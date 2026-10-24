@@ -46,16 +46,9 @@ pub fn violates_wildcard_multiplicity(lhs: &[String], rhs: &[String]) -> bool {
 /// power laws that fail only at the measure-zero point C=0. By the measure-zero principle no
 /// special constant value gets weight (neither 0, the additive neutral, nor C=1, the
 /// multiplicative one). Sign coverage `{-1,+1}` is kept (continuous, not an atom):
-/// `sqrt`/`log`/`pow` need both signs of C tested for domain reasons. Env
-/// `SIMPLIPY_ZERO_SIGN=1` restores the old `{-1,0,1}` grid (reference/repro only).
-// ARTIFACT-AFFECTING switch: listed in engine.py::ARTIFACT_ENV_SWITCHES (H-042).
+/// `sqrt`/`log`/`pow` need both signs of C tested for domain reasons.
 fn sign_combos(n: usize) -> Vec<Vec<f64>> {
-    static WITH_ZERO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let signs: &[f64] = if *WITH_ZERO.get_or_init(|| std::env::var("SIMPLIPY_ZERO_SIGN").is_ok()) {
-        &[-1.0, 0.0, 1.0]
-    } else {
-        &[-1.0, 1.0]
-    };
+    let signs: &[f64] = &[-1.0, 1.0];
     let mut out = vec![Vec::new()];
     for _ in 0..n {
         let mut next = Vec::with_capacity(out.len() * signs.len());
@@ -106,16 +99,30 @@ const POLE_GRID: [f64; 26] = [
 /// step-function artifacts (`pow(asin(C), inf) -> 0`, and its multi-constant scalings
 /// `* C1 pow(asin(C2), inf) -> 0`, which random sampling lands in only ~2%/draw). Fully-random
 /// rounds are appended for off-grid decorrelation and joint coverage.
-// ARTIFACT-AFFECTING switch (SIMPLIPY_POLE_GRID): listed in
-// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-fn source_const_magnitudes(rng: &mut Rng, n_const: usize, challenges: usize) -> Vec<Vec<f64>> {
+/// The magnitudes swept, beside `POLE_GRID`, on each constant of a source holding a head the
+/// contract has no kernel for (`hiprec::evaluable`): zero and the integers, where the step heads
+/// jump, `harmonic` has its poles (with the negative sign combos) and `mod` divides exactly, and a
+/// half-integer, `besselj`'s order and the floor/ceil midpoint.
+const POLE_GRID_STEP: [f64; 6] = [0.0, 1.0, 1.5, 2.0, 3.0, 4.0];
+
+fn source_const_magnitudes(
+    rng: &mut Rng,
+    n_const: usize,
+    challenges: usize,
+    step: bool,
+) -> Vec<Vec<f64>> {
     let mut out: Vec<Vec<f64>> = Vec::new();
-    // A/B kill-switch (`SIMPLIPY_POLE_GRID=0`): random draws only, no grid sweep. Ablation only.
-    static GRID_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let grid_on =
-        *GRID_ON.get_or_init(|| std::env::var("SIMPLIPY_POLE_GRID").as_deref() != Ok("0"));
-    for j in 0..(if grid_on { n_const } else { 0 }) {
-        for &m in POLE_GRID.iter() {
+    let grid: Vec<f64> = if step {
+        POLE_GRID
+            .iter()
+            .chain(POLE_GRID_STEP.iter())
+            .copied()
+            .collect()
+    } else {
+        POLE_GRID.to_vec()
+    };
+    for j in 0..n_const {
+        for &m in grid.iter() {
             let mut v: Vec<f64> = (0..n_const).map(|_| rng.const_magnitude()).collect();
             v[j] = m;
             out.push(v);
@@ -302,6 +309,20 @@ fn slot_witnesses(source: &[String], ops: &Operators) -> Vec<f64> {
             }
             continue;
         }
+        // The step heads jump at the integers and `harmonic` has its poles at the negative
+        // ones: each corner's integer neighbours and their float neighbours are witnesses.
+        if matches!(tok.as_str(), "floor" | "ceil" | "harmonic") {
+            for &s in corners.iter() {
+                if s.is_finite() {
+                    for k in [s.floor(), s.ceil()] {
+                        push_witness(&mut w, k);
+                        push_witness(&mut w, crate::interval::step_down(k));
+                        push_witness(&mut w, crate::interval::step_up(k));
+                    }
+                }
+            }
+            continue;
+        }
         let Some(inv) = inverse_unary_name(tok) else {
             continue;
         };
@@ -368,6 +389,20 @@ fn slot_witnesses(source: &[String], ops: &Operators) -> Vec<f64> {
                 // rootn(x, c): preimage pow(s, c). (rootn(c, x) needs only INTEGER witnesses
                 // -- the index is nan off the integers -- and SPECIAL_CONSTS carries those.)
                 ("rootn", false) => exprs.push(prefix(&["pow", &sr], true)),
+                // atan2(x, c): preimage c*tan(s);  atan2(c, x): preimage c/tan(s)
+                ("atan2", false) => exprs.push(prefix(&["*", "tan", &sr], true)),
+                ("atan2", true) => exprs.push(prefix(&["/", "tan", &sr], false)),
+                // mod(x, c): preimages s + k*c, the multiples of c among them
+                ("mod", false) => {
+                    for k in ["-2", "-1", "0", "1", "2"] {
+                        exprs.push(prefix(&["+", &sr, "*", k], true));
+                    }
+                }
+                // max/min(x, c) and (c, x): s itself, and the kink at c
+                ("max" | "min", _) => {
+                    exprs.push(vec![sr.clone()]);
+                    exprs.push(lit.clone());
+                }
                 _ => {}
             }
             for expr in exprs {
@@ -457,35 +492,6 @@ fn gate_trace() -> Option<&'static String> {
         .as_ref()
 }
 
-/// A/B kill-switch for the interval domain-preservation gate (`SIMPLIPY_IVL_GATE=0` disables it).
-/// Ablation/repro only -- the gate is ON by default and is a soundness requirement, not a knob.
-fn ivl_gate_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_GATE").as_deref() != Ok("0"))
-}
-
-/// A/B kill-switch for the exact interval classifier in the all-constant short-circuit
-/// (`SIMPLIPY_IVL_CLASS=0` disables it, leaving const-bearing sources to the candidate scan).
-fn ivl_class_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_CLASS").as_deref() != Ok("0"))
-}
-
-/// A/B kill-switch for the interval REACHABILITY gate (`SIMPLIPY_IVL_REACH=0` disables it).
-/// Independent of `SIMPLIPY_IVL_CLASS` so the grid-retirement factorial can vary one at a time.
-fn ivl_reach_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_REACH").as_deref() != Ok("0"))
-}
-
-/// A/B kill-switch for the special-point battery phase (`SIMPLIPY_SPECIAL_BATTERY=0`
-/// disables it). Ablation/repro only -- like the interval gate, it is a soundness layer,
-/// not a knob (see `rust/battery.rs`).
-fn special_battery_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_SPECIAL_BATTERY").as_deref() != Ok("0"))
-}
-
 /// WITNESS SNAPPING (see `battery::snap_candidates`): the shipped rule's
 /// exists-witness set contains the integer/half-integer snap of the fitted constants
 /// whenever the snap still fits, and deployment realizes the rule AT the snap -- so the
@@ -510,14 +516,20 @@ fn adopt_snapped_witness(
     cols: &[Vec<f64>],
     n_rows: usize,
     y_src: &[f64],
+    src_events: Option<&[bool]>,
     fitted: Vec<f64>,
     rtol: f64,
     atol: f64,
+    rescue: bool,
 ) -> Vec<f64> {
     let Some(snapped) = crate::battery::snap_candidates(&fitted) else {
         return fitted;
     };
-    let y_fit = cand_tape.eval_columns(cols, &snapped, n_rows);
+    let (y_fit, cand_events) = if rescue {
+        (cand_tape.eval_columns(cols, &snapped, n_rows), None)
+    } else {
+        events_if_any(cand_tape.eval_columns_events(cols, &snapped, n_rows))
+    };
     // one-zero relaxation: an (inf, inf) row pair passes regardless of sign -- feed the
     // downstream checks the candidate's own value there so neither vetoes the pair
     let y_adj: Vec<f64> = y_src
@@ -532,24 +544,88 @@ fn adopt_snapped_witness(
         })
         .collect();
     let ok = allclose_extends(&y_adj, &y_fit, rtol, atol)
-        || crate::hiprec::rescue(
-            &y_adj,
-            &y_fit,
-            source_tokens,
-            src_params,
-            cand_tokens,
-            &snapped,
-            ops,
-            var_names,
-            cols,
-            rtol,
-            atol,
-        );
+        || if rescue {
+            crate::hiprec::rescue(
+                &y_adj,
+                &y_fit,
+                source_tokens,
+                src_params,
+                cand_tokens,
+                &snapped,
+                ops,
+                var_names,
+                cols,
+                rtol,
+                atol,
+            )
+        } else {
+            f64_range_rescue(
+                &y_adj,
+                &y_fit,
+                src_events,
+                cand_events.as_deref(),
+                source_tokens,
+                src_params,
+                cand_tokens,
+                &snapped,
+                ops,
+                var_names,
+                cols,
+                rtol,
+                atol,
+            )
+        };
     if ok {
         snapped
     } else {
         fitted
     }
+}
+
+/// An evaluation's values with its range-event marks (`Tape::eval_columns_events`), the marks
+/// dropped when no row has one: most expressions never leave the range on the mine's rows.
+fn events_if_any((y, events): (Vec<f64>, Vec<bool>)) -> (Vec<f64>, Option<Vec<bool>>) {
+    let any = events.iter().any(|&e| e);
+    (y, any.then_some(events))
+}
+
+/// THE f64 RANGE STANDARD on one instance (`hiprec::range_rescue`), the two sides' range events
+/// merged: a row where an operation of either side overflowed or underflowed may carry the true
+/// value instead of the evaluator's. With no event on either side, f64's own verdict stands.
+#[allow(clippy::too_many_arguments)]
+fn f64_range_rescue(
+    y_src: &[f64],
+    y_cand: &[f64],
+    src_events: Option<&[bool]>,
+    cand_events: Option<&[bool]>,
+    source: &[String],
+    src_params: &[f64],
+    cand_tokens: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    rtol: f64,
+    atol: f64,
+) -> bool {
+    if src_events.is_none() && cand_events.is_none() {
+        return false;
+    }
+    crate::hiprec::range_rescue(
+        y_src,
+        y_cand,
+        src_events,
+        cand_events,
+        source,
+        src_params,
+        cand_tokens,
+        cand_params,
+        ops,
+        var_names,
+        cols,
+        rtol,
+        atol,
+    )
 }
 
 /// F3 literal resolution: pin a matched Const-bearing candidate's slots to literal
@@ -758,13 +834,27 @@ fn battery_rows_ok(
     var_names: &[String],
     rtol: f64,
     atol: f64,
+    f64_range: bool,
 ) -> bool {
     let Some(sb) = battery else { return true };
-    let y_s = src_tape.eval_columns(&sb.cols, src_params, sb.n_rows);
-    let y_c = cand_tape.eval_columns(&sb.cols, cand_params, sb.n_rows);
+    // f64's range standard (`numeric::RangeKind`): a special point where an operation of
+    // either side overflows or underflows may carry the true value.
+    let (y_s, y_c, events) = if f64_range {
+        let (y_s, e_s) = src_tape.eval_columns_events(&sb.cols, src_params, sb.n_rows);
+        let (y_c, e_c) = cand_tape.eval_columns_events(&sb.cols, cand_params, sb.n_rows);
+        let events: Vec<bool> = e_s.iter().zip(&e_c).map(|(a, b)| *a || *b).collect();
+        (y_s, y_c, Some(events))
+    } else {
+        (
+            src_tape.eval_columns(&sb.cols, src_params, sb.n_rows),
+            cand_tape.eval_columns(&sb.cols, cand_params, sb.n_rows),
+            None,
+        )
+    };
     crate::battery::rows_consistent(
         &y_s,
         &y_c,
+        events.as_deref(),
         sb,
         source_tokens,
         src_params,
@@ -822,7 +912,12 @@ fn equivalent_no_const(
     let mags = if n_src_const == 0 {
         vec![vec![]]
     } else {
-        source_const_magnitudes(rng, n_src_const, eff_challenges)
+        source_const_magnitudes(
+            rng,
+            n_src_const,
+            eff_challenges,
+            !crate::hiprec::evaluable(source_tokens, ops),
+        )
     };
     let mut instances: Vec<Vec<f64>> = Vec::with_capacity(mags.len() * combos.len());
     for rc in &mags {
@@ -833,7 +928,8 @@ fn equivalent_no_const(
             // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
             // Inf rows are must-match at f64; the near-miss rescue then re-judges the
             // failing rows by escalation (saturation inf resolves finite, a true pole stays).
-            if !allclose_extends(&y, &y_cand, rtol, atol)
+            // A const-free pair agrees RELATIVELY (see `candidate_matches`): no absolute band.
+            if !allclose_extends(&y, &y_cand, rtol, 0.0)
                 && !crate::hiprec::rescue(
                     &y,
                     &y_cand,
@@ -845,7 +941,7 @@ fn equivalent_no_const(
                     var_names,
                     x_cols,
                     rtol,
-                    atol,
+                    0.0,
                 )
             {
                 return false;
@@ -863,14 +959,40 @@ fn equivalent_no_const(
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`). PARITY: identical to the
     // const-free arm of `candidate_matches` -- the two entry points must never diverge.
-    if special_battery_on() {
-        let used = crate::battery::used_variables(source_tokens, var_names);
-        let battery = crate::battery::SpecialBattery::build(var_names.len(), &used);
-        for params in &instances {
+    let used = crate::battery::used_variables(source_tokens, var_names);
+    let battery = crate::battery::SpecialBattery::build(var_names.len(), &used);
+    for params in &instances {
+        if !battery_rows_ok(
+            source,
+            source_tokens,
+            params,
+            candidate,
+            cand_tokens,
+            &[],
+            battery.as_ref(),
+            ops,
+            var_names,
+            rtol,
+            atol,
+            false,
+        ) {
+            return false;
+        }
+    }
+    // the special source-constant sweep (skip semantics: an instance where the
+    // source is nowhere finite binds nothing; a binding instance is judged at the
+    // CONTRACT points only -- the sweep never binds generic X rows)
+    if n_src_const == 1 {
+        for &s in crate::battery::SPECIAL_CONSTS.iter() {
+            let sp = vec![s];
+            let y_s = source.eval_columns(x_cols, &sp, n_rows);
+            if crate::eval::count_finite(&y_s) == 0 {
+                continue;
+            }
             if !battery_rows_ok(
                 source,
                 source_tokens,
-                params,
+                &sp,
                 candidate,
                 cand_tokens,
                 &[],
@@ -879,35 +1001,9 @@ fn equivalent_no_const(
                 var_names,
                 rtol,
                 atol,
+                false,
             ) {
                 return false;
-            }
-        }
-        // the special source-constant sweep (skip semantics: an instance where the
-        // source is nowhere finite binds nothing; a binding instance is judged at the
-        // CONTRACT points only -- the sweep never binds generic X rows)
-        if n_src_const == 1 {
-            for &s in crate::battery::SPECIAL_CONSTS.iter() {
-                let sp = vec![s];
-                let y_s = source.eval_columns(x_cols, &sp, n_rows);
-                if crate::eval::count_finite(&y_s) == 0 {
-                    continue;
-                }
-                if !battery_rows_ok(
-                    source,
-                    source_tokens,
-                    &sp,
-                    candidate,
-                    cand_tokens,
-                    &[],
-                    battery.as_ref(),
-                    ops,
-                    var_names,
-                    rtol,
-                    atol,
-                ) {
-                    return false;
-                }
             }
         }
     }
@@ -969,7 +1065,6 @@ pub fn equivalent_no_const_check(
 /// next one instead of vetoing the whole selection (finding F2 -- the enumeration doctrine
 /// of finding F1 applied to candidate selection). It judges the candidate's FINAL spelling,
 /// i.e. after the bare-`<constant>` literal fold.
-#[allow(dead_code)] // rlib surface; exercised by tests
 pub fn select_best(
     source: &[String],
     mut matches: Vec<Vec<String>>,
@@ -1016,6 +1111,9 @@ struct CandEntry {
     linearity: crate::fit::Linearity,
     tape: Tape,
     y_const_free: Option<Vec<f64>>,
+    /// The rows of `y_const_free` where an operation overflowed or underflowed
+    /// (`numeric::RangeKind`), `None` when there is none: f64's range standard reads them.
+    events_const_free: Option<Vec<bool>>,
     /// count_finite(y_const_free) precomputed at library build (0 for const-bearing candidates):
     /// the informativeness gate rejects vacuous (all-NaN/inf) candidates before any comparison.
     finite_y: usize,
@@ -1038,6 +1136,57 @@ struct CandEntry {
     /// or where in the scan it sits. This is what makes the fold-filter parity gate exact:
     /// a filtered and an unfiltered mine draw IDENTICAL fit randomness for every shared candidate.
     hash: u64,
+}
+
+impl CandEntry {
+    /// Precompile one candidate over the shared X columns: its tape, linearity class,
+    /// log-linear plan, const-free values and value set. The library builds every entry
+    /// through here, and `judge_pair` builds its single target the same way, so a pair is
+    /// judged on exactly the entry the scan would have judged.
+    fn compile(
+        c: &[String],
+        ops: &Operators,
+        var_names: &[String],
+        cols: &[Vec<f64>],
+        n_rows: usize,
+        mu: u64,
+    ) -> Result<CandEntry, String> {
+        let tape = Tape::compile(c, ops, var_names)?;
+        let n_const = tape.n_params;
+        let (y_const_free, events_const_free) = if n_const == 0 {
+            let (y, events) = events_if_any(tape.eval_columns_events(cols, &[], n_rows));
+            (Some(y), events)
+        } else {
+            (None, None)
+        };
+        let linearity = crate::fit::classify(c, ops)?;
+        let loglin = if linearity == crate::fit::Linearity::Nonlinear {
+            match crate::fit::detect_log_linear(c, ops) {
+                Some((form, g)) => Some((form, Tape::compile(&g, ops, var_names)?)),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let finite_y = y_const_free
+            .as_ref()
+            .map(|y| crate::eval::count_finite(y))
+            .unwrap_or(0);
+        Ok(CandEntry {
+            tokens: c.to_vec(),
+            var_mask: var_mask(c, var_names),
+            n_const,
+            linearity,
+            tape,
+            y_const_free,
+            events_const_free,
+            finite_y,
+            loglin,
+            hash: token_hash(c),
+            reals_vs: crate::interval::value_set(c, ops, &crate::interval::Vs::reals()),
+            mu,
+        })
+    }
 }
 
 /// FNV-1a over a token slice, with a separator byte so ["ab","c"] != ["a","bc"].
@@ -1078,6 +1227,7 @@ fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
 #[allow(clippy::too_many_arguments)]
 fn candidate_matches(
     y_src: &[(Vec<f64>, Vec<f64>)],
+    src_events: &[Option<Vec<bool>>],
     cand: &CandEntry,
     source: &[String],
     src_tape: &Tape,
@@ -1091,6 +1241,7 @@ fn candidate_matches(
     atol: f64,
     min_informative: usize,
     fit_seed: u64,
+    rescue: bool,
 ) -> Option<Option<Vec<f64>>> {
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
@@ -1106,27 +1257,60 @@ fn candidate_matches(
         // WITNESS, not just a bool: None = reject; Some(None) = VACUOUS pass (no constants
         // determined -- every row was extendable); Some(Some(c)) = pass AT the constants `c`.
         // The domain gate needs `c` to bind the candidate's `<constant>` leaves.
+        // The source's range events on this instance (f64 only; see `f64_range_rescue`).
+        let ev_src = src_events.get(inst).and_then(|e| e.as_deref());
         let ok: Option<Option<Vec<f64>>> = if cand.n_const == 0 {
             // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
-            // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate. f64 is a
-            // PRE-FILTER: a near-miss reject is re-judged at high precision on exactly the
-            // failing rows (`hiprec::rescue`) so that true identities
-            // whose f64 round-trip loses precision -- atanh(tanh(x)) -> x -- still certify.
+            // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
+            //
+            // A CONST-FREE PAIR AGREES RELATIVELY: `|s - c| <= rtol*|c|`, so zero agrees only
+            // with zero. There is no absolute band here: the pair has no fitted constant
+            // whose solve error it would absorb, and a band lets any value smaller than it
+            // equal 0 (`exp(sinh(-5)) -> 0` is false by 5.9e-33 and passed `atol` = 1e-12).
+            // - f64 (no rescue): the deployed evaluator's values decide. `exp(sinh(-10))` is
+            //   exactly 0.0 in f64, so `-> 0` holds there; `sin(np.pi)` is 1.2e-16, so `-> 0`
+            //   does not. At a row where an operation of either side overflows or
+            //   underflows, the true value is accepted beside the evaluator's (the f64 range
+            //   standard, `f64_range_rescue`): `rootn(exp(x), 2) -> exp(x/2)` certifies past
+            //   exp's overflow, `atanh(tanh(x)) -> x` does not (tanh saturates in range).
+            // - real and permissive (rescue): f64 is a PRE-FILTER, and a near-miss reject is
+            //   re-judged at high precision on exactly the failing rows (`hiprec::rescue`),
+            //   where a zero is a residual that collapses as the precision doubles. True
+            //   identities whose f64 evaluation loses precision -- atanh(tanh(x)) -> x,
+            //   sin(np.pi) -> 0 -- certify; a value that only looks like zero does not.
             let y_cand = cand.y_const_free.as_ref().unwrap();
-            let hit = allclose_extends(y, y_cand, rtol, atol)
-                || crate::hiprec::rescue(
-                    y,
-                    y_cand,
-                    source,
-                    inst_params,
-                    &cand.tokens,
-                    &[],
-                    ops,
-                    var_names,
-                    cols,
-                    rtol,
-                    atol,
-                );
+            let hit = allclose_extends(y, y_cand, rtol, 0.0)
+                || if rescue {
+                    crate::hiprec::rescue(
+                        y,
+                        y_cand,
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &[],
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        0.0,
+                    )
+                } else {
+                    f64_range_rescue(
+                        y,
+                        y_cand,
+                        ev_src,
+                        cand.events_const_free.as_deref(),
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &[],
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        0.0,
+                    )
+                };
             // A const-free candidate binds nothing, so even a vacuous match has a determined
             // (empty) witness and the gate applies exactly.
             if hit {
@@ -1161,6 +1345,33 @@ fn candidate_matches(
             ) {
                 crate::fit::FitVerdict::Pass(c) => Some(c),
                 crate::fit::FitVerdict::Fail => None,
+                // f64 does not escalate a near miss: the deployed evaluator's values decide,
+                // except at the rows where an operation of either side overflows or
+                // underflows, where the true value is accepted at the fitted constants (the
+                // f64 range standard, `f64_range_rescue`).
+                crate::fit::FitVerdict::NearMiss(c0) if !rescue => {
+                    let (y_fit, ev_fit) =
+                        events_if_any(cand.tape.eval_columns_events(cols, &c0, n_rows));
+                    if f64_range_rescue(
+                        y,
+                        &y_fit,
+                        ev_src,
+                        ev_fit.as_deref(),
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &c0,
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        atol,
+                    ) {
+                        Some(Some(c0))
+                    } else {
+                        None
+                    }
+                }
                 // FIT-ARM ESCALATION: a true constant-bearing rule whose SOURCE
                 // f64 evaluation is corrupted on a few rows (atanh(tanh(C*x)) -> C*x) fails
                 // the fit with CONTAMINATED constants (the corrupted rows pull the least
@@ -1232,9 +1443,11 @@ fn candidate_matches(
                     cols,
                     n_rows,
                     y,
+                    ev_src,
                     c,
                     rtol,
                     atol,
+                    rescue,
                 )
             }
         });
@@ -1258,91 +1471,80 @@ fn candidate_matches(
             // `domain_extension_p_at`) must never read as "no extension" = accept. The
             // counters (`interval_horizon_misses`, `interval_node_budget_misses`) count
             // fail-closed REJECTIONS; a large per-stratum delta in a mine is the flag to
-            // raise `SIMPLIPY_IVL_NODE_BUDGET` / R_MAX for that stratum and re-run it.
-            if ivl_gate_on() {
-                let (gh_r, gh_d, gh_decidable) = crate::interval::gate_horizon(
+            // raise `find_rules(interval_node_budget=...)` / R_MAX for that stratum and re-run
+            // it.
+            let (gh_r, gh_d, gh_decidable) =
+                crate::interval::gate_horizon(source, inst_params, &cand.tokens, cand_params, ops);
+            let verdict = if gh_decidable {
+                crate::interval::domain_extension_p_at(
                     source,
                     inst_params,
                     &cand.tokens,
                     cand_params,
                     ops,
-                );
-                let verdict = if gh_decidable {
-                    crate::interval::domain_extension_p_at(
-                        source,
-                        inst_params,
-                        &cand.tokens,
-                        cand_params,
-                        ops,
-                        gh_r,
-                        gh_d,
-                    )
-                } else {
-                    None
-                };
-                let reject = match verdict {
-                    // Undecided (horizon or budget): cannot certify "no extension" -- reject.
-                    None => true,
-                    // A proven positive-measure extension fires the gate ...
-                    // ... unless the rule keeps a DEAD source dead. ONE clause, stated once:
-                    //
-                    //   fire  <=>  extension  AND NOT (source dead AND target dead)
-                    //
-                    // where "dead" = defined on no positive-measure set at these constants. A
-                    // dead source has no generic graph to preserve, and an existential witness
-                    // that is ITSELF dead buys the rule no capacity the source lacked --
-                    // `sqrt(C^x)` at C<0 is NaN a.e. (finite only on the even integers), and the
-                    // fit's `C' = -sqrt(2)` is equally NaN a.e., so nothing was invented. But
-                    // resurrecting a dead source into a LIVE target injects fittable capacity
-                    // from nothing, and that is the artifact.
-                    //
-                    // This REPLACES two ad-hoc carve-outs. The first was
-                    // `cand_params.is_empty()`, justified as "a const-free candidate has no
-                    // witness to be arbitrary" and as what "keeps the f64 SATURATION artifacts
-                    // out". It does not: the verdict it produces depends on the target's
-                    // SPELLING, not its mathematics. `acosh(|tanh x|) -> 0` was rejected while
-                    // `acosh(|tanh x|) -> <constant>` was ACCEPTED at the identical witness
-                    // width, and `select_best` prefers fewest constants -- so the miner reached
-                    // for the rejected form, was refused, and mined the surviving one instead.
-                    // Deadness is a property of the FUNCTION at its constants, so it cannot be
-                    // dodged by respelling: a fitted `<constant>` binds to a finite real and is
-                    // therefore LIVE, exactly like the literal `0` it was standing in for.
-                    //
-                    // Deadness must be PROVEN (`Some(0.0)` = a COMPLETED search found no
-                    // support). An unresolved deadness search (`None`) is treated as live:
-                    // letting it read "dead" widened the accept exemption, the
-                    // anti-conservative direction.
-                    Some(w) if w > 0.0 => {
-                        !(crate::interval::defined_measure_p_at(
-                            source,
-                            inst_params,
+                    gh_r,
+                    gh_d,
+                )
+            } else {
+                None
+            };
+            let reject = match verdict {
+                // Undecided (horizon or budget): cannot certify "no extension" -- reject.
+                None => true,
+                // A proven positive-measure extension fires the gate ...
+                // ... unless the rule keeps a DEAD source dead. ONE clause, stated once:
+                //
+                //   fire  <=>  extension  AND NOT (source dead AND target dead)
+                //
+                // where "dead" = defined on no positive-measure set at these constants. A
+                // dead source has no generic graph to preserve, and an existential witness
+                // that is ITSELF dead buys the rule no capacity the source lacked --
+                // `sqrt(C^x)` at C<0 is NaN a.e. (finite only on the even integers), and the
+                // fit's `C' = -sqrt(2)` is equally NaN a.e., so nothing was invented. But
+                // resurrecting a dead source into a LIVE target injects fittable capacity
+                // from nothing, and that is the artifact.
+                //
+                // This REPLACES two ad-hoc carve-outs. The first was
+                // `cand_params.is_empty()`, justified as "a const-free candidate has no
+                // witness to be arbitrary" and as what "keeps the f64 SATURATION artifacts
+                // out". It does not: the verdict it produces depends on the target's
+                // SPELLING, not its mathematics. `acosh(|tanh x|) -> 0` was rejected while
+                // `acosh(|tanh x|) -> <constant>` was ACCEPTED at the identical witness
+                // width, and `select_best` prefers fewest constants -- so the miner reached
+                // for the rejected form, was refused, and mined the surviving one instead.
+                // Deadness is a property of the FUNCTION at its constants, so it cannot be
+                // dodged by respelling: a fitted `<constant>` binds to a finite real and is
+                // therefore LIVE, exactly like the literal `0` it was standing in for.
+                //
+                // Deadness must be PROVEN (`Some(0.0)` = a COMPLETED search found no
+                // support). An unresolved deadness search (`None`) is treated as live:
+                // letting it read "dead" widened the accept exemption, the
+                // anti-conservative direction.
+                Some(w) if w > 0.0 => {
+                    !(crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d)
+                        == Some(0.0)
+                        && crate::interval::defined_measure_p_at(
+                            &cand.tokens,
+                            cand_params,
                             ops,
                             gh_r,
                             gh_d,
-                        ) == Some(0.0)
-                            && crate::interval::defined_measure_p_at(
-                                &cand.tokens,
-                                cand_params,
-                                ops,
-                                gh_r,
-                                gh_d,
-                            ) == Some(0.0))
-                    }
-                    // Completed search, no extension: the gate passes.
-                    Some(_) => false,
-                };
-                if reject {
-                    if let Some(t) = gate_trace() {
-                        if source.join(" ").starts_with(t.as_str()) {
-                            eprintln!(
-                                "GATE-REJECT src=[{}] src_c={:?} cand=[{}] cand_c={:?} width={:?} src_measure={:?}",
-                                source.join(" "), inst_params, cand.tokens.join(" "), cand_params,
-                                verdict,
-                                crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d));
-                        }
-                    }
-                    return None;
+                        ) == Some(0.0))
                 }
+                // Completed search, no extension: the gate passes.
+                Some(_) => false,
+            };
+            if reject {
+                if let Some(t) = gate_trace() {
+                    if source.join(" ").starts_with(t.as_str()) {
+                        eprintln!(
+                            "GATE-REJECT src=[{}] src_c={:?} cand=[{}] cand_c={:?} width={:?} src_measure={:?}",
+                            source.join(" "), inst_params, cand.tokens.join(" "), cand_params,
+                            verdict,
+                            crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d));
+                    }
+                }
+                return None;
             }
         }
         for (e, v) in evidence.iter_mut().zip(y) {
@@ -1355,97 +1557,103 @@ fn candidate_matches(
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`): runs only for candidates
     // that certified everything above, so its cost is per accepted (source, candidate) pair.
-    if special_battery_on() {
-        // 1. Contract points at every certified instance's witness. A vacuous instance pins
-        //    no target function and is skipped, exactly like the domain gate above.
-        for (inst_params, fitted) in &certified {
-            let Some(cand_params) = fitted else { continue };
+    // 1. Contract points at every certified instance's witness. A vacuous instance pins
+    //    no target function and is skipped, exactly like the domain gate above.
+    for (inst_params, fitted) in &certified {
+        let Some(cand_params) = fitted else { continue };
+        if !battery_rows_ok(
+            src_tape,
+            source,
+            inst_params,
+            &cand.tape,
+            &cand.tokens,
+            cand_params,
+            battery,
+            ops,
+            var_names,
+            rtol,
+            atol,
+            !rescue,
+        ) {
+            return None;
+        }
+    }
+    // 2. The special source-constant battery: a pattern-bound source constant reaches
+    //    0, pi/2, ... in deployment. Skip semantics: an instance with a nowhere-finite
+    //    source, or (const-bearing arm) no fittable witness, binds nothing; a binding
+    //    instance must agree at the contract points. Scoped to single-constant sources
+    //    -- multi-constant shapes have no ratified special-constant semantics beyond
+    //    one constant.
+    let n_src_const = y_src.first().map(|(p, _)| p.len()).unwrap_or(0);
+    if n_src_const == 1 {
+        for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
+            let sp = vec![s];
+            let (y_s, ev_s) = if rescue {
+                (src_tape.eval_columns(cols, &sp, n_rows), None)
+            } else {
+                events_if_any(src_tape.eval_columns_events(cols, &sp, n_rows))
+            };
+            if crate::eval::count_finite(&y_s) == 0 {
+                continue;
+            }
+            let cp: Option<Vec<f64>> = if cand.n_const == 0 {
+                // const-free target: judged at the contract points below (the
+                // source-constant sweep never binds generic X rows)
+                Some(Vec::new())
+            } else {
+                // existence is only generically binding: an unfittable special instance
+                // is SKIPPED, a fitted one binds below
+                let sseed = Rng::new(
+                    fit_seed ^ cand.hash ^ (0xC0DEu64 + k as u64).wrapping_mul(SEED_GOLDEN),
+                )
+                .next_u64();
+                match crate::fit::exist_constants_fit_prepared(
+                    &cand.tape,
+                    cand.linearity,
+                    cols,
+                    n_rows,
+                    &y_s,
+                    rtol,
+                    atol,
+                    retries,
+                    sseed,
+                    cand.loglin.as_ref().map(|(f, t)| (*f, t)),
+                ) {
+                    crate::fit::FitVerdict::Pass(Some(c)) => Some(adopt_snapped_witness(
+                        &cand.tape,
+                        &cand.tokens,
+                        source,
+                        &sp,
+                        ops,
+                        var_names,
+                        cols,
+                        n_rows,
+                        &y_s,
+                        ev_s.as_deref(),
+                        c,
+                        rtol,
+                        atol,
+                        rescue,
+                    )),
+                    _ => None,
+                }
+            };
+            let Some(cp) = cp else { continue };
             if !battery_rows_ok(
                 src_tape,
                 source,
-                inst_params,
+                &sp,
                 &cand.tape,
                 &cand.tokens,
-                cand_params,
+                &cp,
                 battery,
                 ops,
                 var_names,
                 rtol,
                 atol,
+                !rescue,
             ) {
                 return None;
-            }
-        }
-        // 2. The special source-constant battery: a pattern-bound source constant reaches
-        //    0, pi/2, ... in deployment. Skip semantics: an instance with a nowhere-finite
-        //    source, or (const-bearing arm) no fittable witness, binds nothing; a binding
-        //    instance must agree at the contract points. Scoped to single-constant sources
-        //    -- multi-constant shapes have no ratified special-constant semantics beyond
-        //    one constant.
-        let n_src_const = y_src.first().map(|(p, _)| p.len()).unwrap_or(0);
-        if n_src_const == 1 {
-            for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
-                let sp = vec![s];
-                let y_s = src_tape.eval_columns(cols, &sp, n_rows);
-                if crate::eval::count_finite(&y_s) == 0 {
-                    continue;
-                }
-                let cp: Option<Vec<f64>> = if cand.n_const == 0 {
-                    // const-free target: judged at the contract points below (the
-                    // source-constant sweep never binds generic X rows)
-                    Some(Vec::new())
-                } else {
-                    // existence is only generically binding: an unfittable special instance
-                    // is SKIPPED, a fitted one binds below
-                    let sseed = Rng::new(
-                        fit_seed ^ cand.hash ^ (0xC0DEu64 + k as u64).wrapping_mul(SEED_GOLDEN),
-                    )
-                    .next_u64();
-                    match crate::fit::exist_constants_fit_prepared(
-                        &cand.tape,
-                        cand.linearity,
-                        cols,
-                        n_rows,
-                        &y_s,
-                        rtol,
-                        atol,
-                        retries,
-                        sseed,
-                        cand.loglin.as_ref().map(|(f, t)| (*f, t)),
-                    ) {
-                        crate::fit::FitVerdict::Pass(Some(c)) => Some(adopt_snapped_witness(
-                            &cand.tape,
-                            &cand.tokens,
-                            source,
-                            &sp,
-                            ops,
-                            var_names,
-                            cols,
-                            n_rows,
-                            &y_s,
-                            c,
-                            rtol,
-                            atol,
-                        )),
-                        _ => None,
-                    }
-                };
-                let Some(cp) = cp else { continue };
-                if !battery_rows_ok(
-                    src_tape,
-                    source,
-                    &sp,
-                    &cand.tape,
-                    &cand.tokens,
-                    &cp,
-                    battery,
-                    ops,
-                    var_names,
-                    rtol,
-                    atol,
-                ) {
-                    return None;
-                }
             }
         }
     }
@@ -1456,6 +1664,7 @@ fn candidate_matches(
 /// candidate (re-evaluating inside `candidate_matches` would cost per (candidate, challenge,
 /// sign-combo)). A const-free source has exactly one distinct instance, so its challenge count
 /// collapses to 1 (identical targets add no evidence and only multiply fit flakiness).
+#[allow(clippy::too_many_arguments)]
 fn source_instances(
     src_tape: &Tape,
     n_src_const: usize,
@@ -1464,12 +1673,13 @@ fn source_instances(
     n_rows: usize,
     challenges: usize,
     rng: &mut Rng,
+    step: bool,
 ) -> Vec<(Vec<f64>, Vec<f64>)> {
     let eff_challenges = if n_src_const == 0 { 1 } else { challenges };
     let mags = if n_src_const == 0 {
         vec![vec![]]
     } else {
-        source_const_magnitudes(rng, n_src_const, eff_challenges)
+        source_const_magnitudes(rng, n_src_const, eff_challenges, step)
     };
     let mut out = Vec::with_capacity(mags.len() * combos.len());
     for rc in &mags {
@@ -1518,6 +1728,11 @@ impl CandidateLibrary {
     /// sources, e.g. the mining acceptance's determined-source clause).
     pub fn var_names(&self) -> &[String] {
         &self.var_names
+    }
+
+    /// The library's X, per variable column.
+    pub fn cols(&self) -> &[Vec<f64>] {
+        &self.cols
     }
 
     /// Candidates kept in the library (post-filter).
@@ -1574,7 +1789,6 @@ impl CandidateLibrary {
             if len == 0 {
                 continue;
             }
-            let vm = var_mask(c, var_names);
             // Filter decision NOT via `vm == 0`: the scan mask truncates at 32 variables, so a
             // candidate whose only variables have index >= 32 would be misclassified as
             // var-free and wrongly dropped. The filter checks ALL var_names.
@@ -1590,39 +1804,14 @@ impl CandidateLibrary {
                 n_filtered += 1;
                 continue;
             }
-            let tape = Tape::compile(c, ops, var_names)?;
-            let n_const = tape.n_params;
-            let y_const_free = if n_const == 0 {
-                Some(tape.eval_columns(&cols, &[], n_rows))
-            } else {
-                None
-            };
-            let linearity = crate::fit::classify(c, ops)?;
-            let loglin = if linearity == crate::fit::Linearity::Nonlinear {
-                match crate::fit::detect_log_linear(c, ops) {
-                    Some((form, g)) => Some((form, Tape::compile(&g, ops, var_names)?)),
-                    None => None,
-                }
-            } else {
-                None
-            };
-            let finite_y = y_const_free
-                .as_ref()
-                .map(|y| crate::eval::count_finite(y))
-                .unwrap_or(0);
-            by_len[len].push(CandEntry {
-                tokens: c.clone(),
-                var_mask: vm,
-                n_const,
-                linearity,
-                tape,
-                y_const_free,
-                finite_y,
-                loglin,
-                hash: token_hash(c),
-                reals_vs: crate::interval::value_set(c, ops, &crate::interval::Vs::reals()),
-                mu: mus[ci].unwrap_or(u64::MAX),
-            });
+            by_len[len].push(CandEntry::compile(
+                c,
+                ops,
+                var_names,
+                &cols,
+                n_rows,
+                mus[ci].unwrap_or(u64::MAX),
+            )?);
             n_candidates += 1;
         }
         // The mu tiers, built once: every candidate keyed by its mu, ascending.
@@ -1652,6 +1841,327 @@ impl CandidateLibrary {
             n_filtered,
         })
     }
+}
+
+/// One certification's verdict on a candidate: the spelling it would EMIT (the candidate's
+/// own tokens, or their literal resolution) and whether that spelling is a resolution.
+struct Certified {
+    tokens: Vec<String>,
+    resolved: bool,
+}
+
+/// One SOURCE's certification context: its tape, its challenge instances (drawn once, from
+/// the source's own seed), its reachability set and its special-point battery. The scan
+/// builds it once and judges every candidate against it; `judge_pair` builds it for one
+/// pair. Rows are the caller's X (`cols`), which the context does not own.
+struct SourceCtx<'s> {
+    source: &'s [String],
+    tape: Tape,
+    n_const: usize,
+    mask: u32,
+    y: Vec<(Vec<f64>, Vec<f64>)>,
+    /// Per instance of `y`, the rows where an operation overflowed or underflowed
+    /// (`numeric::RangeKind`), `None` where none did; read by f64's range standard only, and
+    /// computed only for it.
+    events: Vec<Option<Vec<bool>>>,
+    reach: Option<crate::interval::Vs>,
+    /// A variable-free source the interval layer could not analyze because it holds a head
+    /// whose arm may refuse (`interval::holds_partial_head`): its reachability and class gates
+    /// cannot run, so every candidate is refused (fail closed).
+    blind: bool,
+    battery: Option<crate::battery::SpecialBattery>,
+}
+
+impl<'s> SourceCtx<'s> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        ops: &Operators,
+        source: &'s [String],
+        var_names: &[String],
+        cols: &[Vec<f64>],
+        n_rows: usize,
+        challenges: usize,
+        seed: u64,
+        f64_range: bool,
+    ) -> Result<Self, String> {
+        let tape = Tape::compile(source, ops, var_names)?;
+        let n_const = tape.n_params;
+        let combos = sign_combos(n_const);
+        let mut rng = Rng::new(seed);
+        // Source instances shared across the whole candidate scan (see `source_instances`).
+        let y = source_instances(
+            &tape,
+            n_const,
+            &combos,
+            cols,
+            n_rows,
+            challenges,
+            &mut rng,
+            !crate::hiprec::evaluable(source, ops),
+        );
+        let events = if f64_range {
+            y.iter()
+                .map(|(p, _)| events_if_any(tape.eval_columns_events(cols, p, n_rows)).1)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // REACHABILITY gate (exact, interval-analytic) for a VARIABLE-FREE source: every value
+        // component the source takes over its constants must be reachable by the candidate over its
+        // own (see `interval::reaches_all_of`). Scoped to variable-free sources -- the class the
+        // interval engine is validated on, and exactly the family the sampled POLE_GRID exists for
+        // (`pow(asin(C/2), inf) -> 0`, whose +inf band a fixed grid can straddle and miss).
+        // Computed ONCE per source, outside the scan.
+        let var_free = !source.iter().any(|t| var_names.contains(t));
+        let reach = if var_free {
+            crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
+        } else {
+            None
+        };
+        let blind = var_free && reach.is_none() && crate::interval::holds_partial_head(source, ops);
+        // Special-point battery over THIS source's variable set (None for a variable-free
+        // source), shared across the whole candidate scan; see `rust/battery.rs`.
+        let battery = crate::battery::SpecialBattery::build(
+            var_names.len(),
+            &crate::battery::used_variables(source, var_names),
+        );
+        Ok(SourceCtx {
+            source,
+            tape,
+            n_const,
+            mask: var_mask(source, var_names),
+            y,
+            events,
+            reach,
+            blind,
+            battery,
+        })
+    }
+}
+
+/// THE per-candidate certification: every check one (source, candidate) pair must pass,
+/// in one place -- the variable-subset and Const-count prefilters, reachability, the
+/// numeric match (`candidate_matches`: equivalence or fit, the domain gate, the special
+/// battery), literal resolution, the Dirac refuter, the var-free-composite emit guard and
+/// class preservation. The scan calls it per candidate; `judge_pair` calls it once.
+/// `None` is a refusal; the scan then moves to the next candidate.
+#[allow(clippy::too_many_arguments)]
+fn certify_candidate(
+    sc: &SourceCtx<'_>,
+    cand: &CandEntry,
+    ops: &Operators,
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    retries: usize,
+    rtol: f64,
+    atol: f64,
+    min_informative: usize,
+    seed: u64,
+    rescue: bool,
+    accept_resolved: Option<AcceptFn<'_>>,
+) -> Option<Certified> {
+    let source = sc.source;
+    if cand.var_mask & !sc.mask != 0 {
+        return None; // candidate uses a variable the source lacks
+    }
+    // The Const-count invariant at the mint (its serve twin is the translate-time
+    // count gate; one invariant, both layers): a fire may never INCREASE the number
+    // of `<constant>` placeholders. For a const-BEARING source, a candidate with
+    // more slots than the source could only mint a count-increasing rule -- its
+    // slot values are per-challenge functions of the drawn source constants, not
+    // fixed reals, so literal resolution cannot apply either. For a const-FREE
+    // source, Const-bearing candidates stay IN the scan: their slots are fixed
+    // reals, resolved to literal tokens below.
+    if sc.n_const > 0 && cand.n_const > sc.n_const {
+        return None;
+    }
+    if sc.blind {
+        return None;
+    }
+    if let Some(sv) = &sc.reach {
+        if let Some(cv) = &cand.reals_vs {
+            if !crate::interval::reaches_all_of(cv, sv) {
+                return None; // cannot reach a component the source takes: FALSE, no sampling
+            }
+        }
+    }
+    let witness = candidate_matches(
+        &sc.y,
+        &sc.events,
+        cand,
+        source,
+        &sc.tape,
+        sc.battery.as_ref(),
+        ops,
+        var_names,
+        cols,
+        n_rows,
+        retries,
+        rtol,
+        atol,
+        min_informative,
+        seed,
+        rescue,
+    )?;
+    // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
+    // source's drawn constants and the fit's chosen constants are both in scope)
+    // LITERAL RESOLUTION (the Const-count invariant's constructive arm): a
+    // const-FREE source that matched a Const-bearing candidate did so at FIXED
+    // slot values -- abstraction manufactured at mint time, which is masking's
+    // job downstream, never the miner's. The slots are pinned to literal tokens
+    // (fail closed: an unpinnable slot skips the candidate and the scan
+    // continues), so the minted rule carries the VALUE, not a mask. The
+    // downstream guards and the caller's ordering acceptance then judge the
+    // RESOLVED spelling -- a resolution the engine already reaches natively
+    // (the fold family) lands on the mark's own state and is refused there.
+    let is_resolution = sc.n_const == 0 && cand.n_const > 0;
+    let target: Vec<String> = if is_resolution {
+        let resolved = sc.y.first().and_then(|inst| {
+            resolve_const_slots(
+                &cand.tokens,
+                witness.as_deref(),
+                source,
+                ops,
+                var_names,
+                cols,
+                &inst.1,
+            )
+        });
+        let resolved = resolved.filter(|t| match accept_resolved {
+            Some(f) => f(t),
+            None => true,
+        });
+        // ONE VERDICT FOR "THIS TARGET EQUALS THIS SOURCE". The fit certified the slot at
+        // its fitted f64 value; the rule ships the RESOLVED literal, a const-free target.
+        // It is certified as one, by the same const-free check `judge_pair` runs, so a
+        // resolution can never ship a literal the pair judgment refuses (`atanh tanh 8`:
+        // the fit absorbs f64's 7.99999999997, the literal `8` is f64-false and true).
+        let resolved = resolved.filter(|t| {
+            CandEntry::compile(t, ops, var_names, cols, n_rows, u64::MAX).is_ok_and(|entry| {
+                candidate_matches(
+                    &sc.y,
+                    &sc.events,
+                    &entry,
+                    source,
+                    &sc.tape,
+                    sc.battery.as_ref(),
+                    ops,
+                    var_names,
+                    cols,
+                    n_rows,
+                    retries,
+                    rtol,
+                    atol,
+                    min_informative,
+                    seed,
+                    rescue,
+                )
+                .is_some()
+            })
+        });
+        match resolved {
+            Some(t) => t,
+            None => {
+                if let Some(t) = gate_trace() {
+                    if source.join(" ").starts_with(t.as_str()) {
+                        eprintln!(
+                            "RESOLVE-FAIL src=[{}] cand=[{}] witness={witness:?}",
+                            source.join(" "),
+                            cand.tokens.join(" ")
+                        );
+                    }
+                }
+                return None;
+            }
+        }
+    } else {
+        cand.tokens.clone()
+    };
+    // The scan reaches literal targets the short-circuit never sees: `finite_leaf`
+    // excludes any source carrying an inf/nan literal from the short-circuit
+    // entirely, so guarding only the arms would leave that whole family unjudged.
+    // Judged on the RESOLVED spelling: a resolved bare literal is exactly the
+    // single-token collapse this refuter exists for.
+    if dirac_refutes_literal(source, &target, ops) {
+        return None;
+    }
+    // THE EMITTED TARGET IS WHAT SHIPS (2026-08-21). The library's fold filter
+    // asks what the CONSTRUCTOR folds a candidate to, but the scan emits the
+    // candidate's OWN token form -- so a candidate admitted because it folds to
+    // a leaf (`pow 1 <constant>` -> `1`) was still written out composite:
+    // `rootn 1 <constant> -> pow 1 <constant>`. Filtering the LIBRARY cannot
+    // close the class; only a guard on the emitted spelling can, and it belongs
+    // HERE, in the shared scan, because `find_rule_lib` and the resident mine
+    // carry separate acceptance closures and a guard in either alone is a hole.
+    //
+    // A var-free LEAF target (`0`, `np.pi`) stays legal -- admitting foldable
+    // candidates is the point. A var-free COMPOSITE never does.
+    if target.len() >= 2
+        && !target.iter().any(|t| {
+            var_names.iter().any(|v| v == t)
+                || t.starts_with('_')
+                || t.starts_with('$')
+                || t.starts_with('?')
+                || t.starts_with('!')
+        })
+    {
+        return None;
+    }
+    // COLLAPSE-TO-`<constant>` guard, the ratified zoo-collapse predicate applied at
+    // the MINT rather than only at the online fold: a source may collapse to a free
+    // finite constant only if its finite part has POSITIVE MEASURE. `inv <constant>`
+    // qualifies (finite off the measure-zero pole, which is why the family is
+    // ratified); `pow (-1) <constant>` does not (finite only at the integers, a null
+    // set), and without this the literal refuter above merely diverts it into an
+    // equally false `-> <constant>`. Same predicate as the engine's value-set
+    // collapse fold (`engine/ac.rs::ac_fold`, `cls()==Finite && fin_pm()`), so
+    // the two paths cannot disagree about what "collapses to a constant" means.
+    // CLASS PRESERVATION for a VARIABLE-FREE source (ratified licence).
+    // Such a source is a constant-family: its whole behaviour is a function of its
+    // `<constant>` slots, so a rewrite must preserve the value CLASS, which is a
+    // measure statement over the constant axis. `reaches_all_of` above deliberately
+    // ignores nan (a nan row is extendable, "decided by measure rather than by
+    // reachability") -- this is where that measure decision is made.
+    //   `exp log <constant>` is MIXED (finite on C>0, undefined on C<0) while
+    //   `exp <constant>` is FINITE: the rewrite would DEFINE a positive-measure
+    //   undefined region, which §4 R3 and §9.8.3(b) put in the kill set.
+    //   `pow 0 <constant>` (MIXED: 0 on C>0, +inf on C<0) likewise cannot become a
+    //   bare `<constant>`, and `pow (-1) <constant>` (nan a.e.) cannot become
+    //   anything finite.
+    // Null-set exceptions stay tolerated because the CLASS ignores them: `inv
+    // <constant>` is FINITE (its +inf lives only at C=0) and keeps collapsing, per
+    // §9.8.3(c) and the §9.8.4 degenerate-literal carve-out.
+    if let Some(sv) = &sc.reach {
+        // `target` is the candidate's own tokens unless literal resolution
+        // respelled it -- reuse the build-time value set where it is.
+        let tv = if is_resolution {
+            crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
+        } else {
+            cand.reals_vs
+        };
+        let same_class = tv.is_some_and(|cv| cv.cls() == sv.cls());
+        if !same_class {
+            return None;
+        }
+        // A source finite only on a NULL set additionally may not collapse to a free
+        // constant (the ratified zoo-collapse predicate, mint-side).
+        if target.len() == 1 && target[0] == "<constant>" && !sv.fin_pm() {
+            return None;
+        }
+    }
+    // THE DEPLOYED-ONLY BAR (`battery::deployed_exact`): a rule spelled with a head the contract
+    // has no kernel for is judged in the deployed lane alone, bit for bit at that bar's probes.
+    // The mint applies the same function, so the judge licenses what the mint accepts.
+    if !(crate::hiprec::evaluable(source, ops) && crate::hiprec::evaluable(&target, ops))
+        && !crate::battery::deployed_exact(source, &target, var_names, ops).ok
+    {
+        return None;
+    }
+    Some(Certified {
+        tokens: target,
+        resolved: is_resolution,
+    })
 }
 
 /// The full native `find_rule_worker` decision over a RESIDENT library:
@@ -1693,7 +2203,9 @@ pub fn find_rule_with_lib(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    rescue: bool,
     accept: Option<AcceptFn<'_>>,
+    confirm: Option<AcceptFn<'_>>,
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Result<Option<Vec<String>>, String> {
     // GUARD FIRST (BEFORE the all-constant short-circuit).
@@ -1707,9 +2219,15 @@ pub fn find_rule_with_lib(
     // Every return path honors the caller's acceptance -- the short-circuits included: a
     // refused short-circuit target falls through to the candidate scan instead of being
     // returned for the caller to veto (there is no caller-side veto anymore).
-    let accepted = |t: &[String]| match accept {
-        Some(f) => f(t),
-        None => true,
+    // A source spelled with a head the contract has no kernel for answers to the deployed-only
+    // bar on every path, the ground arms below included (`battery::deployed_exact`, which the
+    // contract judge applies to it too): `ceil(asinh(-1))` is -0 in float64, so it is no `0`.
+    let deployed_only = !crate::hiprec::evaluable(source, ops);
+    let accepted = |t: &[String]| {
+        (match accept {
+            Some(f) => f(t),
+            None => true,
+        }) && (!deployed_only || crate::battery::deployed_exact(source, t, &lib.var_names, ops).ok)
     };
     // all-constant short-circuit, reached only after the guard passes.
     // A leaf counts as constant when `leaf_value` resolves it to a FINITE value: numeric
@@ -1718,44 +2236,15 @@ pub fn find_rule_with_lib(
     // (inf/nan literals stay excluded -- non-finite algebra is the explicit rules' domain,
     // e.g. `+ float("-inf") <constant> -> float("-inf")`, not absorption).
     let finite_leaf = |t: &str| crate::numeric::leaf_value(t).is_some_and(f64::is_finite);
-    // STAGE-1 GROUND-FOLD LICENCE, miner side (owner-ratified 2026-07-31; a future
-    // theorem of the unified measure, design/UNIFIED_SIMPLICITY_MEASURE.md §5): a
-    // special-bearing source never short-circuits to its f64 evaluation -- that literal
-    // is a ROUNDING of an exact symbolic value (`rootn np.e (-1) ->
-    // 0.36787944117144233`). The refusal is by CHANNEL, not by target shape: exact
-    // finite hits (`sin np.pi -> 0`) still mint through the candidate scan below, whose
-    // equivalence machinery reads specials at high precision (hiprec rescue), while a
-    // rounded value finds no alphabet literal to match. The non-finite class arms stay
-    // OPEN to special-bearing sources: nan/inf collapse is exact (the ratified
-    // nan/inf x special absorption rows), certified by intervals plus the dirac refuter.
-    // SPELLING-COMPLETE, not spelling-literal (2026-08-07). This tests whether the source
-    // DENOTES a special, and since 2026-08-07 the token scan alone no longer decides that:
-    // the constructor folds `exp 1` to the leaf `e` (`fun`, the write half of
-    // `compose_e_power`), so `* <constant> exp 1` is the canonical state
-    // `<mul> np.e <constant> </mul>` while carrying no `np.e` token. Testing the raw tokens
-    // alone let exactly that source through and the re-mine minted
-    // `* <constant> exp 1 -> <constant>` plus its +, - and / mirrors -- an absorption the
-    // licence forbids and the CONSTRUCTOR itself refuses, so the mine was routing around a
-    // ratified refusal through a second spelling of one value.
-    //
-    // `exp 1` is the ONLY spelling that needs adding, and that is a checkable claim rather
-    // than a hope: `Ex::Pi` has no constructor arm producing it at all, and `Ex::E` is
-    // produced by exactly one -- `exp(Num(1))`. In prefix a unary head is immediately
-    // followed by its argument, so consecutive `exp 1` IS the subterm.
-    //
-    // This guard covers the GROUND-FOLD channel (the short-circuit just below). The
-    // ABSORPTION channel has its own twin in `miner.rs`, and that one could not be fixed
-    // this way: `/ <constant> exp (-1)` denotes `<constant> * e` through no `exp 1` subterm
-    // at all, so the mint-side licence counts specials on the engine's own ENDPOINT for the
-    // source instead of on any spelling. Here the spelling test is enough and provably
-    // complete, because this channel only ever sees the source's own leaves.
-    //
-    // The general question both leave open is recorded in the audit (F49, register C1.20):
-    // a gate keyed on a spelling breaks whenever the canon unifies two spellings, and the
-    // miner has no mechanism that asks the engine "would you refuse this?" -- it only asks
-    // "do you already derive it?" (the mint-pristine property). The dual is missing.
-    let src_special = source.iter().any(|t| t == "np.pi" || t == "np.e")
-        || source.windows(2).any(|w| w[0] == "exp" && w[1] == "1");
+    // A GROUND EVALUATION answers to the resolved-literal bar like every computed
+    // literal: strict mu descent below the mark and a different literal skeleton. That bar
+    // is what refuses a ROUNDING of an exact symbolic value (`rootn np.e (-1) ->
+    // 0.36787944117144233`, `acos (-1) -> 3.141592653589793`): the 17-digit literal is far
+    // costlier than the symbolic mark it would replace, from every spelling of the special
+    // (`np.pi`, `exp 1`, `acos (-1)`, pi/2, 2 pi). Exact finite hits that print short
+    // (`cos np.pi -> (-1)`) descend and mint, here or through the scan. The standing
+    // falsifier is `tests/test_special_constants.py`: no special-bearing rule with a
+    // rounded decimal RHS.
     let src_has_const = source.iter().any(|t| t == "<constant>");
     if source.len() > 1
         && source
@@ -1763,38 +2252,8 @@ pub fn find_rule_with_lib(
             .all(|t| t == "<constant>" || ops.is_operator(t) || finite_leaf(t))
     {
         let non_ops: Vec<&String> = source.iter().filter(|t| !ops.is_operator(t)).collect();
-        if !src_special && !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
+        if !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
             if let Some(tok) = crate::numeric::evaluate_constant_subtree(source, ops) {
-                // DENOTES A SPECIAL BY VALUE, NOT BY SPELLING (2026-08-08; register B, and the
-                // dual C1.20 records above). The licence's own prose already states the right
-                // test -- whether the source DENOTES a special -- and its token scan cannot
-                // see one that arrives as a computed VALUE: `acos (-1)` carries no `np.pi`
-                // token and no `exp 1` subterm, yet it IS pi. So `exp 1 is the ONLY spelling
-                // that needs adding` above is complete for CONSTRUCTOR-PRODUCED leaves and
-                // silent about evaluated ones; this is the other half.
-                //
-                // Left alone, the short-circuit answers with the f64 decimal
-                // 3.141592653589793 -- a ROUNDING of an exact symbolic value, exactly what
-                // this licence exists to refuse -- and since that decimal is mu-expensive
-                // nothing descends, no rule mints, and the candidate scan never runs. The
-                // corpus paid for it in FORTY-EIGHT rules, every one a context of the single
-                // fact `acos(-1) = pi`: `* acos (-1) _0 -> * np.pi _0` and its +, -, /, pow
-                // and both-argument-order mirrors, `cos acos (-1) -> -1`, `/ acos (-1) np.pi
-                // -> 1` -- with no bare `acos (-1) -> np.pi` among them, because that is the
-                // one rule this channel prevented. Same shape as F49/F51/F52/F53: an arm the
-                // engine lacks shows up as rules.
-                //
-                // Declining routes the source to the CANDIDATE SCAN -- the channel that
-                // already mints `sin np.pi -> 0` -- whose equivalence machinery reads specials
-                // at high precision. The f64 comparison is only the TRIGGER; hiprec is the
-                // proof. A value that merely SHARES pi's f64 without being pi finds no
-                // alphabet match there and stays symbolic, so the failure direction is closed
-                // rather than open. Both signs trigger: the sign is carried by the same
-                // rounding argument, and which of them the mine actually reaches is left to
-                // the re-mine to answer rather than prescribed here.
-                let denotes_special = crate::numeric::leaf_value(&tok).is_some_and(|x| {
-                    x.abs() == std::f64::consts::PI || x.abs() == std::f64::consts::E
-                });
                 // A NON-FINITE f64 verdict must be corroborated by the honest interval
                 // CLASS (H-019/H-021, 2026-08-04): f64 evaluation cannot distinguish an
                 // exact boundary hit from a true domain escape -- `acosh(acos(cos 1))`
@@ -1829,7 +2288,7 @@ pub fn find_rule_with_lib(
                         }
                     },
                 };
-                if corroborated && !denotes_special {
+                if corroborated {
                     let t = vec![tok];
                     // An f64-EVALUATED literal is a COMPUTED value, not an alphabet
                     // spelling, so it answers to the caller's resolved-target criterion
@@ -1843,8 +2302,8 @@ pub fn find_rule_with_lib(
                     // ~1.4k mint-then-drop rules per canonical mine, contained only by
                     // sort promotion's UNSUPPORTED bucket (and `promote_sorts` defaults
                     // to OFF, where they shipped as serve-time rounding rewrites).
-                    // Callers without the criterion (stage-2 confirmation, the public
-                    // query path) keep the short-circuit as-is.
+                    // Callers without the criterion (the per-call query path) keep the
+                    // short-circuit as-is.
                     let resolved_ok = match accept_resolved {
                         Some(f) => f(&t),
                         None => true,
@@ -1863,24 +2322,13 @@ pub fn find_rule_with_lib(
         // rows extend); all-NaN -> nan (`* <constant> acos(np.e)`); a.e. +-inf -> that inf literal
         // (`inv(pow(0, exp C))` = +inf everywhere); a mixed pole -> fall through to the candidate
         // scan. The sampled classifier this replaces could only ever be as good as its grid.
-        match if ivl_class_on() {
-            crate::interval::value_class(source, ops)
-        } else {
-            None
-        } {
-            // The Finite -> `<constant>` arm is gated on SPECIAL-FREE sources (stage-1
-            // Const-absorption licence at the channel, owner 2026-08-01): a special
-            // vanishing into a fitted constant is the absorption the policy forbids, for
-            // EVERY caller. This is also what makes stage-2 confirmation honest for the
-            // exact-collapse family: confirmation re-runs this function with the target
-            // as the only candidate, and this arm used to HIJACK the answer for
-            // `cos np.pi` (returning `<constant>` instead of testing `(-1)`), scoring
-            // every bare ground exact collapse "unconfirmed". Gated, the source falls
-            // through to the scan, which verifies the asked target -- exact hits
-            // (`cos np.pi -> (-1)`, owner: "cos(pi) should be simplified to -1") mint
-            // and confirm; inexact values still find no alphabet literal to match.
+        match crate::interval::value_class(source, ops) {
+            // A special vanishing into a fitted constant is the absorption the licence
+            // registry refuses (`mint_refusals`, counted on the source and its mark), and
+            // the caller's acceptance carries the registry, so this arm needs no special
+            // gate of its own: a refused `<constant>` falls through to the scan.
             //
-            // ALSO gated on `<constant>`-BEARING sources -- the arm's contract as
+            // The arm is gated on `<constant>`-BEARING sources -- the arm's contract as
             // documented above ("a variable-free `<constant>`-bearing source"): a
             // DETERMINED source (var-free, Const-free, all leaves finite literals) is
             // its own reduction -- the engine folds it to its exact value and never
@@ -1895,7 +2343,7 @@ pub fn find_rule_with_lib(
             // carries the matching refusal so the candidate scan cannot re-mint what
             // this arm no longer answers.
             Some(crate::interval::Class::Finite) => {
-                if !src_special && src_has_const {
+                if src_has_const {
                     let t = vec!["<constant>".to_string()];
                     if accepted(&t) {
                         return Ok(Some(t));
@@ -1927,39 +2375,16 @@ pub fn find_rule_with_lib(
             _ => {} // Mixed / Empty / unevaluable -> not a clean collapse: candidate scan below
         }
     }
-    let src_tape = Tape::compile(source, ops, &lib.var_names)?;
-    let n_src_const = src_tape.n_params;
-    let src_mask = var_mask(source, &lib.var_names);
-    let combos = sign_combos(n_src_const);
-
-    let mut rng = Rng::new(seed);
-    // Source instances shared across the whole candidate scan (see `source_instances`).
-    let y_src = source_instances(
-        &src_tape,
-        n_src_const,
-        &combos,
+    let sc = SourceCtx::new(
+        ops,
+        source,
+        &lib.var_names,
         &lib.cols,
         lib.n_rows,
         challenges,
-        &mut rng,
-    );
-    // REACHABILITY gate (exact, interval-analytic) for a VARIABLE-FREE source: every value
-    // component the source takes over its constants must be reachable by the candidate over its
-    // own (see `interval::reaches_all_of`). Scoped to variable-free sources -- the class the
-    // interval engine is validated on, and exactly the family the sampled POLE_GRID exists for
-    // (`pow(asin(C/2), inf) -> 0`, whose +inf band a fixed grid can straddle and miss).
-    // Computed ONCE per source, outside the scan.
-    let src_reach = if ivl_reach_on() && !source.iter().any(|t| lib.var_names.contains(t)) {
-        crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
-    } else {
-        None
-    };
-    // Special-point battery over THIS source's variable set (None for a variable-free
-    // source), shared across the whole candidate scan; see `rust/battery.rs`.
-    let battery = crate::battery::SpecialBattery::build(
-        lib.var_names.len(),
-        &crate::battery::used_variables(source, &lib.var_names),
-    );
+        seed,
+        !rescue,
+    )?;
     // THE SEARCH BOUND. `max_mu` (the caller's mark, i.e. mu of the engine's own endpoint
     // for this source) makes the search bound the SAME predicate as the acceptance gate:
     // walk mu tiers ascending and stop at the first tier that cannot descend. The token
@@ -2001,33 +2426,9 @@ pub fn find_rule_with_lib(
             if resolvable_only && cand.n_const == 0 {
                 continue; // its own mu is its price, and it is already above the mark
             }
-            if cand.var_mask & !src_mask != 0 {
-                continue; // candidate uses a variable the source lacks
-            }
-            // The Const-count invariant at the mint (its serve twin is the translate-time
-            // count gate; one invariant, both layers): a fire may never INCREASE the number
-            // of `<constant>` placeholders. For a const-BEARING source, a candidate with
-            // more slots than the source could only mint a count-increasing rule -- its
-            // slot values are per-challenge functions of the drawn source constants, not
-            // fixed reals, so literal resolution cannot apply either. For a const-FREE
-            // source, Const-bearing candidates stay IN the scan: their slots are fixed
-            // reals, resolved to literal tokens below.
-            if n_src_const > 0 && cand.n_const > n_src_const {
-                continue;
-            }
-            if let Some(sv) = &src_reach {
-                if let Some(cv) = &cand.reals_vs {
-                    if !crate::interval::reaches_all_of(cv, sv) {
-                        continue; // cannot reach a component the source takes: FALSE, no sampling
-                    }
-                }
-            }
-            if let Some(witness) = candidate_matches(
-                &y_src,
+            let Some(c) = certify_candidate(
+                &sc,
                 cand,
-                source,
-                &src_tape,
-                battery.as_ref(),
                 ops,
                 &lib.var_names,
                 &lib.cols,
@@ -2037,130 +2438,15 @@ pub fn find_rule_with_lib(
                 atol,
                 min_informative,
                 seed,
-            ) {
-                // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
-                // source's drawn constants and the fit's chosen constants are both in scope)
-                // LITERAL RESOLUTION (the Const-count invariant's constructive arm): a
-                // const-FREE source that matched a Const-bearing candidate did so at FIXED
-                // slot values -- abstraction manufactured at mint time, which is masking's
-                // job downstream, never the miner's. The slots are pinned to literal tokens
-                // (fail closed: an unpinnable slot skips the candidate and the scan
-                // continues), so the minted rule carries the VALUE, not a mask. The
-                // downstream guards and the caller's ordering acceptance then judge the
-                // RESOLVED spelling -- a resolution the engine already reaches natively
-                // (the fold family) lands on the mark's own state and is refused there.
-                let is_resolution = n_src_const == 0 && cand.n_const > 0;
-                let target: Vec<String> = if is_resolution {
-                    let resolved = y_src.first().and_then(|inst| {
-                        resolve_const_slots(
-                            &cand.tokens,
-                            witness.as_deref(),
-                            source,
-                            ops,
-                            &lib.var_names,
-                            &lib.cols,
-                            &inst.1,
-                        )
-                    });
-                    let resolved = resolved.filter(|t| match accept_resolved {
-                        Some(f) => f(t),
-                        None => true,
-                    });
-                    match resolved {
-                        Some(t) => t,
-                        None => {
-                            if let Some(t) = gate_trace() {
-                                if source.join(" ").starts_with(t.as_str()) {
-                                    eprintln!(
-                                        "RESOLVE-FAIL src=[{}] cand=[{}] witness={witness:?}",
-                                        source.join(" "),
-                                        cand.tokens.join(" ")
-                                    );
-                                }
-                            }
-                            continue;
-                        }
-                    }
-                } else {
-                    cand.tokens.clone()
-                };
-                // The scan reaches literal targets the short-circuit never sees: `finite_leaf`
-                // excludes any source carrying an inf/nan literal from the short-circuit
-                // entirely, so guarding only the arms would leave that whole family unjudged.
-                // Judged on the RESOLVED spelling: a resolved bare literal is exactly the
-                // single-token collapse this refuter exists for.
-                if dirac_refutes_literal(source, &target, ops) {
-                    continue;
-                }
-                // THE EMITTED TARGET IS WHAT SHIPS (2026-08-21). The library's fold filter
-                // asks what the CONSTRUCTOR folds a candidate to, but the scan emits the
-                // candidate's OWN token form -- so a candidate admitted because it folds to
-                // a leaf (`pow 1 <constant>` -> `1`) was still written out composite:
-                // `rootn 1 <constant> -> pow 1 <constant>`. Filtering the LIBRARY cannot
-                // close the class; only a guard on the emitted spelling can, and it belongs
-                // HERE, in the shared scan, because `find_rule_lib` and the resident mine
-                // carry separate acceptance closures and a guard in either alone is a hole.
-                //
-                // A var-free LEAF target (`0`, `np.pi`) stays legal -- admitting foldable
-                // candidates is the point. A var-free COMPOSITE never does.
-                if target.len() >= 2
-                    && !target.iter().any(|t| {
-                        lib.var_names.iter().any(|v| v == t)
-                            || t.starts_with('_')
-                            || t.starts_with('$')
-                            || t.starts_with('?')
-                            || t.starts_with('!')
-                    })
-                {
-                    continue;
-                }
-                // COLLAPSE-TO-`<constant>` guard, the ratified zoo-collapse predicate applied at
-                // the MINT rather than only at the online fold: a source may collapse to a free
-                // finite constant only if its finite part has POSITIVE MEASURE. `inv <constant>`
-                // qualifies (finite off the measure-zero pole, which is why the family is
-                // ratified); `pow (-1) <constant>` does not (finite only at the integers, a null
-                // set), and without this the literal refuter above merely diverts it into an
-                // equally false `-> <constant>`. Same predicate as the engine's value-set
-                // collapse fold (`engine/ac.rs::ac_fold`, `cls()==Finite && fin_pm()`), so
-                // the two paths cannot disagree about what "collapses to a constant" means.
-                // CLASS PRESERVATION for a VARIABLE-FREE source (ratified licence).
-                // Such a source is a constant-family: its whole behaviour is a function of its
-                // `<constant>` slots, so a rewrite must preserve the value CLASS, which is a
-                // measure statement over the constant axis. `reaches_all_of` above deliberately
-                // ignores nan (a nan row is extendable, "decided by measure rather than by
-                // reachability") -- this is where that measure decision is made.
-                //   `exp log <constant>` is MIXED (finite on C>0, undefined on C<0) while
-                //   `exp <constant>` is FINITE: the rewrite would DEFINE a positive-measure
-                //   undefined region, which §4 R3 and §9.8.3(b) put in the kill set.
-                //   `pow 0 <constant>` (MIXED: 0 on C>0, +inf on C<0) likewise cannot become a
-                //   bare `<constant>`, and `pow (-1) <constant>` (nan a.e.) cannot become
-                //   anything finite.
-                // Null-set exceptions stay tolerated because the CLASS ignores them: `inv
-                // <constant>` is FINITE (its +inf lives only at C=0) and keeps collapsing, per
-                // §9.8.3(c) and the §9.8.4 degenerate-literal carve-out.
-                if let Some(sv) = &src_reach {
-                    // `target` is the candidate's own tokens unless literal resolution
-                    // respelled it -- reuse the build-time value set where it is.
-                    let tv = if is_resolution {
-                        crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
-                    } else {
-                        cand.reals_vs.clone()
-                    };
-                    let same_class = tv.is_some_and(|cv| cv.cls() == sv.cls());
-                    if !same_class {
-                        continue;
-                    }
-                    // A source finite only on a NULL set additionally may not collapse to a free
-                    // constant (the ratified zoo-collapse predicate, mint-side).
-                    if target.len() == 1 && target[0] == "<constant>" && !sv.fin_pm() {
-                        continue;
-                    }
-                }
-                if is_resolution {
-                    resolved_matches.push(target);
-                } else {
-                    matches.push(target);
-                }
+                rescue,
+                accept_resolved,
+            ) else {
+                continue;
+            };
+            if c.resolved {
+                resolved_matches.push(c.tokens);
+            } else {
+                matches.push(c.tokens);
             }
         }
         matches.extend(resolved_matches);
@@ -2177,9 +2463,16 @@ pub fn find_rule_with_lib(
                 }
             }
             // CHEAPEST ACCEPTED mu tier wins. When select_best refuses every match in this
-            // tier (wildcard multiplicity or the caller's acceptance), the scan continues:
-            // a costlier spelling can still sit strictly below the caller's mark.
-            if let Some(best) = select_best(source, matches, ops, accept) {
+            // tier (wildcard multiplicity, the caller's acceptance or its confirmation), the
+            // scan continues: a costlier spelling can still sit strictly below the caller's
+            // mark, and an unconfirmed pick yields to the next candidate.
+            //
+            // CONFIRMATION re-tests a NUMERIC certificate on independent rows, so it rides
+            // only this channel. The short-circuit arms above answer from exact sources --
+            // the interval class and the source's own evaluation -- which fresh rows cannot
+            // re-test.
+            let accept_confirmed = |t: &[String]| accepted(t) && confirm.is_none_or(|f| f(t));
+            if let Some(best) = select_best(source, matches, ops, Some(&accept_confirmed)) {
                 return Ok(Some(best));
             }
         }
@@ -2214,6 +2507,7 @@ pub fn find_rule(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    rescue: bool,
 ) -> Result<Option<Vec<String>>, String> {
     // Per-call path: no engine here to score mu, so the library is unscored and the legacy
     // token bound stands (`max_mu = None`). The MINE goes through the resident-library path.
@@ -2232,9 +2526,78 @@ pub fn find_rule(
         rtol,
         atol,
         min_informative,
+        rescue,
+        None,
         None,
         None,
     )
+}
+
+/// THE PAIR JUDGMENT: one (source, target) pair through `certify_candidate` on the given
+/// rows -- no library, no token bound, no short-circuit -- and then `select_best`'s guards
+/// (wildcard multiplicity, the bare-`<constant>` fold). The pair passes iff the spelling
+/// the scan would EMIT for it is the target asked about: a target that needs literal
+/// resolution would emit a different rule, so it is refused here.
+///
+/// This is stage-2 confirmation (on the independent rows) and the hint arms' numeric test
+/// (on the mine's own rows): one implementation, the same one the scan runs per candidate.
+/// `Ok(None)` is acceptance; `Ok(Some(reason))` a refusal.
+#[allow(clippy::too_many_arguments)]
+pub fn judge_pair(
+    ops: &Operators,
+    source: &[String],
+    target: &[String],
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    challenges: usize,
+    retries: usize,
+    seed: u64,
+    rtol: f64,
+    atol: f64,
+    min_informative: usize,
+    rescue: bool,
+) -> Result<Option<&'static str>, String> {
+    let sc = SourceCtx::new(
+        ops, source, var_names, cols, n_rows, challenges, seed, !rescue,
+    )?;
+    let cand = CandEntry::compile(target, ops, var_names, cols, n_rows, u64::MAX)?;
+    let Some(c) = certify_candidate(
+        &sc,
+        &cand,
+        ops,
+        var_names,
+        cols,
+        n_rows,
+        retries,
+        rtol,
+        atol,
+        min_informative,
+        seed,
+        rescue,
+        None,
+    ) else {
+        return Ok(Some("uncertified"));
+    };
+    match select_best(source, vec![c.tokens], ops, None) {
+        None => Ok(Some("wildcard_multiplicity")),
+        Some(t) if t != target => Ok(Some("respelled")),
+        Some(_) => Ok(None),
+    }
+}
+
+/// An order-free seed for one (source, target) pair: the base plus a hash of BOTH sides,
+/// so a pair's verdict never depends on what else was judged or in which order.
+pub fn pair_seed(base: u64, source: &[String], target: &[String]) -> u64 {
+    base.wrapping_add(token_hash(source).rotate_left(17) ^ token_hash(target))
+}
+
+/// Row-major X to the per-variable columns every evaluation here reads.
+pub fn x_columns(x_flat: &[f64], n_rows: usize, n_vars: usize) -> Result<Vec<Vec<f64>>, String> {
+    if x_flat.len() != n_rows * n_vars {
+        return Err("x_flat shape mismatch".to_string());
+    }
+    Ok(columns_from_row_major(x_flat, n_rows, n_vars))
 }
 
 #[cfg(test)]
@@ -2571,6 +2934,8 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
+                true,
+                None,
                 None,
                 None,
             )
@@ -2687,6 +3052,8 @@ mod tests {
             1e-9,
             1e-12,
             16,
+            true,
+            None,
             None,
             None,
         )
@@ -2708,11 +3075,65 @@ mod tests {
             1e-9,
             1e-12,
             16,
+            true,
             Some(&not_star_head),
+            None,
             None,
         )
         .unwrap();
         assert_eq!(deep, Some(s(&["neg", "*", "-3", "x0"])));
+    }
+
+    /// Stage 2 inside the scan: an UNCONFIRMED pick yields to the next candidate instead of
+    /// leaving the source without a rule, and confirmation rides only the numeric scan --
+    /// the exact ground evaluation answers without it.
+    #[test]
+    fn an_unconfirmed_pick_yields_to_the_next_candidate() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let xf = grid_1var(n);
+        let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
+        let lib =
+            CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n).unwrap();
+        let scan = |src: &[String], confirm: AcceptFn<'_>| {
+            find_rule_with_lib(
+                ops,
+                src,
+                src.len(),
+                None,
+                None,
+                &lib,
+                16,
+                16,
+                7,
+                1e-9,
+                1e-12,
+                16,
+                true,
+                None,
+                Some(confirm),
+                None,
+            )
+            .unwrap()
+        };
+        let src = s(&["+", "+", "x0", "x0", "x0"]);
+        let not_star_head = |t: &[String]| t[0] != "*";
+        assert_eq!(
+            scan(&src, &not_star_head),
+            Some(s(&["neg", "*", "-3", "x0"])),
+            "the unconfirmed first pick must yield to the next candidate"
+        );
+        let nothing = |_: &[String]| false;
+        assert_eq!(scan(&src, &nothing), None, "nothing confirms: no rule");
+        assert_eq!(
+            scan(&s(&["+", "1", "2"]), &nothing),
+            Some(s(&["3"])),
+            "the exact ground evaluation is not re-tested on fresh rows"
+        );
     }
 
     /// Signed, mixed-magnitude 1-var grid: negatives probe domain extensions, positives feed
@@ -2764,9 +3185,11 @@ mod tests {
             &cols,
             n,
             &y,
+            None,
             vec![-0.999_999_999_997_003_7],
             1e-9,
             1e-12,
+            true,
         );
         assert_eq!(a, vec![-1.0]);
         // y genuinely x^2.9999997: within snap range of 3 but pow(x, 3) misses by ~1e-7
@@ -2782,9 +3205,11 @@ mod tests {
             &cols,
             n,
             &yb,
+            None,
             vec![2.999_999_7],
             1e-9,
             1e-12,
+            true,
         );
         assert_eq!(b, vec![2.999_999_7]);
     }

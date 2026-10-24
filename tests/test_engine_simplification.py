@@ -6,6 +6,12 @@ from simplipy.utils import violates_wildcard_multiplicity
 from conftest import acj_config_path
 
 
+@pytest.fixture(scope='module')
+def eng() -> SimpliPyEngine:
+    """The shipped acj-4 engine, built once for the classes that only read it."""
+    return SimpliPyEngine.from_config(acj_config_path())
+
+
 # Minimal operator set for pruning tests
 _MINIMAL_OPERATORS = {
     "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
@@ -28,7 +34,7 @@ class TestPruneCoveredRules:
         covered = (("sin", "sin", "sin", "?0"), ("sin", "?0"))
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[base, covered])
 
-        n_pruned = engine.prune_covered_rules()
+        n_pruned = engine.prune_covered_rules(rule_mode='default')
 
         assert n_pruned == 1
         assert engine.simplification_rules == [base]
@@ -58,7 +64,7 @@ class TestPruneCoveredRules:
         # ... but the composite variant does not
         assert probe.simplify(["sin", "+", "sin", "x0", "1"]) != ["sin", "sin", "x0"]
 
-        n_pruned = engine.prune_covered_rules()
+        n_pruned = engine.prune_covered_rules(rule_mode='default')
 
         assert n_pruned == 0
         assert engine.simplification_rules == [leaf_cover, wide]
@@ -79,7 +85,7 @@ class TestPruneCoveredRules:
         no_rules = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         assert no_rules.simplify(["/", "<constant>", 'float("-inf")']) == ["0"]
 
-        n_pruned = engine.prune_covered_rules()
+        n_pruned = engine.prune_covered_rules(rule_mode='default')
 
         assert n_pruned == 1
         assert engine.simplification_rules == []
@@ -92,10 +98,10 @@ class TestPruneCoveredRules:
             (("sin", "sin", "sin", "sin", "?0"), ("?0",)),     # covered
         ]
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
-        n_first = engine.prune_covered_rules()
+        n_first = engine.prune_covered_rules(rule_mode='default')
         rules_after_first = list(engine.simplification_rules)
 
-        n_second = engine.prune_covered_rules()
+        n_second = engine.prune_covered_rules(rule_mode='default')
 
         assert n_first == 2
         assert n_second == 0
@@ -125,7 +131,7 @@ class TestPruneCoveredRules:
             "    (('/', '<constant>', 'float(\"-inf\")'), ('0',)),\n"
             "]\n"
             "engine = SimpliPyEngine(operators=ops, rules=rules)\n"
-            "engine.prune_covered_rules()\n"
+            "engine.prune_covered_rules(rule_mode='default')\n"
             "print(json.dumps(engine.simplification_rules))\n"
         )
         outputs = []
@@ -258,8 +264,8 @@ class TestMode:
         stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
         applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
         three edges behave consistently under `Mode.permissive`."""
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         from simplipy import Mode
         engine = SimpliPyEngine.from_config(
             acj_config_path())
@@ -472,6 +478,8 @@ class TestFindRules:
         compiled core, so mining (and everything else) is always available."""
         engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
         assert engine._core is not None
+        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'explicit', 0, rule_mode='default') == \
+            ['*', '2', 'x0']
 
     def test_default_mine_ships_promoted_seeds(self, tmp_path) -> None:
         """promote_sorts defaults ON (owner ruling 2026-08-01: features do not ship
@@ -907,10 +915,6 @@ class TestB2TailArm:
     API. Scope honesty: the arm removes the HORIZON class only -- dependency-loss
     unsoundness remains, and the D9 wording obligation forbids "finite_ae is sound"."""
 
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
-
     def test_tail_nan_no_longer_cancels(self, eng) -> None:
         assert eng.simplify('log(1 - 0.001*x1) - log(1 - 0.001*x1)') != '0'
         assert eng.simplify('asin(0.001*x1)/asin(0.001*x1)') != '1'
@@ -934,10 +938,6 @@ class TestB5B19OddSignFusion:
     at collection. Artifact effect, measured: 400-corpus row-identical; 30 shipped
     rules subsume at translation (0 dropped), twins 10 -> 8 -- the dated interim
     pins live in gate_acj.py and ac_translation_stats until the G2 republish."""
-
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
 
     def test_routes_agree_on_the_ratified_spelling(self, eng) -> None:
         via_mul = list(eng.simplify(eng.to_tagged(['*', '-5', 'sin', '2'])))
@@ -1067,14 +1067,9 @@ class TestB9MuGuarantee:
     check that the replaced claim really was false (some output IS token-longer)."""
 
     def test_mu_non_increase_and_idempotence_hold_400_of_400(self):
-        import json
-        import os
-        corpus_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   'benchmarks', 'corpus', 'raw_skeletons_nv.json')
-        if not os.path.exists(corpus_path):
-            pytest.skip('reference corpus not present')
+        from simplipy.verify import default_corpus
         eng = SimpliPyEngine.from_config(acj_config_path())
-        corpus = json.load(open(corpus_path))
+        corpus = default_corpus()
         assert len(corpus) == 400
         token_longer = 0
         for expr in corpus:
@@ -1098,10 +1093,6 @@ class TestApi1ModeParameter:
     of a JSON config got the mode that trades soundness for recall. max_passes /
     mode / form are keyword-only now, and mode accepts only Mode members and their
     documented string names."""
-
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
 
     def test_positional_arguments_are_refused(self, eng) -> None:
         from simplipy import Mode
@@ -1140,8 +1131,8 @@ class TestConc12CopyOnWrite:
         engine.compile_rules()
         assert engine._core is not old_core, 'compile_rules must swap, not mutate in place'
         # a reader that captured the old core keeps a consistent (old) view
-        assert old_core.ac_rules_info()[0] == 0
-        assert engine._core.ac_rules_info()[0] == 1
+        assert old_core.ac_rules_info_in_mode(rule_mode='default')[0] == 0
+        assert engine._core.ac_rules_info_in_mode(rule_mode='default')[0] == 1
 
     def test_failed_mutator_push_leaves_rules_unchanged(self, monkeypatch) -> None:
         engine = SimpliPyEngine(
@@ -1155,7 +1146,7 @@ class TestConc12CopyOnWrite:
             raise RuntimeError('injected core-build failure')
         monkeypatch.setattr(SimpliPyEngine, '_build_core', staticmethod(boom))
         with pytest.raises(RuntimeError, match='injected'):
-            engine.prune_covered_rules()
+            engine.prune_covered_rules(rule_mode='default')
         assert engine.simplification_rules == before, \
             'a failed push must leave the wrapper list unchanged (loud, not diverged)'
         assert engine._core is core_before

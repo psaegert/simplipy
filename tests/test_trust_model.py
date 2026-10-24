@@ -22,7 +22,6 @@ The load-bearing test in this file is
 :meth:`TestConfigIsNotExecutable.test_refusal_happens_before_the_import`: refusing is
 worth nothing if the module was already imported when the refusal fired.
 """
-import json
 import os
 import pickle
 import sys
@@ -33,6 +32,7 @@ import pytest
 import yaml
 
 from simplipy import SimpliPyEngine, codify, explicit_constant_placeholders
+from simplipy.verify import default_corpus
 from simplipy.trust import UntrustedModuleError
 from conftest import acj_config_path
 
@@ -216,9 +216,7 @@ class TestDeployedEvaluationPath:
         refiner uses: simplify, render with realizations, turn ``<constant>`` into
         named lambda arguments, codify, call. Every name the rendered row mentions has
         to resolve in the engine's own namespace, or the downstream refiner breaks."""
-        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(repo, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')) as file:
-            corpus = json.load(file)
+        corpus = default_corpus()
 
         checked = 0
         with_constants = 0
@@ -228,7 +226,7 @@ class TestDeployedEvaluationPath:
                 continue
             simplified = engine.simplify(list(row))
             with_placeholders, constants = explicit_constant_placeholders(
-                simplified, convert_numbers_to_constant=False)
+                simplified)
             infix = engine.prefix_to_infix(with_placeholders, realization=True)
             function = engine.code_to_lambda(codify(infix, variables + constants))
             function(*[0.7] * (len(variables) + len(constants)))  # a NameError here is the regression

@@ -13,7 +13,7 @@ import pytest
 
 # R1-R13 + __version__ — the root column, verbatim.
 ROOT_ALL = {
-    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'DEFAULT_WORK',
+    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
     'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
@@ -41,7 +41,7 @@ MODULE_ALLS = {
         'AssetType',
     },
     'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT'},
-    'simplipy.mining': {'RuleMiner'},
+    'simplipy.mining': {'RuleMiner', 'verify_mine', 'cross_mode_complexity'},
     # Joined 2026-08-23: the two public modules the D11 landing missed. The
     # compatibility policy says every public module declares its column; these
     # rows make that sentence literally true and pin it.
@@ -50,6 +50,8 @@ MODULE_ALLS = {
         'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
         'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
         'exp', 'log', 'rootn', 'pow',
+        'add', 'sub', 'mul',
+        'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'atan2', 'besselj',
     },
     'simplipy.promotion': {'promote'},
 }

@@ -144,7 +144,7 @@ def solve_witness(lhs_b, rhs, ws, nt, y_src, V, rng):
         # hard failure, never a silent degradation.
         raise RuntimeError(
             'simplipy.promotion requires scipy for witness solving; refusing to '
-            'silently mine a different artifact without it (C23c-loud)') from ex
+            'silently mine a different artifact without it') from ex
     defined = ~np.isnan(y_src) & np.isfinite(y_src)
     if defined.sum() < max(4, nt + 2):
         return []

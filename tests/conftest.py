@@ -17,6 +17,7 @@ input-language tests and the chain-combining caps -- go through here instead, so
 the refusal stays total on the public surface and no test downloads a legacy asset.
 """
 import os
+import tempfile
 
 import pytest
 
@@ -29,6 +30,23 @@ _FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 _ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj-4')
 _ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines', 'acj-4')
+
+
+@pytest.fixture(autouse=True, scope='session')
+def _temporary_files_stay_in_the_pytest_tree(tmp_path_factory):
+    """Every temporary file a test makes -- itself or through library code and spawned
+    workers (``tempfile``, ``TMPDIR``) -- lands in pytest's own tmp tree, never in the
+    system temp dir, and is cleaned up with it."""
+    scratch = str(tmp_path_factory.mktemp('tempfile'))
+    old_env, old_tempdir = os.environ.get('TMPDIR'), tempfile.tempdir
+    os.environ['TMPDIR'] = scratch
+    tempfile.tempdir = scratch
+    yield
+    tempfile.tempdir = old_tempdir
+    if old_env is None:
+        os.environ.pop('TMPDIR', None)
+    else:
+        os.environ['TMPDIR'] = old_env
 
 
 def acj_asset_dir() -> str:
@@ -62,45 +80,81 @@ def acj_corpus_rules_path() -> str:
     return os.path.join(acj_asset_dir(), 'rules_permissive.json')
 
 
-def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set only') -> None:
-    """Skip when the acj-4 cell ships no `real`/`corpus` set of its own.
-
-    The cell carries the f64 third alone while the other two are re-mined, so a test
-    whose subject is a `real` or `corpus` RULE SET has no subject and says so -- locally
-    AND in CI. `SIMPLIPY_TEST_REQUIRE_ASSETS` deliberately does NOT harden this gate:
-    that switch guards the assets CI actually STAGES (the f64 four and the legacy
-    refusal input) against a silently broken staging step, and hardening the triple on
-    the same switch turned the documented interim into 11 CI failures (audit U1). The
-    gate never goes quietly wrong instead, because both of its failure channels are
-    loud on their own terms:
-
-    * a PARTIAL triple always fails, in every environment -- no intended state ships
-      one file of the pair, so half a triple is breakage wherever it is observed;
-    * `SIMPLIPY_TEST_REQUIRE_TRIPLE` is the release-gate switch for the job that
-      validates a build whose artifact IS the triple: there, absence must read as
-      failure, never as a skip.
-
-    No switch needs flipping for the tests themselves: the moment `rules_real.json`
-    and `rules_permissive.json` land beside the f64 set, every gated test runs everywhere.
-    """
-    real, corpus = acj_real_rules_path(), acj_corpus_rules_path()
-    present = [p for p in (real, corpus) if os.path.exists(p)]
-    if len(present) == 2:
-        return
-    if present:
-        pytest.fail(
-            f'the acj-4 cell carries PART of a triple ({os.path.basename(present[0])} '
-            f'without its sibling) -- a triple ships whole or not at all')
-    if os.environ.get('SIMPLIPY_TEST_REQUIRE_TRIPLE'):
-        pytest.fail(f'SIMPLIPY_TEST_REQUIRE_TRIPLE is set but {why}')
-    pytest.skip(why)
-
-
 def require_or_skip(path: str, why: str) -> None:
     if not os.path.exists(path):
         if os.environ.get('SIMPLIPY_TEST_REQUIRE_ASSETS'):
             pytest.fail(f'SIMPLIPY_TEST_REQUIRE_ASSETS is set but {why}')
         pytest.skip(why)
+
+
+def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
+    """All three rule sets of the acj-4 cell, gated like every other staged asset: a
+    missing file skips locally and fails under SIMPLIPY_TEST_REQUIRE_ASSETS."""
+    for path in (acj_rules_path(), acj_real_rules_path(), acj_corpus_rules_path()):
+        require_or_skip(path, f'{why} ({os.path.basename(path)} is missing)')
+
+
+# INTERIM PINS (2026-10-18), until the acj-4 re-mine, which resets both lists to empty. The sign
+# key (fewest signs, then outermost) and the one-bit sign moved the canon and the measure past the
+# staged acj-4 asset, which was mined under the earlier ones, and the f64 load refuses exactly
+# these rows of it:
+#   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, and
+#     a product of two powers of e, which the product constructor merges (`exp(2)/e` is `e`),
+#     so both sides are one canonical state;
+#   * UPHILL (gate G7): two rows whose sides now climb in price. A sign costs one bit wherever it
+#     sits, so a negation standing alone pays no `Mul` head: `-exp(-x)` is cheaper than
+#     `-1/exp(x)` and `-log(acos(x))` than `log(1/acos(x))`, where the two sides cost the same
+#     before. G7 refuses only a rule whose sides climb; the rules whose two spellings cost the same
+#     and which the sign key orders the other way load, and the runtime gate fires them only where
+#     an application descends.
+# The suites pin the counts and these rows, so any other drift still fails.
+ACJ4_INTERIM_SUBSUMED = (
+    ('neg asin _0', 'asin neg _0'), ('neg asinh _0', 'asinh neg _0'),
+    ('neg atan _0', 'atan neg _0'), ('neg atanh _0', 'atanh neg _0'),
+    ('neg sin _0', 'sin neg _0'), ('neg sinh _0', 'sinh neg _0'),
+    ('neg tan _0', 'tan neg _0'), ('neg tanh _0', 'tanh neg _0'),
+    ('inv neg asin _0', 'inv asin neg _0'), ('inv neg asinh _0', 'inv asinh neg _0'),
+    ('inv neg atan _0', 'inv atan neg _0'), ('inv neg atanh _0', 'inv atanh neg _0'),
+    ('neg rootn _0 3', 'rootn neg _0 3'), ('neg rootn _0 5', 'rootn neg _0 5'),
+    ('neg rootn _0 7', 'rootn neg _0 7'), ('neg rootn _0 9', 'rootn neg _0 9'),
+    ('/ exp 2 np.e', 'np.e'),
+)
+ACJ4_INTERIM_UPHILL = (
+    ('neg exp neg !0', 'inv neg exp !0'), ('neg log acos _0', 'log inv acos _0'),
+)
+
+
+def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:
+    """The rows of `engine`'s f64 set its load refuses, each as `(lhs, rhs)` strings: the rows no
+    served rule answers for (`ac_served_rules_in_mode`'s provenance), split into the subsumed
+    ones (one canonical state on both sides, in the canon the set was certified in) and the
+    rest."""
+    core = engine._core
+    canon = engine._rule_canons.get('default')
+    served = {src for _, _, src in core.ac_served_rules_in_mode(rule_mode='default')}
+    subsumed, other = [], []
+    for i, (lhs, rhs) in enumerate(engine.simplification_rules):
+        if i in served:
+            continue
+        row = (' '.join(lhs), ' '.join(rhs))
+        key_l, key_r = core.ac_canonical_keys([list(lhs), list(rhs)], rule_mode='default',
+                                              canon=canon)
+        (subsumed if key_l == key_r else other).append(row)
+    return subsumed, other
+
+
+# Known violations of the permissive-dominance sweep over the shipped corpus (rows where the
+# permissive answer prices above another mode's on f64's yardstick). One row, by the zero each
+# mode reads: its divisor holds `x13 - x13` beside `x11`, which float64's signed zero makes
+# `-inf*x14*(x17/x11 - 1)` inside the tanh in `f64` and `permissive`, while the one zero of
+# `real` gives the cheaper `inf*x14*(x11 - x17)`, a value permissive may not take (it is +inf
+# where float64 gives -inf).
+PERMISSIVE_DOMINANCE_KNOWN: tuple = (
+    {'expression': ['/', '*', 'x2', '-', '+', '*', 'x13', 'tanh', '+', '+', 'x13', '/', '*', '2',
+                    '*', 'x14', '-', 'x11', 'x17', '*', 'x11', '-', 'x13', 'x13', 'x14', 'x13',
+                    '-', 'x14', 'x13', 'x11'],
+     'mu': {'f64': 91585, 'real': 83585, 'permissive': 91585}},
+)
 
 
 def construct_legacy_table() -> SimpliPyEngine:

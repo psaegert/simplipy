@@ -6,7 +6,8 @@
 //!   `Const`; like terms collected as far as the soundness gates allow; sorted by [`cmp_ex`].
 //! * `Mul(v)`: `v.len() >= 2`; no element is a `Mul`; at most one `Num` (never 1; 0 only in the
 //!   uncertified `0 * t` case documented at the zero-coefficient gate); at most one bare `Const`;
-//!   like bases collected under the gates; sorted by [`cmp_ex`].
+//!   like bases collected under the gates, and at most one power of e (`exp(a) exp(b)` is
+//!   `exp(a + b)`); sorted by [`cmp_ex`].
 //! * `Pow(b, e)`: `e` is never `Num(0)` or `Num(1)`; `b` is never a `Mul` when `e` is a
 //!   non-negative or even integer (integer powers distribute) -- for ODD NEGATIVE `e` the
 //!   distribution carries a zero-set licence (see `pow`), so a refused `Pow(Mul[..], e)`
@@ -26,9 +27,9 @@ use std::cmp::Ordering;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::rat::Rat;
-use num_bigint::BigUint;
-use num_traits::{One, ToPrimitive, Zero};
+use super::rat::{Mantissa, Rat};
+use num_bigint::{BigInt, BigUint};
+use num_traits::ToPrimitive;
 
 /// An AC-core expression. Leaves carry interned [`Tok`] ids (variables `x0..`, wildcards
 /// `_0`/`?0`/`!0`/`$0`); everything numeric is EXACT ([`Rat`], or the symbolic
@@ -144,15 +145,15 @@ impl Ex {
 /// | numeric literal p/q (exact VALUE)  | max(2, bits(p)+bits(q)-1) | its description      |
 /// |   (spelling-free: `0.5` == `1/2`)  |                  | length; implicit /1 is free   |
 /// | bag coefficient slot, magnitude!=1 | the literal cost | the slot PAYS (removes the    |
-/// |   (magnitude 1: a bare sign, 0)    |                  | coefficient-rides-free        |
+/// |   (magnitude 1: a bare sign)       |                  | coefficient-rides-free        |
 /// |                                    |                  | asymmetry that minted the     |
 /// |                                    |                  | materialization fork)         |
 /// | rational `Pow` exponent            | as coefficient   | `x^-1` = division = structure |
 /// | `<constant>`                       | c_free = 128     | a free real dof; the priciest |
 /// |                                    |                  | atom (owner floor: >= special)|
 ///
-/// SIGN IS FREE throughout (`|p|`; a magnitude-1 coefficient or exponent costs 0):
-/// `x - y` is not more complex than `x + y` -- standing doctrine, not revoked by mu.
+/// (The sign rows of this preamble are superseded: a sign costs ONE BIT wherever it sits,
+/// `mu_sign` below. A magnitude-1 exponent is division, not a sign, and stays free.)
 /// The literal formula `max(2, bits(|p|) + bits(q) - 1)` is the unique reading
 /// consistent with the ratified doc's worked examples: cost(2)=2 (T4: mu(2x)=18),
 /// cost(5/2)=4 (T5: mu(2.5*pi)=20), a 52-bit dyadic ~105 (T1/T2), mu(0)=mu(1)=2 (T3).
@@ -169,26 +170,11 @@ impl Ex {
 /// The symbol UNIT, in BITS: what one grammar symbol costs at the ratified 1/8 pin, and
 /// the scale every entry of the symbol table below is expressed against. Since 2026-08-21
 /// no node is priced at the bare unit except an unclassified function head -- the table
-/// holds the per-kind entries, and this is what they are read AGAINST.
-/// 8 by default; `SIMPLIPY_MU_SYM` overrides it, read
-/// ONCE per process -- the pre-registered P-R3 sensitivity axis is this
-/// symbol-vs-bits RATIO (literal costs are absolute bits and do not scale), and the axis
-/// survives the table unchanged because the whole table scales with the unit.
-/// Production never sets the variable; it exists for the sensitivity mine only.
-// ARTIFACT-AFFECTING switch (and mu_free below): listed in
-// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-fn mu_sym_unit() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_MU_SYM")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(8)
-    })
-}
+/// holds the per-kind entries, and this is what they are read AGAINST. Literal costs are
+/// absolute bits and do not scale with it.
+const MU_SYM_UNIT: u64 = 8;
 
-/// A symbol-table entry, in MILLI-BITS: `bits` read at the ratified 8-bit unit, scaled
-/// by whatever unit this process runs at.
+/// A symbol-table entry, in MILLI-BITS: `bits` read at the ratified 8-bit unit.
 ///
 /// EXACT in integer arithmetic at every unit -- `MU_MILLI / 8 = 125` divides evenly, so
 /// no entry ever rounds. That is not cosmetic: the reduction ordering's well-foundedness
@@ -196,7 +182,7 @@ fn mu_sym_unit() -> u64 {
 /// fresh termination argument.
 #[inline]
 fn sym_bits(bits: u64) -> u64 {
-    bits * (MU_MILLI / 8) * mu_sym_unit()
+    bits * (MU_MILLI / 8) * MU_SYM_UNIT
 }
 
 /// The mu SYMBOL TABLE (round-1, 2026-08-21), in BITS at the 8-bit unit.
@@ -231,9 +217,7 @@ fn sym_bits(bits: u64) -> u64 {
 /// and `np.e` now beats `exp 1` on COST rather than on the canonical tie-break, which is
 /// what the fold filter's correctness had been resting on.
 ///
-/// Entries are bits AT THE 8-BIT UNIT and scale with it, so the pre-registered P-R3
-/// sensitivity axis is exactly what it was: `SIMPLIPY_MU_SYM=16` doubles every entry
-/// while literal costs stay absolute bits.
+/// Entries are bits AT THE 8-BIT UNIT, while literal costs stay absolute bits.
 const MU_BITS_LEAF: u64 = 6;
 const MU_BITS_ADD: u64 = 3;
 const MU_BITS_MUL: u64 = 3;
@@ -256,10 +240,30 @@ pub fn mu_add() -> u64 {
     sym_bits(MU_BITS_ADD)
 }
 
-/// The `Mul` bag head -- also the negation WRAPPER `Mul[-1, .]` that spells `x - y`.
+/// The `Mul` bag head. A negation `Mul[-1, x]` is no product and pays no head: it is a sign
+/// (`mu_sign`).
 #[inline]
 pub fn mu_mul() -> u64 {
     sym_bits(MU_BITS_MUL)
+}
+
+/// A SIGN, in milli-bits: ONE BIT wherever it sits. The sign of a literal (`-2`, a coefficient
+/// `-3`, an exponent `-2`), the coefficient -1 of a product beside its other factors
+/// (`-x1*x2`), and a negation standing alone (`-x1`, the `-x2` of `x1 - x2`), which is a sign
+/// and not a product, so it pays its operand and this bit and no `Mul` head. `+1` is no sign
+/// and costs nothing, and a reciprocal (`Pow[y, -1]`) is division, not a sign.
+///
+/// A description length must tell a number from its negation, and one bit is what that
+/// distinction costs; pricing it the same everywhere is what makes the placement of a sign
+/// a question the sign key decides rather than the price (`-x1*tanh(3)` and
+/// `x1*tanh(-3)` cost the same). An absolute bit, like a literal's, not a symbol-table
+/// entry: it does not scale with `MU_SYM_UNIT`.
+pub const MU_SIGN: u64 = MU_MILLI;
+
+/// See [`MU_SIGN`].
+#[inline]
+pub fn mu_sign() -> u64 {
+    MU_SIGN
 }
 
 /// The `Pow` head -- also the division wrapper `Pow[y, -1]` that spells `x / y`.
@@ -302,6 +306,10 @@ fn mu_fun_bits(name: &str) -> u64 {
     match name {
         "exp" | "log" | "abs" | "sin" | "cos" | "tan" | "rootn" => MU_BITS_ELEMENTARY,
         "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
+            MU_BITS_TRANSCENDENTAL
+        }
+        // The 0.15 heads, priced at the transcendental tier by ruling (no census yet).
+        "floor" | "ceil" | "max" | "min" | "mod" | "harmonic" | "erf" | "atan2" | "besselj" => {
             MU_BITS_TRANSCENDENTAL
         }
         _ => 8,
@@ -351,17 +359,9 @@ fn mu_fun_bits(name: &str) -> u64 {
 /// construction guarantees.
 pub const MU_FREE_WORST_CASE_F64: u64 = 67 * MU_MILLI;
 
-/// `<constant>`, the priciest atom. `SIMPLIPY_MU_FREE` (read in BITS) overrides explicitly, for
-/// deployments whose fitted constants live in a narrower range than the whole f64 line.
-pub fn mu_free() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_MU_FREE")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(|bits| bits * MU_MILLI) // read in BITS, like `SIMPLIPY_MU_SYM`
-            .unwrap_or(MU_FREE_WORST_CASE_F64)
-    })
+/// `<constant>`, the priciest atom: the worst case over every fittable f64.
+pub const fn mu_free() -> u64 {
+    MU_FREE_WORST_CASE_F64
 }
 
 /// Milli-bits per bit. The whole measure is carried in MILLI-BITS so that a literal's
@@ -446,7 +446,8 @@ fn l_millibits_fixed(int_part: u64, mut x: u128) -> u64 {
 /// expansion (`q = 2^a * 5^b`, which includes every integer): the cost of the integer
 /// mantissa `m` of the SHORTEST exact decimal spelling `m * 10^k` and of the decimal
 /// exponent `k`, each priced by `l_millibits` -- the exponent is just another integer
-/// the spelling has to write down, `L(k) = log2(1 + |k|)`.
+/// the spelling has to write down, `L(k) = log2(1 + |k|)`. The pair is the value's one
+/// decimal decomposition ([`Rat::decimal_parts`]), the same the printer spells.
 ///
 /// For a non-integer, `k = -max(a, b)` and `m = |p| * 10^|k| / q` (for a REDUCED
 /// fraction `m` is never divisible by 10, so this IS the shortest spelling); for an
@@ -455,105 +456,19 @@ fn l_millibits_fixed(int_part: u64, mut x: u128) -> u64 {
 /// codeword `(1, 3)`; an integer with no trailing zeros has `k = 0`, where the
 /// codeword degenerates to the rational one and is refused as redundant).
 ///
-/// `None` when the value does not terminate in base ten, when the codeword would be
-/// degenerate (`k = 0`), or when the scaled mantissa leaves `i128`, in which case the
-/// decimal spelling is not available in range and the fraction code stands alone (the
-/// ratified i128-boundedness boundary; the beyond-`Rat` STRING pricer carries the same
-/// refusal, so the boundary cannot become an ordering cliff).
+/// `None` when the value does not terminate in base ten or when the codeword would be
+/// degenerate (`k = 0`, zero included).
 fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
-    match r.small_parts() {
-        Some((p, q)) => match decimal_code_small(p, q) {
-            Ok(code) => code,
-            Err(()) => decimal_code_big(r),
-        },
-        None => decimal_code_big(r),
-    }
-}
-
-/// `decimal_code` in 128 bits: `Err` when the scaled mantissa leaves `i128` (the boundary
-/// phase 2c lifts), `Ok(None)` when there is no decimal codeword.
-#[allow(clippy::result_unit_err)]
-fn decimal_code_small(p: i128, q: i128) -> Result<Option<(u64, u64)>, ()> {
-    if q == 1 {
-        // Integer arm (D38): k = trailing base-ten zeros, m = the remaining digits.
-        let mut m = p.checked_abs().ok_or(())?;
-        if m == 0 {
-            return Ok(None);
-        }
-        let mut k = 0u32;
-        while m % 10 == 0 {
-            m /= 10;
-            k += 1;
-        }
-        if k == 0 {
-            return Ok(None);
-        }
-        return Ok(Some((
-            l_millibits(m.unsigned_abs()),
-            l_millibits(u128::from(k)),
-        )));
-    }
-    let (mut a, mut b) = (0u32, 0u32);
-    let mut rest = q;
-    while rest % 2 == 0 {
-        rest /= 2;
-        a += 1;
-    }
-    while rest % 5 == 0 {
-        rest /= 5;
-        b += 1;
-    }
-    if rest != 1 {
-        return Ok(None);
-    }
-    let k = a.max(b);
-    let mut m = p.checked_abs().ok_or(())?;
-    for _ in 0..(k - a) {
-        m = m.checked_mul(2).ok_or(())?;
-    }
-    for _ in 0..(k - b) {
-        m = m.checked_mul(5).ok_or(())?;
-    }
-    Ok(Some((
-        l_millibits(m.unsigned_abs()),
-        l_millibits(u128::from(k)),
-    )))
-}
-
-/// `decimal_code` in big integers.
-fn decimal_code_big(r: &Rat) -> Option<(u64, u64)> {
-    let (p, q) = r.big_parts();
-    let (ten, five) = (BigUint::from(10u32), BigUint::from(5u32));
-    let mut m = p.magnitude().clone();
-    if m.is_zero() {
+    let parts = r.decimal_parts()?;
+    if parts.exp == 0 {
         return None;
     }
-    if q.is_one() {
-        let mut k = 0u64;
-        while (&m % &ten).is_zero() {
-            m /= &ten;
-            k += 1;
-        }
-        if k == 0 {
-            return None;
-        }
-        return Some((l_millibits_big(&m), l_millibits(u128::from(k))));
-    }
-    let q = q.magnitude().clone();
-    let a = q.trailing_zeros().unwrap_or(0);
-    let mut rest = &q >> a;
-    let mut b = 0u64;
-    while (&rest % &five).is_zero() {
-        rest /= &five;
-        b += 1;
-    }
-    if !rest.is_one() {
-        return None;
-    }
-    let k = a.max(b);
-    m <<= k - a;
-    m *= num_traits::pow(five, (k - b) as usize);
-    Some((l_millibits_big(&m), l_millibits(u128::from(k))))
+    let m = match &parts.mantissa {
+        Mantissa::Small(m) if *m < u128::MAX => l_millibits(*m),
+        Mantissa::Small(m) => l_millibits_big(&BigUint::from(*m)),
+        Mantissa::Big(m) => l_millibits_big(m),
+    };
+    Some((m, l_millibits(u128::from(parts.exp.unsigned_abs()))))
 }
 
 /// Description length of the exact VALUE p/q (lowest terms), in MILLI-BITS and
@@ -616,9 +531,11 @@ pub fn mu_rat_exact(r: &Rat) -> u64 {
 /// spelling; on rare exact ties it can differ from Python's `repr` in the last digit), never a
 /// fraction that reads as the same float: `0.3333333333333333` keeps its 16-digit price although
 /// `1/3` reads as the same float. A literal beyond float64's range (or below its smallest
-/// subnormal) keeps its exact price, and a numeric-string leaf (beyond the 1,100-bit cap, or not
-/// admissible in f64 mode) keeps its print's price (`mu_numeric_str`); a leaf never becomes a
-/// `Rat`, so no ordering cliff opens between the two. The state keeps
+/// subnormal) keeps its exact price. The cap reaches every literal the exact domain holds as a
+/// number, however a state holds it (`is_piece`, `piece_price`): a numeric-string leaf not
+/// admissible in f64 mode, and a product, sum or power the f64 domain keeps in pieces, cost at
+/// most what this function prices their value at; a leaf beyond the 1,100-bit cap keeps its
+/// print's price (`mu_numeric_str`), so no ordering cliff opens between the two. The state keeps
 /// the exact value and prints it: only the measure reads the float. The price is a function of the
 /// value alone (the decimal is built in the exact number domain), so each thread remembers the
 /// prices it computed, emptying the table at 65,536 entries.
@@ -680,7 +597,7 @@ fn mu_rat_float(r: &Rat) -> u64 {
 /// numbers move with it -- `mu(1000)` is 4 bits where the ratified note says 5 -- but
 /// H-055's finding was the SYMMETRY, `mu(1000) == mu(0.001)`, and that holds at 4.
 /// Evidence: `audit-2026-08-21/floor/`.
-const MU_RAT_FLOOR: u64 = 1 * MU_MILLI;
+const MU_RAT_FLOOR: u64 = MU_MILLI;
 
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     // A big-form literal's codewords cost big-integer divisions and logarithms, and the same
@@ -710,7 +627,7 @@ fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
 }
 
 fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
-    let sign = if r.is_negative() { MU_MILLI } else { 0 };
+    let sign = if r.is_negative() { MU_SIGN } else { 0 };
     let (pb, qb) = match r.small_parts() {
         Some((p, q)) => (l_millibits(p.unsigned_abs()), l_millibits(q as u128)),
         None => {
@@ -744,9 +661,9 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
 /// falsifier suite's boundary pair) -- so the clause is defensive. Ties would also
 /// keep the powers of two (`1/2`, `5/8`) on the fraction side, exactly as before D38.
 ///
-/// Callers gate integers upstream (`is_integer()` prints the bare digit string, which
-/// is the rendering of BOTH an integer's codewords), so the integer arm of
-/// `decimal_code` never surfaces a scientific print: `1000` never prints `1e3`.
+/// Callers gate integers upstream: an integer prints its decimal spelling
+/// (`Rat::exact_decimal`, the rendering of BOTH an integer's codewords), positional in the
+/// ordinary range (`1000`, never `1e3`) and scientific beyond it where shorter (`1e300`).
 pub fn decimal_spelling_wins(r: &Rat) -> bool {
     let (fraction, decimal) = mu_rat_codeword_totals(r);
     decimal.is_some_and(|d| d < fraction)
@@ -807,7 +724,7 @@ const MU_SCALE_KNEE_COST: u64 = MU_SCALE_KNEE * L10_MILLI;
 pub fn mu_numeric_str(s: &str) -> u64 {
     let negative = s.starts_with('-');
     let body = s.strip_prefix('-').unwrap_or(s);
-    let sign = if negative { MU_MILLI } else { 0 };
+    let sign = if negative { MU_SIGN } else { 0 };
     // Every priced numeric leaf pays the one selector bit on top of its cheapest
     // codeword total; each total carries the sign and the codeword floor itself,
     // mirroring `mu_rat_codeword_totals` exactly -- the SAME `MU_RAT_FLOOR`, or the
@@ -1000,11 +917,12 @@ pub fn eq_mod_nums(a: &Ex, b: &Ex, view: &TokenView) -> bool {
 // decrease, so two totals pinned at the ceiling can only ever REFUSE.
 /// CENSUS of the nodes `complexity` actually CHARGES, keyed by kind.
 ///
-/// Mirrors the pricing arms exactly, including their silences: a +-1 rational coefficient
-/// inside a `Mul` bag is free, so it is not counted; a degenerate all-coefficient bag is
-/// the literal itself. Counting serialized TOKENS instead gets this wrong in both
-/// directions -- `-` and `/` are not nodes (they are an inverted member of an Add/Mul
-/// bag), and an n-ary bag is ONE node however many `+` the spelling shows.
+/// Mirrors the pricing arms exactly, including their silences: a +1 rational coefficient
+/// inside a `Mul` bag is free, so it is not counted; a -1 coefficient is a `Sign`, and a
+/// negation standing alone (`Mul[-1, x]`) is a `Sign` and no `Mul`; a degenerate
+/// all-coefficient bag is the literal itself. Counting serialized TOKENS instead gets this
+/// wrong in both directions -- `-` and `/` are not nodes (they are an inverted member of an
+/// Add/Mul bag), and an n-ary bag is ONE node however many `+` the spelling shows.
 pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap<String, u64>) {
     let mut bump = |k: &str| *out.entry(k.to_string()).or_insert(0) += 1;
     match e {
@@ -1023,11 +941,17 @@ pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap
             }
         }
         Ex::Mul(v) => {
-            bump("Mul");
+            if !is_negation(v) {
+                bump("Mul");
+            }
             for f in v {
-                // The free +-1 coefficient slot is NOT charged, so it is not counted.
+                // The free +1 coefficient slot is NOT charged, so it is not counted; -1 is a sign.
                 if let Ex::Num(r) = f {
-                    if r.is_one() || *r == Rat::NEG_ONE {
+                    if r.is_one() {
+                        continue;
+                    }
+                    if *r == Rat::NEG_ONE {
+                        *out.entry("Sign".to_string()).or_insert(0) += 1;
                         continue;
                     }
                 }
@@ -1049,59 +973,265 @@ pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap
     }
 }
 
+/// Is this product a NEGATION standing alone, `Mul[-1, x]` (a sign, not a product)?
+fn is_negation(v: &[Ex]) -> bool {
+    v.len() == 2
+        && v.iter()
+            .any(|f| matches!(f, Ex::Num(r) if *r == Rat::NEG_ONE))
+        && v.iter().any(|f| !matches!(f, Ex::Num(_)))
+}
+
+/// THE MEASURE `mu` of a canonical state, in milli-bits.
 pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
+    priced(e, view).0
+}
+
+/// The spelling of float64's negative zero in `f64`: a numeral leaf, since a number has one
+/// zero. Python reads `-0.0` as -0 and `-0` as the integer zero, +0.
+pub(crate) const NEG_ZERO: &str = "-0.0";
+
+/// Is `e` the written negative zero (`NEG_ZERO`)?
+pub(crate) fn is_neg_zero(e: &Ex, view: &TokenView) -> bool {
+    matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0 && view.with_str(*t, |s| s == NEG_ZERO))
+}
+
+/// Is `s` a NUMERIC-STRING leaf (a literal the engine holds as written)? A first-byte filter
+/// skips the full numeric parse for ordinary vocabulary leaves (`x0`, function names), which
+/// never start with a digit, dot, or sign.
+#[inline]
+fn numeric_leaf(s: &str) -> bool {
+    s.as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.' || *b == b'+')
+        && crate::utils::is_numeric_string(s)
+}
+
+/// A PIECE OF A LITERAL: a number, a numeric-string leaf, an integer power of a piece, or a sum
+/// or product of pieces -- variable-free arithmetic that denotes one rational value.
+///
+/// The exact number domain (`real`) holds every such value within the 1,100-bit cap as one
+/// `Rat`, which [`mu_rat`] prices at most at its float's price. The f64 domain admits only
+/// numbers whose components are at most 2^1022 (`rat::number_domain`) and holds the rest in
+/// pieces: a literal whose exact fraction leaves it stays a leaf as written
+/// (`1.2345678901234567e-305`, whose denominator is 10^321), and a product, sum or power that
+/// leaves it stays a product, sum or power (`1.2345678901234567e-305 / 9.876543210987654e-10`
+/// is the leaf times the number `1/9.876543210987654e-10`). Priced piece by piece, such a value
+/// costs what its pieces cost, above its float. [`priced`] prices the pieces of a bag, and a
+/// node that is pieces throughout, as the one literal they denote ([`piece_price`]).
+fn is_piece(e: &Ex, view: &TokenView) -> bool {
     match e {
-        Ex::Num(r) => mu_rat(r),
-        Ex::Pi => mu_pi(),
-        Ex::E => mu_e(),
-        Ex::PosInf | Ex::NegInf | Ex::NaN => mu_infinity(),
-        // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a beyond-`Rat`
-        // literal and pays the description length of the value its print denotes
-        // (see `mu_numeric_str` -- the boundary must not be an ordering cliff).
-        // HOT PATH: no allocation (`with_str`), and a first-byte filter skips the
-        // full numeric parse for ordinary vocabulary leaves (`x0`, function names),
-        // which never start with a digit, dot, or sign.
+        Ex::Num(_) => true,
+        Ex::Leaf(t) => view.with_str(*t, numeric_leaf),
+        Ex::Pow(b, k) => matches!(&**k, Ex::Num(k) if k.is_integer()) && is_piece(b, view),
+        Ex::Add(v) | Ex::Mul(v) => v.iter().all(|f| is_piece(f, view)),
+        _ => false,
+    }
+}
+
+/// The nodes of a piece ([`is_piece`]); an exponent is part of its power.
+fn piece_nodes(e: &Ex) -> u64 {
+    match e {
+        Ex::Pow(b, _) => 1 + piece_nodes(b),
+        Ex::Add(v) | Ex::Mul(v) => v.iter().fold(1, |n, f| n + piece_nodes(f)),
+        _ => 1,
+    }
+}
+
+/// The exact value of a piece ([`is_piece`]) as the exact number domain holds it: `None` where
+/// that domain holds no number for it (a component beyond the 1,100-bit cap, a leaf no numeral
+/// reader reads) or where `e` is no piece. The caller enters the exact domain.
+fn piece_value(e: &Ex, view: &TokenView) -> Option<Rat> {
+    match e {
+        Ex::Num(r) => Some(r.clone()),
+        Ex::Leaf(t) => view.with_str(*t, leaf_value),
+        Ex::Pow(b, k) => match &**k {
+            Ex::Num(k) => piece_value(b, view)?.checked_pow_integer(k),
+            _ => None,
+        },
+        Ex::Add(v) => pieces_value(v.iter(), true, view),
+        Ex::Mul(v) => pieces_value(v.iter(), false, view),
+        _ => None,
+    }
+}
+
+/// The exact value of a numeric-string leaf as the exact number domain holds it (see
+/// [`piece_value`]). The caller enters the exact domain.
+fn leaf_value(s: &str) -> Option<Rat> {
+    if !numeric_leaf(s) {
+        return None;
+    }
+    let (p, q) = super::rat::token_rational(s)?;
+    Rat::from_big(p, q)
+}
+
+/// The exact sum (`sum`) or product of pieces ([`piece_value`]), formed exactly and capped once,
+/// so it does not depend on the order of a bag's members. The caller enters the exact domain.
+fn pieces_value<'a>(
+    pieces: impl Iterator<Item = &'a Ex>,
+    sum: bool,
+    view: &TokenView,
+) -> Option<Rat> {
+    let mut p = BigInt::from(u8::from(!sum));
+    let mut q = BigInt::from(1u8);
+    for f in pieces {
+        let (a, b) = piece_value(f, view)?.big_parts();
+        if sum {
+            p = p * &b + a * &q;
+        } else {
+            p *= a;
+        }
+        q *= b;
+    }
+    Rat::from_big(p, q)
+}
+
+/// The exact value of the pieces among `members` ([`is_piece`]), their sum or their product.
+fn bag_literal_value(members: &[Ex], sum: bool, view: &TokenView) -> Option<Rat> {
+    let _exact = super::rat::number_domain(false);
+    pieces_value(members.iter().filter(|f| is_piece(f, view)), sum, view)
+}
+
+/// THE FLOAT CAP ON EVERY PATH. The price of a literal held in pieces ([`is_piece`]):
+/// `structural`, its pieces priced one by one, at most what the exact domain prices the value
+/// they denote ([`mu_rat`], so at most what its float costs), and never below one bit per node,
+/// so that the price still bounds the node count (L5, docs/formal.md). `None`, a value the exact
+/// domain holds no number for (beyond the 1,100-bit cap), keeps the structural price.
+fn piece_price(structural: u64, value: Option<&Rat>, nodes: u64) -> u64 {
+    match value {
+        Some(v) => structural.min(mu_rat(v).max(nodes.saturating_mul(MU_MILLI))),
+        None => structural,
+    }
+}
+
+/// The price of a NUMERIC-STRING leaf: the price of its print ([`mu_numeric_str`]), at most what
+/// the exact domain prices its value ([`piece_price`]): a literal not admissible in the f64
+/// domain costs at most its float's price, as a `Num` does; one beyond the 1,100-bit cap keeps its
+/// print's price. A function of the string, so each thread remembers the prices it computed,
+/// emptying the table at 65,536 entries.
+fn mu_numeric_leaf(s: &str) -> u64 {
+    thread_local! {
+        static LEAF_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Box<str>, u64>> =
+            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(v) = LEAF_PRICES.with(|m| m.borrow().get(s).copied()) {
+        return v;
+    }
+    // The written negative zero is the zero and one sign bit (its value, 0, has no sign).
+    if s == NEG_ZERO {
+        return mu_rat(&Rat::ZERO).saturating_add(MU_SIGN);
+    }
+    let value = {
+        let _exact = super::rat::number_domain(false);
+        leaf_value(s)
+    };
+    let v = piece_price(mu_numeric_str(s), value.as_ref(), 1);
+    LEAF_PRICES.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 1 << 16 {
+            m.clear();
+        }
+        m.insert(s.into(), v);
+    });
+    v
+}
+
+/// [`complexity`], and whether `e` is a piece of a literal ([`is_piece`]).
+fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
+    match e {
+        Ex::Num(r) => (mu_rat(r), true),
+        Ex::Pi => (mu_pi(), false),
+        Ex::E => (mu_e(), false),
+        Ex::PosInf | Ex::NegInf | Ex::NaN => (mu_infinity(), false),
+        // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a literal the engine holds
+        // as written and pays the description length of the value its print denotes (see
+        // `mu_numeric_str` -- the boundary must not be an ordering cliff), capped
+        // (`mu_numeric_leaf`). HOT PATH: no allocation (`with_str`).
         Ex::Leaf(t) => view.with_str(*t, |s| {
-            if s.as_bytes()
-                .first()
-                .is_some_and(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.' || *b == b'+')
-                && crate::utils::is_numeric_string(s)
-            {
-                mu_numeric_str(s)
+            if numeric_leaf(s) {
+                (mu_numeric_leaf(s), true)
             } else {
-                mu_leaf()
+                (mu_leaf(), false)
             }
         }),
-        Ex::Const => mu_free(),
-        Ex::Add(v) => v
-            .iter()
-            .fold(mu_add(), |t, x| t.saturating_add(complexity(x, view))),
+        Ex::Const => (mu_free(), false),
+        Ex::Add(v) => {
+            // The sum's literal: its pieces, priced as the one literal they denote.
+            let mut total = mu_add();
+            let (mut lit, mut lit_nodes, mut pieces) = (0u64, 0u64, 0usize);
+            for x in v {
+                let (p, piece) = priced(x, view);
+                if piece {
+                    lit = lit.saturating_add(p);
+                    lit_nodes += piece_nodes(x);
+                    pieces += 1;
+                } else {
+                    total = total.saturating_add(p);
+                }
+            }
+            let value = (pieces >= 2)
+                .then(|| bag_literal_value(v, true, view))
+                .flatten();
+            let total = total.saturating_add(piece_price(lit, value.as_ref(), lit_nodes));
+            if pieces == v.len() {
+                (piece_price(total, value.as_ref(), lit_nodes + 1), true)
+            } else {
+                (total, false)
+            }
+        }
         Ex::Mul(v) => {
             let head = mu_mul();
             let mut total = head;
             let mut members = 0u64;
+            // The product's literal: its coefficient slots and its other pieces, priced as the
+            // one literal they denote.
+            let (mut lit, mut lit_nodes, mut pieces) = (0u64, 0u64, 0usize);
             for f in v {
                 match f {
-                    // The rational coefficient slot: magnitude 1 is a bare sign (free);
-                    // any other magnitude pays its description length -- THE stage-2
-                    // decision (an `E` factor at 8 now undercuts a `2.718...` coefficient
-                    // at ~109 instead of riding free below it).
+                    // The rational coefficient slot: +1 is no sign (free), -1 is a bare sign
+                    // (`mu_sign`, one bit, as a literal's sign); any other magnitude pays its
+                    // description length, its sign bit included -- THE stage-2 decision (an
+                    // `E` factor at 8 now undercuts a `2.718...` coefficient at ~109 instead
+                    // of riding free below it).
                     Ex::Num(r) => {
-                        if !(r.is_one() || *r == Rat::NEG_ONE) {
-                            total = total.saturating_add(mu_rat(r));
+                        if *r == Rat::NEG_ONE {
+                            lit = lit.saturating_add(mu_sign());
+                        } else if !r.is_one() {
+                            lit = lit.saturating_add(mu_rat(r));
                         }
+                        lit_nodes += 1;
+                        pieces += 1;
                     }
                     _ => {
                         members += 1;
-                        total = total.saturating_add(complexity(f, view));
+                        let (p, piece) = priced(f, view);
+                        if piece {
+                            lit = lit.saturating_add(p);
+                            lit_nodes += piece_nodes(f);
+                            pieces += 1;
+                        } else {
+                            total = total.saturating_add(p);
+                        }
                     }
                 }
             }
-            if members == 0 {
+            let value = (pieces >= 2)
+                .then(|| bag_literal_value(v, false, view))
+                .flatten();
+            let total = total.saturating_add(piece_price(lit, value.as_ref(), lit_nodes));
+            let structural = if members == 0 {
                 // Degenerate all-coefficient bag: the literal (or bare Const) itself.
-                return (total - head).max(2);
+                (total - head).max(2)
+            } else if is_negation(v) {
+                // A negation standing alone is a sign, not a product: its operand and one bit.
+                total - head
+            } else {
+                total
+            };
+            if pieces == v.len() {
+                (piece_price(structural, value.as_ref(), lit_nodes + 1), true)
+            } else {
+                (structural, false)
             }
-            total
         }
         Ex::Pow(b, ex) => {
             let head = mu_pow();
@@ -1113,17 +1243,36 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
                 } else {
                     mu_rat(r)
                 };
-                return head.saturating_add(complexity(b, view)).saturating_add(mag);
+                let (base, piece) = priced(b, view);
+                let structural = head.saturating_add(base).saturating_add(mag);
+                if piece && r.is_integer() {
+                    // An integer power of a piece is a piece: the literal it denotes.
+                    let value = {
+                        let _exact = super::rat::number_domain(false);
+                        piece_value(e, view)
+                    };
+                    return (
+                        piece_price(structural, value.as_ref(), piece_nodes(e)),
+                        true,
+                    );
+                }
+                return (structural, false);
             }
-            head.saturating_add(complexity(b, view))
-                .saturating_add(complexity(ex, view))
+            (
+                head.saturating_add(complexity(b, view))
+                    .saturating_add(complexity(ex, view)),
+                false,
+            )
         }
         // The head is priced by NAME (`mu_fun_bits`): the elementary/transcendental gap
         // is the table's load-bearing entry. Read without allocating, like the leaf above.
         Ex::Fun(t, args) => {
             let head = view.with_str(*t, |s| sym_bits(mu_fun_bits(s)));
-            args.iter()
-                .fold(head, |acc, x| acc.saturating_add(complexity(x, view)))
+            (
+                args.iter()
+                    .fold(head, |acc, x| acc.saturating_add(complexity(x, view))),
+                false,
+            )
         }
     }
 }
@@ -1202,6 +1351,13 @@ pub struct Cx<'a> {
     /// SYMBOLIC-exponent occurrence merge (see `mul`'s like-base collection) on
     /// sign-indefinite bases by proving the exponent's level sets are null.
     pub cert_nce: Option<&'a dyn Fn(&Ex) -> bool>,
+    /// The REGION certificate: the zero-set certificate, consulted only where a sum's zero sign is
+    /// decided (`keeps_zero_sign`). A parse holds no other certificate, yet where it inverts a sum
+    /// whose zero set may hold a region it distributes the inverse (`inverts_a_signed_zero`), a
+    /// decision its canon cannot undo, so in `f64` it reads that region as the canon does while
+    /// every licence of the parse stays certificate-free. `None`: reading A's test
+    /// (`zero_set_null`).
+    pub cert_region: Option<&'a dyn Fn(&Ex) -> bool>,
     /// WHICH SOUNDNESS this construction preserves. Was a `lossy: bool`, which could only
     /// ask "may I skip certification?" -- and that is the wrong question for a guard whose
     /// reason is f64 saturation rather than recall. `real` needs those guards OFF (the
@@ -1209,14 +1365,13 @@ pub struct Cx<'a> {
     /// certificate ON, and no boolean can say that. Both old readings are derived below,
     /// so the mode stays the single representation.
     pub mode: RuleMode,
-    /// Whether the constructor may fold a ground transcendental to its f64 value.
-    /// DERIVED from the mode (`f64` only) by `Cx::for_mode`, and set explicitly in
-    /// exactly one place: permissive runs the whole pipeline TWICE, once with each
-    /// discipline, and keeps the cheaper endpoint. That is the only way permissive can have
-    /// both -- `atanh(tanh 30) -> 30`, which needs the fold OFF so the inverse-pair
-    /// collapse survives, AND `asin(1e-8) -> 1e-8`, which needs it ON. Folding is
-    /// bottom-up, so no ordering inside a node can deliver both: `tanh 30` becomes `1`
-    /// before `atanh` ever sees it. Selection between two finished endpoints can.
+    /// Whether the walk folds a ground node to the float the deployed evaluator computes for
+    /// it (`Engine::ground_fold`), in `f64`. DERIVED from the mode by `Cx::folds_for`; the
+    /// miner sets it explicitly (it canonicalises unfolded). No constructor folds a
+    /// transcendental: folding is bottom-up there, so `exp(19.1...)` would become a 9-digit
+    /// literal before the root over it is read, and `tanh 30` would become `1` before `atanh`
+    /// sees it. The fold is a step of the pass, tried after the rules at each node and kept
+    /// only where it descends; `permissive` always folds so (its lossy reading).
     pub fold_f64: bool,
     /// SENTINEL EXPIRY (H-015 class (a), 2026-08-04): lossy parse deliberately keeps
     /// `inv(inf)`-class reciprocals unfolded so the mul bag can find their `$`-cancel
@@ -1232,9 +1387,9 @@ pub struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
-    /// THE DERIVATION of `fold_f64` from a mode: only `f64` folds transcendentals.
-    /// `real` cannot (the result is not representable -- `tan(1)` is irrational and no
-    /// literal spells it), and `permissive` gets both disciplines by running twice.
+    /// THE DERIVATION of `fold_f64` from a mode: `f64` folds a ground node to its float in the
+    /// pass. `real` cannot (the result is not representable -- `tan(1)` is irrational and no
+    /// literal spells it), and `permissive` folds in its pass by its lossy reading.
     #[inline]
     pub fn folds_for(mode: RuleMode) -> bool {
         matches!(mode, RuleMode::Default)
@@ -1266,6 +1421,15 @@ impl<'a> Cx<'a> {
         !matches!(self.mode, RuleMode::Real) && super::rat::f64_numbers()
     }
 
+    /// The SIGNED-ZERO reading: does this construction answer in float64's signed zeros (IEEE
+    /// 754)? `f64` and `permissive` are evaluated in float64, where an exact zero carries the sign
+    /// of what formed it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign;
+    /// `real` reasons over the reals, whose one zero inverts to `+inf` whatever formed it.
+    #[inline]
+    pub fn ieee_zeros(&self) -> bool {
+        !matches!(self.mode, RuleMode::Real)
+    }
+
     /// In f64 mode, a numeral leaf the evaluator reads as +-inf or (underflowing) as 0:
     /// literals beyond float64's range, which stay leaves there (design 2c, review M4).
     fn f64_reads_degenerate(&self, t: Tok, zero_too: bool) -> bool {
@@ -1285,6 +1449,7 @@ impl<'a> Cx<'a> {
             cert_finnz: None,
             cert_nzae: None,
             cert_nce: None,
+            cert_region: None,
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
@@ -1319,7 +1484,7 @@ impl<'a> Cx<'a> {
     /// or fractional powers, ...) is never certain here -- it goes through `cert_fin`, the real
     /// interval machinery. A conservative subset by construction: syntactic certainty may say
     /// "no" where the certificate would say "yes", never the reverse.
-    fn certainly_finite(&self, e: &Ex) -> bool {
+    pub(crate) fn certainly_finite(&self, e: &Ex) -> bool {
         match e {
             Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const => true,
             // A numeral leaf beyond float64's range denotes a finite real (H-052), but in f64
@@ -1455,42 +1620,6 @@ impl<'a> Cx<'a> {
     /// when the base cannot reach an infinity (see the licence comment in `pow`).
     fn never_infinite(&self, e: &Ex) -> bool {
         matches!(e, Ex::Leaf(_) | Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E)
-    }
-
-    // (pub(crate) for the F80 E3 offline instrument `ac_odd_neg_carriers`, which
-    // re-asks the deployed pow-distribution licence per factor; no semantic change.)
-    /// Is `e` CERTAINLY without DEFINED zeros anywhere, syntactically? (F83, the
-    /// odd-negative distribution's negative-coefficient guard: it needs
-    /// zero-FREENESS, not zero-set-nullity -- the constructed exceptional point IS
-    /// the null set the a.e. licence tolerates.) Zeros can also arrive through
-    /// infinite arguments (`exp(-inf) = 0`; `pow(b, -q)` vanishes at b = +-inf),
-    /// so clauses with that route demand `certainly_finite` of the argument.
-    /// Conservative: `false` means "not certain", never "certainly vanishes".
-    pub(crate) fn certainly_nonvanishing(&self, e: &Ex) -> bool {
-        match e {
-            Ex::Num(r) => !r.is_zero(),
-            Ex::Pi | Ex::E => true,
-            Ex::Mul(v) => v.iter().all(|f| self.certainly_nonvanishing(f)),
-            Ex::Pow(b, q) => match &**q {
-                Ex::Num(r) if r.is_integer() && r.signum() > 0 => self.certainly_nonvanishing(b),
-                Ex::Num(r) if r.is_integer() && r.is_negative() => {
-                    // b^-n = 0 exactly where b = +-inf: demand finiteness too.
-                    self.certainly_nonvanishing(b) && self.certainly_finite(b)
-                }
-                _ => false,
-            },
-            Ex::Fun(f, v) => {
-                let s = self.view.resolve_owned(*f);
-                match s.as_str() {
-                    // cosh >= 1 on finite args, +inf at infinite ones: never 0.
-                    "cosh" => true,
-                    // exp(u) = 0 exactly at u = -inf: finite arguments only.
-                    "exp" => v.iter().all(|x| self.certainly_finite(x)),
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
     }
 
     pub(crate) fn certainly_nonneg(&self, e: &Ex) -> bool {
@@ -1647,15 +1776,17 @@ impl<'a> Cx<'a> {
                 self.sign_blind_rep(b).map(|s| pow(s, (**ex).clone(), self))
             }
             // A product's sign is erased here too, so each of its sign-trade sites takes its
-            // cheaper spelling whatever sign that leaves: `|333 atan(u - 0.66)^5|` is
-            // `|333 atan(0.66 - u)^5|`, a sign bit cheaper, where the product alone keeps its
-            // coefficient positive on the tie (a sign bit for nothing).
+            // cheaper spelling whatever sign that leaves, and on a tie the one with fewer signs
+            // (`tie_cmp`): `|333 atan(u - 0.66)^5|` is `|333 atan(0.66 - u)^5|`, a sign bit
+            // cheaper, where the product alone keeps its coefficient positive on the tie (a sign
+            // bit for nothing), and `cos(x1*rootn(-x2*x3, 3))` is `cos(x1*rootn(x2*x3, 3))`.
             Ex::Mul(v) => {
                 let mut out = v.clone();
                 let mut moved = false;
                 for f in out.iter_mut() {
                     if let Some(nf) = sign_trade_flip(f, self) {
-                        if complexity(&nf, self.view) < complexity(f, self.view) {
+                        let (mn, mf) = (complexity(&nf, self.view), complexity(f, self.view));
+                        if mn < mf || (mn == mf && tie_cmp(&nf, f, self.view) == Ordering::Less) {
                             *f = nf;
                             moved = true;
                         }
@@ -1682,12 +1813,12 @@ impl<'a> Cx<'a> {
     /// hazard) -- the discipline `certainly_nonneg` already follows. Integer arithmetic
     /// throughout: this guard must not acquire an f64 reading of a `Rat`.
     ///
-    /// EXISTS because the f64 evaluator saturates where the extended real line does not:
-    /// `tanh` attains exactly 1.0 from 18.990341103219276, `exp` overflows from
-    /// 709.782713 and underflows to +0 below -745.133219, `cosh`/`sinh` overflow from
-    /// 710.475860. An inverse pair that is a total bijection on the extended line is NOT
-    /// one under the deployed arithmetic past those points, which is precisely the gap
-    /// the contract judge cannot see (it models the extended reals, not f64).
+    /// EXISTS because the f64 evaluator rounds where the extended real line does not: an
+    /// inverse pair that is a total bijection on the extended line drifts past the realised
+    /// bar under the deployed arithmetic outside a band (`tanh` compresses its argument
+    /// approaching +-1, `asinh`'s rounding returns as relative error through `sinh`), which
+    /// is precisely the gap the contract judge cannot see (it models the extended reals,
+    /// not f64). An overflow cuts no band (`inverse_pair_collapse`).
     fn magnitude_ceiling(&self, e: &Ex) -> Option<i128> {
         match e {
             Ex::Num(r) => r.ceil_abs(),
@@ -1846,30 +1977,33 @@ impl<'a> Cx<'a> {
         let i = self.view.resolve_owned(inner);
         match (o.as_str(), i.as_str()) {
             // TOTAL on the extended real line -- but NOT under the deployed f64 algebra
-            // outside the bands below, so each carries the band its own inner function
-            // survives. MODE-AWARE, and the guard asks the F64 question, not the recall
-            // one (owner ruling 2026-08-19). These identities are TOTAL over the reals --
-            // atanh(tanh x) = x for every real x -- and each band is derived from the
-            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract), not
-            // from where the inner function attains its limit. The two are different
-            // diseases: OVERFLOW caps the HIGH end of `log o exp` and the sinh/cosh
-            // pairs (709/710, bisected to the ulp against the deployed evaluator), and
-            // COMPRESSION near a flat point of the inner function eats the LOW end --
-            // exp rounds a small argument into the neighbourhood of 1 and cosh is
-            // quadratically flat at 0, so `log o exp` breaches the 8-ULP bar for all
-            // |t| < ~0.0625 (worst 6.7e7 ULP at 1e-8) and `acosh o cosh` for all
-            // |t| < ~0.25 (worst ~4.5e18), while inside |t| >= 1 the measured worst is
-            // 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor (task 46).
-            // The sinh pairs are clean over their whole bands, worst 2 ULP measured
-            // for asinh o sinh and 4 for sinh o asinh, and carry no floor. `atanh o tanh` fails by the same COMPRESSION but at the
-            // HIGH end -- tanh loses
-            // ~2|t|/ln2 bits of the argument approaching +-1, so the roundtrip drifts
-            // past 8 ULP at |t| ~ 2.7 (first breach measured 2.677 audit host / 2.808
-            // this host, libm-dependent; by |t|=18 the drift is ~0.03-0.06 ABSOLUTE),
-            // eleven-plus band-widths before saturation at 18.99 -- which is what the
-            // old attainment-derived band of 18 measured, and why it was wrong (S3).
-            // The integer bound below is the last magnitude ceiling on the SAFE side of
-            // every measured breach, with >= 2x margin on both hosts. So:
+            // everywhere, so each carries the band where its rounding stays within the
+            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract).
+            // MODE-AWARE, and the guard asks the F64 question, not the recall one (owner
+            // ruling 2026-08-19). These identities are TOTAL over the reals -- atanh(tanh x)
+            // = x for every real x. OVERFLOW and UNDERFLOW cut no band: where the inner
+            // function overflows or underflows (exp past 709.78 or below -708.4, sinh and
+            // cosh past 710.48), a rewrite may give the evaluator's value or the true one,
+            // and the collapse gives the true one. ROUNDING does cut bands. COMPRESSION near
+            // a flat point of the inner function eats the LOW end -- exp rounds a small
+            // argument into the neighbourhood of 1 and cosh is quadratically flat at 0, so
+            // `log o exp` breaches the 8-ULP bar for all |t| < ~0.0625 (worst 6.7e7 ULP at
+            // 1e-8) and `acosh o cosh` for all |t| < ~0.25 (worst ~4.5e18),
+            // while at |t| >= 1 the measured worst wherever nothing overflows or underflows
+            // is 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor (task 46).
+            // `asinh o sinh` is clean wherever sinh does not overflow, worst 2 ULP measured,
+            // and carries no band. `sinh o asinh` never overflows short of the top of the
+            // range, but asinh's ~|ln 2t| of absolute rounding returns as RELATIVE error
+            // through sinh: worst 4 ULP for |t| <= 710, first breach past 8 ULP measured at
+            // |t| ~ 4.4e6, so it keeps the 710 ceiling. `atanh o tanh` fails by COMPRESSION
+            // at the HIGH end -- tanh loses ~2|t|/ln2 bits of the argument approaching +-1,
+            // so the roundtrip drifts past 8 ULP at |t| ~ 2.7 (first breach measured 2.677
+            // audit host / 2.808 this host, libm-dependent; by |t|=18 the drift is
+            // ~0.03-0.06 ABSOLUTE), eleven-plus band-widths before saturation at 19.06 --
+            // which is what the old attainment-derived band of 18 measured, and why it was
+            // wrong (S3); saturation is not overflow, so the band stays. Each integer bound
+            // below is the last magnitude ceiling on the SAFE side of every measured breach,
+            // with >= 2x margin on both hosts. So:
             //   f64    -- band REQUIRED: the deployed evaluator is the authority.
             //   real   -- band SKIPPED: mathematics has no saturation to protect against,
             //             and requiring it here would refuse a rewrite that is simply true.
@@ -1880,21 +2014,14 @@ impl<'a> Cx<'a> {
             ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 2) => {
                 Some(t.clone())
             }
-            ("log", "exp")
-                if !self.f64_semantics()
-                    || (self.certainly_in_band(t, 709) && self.certainly_at_least(t, 1)) =>
-            {
+            ("log", "exp") if !self.f64_semantics() || self.certainly_at_least(t, 1) => {
                 Some(t.clone())
             }
-            ("asinh", "sinh") | ("sinh", "asinh")
-                if !self.f64_semantics() || self.certainly_in_band(t, 710) =>
-            {
+            ("asinh", "sinh") => Some(t.clone()),
+            ("sinh", "asinh") if !self.f64_semantics() || self.certainly_in_band(t, 710) => {
                 Some(t.clone())
             }
-            ("acosh", "cosh")
-                if !self.f64_semantics()
-                    || (self.certainly_in_band(t, 710) && self.certainly_at_least(t, 1)) =>
-            {
+            ("acosh", "cosh") if !self.f64_semantics() || self.certainly_at_least(t, 1) => {
                 Some(fun(self.view.intern("abs"), vec![t.clone()], self))
             }
             ("exp", "log") if self.certainly_nonneg(t) => Some(t.clone()),
@@ -1935,7 +2062,7 @@ pub fn add_term_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
     let gb = is_constlike(&kb) as u8;
     ga.cmp(&gb)
         .then_with(|| cmp_ex(&ka, &kb, view))
-        .then_with(|| ca.cmp_exact(&cb))
+        .then_with(|| ca.order(&cb))
 }
 
 pub fn mul_factor_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
@@ -1959,10 +2086,265 @@ fn factor_split_ref(e: &Ex) -> (&Ex, &Ex) {
     }
 }
 
+/// A term's rational coefficient ([`term_split`]): a sign and the magnitudes of the term's
+/// literal members, which `mul()` keeps as their canonical product partition
+/// (`Rat::partition_product`): one member wherever the product is representable, none for a
+/// unit, several where a fold is refused (`1e160*1e170*x` in f64 has the coefficient
+/// `{1e160, 1e170}` and the key `x`). The whole partition is the coefficient. With only its
+/// first member as the coefficient and the others left in the key, `1e160*1e170*x` and
+/// `1e160*x` shared the content 1e160 and `-1e160*1e170*x` kept a key of its own, so a sum's
+/// content and like terms depended on which terms a construction saw together, and a second
+/// call could split them again.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Coef {
+    neg: bool,
+    /// Positive, sorted ascending (`cmp_exact`), no unit; `[0]` is the zero.
+    mags: Vec<Rat>,
+}
+
+impl Coef {
+    pub(crate) const ONE: Coef = Coef {
+        neg: false,
+        mags: Vec::new(),
+    };
+
+    fn zero() -> Coef {
+        Coef {
+            neg: false,
+            mags: vec![Rat::ZERO],
+        }
+    }
+
+    /// The coefficient `r`.
+    pub(crate) fn of(r: &Rat) -> Coef {
+        Coef::from_members(std::iter::once(r))
+    }
+
+    /// The product of literal members (of any sign), as they stand: a canonical product holds
+    /// its partition already, and a re-partition here could run in another number domain.
+    fn from_members<'a>(members: impl IntoIterator<Item = &'a Rat>) -> Coef {
+        let mut neg = false;
+        let mut mags: Vec<Rat> = Vec::new();
+        for r in members {
+            if r.is_zero() {
+                return Coef::zero();
+            }
+            neg ^= r.is_negative();
+            if !r.is_one() && *r != Rat::NEG_ONE {
+                mags.push(r.abs());
+            }
+        }
+        mags.sort_unstable_by(|a, b| a.cmp_exact(b));
+        Coef { neg, mags }
+    }
+
+    pub(crate) fn is_one(&self) -> bool {
+        !self.neg && self.mags.is_empty()
+    }
+
+    fn is_neg_one(&self) -> bool {
+        self.neg && self.mags.is_empty()
+    }
+
+    pub(crate) fn is_zero(&self) -> bool {
+        matches!(self.mags.as_slice(), [m] if m.is_zero())
+    }
+
+    pub(crate) fn is_negative(&self) -> bool {
+        self.neg
+    }
+
+    /// The coefficient as one rational, where its partition has at most one member.
+    pub(crate) fn rat(&self) -> Option<Rat> {
+        let m = match self.mags.as_slice() {
+            [] => Rat::ONE,
+            [m] => m.clone(),
+            _ => return None,
+        };
+        if self.neg {
+            m.checked_neg()
+        } else {
+            Some(m)
+        }
+    }
+
+    pub(crate) fn negated(&self) -> Coef {
+        Coef {
+            neg: !self.neg && !self.is_zero(),
+            mags: self.mags.clone(),
+        }
+    }
+
+    fn abs(&self) -> Coef {
+        Coef {
+            neg: false,
+            mags: self.mags.clone(),
+        }
+    }
+
+    /// The product of two coefficients, partitioned in the current number domain.
+    fn times(&self, o: &Coef) -> Coef {
+        if self.is_zero() || o.is_zero() {
+            return Coef::zero();
+        }
+        let mut mags = self.mags.clone();
+        mags.extend(o.mags.iter().cloned());
+        Coef {
+            neg: self.neg != o.neg,
+            mags: Rat::partition_product(mags),
+        }
+    }
+
+    /// The quotient by a nonzero `o`, exactly: the members left once `o`'s are taken out, or
+    /// the rational quotient of two one-member coefficients; `None` otherwise.
+    fn over(&self, o: &Coef) -> Option<Coef> {
+        if o.is_zero() {
+            return None;
+        }
+        if let Some(rest) = take_members(&self.mags, &o.mags) {
+            return Some(Coef {
+                neg: (self.neg != o.neg) && !self.is_zero(),
+                mags: rest,
+            });
+        }
+        let (a, b) = (self.rat()?, o.rat()?);
+        Some(Coef::of(&a.checked_mul(&b.checked_inv()?)?))
+    }
+
+    /// The sum of two coefficients of one key, where it is a coefficient of the domain: the
+    /// rational sum of two one-member coefficients, or the members both share times the sum
+    /// of what remains of each (`{2e300, 1e300} - {1e300, 1e300}` is `{1e300, 1e300}`, and
+    /// `{1e160, 1e170} + {1e160, 1e170}` is `{2e160, 1e170}`); `None` where neither applies.
+    /// A function of the pair, so a pool folds by [`partition_by`] as a literal pool does.
+    fn checked_add(&self, o: &Coef) -> Option<Coef> {
+        if let (Some(a), Some(b)) = (self.rat(), o.rat()) {
+            if let Some(s) = a.checked_add(&b) {
+                return Some(Coef::of(&s));
+            }
+        }
+        let (shared, p, q) = common_members(&self.mags, &o.mags);
+        if shared.is_empty() {
+            return None;
+        }
+        let rest = |neg: bool, ms: &[Rat]| -> Option<Rat> {
+            let m = match ms {
+                [] => Rat::ONE,
+                [m] => m.clone(),
+                _ => return None,
+            };
+            if neg {
+                m.checked_neg()
+            } else {
+                Some(m)
+            }
+        };
+        let s = rest(self.neg, &p)?.checked_add(&rest(o.neg, &q)?)?;
+        if s.is_zero() {
+            return Some(Coef::zero());
+        }
+        let mut mags = shared;
+        mags.push(s.abs());
+        Some(Coef {
+            neg: s.is_negative(),
+            mags: Rat::partition_product(mags),
+        })
+    }
+
+    /// The canonical order: by exact value (the products formed without a cap), then by the
+    /// members. On one-member coefficients it is the rational order.
+    pub(crate) fn order(&self, o: &Coef) -> Ordering {
+        if let (Some(a), Some(b)) = (self.rat(), o.rat()) {
+            return a.cmp_exact(&b);
+        }
+        let sign = |c: &Coef| {
+            if c.is_zero() {
+                0
+            } else if c.neg {
+                -1
+            } else {
+                1
+            }
+        };
+        let (sa, sb) = (sign(self), sign(o));
+        if sa != sb {
+            return sa.cmp(&sb);
+        }
+        let product = |ms: &[Rat]| {
+            ms.iter()
+                .fold((BigInt::from(1u8), BigInt::from(1u8)), |(p, q), m| {
+                    let (a, b) = m.big_parts();
+                    (p * a, q * b)
+                })
+        };
+        let ((p1, q1), (p2, q2)) = (product(&self.mags), product(&o.mags));
+        let mag = (p1 * q2).cmp(&(p2 * q1)).then_with(|| {
+            self.mags
+                .iter()
+                .zip(&o.mags)
+                .map(|(a, b)| a.cmp_exact(b))
+                .find(|c| c.is_ne())
+                .unwrap_or_else(|| self.mags.len().cmp(&o.mags.len()))
+        });
+        if sa < 0 {
+            mag.reverse()
+        } else {
+            mag
+        }
+    }
+
+    /// The literal members of a product with this coefficient, as `mul()` writes them: the sign
+    /// on the one member, or on the smallest of several ([`host_partition_sign`]).
+    pub(crate) fn items(&self) -> Vec<Ex> {
+        let mut v: Vec<Ex> = self.mags.iter().cloned().map(Ex::Num).collect();
+        if self.neg {
+            match v.first_mut() {
+                Some(Ex::Num(m)) => *m = m.checked_neg().expect("a Rat negates"),
+                _ => v.push(Ex::Num(Rat::NEG_ONE)),
+            }
+        }
+        v
+    }
+}
+
+/// `ms` without the members of `sub` (both sorted), or `None` where `sub` is no sub-multiset.
+fn take_members(ms: &[Rat], sub: &[Rat]) -> Option<Vec<Rat>> {
+    let (shared, rest, left) = common_members(ms, sub);
+    (shared.len() == sub.len() && left.is_empty()).then_some(rest)
+}
+
+/// The members two sorted lists share (as multisets), and what remains of each.
+fn common_members(a: &[Rat], b: &[Rat]) -> (Vec<Rat>, Vec<Rat>, Vec<Rat>) {
+    let (mut shared, mut ra, mut rb) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp_exact(&b[j]) {
+            Ordering::Equal => {
+                shared.push(a[i].clone());
+                i += 1;
+                j += 1;
+            }
+            Ordering::Less => {
+                ra.push(a[i].clone());
+                i += 1;
+            }
+            Ordering::Greater => {
+                rb.push(b[j].clone());
+                j += 1;
+            }
+        }
+    }
+    ra.extend(a[i..].iter().cloned());
+    rb.extend(b[j..].iter().cloned());
+    (shared, ra, rb)
+}
+
 /// Split an addend into `(rational coefficient, term key)`. The key is what like-term collection
 /// compares: `Mul[3, x, y] -> (3, Mul[x, y])`, `Mul[x, y] -> (1, Mul[x, y])`, `sin(x) -> (1,
-/// sin(x))`. A `Mul` whose coefficient is 0 (the uncertified `0 * t` form) is NOT split -- it
-/// stays an opaque term so collection cannot manufacture a licence it does not have.
+/// sin(x))`. The coefficient is every literal member of the product ([`Coef`]): a refused
+/// partition splits as `Mul[-1, 1e160, 1e170, x] -> (-{1e160, 1e170}, x)`, and a product of
+/// literals alone keys as `1`. A `Mul` whose coefficient is 0 (the uncertified `0 * t` form)
+/// is NOT split -- it stays an opaque term so collection cannot manufacture a licence it does
+/// not have.
 ///
 /// The key is SIGN-NORMALIZED (audit B19): an odd function's negative-literal sign
 /// lifts out of the key into the coefficient (`sin(-2)` splits as `(-1, sin(2))`;
@@ -1972,7 +2354,7 @@ fn factor_split_ref(e: &Ex) -> (&Ex, &Ex) {
 /// trade-site route (`mul()` -> `sign_place`), so split/join still round-trips onto
 /// the canonical spelling. Scope: top-level factors with a literal argument only -- a
 /// sign under a `Pow` base is structure, not a spelling choice, and stays put.
-fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
+fn term_split(e: Ex, view: &TokenView) -> (Coef, Ex) {
     // Flip `f(-r)` -> `f(r)` in place for odd f; true iff a sign was extracted. RAW
     // rebuild on purpose: keys are comparison objects, and every re-JOIN routes
     // through `fun()` (which folds boundary grounds); a fold here would change the
@@ -1987,56 +2369,45 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
             }
             return false;
         }
-        // An odd function or odd root of a negative literal multiple: the multiple's sign.
-        if odd_of_literal_multiple(e, view).is_some_and(|r| r.is_negative()) {
-            if let Ex::Fun(_, args) = e {
-                if let Ex::Mul(v) = &mut args[0] {
-                    let Ex::Num(r) = &v[0] else { return false };
-                    if let Some(p) = r.checked_neg() {
-                        v[0] = Ex::Num(p);
-                        return true;
-                    }
+        // An odd head of a negative literal multiple: the multiple's sign (`positive_head`).
+        match odd_of_literal_multiple(e, view) {
+            Some(r) if r.is_negative() => match positive_head(e, view) {
+                Some(p) => {
+                    *e = p;
+                    true
                 }
-            }
-            return false;
+                None => false,
+            },
+            _ => false,
         }
-        if let Ex::Fun(f, args) = e {
-            if args.len() == 1 && odd_fun(view, *f) {
-                if let Ex::Num(r) = &args[0] {
-                    if r.is_negative() {
-                        if let Some(p) = r.checked_neg() {
-                            *e = Ex::Fun(*f, vec![Ex::Num(p)]);
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
     }
-    let (c, key) = match e {
-        Ex::Mul(v) => match v.first() {
-            Some(Ex::Num(r)) if !r.is_zero() => {
-                let r = r.clone();
-                let mut rest = v;
-                rest.remove(0);
-                let key = if rest.len() == 1 {
-                    rest.pop().unwrap()
-                } else {
-                    Ex::Mul(rest) // still flat + sorted: removing the leading Num keeps both
+    let (c, mut key) = match e {
+        Ex::Mul(v) => {
+            // The literal members lead a canonical product (`mul_factor_cmp`).
+            let n = v.iter().take_while(|f| matches!(f, Ex::Num(_))).count();
+            if n == 0
+                || v[..n]
+                    .iter()
+                    .any(|f| matches!(f, Ex::Num(r) if r.is_zero()))
+            {
+                (Coef::ONE, Ex::Mul(v))
+            } else {
+                let mut lits = v;
+                let mut rest = lits.split_off(n);
+                let c = Coef::from_members(lits.iter().map(|f| match f {
+                    Ex::Num(r) => r,
+                    _ => unreachable!("a literal prefix"),
+                }));
+                let key = match rest.len() {
+                    0 => Ex::Num(Rat::ONE),
+                    1 => rest.pop().expect("one factor"),
+                    _ => Ex::Mul(rest), // still flat + sorted: the literals led
                 };
-                (r, key)
+                (c, key)
             }
-            _ => (Rat::ONE, Ex::Mul(v)),
-        },
-        other => (Rat::ONE, other),
+        }
+        other => (Coef::ONE, other),
     };
-    // The coefficient must be able to host the sign before any factor flips (the
-    // i128::MIN edge fails safe: unnormalized split, exactly the pre-B19 behavior).
-    let Some(nc) = c.checked_neg() else {
-        return (c, key);
-    };
-    let mut key = key;
     let mut flips = 0usize;
     match &mut key {
         Ex::Mul(v) => {
@@ -2057,7 +2428,7 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
             }
         }
     }
-    (if flips % 2 == 1 { nc } else { c }, key)
+    (if flips % 2 == 1 { c.negated() } else { c }, key)
 }
 
 /// Negate an addend exactly. Literals and infinities negate DIRECTLY; everything else
@@ -2137,7 +2508,7 @@ fn up_to_sign_key(x: &Ex, cx: &Cx) -> (Ex, bool) {
                 }
             }
             Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
-                match orient_base(b, cx) {
+                match orient_base(b, cx, &[]) {
                     Some((nb, _)) => {
                         moved = true;
                         out.push(Ex::Pow(Box::new(nb), q.clone()));
@@ -2145,7 +2516,7 @@ fn up_to_sign_key(x: &Ex, cx: &Cx) -> (Ex, bool) {
                     None => out.push(f.clone()),
                 }
             }
-            _ => match orient_base(f, cx) {
+            _ => match orient_base(f, cx, &[]) {
                 Some((nb, _)) => {
                     moved = true;
                     out.push(nb);
@@ -2179,70 +2550,39 @@ pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::Num(_) => return None,
         _ => (vec![t.clone()], Rat::int(1)),
     };
-    // A class is reoriented only as a whole, and only where reading A allows it: not where its
-    // value at the zero is not read (`class_pinned`), nor where a factor the orientation does not
-    // reach would leave the product's value there off the limit (`zero_off`). Every factor carrying
-    // a class that stays keeps its spelling, and so does every other class such a factor carries.
-    let carried: Vec<Vec<Ex>> = factors
-        .iter()
-        .map(|f| {
-            let mut v = Vec::new();
-            carried_classes(f, cx, &mut v);
-            v
-        })
-        .collect();
-    let mut pinned: Vec<Ex> = Vec::new();
-    for k in carried.iter().flatten() {
-        if !pinned.contains(k) && class_pinned(&factors, k, cx) {
-            pinned.push(k.clone());
-        }
+    // A class is reoriented only as a whole: each class the factors carry is written in its own
+    // orientation (`orient_base`), unless the term keeps a value at the class's zero
+    // (`zero_limit`) that this orientation leaves off the limit. Then it is written in its other
+    // orientation where that restores the limit (an odd count of odd members, as beside a log of
+    // the class, whose side fixes the orientation), else as it stands.
+    let mut classes: Vec<Ex> = Vec::new();
+    for f in &factors {
+        carried_classes(f, cx, &mut classes);
     }
-    let spread = |pinned: &mut Vec<Ex>| loop {
-        let before = pinned.len();
-        for cs in &carried {
-            if cs.iter().any(|k| pinned.contains(k)) {
-                for k in cs {
-                    if !pinned.contains(k) {
-                        pinned.push(k.clone());
-                    }
-                }
-            }
-        }
-        if pinned.len() == before {
-            break;
-        }
-    };
-    spread(&mut pinned);
-    let orient = |pinned: &[Ex]| -> Vec<(Ex, bool, bool)> {
+    let orient = |turns: &[(Ex, Turn)]| -> Vec<(Ex, bool, bool)> {
         factors
             .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                if carried[i].iter().any(|k| pinned.contains(k)) {
-                    return (f.clone(), false, false);
-                }
-                match orient_factor(f, cx) {
-                    Some((g, s)) => (g, true, s),
-                    None => (f.clone(), false, false),
-                }
+            .map(|f| match orient_factor(f, cx, turns) {
+                Some((g, s)) => (g, true, s),
+                None => (f.clone(), false, false),
             })
             .collect()
     };
-    let mut oriented = orient(&pinned);
-    for _ in 0..factors.len() {
+    let mut turns: Vec<(Ex, Turn)> = Vec::new();
+    let mut oriented = orient(&turns);
+    for _ in 0..2 * classes.len() {
         let now: Vec<Ex> = oriented.iter().map(|(g, _, _)| g.clone()).collect();
-        let off: Vec<Ex> = carried
-            .iter()
-            .flatten()
-            .filter(|k| !pinned.contains(k) && zero_off(&now, k, cx) == Some(true))
-            .cloned()
-            .collect();
-        if off.is_empty() {
+        let off = classes.iter().find(|k| {
+            !turns.contains(&((*k).clone(), Turn::Keep)) && zero_off(&now, k, cx) == Some(true)
+        });
+        let Some(k) = off else {
             break;
+        };
+        match turns.iter_mut().find(|(c, _)| c == k) {
+            Some(t) => t.1 = Turn::Keep,
+            None => turns.push((k.clone(), Turn::Other)),
         }
-        pinned.extend(off);
-        spread(&mut pinned);
-        oriented = orient(&pinned);
+        oriented = orient(&turns);
     }
     let mut odd = false;
     let mut changed = false;
@@ -2268,9 +2608,17 @@ pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
     })
 }
 
-/// `f` in its class's orientation, and whether the flip moved a sign out of it; `None` where it
-/// already is, or holds no class.
-fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+/// A class written against its own orientation (`orient_term_classes`): in the other one, or as
+/// it stands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Turn {
+    Other,
+    Keep,
+}
+
+/// `f` in its class's orientation (`orient_base`), and whether the flip moved a sign out of it;
+/// `None` where it already is, or holds no class.
+fn orient_factor(f: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     let (b, k) = match f {
         Ex::Pow(b, e) => match &**e {
             Ex::Num(r) if r.is_integer() => (&**b, Some(r)),
@@ -2284,7 +2632,7 @@ fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     if k.is_some_and(|r| r.is_negative()) && !zero_set_null(b, cx) {
         return None;
     }
-    let (nb, flipped) = orient_base(b, cx)?;
+    let (nb, flipped) = orient_base(b, cx, turns)?;
     let odd = k.is_none_or(|r| r.is_odd_integer());
     let g = match k {
         None => nb,
@@ -2293,17 +2641,30 @@ fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     Some((g, flipped && odd))
 }
 
-/// A sum, an odd function of one or an odd root of one, in its class's orientation, and whether
-/// it flipped (each is odd in its sum, so a flip moves a sign out); `None` where it already has
-/// it. The sum's terms are read with every odd function of a negative literal multiple turned
-/// positive (`sin(-x1)` as `-sin(x1)`), so that a sum and its negation spell their terms alike.
-fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+/// A class base (`class_base`: a sum, or an odd head of a negatable argument) in its class's
+/// orientation, and whether it flipped (each is odd in its argument, so a flip moves a sign out);
+/// `None` where it already has it. A sum's terms are read with every odd head of a negative literal
+/// multiple turned positive (`sin(-x1)` as `-sin(x1)`), so that a sum and its negation spell their
+/// terms alike; the sum's orientation is the structurally smaller one, or as `turns` gives it. An
+/// odd head's argument takes its own orientation where it holds a class (`sin(-(x1 (x1 - 3)))` is
+/// `-sin(x1 (x1 - 3))`), else its positive literal (`sin(-x1)` is `-sin(x1)`).
+fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     match b {
-        Ex::Add(ts) => {
-            if ts
-                .iter()
-                .any(|t| t.contains_const() || t.contains_infinity())
-            {
+        Ex::Add(_) => {
+            let Some(ClassBase {
+                arg: ClassArg::Sum(ts),
+                ..
+            }) = class_base(b, cx.view)
+            else {
+                return None;
+            };
+            let turn = if turns.is_empty() {
+                None
+            } else {
+                class_of(ts, cx)
+                    .and_then(|(k, _, _)| turns.iter().find(|(c, _)| *c == k).map(|(_, t)| *t))
+            };
+            if turn == Some(Turn::Keep) {
                 return None;
             }
             let mut pos: Vec<Ex> = ts.iter().map(|t| odd_signs_out(t, cx)).collect();
@@ -2314,23 +2675,26 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
                 .collect::<Option<Vec<Ex>>>()?;
             neg.sort_by(|x, y| add_term_cmp(x, y, cx.view));
             let (pb, nb) = (Ex::Add(pos), Ex::Add(neg));
-            if cmp_ex(&nb, &pb, cx.view) == Ordering::Less {
+            if (cmp_ex(&nb, &pb, cx.view) == Ordering::Less) != (turn == Some(Turn::Other)) {
                 Some((nb, true))
             } else {
                 (pb != *b).then_some((pb, false))
             }
         }
-        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            let (a, s) = orient_base(&args[0], cx)?;
-            Some((Ex::Fun(*fk, vec![a]), s))
-        }
-        Ex::Fun(fk, args)
-            if args.len() == 2
-                && cx.view.tok_is(*fk, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
-        {
-            let (a, s) = orient_base(&args[0], cx)?;
-            Some((Ex::Fun(*fk, vec![a, args[1].clone()]), s))
+        Ex::Fun(fk, args) => {
+            let ClassBase { head: Some(_), arg } = class_base(b, cx.view)? else {
+                return None;
+            };
+            let (a, s) = match (orient_base(&args[0], cx, turns), arg) {
+                (Some(o), _) => o,
+                (None, ClassArg::Multiple(m)) if multiple_literal(m)?.is_negative() => {
+                    (positive_multiple(m)?, true)
+                }
+                _ => return None,
+            };
+            let mut v = args.clone();
+            v[0] = a;
+            Some((Ex::Fun(*fk, v), s))
         }
         // An integer power of a class carrier: odd powers move the sign out, even ones do not. A
         // negative power whose base's zero set may hold a region keeps its spelling
@@ -2340,7 +2704,7 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
             if !r.is_integer() || (r.is_negative() && !zero_set_null(pb, cx)) {
                 return None;
             }
-            let (nb, s) = orient_base(pb, cx)?;
+            let (nb, s) = orient_base(pb, cx, turns)?;
             Some((Ex::Pow(Box::new(nb), q.clone()), s && r.is_odd_integer()))
         }
         // A product holding a class carrier: each carrier in its orientation and a negative
@@ -2360,7 +2724,7 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
                             v.push(Ex::Num(a));
                         }
                     }
-                    _ => match orient_base(f, cx) {
+                    _ => match orient_base(f, cx, turns) {
                         Some((g, s)) => {
                             flipped ^= s;
                             changed = true;
@@ -2387,60 +2751,35 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     }
 }
 
-/// Does `f` carry a class that `orient_base` reorients: a sum, or an odd function, odd root,
-/// integer power or product of a carrier?
+/// Does `f` carry a class that `orient_base` reorients: a class base (`class_base`), or an integer
+/// power or product of one?
 fn carries_class(f: &Ex, cx: &Cx) -> bool {
     match f {
-        Ex::Add(ts) => !ts
-            .iter()
-            .any(|t| t.contains_const() || t.contains_infinity()),
         Ex::Pow(b, q) => matches!(&**q, Ex::Num(r) if r.is_integer()) && carries_class(b, cx),
-        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            carries_class(&args[0], cx)
-        }
-        Ex::Fun(fk, args)
-            if args.len() == 2
-                && cx.view.tok_is(*fk, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
-        {
-            carries_class(&args[0], cx)
-        }
         Ex::Mul(fs) => fs.iter().any(|g| carries_class(g, cx)),
-        _ => false,
+        f => class_base(f, cx.view).is_some(),
     }
 }
 
-/// The classes `f` carries where `orient_base` reaches them (`carries_class`), each in its one
-/// orientation.
+/// The sums `f` carries as classes where `orient_base` reaches them (`carries_class`), each in its
+/// one orientation (`class_of`, the key a class's zero is read by).
 fn carried_classes(f: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
     match f {
-        Ex::Add(ts) => {
-            if !ts
-                .iter()
-                .any(|t| t.contains_const() || t.contains_infinity())
-            {
+        Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
+            carried_classes(b, cx, out)
+        }
+        Ex::Mul(fs) => fs.iter().for_each(|g| carried_classes(g, cx, out)),
+        f => match class_base(f, cx.view).map(|c| c.arg) {
+            Some(ClassArg::Sum(ts)) => {
                 if let Some((k, _, _)) = class_of(ts, cx) {
                     if !out.contains(&k) {
                         out.push(k);
                     }
                 }
             }
-        }
-        Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
-            carried_classes(b, cx, out)
-        }
-        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            carried_classes(&args[0], cx, out)
-        }
-        Ex::Fun(fk, args)
-            if args.len() == 2
-                && cx.view.tok_is(*fk, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
-        {
-            carried_classes(&args[0], cx, out)
-        }
-        Ex::Mul(fs) => fs.iter().for_each(|g| carried_classes(g, cx, out)),
-        _ => {}
+            Some(ClassArg::Multiple(m)) => carried_classes(m, cx, out),
+            None => {}
+        },
     }
 }
 
@@ -2468,17 +2807,10 @@ fn positive_multiple(a: &Ex) -> Option<Ex> {
     }
 }
 
-/// A term with each odd function of a negative literal multiple (possibly under an integer
-/// power) turned positive, the signs moved into the term's coefficient. Raw.
+/// A term with each odd head of a negative literal multiple (possibly under an integer power)
+/// turned positive (`positive_head`), the signs moved into the term's coefficient. Raw.
 fn odd_signs_out(t: &Ex, cx: &Cx) -> Ex {
-    let flip_fun = |f: &Ex| -> Option<Ex> {
-        match f {
-            Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-                Some(Ex::Fun(*fk, vec![positive_multiple(&args[0])?]))
-            }
-            _ => None,
-        }
-    };
+    let flip_fun = |f: &Ex| positive_head(f, cx.view);
     let (mut c, factors): (Rat, Vec<Ex>) = match t {
         Ex::Mul(fs) => match fs.first() {
             Some(Ex::Num(r)) => (r.clone(), fs[1..].to_vec()),
@@ -2569,13 +2901,15 @@ pub(crate) fn negate_term(t: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::NaN => Some(Ex::NaN),
         _ => {
             let (c, key) = term_split(t.clone(), cx.view);
-            Some(term_join(c.checked_neg()?, key, cx))
+            Some(term_join(c.negated(), key, cx))
         }
     }
 }
 
-/// Scale an addend by a rational, exactly (`None` on overflow). The distribution step of the
-/// Add flatten (see the `Mul[Num, Add]` arm there).
+/// Scale an addend by a coefficient, exactly. The distribution step of the Add flatten (see the
+/// `Mul[Num.., Add]` arm there). A product a fold refuses keeps both members in the term's
+/// coefficient (`1e160 * (x + 1e170*y)` scales `1e170*y` to `1e160*1e170*y`), so only `0 * inf`
+/// returns `None`.
 ///
 /// The ZERO product routes through `mul()` (H-031): `term_join` is canonical-form-
 /// preserving only for NONZERO coefficients -- `term_join(0, x0)` would mint `Mul[0, x0]`,
@@ -2586,9 +2920,12 @@ pub(crate) fn negate_term(t: &Ex, cx: &Cx) -> Option<Ex> {
 /// not a consequence of who re-walks them. `mul()` owns the kept-zero licence logic
 /// (licensed factors collapse, unlicensed keep `Mul[0, t]`), so the zero case lands on
 /// exactly the state the healing used to reach.
-fn scale_term(t: &Ex, r: &Rat, cx: &Cx) -> Option<Ex> {
+fn scale_term(t: &Ex, r: &Coef, cx: &Cx) -> Option<Ex> {
     match t {
-        Ex::Num(v) => Some(Ex::Num(v.checked_mul(r)?)),
+        Ex::Num(v) => Some(match Coef::of(v).times(r) {
+            p if p.rat().is_some() => Ex::Num(p.rat().expect("one member")),
+            p => mul(p.items(), cx),
+        }),
         Ex::Const => {
             if r.is_zero() {
                 // 0 * c = 0 EXACTLY (masked constants are FINITE by doctrine): the
@@ -2614,7 +2951,7 @@ fn scale_term(t: &Ex, r: &Rat, cx: &Cx) -> Option<Ex> {
         Ex::NaN => Some(Ex::NaN),
         _ => {
             let (c, key) = term_split(t.clone(), cx.view);
-            let p = c.checked_mul(r)?;
+            let p = c.times(r);
             if p.is_zero() {
                 // r == 0 (term_split never yields c == 0): the kept-zero licence
                 // decision belongs to mul() -- see the doc above.
@@ -2631,43 +2968,27 @@ fn scale_term(t: &Ex, r: &Rat, cx: &Cx) -> Option<Ex> {
 /// parity machinery and the infix renderer's sign hoist -- ONE table, or it is the
 /// five-arity-tables disease again.
 pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
-    const ODD: [&str; 8] = [
-        "sin", "sinh", "tan", "tanh", "asin", "asinh", "atan", "atanh",
+    // `erf` is odd bit for bit in float64 too, signed zero included: its kernel evaluates
+    // |x| and restores the sign.
+    const ODD: [&str; 9] = [
+        "sin", "sinh", "tan", "tanh", "asin", "asinh", "atan", "atanh", "erf",
     ];
     ODD.iter().any(|s| view.tok_is(f, s))
 }
 
-/// The literal of an odd function or odd root of a literal multiple: `f(c * u..)` with `c` a
-/// literal other than 0, 1 and -1, `f` odd (`odd_fun`) or `rootn` of an odd index of at least 3;
-/// never `f(-S)` for a sum `S`. Such a function owns an adjacent sign, as an odd function of a
-/// literal does (`-1 * sin(2 x)` is `sin(-2 x)`, `-5 * rootn(3 x, 5)` is `5 * rootn(-3 x, 5)`):
-/// `f(-c u) = -f(c u)` exactly, so the sign moves between the coefficient and the literal, and one
-/// owner (`sign_trade_flip`) prices both spellings. Otherwise a sum holding `rootn(-c u, 5)` would
-/// be priced in its other orientation as `-rootn(-c u, 5)`, the sign left outside, and keep the
-/// dearer orientation. A negation (`c = -1`) is none: the sign-pull rules keep `f(-u)` with the
-/// sign inside. An odd function of a negated sum is none either: it and the function of the sum
-/// are one class, which a product holding both decides (`collect_opposite_sums`).
-fn odd_of_literal_multiple<'a>(e: &'a Ex, view: &TokenView) -> Option<&'a Rat> {
-    let Ex::Fun(f, args) = e else { return None };
-    let odd = (args.len() == 1 && odd_fun(view, *f))
-        || (args.len() == 2
-            && view.tok_is(*f, "rootn")
-            && matches!(&args[1], Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less));
-    if !odd {
-        return None;
-    }
-    match &args[0] {
-        // A negated sum is not one: an odd function of a sum and of its negation are one class
-        // the product decides (`collect_opposite_sums`).
-        Ex::Mul(v)
-            if v.len() == 2 && matches!(v[1], Ex::Add(_)) && v[0] == Ex::Num(Rat::NEG_ONE) =>
-        {
-            None
-        }
-        Ex::Mul(v) => match v.first() {
-            Some(Ex::Num(r)) if !r.is_zero() && !r.is_one() && *r != Rat::NEG_ONE => Some(r),
-            _ => None,
-        },
+/// The literal of an odd head of a literal multiple (`class_base`'s `{B, -B}` over a multiple):
+/// `f(c u)` with `f` odd (`odd_fun`) or `rootn` of an odd index of at least 3, `c` the multiple's
+/// literal (`multiple_literal`: 1 for a bare `u`, -1 for a negation). Such a head is a sign-trade
+/// site: `f(-c u) = -f(c u)` exactly, so the sign moves between the product's coefficient and the
+/// argument, and one owner (`sign_trade_flip`, `sign_place`) prices both spellings, the tie going
+/// by the one sign key (`sign_key`). An odd head of a sum is a site of its own kind (its sum
+/// flips).
+fn odd_of_literal_multiple(e: &Ex, view: &TokenView) -> Option<Rat> {
+    match class_base(e, view)? {
+        ClassBase {
+            head: Some(_),
+            arg: ClassArg::Multiple(m),
+        } => multiple_literal(m),
         _ => None,
     }
 }
@@ -2680,7 +3001,7 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     let may_be_site = |f: &Ex| match f {
         Ex::Add(_) => true,
         Ex::Pow(b, _) => matches!(**b, Ex::Add(_) | Ex::Fun(..)),
-        Ex::Fun(_, args) => matches!(args.first(), Some(Ex::Add(_) | Ex::Num(_) | Ex::Mul(_))),
+        Ex::Fun(_, args) => !args.is_empty(),
         _ => false,
     };
     match key {
@@ -2697,19 +3018,32 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     }
 }
 
-/// The sum a site carries.
-fn site_sum(f: &Ex) -> &Ex {
-    match f {
-        Ex::Pow(b, _) => match &**b {
-            Ex::Fun(_, a) => &a[0],
-            b => b,
-        },
-        Ex::Fun(_, a) => &a[0],
-        f => f,
-    }
-}
-
-fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
+fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
+    // A coefficient a fold refused joins through `mul()`, which owns the partition and its sign
+    // host (F72), and folds it into a constant or an infinity of the key.
+    let c = match c.rat() {
+        Some(c) => c,
+        None => {
+            let mut items = c.items();
+            match key {
+                Ex::Mul(v) => items.extend(v),
+                k => items.push(k),
+            }
+            let placed = mul(items, cx);
+            debug_assert!(
+                !matches!(placed, Ex::Add(_)),
+                "term_join produced a bare Add term: {placed:?}"
+            );
+            return placed;
+        }
+    };
+    // The coefficient LANDS on its key here (permissive's ρ, [`land`]); a literal key is a
+    // product of literals, which `mul` keeps exact.
+    let c = if matches!(key, Ex::Num(_)) {
+        c
+    } else {
+        land(c, cx)
+    };
     // An ODD function of a LITERAL argument owns any adjacent SIGN (owner ruling
     // 2026-08-08; I4): `-1 * sin(2)` joins as `sin(-2)`, and `-5 * sin(2)` as
     // `5 * sin(-2)`. HOISTED (audit B5+B19): the fusion is no longer a private arm
@@ -2722,8 +3056,7 @@ fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
     // fixpoints for one value, construction-history dependence).
     if c.is_one() {
         // A UNIT coefficient still decides the orientation of the key's sign-trade sites:
-        // the sign of a coefficient of magnitude 1 is free while any other one costs, so a
-        // key oriented for its old coefficient (`k * (-a - b) * x` keeps the negated sum: at
+        // a key oriented for its old coefficient (`k * (-a - b) * x` keeps the negated sum: at
         // |k| != 1 it ties with `-k * (a + b) * x`, and the tie goes to the positive
         // coefficient) is not the cheapest spelling once the coefficient is 1 -- `mul()`
         // reads `(-a - b) * x` as `-(a + b) * x`. Returned raw, the term printed
@@ -3038,8 +3371,21 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   terms, which all collapse into ONE `Const` absorbing the rational accumulator
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
-    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // `x + (-0)` is `x` bit for bit in float64, the sign of a zero and NaN included: the written
+    // negative zero leaves a sum that holds anything else.
+    let items = if cx.f64_semantics()
+        && items.len() > 1
+        && items.iter().any(|e| is_neg_zero(e, cx.view))
+        && !items.iter().all(|e| is_neg_zero(e, cx.view))
+    {
+        items
+            .into_iter()
+            .filter(|e| !is_neg_zero(e, cx.view))
+            .collect()
+    } else {
+        items
+    };
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
     let mut acc_overflow: Vec<Ex> = Vec::new(); // Num partials an overflowed accumulator emitted
@@ -3061,11 +3407,21 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             // `2a + (2b + c)`). Extraction decisions are thereby always made once, on the
             // complete bag. Scaled terms re-enter the flatten stack so every classification
             // (literals, Const, infinities, nested sums) reruns on them.
+            // The literal may be a refused partition (`Mul[1e160, 1e170, Add]`): its members are
+            // one coefficient.
             Ex::Mul(v)
-                if v.len() == 2 && matches!(&v[0], Ex::Num(_)) && matches!(&v[1], Ex::Add(_)) =>
+                if v.len() >= 2
+                    && matches!(v.last(), Some(Ex::Add(_)))
+                    && v[..v.len() - 1].iter().all(|f| matches!(f, Ex::Num(_))) =>
             {
-                let (r, inner) = match (&v[0], &v[1]) {
-                    (Ex::Num(r), Ex::Add(inner)) => (r.clone(), inner.clone()),
+                let (r, inner) = match v.split_last() {
+                    Some((Ex::Add(inner), lits)) => (
+                        Coef::from_members(lits.iter().map(|f| match f {
+                            Ex::Num(r) => r,
+                            _ => unreachable!("literal members"),
+                        })),
+                        inner.clone(),
+                    ),
                     _ => unreachable!(),
                 };
                 let mut scaled: Vec<Ex> = Vec::with_capacity(inner.len());
@@ -3082,7 +3438,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 if ok {
                     stack.extend(scaled.into_iter().rev());
                 } else {
-                    terms.push(Ex::Mul(v)); // overflow: keep the factored term opaque
+                    terms.push(Ex::Mul(v)); // `0 * inf`: keep the factored term opaque
                 }
             }
             Ex::Num(r) => lits.push(r),
@@ -3114,7 +3470,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         /// ALL same-key coefficients, collected raw; the fold happens at rebuild in
         /// SORTED order (B3b: an arrival-order fold made the overflow partition depend
         /// on the input spelling).
-        coeffs: Vec<Rat>,
+        coeffs: Vec<Coef>,
     }
     let mut buckets: Vec<Bucket> = Vec::new();
     let mut const_terms = false; // any r*Const term seen (merges into the bare-Const pool)
@@ -3186,7 +3542,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 .map(|&i| match orient_term_classes(&buckets[i].key, cx) {
                     Some(o) => match term_split(o, cx.view) {
                         (c, k) if c.is_one() => (k, false),
-                        (c, k) if c == Rat::NEG_ONE => (k, true),
+                        (c, k) if c.is_neg_one() => (k, true),
                         _ => (buckets[i].key.clone(), false),
                     },
                     None => (buckets[i].key.clone(), false),
@@ -3203,22 +3559,11 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 if group.len() < 2 {
                     continue;
                 }
-                let mut coeffs: Vec<Rat> = Vec::new();
-                let mut ok = true;
+                let mut coeffs: Vec<Coef> = Vec::new();
                 for &b in &group {
                     for c in &buckets[hit[b]].coeffs {
-                        match if read[b].1 {
-                            c.checked_neg()
-                        } else {
-                            Some(c.clone())
-                        } {
-                            Some(c) => coeffs.push(c),
-                            None => ok = false,
-                        }
+                        coeffs.push(if read[b].1 { c.negated() } else { c.clone() });
                     }
-                }
-                if !ok {
-                    continue;
                 }
                 let target = hit[group[0]];
                 buckets[target].key = read[a].0.clone();
@@ -3272,18 +3617,22 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         let Bucket { key, coeffs } = b;
         let mixed =
             coeffs.iter().any(|c| c.is_negative()) && coeffs.iter().any(|c| !c.is_negative());
-        let pools: Vec<Vec<Rat>> = if mixed && cx.fin_licensed(&key) {
+        let pools: Vec<Vec<Coef>> = if mixed && cx.fin_licensed(&key) {
             vec![coeffs]
         } else {
-            let (negs, poss): (Vec<Rat>, Vec<Rat>) =
+            let (negs, poss): (Vec<Coef>, Vec<Coef>) =
                 coeffs.into_iter().partition(|c| c.is_negative());
             vec![poss, negs]
         };
-        for pool in pools {
-            for c in Rat::partition_sum(pool) {
+        for mut pool in pools {
+            // Each coefficient may be a refused partition, folded by `Coef::checked_add`.
+            pool.retain(|c| !c.is_zero());
+            for c in super::rat::partition_by(pool, Coef::order, Coef::checked_add, Coef::is_zero) {
                 // a fully cancelled bucket leaves nothing: 0 * (finite-a.e. t) -> 0 licensed
                 let t = if rebuilt && !c.is_zero() {
-                    mul(vec![Ex::Num(c), canon(key.clone(), cx)], cx)
+                    let mut items = c.items();
+                    items.push(canon(key.clone(), cx));
+                    mul(items, cx)
                 } else {
                     term_join(c, key.clone(), cx)
                 };
@@ -3411,6 +3760,9 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     if has_const {
         out.push(Ex::Const);
     } else if !acc.is_zero() {
+        // The constant term LANDS beside other terms here (permissive's ρ, [`land`]); a sum
+        // of literals alone stays exact.
+        let acc = if out.is_empty() { acc } else { land(acc, cx) };
         out.push(Ex::Num(acc));
     }
 
@@ -3467,21 +3819,15 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     }
     // Unanimity: every term's |coefficient| equal (Const counts as 1; NaN cannot appear --
     // it collapses the whole sum earlier).
-    let mut magnitudes: Vec<Rat> = Vec::with_capacity(terms.len());
+    // A coefficient a fold refused is one magnitude with all its members (`Coef`).
+    let mut magnitudes: Vec<Coef> = Vec::with_capacity(terms.len());
     for t in &terms {
         let c = match t {
-            Ex::Const => Rat::ONE,
-            Ex::Num(r) => r.clone(),
+            Ex::Const => Coef::ONE,
+            Ex::Num(r) => Coef::of(r),
             _ => term_split(t.clone(), cx.view).0,
         };
-        magnitudes.push(if c.is_negative() {
-            match c.checked_neg() {
-                Some(m) => m,
-                None => return Ex::Add(terms), // overflow: skip extraction
-            }
-        } else {
-            c
-        });
+        magnitudes.push(c.abs());
     }
     let unanimous = magnitudes.windows(2).all(|w| w[0] == w[1]);
     // H-030: a sum holding a negation-absorbing member (see `term_absorbs_negation`)
@@ -3494,12 +3840,12 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let g = if unanimous {
         magnitudes[0].clone()
     } else {
-        Rat::ONE
+        Coef::ONE
     };
     // (b), owner ruling 2026-08-08: the filed orientation is the mu-CHEAPER one ("the
     // mirrors score equal; the bigger expression scores bigger"); the historical
     // first-in-sort-positive lex rule survives only as the exact-tie breaker. For a
-    // content-1 sum the flip's wrapper cost is one Mul head (the `-1 x Add` wrapper exists
+    // content-1 sum the flip's wrapper cost is one sign (the negation `-1 x Add` exists
     // only in the flipped spelling); for a non-unit content the wrapper exists in BOTH
     // spellings and the flip pays only the coefficient's sign bit -- and the per-term
     // deltas must then be priced on the DIVIDED terms (the candidates actually stored),
@@ -3507,53 +3853,39 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let sign_neg = if terms.iter().any(term_absorbs_negation) {
         false
     } else if g.is_one() {
-        flipped_orientation_wins(&terms, mu_mul() as i128, Tie::Keep, cx)
+        flipped_orientation_wins(&terms, Wrapper::Flipped, Tie::Keep, cx)
     } else {
-        let Some(ng) = g.checked_neg() else {
-            return Ex::Add(terms);
-        };
         match divide_terms(&terms, &g, cx) {
             Some(divided_pos) => {
-                let wsd = mu_rat(&ng) as i128 - mu_rat(&g) as i128;
-                flipped_orientation_wins(&divided_pos, wsd, Tie::Keep, cx)
+                let wsd = match g.rat() {
+                    Some(r) => {
+                        mu_rat(&r.checked_neg().expect("a Rat negates")) as i128
+                            - mu_rat(&r) as i128
+                    }
+                    // A partition's sign is a member of its own (`Mul[-1, 1e160, 1e170, S]`):
+                    // the two wrappers priced as they stand.
+                    None => {
+                        let wrap = |c: &Coef| {
+                            let mut v = c.items();
+                            v.push(Ex::Add(divided_pos.clone()));
+                            complexity(&Ex::Mul(v), cx.view) as i128
+                        };
+                        wrap(&g.negated()) - wrap(&g)
+                    }
+                };
+                flipped_orientation_wins(&divided_pos, Wrapper::Both(wsd), Tie::Keep, cx)
             }
             None => return Ex::Add(terms),
         }
     };
-    let u = if sign_neg {
-        match g.checked_neg() {
-            Some(n) => n,
-            None => return Ex::Add(terms),
-        }
-    } else {
-        g
-    };
+    let u = if sign_neg { g.negated() } else { g };
     if u.is_one() || u.is_zero() {
         return Ex::Add(terms);
     }
-    let inv_u = match u.checked_inv() {
-        Some(i) => i,
-        None => return Ex::Add(terms),
-    };
     // Divide every term by u (exact; total -- see the doc above).
-    let mut divided: Vec<Ex> = Vec::with_capacity(terms.len());
-    for t in terms.iter() {
-        let d = match t {
-            Ex::Const => Ex::Const,
-            Ex::Num(r) => match r.checked_mul(&inv_u) {
-                Some(v) => Ex::Num(v),
-                None => return Ex::Add(terms),
-            },
-            _ => {
-                let (c, key) = term_split(t.clone(), cx.view);
-                match c.checked_mul(&inv_u) {
-                    Some(v) => term_join(v, key, cx),
-                    None => return Ex::Add(terms),
-                }
-            }
-        };
-        divided.push(d);
-    }
+    let Some(mut divided) = divide_terms(&terms, &u, cx) else {
+        return Ex::Add(terms);
+    };
     // Re-sort (coefficient ties may reorder) and wrap. `mul`'s sign-orientation arm
     // (H-014) re-enters `add` only when the FLIPPED orientation wins -- and `divided`
     // is the winning orientation by construction (sign_neg came from the same
@@ -3570,22 +3902,23 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     if divided == terms {
         return Ex::Add(terms);
     }
-    mul(vec![Ex::Num(u), Ex::Add(divided)], cx)
+    let mut items = u.items();
+    items.push(Ex::Add(divided));
+    mul(items, cx)
 }
 
 /// Divide every term by `u` exactly (`None` on any overflow) -- the same loop as
 /// `primitive_sum`'s tail, factored so the orientation decision can price the DIVIDED
 /// candidates for a non-unit content.
-fn divide_terms(terms: &[Ex], u: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
-    let inv_u = u.checked_inv()?;
+fn divide_terms(terms: &[Ex], u: &Coef, cx: &Cx) -> Option<Vec<Ex>> {
     let mut divided: Vec<Ex> = Vec::with_capacity(terms.len());
     for t in terms {
         let d = match t {
             Ex::Const => Ex::Const,
-            Ex::Num(r) => Ex::Num(r.checked_mul(&inv_u)?),
+            Ex::Num(r) => Ex::Num(Coef::of(r).over(u)?.rat()?),
             _ => {
                 let (c, key) = term_split(t.clone(), cx.view);
-                term_join(c.checked_mul(&inv_u)?, key, cx)
+                term_join(c.over(u)?, key, cx)
             }
         };
         divided.push(d);
@@ -3610,9 +3943,9 @@ fn divide_terms(terms: &[Ex], u: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 /// `Const` terms are sign-free (negation re-fits, `term_join` absorbs the sign) and compare
 /// equal at their positions; infinities carry their sign. `false` (keep the original
 /// orientation, extraction-free) on any negation overflow.
-/// What decides an EXACT mu tie between the two orientations (owner ruling A,
-/// 2026-08-08): at a SIGN-TRADE site one spelling is distinguished -- bare / positive
-/// coefficient -- and it wins the tie, so `Keep` (the current spelling is the
+/// What decides an EXACT mu tie between the two orientations that the sign key (`sign_key`)
+/// leaves tied: at a SIGN-TRADE site one spelling is distinguished -- bare / positive
+/// coefficient -- and it wins, so `Keep` (the current spelling is the
 /// distinguished one) and `Flip` (the flipped spelling is) resolve structurally. `Lex`
 /// survives ONLY for free-orientation sites (even carriers, wrapper delta 0), where
 /// both spellings are bare and no structural member is distinguished -- there the
@@ -3631,16 +3964,30 @@ enum Tie {
     Lex,
 }
 
-fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx: &Cx) -> bool {
-    // (b), owner ruling 2026-08-08: the mu-CHEAPER orientation wins. `wrapper_sign_delta`
-    // is what the flip costs at the wrapper itself, signed from the caller's side:
-    // +mu_mul (the wrapper IS a `Mul[-1, .]` node, priced by the symbol table) in
-    // `primitive_sum` for a content-1 sum (the wrapper exists only in the
-    // flipped spelling), NEGATIVE mu_mul in `mul()`'s distribution arm (the wrapper
-    // exists only in the CURRENT spelling), the coefficient sign-bit delta for a
-    // non-unit content (wrapper in both spellings). The two callers' deltas are exact
-    // mirrors, so their decisions cannot ping-pong.
-    let mut delta = wrapper_sign_delta;
+/// Where the wrapper of a sum's flipped orientation stands (`flipped_orientation_wins`).
+#[derive(Clone, Copy)]
+enum Wrapper {
+    /// In neither spelling: a free-orientation site (an even power's base, an even function's
+    /// argument), where both orientations are bare.
+    Neither,
+    /// In the flipped spelling only: a content-1 sum, whose flip is the negation `Mul[-1, .]`,
+    /// one sign (`mu_sign`).
+    Flipped,
+    /// In both: a non-unit content `g`, written `g x .` and flipped `-g x .`; the flip pays the
+    /// price of `-g` over `g`.
+    Both(i128),
+}
+
+fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -> bool {
+    // (b), owner ruling 2026-08-08: the mu-CHEAPER orientation wins. The wrapper's own price
+    // delta, from the caller's side: one sign for a content-1 sum (the negation exists only
+    // in the flipped spelling), the coefficient's sign-bit delta for a non-unit content
+    // (wrapper in both spellings), nothing at a free-orientation site.
+    let mut delta = match wrapper {
+        Wrapper::Neither => 0,
+        Wrapper::Flipped => mu_sign() as i128,
+        Wrapper::Both(d) => d,
+    };
     let mut flipped: Vec<Ex> = Vec::with_capacity(terms.len());
     for t in terms {
         match negate_term(t, cx) {
@@ -3654,7 +4001,31 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx
     if delta != 0 {
         return delta < 0;
     }
-    // EXACT mu tie -> the caller's structural policy (owner ruling A). Only `Lex` --
+    // EXACT mu tie -> the one sign key (`sign_key`): fewer signs, then outer ones. The flipped
+    // spelling carries the wrapper's sign (`-1 x Add` for a content-1 sum, `-g x Add` beside a
+    // current `g x Add`), except at the free-orientation sites (`Lex`: an even power's base),
+    // where neither spelling has one.
+    let terms_key = |ts: &[Ex], depth: u32| {
+        ts.iter()
+            .map(|t| sign_key(t, cx.view))
+            .fold((0u32, 0u32), |a, (c, s)| (a.0 + c, a.1 + s + c * depth))
+    };
+    let (current, flip) = match tie {
+        Tie::Lex => (terms_key(terms, 1), terms_key(&flipped, 1)),
+        _ => {
+            let depth = if matches!(wrapper, Wrapper::Both(_)) {
+                2
+            } else {
+                1
+            };
+            let (c, s) = terms_key(&flipped, 2);
+            (terms_key(terms, depth), (c + 1, s + 1))
+        }
+    };
+    if current != flip {
+        return flip < current;
+    }
+    // Equal signs too -> the caller's structural policy (owner ruling A). Only `Lex` --
     // the free-orientation sites, where neither spelling is structurally
     // distinguished -- still runs the historical rule: compare the sorted coefficient
     // sequences lexicographically and prefer the larger. Total and a function of the
@@ -3669,7 +4040,7 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx
     for (a, b) in terms.iter().zip(flipped.iter()) {
         let ca = orientation_coeff(a, cx.view);
         let cb = orientation_coeff(b, cx.view);
-        match ca.cmp_exact(&cb) {
+        match ca.order(&cb) {
             std::cmp::Ordering::Less => return true,
             std::cmp::Ordering::Greater => return false,
             std::cmp::Ordering::Equal => {}
@@ -3712,12 +4083,12 @@ fn term_absorbs_negation(t: &Ex) -> bool {
     }))
 }
 
-fn orientation_coeff(t: &Ex, view: &TokenView) -> Rat {
+fn orientation_coeff(t: &Ex, view: &TokenView) -> Coef {
     match t {
-        Ex::Const => Rat::ONE,
-        Ex::PosInf => Rat::ONE,
-        Ex::NegInf => Rat::NEG_ONE,
-        Ex::Num(r) => r.clone(),
+        Ex::Const => Coef::ONE,
+        Ex::PosInf => Coef::ONE,
+        Ex::NegInf => Coef::ONE.negated(),
+        Ex::Num(r) => Coef::of(r),
         // Sign-normalized split (B19): an odd-literal term's sign is SEMANTIC and the
         // orientation comparison must see it -- sin(-2) contributes -1, not +1.
         _ => term_split(t.clone(), view).0,
@@ -3841,6 +4212,74 @@ impl Drop for RegionScope {
     }
 }
 
+/// A SUM KEEPS THE SIGN OF ITS ZERO WHERE ITS ZERO SET MAY HOLD A REGION, in `f64`. Float64 adds
+/// to `+0` wherever a sum cancels, however it is written: `x1 - |x1|` and `|x1| - x1` are both
+/// `+0` for every `x1 >= 0`, so the negation `-(|x1| - x1)` is `-0` there. A sum and its terms
+/// negated one by one (its other orientation) are one value everywhere else, the rounding being
+/// symmetric in sign. Where the zero set is null its sign is no value the answer keeps (reading
+/// A: poles are read by their limits); where it may hold a region, the sign is a value where the
+/// zero is inverted (`region_signed_zero`, `inverts_a_signed_zero`). The region test is reading
+/// A's (`zero_set_null`: the certificate where the context has one; a context without it reads
+/// the form, `zero_set_null_by_form`). A sum without a region of the variables' space
+/// (`Ex::has_measure_space`: a ground sum, or a pattern's) has no zero set to read, and a sum
+/// whose sign an absorption owner takes into its terms whatever its zero set -- one holding a
+/// `<constant>` (the refit, H-020), an infinity term or a term absorbing a negation (H-014,
+/// H-030) -- keeps its owner. `real` reads one unsigned zero, and `permissive` a value up to the
+/// sign of a zero.
+pub(crate) fn keeps_zero_sign(s: &Ex, cx: &Cx) -> bool {
+    let owned = s.contains_const()
+        || matches!(s, Ex::Add(ts) if ts.iter().any(|t| {
+            matches!(t, Ex::PosInf | Ex::NegInf) || term_absorbs_negation(t)
+        }));
+    cx.f64_semantics()
+        && s.has_measure_space(cx.view)
+        && !owned
+        && !zero_set_null_by_form(s, cx)
+        && !match cx.cert_region {
+            Some(f) => f(s),
+            None => zero_set_null(s, cx),
+        }
+}
+
+/// Does `f` vanish on a region with the sign its orientation gives it: a sum that keeps the sign
+/// of its zero (`keeps_zero_sign`), or an odd power, an odd function or an odd root of one, each
+/// odd at a signed zero as everywhere else?
+fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
+    match f {
+        Ex::Add(_) => keeps_zero_sign(f, cx),
+        Ex::Pow(b, e) => {
+            matches!(&**e, Ex::Num(r) if r.is_odd_integer() && !r.is_negative())
+                && region_signed_zero(b, cx)
+        }
+        Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => region_signed_zero(&a[0], cx),
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => {
+            matches!(&a[1], Ex::Num(k) if k.is_odd_integer()) && region_signed_zero(&a[0], cx)
+        }
+        // The 0.15 heads. A step or lattice head vanishes on whole intervals with a sign of its
+        // own (`ceil` is -0 on (-1, 0), `mod` takes the divisor's, `max(x, -0)` and `min(x, 0)`
+        // hold a zero on a half-line), wherever it has a region to vanish on. `harmonic` is odd at
+        // its zero, `atan2` in its first argument and `besselj` (under an odd order) in its
+        // second, so each keeps its argument's.
+        Ex::Fun(op, _)
+            if ["floor", "ceil", "max", "min", "mod"]
+                .iter()
+                .any(|h| cx.view.tok_is(*op, h)) =>
+        {
+            cx.f64_semantics() && f.has_measure_space(cx.view)
+        }
+        Ex::Fun(op, a) if a.len() == 1 && cx.view.tok_is(*op, "harmonic") => {
+            region_signed_zero(&a[0], cx)
+        }
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "atan2") => {
+            region_signed_zero(&a[0], cx)
+        }
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "besselj") => {
+            region_signed_zero(&a[1], cx)
+        }
+        _ => false,
+    }
+}
+
 /// Is the zero set of `e` null by its form alone, without the certificate (which the parse has
 /// not)? A variable, a nonzero literal, a `Const`, an infinity, a product of such factors, a
 /// positive power or a root of one, a negative power of a function whose level sets are null
@@ -3930,23 +4369,51 @@ fn level_sets_null(e: &Ex, cx: &Cx) -> bool {
 /// `Err` holds their product, built without its decision (`mul_undecided`), where `pow` refuses.
 pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<Ex>, Ex> {
     let ex = Ex::Num(k.clone());
+    if inverts_a_signed_zero(&members, cx) {
+        return Ok(members
+            .into_iter()
+            .map(|f| pow_member(f, ex.clone(), cx))
+            .collect());
+    }
     let magnitude = |v: &[Ex]| {
         v.iter()
             .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
     };
     match mul_undecided(members.clone(), cx) {
         Ex::Mul(v) => match power_bag(&v, k, cx) {
-            Some(bag) if bag != v && magnitude(&v) => {
-                Ok(bag.into_iter().map(|f| pow(f, ex.clone(), cx)).collect())
-            }
+            Some(bag) if bag != v && magnitude(&v) => Ok(bag
+                .into_iter()
+                .map(|f| pow_member(f, ex.clone(), cx))
+                .collect()),
             Some(_) => Ok(members
                 .into_iter()
-                .map(|f| pow(f, ex.clone(), cx))
+                .map(|f| pow_member(f, ex.clone(), cx))
                 .collect()),
             None => Err(Ex::Mul(v)),
         },
-        f => Ok(vec![pow(f, ex, cx)]),
+        f => Ok(vec![pow_member(f, ex, cx)]),
     }
+}
+
+/// A ZERO KEEPS ITS SIGN WHERE IT IS INVERTED, in float64's signed zeros (`Cx::ieee_zeros`): does
+/// the product of `v` hold an exact zero, whose sign is then the sign of its other members (`x*0`
+/// is -0 wherever x < 0, `-(x - x)` is -0)? A negative integer power distributes over such a
+/// product exactly in IEEE 754 arithmetic: the exact zero is +0, so `(0*f)^k` is `0^k * f^k`, that
+/// is `inf * f^k`, for every `f`, a zero, an infinity and NaN included. Each member keeps its own
+/// power and the zero the pole, so the answer keeps the infinity's sign: `1/(x1*(x2 - x2))` is
+/// `inf/x1`, `1/-(x1 - x1)` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`. `real` keeps its one zero:
+/// there the product is the zero and its inverse `+inf`. Asked where the members of an inverted
+/// product are still apart (`raised_members`), and by `pow`'s distribution licence
+/// (`power_bag`), where a product that holds a zero is inverted whole.
+///
+/// So with a member that vanishes on a region with the sign its orientation gives it, in `f64`
+/// (`region_signed_zero`): `1/(x2*-(|x1| - x1))` is `-1/x2 * 1/(|x1| - x1)`, `-inf/x2` for every
+/// `x1 >= 0`, and each member's inverse keeps the orientation it was written in, a negative power
+/// whose zero set may hold a region being no sign-trade site (`sign_trade_flip`).
+pub(crate) fn inverts_a_signed_zero(v: &[Ex], cx: &Cx) -> bool {
+    cx.ieee_zeros()
+        && v.iter()
+            .any(|f| matches!(f, Ex::Num(r) if r.is_zero()) || region_signed_zero(f, cx))
 }
 
 /// `mul()` without the opposite-sums decision, for a product about to be raised to a negative
@@ -3976,7 +4443,39 @@ pub(crate) fn mul_undecided(items: Vec<Ex>, cx: &Cx) -> Ex {
 }
 
 fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
-    super::work::tick(1);
+    host_partition_sign(mul_assembled(items, cx, decide))
+}
+
+/// A product's sign, where its coefficient is a partition of several literals (a fold refused),
+/// written on the smallest of them: `-1e300*1e300*x1`, not `-1*1e300*1e300*x1`. The assembly
+/// decides every placement with the sign on the coefficient slot (F72: `-1` beside the
+/// magnitudes), and a re-read factors the signs of the members out again, so the decisions are
+/// the same however the sign is written; the written product carries it on a literal, as a
+/// ground constant carries its own sign, one sign and no extra member.
+fn host_partition_sign(e: Ex) -> Ex {
+    let Ex::Mul(mut v) = e else {
+        return e;
+    };
+    // The literals lead (`mul_factor_cmp`); `-1` sorts before the positive magnitudes.
+    let n = v.iter().take_while(|f| matches!(f, Ex::Num(_))).count();
+    if n >= 2 && matches!(&v[0], Ex::Num(r) if *r == Rat::NEG_ONE) {
+        if let Ex::Num(m) = &v[1] {
+            if !m.is_negative() && !m.is_zero() {
+                let host = m.checked_neg().expect("a Rat negates");
+                v.remove(0);
+                v[0] = Ex::Num(host);
+                return if v.len() == 1 {
+                    v.pop().expect("one member")
+                } else {
+                    Ex::Mul(v)
+                };
+            }
+        }
+    }
+    Ex::Mul(v)
+}
+
+fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
@@ -4242,8 +4741,10 @@ fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
 
 /// Like-base exponent collection, `mul()`'s step after the coefficient: the factors with one
 /// base (and one symbolic exponent) merge their exponents, and each result is rebuilt through
-/// [`pow`]. Returns the rebuilt factors and whether one of them came back as a product
-/// (`spliced`: its members are in the list, and the caller re-runs the constructor on it).
+/// [`pow`]; then the powers of e left over distinct bases merge into one (`merge_e_powers`).
+/// Returns the rebuilt factors and whether one of them must re-enter the constructor
+/// (`spliced`: a product whose members are in the list, or a factor of another kind, and the
+/// caller re-runs the constructor on it).
 fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     // Like-base exponent collection. The BRANCH-CUT licence gates every single merge step,
     // including same-sign ones: merging exponents `a` and `b` into `a + b` is sound iff both
@@ -4352,13 +4853,77 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
         let (out, again) = collect_like_bases(out, cx);
         return (out, spliced || again);
     }
-    (out, spliced)
+    let merged = merge_e_powers(&mut out, cx);
+    (out, spliced || merged)
+}
+
+/// The exponent of `f` read as a power of Euler's number: `exp(a)` is `e^a`, the leaf `E` is
+/// `e^1`, and a rational power of either is `e^(a r)` -- a `Pow` with a literal exponent, or an
+/// even root, which `factor_split` reads as a rational power too. `None` for anything else,
+/// a symbolic power included: `(e^a)^b` is `e^(a b)` only where `a b` is no `0 * inf`.
+fn e_exponent(f: &Ex, cx: &Cx) -> Option<Ex> {
+    let (base, r) = as_rational_power(f, cx).unwrap_or((f, Rat::ONE));
+    let a = match base {
+        Ex::E => return Some(Ex::Num(r)),
+        Ex::Fun(op, args) if args.len() == 1 && cx.view.tok_is(*op, "exp") => &args[0],
+        _ => return None,
+    };
+    Some(if r.is_one() {
+        a.clone()
+    } else {
+        mul(vec![Ex::Num(r), a.clone()], cx)
+    })
+}
+
+/// POWERS OF e COLLECT BY THEIR EXPONENTS: `exp(a) exp(b) = exp(a + b)`. `exp` is a power of e,
+/// so this is the like-base collection that merges `x^a x^b` into `x^(a + b)`, over the one base
+/// e every power of e shares, whatever `exp` spells its exponent with: `collect_like_bases` merges
+/// the powers over one `exp(a)` as over any base, and this merges what remains over distinct
+/// ones. The base is positive, finite and nonzero, so every licence of that collection holds for
+/// it (the branch cut and the finite-nonzero licence of a cancelling merge); the exponents sum
+/// through [`add`], whose own licences decide what cancels: `exp(u) exp(-u)` is `exp(0) = 1` where
+/// `u` is finite almost everywhere, as `exp(u)/exp(u)` is.
+///
+/// TOTAL on the extended real line, so no mode needs a licence of its own: at `a = +inf`,
+/// `b = -inf` both sides are NaN (`inf * 0`, and `exp(inf - inf)`), and at one infinite exponent
+/// both are that exponent's limit. Under the f64 evaluator the two sides differ where an `exp`
+/// overflows or underflows (`exp(800) exp(-800)` is `inf * 0 = NaN`, while `exp(0)` is 1), which
+/// is f64's range event (`numeric::RangeKind`): there a rewrite may give the true value, and the
+/// merge gives it.
+///
+/// Rebuilt through [`pow`] over the base e, so the merged exponent takes the spelling `pow` gives
+/// any power of e (`compose_e_power`): `exp(x + 1)`, or `E` and `1` at the exponents 1 and 0. A
+/// single power of e stays as it stands. Returns whether the merged factor must re-enter the
+/// constructor: when it is no power of e (a number, a product, a factor over another base).
+fn merge_e_powers(out: &mut Vec<Ex>, cx: &Cx) -> bool {
+    let at: Vec<(usize, Ex)> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| e_exponent(f, cx).map(|x| (i, x)))
+        .collect();
+    if at.len() < 2 {
+        return false;
+    }
+    let mut exponents = Vec::with_capacity(at.len());
+    for (i, x) in at.into_iter().rev() {
+        out.remove(i);
+        exponents.push(x);
+    }
+    let merged = pow(Ex::E, add(exponents, cx), cx);
+    let again = e_exponent(&merged, cx).is_none();
+    out.push(merged);
+    again
 }
 
 /// `mul()`'s last step: the sign owners, then the assembly, for a nonzero coefficient and a
 /// collected factor list (bare `Const` and infinities included). `collect_opposite_sums` prices
 /// its candidates through it, so a priced product is exactly the product built.
 fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
+    // The coefficient LANDS beside the other factors here (permissive's ρ, [`land`]); a
+    // product of literals alone stays exact.
+    if !out.is_empty() {
+        coeff = land(coeff, cx);
+    }
     // CANONICAL SIGN ORIENTATION for `Mul[-1, Add[S]]` (H-014 root cause, 2026-08-03):
     // the orientation of a sum class {S, -S} is owned by `flipped_orientation_wins`, but
     // two assembly paths could ship the LOSING orientation wrapped in a -1 coefficient:
@@ -4508,21 +5073,13 @@ fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     // f(-S) = -f(S) is TOTAL on those carriers (negative odd exponents/indices are
     // NOT carriers: the one-zero pole trilemma, see is_odd_fun). With n trade sites
     // the value has 2^n spellings (each site independently flippable, the
-    // coefficient's sign = entry sign times flip parity). The owner MATERIALIZES
-    // every spelling, prices it with the real mu, and returns the argmin -- so the
-    // priced spelling IS the built spelling (the row-120 law: any gap between the
-    // two re-opens construction-history dependence), and the decision is a function
-    // of the ORBIT, not of the entry spelling. Ties: the positive-coefficient
-    // spelling wins (ruling A -- a leading minus is only ever minted when strictly
-    // cheaper, and what the user typed survives whenever prices tie); residual
-    // equal-mu same-sign ties fall to a fixed structural order. n > 6 does not
-    // enumerate (2^n materializations): `sign_place_wide` computes the same argmin price
-    // from the per-site prices and the flip parity, with its own orbit-invariant tie
-    // order. (Until it existed n > 6 refused and kept the entry orientation, which is
-    // not orbit-invariant: on srbf's 125,127 model predictions every answer that changed
-    // on a second call in f64 and real -- 24 at effort 0, 26 with the search -- was such
-    // a product, re-read through a parse whose shorter prefix products had traded.)
-    // A negate_term overflow
+    // coefficient's sign = entry sign times flip parity). The owner finds the argmin
+    // of the orbit in closed form over whole classes (`sign_place_groups`), builds that
+    // spelling and prices it with the real mu -- so the priced spelling IS the built
+    // spelling (the row-120 law: any gap between the two re-opens construction-history
+    // dependence), and the decision is a function of the ORBIT, not of the entry
+    // spelling. Ties go to the sign key (`sign_key`: fewest signs, then the outer ones);
+    // residual ties fall to a fixed order that is a function of the orbit. A negate_term overflow
     // refusal keeps the entry spelling, whose display is injective. This arm
     // SUBSUMES the former lone `-1 x Add` distribution arm (its case is n=1 with
     // out.len() == 1; the mu comparison and the A-tie give the identical decision).
@@ -4607,8 +5164,7 @@ enum HostKey {
 /// between the integer power and the fractional powers of its sign) is priced as the whole
 /// product it builds -- each class collected under the context's own licences, the rest of the
 /// bag beside them, the sign placed by `finish_product` -- and the cheapest wins; a price tie
-/// goes by `sign_place`'s own order (a non-negative coefficient, then the structurally smaller
-/// product). The classes are decided together while their placements combine to at most
+/// goes by `sign_place`'s own order (the sign key, then the structurally smaller product). The classes are decided together while their placements combine to at most
 /// `JOINT_LIMIT` products, priced in the order of a lower bound on their prices, else one at a
 /// time, from a start the tables decide, until none moves; a class with a large total offers its
 /// two extreme placements and the one it holds. A product about to be inverted is built without
@@ -4659,6 +5215,11 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         }
         classes.push(Class::new(&read));
     }
+    for c in classes.iter_mut().filter(|c| !c.multiple()) {
+        c.kept = class_of(&c.sums[0], cx)
+            .map(|(k, _, _)| k)
+            .filter(|k| zero_limit(&raw, k, cx).is_some());
+    }
     // A class whose factors all arrived over one sum is decided too where they hold exponents of
     // both signs, as the cancellation they meet may be cheaper over the other sum
     // (`-(x1 - 3) / (x1 - 3)^2` is `1/(3 - x1)`), or fractional powers that split its mass
@@ -4673,8 +5234,18 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         );
         (t.sides[0].p > 0 && t.sides[0].n < 0 || t.splits_mass(0, cx)) && c.complete(cx)
     });
+    // Each class written over its first sum: the structurally smaller one, or for a literal
+    // multiple the positive one (as an even power of it files, `pow`).
     for c in classes.iter_mut() {
-        if cmp_vec(&c.sums[1], &c.sums[0], cx.view) == Ordering::Less {
+        let first = if c.multiple() {
+            c.sums[1]
+                .first()
+                .and_then(multiple_literal)
+                .is_some_and(|r| !r.is_negative())
+        } else {
+            cmp_vec(&c.sums[1], &c.sums[0], cx.view) == Ordering::Less
+        };
+        if first {
             c.sums.swap(0, 1);
         }
     }
@@ -4731,13 +5302,8 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
     // Cheaper than `(q, m)`: the price, then `sign_place`'s own tie order (a non-negative
     // coefficient, then the structurally smaller product), so a product the sign owner alone
     // would build from either spelling is the one chosen.
-    let negative = |p: &Ex| match p {
-        Ex::Num(r) => r.is_negative(),
-        Ex::Mul(v) => v.iter().any(|f| matches!(f, Ex::Num(r) if r.is_negative())),
-        _ => false,
-    };
     let better = |mu: u64, p: &Ex, q: &Ex, m: u64| {
-        mu < m || (mu == m && (negative(p), cmp_ex(p, q, cx.view)) < (negative(q), Ordering::Equal))
+        mu < m || (mu == m && tie_cmp(p, q, cx.view) == Ordering::Less)
     };
     // A lower bound on a candidate's price, from its factors alone: `complexity` prices a product
     // as its node, its members and its coefficient, and the sign placement can only choose each
@@ -4747,7 +5313,14 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
     // re-orient a sum of the rest (a `Const`-bearing, negation-absorbing or infinite one) and take
     // the sign or the coefficient into it, the bound counts only the classes' factors and the
     // rest's other factors, at their cheaper orientations.
+    // A piece of a literal (`is_piece`) is priced with the coefficient and the product's other
+    // pieces as the one literal they denote, which can cost less than its pieces: where the
+    // product holds one, the bound counts neither the pieces, nor the coefficient, nor the node.
+    let pieces = raw.iter().any(|f| is_piece(f, cx.view));
     let factor_lb = |f: &Ex| {
+        if is_piece(f, cx.view) {
+            return 0;
+        }
         let mu = complexity(f, cx.view);
         match sign_trade_flip(f, cx) {
             Some(nf) => mu.min(complexity(&nf, cx.view)),
@@ -4777,7 +5350,7 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         if members == 0 {
             return 0;
         }
-        if !bounded {
+        if !bounded || pieces {
             return rest_lb.saturating_add(lb);
         }
         let node = if members >= 2 || !unit { mu_mul() } else { 0 };
@@ -4860,11 +5433,26 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             );
             bound(members, lb)
         };
+        // A placement that leaves the product's value at a class's zero off the limit it keeps
+        // there (`zero_limit`, as `sign_place` reads it) is priced above every other.
+        let off = |p: &Ex| {
+            let members = match p {
+                Ex::Mul(v) => v.as_slice(),
+                p => std::slice::from_ref(p),
+            };
+            classes
+                .iter()
+                .filter_map(|c| c.kept.as_ref())
+                .any(|k| zero_off(members, k, cx) == Some(true))
+        };
         let price = |choice: &[usize]| -> Option<(Ex, u64)> {
-            super::work::tick(1);
             let (v, odd) = bag(choice)?;
             let p = host.build(neg != odd, v, cx)?;
-            let mu = complexity(&p, cx.view);
+            let mu = if off(&p) {
+                u64::MAX
+            } else {
+                complexity(&p, cx.view)
+            };
             debug_assert!(mu >= lower(choice), "a candidate priced below its bound");
             Some((p, mu))
         };
@@ -5015,35 +5603,163 @@ fn holds_joinable_roots(v: &[Ex], cx: &Cx) -> bool {
 }
 
 /// How a factor reads as a member of a class {B, -B} (`collect_opposite_sums`): the head of `B`
-/// (`None` for the sum itself, else the odd function and an odd root's index), the sum's terms,
-/// and the factor's exponent over `B` (`None` when it is symbolic). Only a sum the sign may
-/// pass through is a class base: a `Const`-bearing, negation-absorbing or bare-infinity sum has
-/// its own owners.
+/// (`None` for the sum itself, else the odd function and an odd root's index), the terms of its
+/// argument (`class_base`; a literal multiple is a sum of one term: `sin(2 x1)` and `sin(-2 x1)`,
+/// `sin(x1)` and `sin(-x1)`, `sin(2)` and `sin(-2)`), and the factor's exponent over `B` (`None`
+/// when it is symbolic).
 struct ClassRead<'a> {
     head: Option<(Tok, Option<&'a Ex>)>,
     terms: &'a [Ex],
     exp: Option<Rat>,
 }
 
-fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
-    type Head<'a> = Option<(Tok, Option<&'a Ex>)>;
-    fn base_read<'a>(b: &'a Ex, cx: &Cx) -> Option<(Head<'a>, &'a [Ex])> {
-        let odd_index = |k: &Ex| matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less);
-        match b {
-            Ex::Add(ts) => Some((None, ts)),
-            Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => match &a[0] {
-                Ex::Add(ts) => Some((Some((*op, None)), ts)),
-                _ => None,
-            },
-            Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") && odd_index(&a[1]) => {
-                match &a[0] {
-                    Ex::Add(ts) => Some((Some((*op, Some(&a[1]))), ts)),
-                    _ => None,
-                }
-            }
-            _ => None,
+/// THE CLASS READING, the one definition every owner asks (the product table `class_read`, the
+/// orientation of like terms and of shared factors `orient_base`, the sign trade's classes
+/// `site_multiple`, a term read up to sign `odd_signs_out`, and `pow`'s even powers). A class is a
+/// pair {B, -B}: a sum and its negation, or an odd head -- an odd function, or an odd root of an
+/// odd index of at least 3 -- of a negatable argument and of its negation. A negatable argument is
+/// a sum, or a literal multiple `c u` (`multiple_literal`: a bare `u` is `1 u`, a negation `-u` is
+/// `-1 u`, a literal is itself). A sum is one only where the sign may pass through it: a sum
+/// holding a `Const` or an infinity, or a term that absorbs a negation, has its own owners.
+struct ClassBase<'a> {
+    head: Option<(Tok, Option<&'a Ex>)>,
+    arg: ClassArg<'a>,
+}
+
+/// The argument of a class base: a sum's terms, or a literal multiple.
+enum ClassArg<'a> {
+    Sum(&'a [Ex]),
+    Multiple(&'a Ex),
+}
+
+impl<'a> ClassArg<'a> {
+    /// The argument as the terms of a sum (a literal multiple is a sum of one term).
+    fn terms(&self) -> &'a [Ex] {
+        match self {
+            ClassArg::Sum(ts) => ts,
+            ClassArg::Multiple(m) => std::slice::from_ref(*m),
         }
     }
+}
+
+fn class_base<'a>(b: &'a Ex, view: &TokenView) -> Option<ClassBase<'a>> {
+    let sum = |ts: &'a [Ex]| {
+        (!ts.iter()
+            .any(|t| t.contains_const() || t.contains_infinity() || term_absorbs_negation(t)))
+        .then_some(ClassArg::Sum(ts))
+    };
+    match b {
+        Ex::Add(ts) => Some(ClassBase {
+            head: None,
+            arg: sum(ts)?,
+        }),
+        Ex::Fun(op, a) => {
+            let index = match a.as_slice() {
+                [_] if odd_fun(view, *op) => None,
+                [_, k]
+                    if view.tok_is(*op, "rootn")
+                        && matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less) =>
+                {
+                    Some(k)
+                }
+                _ => return None,
+            };
+            let arg = match &a[0] {
+                Ex::Add(ts) => sum(ts)?,
+                m => {
+                    multiple_literal(m)?;
+                    ClassArg::Multiple(m)
+                }
+            };
+            Some(ClassBase {
+                head: Some((*op, index)),
+                arg,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// THE SIGN TIE KEY (one key after the price, for every placement tie: the sign trade, the product
+/// table, the reduction ordering): fewest signs, then outermost, then the structural order
+/// (`tie_cmp`). A sign is a negative number -- a product's or a sum term's negative coefficient (a
+/// negation is the coefficient -1) or a negative literal argument. A literal exponent is not a
+/// sign (a negative one is a reciprocal, written as a division), nor is an infinity's sign, which
+/// is its value (`-inf` and `log(0)` are one constant, not a placement). A sign inside a ground
+/// argument of a function (no variable, wildcard or `<constant>`) belongs to that constant and is
+/// not counted, so a constant keeps its sign on its literal (`sin(-2)` stays, `-sin(2)` is filed
+/// as `sin(-2)`). The key is the number of the counted signs and the sum of their depths (the
+/// root at depth 0): fewer, then outer.
+pub(crate) fn sign_key(e: &Ex, view: &TokenView) -> (u32, u32) {
+    fn walk(e: &Ex, depth: u32, view: &TokenView, acc: &mut (u32, u32)) {
+        match e {
+            Ex::Num(r) if r.is_negative() => {
+                acc.0 += 1;
+                acc.1 += depth;
+            }
+            Ex::Add(v) | Ex::Mul(v) => v.iter().for_each(|x| walk(x, depth + 1, view, acc)),
+            Ex::Pow(b, q) => {
+                walk(b, depth + 1, view, acc);
+                if !matches!(**q, Ex::Num(_)) {
+                    walk(q, depth + 1, view, acc);
+                }
+            }
+            Ex::Fun(_, args) => {
+                for a in args {
+                    if a.has_measure_space(view) || a.contains_wildcard(view) {
+                        walk(a, depth + 1, view, acc);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut acc = (0, 0);
+    walk(e, 0, view, &mut acc);
+    acc
+}
+
+/// The order of two spellings of an equal price (`sign_key`, then `cmp_ex`).
+pub(crate) fn tie_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
+    sign_key(a, view)
+        .cmp(&sign_key(b, view))
+        .then_with(|| cmp_ex(a, b, view))
+}
+
+/// The literal of a literal multiple `c u`: `c`, 1 for a bare `u`; `None` for a sum, a zero, and an
+/// argument holding a `Const` or an infinity, whose signs have their own owners.
+fn multiple_literal(m: &Ex) -> Option<Rat> {
+    if matches!(m, Ex::Add(_)) || m.contains_const() || m.contains_infinity() {
+        return None;
+    }
+    let c = match m {
+        Ex::Num(r) => r.clone(),
+        Ex::Mul(v) => match v.first() {
+            Some(Ex::Num(r)) => r.clone(),
+            _ => Rat::ONE,
+        },
+        _ => Rat::ONE,
+    };
+    (!c.is_zero()).then_some(c)
+}
+
+/// `b` over the positive literal of its class's argument, where `b` is an odd head over a literal
+/// multiple with a negative literal (`sin(-2 x1)` is `-sin(2 x1)`); raw.
+fn positive_head(b: &Ex, view: &TokenView) -> Option<Ex> {
+    let ClassBase {
+        head: Some(_),
+        arg: ClassArg::Multiple(m),
+    } = class_base(b, view)?
+    else {
+        return None;
+    };
+    let Ex::Fun(op, a) = b else { return None };
+    let mut args = a.clone();
+    args[0] = positive_multiple(m)?;
+    Some(Ex::Fun(*op, args))
+}
+
+fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
     let (base, exp) = match f {
         Ex::Pow(b, e) => (
             &**b,
@@ -5062,17 +5778,38 @@ fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
         }
         other => (other, Some(Rat::ONE)),
     };
-    let (head, terms) = base_read(base, cx)?;
-    let tradeable = !terms.iter().any(Ex::contains_const)
-        && !terms.iter().any(term_absorbs_negation)
-        && !terms.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf));
-    tradeable.then_some(ClassRead { head, terms, exp })
+    let ClassBase { head, arg } = class_base(base, cx.view)?;
+    Some(ClassRead {
+        head,
+        terms: arg.terms(),
+        exp,
+    })
+}
+
+/// The class of a sign-trade site over a literal multiple (`class_read`'s {B, -B}): `B`, the
+/// head over the multiple with its literal made positive, and whether the site spells `-B`.
+fn site_multiple(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+    let m = match f {
+        Ex::Pow(b, q) if matches!(&**q, Ex::Num(_)) => &**b,
+        _ => f,
+    };
+    let ClassBase {
+        head: Some(_),
+        arg: ClassArg::Multiple(arg),
+    } = class_base(m, cx.view)?
+    else {
+        return None;
+    };
+    if multiple_literal(arg)?.is_negative() {
+        Some((positive_head(m, cx.view)?, true))
+    } else {
+        Some((m.clone(), false))
+    }
 }
 
 /// The class a sign-trade site is built over: the sum under the site's head (the sum itself, an
 /// odd function or odd root of it, or a power of any of these) in its one orientation, and whether
-/// the site spells it in the other one. `None` where the site is over no sum (an odd function of
-/// a literal multiple): it is a class of its own.
+/// the site spells it in the other one. `None` where the site is over no sum.
 fn site_class(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     let m = match f {
         Ex::Pow(b, q) if matches!(&**q, Ex::Num(_)) => &**b,
@@ -5107,12 +5844,16 @@ fn class_of(ts: &[Ex], cx: &Cx) -> Option<(Ex, bool, bool)> {
     let mut parts: Vec<(Rat, Ex)> = ts
         .iter()
         .map(|t| match t {
-            Ex::Num(r) => (r.clone(), Ex::Num(Rat::ONE)),
+            Ex::Num(r) => Some((r.clone(), Ex::Num(Rat::ONE))),
             // Each term read as the orientation reads it (`odd_signs_out`, as `orient_base` and
             // `up_to_sign_key` do): an odd function of a negated argument is the negated term.
-            t => term_split(odd_signs_out(t, cx), cx.view),
+            // A term whose coefficient is a refused partition has no class here.
+            t => {
+                let (c, k) = term_split(odd_signs_out(t, cx), cx.view);
+                Some((c.rat()?, k))
+            }
         })
-        .collect();
+        .collect::<Option<_>>()?;
     // The factors every term shares, divided out.
     let factors = |k: &Ex| -> Vec<Ex> {
         match k {
@@ -5159,6 +5900,222 @@ fn class_of(ts: &[Ex], cx: &Cx) -> Option<(Ex, bool, bool)> {
         });
     }
     Some((Ex::Add(key), lead.is_negative(), scaled))
+}
+
+/// THE CLASS'S POLYNOMIAL MULTIPLES: a sum `T` (its terms `ts`) that holds the sum `S` of a class
+/// (its key, `class_of`'s) as an exact polynomial factor, `T = S^m R` with `S` not dividing `R`:
+/// `9 - x1^2` is `-(x1 - 3)(x1 + 3)`, `x1^2 - 6 x1 + 9` is `(x1 - 3)^2`. Read where `S` is linear in
+/// one of its variables `v` (`c v + r`, `c` a nonzero literal, `r` free of `v`, and no other atom
+/// holding `v`): such an `S` is irreducible, so `R` does not vanish on its zero set at a generic
+/// point, and `T` is odd in `S` for an odd `m` and even for an even one. Returned: whether `m` is
+/// odd, and the sign of `R` on the zero set where it is a constant there (`R` with `v = -r/c`;
+/// `true`: negative), else `None` (its sign is not read, as for a factor every term shares). The
+/// atoms are the factors that are neither literals nor sums nor positive integer powers of either
+/// (a variable, a function, any other power), each an indeterminate, so the factor is proven for
+/// every value they take; sums inside products and under positive integer powers are expanded,
+/// within `POLY_TERM_CAP` terms. `None` where `T` or `S` holds a `Const`, an infinity or a
+/// wildcard, or no factor is proven. A float screen comes first, so that the exact division runs
+/// only on a sum that vanishes at one point of the zero set of `S` (`linear_point`,
+/// `vanishes_at`); it only refuses.
+fn class_multiple(ts: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, Option<bool>)> {
+    use super::poly::Poly;
+    let Ex::Add(kts) = class else {
+        return None;
+    };
+    // The screen first (`linear_point`, `vanishes_at`): most sums are no multiple of the class.
+    let (lv, lx) = linear_point(kts, cx)?;
+    if !vanishes_at(ts, lv, lx) {
+        return None;
+    }
+    let unread =
+        |e: &Ex| e.contains_const() || e.contains_infinity() || e.contains_wildcard(cx.view);
+    if ts.iter().chain(kts).any(unread) {
+        return None;
+    }
+    fn to_poly(e: &Ex, atoms: &mut Vec<Ex>) -> Option<Poly> {
+        const POWER_CAP: i128 = 8;
+        let mut atom = |a: &Ex, k: u32| -> Option<Poly> {
+            let i = match atoms.iter().position(|x| x == a) {
+                Some(i) => i,
+                None => {
+                    atoms.push(a.clone());
+                    atoms.len() - 1
+                }
+            };
+            Some(Poly::atom(u16::try_from(i).ok()?, k))
+        };
+        match e {
+            Ex::Num(r) => Some(Poly::constant(r.clone())),
+            Ex::Add(v) => v
+                .iter()
+                .try_fold(Poly::zero(), |acc, t| acc.add(&to_poly(t, atoms)?)),
+            Ex::Mul(v) => v.iter().try_fold(Poly::constant(Rat::ONE), |acc, f| {
+                acc.mul(&to_poly(f, atoms)?)
+            }),
+            Ex::Pow(b, q) => {
+                let k = match &**q {
+                    Ex::Num(r) if r.is_integer() && r.signum() > 0 => r
+                        .small_int()
+                        .filter(|k| *k <= POWER_CAP)
+                        .and_then(|k| u32::try_from(k).ok()),
+                    _ => None,
+                };
+                match k {
+                    Some(k) if matches!(&**b, Ex::Add(_) | Ex::Num(_)) => to_poly(b, atoms)?.pow(k),
+                    Some(k) => atom(b, k),
+                    None => atom(e, 1),
+                }
+            }
+            Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
+            other => atom(other, 1),
+        }
+    }
+    let mut atoms: Vec<Ex> = Vec::new();
+    let s = to_poly(class, &mut atoms)?;
+    // Every atom of `S` is an atom of each of its multiples.
+    if !atoms.iter().all(|a| ts.iter().any(|t| poly_occurs(a, t))) {
+        return None;
+    }
+    let n_s = atoms.len();
+    let v = (0..n_s).find(|&i| {
+        matches!(atoms[i], Ex::Leaf(_))
+            && atoms[i].has_measure_space(cx.view)
+            && s.linear_in(i as u16).is_some()
+            && atoms
+                .iter()
+                .enumerate()
+                .all(|(j, a)| j == i || !poly_occurs(&atoms[i], a))
+    })? as u16;
+    let terms: Vec<Ex> = ts.iter().map(|t| odd_signs_out(t, cx)).collect();
+    let mut rest = to_poly(&Ex::Add(terms), &mut atoms)?;
+    if atoms
+        .iter()
+        .enumerate()
+        .any(|(j, a)| j != v as usize && poly_occurs(&atoms[v as usize], a))
+    {
+        return None;
+    }
+    let mut m = 0u32;
+    while let Some(q) = rest.div_exact(&s) {
+        m += 1;
+        rest = q;
+        if m > 32 {
+            return None;
+        }
+    }
+    if m == 0 {
+        return None;
+    }
+    let (c, r) = s.linear_in(v)?;
+    let at = Poly::constant(c.checked_inv()?.checked_neg()?).mul(&r)?;
+    let sign = rest
+        .substitute(v, &at)?
+        .as_constant()
+        .filter(|k| !k.is_zero())
+        .map(|k| k.is_negative());
+    Some((m % 2 == 1, sign))
+}
+
+/// `poly_screen` of the sum of `ts`.
+fn poly_screen_sum(ts: &[Ex], v: &Ex, x: f64) -> Option<(f64, f64)> {
+    ts.iter().try_fold((0.0, 0.0), |(a, b), t| {
+        let (y, m) = poly_screen(t, v, x)?;
+        Some((a + y, b + m))
+    })
+}
+
+/// A variable `v` a sum is linear in, `c v` one of its terms and `v` in no other, and the value of
+/// `v` that puts the sum to zero where every other atom takes its value (`poly_atom_value`): a
+/// point of the sum's zero set for `class_multiple`'s screen.
+fn linear_point<'a>(ts: &'a [Ex], cx: &Cx) -> Option<(&'a Ex, f64)> {
+    ts.iter().enumerate().find_map(|(i, t)| {
+        let (c, v) = match t {
+            Ex::Leaf(_) => (1.0, t),
+            Ex::Mul(fs) => match fs.as_slice() {
+                [Ex::Num(c), v @ Ex::Leaf(_)] => (c.to_f64(), v),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if !v.has_measure_space(cx.view)
+            || ts
+                .iter()
+                .enumerate()
+                .any(|(j, u)| j != i && poly_occurs(v, u))
+        {
+            return None;
+        }
+        let (r, _) = poly_screen_sum(&ts[..i], v, 0.0)?;
+        let (q, _) = poly_screen_sum(&ts[i + 1..], v, 0.0)?;
+        Some((v, -(r + q) / c))
+    })
+}
+
+/// Does the sum of `ts` vanish, up to rounding, at the point `linear_point` gives (`v = x`, every
+/// other atom at its value)? A multiple of a sum vanishes where it does; the screen only refuses.
+fn vanishes_at(ts: &[Ex], v: &Ex, x: f64) -> bool {
+    poly_screen_sum(ts, v, x).is_some_and(|(y, scale)| scale.is_finite() && y.abs() <= 1e-9 * scale)
+}
+
+/// Does `a` occur in `e` (`e` itself included)?
+fn poly_occurs(a: &Ex, e: &Ex) -> bool {
+    e == a
+        || match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|x| poly_occurs(a, x)),
+            Ex::Pow(b, q) => poly_occurs(a, b) || poly_occurs(a, q),
+            _ => false,
+        }
+}
+
+/// A value for an atom (`class_multiple`), the same wherever it stands: the screen reads the
+/// polynomials at one point of the atoms' space, each atom an independent coordinate.
+fn poly_atom_value(a: &Ex) -> f64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    a.hash(&mut h);
+    0.55 + (h.finish() >> 11) as f64 / (1u64 << 53) as f64 * 0.9
+}
+
+/// THE SCREEN of `class_multiple`: `e` at the atoms' point (`poly_atom_value`) with `x` for the
+/// atom `v`, and the same with every term made positive (the scale its rounding error is measured
+/// against); `None` where `v` stands inside another atom, where the formal identity would not be
+/// the function's.
+fn poly_screen(e: &Ex, v: &Ex, x: f64) -> Option<(f64, f64)> {
+    let atom = |a: &Ex| -> Option<(f64, f64)> {
+        if a == v {
+            Some((x, x.abs()))
+        } else if poly_occurs(v, a) {
+            None
+        } else {
+            let y = poly_atom_value(a);
+            Some((y, y))
+        }
+    };
+    match e {
+        Ex::Num(r) => {
+            let y = r.to_f64();
+            Some((y, y.abs()))
+        }
+        Ex::Add(ts) => poly_screen_sum(ts, v, x),
+        Ex::Mul(fs) => fs.iter().try_fold((1.0, 1.0), |(a, b), f| {
+            let (y, m) = poly_screen(f, v, x)?;
+            Some((a * y, b * m))
+        }),
+        Ex::Pow(b, q) => match &**q {
+            Ex::Num(r) if r.is_integer() && r.signum() > 0 && r.cmp_int(8) != Ordering::Greater => {
+                let k = r.small_int()? as i32;
+                let (y, m) = if matches!(&**b, Ex::Add(_) | Ex::Num(_)) {
+                    poly_screen(b, v, x)?
+                } else {
+                    atom(b)?
+                };
+                Some((y.powi(k), m.powi(k)))
+            }
+            _ => atom(e),
+        },
+        Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
+        other => atom(other),
+    }
 }
 
 /// A hash of a sum's terms as `class_of` reads them: the factors every term shares left out, and
@@ -5213,26 +6170,35 @@ fn shape_sig(e: &Ex) -> u64 {
 }
 
 /// How a factor reads in a class `S` (a sum in its one orientation): free of it, even (alike over
-/// `S` and `-S`), odd (negated with it), or neither. Compositional: `S` and `-S` are odd; a
-/// product's parity is the product of its factors' (a factor free of `S` is even); an odd function
-/// or an odd root keeps its argument's; an even function of anything in `S`, an even integer power
-/// of it, or any function of something even in it, is even; a sum has the parity its terms share.
+/// `S` and `-S`), odd (negated with it), defined beside the zero of `S` on one side only, or
+/// neither. Compositional: `S` and `-S` are odd; a product's parity is the product of its factors'
+/// (a factor free of `S` is even); an odd function or an odd root keeps its argument's; an even
+/// function of anything in `S`, an even integer power of it, or any function of something even in
+/// it, is even; a sum that holds `S` as an exact polynomial factor has the parity of the factor's
+/// multiplicity (`class_multiple`), any other sum the parity its terms share. A log, an even root
+/// or a fractional or symbolic power of something odd in `S` whose sign beside the zero is read is
+/// defined only on the side where that is positive (`Side(true)`: where `S` is negative), and so
+/// is a product or an integer power holding one; members defined on opposite sides leave no domain
+/// beside the zero, and are not read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Parity {
     Free,
     Even,
     Odd,
+    Side(bool),
     Unknown,
 }
 
 /// A factor read at the zero of a class `S` (READING A): its parity in `S`; whether its sign at
-/// the zero differs from its sign beside the zero on the side where the oriented sum is positive;
-/// and that sign beside the zero (negative?). The sum spelled in its other orientation is `+0` at
-/// its zero but negative beside it; a product counts its members (a literal or a factor free of
-/// `S` signs both alike); an odd power and an odd function keep the sign of zero; an odd root reads
-/// `-0` as `+0` (`rootn`), so it differs where its radicand is negative beside the zero; an even
-/// power or an even function differs nowhere. `None` where that is not read (a factor of unknown
-/// sign under an odd root, a sum that holds `S` among other terms, any other head).
+/// the zero differs from its sign beside the zero on the side where the oriented sum is positive
+/// (for a factor defined on one side only, on that side); and that sign beside the zero
+/// (negative?). The sum spelled in its other orientation is `+0` at its zero but negative beside
+/// it; a product counts its members (a literal or a factor free of `S` signs both alike); an odd
+/// power, an odd function and an odd root keep the sign of zero; an even power or an even function
+/// differs nowhere, and neither does a one-sided head (`log(±0)` is `-inf`, a fractional power of
+/// `±0` is `+0` or `+inf`, each with the sign it has beside the zero). `None` where that is not
+/// read (a sum that holds `S` times a factor its terms share, `3 x2 - x1 x2`, or as a polynomial
+/// factor beside a cofactor of no constant sign at the zero, any other head).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ZeroRead {
     parity: Parity,
@@ -5284,8 +6250,61 @@ fn parity_in(e: &Ex, class: &Ex, cx: &Cx) -> Parity {
     zero_read(e, class, cx).parity
 }
 
+/// The read of a product from its members' reads: its parity is theirs multiplied, and on the side
+/// a one-sided member is defined on (the side where the class's key is positive otherwise) the
+/// members whose sign at the zero differs from their sign beside it are counted, and so are those
+/// negative beside it. An odd member read on the side where the key is negative changes both.
+/// Members defined on opposite sides leave no domain beside the zero: not read.
+fn product_read(reads: impl Iterator<Item = ZeroRead> + Clone) -> ZeroRead {
+    use Parity::{Even, Free, Odd, Side, Unknown};
+    let unread = ZeroRead {
+        parity: Unknown,
+        differs: None,
+        below: None,
+    };
+    let mut side: Option<bool> = None;
+    for r in reads.clone() {
+        match r.parity {
+            Unknown => return unread,
+            Side(s) if side.is_some_and(|t| t != s) => return unread,
+            Side(s) => side = Some(s),
+            _ => {}
+        }
+    }
+    let other = side == Some(true);
+    let (mut odd, mut held) = (false, false);
+    let (mut differs, mut below) = (Some(false), Some(false));
+    for r in reads {
+        let turn = match r.parity {
+            Odd => {
+                odd = !odd;
+                held = true;
+                other
+            }
+            Even | Side(_) => {
+                held = true;
+                false
+            }
+            _ => false,
+        };
+        differs = differs.zip(r.differs).map(|(a, b)| a ^ b ^ turn);
+        below = below.zip(r.below).map(|(a, b)| a ^ b ^ turn);
+    }
+    let parity = match (side, odd, held) {
+        (Some(s), _, _) => Side(s),
+        (None, true, _) => Odd,
+        (None, false, true) => Even,
+        _ => Free,
+    };
+    ZeroRead {
+        parity,
+        differs,
+        below,
+    }
+}
+
 fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
-    use Parity::{Even, Free, Odd, Unknown};
+    use Parity::{Even, Free, Odd, Side, Unknown};
     let read = |parity, differs, below| ZeroRead {
         parity,
         differs,
@@ -5294,6 +6313,15 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
     let unread = read(Unknown, None, None);
     let free = |below| read(Free, Some(false), below);
     let even = read(Even, Some(false), Some(false));
+    // A head defined where its argument is positive, over an argument odd in `S` whose sign beside
+    // the zero is read: defined on the side where that sign is positive, where the head is
+    // positive (a root or a power) or of the sign `below` gives (a log: negative where its argument
+    // tends to zero, read for no argument here).
+    let one_sided = |r: ZeroRead, below: Option<bool>| match (r.parity, r.below) {
+        (Odd, Some(b)) => read(Side(b), Some(false), below),
+        (Side(s), Some(false)) => read(Side(s), Some(false), below),
+        _ => unread,
+    };
     let is_even_fun = |op: Tok| {
         cx.view.tok_is(op, "abs") || cx.view.tok_is(op, "cos") || cx.view.tok_is(op, "cosh")
     };
@@ -5308,10 +6336,35 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
                     }
                 }
             }
+            // A polynomial multiple of the class (`class_multiple`): odd or even in it, with the
+            // sign of its cofactor at the zero, and `+0` there as an exactly cancelling sum.
+            if let Some((odd, sign)) = class_multiple(ts, class, cx) {
+                return read(if odd { Odd } else { Even }, sign, sign);
+            }
+            let reads: Vec<ZeroRead> = ts.iter().map(|t| read_walk(t, class, n, nk, cx)).collect();
+            // A sum holding a term defined on one side only reads as its one-sided terms where those
+            // are infinite at the zero (of one side and one sign) and the rest finite there: they
+            // dominate it at the zero and beside it (`(3 - x1)^(-1/2) + x2*(x1 - 3)`).
+            if reads.iter().any(|r| matches!(r.parity, Side(_))) {
+                let (mut side, mut below) = (None, None);
+                for (t, r) in ts.iter().zip(&reads) {
+                    match (r.parity, zero_mag(t, class, cx)) {
+                        (Side(s), Mag::Inf) if side.is_none_or(|x| x == s) => {
+                            let Some(b) = r.below.filter(|b| below.is_none_or(|x| x == *b)) else {
+                                return unread;
+                            };
+                            (side, below) = (Some(s), Some(b));
+                        }
+                        (Free | Even | Odd, Mag::Zero | Mag::Finite) => {}
+                        _ => return unread,
+                    }
+                }
+                return side.map_or(unread, |s| read(Side(s), Some(false), below));
+            }
             let (mut odd, mut even_t, mut free_t) = (false, false, false);
-            for t in ts {
-                match read_walk(t, class, n, nk, cx).parity {
-                    Unknown => return unread,
+            for r in &reads {
+                match r.parity {
+                    Unknown | Side(_) => return unread,
                     Odd => odd = true,
                     Even => even_t = true,
                     Free => free_t = true,
@@ -5325,26 +6378,11 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
             }
         }
         Ex::Mul(fs) => {
-            let (mut odd, mut held) = (false, false);
-            let (mut differs, mut below) = (Some(false), Some(false));
-            for f in fs {
-                let r = read_walk(f, class, n, nk, cx);
-                match r.parity {
-                    Unknown => return unread,
-                    Odd => {
-                        odd = !odd;
-                        held = true;
-                    }
-                    Even => held = true,
-                    Free => {}
-                }
-                differs = differs.zip(r.differs).map(|(a, b)| a ^ b);
-                below = below.zip(r.below).map(|(a, b)| a ^ b);
-            }
-            match (odd, held) {
-                (true, _) => read(Odd, differs, below),
-                (false, true) => read(Even, differs, below),
-                _ => free(below),
+            let r = product_read(fs.iter().map(|f| read_walk(f, class, n, nk, cx)));
+            if r.parity == Free {
+                free(r.below)
+            } else {
+                r
             }
         }
         Ex::Pow(b, q) => {
@@ -5357,18 +6395,22 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
                 (Free, Ex::Num(r)) if r.is_even_integer() => free(Some(false)),
                 (Free, _) => free(None),
                 (Unknown, _) => unread,
+                (Side(s), Ex::Num(r)) if r.is_even_integer() => {
+                    read(Side(s), Some(false), Some(false))
+                }
                 (_, Ex::Num(r)) if r.is_even_integer() => even,
                 (p, Ex::Num(r)) if r.is_odd_integer() => read(p, rb.differs, rb.below),
                 (Even, _) => read(Even, None, None),
-                _ => unread,
+                // A fractional or symbolic power: defined where its base is positive.
+                _ => one_sided(rb, Some(false)),
             }
         }
         Ex::Fun(op, args) if args.len() == 1 && odd_fun(cx.view, *op) => {
             let ra = read_walk(&args[0], class, n, nk, cx);
-            if ra.parity == Free {
-                free(None)
-            } else {
-                ra
+            match ra.parity {
+                Free => free(None),
+                Side(_) => unread,
+                _ => ra,
             }
         }
         Ex::Fun(op, args) if args.len() == 2 && cx.view.tok_is(*op, "rootn") => {
@@ -5377,19 +6419,38 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
             }
             let ra = read_walk(&args[0], class, n, nk, cx);
             let odd_index = matches!(&args[1], Ex::Num(k) if k.is_odd_integer());
+            let even_index = matches!(&args[1], Ex::Num(k) if k.is_even_integer());
             match ra.parity {
                 Free if odd_index => free(ra.below),
                 Free => free(Some(false)),
                 Unknown => unread,
-                p if odd_index => read(p, ra.below, ra.below),
+                _ if odd_index => ra,
                 Even => even,
+                _ if even_index => one_sided(ra, Some(false)),
                 _ => unread,
+            }
+        }
+        Ex::Fun(op, args) if args.len() == 1 && cx.view.tok_is(*op, "log") => {
+            let ra = read_walk(&args[0], class, n, nk, cx);
+            match ra.parity {
+                Free => free(None),
+                Even => read(Even, None, None),
+                // negative beside the zero where its argument vanishes there, positive where it is
+                // infinite
+                _ => one_sided(
+                    ra,
+                    match zero_mag(&args[0], class, cx) {
+                        Mag::Zero => Some(true),
+                        Mag::Inf => Some(false),
+                        _ => None,
+                    },
+                ),
             }
         }
         Ex::Fun(op, args) if args.len() == 1 && is_even_fun(*op) => {
             match read_walk(&args[0], class, n, nk, cx).parity {
                 Free => free(None),
-                Unknown => unread,
+                Unknown | Side(_) => unread,
                 _ => even,
             }
         }
@@ -5412,120 +6473,152 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
     }
 }
 
-/// READING A AT THE ZERO OF A CLASS: a sign moves through a pole over a sum `S` only where the
-/// answer's value at the zero of `S` is read, and there it must be the limit. Where a factor's
-/// value there is not read -- neither even nor odd in `S` (a log of it, an even root or a
-/// fractional power of it) or of unread sign at the zero (an odd root of a product with a factor
-/// of unknown sign), and not regular there (`regular_at_zero`) -- and the product has a pole over
-/// `S`, the class keeps the input's orientation (`log(S)/S` keeps `S`, the sign of its pole's
-/// infinity being the limit's from the side `log` is defined on). Without a pole the orientation
-/// moves no infinity. A lossy context keeps no value at a pole, so it pins nothing. The sign
-/// trade (`sign_place`), the up-to-sign retry, FACTOR and the sum's like terms
-/// (`orient_term_classes`) ask this; the product table only collects a class's powers, and every
-/// product it builds is signed by the sign trade.
-fn class_pinned(factors: &[Ex], class: &Ex, cx: &Cx) -> bool {
-    !cx.lossy()
-        && factors.iter().any(|f| {
-            let r = zero_read(f, class, cx);
-            r.parity != Parity::Free
-                && (r.parity == Parity::Unknown || r.differs.is_none())
-                && !regular_at_zero(f, class, cx)
-        })
-        && factors.iter().any(|f| pole_at_zero(f, class, cx))
+/// READING A AT THE ZERO OF A CLASS `S`: the value a product keeps at the zero of `S` -- the side
+/// whose limit it is (`true`: where the class's key is negative) and whether the factors as written
+/// leave the value off that limit -- or `None` where it keeps none. It keeps one where that value
+/// is a limit: where the product is even in `S` (two or more odd members, an even count, so its two
+/// sides agree), or defined beside the zero on one side only (`Parity::Side`: a log, an even root,
+/// a fractional or symbolic power of `S` among its members, which fixes the side), and the product
+/// is not NaN there in every orientation (an infinity times a zero, `log(S) S`). An odd product
+/// with no one-sided member has a two-signed pole or zero, whose sign is no value the answer keeps.
+/// The float value at the zero is the limit exactly where the members whose sign there differs
+/// from their sign beside the zero on that side are even in number (`ZeroRead::differs`): written
+/// in the orientation positive on that side, every member's base is `+0` there. Where a member is
+/// not read (an odd root of a product of unknown sign, `cbrt(x2 (x1 - 3))`, or a class scaled by a
+/// factor of unknown sign), the product keeps nothing and its orientation is its cheapest. A lossy
+/// context keeps no value at a pole. The product owners all ask this one predicate: the sign trade
+/// (`sign_place`), the product table's lone inverse (`Class::table`) and the sum's like terms
+/// (`orient_term_classes`).
+fn zero_limit(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, bool)> {
+    if cx.lossy() {
+        return None;
+    }
+    let reads: Vec<ZeroRead> = factors.iter().map(|f| zero_read(f, class, cx)).collect();
+    let r = product_read(reads.iter().copied());
+    let side = match r.parity {
+        Parity::Side(s) => s,
+        Parity::Even if reads.iter().filter(|r| r.parity == Parity::Odd).count() >= 2 => false,
+        _ => return None,
+    };
+    let off = r.differs?;
+    let mags = factors.iter().map(|f| zero_mag(f, class, cx));
+    (product_mag(mags) != Mag::Nan).then_some((side, off))
 }
 
-/// Whether a product's value at the zero of a class `S` is off the limit there: the product is even
-/// in `S` (an even count of odd members), so its two sides agree, and an odd count of its members
-/// has a sign at the zero other than beside it (`ZeroRead::differs`); `None` where not read.
+/// Whether a product's value at the zero of a class is off the limit it keeps there
+/// (`zero_limit`); `None` where it keeps none.
 fn zero_off(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<bool> {
-    let (mut odd, mut differs) = (0usize, false);
-    for f in factors {
-        let r = zero_read(f, class, cx);
-        match r.parity {
-            Parity::Free => continue,
-            Parity::Unknown => return None,
-            Parity::Odd => odd += 1,
-            Parity::Even => {}
+    zero_limit(factors, class, cx).map(|(_, off)| off)
+}
+
+/// A factor's magnitude at the zero of a class `S` (`zero_limit`'s NaN test): zero, finite and
+/// nonzero, infinite, NaN, or not read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mag {
+    Zero,
+    Finite,
+    Inf,
+    Nan,
+    Unknown,
+}
+
+/// The magnitude of a product from its members': NaN where an infinity meets a zero.
+fn product_mag(mags: impl Iterator<Item = Mag>) -> Mag {
+    let (mut zero, mut inf) = (false, false);
+    for m in mags {
+        match m {
+            Mag::Nan => return Mag::Nan,
+            Mag::Unknown => return Mag::Unknown,
+            Mag::Zero => zero = true,
+            Mag::Inf => inf = true,
+            Mag::Finite => {}
         }
-        differs ^= r.differs?;
     }
-    Some(odd >= 2 && odd % 2 == 0 && differs)
+    match (zero, inf) {
+        (true, true) => Mag::Nan,
+        (true, false) => Mag::Zero,
+        (false, true) => Mag::Inf,
+        _ => Mag::Finite,
+    }
+}
+
+/// `e`'s magnitude at the zero of a class `S`: a factor free of `S` is finite there (at a generic
+/// point), a sum of the class and a sum of terms that vanish there are zero, and the heads carry it:
+/// a negative power or a negative root index inverts it, a log of a zero is infinite, an odd
+/// function keeps a zero, `exp`, `cos` and `cosh` of a finite argument are finite.
+fn zero_mag(e: &Ex, class: &Ex, cx: &Cx) -> Mag {
+    let inverse = |m: Mag| match m {
+        Mag::Zero => Mag::Inf,
+        Mag::Inf => Mag::Zero,
+        m => m,
+    };
+    if parity_in(e, class, cx) == Parity::Free {
+        return match e {
+            Ex::PosInf | Ex::NegInf => Mag::Inf,
+            _ => Mag::Finite,
+        };
+    }
+    match e {
+        Ex::Add(ts) if matches!(class_of(ts, cx), Some((k, _, _)) if k == *class) => Mag::Zero,
+        Ex::Add(ts) if class_multiple(ts, class, cx).is_some() => Mag::Zero,
+        Ex::Add(ts) => {
+            let mut all_zero = true;
+            for t in ts {
+                match zero_mag(t, class, cx) {
+                    Mag::Zero => {}
+                    Mag::Finite => all_zero = false,
+                    _ => return Mag::Unknown,
+                }
+            }
+            if all_zero {
+                Mag::Zero
+            } else {
+                Mag::Finite
+            }
+        }
+        Ex::Mul(fs) => product_mag(fs.iter().map(|f| zero_mag(f, class, cx))),
+        Ex::Pow(b, q) => match &**q {
+            Ex::Num(r) if r.is_negative() => inverse(zero_mag(b, class, cx)),
+            Ex::Num(_) => zero_mag(b, class, cx),
+            _ => match zero_mag(b, class, cx) {
+                Mag::Finite => Mag::Finite,
+                _ => Mag::Unknown,
+            },
+        },
+        Ex::Fun(op, args) if args.len() == 2 && cx.view.tok_is(*op, "rootn") => match &args[1] {
+            Ex::Num(k) if k.is_negative() => inverse(zero_mag(&args[0], class, cx)),
+            Ex::Num(_) => zero_mag(&args[0], class, cx),
+            _ => Mag::Unknown,
+        },
+        Ex::Fun(op, args) if args.len() == 1 => {
+            let m = zero_mag(&args[0], class, cx);
+            let view = cx.view;
+            if view.tok_is(*op, "log") {
+                match m {
+                    Mag::Zero | Mag::Inf => Mag::Inf,
+                    m => m,
+                }
+            } else if odd_fun(view, *op) || view.tok_is(*op, "abs") {
+                match m {
+                    Mag::Zero | Mag::Finite => m,
+                    _ => Mag::Unknown,
+                }
+            } else if ["exp", "cos", "cosh"].iter().any(|n| view.tok_is(*op, n)) {
+                match m {
+                    Mag::Zero | Mag::Finite => Mag::Finite,
+                    _ => Mag::Unknown,
+                }
+            } else {
+                Mag::Unknown
+            }
+        }
+        _ => Mag::Unknown,
+    }
 }
 
 /// The sites of one class in a product (`sign_place`): the class, and per site its index among the
 /// sites and whether it spells the class against the class's own orientation.
 type ClassGroup = (Option<Ex>, Vec<(usize, bool)>);
-
-/// Whether `e` is infinite at the zero of a class `S` (a sum in its one orientation): a negative
-/// power or a log of something that holds `S`, anywhere in it.
-fn pole_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
-    let holds = |x: &Ex| parity_in(x, class, cx) != Parity::Free;
-    match e {
-        Ex::Pow(b, q) => {
-            (matches!(&**q, Ex::Num(r) if r.is_negative()) && holds(b))
-                || pole_at_zero(b, class, cx)
-        }
-        Ex::Fun(op, args) => {
-            (cx.view.tok_is(*op, "log") && args.iter().any(holds))
-                || args.iter().any(|a| pole_at_zero(a, class, cx))
-        }
-        Ex::Add(v) | Ex::Mul(v) => v.iter().any(|x| pole_at_zero(x, class, cx)),
-        _ => false,
-    }
-}
-
-/// Whether `e` is regular at the zero of a class `S`: continuous through it, built from `S` by
-/// sums, products, non-negative integer powers, odd roots and functions defined on the whole line
-/// (`exp`, `sin`, `cos`, `sinh`, `cosh`, `tanh`, `atan`, `asinh`, `abs`), and away from zero there
-/// (an exponential or a cosine of such, or a factor free of `S`), so that its value there is
-/// finite, nonzero and the same in both orientations of `S`.
-fn regular_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
-    fn whole(e: &Ex, class: &Ex, cx: &Cx) -> bool {
-        if parity_in(e, class, cx) == Parity::Free {
-            return true;
-        }
-        match e {
-            Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| whole(x, class, cx)),
-            Ex::Pow(b, q) => {
-                matches!(&**q, Ex::Num(r) if r.is_integer() && !r.is_negative())
-                    && whole(b, class, cx)
-            }
-            Ex::Fun(op, args)
-                if args.len() == 2
-                    && cx.view.tok_is(*op, "rootn")
-                    && matches!(&args[1], Ex::Num(k) if k.is_odd_integer() && !k.is_negative()) =>
-            {
-                whole(&args[0], class, cx)
-            }
-            Ex::Fun(op, args) => {
-                [
-                    "exp", "sin", "cos", "sinh", "cosh", "tanh", "atan", "asinh", "abs",
-                ]
-                .iter()
-                .any(|n| cx.view.tok_is(*op, n))
-                    && args.iter().all(|a| whole(a, class, cx))
-            }
-            _ => false,
-        }
-    }
-    match e {
-        // A sum that holds the class -- the class's own sum, one of its multiples, or a sum among
-        // whose terms it sits (`S - S^3`) -- may vanish at the zero: it is regular there only
-        // where it reads free of the class.
-        Ex::Add(_) => parity_in(e, class, cx) == Parity::Free,
-        Ex::Mul(v) => v.iter().all(|x| regular_at_zero(x, class, cx)),
-        Ex::Pow(b, q) => matches!(&**q, Ex::Num(_)) && regular_at_zero(b, class, cx),
-        Ex::Fun(op, args)
-            if args.len() == 1
-                && (cx.view.tok_is(*op, "exp")
-                    || cx.view.tok_is(*op, "cos")
-                    || cx.view.tok_is(*op, "cosh")) =>
-        {
-            whole(&args[0], class, cx)
-        }
-        _ => parity_in(e, class, cx) == Parity::Free,
-    }
-}
 
 /// A class {B, -B}: the head of `B`, the terms of the sum on each side (the second empty until a
 /// factor over it is seen), and the key and flip that recognise the negation of the first.
@@ -5534,6 +6627,8 @@ struct Class<'a> {
     sums: [Vec<Ex>; 2],
     key: u64,
     flip: SumFlip,
+    /// The class's key where the product keeps a value at its zero (`zero_limit`).
+    kept: Option<Ex>,
 }
 
 impl<'a> Class<'a> {
@@ -5543,19 +6638,36 @@ impl<'a> Class<'a> {
             sums: [read.terms.to_vec(), Vec::new()],
             key: negation_key(read.terms),
             flip: SumFlip::new(),
+            kept: None,
         }
     }
 
+    /// Is the class's argument a literal multiple (a sum of one term under a head)?
+    fn multiple(&self) -> bool {
+        self.head.is_some() && self.sums[0].len() == 1 && !matches!(self.sums[0][0], Ex::Add(_))
+    }
+
     /// The second sum of a class whose factors all arrived over the first: its flip, where the
-    /// sign may pass through it (`sign_trade_flip`).
+    /// sign may pass through it (`sign_trade_flip`; for a literal multiple, its head's).
     fn complete(&mut self, cx: &Cx) -> bool {
         let first = &self.sums[0];
-        let flip = self
-            .flip
-            .get_or_init(|| match sign_trade_flip(&Ex::Add(first.clone()), cx) {
+        let multiple = self.multiple();
+        let base = self.base(0);
+        let flip = self.flip.get_or_init(|| {
+            if multiple {
+                // The head's own flip where it is a sign-trade site (a literal folds through
+                // `fun()`), else the argument negated.
+                let negated = match sign_trade_flip(&base, cx) {
+                    Some(Ex::Fun(_, a)) => a[0].clone(),
+                    _ => negate_term(&first[0], cx)?,
+                };
+                return multiple_literal(&negated).map(|_| vec![negated]);
+            }
+            match sign_trade_flip(&Ex::Add(first.clone()), cx) {
                 Some(Ex::Add(f)) => Some(f),
                 _ => None,
-            });
+            }
+        });
         match flip.clone() {
             Some(f) => {
                 self.sums[1] = f;
@@ -5597,9 +6709,12 @@ impl<'a> Class<'a> {
         None
     }
 
-    /// The base over one side's sum.
+    /// The base over one side's sum (a literal multiple as itself).
     fn base(&self, side: usize) -> Ex {
-        let sum = Ex::Add(self.sums[side].clone());
+        let sum = match self.sums[side].as_slice() {
+            [m] if self.head.is_some() => m.clone(),
+            ts => Ex::Add(ts.to_vec()),
+        };
         match &self.head {
             None => sum,
             Some((op, None)) => Ex::Fun(*op, vec![sum]),
@@ -5643,8 +6758,9 @@ impl<'a> Class<'a> {
         // A lone inverse moves, its sign going to the product: the table writes the class in one
         // orientation, so at the zero of its sum (where every member's base is +0) the product's
         // value is the coefficient's infinity, the limit wherever the pole is one-signed
-        // (`1/((x1 - 3)(3 - x1))` is `-1/(x1 - 3)^2`). A class whose zero set may hold a region
-        // keeps its inverse, infinite on the region.
+        // (`1/((x1 - 3)(3 - x1))` is `-1/(x1 - 3)^2`); where the product keeps a value at the
+        // zero (`zero_limit`), only to a placement that keeps it. A class whose zero set may hold
+        // a region keeps its inverse, infinite on the region.
         t.free_inverse = zero_set_null(&self.base(0), cx);
         for side in t.sides.iter_mut() {
             side.fixed.sort_by(|a, b| cmp_ex(a, b, cx.view));
@@ -6130,39 +7246,43 @@ fn opposite_sums(a: &[Ex], b: &[Ex], view: &TokenView) -> bool {
 
 /// Is the term `y` the term `x` with its coefficient negated?
 fn opposite_terms(x: &Ex, y: &Ex, view: &TokenView) -> bool {
-    // A term's coefficient and the factors that remain (borrowed: no key is built).
-    fn split(t: &Ex) -> (Rat, &[Ex]) {
+    // A term's literal members and the factors that remain (borrowed: no key is built).
+    fn split(t: &Ex) -> (&[Ex], &[Ex]) {
         match t {
-            Ex::Mul(v) => match v.first() {
-                Some(Ex::Num(c)) => (c.clone(), &v[1..]),
-                _ => (Rat::ONE, v.as_slice()),
-            },
-            other => (Rat::ONE, std::slice::from_ref(other)),
+            Ex::Mul(v) => v.split_at(v.iter().take_while(|f| matches!(f, Ex::Num(_))).count()),
+            other => (&[], std::slice::from_ref(other)),
         }
+    }
+    // The coefficient those members denote, all of them (`Coef`).
+    fn coef(lits: &[Ex]) -> Coef {
+        Coef::from_members(lits.iter().filter_map(|f| match f {
+            Ex::Num(r) => Some(r),
+            _ => None,
+        }))
     }
     match (x, y) {
         (Ex::Num(p), Ex::Num(q)) => p.checked_neg().is_some_and(|n| n == *q),
         (Ex::Num(_), _) | (_, Ex::Num(_)) => false,
         _ => {
-            let ((cx_, kx), (cy, ky)) = (split(x), split(y));
+            let ((lx, kx), (ly, ky)) = (split(x), split(y));
             if kx == ky {
-                return cx_.checked_neg().is_some_and(|n| n == cy);
+                return match (lx, ly) {
+                    ([], []) => false,
+                    ([Ex::Num(c)], []) | ([], [Ex::Num(c)]) => *c == Rat::NEG_ONE,
+                    ([Ex::Num(p)], [Ex::Num(q)]) => p.checked_neg().is_some_and(|n| n == *q),
+                    _ => coef(lx).negated() == coef(ly) && !coef(lx).is_zero(),
+                };
             }
             // An odd function of a literal carries its sign inside (`sin(-2)`): only
             // `term_split`'s sign-normalized keys can match then.
-            let literal_odd = |k: &[Ex]| {
-                k.iter().any(|f| {
-                    matches!(f, Ex::Fun(op, a)
-                        if a.len() == 1 && matches!(a[0], Ex::Num(_)) && odd_fun(view, *op))
-                        || odd_of_literal_multiple(f, view).is_some()
-                })
-            };
+            let literal_odd =
+                |k: &[Ex]| k.iter().any(|f| odd_of_literal_multiple(f, view).is_some());
             if !literal_odd(kx) && !literal_odd(ky) {
                 return false;
             }
             let (cx_, kx) = term_split(x.clone(), view);
             let (cy, ky) = term_split(y.clone(), view);
-            kx == ky && cx_.checked_neg().is_some_and(|n| n == cy)
+            kx == ky && cx_.negated() == cy
         }
     }
 }
@@ -6186,8 +7306,62 @@ fn same_collection_base(f: &Ex, g: &Ex, cx: &Cx) -> bool {
 /// another site's sum or inside any factor? Only then are its classes read (`sign_place`). One
 /// pass over the product's sums with a hash of their shapes blind to literals and signs
 /// (`shape_sig`'s), so a sum meets its constant multiples too; a hash that merely collides only
-/// costs the full reading.
-fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
+/// costs the full reading. A sum meets its polynomial multiples as well (`class_multiple`).
+fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)], cx: &Cx) -> bool {
+    shapes_meet(out, site_flips) || multiples_meet(out, site_flips, cx)
+}
+
+/// Does another sum of the product, a factor or inside one, hold a site's sum as a polynomial
+/// factor (`class_multiple`)?
+fn multiples_meet(out: &[Ex], site_flips: &[(usize, Ex)], cx: &Cx) -> bool {
+    fn sums<'a>(e: &'a Ex, acc: &mut Vec<&'a [Ex]>) {
+        match e {
+            Ex::Add(v) => {
+                acc.push(v);
+                v.iter().for_each(|x| sums(x, acc));
+            }
+            Ex::Mul(v) | Ex::Fun(_, v) => v.iter().for_each(|x| sums(x, acc)),
+            Ex::Pow(b, q) => {
+                sums(b, acc);
+                sums(q, acc);
+            }
+            _ => {}
+        }
+    }
+    // Each site's sum with a variable it is linear in and the point of its zero set
+    // (`linear_point`): only a sum that vanishes there is read further.
+    let points: Vec<(&[Ex], &Ex, f64)> = site_flips
+        .iter()
+        .filter_map(|(pos, _)| {
+            let ts = site_sum_terms(&out[*pos])?;
+            let (v, x) = linear_point(ts, cx)?;
+            Some((ts, v, x))
+        })
+        .collect();
+    if points.is_empty() {
+        return false;
+    }
+    let mut all: Vec<&[Ex]> = Vec::new();
+    out.iter().for_each(|f| sums(f, &mut all));
+    if all.len() < 2 {
+        return false;
+    }
+    points.iter().any(|&(ts, v, x)| {
+        let mut key: Option<Option<Ex>> = None;
+        all.iter().any(|us| {
+            if std::ptr::eq(us.as_ptr(), ts.as_ptr()) || !vanishes_at(us, v, x) {
+                return false;
+            }
+            let Some(k) = key.get_or_insert_with(|| class_of(ts, cx).map(|(k, _, _)| k)) else {
+                return false;
+            };
+            !matches!(class_of(us, cx), Some((c, _, _)) if c == *k)
+                && class_multiple(us, k, cx).is_some()
+        })
+    })
+}
+
+fn shapes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
     fn one<T: std::hash::Hash>(t: &T) -> u64 {
         use std::hash::Hasher;
         let mut h = rustc_hash::FxHasher::default();
@@ -6274,8 +7448,8 @@ fn site_sum_terms(f: &Ex) -> Option<&[Ex]> {
 /// placement -- the shared owner behind `mul()`'s final assembly and `term_join`'s
 /// negative-coefficient joins, so every site that mints a product builds the SAME
 /// spelling the orientation machinery prices (the row-120 law). With no trade site
-/// (or a negation overflow, or a wide orbit `sign_place_wide` refuses) this is exactly the
-/// plain assembly: push the non-unit coefficient, sort, wrap.
+/// (or a negation overflow, or no configuration that keeps the product's values at its zeros)
+/// this is exactly the plain assembly: push the non-unit coefficient, sort, wrap.
 fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     // A sum holding a `Const` takes a sign into its terms (`negate_term`: a Const term absorbs it
     // in the refit, every other term negates), so it carries the product's sign exactly, as a
@@ -6351,12 +7525,6 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     //     the kept-zero arm assembled RAW and froze the arrival mirror, so the
     //     direct build and the parse of its own rendering shipped two states);
     //   * otherwise: the rational coefficient.
-    enum Carrier {
-        Inf(usize),
-        Free,
-        Absorb(usize),
-        Coeff,
-    }
     {
         // Each site's flip is materialized ONCE (the site test computes it anyway) and
         // reused by every orientation mask below: a flip negates a sum term by term, and
@@ -6369,24 +7537,34 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // by the parity of the class's members. At the zero of the sum every member's base is +0,
         // so the product's value there is the coefficient's infinity -- the limit wherever the
         // pole is one-signed; a single member flipping alone would turn it (`1/(cbrt(u) u)`).
-        let mut site_flips: Vec<(usize, Ex)> = out
+        // Beside a bare `Const`, which absorbs every constant factor of the product and so the
+        // orientation sign of every class, every class is a site (`refit_trade_flip`).
+        let refit = out.iter().any(|f| matches!(f, Ex::Const));
+        let site_flips: Vec<(usize, Ex)> = out
             .iter()
             .enumerate()
-            .filter_map(|(i, f)| sign_trade_flip(f, cx).map(|nf| (i, nf)))
+            .filter_map(|(i, f)| {
+                let flip = if refit {
+                    refit_trade_flip(f, cx)
+                } else {
+                    sign_trade_flip(f, cx)
+                };
+                flip.map(|nf| (i, nf))
+            })
             .collect();
         // A class is read only where its sum meets another occurrence of itself: two sites over
         // sums of one shape, or a sum inside another factor (`classes_meet`). Elsewhere each site
         // is a class of its own, which nothing pins and no other member checks.
-        let meets = classes_meet(&out, &site_flips);
+        let meets = classes_meet(&out, &site_flips, cx);
         // Each group: its sites (indices into `site_flips`) and, per site, whether it spells the
         // class against the class's own orientation (`site_class`). A configuration bit picks one
         // orientation for the whole group; the sites spelled against it flip.
         let mut groups: Vec<ClassGroup> = Vec::new();
         for (bit, (pos, _)) in site_flips.iter().enumerate() {
-            let class = if meets {
-                site_class(&out[*pos], cx)
-            } else {
-                None
+            let class = match site_multiple(&out[*pos], cx) {
+                Some(c) => Some(c),
+                None if meets => site_class(&out[*pos], cx),
+                None => None,
             };
             let joined = class.as_ref().and_then(|(key, flipped)| {
                 groups
@@ -6402,137 +7580,39 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
                 }
             }
         }
-        // Reading A at the zero of each class (`class_pinned`): where the value there is not
-        // read, the class's sites keep their spelling.
-        let pinned: Vec<Ex> = groups
+        // Reading A at the zero of each class (`zero_limit`): where the product keeps a value
+        // there, a configuration that leaves it off the limit is no candidate. A configuration
+        // changes the count of members whose sign at the zero differs from their sign beside it by
+        // the sites it flips whose own count changes; a member built over the sum's other
+        // orientation inside a product (`sin(-(x1 (x1 - 3)))` for `sin(x1 (3 - x1))`) is counted
+        // where it stands, so the product restores the limit an inner orientation moved.
+        let checks: Vec<(bool, Vec<Option<bool>>)> = groups
             .iter()
-            .filter_map(|(k, _)| k.as_ref().filter(|k| class_pinned(&out, k, cx)).cloned())
+            .filter_map(|(k, _)| {
+                let k = k.as_ref()?;
+                let (_, now) = zero_limit(&out, k, cx)?;
+                let toggles: Vec<Option<bool>> = site_flips
+                    .iter()
+                    .map(|(pos, nf)| {
+                        let r = zero_read(&out[*pos], k, cx);
+                        if r.parity == Parity::Free {
+                            return Some(false);
+                        }
+                        Some(r.differs? != zero_read(nf, k, cx).differs?)
+                    })
+                    .collect();
+                Some((now, toggles))
+            })
             .collect();
-        if !pinned.is_empty() {
-            // Every site that holds a pinned class and vanishes at its zero keeps its spelling
-            // too: a sum among whose terms the class sits (`S - S^3`) is zero there as well, and
-            // its flip would move the sign of the infinity there just as the class's own sites
-            // would. A site over a sum infinite there (`(x9 - 1)^(-1/4) - x9`) flips exactly.
-            let holds = |pos: usize| {
-                pinned.iter().any(|k| {
-                    parity_in(&out[pos], k, cx) != Parity::Free
-                        && !pole_at_zero(site_sum(&out[pos]), k, cx)
-                })
-            };
-            // The sites left keep their order in `site_flips`, so a site's new bit is its rank
-            // among them.
-            let mut free: Vec<usize> = groups
-                .iter()
-                .filter(|(k, _)| !k.as_ref().is_some_and(|k| pinned.contains(k)))
-                .flat_map(|(_, m)| m.iter().map(|(bit, _)| *bit))
-                .filter(|bit| !holds(site_flips[*bit].0))
-                .collect();
-            free.sort_unstable();
-            let renumber = |bit: usize| free.iter().position(|&b| b == bit);
-            groups = groups
-                .into_iter()
-                .filter(|(k, _)| !k.as_ref().is_some_and(|k| pinned.contains(k)))
-                .map(|(k, m)| {
-                    let m: Vec<(usize, bool)> = m
-                        .into_iter()
-                        .filter_map(|(bit, other)| renumber(bit).map(|b| (b, other)))
-                        .collect();
-                    (k, m)
-                })
-                .filter(|(_, m)| !m.is_empty())
-                .collect();
-            site_flips = site_flips
-                .into_iter()
-                .enumerate()
-                .filter(|(bit, _)| free.contains(bit))
-                .map(|(_, sf)| sf)
-                .collect();
-        }
-        // More than six groups go to the closed form, which decides site by site: a class of two
-        // or more members then keeps its spelling there.
-        if groups.len() > 6 && groups.iter().any(|(_, m)| m.len() > 1) {
-            let lone: Vec<usize> = groups
-                .iter()
-                .filter(|(_, m)| m.len() == 1)
-                .map(|(_, m)| m[0].0)
-                .collect();
-            site_flips = site_flips
-                .into_iter()
-                .enumerate()
-                .filter(|(bit, _)| lone.contains(bit))
-                .map(|(_, sf)| sf)
-                .collect();
-            groups = (0..site_flips.len())
-                .map(|b| (None, vec![(b, false)]))
-                .collect();
-        }
-        // At the zero of a class the product is even in (an even count of odd members), the two
-        // sides agree, and the value there is the limit, which the answer keeps (reading A). Every
-        // member's value there is its sum's at +0 carried through its head, so the product's value
-        // is the limit exactly when the members whose sign there differs from their sign beside the
-        // zero (`ZeroRead::differs`) are even in number; a configuration that leaves an odd count is no
-        // candidate. A member built over the sum's other orientation inside a product
-        // (`sin(-(x1 (x1 - 3)))` for `sin(x1 (3 - x1))`) is counted where it stands, so the product
-        // restores the limit an inner orientation moved. A lossy context keeps no value at a pole.
-        let checks: Vec<(bool, Vec<Option<bool>>)> = if cx.lossy() {
-            Vec::new()
-        } else {
-            groups
-                .iter()
-                .filter_map(|(k, _)| {
-                    let k = k.as_ref()?;
-                    let reads: Vec<ZeroRead> = out.iter().map(|f| zero_read(f, k, cx)).collect();
-                    let odd = reads.iter().filter(|r| r.parity == Parity::Odd).count();
-                    if odd < 2 || odd % 2 == 1 || reads.iter().any(|r| r.parity == Parity::Unknown)
-                    {
-                        return None;
-                    }
-                    let mut now = false;
-                    for r in reads.iter().filter(|r| r.parity != Parity::Free) {
-                        now ^= r.differs?;
-                    }
-                    let toggles: Vec<Option<bool>> = site_flips
-                        .iter()
-                        .map(|(pos, nf)| {
-                            let r = reads[*pos];
-                            if r.parity == Parity::Free {
-                                return Some(false);
-                            }
-                            Some(r.differs? != zero_read(nf, k, cx).differs?)
-                        })
-                        .collect();
-                    Some((now, toggles))
-                })
-                .collect()
-        };
-        let sites: Vec<usize> = site_flips.iter().map(|(i, _)| *i).collect();
         let factor_price = |f: &Ex| -> u64 {
             match f {
-                Ex::Num(r) => {
-                    if r.is_one() || *r == Rat::NEG_ONE {
-                        0
-                    } else {
-                        mu_rat(r)
-                    }
-                }
+                Ex::Num(r) if r.is_one() => 0,
+                Ex::Num(r) if *r == Rat::NEG_ONE => mu_sign(),
+                Ex::Num(r) => mu_rat(r),
                 _ => complexity(f, cx.view),
             }
         };
-        let enumerates = !sites.is_empty() && groups.len() <= 6;
-        // More than six classes: the WIDE owner below decides the orbit without enumerating
-        // it (it used to refuse and keep the entry orientation, which depends on the route).
-        let wide = groups.len() > 6;
-        let base_price: Vec<u64> = if enumerates || wide {
-            out.iter().map(&factor_price).collect()
-        } else {
-            Vec::new()
-        };
-        let flip_price: Vec<u64> = if enumerates || wide {
-            site_flips.iter().map(|(_, nf)| factor_price(nf)).collect()
-        } else {
-            Vec::new()
-        };
-        if enumerates || wide {
+        if let (false, Some(nc)) = (site_flips.is_empty(), coeff.checked_neg()) {
             // Priority: Free FIRST -- a bare Const eats EVERY sign (coefficient and
             // bare-infinity signs alike, by the forall-exists refit), so with one present
             // the whole sign dimension collapses and orientations are chosen freely.
@@ -6559,214 +7639,32 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             } else {
                 Carrier::Coeff
             };
-            if let (true, Some(nc)) = (wide, coeff.checked_neg()) {
-                if let Some(chosen) = sign_place_wide(
-                    &out,
-                    &coeff,
-                    &nc,
-                    &site_flips,
-                    &base_price,
-                    &flip_price,
-                    match carrier {
-                        Carrier::Free => WideCarrier::Free,
-                        Carrier::Coeff => WideCarrier::Coeff,
-                        Carrier::Inf(i) => WideCarrier::Inf(i),
-                        Carrier::Absorb(i) => WideCarrier::Absorb(i),
-                    },
-                    &factor_price,
-                    &assemble,
-                    cx,
-                ) {
-                    return chosen;
-                }
-            } else if let Some(nc) = coeff.checked_neg() {
-                let mut best: Option<(i128, bool, Ex)> = None;
-                let mut all_ok = true;
-                'subsets: for gmask in 0u32..(1u32 << groups.len()) {
-                    // The sites a class configuration flips: every member into the orientation
-                    // the class's bit picks.
-                    let mut mask = 0u32;
-                    for (g, (_, members)) in groups.iter().enumerate() {
-                        for (bit, other) in members {
-                            if *other != (gmask & (1 << g) != 0) {
-                                mask |= 1 << bit;
-                            }
-                        }
-                    }
-                    let mut factors = out.clone();
-                    let mut price = base_price.clone();
-                    for (bit, (pos, nf)) in site_flips.iter().enumerate() {
-                        if mask & (1 << bit) != 0 {
-                            factors[*pos] = nf.clone();
-                            price[*pos] = flip_price[bit];
-                        }
-                    }
-                    // A flip may mint a factor over another factor's base (`sin(-2)` flipped
-                    // beside `sin(2)`, a flipped sum landing on its own twin or on an even
-                    // root's radicand): `assemble` builds RAW, so the candidate is an unmerged
-                    // bag that collection -- here, or in a later context with more licences --
-                    // merges, a spelling that re-parses to a different state (idempotence
-                    // loss, B5 hazard). Such masks are not candidates. Only the flipped factors
-                    // are tested: two factors the entry already holds over one base (a
-                    // symbolic power beside a rational one, a merge the licences refuse) are
-                    // how `mul()` emits them, and they block no other site. Mask 0 never
-                    // collides, so `best` is always Some.
-                    if mask != 0 {
-                        let collides = site_flips.iter().enumerate().any(|(bit, (pos, _))| {
-                            mask & (1 << bit) != 0
-                                && (0..factors.len()).any(|j| {
-                                    j != *pos
-                                        && same_collection_base(&factors[*pos], &factors[j], cx)
-                                })
-                        });
-                        if collides {
-                            continue;
-                        }
-                    }
-                    if checks.iter().any(|(now, toggles)| {
-                        let mut odd = *now;
-                        for (bit, t) in toggles.iter().enumerate() {
-                            if mask & (1 << bit) != 0 {
-                                match t {
-                                    Some(t) => odd ^= t,
-                                    None => return true,
-                                }
-                            }
-                        }
-                        odd
-                    }) {
-                        continue;
-                    }
-                    let toggled = mask.count_ones() % 2 == 1;
-                    let c = match carrier {
-                        Carrier::Coeff => {
-                            if toggled {
-                                nc.clone()
-                            } else {
-                                coeff.clone()
-                            }
-                        }
-                        Carrier::Inf(i) => {
-                            if toggled {
-                                factors[i] = match &factors[i] {
-                                    Ex::PosInf => Ex::NegInf,
-                                    Ex::NegInf => Ex::PosInf,
-                                    _ => unreachable!(),
-                                };
-                            }
-                            coeff.clone()
-                        }
-                        // The refit eats the toggle: every mask is value-equal as a
-                        // fitted family. Normalize the WHOLE sign dimension into the
-                        // refit: coefficient magnitude only, bare infinities positive.
-                        Carrier::Free => {
-                            for f in factors.iter_mut() {
-                                if matches!(f, Ex::NegInf) {
-                                    *f = Ex::PosInf;
-                                }
-                            }
-                            if coeff.is_negative() {
-                                nc.clone()
-                            } else {
-                                coeff.clone()
-                            }
-                        }
-                        Carrier::Absorb(i) => {
-                            if toggled {
-                                match flip_carrier_sum(&factors[i], cx) {
-                                    Some(fl) => {
-                                        factors[i] = fl;
-                                        price[i] = factor_price(&factors[i]);
-                                    }
-                                    None => {
-                                        all_ok = false;
-                                        break 'subsets;
-                                    }
-                                }
-                            }
-                            coeff.clone()
-                        }
-                    };
-                    // complexity(Mul[v]) = mu_mul + each item's price (a coefficient of
-                    // magnitude 1 is free) whenever the bag has two items and a non-number
-                    // member; the other shapes are priced whole.
-                    let n_items = factors.len() + usize::from(!c.is_one());
-                    let members = factors.iter().filter(|f| !matches!(f, Ex::Num(_))).count();
-                    let additive = n_items >= 2 && members > 0;
-                    let mut total = mu_mul();
-                    if additive {
-                        for p in &price {
-                            total = total.saturating_add(*p);
-                        }
-                        if !(c.is_one() || c == Rat::NEG_ONE) {
-                            total = total.saturating_add(mu_rat(&c));
-                        }
-                    }
-                    let cand = assemble(factors, &c);
-                    let mu = if additive {
-                        debug_assert_eq!(
-                            total,
-                            complexity(&cand, cx.view),
-                            "summed orientation price differs from complexity()"
-                        );
-                        total as i128
-                    } else {
-                        complexity(&cand, cx.view) as i128
-                    };
-                    let better = match &best {
-                        None => true,
-                        Some((bmu, bneg, bex)) => {
-                            mu < *bmu
-                                || (mu == *bmu && !c.is_negative() && *bneg)
-                                || (mu == *bmu
-                                    && c.is_negative() == *bneg
-                                    && cmp_ex(&cand, bex, cx.view) == std::cmp::Ordering::Less)
-                        }
-                    };
-                    if better {
-                        best = Some((mu, c.is_negative(), cand));
-                    }
-                }
-                // The wide owner's price is the enumeration's optimum wherever both apply (a
-                // bag of two or more members prices additively): checked on every small orbit.
-                #[cfg(debug_assertions)]
-                if all_ok
-                    && groups.iter().all(|(_, m)| m.len() == 1)
-                    && checks.is_empty()
-                    && out.iter().filter(|f| !matches!(f, Ex::Num(_))).count() >= 2
-                {
-                    if let Some((bmu, _, _)) = &best {
-                        let wc = match carrier {
-                            Carrier::Free => WideCarrier::Free,
-                            Carrier::Coeff => WideCarrier::Coeff,
-                            Carrier::Inf(i) => WideCarrier::Inf(i),
-                            Carrier::Absorb(i) => WideCarrier::Absorb(i),
-                        };
-                        if let Some(w) = sign_place_wide(
-                            &out,
-                            &coeff,
-                            &nc,
-                            &site_flips,
-                            &base_price,
-                            &flip_price,
-                            wc,
-                            &factor_price,
-                            &assemble,
-                            cx,
-                        ) {
-                            debug_assert_eq!(
-                                complexity(&w, cx.view) as i128,
-                                *bmu,
-                                "wide sign orbit prices a small orbit off its enumeration"
-                            );
-                        }
-                    }
-                }
-                if all_ok {
-                    if let Some((_, _, chosen)) = best {
-                        return chosen;
-                    }
-                }
+            let base_price: Vec<u64> = out.iter().map(&factor_price).collect();
+            let flip_price: Vec<u64> = site_flips.iter().map(|(_, nf)| factor_price(nf)).collect();
+            let orbit = SignOrbit {
+                out: &out,
+                coeff: &coeff,
+                nc: &nc,
+                site_flips: &site_flips,
+                groups: &groups,
+                checks: &checks,
+                base_price: &base_price,
+                flip_price: &flip_price,
+                carrier,
+                assemble: &assemble,
+            };
+            let chosen = sign_place_groups(&orbit, cx);
+            // The closed form's price is the enumeration's optimum: checked on every small orbit.
+            #[cfg(debug_assertions)]
+            if groups.len() <= 6 {
+                debug_assert_eq!(
+                    chosen.as_ref().map(|c| complexity(c, cx.view)),
+                    sign_place_enumerated(&orbit, cx),
+                    "the sign orbit's closed form prices off its enumeration"
+                );
+            }
+            if let Some(chosen) = chosen {
+                return chosen;
             }
         }
     }
@@ -6792,269 +7690,437 @@ fn flip_carrier_sum(f: &Ex, cx: &Cx) -> Option<Ex> {
     Some(Ex::Add(fl))
 }
 
-/// The sign carrier of a wide orbit (mirrors `sign_place`'s local `Carrier`).
-enum WideCarrier {
+/// A product's sign carrier (`sign_place`): where a sign toggle lives.
+#[derive(Clone, Copy)]
+enum Carrier {
     Inf(usize),
     Free,
     Absorb(usize),
     Coeff,
 }
 
-/// F63, WIDE ORBITS (n > 6 trade sites): the orbit's choice without enumerating its 2^n
-/// spellings. The enumeration above prices each mask as a SUM of per-factor prices plus the
-/// carrier's price (the additive case of `complexity`'s Mul arm, which always holds here:
-/// seven or more non-number factors), so the cheapest spelling is separable up to the one
-/// coupling the sites share, the PARITY of their flips (the carrier's sign): per site the
-/// cheaper orientation, and where the parity the carrier wants differs, the one site whose
-/// switch costs least. That makes the argmin price exact in O(n). Ties resolve by a fixed
-/// order that is a function of the ORBIT, never of the entry spelling: first a non-negative
-/// coefficient (ruling A), a positive infinity, the structurally smaller absorbing sum; then,
-/// site by site in the order of each site's smaller orientation, the smaller orientation
-/// wherever the rest can still complete an optimal spelling. (The enumeration breaks its
-/// residual ties by comparing whole products instead; n is orbit-invariant, so the two
-/// regimes never meet on one value.)
-///
-/// Before this owner, n > 6 kept the entry orientation: the binary `*` chain a parse builds
-/// decides each prefix product of up to six sites by its own argmin and freezes the rest as
-/// it arrives, so a state and the parse of its own print could carry two orientations of
-/// one value (the `stable()` failures on long products; formal.md, I3 residuals).
-///
-/// `None` keeps the entry spelling (the old n > 6 behavior) in two cases: a site in some
-/// orientation shares its base with another factor (the enumeration skips the colliding masks
-/// one by one; here any possible collision refuses the whole orbit), or the absorbing sum's
-/// negation overflows. Whether it refuses is a function of the orbit; the spelling it then
-/// keeps is not -- the residual every n > 6 orbit had before.
-#[allow(clippy::too_many_arguments)]
-fn sign_place_wide(
-    out: &[Ex],
-    coeff: &Rat,
-    nc: &Rat,
-    site_flips: &[(usize, Ex)],
-    base_price: &[u64],
-    flip_price: &[u64],
-    carrier: WideCarrier,
-    factor_price: &dyn Fn(&Ex) -> u64,
-    assemble: &dyn Fn(Vec<Ex>, &Rat) -> Ex,
-    cx: &Cx,
-) -> Option<Ex> {
-    let n = site_flips.len();
-    let view = cx.view;
-    // Collision screen: a site, in either orientation, over the base of another factor in any
-    // of its orientations (two non-sites over one base are how `mul()` emits them).
-    {
-        let mut options: Vec<Vec<&Ex>> = out.iter().map(|f| vec![f]).collect();
-        for (pos, nf) in site_flips {
-            options[*pos].push(nf);
+/// A product's sign orbit (`sign_place`): its factors and coefficient (and the coefficient's
+/// negation), its sign-trade sites with their flips, the classes they form, the zero checks, the
+/// prices of every factor and flip, and the sign carrier.
+struct SignOrbit<'a> {
+    out: &'a [Ex],
+    coeff: &'a Rat,
+    nc: &'a Rat,
+    site_flips: &'a [(usize, Ex)],
+    groups: &'a [ClassGroup],
+    checks: &'a [(bool, Vec<Option<bool>>)],
+    base_price: &'a [u64],
+    flip_price: &'a [u64],
+    carrier: Carrier,
+    assemble: &'a dyn Fn(Vec<Ex>, &Rat) -> Ex,
+}
+
+/// One orientation of a group of sites (`SignOrbit::group_options`): the sites it flips, their
+/// price, whether it moves the product's sign, and its sites as they then stand (the tie order).
+#[derive(Clone)]
+struct SiteOption {
+    flips: Vec<usize>,
+    cost: u64,
+    odd: bool,
+    key: Vec<Ex>,
+    /// The signs of its sites as they then stand (`sign_key`, summed).
+    signs: (u32, u32),
+}
+
+impl SignOrbit<'_> {
+    /// The product the flipped sites give, the carrier taking the sign their count moves, and
+    /// whether its coefficient is negative; `None` where the carrier cannot take it.
+    fn candidate(&self, flipped: &[bool], cx: &Cx) -> Option<(Ex, bool)> {
+        let mut factors = self.out.to_vec();
+        let mut toggled = false;
+        for (bit, (pos, nf)) in self.site_flips.iter().enumerate() {
+            if flipped[bit] {
+                factors[*pos] = nf.clone();
+                toggled = !toggled;
+            }
         }
-        for i in 0..options.len() {
-            for j in (i + 1)..options.len() {
-                if options[i].len() == 1 && options[j].len() == 1 {
-                    continue;
+        let c = match self.carrier {
+            Carrier::Coeff if toggled => self.nc.clone(),
+            Carrier::Coeff => self.coeff.clone(),
+            Carrier::Inf(i) => {
+                if toggled {
+                    factors[i] = match &factors[i] {
+                        Ex::PosInf => Ex::NegInf,
+                        _ => Ex::PosInf,
+                    };
                 }
-                for a in &options[i] {
-                    for b in &options[j] {
-                        if same_collection_base(a, b, cx) {
-                            return None;
+                self.coeff.clone()
+            }
+            // The refit eats the toggle: every configuration is value-equal as a fitted family.
+            // The whole sign dimension goes into the refit: coefficient magnitude only, bare
+            // infinities positive.
+            Carrier::Free => {
+                for f in factors.iter_mut() {
+                    if matches!(f, Ex::NegInf) {
+                        *f = Ex::PosInf;
+                    }
+                }
+                if self.coeff.is_negative() {
+                    self.nc.clone()
+                } else {
+                    self.coeff.clone()
+                }
+            }
+            Carrier::Absorb(i) => {
+                if toggled {
+                    factors[i] = flip_carrier_sum(&factors[i], cx)?;
+                }
+                self.coeff.clone()
+            }
+        };
+        let negative = c.is_negative();
+        Some(((self.assemble)(factors, &c), negative))
+    }
+
+    /// Each group's orientations: the class written along its key or against it, every site
+    /// spelled the other way flipping. An orientation that flips a site onto the base of another
+    /// factor is none: the bag would be an unmerged spelling that collection merges, so the
+    /// product would not read back as itself (two factors the entry already holds over one base
+    /// are how `mul()` emits them, and block nothing).
+    fn group_options(&self, cx: &Cx) -> Vec<Vec<SiteOption>> {
+        let view = cx.view;
+        let mut site_of: Vec<Option<usize>> = vec![None; self.out.len()];
+        let mut group_of = vec![0usize; self.site_flips.len()];
+        for (bit, (pos, _)) in self.site_flips.iter().enumerate() {
+            site_of[*pos] = Some(bit);
+        }
+        for (g, (_, members)) in self.groups.iter().enumerate() {
+            for (bit, _) in members {
+                group_of[*bit] = g;
+            }
+        }
+        let state = |bit: usize, flipped: bool| -> &Ex {
+            if flipped {
+                &self.site_flips[bit].1
+            } else {
+                &self.out[self.site_flips[bit].0]
+            }
+        };
+        self.groups
+            .iter()
+            .enumerate()
+            .map(|(g, (_, members))| {
+                [false, true]
+                    .into_iter()
+                    .filter_map(|against| {
+                        let flips: Vec<usize> = members
+                            .iter()
+                            .filter(|(_, other)| *other != against)
+                            .map(|(bit, _)| *bit)
+                            .collect();
+                        for &bit in &flips {
+                            let (pos, nf) = &self.site_flips[bit];
+                            for j in (0..self.out.len()).filter(|j| j != pos) {
+                                let hit = match site_of[j] {
+                                    Some(b) if group_of[b] == g => {
+                                        same_collection_base(nf, state(b, flips.contains(&b)), cx)
+                                    }
+                                    Some(b) => {
+                                        same_collection_base(nf, state(b, false), cx)
+                                            || same_collection_base(nf, state(b, true), cx)
+                                    }
+                                    None => same_collection_base(nf, &self.out[j], cx),
+                                };
+                                if hit {
+                                    return None;
+                                }
+                            }
                         }
+                        let cost = members.iter().fold(0u64, |acc, (bit, _)| {
+                            acc.saturating_add(if flips.contains(bit) {
+                                self.flip_price[*bit]
+                            } else {
+                                self.base_price[self.site_flips[*bit].0]
+                            })
+                        });
+                        let mut key: Vec<Ex> = members
+                            .iter()
+                            .map(|(bit, _)| state(*bit, flips.contains(bit)).clone())
+                            .collect();
+                        key.sort_by(|a, b| cmp_ex(a, b, view));
+                        let signs = key
+                            .iter()
+                            .map(|f| sign_key(f, view))
+                            .fold((0, 0), |a, k| (a.0 + k.0, a.1 + k.1));
+                        Some(SiteOption {
+                            odd: flips.len() % 2 == 1,
+                            flips,
+                            cost,
+                            key,
+                            signs,
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Does a configuration (the sites it flips) keep every value the product keeps at a class's
+    /// zero (`zero_limit`)? A site whose own count is not read may not flip.
+    fn keeps(&self, checks: &[usize], flipped: &[bool]) -> bool {
+        checks.iter().all(|&c| {
+            let (now, toggles) = &self.checks[c];
+            let mut off = *now;
+            for (bit, t) in toggles.iter().enumerate() {
+                if flipped[bit] {
+                    match t {
+                        Some(t) => off ^= t,
+                        None => return false,
                     }
                 }
             }
+            !off
+        })
+    }
+}
+
+/// THE SIGN ORBIT'S ARGMIN, for any number of classes. A product's price is the sum of its
+/// factors' prices and the carrier's (`complexity`'s Mul arm; pieces of a literal, `is_piece`,
+/// price together, which a site that is one reads as its own price), so the cheapest spelling is
+/// separable up to the one coupling the classes share, the PARITY of the sites they flip (the
+/// sign the carrier takes). Each class flips as a whole and prices as the sum of its members; a
+/// zero check (`zero_limit`) constrains the classes whose sites it counts, and the classes one
+/// check couples are decided together (a component, its orientations enumerated: in practice a
+/// check counts the sites of its own class only). Per component its cheapest orientation, and per
+/// parity of the sign the one component whose switch to the other parity costs least: the
+/// cheapest product of either sign, priced exactly, the cheaper winning (then a non-negative
+/// coefficient, then the structurally smaller product). Ties within a parity resolve by a fixed
+/// order that is a function of the orbit, never of the entry spelling: each component's
+/// orientation by its sites as they then stand, the switch by the components' smallest site.
+/// `None` where no configuration keeps the product's values at its zeros, or a component
+/// couples more than `COMPONENT_LIMIT` classes: the caller keeps the entry spelling.
+fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
+    const COMPONENT_LIMIT: usize = 12;
+    let view = cx.view;
+    let n = o.site_flips.len();
+    let options = o.group_options(cx);
+    if options.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let mut group_of = vec![0usize; n];
+    for (g, (_, members)) in o.groups.iter().enumerate() {
+        for (bit, _) in members {
+            group_of[*bit] = g;
         }
     }
-    // The non-site factors' prices (the absorbing sum's entry price included).
-    let fixed: u64 = {
-        let mut is_site = vec![false; out.len()];
-        for (pos, _) in site_flips {
-            is_site[*pos] = true;
+    // Components: the groups each check couples (the sites whose flip changes its count, or whose
+    // count is not read), joined.
+    let mut root: Vec<usize> = (0..o.groups.len()).collect();
+    fn find(root: &mut [usize], g: usize) -> usize {
+        let mut r = g;
+        while root[r] != r {
+            r = root[r];
         }
-        (0..out.len())
-            .filter(|i| !is_site[*i])
-            .fold(0u64, |acc, i| acc.saturating_add(base_price[i]))
-    };
-    let p0: Vec<u64> = site_flips.iter().map(|(pos, _)| base_price[*pos]).collect();
-    // Is the flipped orientation the structurally smaller one?
-    let small1: Vec<bool> = site_flips
-        .iter()
-        .map(|(pos, nf)| cmp_ex(nf, &out[*pos], view) == Ordering::Less)
-        .collect();
-    let pref: Vec<bool> = (0..n)
-        .map(|j| {
-            if flip_price[j] != p0[j] {
-                flip_price[j] < p0[j]
-            } else {
-                small1[j]
+        root[g] = r;
+        r
+    }
+    let mut check_groups: Vec<Vec<usize>> = Vec::with_capacity(o.checks.len());
+    for (now, toggles) in o.checks {
+        let mut gs: Vec<usize> = toggles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| **t != Some(false))
+            .map(|(bit, _)| group_of[bit])
+            .collect();
+        gs.sort_unstable();
+        gs.dedup();
+        if gs.is_empty() && *now {
+            return None;
+        }
+        for w in gs.windows(2) {
+            let (a, b) = (find(&mut root, w[0]), find(&mut root, w[1]));
+            root[a.max(b)] = a.min(b);
+        }
+        check_groups.push(gs);
+    }
+    let mut components: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+    for g in 0..o.groups.len() {
+        let r = find(&mut root, g);
+        match components
+            .iter_mut()
+            .find(|(gs, _)| find(&mut root, gs[0]) == r)
+        {
+            Some((gs, _)) => gs.push(g),
+            None => components.push((vec![g], Vec::new())),
+        }
+    }
+    for (c, gs) in check_groups.iter().enumerate() {
+        if let Some(&g) = gs.first() {
+            let r = find(&mut root, g);
+            if let Some((_, cs)) = components
+                .iter_mut()
+                .find(|(groups, _)| find(&mut root, groups[0]) == r)
+            {
+                cs.push(c);
             }
+        }
+    }
+    // Each component's orientations, cheapest first (then by its sites as they stand), and its
+    // rank: its smallest site in either orientation.
+    let mut decided: Vec<(Ex, Vec<SiteOption>)> = Vec::with_capacity(components.len());
+    for (gs, cs) in &components {
+        if gs.len() > COMPONENT_LIMIT {
+            return None;
+        }
+        let mut opts: Vec<SiteOption> = vec![SiteOption {
+            flips: Vec::new(),
+            cost: 0,
+            odd: false,
+            key: Vec::new(),
+            signs: (0, 0),
+        }];
+        for &g in gs {
+            opts = opts
+                .into_iter()
+                .flat_map(|a| {
+                    options[g].iter().map(move |b| {
+                        let mut flips = a.flips.clone();
+                        flips.extend(b.flips.iter().copied());
+                        let mut key = a.key.clone();
+                        key.extend(b.key.iter().cloned());
+                        SiteOption {
+                            flips,
+                            cost: a.cost.saturating_add(b.cost),
+                            odd: a.odd ^ b.odd,
+                            key,
+                            signs: (a.signs.0 + b.signs.0, a.signs.1 + b.signs.1),
+                        }
+                    })
+                })
+                .collect();
+        }
+        if !cs.is_empty() {
+            opts.retain(|opt| {
+                let mut flipped = vec![false; n];
+                for &bit in &opt.flips {
+                    flipped[bit] = true;
+                }
+                o.keeps(cs, &flipped)
+            });
+        }
+        if opts.is_empty() {
+            return None;
+        }
+        opts.sort_by(|a, b| {
+            (a.cost, a.signs)
+                .cmp(&(b.cost, b.signs))
+                .then_with(|| cmp_vec(&a.key, &b.key, view))
+        });
+        let rank = gs
+            .iter()
+            .flat_map(|g| o.groups[*g].1.iter())
+            .flat_map(|(bit, _)| [&o.out[o.site_flips[*bit].0], &o.site_flips[*bit].1])
+            .min_by(|a, b| cmp_ex(a, b, view))
+            .cloned()
+            .unwrap_or(Ex::Num(Rat::ONE));
+        decided.push((rank, opts));
+    }
+    decided.sort_by(|a, b| cmp_ex(&a.0, &b.0, view));
+    // Per parity, the cheapest configuration: every component's cheapest orientation, and where
+    // their parity is the other one, the cheapest switch of one component to its cheapest
+    // orientation of the other parity (among switches of one cost, the one whose product is
+    // structurally smallest).
+    let best: Vec<&SiteOption> = decided.iter().map(|(_, opts)| &opts[0]).collect();
+    let build = |pick: &[&SiteOption]| {
+        let mut flipped = vec![false; n];
+        for opt in pick {
+            for &bit in &opt.flips {
+                flipped[bit] = true;
+            }
+        }
+        o.candidate(&flipped, cx)
+    };
+    // Where the sign is absorbed (a bare `Const`, which absorbs every constant factor of its
+    // product, or a zero coefficient) the parity is no constraint: every class takes its own
+    // cheapest orientation, ties by its sites as they then stand, whatever else the product holds.
+    if matches!(o.carrier, Carrier::Free) {
+        return build(&best).map(|(e, _)| e);
+    }
+    let parity = best.iter().fold(false, |p, opt| p ^ opt.odd);
+    type Delta = (u64, i64, i64);
+    let switches: Vec<(Delta, usize, &SiteOption)> = decided
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, opts))| {
+            let other = opts.iter().find(|opt| opt.odd != opts[0].odd)?;
+            let delta = (
+                other.cost - opts[0].cost,
+                i64::from(other.signs.0) - i64::from(opts[0].signs.0),
+                i64::from(other.signs.1) - i64::from(opts[0].signs.1),
+            );
+            Some((delta, i, other))
         })
         .collect();
-    let d: Vec<u64> = (0..n).map(|j| p0[j].abs_diff(flip_price[j])).collect();
-    let site_lo: u64 = (0..n).fold(0u64, |acc, j| acc.saturating_add(p0[j].min(flip_price[j])));
-    let g_par = pref.iter().filter(|b| **b).count() % 2 == 1;
-    let dmin = d.iter().copied().min().unwrap_or(u64::MAX);
-    let site_cost = |par: bool| -> u64 {
-        if par == g_par {
-            site_lo
+    let least = switches.iter().map(|(delta, _, _)| *delta).min();
+    let mut chosen: Option<(u64, Ex)> = None;
+    for target in [false, true] {
+        let built = if target == parity {
+            build(&best)
         } else {
-            site_lo.saturating_add(dmin)
-        }
-    };
-    let coef_price = |c: &Rat| -> u64 {
-        if c.is_one() || *c == Rat::NEG_ONE {
-            0
-        } else {
-            mu_rat(c)
-        }
-    };
-    // The carrier's parity, coefficient and (Absorb) flipped sum.
-    let mut absorb_flip: Option<Ex> = None;
-    let mut absorb_delta: Option<(u64, u64)> = None;
-    let (par, c): (Option<bool>, Rat) = match carrier {
-        WideCarrier::Free => (
-            None,
-            if coeff.is_negative() {
-                nc.clone()
-            } else {
-                coeff.clone()
-            },
-        ),
-        WideCarrier::Coeff => {
-            let k0 = (
-                site_cost(false).saturating_add(coef_price(coeff)),
-                coeff.is_negative(),
-            );
-            let k1 = (
-                site_cost(true).saturating_add(coef_price(nc)),
-                nc.is_negative(),
-            );
-            if k1 < k0 {
-                (Some(true), nc.clone())
-            } else {
-                (Some(false), coeff.clone())
-            }
-        }
-        WideCarrier::Inf(i) => {
-            // The toggled infinity keeps its base price, as in the enumeration.
-            let pos_at = |p: bool| matches!(out[i], Ex::PosInf) != p;
-            let k0 = (site_cost(false), !pos_at(false));
-            let k1 = (site_cost(true), !pos_at(true));
-            (Some(k1 < k0), coeff.clone())
-        }
-        WideCarrier::Absorb(i) => {
-            let fl = flip_carrier_sum(&out[i], cx)?;
-            let fp = factor_price(&fl);
-            let fl_smaller = cmp_ex(&fl, &out[i], view) == Ordering::Less;
-            let k0 = (site_cost(false).saturating_add(base_price[i]), fl_smaller);
-            let k1 = (site_cost(true).saturating_add(fp), !fl_smaller);
-            let p = k1 < k0;
-            absorb_delta = Some((base_price[i], fp));
-            if p {
-                absorb_flip = Some(fl);
-            }
-            (Some(p), coeff.clone())
-        }
-    };
-    let bits: Vec<bool> = match par {
-        None => pref.clone(),
-        Some(par) => {
-            // Site order: by each site's structurally smaller orientation (orbit-invariant).
-            let small_item = |j: usize| -> &Ex {
-                if small1[j] {
-                    &site_flips[j].1
-                } else {
-                    &out[site_flips[j].0]
-                }
-            };
-            let mut order: Vec<usize> = (0..n).collect();
-            order.sort_by(|&a, &b| cmp_ex(small_item(a), small_item(b), view));
-            let extra_star = if par == g_par { 0 } else { dmin };
-            // Suffix (in `order`) parity of the preferred choices and least switch cost.
-            let mut suf_par = vec![false; n + 1];
-            let mut suf_min = vec![u64::MAX; n + 1];
-            for t in (0..n).rev() {
-                let j = order[t];
-                suf_par[t] = suf_par[t + 1] ^ pref[j];
-                suf_min[t] = suf_min[t + 1].min(d[j]);
-            }
-            let mut used = 0u64;
-            let mut cur = false;
-            let mut bits = vec![false; n];
-            for t in 0..n {
-                let j = order[t];
-                let fits = |b: bool| -> bool {
-                    let extra = if b == pref[j] { 0 } else { d[j] };
-                    let need = par ^ cur ^ b;
-                    let rest = if need == suf_par[t + 1] {
-                        0
-                    } else {
-                        suf_min[t + 1]
-                    };
-                    rest != u64::MAX
-                        && used.saturating_add(extra).saturating_add(rest) <= extra_star
-                };
-                let b = if fits(small1[j]) {
-                    small1[j]
-                } else {
-                    !small1[j]
-                };
-                used = used.saturating_add(if b == pref[j] { 0 } else { d[j] });
-                cur ^= b;
-                bits[j] = b;
-            }
-            debug_assert!(
-                cur == par && used == extra_star,
-                "wide sign orbit: the greedy completion missed the optimum"
-            );
-            bits
-        }
-    };
-    let mut factors = out.to_vec();
-    for (j, (pos, nf)) in site_flips.iter().enumerate() {
-        if bits[j] {
-            factors[*pos] = nf.clone();
-        }
-    }
-    match carrier {
-        WideCarrier::Inf(i) if par == Some(true) => {
-            factors[i] = match &factors[i] {
-                Ex::PosInf => Ex::NegInf,
-                Ex::NegInf => Ex::PosInf,
-                _ => unreachable!(),
-            };
-        }
-        WideCarrier::Absorb(i) => {
-            if let Some(fl) = absorb_flip {
-                factors[i] = fl;
-            }
-        }
-        WideCarrier::Free => {
-            for f in factors.iter_mut() {
-                if matches!(f, Ex::NegInf) {
-                    *f = Ex::PosInf;
-                }
-            }
-        }
-        _ => {}
-    }
-    let cand = assemble(factors, &c);
-    #[cfg(not(debug_assertions))]
-    let _ = (absorb_delta, fixed);
-    #[cfg(debug_assertions)]
-    {
-        // The separable price the choice optimized IS the product's complexity.
-        let carrier_price: i128 = match absorb_delta {
-            Some((base, fp)) if par == Some(true) => fp as i128 - base as i128,
-            _ => 0,
+            switches
+                .iter()
+                .filter(|(delta, _, _)| Some(*delta) == least)
+                .filter_map(|(_, i, other)| {
+                    let mut pick = best.clone();
+                    pick[*i] = other;
+                    build(&pick)
+                })
+                .min_by(|a, b| tie_cmp(&a.0, &b.0, view))
         };
-        let sites_price: u64 = (0..n)
-            .map(|j| if bits[j] { flip_price[j] } else { p0[j] })
-            .sum();
-        let predicted = (mu_mul() + fixed + sites_price + coef_price(&c)) as i128 + carrier_price;
-        debug_assert_eq!(
-            predicted,
-            complexity(&cand, view) as i128,
-            "wide sign orbit: summed price differs from complexity()"
-        );
+        let Some((cand, _)) = built else {
+            continue;
+        };
+        let mu = complexity(&cand, view);
+        let better = match &chosen {
+            None => true,
+            Some((bmu, bex)) => {
+                mu < *bmu || (mu == *bmu && tie_cmp(&cand, bex, view) == Ordering::Less)
+            }
+        };
+        if better {
+            chosen = Some((mu, cand));
+        }
     }
-    Some(cand)
+    chosen.map(|(_, e)| e)
+}
+
+/// The debug build's cross-check of `sign_place_groups`: the cheapest price over every
+/// configuration of whole classes, under the same orientations and checks.
+#[cfg(debug_assertions)]
+fn sign_place_enumerated(o: &SignOrbit, cx: &Cx) -> Option<u64> {
+    let n = o.site_flips.len();
+    let options = o.group_options(cx);
+    let all: Vec<usize> = (0..o.checks.len()).collect();
+    let mut best: Option<u64> = None;
+    for code in 0usize..(1usize << o.groups.len()) {
+        let mut flipped = vec![false; n];
+        let mut allowed = true;
+        for (g, (_, members)) in o.groups.iter().enumerate() {
+            let against = code & (1 << g) != 0;
+            let flips: Vec<usize> = members
+                .iter()
+                .filter(|(_, other)| *other != against)
+                .map(|(bit, _)| *bit)
+                .collect();
+            allowed &= options[g].iter().any(|opt| opt.flips == flips);
+            for bit in flips {
+                flipped[bit] = true;
+            }
+        }
+        if !allowed || !o.keeps(&all, &flipped) {
+            continue;
+        }
+        if let Some((cand, _)) = o.candidate(&flipped, cx) {
+            let mu = complexity(&cand, cx.view);
+            best = Some(best.map_or(mu, |b| b.min(mu)));
+        }
+    }
+    best
 }
 
 /// F63: cheap shape test for [`sign_trade_flip`] -- true iff the factor is an odd
@@ -7086,10 +8152,25 @@ fn is_sign_trade_site(f: &Ex, cx: &Cx) -> bool {
 /// through the same two. Without the memo a sum nested `d` deep cost `4^d` flips (measured:
 /// `x1*(x1 + (N + 1)/x1)` nested 9 deep took 7 s with the search off, all of it here).
 fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    trade_flip(f, cx, false)
+}
+
+/// The flip of `f` as a factor of a product that holds a bare `Const` (`sign_place`). A
+/// `<constant>` absorbs every constant factor of its product, and a class's orientation sign is
+/// one, the constant factor -1: beside one, the orientation of EVERY class is free, so the classes
+/// whose sign an absorption owner holds elsewhere (a sum holding a `Const`, one with a
+/// negation-absorbing member, one with an infinity) are sites too, their sign the constant's.
+fn refit_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    trade_flip(f, cx, true)
+}
+
+/// [`sign_trade_flip`] and [`refit_trade_flip`], memoized; `refit`: the product's sign is a bare
+/// `Const`'s.
+fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     if !matches!(f, Ex::Add(_) | Ex::Pow(..) | Ex::Fun(..)) {
         return None;
     }
-    let key = (flip_cx_key(cx), f.clone());
+    let key = (flip_cx_key(cx), f.clone(), refit);
     let outer = FLIP_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if m.is_none() {
@@ -7103,7 +8184,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
     if let Some(hit) = FLIP_MEMO.with(|m| m.borrow().as_ref().and_then(|t| t.get(&key).cloned())) {
         return hit;
     }
-    let r = sign_trade_flip_raw(f, cx);
+    let r = sign_trade_flip_raw(f, cx, refit);
     FLIP_MEMO.with(|m| {
         if let Some(t) = m.borrow_mut().as_mut() {
             t.insert(key, r.clone());
@@ -7116,8 +8197,8 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
 /// token view, the four certificate closures (by identity), the mode, the two fold switches and
 /// the thread's number domain. All of them outlive the outermost call, so no identity is reused
 /// within the memo's extent.
-type FlipCxKey = (usize, [usize; 4], u8);
-type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex), Option<Ex>>;
+type FlipCxKey = (usize, [usize; 5], u8);
+type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex, bool), Option<Ex>>;
 
 /// The opposite-sums decision of a product (`collect_opposite_sums`), keyed like a flip: by the
 /// context, the sign host and the factors as they arrived. It lives exactly as long as the flip
@@ -7181,24 +8262,37 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
             id(cx.cert_finnz),
             id(cx.cert_nzae),
             id(cx.cert_nce),
+            id(cx.cert_region),
         ],
         bits,
     )
 }
 
-fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
+fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     let flip_sum = |ts: &[Ex]| -> Option<Vec<Ex>> {
         // Exclusions = the absorption owners' classes: Const-bearing (H-020),
         // absorbing-member (H-030), and BARE-infinity terms (the inf carries the
         // sign itself, H-014 -- `term_absorbs_negation` only matches inf-carrying
         // PRODUCTS, so the bare member needs its own test; missing it let an
         // odd-fun trade flip an inf-bearing sum and inflate mu: fuzz row 131227,
-        // P5, the one violation in 200k).
+        // P5, the one violation in 200k). Beside a bare `Const` (`refit`) the
+        // constant owns every class's sign, theirs too: such a sum negates through
+        // `add`, which files it bare (`primitive_sum` never wraps one).
         if ts.iter().any(Ex::contains_const)
             || ts.iter().any(term_absorbs_negation)
             || ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
         {
-            return None;
+            if !refit {
+                return None;
+            }
+            let negated = ts
+                .iter()
+                .map(|t| negate_term(t, cx))
+                .collect::<Option<Vec<Ex>>>()?;
+            return match add(negated, cx) {
+                Ex::Add(v) => Some(v),
+                _ => None,
+            };
         }
         let mut out = ts
             .iter()
@@ -7213,7 +8307,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
         // the odd-literal fusion parks signs inside function arguments where no
         // coefficient shows them (measured: 5 corpus rows + 4 rust pins regressed
         // under mixed-sign counting).
-        if flipped_orientation_wins(&out, mu_mul() as i128, Tie::Keep, cx) {
+        if flipped_orientation_wins(&out, Wrapper::Flipped, Tie::Keep, cx) {
             return None;
         }
         out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -7232,14 +8326,16 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::Pow(b, e) if odd_power(e) => {
             let flipped = match &**b {
                 Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Pow(Box::new(Ex::Add(s)), e.clone())),
-                // An odd power of an odd carrier over a sum (an odd function or an odd root of it)
-                // is one too: `f(-S)^n = -f(S)^n`; so is a positive odd power of one over a literal
-                // multiple or a negation.
+                // An odd power of an odd head of a negatable argument (`class_base`) is one too:
+                // `f(-u)^n = -f(u)^n`, for a negative `n` as for a positive one. A constant
+                // argument keeps its sign on its literal under a power (`1/tanh(-2)`), as the
+                // sign key files it.
                 Ex::Fun(_, args)
-                    if matches!(args.first(), Some(Ex::Add(_)))
-                        || (matches!(args.first(), Some(Ex::Mul(_))) && odd_int_ge3(e)) =>
+                    if args.first().is_some_and(|a| {
+                        a.has_measure_space(cx.view) || a.contains_wildcard(cx.view)
+                    }) =>
                 {
-                    sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
+                    trade_flip(b, cx, refit).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
                 }
                 _ => None,
             }?;
@@ -7275,8 +8371,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
                 let flipped = fun(*op, vec![Ex::Num(r.checked_neg()?)], cx);
                 matches!(flipped, Ex::Fun(..)).then_some(flipped)
             }
-            Ex::Mul(_) => literal_multiple_flip(f, cx),
-            _ => None,
+            _ => literal_multiple_flip(f, cx),
         },
         Ex::Fun(..) => literal_multiple_flip(f, cx),
         _ => None,
@@ -7290,23 +8385,27 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
 fn literal_multiple_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
     let c = odd_of_literal_multiple(f, cx.view)?;
     let Ex::Fun(op, args) = f else { return None };
-    let Ex::Mul(v) = &args[0] else { return None };
-    let mut items = Vec::with_capacity(v.len());
-    items.push(Ex::Num(c.checked_neg()?));
-    items.extend(v[1..].iter().cloned());
+    let mut items = vec![Ex::Num(c.checked_neg()?)];
+    match &args[0] {
+        Ex::Num(_) => {}
+        Ex::Mul(v) if matches!(v.first(), Some(Ex::Num(_))) => items.extend(v[1..].iter().cloned()),
+        u => items.push(u.clone()),
+    }
     let mut flipped_args = args.clone();
     flipped_args[0] = mul(items, cx);
     let flipped = fun(*op, flipped_args, cx);
-    odd_of_literal_multiple(&flipped, cx.view)
-        .is_some()
-        .then_some(flipped)
+    matches!(
+        class_base(&flipped, cx.view),
+        Some(ClassBase { head: Some(_), .. })
+    )
+    .then_some(flipped)
 }
 
 // F72 (2026-08-09): the residual equal-mu same-coefficient-sign tie in the
 // sign-placement owner breaks on `cmp_ex` -- the ONE canonical total order, which
 // compares Leaf/Fun tokens by their STRINGS. The dedicated `ex_struct_cmp` this
 // replaced compared them by raw token ID, i.e. by INTERNING ORDER, so on a fully
-// mu-tied orbit (a -1 coefficient rides mu-free) the winner was a function of which
+// mu-tied orbit (the two mirror pairings price alike) the winner was a function of which
 // literal the input stream interned first: `-1 * (a-b)*(c-d)` and its factor-swapped
 // spelling picked OPPOSITE mirror pairings (extreme-lane P2 rows 829655/866090, the
 // two 1M regressions of the F62..F71 window).
@@ -7649,6 +8748,10 @@ fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
             Box::new(rejoin_walk(*b, false, cx)),
             Box::new(rejoin_walk(*ex, false, cx)),
         ),
+        // `atan2` reads its arguments' zero signs, and the parse keeps their signs (`atan2_of`).
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(f, "atan2") => {
+            Ex::Fun(f, v.into_iter().map(|x| rejoin_walk(x, true, cx)).collect())
+        }
         Ex::Fun(f, v) => Ex::Fun(
             f,
             v.into_iter().map(|x| rejoin_walk(x, false, cx)).collect(),
@@ -7657,17 +8760,18 @@ fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
     }
 }
 
-/// Rebuild `base^exp` (rational or symbolic-with-count) through the [`pow`] constructor so
-/// integer-power distribution and exact folds apply.
+/// Rebuild `base^exp` (rational or symbolic-with-count) through the power constructor so
+/// integer-power distribution and exact folds apply; as a member of the product being built
+/// ([`pow_member`]), whose sign placement orients it.
 fn rebuild_factor(base: Ex, sym: Option<Ex>, r: Rat, cx: &Cx) -> Ex {
     match sym {
-        None => pow(base, Ex::Num(r), cx),
+        None => pow_member(base, Ex::Num(r), cx),
         Some(e) => {
             if r.is_one() {
-                pow(base, e, cx)
+                pow_member(base, e, cx)
             } else {
                 let scaled = mul(vec![Ex::Num(r), e], cx);
-                pow(base, scaled, cx)
+                pow_member(base, scaled, cx)
             }
         }
     }
@@ -7685,6 +8789,7 @@ pub(crate) fn distributes_power(v: &[Ex], e: &Rat, cx: &Cx) -> bool {
 fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     let licensed = !e.is_negative()
         || e.is_even_integer()
+        || inverts_a_signed_zero(v, cx)
         || v.iter().any(holds_infinity)
         || v.iter().all(|f| zero_set_null(f, cx))
         || (v.iter().any(|f| holds_odd_root(f, cx))
@@ -7706,7 +8811,7 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     // post-distribute there is no legal trade, so entry-independence
     // requires one fixed pre-state.
     let vv: Vec<Ex>;
-    let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() {
+    let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() && !inverts_a_signed_zero(v, cx) {
         let ci = v
             .iter()
             .position(|f| matches!(f, Ex::Num(r) if r.is_negative()));
@@ -7736,41 +8841,7 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     } else {
         v
     };
-    // F83 (owner-ruled F75 group D, 2026-08-11; extreme row 508487): a
-    // NEGATIVE rational coefficient that SURVIVED the F63 pre-fold (no
-    // sign-trade site in the bag) flips the pole sign at every zero of a
-    // co-factor: the source folds the product to THE unsigned zero first
-    // (`inv(0) = +inf`, contract §9.2/§9.8), while the distributed
-    // spelling ships `sign(c)·inf` -- a REAL value change at a constructed
-    // rational exceptional point, the class the licence registry (F66)
-    // refuses for mined rules, arrived at constructor level
-    // (`rootn(x0/(-3), -1) -> -3/x0`: exp of it turned 0.0 into +inf).
-    // Refuse the distribution unless every non-coefficient factor
-    // certainly never vanishes -- nonzero-a.e. is NOT enough here, the
-    // exceptional point IS the null set. Positive coefficients agree at
-    // the atom and stay licensed; traded signs (F63) stay licensed.
-    // SOUND MODE ONLY: lossy canonicalisation keeps its training
-    // semantics; the phase-2 sound re-canon applies the guard to every
-    // endpoint. Boundary note (owner-visible, audit F83): a negative
-    // VARIABLE co-factor at another factor's zero flips the same way,
-    // but that is not a CONSTRUCTED-rational exceptional point -- it
-    // stays under the standing a.e. doctrine.
-    // VARIANT MEASUREMENT (owner boundary question, 2026-08-11): the
-    // `*r != Rat::NEG_ONE` clause is the NARROW line -- pure-sign
-    // coefficients keep the standing §9.8.4-priced compression; only
-    // magnitude-carrying negative literals refuse. The BROAD line
-    // (every negative coefficient) is the same condition without it.
-    let neg_coeff_stuck = !cx.lossy()
-        && e.is_negative()
-        && !e.is_even_integer() // possibly odd: the f64 domain may not know
-        && !bag.iter().any(holds_infinity)
-        && bag
-            .iter()
-            .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
-        && bag
-            .iter()
-            .any(|f| !matches!(f, Ex::Num(_)) && !cx.certainly_nonvanishing(f));
-    (!neg_coeff_stuck).then(|| bag.to_vec())
+    Some(bag.to_vec())
 }
 
 /// The canonical power constructor. Folds and gates:
@@ -7790,9 +8861,27 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 ///   `(a^(1/2))^2 = a` only on `a >= 0`.
 /// * `(a*b)^n` for INTEGER n distributes over the factors (TOTAL as extended-real evaluations;
 ///   for non-integer exponents `(ab)^(1/2) != a^(1/2) b^(1/2)` on `a, b < 0`).
+/// * a power that is a sign-trade site takes the orientation it takes as a product's one factor
+///   (`lone_site`).
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
-    super::work::tick(1);
+    match pow_member(base, exp, cx) {
+        node @ Ex::Pow(..) => lone_site(node, cx),
+        other => other,
+    }
+}
+
+/// [`pow`] for a member of a product, whose sign placement decides the member's orientation with
+/// the product's other members (`sign_place`): the same power, a sign-trade site left in the
+/// orientation it was built in.
+pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
+    // [`land`]); a power of two literals folds exactly or stays as written.
+    let (base, exp) = if matches!(base, Ex::Num(_)) != matches!(exp, Ex::Num(_)) {
+        (land_operand(base, cx), land_operand(exp, cx))
+    } else {
+        (base, exp)
+    };
     if let Ex::Num(e) = &exp {
         if e.is_zero() {
             return Ex::Num(Rat::ONE);
@@ -7803,6 +8892,19 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     }
     if matches!(&base, Ex::Num(b) if b.is_one()) {
         return Ex::Num(Rat::ONE);
+    }
+    // THE WRITTEN NEGATIVE ZERO under a negative integer power is float64's pole of its sign:
+    // `(-0)^-1` is -inf, `(-0)^-2` is +inf (`NEG_ZERO`; `f64` only).
+    if cx.f64_semantics() && is_neg_zero(&base, cx.view) {
+        if let Ex::Num(k) = &exp {
+            if k.is_integer() && k.is_negative() {
+                return if k.is_odd_integer() {
+                    Ex::NegInf
+                } else {
+                    Ex::PosInf
+                };
+            }
+        }
     }
     // rational^rational exact folds.
     if let (Ex::Num(b), Ex::Num(e)) = (&base, &exp) {
@@ -7862,6 +8964,26 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             }
         }
     }
+    // A NEGATED SITE UNDER A POWER IS THE POWER OF ITS FLIP: `-F` and its flip (`sign_trade_flip`)
+    // are one class in its two orientations, one value wherever the flip is a site's other spelling,
+    // so `(-F)^s` is `flip(F)^s` for every exponent. A site standing alone may take the negated
+    // orientation (`lone_site`); a power over it reads the class as it reads the site spelled
+    // without the sign: `(S^3)^-1` is `S^-3` and `(S^3)^(1/2)` is `S^(3/2)` whichever orientation
+    // `S^3` stands in. (A negative coefficient beside other members folds into a site where the
+    // power distributes, `power_bag`.)
+    // An odd negative power inverts the zero of a site that vanishes on a region with the sign
+    // its orientation gives it (`region_signed_zero`): `1/-(S^3)` is `-inf` there and
+    // `1/flip(S)^3` is `+inf`, so the power distributes instead (`inverts_a_signed_zero`).
+    let inverts = matches!(&exp, Ex::Num(s) if s.is_negative() && s.is_odd_integer());
+    if let Ex::Mul(v) = &base {
+        if let [Ex::Num(c), f] | [f, Ex::Num(c)] = v.as_slice() {
+            if *c == Rat::NEG_ONE && !(inverts && region_signed_zero(f, cx)) {
+                if let Some(flipped) = sign_trade_flip(f, cx) {
+                    return pow_member(flipped, exp, cx);
+                }
+            }
+        }
+    }
     // Integer powers distribute over products -- TOTAL for non-negative and for EVEN
     // integer exponents (at a zero of the product both spellings give 0 resp. +inf; at
     // infinities they agree for every integer). For ODD NEGATIVE exponents the identity
@@ -7884,7 +9006,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if let Some(bag) = power_bag(v, e, cx) {
                 let parts: Vec<Ex> = bag
                     .into_iter()
-                    .map(|f| pow(f, Ex::Num(e.clone()), cx))
+                    .map(|f| pow_member(f, Ex::Num(e.clone()), cx))
                     .collect();
                 return mul(parts, cx);
             }
@@ -7902,9 +9024,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 let parts: Vec<Ex> = v
                     .iter()
                     .cloned()
-                    .map(|f| pow(f, Ex::Num(m.clone()), cx))
+                    .map(|f| pow_member(f, Ex::Num(m.clone()), cx))
                     .collect();
-                return pow(mul(parts, cx), Ex::int(-1), cx);
+                return pow_member(mul(parts, cx), Ex::int(-1), cx);
             }
         }
     }
@@ -7955,7 +9077,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             };
             if licence {
                 if let Some(p) = r.checked_mul(s) {
-                    return pow(inner_base.clone(), Ex::Num(p), cx);
+                    return pow_member(inner_base.clone(), Ex::Num(p), cx);
                 }
             }
         }
@@ -7996,7 +9118,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     if !e.is_negative() {
                         return rargs[0].clone();
                     }
-                    return pow(rargs[0].clone(), Ex::int(-1), cx);
+                    return pow_member(rargs[0].clone(), Ex::int(-1), cx);
                 }
             }
         }
@@ -8021,7 +9143,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if let Ex::Num(idx) = &rargs[1] {
                 if idx.is_odd_integer() && idx.cmp_int(3) != Ordering::Less {
                     if let Some(t) = idx.checked_inv().and_then(|inv| s.checked_mul(&inv)) {
-                        return pow(rargs[0].clone(), Ex::Num(t), cx);
+                        return pow_member(rargs[0].clone(), Ex::Num(t), cx);
                     }
                 }
             }
@@ -8043,8 +9165,8 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     && n.is_even_integer()
                 {
                     if let Some(unit) = s.checked_neg() {
-                        let root = pow(base.clone(), Ex::Num(unit), cx);
-                        return pow(root, Ex::int(-1), cx);
+                        let root = pow_member(base.clone(), Ex::Num(unit), cx);
+                        return pow_member(root, Ex::int(-1), cx);
                     }
                 }
             }
@@ -8095,7 +9217,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 } else {
                     Ex::PosInf
                 };
-                return pow((**inner).clone(), flipped, cx);
+                return pow_member((**inner).clone(), flipped, cx);
             }
         }
     }
@@ -8142,7 +9264,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         };
         if single_member {
             if let Some(r) = literal_reciprocal(&base) {
-                return pow(r, positive, cx);
+                return pow_member(r, positive, cx);
             }
         }
     }
@@ -8156,7 +9278,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if matches!(&exp, Ex::Num(r) if *r == Rat::NEG_ONE) {
         if let Ex::Pow(ib, ie) = &base {
             if let Some(r) = literal_reciprocal(ib) {
-                return pow(r, (**ie).clone(), cx);
+                return pow_member(r, (**ie).clone(), cx);
             }
         }
     }
@@ -8195,7 +9317,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             && !ts.iter().any(Ex::contains_const)
             && !ts.iter().any(term_absorbs_negation)
             && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-            && flipped_orientation_wins(ts, 0, Tie::Lex, cx)
+            && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
         {
             if let Some(mut flipped) = ts
                 .iter()
@@ -8204,9 +9326,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             {
                 // FILES-BARE gate (same rule as sign_trade_flip): only adopt an
                 // orientation primitive_sum itself would file bare.
-                if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
+                if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
-                    return pow(Ex::Add(flipped), exp, cx);
+                    return pow_member(Ex::Add(flipped), exp, cx);
                 }
             }
         }
@@ -8223,268 +9345,253 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if !ts.iter().any(Ex::contains_const)
                 && !ts.iter().any(term_absorbs_negation)
                 && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-                && flipped_orientation_wins(ts, 0, Tie::Lex, cx)
+                && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
             {
                 if let Some(mut flipped) = ts
                     .iter()
                     .map(|t| negate_term(t, cx))
                     .collect::<Option<Vec<Ex>>>()
                 {
-                    if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
+                    if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         let mut args = args.clone();
                         args[0] = Ex::Add(flipped);
-                        return pow(Ex::Fun(*op, args), exp, cx);
+                        return pow_member(Ex::Fun(*op, args), exp, cx);
                     }
                 }
+            }
+        }
+        // And over a negative literal multiple, the positive one: `sin(-2 x1)^2` is
+        // `sin(2 x1)^2`, as the class {sin(2 x1), sin(-2 x1)} is written (`collect_opposite_sums`).
+        if r.is_even_integer() && !r.is_zero() {
+            if let Some(Ex::Fun(fk, fa)) = positive_head(&base, cx.view) {
+                return pow_member(fun(fk, fa, cx), exp, cx);
             }
         }
     }
     Ex::Pow(Box::new(base), Box::new(exp))
 }
 
-/// The canonical function-application constructor. No folding here on purpose: literal
-/// evaluation (`sin(1) -> 0.841...`) and `<constant>`-collapse (`sin(C) -> C`) are RULES-PASS
-/// FALLBACKS, exactly as in the shipped engine -- running them at construction would destroy
-/// the exact rules' chance to fire first (`sin(pi) -> 0` must beat `sin(3.14159...) ->
-/// 1.22e-16`).
-/// EXPERIMENT (branch experiment/f64-folding, owner-ruled 2026-08-20 for 0.14.0):
-/// fold a ground function application to its f64 value, but ONLY when that is cheaper.
-///
-/// The 2026-08-02 ban had one rationale -- "an f64 evaluation landing exactly on a cheap
-/// literal while truly differing at 1e-17" -- and that conflation IS the f64/real
-/// distinction the mode split now represents. In `f64` the deployed evaluator is the
-/// authority, so its answer is exact BY DEFINITION of the mode. In `real` this never
-/// runs: `tan(1)` is irrational and no literal in the grammar spells it at any precision,
-/// so exact rational arithmetic is not a policy there but the only representable thing.
-///
-/// mu MAKES IT SELF-LIMITING, which is what makes "fold everything" safe to say:
-///     mu(tan 1)      = 11000   vs its float 58877  -> refused, `tan 1` survives
-///     mu(asin 1e-08) = 14170   vs its float  6170  -> folded
-/// so the canon does not fill with 17-digit literals; it folds exactly where the literal
-/// is genuinely the simpler object. That asymmetry is also why the 18-rule
-/// `f(+-10^-k) -> +-10^-k` family had to be MINED: the mine found as rules what the
-/// constructor was forbidden to do.
-///
-/// Two refusals carried over from `evaluate_constants`, both load-bearing: a non-finite
-/// result is never injected (that is the defect class that put a guard into flash-ansr),
-/// and anything that is not an exact rational operand is left alone (a `<constant>` is a
-/// fitted degree of freedom, not a value). A value whose shortest decimal will not fit
-/// `Rat`'s i128 also refuses -- fail-closed, and it costs only very large exponents.
-fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
-    // f64 ONLY. Corpus was included at first and it cost `atanh(tanh 30)`: f64 tanh(30)
-    // attains exactly 1.0, mu folds `tanh 30 -> 1`, and the literal-provenance arm then
-    // reads a WRITTEN atanh(1) as a limit and yields inf. In f64 that inf is CORRECT --
-    // np.arctanh(np.tanh(30.0)) really is inf -- but corpus is the beautification path,
-    // and turning a finite, mathematically-true 30 into a non-finite token is the exact
-    // defect class that put a guard into flash-ansr. Corpus gets both disciplines through
-    // the two-candidate selection at the simplify entry instead, which lets it keep 30
-    // AND fold where real cannot.
-    if !cx.fold_f64 {
-        return None;
+/// ONE ORIENTATION FOR A CLASS, WHEREVER IT STANDS. A sign-trade site (`sign_trade_flip`: an odd
+/// power or an odd root of a sum, an odd function of one) spells its class in either
+/// orientation, `f(S)` or `-f(-S)`; as a factor of a product the sign placement picks between
+/// them over the whole product (`sign_place`: the cheaper, then the sign key, fewest signs and
+/// then the outer ones). A site standing alone takes the spelling that placement gives it as the
+/// one factor of a product, so `S^3` and `1*S^3` are one answer, and so are `1/S` and `1/(1*S)`:
+/// `(x3*(x3 - x1) - x2)^3` is `-(x2 + x3*(x1 - x3))^3`, whose two signs stand further out.
+fn lone_site(node: Ex, cx: &Cx) -> Ex {
+    // A site standing alone may be the one an inverse reads (`1/S^3`): over a sum that vanishes on
+    // a region it keeps the orientation it was written in, which the inverse keeps
+    // (`region_signed_zero`, `inverts_a_signed_zero`).
+    if region_signed_zero(&node, cx) {
+        return node;
     }
-    let [Ex::Num(r)] = args else { return None };
-    // The argument the deployed evaluator sees is the f64 NEAREST to the literal (Python
-    // reads `p/q` and decimals correctly rounded). `to_f64` rounds p and q separately and
-    // lands an ulp or two off once either leaves 53 bits, which the function then
-    // amplifies: `sin(91618929858.17857)` folded 3e-6 away from the evaluator's value.
-    let x = r.to_f64_nearest();
-    // `TokenView` compares by interned id, so the vocabulary is spelled out rather than
-    // matched on a &str.
-    const UNARY: [&str; 14] = [
-        "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
-        "atanh", "exp", "log",
-    ];
-    let which = UNARY.iter().position(|n| cx.view.tok_is(op, n))?;
-    // The SAME kernels the deployed evaluator and the offline folder use (the system libm):
-    // Rust's `f64::atanh` is its own composition and drifts from libm by up to 1.5e13 ulps
-    // near the domain edges (`numeric.rs`, `cmath`), so the fold must not use std's methods.
-    let y = crate::numeric::unary_fn(UNARY[which])?(x);
-    if !y.is_finite() {
-        return None;
-    }
-    // Rust's `{:?}` for f64 is the shortest string that round-trips, which is precisely
-    // the spelling whose f64 reading is this value again.
-    let folded = Rat::parse_decimal(&format!("{y:?}"))?;
-    let before = complexity(&Ex::Fun(op, args.to_vec()), cx.view);
-    let after = complexity(&Ex::Num(folded.clone()), cx.view);
-    if after < before {
-        Some(Ex::Num(folded))
+    // One scope for the site test and the placement, so the flip is computed once.
+    let _memo = FlipScope::open();
+    if sign_trade_flip(&node, cx).is_some() {
+        sign_place(Rat::ONE, vec![node], cx)
     } else {
-        None
+        node
     }
 }
 
-/// THE PERMISSIVE LITERAL FOLD (owner ruling 2026-09-03: "in the permissive mode, we can
-/// relax this"). An exact rational the constructors produced -- the quotient of two
+/// THE PERMISSIVE LITERAL FOLD. An exact rational the constructors produced -- the quotient of two
 /// 16-digit decimals, a coefficient cleared into `p/q`, a 30-digit integer -- prices under
 /// mu' as the rational codeword alone once its expansion stops terminating, and the
 /// emitter must spell it as that fraction, because a spelling denotes the state's EXACT
 /// value (`decimal_spelling_wins` chooses among exact codewords only). On the permissive
 /// tier the value is allowed to move -- that tier's licence -- so the literal folds to the
-/// f64 nearest to it (printed as that float's exact decimal) WHEN the exact codewords
+/// f64 nearest to it (as that float's shortest decimal) WHEN the exact codewords
 /// ([`mu_rat_exact`]) price that spelling strictly cheaper -- the float price ([`mu_rat`]) of the
 /// two is equal by construction, the fold changes what is PRINTED:
 /// `2e29/426738538271436458205631863649` (196.8 bits) becomes `0.46867105279529636`
 /// (57.1 bits); `1/2`, `15/37` and `4366/8875` stay, their fractions being cheaper than
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
-/// and never moves, so the drawn constants of a training stream are untouched. The
-/// STRICT inequality is what makes the re-simplification loop at the permissive entry
-/// (`Engine::ac_simplify_ex_explore`) terminate: the exact price descends by at least one
-/// milli-bit per round. Values whose shortest spelling leaves `i128` refuse (fail-closed,
-/// exactly as `f64_fold`); non-finite values never fold.
+/// and never moves, so the drawn constants of a training stream are untouched, and the fold
+/// is idempotent. It is applied where a literal lands ([`land`]).
+///
+/// THE FLOAT IT LANDS ON: the value lies between two floats, and permissive promises float
+/// precision, not the nearest float, so the literal lands on whichever of the two prints
+/// shorter (the cheaper shortest spelling; the nearest on a tie). A literal combined from
+/// literals that already landed can sit an ulp from the single rounding of its exact sources,
+/// on the float whose shortest spelling carries a digit more (`0.016213652755841255` where the
+/// sources give `0.01621365275584125`); the shorter neighbour is that rounding wherever it is
+/// one of the two, and no worse a float anywhere. Values whose shortest
+/// spelling is no number of the f64 domain refuse (fail-closed, as the ground fold does);
+/// non-finite values
+/// never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
-    let y = r.to_f64_nearest();
-    if !y.is_finite() {
-        return None;
-    }
-    // Rust's `{:?}` for f64 is the shortest string that round-trips (see `f64_fold`).
+    let (y, other) = r.float_bracket()?;
+    // Rust's `{:?}` for f64 is the shortest string that round-trips, which is precisely the
+    // spelling whose f64 reading is this value again.
     let snapped = Rat::parse_decimal(&format!("{y:?}"))?;
     if snapped == *r {
         return None;
     }
+    let snapped = match other.and_then(|o| Rat::parse_decimal(&format!("{o:?}"))) {
+        Some(s) if mu_rat_exact(&s) < mu_rat_exact(&snapped) => s,
+        _ => snapped,
+    };
     (mu_rat_exact(&snapped) < mu_rat_exact(r)).then_some(snapped)
 }
 
-/// `Some(e')` with every literal `lossy_literal` folds replaced and every GROUND arithmetic
-/// subtree the exact fold refused evaluated in f64, `None` when nothing moves. A pure tree
-/// map: the caller re-canonicalizes (a moved literal can re-fold with its neighbours -- an
-/// i128-overflow PARTITION bag (F73) whose members now fit).
+/// ρ, PERMISSIVE'S ONE ROUNDING: a literal is rounded once, when it becomes part of the
+/// expression, not at every operation. Arithmetic BETWEEN
+/// literals stays exact -- an all-literal node folds exactly, as in every mode -- and a literal
+/// is moved by [`lossy_literal`] at the one place it LANDS as an operand of a composite node:
+/// a sum's constant term or a term's coefficient (`add`, `term_join`), a product's coefficient
+/// (`finish_product`), a power's literal base or exponent beside a non-literal one (`pow`), a
+/// function's argument (`fun`), and the root of a state (the walk, [`land_root`]). So
+/// `3*(1/3 + 1e-20)` folds exactly to `1 + 3e-20` and rounds once, to `1`; rounding inside
+/// each operation would give `0.9999999999999999`.
 ///
-/// The ground fold is the second half of the same licence. An all-literal `Add` / `Mul` /
-/// `Pow` survives the exact chain only because its exact value left `i128`
-/// (`74.22 - 92.13 * pow(9.44, 4)`: the power alone is 64 digits), so the strict tiers keep
-/// the whole subtree, four operators whose value is one number. Permissive evaluates it in
-/// f64 (children first, so a partition folds member by member) and keeps the literal when
-/// mu prices it below the literals it replaces -- the operator's own symbol cost is not even
-/// counted, so the gate is conservative. Non-finite values refuse; function applications
-/// stay with `f64_fold`'s own gate.
-pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
-    fn ground_fold(e: Ex, moved: &mut bool) -> Ex {
-        let lits: Option<Vec<Rat>> = match &e {
-            Ex::Add(v) | Ex::Mul(v) => v
-                .iter()
-                .map(|x| {
-                    if let Ex::Num(r) = x {
-                        Some(r.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            Ex::Pow(b, x) => match (&**b, &**x) {
-                (Ex::Num(rb), Ex::Num(rx)) => Some(vec![rb.clone(), rx.clone()]),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some(lits) = lits else { return e };
-        if lits.len() < 2 {
-            return e;
-        }
-        let vals: Vec<f64> = lits.iter().map(|r| r.to_f64_nearest()).collect();
-        let y = match &e {
-            Ex::Add(_) => vals.iter().sum::<f64>(),
-            Ex::Mul(_) => vals.iter().product::<f64>(),
-            Ex::Pow(..) => vals[0].powf(vals[1]),
-            _ => return e,
-        };
-        if !y.is_finite() {
-            return e;
-        }
-        let Some(folded) = Rat::parse_decimal(&format!("{y:?}")) else {
-            return e;
-        };
-        let before: u64 = lits.iter().map(mu_rat_exact).sum();
-        if mu_rat_exact(&folded) < before {
-            *moved = true;
-            Ex::Num(folded)
-        } else {
-            e
-        }
+/// ρ is the identity outside permissive, idempotent (a moved literal is a shortest float
+/// spelling, which [`lossy_literal`] never moves), and never raises a price: the float cap prices
+/// a literal and its nearest float alike ([`mu_rat`]), and the shorter neighbour costs less, so
+/// the reduction ordering, termination and every descent argument are unchanged, and every state
+/// the walk holds prints the codeword it is priced at. It moves a value to one of the two floats
+/// around it, less than an ulp, inside permissive's licence; it never creates an infinity or a
+/// zero (non-finite values refuse, and both floats around a nonzero value are nonzero).
+#[inline]
+pub fn land(r: Rat, cx: &Cx) -> Rat {
+    if !cx.lossy() {
+        return r;
     }
-    fn walk(e: &Ex, moved: &mut bool) -> Ex {
-        match e {
-            Ex::Num(r) => match lossy_literal(r) {
-                Some(s) => {
-                    *moved = true;
-                    Ex::Num(s)
+    match lossy_literal(&r) {
+        Some(s) => s,
+        None => r,
+    }
+}
+
+/// [`land`] on a literal operand; any other operand is returned as it is.
+#[inline]
+fn land_operand(e: Ex, cx: &Cx) -> Ex {
+    match e {
+        Ex::Num(r) => Ex::Num(land(r, cx)),
+        e => e,
+    }
+}
+
+/// [`land`] at the root of a state: a state that is one literal is that literal landed.
+pub fn land_root(e: Ex, cx: &Cx) -> Ex {
+    land_operand(e, cx)
+}
+
+/// `atan2(y, x)` built from the product members of its arguments, as float64 reads them: it
+/// reads the sign of a zero in both (`atan2(-0, -1) = -pi`, `atan2(+0, -0) = pi`). In the
+/// float64 modes a negative coefficient of `y` leaves the call (`atan2(-S, x) = -atan2(S, x)`,
+/// exact there, and not in `real`, whose one zero gives `atan2(0, -1) = pi`), and each argument
+/// keeps its members apart (`mul_undecided`), so neither a sum that vanishes on a region nor a
+/// written zero changes the sign of its zero by a product's orientation decision. Every
+/// construction of an `atan2` node goes through here: the parse, the canonical rebuild (a rule's
+/// right-hand side after substitution) and the pass's rebuild.
+pub(crate) fn atan2_of(op: Tok, mut ym: Vec<Ex>, xm: Vec<Ex>, cx: &Cx) -> Ex {
+    let negative = |m: &Ex| matches!(m, Ex::Num(r) if r.is_negative());
+    if !cx.ieee_zeros() {
+        return fun(op, vec![mul(ym, cx), mul(xm, cx)], cx);
+    }
+    // No sign moves between an argument's members either way: a decided product may trade its
+    // coefficient's sign with a sum's orientation, which moves the sign of the sum's zero.
+    let build = |m: Vec<Ex>| mul_undecided(m, cx);
+    if ym.iter().filter(|m| negative(m)).count() % 2 == 1 {
+        if let Some(pos) = ym.iter().position(negative) {
+            if let Ex::Num(r) = &ym[pos] {
+                if let Some(n) = r.checked_neg() {
+                    ym[pos] = Ex::Num(n);
+                    let inner = fun(op, vec![build(ym), build(xm)], cx);
+                    return mul(vec![Ex::Num(Rat::NEG_ONE), inner], cx);
                 }
-                None => Ex::Num(r.clone()),
-            },
-            Ex::Add(v) => ground_fold(Ex::Add(v.iter().map(|x| walk(x, moved)).collect()), moved),
-            Ex::Mul(v) => ground_fold(Ex::Mul(v.iter().map(|x| walk(x, moved)).collect()), moved),
-            Ex::Pow(b, x) => ground_fold(
-                Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
-                moved,
-            ),
-            Ex::Fun(f, v) => Ex::Fun(*f, v.iter().map(|x| walk(x, moved)).collect()),
-            leaf => leaf.clone(),
-        }
-    }
-    let mut moved = false;
-    let out = walk(e, &mut moved);
-    moved.then_some(out)
-}
-
-/// [`snap_lossy_literals`] for the literals that PRINT a number beyond float precision only
-/// (more than 17 significant digits in the decimal, the numerator or the denominator the token
-/// printer writes for it -- for a product's coefficient moved behind the divide, its
-/// reciprocal's): each moves to the float nearest to it, as [`lossy_literal`] moves it. No
-/// ground fold, and a literal printed short stays (the quotient `1/25.06292563505454`, printed
-/// as a division by that decimal): either can price above the state it came from.
-pub fn snap_long_literals(e: &Ex) -> Option<Ex> {
-    fn num(r: &Rat, printed: &Rat, moved: &mut bool) -> Ex {
-        match lossy_literal(r).filter(|_| prints_long(printed)) {
-            Some(s) => {
-                *moved = true;
-                Ex::Num(s)
             }
-            None => Ex::Num(r.clone()),
         }
     }
-    fn walk(e: &Ex, moved: &mut bool) -> Ex {
-        match e {
-            Ex::Num(r) => num(r, r, moved),
-            Ex::Add(v) => Ex::Add(v.iter().map(|x| walk(x, moved)).collect()),
-            Ex::Mul(v) => Ex::Mul(
-                v.iter()
-                    .map(|x| match x {
-                        Ex::Num(r) => num(r, &super::convert::printed_coefficient(r, v), moved),
-                        _ => walk(x, moved),
-                    })
-                    .collect(),
-            ),
-            Ex::Pow(b, x) => Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
-            Ex::Fun(f, v) => Ex::Fun(*f, v.iter().map(|x| walk(x, moved)).collect()),
-            leaf => leaf.clone(),
-        }
-    }
-    let mut moved = false;
-    let out = walk(e, &mut moved);
-    moved.then_some(out)
+    fun(op, vec![build(ym), build(xm)], cx)
 }
 
-/// Whether the exact spelling of `r` carries a digit string of more than 17 significant
-/// digits: its decimal where that spelling wins, else its numerator or denominator.
-fn prints_long(r: &Rat) -> bool {
-    let long = |s: &str| {
-        let digits: String = s.chars().filter(char::is_ascii_digit).collect();
-        digits.trim_matches('0').len() > 17
-    };
-    if !r.is_integer() && decimal_spelling_wins(r) {
-        return r.exact_decimal().is_some_and(|d| long(&d));
+/// The product members of `e` (itself where it is no product).
+fn product_members(e: Ex) -> Vec<Ex> {
+    match e {
+        Ex::Mul(v) => v,
+        other => vec![other],
+    }
+}
+
+/// The float64 value of a written product of numbers that is zero, in `f64`: the product of the
+/// signs of its factors (`-1*0`, `0*(-2)` and `-(0)` are -0, `-1*-0.0` is +0), which the exact
+/// coefficient, one zero, cannot hold, so `-0.0` (`NEG_ZERO`) where an odd number of the factors
+/// are negative or the written negative zero, else `0`. `None` outside `f64` and for any other
+/// product (a factor that is no number, an infinity, or no zero factor). The parse builds a
+/// written product through it; a zero the search derives keeps the one zero (the region rule).
+pub(crate) fn signed_zero_product(items: &[Ex], cx: &Cx) -> Option<Ex> {
+    if !cx.f64_semantics() {
+        return None;
+    }
+    let mut zero = false;
+    let mut negative = false;
+    for f in items {
+        match f {
+            Ex::Num(r) => {
+                zero |= r.is_zero();
+                negative ^= r.is_negative();
+            }
+            f if is_neg_zero(f, cx.view) => {
+                zero = true;
+                negative = !negative;
+            }
+            _ => return None,
+        }
+    }
+    zero.then(|| {
+        if negative {
+            Ex::Leaf(cx.view.intern(NEG_ZERO))
+        } else {
+            Ex::Num(Rat::ZERO)
+        }
+    })
+}
+
+/// `floor` (or `ceil`) of a rational, exactly; `None` when the result leaves `Rat`.
+fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
+    use num_integer::Integer;
+    if r.is_integer() {
+        return Some(r.clone());
     }
     let (p, q) = r.big_parts();
-    long(&p.to_string()) || long(&q.to_string())
+    let f = p.div_floor(&q);
+    Rat::from_big(if ceil { f + 1 } else { f }, BigInt::from(1))
+}
+
+/// The exact value of `max` or `min` at rational arguments, and with `real` of `floor`, `ceil`
+/// or `mod` too (the real `mod`: `a - b floor(a/b)`, NaN at `b = 0`); `None` for any other head
+/// or a result that leaves `Rat`.
+fn exact_step_fold(op: Tok, args: &[Ex], real: bool, cx: &Cx) -> Option<Ex> {
+    let v = cx.view;
+    match args {
+        [Ex::Num(r)] if real && v.tok_is(op, "floor") => rat_floor(r, false).map(Ex::Num),
+        [Ex::Num(r)] if real && v.tok_is(op, "ceil") => rat_floor(r, true).map(Ex::Num),
+        [Ex::Num(a), Ex::Num(b)] if v.tok_is(op, "max") || v.tok_is(op, "min") => {
+            let a_wins = (a.cmp_exact(b) == Ordering::Less) != v.tok_is(op, "max");
+            Some(Ex::Num(if a_wins { a.clone() } else { b.clone() }))
+        }
+        [Ex::Num(a), Ex::Num(b)] if real && v.tok_is(op, "mod") => {
+            if b.is_zero() {
+                return Some(Ex::NaN);
+            }
+            let k = rat_floor(&a.checked_mul(&b.checked_inv()?)?, false)?;
+            a.checked_add(&b.checked_mul(&k)?.checked_neg()?)
+                .map(Ex::Num)
+        }
+        _ => None,
+    }
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
-    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
-    if let Some(folded) = f64_fold(op, &args, cx) {
-        return folded;
-    }
+    // A literal argument LANDS here (permissive's ρ, [`land`]).
+    let args: Vec<Ex> = if cx.lossy() {
+        args.into_iter().map(|a| land_operand(a, cx)).collect()
+    } else {
+        args
+    };
     // `exp(1) -> E`. The two spellings denote the SAME constant exactly -- this is a
     // choice of symbol, not an evaluation, so the rules-pass doctrine above does not
     // cover it (nothing is rounded and no exact rule can be preempted; `exp(0) -> 1`
@@ -8521,6 +9628,41 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             } else {
                 return Ex::Num(r.clone());
             }
+        }
+    }
+    // THE STEP AND LATTICE HEADS OF RATIONALS ARE EXACT ARITHMETIC, so they fold here as
+    // `abs` does: `max` and `min` in every mode (they pick an operand, and rounding to the
+    // nearest float keeps the order, so the float of the pick is the pick of the floats), and
+    // `floor`, `ceil` and `mod` (`mod(a, 0)` is NaN) in `real` only, where a literal is its
+    // rational: `f64` and `permissive` read a literal at its nearest float
+    // (`floor(0.99999999999999999)` is 1 there), so their ground fold computes these with the
+    // deployed kernels instead.
+    if !args.is_empty() && args.iter().all(|a| matches!(a, Ex::Num(_))) {
+        if let Some(folded) = exact_step_fold(op, &args, matches!(cx.mode, RuleMode::Real), cx) {
+            return folded;
+        }
+    }
+    // `max` AND `min` ARE COMMUTATIVE AND IDEMPOTENT, bit for bit: their kernels are IEEE
+    // 754-2019's maximum and minimum, NaN-propagating in both orders and ordering -0 below +0,
+    // and so are the real functions. The arguments take the canonical order, and `max(a, a)` is
+    // `a` (two `<constant>`s are independent, so a `Const`-bearing pair stays). Nesting stays
+    // as written: `max(a, max(b, c))` is no bag.
+    let mut args = args;
+    if args.len() == 2
+        && cx.ieee_zeros()
+        && cx.view.tok_is(op, "atan2")
+        && matches!(&args[0], Ex::Mul(v) if v.iter().any(|m| matches!(m, Ex::Num(r) if r.is_negative())))
+    {
+        let x = args.pop().expect("two arguments");
+        let y = args.pop().expect("two arguments");
+        return atan2_of(op, product_members(y), product_members(x), cx);
+    }
+    if args.len() == 2 && (cx.view.tok_is(op, "max") || cx.view.tok_is(op, "min")) {
+        if args[0] == args[1] && !args[0].contains_const() {
+            return args.into_iter().next().unwrap();
+        }
+        if cmp_ex(&args[1], &args[0], cx.view) == Ordering::Less {
+            args.swap(0, 1);
         }
     }
     // AN EVEN FUNCTION EATS THE SIGN OF ITS ARGUMENT: `g(-t) -> g(t)`.
@@ -8565,7 +9707,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             if !ts.iter().any(Ex::contains_const)
                 && !ts.iter().any(term_absorbs_negation)
                 && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-                && flipped_orientation_wins(ts, 0, Tie::Lex, cx)
+                && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
             {
                 if let Some(mut flipped) = ts
                     .iter()
@@ -8573,7 +9715,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     .collect::<Option<Vec<Ex>>>()
                 {
                     // FILES-BARE gate (same rule as sign_trade_flip).
-                    if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
+                    if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         return fun(op, vec![Ex::Add(flipped)], cx);
                     }
@@ -8852,7 +9994,35 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     if args.len() == 1 && cx.view.tok_is(op, "abs") && cx.certainly_nonneg(&args[0]) {
         return args.into_iter().next().unwrap();
     }
-    Ex::Fun(op, args)
+    // THE SIGN OF AN ODD HEAD (the one tie key, `sign_key`): `f(-u)` and `-f(u)` are one value
+    // for an odd head of a negatable argument (`class_base`); the cheaper spelling stands, and on
+    // an equal price the sign stands outside (fewer signs, then the outer one). A product the head
+    // stands in decides again over all its members (`sign_place`). A constant argument keeps its
+    // sign on its literal (`sin(-2)`).
+    let head = Ex::Fun(op, args);
+    if let (Some(r), Ex::Fun(_, a)) = (odd_of_literal_multiple(&head, cx.view), &head) {
+        if r.is_negative() && (a[0].has_measure_space(cx.view) || a[0].contains_wildcard(cx.view)) {
+            if let Some(p) = positive_head(&head, cx.view) {
+                let mut v = vec![Ex::Num(Rat::NEG_ONE), p];
+                v.sort_by(|x, y| mul_factor_cmp(x, y, cx.view));
+                let outside = Ex::Mul(v);
+                let (inside_mu, outside_mu) =
+                    (complexity(&head, cx.view), complexity(&outside, cx.view));
+                if outside_mu < inside_mu
+                    || (outside_mu == inside_mu
+                        && tie_cmp(&outside, &head, cx.view) == Ordering::Less)
+                {
+                    return outside;
+                }
+            }
+        }
+    }
+    // A head of a sum is a class site: alone it takes the orientation it takes as a product's one
+    // factor (`lone_site`). Its flip negates the sum in place, so asking it builds no head.
+    if matches!(&head, Ex::Fun(_, a) if matches!(a.first(), Some(Ex::Add(_)))) {
+        return lone_site(head, cx);
+    }
+    head
 }
 
 /// Full recursive re-canonicalization: rebuild `e` bottom-up through the canonical
@@ -8903,6 +10073,15 @@ fn canon_walk(e: Ex, cx: &Cx) -> Ex {
             let b = canon_walk(*b, cx);
             let ex = canon_walk(*ex, cx);
             pow(b, ex, cx)
+        }
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(f, "atan2") => {
+            let mut members = v.into_iter().map(|a| match a {
+                Ex::Mul(w) => w.into_iter().map(|m| canon_walk(m, cx)).collect(),
+                other => vec![canon_walk(other, cx)],
+            });
+            let ym: Vec<Ex> = members.next().expect("two arguments");
+            let xm: Vec<Ex> = members.next().expect("two arguments");
+            atan2_of(f, ym, xm, cx)
         }
         Ex::Fun(f, v) => {
             let parts = v.into_iter().map(|x| canon_walk(x, cx)).collect();
@@ -9049,6 +10228,7 @@ mod tests {
                 cert_finnz: None,
                 cert_nzae: None,
                 cert_nce: None,
+                cert_region: None,
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,
@@ -9098,6 +10278,134 @@ mod tests {
     }
 
     #[test]
+    fn a_constant_absorbs_the_orientation_sign_of_every_class() {
+        with_view(|view| {
+            let sin = view.intern("sin");
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // A sum holding a `<constant>` takes a sign into its terms: -(x0 + x1^c) is
+                // -x0 - x1^c.
+                let s = add(vec![x(view), pow(y(view), Ex::Const, &cx)], &cx);
+                let neg_s = neg(s.clone());
+                assert!(matches!(&neg_s, Ex::Add(_)), "{mode:?}: {neg_s:?}");
+                // Beside a bare `<constant>`, which absorbs every constant factor of its
+                // product, that sign is the constant's, whatever route built the product, and the
+                // sum takes the orientation with the fewer signs: c*-(x0 + x1^c) is c*(x0 + x1^c).
+                let want = mul(vec![Ex::Const, s.clone()], &cx);
+                assert_eq!(want, Ex::Mul(vec![Ex::Const, s.clone()]), "{mode:?}");
+                assert_eq!(mul(vec![neg_s.clone(), Ex::Const], &cx), want, "{mode:?}");
+                assert_eq!(
+                    mul(vec![Ex::Const, Ex::int(-1), s.clone()], &cx),
+                    want,
+                    "{mode:?}"
+                );
+                // So does an odd function of one: c*sin(c - x0) is c*sin(x0 + c).
+                let t = add(vec![x(view), Ex::Const], &cx);
+                assert_eq!(
+                    mul(vec![Ex::Const, fun(sin, vec![neg(t.clone())], &cx)], &cx),
+                    mul(vec![Ex::Const, fun(sin, vec![t], &cx)], &cx),
+                    "{mode:?}"
+                );
+                // Without a bare `<constant>` the sum keeps the sign the product gave it.
+                let kept = mul(vec![y(view), neg_s.clone()], &cx);
+                assert!(
+                    matches!(&kept, Ex::Mul(v) if v.contains(&neg_s)),
+                    "{mode:?}: {kept:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_lone_site_takes_the_orientation_of_a_products_one_factor() {
+        with_view(|view| {
+            let sin = view.intern("sin");
+            let z = || Ex::Leaf(view.intern("x2"));
+            let half = Ex::Num(Rat::new(1, 2).unwrap());
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // x0 - x1 - x2: two signs; -(x1 + x2 - x0) has two too, the outer one
+                let s = add(vec![x(view), neg(y(view)), neg(z())], &cx);
+                let raw_cube = Ex::Pow(Box::new(s.clone()), Box::new(Ex::int(3)));
+                let raw_sin = Ex::Fun(sin, vec![s.clone()]);
+                // alone, as the one factor of a product: (x0 - x1 - x2)^3 is
+                // -(x1 + x2 - x0)^3, and sin(x0 - x1 - x2) is -sin(x1 + x2 - x0)
+                let cube = pow(s.clone(), Ex::int(3), &cx);
+                assert_eq!(
+                    cube,
+                    mul(vec![Ex::int(1), raw_cube.clone()], &cx),
+                    "{mode:?}"
+                );
+                assert!(
+                    matches!(&cube, Ex::Mul(v) if v.contains(&Ex::int(-1))),
+                    "{mode:?}: {cube:?}"
+                );
+                let sine = fun(sin, vec![s.clone()], &cx);
+                assert_eq!(
+                    sine,
+                    mul(vec![Ex::int(1), raw_sin.clone()], &cx),
+                    "{mode:?}"
+                );
+                // a power over a lone site reads its class, whichever orientation it stands in
+                assert_eq!(
+                    pow(cube.clone(), Ex::int(-1), &cx),
+                    pow(s.clone(), Ex::int(-3), &cx),
+                    "{mode:?}"
+                );
+                assert_eq!(
+                    pow(cube, half.clone(), &cx),
+                    pow(s.clone(), Ex::Num(Rat::new(3, 2).unwrap()), &cx),
+                    "{mode:?}"
+                );
+                assert_eq!(
+                    pow(sine, Ex::int(-1), &cx),
+                    pow(raw_sin, Ex::int(-1), &cx),
+                    "{mode:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_zero_keeps_its_ieee_sign_where_it_is_inverted() {
+        with_view(|view| {
+            let lg = |cx: &Cx| fun(view.intern("log"), vec![x(view)], cx);
+            for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let ieee = !matches!(mode, RuleMode::Real);
+                let inverse = |members: Vec<Ex>| -> Ex {
+                    let raised = raised_members(members, &Rat::NEG_ONE, &cx)
+                        .unwrap_or_else(|held| vec![pow(held, Ex::int(-1), &cx)]);
+                    mul(raised, &cx)
+                };
+                // 1/(x0*0) is inf/x0 in the float64 modes (-inf wherever x0 < 0), +inf in real
+                let want = if ieee {
+                    mul(vec![Ex::PosInf, pow(x(view), Ex::int(-1), &cx)], &cx)
+                } else {
+                    Ex::PosInf
+                };
+                assert_eq!(inverse(vec![x(view), Ex::int(0)]), want, "{mode:?}");
+                // 1/(-1*0) = 1/-0 is -inf in the float64 modes
+                let want = if ieee { Ex::NegInf } else { Ex::PosInf };
+                assert_eq!(inverse(vec![Ex::int(-1), Ex::int(0)]), want, "{mode:?}");
+                // a product held whole around its zero distributes the inverse too
+                let held = pow(Ex::Mul(vec![Ex::int(0), lg(&cx)]), Ex::int(-1), &cx);
+                if ieee {
+                    let want = mul(vec![Ex::PosInf, pow(lg(&cx), Ex::int(-1), &cx)], &cx);
+                    assert_eq!(held, want, "{mode:?}");
+                } else {
+                    assert!(matches!(held, Ex::Pow(..)), "{mode:?}: {held:?}");
+                }
+            }
+        });
+    }
+
+    #[test]
     fn mul_collects_exponents() {
         with_view(|view| {
             let cx = Cx::bare(view);
@@ -9126,6 +10434,54 @@ mod tests {
             assert_eq!(mul(vec![Ex::int(0), x(view)], &cx), Ex::int(0));
             let e = mul(vec![Ex::int(0), lg.clone()], &cx);
             assert_eq!(e, Ex::Mul(vec![Ex::int(0), lg]));
+        });
+    }
+
+    #[test]
+    fn powers_of_e_collect_by_their_exponents() {
+        with_view(|view| {
+            let exp = view.intern("exp");
+            let y = || Ex::Leaf(view.intern("x1"));
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let e = |a: Ex| fun(exp, vec![a], &cx);
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // exp(a) exp(b) = exp(a + b)
+                assert_eq!(
+                    mul(vec![e(x(view)), e(y())], &cx),
+                    e(add(vec![x(view), y()], &cx)),
+                    "{mode:?}"
+                );
+                // exp(u) exp(-u) = exp(0) = 1, u finite almost everywhere
+                assert_eq!(mul(vec![e(x(view)), e(neg(x(view)))], &cx), Ex::int(1));
+                // e is e^1, and a rational power of an exp is a power of e
+                assert_eq!(
+                    mul(vec![Ex::E, e(x(view))], &cx),
+                    e(add(vec![x(view), Ex::int(1)], &cx))
+                );
+                let sq = pow(e(x(view)), Ex::int(2), &cx);
+                assert_eq!(
+                    mul(vec![sq.clone(), e(y())], &cx),
+                    e(add(vec![mul(vec![Ex::int(2), x(view)], &cx), y()], &cx))
+                );
+                // a quotient of powers of e, inside a wider product
+                let q = mul(vec![y(), e(x(view)), pow(e(y()), Ex::int(-1), &cx)], &cx);
+                assert_eq!(q, mul(vec![y(), e(add(vec![x(view), neg(y())], &cx))], &cx));
+                // f64's exp(800) exp(-800) is inf * 0 = NaN, an overflow, where the true value
+                // is given: exp(0) = 1
+                assert_eq!(
+                    mul(vec![e(Ex::int(800)), e(Ex::int(-800))], &cx),
+                    Ex::int(1)
+                );
+                // a lone power of e stays, and one base's powers collect over that base as
+                // `pow` spells them: exp(x) exp(x) is exp(x)^2
+                assert_eq!(
+                    mul(vec![sq.clone(), Ex::int(3)], &cx),
+                    Ex::Mul(vec![Ex::int(3), sq.clone()])
+                );
+                assert_eq!(mul(vec![e(x(view)), e(x(view))], &cx), sq);
+            }
         });
     }
 
@@ -9435,6 +10791,75 @@ mod tests {
         });
     }
 
+    /// Permissive's one rounding lands on whichever of the two floats around the value prints
+    /// shorter: a value between 0.1 and the next float, nearer the next, lands on 0.1 (the
+    /// nearest, 0.10000000000000002, prints a digit more). A float's own shortest spelling never
+    /// moves.
+    #[test]
+    fn a_landed_literal_takes_the_shorter_of_its_two_floats() {
+        let r = Rat::from_big(
+            num_bigint::BigInt::from(28823037615171179u64),
+            num_bigint::BigInt::from(288230376151711744u64),
+        )
+        .unwrap();
+        assert_eq!(r.to_f64_nearest(), 0.10000000000000002);
+        assert_eq!(lossy_literal(&r), Rat::parse_decimal("0.1"));
+        assert_eq!(lossy_literal(&Rat::parse_decimal("0.1").unwrap()), None);
+        assert_eq!(
+            lossy_literal(&Rat::parse_decimal("0.10000000000000002").unwrap()),
+            None
+        );
+    }
+
+    /// ONE PRICE FOR A SIGN: one bit wherever it sits -- on a literal, on a product's
+    /// coefficient beside other factors, or a negation standing alone (a sign, not a product,
+    /// so no `Mul` head). `+1` is no sign, and a reciprocal is division, not a sign.
+    #[test]
+    fn a_sign_costs_one_bit_wherever_it_sits() {
+        with_view(|view| {
+            let cx = Cx::bare(view);
+            let c = |e: &Ex| super::complexity(e, view);
+            let (x_, y_) = (x(view), y(view));
+            let neg = |e: Ex| mul(vec![Ex::int(-1), e], &cx);
+            let sin = |e: Ex| fun(view.intern("sin"), vec![e], &cx);
+            // a negation standing alone: its operand and one bit
+            assert_eq!(c(&neg(x_.clone())), c(&x_) + 1_000);
+            assert_eq!(c(&neg(x_.clone())), 7_000);
+            // the term of a difference
+            let diff = add(vec![x_.clone(), neg(y_.clone())], &cx);
+            let sum = add(vec![x_.clone(), y_.clone()], &cx);
+            assert_eq!(c(&diff), c(&sum) + 1_000);
+            // the -1 coefficient of a product beside other factors
+            let prod = mul(vec![x_.clone(), y_.clone()], &cx);
+            assert_eq!(c(&neg(prod.clone())), c(&prod) + 1_000);
+            // the sign of a literal, a coefficient and an exponent: unchanged, one bit each
+            assert_eq!(c(&Ex::int(-2)), c(&Ex::int(2)) + 1_000);
+            let three_x = mul(vec![Ex::int(3), x_.clone()], &cx);
+            let minus_three_x = mul(vec![Ex::int(-3), x_.clone()], &cx);
+            assert_eq!(c(&minus_three_x), c(&three_x) + 1_000);
+            assert_eq!(
+                c(&pow(x_.clone(), Ex::int(-2), &cx)),
+                c(&pow(x_.clone(), Ex::int(2), &cx)) + 1_000
+            );
+            // a reciprocal is division, not a sign
+            assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 9_000);
+            // so the two placements of a constant's sign cost the same, and the sign key
+            // decides: the sign stays on the constant's literal
+            let outside = Ex::Mul(vec![
+                Ex::int(-1),
+                x_.clone(),
+                Ex::Fun(view.intern("sin"), vec![Ex::int(3)]),
+            ]);
+            let inside = Ex::Mul(vec![
+                x_.clone(),
+                Ex::Fun(view.intern("sin"), vec![Ex::int(-3)]),
+            ]);
+            assert_eq!(c(&outside), c(&inside));
+            let built = mul(vec![Ex::int(-1), x_.clone(), sin(Ex::int(3))], &cx);
+            assert_eq!(built, inside);
+        });
+    }
+
     #[test]
     fn complexity_weight_table() {
         // The mu weight table in MILLI-BITS, at the SYMBOL TABLE (2026-08-21): a leaf 6
@@ -9449,8 +10874,8 @@ mod tests {
         with_view(|view| {
             let cx = Cx::bare(view);
             let c = |e: &Ex| super::complexity(e, view);
-            // x - y = 18: Add(3) + x(6) + the sign-wrapper Mul (3, a real structural
-            // node of the canonical tree; the -1 slot itself is free) + y(6).
+            // x - y = 16: Add(3) + x(6) + the negation of y (a sign, one bit, and no Mul
+            // head) + y(6).
             // x*y = 15; x/y = 18 (the Pow(y, -1) wrapper at 3, exponent -1 free).
             let x_ = x(view);
             let y_ = y(view);
@@ -9458,7 +10883,7 @@ mod tests {
                 vec![x_.clone(), mul(vec![Ex::int(-1), y_.clone()], &cx)],
                 &cx,
             );
-            assert_eq!(c(&x_minus_y), 18_000);
+            assert_eq!(c(&x_minus_y), 16_000);
             assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 15_000);
             let x_over_y = mul(vec![x_.clone(), pow(y_.clone(), Ex::int(-1), &cx)], &cx);
             assert_eq!(c(&x_over_y), 18_000);
@@ -9761,7 +11186,7 @@ mod tests {
             // The two routes must agree, and on the ratified I4 direction (the
             // literal owns the sign): -5 * sin(2) spells 5 * sin(-2).
             let via_mul = mul(vec![Ex::int(-5), sin2.clone()], &cx);
-            let via_join = term_join(Rat::int(-5), sin2.clone(), &cx);
+            let via_join = term_join(Coef::of(&Rat::int(-5)), sin2.clone(), &cx);
             assert_eq!(
                 via_mul, via_join,
                 "mul() and term_join disagree on the sign"
@@ -9821,8 +11246,8 @@ mod tests {
     }
 
     /// F72: the sign-placement tie-break is a function of CONTENT, never of token
-    /// interning order. The mu-tied orbit of `-1 * (a-b) * (c-d)` (a -1 coefficient
-    /// rides mu-free, so every mask ties) must land on the same resolved spelling
+    /// interning order. The mu-tied orbit of `-1 * (a-b) * (c-d)` (its two mirror
+    /// pairings price alike) must land on the same resolved spelling
     /// when the same four opaque literals are interned in OPPOSITE orders and the
     /// factors arrive swapped -- the pre-F72 `ex_struct_cmp` compared `Leaf`/`Fun`
     /// tokens by raw id and flipped the mirror decision with the interning (extreme
@@ -9878,7 +11303,8 @@ mod tests {
             );
             let route_negated_bag =
                 negate_term(&mul(vec![Ex::Num(n.clone()), Ex::Num(p.clone())], &cx), &cx).unwrap();
-            let route_other_host = term_join(p.checked_neg().unwrap(), Ex::Num(n.clone()), &cx);
+            let route_other_host =
+                term_join(Coef::of(&p.checked_neg().unwrap()), Ex::Num(n.clone()), &cx);
             let route_swapped = mul(vec![Ex::Num(p), Ex::Num(n.checked_neg().unwrap())], &cx);
             assert_eq!(route_signed_member, route_negated_bag);
             assert_eq!(route_signed_member, route_other_host);
@@ -9891,8 +11317,75 @@ mod tests {
         });
     }
 
+    /// A term's coefficient is its whole literal partition (`Coef`). With only the first member
+    /// as the coefficient, `-N*N*x` kept a key of its own beside `N*N*x`, `N*N*x` and `N*y`
+    /// shared the content `N`, and a sum's content and like terms depended on which terms a
+    /// construction saw together: a state and the parse of its own print differed.
+    #[test]
+    fn refused_partition_is_one_coefficient() {
+        for mode in [RuleMode::Real, RuleMode::Default] {
+            with_view(|view| {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                // 10^300 * 10^300 is beyond 2^1022 and beyond 1,100 bits: refused in both domains.
+                let n = Rat::from_big(
+                    num_traits::pow(num_bigint::BigInt::from(10), 300),
+                    num_bigint::BigInt::from(1),
+                )
+                .unwrap();
+                let leaf = |s: &str| Ex::Leaf(view.intern(s));
+                let (x, y, z) = (leaf("x1"), leaf("x2"), leaf("x3"));
+                let nn = |e: Ex| mul(vec![Ex::Num(n.clone()), Ex::Num(n.clone()), e], &cx);
+                let neg = |e: &Ex| negate_term(e, &cx).unwrap();
+                let t = nn(x.clone());
+                assert!(
+                    matches!(&t, Ex::Mul(v) if v.len() == 3),
+                    "partition bag expected: {t:?}"
+                );
+                let (c, k) = term_split(t.clone(), view);
+                assert_eq!((c.rat(), &k), (None, &x));
+                assert_eq!(term_split(neg(&t), view), (c.negated(), x.clone()));
+                // The sign is written on the smallest member, not as a `-1` beside them, however
+                // it arrives.
+                let minus_n = Ex::Num(n.checked_neg().unwrap());
+                let written = Ex::Mul(vec![minus_n.clone(), Ex::Num(n.clone()), x.clone()]);
+                assert_eq!(neg(&t), written);
+                assert_eq!(mul(vec![Ex::int(-1), t.clone()], &cx), written);
+                assert_eq!(nn(mul(vec![Ex::int(-1), x.clone()], &cx)), written);
+                assert_eq!(mul(vec![written.clone()], &cx), written);
+                assert_eq!(
+                    mul(vec![Ex::Num(n.clone()), minus_n, x.clone()], &cx),
+                    written
+                );
+                // Like terms cancel, and add over their shared member: {2N, N} - {N, N} = {N, N}.
+                assert_eq!(add(vec![t.clone(), neg(&t)], &cx), Ex::Num(Rat::ZERO));
+                let two_t = mul(vec![Ex::int(2), t.clone()], &cx);
+                assert_eq!(add(vec![two_t, neg(&t)], &cx), t);
+                // The grouping does not decide: flat, a sub-sum first, and factored.
+                let flat = add(vec![nn(x.clone()), nn(y.clone()), z.clone()], &cx);
+                let nested = add(
+                    vec![z.clone(), add(vec![nn(x.clone()), nn(y.clone())], &cx)],
+                    &cx,
+                );
+                let xy = add(vec![x.clone(), y.clone()], &cx);
+                let factored = add(vec![nn(xy.clone()), z.clone()], &cx);
+                assert_eq!(flat, nested);
+                assert_eq!(flat, factored);
+                // A member of a partition is no content shared with a one-member coefficient.
+                let mixed = add(
+                    vec![nn(x.clone()), mul(vec![Ex::Num(n.clone()), y.clone()], &cx)],
+                    &cx,
+                );
+                assert!(matches!(&mixed, Ex::Add(_)), "{mixed:?}");
+                // The negated pair's content is the partition, its sign the partition's.
+                let negated = add(vec![neg(&nn(x.clone())), neg(&nn(y.clone()))], &cx);
+                assert_eq!(negated, neg(&nn(xy)));
+            });
+        }
+    }
+
     /// Integers beyond 128 bits are integers (number plan phase 2). The map of the 128-bit
-    /// boundary found four sites that read "does not fit i128" as "is not an integer", each
+    /// boundary found the sites that read "does not fit i128" as "is not an integer", each
     /// unsound once such an integer reaches it. Real mode has the exact parity; the f64 domain
     /// knows no parity beyond 2^53 (phase 2c), and every site must then refuse as well.
     #[test]
@@ -9945,20 +11438,6 @@ mod tests {
                 &cx,
             );
             assert_ne!(through, wrong);
-
-            // 4. F83: (-2*x)^-(10^40+1) keeps the guard against distributing a negative
-            //    magnitude coefficient over a factor that may vanish.
-            let n = odd.checked_neg().unwrap();
-            let bag = mul(vec![Ex::int(-2), x(view)], &cx);
-            let kept = pow(bag, Ex::Num(n.clone()), &cx);
-            let distributed = mul(
-                vec![
-                    pow(Ex::int(-2), Ex::Num(n.clone()), &cx),
-                    pow(x(view), Ex::Num(n), &cx),
-                ],
-                &cx,
-            );
-            assert_ne!(kept, distributed);
         }
     }
 
@@ -10046,62 +11525,61 @@ mod tests {
         }
     }
 
-    /// The long-literal snap moves a literal printed beyond float precision (a decimal, or a
-    /// fraction with a long numerator or denominator) to the float nearest to it, and keeps a
-    /// quotient printed short, which the full snap moves too.
+    /// The float cap on every path: a value the f64 domain holds in pieces costs what the exact
+    /// domain prices the one number at, alone or beside other factors.
     #[test]
-    fn snap_long_literals_moves_only_long_prints() {
+    fn float_cap_reaches_a_literal_held_in_pieces() {
         with_view(|view| {
-            // the permissive chain's own (f64) number domain, and the exact one
-            for f64_numbers in [true, false] {
-                let _domain = crate::ac::rat::number_domain(f64_numbers);
-                let long = Rat::parse_decimal("0.29691830596424839286351539224825775976423047785")
-                    .unwrap();
-                let monster = Rat::from_big(
-                    "200000000000000000000000000000".parse().unwrap(),
-                    "426738538271436458205631863649".parse().unwrap(),
+            let cx = Cx::bare(view); // f64's number domain
+            let (a, b) = {
+                let _exact = crate::ac::rat::number_domain(false);
+                (
+                    Rat::parse_decimal("1.2345678901234567e-305").unwrap(),
+                    Rat::parse_decimal("9.876543210987654e-10").unwrap(),
                 )
-                .unwrap();
-                let quotient = Rat::parse_decimal("25.06292563505454")
-                    .unwrap()
-                    .checked_inv()
-                    .unwrap();
-                let nearest = |r: &Rat| Rat::shortest_reading_as(r.to_f64_nearest()).unwrap();
-                let e = Ex::Add(vec![
-                    Ex::Num(long.clone()),
-                    Ex::Num(monster.clone()),
-                    Ex::Num(quotient.clone()),
-                ]);
-                assert_eq!(
-                    snap_long_literals(&e),
-                    Some(Ex::Add(vec![
-                        Ex::Num(nearest(&long)),
-                        Ex::Num(nearest(&monster)),
-                        Ex::Num(quotient.clone()),
-                    ]))
-                );
-                assert_eq!(
-                    snap_lossy_literals(&Ex::Num(quotient.clone())),
-                    Some(Ex::Num(nearest(&quotient)))
-                );
-                assert_eq!(snap_long_literals(&Ex::Num(quotient)), None);
-                // A coefficient the printer moves behind the divide prints its reciprocal:
-                // 95367431640625/1000000000003 * x0 prints `/ x0 0.01048576000003145728`, and
-                // 298023223876953125/123456791 * x0 prints `/ x0 0.0000000004142522498547712`.
-                let hidden = Rat::new(95367431640625, 1000000000003).unwrap();
-                let shown = Rat::new(298023223876953125, 123456791).unwrap();
-                let product = |r: &Rat| Ex::Mul(vec![Ex::Num(r.clone()), x(view)]);
-                assert_eq!(
-                    snap_long_literals(&product(&hidden)),
-                    Some(product(&nearest(&hidden)))
-                );
-                assert_eq!(snap_long_literals(&Ex::Num(hidden)), None);
-                assert_eq!(snap_long_literals(&product(&shown)), None);
-                assert_eq!(
-                    snap_long_literals(&Ex::Num(shown.clone())),
-                    Some(Ex::Num(nearest(&shown)))
-                );
-            }
+            };
+            let inv_b = b.checked_inv().unwrap();
+            let exact = {
+                let _exact = crate::ac::rat::number_domain(false);
+                a.checked_mul(&inv_b).unwrap()
+            };
+            // a's denominator, 10^321, passes 2^1022: a stays a leaf as written, beside 1/b
+            let leaf = Ex::Leaf(view.intern("1.2345678901234567e-305"));
+            let quotient = mul(
+                vec![leaf.clone(), pow(Ex::Num(b.clone()), Ex::int(-1), &cx)],
+                &cx,
+            );
+            assert_eq!(
+                quotient,
+                Ex::Mul(vec![Ex::Num(inv_b.clone()), leaf.clone()])
+            );
+            let pieces = mu_numeric_str("1.2345678901234567e-305") + mu_rat(&inv_b);
+            assert!(mu_rat(&exact) < pieces);
+            assert_eq!(complexity(&quotient, view), mu_rat(&exact));
+            let beside = mul(vec![quotient, x(view)], &cx);
+            assert_eq!(
+                complexity(&beside, view),
+                mu_mul() + mu_rat(&exact) + mu_leaf()
+            );
+            // A product deciding opposite sums beside a piece prices its candidates against
+            // bounds below their prices (`decide_opposite_sums`' debug assertion).
+            let s = add(
+                vec![x(view), Ex::Num(Rat::parse_decimal("-9.6").unwrap())],
+                &cx,
+            );
+            let t = mul(vec![Ex::int(-1), s.clone()], &cx);
+            let p = mul(vec![Ex::int(3), leaf, s, t], &cx);
+            let Ex::Mul(v) = &p else {
+                panic!("not a product: {p:?}")
+            };
+            assert_eq!(v.iter().filter(|f| is_piece(f, view)).count(), 2, "{p:?}");
+            let literal = bag_literal_value(v, false, view).unwrap();
+            let rest: u64 = v
+                .iter()
+                .filter(|f| !is_piece(f, view))
+                .map(|f| complexity(f, view))
+                .sum();
+            assert_eq!(complexity(&p, view), mu_mul() + mu_rat(&literal) + rest);
         });
     }
 }

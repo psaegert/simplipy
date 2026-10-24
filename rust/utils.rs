@@ -1,5 +1,6 @@
-//! Pure string/number helpers mirroring `simplipy/utils.py`: is_numeric_string,
-//! numbers_to_constant, remove_pow1, factorize_to_at_most.
+//! Pure string/number helpers: the numeral grammar (`is_numeric_string`, which
+//! `simplipy.utils` calls), the parser's `numbers_to_constant` step (its Python namesake is
+//! gone), and `factorize_to_at_most`.
 
 /// THE NUMERAL GRAMMAR (B2, 2026-10-05), the one definition every reader shares (Python
 /// mirror: `simplipy.utils.is_numeric_string`). A numeral is
@@ -153,7 +154,7 @@ pub fn reserved_numeric_spelling(t: &str) -> bool {
     false
 }
 
-/// Port of `numbers_to_constant`: replace every token for which Python's
+/// `parse`'s `mask_numbers` step: replace every token for which Python's
 /// `float(token)` SUCCEEDS with `<constant>`. NOTE this uses `float()` (try/except), NOT
 /// `is_numeric_string` -- so it is a DIFFERENT predicate from [`mask_elementary_literals`]
 /// (e.g. `float('1e3')` succeeds, `float('inf')`/`float('nan')` succeed). `parse` calls this when
@@ -172,24 +173,6 @@ pub fn numbers_to_constant(prefix_expression: &[String]) -> Vec<String> {
             }
         })
         .collect()
-}
-
-/// Port of `remove_pow1`: drop every `pow1` token (raising-to-1 identity)
-/// and rewrite `pow_1` (raising-to-(-1)) as `inv`; all other tokens pass through. The final cleanup
-/// step of `parse`.
-pub fn remove_pow1(prefix_expression: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(prefix_expression.len());
-    for token in prefix_expression {
-        if token == "pow1" {
-            continue;
-        }
-        if token == "pow_1" {
-            out.push("inv".to_string());
-            continue;
-        }
-        out.push(token.clone());
-    }
-    out
 }
 
 /// Port of `utils.factorize_to_at_most`. Decomposes `p` into factors

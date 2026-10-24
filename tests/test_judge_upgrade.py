@@ -122,7 +122,9 @@ FLIP_TO_OK = [
 
 @pytest.mark.parametrize("row,inp,out", FLIP_TO_OK, ids=[str(r[0]) for r in FLIP_TO_OK])
 def test_fabricated_conviction_now_ok(row, inp, out):
-    verdict, detail = judge_pair(list(inp), list(out), rng())
+    # Judged in the real lane, whose one zero these recorded answers were made in: row
+    # 121456's divisor `0*(-1e19) - 0` is -0 in float64's signed zeros (the f64 lane).
+    verdict, detail = judge_pair(list(inp), list(out), rng(), mode='real')
     assert verdict == 'OK', f'row {row}: {verdict} [{detail}]'
 
 
@@ -431,9 +433,11 @@ class TestSingularInputGate:
             assert verdict == 'OK', f'seed {seed}: {verdict} [{detail}]'
 
     def test_the_gate_tallies_the_null_event(self):
+        # The completion clash is the one zero's (the real lane): IEEE's signed zero makes the
+        # two spellings agree on the diagonal, so the f64 lane has nothing to tally there.
         from simplipy.verify._monitor import TOL_COUNTS
         before = TOL_COUNTS.get('singular-real-null', 0)
-        judge_pair(list(self.WITNESS_IN), list(self.WITNESS_OUT), rng())
+        judge_pair(list(self.WITNESS_IN), list(self.WITNESS_OUT), rng(), mode='real')
         assert TOL_COUNTS.get('singular-real-null', 0) > before
 
     def test_clean_input_value_change_keeps_strict_authority(self):

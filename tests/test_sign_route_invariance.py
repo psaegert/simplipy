@@ -192,16 +192,22 @@ def _sq(s):
 
 REDECIDED = [
     # (x1 - 3) / (x1 - 3)^3 is an even power, which then joins 1/(3 - x1)
-    (['<mul>', 'inv'] + _S + _N + ['inv', 'pow'] + _N + ['3', '</mul>'], 'pow <add> 3 <sub> x1 </add> -3'),
+    (['<mul>', 'inv'] + _S + _N + ['inv', 'pow'] + _N + ['3', '</mul>'],
+     '<mul> 1 <div> pow <add> 3 <sub> x1 </add> 3 </mul>'),
     # (3 - x1)^2 / (3 - x1) is the bare 3 - x1, which joins the root over x1 - 3
     ('* / pow - 3 x1 2 - 3 x1 pow - x1 3 0.5'.split(), 'neg pow - x1 3 / 3 2'),
     # inverses on both sides: the class is written in one orientation, the lone inverse joining the
     # even power and the root (its infinity at the zero is the one-sided limit's, -inf)
     ('* * inv pow - 3 x1 2 inv - 3 x1 pow - x1 3 0.5'.split(), '/ -1 pow - x1 3 / 5 2'),
-    # a symbolic power cannot move; the even power cancels the bare sum
-    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(), '/ pow - 3 x1 x3 - x1 3'),
+    # a symbolic power cannot move; the even power cancels the bare sum, and the symbolic power,
+    # defined where 3 - x1 is positive, orients the class (its infinity at the zero is the
+    # one-sided limit's; permissive keeps no value at a pole)
+    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(),
+     {'f64': '/ neg pow - 3 x1 x3 - 3 x1', 'real': '/ neg pow - 3 x1 x3 - 3 x1',
+      'permissive': '/ pow - 3 x1 x3 - x1 3'}),
     # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
-    (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'], 'inv <add> x1 <sub> 3 </add>'),
+    (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'],
+     '<mul> 1 <div> <add> x1 <sub> 3 </add> </mul>'),
     # (x1 - 3)^2 / (x1 - 3) is the bare x1 - 3, which cancels against 1/(3 - x1)
     (['<mul>', 'pow'] + _N + ['2', 'inv'] + _S + ['inv'] + _N + ['</mul>'], '-1'),
     # x1 - 3 flips onto the root's sum and collects with both members there
@@ -344,7 +350,7 @@ def test_classes_are_decided_together(eng, mode):
 def test_an_odd_negative_total_keeps_one_inverse(eng, mode, effort):
     src = ['<mul>', 'inv', 'pow'] + _S + ['2', 'inv', 'pow'] + _S + ['3', 'inv'] + _N + ['</mul>']
     answer = list(eng.simplify(src, mode=mode, effort=effort))
-    assert ' '.join(answer) == 'neg pow <add> x1 <sub> 3 </add> -6'
+    assert ' '.join(answer) == '<mul> -1 <div> pow <add> x1 <sub> 3 </add> 6 </mul>'
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 
@@ -382,3 +388,77 @@ def test_a_bracketed_product_collects_as_the_flat_one(eng, mode, bag):
             answer = list(eng.simplify(tokens, mode=mode))
             assert eng.complexity(answer, mode=mode) == price, (tokens, answer, flat)
             assert list(eng.simplify(answer, mode=mode)) == answer
+
+
+# AN ODD FUNCTION OF A LITERAL MULTIPLE AND OF ITS NEGATION ARE ONE CLASS {B, -B}, as an odd function of a
+# sum and of its negation are: the product collects them, written over the positive literal. A bare argument is a
+# multiple of 1 and a negation one of -1 (`sin(x1)` and `sin(-x1)`).
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('spellings, expected', [
+    (['/ sin * 2 x1 sin * -2 x1', '/ sin * -2 x1 sin * 2 x1', '/ rootn * 2 x1 3 rootn * -2 x1 3'], '-1'),
+    (['* sin 2 sin -2', 'neg pow sin 2 2', 'neg pow sin -2 2'], None),
+    (['* sin * 2 x1 sin * -2 x1', 'neg pow sin * 2 x1 2', 'neg pow sin * -2 x1 2'], None),
+    (['* * x2 tan * 3 x1 tan * -3 x1', 'neg * x2 pow tan * 3 x1 2'], None),
+    (['/ sin x1 sin neg x1', '/ sin neg x1 sin x1', '/ rootn x1 3 rootn neg x1 3'], '-1'),
+    (['* sin x1 sin neg x1', 'neg pow sin x1 2', 'neg pow sin neg x1 2'], 'neg pow sin x1 2'),
+])
+def test_an_odd_function_of_a_literal_multiple_is_a_class(eng, mode, spellings, expected):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert len(answers) == 1, answers
+    if expected is not None:
+        assert answers == {expected}
+
+
+# ONE ALGORITHM FOR ANY NUMBER OF CLASSES: a class of several members, a class collected from a
+# literal multiple, and a value kept at a class's zero are decided alike beside six or more other
+# sums, so mirrored spellings get one answer.
+def _prod(*fs):
+    return ['*'] * (len(fs) - 1) + ' '.join(fs).split()
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('pair', [
+    (_prod('- x2 x1', 'sin - x1 x2', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
+     _prod('- x1 x2', 'sin - x2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)])),
+    (_prod('neg sin * 2 x1', 'sin * -2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
+     _prod('sin * 2 x1', 'sin * -2 x1', '- x4 x3', *[f'- x{i} x{i + 1}' for i in range(5, 15, 2)])),
+    (_prod('/ log - x1 3 - 3 x1', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)]),
+     _prod('neg / log - x1 3 - x1 3', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)])),
+])
+def test_wide_products_get_one_answer(eng, mode, pair):
+    a, b = (list(eng.simplify(list(t), mode=mode)) for t in pair)
+    assert a == b
+    assert list(eng.simplify(a, mode=mode)) == a
+
+
+# ONE CLASS READING FOR THE SHARED FACTOR AND THE LIKE TERM: a term over an odd function of a negated argument
+# shares that function with a term over its positive argument, up to sign, so the search factors it as it factors
+# an odd function of a sum and of its negation.
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('spellings, expected', [
+    (['- * x3 sin x1 sin x1', '+ * x3 sin x1 sin neg x1'], '* sin x1 - x3 1'),
+    (['- * x3 rootn x1 3 rootn x1 3', '+ * x3 rootn x1 3 rootn neg x1 3'], '* rootn x1 3 - x3 1'),
+    (['- * x3 sin - x1 x2 sin - x1 x2', '+ * x3 sin - x1 x2 sin - x2 x1'], '* sin - x1 x2 - x3 1'),
+    (['- * <constant> sin x1 sin x1', '+ * <constant> sin x1 sin neg x1'], '* <constant> sin x1'),
+])
+def test_a_shared_odd_function_is_read_up_to_sign(eng, mode, spellings, expected):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert answers == {expected}
+
+
+# ONE ORIENTATION FOR A CLASS, WHEREVER IT STANDS: a site alone takes the orientation it takes as a
+# product's one factor (two signs either way here, the outer one wins), and an inverse over it reads
+# the same class whichever orientation it stands in (srbf ground truth 6397).
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('spellings, expected', [
+    (['pow - * x3 - x3 x1 x2 3', '* 1 pow - * x3 - x3 x1 x2 3', 'neg pow + x2 * x3 - x1 x3 3'],
+     'neg pow + x2 * x3 - x1 x3 3'),
+    (['inv pow - * x3 - x3 x1 x2 3', '/ 1 * 1 pow - * x3 - x3 x1 x2 3', 'pow - * x3 - x3 x1 x2 -3',
+      'inv neg pow + x2 * x3 - x1 x3 3'], '/ -1 pow + x2 * x3 - x1 x3 3'),
+    (['sin - - x1 x2 x3', '* 1 sin - - x1 x2 x3', 'neg sin - + x2 x3 x1'], 'neg sin - + x2 x3 x1'),
+    (['inv sin - - x1 x2 x3', '/ 1 * 1 sin - - x1 x2 x3', 'inv neg sin - + x2 x3 x1'],
+     '/ -1 sin - + x2 x3 x1'),
+])
+def test_a_lone_site_is_oriented_as_a_products_one_factor(eng, mode, spellings, expected):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert answers == {expected}

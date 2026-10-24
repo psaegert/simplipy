@@ -32,14 +32,12 @@ JUDGE_TIMEOUT_S = 30   # per-rule budget. A gate that can HANG is not a gate: mp
                        # silently skipped.
 
 POISONS = [
-    # legacy-vocabulary spellings (the gate keeps judging pre-0.12 artifacts)
-    ('pow1_2 pow2 ?0'.split(), '?0'.split(), 'KILL',
+    ('rootn pow ?0 2 2'.split(), '?0'.split(), 'KILL',
      'clause (a): sqrt(x^2)->x changes real values on x<0'),
-    ('pow4 pow5 pow1_2 !0'.split(), 'pow !0 <constant>'.split(), 'KILL',
+    ('pow pow rootn !0 2 5 4'.split(), 'pow !0 <constant>'.split(), 'KILL',
      'clause (b): even-root half-line domain extension'),
-    ('pow1_2 pow float("-inf") ?0'.split(), 'pow float("inf") ?0'.split(), 'KILL',
+    ('rootn pow float("-inf") ?0 2'.split(), 'pow float("inf") ?0'.split(), 'KILL',
      'clause (b): pow(-inf, data) undefined a.e.'),
-    # live 0.12-vocabulary spellings (rootn + the $ mult-certified sort)
     ('pow rootn !0 2 2'.split(), '!0'.split(), 'KILL',
      'clause (b): even-root round-trip extends the x<0 half-line (rootn spelling)'),
     ('/ $0 $0'.split(), '0'.split(), 'KILL',
@@ -78,9 +76,13 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
     # it without restore leaks our handler past this call (audit Tier-2, 2026-08-03).
     # MAIN THREAD ONLY: `signal.signal` raises anywhere else, which made every
     # off-main-thread mine crash in its finalize gate (hardening H-010, 2026-08-03).
-    # Off the main thread the sweep runs with timeouts DISARMED (judge_timeout_s=0
-    # makes every per-rule `signal.alarm(0)` a harmless cancel; arming a real alarm
-    # off-main would deliver SIGALRM to an unhandled main thread and kill the process).
+    # Off the main thread the sweep runs with timeouts DISARMED, as with no timeout asked:
+    # arming a real alarm off-main would deliver SIGALRM to an unhandled main thread and
+    # kill the process. WITH NO TIMEOUT (`judge_timeout_s=0`, as a mine judges) the sweep
+    # touches no alarm at all: it neither arms one nor replaces the handler nor cancels an
+    # alarm the process has pending.
+    if not judge_timeout_s:
+        return _sweep_inner(rules, report_path, build_path, 0, announce_report)
     import threading
     on_main = threading.current_thread() is threading.main_thread()
     if not on_main:
@@ -97,12 +99,13 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
 
 
 def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_report):
-    buckets = {'CERTIFIED': [], 'TOLERATED': [], 'KILL': [],
+    buckets = {'CERTIFIED': [], 'TOLERATED': [], 'KILL': [], 'F64-ONLY': [],
                'ENGINE-MISALIGN': [], 'NO-WITNESS': [],
                'UNRESOLVED-COVERAGE': [], 'UNSUPPORTED-SHAPE': [], 'JUDGE-TIMEOUT': []}
     detail = []
     for idx, (lhs, rhs) in enumerate(rules):
-        signal.alarm(judge_timeout_s)
+        if judge_timeout_s:
+            signal.alarm(judge_timeout_s)
         try:
             r = judge_rule(list(lhs), list(rhs))
         except _JudgeTimeout:
@@ -110,7 +113,8 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         except Exception as ex:
             r = {'verdict': 'NO-WITNESS', 'detail': f'judge error {type(ex).__name__}: {ex}'}
         finally:
-            signal.alarm(0)
+            if judge_timeout_s:
+                signal.alarm(0)
         r['idx'] = idx
         r['lhs'] = ' '.join(lhs)
         r['rhs'] = ' '.join(rhs)
@@ -156,7 +160,7 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
     print('\n================ GATE RESULT ================')
     for k, v in buckets.items():
         print(f'  {k:16s} {len(v)}')
-    for k in ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
+    for k in ('KILL', 'F64-ONLY', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
               'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT'):
         for i in buckets[k]:
             d = detail[i]
@@ -176,6 +180,6 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         keep = [rules[i] for i in sorted(buckets['CERTIFIED'] + buckets['TOLERATED'])]
         json.dump(keep, open(build_path, 'w'))
         print(f'built {len(keep)} kept rules -> {build_path}')
-    return 0 if not (buckets['KILL'] or buckets['ENGINE-MISALIGN']
+    return 0 if not (buckets['KILL'] or buckets['F64-ONLY'] or buckets['ENGINE-MISALIGN']
                      or buckets['NO-WITNESS'] or buckets['UNRESOLVED-COVERAGE']
                      or buckets['UNSUPPORTED-SHAPE'] or buckets['JUDGE-TIMEOUT']) else 1

@@ -52,10 +52,10 @@ LEGAL_NUMERIC = [
     # explicit dialect's structural division (the tagged twin is `<mul> 1 <div> 2 </mul>`).
     (".5", ["/", "1", "2"]),
     ("5.", ["5"]),
-    ("1e-05", ["0.00001"]),
+    ("1e-05", ["1e-5"]),
     ("1e+5", ["100000"]),
     ("1E5", ["100000"]),
-    ("1e+16", ["10000000000000000"]),
+    ("1e+16", ["1e16"]),
 ]
 
 # Malformed numerals (B2): tokens that start like a number (a digit or `.`, after optional
@@ -97,9 +97,9 @@ class TestReservedSpellingsRefused:
 
     def test_judge_and_complexity_refuse(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match="reserved numeric spelling"):
-            engine._core.ac_judge(["inf"], 48)
+            engine._core.mine_mark(["inf"], rule_mode="default")
         with pytest.raises(ValueError, match="reserved numeric spelling"):
-            engine._core.ac_complexity(["nan"])
+            engine._core.ac_complexity(["nan"], rule_mode='default')
 
     def test_parse_normalizes_lowercase_nonfinites(self, engine: SimpliPyEngine) -> None:
         # The infix tokenizer maps lowercase `inf`/`nan` to the CANONICAL spellings:
@@ -209,7 +209,7 @@ class TestRecursionCapEveryEntry:
         core = engine._core
         deep = ["neg"] * 200_000 + ["x0"]
         deepc = ["neg"] * 200_000 + ["1"]
-        lib = core.build_candidate_library([["x0"]], ["x0"], [1.0] * 8, 8)
+        lib = core.build_candidate_library([["x0"]], ["x0"], [1.0] * 8, 8, rule_mode='default')
         calls = [
             lambda: core.evaluate_batch(deep, ["x0"], [1.0], 1, []),
             lambda: core.evaluate_constant_subtree(deepc),
@@ -221,14 +221,14 @@ class TestRecursionCapEveryEntry:
             lambda: core.interval_domain_extension_p(deep, [], ["x0"], []),
             lambda: core.convert_expression(deep),
             lambda: core.equivalent_no_const(deep, ["x0"], ["x0"], [1.0] * 8, 8),
-            lambda: core.find_rule(deep, len(deep), None, [["x0"]], ["x0"], [1.0] * 8, 8),
-            lambda: core.find_rule_lib(deep, len(deep), None, lib),
+            lambda: core.find_rule(deep, len(deep), None, [["x0"]], ["x0"], [1.0] * 8, 8, rule_mode="permissive"),
+            lambda: core.find_rule_lib(deep, lib, rule_mode='default'),
             lambda: core.exist_constants_fit(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
             lambda: core.exist_constants_fit_linear(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
-            lambda: core.set_rules([(deep, ["x0"])]),
-            lambda: core.mine_one_length([deep], lib, None),
-            lambda: core.ac_ordered_below(deep, ["x0"]),
-            lambda: core.ac_judge(deep, 48),
+            lambda: core.set_mode_rules('default', [(deep, ["x0"])]),
+            lambda: core.mine_one_length([deep], lib, rule_mode='default'),
+            lambda: core.ac_ordered_below_in(deep, ["x0"], rule_mode='default'),
+            lambda: core.mine_mark(deep, rule_mode='default'),
             lambda: core.parse("neg(" * 100_000 + "x0" + ")" * 100_000, True, False),
         ]
         for i, call in enumerate(calls):

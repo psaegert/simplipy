@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.mining import RuleMiner
 from simplipy.utils import (compositions, count_expressions, enumerate_expressions, sample_expression,
                             violates_wildcard_multiplicity)
@@ -119,7 +120,7 @@ class TestCheckerSoundness:
         # 'pi/2-ish constant' replacement matches the source AT its only defined point,
         # but evidence (source-finite rows) is ~7 of 1024 < n/8.
         assert engine._core.find_rule(
-            ['asin', 'cosh', 'x0'], 3, None, [['<constant>']], ['x0'], x_flat, n) is None
+            ['asin', 'cosh', 'x0'], 3, None, [['<constant>']], ['x0'], x_flat, n, rule_mode='permissive') is None
 
     def test_generically_constant_source_rejects(self, engine, mining_x) -> None:
         """Two checker policies combine to reject certifying asin(cosh(C*x0)) ->
@@ -135,7 +136,7 @@ class TestCheckerSoundness:
         x_flat, n = mining_x
         assert engine._core.find_rule(
             ['asin', 'cosh', '*', '<constant>', 'x0'], 5, None, [['<constant>']],
-            ['x0'], x_flat, n) is None
+            ['x0'], x_flat, n, rule_mode='permissive') is None
 
     def test_all_undefined_instance_rejects(self, engine, mining_x) -> None:
         """A const-bearing source with an instance that is defined NOWHERE (here
@@ -144,7 +145,7 @@ class TestCheckerSoundness:
         x_flat, n = mining_x
         assert engine._core.find_rule(
             ['asin', '+', 'cosh', 'x0', 'pow2', '<constant>'], 6, None,
-            [['<constant>']], ['x0'], x_flat, n) is None
+            [['<constant>']], ['x0'], x_flat, n, rule_mode='permissive') is None
 
     def test_evidence_counts_unique_rows_not_repetitions(self, engine, mining_x) -> None:
         """DISCRIMINATING test that evidence counts unique rows, not (row, instance)
@@ -157,7 +158,7 @@ class TestCheckerSoundness:
         x_flat, n = mining_x
         assert engine._core.find_rule(
             ['asin', 'cosh', '*', 'x0', '+', 'pow2', '<constant>', '1'], 8, None,
-            [['<constant>']], ['x0'], x_flat, n) is None
+            [['<constant>']], ['x0'], x_flat, n, rule_mode='permissive') is None
 
     def test_affine_with_intercept_family_certifies(self, engine, mining_x) -> None:
         """REGRESSION for the affine-fit conditioning fix. The whole
@@ -231,7 +232,7 @@ class TestCheckerSoundness:
         xf = x.flatten(order='C').tolist()
         assert dev._core.find_rule(
             ['exp', '+', 'x0', 'x0'], 4, 3, [['pow', '<constant>', 'x0']],
-            ['x0'], xf, x.shape[0]) == ['pow', '7.38905609893065', 'x0']
+            ['x0'], xf, x.shape[0], rule_mode='permissive') == ['pow', '7.38905609893065', 'x0']
 
     def test_confirm_primitive_rejects_shipped_defect(self, engine, mining_x) -> None:
         """The exact dev_7-3 defect asin(cosh(_0)) -> nan, via the stage-2 confirm
@@ -243,10 +244,10 @@ class TestCheckerSoundness:
         x_flat, n = mining_x
         with pytest.raises(ValueError, match="reserved numeric spelling"):
             engine._core.find_rule(
-                ['asin', 'cosh', 'x0'], 3, None, [['nan']], ['x0'], x_flat, n)
+                ['asin', 'cosh', 'x0'], 3, None, [['nan']], ['x0'], x_flat, n, rule_mode='permissive')
         assert engine._core.find_rule(
             ['asin', 'cosh', 'x0'], 3, None, [['float("nan")']], ['x0'],
-            x_flat, n) is None
+            x_flat, n, rule_mode='permissive') is None
 
 
 class TestMiningSampleX:
@@ -343,7 +344,8 @@ class TestEndToEndMineGate:
         """DISCRIMINATING determinism test: two SEPARATE interpreters with DIFFERENT
         PYTHONHASHSEED must mine the identical ruleset. A same-process replica (the
         weaker TestFindRules.test_deterministic_across_runs) shares set-iteration order
-        and cannot catch a removed sorted() reproducibility guard; this can."""
+        and cannot catch a removed sorted() reproducibility guard; this can. All three
+        modes' sets are compared, and the judge's process count varies with the arms."""
         import json
         import subprocess
         import sys
@@ -357,8 +359,10 @@ class TestEndToEndMineGate:
             f"e = SimpliPyEngine.from_config({str(tmp_path / 'config.yaml')!r});"
             "e.find_rules(max_source_pattern_length=3, dummy_variables=1,"
             " extra_internal_terms=['0','1','<constant>'], X=256, seed=7, verbose=False,"
-            " promote_sorts=False);"
-            "print(json.dumps(sorted([[list(l), list(r)] for l, r in e.simplification_rules])))"
+            " promote_sorts=False, judge_processes=int(sys.argv[1]));"
+            "print(json.dumps([[[list(l), list(r)] for l, r in rs] for rs in"
+            " (e.simplification_rules, e.real_simplification_rules,"
+            " e.permissive_simplification_rules)]))"
         )
         # Propagate the parent's import path: simplipy may be an editable install
         # (src/ holds the compiled core) or a pip-installed package (site-packages);
@@ -372,16 +376,16 @@ class TestEndToEndMineGate:
         # published promise untested. The arms now vary it (1 vs 4) alongside the
         # hash seed, so one comparison covers all three legs.
         outs = []
-        for hashseed, rayon in (("0", "1"), ("12345", "4")):
-            res = subprocess.run([sys.executable, "-c", prog],
+        for hashseed, rayon, judges in (("0", "1", "1"), ("12345", "4", "4")):
+            res = subprocess.run([sys.executable, "-c", prog, judges],
                                  env={**env_base, "PYTHONHASHSEED": hashseed,
                                       "RAYON_NUM_THREADS": rayon},
                                  capture_output=True, text=True, cwd=os.getcwd())
             assert res.returncode == 0, res.stderr
-            outs.append(res.stdout.strip())
+            outs.append(res.stdout.strip().splitlines()[-1])  # the sets; the gate prints above
         assert outs[0] == outs[1], \
             "ruleset differs across PYTHONHASHSEED/RAYON_NUM_THREADS -> non-reproducible"
-        assert outs[0] != "[]"
+        assert all(json.loads(outs[0])), "vacuous: a mode mined nothing"
 
 
 # Failure mode 7 (F0): rootn's expression-position index is a non-integer almost everywhere,
@@ -441,7 +445,9 @@ class TestExtensionMeasureGate:
         # `-tanh(-x) = tanh(x)`: the outer sign is a bag coefficient rather than an even
         # FUNCTION, so the parity arm (which only plants sign-blindness at an even head)
         # does not reach it.
-        assert (("neg", "tanh", "neg", "?0"), ("tanh", "?0")) in rules, sorted(rules)
+        # Since the marks are the serve answer, `-tanh(-x)` reads as `tanh(x)` in the
+        # mode's own canon and mints nothing; the tripwire is that the mine minted at all.
+        assert rules, 'the mine minted nothing: every assertion below would hold vacuously'
         # the gate: no shipped LHS applies rootn with an operator-headed (expression)
         # index -- literal-index rootn is AC-native and never reaches the rule table
         arity = {name: spec["arity"] for name, spec in _ROOTN_OPERATORS.items()}
@@ -477,14 +483,14 @@ class TestFoldFilter:
         x_flat, n = mining_x
         cands = [["x0"], ["<constant>"], ["exp", "<constant>"], ["pow2", "<constant>"],
                  ["exp", "1"], ["neg", "x0"], ["*", "<constant>", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         # every var-free composite drops -- including `exp 1`, which the retired
         # `folds_to_leaf` exemption used to admit: the leaf `np.e` is the candidate
         # that emits; the composite spelling never can (emit guard).
         assert lib.n_filtered == 3, "exp(<c>), pow2(<c>) and exp(1) are all var-free composites"
         assert lib.n_candidates == 4
         # and the drop needs no bare `<constant>` guard token: it is unconditional
-        lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n)
+        lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n, rule_mode='default')
         assert lib2.n_filtered == 3
         assert lib2.n_candidates == 2
 
@@ -511,42 +517,25 @@ class TestFoldFilter:
         assert engine._core.exist_constants_fit_linear(
             ["<constant>"], ["x0"], [float(r) for r in range(n)], n, y_bad.tolist(),
             1e-9, 1e-12) is not True
-        # (2) END-TO-END: the exact divergence case. Crafted X (63 rows
-        # x0 = -1, one row x0 = +1); source exp(1) + 2.4e-9*x0 evaluates to the skewed y.
-        # The filtered and unfiltered scans must AGREE whatever else gates the match.
+        # (2) END-TO-END: the exact divergence case. Crafted X (63 rows x0 = -1, one row
+        # x0 = +1); the source exp(1) + 2.4e-9*tanh(1000*x0) evaluates to the skewed y there,
+        # and stays inside the same +-2.4e-9 everywhere else, so the special-point battery's
+        # probes (which reach |x| = pi) see a near-constant source too.
         x_flat = [-1.0] * (n - 1) + [1.0]
-        src = ["+", "exp", "1", "*", "2.4e-9", "x0"]
+        src = ["+", "exp", "1", "*", "2.4e-9", "tanh", "*", "1000", "x0"]
         cands = [["<constant>"], ["x0"], ["exp", "1"]]
         # `exp 1` is dropped from the library (var-free composite); the exact
         # interval-intersection `<constant>` decision must carry the match alone.
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_filtered == 1
-        # The band-edge match itself is asserted with the special-point battery OFF (own
-        # subprocess: the switch is a process-lifetime OnceLock). The battery's fixed
-        # probe points (|x| up to pi) amplify the crafted 2.4e-9-per-x skew past the
-        # acceptance band (a 7.2e-9 real change at x = +-3): a value-soundness
-        # rejection orthogonal to the dominance property under test.
-        import subprocess
-        import sys
-        prog = (
-            "import json, sys;"
-            "from simplipy import SimpliPyEngine;"
-            "eng = SimpliPyEngine.from_config(sys.argv[1]);"
-            f"x_flat = {x_flat!r}; n = {n};"
-            f"cands = {cands!r};"
-            "lib = eng._core.build_candidate_library(cands, ['x0'], x_flat, n)\n"
-            f"out = eng._core.find_rule_lib({src!r}, {len(src)}, 2, lib,"
-            " challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12)\n"
-            "assert out is not None, 'the feasible near-constant source must match'\n"
-        )
-        (tmp_path / "rules.json").write_text(json.dumps([]))
-        cfg = tmp_path / "config.yaml"
-        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
-        res = subprocess.run(
-            [sys.executable, "-c", prog, str(cfg)],
-            env={**os.environ, "SIMPLIPY_SPECIAL_BATTERY": "0", "OMP_NUM_THREADS": "1"},
-            capture_output=True, text=True)
-        assert res.returncode == 0, res.stderr
+        # The certification alone (no mint acceptance). The source is const-free, so the
+        # `<constant>` match resolves to a literal, and the literal ships only if it
+        # certifies as the const-free target it is: the scan and the pair judgment agree.
+        out = engine._core.find_rule(src, len(src), 2, cands, ["x0"], x_flat, n,
+                                     challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12, rule_mode='permissive')
+        assert out is None or engine._core.judge_pair(
+            src, out, ["x0"], x_flat, n, 16, 16, 7, 1e-9, 1e-12, rule_mode='permissive')[0], \
+            f'the scan shipped {out}, which the pair judgment refuses'
 
     def test_the_mine_never_ships_a_var_free_composite_rhs(self, tmp_path) -> None:
         """The end-to-end form of the invariant. The old parity gate A/B-ran the mine
@@ -583,7 +572,7 @@ class TestTheLibraryIsQuotientedByCanonicalClass:
         n = 64
         x_flat = [0.13 * i - 4.0 for i in range(2 * n)]
         cands = [["x0"], ["x1"], ["*", "x0", "x1"], ["*", "x1", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0", "x1"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0", "x1"], x_flat, n, rule_mode='default')
         assert lib.n_candidates == 3, "the commuted spelling is the same class and must collapse"
 
     def test_a_different_variable_multiset_is_never_dropped(self, engine) -> None:
@@ -592,7 +581,7 @@ class TestTheLibraryIsQuotientedByCanonicalClass:
         n = 64
         x_flat = [0.13 * i - 4.0 for i in range(n)]
         cands = [["x0"], ["*", "x0", "x0"], ["pow2", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_candidates == 3, "different variable multisets: both spellings stay"
 
 
@@ -617,9 +606,21 @@ class TestProvenance:
         assert side["universe"]["3"]["coverage"] == 1.0
         assert side["universe"]["2"]["coverage"] == 1.0
         assert side["progress"]["final"] is True
-        assert side["progress"]["rules_total"] == len(
-            json.load(open(out.replace(".json", "_permissive.json"))))
+        # One mine per file: this sidecar records the f64 file's own mine.
+        assert side["mode"] == "f64"
+        assert side["progress"]["rules_total"] == len(json.load(open(out)))
         assert side["simplipy_version"]
+        # The versions that serve the mined rules: the running version's minor series,
+        # and a config carrying it loads on the version that mined it.
+        from simplipy.compat import check_config, requires_simplipy_specifier
+        assert side["requires_simplipy"] == requires_simplipy_specifier(side["simplipy_version"])
+        check_config({"engine_generation": 2, "operators": _OPERATORS,
+                      "requires_simplipy": side["requires_simplipy"]}, source=str(cfg))
+        # One sidecar per rule file, each with the measure in its own mode's reading.
+        for mode, path in (("f64", out), ("real", out.replace(".json", "_real.json")),
+                           ("permissive", out.replace(".json", "_permissive.json"))):
+            measure = json.load(open(path + ".provenance.json"))["measure"]
+            assert measure == eng._measure_fingerprint(mode), mode
 
     def test_an_interrupted_mine_is_not_final(self, tmp_path, monkeypatch) -> None:
         """A SIGINT stops the climb after the running length. What is written then is a
@@ -650,11 +651,11 @@ class TestProvenance:
         assert side["progress"]["last_completed_source_length"] == 1
 
     def test_sidecar_records_soundness_state(self, tmp_path) -> None:
-        """The mine's SOUNDNESS PROVENANCE (audit Tier-1 #4): the four default-ON
-        kill-switches ship recorded (a mine run with a soundness layer disabled must
-        say so in its artifact), and the three interval fail-closed miss counters are
-        read after the mine instead of assumed zero -- the exposure is a NUMBER in the
-        sidecar, not a hope."""
+        """The mine's SOUNDNESS PROVENANCE: the artifact-affecting switches set during
+        the mine (none, by default) are recorded verbatim, and the three interval
+        fail-closed miss counters are read after the mine instead of assumed zero -- the
+        exposure is a NUMBER in the sidecar, not a hope. The soundness layers have no
+        switch: there is nothing to record about them being off."""
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
         cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
@@ -665,10 +666,10 @@ class TestProvenance:
                        verbose=False, output_file=out, promote_sorts=False)
         side = json.load(open(out + ".provenance.json"))
         sound = side["soundness"]
-        assert sound["kill_switches"] == {
-            "SIMPLIPY_IVL_GATE": True, "SIMPLIPY_IVL_CLASS": True,
-            "SIMPLIPY_IVL_REACH": True, "SIMPLIPY_SPECIAL_BATTERY": True}
-        assert sound["node_budget_env"] is None  # default budget, no override
+        assert "kill_switches" not in sound
+        assert sound["env_overrides"] == {}
+        assert "node_budget_env" not in sound  # the budget is a parameter now
+        assert side["params"]["interval_node_budget"] is None  # the default budget
         undecided = sound["interval_undecided"]
         assert set(undecided) == {"horizon", "node_budget", "unanalyzable"}
         assert all(isinstance(v, int) and v >= 0 for v in undecided.values())
@@ -725,48 +726,41 @@ class TestProvenance:
 
 
 class TestStageTwoConfirmation:
-    """The stage-2 confirmation (confirm=True) must actually filter, not pass through."""
+    """Stage-2 confirmation is `judge_pair` on an independent, wider X, inside the scan: it
+    must actually filter, and it must answer exactly the pair it is asked about."""
+
+    @staticmethod
+    def _judge(engine, x, pairs, seed):
+        n = x.shape[0]
+        return [engine._core.judge_pair(list(s), list(t), ['x0'], x.flatten(order='C').tolist(),
+                                        n, 16, 16, seed, 1e-9, 1e-12, 256,
+                                        rule_mode='default')[0]
+                for s, t in pairs]
 
     def test_confirm_filters_a_data_luck_rule(self, engine, mining_x) -> None:
-        """_confirm_mined_rules re-verifies on an INDEPENDENT wider X. A (source, target)
-        pair that the checker rejects there must be dropped. Direct probe of the confirm
-        primitive on the shipped defect (canonical `float("nan")` spelling -- the old
-        artifact's bare `nan` is refused at the alphabet boundary, pinned above):
-        asin(cosh(x0)) -> nan is rejected by the confirm X, so _confirm_mined_rules
-        drops it while keeping a genuine rule."""
+        """A (source, target) pair the checker rejects on the confirmation X is refused,
+        while a genuine rule passes: the shipped defect asin(cosh(x0)) -> nan (canonical
+        `float("nan")` spelling) against `+ x0 0 -> x0`."""
         x_confirm = RuleMiner(engine)._mining_sample_x(2048, 1, np.random.default_rng(99))
-        kept = RuleMiner(engine)._confirm_mined_rules(
-            [(('asin', 'cosh', 'x0'), ('float("nan")',)), (('+', 'x0', '0'), ('x0',))],
-            ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 123)
-        assert (('asin', 'cosh', 'x0'), ('float("nan")',)) not in kept
-        assert (('+', 'x0', '0'), ('x0',)) in kept
+        assert self._judge(engine, x_confirm, [(('asin', 'cosh', 'x0'), ('float("nan")',)),
+                                               (('+', 'x0', '0'), ('x0',))], 123) == [False, True]
 
     def test_confirm_answers_the_question_it_was_asked(self, engine, mining_x) -> None:
-        """The confirm must verify THE PROPOSED TARGET, not merely that `find_rule` returned
-        something.
-
-        `find_rule` does not always answer the question it is asked: for a variable-free
-        `<constant>`-bearing source its all-constant short-circuit classifies the source and
-        returns that CLASS LITERAL without ever reading the candidate list. While the confirm
-        tested only `result is not None`, stage-2 confirmation was therefore VACUOUS for every
-        such source -- it accepted whatever target it was handed. That is what let a false
-        rule survive the gate whose entire purpose is to kill false rules.
-
-        Each absurd pair below was measured to "confirm" before the fix; the control does not
-        hit the short-circuit and failed correctly even then, which is what made the defect
-        invisible to the existing test above."""
+        """The pair judgment verifies THE PROPOSED TARGET. The per-call `find_rule` that
+        stage 2 used to run first tried its all-constant short-circuit, which classifies a
+        variable-free `<constant>`-bearing source and answers with that class literal
+        without reading the candidate; each absurd pair below "confirmed" through it until
+        the result was compared with the target. `judge_pair` has no short-circuit, so the
+        question cannot be swapped for another."""
         x_confirm = RuleMiner(engine)._mining_sample_x(2048, 1, np.random.default_rng(99))
         absurd = [
             (('exp', '<constant>'), ('0',)),
             (('exp', '<constant>'), ('float("nan")',)),
             (('+', '<constant>', '1'), ('float("-inf")',)),
         ]
-        kept = RuleMiner(engine)._confirm_mined_rules(
-            absurd, ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 99)
-        assert kept == [], f"stage-2 confirmation is vacuous: it confirmed {kept}"
-        # Power check: a genuine rule must still survive the same call.
-        assert RuleMiner(engine)._confirm_mined_rules(
-            [(('+', 'x0', '0'), ('x0',))], ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 99)
+        assert self._judge(engine, x_confirm, absurd, 99) == [False, False, False]
+        # Power check: a genuine rule must still pass the same judgment.
+        assert self._judge(engine, x_confirm, [(('+', 'x0', '0'), ('x0',))], 99) == [True]
 
 
 class TestCertifyRules:
@@ -774,28 +768,29 @@ class TestCertifyRules:
 
     def test_certifies_true_identity_rejects_false_and_verifies_hint(self, engine) -> None:
         proposals = [
-            ["pow2", "tanh", "neg", "x0"],                           # (tanh -a)^2 = (tanh a)^2
+            ["inv", "exp", "x0"],                                    # 1/exp(a) = exp(-a)
             ["+", "exp", "x0", "cosh", "x1"],                        # no shorter equivalent -> reject
-            ["*", "exp", "x0", "*", "exp", "x1", "exp", "x2"],       # minimal form is 6 tokens
-            ["log", "*", "exp", "x0", "exp", "x1"],                  # log(e^a e^b) -> a+b: TRUE, unrealised
+            ["+", "exp", "x0", "exp", "+", "x0", "x1"],              # minimal form is 6 tokens
+            ["log", "pow2", "exp", "x0"],                            # log((e^a)^2) -> a+a: TRUE, unrealised
         ]
-        hints = [None, None, ["exp", "+", "x0", "+", "x1", "x2"], None]
+        hints = [None, None, ["*", "exp", "x0", "+", "1", "exp", "x1"], None]
         out = engine.certify_rules(proposals, hints, dummy_variables=3, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
-        assert by_src[tuple(proposals[0])] == (("pow2", "tanh", "x0"), "minimal")
+        assert by_src[tuple(proposals[0])] == (("exp", "neg", "x0"), "minimal")
         assert tuple(proposals[1]) not in by_src
-        assert by_src[tuple(proposals[2])] == (("exp", "+", "x0", "+", "x1", "x2"), "verified")
-        # `log(e^a e^b) -> a+b` is exactly true on R and NOT realised by the shipped f64
-        # engine -- exp overflows at 709.78, so log(exp(800)*exp(1)) is inf, not 801 --
-        # which the deployed lane convicts as ENGINE-MISALIGN.
+        assert by_src[tuple(proposals[2])] == (("*", "exp", "x0", "+", "1", "exp", "x1"), "verified")
+        # `log((e^a)^2) -> a+a` is exactly true on R and NOT realised by the shipped f64
+        # engine -- near a = 0 the log of a rounded square of exp loses the low digits, so
+        # at a = 1e-3 the two sides are 83 ulps apart -- which the deployed lane convicts as
+        # ENGINE-MISALIGN.
         #
         # Under the triple that verdict is no longer a death sentence: ENGINE-MISALIGN is
         # the `real` tier, so the pair SURVIVES certification and is routed into
         # rules_real.json / rules_permissive.json and out of rules.json. Deleting it here
         # would break the parity `certify_rules` promises with the mine, which keeps it.
-        assert by_src[tuple(proposals[3])][0] == ('+', 'x0', 'x1')
+        assert by_src[tuple(proposals[3])][0] == ('+', 'x0', 'x0')
         from simplipy.verify._contract import judge_rule
-        assert judge_rule(list(proposals[3]), ['+', 'x0', 'x1'])['tier'] == 'real'
+        assert judge_rule(list(proposals[3]), ['+', 'x0', 'x0'])['tier'] == 'real'
 
     def test_skips_sources_the_engine_already_reduces(self, engine) -> None:
         engine.find_rules(max_source_pattern_length=3, dummy_variables=1,
@@ -823,17 +818,19 @@ class TestCertifyRules:
         the same call must still certify: the impostor's absence is then the GATE's
         verdict, not an upstream refusal."""
         out = engine.certify_rules(
-            [["tanh", "exp", "np.e"], ["pow2", "tanh", "neg", "x0"]],
+            [["tanh", "exp", "np.e"], ["inv", "exp", "x0"]],
             [["1"], None],
             dummy_variables=2, extra_internal_terms=["np.e"], X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
         # The control must be a true identity the deployed engine ALSO performs, or its
         # own refusal would mask the gate's verdict. `log(e^a e^b) -> a+b` used to sit
         # here and no longer qualifies: true on R, but ENGINE-MISALIGN past exp's
-        # overflow (F95). `(tanh -a)^2 = (tanh a)^2` is true and exactly realised --
-        # tanh is odd in f64 and squaring kills the sign.
-        assert by_src.get(("pow2", "tanh", "neg", "x0")) \
-            == (("pow2", "tanh", "x0"), "minimal"), "control identity failed upstream"
+        # overflow (F95). `-tanh(-a) = tanh a` followed it until the sign of an odd function
+        # became the construction's own decision (a source certification skips).
+        # `1/exp(a) = exp(-a)` is true, certified, and a rule's to perform: the negation is two
+        # bits cheaper than the reciprocal, and the construction keeps either spelling.
+        assert by_src.get(("inv", "exp", "x0")) \
+            == (("exp", "neg", "x0"), "minimal"), "control identity failed upstream"
         assert ("tanh", "exp", "np.e") not in by_src, \
             f"a symbolically-KILLed pair was certified: {out}"
 
@@ -868,8 +865,11 @@ class TestSymbolicGateFatalBuckets:
         """The plan's acceptance: mining a config with an operator the judge cannot
         evaluate refuses the rule instead of shipping it, and the sidecar carries the
         full bucket census alongside killed/kept. The unpatched fixture mine mints
-        five log-bearing rules (log 1 -> 0, log exp 1 -> 1, ...), so a zero census
-        here would be a vacuous pass -- the census >= 1 assertion is the anti-vacuity."""
+        five log-bearing rules (log 1 -> 0, log exp 1 -> 1, ...). The judge now acts per
+        length (miner.md 2.6), so the refusal is the judge loop's: each unjudgeable pick
+        is EXCLUDED and its source re-scanned, and the per-length record names it --
+        an empty exclusion record here would be a vacuous pass. The judge runs
+        in-process (`judge_processes=1`): a spawned worker would not see the patch."""
         self._withdraw_log(monkeypatch)
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
@@ -878,24 +878,30 @@ class TestSymbolicGateFatalBuckets:
         out = str(tmp_path / "mined.json")
         eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
                        extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
-                       verbose=False, output_file=out, promote_sorts=False)
+                       verbose=False, output_file=out, promote_sorts=False,
+                       judge_processes=1)
         mined = json.load(open(out))
         shipped_unjudgeable = [r for r in mined if "log" in r[0] or "log" in r[1]]
         assert shipped_unjudgeable == [], (
             f"rules the judge cannot evaluate shipped: {shipped_unjudgeable}")
-        gate = json.load(open(out + ".provenance.json"))["symbolic_gate"]
-        assert len(gate["unsupported_shape"]) >= 1, "vacuous: no log rule reached the gate"
+        prov = json.load(open(out + ".provenance.json"))
+        excluded = [pair for row in prov["per_length"].values() for pair in row["excluded"]]
+        assert [p for p in excluded if "log" in p[0] or "log" in p[1]], \
+            "vacuous: the judge loop excluded no log rule"
+        gate = prov["symbolic_gate"]
+        assert gate["unsupported_shape"] == []  # present even when empty: the channel ran
         assert gate["killed"] == []
         assert gate["no_witness"] == []  # present even when empty: the channel ran
         census = gate["census"]
-        assert census["UNSUPPORTED-SHAPE"] == len(gate["unsupported_shape"])
+        assert census.get("UNSUPPORTED-SHAPE", 0) == len(gate["unsupported_shape"])
         assert census["CERTIFIED"] == gate["kept"]
-        # `kept` is counted BEFORE the per-mode prune, and `rules.json` is written after
-        # it, so the two differ by exactly what f64's own constructor already performs.
-        # The sidecar states that rather than leaving "smaller than expected"
+        # `kept` is counted BEFORE the final gates, and `rules.json` is written after
+        # them, so the two differ by exactly what the gates dropped -- each named in the
+        # sidecar. The sidecar states that rather than leaving "smaller than expected"
         # indistinguishable from "something was lost".
         prov = json.load(open(out + ".provenance.json"))
-        assert gate["kept"] == len(mined) + prov["triple"]["preempted"]["f64"]
+        assert gate["kept"] == (len(mined) + len(prov["gates"]["unlicensed"])
+                                + len(prov["gates"]["preempted"]))
 
     def test_certify_rules_refuses_the_same_buckets(self, engine, monkeypatch) -> None:
         """The B3 gate site must apply the same fatal set: a certification the judge
@@ -904,11 +910,11 @@ class TestSymbolicGateFatalBuckets:
         self._withdraw_log(monkeypatch)
         out = engine.certify_rules(
             [["log", "*", "exp", "x0", "exp", "x1"],
-             ["*", "exp", "x0", "exp", "x1"]],
+             ["inv", "exp", "x0"]],
             dummy_variables=2, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
-        assert by_src.get(("*", "exp", "x0", "exp", "x1")) \
-            == (("exp", "+", "x0", "x1"), "minimal"), "control identity failed upstream"
+        assert by_src.get(("inv", "exp", "x0")) \
+            == (("exp", "neg", "x0"), "minimal"), "control identity failed upstream"
         assert ("log", "*", "exp", "x0", "exp", "x1") not in by_src, \
             "a certification the judge cannot evaluate was returned"
 
@@ -933,13 +939,16 @@ class TestCoverageGateSearches:
         across-length continuation: at target length 3 the scan meets `pow2 exp x0`,
         numerically equivalent but parsing to the very Ex the engine already reaches
         (not strictly below -> refused); the scan must keep going and take the
-        length-4 `exp + x0 x0`. The off-diagonal sibling never hit the gate and is the
-        anti-vacuity control."""
+        length-4 `exp + x0 x0`. A source that never hits the gate is the anti-vacuity control.
+        The off-diagonal sibling `* exp x0 exp x1` is the product constructor's own: it merges
+        the two powers of e into `exp(x0 + x1)`, so no target lies strictly below it."""
         out = engine.certify_rules(
-            [self.DIAG, ["*", "exp", "x0", "exp", "x1"]], dummy_variables=2, X=256, seed=7)
+            [self.DIAG, ["*", "exp", "x0", "exp", "x1"], ["inv", "exp", "x0"]],
+            dummy_variables=2, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
         assert by_src.get(tuple(self.DIAG)) == (self.BETTER, "minimal")
-        assert by_src.get(("*", "exp", "x0", "exp", "x1")) == (("exp", "+", "x0", "x1"), "minimal")
+        assert ("*", "exp", "x0", "exp", "x1") not in by_src
+        assert by_src.get(("inv", "exp", "x0")) == (("exp", "neg", "x0"), "minimal")
 
     def test_hint_certifies_when_the_library_cannot_spell_the_target(self, engine) -> None:
         """Same source, target length capped at 3: the library cannot spell the 4-token
@@ -982,9 +991,9 @@ class TestEmitParseClosure:
         assert engine.simplify(list(out)) == out, "own output must re-simplify to itself"
 
     def test_ordering_judge_reads_own_output(self, engine) -> None:
-        _, _, ac_out = engine._core.ac_judge(["*", "exp", "x0", "exp", "x0"], 48)
-        assert engine._core.ac_ordered_below(["exp", "+", "x0", "x0"], ac_out) is True
-        assert engine._core.ac_ordered_below(["pow2", "exp", "x0"], ac_out) is False
+        ac_out = engine._core.mine_mark(["*", "exp", "x0", "exp", "x0"], rule_mode='default')
+        assert engine._core.ac_ordered_below_in(["exp", "+", "x0", "x0"], ac_out, rule_mode='default') is True
+        assert engine._core.ac_ordered_below_in(["pow2", "exp", "x0"], ac_out, rule_mode='default') is False
 
 
 @pytest.fixture(scope="module")
@@ -1023,10 +1032,10 @@ class TestSpecialPointCertification:
         x_flat, n = dev_x1
         assert dev._core.find_rule(
             ['exp', 'log', 'pow', 'x0', '3'], 5, 3, [['pow', 'x0', '<constant>']],
-            ['x0'], x_flat, n) is None
+            ['x0'], x_flat, n, rule_mode='permissive') is None
         assert dev._core.find_rule(
             ['exp', '/', 'log', 'x0', '3'], 5, 3, [['pow', 'x0', '<constant>']],
-            ['x0'], x_flat, n) == ['pow', 'x0', '0.3333333333333333']
+            ['x0'], x_flat, n, rule_mode='permissive') == ['pow', 'x0', '0.3333333333333333']
 
     def test_contract_point_families_rejected(self, dev, dev_x1) -> None:
         """Deployed-value consistency at the battery points:
@@ -1037,21 +1046,21 @@ class TestSpecialPointCertification:
         must keep certifying (the battery box never reaches its saturation zone)."""
         x_flat, n = dev_x1
         assert dev._core.find_rule(
-            ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n) is None
+            ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n, rule_mode='permissive') is None
         assert dev._core.find_rule(
             ['pow', 'cos', '<constant>', 'float("inf")'], 4, 1, [['0']],
-            ['x0'], x_flat, n) is None
+            ['x0'], x_flat, n, rule_mode='permissive') is None
         assert dev._core.find_rule(
-            ['atanh', 'tanh', 'tan', 'x0'], 4, 2, [['tan', 'x0']], ['x0'], x_flat, n) is None
+            ['atanh', 'tanh', 'tan', 'x0'], 4, 2, [['tan', 'x0']], ['x0'], x_flat, n, rule_mode='permissive') is None
         assert dev._core.find_rule(
-            ['atanh', 'tanh', 'x0'], 3, 1, [['x0']], ['x0'], x_flat, n) == ['x0']
+            ['atanh', 'tanh', 'x0'], 3, 1, [['x0']], ['x0'], x_flat, n, rule_mode='permissive') == ['x0']
 
     def test_null_set_completion_still_certifies(self, dev, dev_x1) -> None:
         """The limit-completion doctrine survives every new gate: x/x -> 1
         extends only at the exact (dyadic, precision-stable) point 0."""
         x_flat, n = dev_x1
         assert dev._core.find_rule(
-            ['/', 'x0', 'x0'], 3, 1, [['1']], ['x0'], x_flat, n) == ['1']
+            ['/', 'x0', 'x0'], 3, 1, [['1']], ['x0'], x_flat, n, rule_mode='permissive') == ['1']
 
     def test_proposals_path_rejects_seam_pair(self, dev) -> None:
         """The LLM-proposal channel runs through the identical certification: the
@@ -1067,7 +1076,7 @@ class TestSpecialPointCertification:
         # non-vacuity guard: none of these are already reduced by the loaded rules
         # (certify_rules skips already-covered sources without judging them). The rules'
         # chain is the mark certify_rules beats, so the guard reads it at effort 0: the
-        # search's factor stage takes x^2 out of the numerator and cancels the sum, a
+        # search's FACTOR move takes x^2 out of the numerator and cancels the sum, a
         # route through the constructors that no rule takes.
         for src in (seam_plus, seam_minus, stable):
             assert len(dev.simplify(list(src), effort=0)) >= len(src)
@@ -1136,12 +1145,9 @@ class TestProposalChannel:
         # carried there. So the honest check is that every engine rule is either in the
         # file or preempted in that mode -- never silently missing. (This replaced a
         # comparison against the retired `corpus == f64 UNION real` identity.)
-        from simplipy.mining import _preempted_by
-        saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(out.replace('.json', '_permissive.json')))}
-        saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
-                  if _preempted_by(eng, lhs, rhs, 'permissive')}
-        assert rules == saved, "the artifact must contain the merged (mined + certified) ruleset"
+        # The engine ends holding the files it wrote: its default set IS the f64 file.
+        saved = {tuple(tuple(side) for side in rule) for rule in json.load(open(out))}
+        assert rules == saved, "the engine must hold the f64 file it wrote"
         assert sidecar["proposals"]["outcomes"] == {
             "certified": 1, "already_covered": 0, "rejected": 1, "duplicate": 1,
             "certified_then_dropped": 0}
@@ -1291,39 +1297,21 @@ class TestProposalTargetAllowance:
                               "arity": 2, "precedence": 3, "commutative": False}}
 
     def test_distribute_family_five_token_target_certifies_past_the_bound(self, tmp_path) -> None:
-        """`x0*x1 + x0*x2 -> x0*(x1+x2)`: a 7-token source with a 5-token hinted target
-        certifies through a ``max_target_pattern_length: 3`` mine (the bound caps the
-        candidate search, never the hint), because the target strictly descends the
-        serve ordering. The certified rule joins the ruleset, the artifact, and the
-        SERVING engine."""
+        """`x0*x1 + x0*x2 -> x0*(x1+x2)`: the distributive law, which the search owns. The
+        mark is the serve answer, so it is already the factored state: the proposal is
+        covered in every mode and nothing mints -- the length cap was never the bar."""
         src = ["+", "*", "x0", "x1", "*", "x0", "x2"]
         tgt = ["*", "x0", "+", "x1", "x2"]
         eng, sidecar, out = self._mine(
             str(tmp_path), [{"source": src, "target": tgt}], dummy_variables=3)
         assert sidecar["proposals"]["outcomes"] == {
-            "certified": 1, "already_covered": 0, "rejected": 0, "duplicate": 0,
+            "certified": 0, "already_covered": 1, "rejected": 0, "duplicate": 0,
             "certified_then_dropped": 0}
-        assert sidecar["proposals"]["trail"][-1] == {
-            "source": src, "target": tgt, "verdict": "certified", "stage": "accepted",
-            "certificate": "verified"}
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules}
-        assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) in rules
-        # The corpus file is PRUNED: a rule corpus's own constructor performs is not
-        # carried there. So the honest check is that every engine rule is either in the
-        # file or preempted in that mode -- never silently missing. (This replaced a
-        # comparison against the retired `corpus == f64 UNION real` identity.)
-        from simplipy.mining import _preempted_by
-        saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(out.replace('.json', '_permissive.json')))}
-        saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
-                  if _preempted_by(eng, lhs, rhs, 'permissive')}
-        assert rules == saved, "the artifact must carry the merged ruleset"
-        # The allowance is only real if the rule FIRES at serve time: the engine's
-        # endpoint for the source must now sit strictly below it in the ordering.
-        assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(src, 48)
-        assert eng._core.ac_ordered_below(endpoint, src), \
-            "the certified long-target rule must actually reduce its source at serve time"
+        assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) not in rules
+        endpoint = eng.simplify(list(src))
+        assert eng._core.ac_ordered_below_in(endpoint, src, rule_mode='default'), \
+            "the engine must reduce the source at serve time"
 
     def test_true_but_non_descending_long_target_is_rejected(self, tmp_path) -> None:
         """`pow(x0,2)*pow(x1,2) -> pow(x0*x1,2)` is numerically TRUE everywhere and
@@ -1343,8 +1331,8 @@ class TestProposalTargetAllowance:
         assert sidecar["proposals"]["trail"][-1]["verdict"] == "rejected"
         assert sidecar["proposals"]["trail"][-1]["stage"] == "search"
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(src, 48)
-        assert not eng._core.ac_ordered_below(tgt, endpoint), \
+        endpoint = eng._core.mine_mark(src, rule_mode='default')
+        assert not eng._core.ac_ordered_below_in(tgt, endpoint, rule_mode='default'), \
             "the specimen must be refused BY THE ORDERING (or it belongs in the certify pin above)"
         assert not any(tuple(rhs) == ("pow", "*", "?0", "?1", "2")
                        for _, rhs in eng.simplification_rules)
@@ -1367,9 +1355,9 @@ class TestProposalTargetAllowance:
         assert sidecar["proposals"]["trail"][-1]["verdict"] == "rejected"
         assert sidecar["proposals"]["trail"][-1]["stage"] == "search"
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(src, 48)
-        assert not eng._core.ac_ordered_below(tgt, endpoint), "tie: not below"
-        assert not eng._core.ac_ordered_below(endpoint, tgt), "tie: not above either"
+        endpoint = eng._core.mine_mark(src, rule_mode='default')
+        assert not eng._core.ac_ordered_below_in(tgt, endpoint, rule_mode='default'), "tie: not below"
+        assert not eng._core.ac_ordered_below_in(endpoint, tgt, rule_mode='default'), "tie: not above either"
 
 
 class TestLadderSnapshots:
@@ -1509,38 +1497,91 @@ class TestMineSingleFlight:
         engine_mod._MINE_LOCK.release()
 
 
-class TestD25MeasureFingerprintAtLoad:
-    """D25 (R6's warn-on-mismatch half): the sidecar records the measure fingerprint
-    but nothing ever READ it back -- recording-without-reading is the inert-control
-    pattern (R2.2 confirmed write-only at HEAD). A ruleset mined under one measure
-    served silently under another is exactly what the fingerprint exists to catch;
-    the load path now compares digests and warns loudly on mismatch."""
+class TestMeasureFingerprintAtLoad:
+    """Each rule file's sidecar records what the measure charged on the fingerprint probes
+    when it was mined. The loader reads every sidecar present and warns, naming the
+    probes, when a recorded probe now prices differently; a probe the record does not
+    hold is unrecorded, not moved."""
 
-    def _asset(self, tmp_path, digest):
-        (tmp_path / "rules.json").write_text(json.dumps([]))
-        (tmp_path / "rules.json.provenance.json").write_text(json.dumps(
-            {"measure": {"digest": digest}}))
+    _FILES = {"f64": "rules.json", "real": "rules_real.json", "permissive": "rules_permissive.json"}
+
+    def _asset(self, tmp_path, measures):
+        """A triple of empty rule files; `measures` maps a mode to its sidecar's record."""
+        for mode, name in self._FILES.items():
+            (tmp_path / name).write_text(json.dumps([]))
+            if mode in measures:
+                (tmp_path / (name + ".provenance.json")).write_text(
+                    json.dumps({"measure": measures[mode]}))
         cfg = tmp_path / "config.yaml"
-        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS,
-                                       "rules": "rules.json"}))
+        cfg.write_text(yaml.safe_dump({
+            "engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json",
+            "rules_real": "rules_real.json", "rules_permissive": "rules_permissive.json"}))
         return str(cfg)
 
-    def test_mismatch_warns(self, tmp_path) -> None:
-        with pytest.warns(UserWarning, match="measure fingerprint"):
-            SimpliPyEngine.from_config(self._asset(tmp_path, "0" * 16))
-
-    def test_match_stays_silent(self, tmp_path) -> None:
+    def _load(self, path):
         import warnings as _w
-        probe = SimpliPyEngine.from_config(self._asset(tmp_path, "0" * 16))
-        good = probe._measure_fingerprint()["digest"]
-        # Scoped to THIS test's subject, the fingerprint. The fixture's ruleset is
-        # deliberately empty (`rules.json` == []), which since the rules-less-state
-        # ruling legitimately warns on its own account; a blanket "no UserWarning"
-        # assertion here would be asserting something this test never meant.
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always", UserWarning)
-            SimpliPyEngine.from_config(self._asset(tmp_path, good))
-        assert not [w for w in caught if "measure fingerprint" in str(w.message)]
+            engine = SimpliPyEngine.from_config(path)
+        # Scoped to the fingerprint: the fixture's empty rule files warn on their own.
+        return engine, [str(w.message) for w in caught if "measure fingerprint" in str(w.message)]
+
+    def _own(self, tmp_path):
+        engine, _ = self._load(self._asset(tmp_path / "own", {}))
+        return {m: engine._measure_fingerprint(m) for m in self._FILES}
+
+    def test_own_records_stay_silent(self, tmp_path) -> None:
+        (tmp_path / "own").mkdir()
+        _, warned = self._load(self._asset(tmp_path, self._own(tmp_path)))
+        assert warned == []
+
+    @pytest.mark.parametrize("mode", ["f64", "real", "permissive"])
+    def test_a_moved_probe_warns_and_is_named(self, tmp_path, mode) -> None:
+        (tmp_path / "own").mkdir()
+        records = self._own(tmp_path)
+        records[mode]["probes"]["asin 1e-08"] += 1000
+        _, warned = self._load(self._asset(tmp_path, records))
+        assert len(warned) == 1, warned
+        recorded = records[mode]["probes"]["asin 1e-08"]
+        assert self._FILES[mode] in warned[0] and f"mode '{mode}'" in warned[0]
+        assert f"'asin 1e-08': {recorded} -> {recorded - 1000}" in warned[0]
+        assert "D25" not in warned[0] and "R6" not in warned[0]
+
+    def test_each_record_is_compared_in_its_own_mode(self, tmp_path) -> None:
+        # f64's record put beside the permissive file still names f64, so it is compared
+        # in f64's reading and stays silent: like is compared with like.
+        (tmp_path / "own").mkdir()
+        records = self._own(tmp_path)
+        assert records["f64"]["probes"]["pow pow x0 2 0.5"] != records["permissive"]["probes"]["pow pow x0 2 0.5"]
+        _, warned = self._load(self._asset(tmp_path, {"permissive": records["f64"]}))
+        assert warned == []
+        # without its mode the permissive record would read as the earlier f64 layout
+        # and its readings would differ
+        legacy = {k: v for k, v in records["permissive"].items() if k != "mode"}
+        _, warned = self._load(self._asset(tmp_path, {"permissive": legacy}))
+        assert len(warned) == 1 and "'pow pow x0 2 0.5'" in warned[0], warned
+
+    def test_an_unrecorded_probe_is_not_a_mismatch(self, tmp_path) -> None:
+        (tmp_path / "own").mkdir()
+        records = self._own(tmp_path)
+        del records["real"]["probes"]["asin 1e-08"]
+        engine, warned = self._load(self._asset(tmp_path, records))
+        assert warned == []
+        assert engine._measure_drift(records["real"]) == ({}, ["asin 1e-08"])
+
+    def test_an_earlier_layout_is_compared_by_its_first_token_keys(self, tmp_path) -> None:
+        # The sidecars published before per-mode fingerprints: no mode, f64's reading,
+        # each probe keyed by its first token.
+        (tmp_path / "own").mkdir()
+        f64 = self._own(tmp_path)["f64"]["probes"]
+        legacy = {"x0": f64["x0"], "+": f64["+ x0 x1"], "asin": f64["asin x0"], "1/2": f64["1/2"]}
+        engine, warned = self._load(self._asset(tmp_path, {"f64": {"probes": legacy}}))
+        assert warned == []
+        moved, unrecorded = engine._measure_drift({"probes": legacy})
+        assert moved == {} and "asin x0" not in unrecorded and "* x0 x1" in unrecorded
+        legacy["asin"] += 1
+        _, warned = self._load(self._asset(tmp_path, {"f64": {"probes": legacy}}))
+        assert len(warned) == 1 and "'asin x0'" in warned[0], warned
 
 
 class TestMissed003SingleFlightPreservesRules:
@@ -1684,29 +1725,32 @@ class TestProposalHintLengthAllowance:
 
         eng, sidecar, artifact = self._mine(
             str(tmp_path / "mine"), [{"source": self.SIN_SRC, "target": self.SIN_TGT}])
-        assert sidecar["proposals"]["trail"][-1] == {
+        # Each file is mined in its own mode. In f64, `1 - cos(2*x0)` loses its value to
+        # cancellation near 0, so the f64 mine refuses the pair; the real file's mine
+        # certifies the hint, and that file carries the rule.
+        real = artifact.replace('.json', '_real.json')
+        with open(real + '.provenance.json') as fh:
+            real_side = json.load(fh)
+        assert real_side["proposals"]["trail"][-1] == {
             "source": self.SIN_SRC, "target": self.SIN_TGT, "verdict": "certified",
             "stage": "accepted", "certificate": "verified"}
-        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules}
+        saved = {tuple(tuple(side) for side in rule) for rule in json.load(open(real))}
         assert (("-", "1", "cos", "*", "2", "?0"),
-                ("*", "2", "pow", "sin", "?0", "2")) in rules
-        saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(artifact.replace('.json', '_permissive.json')))}
-        assert rules == saved, "the artifact must carry the merged ruleset"
+                ("*", "2", "pow", "sin", "?0", "2")) in saved
         # SERVE. `simplify` is DIALECT-PRESERVING (owner-ruled): it answers in the
         # dialect it was handed, and SIN_SRC is explicit binary prefix, so the answer is
-        # too -- `to_tagged` is the separate step for the bag spelling. `ac_judge`'s
-        # endpoint is the same state in the mine's binary alphabet. Before the merge both
+        # too -- `to_tagged` is the separate step for the bag spelling. The mine's mark
+        # (`mine_mark`) is the same state in the mine's binary alphabet. Before the merge both
         # are the source itself -- the rule is what moves them.
-        assert eng.simplify(list(self.SIN_SRC)) \
+        # It serves from the file that carries it: real.
+        assert eng.simplify(list(self.SIN_SRC), mode='real') \
             == ["*", "2", "pow", "sin", "x0", "2"], \
             "the certified rule does not fire at serve time"
-        assert eng.to_tagged(eng.simplify(list(self.SIN_SRC))) \
+        assert eng.to_tagged(eng.simplify(list(self.SIN_SRC), mode='real')) \
             == ["<mul>", "2", "pow", "sin", "x0", "2", "</mul>"], \
             "the bag spelling must still be one conversion away"
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(list(self.SIN_SRC), 48)
-        assert endpoint == self.SIN_TGT
+        assert eng._core.mine_mark(list(self.SIN_SRC), rule_mode='real') == self.SIN_TGT
 
     def test_ascending_sibling_is_refused_by_the_ordering_gate(self, tmp_path) -> None:
         """(b) `1 + cos(2*x0) = 2*cos(x0)^2` is refused BEFORE and AFTER -- but the
@@ -1720,7 +1764,7 @@ class TestProposalHintLengthAllowance:
         eng = self._engine(str(tmp_path / "probe"))
         core = eng._core
         assert core is not None
-        _, _, endpoint = core.ac_judge(list(self.COS_SRC), 48)
+        endpoint = core.mine_mark(list(self.COS_SRC), rule_mode='default')
         # every gate the pair PASSES
         assert len(self.COS_TGT) == len(self.COS_SRC), "the retired gate refused on this"
         assert eng.is_valid(list(self.COS_TGT))
@@ -1729,15 +1773,16 @@ class TestProposalHintLengthAllowance:
         assert core.registry_mint_refusal(
             list(self.COS_SRC), endpoint, list(self.COS_TGT), ["x0"]) is None
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
-        assert RuleMiner(eng)._confirm_mined_rules(
-            [(tuple(self.COS_SRC), tuple(self.COS_TGT))], ["x0"], X_data,
-            16, 16, 1e-9, 1e-12, 32, 7), "the pair is numerically TRUE; it dies elsewhere"
+        assert core.judge_pair(
+            list(self.COS_SRC), list(self.COS_TGT), ["x0"], X_data.flatten(order="C").tolist(),
+            X_data.shape[0], 16, 16, 7, 1e-9, 1e-12, 32, rule_mode="default") \
+            == (True, "accepted"), "the pair is numerically TRUE; it dies elsewhere"
         # the ONE gate it fails -- and it fails it in both directions of the ordering:
         # the engine's own endpoint sits strictly BELOW the proposed target, so the
         # hint is an ASCENT, not a reduction.
-        assert not core.ac_ordered_below(list(self.COS_TGT), endpoint), \
+        assert not core.ac_ordered_below_in(list(self.COS_TGT), endpoint, rule_mode='default'), \
             "the ordering must be the gate that refuses this pair"
-        assert core.ac_ordered_below(endpoint, list(self.COS_TGT))
+        assert core.ac_ordered_below_in(endpoint, list(self.COS_TGT), rule_mode='default')
 
         _, sidecar, _ = self._mine(
             str(tmp_path / "mine"), [{"source": self.COS_SRC, "target": self.COS_TGT}])
@@ -1761,8 +1806,8 @@ class TestProposalHintLengthAllowance:
                                 max_target_pattern_length=3, X=256, seed=7)
         assert [(tuple(s), tuple(t), c) for s, t, c in out] \
             == [(tuple(self.LONG_SRC), tuple(self.LONG_TGT), "verified")]
-        _, _, endpoint = core.ac_judge(list(self.LONG_SRC), 48)
-        assert core.ac_ordered_below(list(self.LONG_TGT), endpoint), \
+        endpoint = core.mine_mark(list(self.LONG_SRC), rule_mode='default')
+        assert core.ac_ordered_below_in(list(self.LONG_TGT), endpoint, rule_mode='default'), \
             "the specimen certifies BECAUSE it descends, not because it is long"
 
     def test_equal_measure_respell_still_ties_and_dies(self, tmp_path) -> None:
@@ -1775,9 +1820,9 @@ class TestProposalHintLengthAllowance:
         core = eng._core
         assert core is not None
         assert len(self.TIE_TGT) < len(self.TIE_SRC), "the retired gate would have passed this"
-        _, _, endpoint = core.ac_judge(list(self.TIE_SRC), 48)
-        assert not core.ac_ordered_below(list(self.TIE_TGT), endpoint), "tie: not below"
-        assert not core.ac_ordered_below(endpoint, list(self.TIE_TGT)), "tie: not above either"
+        endpoint = core.mine_mark(list(self.TIE_SRC), rule_mode='default')
+        assert not core.ac_ordered_below_in(list(self.TIE_TGT), endpoint, rule_mode='default'), "tie: not below"
+        assert not core.ac_ordered_below_in(endpoint, list(self.TIE_TGT), rule_mode='default'), "tie: not above either"
         assert eng.certify_rules([self.TIE_SRC], [self.TIE_TGT], dummy_variables=1,
                                  extra_internal_terms=["1", "2", "<constant>"],
                                  max_target_pattern_length=3, X=256, seed=7) == []
@@ -1802,27 +1847,23 @@ class TestProposalHintLengthAllowance:
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
         library = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], ["cos", "x0"], list(self.SIN_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0])
-        _, _, endpoint = core.ac_judge(list(self.SIN_SRC), 48)
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0],
+            rule_mode='permissive')
+        # Permissive, the mine's own acceptance: in f64, `1 - cos(2*x0)` loses its value to
+        # cancellation near 0, so the deployed evaluator does not realise the pair there.
         scan = dict(challenges=16, retries=16, seed=1, rtol=1e-9, atol=1e-12,
-                    min_informative=32, mark=endpoint)
-        # Equal token count, strictly mu-below the mark: the mined scan now reaches it,
-        # and the source length no longer changes the answer.
-        assert core.find_rule_lib(list(self.SIN_SRC), len(self.SIN_SRC), None,
-                                  library, **scan) == self.SIN_TGT, \
+                    min_informative=32, rule_mode='permissive')
+        # Equal token count, strictly mu-below the mark: the mined scan reaches it (the
+        # scan computes the engine's own endpoint as its mark).
+        assert core.find_rule_lib(list(self.SIN_SRC), library, **scan) == self.SIN_TGT, \
             "a mu-descending target must be reachable at equal token count"
-        assert core.find_rule_lib(list(self.SIN_SRC), len(self.SIN_SRC) + 1, None,
-                                  library, **scan) == self.SIN_TGT, \
-            "and the source-length parameter must not change it"
         # THE BOUND THAT STILL BINDS: the (d) tie is a respell of one canonical state,
         # so it is not ordered strictly below the mark and no length admits it.
         tie_lib = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], list(self.TIE_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0])
-        _, _, tie_end = core.ac_judge(list(self.TIE_SRC), 48)
-        tie_scan = dict(scan, mark=tie_end)
-        assert core.find_rule_lib(list(self.TIE_SRC), len(self.TIE_SRC), None,
-                                  tie_lib, **tie_scan) is None, \
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0],
+            rule_mode='permissive')
+        assert core.find_rule_lib(list(self.TIE_SRC), tie_lib, **scan) is None, \
             "an exact mu tie is not a descent and must never mint, at any length"
 
     def test_a_mine_without_proposals_only_mints_descending_targets(self, engine) -> None:
@@ -1840,7 +1881,7 @@ class TestProposalHintLengthAllowance:
                           X=256, seed=7, verbose=False, promote_sorts=False)
         assert engine.simplification_rules, "the control mine produced nothing to check"
         offenders = [(lhs, rhs) for lhs, rhs in engine.simplification_rules
-                     if not engine._core.ac_ordered_below(list(rhs), list(lhs))]
+                     if not engine._core.ac_ordered_below_in(list(rhs), list(lhs), rule_mode='default')]
         assert not offenders, offenders
 
 
@@ -1894,14 +1935,13 @@ class TestCertifiedThenDropped:
                        dummy_variables=1, extra_internal_terms=["0", "1", "<constant>"],
                        X=256, seed=7, verbose=False, output_file=out, proposals=proposals,
                        **{"promote_sorts": False, **kwargs})
-        with open(out + ".provenance.json") as fh:
+        # ONE MINE PER FILE: the census reconciles a file against its OWN mine, recorded in
+        # that file's sidecar. The real file is the one these fixtures' identities (true on
+        # R, not f64-realised) belong to.
+        real = out.replace('.json', '_real.json')
+        with open(real + ".provenance.json") as fh:
             sidecar = json.load(fh)
-        # THE ARTIFACT IS A TRIPLE. `mined.json` is the f64 set alone, so a rule routed
-        # to `real` (true on R, not f64-realised) is absent from it while being perfectly
-        # present in the mine's output. For census reconciliation -- "did this certified
-        # pair survive, or must it name its drop?" -- the honest denominator is the
-        # CORPUS set, which is exactly f64 UNION real.
-        with open(out.replace('.json', '_permissive.json')) as fh:
+        with open(real) as fh:
             artifact = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(fh)]
         return eng, sidecar, artifact
 
@@ -1944,8 +1984,8 @@ class TestCertifiedThenDropped:
 
         It is not the right thing any more. The identity is exactly true on the extended
         line and fails only because f64 cosh/sinh overflow at 710.475860, which is the
-        definition of the `real` tier. So the gate keeps it, `_route_triple` puts it in
-        rules_real and rules_corpus and NOT in the f64 set, and the census reads
+        definition of the `real` tier. So the gate keeps it where its mode licenses it --
+        rules_real and rules_permissive, NOT the f64 set -- and the census reads
         `certified` because it did survive -- with `routed_to_tier` naming where.
 
         The census property this test has always existed to guard is unchanged: a pair
@@ -2040,96 +2080,89 @@ class TestCertifiedThenDropped:
         assert sum(sidecar["proposals"]["outcomes"].values()) == len(proposals)
 
 
-class TestTripleRouting:
-    """The artifact is a TRIPLE (owner ruling 2026-08-19): one distinct, complete rule
-    set per mode, mined and distributed together, with the rejects RECORDED rather than
-    silently absent. A mine run is valid only if all three fall out of it.
-    """
+class TestTheFinalGate:
+    """Each file holds what its own mode licenses (miner.md 2.11): the final gate judges the
+    installed set's file spellings AND the entries the mode serves from them, and drops a
+    row with any unlicensed spelling. The judge is injected, so the gate's logic is tested
+    with a stub that cannot be wrong."""
 
-    A = [['x0'], ['x0']]
-    B = [['y0'], ['y0']]
-    C = [['z0'], ['z0']]
+    @staticmethod
+    def _miner(rules):
+        """A miner whose engine holds `rules` as BOTH the f64 and the real set."""
+        from simplipy.mining import RuleMiner
+        engine = SimpliPyEngine(operators=_OPERATORS, rules=[list(r) for r in rules])
+        miner = RuleMiner(engine)
+        miner._install('real', rules)
+        return engine, miner
 
-    def _allowed(self):
-        from simplipy.mining import _TIER_MODES
-        return {0: _TIER_MODES['core'], 1: _TIER_MODES['f64'], 2: _TIER_MODES['real']}
+    def test_a_file_spelling_the_mode_does_not_license_is_dropped(self) -> None:
+        """The file spelling is what release verification reads: a row whose served
+        respelling judges clean but whose own spelling does not must go (task #83)."""
+        a = (('+', 'tanh', 'log', '9', '_0'), ('+', 'inv', '1.025', '_0'))
+        b = (('+', 'exp', '?0', 'neg', 'exp', '?0'), ('0',))
+        engine, miner = self._miner([a, b])
+        assert a not in {(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in
+                         engine._core.ac_served_rules_in_mode(rule_mode='default')}, \
+            'vacuous: the file spelling is also served'
 
-    def test_a_correct_triple_passes(self) -> None:
-        from simplipy.mining import _assert_triple_invariants
-        _assert_triple_invariants(
-            {'f64': [self.A, self.B], 'real': [self.A, self.C],
-             'permissive': [self.A, self.B, self.C]},
-            [], [self.A, self.B, self.C], self._allowed())
+        def judge(pairs):
+            return ['real' if tuple(p) == a else 'core' for p in pairs]
 
-    @pytest.mark.parametrize('label,triple,rejected', [
-        # served AND rejected -- the two must stay disjoint
-        ('inv3-both', {'f64': [A, B], 'real': [A, C], 'permissive': [A, B, C]}, [A]),
-        # a rule in a file its tier does not license (invariant 4, the direction the
-        # per-mode prune does NOT excuse)
-        ('inv4', {'f64': [A, B, C], 'real': [A, C], 'permissive': [A, B, C]}, []),
-    ])
-    def test_each_invariant_can_actually_fail(self, label, triple, rejected) -> None:
-        """An invariant that restates its own construction proves nothing. Two of these
-        were tautologies on the first pass and passed every corruption."""
-        from simplipy.mining import _assert_triple_invariants
-        with pytest.raises(AssertionError, match='triple invariant'):
-            _assert_triple_invariants(triple, rejected, [self.A, self.B, self.C],
-                                      self._allowed())
+        kept, dropped = miner._final_gate('default', judge, {})
+        assert kept == [b] and dropped == [[list(a[0]), list(a[1]), 'real']]
+        assert miner._final_gate('real', judge, {}) == ([a, b], [])
 
-    def test_the_per_mode_licence_check_can_fail(self) -> None:
-        """The invariant that replaced the two retired ones. It was gated on a
-        `preempted` argument only the production path supplies, so every direct call
-        skipped it and nothing exercised it at all."""
-        from simplipy.mining import _TIER_MODES, _assert_triple_invariants
-        allowed = {0: _TIER_MODES['core'], 1: _TIER_MODES['real']}
-        # B is real-tier; putting it in rules_f64 is the direction the prune never excuses
-        with pytest.raises(AssertionError, match='not licensed for that mode'):
-            _assert_triple_invariants(
-                {'f64': [self.A, self.B], 'real': [self.A, self.B],
-                 'permissive': [self.A, self.B]},
-                [], [self.A, self.B], allowed)
+    def test_a_served_entry_the_mode_does_not_license_drops_its_row(self) -> None:
+        """The served entries are what fires: a row whose file spelling judges clean but
+        one of whose served entries does not must go. The load canon respells the ground
+        part of this rule (`tanh log 9` folds to `40/41`), so the two spellings differ."""
+        a = (('+', 'tanh', 'log', '9', '_0'), ('+', 'inv', '1.025', '_0'))
+        engine, miner = self._miner([a])
+        served = {(tuple(lhs), tuple(rhs))
+                  for lhs, rhs, _ in engine._core.ac_served_rules_in_mode(rule_mode='default')}
+        assert served and a not in served, 'vacuous: the served spelling is the file spelling'
 
-    def test_invariant_4_catches_what_the_other_three_cannot(self) -> None:
-        """`B` is f64-tier but placed only in `real`. The intersection is still exactly
-        core, the union is still exactly corpus, nothing is rejected -- invariants 1-3
-        all hold. Only the per-rule licence check sees it."""
-        from simplipy.mining import _assert_triple_invariants
-        # Either message is a pass: the per-mode licence check and invariant 4 overlap on
-        # this corruption (a rule in a file its tier does not license), and the licence
-        # check now runs first. What must not happen is silence.
-        with pytest.raises(AssertionError, match='invariant 4|not licensed for that mode'):
-            _assert_triple_invariants(
-                {'f64': [self.A], 'real': [self.A, self.B, self.C],
-                 'permissive': [self.A, self.B, self.C]},
-                [], [self.A, self.B, self.C], self._allowed())
+        def judge(pairs):
+            return ['f64' if tuple(p) in served else 'core' for p in pairs]
 
-    def test_corpus_is_derived_so_it_cannot_disagree_with_the_union(self) -> None:
-        """`_TIER_MODES` deliberately has no `corpus` entry: a rule serves there iff it
-        serves in either other mode, so invariant 2 holds by construction. A fourth entry
-        would make it possible to break."""
-        from simplipy.mining import _TIER_MODES
-        assert 'permissive' not in _TIER_MODES
-        assert _TIER_MODES['core'] == frozenset({'f64', 'real'})
-        assert _TIER_MODES['reject'] == frozenset()
+        assert miner._final_gate('default', judge, {}) == ([a], [])
+        kept, dropped = miner._final_gate('real', judge, {})
+        assert kept == [] and dropped == [[list(a[0]), list(a[1]), 'f64']]
 
-    def test_routing_the_shipped_artifact_satisfies_every_invariant(self) -> None:
-        """The end-to-end smoke test: route a real engine's real rule set. Counts are not
-        pinned -- they are a property of the mine, and this artifact predates the triple
-        -- but the RELATIONSHIPS must hold, and `_route_triple` raises if they do not."""
+    def test_the_loop_judges_a_picks_file_spelling_too(self) -> None:
+        """The judge loop asks the judge about the pattern the file will carry as well as
+        the entries the mode serves from it: a pick whose served respelling judges clean
+        but whose own spelling does not is excluded there, not dropped at the end."""
+        from simplipy.mining import RuleMiner
+        miner = RuleMiner(SimpliPyEngine(operators=_OPERATORS, rules=[]))
+        pick = (['+', 'tanh', 'log', '9', 'x0'], ['+', 'inv', '1.025', 'x0'])
+        pattern = (('+', 'tanh', 'log', '9', '?0'), ('+', 'inv', '1.025', '?0'))
+
+        def judge(pairs):
+            return ['real' if tuple(map(tuple, p)) == pattern else 'core' for p in pairs]
+
+        judged: dict = {}
+        assert miner._unlicensed({3: pick}, 'default', judge, judged, ['x0']) == {3}
+        assert judged[pattern] == 'real' and len(judged) > 1, 'vacuous: one spelling judged'
+        assert miner._unlicensed({3: pick}, 'real', judge, {}, ['x0']) == set()
+
+    def test_a_pick_the_mode_does_not_serve_is_licensed_nowhere(self) -> None:
+        """Never infer a licence for something the matcher never saw: `atanh(tanh(x0)) -> x0`
+        is dead in real (its reading collapses the LHS) and alive in f64, where `tanh`
+        saturates."""
         from conftest import acj_config_path, require_or_skip
-        from simplipy.mining import _route_triple
-        require_or_skip(acj_config_path(), 'the triple routes the shipped rule set')
-        engine = SimpliPyEngine.from_config(acj_config_path())
-        triple, rejected, meta = _route_triple(engine)
-        served = len(engine.simplification_rules)
-        # EXACT, not `<=`. The counts were left unpinned on the stated ground that "this
-        # artifact predates the triple" -- which stopped being true when the asset became
-        # one, and a `<=` bound passes any under-population. The identity that holds under
-        # the per-mode prune is: what a file omits, that mode's own constructor performs.
-        assert len(triple['permissive']) + len(rejected) + meta['preempted']['permissive'] == served
-        assert len(triple['f64']) + meta['preempted']['f64'] <= served
-        assert len(triple['real']) + meta['preempted']['real'] <= served
-        assert 0 < len(triple['f64']) and 0 < len(triple['real'])
+        from simplipy.mining import RuleMiner
+        import yaml
+        require_or_skip(acj_config_path(), 'needs the acj vocabulary')
+        ops = yaml.safe_load(open(acj_config_path()))['operators']
+        miner = RuleMiner(SimpliPyEngine(operators=ops, rules=[]))
+        picks = {7: (['atanh', 'tanh', 'x0'], ['x0'])}
+
+        def judge(pairs):
+            return ['core'] * len(pairs)
+
+        assert miner._unlicensed(picks, 'real', judge, {}, ['x0']) == {7}
+        assert miner._unlicensed(picks, 'default', judge, {}, ['x0']) == set()
 
 
 class TestTheGateRoutesInsteadOfDeleting:
@@ -2162,7 +2195,6 @@ class TestTheGateRoutesInsteadOfDeleting:
 
         f64 = json.load(open(out))
         real = json.load(open(str(tmp_path / 'mined_real.json')))
-        corpus = json.load(open(str(tmp_path / 'mined_permissive.json')))
 
         def keys(rs):
             return {(tuple(lhs), tuple(rhs)) for lhs, rhs in rs}
@@ -2173,28 +2205,36 @@ class TestTheGateRoutesInsteadOfDeleting:
         # the union of the three files -- unconditionally true. What the files must show
         # is the routing itself, checked below.
 
-        # The inverse-pair family is true on R and not f64-realised (tanh attains 1.0
-        # from 18.990341103219276, exp overflows at 709.782713), so it is `real`: present
-        # in the real and corpus sets, absent from f64. Before the gate fix all four were
-        # simply deleted.
+        # The inverse-pair family is true on R. Three of them are not f64-realised: tanh
+        # attains 1.0 from 19.061547465398498, and exp and cosh round a small argument into
+        # the neighbourhood of 1, so `log(exp(x))` and `acosh(cosh(x))` lose the argument's
+        # digits there. They are `real`: absent from f64. `asinh(sinh(x))` stays within 2 ULP
+        # wherever sinh stays in range, and past its overflow at 710.48 f64 accepts the true
+        # value, so it is f64's too. Before the gate fix all four were simply deleted.
         pairs = [(['atanh', 'tanh', '?0'], ['?0']), (['log', 'exp', '?0'], ['?0']),
                  (['asinh', 'sinh', '?0'], ['?0']), (['acosh', 'cosh', '?0'], ['abs', '?0'])]
-        # The point of the routing: they are KEPT, in the two modes whose authority
-        # licenses them, and absent from the one that does not. (An earlier version of
-        # this test asserted only the absence, on the strength of a comment claiming they
-        # were gone from all three files -- which was false.)
-        kept = [p for p in pairs if (tuple(p[0]), tuple(p[1])) in keys(real)]
-        assert kept, f'no inverse pair survived into rules_real: {sorted(keys(real))[:4]}'
-        for lhs, rhs in kept:
-            assert (tuple(lhs), tuple(rhs)) in keys(corpus), lhs
-            assert (tuple(lhs), tuple(rhs)) not in keys(f64), \
-                f'{" ".join(lhs)} is NOT f64-realised and must not be in the f64 set'
-
-        # the carve-out is visible in the sidecar, never silent
-        prov = json.load(open(out + '.provenance.json'))
-        assert prov['triple']['counts'] == {'f64': len(f64), 'real': len(real),
-                                            'permissive': len(corpus)}
-        assert prov['symbolic_gate']['routed_to_tier'].get('real')
+        realised = {('asinh', 'sinh', '?0')}
+        # ONE MINE PER FILE: real's constructor performs the inverse pairs itself (its serve
+        # answer for `atanh(tanh(x0))` is `x0`), so its mine mints none of them. f64's
+        # constructor performs the one its mode realises (an overflow cuts no collapse band),
+        # so the f64 file carries none of them either.
+        for lhs, rhs in pairs:
+            spelled = [('x0' if t == '?0' else t) for t in lhs]
+            target = [('x0' if t == '?0' else t) for t in rhs]
+            assert engine._core.mine_mark(spelled, rule_mode='real') == target, lhs
+            assert (engine._core.mine_mark(spelled, rule_mode='default') == target) \
+                is (tuple(lhs) in realised), f'{" ".join(lhs)}: f64 performs it iff it realises it'
+            assert (tuple(lhs), tuple(rhs)) not in keys(f64), lhs
+            assert (tuple(lhs), tuple(rhs)) not in keys(real), lhs
+        # each file's sidecar records its own mine
+        for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_real.json'), 'real'),
+                           (str(tmp_path / 'mined_permissive.json'), 'permissive')):
+            prov = json.load(open(path + '.provenance.json'))
+            assert prov['mode'] == mode
+            assert prov['gates']['file'] == path.rsplit('/', 1)[-1]
+            # the file holds only what its own mode licenses (the release verification)
+            from simplipy.verify import verify_ruleset
+            assert verify_ruleset(path, mode=mode)['offenders'] == [], mode
 
     def test_the_unjudgeable_buckets_still_fail_closed(self) -> None:
         """Relaxing the gate must not relax it for verdicts that carry no tier at all.
@@ -2204,7 +2244,7 @@ class TestTheGateRoutesInsteadOfDeleting:
         from simplipy.verify import FATAL_BUCKETS
         from simplipy.verify._contract import _tier
         for bucket in FATAL_BUCKETS:
-            if bucket in ('ENGINE-MISALIGN', 'KILL'):
+            if bucket in ('ENGINE-MISALIGN', 'KILL', 'F64-ONLY'):
                 continue
             for realised in (True, False, None):
                 assert _tier(bucket, realised) == 'reject', bucket
@@ -2229,16 +2269,18 @@ class TestCertifyRulesRoutesLikeTheMine:
 
     def test_a_real_tier_proposal_survives_instead_of_being_deleted(self, tmp_path) -> None:
         """`atanh(tanh x)` and `log(exp x)` are true on R and not f64-realised (tanh
-        attains 1.0 from 18.990341103219276, exp overflows at 709.782713), so both are
+        attains 1.0 from 19.061547465398498, exp overflows at 709.782713), so both are
         ENGINE-MISALIGN, tier `real`. Before the fix the gate deleted both."""
         from conftest import acj_config_path, require_or_skip
         require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
         engine = self._bare(tmp_path)
         out = engine.certify_rules([['atanh', 'tanh', 'x0'], ['log', 'exp', 'x0']],
                                    dummy_variables=1, X=256, verbose=False)
-        survived = {(tuple(r[0]), tuple(r[1])) for r in out}
-        assert (('atanh', 'tanh', 'x0'), ('x0',)) in survived
-        assert (('log', 'exp', 'x0'), ('x0',)) in survived
+        # certify_rules judges in permissive, whose serve answer already performs both
+        # inverse pairs: there is nothing to certify, and nothing is deleted either.
+        assert out == []
+        for src in (['atanh', 'tanh', 'x0'], ['log', 'exp', 'x0']):
+            assert engine._core.mine_mark(src, rule_mode='permissive') == ['x0']
 
     def test_a_reject_tier_proposal_is_still_deleted(self, tmp_path) -> None:
         """The relaxation is exactly one step wide. `sin t -> t` is false on R AND not
@@ -2251,15 +2293,12 @@ class TestCertifyRulesRoutesLikeTheMine:
         assert not [r for r in out if tuple(r[1]) == ('x0',)]
 
 
-class TestTheUntestedBranchesOfTheRouter:
-    """Three properties the audit found asserted nowhere. Each is reachable with a small
-    fixture, and one of them -- the fail-closed twin intersection -- passed the entire
-    suite when flipped to a fail-OPEN union."""
+class TestTheSidecarRecordsTheGates:
+    """What a gate drops is RECORDED, never silently absent: the final gate's unlicensed
+    and preempted rows, and per length the judge loop's rounds, its exclusions and the
+    twin-shadowed rows."""
 
-    def test_the_reject_arm_records_rather_than_silently_drops(self, tmp_path) -> None:
-        """The owner's ruling has two halves and only one was covered: rules are routed,
-        AND the rejects are RECORDED. `prov['triple']['rejected']` was written by no test,
-        so a change that stopped emitting it would have gone unnoticed."""
+    def test_every_gate_key_is_present_even_when_empty(self, tmp_path) -> None:
         import yaml
         from conftest import acj_config_path, require_or_skip
         require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
@@ -2273,84 +2312,21 @@ class TestTheUntestedBranchesOfTheRouter:
                           dummy_variables=1, extra_internal_terms=['0', '1', '(-1)'],
                           X=128, seed=7, promote_sorts=False, output_file=out)
         prov = json.load(open(out + '.provenance.json'))
-        assert 'triple' in prov
-        assert set(prov['triple']['counts']) == {'f64', 'real', 'permissive'}
+        assert 'triple' not in prov
         # present even when empty: a key that appears only on failure cannot be audited
-        assert 'rejected' in prov['triple']
-        assert isinstance(prov['triple']['rejected'], list)
-        assert set(prov['triple']['files']) == {'f64', 'real', 'permissive'}
-
-    def test_the_licence_is_judged_on_the_WRITTEN_spelling_not_the_served_canon(self) -> None:
-        """Task #83. The writer serializes `engine.simplification_rules` verbatim, so
-        the routed licence must come from judging exactly those pairs -- the forms
-        release verification (`verify_ruleset` post-write) sees. The served entries are
-        load-minted RESPELLINGS (the canon folds ground subterms to exact rationals),
-        and judging those licensed 13 constant-fold rules for f64 while the file-level
-        gate and the deployed f64 drift (1-6 ulp) both said `real`.
-
-        Asserted through `_route_triple` itself with a spelling-keyed fake judge: the
-        file spelling judges `real`, the served respelling judges `core`. Routing on the
-        served canon puts the rule into rules_f64; routing on the written spelling must
-        put it into rules_real ONLY. A second source rule with no served entry stays
-        rejected -- EXISTENCE is still the served set's call.
-        """
-        import simplipy.mining as M
-
-        file_rule = (['+', 'tanh', 'log', '9', '_0'], ['+', 'inv', '1.025', '_0'])
-        served_respelling = (['+', '_0', 'tanh', 'log', '9'], ['+', '_0', '/', '40', '41'])
-        unserved = (['sin', '_0'], ['_0'])
-
-        class FakeCore:
-            def ac_served_rules(self):
-                return [(served_respelling[0], served_respelling[1], 0)]
-
-        class FakeEngine:
-            simplification_rules = [file_rule, unserved]
-            _core = FakeCore()
-            _operators_config: dict = {}
-
-        tier_by_spelling = {
-            (tuple(file_rule[0]), tuple(file_rule[1])): 'real',
-            (tuple(served_respelling[0]), tuple(served_respelling[1])): 'core',
-            (tuple(unserved[0]), tuple(unserved[1])): 'core',
-        }
-
-        def spelling_keyed_judge(rules, **kw):
-            return {'detail': [
-                {'idx': i, 'tier': tier_by_spelling[(tuple(lhs), tuple(rhs))],
-                 'lhs': ' '.join(lhs), 'rhs': ' '.join(rhs)}
-                for i, (lhs, rhs) in enumerate(rules)]}
-
-        import simplipy.verify as V
-        saved = V.verify_ruleset
-        V.verify_ruleset = spelling_keyed_judge
-        try:
-            triple, rejected, meta = M._route_triple(FakeEngine())
-        finally:
-            V.verify_ruleset = saved
-
-        key = (tuple(file_rule[0]), tuple(file_rule[1]))
-        got = {m for m in ('f64', 'real') if key in {(tuple(a), tuple(b)) for a, b in triple[m]}}
-        assert got == {'real'}, got     # served-canon routing would say {'f64', 'real'}
-        # the unserved rule is rejected on EXISTENCE, whatever its spelling judges
-        assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in rejected] == [
-            (tuple(unserved[0]), tuple(unserved[1]))]
-
-    def test_a_rule_with_no_served_entry_is_licensed_nowhere(self) -> None:
-        """The load-minted-twins lesson in the other direction: never infer a licence for
-        something the matcher never saw. `_route_triple` reads `allowed.get(i, frozenset())`,
-        and the default is the empty set, not `core`."""
-        from simplipy.mining import _assert_triple_invariants, _TIER_MODES
-        A, B = [['x0'], ['x0']], [['y0'], ['y0']]
-        # B is licensed nowhere, so it must be REJECTED, not quietly served
-        _assert_triple_invariants({'f64': [A], 'real': [A], 'permissive': [A]},
-                                  [B], [A, B], {0: _TIER_MODES['core'], 1: frozenset()})
-        with pytest.raises(AssertionError, match='triple invariant'):
-            _assert_triple_invariants({'f64': [A, B], 'real': [A], 'permissive': [A, B]},
-                                      [], [A, B], {0: _TIER_MODES['core'], 1: frozenset()})
+        assert isinstance(prov['gates']['unlicensed'], list)
+        assert isinstance(prov['gates']['preempted'], list)
+        assert prov['gates']['file'] == 'mined.json'
+        assert set(prov['per_length']) == {'1', '2', '3'}
+        for row in prov['per_length'].values():
+            assert row['judge_rounds'] >= 1
+            assert isinstance(row['excluded'], list)
+            assert isinstance(row['twin_shadowed'], list)
+        # the climb's resume point is removed once the file is final
+        assert not (tmp_path / 'mined.json.checkpoint.json').exists()
 
 
-class TestTheRouterJudgesTheFileSpelling:
+class TestTheFinalGateJudgesTheFileSpelling:
     """Task #83 regression: the constant-fold offender family. Mined spelling
     `op(hyperbolic(log n), slot)` with an exact-rational decimal respelling on the RHS:
     true on R (the fold IS an exact rational -- tanh(log 9) = 40/41 = 1/1.025), 1-6 ulp
@@ -2358,8 +2334,8 @@ class TestTheRouterJudgesTheFileSpelling:
     ground subterm (`+ tanh log 9 ?0` serves as `+ ?0 / 40 41`) and judging THAT spelling
     licensed f64 -- which put 13 such rules into a rules_f64.json that release
     verification then rejected. Through the fixed router every one must land in
-    rules_real and stay out of rules_f64, judged end-to-end by the real contract judge on
-    a real engine -- no mine required.
+    rules_real and stay out of rules_f64: the final gate judges the file spelling, end-to-end
+    with the real contract judge on a real engine -- no mine required.
     """
 
     #: The two named exemplars (task #83) verbatim, plus the measured divergent family
@@ -2377,17 +2353,20 @@ class TestTheRouterJudgesTheFileSpelling:
         (['pow', '?0', 'tanh', 'log', '9'], ['pow', '?0', 'inv', '1.025']),
     ]
 
-    def test_the_offender_family_routes_to_real_not_f64(self) -> None:
+    def test_the_offender_family_is_licensed_in_real_not_f64(self) -> None:
         import yaml
         from conftest import acj_config_path, require_or_skip
-        from simplipy.mining import _route_triple
+        from simplipy.mining import RuleMiner, judge_tiers
         require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
         ops = yaml.safe_load(open(acj_config_path()))['operators']
-        engine = SimpliPyEngine(operators=ops,
-                                rules=[[list(lhs), list(rhs)] for lhs, rhs in self.OFFENDERS])
-        triple, rejected, meta = _route_triple(engine)
-        f64 = {(tuple(lhs), tuple(rhs)) for lhs, rhs in triple['f64']}
-        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in triple['real']}
+        rules = [[list(lhs), list(rhs)] for lhs, rhs in self.OFFENDERS]
+        engine = SimpliPyEngine(operators=ops, rules=rules)
+        engine.real_simplification_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+        engine._replace_rules(engine.simplification_rules)
+        miner = RuleMiner(engine)
+        judged: dict = {}
+        f64 = set(miner._final_gate('default', judge_tiers, judged)[0])
+        real = set(miner._final_gate('real', judge_tiers, judged)[0])
         for lhs, rhs in self.OFFENDERS:
             key = (tuple(lhs), tuple(rhs))
             assert key in real, f'{lhs} -> {rhs} must serve in rules_real'
@@ -2433,8 +2412,8 @@ class TestThePerModePrune:
         assert engine.simplify(['1e-08']) == engine.simplify(['0.00000001'])
 
 
-class TestCorpusDominanceReplacesTheSetInvariant:
-    """`rules_corpus == rules_f64 UNION rules_real` was retired: once folding is
+class TestPermissiveDominanceReplacesTheSetInvariant:
+    """`rules_permissive == rules_f64 UNION rules_real` was retired: once folding is
     mode-dependent the three modes live in different canonical worlds, so set overlap
     measures SPELLING, not capability. This is the property it stood proxy for."""
 
@@ -2442,21 +2421,23 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
-        from conftest import require_triple_or_skip
-        require_triple_or_skip('needs the shipped corpus set')
-        # NOT wiped: the shipped artifact's own 5,471-rule real set is the thing corpus
-        # has to dominate. Emptying it first made the check trivial.
+        from conftest import require_triple
+        require_triple('needs the shipped permissive set')
+        # NOT wiped: the shipped artifact's own real set is the thing permissive has to
+        # dominate. Emptying it first made the check trivial.
         engine = SimpliPyEngine.from_config(acj_config_path())
-        assert engine._core.mode_rules_len('real') is not None
-        rows = json.load(open(os.path.join(
-            os.path.dirname(acj_config_path()), '..', '..', '..',
-            'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
-        assert assert_permissive_dominates(engine, rows) == []
+        assert engine._core.mode_rules_len(rule_mode='real') is not None
+        rows = default_corpus()[:120]
+        # the corpus's known violation (conftest): real's one zero and permissive's signed zero
+        # give that row different values, so real's cheaper answer is not permissive's to take
+        from conftest import PERMISSIVE_DOMINANCE_KNOWN
+        known = [v for v in PERMISSIVE_DOMINANCE_KNOWN if v['expression'] in map(list, rows)]
+        assert assert_permissive_dominates(engine, rows) == known
 
     def test_it_CAN_fail(self) -> None:
         """An invariant that cannot fail proves nothing -- three tautologies shipped in
-        this work before being caught. Cripple corpus to real's semantics and the check
-        must report it."""
+        this work before being caught. Cripple permissive to real's semantics and the
+        check must report it."""
         from simplipy import Mode
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_permissive_dominates
@@ -2464,17 +2445,59 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         engine = SimpliPyEngine.from_config(acj_config_path())
         engine._core.set_mode_rules('real', [])
 
-        class CorpusCrippled:
+        class PermissiveCrippled:
             def __init__(self, e):
                 self._e, self._core = e, e._core
 
             def simplify(self, expr, mode=None):
                 return self._e.simplify(expr, mode=Mode.real if mode is Mode.permissive else mode)
 
-        rows = json.load(open(os.path.join(
-            os.path.dirname(acj_config_path()), '..', '..', '..',
-            'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
-        assert assert_permissive_dominates(CorpusCrippled(engine), rows) != []
+        rows = default_corpus()[:120]
+        assert assert_permissive_dominates(PermissiveCrippled(engine), rows) != []
+
+    def test_a_row_that_raises_is_a_reported_violation(self) -> None:
+        """Fail-closed: a mode that raises on a row makes that row a violation carrying
+        the error. Skipping it would let a crash read as dominance."""
+        from simplipy import Mode
+        from conftest import acj_config_path, require_or_skip
+        from simplipy.mining import assert_permissive_dominates
+        require_or_skip(acj_config_path(), 'needs the acj-4 asset')
+        engine = SimpliPyEngine.from_config(acj_config_path())
+
+        class PermissiveRaises:
+            def __init__(self, e):
+                self._e, self._core = e, e._core
+
+            def simplify(self, expr, mode=None):
+                if mode is Mode.permissive and expr == ['sin', 'x1']:
+                    raise RuntimeError('permissive crashed')
+                return self._e.simplify(expr, mode=mode)
+
+        rows = [['sin', 'x1'], ['+', 'x1', '1']]
+        assert assert_permissive_dominates(engine, rows) == []
+        assert assert_permissive_dominates(PermissiveRaises(engine), rows) == [
+            {'expression': ['sin', 'x1'], 'error': 'RuntimeError: permissive crashed'}]
+        # an answer the yardstick cannot price is reported the same way
+        [unpriced] = assert_permissive_dominates(engine, [['nosuchop', 'x1']])
+        assert unpriced['expression'] == ['nosuchop', 'x1']
+        assert unpriced['error'].startswith('ValueError'), unpriced
+
+    def test_the_yardstick_is_f64s_certified_canon(self) -> None:
+        """One declared cross-mode scale: each answer parsed by its own mode and priced,
+        certified, in f64's canon. The parse is the mode's own: f64 reads `atanh(tanh(x1))`
+        as written, real and permissive as `x1`."""
+        from conftest import acj_config_path, require_or_skip
+        from simplipy.mining import cross_mode_complexity
+        require_or_skip(acj_config_path(), 'needs the acj-4 asset')
+        engine = SimpliPyEngine.from_config(acj_config_path())
+        e = ['+', 'atanh', 'tanh', 'x1', 'x2']
+        assert engine.complexity(e, mode='f64') == 31000
+        assert engine.complexity(e, mode='real') == 15000
+        for mode, rule_mode, price in (('f64', 'default', 31000), ('real', 'real', 15000),
+                                       ('permissive', 'permissive', 15000)):
+            assert cross_mode_complexity(engine, e, mode) == price, mode
+            assert cross_mode_complexity(engine, e, mode) == \
+                engine._core.ac_complexity_certified(e, 'default', rule_mode=rule_mode)
 
 
 class TestThePruneIsInstanceSafe:
@@ -2545,7 +2568,9 @@ class TestCanonicalSourceClassCertification:
         # At least one length must actually collapse, or the dedup is untested here.
         assert any(v["classes"] < v["enumerated"] for v in census.values()), census
         for v in census.values():
-            assert 0 < v["classes"] <= v["enumerated"]
+            # an atom has nothing below it, so it is no source: length 1 has none
+            assert 0 <= v["classes"] <= v["enumerated"]
+        assert census["3"]["classes"] > 0
 
     def test_a_skipped_spelling_is_still_served(self, engine) -> None:
         """The whole licence for skipping: same key => the loader builds the same pattern,
@@ -2570,7 +2595,7 @@ class TestCanonicalSourceClassCertification:
                     grown += [[op] + a + b for a in exprs for b in exprs if len(a) + len(b) <= 2]
             exprs = [e for e in exprs + grown if len(e) <= 3]
         classes: dict[tuple, list[list[str]]] = {}
-        for e, k in zip(exprs, core.ac_canonical_keys([list(e) for e in exprs])):
+        for e, k in zip(exprs, core.ac_canonical_keys([list(e) for e in exprs], rule_mode="default")):
             if k is not None:
                 classes.setdefault(tuple(k), []).append(e)
         multi = {k: v for k, v in classes.items() if len(v) > 1}
@@ -2602,7 +2627,7 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
         # candidate that emits; the composite spelling never can.
         cands = [["x0"], ["<constant>"], ["exp", "1"], ["exp", "<constant>"],
                  ["pow2", "<constant>"], ["*", "<constant>", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_filtered == 3, "exp(1), exp(<c>) and pow2(<c>) are all var-free composites"
         assert lib.n_candidates == 3
 
@@ -2614,14 +2639,13 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
         it is never a var-free composite."""
         x_flat, n = mining_x
         cands = [["x0"], ["<constant>"], ["1"], ["pow", "1", "<constant>"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_candidates == 3, "the foldable composite must be REFUSED at admission"
         assert lib.n_filtered == 1
         src = ["rootn", "1", "<constant>"]
-        _, _, mark = engine._core.ac_judge(list(src), 48)
-        got = engine._core.find_rule_lib(list(src), len(src), None, lib, challenges=16,
+        got = engine._core.find_rule_lib(list(src), lib, challenges=16,
                                          retries=16, seed=1, rtol=1e-9, atol=1e-12,
-                                         min_informative=32, mark=mark)
+                                         min_informative=32, rule_mode='default')
         assert got is None or len(got) < 2 or any(
             t.startswith(("x", "_", "$", "?", "!")) for t in got), \
             f"emitted a var-free composite target: {got}"

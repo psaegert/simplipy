@@ -19,7 +19,8 @@ from fractions import Fraction
 import pytest
 
 from simplipy import Mode, SimpliPyEngine
-from conftest import acj_asset_dir, acj_config_path
+from conftest import (ACJ4_INTERIM_SUBSUMED, ACJ4_INTERIM_UPHILL, acj4_refused_rows, acj_asset_dir,
+                      acj_config_path)
 
 HYPER_PREFIXES = ("mult", "div")
 
@@ -124,7 +125,7 @@ class TestExplicitConstants:
             == ["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"]
         # `neg`/`inv` are the sanctioned STANDALONE unary spellings (function arguments,
         # lone reciprocals); inside bags the sections own all inverses.
-        assert engine.simplify(["tan", "neg", "x0"]) == ["tan", "neg", "x0"]
+        assert engine.simplify(["log", "neg", "x0"]) == ["log", "neg", "x0"]
         assert engine.simplify(["inv", "x0"]) == ["inv", "x0"]
         # The parser is liberal: in-bag `neg` on input maps to the section spelling
         # (constant-like terms sort LAST: x2 + 2.3, the polynomial convention).
@@ -178,6 +179,8 @@ class TestExplicitConstants:
         # evaluator); together they make divergent surfaces impossible to reintroduce.
         import math
 
+        import numpy as np
+
         from simplipy import operators as ops
 
         def tok(v: float) -> str:
@@ -185,9 +188,23 @@ class TestExplicitConstants:
                 return 'float("inf")' if v > 0 else 'float("-inf")'
             return repr(v)
 
-        for x in (-8.0, -2.0, -0.5, 0.0, 0.5, 2.0, 8.0, float("inf"), float("-inf")):
+        def agree(want: float, got: float) -> bool:
+            # `-0.0 == 0.0`: a zero (and so the infinity a negative index makes of it) agrees
+            # only with the zero of its sign, so equal values must also share their sign bit.
+            if math.isnan(want) or math.isnan(got):
+                return math.isnan(want) and math.isnan(got)
+            if want == got:
+                return math.copysign(1.0, want) == math.copysign(1.0, got)
+            return (math.isfinite(want) and math.isfinite(got)
+                    and abs(want - got) <= 1e-12 * max(abs(want), abs(got)))
+
+        for x in (-8.0, -2.0, -0.5, -0.0, 0.0, 0.5, 2.0, 8.0, float("inf"), float("-inf")):
             for n in (-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 7):
                 want = float(ops.rootn(x, float(n)))
+                # the fold prints its result as a token, which spells either zero `0`, so the
+                # sign is compared on the batch evaluator (the same kernel, read as floats)
+                got = engine._core.evaluate_batch(["rootn", "x0", str(n)], ["x0"], [x], 1, [])[0]
+                assert agree(want, got), f"rootn({x}, {n}): realization {want}, engine {got}"
                 folded = engine._core.evaluate_constant_subtree(
                     ["rootn", tok(x), str(n)])
                 assert folded is not None, (x, n)
@@ -195,10 +212,13 @@ class TestExplicitConstants:
                        "float(\"-inf\")": float("-inf"),
                        "float(\"nan\")": float("nan")}.get(folded)
                 got = float(folded) if got is None else got
-                agree = (math.isnan(want) and math.isnan(got)) or want == got or (
-                    math.isfinite(want) and math.isfinite(got)
-                    and abs(want - got) <= 1e-12 * max(abs(want), abs(got)))
-                assert agree, f"rootn({x}, {n}): realization {want}, engine {got}"
+                assert agree(abs(want) if want == 0 else want, got), \
+                    f"rootn({x}, {n}): realization {want}, fold {got}"
+        # IEEE-754 rootn at a zero, stated: an odd index keeps its sign, an even one gives +0
+        for n, at_negative_zero in ((3, -0.0), (1, -0.0), (-3, float("-inf")), (-1, float("-inf")),
+                                    (2, 0.0), (-2, float("inf"))):
+            assert agree(float(ops.rootn(-0.0, float(n))), at_negative_zero), n
+            assert agree(float(ops.rootn(np.array([-0.0]), float(n))[0]), at_negative_zero), n
 
     def test_fractional_power_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
         # A finite non-integer exponent has no odd part to carry a sign: pow(-0, y) is +0
@@ -225,6 +245,23 @@ class TestExplicitConstants:
             by_pow = engine.as_callable(['inv', 'pow', 'neg', 'x1', '/', '1', '2'], ['x1'])(x)
             by_root = engine.as_callable(['inv', 'rootn', 'neg', 'x1', '2'], ['x1'])(x)
         assert by_pow.tolist() == by_root.tolist() == [math.inf]
+
+    def test_abs_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
+        # abs is even: |-0| is +0 on scalars as on arrays, so its inverse is +inf on every path.
+        import math
+
+        import numpy as np
+
+        from simplipy import operators as ops
+
+        assert math.copysign(1.0, ops.abs(-0.0)) == 1.0
+        assert math.copysign(1.0, ops.abs(np.array([-0.0]))[0]) == 1.0
+        # a scalar keeps its own type: an int stays an int, a float a float
+        assert type(ops.abs(-3)) is int and ops.abs(-3) == 3
+        assert type(ops.abs(-2.5)) is float and ops.abs(-2.5) == 2.5
+        f = engine.as_callable(['inv', 'abs', 'x0'], ['x0'])
+        with np.errstate(divide='ignore'):
+            assert f(-0.0) == f(np.array([-0.0]))[0] == math.inf
 
     def test_str_input_returns_pretty_infix(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify("x1 * 2 + x1 * 3") == "5*x1"
@@ -409,7 +446,7 @@ class TestContracts:
         (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg))
         (tmp_path / "rules.json").write_text(json.dumps(rules))
         e = SimpliPyEngine.from_config(str(tmp_path / "config.yaml"))
-        kept, _, dropped, _ = e._core.ac_rules_info()
+        kept, _, dropped, _ = e._core.ac_rules_info_in_mode(rule_mode='default')
         assert kept == 1 and dropped == 3
         # The subjects the poison rules would have matched simplify without panicking or
         # growing, and the well-formed control still fires.
@@ -426,7 +463,9 @@ class TestContracts:
         # parse_decimal before the explicit bail. Timing is pinned at the Rust unit
         # level; here the exact values.
         assert engine.simplify(["0e2147483647"]) == ["0"]
-        assert engine.simplify(["-0.00e2147483647"]) == ["0"]
+        # a float spelling of zero with a minus sign is float64's -0, which f64 writes
+        assert engine.simplify(["-0.00e2147483647"]) == ["-0.0"]
+        assert engine.simplify(["-0.00e2147483647"], mode='real') == ["0"]
         # Nonzero mantissas beyond i128 keep their overflow bound and stay symbolic.
         assert engine.simplify(["1e2147483647"]) == ["1e2147483647"]
 
@@ -439,20 +478,18 @@ class TestContracts:
         # "below"; under the triple it is above.
         small_lit = ["*", "x0", "pow", "3", "-1"]           # x0 * 1/3
         big_lit = ["*", "x0", "pow", "1000000007", "-1"]    # x0 * 1/1000000007
-        assert engine._core.ac_ordered_below(small_lit, big_lit) is True
-        assert engine._core.ac_ordered_below(big_lit, small_lit) is False
+        assert engine._core.ac_ordered_below_in(small_lit, big_lit, rule_mode='default') is True
+        assert engine._core.ac_ordered_below_in(big_lit, small_lit, rule_mode='default') is False
         # At equal size, exact value order still decides (2 and 3 are both 2 bits).
-        assert engine._core.ac_ordered_below(["*", "2", "x0"], ["*", "3", "x0"]) is True
-        assert engine._core.ac_ordered_below(["*", "3", "x0"], ["*", "2", "x0"]) is False
+        assert engine._core.ac_ordered_below_in(["*", "2", "x0"], ["*", "3", "x0"], rule_mode='default') is True
+        assert engine._core.ac_ordered_below_in(["*", "3", "x0"], ["*", "2", "x0"], rule_mode='default') is False
         # STAGE 2 INVERSION (the measure's point): under the old triple a 54-bit
         # literal was "strictly simpler" than `x0 + 2` by node count alone. Under mu
         # the literal pays its bits (54 > 18), so the small symbolic expression is
         # below the huge literal -- the exact asymmetry that minted coefficient
         # materializations is gone at the ordering itself.
-        assert engine._core.ac_ordered_below(
-            ["9007199254740993"], ["+", "x0", "2"]) is False
-        assert engine._core.ac_ordered_below(
-            ["+", "x0", "2"], ["9007199254740993"]) is True
+        assert engine._core.ac_ordered_below_in(["9007199254740993"], ["+", "x0", "2"], rule_mode='default') is False
+        assert engine._core.ac_ordered_below_in(["+", "x0", "2"], ["9007199254740993"], rule_mode='default') is True
 
     def test_composite_step_heals_the_distribution_refusal(self, engine: SimpliPyEngine) -> None:
         # docs/formal.md, the composite rebuild case. In 2*(log(1) - c*sinh(x2))^2 the
@@ -529,7 +566,7 @@ class TestContracts:
             assert engine.simplify(oa) == oa
 
     def test_translation_audit_surface(self, engine: SimpliPyEngine) -> None:
-        kept, subsumed, dropped, _ = engine._core.ac_rules_info()
+        kept, subsumed, dropped, _ = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert kept > 400
         # An AC-JUDGED artifact carries zero arithmetic redundancy AT MINE TIME: the miner
         # never mints what the engine computes. Subsumption at LOAD therefore measures how
@@ -546,7 +583,12 @@ class TestContracts:
         # the shipped f64 file is 5,319 rows and reports kept = 5327 -- the
         # 1,049 rows whose pattern an earlier row already owns never reach translate.
         # `subsumed` is what this test pins, and it is unmoved at 0.)
-        assert subsumed == 0, f"republished artifact must be mint-time clean; got {subsumed}"
+        # The shipped file is a pre-0.15 mine, read in the canon it was certified in (the
+        # legacy one). (Read in f64's folded canon, `atanh pow (-10) (-9) -> -1e-09` was
+        # subsumed.) INTERIM (2026-10-18, conftest.ACJ4_INTERIM_SUBSUMED): the sign key made
+        # these rows one canonical state; the re-mine resets this to 0.
+        assert subsumed == len(ACJ4_INTERIM_SUBSUMED), \
+            f"the shipped file must translate loss-free but for the interim rows; got {subsumed}"
 
 
 class TestMatcherAssignmentCompleteness:
@@ -572,7 +614,7 @@ class TestMatcherAssignmentCompleteness:
             acj_config_path())
 
     def test_factoring_reach_is_alpha_invariant(self, fresh_engine: SimpliPyEngine) -> None:
-        fresh_engine._core.set_rules([self.FACTOR_VARS])
+        fresh_engine._core.set_mode_rules('default', [self.FACTOR_VARS])
         # The same shape t*a + t*b under different variable names. Canonical bag order
         # sorts the shared factor first in some spellings and last in others; every one
         # must factor.
@@ -588,7 +630,7 @@ class TestMatcherAssignmentCompleteness:
             assert shared in out, (expr, out)
 
     def test_factoring_reach_composite_shared_factor(self, fresh_engine: SimpliPyEngine) -> None:
-        fresh_engine._core.set_rules([self.FACTOR_ANY])
+        fresh_engine._core.set_mode_rules('default', [self.FACTOR_ANY])
         # The shared factor is a composite (sin x0), which sorts after plain variables in
         # the subject Mul bags.
         expr = ["+", "*", "sin", "x0", "x1", "*", "sin", "x0", "x2"]
@@ -772,45 +814,74 @@ class TestInfixCallSyntaxRoundTrip:
             assert engine.simplify(list(back)) == out, (expr, infix, back)
 
 
-class TestOneZeroPoleContract:
-    """Hardening H-016 (2026-08-03, S0): every zero is THE unsigned zero and its pole
-    is +inf (contract v2 §9.2, DECIDED 2026-07-18; §9.8.1 rejected a directional zero
-    outright). The interval layer's 0.6.0-era signed-zero device (b_mul minted -0.0,
-    u_inv / b_pow read the sign bit to pick the pole) implemented the referee-era
-    deployment semantics that §9.2 formally overturned -- the miner-side twin (the R2''
-    tie-break) was deleted at ratification, but the interval-layer device survived.
-    Observable: a zero-coefficient bag whose cofactor is a RECIPROCAL survives to the
-    ground-classification fold (the cofactor is not syntactically certainly-finite),
-    the fold read the interval class, and IEEE `0 x negative = -0.0` flipped the pole:
-    `inv(0/tanh(-2))` shipped a `-inf` LITERAL while every sibling spelling
-    (`inv(0*tanh(-2))`, `inv(0/(-2))`, `inv(0*x1)`) collapsed structurally first and
-    shipped +inf. Same value, two answers, judge-convicted (INF-CHANGE 40/40)."""
+class TestZeroPoles:
+    """Where an exact zero is inverted, `f64` and `permissive` keep the sign IEEE 754 gives it,
+    since their evaluator is float64: a product holding an exact zero is a zero of its other
+    members' sign, and its inverse distributes over them (`(0*f)^k = inf * f^k`, exact in IEEE
+    arithmetic for every `f`). `real` reads the one zero of the reals, whose pole is `+inf`.
+    Every spelling of one value gets one answer in each mode: `inv(0/tanh(-2))`,
+    `inv(0*tanh(-2))` and `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the
+    first and `+inf` for the others, H-016)."""
 
-    def test_surviving_zero_bag_pole_is_positive(self, engine: SimpliPyEngine) -> None:
-        assert engine.simplify(['inv', '/', '0', 'tanh', '-2']) == ['float("inf")']
+    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("-inf")'),
+                                           ('real', 'float("inf")')])
+    def test_a_negative_zero_inverts_to_minus_inf(self, engine: SimpliPyEngine, mode, want) -> None:
+        for tokens in (['inv', '/', '0', 'tanh', '-2'],
+                       ['inv', '*', '0', 'tanh', '-2'],
+                       ['inv', '/', '0', '-2'],
+                       ['inv', 'neg', '-', 'x1', 'x1'],
+                       engine.read_infix('pow(0/tanh(-2), -3)')):
+            assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
+        # an even power of a zero is +0, whatever its sign
+        assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -2)'), mode=mode) == \
+            ['float("inf")']
 
-    def test_odd_negative_exponent_pole_is_positive(self, engine: SimpliPyEngine) -> None:
-        # Under signed zero the odd-integer exponent carried -inf (pow(-0.0, -3) = -inf);
-        # under one zero the exponent's parity is irrelevant: pow(0, y<0) = +inf.
-        assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -3)')) == ['float("inf")']
+    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
+    def test_a_zero_takes_the_sign_of_its_co_members(self, engine: SimpliPyEngine, mode) -> None:
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode=mode) == ['/', 'float("inf")', 'x1']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode=mode) == \
+            ['/', 'float("inf")', 'x11']
+        # permissive keeps S in x/(0/S), as f64 does
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode=mode) == \
+            ['*', 'float("inf")', '*', 'x1', 'x2']
+
+    def test_a_written_signed_zero_keeps_float64s_sign_in_f64(self, engine) -> None:
+        # A written negation of a zero is f64's `-0.0`, which an odd function keeps, and a written
+        # difference subtracts by adding the negation (`-0 - 0` is `-0`): float64 gives -inf for
+        # all three. real reads its one zero, permissive a value up to the sign of a zero.
+        for mode in ('f64', 'permissive', 'real'):
+            for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0'],
+                           ['inv', '-', '-0.0', '0']):
+                want = 'float("-inf")' if mode == 'f64' else 'float("inf")'
+                assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
+        # -0 + 0 is +0, and x - 0 is x bit for bit
+        assert engine.simplify(['inv', '+', '-0.0', '0'], mode='f64') == ['float("inf")']
+        assert engine.simplify(['-', 'x1', '0'], mode='f64') == ['x1']
+
+    def test_real_reads_one_zero(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode='real') == ['float("inf")']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode='real') == \
+            ['float("inf")']
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode='real') == \
+            ['*', 'float("inf")', 'x1']
 
     def test_fuzz_row_188677_family(self, engine: SimpliPyEngine) -> None:
-        # x2 / ((0*x1/tanh(-2)) / inf): the denominator collapses to a ground zero bag;
-        # its -0.0 rendering flipped x2/0 to -inf*x2.
-        out = engine.simplify(engine.to_tagged(
-            ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']))
-        assert out == ['<mul>', 'float("inf")', 'x2', '</mul>']
-
-    def test_sibling_spellings_stay_positive(self, engine: SimpliPyEngine) -> None:
-        # Anti-regression: the structurally-collapsing spellings were already correct.
-        for tokens in (['inv', '*', '0', 'tanh', '-2'],
-                       ['inv', '/', '0', '-2'],
-                       ['inv', '*', '0', 'x1']):
-            assert engine.simplify(list(tokens)) == ['float("inf")'], tokens
+        # x2 / ((0*x1/tanh(-2)) / inf): the inverse of a product holding a zero, which takes the
+        # sign of x1 and of tanh(-2): -inf*x2/x1 in f64, +inf*x2 (one zero) in real.
+        import numpy as np
+        tokens = ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']
+        assert engine.simplify(list(tokens), mode='real') == ['*', 'float("inf")', 'x2']
+        out = engine.simplify(list(tokens))
+        x = np.array([[1.5, 2.5], [-1.5, 2.5], [1.5, -2.5], [-1.5, -2.5]])
+        f = engine.as_callable(out, ['x1', 'x2'])
+        with np.errstate(all='ignore'):
+            got = np.asarray(f(x[:, 0], x[:, 1]), dtype=float)
+        assert list(got) == [-np.inf, np.inf, np.inf, -np.inf], out
 
     def test_interval_layer_speaks_one_zero(self, engine: SimpliPyEngine) -> None:
-        # The oracle itself, not just the fold that consumes it: the class of a
-        # point-zero pole is POSINF regardless of how IEEE arithmetic renders the zero.
+        # The interval oracle reads the reals' one zero: the class of a point-zero pole is
+        # POSINF regardless of how IEEE arithmetic renders the zero. The float64 modes distribute
+        # the inverse of a product holding a zero before a ground node is classified.
         for tokens in (['inv', '/', '0', 'tanh', '-2'],
                        ['inv', '/', '0', '-2'],
                        ['inv', '*', '0', 'x0']):
@@ -819,14 +890,14 @@ class TestOneZeroPoleContract:
 
 class TestAtanhTanhBandIsPrecisionDerived:
     """S3: the atanh(tanh(t)) -> t collapse carried a band of 18, derived from where
-    f64 tanh ATTAINS +-1 (18.99). But tanh fails by COMPRESSION long before it
+    f64 tanh ATTAINS +-1 (19.06). But tanh fails by COMPRESSION long before it
     saturates -- it loses ~2|t|/ln2 bits of the argument approaching +-1 -- and under
     the realised criterion (`_ulp_gap <= REALISED_ULP = 8`, the same bar the judge
     holds every rule to) the roundtrip first breaches at |t| ~ 2.7 (2.677 audit host,
     2.808 this host, libm-dependent; by |t| = 18 the drift is ~0.03-0.06 ABSOLUTE).
     The band is now 2: the last integer magnitude ceiling on the safe side of every
-    measured breach. The overflow-derived bands (log/exp 709, sinh/cosh 710) are a
-    different disease and keep their attainment thresholds."""
+    measured breach. Saturation is not overflow: the band stays, where the overflow
+    cut-offs of log o exp and the sinh/cosh pairs are gone."""
 
     def test_collapses_inside_the_band(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['atanh', 'tanh', 'sin', 'x0']) == ['sin', 'x0']
@@ -852,9 +923,10 @@ class TestFlatPointCollapseFloors:
     neighbourhood of 1, and cosh is quadratically flat at 0. Measured against
     `_ulp_gap <= REALISED_ULP = 8`: log(exp(t)) breaches for ALL |t| < ~0.0625
     (worst 6.7e7 ULP at 1e-8) and acosh(cosh(t)) for all |t| < ~0.25 (worst ~4.5e18),
-    while inside |t| >= 1 the measured worst is 0 and 1 ULP. Both arms now carry a
-    proven magnitude floor of 1 next to their ceiling; asinh(sinh(t)) measured clean
-    over its whole band (worst 2 ULP) and carries none."""
+    while at |t| >= 1 the measured worst is 0 and 1 ULP wherever nothing overflows or
+    underflows. Both arms carry a proven magnitude floor of 1 (and no ceiling: an overflow
+    cuts no band); asinh(sinh(t)) measured clean wherever sinh does not overflow (worst
+    2 ULP) and carries none."""
 
     def test_collapses_with_a_proven_floor(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['log', 'exp', '2']) == ['2']
@@ -866,13 +938,17 @@ class TestFlatPointCollapseFloors:
         ULP. All three collapsed under the ceiling-only licence."""
         assert engine.simplify(['log', 'exp', 'sin', 'x0']) == \
             ['log', 'exp', 'sin', 'x0']
-        assert engine.simplify(['log', 'exp', '0.5']) == ['log', 'exp', '/', '1', '2']
+        # A ground argument is the walk's to fold, to the float the evaluator computes, kept
+        # only where it is cheaper: exactly 0.5 for 0.5, while 0.0137 comes back 34 ULP off
+        # (0.013700000000000468), dearer than the expression.
+        assert engine.simplify(['log', 'exp', '0.5']) == ['/', '1', '2']
+        assert engine.simplify(['log', 'exp', '0.0137']) == ['log', 'exp', '0.0137']
         assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
             ['acosh', 'cosh', 'sin', 'x0']
 
-    def test_the_clean_pair_keeps_its_ceiling_only_licence(
-            self, engine: SimpliPyEngine) -> None:
+    def test_the_clean_pair_needs_no_licence(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['asinh', 'sinh', 'sin', 'x0']) == ['sin', 'x0']
+        assert engine.simplify(['asinh', 'sinh', 'x0']) == ['x0']
 
 
 class TestTranscendentalAtomEnclosures:
@@ -893,8 +969,8 @@ class TestTranscendentalAtomEnclosures:
         # (f64 gives 1.2246467991473532e-16), so from 0.14.0 it is a `real`-tier rule.
         # The pole is therefore reached in `real`, and the default mode keeps the
         # expression -- the two soundnesses disagreeing, on one row.
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         from simplipy import Mode
         for tokens in (['inv', '*', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
@@ -908,8 +984,8 @@ class TestTranscendentalAtomEnclosures:
         # `sin(np.pi) -> 0` is `real`-tier from 0.14.0 (exactly true, and f64 computes
         # 1.2246467991473532e-16), so the pole is reached in the mode whose authority
         # is mathematics.
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         from simplipy import Mode
         out = engine.simplify(['inv', '/', 'abs', 'sin', 'np.pi',
                                'inv', '-', '-', 'x4', 'x1', '*', 'x2', '-2'],
@@ -919,13 +995,12 @@ class TestTranscendentalAtomEnclosures:
     def test_true_nonzero_atom_grounds_still_certify(self, engine: SimpliPyEngine) -> None:
         # The enclosure must not blanket-refuse: pi itself and shifted atoms are
         # rigorously bounded away from 0, so the licensed split still fires.
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         assert engine.simplify(engine.to_tagged(['inv', '*', 'np.pi', 'x1'])) != \
             ['inv', '<mul>', 'np.pi', 'x1', '</mul>']  # some reduction happened
-        # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In
-        # `f64` the fold is declined (see R1) and the enclosure must STILL not
-        # blanket-refuse -- which is the property this test exists for.
+        # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In `f64` the
+        # walk folds it to its float, which is 2.0 too (sin(pi) is 1.2e-16 there).
         from simplipy import Mode
         out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'],
                               mode=Mode.real)
@@ -934,7 +1009,7 @@ class TestTranscendentalAtomEnclosures:
         # fired is the property, and `!= input` is true of every subject whether the
         # enclosure certifies or blanket-refuses.
         f64_out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'])
-        assert f64_out == ['/', 'x1', '+', 'sin', 'np.pi', '2'], f64_out
+        assert f64_out == ['/', 'x1', '2'], f64_out
 
 
 class TestSignDistributionCanonicalUniqueness:
@@ -952,9 +1027,9 @@ class TestSignDistributionCanonicalUniqueness:
              'sinh', '-', 'x2', 'exp', 'float("inf")']
         out = engine.simplify(engine.to_tagged(list(x)))
         assert engine.simplify(list(out)) == out, out
-        # The one-call answer must already be the reduced fixpoint (both signs cancel).
-        assert out == ['acos', '<add>', 'tanh', 'acos', '<constant>',
-                       'float("inf")', '</add>'], out
+        # The one-call answer must already be the reduced fixpoint (both signs cancel), and it
+        # is NaN: `acos(tanh(acos(c)) + inf)` is the acos of +inf at every constant.
+        assert out == ['float("nan")'], out
 
     def test_fuzz_row_7333_explicit_fixpoint(self, engine: SimpliPyEngine) -> None:
         x = ['/', '-', 'float("-inf")', 'acosh', '*', '1.111', 'atanh', 'x2', 'inv', '-2']
@@ -985,7 +1060,7 @@ class TestLossyReciprocalRejoinProjection:
         sound = engine.simplify(list(x))
         lossy = engine.simplify(list(x), mode=Mode.permissive)
         assert lossy == sound, (lossy, sound)
-        assert lossy[:2] == ['inv', '<mul>'], lossy
+        assert lossy[:4] == ['<mul>', '1', '<div>', '<mul>'], lossy
 
     def test_partner_cancellation_survives(self, engine: SimpliPyEngine) -> None:
         x = ['*', 'acos', 'x0', 'inv', '*', 'acos', 'x0', 'atan', 'x1']
@@ -1251,10 +1326,10 @@ class TestConstSumSignAbsorption:
     def test_mixed_sum_sign_lands_on_nonconst_term(self, engine: SimpliPyEngine) -> None:
         out = engine.simplify(engine.to_tagged(
             ['neg', '+', '*', '<constant>', 'x4', 'tanh', 'x1']))
-        # The Const term refits sign-free; tanh carries the sign (pushed inside by the
-        # odd-function sign-pull rule).
-        assert out == ['<add>', 'tanh', 'neg', 'x1',
-                       '<mul>', '<constant>', 'x4', '</mul>', '</add>'], out
+        # The Const term refits sign-free; tanh carries the sign, outside on the tie (fewest
+        # signs, then outermost).
+        assert out == ['<add>', '<mul>', '<constant>', 'x4', '</mul>',
+                       '<sub>', 'tanh', 'x1', '</add>'], out
         assert engine.simplify(list(out)) == out
 
     def test_bag_coefficient_parking_is_stable(self, engine: SimpliPyEngine) -> None:
@@ -1292,8 +1367,8 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
 
     def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
         # A PARTNERED sentinel cancels in phase 1, before the licence expires.
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         x = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
         assert engine.simplify(list(x), mode=Mode.permissive) == ['x0']
 
@@ -1313,11 +1388,18 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
                        '</add>', '</mul>'], out
         assert engine.simplify(list(out), mode=Mode.permissive) == out
 
-    def test_neg_one_coefficient_joins_inside(self, engine: SimpliPyEngine) -> None:
-        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4'])
+    def test_neg_one_coefficient_stands_outside_the_join(self, engine: SimpliPyEngine) -> None:
+        # The -1 inside the joined base and the negation outside it cost the same (a sign is
+        # one bit wherever it sits), so the sign key places it outermost. (The join is offered
+        # where the sound certificate does not split the inverse: `x3 + |x3|`, zero on all of
+        # x3 <= 0; `exp(x3) + log(sin(x4))` it reads null, moving with x3 on every slice.)
+        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'x3', 'abs', 'x3'])
         out = engine.simplify(list(x), mode=Mode.permissive)
-        assert out == ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
-                       'x4', '</add>', '</mul>'], out
+        assert out == ['<mul>', '-1', '<div>', '<mul>', 'x0', '<add>', 'x3', 'abs', 'x3',
+                       '</add>', '</mul>', '</mul>'], out
+        inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'x3', 'abs', 'x3', '</add>', '</mul>']
+        assert engine.complexity(out, mode=Mode.permissive) == \
+            engine.complexity(inside, mode=Mode.permissive)
         assert engine.simplify(list(out), mode=Mode.permissive) == out
 
 
@@ -1344,19 +1426,29 @@ class TestC36DropCensus:
                'sin': {'realization': 'np.sin', 'alias': [], 'inverse': None,
                        'arity': 1, 'precedence': 3, 'commutative': False}}
         engine = SimpliPyEngine(operators=ops, rules=list(rules))
-        census = engine._core.ac_rules_drop_census()
+        census = engine._core.ac_rules_drop_census(rule_mode="default")
         assert census.get('const-count-increase') == 1, census
         assert census.get('catch-all-lhs') == 1, census
         assert census.get('unbound-rhs-wildcard') == 1, census
         assert census.get('not-ordered-below', 0) >= 1, census
         assert census.get('arithmetic-subsumed', 0) >= 1, census
-        kept, subsumed, dropped, _ = engine._core.ac_rules_info()
+        kept, subsumed, dropped, _ = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert dropped == sum(v for k, v in census.items()
                               if k not in ('arithmetic-subsumed', 'registry-pole-class-change')), \
             'census must reconcile with the aggregate counter'
 
-    def test_clean_artifact_census_is_empty(self, engine: SimpliPyEngine) -> None:
-        assert engine._core.ac_rules_drop_census() == {}
+    def test_artifact_census_is_the_interim_lag(self, engine: SimpliPyEngine) -> None:
+        # A clean artifact's census is empty (read in the canon it was certified in, see
+        # test_translation_audit_surface). INTERIM (2026-10-18): exactly the rows the sign key
+        # moved past the staged asset (conftest), by count and by rule; the re-mine restores
+        # `{}`.
+        expected = {'arithmetic-subsumed': len(ACJ4_INTERIM_SUBSUMED),
+                    'not-ordered-below': len(ACJ4_INTERIM_UPHILL)}
+        assert engine._core.ac_rules_drop_census(rule_mode="default") == \
+            {k: v for k, v in expected.items() if v}
+        subsumed, uphill = acj4_refused_rows(engine)
+        assert subsumed == list(ACJ4_INTERIM_SUBSUMED)
+        assert uphill == list(ACJ4_INTERIM_UPHILL)
 
 
 class TestSuppressedProbeAndShadowCensus:
@@ -1375,7 +1467,7 @@ class TestSuppressedProbeAndShadowCensus:
         for probe in (["sin", "neg", "x0"], ["*", "(-1)", "abs", "x1"],
                       ["+", "x0", "*", "2", "x0"]):
             assert engine._core.ac_simplify_suppressed(
-                probe, 48, "explicit", DEFAULT_EFFORT, []) == list(engine.simplify(probe))
+                probe, 48, "explicit", DEFAULT_EFFORT, [], rule_mode="default") == list(engine.simplify(probe))
 
     def test_suppressing_a_row_is_the_engine_without_it(self, engine: SimpliPyEngine) -> None:
         from simplipy.engine import DEFAULT_EFFORT
@@ -1386,13 +1478,13 @@ class TestSuppressedProbeAndShadowCensus:
             (["atan", "asinh", "abs", "?0"], ["abs", "atan", "asinh", "?0"]),
         ]
         full = SimpliPyEngine(operators=ops, rules=list(rules))
-        assert full._core.ac_shadow_census() == []  # no cross-rule state: suppression is exact
+        assert full._core.ac_shadow_census(rule_mode="default") == []  # no cross-rule state: suppression is exact
         probe = ["atan", "asinh", "abs", "x0"]
         for i in range(len(rules)):
             without = SimpliPyEngine(
                 operators=ops, rules=[r for j, r in enumerate(rules) if j != i])
             assert full._core.ac_simplify_suppressed(
-                probe, 48, "explicit", DEFAULT_EFFORT, [i]) == list(without.simplify(probe))
+                probe, 48, "explicit", DEFAULT_EFFORT, [i], rule_mode="default") == list(without.simplify(probe))
 
     def test_shadow_census_names_the_sign_sibling_pair(self, engine: SimpliPyEngine) -> None:
         # Each rule is canonically the other's orientation twin, so each one's twin is
@@ -1404,7 +1496,7 @@ class TestSuppressedProbeAndShadowCensus:
             (["-", "?1", "acosh", "atanh", "?0"], ["-", "?1", "?0"]),
         ]
         e = SimpliPyEngine(operators=ops, rules=list(sib))
-        assert e._core.ac_shadow_census() == [
+        assert e._core.ac_shadow_census(rule_mode="default") == [
             (0, 1, False, "twin-shadow"), (1, 0, False, "twin-shadow")]
 
     def test_refund_prunes_exactly_one_of_a_mutually_derivable_pair(
@@ -1418,5 +1510,5 @@ class TestSuppressedProbeAndShadowCensus:
             (("-", "acosh", "atanh", "?0", "?1"), ("-", "?0", "?1")),
             (("-", "?1", "acosh", "atanh", "?0"), ("-", "?1", "?0")),
         ]
-        kept = refund(list(sib), engine._operators_config, set())
+        kept = refund(list(sib), engine._operators_config, set(), rule_mode='default')
         assert kept == [sib[1]]

@@ -140,6 +140,10 @@ impl TokenTable {
         for a in aliases {
             t.intern(a, ops);
         }
+        // `f64`'s written negative zero (`ac::expr::NEG_ZERO`): the constructors build it, and
+        // a rule holding one is stored per-Engine, so it is a TABLE id (appended: every other
+        // id is unchanged).
+        t.intern(crate::ac::expr::NEG_ZERO, ops);
         // (The former cc_inverse_op tail interned the config's +/* inverse names here.
         // For every real config that is a no-op on table contents -- `-` and `/` are
         // eagerly interned above, and an inverse naming another OPERATOR is interned

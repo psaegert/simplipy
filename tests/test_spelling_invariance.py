@@ -10,18 +10,17 @@ Pinned here: the infix text and the token answer are one state at one price on t
 corpus; the token answers and the mining judge keep the 0.14.7 spellings; and the source keeps
 the reader's rule inside the infix printer.
 """
-import json
 import os
 import re
 
 import pytest
 
 from simplipy.engine import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 PI = '3.141592653589793'
 
 
@@ -38,9 +37,7 @@ def tokens(eng, text):
 
 class TestOneStateTwoSpellings:
     def test_the_infix_text_reads_back_to_the_token_answer_at_the_same_price(self, eng):
-        from conftest import require_or_skip
-        require_or_skip(CORPUS, 'tracked corpus not present')
-        rows = json.load(open(CORPUS))
+        rows = default_corpus()
         for i, row in enumerate(rows):
             answer = list(eng.simplify(list(row)))
             text = eng.simplify(eng.to_infix(answer))
@@ -49,7 +46,8 @@ class TestOneStateTwoSpellings:
         assert len(rows) == 400
 
     def test_the_reader_spelling_reads_back_to_the_token_answer_at_the_same_price(self, eng):
-        # the corpus has no value the reader's spelling touches; these do (25 of 44)
+        # the corpus has no value the reader's spelling touches; these do (19 of 44: the six
+        # roots of a constant fold to their floats, which carry no long integer)
         sources = [f'{c}*x1/({k}*{PI})' for c in (1, 3, 7) for k in range(1, 13)]
         sources += [f'x1*rootn(1/({k}*{PI}), 2)' for k in range(1, 7)]
         sources += ['100/101*x1', f'sin(x1/(2*{PI}))']
@@ -61,7 +59,7 @@ class TestOneStateTwoSpellings:
             assert tokens(eng, text) == answer, (src, text, answer)
             assert eng.complexity(text) == eng.complexity(answer), (src, text, answer)
             respelled += any(t.isdigit() and len(t) >= 10 for t in answer) and not long_integer.search(text)
-        assert respelled == 25, respelled
+        assert respelled == 19, respelled
 
 
 class TestTheTokenSpellingDoesNotMove:
@@ -71,9 +69,9 @@ class TestTheTokenSpellingDoesNotMove:
         (['/', '*', '/', '3', '5', 'pow', 'x1', '2', '*', '*', '*', '4', PI, 'x2', 'x3'],
          ['/', '*', '150000000000000', 'pow', 'x1', '2', '*', '3141592653589793', '*', 'x2', 'x3'],
          '3*x1^2/62.83185307179586/x2/x3'),
-        (['*', 'x1', 'rootn', '/', '1', '*', '2', PI, '2'],
-         ['*', 'x1', 'rootn', '/', '500000000000000', '3141592653589793', '2'],
-         'x1*rootn(1/6.283185307179586, 2)'),
+        (['+', 'x1', '/', '1', '*', '2', PI],
+         ['+', 'x1', '/', '500000000000000', '3141592653589793'],
+         'x1 + 1/6.283185307179586'),
     ]
 
     @pytest.mark.parametrize('expr, answer, text', CASES)
@@ -84,7 +82,7 @@ class TestTheTokenSpellingDoesNotMove:
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_mining_judge_answers_in_the_token_spelling(self, eng, expr, answer, _):
         # the judge's form is the miner's "mark to beat" and coverage's comparison spelling
-        assert eng._core.ac_judge(expr, 48)[2] == answer
+        assert eng._core.mine_mark(expr, rule_mode='default') == answer
 
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_tagged_answer_has_no_reader_spelling(self, eng, expr, answer, _):
@@ -126,5 +124,6 @@ class TestReaderRuleStaysInTheInfixPrinter:
             for f in files:
                 if f.endswith('.py'):
                     rel = os.path.relpath(os.path.join(root, f), REPO)
-                    hits += [rel for ln in self.source(rel) if '_core.ac_simplify_infix' in ln]
+                    # `simplify` asks the core it captured for the call (`_serve`): `core.`
+                    hits += [rel for ln in self.source(rel) if 'core.ac_simplify_infix' in ln]
         assert hits == ['src/simplipy/engine.py'], hits

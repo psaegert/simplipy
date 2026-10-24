@@ -9,9 +9,9 @@ the compiled core is REQUIRED; there is no pure-Python fallback.
 import builtins
 import hashlib
 import importlib
+import logging
 import os
 import threading
-import time
 import warnings
 from itertools import product
 from types import CodeType, FunctionType
@@ -19,7 +19,7 @@ from typing import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 from copy import deepcopy
-from enum import Enum, EnumMeta
+from enum import Enum
 
 import numpy as np
 import json
@@ -38,53 +38,67 @@ try:
     # hard error at engine construction.
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
     from simplipy._core import core_serialization_ops as _core_serialization_ops  # type: ignore[attr-defined]
+    from simplipy._core import MissingModeSet as _MissingModeSet  # type: ignore[attr-defined]
     _CORE_IMPORT_ERROR: Exception | None = None
 except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
     _core_serialization_ops = None  # type: ignore[assignment]
+    _MissingModeSet = LookupError  # type: ignore[assignment, misc]
     _CORE_IMPORT_ERROR = _exc
+
+#: The library's announcements (the implicit default engine, a deferred set's first-use
+#: build) are WARNING records on the ``simplipy`` logger: visible without any logging
+#: setup, silenced with ``logging.getLogger('simplipy').setLevel(logging.ERROR)``.
+_log = logging.getLogger(__name__)
 
 
 def _is_slot_token(token: str) -> bool:
-    """A sorted-rule slot token: a sort sigil (``_`` / ``?`` / ``!``) followed by digits."""
-    return bool(token) and token[0] in '_?!' and token[1:].isdigit()
+    """A sorted-rule slot token: a sort sigil (``_`` / ``?`` / ``!`` / ``$``) followed by
+    digits."""
+    return bool(token) and token[0] in '_?!$' and token[1:].isdigit()
+
+
+#: The values outside a variable's generic reading. Permissive binds every slot to any
+#: subtree, a literal included, and its constructor reads a variable as finite and nonzero
+#: almost everywhere -- which says nothing about these three.
+_NON_FINITE_LITERALS = ('float("inf")', 'float("-inf")', 'float("nan")')
 
 
 def _coverage_variants(
         lhs: tuple[str, ...],
-        rhs: tuple[str, ...]) -> list[tuple[list[str], list[str]]]:
-    """Instantiation variants a rule must survive to count as covered.
+        rhs: tuple[str, ...],
+        rule_mode: str) -> list[tuple[list[str], list[str]]]:
+    """Instantiation variants a rule must survive to count as covered in ``rule_mode``:
+    the instances its slots bind there.
 
     Every slot in ``lhs`` is instantiated as a distinct variable leaf ``x{i}``;
     ``<constant>`` stays LITERAL (substituting a numeral would let native constant
     folding fake coverage). Additionally, every subset of up to 3 wide slots
-    (``_``/``!`` sigils) is probed with the composite ``sin(x{i})``: leaf-only
-    instantiation under-tests what a wide slot claims to match.
+    (``_``/``!``/``$`` sigils, which bind composites) is probed with the composite
+    ``sin(x{i})``: leaf-only instantiation under-tests what a wide slot claims to match.
+    In ``permissive``, where every slot binds any subtree, each non-finite literal is a
+    variant too (all slots at once): `$0 / $0 -> 1` is what takes `inf/inf` to `1` there,
+    which the constructor takes to `nan`. (In ``f64`` and ``real`` the ground fold reads
+    such an instance before any rule.)
     """
     slots = list(dict.fromkeys(t for t in lhs if _is_slot_token(t)))
-    wide = [s for s in slots if s[0] in '_!'][:3]
-    variants = []
+    wide = [s for s in slots if s[0] in '_!$'][:3]
+    bindings_list = []
     for mask in product((0, 1), repeat=len(wide)):
         bindings = {s: ['x' + s[1:]] for s in slots}
         for slot, composite in zip(wide, mask):
             if composite:
                 bindings[slot] = ['sin', 'x' + slot[1:]]
-
-        def substitute(tokens: tuple[str, ...]) -> list[str]:
-            return [out for t in tokens for out in bindings.get(t, [t])]
-
-        variants.append((substitute(lhs), substitute(rhs)))
-    return variants
+        bindings_list.append(bindings)
+    if rule_mode == 'permissive' and slots:
+        bindings_list += [{s: [value] for s in slots} for value in _NON_FINITE_LITERALS]
+    return [([out for t in lhs for out in b.get(t, [t])],
+             [out for t in rhs for out in b.get(t, [t])]) for b in bindings_list]
 
 
 # The core serialization language's arities (config-independent built-ins): the
 # canonical explicit projection emits these regardless of the config vocabulary,
 # so any walk over projection output needs them alongside `operator_arity`.
-# One mine per process, enforced (hardening H-002/H-008, 2026-08-03): the interval
-# soundness counters the provenance sidecar reads are PROCESS-GLOBAL, so a second
-# concurrent mine would cross-contaminate both sidecars' per-mine deltas -- and would
-# only contend for the cores the first mine already saturates. Serve traffic is safe
-# alongside a mine (measured: `simplify` never touches the counters).
 
 
 #: Arities of the CORE SERIALIZATION LANGUAGE, read from the engine's own table rather
@@ -98,11 +112,6 @@ def _coverage_variants(
 _CORE_SERIALIZATION_ARITIES = (
     {tok: spec['arity'] for tok, spec in _core_serialization_ops().items()}
     if _core_serialization_ops is not None else {})
-# Constlike LEAF spellings a `<constant>` promise-slot may bind: named constants and
-# the poles/nan, plus (checked separately) any numeric literal. NEVER a compound
-# variable-free subtree: collapsing `acos(cos(C))` to one Const leaf is a strict
-# serve-ordering descent (real rule content), while renaming a LEAF constant to
-# `<constant>` is a complexity tie (pure abstraction -- masking's job, downstream).
 
 
 # The bag delimiters and inverse-section markers of the TAGGED serialization --
@@ -110,10 +119,6 @@ _CORE_SERIALIZATION_ARITIES = (
 # entry points (`is_valid`, `prefix_to_infix`) do not read this form; they use this set
 # to NAME the dialect in their diagnostics instead of failing with a bare arity error (B1).
 _TAGGED_DIALECT_TOKENS = frozenset({'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>'})
-
-#: The EXACT migration for each deprecated `simplify(form=...)` value: convert first,
-#: then simplify. Measured byte-identical to the parameter on every corpus row.
-_FORM_RECIPE = {'tagged': 'to_tagged', 'explicit': 'to_prefix', 'infix': 'to_infix'}
 
 #: (C1.18) Every key an operator spec must carry. `precedence` is deliberately NOT
 #: required: non-core operators render as function calls, which never consult it; a
@@ -127,15 +132,15 @@ _REQUIRED_OPERATOR_KEYS = ('realization', 'alias', 'arity', 'commutative')
 
 
 def _normalized_operator_specs(operators: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Validate operator specs LOUDLY and normalize them (C1.18).
+    """Validate operator specs LOUDLY and normalize them.
 
-    Three silent failure modes closed, none of which the suite's DEGENERATE battery
-    used to build: a spec missing a key died as a bare ``KeyError: 'alias'`` naming
-    neither the operator nor the file; ``commutative: true`` on a non-core operator
-    was consumed by NOTHING (only ``+`` and ``*`` are AC bags, so ``f(a, b)`` and
-    ``f(b, a)`` stayed two canonical states while the config claimed one value); and
-    a core serialization token declared WITHOUT ``precedence:`` bypassed the C1.8
-    conflicting-precedence guard, which compares only present values.
+    Three failure modes are refused by name instead of failing silently: a spec missing
+    a key (it would die as a bare ``KeyError: 'alias'`` naming neither the operator nor
+    the file); ``commutative: true`` on a non-core operator (only ``+`` and ``*`` are AC
+    bags, so ``f(a, b)`` and ``f(b, a)`` would stay two canonical states while the
+    config claims one value); and a core serialization token declared WITHOUT
+    ``precedence:`` (it would bypass the conflicting-precedence guard, which compares
+    only present values).
     """
     normalized: dict[str, dict[str, Any]] = {}
     core = _core_serialization_ops() if _core_serialization_ops is not None else {}
@@ -199,15 +204,6 @@ def _fulfills_constant_promise(pattern: list[str], subject: list[str],
     return walk(0, 0) == (len(pattern), len(subject))
 
 
-def _validate_ndarray_input(expression: 'np.ndarray') -> None:
-    """The ndarray input contract for ``simplify`` (engine.py): 1-D, string-like dtype.
-    Validated BEFORE the core call so malformed inputs fail with a clean ValueError."""
-    if expression.ndim != 1:
-        raise ValueError('`simplify` expects a one-dimensional numpy array of tokens')
-    if expression.dtype.kind not in {'U', 'S', 'O'}:
-        raise ValueError('`simplify` expects a numpy array of string-like tokens')
-
-
 # C23a (D27): the mine half lives in `simplipy.mining` as RuleMiner; the
 # engine keeps `find_rules`/`certify_rules` as thin delegators so the public
 # API does not move. These aliases keep the module surface stable (tests and
@@ -243,77 +239,49 @@ DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given.
 #: ``None``: the search runs until a round finds nothing, so a second call returns the
-#: answer unchanged (in ``permissive`` its work budget can stop a search, see
-#: ``DEFAULT_WORK``). The previous default, 4, stops searches between
-#: two improvements: on srbf's 125,127 model predictions 2,872 answers change on a second
+#: answer unchanged. The previous default, 4, stops searches between
+#: two improvements: on srbf's 125,127 model predictions 1,632 answers change on a second
 #: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
-
-#: The WORK BUDGET of each search ``simplify(.., mode='permissive')`` runs when ``work`` is not
-#: given. Its units are deterministic -- one step of the AC matcher or one canonical-constructor
-#: call -- so a budget cuts the same walk at the same place on every machine and under any load. A
-#: search that spends it stops as if its descent cap had bound and returns its best answer so far.
-#: ``work=None`` lifts the bound: the search runs until a round finds nothing, the default of
-#: ``f64`` and ``real``, which stay fast without one.
-DEFAULT_WORK: int | None = 10_000
-
-
-class _ModeMeta(EnumMeta):
-    """Serves the retired ``SOUND``/``LOSSY`` spellings with a deprecation notice.
-
-    They are resolved HERE rather than declared as enum aliases in the body, because a
-    body alias (``SOUND = 'f64'``) is indistinguishable from the member it aliases and
-    could never warn. ``__getattr__`` runs only when normal lookup fails, so live
-    members never take this path.
-    """
 
 
 #: Leaves that denote a VALUE rather than a free variable.
 _SPECIAL_LEAVES = {'np.pi', 'np.e', 'float("inf")', 'float("-inf")', 'float("nan")'}
 
 
-_MODE_RENAME_WHY = (
-    "`SOUND` claimed one notion of soundness where there are two incomparable ones: "
-    "`f64` is sound as the deployed f64 evaluator computes, `real` is sound as "
-    "mathematics defines, and neither implies the other"
-)
+class Mode(Enum):
+    """What a simplification preserves. The three modes are an axis, not an ordering.
 
+    "Mathematically true" and "realised in float64" are incomparable:
+    ``inv(acosh(cosh x)) -> abs(inv x)`` is true and not what the float64 evaluator
+    computes, while ``asin(1e-8) -> 1e-8`` is exact in float64 and false as mathematics
+    (the cubic term is 1.667e-25). Neither rule is "more sound" than the other, so modes
+    do not compare with ``<``.
 
-class Mode(Enum, metaclass=_ModeMeta):
-    """Which soundness the simplification preserves. An AXIS, not an ordering.
+    - ``f64`` (the default; also spelled ``'default'``): preserves what the deployed
+      float64 evaluator computes, wherever no operation overflows or underflows. Where one
+      does, a rewrite may give the true value instead (``exp(x)/exp(x)`` is ``1`` also
+      past ``exp``'s overflow). This is the inference and scoring mode: a rewrite in it
+      is safe for a model that is evaluated in float64.
+    - ``real``: preserves the function as mathematics defines it, independent of any
+      float format. Use it when the rewrite must hold symbolically (proofs,
+      exact-arithmetic backends, publication), accepting that some of it is not what
+      float64 computes.
+    - ``permissive``: accepts what holds up to sign or domain as well (``(x^2)^(1/2)`` is
+      ``x``, ``exp(log(<constant>))`` is ``<constant>``), trading equivalence for shorter forms.
+      It is not equivalence-preserving and is meant for training-corpus canonicalisation,
+      where the training data is generated from the simplified form, so there is no
+      external function to violate. Do not use it on an inference or scoring path.
 
-    The old ``Mode`` was an ``IntEnum`` on the premise that soundness is ordinal --
-    ``EXACT <= SOUND <= AE <= LOSSY``, a higher rung permitting strictly more. Measurement
-    refuted the premise. "Mathematically true" and "realised in f64" are INCOMPARABLE:
-    ``inv(acosh(cosh x)) -> abs(inv x)`` is true and NOT f64-realised (the deployed
-    evaluator diverges), while ``asin(1e-8) -> 1e-8`` is f64-exact and mathematically
-    FALSE (the cubic term is 1.667e-25). Neither rule is "more sound" than the other,
-    so there is no rung to put them on, and ``<`` between modes no longer type-checks.
+    Each mode names one complete rule set of its own -- ``rules_f64.json``,
+    ``rules_real.json``, ``rules_permissive.json`` (artifacts published before 0.14.0 call
+    the f64 file ``rules.json`` and the permissive file ``rules_corpus.json``; configs name
+    their files, so they load unchanged) -- so selecting a mode selects a file, and what
+    is loaded is what is served.
 
-    - ``f64`` (the default): sound as the DEPLOYED f64 evaluator computes. Byte-identical
-      to the historical ``SOUND``. This is the inference/scoring mode -- it is what makes
-      a rewrite safe for a model that will be evaluated in f64.
-    - ``real``: sound as MATHEMATICS defines, independent of any float format. Use when
-      the rewrite must hold symbolically -- proofs, exact-arithmetic backends, or
-      publication -- and accept that some of it is not what f64 will compute.
-    - ``permissive``: both of the above UNION-ed, trading soundness for recall -- every
-      rule placeholder binds any subtree (the ``!``-sort finite-a.e. certificate is
-      skipped) and the constant-fold's finiteness gate is relaxed (so ``<constant>/0``
-      collapses to ``<constant>``). NOT equivalence-preserving. For training-corpus
-      canonicalisation ONLY: the training data is generated FROM the simplified form, so
-      the target equals the data and there is no external function to violate. Do NOT
-      use on an inference or scoring path.
-
-    Each mode names ONE DISTINCT, COMPLETE rule set -- ``rules_f64.json`` /
-    ``rules_real.json`` / ``rules_permissive.json`` (artifacts published before the
-    0.14.0 naming rulings call the f64 file ``rules.json`` and the permissive file
-    ``rules_permissive.json``; configs name their files, so they load unchanged) -- so
-    selecting a mode selects a file, and what is loaded IS what is served with nothing
-    unioned at serve time.
-
-    ``SOUND`` and ``LOSSY`` still resolve, with a ``DeprecationWarning``, to ``f64`` and
+    The names ``SOUND`` and ``LOSSY`` were removed in 0.14.0; use ``f64`` and
     ``permissive``.
     """
 
@@ -328,6 +296,59 @@ class Mode(Enum, metaclass=_ModeMeta):
 #: ``rules_f64.json`` file; ``rules.json`` in pre-rename artifacts).
 _RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.permissive: 'permissive'}
 
+
+#: Every name a mode answers to, matched case-insensitively. ``'default'`` is the f64
+#: mode's second name: the rule-file entries (``rule_mode=``) have always used it.
+_MODE_NAMES: dict[str, Mode] = {
+    'f64': Mode.f64, 'default': Mode.f64, 'real': Mode.real, 'permissive': Mode.permissive}
+_MODE_CHOICES = "'f64' (also 'default'), 'real' or 'permissive'"
+
+
+def _canon_of_record(rules_path: str) -> str:
+    """The canon the rule file at ``rules_path`` was certified in, as its provenance sidecar
+    records it: the mode of a per-mode mine (``'f64'``, ``'real'``, ``'permissive'``), else
+    ``'legacy'``. Mines before per-mode mines (simplipy 0.14 and earlier) mined all three files
+    in one canon and recorded no mode: they wrote one sidecar, beside the f64 file."""
+    sidecar = rules_path + '.provenance.json'
+    if not os.path.exists(sidecar):
+        return 'legacy'
+    with open(sidecar, 'r') as f:
+        record = json.load(f)
+    mode = record.get('mode') if isinstance(record, dict) else None
+    if mode is None:
+        return 'legacy'
+    if mode not in {m.name for m in Mode}:
+        raise ValueError(f"the sidecar '{sidecar}' records the mode {mode!r}, which this "
+                         f"simplipy does not know: expected one of {[m.name for m in Mode]}")
+    return str(mode)
+
+
+def _coerce_mode(mode: 'Mode | str') -> Mode:
+    """A :class:`Mode` member, or one of its names in any case; anything else raises.
+
+    The one coercion every entry that takes a mode uses (``mode=``, ``modes=``,
+    ``rule_mode=``): ``'f64'`` and ``'default'`` name the same mode. A bare int does not
+    bind: only members and their names select a mode.
+    """
+    if isinstance(mode, Mode):
+        return mode
+    if isinstance(mode, str):
+        match = _MODE_NAMES.get(mode.strip().lower())
+        if match is None:
+            raise ValueError(
+                f"unknown mode {mode!r}: expected {_MODE_CHOICES} (or a simplipy.Mode)")
+        return match
+    raise TypeError(
+        f"mode must be a simplipy.Mode or one of {_MODE_CHOICES}, "
+        f"not {type(mode).__name__} ({mode!r})")
+
+
+def _coerce_rule_mode(mode: 'Mode | str') -> str:
+    """The core's name for a mode's rule set (``'default'``, ``'real'``, ``'permissive'``),
+    from any spelling :func:`_coerce_mode` accepts."""
+    return _RULE_MODE[_coerce_mode(mode)]
+
+
 #: The wrapper attribute carrying each NON-DEFAULT rule mode's own set -- the two sets
 #: the lazy machinery (``modes=...`` at construction, :meth:`SimpliPyEngine.unload_mode`)
 #: can defer and drop. The default (f64) set is deliberately absent from this map: it is
@@ -338,9 +359,26 @@ _MODE_RULES_ATTR: dict[str, str] = {
     'permissive': 'permissive_simplification_rules',
 }
 
-#: The retired STRING spellings, accepted by ``simplify(mode=...)`` with a notice. Kept
-#: beside ``_ModeMeta._DEPRECATED`` deliberately: the enum path and the string path are
-#: two doors onto the same rename and must not drift.
+
+def _token_of(t: Any) -> str:
+    """One element of a token sequence as its token: a ``str`` as itself, a number as its
+    ``str``. Anything else is refused: ``str(True)`` and ``str(None)`` are words, not the tokens
+    of anything the element denotes."""
+    if isinstance(t, str):
+        return t
+    if isinstance(t, (int, float, np.integer, np.floating)) and not isinstance(t, (bool, np.bool_)):
+        return str(t)
+    raise ValueError(f'a token must be a str or a number, not {type(t).__name__} ({t!r})')
+
+
+#: :meth:`SimpliPyEngine.simplify`'s refusal of ``mode='real'`` on an engine naming no real set.
+_REAL_NEEDS_A_SET = (
+    "mode='real' needs a ruleset mined for it, and this artifact has none: "
+    "it predates the rules_f64/rules_real/rules_permissive triple. Falling back "
+    "to the default set would serve f64-certified rules under a claim of "
+    "MATHEMATICAL soundness, and the two are incomparable -- some f64 rules "
+    "are mathematically false. Use mode='f64' for the deployed semantics, or "
+    "load an artifact whose config names a real ruleset.")
 
 
 class SimpliPyEngine:
@@ -365,15 +403,21 @@ class SimpliPyEngine:
         rules.
     rules_real : list[tuple] or None, optional
         The ``real`` mode's OWN COMPLETE rule set -- core rules AND the real-only
-        rules, in one self-contained list, NOT a supplement to ``rules``. Owner ruling
-        (2026-08-19): "one distinct rule set for each mode", so what is loaded IS what
-        is served and the engine never computes a union to decide what fires.
+        rules, in one self-contained list, NOT a supplement to ``rules``: each mode has
+        one distinct rule set, so what is loaded IS what is served and the engine never
+        computes a union to decide what fires.
         ``None`` (the default) means this engine names no ``real`` set of its own and
         that mode serves ``rules``; ``[]`` is the different, sayable statement "the
         ``real`` mode serves nothing".
     rules_permissive : list[tuple] or None, optional
         The ``permissive`` mode's OWN COMPLETE rule set, same discipline as ``rules_real``.
         This is the set ``Mode.permissive`` serves.
+    rule_canons : dict[str, str] or None, optional
+        The canon each set was certified in, which the engine reads it in, by mode name
+        (``'f64'``, ``'real'``, ``'permissive'``): a mode name for a set mined in that
+        mode, or ``'legacy'`` for a set mined before per-mode mines (simplipy 0.14 and
+        earlier mined all three files in one canon). A mode not named reads its set in
+        its own canon. :meth:`from_config` fills this from each file's provenance sidecar.
     modes : str or Mode or tuple or list, optional
         Which mode rule sets are built EAGERLY, at construction. The default ``'all'``
         builds every set the engine names -- byte-identical to the historical
@@ -381,8 +425,8 @@ class SimpliPyEngine:
         mode names or :class:`Mode` members (e.g. ``modes=('f64', 'permissive')``)
         builds exactly those; a set NOT named builds LAZILY on its mode's first use
         (any ``simplify``/``complexity`` call addressing it) -- once,
-        lock-guarded, announced with one loud log line on the same channel as the
-        default-engine announcement in :meth:`load`, and with a pause of a few
+        lock-guarded, announced with one WARNING record on the ``simplipy`` logger
+        like the default-engine announcement in :meth:`load`, and with a pause of a few
         seconds for a large artifact while the set loads and compiles. The machinery
         is ADDITIVE-ONLY: a lazy build never evicts another mode's structures, and
         nothing is ever dropped implicitly -- dropping is :meth:`unload_mode`, an
@@ -391,11 +435,12 @@ class SimpliPyEngine:
         dedup key, and the set every absent mode falls back to). Naming ``'f64'`` in
         the tuple is therefore allowed but redundant.
 
-        Measured on the acj-5-4-llm artifact (fresh process each, RSS directly after
-        ``load``): ``modes='all'`` 569 MB, ``modes=('f64', 'permissive')`` 469 MB,
-        ``modes=('f64',)`` 338 MB; a deferred set then costs its build on first use
-        (~4 s and ~130 MB per set on this artifact, announced by the log line). The
-        worker profile ``modes=('f64', 'permissive')`` is the intended lean
+        A built set is compiled at construction too, so the first call in a mode
+        pays nothing extra. Measured on the acj-5-4-llm artifact (fresh process each,
+        peak RSS directly after ``load``): about 0.9 GB for ``modes='all'``, 0.7 GB for
+        ``modes=('f64', 'permissive')`` and 0.45 GB for ``modes=('f64',)``, about
+        100 MB per set; a deferred set then costs its build on first use (about 3-4 s
+        on this artifact, announced by the log line). The worker profile ``modes=('f64', 'permissive')`` is the intended lean
         deployment: inference (f64) plus training-corpus canonicalisation, without
         the ``real`` set's RAM.
     trusted_modules : list[str] or None, optional
@@ -434,11 +479,13 @@ class SimpliPyEngine:
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None, *,
                  rules_real: list[tuple] | None = None,
                  rules_permissive: list[tuple] | None = None,
+                 rule_canons: dict[str, str] | None = None,
                  modes: 'str | Mode | tuple | list' = 'all',
                  trusted_modules: list[str] | None = None) -> None:
         # Loud validation FIRST, like the operator specs below: a mistyped `modes`
         # must never construct an engine that silently built the wrong sets.
         self._modes = self._normalized_modes(modes)
+        self._rule_canons = self._normalized_rule_canons(rule_canons)
         # C1.18: loud spec validation + normalization BEFORE anything reads a key --
         # the first consumer used to be a bare `KeyError: 'alias'`.
         operators = _normalized_operator_specs(operators)
@@ -490,7 +537,8 @@ class SimpliPyEngine:
         else:
             self._core = self._build_core(self._operators_config, [])
             self.simplification_rules = deduplicate_rules(
-                rules, dummy_variables=dummy_variables, engine=self)
+                rules, dummy_variables=dummy_variables, engine=self, rule_mode='default',
+                canon=self._rule_canons.get('default'))
 
         # THE OTHER TWO MODES' SETS. Normalized to the same (tuple, tuple) shape as the
         # default list, and deliberately NOT deduplicated against it: each set is
@@ -519,7 +567,8 @@ class SimpliPyEngine:
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.real_simplification_rules if 'real' in eager else None,
-            self.permissive_simplification_rules if 'permissive' in eager else None)
+            self.permissive_simplification_rules if 'permissive' in eager else None,
+            canons=self._rule_canons)
         # The lazy-mode bookkeeping. `_mode_rule_sources` maps a rule mode name to the
         # FILE its set loads from (attached by `from_config` for every config-named
         # set); `_core_loaded_modes` holds the non-default modes whose sets the CURRENT
@@ -527,8 +576,6 @@ class SimpliPyEngine:
         # guards every first-use build and unload so two threads cannot double-build.
         self._mode_rule_sources: dict[str, str] = {}
         self._mode_load_lock = threading.Lock()
-        self._push_gate = threading.Condition()
-        self._push_waiting = False
         self._core_loaded_modes = {
             m for m in _MODE_RULES_ATTR
             if m in eager and getattr(self, _MODE_RULES_ATTR[m]) is not None}
@@ -560,18 +607,26 @@ class SimpliPyEngine:
         names = {'f64'}
         for m in modes:
             if isinstance(m, str):
-                match = {mm.name.lower(): mm for mm in Mode}.get(m.strip().lower())
-                if match is None:
-                    raise ValueError(
-                        f"unknown mode {m!r} in modes=...: expected one of "
-                        f"{[mm.name for mm in Mode]} (or a simplipy.Mode)")
-                m = match
+                m = _coerce_mode(m)
             elif not isinstance(m, Mode):
                 raise TypeError(
                     f"modes entries must be mode names or simplipy.Mode members, "
                     f"not {type(m).__name__} ({m!r})")
             names.add(m.name)
         return tuple(n for n in ('f64', 'real', 'permissive') if n in names)
+
+    @staticmethod
+    def _normalized_rule_canons(canons: dict[str, str] | None) -> dict[str, str]:
+        """``rule_canons`` as the core spells it: rule mode -> canon (``'legacy'`` or a rule
+        mode). A mode not named, or named with its own canon, is left out: it reads its set
+        in its own canon."""
+        out: dict[str, str] = {}
+        for mode, canon in (canons or {}).items():
+            rule_mode = _RULE_MODE[_coerce_mode(mode)]
+            read_in = canon if canon == 'legacy' else _RULE_MODE[_coerce_mode(canon)]
+            if read_in != rule_mode:
+                out[rule_mode] = read_in
+        return out
 
     @staticmethod
     def _normalized_mode_rules(rules: list[tuple] | None) -> list[tuple] | None:
@@ -585,7 +640,8 @@ class SimpliPyEngine:
     @staticmethod
     def _build_core(operators: dict[str, dict[str, Any]], rules: list[tuple],
                     rules_real: list[tuple] | None = None,
-                    rules_permissive: list[tuple] | None = None) -> Any:
+                    rules_permissive: list[tuple] | None = None, *,
+                    canons: dict[str, str] | None = None) -> Any:
         """Build the compiled core (``simplipy._core``) from in-memory config + rules.
 
         The core is REQUIRED: a missing extension or a load failure is a hard error --
@@ -599,18 +655,23 @@ class SimpliPyEngine:
         separate statements rather than more arguments to ``from_strs`` because the mine
         driver needs exactly this surface too (it installs a freshly minted set on a live
         core), and one entry point is easier to keep honest than two.
+
+        ``canons`` maps a rule mode to the canon its set was certified in
+        (:meth:`_normalized_rule_canons`); a mode not named reads its set in its own.
         """
+        canons = canons or {}
         if _RustEngine is None:
             raise ImportError(
                 'simplipy._core is required (the pure-Python engine was removed): the compiled '
                 f'extension failed to import ({_CORE_IMPORT_ERROR!r})')
         config_text = yaml.safe_dump({'operators': operators}, sort_keys=False)
         rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
-        core = _RustEngine.from_strs(config_text, rules_text)
+        core = _RustEngine.from_strs(config_text, rules_text, canons.get('default'))
         for mode_name, mode_rules in (('real', rules_real), ('permissive', rules_permissive)):
             if mode_rules is not None:
                 core.set_mode_rules(
-                    mode_name, [(list(lhs), list(rhs)) for lhs, rhs in mode_rules])
+                    mode_name, [(list(lhs), list(rhs)) for lhs, rhs in mode_rules],
+                    canon=canons.get(mode_name))
         return core
 
     def __getstate__(self) -> dict[str, Any]:
@@ -631,14 +692,13 @@ class SimpliPyEngine:
         worker from the same recipe, re-running the trust check there rather than
         carrying imported modules across the process boundary.
 
-        C1.9: the recipe is REFUSED when it is ambiguous. The core echoes a digest of
+        The recipe is REFUSED when it is ambiguous. The core echoes a digest of
         the rules it was actually given (:meth:`compile_rules` or construction), and a
         mismatch with ``simplification_rules`` here means the two have diverged -- the
         list was mutated without :meth:`compile_rules`, or the core's rules were set
         directly. A pickle rebuilds the worker from the LIST, so a diverged parent
-        would silently spawn workers running different rules (measured before the fix:
-        50/400 corpus rows simplified differently between a parent and its own
-        unpickled worker, with no warning). Loud beats silent: sync first, then pickle.
+        would silently spawn workers running different rules. Sync first
+        (:meth:`compile_rules`), then pickle.
         """
         if not self._core.rules_in_sync(
                 [(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules]):
@@ -660,8 +720,6 @@ class SimpliPyEngine:
         # file on first use -- note this makes such a pickle portable exactly as far
         # as the recorded artifact paths resolve (the spawn-worker case it serves).
         state.pop('_mode_load_lock', None)
-        state.pop('_push_gate', None)
-        state.pop('_push_waiting', None)
         state.pop('_core_loaded_modes', None)
         return state
 
@@ -684,13 +742,13 @@ class SimpliPyEngine:
         # `modes='all'` engines with no file sources, which is exactly what they were.
         self.__dict__.setdefault('_modes', 'all')
         self.__dict__.setdefault('_mode_rule_sources', {})
+        self.__dict__.setdefault('_rule_canons', {})
         self._mode_load_lock = threading.Lock()
-        self._push_gate = threading.Condition()
-        self._push_waiting = False
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.__dict__.setdefault('real_simplification_rules', None),
-            self.__dict__.setdefault('permissive_simplification_rules', None))
+            self.__dict__.setdefault('permissive_simplification_rules', None),
+            canons=self._rule_canons)
         # The fresh core carries exactly the non-None in-memory sets `_build_core`
         # just pushed; a set that was deferred (or unloaded) in the parent stays
         # deferred here and lazily loads from its recorded source on first use.
@@ -704,11 +762,10 @@ class SimpliPyEngine:
         Public contract (unchanged since the pure-Python engine): after mutating
         ``self.simplification_rules``, call this so ``simplify`` sees the new rules.
 
-        COPY-ON-WRITE (conc-1): a fresh core is built from the in-memory state and
-        the reference is swapped atomically -- an in-place ``set_rules`` push
-        mutated the core under a concurrent reader's feet mid-``simplify``. A
-        reader holding the old core finishes on a consistent (old) ruleset; the
-        ~20 ms rebuild is mutation-API cost only, never on the hot path.
+        COPY-ON-WRITE: a fresh core is built from the in-memory state and the reference
+        is swapped atomically, so a concurrent reader is never mutated mid-``simplify``.
+        A reader holding the old core finishes on a consistent (old) ruleset; the
+        rebuild is mutation-API cost only, never on the hot path.
 
         The other two modes' sets are re-pushed alongside: a fresh core starts with no
         set of its own for either, so NOT re-pushing them would silently retract both on
@@ -720,68 +777,24 @@ class SimpliPyEngine:
         with self._mode_load_lock:
             self._core = self._build_core(
                 self._operators_config, self.simplification_rules,
-                self.real_simplification_rules, self.permissive_simplification_rules)
+                self.real_simplification_rules, self.permissive_simplification_rules,
+                canons=self._rule_canons)
             self._core_loaded_modes = {
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
-    def _await_no_pending_push(self) -> None:
-        """The reader half of the lazy-install fairness gate: hold a NEW
-        ``simplify``/``complexity`` core entry while a mode-set push is waiting.
-
-        Without this, a push under sustained concurrent traffic starves: the core's
-        exclusive (`&mut`) entry only opens when NO call is in flight, and
-        overlapping detached readers keep it closed indefinitely (measured: two
-        threads of long ``simplify`` calls held it closed past a 60 s deadline).
-        Readers pausing at this gate drain the in-flight calls, the push lands in
-        roughly one call duration, and the gate reopens. The fast path -- no push
-        pending, i.e. always, outside a lazy first use or an ``unload_mode`` -- is
-        one attribute test.
-        """
-        if self._push_waiting:
-            with self._push_gate:
-                while self._push_waiting:
-                    self._push_gate.wait(timeout=1.0)
-
     def _push_mode_rules(self, rule_mode: str, rules: list[tuple] | None) -> None:
-        """Push (or with ``None`` retract) one mode's set into the LIVE core, riding
-        out in-flight borrow contention.
+        """Push (or with ``None`` retract) one mode's set into the LIVE core.
 
-        The core's ``set_mode_rules`` needs exclusive access (`&mut` -- the token
-        table is deliberately lock-free), so pyo3 refuses it with ``RuntimeError:
-        Already borrowed`` while any other thread is inside a core call. The refusal
-        is transient -- a reader's borrow ends with its call -- so this helper
-        raises the fairness flag (parking NEW ``simplify``/``complexity`` entries at
-        :meth:`_await_no_pending_push`) and retries until the in-flight calls drain
-        and the push lands; it re-raises loudly, with the cause named, only if the
-        core never falls quiet within the deadline (e.g. long-running core work
-        outside the gated methods). Single-threaded callers never retry. Callers
-        hold ``_mode_load_lock``, so pushes cannot race each other -- only readers.
+        Safe while other threads are inside the core: the core's push waits for the
+        calls in flight to return, and translates the set before it returns. Callers
+        hold ``_mode_load_lock``, so two pushes cannot race each other.
         """
-        payload = (None if rules is None
-                   else [(list(lhs), list(rhs)) for lhs, rhs in rules])
-        deadline = time.monotonic() + 60.0
-        self._push_waiting = True
-        try:
-            while True:
-                try:
-                    self._core.set_mode_rules(rule_mode, payload)
-                    return
-                except RuntimeError as exc:
-                    if 'Already borrowed' not in str(exc) or time.monotonic() > deadline:
-                        raise RuntimeError(
-                            f"could not install the {rule_mode!r} rule set: the "
-                            f"compiled core stayed exclusively unavailable (other "
-                            f"threads kept it busy for 60 s). Retry at a quieter "
-                            f"moment, or build the set eagerly (modes=...) at "
-                            f"construction.") from exc
-                    time.sleep(0.002)
-        finally:
-            with self._push_gate:
-                self._push_waiting = False
-                self._push_gate.notify_all()
+        self._core.set_mode_rules(
+            rule_mode, None if rules is None else [(list(lhs), list(rhs)) for lhs, rhs in rules],
+            canon=self._rule_canons.get(rule_mode))
 
-    def _ensure_mode_loaded(self, rule_mode: str) -> None:
+    def _ensure_mode_loaded(self, rule_mode: str, *, found_absent: bool = False) -> None:
         """Build ``rule_mode``'s set NOW if this engine names one that the core does
         not currently hold -- the first-use half of the lazy ``modes=`` machinery.
 
@@ -789,11 +802,17 @@ class SimpliPyEngine:
         non-default mode; the fast path is one set-membership test. The slow path
         runs ONCE per set (lock-guarded, so two threads' first calls cannot
         double-build), is ADDITIVE-ONLY (it installs into the live core and evicts
-        nothing), and announces itself with one loud line on the same channel as
-        :meth:`load`'s default-engine announcement, because the build pauses the
+        nothing), and announces itself with one WARNING record on the ``simplipy``
+        logger, like :meth:`load`'s default-engine announcement, because the build pauses the
         call for a few seconds on a large artifact.
+
+        ``found_absent``: a core call has just found the set missing (an :meth:`unload_mode`
+        landed after the fast path), so the membership is read under the lock, where it
+        agrees with the core.
         """
-        if rule_mode not in _MODE_RULES_ATTR or rule_mode in self._core_loaded_modes:
+        if rule_mode not in _MODE_RULES_ATTR:
+            return
+        if not found_absent and rule_mode in self._core_loaded_modes:
             return
         with self._mode_load_lock:
             if rule_mode in self._core_loaded_modes:
@@ -808,18 +827,50 @@ class SimpliPyEngine:
                     # Marking it loaded makes every later call take the fast path.
                     self._core_loaded_modes.add(rule_mode)
                     return
-                print(f"simplipy: building the {rule_mode!r} rule set on first use "
-                      f"from '{source}' (deferred by modes={self._modes!r}); "
-                      f"expect a pause while it loads and compiles")
+                _log.warning("simplipy: building the %r rule set on first use from '%s' "
+                             "(deferred by modes=%r); expect a pause while it loads and "
+                             "compiles", rule_mode, source, self._modes)
                 with open(source, 'r') as f:
                     rules = self._normalized_mode_rules(json.load(f))
                 setattr(self, attr, rules)
             else:
-                print(f"simplipy: building the {rule_mode!r} rule set on first use "
-                      f"from its in-memory recipe (deferred by "
-                      f"modes={self._modes!r}); expect a pause while it compiles")
+                _log.warning("simplipy: building the %r rule set on first use from its "
+                             "in-memory recipe (deferred by modes=%r); expect a pause while "
+                             "it compiles", rule_mode, self._modes)
             self._push_mode_rules(rule_mode, rules)
             self._core_loaded_modes.add(rule_mode)
+
+    def _names_mode_set(self, rule_mode: str) -> bool:
+        """Does this engine name a set of its own for ``rule_mode`` (in memory, or a file it
+        rebuilds from)? Fixed for the engine's life: :meth:`unload_mode` keeps the recipe."""
+        return (getattr(self, _MODE_RULES_ATTR[rule_mode]) is not None
+                or rule_mode in self._mode_rule_sources)
+
+    def _serve(self, mode: Mode, call: Callable[[Any], Any], refusal: str) -> Any:
+        """``call(core)`` for one public call in ``mode``, on the live core captured once.
+
+        ``real`` FAILS CLOSED: a mode naming no set of its own falls back to the default
+        set, which is right for ``permissive`` (its divergence is search semantics) and
+        wrong for ``real``, whose only divergence IS which rules are certified -- the f64
+        set holds rules that are mathematically false. ``call`` passes ``own_set`` for
+        ``real``, so the core makes that decision under the read guard it answers under,
+        and an :meth:`unload_mode` cannot land between the check and the answer. A core
+        found without the set either belongs to an engine that names none (``refusal`` is
+        raised) or had it unloaded since the lazy load check; then the next use rebuilds
+        it, as :meth:`unload_mode` promises, and the call is asked again.
+        """
+        rule_mode = _RULE_MODE[mode]
+        found_absent = False
+        while True:
+            if mode is not Mode.f64:
+                self._ensure_mode_loaded(rule_mode, found_absent=found_absent)
+            core = self._core
+            try:
+                return call(core)
+            except _MissingModeSet:
+                if not self._names_mode_set(rule_mode):
+                    raise ValueError(refusal) from None
+                found_absent = True
 
     def unload_mode(self, mode: 'Mode | str') -> None:
         """Drop ``mode``'s built rule structures; the next use lazily rebuilds them.
@@ -836,9 +887,8 @@ class SimpliPyEngine:
 
         What is freed depends on the recipe. A CONFIG-NAMED set (built by
         ``from_config``/``load``) drops both the compiled core structures and the
-        wrapper's parsed rule list -- the mode's full footprint, measured at roughly
-        130 MB per used set on the acj-5-4-llm artifact (~100-130 MB parsed plus
-        50-65 MB compiled; how much of it the allocator returns to the OS
+        wrapper's parsed rule list -- the mode's full footprint, about 100 MB per set
+        on the acj-5-4-llm artifact (how much of it the allocator returns to the OS
         immediately depends on heap layout). A set handed IN MEMORY to ``__init__``
         drops the compiled structures only: the wrapper's list is the sole recipe,
         so it stays.
@@ -850,30 +900,23 @@ class SimpliPyEngine:
         the refusal into a silent lie. Unloading a mode that names no set of its own
         is a no-op, and the call is idempotent.
 
-        Operational discipline: call it at a QUIET moment for the mode being
-        unloaded. The drop itself is guarded (it waits for in-flight core calls and
-        cannot corrupt one), but a call racing into that mode on ANOTHER thread may
-        pass its already-loaded check before the drop lands and then run against the
-        core's absence semantics for the mode -- ``permissive`` falling back to the
-        default set for that one call. The next call lazily rebuilds.
+        Calling it while other threads simplify is safe. The drop waits for in-flight
+        core calls and cannot corrupt one. A ``real`` call that races it is never served
+        the default set: the core checks for the mode's own set under the read guard it
+        answers under, and a call that finds the set gone rebuilds it before it answers,
+        paying the rebuild's pause. A ``permissive`` call that races it may run against
+        the core's absence semantics for the mode, falling back to the default set for
+        that one call. Call it at a quiet moment for the mode being unloaded, since every
+        racing call that rebuilds the set undoes the drop.
 
         Parameters
         ----------
         mode : Mode or str
             The mode to unload, as a :class:`Mode` member or its name
-            (``'real'``, ``'permissive'``). ``Mode.f64`` raises ``ValueError``.
+            (``'real'``, ``'permissive'``). ``Mode.f64`` (``'f64'``, ``'default'``)
+            raises ``ValueError``.
         """
-        if isinstance(mode, str):
-            match = {m.name.lower(): m for m in Mode}.get(mode.strip().lower())
-            if match is None:
-                raise ValueError(
-                    f"unknown mode {mode!r}: expected one of "
-                    f"{[m.name for m in Mode]} (or a simplipy.Mode)")
-            mode = match
-        elif not isinstance(mode, Mode):
-            raise TypeError(
-                f"mode must be a simplipy.Mode or one of "
-                f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+        mode = _coerce_mode(mode)
         if mode is Mode.f64:
             raise ValueError(
                 "the default (f64) rule set cannot be unloaded: it is the core's "
@@ -902,14 +945,15 @@ class SimpliPyEngine:
         with self._mode_load_lock:
             new_core = self._build_core(
                 self._operators_config, rules,
-                self.real_simplification_rules, self.permissive_simplification_rules)
+                self.real_simplification_rules, self.permissive_simplification_rules,
+                canons=self._rule_canons)
             self.simplification_rules = rules
             self._core = new_core
             self._core_loaded_modes = {
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
-    def prune_covered_rules(self, verbose: bool = False) -> int:
+    def prune_covered_rules(self, verbose: bool = False, *, rule_mode: 'Mode | str') -> int:
         """Remove rules that the remaining rules already cover behaviorally.
 
         A rule ``(lhs, rhs)`` is *covered* if the engine WITHOUT it still
@@ -955,6 +999,10 @@ class SimpliPyEngine:
         ----------
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
+        rule_mode : str or Mode
+            The mode whose own set is pruned: ``'f64'`` (also ``'default'``), ``'real'``,
+            ``'permissive'``, or a :class:`Mode` member. Coverage is asked of that mode's engine: its serve answer (the miner's mark) and
+            its serve ordering, with the kept rules installed as its set.
 
         Returns
         -------
@@ -964,7 +1012,9 @@ class SimpliPyEngine:
         from .progress import Progress
         prog = Progress(verbose, prefix='  [prune] ')
 
-        full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
+        rule_mode = _coerce_rule_mode(rule_mode)
+        attr = 'simplification_rules' if rule_mode == 'default' else _MODE_RULES_ATTR[rule_mode]
+        full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in (getattr(self, attr) or [])]
         if not full:
             return 0
 
@@ -982,19 +1032,19 @@ class SimpliPyEngine:
             # (each Const slot bound to a ground subterm -- `0` fulfills
             # `<constant>`, `* 2.71... x0` fulfills `* <constant> x0`) has fulfilled
             # it, though the total order sees only unrelated leaf kinds there.
-            # (ac_judge/ac_ordered_below: the AC parser is the arbiter, no
+            # (mine_mark/ac_ordered_below_in: the AC parser is the arbiter, no
             # config-vocabulary gate; an undecidable ordering raises.)
             def fulfilled(variant_lhs: list[str], variant_rhs: list[str]) -> bool:
-                probe_out = core.ac_judge(variant_lhs, 5)[2]
-                if not core.ac_ordered_below(list(variant_rhs), probe_out):
+                probe_out = core.mine_mark(variant_lhs, rule_mode=rule_mode)
+                if not core.ac_ordered_below_in(list(variant_rhs), probe_out, rule_mode=rule_mode):
                     return True
                 if '<constant>' in variant_rhs:
-                    promise = core.ac_judge(list(variant_rhs), 0)[2]
+                    promise = core.mine_mark(list(variant_rhs), rule_mode=rule_mode)
                     return _fulfills_constant_promise(promise, probe_out, arity)
                 return False
 
             return all(fulfilled(variant_lhs, variant_rhs)
-                       for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
+                       for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs, rule_mode))
 
         kept = set(full)
         for wave_length in range(max(len(lhs) for lhs, _ in full), 2, -1):
@@ -1011,7 +1061,19 @@ class SimpliPyEngine:
                 # is one AC judge per pending rule per coverage variant.
                 prog.stage(f'wave {wave_length} round {rounds}: rebuilding probe engine',
                            kept=len(kept), pending=len(pending))
-                core = self._build_core(self._operators_config, [rule for rule in full if rule in kept])
+                probe_set = [rule for rule in full if rule in kept]
+                if rule_mode == 'default':
+                    core = self._build_core(self._operators_config, probe_set,
+                                            self.real_simplification_rules,
+                                            self.permissive_simplification_rules,
+                                            canons=self._rule_canons)
+                else:
+                    core = self._build_core(
+                        self._operators_config, self.simplification_rules,
+                        probe_set if rule_mode == 'real' else self.real_simplification_rules,
+                        probe_set if rule_mode == 'permissive'
+                        else self.permissive_simplification_rules,
+                        canons=self._rule_canons)
                 readd = [rule for rule in
                          prog.track(list(pending), f'  wave {wave_length} round {rounds}: coverage scan')
                          if not covered(core, *rule)]
@@ -1037,11 +1099,15 @@ class SimpliPyEngine:
                     pending = set()
                     break
 
-        self._replace_rules([rule for rule in full if rule in kept])
-        n_pruned = len(full) - len(self.simplification_rules)
+        remaining = [rule for rule in full if rule in kept]
+        if rule_mode == 'default':
+            self._replace_rules(remaining)
+        else:
+            setattr(self, attr, remaining)
+            self._replace_rules(self.simplification_rules)
+        n_pruned = len(full) - len(remaining)
         if verbose:
-            print(f'Pruned {n_pruned} covered rules '
-                  f'({len(self.simplification_rules)} rules remaining)')
+            print(f'Pruned {n_pruned} covered rules ({len(remaining)} rules remaining)')
         return n_pruned
 
     def resolve_constant_rules(self, verbose: bool = False) -> int:
@@ -1150,8 +1216,9 @@ class SimpliPyEngine:
             behavior. Under a lean selection (e.g. ``modes=('f64', 'permissive')``)
             a config-named set outside it is not even read here -- its resolved
             path is recorded and the file loads on the mode's first use. See the
-            class docstring's ``modes`` entry for the full contract and measured
-            RSS numbers, and :meth:`unload_mode` for the explicit drop.
+            class docstring's ``modes`` entry for the full contract and the peak RSS
+            measured on the acj-5-4-llm artifact, and :meth:`unload_mode` for the
+            explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the config is allowed to import (see
             :mod:`simplipy.trust`). Deliberately an argument HERE and not a key in
@@ -1260,9 +1327,13 @@ class SimpliPyEngine:
                     f"'{mode_path}'): the engine is built WITHOUT it, so {consequence}. "
                     f"The other modes are unaffected -- each mode's set is its own file.",
                     UserWarning)
+        # Each file is read in the canon it was certified in, which its sidecar records.
+        canons = {mode_name: _canon_of_record(path) for mode_name, path in mode_sources.items()}
+        if rules_path is not None and os.path.exists(rules_path):
+            canons['f64'] = _canon_of_record(rules_path)
         engine = cls(operators=config['operators'], rules=rules,
                      rules_real=mode_rules['real'], rules_permissive=mode_rules['permissive'],
-                     modes=modes, trusted_modules=trusted_modules)
+                     rule_canons=canons, modes=modes, trusted_modules=trusted_modules)
         # The file recipe, attached AFTER construction because paths are this
         # loader's knowledge, not `__init__`'s: a deferred set lazily loads from
         # here on first use, and `unload_mode` re-reads from here after a drop.
@@ -1284,29 +1355,14 @@ class SimpliPyEngine:
                 f"canonical form, but no simplification rule can ever fire.",
                 UserWarning)
         # (The compiled core self-attaches in __init__ from the SAME in-memory state.)
-        # D25 (R6's warn-on-mismatch half): the provenance sidecar records the measure
-        # fingerprint the ruleset was MINED under, and until this check nothing ever
-        # read it back -- recording-without-reading is the inert-control pattern. A
-        # ruleset served under a different measure than it was mined with is exactly
-        # what the fingerprint exists to catch; warn loudly, do not refuse (the rules
-        # stay sound -- their MINIMALITY claims are what the measure change voids).
-        if rules_path is not None:
-            sidecar_path = rules_path + '.provenance.json'
-            if os.path.exists(sidecar_path):
-                try:
-                    with open(sidecar_path, 'r') as f:
-                        recorded = json.load(f).get('measure', {}).get('digest')
-                except (OSError, ValueError):
-                    recorded = None
-                if recorded is not None:
-                    current = engine._measure_fingerprint()['digest']
-                    if recorded != current:
-                        warnings.warn(
-                            f"measure fingerprint mismatch: the ruleset at '{rules_path}' was "
-                            f"mined under measure digest {recorded} but this engine computes "
-                            f"{current}. The rules stay sound, but their minimality/ordering "
-                            f"claims were certified under a different measure (D25/R6).",
-                            UserWarning)
+        # THE MEASURE CHECK. Each rule file's provenance sidecar records what the measure
+        # charged on the fingerprint probes when the file was mined. A ruleset served
+        # under a different measure stays sound, but its minimality and ordering were
+        # decided under the other one, so a probe that moved warns (it never refuses).
+        # Every sidecar present is read, one per rule file, each compared probe by probe.
+        for checked_path in [rules_path, *mode_sources.values()]:
+            if checked_path is not None:
+                engine._warn_on_measure_drift(checked_path)
         return engine
 
     @classmethod
@@ -1326,7 +1382,8 @@ class SimpliPyEngine:
             The NAME of an official engine artifact (e.g. ``'acj-4'``). Defaults to
             :data:`simplipy.DEFAULT_ENGINE`, the artifact this simplipy version was
             built and tested against; when it is used implicitly, the choice is
-            announced, because a silent default is one a user cannot reproduce.
+            announced (a WARNING record on the ``simplipy`` logger), because a silent
+            default is one a user cannot reproduce.
             Replaces the old ``path`` argument, which named neither a path nor a
             version.
         install : bool, optional
@@ -1344,7 +1401,8 @@ class SimpliPyEngine:
             is the historical behavior, a lean selection such as
             ``modes=('f64', 'permissive')`` defers the rest to first use. See
             :meth:`from_config` and the class docstring's ``modes`` entry (with the
-            measured RSS numbers); :meth:`unload_mode` is the paired explicit drop.
+            peak RSS measured on the acj-5-4-llm artifact); :meth:`unload_mode` is the
+            paired explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the fetched config is allowed to import (see
             :mod:`simplipy.trust`). A hosted asset is third-party input like any
@@ -1362,9 +1420,10 @@ class SimpliPyEngine:
             from . import __version__
             # ANNOUNCED, and only on the implicit path. A default a user did not choose
             # is one they cannot reproduce unless they are told which it was.
-            print(f"simplipy: loading the default engine {engine!r}"
-                  + (f" @ {DEFAULT_ENGINE_REVISION}" if DEFAULT_ENGINE_REVISION else "")
-                  + f" (simplipy {__version__}); pass engine=... to choose another")
+            _log.warning(
+                "simplipy: loading the default engine %r%s (simplipy %s); pass engine=... to "
+                "choose another", engine,
+                f" @ {DEFAULT_ENGINE_REVISION}" if DEFAULT_ENGINE_REVISION else "", __version__)
         # Known generation-1 names refuse BEFORE any download (the config-level gate
         # in from_config covers everything else, including local paths).
         if not os.path.exists(engine):
@@ -1383,15 +1442,13 @@ class SimpliPyEngine:
         engine's vocabulary: every operator gets exactly its arity of operands, a
         single root remains, and every tag section closes.
 
-        All three external forms are accepted and VERIFIED (ruling 2026-08-18);
-        the form is detected exactly as the conversion API detects it (D2), by
-        TYPE first and then by dialect:
+        All three external forms are accepted and VERIFIED; the form is detected
+        exactly as the conversion API detects it, by TYPE first and then by dialect:
 
         * an infix ``str`` (``'2*atan(x0)/3'``) -- read, then verified;
         * an explicit binary-prefix token sequence (``['*', '2', 'atan', 'x0']``);
         * a TAGGED token sequence (``['<mul>', '2', 'atan', 'x0', '</mul>']``) --
-          the engine's own native serialization, which this predicate used to
-          refuse with a False verdict rather than read.
+          the engine's own native serialization.
 
         A ``list``, ``tuple`` or 1-D ``ndarray`` is a token sequence; tag-bearing
         sequences are verified by the shared liberal parser (the arbiter for that
@@ -1438,14 +1495,15 @@ class SimpliPyEngine:
         if _TAGGED_DIALECT_TOKENS.intersection(tokens):
             # TAGGED: the shared AC parser is the arbiter for this dialect (the arity
             # oracle has no reading of the bag delimiters and would reject every one
-            # of them). A budget-0 projection parses and serializes WITHOUT running
-            # the rewrite loop, so this is a pure well-formedness question; malformed
-            # input fails the parse and the FFI raises, which is the False verdict.
+            # of them). A projection with no pass and no search parses and serializes
+            # WITHOUT running the rewrite loop, so this is a pure well-formedness
+            # question; malformed input fails the parse and the FFI raises, which is the
+            # False verdict.
             try:
-                self._core.ac_simplify(tokens, 0, False, 'tagged')
+                self._core.ac_simplify_in_mode(tokens, 0, 'tagged', 0, rule_mode='default')
             except ValueError:
                 if verbose:
-                    self._explain_invalid(tokens)
+                    self._explain_invalid(tokens, 'tagged')
                 return False
             return True
         # EXPLICIT (and everything else): the verdict ALWAYS comes from the compiled core
@@ -1456,13 +1514,13 @@ class SimpliPyEngine:
         # as it did.
         valid = self._core.is_valid(tokens)
         if verbose and not valid:
-            self._explain_invalid(tokens)
+            self._explain_invalid(tokens, 'explicit')
         return valid
 
     def _validation_tokens(
             self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray') -> 'list[str] | None':
         """Read :meth:`is_valid`'s input into tokens, mirroring the conversion API's
-        detection (D2). Returns ``None`` when an infix ``str`` does not read at all --
+        detection. Returns ``None`` when an infix ``str`` does not read at all --
         an invalid expression, not an error. Refuses a non-expression TYPE loudly."""
         if isinstance(expression, str):
             try:
@@ -1481,20 +1539,21 @@ class SimpliPyEngine:
             f'is_valid expects an infix str or a token sequence '
             f'(list, tuple or 1-D ndarray), not {type(expression).__name__}')
 
-    def _explain_invalid(self, prefix_expression: list[str]) -> None:
-        """Print WHY an expression failed :meth:`is_valid` (diagnostics only, no verdict)."""
+    def _explain_invalid(self, prefix_expression: list[str], form: str) -> None:
+        """Print WHY an expression in ``form`` failed :meth:`is_valid` (diagnostics only,
+        no verdict)."""
         stack: list[str] = []
-        tagged = _TAGGED_DIALECT_TOKENS.intersection(prefix_expression)
-        if tagged:
-            # Without this check the walk below misreads the bag delimiters as variables
+        if form == 'tagged':
+            # Without this branch the walk below misreads the bag delimiters as variables
             # and prints 'Variable must be leaf node' -- actively misleading (B1). is_valid
-            # now READS this dialect, so reaching here means the sequence is malformed AS
+            # READS this dialect, so reaching here means the sequence is malformed AS
             # tagged, not that the dialect was refused.
+            tagged = _TAGGED_DIALECT_TOKENS.intersection(prefix_expression)
             print(f'Invalid expression {prefix_expression}: malformed '
                   f'tagged-serialization sequence (carries {sorted(tagged)}). Every '
                   f'section must open and close in order and every operator must get '
                   f"its operands; re-project a valid expression with "
-                  f"simplify(expr, form='explicit') or to_tagged(expr).")
+                  f"to_prefix(expr) or to_tagged(expr).")
             return
         if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
             print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
@@ -1524,9 +1583,9 @@ class SimpliPyEngine:
         tokens : list[str]
             The prefix expression to render.
         power : {'func', '**'}, optional
-            Controls how power operators are emitted. ``'func'`` keeps canonical
-            engine names such as ``pow3(x)``, while ``'**'`` renders Python-style
-            exponentiation.
+            Controls how power operators are emitted. ``'func'`` keeps the engine's
+            function spelling, ``pow(x, 3)``, while ``'**'`` renders Python-style
+            exponentiation, ``x ** 3``.
         realization : bool, optional
             If True, operator tokens are replaced with their runtime
             realizations (for example, ``'sin'`` becomes ``'np.sin'``), so the
@@ -1541,19 +1600,16 @@ class SimpliPyEngine:
         ------
         ValueError
             If the provided tokens do not form a well-formed prefix expression --
-            including the TAGGED serialization (``simplify``'s default token output),
-            which this converter does not read: render the canonical state with
-            ``simplify(expr, form='infix')``, or request the binary-chain form with
-            ``simplify(expr, form='explicit')``.
+            including the TAGGED serialization, which this converter does not read:
+            convert it with :meth:`to_infix`, or to the binary prefix with
+            :meth:`to_prefix`.
         """
         tagged = _TAGGED_DIALECT_TOKENS.intersection(tokens)
         if tagged:
             raise ValueError(
                 f"prefix_to_infix reads the explicit binary-prefix dialect, but the input "
-                f"carries tagged-serialization tokens {sorted(tagged)} (simplify's default "
-                f"token output). Render the canonical state directly with "
-                f"simplify(expr, form='infix'), or request the binary-chain form with "
-                f"simplify(expr, form='explicit').")
+                f"carries tagged-serialization tokens {sorted(tagged)}. Convert it with "
+                f"to_infix(expr), or to the binary prefix with to_prefix(expr).")
         return self._core.prefix_to_infix(list(tokens), power, realization)
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
@@ -1587,13 +1643,9 @@ class SimpliPyEngine:
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
         """Normalizes an expression into the engine's standard internal format.
 
-        This method performs several key conversions:
-        1.  Converts standard binary operators like `**` into the engine's
-            unary power operators (e.g., `pow2`, `pow1_3`).
-        2.  Combines chained power operators (e.g., `pow2(pow3(x))` becomes
-            `pow6(x)`).
-        3.  Handles unary negation, applying it directly to numbers where
-            possible.
+        It resolves operator aliases, spells ``**`` as the engine's ``pow``
+        (``** x0 2`` becomes ``pow x0 2``), and applies a unary negation of a numeric
+        literal to the literal (``neg 3`` becomes ``-3``).
 
         Parameters
         ----------
@@ -1616,7 +1668,7 @@ class SimpliPyEngine:
         and PRESERVING ITS SPELLING.
 
         The name states the contract because the contract is a CAPABILITY that no
-        other public entry offers (renamed from ``parse``, ruling 2026-08-18):
+        other public entry offers (it was called ``parse`` before 0.14.0):
 
         * **TOLERANT of unknown vocabulary.** A function this engine's config does
           not declare survives as a bare leaf --
@@ -1655,8 +1707,7 @@ class SimpliPyEngine:
         product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
 
         Mechanically it is :meth:`infix_to_prefix` plus optional
-        ``convert_expression`` normalization, with a ``remove_pow1`` cleanup that
-        drops redundant ``pow1_1`` occurrences.
+        :meth:`convert_expression` normalization.
 
         Parameters
         ----------
@@ -1664,7 +1715,7 @@ class SimpliPyEngine:
             The mathematical expression in infix notation.
         convert_expression : bool, optional
             If True, the expression is normalized using `convert_expression`
-            (``**`` becomes the engine's power operators). Defaults to True.
+            (``**`` becomes the engine's ``pow``). Defaults to True.
         mask_numbers : bool, optional
             If True, all numerical literals in the expression are replaced
             with a generic '<constant>' token. Defaults to False.
@@ -1672,58 +1723,66 @@ class SimpliPyEngine:
         Returns
         -------
         list[str]
-            The processed prefix expression after conversion, masking (if
-            enabled), and `remove_pow1` cleanup.
+            The processed prefix expression after conversion and masking (if
+            enabled).
         """
 
         return self._core.parse(infix_expression, convert_expression, mask_numbers)
 
-    def _conversion_input(
+    def _read_input(
             self, expression: str | list[str] | tuple[str, ...] | np.ndarray
     ) -> tuple[str, list[str]]:
-        """``(form, tokens)`` -- the shared input reading of the conversion API.
+        """``(form, tokens)``: THE reading of an expression argument, shared by
+        :meth:`simplify`, :meth:`complexity`, :meth:`prettify`, the conversion API and
+        :mod:`simplipy.normalization`.
 
-        A ``str`` is INFIX and is read with the tolerant reader; a list, tuple or 1-D
-        ``ndarray`` is a token sequence, TAGGED when it carries a bag delimiter or an
-        inverse-section marker and the explicit binary PREFIX otherwise. Any other type
-        refuses loudly. The reading does not validate -- each conversion validates
-        through the one arbiter, the syntactic parser in ``rust/forms.rs``.
+        A ``str`` is INFIX and is read strictly into explicit prefix tokens. A list, tuple
+        or 1-D ``ndarray`` of string-like tokens is a token sequence: TAGGED when it
+        carries a bag delimiter or an inverse-section marker, EXPLICIT binary prefix
+        otherwise. A sequence written in REALIZATION notation (each operator spelled as
+        the callable it runs, ``simplipy.operators.neg`` for ``neg``) is read back to
+        operator tokens first: it is a notation of the same expression. Only
+        realizations that differ from their operator token identify it, and those are
+        dotted names no operator vocabulary contains, so it is detected, never guessed.
+        Reading it back needs an injective realization map, so a config where two
+        operators share a realization refuses it (:meth:`_assert_realizations_are_invertible`).
+
+        Refuses loudly: an ``ndarray`` that is not 1-D or not string-like raises
+        ``ValueError``, any other type ``TypeError``. The reading does not validate;
+        each consumer validates through the core.
         """
         if isinstance(expression, str):
-            return 'infix', self._core.parse(expression, True, False)
+            return 'infix', self._core.parse(expression, strict=True)
         if isinstance(expression, np.ndarray):
             if expression.ndim != 1:
-                raise ValueError('conversion expects a one-dimensional numpy array of tokens')
+                raise ValueError('expected a one-dimensional numpy array of tokens, '
+                                 f'got {expression.ndim} dimensions')
             if expression.dtype.kind not in {'U', 'S', 'O'}:
-                raise ValueError('conversion expects a numpy array of string-like tokens')
-            tokens = [str(t) for t in expression.tolist()]
+                raise ValueError('expected a numpy array of string-like tokens, '
+                                 f'got dtype {expression.dtype}')
+            if expression.dtype.kind == 'O':
+                tokens = [_token_of(t) for t in expression.tolist()]
+            else:
+                tokens = [str(t) for t in expression.astype(str).tolist()]
         elif isinstance(expression, (list, tuple)):
-            tokens = [str(t) for t in expression]
+            tokens = [_token_of(t) for t in expression]
         else:
             raise TypeError(
-                f'conversion expects an infix str or a token sequence '
+                f'expected an infix str or a token sequence '
                 f'(list, tuple or 1-D ndarray), not {type(expression).__name__}')
-        # REALIZATION is a fourth NOTATION, not a fourth semantics: the same expression
-        # with each operator spelled as the callable it runs (`neg` ->
-        # `simplipy.operators.neg`). Detected, never guessed -- only realizations that
-        # DIFFER from their operator token can identify the form, and those are dotted
-        # names no operator vocabulary contains. Operators realized as themselves (`+`,
-        # `-`, `*`) make the two spellings identical, so there is nothing to detect and
-        # nothing to get wrong.
         if self._realization_only_tokens().intersection(tokens):
+            self._assert_realizations_are_invertible()
             tokens = self.realizations_to_operators(tokens)
-        return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'prefix'), tokens
+        return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'explicit'), tokens
 
     def evaluate_constants(
-            self, expression: str | list[str] | tuple[str, ...] | np.ndarray,
-            form: str | None = None) -> str | list[str]:
+            self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str | list[str]:
         """Fold every variable-free subtree to its f64 value -- EXPLICITLY, on request.
 
         This is the front door for the numeric evaluation :meth:`simplify` refuses to
         do. The engine folds only what it computes EXACTLY (rational arithmetic, in the
-        constructors); the serve path's last f64-evaluation arm was deleted on
-        2026-08-02 because "an f64 evaluation landing exactly on a cheap literal while
-        truly differing at 1e-17" is not a simplification, it is a rounding. So
+        constructors), because an f64 evaluation that lands exactly on a cheap literal
+        while the true value differs at 1e-17 is not a simplification but a rounding. So
         ``simplify(['tan', '1'])`` returns ``tan 1`` in every mode, and this returns
         ``1.5574077246549023``.
 
@@ -1743,18 +1802,21 @@ class SimpliPyEngine:
         non-finite guard into flash-ansr; refusing is the safe direction and the caller
         can still evaluate the expression themselves.
 
-        NEVER called by :meth:`simplify`, in any mode. Returns the input's own dialect
-        unless ``form`` says otherwise, exactly as :meth:`simplify` does.
+        NEVER called by :meth:`simplify`, in any mode. Returns the input's dialect: infix
+        text for a ``str``, otherwise the tagged or binary-prefix tokens it was given. To
+        change the notation, convert the answer (:meth:`to_infix`, :meth:`to_tagged`,
+        :meth:`to_prefix`).
         """
-        in_form, tokens = self._conversion_input(expression)
+        in_form, tokens = self._read_input(expression)
         if not tokens:
             return '' if in_form == 'infix' else []
-        prefix = (self._core.to_prefix_syntactic(tokens) if in_form == 'tagged'
-                  else self._core.parse(expression, True, False) if in_form == 'infix'
-                  else tokens)
+        # an infix `str` was already read (strictly) by `_read_input`
+        prefix = self._core.to_prefix_syntactic(tokens) if in_form == 'tagged' else tokens
         self._core.check_form(prefix)
 
         arity = self.operator_arity
+        # A variable is what `expression_variables` says it is, the engine's one definition.
+        variables = set(self.expression_variables(prefix))
 
         def span(i: int) -> int:
             j = i + 1
@@ -1763,8 +1825,8 @@ class SimpliPyEngine:
             return j
 
         def foldable(sub: list[str]) -> bool:
-            return not any(t == '<constant>' or t[:1] in '_!?$' and t[1:].isdigit()
-                           or (t.startswith('x') and t[1:].isdigit()) for t in sub)
+            return not any(t in variables or t == '<constant>' or t[:1] in '_!?$' and t[1:].isdigit()
+                           for t in sub)
 
         out: list[str] = []
         i = 0
@@ -1775,7 +1837,7 @@ class SimpliPyEngine:
                 try:
                     value = float(np.asarray(
                         self._core.evaluate_batch(sub, ['x0'], [0.0], 1, [])).ravel()[0])
-                except Exception:
+                except ValueError:  # an operator the evaluator has no kernel for: left as is
                     value = float('nan')
                 if np.isfinite(value):
                     out.append(repr(value))
@@ -1784,15 +1846,11 @@ class SimpliPyEngine:
             out.append(prefix[i])
             i += 1
 
-        target = form or ('infix' if in_form == 'infix' else
-                          'tagged' if in_form == 'tagged' else 'explicit')
-        if target == 'explicit':
-            return out
-        if target == 'tagged':
+        if in_form == 'tagged':
             return cast(list, self.to_tagged(out))
-        if target == 'infix':
+        if in_form == 'infix':
             return cast(str, self.to_infix(out))
-        raise ValueError(f"unknown form {form!r}: expected 'tagged', 'explicit' or 'infix'")
+        return out
 
     def to_infix(self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:
         """Convert an expression to the INFIX form -- NOTATION ONLY.
@@ -1812,7 +1870,7 @@ class SimpliPyEngine:
         (conversions are strict; :meth:`read_infix` stays the tolerant reader),
         ``TypeError`` on a non-expression type.
         """
-        form, tokens = self._conversion_input(expression)
+        form, tokens = self._read_input(expression)
         if form == 'infix':
             if tokens:
                 self._core.check_form(tokens)
@@ -1840,7 +1898,7 @@ class SimpliPyEngine:
         inverts each member individually -- only a left chain spells that without
         inventing the product ``c*d``.
         """
-        form, tokens = self._conversion_input(expression)
+        form, tokens = self._read_input(expression)
         if not tokens:
             return []
         if form == 'tagged':
@@ -1853,18 +1911,21 @@ class SimpliPyEngine:
 
         See :meth:`to_infix` for the shared contract. Bag members keep their
         source ORDER (sorting is canonicalisation, which is :meth:`simplify`'s job)
-        and literals keep their spelling, so a tagged sequence already in normal form
-        comes back byte-identical.
+        and literals keep their spelling (a fraction token aside, below), so a tagged
+        sequence already in normal form comes back byte-identical.
 
         The regrouping is CONSERVATIVE: a chain flattens only across nodes of the same
         kind at the same POLARITY. The right operand of ``-``/``/`` and the operand of
         ``neg``/``inv`` become ONE section member, never a flattened run, because
         ``1/(a*b)`` and ``(1/a)*(1/b)`` are different expressions -- they part company
         at ``0`` and ``inf``, which is why the AC core gates that distribution behind a
-        nonzero certificate. A lone group inverse keeps its unary spelling (``neg x0``,
-        ``inv x0``): the grammar has no one-member bag.
+        nonzero certificate. A tagged sequence declares its dialect by its bags, so every
+        quotient carries one: a fraction token is its quotient (``1/2`` is
+        ``<mul> 1 <div> 2 </mul>``), and a lone reciprocal, having no one-member bag, is
+        bagged with the unit (``inv x0`` is ``<mul> 1 <div> x0 </mul>``). A lone negation
+        keeps its unary spelling ``neg x0``, which both dialects read alike.
         """
-        form, tokens = self._conversion_input(expression)
+        form, tokens = self._read_input(expression)
         if not tokens:
             return []
         return cast(list, self._core.to_tagged_syntactic(tokens))
@@ -1872,7 +1933,7 @@ class SimpliPyEngine:
     def mask(self, expression: str | list[str],
              policy: 'str | Callable[[str, Any], str | None]' = 'all',
              *, collect: bool = True) -> str | list[str]:
-        """Mask literals: the front door over :mod:`simplipy.masking` (design D8).
+        """Mask literals: the front door over :mod:`simplipy.masking`.
 
         Pure delegation to the toolkit -- the mechanism, the role walk, and the
         one-constant-per-degree-of-freedom collect stage are all
@@ -1939,7 +2000,7 @@ class SimpliPyEngine:
                 f'callable, not {type(policy).__name__}')
         if isinstance(expression, str):
             return self.to_infix(
-                _masking.mask(self._core.parse(expression, True, False), self, policy_fn,
+                _masking.mask(self._core.parse(expression, strict=True), self, policy_fn,
                               collect=collect))
         if isinstance(expression, list):
             return _masking.mask(expression, self, policy_fn, collect=collect)
@@ -1953,14 +2014,12 @@ class SimpliPyEngine:
             *,
             max_passes: int | None = None,
             mode: Mode | str = Mode.f64,
-            effort: int | None = None,
-            work: int | None | str = 'default') -> str | list[str] | tuple[str, ...] | np.ndarray:
+            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
-        coefficients composed explicitly (``* 7 x``, ``pow x 3``) instead of the hyper-operator
-        vocabulary (``mult2..5``, ``div2..5``, ``pow2..5``, ``pow1_2/1_4``; the real odd roots
-        ``pow1_3``/``pow1_5`` remain genuine operators). Rules are widened to SUB-MULTISET
+        coefficients composed explicitly (``* 7 x``, ``pow x 3``, ``rootn x 3``) instead of the
+        retired hyper-operator vocabulary. Rules are widened to SUB-MULTISET
         matching with the unmatched remainder preserved, so a rule fires wherever the algebra
         permits, regardless of operand order or bracketing -- both axes of the binary engine's
         commutative-order invariance defect are removed at the representation level, and the
@@ -1970,18 +2029,17 @@ class SimpliPyEngine:
         canonical constructors under the same soundness certificates as the rule matcher
         (finite-a.e. for sign-cancelling addition, finite-and-nonzero-a.e. for
         exponent-cancelling multiplication), and coefficient arithmetic is exact rational
-        computation rather than mined rules. The output is idempotent
-        (``simplify(simplify(x)) == simplify(x)``) when every search runs until a round finds
-        nothing, the default of ``f64`` and ``real``; in ``permissive`` a search its work budget
-        stops, or another of its arms, can continue on a second call (``effort``, ``work``).
+        computation rather than mined rules. Every mode runs one walk: its chain of rules and
+        constructors, then the search, in its own canonical form and rules. The output is
+        idempotent (``simplify(simplify(x)) == simplify(x)``) when the search runs until a
+        round finds nothing, the default in every mode; a search that an ``effort`` cap
+        stops can continue on a second call.
 
         .. note::
-            Pair this engine with SORT-PROMOTED rulesets (the ``2-1``/``3-2``/``4-3``
-            artifact family and later). The legacy ``dev_7-3`` asset predates the certificate
-            sorts (its pattern rules are uniformly ``_``-sorted, gated only by mining-time
-            sampling); it is supported only by simplipy <= 0.11 as a separate pinned install,
-            and its certificate-free cancellation rules are unsound on pole spellings that the
-            AC core's unified representation makes reachable.
+            Pair this engine with sort-promoted rulesets, which every published engine
+            (such as ``acj-5-4-llm``) is. Generation-1 artifacts (the retired hyper-operator
+            vocabulary, such as ``dev_7-3``) are refused at load; they need
+            ``simplipy<0.12``.
 
         Parameters
         ----------
@@ -1990,40 +2048,66 @@ class SimpliPyEngine:
             1-D ``ndarray`` is a prefix token sequence (old grammar and tagged form are
             both accepted -- one shared parser).
         max_passes : int, optional
-            Bound on the number of outer REWRITE PASSES -- not on nodes, and not on rule
-            firings. One pass is one full rewrite sweep over the whole expression; the
-            chain stops as soon as a pass changes nothing (the fixpoint). Defaults to 48,
-            which is far above the observed convergence of 2-4 passes, so the bound is
-            defense-in-depth against an ordering bug (T6 proves the fixpoint is reached in
-            finitely many passes) rather than a tuning knob. ``max_passes=0`` is treated as
-            1: at least one pass always runs.
+            Safety cap on the number of outer REWRITE PASSES -- not on nodes, and not on
+            rule firings. One pass is one full rewrite sweep over the whole expression,
+            and it reaches the fixpoint: it re-enters every node it changes, so the next
+            pass only confirms that nothing moves. Defaults to 48; the cap is
+            defense-in-depth against an ordering bug (the descent is well-founded, so the
+            fixpoint is reached in finitely many passes: Theorem T6 in ``docs/formal.md``),
+            not a tuning knob. Must be at least 1; ``0`` raises ``ValueError``.
 
-            * ``'tagged'`` -- the STRICT prefix form, the AC engine's native serialization
-              (default for token inputs): n-ary bags are delimited (``<add> ... </add>``,
+        effort : int or None, optional
+            The SEARCH BUDGET: after the chain reaches its fixpoint, an
+            exploration phase proposes the moves of the distributive law the strict
+            descent refuses (distributing a product over its sums, expanding an integer
+            power of a sum, factoring what terms of a sum share), runs each candidate
+            through the same certified constructors and the same descent loop, cheapest
+            first, and replaces the result only when the candidate's endpoint lands
+            STRICTLY below it in the serve-time reduction ordering.
+            ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
+            nothing, so a second call returns the answer unchanged (up to the residual
+            classes listed in ``docs/formal.md``);
+            an int caps the search at that many candidate descents, after which
+            a second call can continue it; ``0`` never enters the phase and is byte-identical to the plain chain
+            (rules and constructors), which does not factor.
+            Every guarantee survives any budget: soundness (same certificates), never-worse
+            (strictly-below acceptance: never above the input, and never above the answer at a
+            smaller ``effort``), termination (well-founded ordering,
+            independent of the budget) and deterministic output.
+
+        Returns
+        -------
+        str | list[str] | tuple[str, ...] | np.ndarray
+            The simplified expression, in the same container and dialect as the input: a
+            ``str`` answers in infix, a token sequence carrying a bag delimiter in the tagged
+            form, and any other token sequence in the explicit binary prefix.
+
+            * tagged -- the STRICT prefix form, the AC engine's native serialization: n-ary bags are delimited (``<add> ... </add>``,
               ``<mul> ... </mul>``) and carry their group inverse as a SECTION -- terms
               after ``<sub>`` subtract, factors after ``<div>`` divide, so
               ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
-              unary functions stay plain prefix; ``neg``/``inv`` exist only as the
-              standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
-              sections own all inverses. Integers are one token (``7``), every fraction is a
+              unary functions stay plain prefix; ``neg`` exists only as the standalone
+              unary spelling (``tan neg x0``), and a reciprocal or negative power is a
+              quotient like any other (``<mul> 1 <div> x0 </mul>``, ``<mul> 1 <div> pow x0 3
+              </mul>``, as ``to_tagged`` writes ``inv x0`` and ``inv pow x0 3``) -- inside bags
+              the sections own all inverses. Integers are one token (``7``), every fraction is a
               bag (``<mul> 1 <div> 3 </mul>``), and so is a small decimal (``0.2`` is
               ``<mul> 1 <div> 5 </mul>``); other decimals are one token. So a tagged answer
               that holds a fraction always carries a bag and reads back as tagged. Tagged
               output is accepted back as input (one shared, liberal parser).
-            * ``'infix'`` -- the PRETTY human-readable rendering (default for ``str``
-              inputs; always returns ``str``): ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
+            * infix -- the PRETTY human-readable rendering, a ``str``: ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
               Round-trips: feeding the rendering back as a ``str`` input reaches the same
               canonical state. The bare names ``pi``, ``e``, ``inf`` and ``nan`` are
               RESERVED constant spellings of the infix language (the renderer emits them
               for the canonical constants, so the parser reads them back as constants,
               never as variables).
-            * ``'explicit'`` -- the binary-chain form (``* 6 x``, ``- a b``, literal
+            * explicit -- the binary-chain form (``* 6 x``, ``- a b``, literal
               coefficients only -- the hyper-operator vocabulary is deleted). This is
               the project's INTERNAL dialect, not a recommended consumer format:
               rule artifacts are stored in it, the miner's enumeration universe and
               the certificate tapes are defined on it, and it stays available here
-              for debugging and compatibility. ``'tagged'`` and ``'infix'`` are the
-              public output forms. Sign placement follows the same doctrine as the
+              for debugging and compatibility. Tagged and infix are the public output
+              forms. Sign placement follows the same doctrine as the
               tagged form: a sign lives in the numeric coefficient literal whenever
               one is emitted (``* -2 x``), additive term signs are structural
               (binary ``-``), and ``neg`` spells only the pure sign (``neg x0``,
@@ -2040,38 +2124,6 @@ class SimpliPyEngine:
             -- and a spelling chosen for a reader must not move any of those. To read a
             token answer, convert it: ``simplify(to_infix(tokens))``.
 
-        effort : int or None, optional
-            The SEARCH BUDGET: after the chain reaches its fixpoint, an
-            exploration phase proposes expansion moves the strict descent refuses
-            (distributing a product over its sums, expanding an integer power of a
-            sum), runs each candidate through the same certified constructors and the
-            same descent loop, and replaces the result only when the candidate's
-            endpoint lands STRICTLY below it in the serve-time reduction ordering.
-            ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
-            nothing, so a second call returns the answer unchanged (up to the residual
-            classes in ``docs/formal.md``, I3 and L6, and in ``permissive`` a search its
-            work budget stopped); an int caps each search at that many candidate descents
-            (``permissive`` runs several per call), after which a second call can continue
-            it; ``0`` never enters the phase and is byte-identical to the plain chain.
-            Every guarantee survives any budget: soundness (same certificates), never-worse
-            (strictly-below acceptance; in ``permissive`` its selection too, never above its
-            input, its search-off answer or its answer at a smaller ``effort``, among calls
-            with the same ``work``), termination (well-founded ordering, independent of the
-            budget) and deterministic output.
-        work : int, None or 'default', optional
-            The WORK BUDGET of each search, in deterministic units (one AC-matcher step or
-            one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK`` in
-            ``permissive`` and no bound in ``f64`` and ``real``; ``None`` lifts the bound (the
-            search runs until a round finds nothing). A search that spends its budget returns
-            its best answer so far, and the guarantees above hold at every budget;
-            ``permissive``'s three bounds hold among calls with the same ``work``. Under a
-            budget, ``permissive`` continues its literal fold without the search.
-
-        Returns
-        -------
-        str | list[str] | tuple[str, ...] | np.ndarray
-            The simplified expression, in the same format as the input.
-
         Raises
         ------
         ValueError
@@ -2081,10 +2133,11 @@ class SimpliPyEngine:
         """
         if max_passes is None:
             max_passes = 48
-        if max_passes < 0:
-            # would otherwise surface as a raw pyo3 OverflowError at the usize
-            # conversion (hardening H-006, 2026-08-03)
-            raise ValueError(f"max_passes must be non-negative, got {max_passes}")
+        if max_passes < 1:
+            # 0 would run no pass at all (the core reads it literally), and a negative
+            # value would surface as a raw pyo3 OverflowError at the usize conversion
+            # (hardening H-006, 2026-08-03)
+            raise ValueError(f"max_passes must be at least 1, got {max_passes}")
         if effort is None:
             effort = DEFAULT_EFFORT
         # None stays None: the core then searches until a round finds nothing.
@@ -2104,132 +2157,211 @@ class SimpliPyEngine:
                 raise ValueError(f"effort must be non-negative, got {effort}")
             if effort > 2 ** 63 - 1:
                 effort = None  # beyond the index range no cap binds: the uncapped search
-        if isinstance(work, str):
-            if work != 'default':
-                raise ValueError(f"work must be None, an int >= 0 or 'default', not {work!r}")
-        elif work is not None:
-            if isinstance(work, bool):
-                raise TypeError(f"work must be None or an int >= 0, not bool ({work!r})")
-            try:
-                work = work.__index__()
-            except AttributeError:
-                raise TypeError(
-                    f"work must be None or an int >= 0, not {type(work).__name__} ({work!r})") from None
-            if work < 0:
-                raise ValueError(f"work must be non-negative, got {work}")
-            if work > 2 ** 64 - 1:
-                work = None  # beyond the counter's range no budget binds
-        # A STRING mode must coerce, never silently compare unequal to the enum:
-        # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
-        # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its
-        # integer values; everything else raises.
-        if isinstance(mode, str):
-            key = mode.strip().lower()
-            # Match on the member NAME case-insensitively: the documented spellings are
-            # lower-case (`'f64'`), and the old code upper-cased before lookup, so a
-            # bare `.upper()` would now miss every one of them.
-            match = {m.name.lower(): m for m in Mode}.get(key)
-            if match is None:
-                raise ValueError(
-                    f"unknown mode {mode!r}: expected one of "
-                    f"{[m.name for m in Mode]} (or a simplipy.Mode)") from None
-            mode = match
-        elif not isinstance(mode, Mode):
-            # api-1/fmux-mode-1: a bare int (or numpy float) used to COERCE -- mode=3
-            # from a JSON config silently selected LOSSY, the rung that trades
-            # soundness for recall. Only Mode members and the documented names bind.
-            raise TypeError(
-                f"mode must be a simplipy.Mode or one of "
-                f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
-
-        if work == 'default':
-            work = DEFAULT_WORK if mode is Mode.permissive else None
-
-        # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds
-        # HERE, on the mode's first use -- once, lock-guarded, announced. Under the
-        # default `modes='all'` this is one set-membership test. Runs BEFORE the
-        # fail-closed `real` check below, so that check judges the loaded state.
-        if mode is not Mode.f64:
-            self._ensure_mode_loaded(_RULE_MODE[mode])
-        # The reader half of the lazy-install fairness gate (one attribute test
-        # when no push is pending -- i.e. always, outside a first-use build).
-        self._await_no_pending_push()
-
-        if isinstance(expression, str):
-            tokens = self._core.parse(expression, True, False)
-        elif isinstance(expression, np.ndarray):
-            _validate_ndarray_input(expression)
-            tokens = expression.tolist()
-        else:
-            tokens = list(expression)
+        mode = _coerce_mode(mode)
 
         # DIALECT-PRESERVING (owner ruling 2026-08-18): `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
         # a bag delimiter is tagged, anything else is the explicit binary prefix. This is
         # what closed the old "tagged leak" (a prefix-in token list used to come back
         # tagged); to change the NOTATION, convert: `simplify(to_tagged(x))`.
-        if isinstance(expression, str):
-            form = 'infix'
-        elif _TAGGED_DIALECT_TOKENS.intersection(tokens):
-            form = 'tagged'
-        else:
-            form = 'explicit'
-        if mode is Mode.real and self._core.mode_rules_len('real') is None:
-            # FAIL CLOSED. A mode naming no set of its own falls back to the default
-            # set, which is right for `permissive` (its divergence is search semantics, so
-            # the fallback reproduces today's LOSSY exactly) and WRONG for `real`, whose
-            # only divergence IS which rules are certified. Silently serving the f64 set
-            # here would answer a request for mathematical soundness with rules known to
-            # be mathematically false -- the 18-rule `f(+-10^-k) -> +-10^-k` family is
-            # f64-exact and false by a cubic term -- which is the exact over-claim the
-            # mode split exists to prevent. An artifact predating the triple cannot
-            # answer this question, so it says so.
-            raise ValueError(
-                "mode='real' needs a ruleset mined for it, and this artifact has none: "
-                "it predates the rules_f64/rules_real/rules_permissive triple. Falling back "
-                "to the default set would serve f64-certified rules under a claim of "
-                "MATHEMATICAL soundness, and the two are incomparable -- some f64 rules "
-                "are mathematically false. Use mode='f64' for the deployed semantics, or "
-                "load an artifact whose config names a real ruleset.")
+        form, tokens = self._read_input(expression)
 
         # ONE lookup, both branches: the rule mode is decided here and the core is asked
         # for it by name, so the two output paths cannot end up serving different sets.
+        # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds in
+        # `_serve`, on the mode's first use -- once, lock-guarded, announced; under the
+        # default `modes='all'` that is one set-membership test. `real` FAILS CLOSED there
+        # (`_serve`): the 18-rule `f(+-10^-k) -> +-10^-k` family is f64-exact and false by a
+        # cubic term, so serving the f64 set would over-claim mathematical soundness.
         rule_mode = _RULE_MODE[mode]
+        own_set = mode is Mode.real
         if form == 'infix':
-            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort, work)
-
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort, work)
-
-        if isinstance(expression, str):
-            # The old infix converter cannot render the tagged form; a str input asking for
-            # a token form gets the token list.
-            return out
+            return self._serve(mode, lambda core: core.ac_simplify_infix_in_mode(
+                tokens, max_passes, effort, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
+        out = self._serve(mode, lambda core: core.ac_simplify_in_mode(
+            tokens, max_passes, form, effort, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
         return self._denormalize(out, expression)
+
+    def prettify(
+            self,
+            expression: str | list[str] | tuple[str, ...] | np.ndarray,
+            *,
+            digits: int = 3,
+            precision: int | None = None,
+            form: str | None = None,
+            mode: Mode | str = Mode.f64,
+            keep_grouping: bool = False) -> str | list[str]:
+        """Write an expression for a READER: each number written to a digit budget, nothing else decided.
+
+        :meth:`simplify` returns the canonical form, whose numbers are exact
+        (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
+        is the display of that form: it decides how each number is WRITTEN and leaves the
+        structure as it is: it changes how a number is written, never the structure, and
+        applies no rules. Nothing inside SimpliPy calls it or reads what it returns; call it
+        where people read expressions, on the answer of :meth:`simplify`::
+
+            engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
+            # '2.1458314277221002*x1'
+            engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
+            engine.prettify(engine.simplify('1/(2*3.141592653589793)'))   # '1/(2*pi)'
+            engine.prettify(engine.simplify('x1*exp(-381/2)'))
+            # '1.8488479557720672e-83*x1'
+
+        The rules, at the digit budget ``D = digits`` (the significant digits a spelling
+        writes count, never an exponent's, a numerator of 1 included: ``1/12`` counts 3,
+        ``2.5e307`` counts 2, ``0.05`` counts 1). Each number is written in the first form
+        that fits ``D``:
+
+        * Exactly, as one number, as :meth:`simplify` writes it, a decimal in the notation
+          below (``3*x1/10`` is ``0.3*x1``, ``x2 + 0.5`` is ``x2 + 1/2``, ``5/21`` beside a
+          factor is ``x1/4.2``, ``22/7`` stays ``22*x1/7``, ``x1/2`` stays ``x1/2``).
+        * At full precision, as a short exact sum ``s + r`` or ``s - r``: ``s`` the number's
+          first significant digits, ``r`` the rest to its value, each written exactly as one
+          number, within ``D`` in total; so it keeps the value (``x1 + 1.000000000000000000003`` is ``x1 + 1 + 3e-21``,
+          ``2.5e30 + 1e15`` is ``2.5e30 + 1e15``, ``0.30000000000000004`` is ``0.3 + 4e-17``).
+          A number float64 writes exactly in 15 digits (``1905``, ``1.0001``) is written as its
+          float instead.
+        * Otherwise the float64 nearest to it, in its shortest form, as a multiplier
+          (``x1/1024`` is ``9.765625e-4*x1``, ``0.0009853704666076428*x1`` is
+          ``9.853704666076429e-4*x1``). A number shown as a float is read as a float. With
+          ``precision=k`` such a float shows ``k`` significant digits instead, with no rest
+          (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), and that number is
+          written by these rules as every number is, so the display reads back as itself
+          (``0.175`` is 7/40, written ``7/40``) and no short sum is written; a number written
+          exactly is not affected.
+        * pi: a value that is an exact number within ``D`` times or over the literal
+          ``3.141592653589793`` is written with pi factored out as the symbol ``pi``
+          (``np.pi`` in the token forms): ``x0/(2*pi)``, ``0.15*x0^2/(pi*x1*x2)``. In ``f64``
+          the symbol is that float. It holds at every precision: pi is never shortened, and a
+          precision applies to the other numbers only. The literal is written instead where
+          the symbol would read back as another expression (reading ``sin(x1 + pi)`` builds
+          ``-sin(x1)``, so ``sin(x1 + 3.141592653589793)`` keeps the literal), and where the
+          expression holds the symbol pi itself.
+        * Where writing a number so would change the structure -- it would be 1 and a
+          multiplier or an exponent would drop, an integer where a non-integer exponent stood,
+          or equal to another number so that parts collect or cancel -- it is written as that
+          spelling and the rest to its value, the rest by the same rules
+          (``1.0000000000000000000031*x1`` is ``(1 + 3.1e-21)*x1``,
+          ``sin(1.0001*x1) - sin(x1)`` at ``precision=3`` is ``sin((1 + 1e-4)*x1) - sin(x1)``).
+          Of two numbers that would be equal, the one written first keeps its spelling.
+        * A float whose reciprocal float64 holds as written stays a divisor where the
+          product has another divisor; a bare ``x1/0.225147640565301`` is
+          ``4.441529999999994*x1``.
+        * A function of numbers that would all be written as floats is one float: its
+          float64 as SimpliPy's evaluator computes it, shown at the ``precision``
+          (``x1*exp(-381/2)`` is ``1.8488479557720672e-83*x1``, ``1.85e-83*x1`` at
+          ``precision=3``). A function of a number written exactly stays (``sin(2)``), and so
+          does one whose float would be 0, inf or subnormal, and one whose float would let
+          reading the display build another sum, a number distributed over a sum or a term
+          collected with a like term (``x1 + atan(1.2345678)*(x2 + x3)``,
+          ``x1 + x2 + x1/log(0.7377233226141932)``). Numbers a product keeps apart for their
+          size (a number of ``real`` has at most 1,100 bits) are one float, the product of the
+          floats they are written as. No numbers combine to inf, 0 or a subnormal.
+        * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
+          ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
+        * One slash: every divisor of a product joins one denominator, functions and sums
+          included (``x1/x2/log(x3)`` is ``x1/(x2*log(x3))``, ``x1/sin(x3)/(x2 + 1)`` is
+          ``x1/(sin(x3)*(x2 + 1))``). The display is of the product reading it back builds:
+          the same whether the canonical form holds a reciprocal per factor or one of their
+          product, its factors in canonical order and a sign the denominator holds kept there
+          (``x3/(-(x11 + x9))``). Tagged tokens write a section member per reciprocal, so a
+          reciprocal of a product with a sum or a function stays one bag in the section.
+        * Scientific notation from ``1e6`` and below ``1e-3``.
+
+        At the default ``precision=None`` a number is written exactly, as a short exact sum or
+        as the float64 nearest to it, so the display reads back to the same float64 values: it evaluates as the expression does, up to the order of its
+        operations (a number the explicit tokens write as a quotient, ``x1/0.225147640565301``,
+        is written as the float of that quotient, ``4.441529999999994*x1``, one rounding
+        apart). A sum is written as one flat chain, ``x1 + x2 + exp(x3)``, and an infix
+        product as one run of factors, which reading groups from the left; SimpliPy's explicit
+        tokens group them from the right (``+ x1 + x2 exp x3``), and where terms nearly cancel,
+        or a function amplifies its argument, the two orders give different float64 values.
+        ``keep_grouping=True`` writes every sum and product with the grouping of the explicit
+        tokens, ``x1 + (x2 + exp(x3))``, ``2*(x1*(x2*x3))``, so the display evaluates every sum
+        and product in the state's order. With a ``precision`` the display does not read back
+        to the same values: a float shortened to ``k`` digits reads back as another number. At
+        every precision the display reads back to the expression's structure, and displaying a
+        display gives it back (``prettify(prettify(x)) == prettify(x)``).
+
+        Parameters
+        ----------
+        expression : str | list[str] | tuple[str, ...] | np.ndarray
+            Infix text, or explicit or tagged prefix tokens (as :meth:`simplify` reads them).
+            Its canonical state is displayed; pass the answer of :meth:`simplify`.
+        digits : int, optional
+            The digit budget ``D`` (default 3).
+        precision : int or None, optional
+            The significant digits a number written as a float shows. ``None`` (the default)
+            writes the shortest decimal that reads back as the same float64.
+        form : str, optional
+            ``'infix'``, ``'explicit'`` or ``'tagged'``; by default the input's dialect, as
+            :meth:`simplify` answers.
+        mode : Mode | str, optional
+            The mode whose number domain reads the expression's numbers (default ``f64``, for
+            which the display rules are designed). No rules are used.
+        keep_grouping : bool, optional
+            Write every sum and product with the grouping of SimpliPy's explicit tokens of the
+            canonical form, the order in which it evaluates the expression: a sum's positive
+            terms grouped from the right, then each subtracted term in turn
+            (``x1 + (x2 + exp(x3)) - x4``), a number written with its rest as one term
+            (``x1 + (1 + 3e-21)``), and a product's factors grouped from the right
+            (``x1*(x2*x3)/(x4*(x5*x6))``). Default ``False``: one flat chain per sum and
+            product. The tagged form writes bags, which have no order, and is the same either
+            way.
+
+        Returns
+        -------
+        str | list[str]
+            Infix text when the output form is ``'infix'`` (an infix input, or
+            ``form='infix'``), else a token list.
+        """
+        if isinstance(digits, bool) or not isinstance(digits, (int, np.integer)):
+            raise TypeError(f"digits must be an int >= 1, not {type(digits).__name__} ({digits!r})")
+        if digits < 1:
+            raise ValueError(f"digits must be at least 1, got {digits}")
+        if precision is not None:
+            if isinstance(precision, bool) or not isinstance(precision, (int, np.integer)):
+                raise TypeError(
+                    f"precision must be None or an int >= 1, not {type(precision).__name__} ({precision!r})")
+            if precision < 1:
+                raise ValueError(f"precision must be at least 1, got {precision}")
+            precision = int(precision)
+        if not isinstance(keep_grouping, (bool, np.bool_)):
+            raise TypeError(f"keep_grouping must be a bool, not {type(keep_grouping).__name__} ({keep_grouping!r})")
+        mode = _coerce_mode(mode)
+        in_form, tokens = self._read_input(expression)
+        target = form or in_form
+        if target not in ('infix', 'explicit', 'tagged'):
+            raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
+        if not tokens:
+            return '' if target == 'infix' else []
+        return self._core.prettify(tokens, int(digits), target, precision, rule_mode=_RULE_MODE[mode],
+                                   keep_grouping=bool(keep_grouping))
 
     def complexity(
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             certified: bool = True,
-            mode: Mode | str = Mode.f64,
-            canon: str = 'mode') -> int:
+            mode: Mode | str = Mode.f64) -> int:
         """The SEMANTIC COMPLEXITY of an expression in a mode: its price as that mode reads it.
 
         Each mode reads an expression into its own canonical form, because the modes accept
         different simplifications as true: ``f64`` follows the deployed float evaluator
-        (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
-        ``permissive`` also what holds only up to sign or domain (``(x^2)^(1/2)`` is ``x``,
-        where ``f64`` and ``real`` give ``abs(x)``).
+        wherever no operation overflows or underflows (``atanh(tanh(x))`` is not ``x``: in
+        floats ``tanh`` saturates to ``1``; past an overflow the true value is accepted as
+        well, so ``exp(x)/exp(x)`` is ``1``), ``real`` exact real arithmetic (``atanh(tanh(x))``
+        is ``x``), and ``permissive`` also what holds only up to sign or domain
+        (``(x^2)^(1/2)`` is ``x``, where ``f64`` and ``real`` give ``abs(x)``). A ground
+        constant is read as written in every mode: folding it to its float is a step of
+        :meth:`simplify`'s walk in ``f64`` and ``permissive``, not part of the reading.
         This prices that form, on the
         CERTIFIED canonical state (the same certificate-carrying canonicalization the
         simplify chain runs on), with the one codebook (the unified measure mu). It is the
         measure :meth:`simplify` descends in that mode, so for every mode
         ``complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)``. Prices in
-        different modes price different readings and are not comparable across modes.
-
-        ``canon='default'`` (deprecated) keeps the mode's parse but canonicalizes and prices
-        in ``f64``'s canon, as ``complexity()`` did before 0.15.0: identical for
-        ``mode='f64'``, and a ``FutureWarning`` for ``real`` and ``permissive``, whose own
-        answers it can price above their inputs.
+        different modes price different readings and are not comparable across modes;
+        :func:`simplipy.mining.cross_mode_complexity` prices answers of every mode on one
+        shared scale.
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
@@ -2240,45 +2372,39 @@ class SimpliPyEngine:
         certified default closes exactly this).
 
         Invariant in every case: mu prices structure and information, not spelling --
-        signs and magnitude-1 coefficient/exponent slots are free, literals pay their
-        description length on the exact value, symbols pay one symbol unit.
+        a sign costs one bit wherever it sits (a literal's sign, a coefficient -1, a
+        negation standing alone, which is a sign and not a product: ``-x1`` costs one bit
+        more than ``x1``, ``x1 - x2`` one bit more than ``x1 + x2``), a coefficient +1 is
+        free and an exponent -1 is division, literals pay their description length on the
+        exact value, symbols pay their entry of the symbol table.
+
+        A literal costs at most what its float costs: the evaluator reads every literal as
+        its nearest float64, so a literal's price is capped at the price of that float's
+        shortest decimal (at most 17 significant digits). A number carrying more digits
+        than its float needs therefore costs that decimal, while :meth:`simplify` keeps and
+        prints the exact value. The cap holds however a form holds a literal: ``f64`` and
+        ``permissive`` admit a number only where its numerator and denominator are at most
+        2^1022, and hold any other value in pieces (``1.2345678901234567e-305`` as written,
+        and its quotient by ``9.876543210987654e-10`` as that literal times a number), which
+        cost at most what ``real`` prices the one number at. A literal beyond the 1,100-bit
+        cap keeps its own price. The price is an integer in milli-bits.
         """
-        if isinstance(expression, str):
-            tokens = self._core.parse(expression, True, False)
-        elif isinstance(expression, np.ndarray):
-            tokens = expression.tolist()
-        else:
-            tokens = list(expression)
-        rule_mode = _RULE_MODE[mode if isinstance(mode, Mode)
-                               else {m.name.lower(): m for m in Mode}[str(mode).strip().lower()]]
+        _, tokens = self._read_input(expression)
+        rule_mode = _RULE_MODE[_coerce_mode(mode)]
         # LAZY MODES (task #88): same first-use hook as `simplify` -- the mode
-        # argument reaches the core below, so a deferred set must be built first --
-        # and the same reader half of the install fairness gate.
+        # argument reaches the core below, so a deferred set must be built first.
         self._ensure_mode_loaded(rule_mode)
-        self._await_no_pending_push()
-        canon = str(canon).strip().lower()
-        if canon not in ('default', 'mode'):
-            raise ValueError(
-                f"unknown canon {canon!r}: expected 'mode' (the mode's own reading, the default) "
-                f"or 'default' (deprecated: the mode's parse priced in f64's canon)")
-        if canon == 'default' and rule_mode != _RULE_MODE[Mode.f64]:
-            warnings.warn(
-                "complexity(..., canon='default') prices a real or permissive expression in "
-                "f64's canon; complexity() now prices each mode in its own reading (the "
-                "default, canon='mode'), and canon='default' will be removed.",
-                FutureWarning, stacklevel=2)
         if certified:
-            return self._core.ac_complexity_certified(tokens, rule_mode, canon)
-        return self._core.ac_complexity(tokens, rule_mode, canon)
+            return self._core.ac_complexity_certified(tokens, 'mode', rule_mode=rule_mode)
+        return self._core.ac_complexity(tokens, 'mode', rule_mode=rule_mode)
 
     def _denormalize(
             self,
             out: list[str],
-            expression: str | list[str] | tuple[str, ...] | np.ndarray,
-    ) -> str | list[str] | tuple[str, ...] | np.ndarray:
-        """Map a core prefix-token result back to the input's type (``simplify``'s tail)."""
-        if isinstance(expression, str):
-            return self._core.prefix_to_infix(out, '**', False)
+            expression: list[str] | tuple[str, ...] | np.ndarray,
+    ) -> list[str] | tuple[str, ...] | np.ndarray:
+        """Map a core token result back to a token input's container (``simplify``'s tail;
+        a ``str`` input answers in infix before reaching it)."""
         if isinstance(expression, np.ndarray):
             # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
             # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed
@@ -2291,9 +2417,8 @@ class SimpliPyEngine:
     def find_rules(self, *args: Any, **kwargs: Any) -> Any:
         """Mine rewrite rules into this engine's rule set.
 
-        Thin delegator to :meth:`simplipy.mining.RuleMiner.find_rules` (C23a,
-        D27) — the signature, semantics, and single-flight lock are the
-        miner's; the public API is unchanged."""
+        Thin delegator to :meth:`simplipy.mining.RuleMiner.find_rules`: the
+        signature, the semantics and the one-mine-per-process lock are the miner's."""
         return RuleMiner(self).find_rules(*args, **kwargs)
 
     # the delegators carry the miner's REAL signature for inspect/docs/tests
@@ -2302,8 +2427,8 @@ class SimpliPyEngine:
     def certify_rules(self, *args: Any, **kwargs: Any) -> Any:
         """Certify proposed rules against this engine.
 
-        Thin delegator to :meth:`simplipy.mining.RuleMiner.certify_rules`
-        (C23a, D27); the public API is unchanged."""
+        Thin delegator to :meth:`simplipy.mining.RuleMiner.certify_rules`: the
+        signature and the semantics are the miner's."""
         return RuleMiner(self).certify_rules(*args, **kwargs)
 
     certify_rules.__wrapped__ = RuleMiner.certify_rules  # type: ignore[attr-defined]
@@ -2319,12 +2444,12 @@ class SimpliPyEngine:
         # it reads as, so a decimal carrying more than float precision costs that decimal. Every
         # probe above is its own float's shortest decimal (or cheaper), so none of them moved.
         ('0.0766541268471677307861497420516056347394916180597539647375669841',),
-        # the SYMBOL TABLE, one probe per entry (2026-08-21). Before these, six of the
-        # nine entries were invisible to the fingerprint: changing `Pow` from 4 bits to
-        # 3 left the digest at `355f6ba90801f603`, so an artifact mined under one table
-        # was indistinguishable from one mined under another -- which is the exact
-        # failure this fingerprint exists to prevent. Keyed on the first token, so each
-        # probe needs a distinct head.
+        # ... on every path: a value f64's number domain holds in pieces (here a literal whose
+        # denominator passes 2^1022 times a number) costs at most what its float costs, as the
+        # one number `real` holds.
+        ('/', '1.2345678901234567e-305', '9.876543210987654e-10'),
+        # the SYMBOL TABLE, one probe per entry. Without these, six of the nine entries
+        # were invisible to the fingerprint: changing `Pow` from 4 bits to 3 moved no probe.
         ('x0',),                    # leaf
         ('+', 'x0', 'x1'),          # Add
         ('*', 'x0', 'x1'),          # Mul
@@ -2332,33 +2457,60 @@ class SimpliPyEngine:
         ('np.pi',), ('np.e',),      # the named constants
         ('sin', 'x0'),              # an elementary head
         ('asin', 'x0'),             # a transcendental head
+        ('atan2', 'x0', 'x1'),      # a 0.15 head (binary; absent where a config lacks it)
         ('float("inf")',),          # the infinities
+        # the SIGN, one bit wherever it sits: a literal's sign, a negation standing alone (a
+        # sign, not a product, so no `Mul` head), the coefficient -1 beside other factors
+        ('-2',), ('neg', 'x0'), ('*', 'neg', 'x0', 'x1'),
+        # THE READINGS: compound probes whose price depends on how a mode reads them, so
+        # a change to a mode's canonical forms moves its fingerprint. Each mode prices
+        # every probe in its own reading; the comments give where the readings differ.
+        ('pow', 'pow', 'x0', '2', '0.5'),        # (x0^2)^(1/2): x0 only in permissive
+        ('asin', '1e-08'),                       # ground constants are read as written in
+        ('*', 'inv', 'exp', '5132.3', 'x0'),     # every mode (the float fold is a walk step)
+        ('atanh', 'tanh', 'x0'),                 # x0 except in f64, where tanh saturates
+        ('/', 'x0', '*', 'x0', 'x1'),            # a shared factor cancels in every mode
     )
 
-    def _measure_fingerprint(self) -> dict:
-        """A fingerprint of the REDUCTION MEASURE, for the provenance sidecar.
+    #: The sidecars published before per-mode fingerprints key each probe by its FIRST
+    #: token and price it in f64's reading. These are the compound probes of that
+    #: battery; every other legacy key is the probe's whole spelling.
+    _LEGACY_PROBE_KEYS: dict[str, str] = {
+        '+': '+ x0 x1', '*': '* x0 x1', 'pow': 'pow x0 2', 'sin': 'sin x0', 'asin': 'asin x0'}
+
+    def _measure_fingerprint(self, mode: 'Mode | str' = Mode.f64) -> dict:
+        """A fingerprint of the REDUCTION MEASURE in ``mode``, for the provenance sidecar.
 
         Without it an artifact mined under one measure is indistinguishable from one mined
         under another: the sidecar records the version, the build and the parameters, and
         every one of those can be identical across a measure change (worse, uncommitted
-        work stamps the same `-dirty` build string). Audit C1.4 flagged this as a BLOCKER to
-        fix BEFORE a re-mine; three artifacts were re-mined without it, so the values here
-        are also what identifies those retroactively.
+        work stamps the same `-dirty` build string). Artifacts mined before the fingerprint
+        existed are identified retroactively by the same values.
 
         The fingerprint is BEHAVIOURAL, not a version string: it records what the measure
         actually charges on probes chosen to separate the changes it has undergone. Any
         change to `L`, to the fraction/decimal codes, to `mu_free`, or to ANY ENTRY OF THE
         SYMBOL TABLE moves at least one entry -- the last clause is why there is one probe
-        per table entry rather than the single bare symbol this used to carry.
+        per table entry rather than the single bare symbol this used to carry. The compound
+        probes are priced in ``mode``'s own reading, so a change to that mode's canonical
+        forms moves them too.
+
+        Probes are keyed by their whole token spelling. The price is the certified one
+        :meth:`complexity` returns, read from the core directly: the measure and the
+        readings belong to the constructor, not to a rule set, so fingerprinting a mode
+        never builds that mode's deferred rules.
         """
+        mode = _coerce_mode(mode)
         probes: dict[str, int | None] = {}
         for tokens in self._MEASURE_PROBES:
             try:
-                probes[tokens[0]] = int(self.complexity(list(tokens)))
-            except Exception:  # a config that cannot express a probe records it as absent
-                probes[tokens[0]] = None
+                probes[' '.join(tokens)] = int(
+                    self._core.ac_complexity_certified(list(tokens), 'mode', rule_mode=_RULE_MODE[mode]))
+            except ValueError:  # a config that cannot express a probe records it as absent
+                probes[' '.join(tokens)] = None
         return {
             'unit': 'milli-bits',
+            'mode': mode.name,
             # `mu_sym` is the historical key and stays, for sidecars already published;
             # what it holds is the LEAF entry, which is what a bare symbol costs.
             'mu_sym': probes.get('x0'),
@@ -2368,6 +2520,52 @@ class SimpliPyEngine:
             'digest': hashlib.sha256(
                 repr(sorted(probes.items())).encode()).hexdigest()[:16],
         }
+
+    def _measure_drift(self, recorded: dict) -> tuple[dict[str, tuple[int | None, int | None]], list[str]]:
+        """Compare a sidecar's ``measure`` record with what this engine charges now.
+
+        Returns ``(moved, unrecorded)``: ``moved`` maps each probe the record holds whose
+        price differs to ``(recorded, now)``, and ``unrecorded`` lists the probes the
+        record does not hold. A probe added to the battery after the record was written
+        is unrecorded, not moved. The record is compared in the mode it names; a record
+        without a mode is the earlier layout (f64's reading, probes keyed by their first
+        token), compared through :attr:`_LEGACY_PROBE_KEYS`.
+        """
+        held = recorded.get('probes') or {}
+        if 'mode' in recorded:
+            mode = _coerce_mode(recorded['mode'])
+        else:
+            mode = Mode.f64
+            held = {self._LEGACY_PROBE_KEYS.get(key, key): value for key, value in held.items()}
+        current = self._measure_fingerprint(mode)['probes']
+        moved = {key: (held[key], now) for key, now in current.items()
+                 if key in held and held[key] != now}
+        unrecorded = [key for key in current if key not in held]
+        return moved, unrecorded
+
+    def _warn_on_measure_drift(self, rules_path: str) -> None:
+        """Warn when the sidecar beside ``rules_path`` records a probe the measure now prices
+        differently. No sidecar, or one without a measure record, has nothing to compare."""
+        sidecar_path = rules_path + '.provenance.json'
+        if not os.path.exists(sidecar_path):
+            return
+        try:
+            with open(sidecar_path, 'r') as f:
+                recorded = json.load(f).get('measure')
+        except (OSError, ValueError):
+            return
+        if not isinstance(recorded, dict):
+            return
+        moved, _ = self._measure_drift(recorded)
+        if moved:
+            mode = recorded.get('mode', Mode.f64.name)
+            detail = '; '.join(f'{probe!r}: {old} -> {now}' for probe, (old, now) in moved.items())
+            warnings.warn(
+                f"measure fingerprint mismatch: the rules at '{rules_path}' were mined under "
+                f"a measure that priced {len(moved)} probe(s) differently in mode {mode!r} "
+                f"(recorded -> now, in milli-bits: {detail}). The rules stay sound, but their "
+                f"minimality and ordering were decided under the other measure.",
+                UserWarning)
 
     # The libm probe battery (R5, audit L9): expressions whose folded values are
     # decided by the SYSTEM libm the deployed folder calls -- the C symbols bound in
@@ -2390,11 +2588,13 @@ class SimpliPyEngine:
         ('pow', 'np.pi', 'np.e'), ('pow', '2', '0.5'), ('pow', '10', '-7'),
         ('rootn', '2', '3'), ('sin', 'exp', '3'), ('log', 'cosh', '10'),
         ('tan', 'exp', '2'),
+        # the 0.15 heads that call libm: erf, and atan2 off its exact cells
+        ('erf', '0.5'), ('erf', '2'), ('atan2', '1', '2'), ('atan2', '-3', '0.5'),
     )
 
     def libm_fingerprint(self) -> str:
         """A sha256 fingerprint of the host's libm, computed through the deployed
-        folding path (R5, audit L9).
+        folding path.
 
         The transcendental folds go through the SYSTEM libm (the C symbols
         `rust/numeric.rs` binds), which resolves on the running machine -- so two
@@ -2408,10 +2608,9 @@ class SimpliPyEngine:
         assert self._core is not None
         lines = []
         for probe in self._LIBM_PROBES:
-            try:
-                out = self._core.evaluate_constant_subtree(list(probe))
-            except Exception:
-                out = None
+            # `None` is the core's own answer for a probe it cannot fold (an operator the
+            # config lacks); an error is not an answer and propagates.
+            out = self._core.evaluate_constant_subtree(list(probe))
             lines.append(f"{' '.join(probe)}={out}")
         return hashlib.sha256('\n'.join(lines).encode()).hexdigest()
 
@@ -2549,8 +2748,8 @@ class SimpliPyEngine:
         modules its own realizations needed, plus ``np`` for the ``np.pi``/``np.e``
         token grammar. Until 0.13 every engine shared ``simplipy.engine``'s module
         globals, so one engine's imports were reachable from another's expressions,
-        along with simplipy's own imports (``os``, ``importlib``, ...); register
-        C1.12 closed that. Python still injects builtins, and a hostile EXPRESSION is
+        along with simplipy's own imports (``os``, ``importlib``, ...); since 0.13 each
+        engine has its own namespace. Python still injects builtins, and a hostile EXPRESSION is
         still unsafe to compile -- the namespace is scoping, not a sandbox
         (:mod:`simplipy.trust`).
 

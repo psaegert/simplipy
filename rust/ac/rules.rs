@@ -30,13 +30,14 @@
 //! docs/formal.md).
 
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
-use super::expr::{add, canon, cmp_ex, complexity, mul, orient_term_classes, Cx, Ex};
+use super::expr::{add, canon, complexity, mul, orient_term_classes, tie_cmp, Cx, Ex};
 use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
 
@@ -56,12 +57,9 @@ pub struct AcRule {
     /// the `Mul` bucket here, and the pattern rule is unsound exactly on the ground poles the
     /// exact rules exist for.
     pub is_pattern: bool,
-    /// A unit twin, or the orientation twin of one: served only to a pass that asks for
-    /// them (`PassCtx::unit_twins`, the search's factor stage).
-    pub unit: bool,
     /// Does a wildcard occur more than once in the LHS? Then it binds a class (a sum, an odd
     /// function or odd root of one) up to sign: a sum pattern whose first match met a near miss
-    /// (a binding refused by its repeat's negation, `matcher::near_misses`) tries its subject again
+    /// (a binding refused by its repeat's negation, `MCx::near_misses`) tries its subject again
     /// with every class in one orientation (`orient_term_classes`). `Repeat::Class` where the repeated
     /// wildcard's sort can bind a class in every mode (`_`, `!`, `$`); `Repeat::Leaf` where only
     /// a pass that binds any subtree (permissive) lets it, `?` binding variable leaves otherwise.
@@ -129,13 +127,9 @@ pub struct AcRules {
     pub n_dropped: usize,
     /// Orientation twins MINTED at translate (not asset rules): for an admitted rule
     /// `L -> T`, the negated identity `-L -> -T`, added when the flipped LHS absorbs the
-    /// sign and every admission gate passes; and the unit twins (`n_unit_twins`). Counted
-    /// separately so the asset-rule accounting (`n_subsumed`/`n_dropped`) keeps its meaning.
+    /// sign and every admission gate passes. Counted separately so the asset-rule accounting
+    /// (`n_subsumed`/`n_dropped`) keeps its meaning.
     pub n_twins: usize,
-    /// Unit twins MINTED at translate: for an admitted sum rule whose term `w * u` holds a
-    /// wildcard `w` found nowhere else, the rule with `w` bound to 1, so that the bare term
-    /// `u` (unit coefficient, not a product) is reached too. Included in `n_twins`.
-    pub n_unit_twins: usize,
     /// Rules refused by the licence registry's load consumer (C1.20, SWEEP row 3): the
     /// rule changes a DEFINED extended-real value at a constructed exceptional point.
     /// The engine pre-filters the raw rules BEFORE translate (the caller sets this
@@ -149,14 +143,14 @@ pub struct AcRules {
     pub drop_census: Vec<(&'static str, usize)>,
     /// The SHADOW CENSUS: every translate-time skip caused by CROSS-RULE state, i.e.
     /// every entry that would (re)appear if some OTHER artifact row were removed from
-    /// the input. `(victim_row, owner_row, owner_was_twin, kind)`:
-    ///   - `"inverse"`      -- asset rule `victim_row` dropped because `owner_row`
-    ///     already owns its reversed pair (`seen_pairs`),
-    ///   - `"twin-shadow"`  -- the orientation twin of `victim_row` skipped because
-    ///     `owner_row`'s entry (its asset rule, or its own twin when `owner_was_twin`)
-    ///     already carries the identical pair (`seen_rules`),
-    ///   - `"twin-inverse"` -- the twin of `victim_row` skipped as the exact inverse of
-    ///     `owner_row`'s entry (`seen_pairs`).
+    /// the input. `(victim_row, owner_row, owner_was_twin, kind)`, with one kind,
+    /// `"twin-shadow"`: the orientation twin of `victim_row` skipped because
+    /// `owner_row`'s entry (its asset rule, or its own twin when `owner_was_twin`)
+    /// already carries the identical pair (`seen_rules`).
+    ///
+    /// No other cross-rule skip exists. The reverse of a loaded rule (asset or twin) never
+    /// loads, but by gate G7 alone (`ordered_below` is a strict total order, so a pair and
+    /// its reverse cannot both descend it), and removing the owner resurrects nothing.
     ///
     /// Twin victims are recorded only when every OTHER admission gate passes, so an
     /// entry states "removing the owner resurrects this rewrite", not merely "a hash
@@ -259,111 +253,139 @@ fn leaf_count(e: &Ex, tok: Tok) -> usize {
     }
 }
 
-/// Is the rule `(l2, r2)` the rule `(l1, r1)` with its wildcards renamed? Rules here have a
-/// handful of wildcards, so every bijection is tried.
-fn alpha_equal(l1: &Ex, r1: &Ex, l2: &Ex, r2: &Ex, view: &TokenView, cx: &Cx) -> bool {
-    let sorted = |l: &Ex, r: &Ex| {
-        let mut s = FxHashSet::default();
-        collect_wildcards(l, view, &mut s);
-        collect_wildcards(r, view, &mut s);
-        let mut v: Vec<Tok> = s.into_iter().collect();
-        v.sort_by_key(|t| t.0);
-        v
-    };
-    let (w1, w2) = (sorted(l1, r1), sorted(l2, r2));
-    if w1.len() != w2.len() || w1.len() > 6 {
-        return false;
+/// The context a rule side of `mode` is READ in: that mode's fold discipline and number
+/// semantics, without certificates. A mode's rules are read the way the mode reads its
+/// inputs, so an f64 pattern carrying a ground subtree f64 folds is folded here too and can
+/// match; the miner keys its classes and reads its sources in the same context.
+///
+/// A PATTERN IS NOT ITS INSTANCES. What the mode's canon does to a ground subtree it does
+/// to every instance, so folds apply. A licence that passes a gate uncertified does not:
+/// permissive cancels `/ $0 $0` on the pattern, but its instance `inf / inf` is NaN, and the
+/// rule `/ $0 $0 -> 1` is the sentinel doctrine that defines that instance. So permissive's
+/// rule sides are read with certified licences (its fold discipline is the bare one).
+pub(crate) fn rule_cx<'a>(view: &'a TokenView<'a>, mode: crate::engine::RuleMode) -> Cx<'a> {
+    let mut cx = Cx::bare(view);
+    if !mode.wildcard_all() {
+        cx.mode = mode;
     }
-    fn perms(rest: &mut Vec<Tok>, k: usize, f: &mut dyn FnMut(&[Tok]) -> bool) -> bool {
-        if k == rest.len() {
-            return f(rest);
-        }
-        for i in k..rest.len() {
-            rest.swap(k, i);
-            if perms(rest, k + 1, f) {
-                return true;
-            }
-            rest.swap(k, i);
-        }
-        false
-    }
-    let mut target = w2.clone();
-    perms(&mut target, 0, &mut |p| {
-        let b: Binds = w1.iter().zip(p).map(|(&a, &t)| (a, Ex::Leaf(t))).collect();
-        canon(substitute(l1, &b, view), cx) == *l2 && canon(substitute(r1, &b, view), cx) == *r2
-    })
+    cx.fold_f64 = Cx::folds_for(mode);
+    cx
 }
 
-/// The unit twins of one rule (see `AcRules::translate`): for each term `w * u` of a sum
-/// pattern whose wildcard `w` occurs once in the pattern, the rule with `w` bound to 1, so
-/// the term becomes the bare `u`. Canonical sides; renamings of one twin are kept once.
-fn unit_twins(lhs: &Ex, rhs: &Ex, view: &TokenView, cx: &Cx) -> Vec<(Ex, Ex)> {
-    let Ex::Add(terms) = lhs else {
-        return Vec::new();
-    };
-    let mut wilds = FxHashSet::default();
-    collect_wildcards(lhs, view, &mut wilds);
-    collect_wildcards(rhs, view, &mut wilds);
-    let mut out: Vec<(Ex, Ex)> = Vec::new();
-    for t in terms {
-        let Ex::Mul(fs) = t else {
-            continue;
-        };
-        // The term's factors besides its coefficient: `w * u`, or `c * w * u` (an orientation
-        // twin's term carries `-1`; with `w` bound to 1 it is `c * u`, the product a matcher
-        // reaches).
-        let core: Vec<&Ex> = fs.iter().filter(|f| !matches!(f, Ex::Num(_))).collect();
-        if core.len() != 2 {
-            continue;
-        }
-        for (i, f) in core.iter().enumerate() {
-            let Ex::Leaf(w) = f else {
-                continue;
-            };
-            // `u`, the factor left, must be a term the bare spelling can show: not a literal
-            // (the term `-1 * w` is the coefficient's, not a bare term), and still a pattern.
-            let u = core[1 - i];
-            if view.sigil(*w) == 0
-                || leaf_count(lhs, *w) != 1
-                || matches!(u, Ex::Num(_))
-                || !u.contains_wildcard(view)
-            {
-                continue;
-            }
-            let mut b: Binds = wilds.iter().map(|&x| (x, Ex::Leaf(x))).collect();
-            b.insert(*w, Ex::int(1));
-            let tl = canon(substitute(lhs, &b, view), cx);
-            if !matches!(tl, Ex::Add(_)) {
-                continue;
-            }
-            let tr = canon(substitute(rhs, &b, view), cx);
-            if out
-                .iter()
-                .any(|(l, r)| alpha_equal(l, r, &tl, &tr, view, cx))
-            {
-                continue;
-            }
-            out.push((tl, tr));
+/// THE CANON A RULE SET WAS CERTIFIED IN, and so the one it is read in. A rule is judged on
+/// the pattern its mine wrote, read in its mine's canon; read in another canon, its LHS can
+/// become a different pattern, which nothing judged. Real's canon reads the f64 fact
+/// `rootn 2 atanh tanh 3 -> nan` (f64's `atanh(tanh(3))` is not 3) as `rootn 2 3 -> nan`,
+/// which is false. Read in the canon it was mined in, the pattern stays the one judged, and a
+/// pattern the serving canon never produces never fires.
+///
+/// Numerals are read in the SERVING mode's number domain whatever the canon (a numeral
+/// denotes the number it spells, and real reads it exactly); the canon decides the structure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleCanon {
+    /// A per-mode mine of this mode (0.15 on), and every set handed over in memory: the
+    /// mode's own reading ([`rule_cx`]).
+    Mode(crate::engine::RuleMode),
+    /// A mine from before per-mode mines (0.14 and earlier): one mode-blind canon for all
+    /// three files, Default's, unfolded and uncertified ([`Cx::bare`]), the reading every
+    /// file was loaded in until per-mode mines.
+    Legacy,
+}
+
+impl RuleCanon {
+    /// The context a rule side of this canon is read in.
+    pub(crate) fn cx<'a>(self, view: &'a TokenView<'a>) -> Cx<'a> {
+        match self {
+            RuleCanon::Mode(mode) => rule_cx(view, mode),
+            RuleCanon::Legacy => Cx::bare(view),
         }
     }
-    out
+
+    /// The wire spelling: `"legacy"`, or a rule mode's (`RuleMode::parse`).
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "legacy" => Some(RuleCanon::Legacy),
+            other => crate::engine::RuleMode::parse(other).map(RuleCanon::Mode),
+        }
+    }
+
+    /// The wire spelling [`RuleCanon::parse`] reads back.
+    pub fn name(self) -> &'static str {
+        use crate::engine::RuleMode;
+        match self {
+            RuleCanon::Legacy => "legacy",
+            RuleCanon::Mode(RuleMode::Default) => "default",
+            RuleCanon::Mode(RuleMode::Real) => "real",
+            RuleCanon::Mode(RuleMode::Permissive) => "permissive",
+        }
+    }
+}
+
+/// THE ENGINE-OWNED LAW (gate G8), one definition for the rule load and the miner: does the
+/// rule `lhs -> rhs` (canonical sides) state a law the engine itself performs? Today that is
+/// the distributive law as the search applies it (one FACTOR move, `search::is_factoring`).
+/// The load drops such a rule ("engine-owned-law"); the miner refuses to mint it
+/// (`Engine::law_instance`, the miner's acceptance). A law the constructors perform needs no
+/// arm here, the collection of powers of e (`exp(a) exp(b) = exp(a + b)`) among them: every
+/// canon a rule side is read in performs it, so a rule stating it, in either direction, has one
+/// canonical state on both sides, which the load refuses as subsumed before this gate and
+/// `Engine::law_instance` names `canon`.
+///
+/// The search meets a rule's INSTANCES, so the law is judged on one: every `?`, `!` and `$`
+/// wildcard becomes a variable of its own ([`pattern_instance`]), and the sides are read in
+/// `law`, the serving search's licence context (`Engine::with_law_cx`), whose certificates
+/// answer for every binding the sorts admit. The FACTOR move is then the search's own.
+pub(crate) fn engine_owned_law(lhs: &Ex, rhs: &Ex, law: &Cx) -> bool {
+    let mut fresh = FxHashMap::default();
+    let l = canon(pattern_instance(lhs, law.view, &mut fresh), law);
+    let r = canon(pattern_instance(rhs, law.view, &mut fresh), law);
+    super::search::is_factoring(&l, &r, law)
+}
+
+/// The spelling prefix of the variables [`pattern_instance`] puts in place of wildcards: the
+/// wildcard's own spelling follows it (`PATTERN_VAR` + `?0`). No token of a table spells it.
+pub(crate) const PATTERN_VAR: &str = "\u{1}";
+
+/// `e` with each `?`, `!` and `$` wildcard replaced by a variable leaf of its own, minted in
+/// `view`'s overlay (`fresh` keeps one per wildcard across both sides). A `?` binds a variable,
+/// so this is its instance up to renaming; `!` and `$` bind subjects that carry their sort's
+/// certificate, which the licence context's certificates read off the spelling. `_` binds any
+/// subtree, so it stays a wildcard and no licence holds for it.
+fn pattern_instance(e: &Ex, view: &TokenView, fresh: &mut FxHashMap<Tok, Tok>) -> Ex {
+    match e {
+        Ex::Leaf(t) if matches!(view.sigil(*t), b'?' | b'!' | b'$') => {
+            Ex::Leaf(*fresh.entry(*t).or_insert_with(|| {
+                view.intern(&format!("{PATTERN_VAR}{}", view.resolve_owned(*t)))
+            }))
+        }
+        Ex::Add(v) => Ex::Add(v.iter().map(|x| pattern_instance(x, view, fresh)).collect()),
+        Ex::Mul(v) => Ex::Mul(v.iter().map(|x| pattern_instance(x, view, fresh)).collect()),
+        Ex::Fun(f, v) => Ex::Fun(
+            *f,
+            v.iter().map(|x| pattern_instance(x, view, fresh)).collect(),
+        ),
+        Ex::Pow(b, x) => Ex::Pow(
+            Box::new(pattern_instance(b, view, fresh)),
+            Box::new(pattern_instance(x, view, fresh)),
+        ),
+        other => other.clone(),
+    }
 }
 
 impl AcRules {
-    /// Translate a compiled ruleset's raw (asset-order) rules. `view` must be a table-backed
+    /// Translate a compiled ruleset's raw (asset-order) rules, read in the canon they were
+    /// certified in ([`RuleCanon`]); `law` is the serving search's licence context, which
+    /// gate G8 judges in ([`engine_owned_law`]). `view` must be a table-backed
     /// view; translation is read-only on the token side (parse + canon mint no tokens), so the
     /// resulting `Ex`s hold table ids only and are safe to store per-Engine.
-    pub fn translate(raw: &[(Vec<Tok>, Vec<Tok>)], view: &TokenView) -> AcRules {
-        let cx = Cx::bare(view);
+    pub fn translate(
+        raw: &[(Vec<Tok>, Vec<Tok>)],
+        view: &TokenView,
+        read_in: RuleCanon,
+        law: &Cx,
+    ) -> AcRules {
+        let cx = read_in.cx(view);
         let mut out = AcRules::default();
-        // Inverse-pair guard: the asset contains BOTH directions of some length-neutral
-        // canonicalizations (`* float("inf") !0 <-> / float("inf") !0`), which root at
-        // DIFFERENT operators in the old tree but at the same `Mul` after desugaring -- a
-        // deterministic ping-pong. First-match-wins resolves the direction: the earlier rule
-        // owns it, the reversed later rule is dropped. The map value is the OWNING artifact
-        // row (and whether the owner is a minted twin), feeding the shadow census; the
-        // guard's membership semantics are unchanged (first insert wins).
-        let mut seen_pairs: FxHashMap<(Ex, Ex), (usize, bool)> = FxHashMap::default();
         for (raw_idx, (lhs_t, rhs_t)) in raw.iter().enumerate() {
             let (Some(lhs0), Some(rhs0)) = (from_prefix(lhs_t, &cx), from_prefix(rhs_t, &cx))
             else {
@@ -401,14 +423,6 @@ impl AcRules {
                 out.note_drop("catch-all-lhs");
                 continue;
             }
-            if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(rhs.clone(), lhs.clone())) {
-                // The exact inverse of an earlier rule: ping-pong fuel. Removing the
-                // owner would let this rule load, so the census records the dependency.
-                out.shadow_census
-                    .push((raw_idx, owner, owner_was_twin, "inverse"));
-                out.note_drop("inverse-of-earlier-rule");
-                continue;
-            }
             // Sixth drop reason: an RHS wildcard the canonical LHS does not bind would
             // panic `substitute` at rewrite time -- a delayed, data-dependent crash
             // pointing nowhere near the defective rule. Fail closed at load instead.
@@ -420,20 +434,31 @@ impl AcRules {
                 out.note_drop("unbound-rhs-wildcard");
                 continue;
             }
-            // Seventh drop reason: the Knuth-Bendix orientation, checked statically on
-            // the canonical pattern sides (gate G7, docs/formal.md). The complexity
+            // Seventh drop reason: an uphill rule, checked statically on the canonical
+            // pattern sides by price alone (gate G7, docs/formal.md). The complexity
             // functional is not additive, so pattern-level descent neither implies nor is
-            // implied by instance-level descent -- the runtime `oriented` gate remains the
-            // enforcement per fire; this gate keeps every LOADED rule aligned with the
-            // ordering the pass fires under, and re-vets every asset on every load (an
-            // order change re-judges the rules automatically).
-            if !ordered_below(&rhs, &lhs, view) {
+            // implied by instance-level descent -- the runtime `oriented` gate is the
+            // enforcement per fire, under the full ordering. Two sides of one price are
+            // therefore no orientation: the rule loads, and each application fires only where
+            // it descends (a literal instance that is cheaper, or the sign key's order on a
+            // tie). Both directions of such a rewrite may load (`* float("inf") !0 <-> / float("inf")
+            // !0` roots at the same `Mul` after desugaring); the order is strict and total, so
+            // on any instance at most one of them descends and fires, and neither undoes the
+            // other. The gate re-vets every asset on every load.
+            if complexity(&rhs, view) > complexity(&lhs, view) {
                 out.note_drop("not-ordered-below");
                 continue;
             }
-            seen_pairs
-                .entry((lhs.clone(), rhs.clone()))
-                .or_insert((raw_idx, false));
+            // Eighth drop reason: the rule states the distributive law, which the search owns
+            // (one FACTOR move turns its LHS into its RHS, `search::is_factoring`): judged by
+            // the law, not by spelling. The search proposes every factoring such a rule makes,
+            // under whole-state acceptance; in the chain the rule would take the first factoring
+            // that lowers its own node, undo the search's DISTRIBUTE candidates, and pre-empt
+            // the other factorings and the merges they enable.
+            if engine_owned_law(&lhs, &rhs, law) {
+                out.note_drop("engine-owned-law");
+                continue;
+            }
             out.src.push(raw_idx);
             let sig = atom_sig(&lhs, view);
             let is_pattern = lhs.contains_wildcard(view);
@@ -451,7 +476,6 @@ impl AcRules {
                 rhs,
                 sig,
                 is_pattern,
-                unit: false,
                 repeat,
             });
         }
@@ -515,10 +539,9 @@ impl AcRules {
             if !rhs_wilds.is_subset(&lhs_wilds) {
                 continue;
             }
-            // The KB orientation genuinely can differ from the source rule's at
-            // complexity ties (the tie-break is a total order, not sign-invariant):
-            // a twin that does not orient is dropped, conservative.
-            if !ordered_below(&tr, &tl, view) {
+            // The twin's price can differ from the source rule's (negating redistributes
+            // signs into coefficients): an uphill twin is dropped, as G7 drops a rule.
+            if complexity(&tr, view) > complexity(&tl, view) {
                 continue;
             }
             if let Some(&(owner, owner_was_twin)) = seen_rules.get(&(tl.clone(), tr.clone())) {
@@ -528,94 +551,27 @@ impl AcRules {
                     .push((out.src[i], owner, owner_was_twin, "twin-shadow"));
                 continue;
             }
-            if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
-                // The exact inverse of a loaded rule: ping-pong fuel -- census.
-                out.shadow_census
-                    .push((out.src[i], owner, owner_was_twin, "twin-inverse"));
-                continue;
-            }
             let idx = out.rules.len();
             match &tl {
                 Ex::Add(_) => out.add_idx.push(idx),
                 Ex::Mul(_) => out.mul_idx.push(idx),
                 _ => continue, // unreachable given `absorbed`; fail closed
             }
-            seen_pairs
-                .entry((tl.clone(), tr.clone()))
-                .or_insert((out.src[i], true));
             seen_rules
                 .entry((tl.clone(), tr.clone()))
                 .or_insert((out.src[i], true));
             out.src.push(out.src[i]);
             let sig = atom_sig(&tl, view);
             let is_pattern = tl.contains_wildcard(view);
-            let unit = out.rules[i].unit;
             let repeat = repeated_wildcard(&tl, view);
             out.rules.push(AcRule {
                 lhs: tl,
                 rhs: tr,
                 sig,
                 is_pattern,
-                unit,
                 repeat,
             });
             out.n_twins += 1;
-        }
-        // UNIT TWINS (a bare term is its own product with 1): a product pattern matches only
-        // a term that is itself a product, so a sum pattern holding the term `w * u`, `w` a
-        // wildcard that occurs nowhere else, never reaches a bare `u`. A coefficient makes
-        // a term a product (`-x1` is `-1 * x1`, which `w` binds), so `x1*x2 - x1` factors
-        // through `?0*?1 + ?2*?1 -> (?0 + ?2)*?1` while `x1 - x1*x2` and `x1 + x1*x2`, whose
-        // bare term has the unit coefficient, do not. The twin binds `w` to 1: a rule holds
-        // at every value of its wildcards, 1 among them, so `L[w := 1] -> R[w := 1]` is the
-        // same identity stated for the bare term. It passes the asset rules' admission gates
-        // and is minted after the orientation closure, from every chain rule (an asset or its
-        // orientation twin): a unit entry never takes a chain rule's place, as a shadow or as
-        // an inverse. Twins of one rule that differ only in their wildcards' names mint once. They serve
-        // only the search's factor stage (`PassCtx::unit_twins`): the chain and the
-        // expansion stage stay exactly what the asset rules make them, so the factor stage,
-        // which starts from their answer and only descends, can never end costlier.
-        let n_chain = out.rules.len();
-        for i in 0..n_chain {
-            for (tl, tr) in unit_twins(&out.rules[i].lhs, &out.rules[i].rhs, view, &cx) {
-                if tl == tr || const_count(&tr) > const_count(&tl) {
-                    continue;
-                }
-                let mut lhs_wilds = FxHashSet::default();
-                let mut rhs_wilds = FxHashSet::default();
-                collect_wildcards(&tl, view, &mut lhs_wilds);
-                collect_wildcards(&tr, view, &mut rhs_wilds);
-                if !rhs_wilds.is_subset(&lhs_wilds) || !ordered_below(&tr, &tl, view) {
-                    continue;
-                }
-                if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
-                    out.shadow_census
-                        .push((out.src[i], owner, owner_was_twin, "unit-inverse"));
-                    continue;
-                }
-                if out.rules.iter().any(|r| r.lhs == tl && r.rhs == tr) {
-                    continue;
-                }
-                seen_pairs
-                    .entry((tl.clone(), tr.clone()))
-                    .or_insert((out.src[i], true));
-                let idx = out.rules.len();
-                out.add_idx.push(idx);
-                out.src.push(out.src[i]);
-                let sig = atom_sig(&tl, view);
-                let is_pattern = tl.contains_wildcard(view);
-                let repeat = repeated_wildcard(&tl, view);
-                out.rules.push(AcRule {
-                    lhs: tl,
-                    rhs: tr,
-                    sig,
-                    is_pattern,
-                    unit: true,
-                    repeat,
-                });
-                out.n_twins += 1;
-                out.n_unit_twins += 1;
-            }
         }
         // Exact-before-pattern within every bucket (stable: asset order within each class).
         let rules = &out.rules;
@@ -714,16 +670,14 @@ pub struct PassCtx<'a> {
     /// pre-existing entry point) is byte-identical to the field not existing. Consumer:
     /// the promotion refund's per-candidate "engine WITHOUT this rule" probes.
     pub suppressed: Option<&'a FxHashSet<usize>>,
-    /// Does this pass serve the unit twins (`AcRule::unit`)? `false` for the chain and the
-    /// search's expansion stage, `true` for its factor stage.
-    pub unit_twins: bool,
 }
 
-/// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic pair
-/// (mu, canonical total order)? This one predicate is the Knuth-Bendix orientation of
-/// the whole system: `translate` drops rules whose canonical pattern sides do not
-/// descend it (gate G7, docs/formal.md), and `rewrite_pass` refuses any FIRE or
-/// REBUILD whose result does not descend it at the rewritten node (Lemma L2).
+/// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic order
+/// (mu, the sign key, canonical total order -- `tie_cmp`)? This one predicate orients the
+/// whole system: `rewrite_pass` refuses any FIRE or REBUILD whose result does not descend it
+/// at the rewritten node (Lemma L2), and the search accepts only states below its best;
+/// `translate` drops only rules whose canonical pattern sides climb in mu (gate G7,
+/// docs/formal.md).
 ///
 /// Stage 2 (design/UNIFIED_SIMPLICITY_MEASURE.md): the first component is the unified
 /// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size
@@ -748,7 +702,7 @@ pub fn ordered_below(a: &Ex, b: &Ex, view: &TokenView) -> bool {
     match complexity(a, view).cmp(&complexity(b, view)) {
         std::cmp::Ordering::Less => true,
         std::cmp::Ordering::Greater => false,
-        std::cmp::Ordering::Equal => cmp_ex(a, b, view) == std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal => tie_cmp(a, b, view) == std::cmp::Ordering::Less,
     }
 }
 
@@ -763,7 +717,7 @@ fn oriented_mu(next: &Ex, node_mu: u64, node: &Ex, p: &PassCtx) -> bool {
     match complexity(next, p.cx.view).cmp(&node_mu) {
         std::cmp::Ordering::Less => true,
         std::cmp::Ordering::Greater => false,
-        std::cmp::Ordering::Equal => cmp_ex(next, node, p.cx.view) == std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal => tie_cmp(next, node, p.cx.view) == std::cmp::Ordering::Less,
     }
 }
 
@@ -789,20 +743,7 @@ fn memo_log(what: &str, e: &Ex) {
 
 /// Try every applicable rule at this node (asset order, sig-prefiltered). On a bag fire the
 /// remainder joins the substituted RHS in a fresh canonical bag.
-/// Kill switch for the exact-dispatch map (`SIMPLIPY_EXACT_INDEX=0` restores the full
-/// linear bucket scan) -- an A/B and rollback lever, not a semantic knob: both paths are
-/// behavior-identical by the `exact_map` soundness argument.
-fn exact_index_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_EXACT_INDEX").as_deref() != Ok("0"))
-}
-
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
-    // Past an armed work ceiling no rule is tried: the descent in progress settles quickly
-    // and the search discards it (`ac::search::explore`).
-    if super::work::over() {
-        return None;
-    }
     let node_sig = atom_sig(e, p.cx.view);
     // Lazy per-visit complexity of the subject (first candidate that needs it pays it).
     let node_mu_cell: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);
@@ -820,7 +761,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     const EMPTY: &[usize] = &[];
     let (exact_hits, scan): (&[usize], &[usize]) = match e {
         Ex::Add(_) | Ex::Mul(_) => (EMPTY, p.rules.bucket_for(e)),
-        _ if exact_index_enabled() => {
+        _ => {
             let bucket = p.rules.bucket_for(e);
             let end = match e {
                 Ex::Pow(..) => p.rules.pow_exact_end,
@@ -834,7 +775,6 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
             };
             (hits, &bucket[end..])
         }
-        _ => (EMPTY, p.rules.bucket_for(e)),
     };
     // The subject bag's equality classes, computed by the first rule whose match needs them.
     let bag_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
@@ -844,7 +784,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     let oriented_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
     for &ri in exact_hits.iter().chain(scan.iter()) {
         let rule = &p.rules.rules[ri];
-        if rule.sig & !node_sig != 0 || (rule.unit && !p.unit_twins) {
+        if rule.sig & !node_sig != 0 {
             continue;
         }
         if let Some(sup) = p.suppressed {
@@ -894,10 +834,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     out
                 };
                 // A repeated wildcard binds a class up to sign: where the first match met a
-                // binding refused by its repeat's negation (a near miss, `matcher::near_misses`),
+                // binding refused by its repeat's negation (a near miss, `MCx::near_misses`),
                 // the same terms with every class in one orientation, the signs in the
                 // coefficients, are tried too.
-                let misses = super::matcher::near_misses();
+                let misses = p.mcx.near_misses.get();
                 fire(sv, &bag_cls).or_else(|| {
                     let class_binds = match rule.repeat {
                         Repeat::No => false,
@@ -907,7 +847,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     if !class_binds {
                         return None;
                     }
-                    if super::matcher::near_misses() == misses {
+                    if p.mcx.near_misses.get() == misses {
                         return None;
                     }
                     let oriented = oriented_terms
@@ -981,11 +921,11 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     "AC fire rule#{ri}: lhs={:?} rhs={:?}\n  subject={e:?}\n  ->={next:?}",
                     rule.lhs, rule.rhs
                 );
-                debug_assert!(
-                    no_nested_bags(&next),
-                    "NESTED BAG after rule#{ri}: {next:?}"
-                );
             }
+            debug_assert!(
+                no_nested_bags(&next),
+                "NESTED BAG after rule#{ri}: {next:?}"
+            );
             return Some(next);
         }
     }
@@ -996,13 +936,33 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
 /// Since the reduction ordering is well-founded (see `ordered_below`), every run is
 /// finite as a THEOREM and this cap is defense-in-depth against bugs in the ordering
 /// invariant itself, not a load-bearing bound. Orders of magnitude above any observed
-/// run; when it binds, the pass completes descent-free, which is sound.
+/// run; when it binds, the pass completes descent-free, which is sound -- but the answer
+/// may then be a non-fixpoint, so every binding is counted ([`step_cap_binds`]).
 const STEP_CAP: u64 = 1_000_000;
 
-/// One top-down rewrite pass. The protocol at each node: fire site on the node as-is ->
-/// fold fallback -> recurse into children + canonical rebuild -> re-enter on an ORIENTED
-/// rebuild (else give the rebuild its one COMPOSITE chance, else refuse it) -> normal
-/// form.
+/// Descent steps refused because `STEP_CAP` had bound, process-wide. Expected 0 on every
+/// input: a nonzero count means the ordering invariant has a bug (see `STEP_CAP`).
+static STEP_CAP_BINDS: AtomicU64 = AtomicU64::new(0);
+
+/// How many descent steps `STEP_CAP` has refused in this process (expected 0).
+pub fn step_cap_binds() -> u64 {
+    STEP_CAP_BINDS.load(Relaxed)
+}
+
+/// May the walk take one more descent step? A refusal is a binding of the cap, counted.
+#[inline]
+fn step_allowed(p: &PassCtx) -> bool {
+    let allowed = p.fires.get() < STEP_CAP;
+    if !allowed {
+        STEP_CAP_BINDS.fetch_add(1, Relaxed);
+    }
+    allowed
+}
+
+/// One top-down rewrite pass. The protocol at each node ([`visit`]): fire site on the node
+/// as-is -> fold fallback -> recurse into children + canonical rebuild -> re-enter on an
+/// ORIENTED rebuild (else give the rebuild its one COMPOSITE chance, else refuse it) ->
+/// normal form.
 ///
 /// Every state change strictly descends the reduction ordering (`ordered_below`) at this
 /// node: fires and rebuilds are gated explicitly (a composite step is gated on its
@@ -1017,186 +977,105 @@ const STEP_CAP: u64 = 1_000_000;
 /// step cap has bound: a capped walk skipped fire sites, so its results are not certified
 /// normal forms (the cap is permanent for the call, so this is hygiene of the memo's
 /// meaning, not a behavioral necessity).
+///
+/// The owned loop re-enters on every accepted step, so fire chains iterate instead of
+/// recursing; [`rewrite_pass_opt`] is the borrow-side entry the child walk uses.
 pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
     let mut node = e;
     loop {
-        if matches!(
-            node,
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
-        ) {
-            return node; // literal leaves: nothing to do
+        match visit(&node, p) {
+            Visit::Normal => return node,
+            Visit::Folded(x) => return x,
+            Visit::Step(next) => node = next,
         }
-        if p.normal.borrow().contains(&node) {
-            if trace_memo() {
-                memo_log("HIT", &node);
-            }
-            return node;
-        }
-
-        // First fire site. Every accepted fire strictly descends the reduction ordering at
-        // this node (gated inside `try_rules_at`); the step cap bounds the tier the descent
-        // argument leaves open (see STEP_CAP).
-        if p.fires.get() < STEP_CAP {
-            if let Some(next) = try_rules_at(&node, p) {
-                p.fires.set(p.fires.get() + 1);
-                node = next;
-                continue;
-            }
-        }
-        // Fold fallback, GOVERNED BY THE MEASURE (stage 2; owner 2026-07-31, option
-        // (a)): the fold fires exactly when its result descends the reduction
-        // ordering. (Full rationale in the original site: literal bits are priced, so
-        // `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds.)
-        if let Some(folded) = (p.fold)(&node) {
-            if oriented(&folded, &node, p) {
-                return folded;
-            }
-        }
-
-        // Recurse into children, CLONE-ON-CHANGE (the B1 restructure): an unchanged child
-        // is never cloned and an unchanged node never re-runs its canonical constructor.
-        // Skipping the constructor on unchanged children is sound because constructors
-        // are idempotent on canonical input -- every node in this walk IS constructor
-        // output under this same `cx` (from_prefix+canon at entry, constructors
-        // everywhere after), so re-running them reproduces the node; the old code
-        // computed that reproduction and compared. The normal-form memo already relies
-        // on the same fact when it returns marked subtrees untouched.
-        let rebuilt: Option<Ex> = match &node {
-            Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
-            Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
-            Ex::Pow(b, ex) => {
-                let nb = rewrite_pass_opt(b, p);
-                let nx = rewrite_pass_opt(ex, p);
-                if nb.is_none() && nx.is_none() {
-                    None
-                } else {
-                    Some(super::expr::pow(
-                        nb.unwrap_or_else(|| (**b).clone()),
-                        nx.unwrap_or_else(|| (**ex).clone()),
-                        p.cx,
-                    ))
-                }
-            }
-            Ex::Fun(f, v) => {
-                let f = *f;
-                rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
-            }
-            _ => None, // Leaf: no children
-        };
-
-        let rebuilt = match rebuilt {
-            None => {
-                // A true fixpoint of one full walk: children unchanged, no fire, no fold.
-                if p.fires.get() < STEP_CAP {
-                    if trace_memo() {
-                        memo_log("INSERT(fixpoint)", &node);
-                    }
-                    p.normal.borrow_mut().insert(node.clone());
-                }
-                return node;
-            }
-            Some(r) => r,
-        };
-
-        // A rebuild that changed anything must re-enter the full walk: the canonical
-        // constructors can MINT new subterms during the rebuild (an integer power
-        // distributing over a product, collection merging terms), and only a fresh
-        // top-down walk visits them. The re-entry must satisfy the SAME reduction
-        // ordering as a rule fire (a disoriented rebuild is REFUSED): see the composite
-        // step below for the one-level endpoint exploration.
-        if rebuilt != node {
-            if p.fires.get() < STEP_CAP && oriented(&rebuilt, &node, p) {
-                p.fires.set(p.fires.get() + 1);
-                node = rebuilt;
-                continue;
-            }
-            // COMPOSITE-STEP acceptance (docs/formal.md, step relation): judge the
-            // SETTLED ENDPOINT of the rebuilt candidate under a one-level, private-memo
-            // walk, and commit iff the endpoint strictly descends.
-            if p.explore && p.fires.get() < STEP_CAP {
-                let sub = PassCtx {
-                    rules: p.rules,
-                    cx: p.cx,
-                    mcx: p.mcx,
-                    fold: p.fold,
-                    fires: Cell::new(p.fires.get()),
-                    normal: RefCell::new(FxHashSet::default()),
-                    explore: false,
-                    suppressed: p.suppressed,
-                    unit_twins: p.unit_twins,
-                };
-                let endpoint = rewrite_pass(rebuilt, &sub);
-                p.fires.set(sub.fires.get());
-                if p.fires.get() < STEP_CAP && oriented(&endpoint, &node, p) {
-                    p.fires.set(p.fires.get() + 1);
-                    if trace_fires() {
-                        eprintln!(
-                            "AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}"
-                        );
-                    }
-                    node = endpoint;
-                    continue;
-                }
-                if trace_fires() {
-                    eprintln!(
-                        "AC rebuild refused (endpoint not below):\n  node={node:?}\n  endpoint={endpoint:?}"
-                    );
-                }
-            } else if trace_fires() {
-                eprintln!(
-                    "AC rebuild refused (disoriented):\n  node={node:?}\n  rebuilt={rebuilt:?}"
-                );
-            }
-            if p.fires.get() < STEP_CAP {
-                if trace_memo() {
-                    memo_log("INSERT(refused-rebuild)", &node);
-                }
-                p.normal.borrow_mut().insert(node.clone());
-            }
-            return node;
-        }
-
-        // rebuilt == node with changed children: the constructor undid the child moves
-        // (equality decided on the representation). A fixpoint by decision, as before.
-        if p.fires.get() < STEP_CAP {
-            if trace_memo() {
-                memo_log("INSERT(fixpoint)", &node);
-            }
-            p.normal.borrow_mut().insert(node.clone());
-        }
-        return node;
     }
 }
 
 /// Borrow-side single visit: `None` = this subtree is unchanged by the pass (no clone was
 /// made, no constructor was run); `Some(x)` = it rewrote to `x` (strictly below in the
-/// reduction ordering, by the same gates as [`rewrite_pass`]). The owned iterative loop
-/// handles everything past the first change, so fire chains never recurse.
+/// reduction ordering, by the same gates as [`rewrite_pass`]). The owned loop handles
+/// everything past the first change, so fire chains never recurse.
 pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
+    match visit(node0, p) {
+        Visit::Normal => None,
+        Visit::Folded(x) => Some(x),
+        Visit::Step(next) => Some(rewrite_pass(next, p)),
+    }
+}
+
+/// Debug check of the pass contract (Lemma L3 plus re-entry): is `e` a fixpoint of a
+/// FRESH pass -- the same rules, contexts and fold, but an empty normal-form memo, so the
+/// check does not trust the marks the checked pass placed itself? `rewrite_pass`
+/// re-enters every node it changes, so one pass ends where nothing fires, folds or
+/// rebuilds, and its output must pass this check. (Called from `debug_assert!` only.)
+pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
+    let fresh = PassCtx {
+        rules: p.rules,
+        cx: p.cx,
+        mcx: p.mcx,
+        fold: p.fold,
+        fires: Cell::new(0),
+        normal: RefCell::new(FxHashSet::default()),
+        explore: p.explore,
+        suppressed: p.suppressed,
+    };
+    rewrite_pass_opt(e, &fresh).is_none()
+}
+
+/// What one visit of a node decided.
+enum Visit {
+    /// The node is a normal form of this pass (memo-marked unless the cap has bound).
+    Normal,
+    /// The numeric fold replaced the node by a leaf: final, no re-entry.
+    Folded(Ex),
+    /// An accepted descent step (a fire, an oriented rebuild, or a committed composite
+    /// step): the walk re-enters on the new node.
+    Step(Ex),
+}
+
+/// THE PER-NODE PROTOCOL, written once for both entries ([`rewrite_pass`],
+/// [`rewrite_pass_opt`]); see [`rewrite_pass`] for the ordering argument. Inlined into
+/// both, so the walk's recursion keeps the frame layout of the former two copies.
+#[inline(always)]
+fn visit(node: &Ex, p: &PassCtx) -> Visit {
     if matches!(
-        node0,
+        node,
         Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
     ) {
-        return None;
+        return Visit::Normal; // literal leaves: nothing to do
     }
-    if p.normal.borrow().contains(node0) {
+    if p.normal.borrow().contains(node) {
         if trace_memo() {
-            memo_log("HIT", node0);
+            memo_log("HIT", node);
         }
-        return None;
+        return Visit::Normal;
     }
-    if p.fires.get() < STEP_CAP {
-        if let Some(next) = try_rules_at(node0, p) {
+
+    // First fire site. Every accepted fire strictly descends the reduction ordering at this
+    // node (gated inside `try_rules_at`); the step cap bounds the tier the descent argument
+    // leaves open (see STEP_CAP).
+    if step_allowed(p) {
+        if let Some(next) = try_rules_at(node, p) {
             p.fires.set(p.fires.get() + 1);
-            return Some(rewrite_pass(next, p));
+            return Visit::Step(next);
         }
     }
-    if let Some(folded) = (p.fold)(node0) {
-        if oriented(&folded, node0, p) {
-            return Some(folded);
+    // Fold fallback, GOVERNED BY THE MEASURE (stage 2; owner 2026-07-31, option (a)): the
+    // fold fires exactly when its result descends the reduction ordering (literal bits are
+    // priced, so `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds).
+    if let Some(folded) = (p.fold)(node) {
+        if oriented(&folded, node, p) {
+            return Visit::Folded(folded);
         }
     }
-    let rebuilt: Option<Ex> = match node0 {
+
+    // Recurse into children, CLONE-ON-CHANGE: an unchanged child is never cloned and an
+    // unchanged node never re-runs its canonical constructor. Skipping the constructor on
+    // unchanged children is sound because constructors are idempotent on canonical input --
+    // every node in this walk IS constructor output under this same `cx` (from_prefix+canon
+    // at entry, constructors everywhere after), so re-running them reproduces the node. The
+    // normal-form memo relies on the same fact when it returns marked subtrees untouched.
+    let rebuilt: Option<Ex> = match node {
         Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
         Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
         Ex::Pow(b, ex) => {
@@ -1212,75 +1091,105 @@ pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
                 ))
             }
         }
+        // `atan2` is rebuilt from its arguments' members (`expr::atan2_of`): a negated argument
+        // keeps its members apart, so its rewritten members are not re-decided as a product.
+        Ex::Fun(f, v) if v.len() == 2 && p.cx.ieee_zeros() && p.cx.view.tok_is(*f, "atan2") => {
+            let f = *f;
+            let members = |a: &Ex| -> (Vec<Ex>, bool) {
+                match a {
+                    Ex::Mul(w) => match rewrite_children(w, p) {
+                        Some(k) => (k, true),
+                        None => (w.clone(), false),
+                    },
+                    other => match rewrite_pass_opt(other, p) {
+                        Some(n) => (vec![n], true),
+                        None => (vec![other.clone()], false),
+                    },
+                }
+            };
+            let ((ym, cy), (xm, cxm)) = (members(&v[0]), members(&v[1]));
+            (cy || cxm).then(|| super::expr::atan2_of(f, ym, xm, p.cx))
+        }
         Ex::Fun(f, v) => {
             let f = *f;
             rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
         }
-        _ => None,
+        _ => None, // Leaf: no children
     };
-    let rebuilt = match rebuilt {
-        None => {
-            if p.fires.get() < STEP_CAP {
-                if trace_memo() {
-                    memo_log("INSERT(fixpoint)", node0);
-                }
-                p.normal.borrow_mut().insert(node0.clone());
-            }
-            return None;
-        }
-        Some(r) => r,
-    };
-    if rebuilt != *node0 {
-        if p.fires.get() < STEP_CAP && oriented(&rebuilt, node0, p) {
-            p.fires.set(p.fires.get() + 1);
-            return Some(rewrite_pass(rebuilt, p));
-        }
-        if p.explore && p.fires.get() < STEP_CAP {
-            let sub = PassCtx {
-                rules: p.rules,
-                cx: p.cx,
-                mcx: p.mcx,
-                fold: p.fold,
-                fires: Cell::new(p.fires.get()),
-                normal: RefCell::new(FxHashSet::default()),
-                explore: false,
-                suppressed: p.suppressed,
-                unit_twins: p.unit_twins,
-            };
-            let endpoint = rewrite_pass(rebuilt, &sub);
-            p.fires.set(sub.fires.get());
-            if p.fires.get() < STEP_CAP && oriented(&endpoint, node0, p) {
+
+    match rebuilt {
+        // A true fixpoint of one full walk: children unchanged, no fire, no fold.
+        None => mark_normal(node, p, "INSERT(fixpoint)"),
+        // A rebuild that changed anything must re-enter the full walk: the canonical
+        // constructors can MINT new subterms during the rebuild (an integer power
+        // distributing over a product, collection merging terms), and only a fresh top-down
+        // walk visits them. The re-entry must satisfy the SAME reduction ordering as a rule
+        // fire (a disoriented rebuild is REFUSED), with the composite step as its one
+        // second chance.
+        Some(rebuilt) if rebuilt != *node => {
+            if oriented(&rebuilt, node, p) && step_allowed(p) {
                 p.fires.set(p.fires.get() + 1);
-                if trace_fires() {
-                    eprintln!(
-                        "AC composite step committed:\n  node={node0:?}\n  endpoint={endpoint:?}"
-                    );
-                }
-                return Some(rewrite_pass(endpoint, p));
+                return Visit::Step(rebuilt);
             }
-            if trace_fires() {
-                eprintln!(
-                    "AC rebuild refused (endpoint not below):\n  node={node0:?}\n  endpoint={endpoint:?}"
-                );
+            if let Some(endpoint) = composite_step(rebuilt, node, p) {
+                return Visit::Step(endpoint);
             }
-        } else if trace_fires() {
-            eprintln!("AC rebuild refused (disoriented):\n  node={node0:?}\n  rebuilt={rebuilt:?}");
+            mark_normal(node, p, "INSERT(refused-rebuild)")
         }
-        if p.fires.get() < STEP_CAP {
-            if trace_memo() {
-                memo_log("INSERT(refused-rebuild)", node0);
-            }
-            p.normal.borrow_mut().insert(node0.clone());
+        // rebuilt == node with changed children: the constructor undid the child moves
+        // (equality decided on the representation). A fixpoint by decision.
+        Some(_) => mark_normal(node, p, "INSERT(fixpoint)"),
+    }
+}
+
+/// COMPOSITE-STEP acceptance (docs/formal.md, step relation) for a rebuild that failed the
+/// immediate ordering test: judge the SETTLED ENDPOINT of the rebuilt candidate under a
+/// one-level, private-memo walk, and commit iff the endpoint strictly descends below
+/// `node`. `None` = refused (or exploration is off at this level, or the cap has bound).
+#[inline(always)]
+fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
+    if !(p.explore && step_allowed(p)) {
+        if trace_fires() {
+            eprintln!("AC rebuild refused (disoriented):\n  node={node:?}\n  rebuilt={rebuilt:?}");
         }
         return None;
     }
-    if p.fires.get() < STEP_CAP {
-        if trace_memo() {
-            memo_log("INSERT(fixpoint)", node0);
+    let sub = PassCtx {
+        rules: p.rules,
+        cx: p.cx,
+        mcx: p.mcx,
+        fold: p.fold,
+        fires: Cell::new(p.fires.get()),
+        normal: RefCell::new(FxHashSet::default()),
+        explore: false,
+        suppressed: p.suppressed,
+    };
+    let endpoint = rewrite_pass(rebuilt, &sub);
+    p.fires.set(sub.fires.get());
+    if oriented(&endpoint, node, p) && step_allowed(p) {
+        p.fires.set(p.fires.get() + 1);
+        if trace_fires() {
+            eprintln!("AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}");
         }
-        p.normal.borrow_mut().insert(node0.clone());
+        return Some(endpoint);
+    }
+    if trace_fires() {
+        eprintln!(
+            "AC rebuild refused (endpoint not below):\n  node={node:?}\n  endpoint={endpoint:?}"
+        );
     }
     None
+}
+
+/// Mark `node` a normal form of this pass (unless the step cap has bound) and report it so.
+fn mark_normal(node: &Ex, p: &PassCtx, why: &str) -> Visit {
+    if p.fires.get() < STEP_CAP {
+        if trace_memo() {
+            memo_log(why, node);
+        }
+        p.normal.borrow_mut().insert(node.clone());
+    }
+    Visit::Normal
 }
 
 /// Rewrite a bag's members clone-on-change: `None` = no member moved (nothing allocated).

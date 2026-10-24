@@ -80,8 +80,8 @@ class TestGroundFoldLicence:
         # `f(special)` collapses ONLY to exact values, and those ship as MINED certified
         # rules -- the f64 fold may not approximate. This retires the documented
         # `sin(np.pi) -> 1.2246e-16` wart as a POLICY consequence (P-B3).
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         check(eng, ['cos', 'np.e'], ['cos', 'np.e'])
         check(eng, ['exp', 'np.pi'], ['exp', 'np.pi'])
         # `sin(np.pi) -> 0` is exactly true and NOT f64-realised: f64 computes
@@ -153,15 +153,12 @@ class TestExactCollapsesMint:
     collapses mint as certified rules (the policy's `f(special) -> exact value` row).
 
     Root cause of the earlier refusal (this test was red): the mint itself worked, but
-    stage-2 confirmation re-runs `find_rule` with the target as the only candidate, and
-    the var-free short-circuit's `Class::Finite -> <constant>` arm HIJACKED the answer
-    for special-bearing sources -- returning `<constant>` instead of testing `(-1)`,
-    which the result-must-equal-target guard rightly scored as unconfirmed. The arm is
-    now gated on special-free sources (the same absorption the Const licence forbids,
-    refused at the channel), so confirmation falls through to the scan and honestly
-    verifies the asked target. Inexact values still cannot mint: their correctly-rounded
-    literals are not in the candidate alphabet, resolution refuses special-bearing
-    sources, and the hiprec point layer refutes near-misses."""
+    stage-2 confirmation re-ran `find_rule`, whose var-free short-circuit answered its
+    own question (`<constant>`) instead of testing `(-1)`. Confirmation is now the pair
+    judgment (`judge_pair`) inside the scan: no short-circuit, the asked target is what
+    is judged. Inexact values still cannot mint: a correctly-rounded literal is far
+    costlier than the symbolic mark, so strict descent refuses it, and the hiprec point
+    layer refutes near-misses."""
 
     @pytest.fixture(scope='class')
     def mined(self, tmp_path_factory):
@@ -192,27 +189,36 @@ class TestExactCollapsesMint:
 
     def test_bare_exact_collapses_mint(self, mined):
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
-        assert (('sin', 'np.pi'), ('0',)) in rules, sorted(rules)
-        assert (('log', 'np.e'), ('1',)) in rules, sorted(rules)
+        # In f64 the walk folds a ground node to the float the evaluator computes, here exactly
+        # -1 and 1, so the f64 mine has nothing to mint for them; the real mine mints them.
+        assert list(mined.simplify(['cos', 'np.pi'])) == ['-1']
+        assert list(mined.simplify(['log', 'np.e'])) == ['1']
+        assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)
+        # `sin(np.pi) -> 0` is exactly true and f64 computes 1.2246467991473532e-16: the judge
+        # files it `real`, so the f64 mine, whose set the engine holds in its default slot,
+        # leaves it to the modes that license it; the real mine mints it.
+        assert (('sin', 'np.pi'), ('0',)) not in rules, sorted(rules)
+        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
+        assert (('sin', 'np.pi'), ('0',)) in real, sorted(real)
+        assert (('cos', 'np.pi'), ('-1',)) in real, sorted(real)
+        assert (('log', 'np.e'), ('1',)) in real, sorted(real)
 
     def test_mined_engine_serves_the_collapse(self, mined):
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
         assert mined.simplify(['cos', 'np.pi']) == ['-1']
         assert mined.simplify(['log', 'np.e']) == ['1']
-        # `sin(np.pi)` is the one of the three f64 does not realise, so it does not serve
-        # the default mode. Its presence in the MINE's output is what this test can speak
-        # to, and it is asserted from the mined rule set itself -- an earlier version
+        # `sin(np.pi)` is the one of the three f64 does not realise (f64 computes
+        # 1.2246467991473532e-16), so the f64 mine leaves it out and the real mine mints
+        # it: the mined engine serves the collapse in `real` and keeps f64's own value in
+        # the default mode. Asserted from the mined sets themselves -- an earlier version
         # installed the rule into `real` and then asserted that same rule fires, which
         # says nothing about the mine at all.
-        # This fixture is a freshly-mined engine with ONE rule set (no triple), so the
-        # rule is in its default set and fires here. That is what "the mined engine serves
-        # the collapse" can mean for it. Where the rule LANDS -- `real`, not f64, because
-        # f64 computes 1.2246467991473532e-16 -- is a property of the ROUTED artifact and
-        # is pinned in `TestGroundFoldLicence` against the shipped triple.
-        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('sin', 'np.pi'), ('0',)) in rules
-        assert mined.simplify(['sin', 'np.pi']) == ['0']
+        # Where the ROUTED artifact serves it is pinned in `TestGroundFoldLicence` against
+        # the shipped triple.
+        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
+        assert (('sin', 'np.pi'), ('0',)) in real
+        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
+        assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
         from simplipy.verify._contract import judge_rule
         assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'real'
 
@@ -249,7 +255,7 @@ class TestExactCollapsesMint:
         cground_kill = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
         f64_respell = (('+', '1', 'exp', '(-1)'), ('1.3678794411714423',))
         kept, report = promote(bare + controls + [judged_not_bypassed, cground_pass,
-                                                  cground_kill, f64_respell], eng)
+                                                  cground_kill, f64_respell], eng, rule_mode='default')
         kept_set = {(tuple(lhs), tuple(rhs)) for lhs, rhs in kept}
         for rule in bare + controls:
             assert rule in kept_set, (rule, sorted(kept_set))
@@ -314,17 +320,11 @@ class TestConstAbsorptionLicence:
             == ['<mul>', 'np.pi', 'x0', '</mul>']
 
     def test_special_base_pow_const(self, eng):
-        # pi^C keeps its structure: pow is not an absorption site -- the family's
-        # value set is (0, inf), not "anything", so the mask may not claim it.
-        out = eng.simplify(['pow', 'np.pi', '<constant>'])
-        assert out != ['<constant>'], 'pi^C absorbed the special'
-        assert 'np.pi' in out and '<constant>' in out
-        assert eng.simplify(list(out)) == out
-        # e^C is DIFFERENT by design: pow(e, t) == exp(t) is an EXACT identity that
-        # eliminates the special losslessly BEFORE any mask meets it, and the resulting
-        # `exp <constant>` collapses under the pre-existing special-free value-set
-        # absorption (same family as `sin <constant> -> <constant>`). The licence
-        # protects specials from ROUNDING and ABSORPTION, not from exact identities.
+        # pi^C absorbs to C as 2^C, e^C and exp(C) do: a special constant is a fixed
+        # positive real like a literal, so every positive base gives the same family of
+        # values, (0, inf), which the fitted constant represents.
+        check(eng, ['pow', 'np.pi', '<constant>'], ['<constant>'])
+        check(eng, ['pow', '2', '<constant>'], ['<constant>'])
         check(eng, ['pow', 'np.e', '<constant>'], ['<constant>'])
         check(eng, ['exp', '<constant>'], ['<constant>'])
 

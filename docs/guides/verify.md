@@ -50,6 +50,14 @@ Each rule also gets a **tier**, from two independent questions: is it true over
 | `f64` | no | yes | `f64`, `permissive` |
 | `reject` | no | no | nothing — recorded in the drop census |
 
+"f64-realised" means the deployed evaluator computes the rewrite, to within 8 ULP, at every
+battery and grid point where no operation of either side overflows or underflows. At a point
+where one does, the rewrite may give the true value instead, as the canonical constructors do,
+so `rootn(exp(x0), 2) → exp(x0/2)` is `core` although `exp` overflows past 709.78. A pole
+(`atanh(1)`, `log(0)`) is not an overflow and saturation inside the range is not one either,
+so `atanh(tanh(x0)) → x0` stays `real`. The verdict's `out_of_range` counts the points read
+this way.
+
 ## Cleanliness is per mode
 
 `verify_ruleset(rules, mode=...)` asks whether every rule's tier is one that mode
@@ -79,6 +87,13 @@ from simplipy.verify import verify_triple
 report = verify_triple('rules.json', 'rules_real.json', 'rules_permissive.json')
 report['is_clean'], report['relationships']
 ```
+
+With `engine_config=` it also checks that `permissive` is at least as capable as
+either other mode on every expression of a corpus: `corpus_rows`, or by default the
+400-expression corpus that ships with the package (`simplipy.verify.default_corpus()`).
+The check runs on the config's operators and the three rule sets passed in, prices
+every mode's answer on one shared scale, and counts a row on which a mode raises as a
+violation.
 
 The same tier routing gates the miner's own output, so the two authorities cannot
 drift apart.

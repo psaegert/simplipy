@@ -6,10 +6,9 @@ already and the downstream packages to adapt." The 0.13.0 CHANGELOG and
 and pins the boundary of WHAT GOES against WHAT STAYS, because two nearby names
 are easy to remove by association and neither may move:
 
-* `explicit_constant_placeholders(..., convert_numbers_to_constant=)` -- a
-  DIFFERENT surface (a keyword on a mechanical code-generation helper), still
-  required-keyword in this release and passed explicitly by every shipped
-  downstream call site. It stays.
+* `explicit_constant_placeholders` -- a DIFFERENT surface (a mechanical
+  code-generation helper that renames placeholder slots). It stays; its
+  `convert_numbers_to_constant=` keyword is removed in 0.15.
 * `rust/utils.rs::numbers_to_constant` -- the INTERNAL Rust port behind
   `read_infix(..., mask_numbers=True)`. Not public, not reachable by name from
   Python, and the reader's documented behaviour. It stays.
@@ -76,21 +75,13 @@ class TestTheStandaloneHelperIsGone:
 
 
 class TestWhatDeliberatelyStays:
-    def test_the_placeholder_keyword_is_untouched(self) -> None:
-        """A different surface with a shipped downstream on it: the keyword is
-        required, both values keep working, and `False` stays the meaning every
-        migrated call site passes."""
-        expr, constants = utils.explicit_constant_placeholders(
-            ['+', '<constant>', '2.5'], convert_numbers_to_constant=False)
+    def test_the_placeholder_helper_renames_slots_only(self) -> None:
+        """A different surface: the helper stays and renames placeholder slots, and
+        never numerals, whatever their spelling."""
+        expr, constants = utils.explicit_constant_placeholders(['+', '<constant>', '2.5'])
         assert (expr, constants) == (['+', 'C_0', '2.5'], ['C_0'])
-
-        with pytest.warns(DeprecationWarning):
-            expr, constants = utils.explicit_constant_placeholders(
-                ['+', '<constant>', '25'], convert_numbers_to_constant=True)
-        assert (expr, constants) == (['+', 'C_0', 'C_1'], ['C_0', 'C_1'])
-
-        with pytest.raises(TypeError):
-            utils.explicit_constant_placeholders(['+', '<constant>', '2.5'])  # type: ignore[call-arg]
+        expr, constants = utils.explicit_constant_placeholders(['+', '<constant>', '25'])
+        assert (expr, constants) == (['+', 'C_0', '25'], ['C_0'])
 
     def test_the_reader_still_masks_numbers(self, engine: SimpliPyEngine) -> None:
         """`read_infix(..., mask_numbers=True)` runs the INTERNAL Rust port. The

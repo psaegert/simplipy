@@ -94,11 +94,13 @@ class TestF64RespellMintGuard:
                         assert '.' not in tok.strip('()'), \
                             f'f64-respell RHS minted: {lhs} -> {rhs}'
 
-    def test_exact_collapse_still_mints(self, mined):
-        # Positive control: the guard must not touch the owner-ruled exact
-        # collapses (special-bearing, minted through the candidate scan).
+    def test_exact_collapse_is_the_walks_fold(self, mined):
+        # Positive control: the owner-ruled exact collapse holds. The f64 walk folds a ground
+        # node to the float the evaluator computes for it, here exactly -1, so the mine has
+        # nothing to mint for it.
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
+        assert list(mined.simplify(['cos', 'np.pi'])) == ['-1']
+        assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)
 
     def test_serve_never_rounds(self, mined):
         # The footgun, end to end: with the leak, this artifact (promotion OFF)
@@ -174,8 +176,8 @@ class TestMuEraResolutionRespell:
         assert mark[1].startswith('0.111111111111111088'), mark  # exact square stands
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
         lib = core.build_candidate_library(
-            [['*', '<constant>', 'x0'], ['x0'], ['<constant>']], ['x0'], x, 256)
-        res = core.find_rule_lib(src, len(src), 4, lib, mark=mark)
+            [['*', '<constant>', 'x0'], ['x0'], ['<constant>']], ['x0'], x, 256, rule_mode='default')
+        res = core.find_rule_lib(src, lib, 4, rule_mode='default')
         assert res is None, res
 
     def test_structural_resolution_still_lives(self, mined_acj):
@@ -185,7 +187,9 @@ class TestMuEraResolutionRespell:
         # exact. The guard keys on skeleton identity, not on resolution per se.
         # (Since the 2026-08-01 artifact refresh the SHIPPED engine serves 0.5
         # directly -- pinned first -- so the resolution probe runs on a RULE-FREE
-        # twin of the same vocabulary, the mining-time situation.)
+        # twin of the same vocabulary, the mining-time situation. The f64 walk folds the
+        # ground quotient to its float itself, exactly 0.5, so the serve answer is no mark;
+        # the resolution channel reads the source.)
         import numpy as np
         # The RESOLUTION is the guard; the resolved exact 1/2 then takes its argmin
         # spelling (`/ 1 2`, not `0.5`) -- §10.10(1), owner-ratified 2026-08-07.
@@ -194,11 +198,13 @@ class TestMuEraResolutionRespell:
         bare = SimpliPyEngine(operators=mined_acj._operators_config, rules=[])
         core = bare._core
         src = ['/', 'acos', '0', 'np.pi']
-        mark = bare.simplify(list(src))
-        assert 'acos' in mark, mark
+        assert bare.simplify(list(src)) == ['/', '1', '2']
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
-        lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256)
-        res = core.find_rule_lib(src, len(src), 3, lib, mark=mark)
+        # f64's mark is the walk's answer already (as permissive's is); real reads the source as
+        # written, and its resolution recovers the exact 0.5
+        assert core.mine_mark(src, rule_mode='default') == ['/', '1', '2']
+        lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256, rule_mode='real')
+        res = core.find_rule_lib(src, lib, 3, rule_mode='real')
         assert res == ['0.5'], res
 
 
@@ -219,7 +225,7 @@ class TestDeterminedSourceConstIntroduction:
             if determined and '<constant>' in rhs:
                 assert False, f'determined source minted Const abstraction: {lhs} -> {rhs}'
 
-    def test_exact_collapse_still_mints_here_too(self, mined_const):
+    def test_exact_collapse_is_the_walks_fold_here_too(self, mined_const):
         # Positive control: the special-bearing exact collapse is untouched by the
         # determined-source clause (its source is not Const-free-var-free-literal:
         # it carries a special, and its target is an alphabet literal, not
@@ -229,4 +235,6 @@ class TestDeterminedSourceConstIntroduction:
         # already `<constant>` -- the canonical re-mine (1753-identical) is that
         # control.
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined_const.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
+        # The f64 walk folds the ground node to the evaluator's -1 itself.
+        assert list(mined_const.simplify(['cos', 'np.pi'])) == ['-1']
+        assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)

@@ -36,20 +36,22 @@ import yaml
 
 from conftest import acj_config_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
+from simplipy.verify import default_corpus
 
 MODES = ('default', 'real', 'permissive')
 
-# Four PROBE RULES taken verbatim from the shipped acj-4-3 artifact, each of which the
-# canonical CONSTRUCTORS cannot reach unaided. That property is what makes them
+# Four PROBE RULES, each of which the canonical CONSTRUCTORS cannot reach unaided (a sign
+# moved into or out of an odd function is the constructors' own decision, so no probe moves
+# one). That property is what makes them
 # witnesses: which FILE holds a rule is then observable in `simplify` itself, not merely
 # in a count. A rule the constructors already realize (`abs asinh exp _0` is one -- `exp`
 # is positive, so the `abs` folds) fires in every mode whatever the rule sets say, and
 # would make every assertion here pass vacuously. `test_probes_need_a_rule_to_fire` is
 # the control that keeps this suite honest.
-P_ALL = [['*', '(-1)', 'asin', '_0'], ['asin', 'neg', '_0']]
-P_DEFAULT = [['*', '(-1)', 'asinh', '_0'], ['asinh', 'neg', '_0']]
-P_REAL = [['*', '(-1)', 'atan', '_0'], ['atan', 'neg', '_0']]
-P_CORPUS = [['*', '(-1)', 'tan', '_0'], ['tan', 'neg', '_0']]
+P_ALL = [['sin', 'acos', '_0'], ['cos', 'asin', '_0']]
+P_DEFAULT = [['sinh', 'abs', '_0'], ['abs', 'sinh', '_0']]
+P_REAL = [['tanh', 'asinh', '_0'], ['sin', 'atan', '_0']]
+P_CORPUS = [['tanh', 'abs', '_0'], ['abs', 'tanh', '_0']]
 
 
 def instantiate(rule: list) -> tuple[list[str], list[str]]:
@@ -61,7 +63,19 @@ def instantiate(rule: list) -> tuple[list[str], list[str]]:
 def fires(engine: SimpliPyEngine, rule: list, mode: str) -> bool:
     """Does this mode serve a set containing `rule`?"""
     lhs, rhs = instantiate(rule)
-    return engine._core.ac_simplify_in_mode(lhs, 48, mode, 'explicit') == rhs
+    return engine._core.ac_simplify_in_mode(lhs, 48, 'explicit', 0, rule_mode=mode) == rhs
+
+
+#: The config keys that name a mode's own rule set. `rules_corpus` is the pre-rename
+#: spelling of `rules_permissive` that published artifacts still carry.
+MODE_SET_KEYS = ('rules_real', 'rules_permissive', 'rules_corpus')
+
+
+def without_mode_sets(config: dict) -> dict:
+    """The config with every mode-set key removed, under either spelling."""
+    for key in MODE_SET_KEYS:
+        config.pop(key, None)
+    return config
 
 
 def write_artifact(tmp_path, rules, *, real=None, corpus=None, declare=()) -> str:
@@ -75,8 +89,7 @@ def write_artifact(tmp_path, rules, *, real=None, corpus=None, declare=()) -> st
     # The shipped config now NAMES all three, so copying it and only ever ADDING keys made
     # `declare=()` unbuildable -- the "declares neither" arm compared a declared artifact
     # with itself. Strip them first, so `declare` means what the docstring says.
-    config.pop('rules_real', None)
-    config.pop('rules_corpus', None)
+    without_mode_sets(config)
     config['rules'] = 'rules.json'
     json.dump(rules, open(os.path.join(tmp_path, 'rules.json'), 'w'))
     for name, content in (('real', real), ('permissive', corpus)):
@@ -109,9 +122,7 @@ def _default_only_config():
     test rather than quietly retargeting it at a triple."""
     import tempfile
     d = tempfile.mkdtemp()
-    cfg = yaml.safe_load(open(acj_config_path()))
-    cfg.pop('rules_real', None)
-    cfg.pop('rules_corpus', None)
+    cfg = without_mode_sets(yaml.safe_load(open(acj_config_path())))
     cfg['rules'] = 'rules.json'
     json.dump(json.load(open(acj_rules_path())), open(os.path.join(d, 'rules.json'), 'w'))
     yaml.safe_dump(cfg, open(os.path.join(d, 'config.yaml'), 'w'))
@@ -129,22 +140,23 @@ class TestAbsentFilesAreANoOp:
         exercised by the fixtures below instead -- and the shipped config must name all
         three, or `mode='real'` fails closed for every user."""
         require_or_skip(acj_config_path(), 'acj-4-3 config not staged')
-        base = acj_config_path().replace('config.yaml', '')
+        base = os.path.dirname(acj_config_path())
         config = yaml.safe_load(open(acj_config_path()))
-        assert config['rules'] == './rules.json'
+        # The permissive set is named under exactly one of its two spellings.
+        permissive_keys = [k for k in ('rules_permissive', 'rules_corpus') if config.get(k)]
+        assert len(permissive_keys) == 1, permissive_keys
+        named = {key: config[key] for key in ('rules', 'rules_real', *permissive_keys)}
         # THE CONFIG AND THE DIRECTORY MUST AGREE, in both directions. Naming a set it
         # does not ship makes `Mode.real` fail closed and `Mode.permissive` fall back
         # SILENTLY, and shipping a set it does not name makes that set dead weight no
-        # loader will ever read. Asserting the pair holds while the asset carries the f64
-        # third alone AND once the re-mine stages all three, which asserting three
-        # literal filenames did not.
-        for key, fname in (('rules_real', 'rules_real.json'),
-                           ('rules_corpus', 'rules_permissive.json')):
-            staged = os.path.exists(base + fname)
-            named = config.get(key) == f'./{fname}'
-            assert named == staged, (
-                f'{key}: named={named} staged={staged} -- the config and the shipped '
-                f'directory disagree')
+        # loader will ever read.
+        for key, declared in named.items():
+            assert os.path.isfile(os.path.join(base, declared)), (
+                f'{key} names {declared!r}, which the shipped directory does not carry')
+        on_disk = {f for f in os.listdir(base) if f.startswith('rules') and f.endswith('.json')
+                   and not f.endswith('.provenance.json')}
+        assert on_disk == {os.path.basename(declared) for declared in named.values()}, (
+            f'rule files on disk {sorted(on_disk)} vs named {named}')
 
     def test_every_mode_serves_the_default_set(self):
         """No set of its own means the DEFAULT set -- for every mode, counted and
@@ -158,22 +170,20 @@ class TestAbsentFilesAreANoOp:
         import json as _json
         import tempfile as _tempfile
         d = _tempfile.mkdtemp()
-        cfg = yaml.safe_load(open(acj_config_path()))
-        cfg.pop('rules_real', None)
-        cfg.pop('rules_corpus', None)
+        cfg = without_mode_sets(yaml.safe_load(open(acj_config_path())))
         cfg['rules'] = 'rules.json'
         _json.dump(_json.load(open(acj_rules_path())), open(os.path.join(d, 'rules.json'), 'w'))
         yaml.safe_dump(cfg, open(os.path.join(d, 'config.yaml'), 'w'))
         e = SimpliPyEngine.from_config(os.path.join(d, 'config.yaml'))
         assert e.real_simplification_rules is None
         assert e.permissive_simplification_rules is None
-        assert e._core.mode_rules_len('real') is None
-        assert e._core.mode_rules_len('permissive') is None
-        assert e._core.mode_rules_len('default') == len(e.simplification_rules)
-        base = e._core.ac_rules_info()
+        assert e._core.mode_rules_len(rule_mode='real') is None
+        assert e._core.mode_rules_len(rule_mode='permissive') is None
+        assert e._core.mode_rules_len(rule_mode='default') == len(e.simplification_rules)
+        base = e._core.ac_rules_info_in_mode(rule_mode='default')
         for mode in MODES:
-            assert e._core.ac_rules_info_in_mode(mode) == base
-            assert e._core.ac_served_rules_in_mode(mode) == e._core.ac_served_rules()
+            assert e._core.ac_rules_info_in_mode(rule_mode=mode) == base
+            assert e._core.ac_served_rules_in_mode(rule_mode=mode) == e._core.ac_served_rules_in_mode(rule_mode='default')
 
     def test_a_mode_with_no_set_selects_the_default_SET_not_the_default_ANSWER(self):
         """The no-op is about RULE SELECTION, and only that.
@@ -182,33 +192,39 @@ class TestAbsentFilesAreANoOp:
         the default mode's answer token for token -- and that is now FALSE, because the
         CONSTRUCTOR is mode-aware: `real` skips the f64 saturation bands and never folds a
         transcendental. Measured on an artifact where `real` names no set at all, the
-        served sets are identical and the ANSWERS still differ on 4 of 400 corpus rows.
-        `atanh(tanh 30)` is the whole story: f64 gives inf, real gives 30, with zero rules
-        loaded either way.
+        served sets are identical and the ANSWERS still differ on 5 of 400 corpus rows (4
+        while f64 refused `asinh(sinh(t))` past sinh's overflow, which cuts no band now; 3
+        before f64 kept the sign float64 gives an inverted zero, which real's one zero does
+        not). `atanh(tanh 30)` is the whole story: f64 gives inf, real gives 30, with zero
+        rules loaded either way.
 
         (It stayed green only because the corpus was truncated to the first 150 rows, and
         because it was loading the shipped artifact, where `real` names its own 5,471-rule
         set and the comparison was meaningless in a second way.)"""
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
-        rows = json.load(open(os.path.join(
-            os.path.dirname(__file__), '..', 'benchmarks', 'corpus',
-            'raw_skeletons_nv.json')))
+        rows = default_corpus()
         # Built from a config with the optional keys POPPED, because the shipped artifact
         # now names all three and `real` there serves its own 5,471-rule set. Loading it
         # directly made this test assert `real == default` about an artifact where the two
         # legitimately differ -- it stayed green only because the corpus was truncated to
         # the first 150 rows, and rows 210, 370 and 380 diverge.
         e = SimpliPyEngine.from_config(_default_only_config())
-        assert e._core.mode_rules_len('real') is None
+        assert e._core.mode_rules_len(rule_mode='real') is None
         # what IS a no-op: the set the mode selects
-        assert e._core.ac_served_rules_in_mode('real') == \
-            e._core.ac_served_rules_in_mode('default')
+        assert e._core.ac_served_rules_in_mode(rule_mode='real') == \
+            e._core.ac_served_rules_in_mode(rule_mode='default')
         # what is NOT: the answer, because the constructor is mode-aware. Pinned as a
-        # bounded, explained divergence rather than asserted away.
+        # bounded, explained divergence rather than asserted away. Row 380's `asinh(sinh(.))`
+        # collapses in both modes since an overflow cuts no band. Rows 20 and 283 invert a
+        # product holding `x - x`, which keeps its members' sign in f64 (IEEE's signed zero)
+        # and is real's one zero. Rows 74, 156 and 358 hold `exp(0)`, `cos(0)` and `sin(0)`,
+        # which f64 folds and real, with no rules loaded, does not. (The sums over `abs`,
+        # `asin`, `log` or a root that ten more rows invert, which the certificate could not
+        # show null, it now reads null on a slice, so f64 and real write them alike.)
         differ = [row for row in rows
-                  if e._core.ac_simplify_in_mode(row, 48, 'real', 'tagged')
-                  != e._core.ac_simplify_in_mode(row, 48, 'default', 'tagged')]
-        assert len(differ) == 4, len(differ)
+                  if e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='real')
+                  != e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='default')]
+        assert len(differ) == 5, len(differ)
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
         bare._core.set_mode_rules('real', [])
@@ -223,9 +239,7 @@ class TestAbsentFilesAreANoOp:
         per-mode machinery cost hiding behind the declaration."""
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
         rules = json.load(open(acj_rules_path()))[:600]
-        rows = json.load(open(os.path.join(
-            os.path.dirname(__file__), '..', 'benchmarks', 'corpus',
-            'raw_skeletons_nv.json')))[:80]
+        rows = default_corpus()[:80]
         plain = SimpliPyEngine.from_config(write_artifact(tmp_path, rules=rules))
         declared_dir = tmp_path / 'declared'
         declared_dir.mkdir()
@@ -298,9 +312,9 @@ class TestEachModeServesExactlyItsOwnFile:
             'permissive': json.load(open(os.path.join(d, 'rules_permissive.json'))),
         }
         for mode in MODES:
-            assert e._core.mode_rules_len(mode) == len(on_disk[mode])
-            assert e._core.ac_rules_info_in_mode(mode)[0] == len(on_disk[mode])
-            served = e._core.ac_served_rules_in_mode(mode)
+            assert e._core.mode_rules_len(rule_mode=mode) == len(on_disk[mode])
+            assert e._core.ac_rules_info_in_mode(rule_mode=mode)[0] == len(on_disk[mode])
+            served = e._core.ac_served_rules_in_mode(rule_mode=mode)
             assert len(served) == len(on_disk[mode])
             # ...and provenance indexes THAT MODE'S OWN file, with no tier offsets.
             assert [src for _, _, src in served] == list(range(len(on_disk[mode])))
@@ -332,15 +346,15 @@ class TestEachModeServesExactlyItsOwnFile:
         Pinned at the core entry and through the convert-then-simplify route."""
         e = SimpliPyEngine.from_config(triple)
         lhs, _ = instantiate(P_CORPUS)
-        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
-        assert e._core.ac_simplify_infix_in_mode(lhs, 48, 'default') != \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
+        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
+        assert e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='default') != \
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
         # The old `form='infix'` shim is removed in 0.14.0; CONVERTING first is the
         # documented equivalent, and it must still select by mode identically.
         assert e.simplify(e.to_infix(lhs), mode=Mode.permissive) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
         assert e.simplify(e.to_infix(lhs), mode=Mode.f64) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'default')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='default')
 
 
 class TestAnEmptySetIsNotAnAbsentOne:
@@ -354,8 +368,8 @@ class TestAnEmptySetIsNotAnAbsentOne:
         cfg = write_artifact(tmp_path, rules=[P_DEFAULT], real=[])
         e = SimpliPyEngine.from_config(cfg)
         assert e.real_simplification_rules == []
-        assert e._core.mode_rules_len('real') == 0
-        assert e._core.ac_rules_info_in_mode('real')[0] == 0
+        assert e._core.mode_rules_len(rule_mode='real') == 0
+        assert e._core.ac_rules_info_in_mode(rule_mode='real')[0] == 0
         assert not fires(e, P_DEFAULT, 'real')
         # ...while the modes that name no set still serve the default one.
         assert fires(e, P_DEFAULT, 'default')
@@ -365,10 +379,10 @@ class TestAnEmptySetIsNotAnAbsentOne:
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
         e = SimpliPyEngine.from_config(acj_config_path())
         e._core.set_mode_rules('real', [])
-        assert e._core.mode_rules_len('real') == 0
+        assert e._core.mode_rules_len(rule_mode='real') == 0
         e._core.set_mode_rules('real', None)
-        assert e._core.mode_rules_len('real') is None
-        assert e._core.ac_rules_info_in_mode('real') == e._core.ac_rules_info()
+        assert e._core.mode_rules_len(rule_mode='real') is None
+        assert e._core.ac_rules_info_in_mode(rule_mode='real') == e._core.ac_rules_info_in_mode(rule_mode='default')
 
 
 class TestTheSetsSurviveEveryRebuild:
@@ -395,8 +409,8 @@ class TestTheSetsSurviveEveryRebuild:
     def test_compile_rules_does_not_retract_them(self, triple):
         e = SimpliPyEngine.from_config(triple)
         e.compile_rules()
-        assert e._core.mode_rules_len('real') == 2
-        assert e._core.mode_rules_len('permissive') == 3
+        assert e._core.mode_rules_len(rule_mode='real') == 2
+        assert e._core.mode_rules_len(rule_mode='permissive') == 3
         assert fires(e, P_CORPUS, 'permissive')
         assert not fires(e, P_CORPUS, 'default')
 
@@ -420,22 +434,22 @@ class TestTheModeSurfaceRefusesNonsense:
         e = SimpliPyEngine.from_config(acj_config_path())
         for bad in ('lossy', 'sound', 'Default', ''):  # retired spellings refuse (0.14.0)
             with pytest.raises(ValueError, match='unknown rule_mode'):
-                e._core.ac_simplify_in_mode(['x0'], 48, bad, 'tagged')
+                e._core.ac_simplify_in_mode(['x0'], 48, 'tagged', rule_mode=bad)
             with pytest.raises(ValueError, match='unknown rule_mode'):
-                e._core.ac_rules_info_in_mode(bad)
+                e._core.ac_rules_info_in_mode(rule_mode=bad)
             with pytest.raises(ValueError, match='unknown rule_mode'):
-                e._core.mode_rules_len(bad)
+                e._core.mode_rules_len(rule_mode=bad)
 
     def test_mode_sets_face_the_same_load_gates(self, tmp_path):
         """A mode relaxes what a rule may CLAIM about the deployed engine, never what
         the loader will admit. `sin _0 -> log _0` changes a defined value at a
-        constructed exceptional point (licence-registry refusal) and `sin _0 -> tan _0`
-        does not descend the reduction ordering -- both are refused in a mode's set
-        exactly as they are in the default one."""
-        bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['tan', '_0']]]
+        constructed exceptional point (licence-registry refusal) and `sin _0 -> exp sin _0`
+        climbs in price (G7) -- both are refused in a mode's set exactly as they are in the
+        default one."""
+        bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['exp', 'sin', '_0']]]
         cfg = write_artifact(tmp_path, rules=[P_DEFAULT], corpus=bad)
         e = SimpliPyEngine.from_config(cfg)
-        assert e._core.mode_rules_len('permissive') == 2
-        assert e._core.ac_rules_info_in_mode('permissive')[0] == 0
-        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'permissive', 'explicit') \
+        assert e._core.mode_rules_len(rule_mode='permissive') == 2
+        assert e._core.ac_rules_info_in_mode(rule_mode='permissive')[0] == 0
+        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', 0, rule_mode='permissive') \
             == ['sin', 'x0']

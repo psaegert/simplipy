@@ -82,10 +82,13 @@ class TestEffortValidation:
         # The pre-effort core entry is the reference: the new dispatch at budget 0
         # must reproduce it byte-for-byte, tokens and rendering alike.
         tokens = engine.to_prefix(HILL)
-        via_plain = engine._core.ac_simplify(
-            [str(t) for t in engine.to_tagged(tokens)], 48, False, "explicit")
-        assert via_plain == engine._core.ac_simplify_in_mode(
-            [str(t) for t in engine.to_tagged(tokens)], 48, "default", "explicit", 0)
+        tagged = [str(t) for t in engine.to_tagged(tokens)]
+        via_plain = engine._core.ac_simplify_explore(tagged, 48, "explicit", 0, rule_mode='default')
+        assert via_plain == engine._core.ac_simplify_in_mode(tagged, 48, "explicit", 0, rule_mode="default")
+        # The FFI's own default is the public one, so a direct `_core` caller that omits the
+        # budget gets what `simplify` gives, not the chain alone.
+        assert engine._core.ac_simplify_in_mode(tagged, 48, "explicit", rule_mode="default") \
+            == engine._core.ac_simplify_in_mode(tagged, 48, "explicit", None, rule_mode="default")
         # The RULED default (owner 2026-10-06; 4 from 2026-08-24): None -- the default
         # call explores until a round finds nothing, and explicitly asking for the
         # chain alone differs on a mu-hill.
@@ -151,10 +154,11 @@ class TestTheSearchRunsUntilItSettles:
         assert shipped.complexity(twice) < shipped.complexity(once)
         assert shipped.complexity(shipped.simplify(PARTIAL)) <= shipped.complexity(twice)
 
-    @pytest.mark.parametrize('k', [3, 4])
+    @pytest.mark.parametrize('k', [4, 5])
     def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
-        # What a search needs grows with the expression: 2 copies reach the uncapped answer
-        # within 13 candidates, 3 need 19 and 4 need 23, so a cap of 16 falls short here.
+        # What a search needs grows with the expression: each copy takes five descents, so 2
+        # copies reach the uncapped answer within 10, 4 need 20 and 5 need 25, and a cap of 16
+        # falls short here.
         t = _copies(k)
         once = shipped.simplify(t)
         assert shipped.simplify(once) == once
@@ -162,11 +166,11 @@ class TestTheSearchRunsUntilItSettles:
         assert shipped.complexity(once) < shipped.complexity(capped)
         assert shipped.simplify(capped, effort=16) != capped
 
-    def test_the_finish_does_not_retry_what_the_prefix_refused(self, shipped) -> None:
-        # Eight products whose expansion does not pay, then one that does: the breadth-first
-        # prefix refuses the first eight, and the finish's first round starts at the ninth.
+    def test_the_cheapest_candidate_is_tried_first(self, shipped) -> None:
+        # Eight products whose expansion does not pay, then one that does: the candidates are
+        # tried cheapest rebuilt state first, so the first descent is the ninth product's.
         terms = [f'(x{4 * i + 1} + x{4 * i + 2})*(x{4 * i + 3} + x{4 * i + 4})' for i in range(8)]
         t = shipped.infix_to_prefix(' + '.join(terms + ['(y + 1)*(y - 1)']))
         once = shipped.simplify(t)
-        assert shipped.simplify(t, effort=8) != once
-        assert shipped.simplify(t, effort=9) == once
+        assert shipped.simplify(t, effort=0) != once
+        assert shipped.simplify(t, effort=1) == once

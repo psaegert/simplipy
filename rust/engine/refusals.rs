@@ -19,9 +19,11 @@
 //! - The registry never over-refuses what the contract licenses: `Ext` at a point is
 //!   R3's null-set licence and passes; only defined-value changes (R2, "sign
 //!   included") refuse.
-//! - Fail-open on unevaluable adjudications (`contract_point_verdict`'s own
-//!   convention): the registry is a doctrine gate, not a substitute for the numeric
-//!   challenge bars, which keep running unchanged.
+//! - Fail-CLOSED on unevaluable adjudications: a pattern with exceptional points whose
+//!   source or target holds an operator the contract evaluator does not know
+//!   (`hiprec::evaluable`) is refused, since nothing can adjudicate it there. The registry
+//!   is a doctrine gate, not a substitute for the numeric challenge bars, which keep
+//!   running unchanged.
 
 use crate::hiprec::{contract_point_verdict, PointCmp, ProbeAtom};
 use crate::operators::Operators;
@@ -359,8 +361,8 @@ const GENERIC: [(i64, u64); 3] = [(3, 7), (-5, 11), (9, 13)];
 /// sides and adjudicates each with the contract evaluator (one-zero conventions,
 /// precision rungs): a candidate that changes a DEFINED extended-real value at a
 /// definable point (InfChange / RealChange / a lost value) is refused; `Ext` (a nan
-/// hole filled at the point) is R3's licence and passes. Fail-open on unevaluable
-/// points, per `contract_point_verdict`'s own convention.
+/// hole filled at the point) is R3's licence and passes. A side the contract cannot
+/// evaluate (an operator it does not know) is refused outright: fail closed.
 ///
 /// Cost discipline: callers pre-screen (the function returns immediately when
 /// neither side has a solvable exceptional point), and the mint path consults this
@@ -377,6 +379,9 @@ pub fn pole_refusal(
     exceptional_points(target, var_names, ops, &mut pts);
     if pts.is_empty() {
         return None;
+    }
+    if !crate::hiprec::evaluable(src, ops) || !crate::hiprec::evaluable(target, ops) {
+        return Some(Refusal::PoleClassChange);
     }
     // Variables appearing anywhere (order = var_names order, the atoms vector's frame)
     let used: Vec<String> = var_names
@@ -576,5 +581,37 @@ mod tests {
             &mut pts,
         );
         assert!(pts.is_empty());
+    }
+
+    /// A side the contract cannot evaluate has no adjudication: a pattern with exceptional
+    /// points is refused rather than passed, and the point verdict itself is none.
+    #[test]
+    fn an_unevaluable_side_fails_closed() {
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let vars = s(&["x0"]);
+        let src = s(&["floor", "inv", "-", "1", "x0"]);
+        assert_eq!(
+            pole_refusal(&src, &src, &e.operators, &vars),
+            Some(Refusal::PoleClassChange)
+        );
+        // no exceptional point: nothing to adjudicate
+        let (a, b) = (s(&["floor", "floor", "x0"]), s(&["floor", "x0"]));
+        assert_eq!(pole_refusal(&a, &b, &e.operators, &vars), None);
+        let verdict = contract_point_verdict(
+            &b,
+            &[],
+            &s(&["x0"]),
+            &[],
+            &e.operators,
+            &vars,
+            &[ProbeAtom::Val(0.5)],
+        );
+        assert_eq!(verdict, (None, false));
+        assert!(!crate::hiprec::evaluable(&b, &e.operators));
+        assert!(crate::hiprec::evaluable(&s(&["inv", "x0"]), &e.operators));
     }
 }

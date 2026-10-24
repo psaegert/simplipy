@@ -11,7 +11,7 @@ import pytest
 
 from simplipy import SimpliPyEngine
 
-# Training draws of flash-ansr's T8.1 catalog that permissive returned costlier than they came in.
+# Inputs from flash-ansr's training-data generator that permissive returned costlier than they came in.
 PRICIER_THAN_INPUT = [
     '- * + * + x16 * pow 0.36421583172854655 1.5 - x16 x9 x8 log x2 * x17 x7 x6',
     '/ neg / / x14 - + x17 x17 x5 x5 + * x9 + - x9 + - rootn x15 -2 - atanh x13 acos x7 x4 x15 x1',
@@ -84,7 +84,23 @@ def test_the_answer_prints_no_literal_beyond_float_precision(engine) -> None:
         assert price(engine, answer) <= price(engine, t)
 
 
-@pytest.mark.parametrize('expr', PRICIER_THAN_INPUT + [CAPPED_WAS_CHEAPER, LONG_LITERALS])
+# Tiny values (review P4): the ground fold took `5/1.7976931348623157e308` to the normal float
+# 2.781342323134002e-308, whose shortest decimal (denominator 5e322) the f64 number domain does not
+# hold, so the state held a number its print read back as a symbol and the second call re-ordered
+# the sum. Beside it, values below 1e-290 that fold, stay or are written.
+TINY_VALUES = [
+    '+ x1 / 5 1.7976931348623157e308',
+    '+ x2 / 3 1.7976931348623157e308',
+    '* x1 / 7 1.7976931348623157e308',
+    '+ x1 cos / 5 1.7976931348623157e308',
+    '+ x1 * 3 exp -700',
+    '+ x1 / 1 * 3 1e293',
+    '+ x1 1e-300',
+    '+ x1 2.781342323134002e-308',
+]
+
+
+@pytest.mark.parametrize('expr', PRICIER_THAN_INPUT + [CAPPED_WAS_CHEAPER, LONG_LITERALS] + TINY_VALUES)
 def test_the_answer_is_a_fixpoint(engine, expr) -> None:
     once = engine.simplify(expr.split(), mode='permissive')
     assert engine.simplify(once, mode='permissive') == once

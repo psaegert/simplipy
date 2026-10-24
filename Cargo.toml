@@ -25,8 +25,7 @@ pyo3 = { version = "0.29", features = ["abi3-py312", "extension-module"] }
 
 # Asset loading: REUSE simplipy's HF-hub config.yaml + rules.json UNCHANGED (one source of
 # truth for both Python and Rust). serde_json parses the 23 MB rules.json; serde_yaml the
-# operator config. No forked on-disk format in v1 (the rkyv/mmap precompiled cache is a
-# documented LATER optimization, gated behind the `fast-assets` feature below).
+# operator config. No forked on-disk format.
 # ALLOCATOR. The mining workload is 28 rayon threads doing sustained small alloc/free of token
 # vectors, trees and hashmaps for hours. Under glibc malloc that grows RSS steadily (measured
 # 2026-07-27: a 100k-source length-5 tier goes 1.52 -> 3.62 GB peak, and the production 21M-source
@@ -90,9 +89,6 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 
 [features]
 default = []
-# LATER (NOT v1): precompile rules.json -> a Rust-native rkyv/mmap cache for ~instant load.
-# Ships behind a feature so v1 stays on the unchanged HF asset (single source of truth).
-fast-assets = []
 
 # Swap the global allocator to mimalloc. OFF by default for source builds; the WHEEL enables it
 # (pyproject [tool.maturin] features): measured 2026-08-31 on the v25 generation workload at

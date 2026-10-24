@@ -71,17 +71,18 @@ impl BangCache {
 /// keys are `Vec<Tok>`, consistent within the call by interning injectivity.
 pub(super) struct SimplifyCtx {
     pub(super) overlay: RefCell<TokenOverlay>,
-    pub(super) cert_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
+    /// Indexed by the reading (`ac_cert`'s `f64`): 0 over the reals, 1 in float64.
+    pub(super) cert_scratch: [RefCell<FxHashMap<Vec<Tok>, bool>>; 2],
     /// The `$`-sort twin of `cert_scratch` (see `ac_cert`'s `mult` arm).
-    pub(super) cert_mult_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
+    pub(super) cert_mult_scratch: [RefCell<FxHashMap<Vec<Tok>, bool>>; 2],
 }
 
 impl SimplifyCtx {
     pub(super) fn new(table_len: usize) -> Self {
         Self {
             overlay: RefCell::new(TokenOverlay::new(table_len)),
-            cert_scratch: RefCell::new(FxHashMap::default()),
-            cert_mult_scratch: RefCell::new(FxHashMap::default()),
+            cert_scratch: Default::default(),
+            cert_mult_scratch: Default::default(),
         }
     }
 }

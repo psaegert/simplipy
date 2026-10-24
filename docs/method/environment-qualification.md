@@ -34,10 +34,11 @@ recording, alongside the mine parameters and the core build stamp:
   separately-linked libm, so the fingerprint measures the code path that
   actually minted the artifact. Two sidecars are comparable-or-not by
   inspecting one field.
-- **The soundness state**: certificate kill-switch states, every
-  artifact-affecting environment override recorded verbatim
-  (see [environment variables](../environment.md)), and the interval
-  layer's fail-closed miss counters.
+- **The soundness state**: every `SIMPLIPY_*` variable set during the mine,
+  recorded verbatim (no variable changes what the core mines, certifies or
+  serves, so `simplipy verify-mine` requires this record to be empty; see
+  [environment variables](../environment.md)), and the interval layer's
+  fail-closed miss counters.
 - **The measure fingerprint**: the μ constants and probe values with a
   digest, so artifacts mined under different reduction orderings are
   distinguishable from provenance alone.
@@ -46,7 +47,7 @@ recording, alongside the mine parameters and the core build stamp:
 
 - A re-mine from an artifact's `mine.yaml` is promised byte-identical **only
   on an environment matching the sidecar** — same fingerprint, same
-  versions, no artifact-affecting overrides.
+  versions, no `SIMPLIPY_*` variable recorded.
 - On load, the engine cross-checks the artifact's recorded measure
   fingerprint against its own and warns on mismatch — a served ruleset is
   never silently re-interpreted under a different ordering.

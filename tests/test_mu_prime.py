@@ -28,14 +28,13 @@ smaller divergence class is documented at TestIntegerScientificCodeword.
 Oracle: dec_price() of the rescorer, ported exactly below (mantissa priced at the OLD
 integer price max(1 bit, L(m)), + round(1000*log2(1+e)), + sign).
 """
-import json
 import math
-import os
 from fractions import Fraction
 
 import pytest
 
 from simplipy.engine import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 MILLI = 1000
@@ -51,17 +50,15 @@ MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation 
 #: mismatch test can differ FROM.
 ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 
-#: The digest the SHIPPED triple was mined under, read from its provenance sidecar. The
-#: symbol table (2026-08-21) changed the measure, so the engine no longer computes this
-#: and D25/R6 warns at load -- correctly, and until the re-mine under the new measure
-#: replaces the artifact. `test_acj_load_warns_until_the_remine` below pins that the
-#: warning is EXACTLY this one and nothing else, which is the only shape of allowance
-#: that cannot swallow a genuine mismatch (the last blanket one nearly did).
-ACJ_SHIPPED_DIGEST = '32302640b359a348'
-
-#: The digest the engine computes under the float cap (with its probe). The published
-#: rulesets were mined under ACJ_SHIPPED_DIGEST, so loading them warns until the re-mine.
-CURRENT_DIGEST = '9a89036bd9cd33f3'
+#: The probes the shipped acj-4 cell's sidecar does not record: the float cap's probes, the
+#: sign probes and the compound reading probes were added to the battery after it was mined. Unrecorded
+#: is not moved, so loading the cell is silent; `test_acj_load_compares_what_was_recorded`
+#: pins exactly this set, so a re-mine that records them fails there and is noticed.
+ACJ_UNRECORDED_PROBES = [
+    '0.0766541268471677307861497420516056347394916180597539647375669841',
+    '/ 1.2345678901234567e-305 9.876543210987654e-10', 'atan2 x0 x1',
+    '-2', 'neg x0', '* neg x0 x1',
+    'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', 'atanh tanh x0', '/ x0 * x0 x1']
 
 
 def L(n) -> int:
@@ -127,7 +124,7 @@ def eng():
 
 
 def c(eng, tokens):
-    return eng._core.ac_complexity(list(tokens))
+    return eng._core.ac_complexity(list(tokens), rule_mode='default')
 
 
 class TestSpellingInvariance:
@@ -471,11 +468,7 @@ class TestNativeDescentNeverWorse:
     corpus, plus idempotence."""
 
     def test_400_skeleton_corpus(self, eng):
-        corpus_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   'benchmarks', 'corpus', 'raw_skeletons_nv.json')
-        if not os.path.exists(corpus_path):
-            pytest.skip('reference corpus not present')
-        corpus = json.load(open(corpus_path))
+        corpus = default_corpus()
         assert len(corpus) == 400
         made_bigger = []
         for expr in corpus:
@@ -504,8 +497,8 @@ class TestTheFloorIsMirroredAcrossTheI128Boundary:
 class TestOneMeasurePerMode:
     """`complexity(e, mode=m)` prices `e` as mode `m` reads it: each mode reads an expression into
     its own canonical form, because the modes accept different simplifications as true, and that
-    form is what `simplify(.., mode=m)` descends. `canon='default'` (deprecated) is the f64 reading
-    whatever the mode, as `complexity()` priced before 0.15.0."""
+    form is what `simplify(.., mode=m)` descends. Answers of different modes are compared on one
+    shared scale, `simplipy.mining.cross_mode_complexity`."""
 
     SPECIMENS = [
         ['*', '2', 'x0'],
@@ -514,30 +507,30 @@ class TestOneMeasurePerMode:
         ['rootn', 'x0', '3'],
     ]
 
-    def test_the_default_reading_is_the_mode_own(self, eng):
+    def test_the_reading_is_the_mode_own(self, eng):
         for e in self.SPECIMENS:
-            for mode in ('f64', 'real', 'permissive'):
-                assert eng.complexity(e, mode=mode) == eng.complexity(e, mode=mode, canon='mode'), (e, mode)
+            for mode, rule_mode in (('f64', 'default'), ('real', 'real'), ('permissive', 'permissive')):
+                assert eng.complexity(e, mode=mode) == \
+                    eng._core.ac_complexity_certified(e, 'mode', rule_mode=rule_mode), (e, mode)
                 assert eng.complexity(e, certified=False, mode=mode) == \
-                    eng.complexity(e, certified=False, mode=mode, canon='mode'), (e, mode)
+                    eng._core.ac_complexity(e, 'mode', rule_mode=rule_mode), (e, mode)
 
     def test_f64_is_unchanged(self, eng):
-        # f64's own reading IS the former public yardstick: no number moves, and no warning.
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter('error')
-            for e in self.SPECIMENS:
-                assert eng.complexity(e) == eng.complexity(e, mode='f64', canon='default'), e
+        # f64's own reading IS the cross-mode yardstick for an f64 answer: no number moves.
+        from simplipy.mining import cross_mode_complexity
+        for e in self.SPECIMENS:
+            assert eng.complexity(e) == cross_mode_complexity(eng, e, 'f64'), e
 
     def test_the_modes_read_one_expression_differently(self, eng):
-        # The float evaluator reads exp(5132.3) as inf, so f64 folds 1/exp(5132.3) to 0; real
-        # keeps it (the value is finite). Real keeps `log <literal>` unfolded where f64 folds it.
+        # f64 reads atanh(tanh(x0)) as written (tanh saturates in floats), real as x0. A ground
+        # constant is read as written in every mode: the float evaluator reads exp(5132.3) as
+        # inf, and f64's WALK folds 1/exp(5132.3) to 0, while its reading keeps it.
+        e = ['atanh', 'tanh', 'x0']
+        assert eng.complexity(e, mode='f64') > eng.complexity(['x0'], mode='f64')
+        assert eng.complexity(e, mode='real') == eng.complexity(['x0'], mode='real')
         e = ['+', 'x0', '/', '1', 'exp', '5132.277024704901']
-        assert eng.complexity(e, mode='f64') == eng.complexity(['x0'], mode='f64')
-        assert eng.complexity(e, mode='real') > eng.complexity(['x0'], mode='real')
-        e = ['inv', 'log', '1.60604019536491']
-        with pytest.warns(FutureWarning, match="canon='default'"):
-            assert eng.complexity(e, mode='real') != eng.complexity(e, mode='real', canon='default')
+        assert eng.complexity(e, mode='f64') == eng.complexity(e, mode='real')
+        assert list(eng.simplify(list(e), mode='f64')) == ['x0']
 
     def test_simplify_never_prices_above_its_input_in_its_mode(self, eng):
         from simplipy.engine import Mode
@@ -554,9 +547,47 @@ class TestOneMeasurePerMode:
                 out = list(eng.simplify(list(expr), mode=mode))
                 assert eng.complexity(out, mode=mode) <= eng.complexity(list(expr), mode=mode), (expr, mode)
 
-    def test_an_unknown_canon_is_refused(self, eng):
-        with pytest.raises(ValueError, match='canon'):
-            eng.complexity(['x0'], canon='certified')
+    def test_the_canon_keyword_is_removed(self, eng):
+        for canon in ('default', 'mode'):
+            with pytest.raises(TypeError, match='canon'):
+                eng.complexity(['x0'], canon=canon)
+
+
+class TestTheFloatCapOnEveryPath:
+    """A literal costs at most what its float costs, however a state holds it. The f64 number
+    domain (f64 and permissive) admits a number only where its numerator and denominator are at
+    most 2^1022, and holds in pieces a value that `real` holds as one number: a literal as
+    written, a product, a sum, a reciprocal. Each costs what `real` prices the one number at."""
+
+    A, B = '1.2345678901234567e-305', '9.876543210987654e-10'  # A's denominator is 10^321
+
+    @pytest.mark.parametrize('text', [
+        f'{A} / {B}',                            # a leaf times a number
+        f'x1 * {A} / {B}',                       # the same, beside a variable
+        f'x1 + {A} + 1',                         # a sum
+        f'x1 / {A}',                             # a reciprocal
+        f'{A} * 1.5e300',                        # a product of two leaves
+        '1.23456789012345678901234567e-305',     # a leaf longer than its float
+        '1.2345678901234567e-290 * 1e-15 * x1',  # two numbers whose product leaves the domain
+    ])
+    def test_every_mode_prices_what_real_prices(self, eng, text):
+        real = eng.complexity(text, mode='real')
+        for mode in ('f64', 'permissive'):
+            assert eng.complexity(text, mode=mode) == real, mode
+
+    def test_the_quotient_costs_its_float(self, eng):
+        quotient = f'{self.A} / {self.B}'
+        its_float = repr(float(Fraction(self.A) / Fraction(self.B)))
+        for mode in ('f64', 'real', 'permissive'):
+            assert eng.complexity(quotient, mode=mode) == eng.complexity(its_float, mode=mode) == 59436
+
+    def test_a_value_beyond_the_cap_keeps_its_price(self, eng):
+        # 1e400 has no number in either domain (its 1,329 bits pass the 1,100-bit cap), so its
+        # product with 1e-300 keeps the price of its pieces, alike in every mode.
+        text = 'x1 * 1e400 * 1e-300'
+        prices = {mode: eng.complexity(text, mode=mode) for mode in ('f64', 'real', 'permissive')}
+        assert len(set(prices.values())) == 1
+        assert prices['f64'] > eng.complexity('x1 * 1e100', mode='f64')
 
 
 class TestFingerprintAndArtifactLoad:
@@ -577,37 +608,71 @@ class TestFingerprintAndArtifactLoad:
             # the float cap: 64 digits cost their float's shortest decimal,
             # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
             '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
-            # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
-            # same here and still need separate probes: a change to ONE of them has to
-            # move the digest.
+            # ... on every path: f64 holds this quotient in pieces (the first literal's
+            # denominator passes 2^1022), and it costs its float's shortest decimal
+            '/ 1.2345678901234567e-305 9.876543210987654e-10': mu_prime_expected(Fraction('1.249999988609375e-296')),
+            # the symbol table, one probe per entry. Add and Mul price the same here and
+            # still need separate probes: a change to ONE of them has to move a probe.
             'x0': MU_LEAF,                    # 6
-            '+': 3 * MILLI + 2 * MU_LEAF,     # Add 3
-            '*': 3 * MILLI + 2 * MU_LEAF,     # Mul 3
-            'pow': 3 * MILLI + MU_LEAF + 2585,        # Pow 3 + leaf + cost(2)
+            '+ x0 x1': 3 * MILLI + 2 * MU_LEAF,     # Add 3
+            '* x0 x1': 3 * MILLI + 2 * MU_LEAF,     # Mul 3
+            'pow x0 2': 3 * MILLI + MU_LEAF + 2585,        # Pow 3 + leaf + cost(2)
             'np.pi': 4 * MILLI, 'np.e': 4 * MILLI,
-            'sin': 6 * MILLI + MU_LEAF,       # elementary head
-            'asin': 8 * MILLI + MU_LEAF,      # transcendental head
+            'sin x0': 6 * MILLI + MU_LEAF,       # elementary head
+            'asin x0': 8 * MILLI + MU_LEAF,      # transcendental head
+            'atan2 x0 x1': None,                 # a 0.15 head this config lacks
             'float("inf")': 8 * MILLI,
+            # a sign, one bit wherever it sits: on a literal, a negation standing alone (no
+            # Mul head), the coefficient -1 beside other factors
+            '-2': 3585,                       # selector + L(2) + sign
+            'neg x0': MU_LEAF + MILLI,              # the leaf and one bit
+            '* neg x0 x1': 3 * MILLI + MILLI + 2 * MU_LEAF,   # Mul 3 + sign + two leaves
+            # the readings, in f64's: (x0^2)^(1/2) stays a power of a power, a ground constant
+            # is read as written (its float is a step of the walk, not of the reading), x0
+            # cancels from x0/(x0*x1), and atanh(tanh(x0)) stays (tanh saturates in floats)
+            'pow pow x0 2 0.5': 20170,
+            'asin 1e-08': 13170,
+            '* inv exp 5132.3 x0': 33647,
+            '/ x0 * x0 x1': 9 * MILLI,
+            'atanh tanh x0': 22 * MILLI,
         }
+        assert fp['mode'] == 'f64'
         assert fp['digest'] != ACJ_MINED_DIGEST
 
-    def test_acj_load_warns_until_the_remine(self):
-        """D25, on the real asset, under the float cap: EXACTLY ONE fingerprint warning, naming
-        the digest the served cell was mined under and the one the engine computes now.
+    def test_each_mode_prices_the_readings_in_its_own(self, eng):
+        """The compound probes are priced in each mode's reading, so a change to one
+        mode's canonical forms moves that mode's fingerprint (measured values)."""
+        compound = ('pow x0 2', 'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1',
+                    'atanh tanh x0')
+        readings = {m: {k: eng._measure_fingerprint(m)['probes'][k] for k in compound}
+                    for m in ('f64', 'real', 'permissive')}
+        assert readings['f64'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 13170,
+                                   '* inv exp 5132.3 x0': 33647, '/ x0 * x0 x1': 9000,
+                                   'atanh tanh x0': 22000}
+        # real: atanh(tanh(x0)) is x0
+        assert readings['real'] == dict(readings['f64'], **{'atanh tanh x0': 6000})
+        # permissive also reads (x0^2)^(1/2) as x0
+        assert readings['permissive'] == dict(readings['real'], **{'pow pow x0 2 0.5': 6000})
+        for m in ('f64', 'real', 'permissive'):
+            assert eng._measure_fingerprint(m)['mode'] == m
 
-        Both digests are pinned verbatim, so any other measure change -- or a re-mine that
-        leaves this allowance in place -- fails here instead of sliding through as a
-        tolerated warning. After the re-mine under the float cap this becomes the empty-list
-        state again (`test_acj_load_is_fingerprint_clean`)."""
+    def test_acj_load_compares_what_was_recorded(self):
+        """On the real asset: every probe its sidecar records still prices as recorded, so
+        loading it is silent; the probes added after it was mined are unrecorded, which
+        is not a mismatch. Both halves are pinned, so a measure change that moves a
+        recorded probe, or a re-mine that records the rest, fails here."""
+        import json
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
             engine = SimpliPyEngine.from_config(acj_config_path())
-        mismatch = [str(x.message) for x in caught
-                    if 'measure fingerprint mismatch' in str(x.message)]
-        assert len(mismatch) == 1, mismatch
-        assert ACJ_SHIPPED_DIGEST in mismatch[0] and CURRENT_DIGEST in mismatch[0], mismatch
-        assert engine._measure_fingerprint()['digest'] == CURRENT_DIGEST
+        assert [str(x.message) for x in caught if 'measure fingerprint' in str(x.message)] == []
+        with open(acj_config_path().replace('config.yaml', 'rules.json.provenance.json')) as f:
+            recorded = json.load(f)['measure']
+        assert 'mode' not in recorded  # the earlier layout: f64, keyed by first token
+        moved, unrecorded = engine._measure_drift(recorded)
+        assert moved == {}
+        assert unrecorded == ACJ_UNRECORDED_PROBES
         out = engine.simplify(engine.to_prefix(['+', 'x0', 'x0']))
         assert list(out) == ['*', '2', 'x0']
 

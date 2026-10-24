@@ -9,6 +9,7 @@ and resolve an asset name or local path to a concrete entrypoint file
 (:func:`get_path`).
 """
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,8 @@ from filelock import FileLock
 
 # --- Configuration ---
 # The central manifest file defining all official assets.
+_log = logging.getLogger(__name__)
+
 HF_MANIFEST_REPO = "psaegert/simplipy-assets"
 HF_MANIFEST_FILENAME = "manifest.json"
 
@@ -99,9 +102,24 @@ def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = N
         with open(manifest_path, 'r') as f:
             return json.load(f)
     except Exception:
-        print(f"Error: Could not download the asset manifest from Hugging Face "
-              f"({online_error}), and no cached copy exists.")
+        _log.error("could not download the asset manifest from Hugging Face (%s), and no "
+                   "cached copy exists", online_error)
         return {}
+
+
+def _cached_manifest(repo_id: str | None = None, manifest_filename: str | None = None) -> dict:
+    """The last manifest copy in the local hub cache, without touching the network, or ``{}``
+    when there is none (any failure to read it counts as none, as in :func:`fetch_manifest`)."""
+    from huggingface_hub import hf_hub_download
+    try:
+        manifest_path = hf_hub_download(
+            repo_id=repo_id or HF_MANIFEST_REPO, filename=manifest_filename or HF_MANIFEST_FILENAME,
+            repo_type="dataset", local_files_only=True)
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+    except Exception:  # noqa: BLE001 -- no readable cached copy: the caller goes online
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
 
 
 def _asset_files_present(local_dir: Path, asset_info: dict) -> bool:
@@ -145,14 +163,13 @@ def _asset_root(local_dir: Path, asset_info: dict) -> Path:
 
 
 def _verify_asset_digests(local_dir: Path, asset_info: dict) -> None:
-    """Enforce the manifest's per-file `sha256` digests against the local copy (R6).
+    """Enforce the manifest's per-file `sha256` digests against the local copy.
 
-    The audit watched the shared cache change MID-PYTEST-RUN, and the asset was
-    republished under the same name mid-audit -- the one defect class that changes
-    behaviour with no commit, which no later audit can catch. With digests in the
-    manifest, a corrupted or swapped cached file makes resolution RAISE rather than
-    silently serve. Entries without a `sha256` block (pre-R6 manifests) verify
-    nothing -- permissive by design, so old manifests keep working.
+    A cached file can change without any code change (a corrupted download, or an asset
+    republished under the same name). With digests in the manifest, a corrupted or
+    swapped cached file makes resolution raise ``RuntimeError`` rather than silently
+    serve. Entries without a `sha256` block (older manifests) verify nothing, so old
+    manifests keep working.
     """
     import hashlib
     digests = asset_info.get('sha256')
@@ -177,14 +194,23 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
 
     This function serves as a universal resolver for SimpliPy assets. It first
     checks if the `asset` string is a valid local path. If not, it treats it
-    as an official asset name and looks it up in the manifest.
+    as an official asset name.
+
+    Resolution is offline first: an installed asset resolves from the local cache
+    alone, through the manifest copy it was installed with, so loading it needs no
+    network. The Hugging Face Hub is asked only when the asset is not installed or the
+    cache holds no manifest copy; if the hub is unreachable then, the last cached
+    manifest copy is used. Every resolution checks the cached files against the
+    manifest's ``sha256`` digests, and a mismatch raises. Progress and failures are
+    reported through :mod:`logging` (the ``simplipy.asset_manager`` logger), not
+    printed.
 
     Parameters
     ----------
     asset : str
         The identifier for the asset. This can be a direct path to a local
         file (e.g., './my_rules.yaml') or the name of an official asset
-        (e.g., 'core-rules-v1').
+        (e.g., 'acj-5-4-llm').
     install : bool, optional
         If True, automatically downloads and installs the asset from
         Hugging Face Hub if it is not found locally. Defaults to False.
@@ -204,8 +230,10 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     Raises
     ------
     RuntimeError
-        If the asset manifest cannot be fetched from Hugging Face Hub or if
-        the installation fails when `install=True`.
+        If the asset is not installed and no manifest can be fetched (no network and
+        no cached copy), if the installation fails when `install=True`, or if a
+        cached file does not match the manifest's ``sha256`` digest (reinstall with
+        ``install_asset(..., force=True)``).
     ValueError
         If `asset` is not a local path and is not a known asset name in the
         manifest.
@@ -220,6 +248,19 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     if Path(asset).exists():
         return asset
 
+    if local_dir is None:
+        local_dir = get_default_cache_dir()
+    elif isinstance(local_dir, str):
+        local_dir = Path(local_dir)
+
+    # An INSTALLED asset resolves from the local cache alone: the manifest copy it was
+    # installed with names its files and digests, so no load needs the network. The hub is
+    # asked only when the asset is not installed (or the cache holds no manifest).
+    cached_info = _cached_manifest(repo_id=repo_id, manifest_filename=manifest_filename).get(asset)
+    if cached_info and _asset_files_present(local_dir, cached_info):
+        _verify_asset_digests(local_dir, cached_info)  # R6: raises on a corrupted cache
+        return str(_asset_root(local_dir, cached_info) / cached_info['entrypoint'])
+
     # Otherwise, treat 'asset' as an official asset name
     manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
     if not manifest:
@@ -230,11 +271,6 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
         list_assets(asset_type='all')
         raise ValueError(f"Error: Unknown asset: '{asset}'. See above for available assets.")
 
-    if local_dir is None:
-        local_dir = get_default_cache_dir()
-    elif isinstance(local_dir, str):
-        local_dir = Path(local_dir)
-
     entrypoint_path = _asset_root(local_dir, asset_info) / asset_info['entrypoint']
 
     if _asset_files_present(local_dir, asset_info):
@@ -242,7 +278,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
         return str(entrypoint_path)
 
     if install:
-        print(f"Asset '{asset}' is not installed. Installing.")
+        _log.info("asset '%s' is not installed; installing", asset)
         if install_asset(asset, local_dir=local_dir, repo_id=repo_id, manifest_filename=manifest_filename):
             return str(entrypoint_path)
         else:
@@ -255,7 +291,12 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     """Install a SimpliPy asset from Hugging Face Hub.
 
     Downloads all files associated with a given asset from its corresponding
-    Hugging Face repository and places them in the specified local directory.
+    Hugging Face repository, pinned to the revision the manifest records, and
+    places them in the specified local directory. Concurrent installs of the same
+    asset are serialized by a file lock, so another process never sees a partial
+    install. After the download, every file is checked against the manifest's
+    ``sha256`` digests. Progress and failures are reported through :mod:`logging`
+    (the ``simplipy.asset_manager`` logger), not printed.
 
     Parameters
     ----------
@@ -276,8 +317,15 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     -------
     bool
         True if the installation was successful or if the asset was already
-        installed. False if the asset name is unknown or a download error
-        occurs.
+        installed. False if no manifest can be fetched, if the asset name is
+        unknown, or on any download failure (HTTP, offline or connection errors
+        alike); a failed download leaves no partial copy of the asset behind.
+
+    Raises
+    ------
+    RuntimeError
+        If a downloaded file does not match the manifest's ``sha256`` digest; the
+        corrupt copy is removed.
 
     """
     manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
@@ -286,7 +334,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
 
     asset_info = manifest.get(asset)
     if not asset_info:
-        print(f"Error: Unknown asset: '{asset}'.")
+        _log.error("unknown asset: '%s'", asset)
         list_assets(asset_type='all')
         return False
 
@@ -305,20 +353,19 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     with FileLock(lock_path):
         # Re-check INSIDE the lock: another process may have just completed the install.
         if _asset_files_present(local_dir, asset_info) and not force:
-            print(f"Asset '{asset}' is already installed at {local_path}.")
-            print("Use force=True or --force to reinstall.")
+            _log.info("asset '%s' is already installed at %s; use force=True or --force to "
+                      "reinstall", asset, local_path)
             return True
 
         if local_path.exists() and force:
-            print(f"Force option specified. Removing existing version of '{asset}'...")
+            _log.info("force: removing the existing version of '%s'", asset)
             uninstall_asset(asset, quiet=True, local_dir=local_dir)
         elif local_path.exists():
             # A prior attempt left a PARTIAL install (dir present, files incomplete) -> clear it.
             shutil.rmtree(local_path, ignore_errors=True)
 
-        print(f"Installing asset '{asset}' to {local_path}.")
+        _log.info("installing asset '%s' to %s", asset, local_path)
         from huggingface_hub import hf_hub_download
-        from huggingface_hub.utils import HfHubHTTPError
         try:
             for file in asset_info['files']:
                 # R6: pin the download to the manifest's recorded revision when it
@@ -331,24 +378,28 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
                     local_dir=local_dir,
                     revision=asset_info.get('revision'),
                 )
-            # R6: verify what actually landed on disk against the manifest digests.
-            # An integrity failure RAISES (distinct from the network-failure False):
-            # a corrupt artifact must never be reported as installed.
-            try:
-                _verify_asset_digests(local_dir, asset_info)
-            except RuntimeError:
-                if local_path.exists():
-                    shutil.rmtree(local_path, ignore_errors=True)
-                raise
-            print(f"Successfully installed '{asset}'.")
-            return True
-        except HfHubHTTPError as e:
-            print(f"Error downloading asset '{asset}': {e}")
+        except Exception as e:  # noqa: BLE001 -- the hub raises several families (C51)
+            # Every download failure is the documented False, with its cause printed: the
+            # hub raises HTTP, offline and connection errors from different families, and
+            # catching only HfHubHTTPError let the others escape raw and leave a partial
+            # download behind (the class `fetch_manifest` already handles this way).
+            _log.error("error downloading asset '%s': %r", asset, e)
             # Clean up only THIS asset's partial download -- never the shared cache root
             # (rmtree(local_dir) would delete other assets / other workers' caches).
             if local_path.exists():
                 shutil.rmtree(local_path, ignore_errors=True)
             return False
+        # R6: verify what actually landed on disk against the manifest digests.
+        # An integrity failure RAISES (distinct from the network-failure False):
+        # a corrupt artifact must never be reported as installed.
+        try:
+            _verify_asset_digests(local_dir, asset_info)
+        except RuntimeError:
+            if local_path.exists():
+                shutil.rmtree(local_path, ignore_errors=True)
+            raise
+        _log.info("installed '%s'", asset)
+        return True
 
 
 def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> bool:
@@ -405,17 +456,17 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
 
     if not local_path.exists():
         if not quiet:
-            print(f"Asset '{asset}' is not installed.")
+            _log.info("asset '%s' is not installed", asset)
         return True
 
     try:
         shutil.rmtree(local_path)
         if not quiet:
-            print(f"Successfully removed '{asset}'.")
+            _log.info("removed '%s'", asset)
         return True
     except OSError as e:
         if not quiet:
-            print(f"Error removing '{asset}': {e}")
+            _log.error("error removing '%s': %s", asset, e)
         return False
 
 

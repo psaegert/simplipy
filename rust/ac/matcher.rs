@@ -8,9 +8,11 @@
 //! Wildcard sorts are carried over from the shipped matcher unchanged -- the sort rides in the
 //! token: `?N` binds a variable leaf only; `_N` binds anything; `!N` binds a variable leaf
 //! freely and a composite only under the finite-a.e. certificate; `$N` likewise under
-//! finite-and-nonzero-a.e.; `wildcard_all` (LOSSY) binds everything and skips the certificates.
-//! The `<constant>` rebind guard is ported as-is: a placeholder bound to a `Const`-containing
-//! expression never matches a second occurrence (independent constants).
+//! finite-and-nonzero-a.e.; `wildcard_all` (`permissive`) binds everything and skips the
+//! certificates. A wildcard that occurs twice may bind a sum and its negation (a class up to
+//! sign): a binding refused by its own negation is a near miss the caller retries in one
+//! orientation. The `<constant>` rebind guard is ported as-is: a placeholder bound to a
+//! `Const`-containing expression never matches a second occurrence (independent constants).
 //!
 //! Bag matching detail: pattern elements are tried STRUCTURED-FIRST (non-wildcard elements bind
 //! wildcards through their structure), then wildcard elements. A wildcard already bound to a
@@ -21,9 +23,11 @@
 //! deterministic, and assignment-COMPLETE: the search is continuation-passing, so a nested
 //! member match is resumable and a binding refused by a LATER sibling (or by the caller's
 //! acceptance check) is revised rather than fatal. Reach therefore depends on neither the
-//! rule's wildcard numbering nor on where the canonical order places a shared subterm
-//! (finding F1), and first-match-wins stays well-defined: the first accepted assignment in
+//! rule's wildcard numbering nor on where the canonical order places a shared subterm,
+//! and first-match-wins stays well-defined: the first accepted assignment in
 //! canonical enumeration order.
+
+use std::cell::Cell;
 
 use rustc_hash::FxHashMap;
 
@@ -31,21 +35,11 @@ use crate::tokens::{Tok, TokenView};
 
 use super::expr::{orientation_near_miss, Ex};
 
-thread_local! {
-    static NEAR_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// How many near misses (`orientation_near_miss`) the matcher has met on this thread: a caller
-/// reads it before and after a match to learn whether one occurred there.
-pub fn near_misses() -> u64 {
-    NEAR_MISSES.with(|c| c.get())
-}
-
-/// A repeated wildcard bound to `bound` refused `subject`: count it if they are negations of each
-/// other through their classes' orientation.
+/// A repeated wildcard bound to `bound` refused `subject`: count it in the match context if
+/// they are negations of each other through their classes' orientation.
 fn note_near_miss(bound: &Ex, subject: &Ex, cx: &MCx) -> bool {
     if orientation_near_miss(bound, subject, cx.view) {
-        NEAR_MISSES.with(|c| c.set(c.get() + 1));
+        cx.near_misses.set(cx.near_misses.get() + 1);
         true
     } else {
         false
@@ -59,22 +53,15 @@ pub struct MCx<'a> {
     pub cert_fin: Option<&'a dyn Fn(&Ex) -> bool>,
     pub cert_finnz: Option<&'a dyn Fn(&Ex) -> bool>,
     pub wildcard_all: bool,
+    /// How many near misses (`orientation_near_miss`) matches under this context have met:
+    /// a caller reads it before and after a match to learn whether one occurred there.
+    pub near_misses: Cell<u64>,
 }
 
 pub type Binds = FxHashMap<Tok, Ex>;
 
 fn is_variable_leaf(e: &Ex, view: &TokenView) -> bool {
     matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0)
-}
-
-/// A/B diagnostic: with `SIMPLIPY_AC_ABSORB_FIRST=1` an unbound trailing wildcard prefers
-/// ABSORBING the whole remaining sub-bag over binding single elements (maximal-binding-first
-/// instead of the spec'd minimal-binding-first). Both orders are total and deterministic;
-/// this flag exists to MEASURE the preference on the corpus rather than argue about it.
-fn absorb_first() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // ARTIFACT-AFFECTING switch: listed in engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_AC_ABSORB_FIRST").as_deref() == Ok("1"))
 }
 
 /// May a wildcard of this sort bind this subject? (The certificates run EAGERLY at bind time --
@@ -181,7 +168,17 @@ pub fn matches_each(subject: &Ex, pattern: &Ex, binds: &mut Binds, cx: &MCx, k: 
         }
         Ex::Fun(pf, pa) => match subject {
             Ex::Fun(sf, sa) if sf == pf && sa.len() == pa.len() => {
-                matches_seq(sa, pa, 0, binds, cx, k)
+                if matches_seq(sa, pa, 0, binds, cx, &mut *k) {
+                    return true;
+                }
+                // `max` and `min` are commutative: their canonical argument order
+                // (`expr::fun`) sorts a pattern's wildcards apart from what they bind, so
+                // the other order is tried too.
+                if sa.len() == 2 && (cx.view.tok_is(*pf, "max") || cx.view.tok_is(*pf, "min")) {
+                    let swapped = [sa[1].clone(), sa[0].clone()];
+                    return matches_seq(&swapped, pa, 0, binds, cx, k);
+                }
+                false
             }
             _ => false,
         },
@@ -346,12 +343,6 @@ fn try_assign(
     cx: &MCx,
     k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool,
 ) -> bool {
-    // A matcher step is a unit of the search's work budget (`ac::work`); past an armed
-    // ceiling the enumeration stops (the search discards the descent it was part of).
-    super::work::tick(1);
-    if super::work::over() {
-        return false;
-    }
     if at == order.len() {
         // All pattern elements placed. In nested (full-cover) mode every subject element must
         // be consumed; in root mode leftovers become the remainder.
@@ -459,7 +450,7 @@ fn try_assign(
         } else {
             // Unbound wildcard: the spec'd order is each single element (canonical order)
             // first, then absorption of the whole remaining sub-bag as the last alternative
-            // (minimal-binding-first). `SIMPLIPY_AC_ABSORB_FIRST=1` measures the reverse.
+            // (minimal-binding-first).
             let try_singles = |used: &mut Vec<bool>,
                                binds: &mut Binds,
                                k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool|
@@ -538,15 +529,9 @@ fn try_assign(
                 binds.remove(&pk);
                 false
             };
-            // The arms differ in ATTEMPT ORDER only -- but order is semantic here: both
-            // calls short-circuit and mutate the search state, so the first strategy tried
-            // decides which assignment the continuation sees first (the absorb-first
-            // heuristic). `match` spells that out where clippy reads `if a {x||y} else
-            // {y||x}` as duplicate blocks.
-            match absorb_first() {
-                true => try_absorb(used, binds, &mut *k) || try_singles(used, binds, &mut *k),
-                false => try_singles(used, binds, &mut *k) || try_absorb(used, binds, &mut *k),
-            }
+            // Order is semantic: both calls short-circuit and mutate the search state, so
+            // the strategy tried first decides which assignment the continuation sees first.
+            try_singles(used, binds, &mut *k) || try_absorb(used, binds, &mut *k)
         }
     } else {
         // Structured pattern element: enumerate subject elements AND, per element, every
@@ -670,6 +655,7 @@ mod tests {
             cert_fin: None,
             cert_finnz: None,
             wildcard_all: false,
+            near_misses: std::cell::Cell::new(0),
         }
     }
 
@@ -791,6 +777,7 @@ mod tests {
                 cert_fin: Some(&yes),
                 cert_finnz: None,
                 wildcard_all: false,
+                near_misses: std::cell::Cell::new(0),
             };
             binds.clear();
             assert!(matches(&comp, &Ex::Leaf(bang), &mut binds, &m2));
@@ -800,6 +787,7 @@ mod tests {
                 cert_fin: None,
                 cert_finnz: None,
                 wildcard_all: true,
+                near_misses: std::cell::Cell::new(0),
             };
             binds.clear();
             assert!(matches(&comp, &Ex::Leaf(q), &mut binds, &m3));

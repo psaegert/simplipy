@@ -64,20 +64,12 @@ const RM: RoundingMode = RoundingMode::ToEven;
 /// sized for the 1024-row mine X wrongly rejected true rules on the 2048-row confirm X).
 /// Wide misses (plateau falsities) fail by huge margins, exceed the gate, and never escalate.
 /// The escalation cost stays bounded: only near-miss instances escalate at all.
-/// Experiment override: env `SIMPLIPY_HIPREC_FRAC` (calibration only, not a config surface).
-const NEAR_MISS_FRAC: f64 = 0.5;
-
-// ARTIFACT-AFFECTING switch (SIMPLIPY_HIPREC_FRAC): listed in
-// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-fn near_miss_frac() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_HIPREC_FRAC")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(NEAR_MISS_FRAC)
-    })
-}
+///
+/// The gate counts EVALUATION POINTS: every row where the source is defined (finite or
+/// infinite) is a point of the denominator, and a failing infinite row is a failing point
+/// like a finite one. A pair with no variable has ONE point however many rows repeat it;
+/// "at most half the points, rounded up" then escalates it, at the cost of one row.
+pub const NEAR_MISS_FRAC: f64 = 0.5;
 
 /// Verdict of one row at one precision. `Extend` = source nonfinite (domain-extendable),
 /// exactly `allclose_extends`' semantics lifted to `p` bits.
@@ -88,16 +80,21 @@ enum RowVerdict {
     Fail,
 }
 
-/// Finite `s ~= c` within (rtol, atol) at `p` bits.
-fn cmp_finite(s: &BigFloat, c: &BigFloat, rtol: f64, atol: f64, p: usize) -> RowVerdict {
+/// Finite `s ~= c` within `atol + rtol*|c|` at `p` bits -- the f64 row predicate of
+/// `eval::allclose_extends`, lifted (the candidate is the reference). A `Fail` carries the
+/// residual `|s - c|`, which `judge_row_confirmed` compares across precisions.
+fn cmp_finite(s: &BigFloat, c: &BigFloat, rtol: f64, atol: f64, p: usize) -> Judged {
     let diff = s.sub(c, p, RM).abs();
     let tol =
-        BigFloat::from_f64(atol, p).add(&BigFloat::from_f64(rtol, p).mul(&s.abs(), p, RM), p, RM);
+        BigFloat::from_f64(atol, p).add(&BigFloat::from_f64(rtol, p).mul(&c.abs(), p, RM), p, RM);
     match diff.cmp(&tol) {
-        Some(ord) if ord <= 0 => RowVerdict::Pass,
-        _ => RowVerdict::Fail,
+        Some(ord) if ord <= 0 => (RowVerdict::Pass, None),
+        _ => (RowVerdict::Fail, Some(diff)),
     }
 }
+
+/// A row verdict at one precision, with the residual of a failed finite comparison.
+type Judged = (RowVerdict, Option<BigFloat>);
 
 /// `BigFloat` has no `is_finite`; a value is finite when it is neither inf nor NaN.
 fn is_fin(x: &BigFloat) -> bool {
@@ -130,7 +127,7 @@ fn judge_row(
     atol: f64,
     p: usize,
     cc: &mut Consts,
-) -> Option<RowVerdict> {
+) -> Option<Judged> {
     // DEPLOYMENT-FAITHFUL: the extend/pole decision keys on the f64 value (numpy = the DEPLOYED
     // evaluator), NOT the astro-float value. astro-float diverges from numpy on quirk domains --
     // `(-inf)^non-integer` is NaN in astro-float (complex-undefined) but +inf in numpy -- and
@@ -139,7 +136,7 @@ fn judge_row(
     // f64 value makes soundness FRAC-independent: escalation can only REFINE a numpy-inf that is a
     // saturation artifact, never reinterpret a numpy-defined value.
     if f64_src.is_nan() {
-        return Some(RowVerdict::Extend); // numpy-undefined -> domain-extendable (`x/x -> 1`)
+        return Some((RowVerdict::Extend, None)); // numpy-undefined -> domain-extendable (`x/x -> 1`)
     }
     if f64_src.is_infinite() {
         // numpy sees inf. Climb the ladder: a SATURATION artifact resolves to a finite true value
@@ -156,7 +153,7 @@ fn judge_row(
                 return Some(if is_fin(&c_hi) {
                     cmp_finite(&s_hi, &c_hi, rtol, atol, pp)
                 } else {
-                    RowVerdict::Fail
+                    (RowVerdict::Fail, None)
                 });
             }
             if s_hi.is_nan() {
@@ -166,19 +163,20 @@ fn judge_row(
         }
         // pole / numpy-quirk inf: the candidate must reproduce the DEPLOYMENT infinity (same sign)
         return Some(if f64_cand == f64_src {
-            RowVerdict::Pass
+            (RowVerdict::Pass, None)
         } else {
-            RowVerdict::Fail
+            (RowVerdict::Fail, None)
         });
     }
     // numpy-finite source: high-precision comparison of the near-miss row
     let s = eval_prefix(source, ops, var_names, x_cols, src_params, row, p, cc)?;
     if !is_fin(&s) {
-        return Some(RowVerdict::Fail); // astro-float diverges from a finite numpy value -> keep the fail
+        // astro-float diverges from a finite numpy value -> keep the fail
+        return Some((RowVerdict::Fail, None));
     }
     let c = eval_prefix(candidate, ops, var_names, x_cols, cand_params, row, p, cc)?;
     if !is_fin(&c) {
-        return Some(RowVerdict::Fail); // replacement non-finite where the source is finite
+        return Some((RowVerdict::Fail, None)); // replacement non-finite where the source is finite
     }
     Some(cmp_finite(&s, &c, rtol, atol, p))
 }
@@ -186,6 +184,14 @@ fn judge_row(
 /// Judge row `r` with the precision-stability rule: a `P`-bit FAIL only counts once the
 /// row ALSO fails at `2*P` bits (each precision has its own saturation cliff; a
 /// disagreement is treated as non-refuting). `None` propagates (caller keeps its verdict).
+///
+/// WHAT ZERO MEANS at high precision. A true identity whose values are zero (`sin(pi) ->
+/// 0`, pi rendered at the working precision) leaves a residual of rounding residue, about
+/// `2^-P` at `P` bits and `2^-2P` at `2P` bits: no relative band admits it at either
+/// precision, yet it is exactly 0. A FALSE zero (`exp(sinh(-5)) -> 0`, value 5.9e-33)
+/// leaves the same residual at every precision. So a row that fails at both precisions
+/// passes iff its residual COLLAPSES as the precision doubles: it shrinks by at least
+/// `2^(P/2)`, the precision-stability discriminator the symbolic judge applies.
 #[allow(clippy::too_many_arguments)]
 fn judge_row_confirmed(
     source: &[String],
@@ -202,7 +208,7 @@ fn judge_row_confirmed(
     atol: f64,
     cc: &mut Consts,
 ) -> Option<RowVerdict> {
-    let v = judge_row(
+    let (v, d_p) = judge_row(
         source,
         src_params,
         candidate,
@@ -237,8 +243,23 @@ fn judge_row_confirmed(
         2 * P,
         cc,
     ) {
-        Some(RowVerdict::Fail) | None => Some(RowVerdict::Fail),
-        Some(other) => Some(other), // P-bit cliff artifact: the higher precision decides
+        Some((RowVerdict::Fail, Some(d_2p))) => {
+            let collapsed = d_p.is_some_and(|d_p| {
+                let bound = d_p.mul(
+                    &BigFloat::from_f64(2f64.powi(-((P / 2) as i32)), 2 * P),
+                    2 * P,
+                    RM,
+                );
+                matches!(d_2p.cmp(&bound), Some(ord) if ord <= 0)
+            });
+            Some(if collapsed {
+                RowVerdict::Pass
+            } else {
+                RowVerdict::Fail
+            })
+        }
+        Some((RowVerdict::Fail, None)) | None => Some(RowVerdict::Fail),
+        Some((other, _)) => Some(other), // P-bit cliff artifact: the higher precision decides
     }
 }
 
@@ -247,7 +268,8 @@ fn judge_row_confirmed(
 /// candidate carries `cand_params` (empty for the const-free arm; the f64-FITTED constants
 /// for the fit arm's `FitVerdict::NearMiss`). Returns `true` iff every f64-failing binding
 /// row passes at `P` bits. Never called on an f64 accept; a `false` leaves the f64 verdict
-/// unchanged.
+/// unchanged. `atol` is the absolute band of a FITTED constant (the fit arm); a const-free
+/// pair passes 0, because its agreement is relative (see `worker::candidate_matches`).
 #[allow(clippy::too_many_arguments)]
 pub fn rescue(
     y_src: &[f64],
@@ -262,6 +284,10 @@ pub fn rescue(
     rtol: f64,
     atol: f64,
 ) -> bool {
+    // The binding POINTS: every row where the source is defined. A source-inf row the
+    // candidate does not already reproduce fails and is escalated: the P_INF re-judge inside
+    // `judge_row` decides pole (stays inf -> must-match -> Fail) vs saturation (resolves
+    // finite -> compare). It is a point of the denominator as much as of the numerator.
     let mut binding = 0usize;
     let mut failing: Vec<usize> = Vec::new();
     for (r, &s) in y_src.iter().enumerate() {
@@ -269,22 +295,28 @@ pub fn rescue(
         if s.is_nan() {
             continue; // undefined -> extendable, not evidence
         }
-        if s.is_infinite() {
-            // A source-inf row where the candidate does not already reproduce the same inf is a
-            // FAILING row -- escalate. The P_INF re-judge inside `judge_row` then decides pole
-            // (stays inf -> must-match -> Fail) vs saturation (resolves finite -> compare). Not
-            // counted as finite binding evidence.
-            if c != s {
-                failing.push(r);
-            }
-            continue;
-        }
         binding += 1;
-        if !c.is_finite() || (s - c).abs() > atol + rtol * s.abs() {
+        let fails = if s.is_infinite() {
+            c != s
+        } else {
+            // the row predicate of `eval::allclose_extends` (candidate as reference)
+            !c.is_finite() || (s - c).abs() > atol + rtol * c.abs()
+        };
+        if fails {
             failing.push(r);
         }
     }
-    if failing.is_empty() || (failing.len() as f64) > near_miss_frac() * (binding as f64) {
+    // A pair with no variable evaluates to the same value on every row: one point.
+    let one_point = !source
+        .iter()
+        .chain(candidate.iter())
+        .any(|t| var_names.contains(t));
+    if one_point {
+        failing.truncate(1);
+        binding = binding.min(1);
+    }
+    let gate = (NEAR_MISS_FRAC * binding as f64).ceil() as usize;
+    if failing.is_empty() || failing.len() > gate {
         return false; // not a near miss (or nothing to rescue): keep the f64 verdict
     }
     let mut cc = match Consts::new() {
@@ -312,6 +344,88 @@ pub fn rescue(
         }
     }
     true
+}
+
+/// THE f64 RANGE STANDARD on one instance (`numeric::RangeKind`): f64 promises the evaluator's
+/// value wherever nothing overflows or underflows, and at a row where an operation of either
+/// side does (`src_events`, `cand_events`; `None` marks no row), a rewrite may give the true
+/// value instead. So every row that fails
+/// the f64 predicate of `eval::allclose_extends` must be such a row, and must pass when judged
+/// at `P` bits (`judge_row_confirmed`, the rescue's own row judgment: both sides' true values
+/// agree). A failing row with no event refuses, exactly as f64 always did; a row whose true
+/// values disagree refuses too, so a rewrite gives the evaluator's value or the true one there
+/// and nothing else. No near-miss gate: a range event is the special case of the f64 promise,
+/// not a near miss, and the high-precision work stays on the failing event rows. `y_src`,
+/// `y_cand`, the parameters and `atol` are as in `rescue`.
+#[allow(clippy::too_many_arguments)]
+pub fn range_rescue(
+    y_src: &[f64],
+    y_cand: &[f64],
+    src_events: Option<&[bool]>,
+    cand_events: Option<&[bool]>,
+    source: &[String],
+    src_params: &[f64],
+    candidate: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    rtol: f64,
+    atol: f64,
+) -> bool {
+    let mut failing: Vec<usize> = Vec::new();
+    for (r, &s) in y_src.iter().enumerate() {
+        let c = y_cand[r];
+        if s.is_nan() {
+            continue; // undefined -> extendable
+        }
+        let fails = if s.is_infinite() {
+            c != s
+        } else {
+            !c.is_finite() || (s - c).abs() > atol + rtol * c.abs()
+        };
+        if fails {
+            if !(src_events.is_some_and(|e| e[r]) || cand_events.is_some_and(|e| e[r])) {
+                return false; // a failing row where nothing left the range: f64 refuses
+            }
+            failing.push(r);
+        }
+    }
+    // A pair with no variable evaluates to the same value on every row: one point.
+    if !source
+        .iter()
+        .chain(candidate.iter())
+        .any(|t| var_names.contains(t))
+    {
+        failing.truncate(1);
+    }
+    if failing.is_empty() {
+        return false; // nothing failed: not this function's question
+    }
+    let mut cc = match Consts::new() {
+        Ok(cc) => cc,
+        Err(_) => return false,
+    };
+    failing.iter().all(|&r| {
+        matches!(
+            judge_row_confirmed(
+                source,
+                src_params,
+                candidate,
+                cand_params,
+                ops,
+                var_names,
+                x_cols,
+                r,
+                y_src[r],
+                y_cand[r],
+                rtol,
+                atol,
+                &mut cc,
+            ),
+            Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
+        )
+    })
 }
 
 /// The literal-resolution arbiter (worker's `resolve_const_slots`):
@@ -906,9 +1020,67 @@ fn powi_sr_at(x: &BigFloat, k: u64, g: usize) -> BigFloat {
     acc
 }
 
+/// The operators both high-precision evaluators (the rescue `apply_unary`/`apply_binary` and the
+/// contract `ct_unary`/`ct_binary`) know. Any other head is unevaluable, at a NaN operand too,
+/// so every verdict that needs one refuses it.
+pub(crate) fn knows_operator(name: &str) -> bool {
+    matches!(
+        name,
+        "neg"
+            | "abs"
+            | "inv"
+            | "mult2"
+            | "mult3"
+            | "mult4"
+            | "mult5"
+            | "div2"
+            | "div3"
+            | "div4"
+            | "div5"
+            | "pow2"
+            | "pow3"
+            | "pow4"
+            | "pow5"
+            | "pow1_2"
+            | "pow1_3"
+            | "pow1_4"
+            | "pow1_5"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "exp"
+            | "log"
+            | "+"
+            | "-"
+            | "*"
+            | "/"
+            | "pow"
+            | "rootn"
+    )
+}
+
+/// Can both evaluators evaluate every operator of `tokens` (read with `ops`' arities)?
+pub(crate) fn evaluable(tokens: &[String], ops: &Operators) -> bool {
+    tokens
+        .iter()
+        .all(|t| ops.arity_of(t).is_none() || knows_operator(t))
+}
+
 /// Unary/binary OPS at contract semantics. `None` = Unresolved.
 fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
     // outer None = unknown operator (caller falls back); inner None = Unresolved
+    if !knows_operator(name) {
+        return None;
+    }
     let p = ctx.p;
     if x.is_nan() && name != "pow2" && name != "pow3" && name != "pow4" && name != "pow5" {
         // every contract op propagates nan (powk go through ct_pow, which handles nan^0 = n/a)
@@ -1110,6 +1282,9 @@ fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat
 }
 
 fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
+    if !knows_operator(name) {
+        return None;
+    }
     let p = ctx.p;
     if (a.is_nan() || b.is_nan()) && name != "pow" {
         return Some(Some(NAN));
@@ -1139,7 +1314,7 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         "/" => Some(ct_div(a, b, p)),
         "pow" => ct_pow(a, b, ctx),
         // `rootn(x, n)`: IEEE-754 rootn, honest for every integer index.
-        "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc)),
+        "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc, ct_div)),
         _ => return None,
     };
     Some(v)
@@ -1178,18 +1353,28 @@ fn integer_index(b: &BigFloat, p: usize) -> Option<i64> {
 }
 
 /// IEEE-754 `rootn(x, n)`, honest for every integer index:
-/// odd index = the signed root, even = the principal root (NaN on negatives), n == 1 =
-/// the identity, n < 0 = the reciprocal, n == 0 or non-integer = NaN. One semantics,
-/// five surfaces (see `operators.py::rootn` and `numeric.rs::rootn_f64`).
-fn rootn_hiprec(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
+/// odd index = the signed root (odd at zero too: the root of `-0` is `-0`), even = the
+/// principal root (NaN on negatives, `+0` at either zero), n == 1 = the identity, n < 0 =
+/// the reciprocal under the calling evaluator's own division `div` (the contract's one
+/// zero, or IEEE's signed one), n == 0 or non-integer = NaN. One semantics, five surfaces
+/// (see `operators.py::rootn` and `numeric.rs::rootn_f64`).
+fn rootn_hiprec(
+    a: &BigFloat,
+    b: &BigFloat,
+    p: usize,
+    cc: &mut Consts,
+    div: fn(&BigFloat, &BigFloat, usize) -> BigFloat,
+) -> BigFloat {
     let Some(n) = integer_index(b, p) else {
         return NAN;
     };
     let k = n.unsigned_abs();
     let root = if a.is_nan() {
         NAN
-    } else if k == 1 || a.is_zero() {
-        a.clone() // index 1 is the identity; and the root of 0 is 0 for every index magnitude
+    } else if k == 1 || (a.is_zero() && k % 2 == 1) {
+        a.clone() // index 1 is the identity, and an odd root keeps the sign of zero
+    } else if a.is_zero() {
+        small_int(0, p) // an even root of either zero is +0
     } else if a.is_inf() {
         if !a.is_negative() || k % 2 == 1 {
             a.clone() // +inf always, -inf under odd roots: fixed points
@@ -1208,7 +1393,7 @@ fn rootn_hiprec(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFlo
         if root.is_nan() {
             return NAN;
         }
-        ct_div(&one(p), &root, p)
+        div(&one(p), &root, p)
     } else {
         root
     }
@@ -1442,8 +1627,9 @@ fn ct_saturation_verdict(
 /// same contract the artifact gate applies. `(None, snapped)` = the point cannot be judged
 /// honestly (refused at every affordable rung, or rung disagreement); otherwise the
 /// confirmed class. `snapped` is rung 1's flag. `atoms` is full-width (aligned with
-/// `var_names`); coordinates are re-rendered per rung. Unevaluable tokens fail OPEN as
-/// `(Some(Eq), false)` -- the f64 row comparison still binds upstream.
+/// `var_names`); coordinates are re-rendered per rung. A side holding an operator neither
+/// evaluator knows (`knows_operator`) is unevaluable and gets no verdict, `(None, false)`:
+/// it fails CLOSED, never reading as equal.
 ///
 /// THE FINITE HALF HAS NO MAGNITUDE BAR. It asks how a gap RESPONDS TO PRECISION, because
 /// no threshold separates the two populations -- the shipped artifact proves it by
@@ -1521,7 +1707,7 @@ pub fn contract_point_verdict(
     };
 
     let Some((read1, snap1, req1, mag1, dem1)) = once(GAP_RUNGS[0], true) else {
-        return (Some(PointCmp::Eq), false); // unevaluable: fail open
+        return (None, false); // unevaluable: no verdict (fail closed)
     };
     // RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates are
     // 10^217: both rungs are swamped alike, agree on a manufactured verdict, and the
@@ -1543,7 +1729,7 @@ pub fn contract_point_verdict(
             Some(rd) => rd,
             None => match once(rungs[i], false) {
                 Some((rd, _, _, _, _)) => rd,
-                None => return (Some(PointCmp::Eq), false), // unevaluable: fail open
+                None => return (None, false), // unevaluable: no verdict
             },
         };
         if let Some(rd) = read {
@@ -1567,7 +1753,7 @@ pub fn contract_point_verdict(
             // gap to watch decay, so this half is the two/three-rung rule unchanged.
             let f1 = Some((c1, cl1, cr1));
             let Some((r2, _, _, _, _)) = once(hi_dps, false) else {
-                return (Some(PointCmp::Eq), false);
+                return (None, false);
             };
             let Some(r2) = r2 else {
                 return (None, snap1); // Unresolved higher up: never convict
@@ -1605,7 +1791,7 @@ pub fn contract_point_verdict(
             // BOTH FINITE -- decided by DECAY, never by size.
             let mut p = dps_to_prec(hi_dps);
             let Some((rhi, _, _, _, _)) = once(hi_dps, false) else {
-                return (Some(PointCmp::Eq), false);
+                return (None, false);
             };
             let Some(Read::Gap(d2, s2)) = rhi else {
                 return (None, snap1); // class flipped / Unresolved: never convict
@@ -1628,7 +1814,7 @@ pub fn contract_point_verdict(
             if !s1.is_zero() && cmp_eq(&d1, &s1) && !cmp_eq(&d2, &s2) {
                 let next = GAP_RUNGS[2].max(2 * hi_dps);
                 let Some((rn, _, _, _, _)) = once(next, false) else {
-                    return (Some(PointCmp::Eq), false);
+                    return (None, false);
                 };
                 let Some(Read::Gap(d3, s3)) = rn else {
                     return (None, snap1);
@@ -1770,6 +1956,9 @@ fn pow_pos_base(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFlo
 }
 
 fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
+    if !knows_operator(name) {
+        return None;
+    }
     if x.is_nan() {
         return Some(NAN);
     }
@@ -1874,6 +2063,30 @@ fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<Bi
     Some(v)
 }
 
+/// IEEE `x / y`: a zero divisor gives the signed infinity (the ZERO's sign participates) and
+/// an infinite one the signed zero (astro-float's is unsigned); `0/0` and `inf/inf` are NaN.
+fn ieee_div(a: &BigFloat, b: &BigFloat, p: usize) -> BigFloat {
+    let negative = a.is_negative() != b.is_negative();
+    if b.is_zero() {
+        if a.is_zero() {
+            NAN
+        } else if negative {
+            INF_NEG
+        } else {
+            INF_POS
+        }
+    } else if b.is_inf() && !a.is_inf() && !a.is_nan() {
+        let zero = small_int(0, p);
+        if negative {
+            zero.neg()
+        } else {
+            zero
+        }
+    } else {
+        a.div(b, p, RM)
+    }
+}
+
 fn apply_binary(
     name: &str,
     a: &BigFloat,
@@ -1881,6 +2094,9 @@ fn apply_binary(
     p: usize,
     cc: &mut Consts,
 ) -> Option<BigFloat> {
+    if !knows_operator(name) {
+        return None;
+    }
     if a.is_nan() || b.is_nan() {
         return Some(NAN);
     }
@@ -1888,23 +2104,7 @@ fn apply_binary(
         "+" => a.add(b, p, RM),
         "-" => a.sub(b, p, RM),
         "*" => a.mul(b, p, RM),
-        // IEEE `x / y`: zero divisor -> signed inf (the ZERO's sign participates); 0/0 -> nan.
-        "/" => {
-            if b.is_zero() {
-                if a.is_zero() {
-                    NAN
-                } else {
-                    let neg = a.is_negative() != b.is_negative();
-                    if neg {
-                        INF_NEG
-                    } else {
-                        INF_POS
-                    }
-                }
-            } else {
-                a.div(b, p, RM)
-            }
-        }
+        "/" => ieee_div(a, b, p),
         // C pow: negative base with a non-integer exponent -> NaN; 0^negative -> +inf;
         // 0^0 -> 1 (C99). Everything else goes through `pow_pos_base` (exp(b*ln(a)) at
         // explicit precision) -- NOT astro-float's pow, whose internal correct-rounding
@@ -1939,7 +2139,7 @@ fn apply_binary(
             }
         }
         // `rootn(x, n)`: IEEE-754 rootn, same table as the ct_binary arm.
-        "rootn" => rootn_hiprec(a, b, p, cc),
+        "rootn" => rootn_hiprec(a, b, p, cc, ieee_div),
         _ => return None,
     };
     Some(v)
@@ -1951,6 +2151,57 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// THE f64 RANGE STANDARD (`range_rescue`): at a row where an operation overflowed or
+    /// underflowed, the true value is accepted beside the evaluator's -- and nothing else is;
+    /// a failing row with no event refuses as f64 always did.
+    #[test]
+    fn range_rescue_accepts_only_the_true_value_at_a_range_event() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let cols = vec![vec![1.0, 800.0, -1000.0, 20.0]];
+        let n = cols[0].len();
+        let eval = |t: &[&str]| {
+            crate::eval::Tape::compile(&s(t), ops, &vars)
+                .unwrap()
+                .eval_columns_events(&cols, &[], n)
+        };
+        let judge = |src: &[&str], cand: &[&str], rows: std::ops::Range<usize>| {
+            let ((ys, es), (yc, ec)) = (eval(src), eval(cand));
+            let pick = |v: &[f64]| v[rows.clone()].to_vec();
+            let (es, ec) = (es[rows.clone()].to_vec(), ec[rows.clone()].to_vec());
+            let cols_r = vec![cols[0][rows.clone()].to_vec()];
+            range_rescue(
+                &pick(&ys),
+                &pick(&yc),
+                Some(&es),
+                Some(&ec),
+                &s(src),
+                &[],
+                &s(cand),
+                &[],
+                ops,
+                &vars,
+                &cols_r,
+                1e-11,
+                0.0,
+            )
+        };
+        // the true value past exp's overflow (800) and underflow (-1000)
+        assert!(judge(
+            &["rootn", "exp", "x0", "2"],
+            &["exp", "/", "x0", "2"],
+            0..3
+        ));
+        assert!(judge(&["log", "exp", "x0"], &["x0"], 0..3));
+        // a value that is neither the evaluator's nor the true one
+        assert!(!judge(&["log", "exp", "x0"], &["+", "x0", "1"], 1..2));
+        // saturation inside the range is no event: f64's verdict stands
+        assert!(!judge(&["atanh", "tanh", "x0"], &["x0"], 3..4));
     }
 
     /// `np.pi` denotes PI, not its f64 rendering. Lifting the
@@ -1967,10 +2218,11 @@ mod tests {
         let p = 96;
         let mut cc = Consts::new().unwrap();
         let f64_rootn = crate::numeric::binary_fn("rootn").expect("f64 arm exists");
-        let xs: [f64; 10] = [
+        let xs: [f64; 11] = [
             -8.0,
             -2.0,
             -0.5,
+            -0.0,
             0.0,
             0.5,
             2.0,
@@ -1995,6 +2247,10 @@ mod tests {
             if got.is_inf() {
                 return false;
             }
+            if want == 0.0 {
+                // `-0.0 == 0.0`: a zero agrees only with the zero of its sign
+                return got.is_zero() && want.is_sign_negative() == got.is_negative();
+            }
             let w = bf(want, p);
             let diff = got.sub(&w, p, RM).abs();
             let tol = bf(want.abs().max(1e-300) * 1e-12, p);
@@ -2003,7 +2259,13 @@ mod tests {
         for &x in &xs {
             for &n in &ns {
                 let want = f64_rootn(x, n);
-                let got = rootn_hiprec(&bf(x, p), &bf(n, p), p, &mut cc);
+                // `from_f64` reads either zero as `+0`: a `-0` input is the negated zero
+                let lifted = if x == 0.0 && x.is_sign_negative() {
+                    bf(0.0, p).neg()
+                } else {
+                    bf(x, p)
+                };
+                let got = rootn_hiprec(&lifted, &bf(n, p), p, &mut cc, ieee_div);
                 assert!(
                     agree(want, &got, p),
                     "rootn({x}, {n}): f64 gives {want}, hiprec disagrees"
@@ -2129,6 +2391,36 @@ mod tests {
             1e-12,
         );
         assert!(ok);
+    }
+
+    /// The near-miss gate counts POINTS: a source-inf row is a point of the denominator as
+    /// much as of the numerator. Three saturated rows out of seven defined ones are a near
+    /// miss (counted against the four finite rows alone they were not), and the ladder
+    /// resolves each to its finite value.
+    #[test]
+    fn inf_rows_count_in_the_denominator() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let xs: Vec<f64> = vec![0.5, 1.0, -1.5, 2.0, 25.0, 30.0, -40.0];
+        let cols = vec![xs.clone()];
+        let y_src: Vec<f64> = xs.iter().map(|&x| x.tanh().atanh()).collect();
+        assert_eq!(y_src.iter().filter(|v| v.is_infinite()).count(), 3);
+        let ok = rescue(
+            &y_src,
+            &xs,
+            &s(&["atanh", "tanh", "x0"]),
+            &[],
+            &s(&["x0"]),
+            &[],
+            ops,
+            &["x0".to_string()],
+            &cols,
+            1e-9,
+            0.0,
+        );
+        assert!(ok, "3 failing points of 7 is a near miss");
     }
 
     /// Wide-miss candidates are never escalated (cost + correctness guard).

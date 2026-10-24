@@ -4,7 +4,8 @@ Masking is DOWNSTREAM POLICY, not engine behavior: the engine simplifies and del
 full expression with explicit constants; consumers decide what to abstract. This module is
 the MECHANISM. It walks the engine's output (the native tagged form or the explicit binary
 form) and tells a policy the structural ROLE of every literal it meets -- a multiplicative
-coefficient, an additive constant, a ``pow`` exponent, a ``rootn`` index -- so a policy
+coefficient, an additive constant, a ``pow`` exponent, a ``rootn`` index, a ``besselj``
+order -- so a policy
 like "mask constants, but keep in-vocabulary integer exponents" is a single conditional,
 and position-blind accidents (masking a ``rootn`` index into a skeleton that is NaN almost
 everywhere) are impossible to write by accident.
@@ -15,13 +16,14 @@ modes, so the kinds live here rather than being re-invented by every consumer:
 * :func:`mask_all` -- every number, including either half of a fraction and the special
   constants. For structural comparison.
 * :func:`mask_fittable` -- every number a constant optimizer can actually fit, KEEPING the
-  ones it cannot (``pow`` exponents, ``rootn`` indices). For training data.
+  ones it cannot (``pow`` exponents, ``rootn`` indices, ``besselj`` orders). For training
+  data.
 
 TWO KINDS, TWO NAMES -- and they are the SAME kind. ``mask_values_keep_structure`` was
 this module's original name for :func:`mask_fittable` and has been a bare alias since the
 rename; it is REMOVED in 0.14.0. There is no third semantics hiding
 behind the older name: "mask the values, keep the structure" partitions :class:`Role` into
-``{COEFFICIENT, ADDEND, VALUE}`` and ``{EXPONENT, ROOT_INDEX}``, which is exactly the
+``{COEFFICIENT, ADDEND, VALUE}`` and ``{EXPONENT, ROOT_INDEX, ORDER}``, which is exactly the
 partition :func:`mask_fittable` applies. The two names say one thing from two sides --
 WHAT is kept, and WHY it must be (an unfittable literal controls the expression's DOMAIN
 rather than its magnitude).
@@ -65,7 +67,7 @@ The ``-1`` after one pass IS the original ``<sub>``: collect moved the negation 
 ``atan`` (an odd function), so it is structure wearing a literal's clothes. Masking it
 invents a coefficient. Measured at ~0.15% of skeletons over 20k rows.
 
-KEEPING A SYMBOLIC CONSTANT BESIDE A MASKED ONE IS POINTLESS (owner, 2026-08-07). A policy
+KEEPING A SYMBOLIC CONSTANT BESIDE A MASKED ONE IS POINTLESS. A policy
 may keep ``np.pi`` while masking its coefficient, and the mechanism will honour it -- but
 the result ``<constant> * np.pi`` is worth nothing: the constant optimizer just fits an
 arbitrary float, and an arbitrary float times pi is an arbitrary float, so the
@@ -88,7 +90,7 @@ Example (the flash-ansr-style policy)::
     from simplipy import masking
 
     def keep_structure(value: str, role: masking.Role) -> str | None:
-        if role in (masking.Role.EXPONENT, masking.Role.ROOT_INDEX):
+        if role in (masking.Role.EXPONENT, masking.Role.ROOT_INDEX, masking.Role.ORDER):
             return None            # keep structural integers: pow x0 2 stays pow x0 2
         return "<constant>"        # abstract every value-position literal
 
@@ -102,10 +104,7 @@ from simplipy.utils import is_numeric_string, reserved_numeric_spelling
 if TYPE_CHECKING:
     from simplipy.engine import SimpliPyEngine
 
-# The DECLARED surface. `mask_values_keep_structure` is deliberately absent: it is a
-# deprecated spelling of `mask_fittable`, still reachable (with a warning) through the
-# module, but no longer advertised or bound by `import *`. The typing
-# helpers this module imports were never part of the surface either.
+# The DECLARED surface. The typing helpers this module imports are not part of it.
 __all__ = ["Role", "literal_sites", "mask", "mask_all", "mask_fittable"]
 
 
@@ -116,8 +115,13 @@ class Role(enum.Enum):
     ADDEND = "addend"            # a term in an additive context (incl. - operands)
     EXPONENT = "exponent"        # the second operand of ``pow``
     ROOT_INDEX = "root_index"    # the second operand of ``rootn``
+    ORDER = "order"              # the first operand of ``besselj`` (the order nu of J_nu(x))
     VALUE = "value"              # everything else: function argument, pow base, lone literal
 
+
+#: The STRUCTURAL roles: a literal whose value decides the expression's domain, which types
+#: its whole subtree (the exponent ``3/2`` is three literals, each an exponent).
+_TYPED = (Role.EXPONENT, Role.ROOT_INDEX, Role.ORDER)
 
 _OPENERS = {"<add>": ("</add>", "<sub>", Role.ADDEND),
             "<mul>": ("</mul>", "<div>", Role.COEFFICIENT)}
@@ -151,7 +155,7 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         if reserved_numeric_spelling(t):
             raise ValueError(
                 f"invalid token {t!r}: reserved numeric spelling -- a value to Python or a "
-                f"malformed numeral, but not a simplipy numeric literal (H-007); use the "
+                f"malformed numeral, but not a simplipy numeric literal; use the "
                 f"canonical spelling "
                 f"('5', '0.5', '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), float(\"nan\"))")
     arity = dict(engine.operator_arity)
@@ -166,7 +170,7 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         # those literals controls the DOMAIN exactly as a bare exponent does -- so the
         # openers and the arithmetic operators inside an exponent / root index pass the
         # typed role down instead of their own COEFFICIENT / ADDEND roles.
-        typed = role in (Role.EXPONENT, Role.ROOT_INDEX)
+        typed = role in _TYPED
         if t in _OPENERS:
             closer, section, child_role = _OPENERS[t]
             if typed:
@@ -187,6 +191,9 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         if t == "rootn":
             i = walk(i + 1, Role.VALUE)
             return walk(i, Role.ROOT_INDEX)
+        if t == "besselj" and arity.get(t) == 2:
+            i = walk(i + 1, Role.ORDER)
+            return walk(i, Role.VALUE)
         if t in ("*", "/"):
             child = role if typed else Role.COEFFICIENT
             i = walk(i + 1, child)
@@ -271,6 +278,9 @@ def mask_fittable(value: str, role: Role) -> Optional[str]:
       the integers, so a continuous optimizer has no gradient anywhere to descend.
     * ``pow`` EXPONENT -- ``pow(x, 2.5)`` is ``nan`` wherever ``x < 0``. The exponent's
       integrality decides the domain, so masking it silently deletes half the data.
+    * ``besselj`` ORDER -- ``besselj(2.5, x)`` is ``nan`` wherever ``x < 0``, and an integer
+      order's parity decides the function's: the order controls the domain as an exponent
+      does.
 
     Everything else is smooth in its literal (``c*x``, ``x+c``, ``log(c*x)``) and is
     masked. This is the policy for training-data preparation.
@@ -278,6 +288,6 @@ def mask_fittable(value: str, role: Role) -> Optional[str]:
     Formerly ``mask_values_keep_structure`` -- the same policy under the name that says
     what it keeps rather than why. That spelling is removed in 0.14.0.
     """
-    if role in (Role.EXPONENT, Role.ROOT_INDEX):
+    if role in _TYPED:
         return None
     return "<constant>"

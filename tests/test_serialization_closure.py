@@ -126,6 +126,14 @@ def ref_state(referee: SimpliPyEngine, tokens: list[str]) -> tuple[str, ...]:
     return tuple(referee.simplify(referee.to_prefix(list(tokens))))
 
 
+def _holds_quotient(token: str) -> bool:
+    """A sum, product, quotient, reciprocal or fraction token: what the tagged dialect bags."""
+    if token in ("+", "-", "*", "/", "inv"):
+        return True
+    p, _, q = token.partition("/")
+    return bool(q) and p.lstrip("-").isdigit() and q.isdigit()
+
+
 class TestPrefixClosureExhaustive:
     """Every prefix emission parses, is a fixpoint, and means what the source meant."""
 
@@ -138,19 +146,25 @@ class TestPrefixClosureExhaustive:
             want = ref_state(referee, src)
             for form, convert in (("tagged", engine.to_tagged),
                                   ("explicit", engine.to_prefix)):
-                out = engine.simplify(convert(list(src)))
+                given = convert(list(src))
+                # A tagged sequence declares its dialect by its bags, so every quotient and sum
+                # of the source is bagged (review T7: `neg inv x0` and `exp 1/2` declared none,
+                # so `simplify` read them as explicit and answered explicit).
+                bagged = any(t in ("<add>", "<mul>") for t in given)
+                if form == "tagged" and not bagged and any(_holds_quotient(t) for t in src):
+                    failures.append(f"[tagged] {' '.join(src)} -> {given}: declares no dialect")
+                    continue
+                out = engine.simplify(given)
+                # The answer is a STRICT token fixpoint in the dialect its input declared: a
+                # bagless tagged sequence (`pow 2 -1`, whose answer `/ 1 2` holds a quotient the
+                # source spells none of) declares the explicit one.
+                again = convert if (form == "explicit" or bagged) else engine.to_prefix
                 try:
-                    # dialect-preserving: re-simplifying stays in the dialect the tokens
-                    # DECLARE. A tagged answer that carries no bag delimiter (`neg inv x0`,
-                    # `pow x0 -2`) is a sequence of BOTH token dialects, so it re-reads as
-                    # explicit and may re-spell -- the same state, a different projection.
-                    # Feeding it back through the answer's own dialect is the closure
-                    # question; the state check below is what pins "no drift".
-                    back = engine.simplify(convert(list(out)))
+                    back = engine.simplify(again(list(out)))
                 except ValueError as exc:  # noqa: PERF203 -- collecting all failures
                     failures.append(f"[{form}] {' '.join(src)} -> {out}: RAISE {exc}")
                     continue
-                if list(back) != list(out) and ref_state(referee, back) != ref_state(referee, out):
+                if list(back) != list(out):
                     failures.append(f"[{form}] {' '.join(src)} -> {out} -> {back}: not a fixpoint")
                     continue
                 got = ref_state(referee, list(out))
@@ -165,10 +179,8 @@ class TestPrefixClosureExhaustive:
         op_names = DEGENERATE[config]
         engine = make_engine(op_names)
         for src in universe(op_names, 3):
-            judged = engine._core.ac_judge(list(src), 48)
-            assert judged is not None, f"ac_judge failed on in-vocabulary source {src}"
-            out = judged[2]
-            assert engine._core.ac_ordered_below(list(out), list(out)) is False, (
+            out = engine._core.mine_mark(list(src), rule_mode='default')
+            assert engine._core.ac_ordered_below_in(list(out), list(out), rule_mode='default') is False, (
                 f"acceptance cannot read the engine's own output {out} (source {src})"
             )
 
@@ -420,11 +432,28 @@ class TestProvenanceRecordsTheMeasure:
         moved = hashlib.sha256(repr(sorted(perturbed.items())).encode()).hexdigest()[:16]
         assert moved != fp['digest']
 
-    def test_the_tagged_fraction_bound_is_a_recorded_switch(self) -> None:
-        # It changes MINED output, so an artifact must record it; it was missing from the
-        # list while every other ordering-affecting switch was present.
+    def test_the_registry_is_what_the_core_reads(self) -> None:
+        """The core declares the artifact-affecting switches and reads each through that
+        declaration; every other `SIMPLIPY_*` variable it reads by name is a diagnostic
+        trace, the test-asset switch or the kernel thread count (which splits a long map
+        over threads and changes no bit: `test_operator_realizations`). A new switch read as
+        a bare literal fails here until it is declared. Since 0.15 there is none: the
+        interval node budget is a recorded `find_rules` argument and the tagged fraction
+        bound a constant."""
+        import os
+        import re
         from simplipy.engine import ARTIFACT_ENV_SWITCHES
-        assert 'SIMPLIPY_TAGGED_FRACTION_MAX' in ARTIFACT_ENV_SWITCHES
+        rust = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rust')
+        sources = [open(os.path.join(root, name)).read()
+                   for root, _, names in os.walk(rust) for name in names if name.endswith('.rs')]
+        literal = {m for src in sources for m in re.findall(r'env::var(?:_os)?\(\s*"(SIMPLIPY_\w+)"', src)}
+        assert literal == {'SIMPLIPY_AC_TRACE', 'SIMPLIPY_AC_MEMO_TRACE', 'SIMPLIPY_GATE_TRACE',
+                           'SIMPLIPY_BATTERY_TRACE', 'SIMPLIPY_TEST_REQUIRE_ASSETS',
+                           'SIMPLIPY_KERNEL_THREADS'}
+        assert ARTIFACT_ENV_SWITCHES == ()
+        declared = {m for src in sources
+                    for m in re.findall(r'env::var\(\s*crate::env_switches::(\w+)\)', src)}
+        assert declared == set()
 
 
 class TestCoreTableHasOneSource:
@@ -484,21 +513,24 @@ class TestTheMeasureFingerprintReadsTheWholeMeasure:
         Checked structurally rather than by value: two kinds can price the same (an `Add`
         and a `Mul` of two leaves both cost 15,000 today) and still need separate probes,
         because a change to ONE of them must move the digest."""
-        probes = {t[0]: list(t) for t in type(referee)._MEASURE_PROBES}
+        probes = [list(t) for t in type(referee)._MEASURE_PROBES]
         kinds = {
             'leaf': ['x0'], 'Add': ['+', 'x0', 'x1'], 'Mul': ['*', 'x0', 'x1'],
             'Pow': ['pow', 'x0', '2'], 'Pi': ['np.pi'], 'E': ['np.e'],
             'elementary head': ['sin', 'x0'], 'transcendental head': ['asin', 'x0'],
             'infinity': ['float("inf")'], 'free constant': ['<constant>'],
+            'sign standing alone': ['neg', 'x0'], 'sign beside other factors': ['*', 'neg', 'x0', 'x1'],
         }
-        missing = [k for k, toks in kinds.items() if toks not in probes.values()]
+        missing = [k for k, toks in kinds.items() if toks not in probes]
         assert not missing, f'no fingerprint probe exercises: {missing}'
 
-    def test_the_probes_have_distinct_heads(self, referee) -> None:
-        """The digest keys on the FIRST token, so two probes sharing a head would
-        silently collapse into one entry."""
-        heads = [t[0] for t in type(referee)._MEASURE_PROBES]
-        assert len(heads) == len(set(heads)), heads
+    def test_every_probe_is_its_own_entry(self, referee) -> None:
+        """Probes are keyed by their whole spelling, so probes that share a head (`pow
+        x0 2` and `pow pow x0 2 0.5`) are separate entries and none collapses."""
+        probes = type(referee)._MEASURE_PROBES
+        fp = referee._measure_fingerprint()
+        assert list(fp['probes']) == [' '.join(t) for t in probes]
+        assert len(fp['probes']) == len(probes)
 
     def test_the_digest_moves_when_a_probe_moves(self, referee) -> None:
         """The digest is a hash of the probe readings, so a changed reading must change
@@ -508,6 +540,6 @@ class TestTheMeasureFingerprintReadsTheWholeMeasure:
         fp = referee._measure_fingerprint()
         assert fp['digest'] == hashlib.sha256(
             repr(sorted(fp['probes'].items())).encode()).hexdigest()[:16]
-        tampered = dict(fp['probes'], **{'pow': (fp['probes']['pow'] or 0) + 1000})
+        tampered = dict(fp['probes'], **{'pow x0 2': (fp['probes']['pow x0 2'] or 0) + 1000})
         assert hashlib.sha256(
             repr(sorted(tampered.items())).encode()).hexdigest()[:16] != fp['digest']

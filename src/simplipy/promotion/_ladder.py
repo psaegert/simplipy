@@ -607,7 +607,8 @@ def run_controls(rng, core):
                 f'got {v} want {want} ({str(info)[:120]})')
 
 
-def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progress=None):
+def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progress=None,
+                  rule_mode):
     """Certify `rules` down the `_` -> `!` -> `?` ladder (plus the ground tier) and return the
     promoted rules alongside a per-bucket report.
 
@@ -807,7 +808,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
     # seed guards exactly as before).
     def ac_key(sides):
         return [(True, tuple(k)) if k is not None else (False, tuple(s))
-                for k, s in zip(engine._core.ac_canonical_keys([list(s) for s in sides]),
+                for k, s in zip(engine._core.ac_canonical_keys([list(s) for s in sides], rule_mode=rule_mode),
                                 sides)]
 
     lhs_seen = set(ac_key([l for l, _ in kept]))

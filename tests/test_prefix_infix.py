@@ -93,15 +93,15 @@ def test_prefix_to_infix_raises_on_extra_operands(engine: SimpliPyEngine) -> Non
 
 
 def test_prefix_to_infix_names_the_tagged_dialect(engine: SimpliPyEngine) -> None:
-    # simplify's default token output is the TAGGED serialization; this converter reads
-    # the explicit binary-prefix dialect. The refusal must name the dialect and both
-    # escapes, not fail with a bare arity error (B1).
+    # This converter reads the explicit binary-prefix dialect. The refusal must name the
+    # dialect and both conversions that exist, not fail with a bare arity error, and not
+    # point at the removed `simplify(form=)`.
     tagged = ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
     with pytest.raises(ValueError, match='tagged-serialization tokens') as exc_info:
         engine.prefix_to_infix(tagged)
     message = str(exc_info.value)
-    assert "form='infix'" in message
-    assert "form='explicit'" in message
+    assert 'to_infix(expr)' in message and 'to_prefix(expr)' in message
+    assert 'form=' not in message
 
 
 def test_is_valid_accepts_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:

@@ -12,9 +12,12 @@ semantics. The judge speaks the engine's full 0.12 output language: n-ary bag ta
 exact-rational coefficients (``1/3``). Tokens OUTSIDE that language fail CLOSED
 (UNSCORED) -- an output the judge cannot read must never silently pass as OK.
 
-  Values are compared in mpmath (no float64 saturation/overflow); a single unsigned zero;
-  1/0 = +inf; IEEE pow specials (pow(+-1, +-inf) = 1, pow(0, 0) = 1); literal folding
-  (np.pi -> pi). A DEFINED value may never change (checked pointwise; symbolic points such
+  Values are compared in mpmath (no float64 saturation/overflow); IEEE pow specials
+  (pow(+-1, +-inf) = 1, pow(0, 0) = 1); literal folding (np.pi -> pi). A zero is read in the
+  LANE of the mode the rewrite was made in (`judge_pair(..., mode=)`): the `real` lane reads
+  a single unsigned zero, 1/0 = +inf, and the `f64` and `permissive` lanes read IEEE 754's
+  signed zeros, as their float64 evaluator does (x - x is +0, -(x - x) is -0, 1/-0 is -inf).
+  A DEFINED value may never change (checked pointwise; symbolic points such
   as pi/2 are probe points). Extending an undefined point to a defined one is tolerated on
   NULL sets only: extension at isolated atoms is tolerated, while extension on a large
   fraction of continuum draws is a positive-measure violation.
@@ -42,10 +45,10 @@ Importable API:
   * :func:`selftest`    -- poison self-test (returns True iff every poison is caught).
   * :func:`monitor`     -- top-level driver (optional self-test, then the main sweep).
 """
+import contextvars
 import json
 import os
 import re
-import tempfile
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 
@@ -531,6 +534,123 @@ def _raise_unresolved():
     raise Unresolved()
 
 
+# ---------------------------------------------------------------------------------------
+# The zero lanes: how a mode reads the sign of an exact zero.
+# ---------------------------------------------------------------------------------------
+
+#: Does a mode's lane read SIGNED zeros? `real` reasons over the reals: one unsigned zero,
+#: 1/0 = +inf (c/0 = sign(c)*inf). `f64` (also spelled `default`) and `permissive` are
+#: evaluated in float64, whose zeros carry a sign (IEEE 754): `x - x` is +0, `-(x - x)` and
+#: `x*0` at x < 0 are -0, and dividing by a zero gives the infinity of the product of the
+#: signs, so `1/(x1*(x2 - x2))` is -inf wherever x1 < 0. Values stay exact in every lane;
+#: only a zero's sign, and the infinity a zero gives at a pole, depend on it.
+LANES = {'f64': True, 'default': True, 'permissive': True, 'real': False}
+
+#: The lane `evaluate` reads when its caller names none; `judge_pair` sets it for the extent of
+#: one judgment. Outside a judgment it is the one-zero lane.
+_SIGNED_ZEROS = contextvars.ContextVar('signed_zeros', default=False)
+
+
+def _lane(mode):
+    """`True` for a signed-zero lane. `mode` is a mode name or a `simplipy.Mode` member."""
+    name = getattr(mode, 'name', mode)
+    if name not in LANES:
+        raise ValueError(f'unknown mode {mode!r}: one of {sorted(LANES)}')
+    return LANES[name]
+
+
+class _NegZero(type(mpf(0))):
+    """IEEE -0 in a signed-zero lane: an mpf zero -- every comparison and every operation of
+    the one-zero table reads it as 0 -- whose type records the sign bit (mpmath has one
+    zero, and its arithmetic returns plain mpf values)."""
+
+
+def _signbit(v):
+    """IEEE's sign bit of a lane value: set for a negative number, -inf and -0, clear for NaN."""
+    return isinstance(v, _NegZero) or (not isnan(v) and v < 0)
+
+
+def _odd_integer(b):
+    """Is `b` an odd integer (finite, resolved at working precision)?"""
+    if isnan(b) or isinf(b) or b == 0:
+        return False
+    ib = _int_value_or_none(b)
+    return ib is not None and ib % 2 == 1
+
+
+#: Odd at zero, `f(-0) = -0`: the odd functions and roots, and scaling by a positive constant.
+_ODD_AT_ZERO = frozenset({'sin', 'tan', 'asin', 'atan', 'sinh', 'tanh', 'asinh', 'atanh',
+                          'pow1_3', 'pow1_5', 'pow3', 'pow5', 'mult2', 'mult3', 'mult4',
+                          'mult5', 'div2', 'div3', 'div4', 'div5'})
+
+
+def _zero_signbit(op, args):
+    """The sign bit of an exact zero that `op` computes at `args`, as IEEE 754 sets it."""
+    sb = [_signbit(a) for a in args]
+    if op == '+':                         # x + (-x) is +0; -0 + -0 is -0
+        return all(a == 0 for a in args) and all(sb)
+    if op == '-':                         # -0 - (+0) is -0; x - x is +0
+        return args[0] == 0 and args[1] == 0 and sb[0] and not sb[1]
+    if op in ('*', '/'):                  # signs multiply: 0*x, 0/x, x/inf
+        return sb[0] != sb[1]
+    if op == 'inv':                       # 1/(+-inf) is +-0
+        return sb[0]
+    if op == 'neg':
+        return not sb[0]
+    if op in _ODD_AT_ZERO:
+        return args[0] == 0 and sb[0]
+    if op in ('pow', 'rootn'):            # (-0)^odd and rootn(-0, odd) are -0; 1/(-inf)^odd
+        base, k = args
+        if base == 0:
+            return sb[0] and k > 0 and _odd_integer(k)
+        return isinf(base) and base < 0 and k < 0 and _odd_integer(k)
+    if op in _PLUS_ZERO:
+        return False                      # abs, an even power, exp(-inf), log(1), acos(1), ...
+    # A head whose zero sign this table does not know: no reading, rather than a guessed +0.
+    raise Unresolved()
+
+
+#: The operators whose exact zero is always +0 in IEEE 754.
+_PLUS_ZERO = frozenset({'abs', 'exp', 'log', 'cos', 'cosh', 'acos', 'acosh', 'pow2', 'pow4',
+                        'pow1_2', 'pow1_4'})
+
+
+def _pole_signbit(op, args):
+    """At a pole a zero makes (`x/0`, `1/0`, `0^-k`, `rootn(0, -k)`), the sign bit of the
+    infinity IEEE 754 gives there; `None` where no zero operand stands at a pole."""
+    if op == '/' and args[1] == 0 and not isnan(args[0]) and args[0] != 0:
+        return _signbit(args[0]) != _signbit(args[1])
+    if op == 'inv' and args[0] == 0:
+        return _signbit(args[0])
+    if op in ('pow', 'rootn') and args[0] == 0 and not isnan(args[1]) and args[1] < 0:
+        return _signbit(args[0]) and _odd_integer(args[1])
+    return None
+
+
+def _ieee(op, args, v):
+    """`v`, the one-zero table's value of `op` at the lane values `args`, read in a signed-zero
+    lane: a zero result takes IEEE 754's sign, and so does the infinity a zero gives at a
+    pole. Every other value is the table's."""
+    if isnan(v):
+        return v
+    if v == 0:
+        return _NegZero(0) if _zero_signbit(op, args) else mpf(0)
+    if isinf(v):
+        s = _pole_signbit(op, args)
+        if s is not None:
+            return mpf('-inf') if s else mpf('inf')
+    return v
+
+
+def _literal(s, signed):
+    """The value of a numeric literal spelling: in a signed-zero lane a zero spelled as a
+    negative float (`-0.0`) is -0, as float64 reads it; an integer spelling (`-0`) is +0."""
+    v = mpf(s)
+    if signed and v == 0 and s.lstrip().startswith('-') and any(c in s for c in '.eE'):
+        return _NegZero(0)
+    return v
+
+
 def _slot_token(v):
     """Bind a fitted slot at FULL working precision. Binding via '%r' % float(v) rounded the
     constant to f64 (1e-17 error) -- which the two-rung stability gate then CORRECTLY reported
@@ -540,13 +660,20 @@ def _slot_token(v):
     return s if v >= 0 else f'(-{s})'
 
 
-def evaluate(tokens, env, node_hook=None):
+def evaluate(tokens, env, node_hook=None, signed=None):
     """Contract-semantics value of a prefix expression at env (variable name -> mp value).
     Speaks both the binary spelling and the engine's n-ary bag grammar. `node_hook`, when
     given, receives every COMPUTED node value: op results, bag member-inverses and bag
     fold intermediates. Leaves (env values, literals) are deliberately excluded -- a
     literal float("inf") is a DENOTED conventional constant, not a singularity crossing
-    (see the singular-input gate)."""
+    (see the singular-input gate). `signed`: read zeros in a signed-zero lane (`LANES`);
+    `None` reads the lane of the judgment in progress, the one-zero lane outside one."""
+    if signed is None:
+        signed = _SIGNED_ZEROS.get()
+
+    def lane(op, f):
+        return (lambda *a: _ieee(op, a, f(*a))) if signed else f
+
     pos = 0
 
     def walk():
@@ -555,7 +682,7 @@ def evaluate(tokens, env, node_hook=None):
         pos += 1
         if t in BAG_OPEN:
             marker, close, fold_op, _join_op = BAG_OPEN[t]
-            fold = OPS[fold_op][1]
+            fold = lane(fold_op, OPS[fold_op][1])
             main, sec = [], []
             cur = main
             while pos < len(tokens) and tokens[pos] != close:
@@ -577,7 +704,7 @@ def evaluate(tokens, env, node_hook=None):
             # addition, so the <sub> section may negate per member for the same
             # faithfulness. Folds within the flat bag are order-invariant on the
             # special-value lattice {0, +-inf, nan}.
-            inv_member = c_inv if fold_op == '*' else (lambda v: OPS['neg'][1](v))
+            inv_member = lane('inv', c_inv) if fold_op == '*' else lane('neg', OPS['neg'][1])
             neutral = mpf(0) if fold_op == '+' else mpf(1)
             acc = main[0] if main else neutral
             for v in main[1:]:
@@ -595,7 +722,7 @@ def evaluate(tokens, env, node_hook=None):
         if t in OPS:
             ar, f = OPS[t]
             args = [walk() for _ in range(ar)]
-            v = f(*args)
+            v = lane(t, f)(*args)
             if node_hook is not None:
                 node_hook(v)
             return v
@@ -607,7 +734,7 @@ def evaluate(tokens, env, node_hook=None):
         if RAT_RE.match(s):
             p, q = s.split('/')
             return mpf(p) / mpf(q)                         # exact int/int at working dps
-        return mpf(s)
+        return _literal(s, signed)
     v = walk()
     if pos != len(tokens):
         raise ValueError(f'trailing tokens: {tokens}')
@@ -823,7 +950,10 @@ def _fold_exact_rational_spans(tokens):
     token, in unbounded Fraction arithmetic. Contract-semantics extension points stay
     out of scope by construction -- division by an exact zero, non-integer or
     over-budget pow exponents, and any span touching pi/e/inf/nan refuse and are left
-    verbatim for the mpf evaluator. Untouched leaves keep their original spelling."""
+    verbatim for the mpf evaluator. So does a span whose value is zero in a signed-zero
+    lane: a Fraction has one zero, and the evaluator reads the sign IEEE gives it
+    (`* -1 0` is -0). Untouched leaves keep their original spelling."""
+    signed = _SIGNED_ZEROS.get()
     pos = 0
 
     def emit(f):
@@ -872,6 +1002,8 @@ def _fold_exact_rational_spans(tokens):
                         acc = _fold_budget(acc - v)
             except (_FoldRefused, ZeroDivisionError):
                 return parts, None
+            if signed and acc == 0:
+                return parts, None
             return [emit(acc)], acc
         if t in OPS:
             ar = OPS[t][0]
@@ -908,6 +1040,8 @@ def _fold_exact_rational_spans(tokens):
                         raise _FoldRefused()
                     acc = _fold_budget(vals[0] ** e)     # Fraction(0)**0 == 1: contract
             except (_FoldRefused, ZeroDivisionError):
+                return parts, None
+            if signed and acc == 0:
                 return parts, None
             return [emit(acc)], acc
         v = _rat_leaf(t)
@@ -1041,7 +1175,10 @@ def _span_exact_token(toks):
                         return '0' if n == 0 else str(int(n))
                     return None               # rung-stable offset: a true value
                 if db == 0 and r >= SNAP_DPS_CAP:
-                    return '0' if n == 0 else str(int(n))   # exact through the ladder
+                    # exact through the ladder; an exact -0 of a signed-zero lane keeps its sign
+                    if n == 0:
+                        return '-0.0' if isinstance(v, _NegZero) else '0'
+                    return str(int(n))
                 # da == 0: undecidable at this pair (see docstring) -- escalate
         if v is not None:
             prev = (v, r)
@@ -1071,8 +1208,13 @@ def _snap_literal_exacts(tokens):
 
 
 @_ambient_dps
-def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
+def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False, *, mode='f64'):
     """Judge one rewrite inp -> out under the contract. Returns (verdict, detail).
+
+    `mode`: the mode the rewrite was made in (`'f64'`, also `'default'`, `'real'` or
+    `'permissive'`, or a `simplipy.Mode` member), which names the lane its zeros are read in
+    (`LANES`): `real`'s one unsigned zero, or the signed zeros of the float64 modes. The
+    default is the engine's default mode.
 
     `_refit_left`: on a violation while a fittable slot is bound, the bound c may be the
     artifact of a DEGENERATE first fit (pow(c, x) at x = 0 fits every c). One refit at the
@@ -1083,18 +1225,22 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
     working precision adapted to the pair's own literal exponent span (never below the
     ambient mp.dps, so external escalation harnesses stay meaningful). Small-literal
     pairs -- the entire pre-F74 corpus population -- keep the ambient precision."""
-    unk = unknown_tokens(list(inp) + list(out))
-    if unk:
-        # FAIL CLOSED on language gaps: a token the judge cannot read must surface, never
-        # silently skip every probe and fall through to OK (the E1 blindness mechanism).
-        return 'UNSCORED', 'unknown tokens: ' + ' '.join(unk)
-    inp = _fold_exact_rational_spans(list(inp))
-    out = _fold_exact_rational_spans(list(out))
-    with mp.workdps(max(mp.dps, _pair_dps(list(inp) + list(out)))):
-        return _judge_pair_at(inp, out, rng, _refit_left, _slot_bound)
+    lane = _SIGNED_ZEROS.set(_lane(mode))
+    try:
+        unk = unknown_tokens(list(inp) + list(out))
+        if unk:
+            # FAIL CLOSED on language gaps: a token the judge cannot read must surface, never
+            # silently skip every probe and fall through to OK (the E1 blindness mechanism).
+            return 'UNSCORED', 'unknown tokens: ' + ' '.join(unk)
+        inp = _fold_exact_rational_spans(list(inp))
+        out = _fold_exact_rational_spans(list(out))
+        with mp.workdps(max(mp.dps, _pair_dps(list(inp) + list(out)))):
+            return _judge_pair_at(inp, out, rng, _refit_left, _slot_bound, mode)
+    finally:
+        _SIGNED_ZEROS.reset(lane)
 
 
-def _judge_pair_at(inp, out, rng, _refit_left, _slot_bound):
+def _judge_pair_at(inp, out, rng, _refit_left, _slot_bound, mode):
     inp, out = _snap_literal_exacts(list(inp)), _snap_literal_exacts(list(out))
     if '<constant>' in inp:
         # PRE-MASKED input (deployed traffic arrives masked): an input-side <constant>
@@ -1120,7 +1266,8 @@ def _judge_pair_at(inp, out, rng, _refit_left, _slot_bound):
                     c2 = a_here if list(out) == ['<constant>'] else _fit_slot(list(out), env, a_here)
                     if c2 is not None:
                         bound = [_slot_token(c2) if t == '<constant>' else t for t in out]
-                        return judge_pair(inp, bound, rng, _refit_left=0, _slot_bound=True)
+                        return judge_pair(inp, bound, rng, _refit_left=0, _slot_bound=True,
+                                          mode=mode)
             except Exception:
                 pass
         cinfo = f' [bound c={_fmt(slot_val)}]' if slot_val is not None else ''
@@ -1570,15 +1717,11 @@ def build_engine(rules, config_path):
 
     `config_path` is the deployed engine config the monitor realizes against; the driver
     passes the path in. `rules` is a list of (lhs, rhs) token-sequence pairs (empty for the
-    rules-empty baseline engine)."""
+    rules-empty baseline engine), and it is the engine's whole rule set: no mode names a set
+    of its own. Built in memory from the config's operator table, so nothing is written to
+    disk."""
     base = yaml.safe_load(open(config_path))
-    d = tempfile.mkdtemp(prefix='monitor_')
-    with open(os.path.join(d, 'rules.json'), 'w') as fh:
-        json.dump([[list(l), list(r)] for l, r in rules], fh)
-    base['rules'] = 'rules.json'
-    with open(os.path.join(d, 'config.yaml'), 'w') as fh:
-        yaml.safe_dump(base, fh)
-    return SimpliPyEngine.from_config(os.path.join(d, 'config.yaml'))
+    return SimpliPyEngine(operators=base['operators'], rules=[(tuple(l), tuple(r)) for l, r in rules])
 
 
 def make_corpus(eng, n, rng, adversarial=None, leaves=None):

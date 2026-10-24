@@ -50,7 +50,9 @@ except Exception:  # pragma: no cover  (missing/unbuilt extension)
     _CORE_ARITY = {}
 
 #: The judge's vocabulary is DELIBERATELY broader than the engine's: it keeps the deleted
-#: 0.11 hyper-operator spellings so legacy-engine rewrites stay judgeable (pinned by
+#: 0.11 hyper-operator spellings, because a generation-2 config may still declare those
+#: names as operators (the mining test vocabularies declare `pow2`, and the Rust evaluator
+#: has kernels for them), so rules spelled with them stay judgeable (pinned by
 #: `test_legacy_hyperop_spellings_remain_judgeable`). Only the CORE half is derived --
 #: that is the half that must never drift from the engine; the rest is this module's own
 #: and is listed explicitly.
@@ -63,6 +65,14 @@ ARITY = {**_CORE_ARITY,
          'div2': 1, 'div3': 1, 'div4': 1, 'div5': 1,
          'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1}
 SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
+
+#: Heads the DEPLOYED lane evaluates (`simplipy.operators` realizes each with the engine's own
+#: float64 kernel) and the contract cannot: this judge has no extended-real kernel for them yet.
+#: A rule spelled with one is judged in the deployed lane alone (`_judge_deployed_only`), so the
+#: most it can earn is the `f64` tier -- never `core` or `real`, which need the contract. Every
+#: other unknown head stays UNSUPPORTED-SHAPE.
+DEPLOYED_ONLY_ARITY = {'floor': 1, 'ceil': 1, 'erf': 1, 'harmonic': 1,
+                       'max': 2, 'min': 2, 'mod': 2, 'atan2': 2, 'besselj': 2}
 
 
 class Unresolved(Exception):
@@ -174,15 +184,16 @@ def literal_value(t):
 
 
 # ---------------------------------------------------------------- parse
-def parse(tokens, cname='<C>'):
+def parse(tokens, cname='<C>', arity=None):
+    arity = ARITY if arity is None else arity
     toks = [cname if t == '<constant>' else t for t in tokens]
     pos = 0
 
     def rec():
         nonlocal pos
         t = toks[pos]; pos += 1
-        if t in ARITY:
-            return (t,) + tuple(rec() for _ in range(ARITY[t]))
+        if t in arity:
+            return (t,) + tuple(rec() for _ in range(arity[t]))
         if SLOT_RE.match(t) or t.startswith('<C'):
             return ('slot', t)
         if t in ('x0', 'x1', 'x2'):
@@ -618,11 +629,12 @@ def _legacy_even_root(p):
 
 
 def _legacy_odd_root(p):
-    # pre-0.12 pow1_3/pow1_5: the real-valued (sign-preserving) root
+    # pre-0.12 pow1_3/pow1_5: the real-valued odd root, which carries the sign of its operand,
+    # the sign of zero included (IEEE-754 rootn, as `rootn` itself)
     def g(a):
         a = np.asarray(a, dtype=F)
         with np.errstate(invalid='ignore'):
-            return F(np.where(a < 0, -(-a) ** F(p), a ** F(p)))
+            return F(np.copysign(np.abs(a) ** F(p), a))
     return g
 
 
@@ -639,20 +651,70 @@ DEP_OPS = {
     # hyper-operator vocabulary is deleted, once and for all"), which silently emptied
     # these DEP_OPS slots via the getattr fallback below and let a planted gate poison
     # evaporate into NO-WITNESS (E1). Hand-coded here, transplanted from the pre-0.12
-    # module, so the gate keeps judging LEGACY artifacts and its legacy-spelled poisons.
+    # module, so the gate keeps judging rules spelled with those names: 0.15 refuses
+    # generation-1 ARTIFACTS, but a generation-2 config may still declare the names.
     'pow2': lambda a: F(a) ** F(2), 'pow3': lambda a: F(a) ** F(3),
     'pow4': lambda a: F(a) ** F(4), 'pow5': lambda a: F(a) ** F(5),
     'pow1_2': _legacy_even_root(0.5), 'pow1_4': _legacy_even_root(0.25),
     'pow1_3': _legacy_odd_root(1 / 3), 'pow1_5': _legacy_odd_root(1 / 5),
 }
-for _n in ARITY:
+for _n in (*ARITY, *DEPLOYED_ONLY_ARITY):
     _fn = getattr(_spo, _n, None)
     if callable(_fn):
         DEP_OPS[_n] = _wrap_arr(_fn)
 
 
-def d_eval(tree, env):
-    """evaluate under the deployed engine's operator algebra (numpy array path)"""
+#: THE f64 STANDARD: f64 promises the evaluator's value wherever nothing overflows or
+#: underflows, and overflows are a special case. The constructors already work this way:
+#: `x1*x2/x2 -> x1`, `exp(x1)/exp(x1) -> 1` and `rootn(exp(800.5), 2) -> exp(1601/4)` give
+#: the TRUE value where an intermediate leaves the float range. So at a sample point where
+#: an operation of EITHER side overflows or underflows, a rewrite may give the evaluator's
+#: value or the true one: wherever the contract finds the two sides equal at such a point,
+#: the deployed lane reads it as agreement without comparing the floats, and it compares
+#: every other point exactly as before. A rewrite that gives neither value at a range event
+#: (`exp(1000) -> 5`) is still refused, and one that reproduces the evaluator there
+#: (`exp(1000) -> inf`) is still realised.
+#:
+#: The two events are IEEE 754's. An operation OVERFLOWS when its operands are finite and
+#: its exact value is finite, but the float is +-inf (`exp(800)`, `1e200*1e200`). It
+#: UNDERFLOWS when its operands are finite and its exact value is nonzero, but the float is
+#: zero or subnormal (`exp(-800)`, `1e-200*1e-200`). Neither is a POLE -- an exact value
+#: that is itself infinite, IEEE's division by zero (`1/0`, `log(0)`, `atanh(1)`) -- nor an
+#: EXACT ZERO (`x - x`, `log(1)`): those are what the operator computes, not a range
+#: limit, so a point carrying one is compared as before. `atanh(tanh(20))` is therefore
+#: still compared: `tanh` saturates to exactly 1.0 without leaving the range, and
+#: `atanh(1.0)` is a pole. So is every point where the contract cannot decide.
+#:
+#: THE EVENT IS DEFINED ONCE, in the compiled core (`numeric::RangeKind`, read here through
+#: `_core.range_event`), and the miner's scan reads the same definition, so the judge and the
+#: scan cannot disagree about which operation left the range. It is read off each operation's
+#: operands and float result, per operator: where the exact value is infinite at finite
+#: operands (a pole), where it is zero (an exact zero), and which operators' tiny results are
+#: always exact (a sum of floats below the normal range is exactly representable). An
+#: operator outside the core's table has no events: its points stay compared.
+_TINY = float(np.finfo(F).tiny)   # the smallest normal double
+
+try:
+    from simplipy._core import range_event as _range_event  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover  (missing/unbuilt extension: no events, compared as before)
+    _range_event = None
+
+
+def out_of_range(op, args, value):
+    """Does one deployed operation overflow or underflow (see the f64 standard above)?
+    `args` are the operands and `value` the float the deployed evaluator returned. The
+    answer is the core's (`_core.range_event`); an event always leaves a value outside the
+    normal range, so any other value is answered without the call."""
+    if _range_event is None or not (np.isinf(value) or value == 0 or abs(value) < _TINY):
+        return False
+    return bool(_range_event(op, [float(a) for a in args], float(value)))
+
+
+def d_eval(tree, env, in_range=None):
+    """evaluate under the deployed engine's operator algebra (numpy array path).
+
+    With `in_range` (a one-element list), an operation that overflows or underflows
+    (`out_of_range`) sets `in_range[0] = False`."""
     op = tree[0]
     if op == 'slot':
         return env[tree[1]]
@@ -663,11 +725,14 @@ def d_eval(tree, env):
             return F(float(tree[1]))
         except OverflowError:  # `tree[1]` is a Fraction: compare, never convert
             return F(math.inf if tree[1] > 0 else -math.inf)
-    args = [d_eval(c, env) for c in tree[1:]]
+    args = [d_eval(c, env, in_range) for c in tree[1:]]
     # C35: the ignore-everything float semantics this judge needs are SCOPED to the
     # operator application, never set process-wide at import.
     with np.errstate(all='ignore'):
-        return F(DEP_OPS[op](*args))
+        value = F(DEP_OPS[op](*args))
+    if in_range is not None and out_of_range(op, args, value):
+        in_range[0] = False
+    return value
 
 
 # ---------------------------------------------------------------- comparison
@@ -1631,6 +1696,43 @@ def _point_verdict(tl, tr, env_mp):
         mp.dps = old
 
 
+def _judge_deployed_only(lhs, rhs, deployed_check=True):
+    """Judge a rule spelled with a `DEPLOYED_ONLY_ARITY` head in the deployed lane ALONE.
+
+    The contract has no kernel for the head, so nothing here can say the rule is true over
+    the reals, and the verdict is `F64-ONLY`: tier `f64` when the two sides agree BIT FOR BIT in
+    float64 (the sign of a zero included, NaN equal to NaN) at every probe of the core's
+    deployed-only bar (`_core.deployed_exact`: per slot the battery, +-inf, NaN, the jumps and
+    cells of the 0.15 heads, a generic grid, the diagonal; whatever the slot's sort), and
+    `reject` otherwise. The mint applies the same function to every such pair it accepts, so the
+    two cannot disagree. A rule with a `<constant>` is refused: its witness needs the
+    contract."""
+    heads = sorted({t for t in list(lhs) + list(rhs) if t in DEPLOYED_ONLY_ARITY})
+    why = f'no contract kernel for {", ".join(heads)}: judged in the deployed lane alone'
+    ext = {**ARITY, **DEPLOYED_ONLY_ARITY}
+    try:
+        parse(lhs, '<C_L>', ext)
+        parse(rhs, '<C_R>', ext)
+    except UnsupportedToken as ex:
+        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
+    if not deployed_check or '<constant>' in lhs or '<constant>' in rhs:
+        return {'verdict': 'UNSUPPORTED-SHAPE',
+                'detail': why + '; a <constant> needs the contract'}
+    from simplipy._core import deployed_exact  # type: ignore[attr-defined]
+    slot = {}
+    for t in list(lhs) + list(rhs):
+        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+        if SLOT_RE.match(key) and key not in slot:
+            slot[key] = None
+    names = {key: f'x{i}' for i, key in enumerate(sorted(slot))}
+    spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
+                        for t in ts]
+    realised, probes, first = deployed_exact(spell(lhs), spell(rhs), list(names.values()), ext)
+    return {'verdict': 'F64-ONLY', 'detail': why, 'realised': realised,
+            'points': [] if first is None else [dict(zip(names, first))],
+            'probes': probes, 'tier': _tier('F64-ONLY', realised)}
+
+
 #: The four cells of the soundness LATTICE. The two notions are INCOMPARABLE -- a rule
 #: can be true and unrealised (`atanh(tanh t) -> t`, exact on R, `inf` in f64) or
 #: realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by 1.7e-17) --
@@ -1644,21 +1746,22 @@ def _tier(verdict, realised):
     if verdict in ('CERTIFIED', 'TOLERATED'):
         # `real`, NOT `f64`. The contract accepting a rule means it is TRUE; `realised is
         # False` means the deployed evaluator disagrees. "True, not realised" is the `real`
-        # row of the table above, and filing it as `f64` was wrong in both directions at
-        # once -- it put the rule in the one mode whose authority CONTRADICTS it and
-        # removed it from the mode that honours it. Reachable, and measured: 6 rules of
-        # acj-4-3 land here, all TOLERATED, e.g. `/ $0 $0 -> 1` (true off the null set
-        # {0}, and f64 answers nan at 0 and at both infinities).
-        # `core` now requires realised to be TRUE, not merely "not False" (owner ruling,
-        # 2026-08-20). `None` means the deployed lane never got an observation at all --
-        # ABSENT EVIDENCE -- and that cannot support a claim of f64 soundness. 102
-        # acj-4-3 rules take this path, dominated by the symbolic-cancellation snap
-        # family: `sin(np.pi) -> 0` is exactly true in mathematics while f64 computes
-        # 1.2246467991473532e-16, so serving it in f64 mode CHANGES the answer.
+        # row of the table above, and filing it as `f64` would put the rule in the one mode
+        # whose authority contradicts it and remove it from the mode that honours it.
+        # `core` requires realised to be TRUE, not merely "not False": `None` means the
+        # deployed lane never got an observation at all, and absent evidence cannot support
+        # a claim of f64 soundness (`sin(np.pi) -> 0` is exactly true while f64 computes
+        # 1.2246467991473532e-16, so serving it in f64 mode changes the answer).
+        # A TOLERATED rule that only fills f64's NaN holes at the contract's own null events
+        # arrives realised (`judge_rule`'s `fills_nan`): f64 takes the same reading as the
+        # constructors, which fill a NaN hole on a null set (`x1/x1` is `1`).
         return 'core' if realised is True else 'real'
     if verdict == 'ENGINE-MISALIGN':
         return 'real'
-    if verdict == 'KILL':
+    if verdict in ('KILL', 'F64-ONLY'):
+        # F64-ONLY: the deployed lane alone judged it (`_judge_deployed_only`); bit-exact
+        # agreement there is all the `f64` tier asks, and nothing earns more without the
+        # contract.
         return 'f64' if realised is True else 'reject'
     return 'reject'
 
@@ -1676,6 +1779,8 @@ def judge_rule(lhs, rhs, deployed_check=True):
         tl = parse(lhs, '<C_L>')
         tr = parse(rhs, '<C_R>')
     except UnsupportedToken as ex:
+        if any(t in DEPLOYED_ONLY_ARITY for t in list(lhs) + list(rhs)):
+            return _judge_deployed_only(list(lhs), list(rhs), deployed_check)
         # a token outside the numeric grammar: refuse the SHAPE, do not evaluate it
         return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
     sl = slots_of(lhs, '<C_L>')
@@ -1774,6 +1879,10 @@ def judge_rule(lhs, rhs, deployed_check=True):
     # split needs exactly that. `dep_bad`/`dep_seen` record the same comparison with no
     # gate, so a verdict and a realisation can be reported independently.
     dep_bad, dep_seen = [], [False]
+    # The deployed points the f64 standard reads as agreement without comparing the
+    # floats (an operation overflowed or underflowed, and the rewrite gives the true value),
+    # counted so the verdict records them.
+    dep_out_of_range = [0]
     resolved_pts = 0
     attempted_pts = 0
     # battery sweep (cap the slot-product deterministically)
@@ -1862,8 +1971,18 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     if crd is not None:
                         ed['<C_R>'] = F(crd)   # the f64-fitted witness: each algebra
                                                # is judged with its OWN constant
-                    _dcl = cls_np(d_eval(tl, ed))
-                    _dcr = cls_np(d_eval(tr, ed))
+                    in_range = [True]
+                    _dl, _dr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
+                    if not in_range[0] and v == 'eq':
+                        # THE f64 STANDARD (`out_of_range`): an operation of either side
+                        # overflowed or underflowed here, and the rewrite gives the true
+                        # value, which f64 accepts at a range event as the constructors
+                        # do. An agreeing observation, so neither deployed comparison is
+                        # asked.
+                        dep_seen[0] = True
+                        dep_out_of_range[0] += 1
+                        continue
+                    _dcl, _dcr = cls_np(_dl), cls_np(_dr)
                     dv = compare_deployed_realised(_dcl, _dcr)
                     dep_seen[0] = True
                     if dv != 'eq':
@@ -1916,11 +2035,14 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     # engine realise what the contract certified?", and until now the only
                     # place that question was ever put ran over the BATTERY, whose largest
                     # magnitude is 3.0 -- below every point where f64 departs from the
-                    # extended reals (tanh saturates at 18.99, exp overflows at 709.78 and
+                    # extended reals (tanh saturates at 19.06, exp overflows at 709.78 and
                     # underflows at -745.13, cosh/sinh overflow at 710.48). The verdict was
                     # therefore unreachable in principle, not merely unfired. This grid
                     # already reaches 1e4, so the same comparison the battery lane performs
-                    # is put at every grid point too.
+                    # is put at every grid point too. Of those departures, the f64 standard
+                    # (`out_of_range`) accepts the true value at an overflow or underflow,
+                    # as the battery lane does: what this lane still convicts is saturation
+                    # and rounding inside the range (`atanh(tanh(20))`).
                     #
                     # Guards mirror the battery lane exactly: only where the CONTRACT is
                     # 'eq' (misalignment is contract-certifies-but-deployment-diverges, so
@@ -1940,13 +2062,17 @@ def judge_rule(lhs, rhs, deployed_check=True):
                             continue
                         ed['<C_R>'] = F(wf)
                     try:
+                        in_range = [True]
                         with np.errstate(all='ignore'):
-                            _gcl = cls_np(d_eval(tl, ed))
-                            _gcr = cls_np(d_eval(tr, ed))
+                            _gl, _gr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
+                            _gcl, _gcr = cls_np(_gl), cls_np(_gr)
                             dv = compare_deployed_realised(_gcl, _gcr)
                     except Exception:
                         continue
                     dep_seen[0] = True
+                    if not in_range[0] and cv == 'eq':
+                        dep_out_of_range[0] += 1   # the f64 standard, as above: agrees
+                        continue
                     if dv != 'eq':
                         dep_bad.append((dv, {'slot': n, 'grid': float(g)}))
                     if cv == 'eq' and compare_deployed_structural(_gcl, _gcr) != 'eq':
@@ -1992,22 +2118,34 @@ def judge_rule(lhs, rhs, deployed_check=True):
     finally:
         mp.dps = old
 
+    # ONE f64 STANDARD: the constructors fill a NaN hole on a null set (`x1/x1` is `1` in
+    # f64), so a TOLERATED rule whose every deployed disagreement is such a fill -- the left
+    # side NaN where the right side has a value (`EXT`), at a point the contract itself
+    # tolerated as a null event -- is realised in f64 as well. A NaN hole on positive
+    # measure, or one the contract does not tolerate, is not. (A point where an operation
+    # overflowed or underflowed and the rewrite gives the true value never reaches
+    # `dep_bad`: the f64 standard accepts it, and `out_of_range` counts it.)
     _realised = (not dep_bad) if dep_seen[0] else None
+    tolerated_points = [p for _, p, _ in tolerated]
+    fills_nan = bool(dep_bad) and all(k == 'EXT' and p in tolerated_points for k, p in dep_bad)
 
     if a_kills:
         return {'verdict': 'KILL', 'clause': 'a-real-change', 'points': a_kills[:3],
                 'measure': meas, 'skipped_cl': skipped_cl,
-                'realised': _realised, 'tier': _tier('KILL', _realised)}
+                'realised': _realised, 'out_of_range': dep_out_of_range[0],
+                'tier': _tier('KILL', _realised)}
     if nan_kills:
         return {'verdict': 'KILL', 'clause': 'a-nan-domain',
                 'points': [p for _, p in nan_kills[:3]],
                 'kinds': sorted({k for k, _ in nan_kills}),
                 'measure': meas, 'skipped_cl': skipped_cl,
-                'realised': _realised, 'tier': _tier('KILL', _realised)}
+                'realised': _realised, 'out_of_range': dep_out_of_range[0],
+                'tier': _tier('KILL', _realised)}
     if meas > MEASURE_KILL:
         return {'verdict': 'KILL', 'clause': 'bc-positive-measure', 'measure': meas,
                 'tolerated_events': len(tolerated), 'skipped_cl': skipped_cl,
-                'realised': _realised, 'tier': _tier('KILL', _realised)}
+                'realised': _realised, 'out_of_range': dep_out_of_range[0],
+                'tier': _tier('KILL', _realised)}
     if resolved_pts == 0 or resolved_pts / max(1, attempted_pts) < 0.25:
         # "skip, never convict" must not become "skip everything, acquit": a rule whose
         # battery is almost entirely Unresolved has no evidence either way (e.g. a
@@ -2024,17 +2162,21 @@ def judge_rule(lhs, rhs, deployed_check=True):
         # remains is a genuine realization split.
         return {'verdict': 'ENGINE-MISALIGN', 'points': [p for _, p in dep_div[:3]],
                 'kinds': sorted({k for k, _ in dep_div}), 'measure': meas,
-                'realised': _realised, 'tier': _tier('ENGINE-MISALIGN', _realised)}
+                'realised': _realised, 'out_of_range': dep_out_of_range[0],
+                'tier': _tier('ENGINE-MISALIGN', _realised)}
     if tolerated:
         kinds = sorted({v for v, _, _ in tolerated})
+        _realised = True if fills_nan else _realised
         return {'verdict': 'TOLERATED', 'classes': kinds,
                 'saturation_probed': saturation_probed,
-            'realised': _realised, 'tier': _tier('TOLERATED', _realised),
+                'realised': _realised, 'out_of_range': dep_out_of_range[0],
+                'tier': _tier('TOLERATED', _realised),
                 'events': [(v, p) for v, p, _ in tolerated[:3]], 'measure': meas,
                 'skipped_cl': skipped_cl, 'resolved_points': resolved_pts}
     return {'verdict': 'CERTIFIED', 'measure': meas, 'skipped_cl': skipped_cl,
             'saturation_probed': saturation_probed,
-            'realised': _realised, 'tier': _tier('CERTIFIED', _realised),
+            'realised': _realised, 'out_of_range': dep_out_of_range[0],
+            'tier': _tier('CERTIFIED', _realised),
             'resolved_points': resolved_pts}
 
 
@@ -2043,7 +2185,7 @@ TOUCHSTONES = [
     # (lhs, rhs, expected verdict, why -- the mathematical reason)
     ('+ ?0 pow sin ?0 float("inf")', '?0', 'KILL',
      'powsin: real value x+1 changed at exact pi/2 (clause a, null measure irrelevant)'),
-    ('pow1_2 pow2 ?0', '?0', 'KILL',
+    ('rootn pow ?0 2 2', '?0', 'KILL',
      'sqrt(x^2)->x: real values differ on x<0 (clause a + measure)'),
     ('atan tan asin _0', 'asin _0', 'TOLERATED',
      'nan-caused zero-measure extension at +-1 is NOT the powsin class'),
@@ -2055,13 +2197,13 @@ TOUCHSTONES = [
      'absorption: exact everywhere on reals; 0*inf indeterminate at nullx events only'),
     ('inv sin np.pi', 'float("inf")', 'CERTIFIED',
      'sin(pi) is exactly 0 (symbolic point + snap), 1/0 = +inf'),
-    ('pow4 inv pow1_4 ?0', 'pow ?0 <constant>', 'KILL',
+    ('pow inv rootn ?0 4 4', 'pow ?0 <constant>', 'KILL',
      'even-root extension on the negative half-line (clause b, positive measure)'),
-    ('pow1_2 pow float("-inf") ?0', 'pow float("inf") ?0', 'KILL',
+    ('rootn pow float("-inf") ?0 2', 'pow float("inf") ?0', 'KILL',
      'pow(-inf, data): undefined a.e. (clause b, positive measure)'),
-    ('pow1_2 pow1_2 atanh !0', 'pow1_4 atanh !0', 'CERTIFIED',
-     'pow1_4(-inf) = nan = sqrt(sqrt(-inf)): both spellings agree with the contract'),
-    ('/ 0 mult2 ?0', '0', 'TOLERATED',
+    ('rootn rootn atanh !0 2 2', 'rootn atanh !0 4', 'CERTIFIED',
+     'rootn(-inf, 4) = nan = sqrt(sqrt(-inf)): both spellings agree with the contract'),
+    ('/ 0 * 2 ?0', '0', 'TOLERATED',
      '0/0 at x=0 is an undefined->defined null-set extension (the x/x->1 class); the '
      'deployed zero-sign residue is a documented gap by design'),
     ('neg + (-1) _0', '- 1 _0', 'CERTIFIED',
@@ -2069,9 +2211,9 @@ TOUCHSTONES = [
     ('pow sin <constant> float("inf")', '0', 'KILL',
      'powsin in CONSTANT space: at c = pi/2 (symbolic atom) the value is 1, not 0 -- '
      'clause (a); fitted constants reach pi/2'),
-    ('pow1_3 pow3 _0', '_0', 'CERTIFIED',
+    ('rootn pow _0 3 3', '_0', 'CERTIFIED',
      'cbrt(t^3) = t exactly on all of R incl negatives and +-inf (odd-root exactness)'),
-    ('mult3 log pow1_3 _0', 'log _0', 'CERTIFIED',
+    ('* 3 log rootn _0 3', 'log _0', 'CERTIFIED',
      '3*log(cbrt t) = log t for t>0; both undefined for t<0; -inf vs -inf equal at 0; '
      '3*inf = inf at +inf: no disagreement event anywhere -- exactly certified'),
     ('atanh tanh !0', '!0', 'ENGINE-MISALIGN',
@@ -2079,11 +2221,18 @@ TOUCHSTONES = [
      'of R, and the dps-50 rounding of tanh(100) to 1 must still go Unresolved at the '
      'boundary rather than fabricate +inf (boundary-honesty band) -- a CERTIFIED contract '
      'lane is what lets the second half be reached at all. DEPLOYED half, new with F95: '
-     'f64 tanh attains exactly 1.0 from 18.990341103219276, so the shipped engine returns '
+     'f64 tanh attains exactly 1.0 from 19.061547465398498, so the shipped engine returns '
      'inf where the rule says the argument. The rule is TRUE and NOT REALISED, which is '
      'precisely what ENGINE-MISALIGN names. A regression to CERTIFIED here means the '
      'deployed lane stopped reaching the grid; a KILL means the contract lane started '
-     'fabricating.'),
+     'fabricating. The f64 standard leaves overflows and underflows out, and none occurs '
+     'here: tanh saturates INSIDE the range, and atanh(1.0) is a pole.'),
+    ('rootn exp ?0 2', 'exp / ?0 2', 'CERTIFIED',
+     'the f64 standard: f64 promises the evaluator\'s value wherever nothing overflows or '
+     'underflows. True on R, and f64 computes it at every point where exp stays in range; '
+     'past exp\'s overflow (709.78) and underflow (-745.13) the rule gives the true value, '
+     'as the constructors do for exp(x)/exp(x) = 1, so the deployed lane accepts those '
+     'grid points. ENGINE-MISALIGN here means their floats are being compared again.'),
     # -- regression guards --
     ('+ ?0 sin exp -100', '?0', 'KILL',
      'F99. The invariant this pins is unchanged and now holds at EVERY rung rather '
@@ -2096,9 +2245,9 @@ TOUCHSTONES = [
      'AND in f64, where 0.0 + sin(exp(-100)) == 0.0 is False. The snap absorbs it at '
      'dps 50 (threshold 1e-40) and not at dps 120 (1e-110), so rungs 2 and 3 decide, '
      'which is the escalation working as designed.'),
-    ('pow1_2 * - ?0 0.2 - ?0 0.8', 'pow1_2 abs * - ?0 0.2 - ?0 0.8', 'KILL',
+    ('rootn * - ?0 0.2 - ?0 0.8 2', 'rootn abs * - ?0 0.2 - ?0 0.8 2', 'KILL',
      'undefined on (0.2, 0.8), measure 0.6: invisible to a coarse unit-spaced grid'),
-    ('+ ?0 * pow exp neg pow2 - <constant> 2 float("inf") ?0', '?0', 'KILL',
+    ('+ ?0 * pow exp neg pow - <constant> 2 2 float("inf") ?0', '?0', 'KILL',
      'violates exactly at c = 2: requires the constant battery to include even integers '
      '(powsin-in-constant-space at an ordinary value)'),
     ('pow abs ?0 <constant>', 'pow abs ?0 <constant>', 'CERTIFIED',

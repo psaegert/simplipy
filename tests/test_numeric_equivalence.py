@@ -51,14 +51,12 @@ certificate -- so each spelling keeps its own bare measure. Per-row monotonicity
 for the chain's internal certified metric, which that boundary hides from this
 measurement.
 
-Two known sound-flag families double as the walk's liveness canaries
+A known sound-flag family doubles as the walk's liveness canary
 (test_expected_flag_set pins the exact flag set, so wiring rot in the numeric tier --
 a screen that stops seeing disagreements, an inverted flag predicate -- fails loudly
-instead of passing vacuously):
-  * row 20 (43/64 points): a structural zero (x13 - x13) in a denominator evaluates
-    under numpy's SIGNED zeros, flipping the pole sign pointwise vs the contract's one
-    unsigned zero; the judge works at contract semantics and certifies the engine's
-    inf-spelling fold.
+instead of passing vacuously). Row 20, a structural zero (x13 - x13) in a denominator,
+flagged until f64 kept the sign IEEE gives that zero: its answer now evaluates as numpy's
+signed zeros do.
   * row 263 (7/64 points): an exp-argument respelling (exp(inv((1/3)y)) -> exp(3/y))
     with f64 wobble past rtol=1e-5 where the exponent is large; judge-certified sound.
     This row sat inside the old 20% dead band -- it is the in-suite witness that the
@@ -72,21 +70,16 @@ judge pass over the masked rows returns 80/135 spurious convictions (measured
 2026-07-29). Masked-row numeric coverage needs the literal-provenance carve-out
 tracked on the monitor-polish ledger; until then their coverage here is structural.
 """
-import json
-import os
-import re
-
 import numpy as np
 import pytest
 
 import simplipy
+from simplipy.verify import default_corpus
 from simplipy.engine import SimpliPyEngine
 from simplipy.verify._monitor import judge_pair
 from conftest import acj_config_path
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 # Commutative-operand swap for the permutation check (the campaign harnesses' swapper).
 # The arity tables span the live 0.12 vocabulary AND the retired hyper-ops so the swap
@@ -151,9 +144,7 @@ def X():
 @pytest.fixture(scope='module')
 def walk(eng, X):
     """One pass over the corpus; every test below asserts a different invariant of it."""
-    from conftest import require_or_skip
-    require_or_skip(CORPUS, 'tracked corpus not present')
-    corpus = json.load(open(CORPUS))
+    corpus = default_corpus()
     r = {'n': len(corpus), 'errors': [], 'idem_rows': [], 'perm_rows': [],
          'complexity_in': 0, 'complexity_out': 0, 'screened': 0, 'flagged': []}
     for i, sk in enumerate(corpus):
@@ -189,6 +180,11 @@ class TestCorpusGate:
 
     def test_permutation_invariant(self, walk):
         assert not walk['perm_rows'], f'permutation failures at rows {walk["perm_rows"]}'
+
+    def test_step_cap_never_binds(self, eng, walk):
+        # The walk ran the deployed default effort on every row. A binding step cap would
+        # leave a non-fixpoint answer with no other signal.
+        assert eng._core.step_cap_binds() == 0
 
     def test_screen_coverage_exact(self, walk):
         # anti-vacuity, pinned exactly: 400 rows minus the 135 whose INPUT carries
@@ -326,20 +322,74 @@ class TestCorpusGate:
         # two-signed, so its orientation is the product's choice in every mode (a one-signed
         # pole keeps its spelling); a repeated wildcard binds a class up to sign, and FACTOR
         # takes a factor the terms share up to sign. The walk rests 54,000 milli-bits cheaper.
-        assert walk['complexity_out'] == 56053168, walk['complexity_out']
-        gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
-        if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
-            m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56307982, \
-                'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
+        # THE SEARCH OWNS THE DISTRIBUTIVE LAW: 56,053,168 -> 55,815,451. FACTOR takes what
+        # some terms of a sum share out of exactly those terms, DISTRIBUTE also works on one
+        # factor or one term of a sum factor, and every candidate is tried cheapest rebuilt state
+        # first in one search: 50 walk rows move, every one to a cheaper answer.
+        # ONE CLASS READING: 55,815,451 -> 55,812,451. An odd function of a negated argument is a
+        # class member like one of a sum, so an even power over it files the positive argument:
+        # row 397's `sinh(sinh(-x15))^2` is `sinh(sinh(x15))^2` (-3,000).
+        # THE SIGN KEY (2026-10-18): 55,812,451 -> 55,795,451. Fewest signs, then outermost, on
+        # every equal price, and an odd function of any literal multiple trades its sign: 10
+        # walk rows move. Eight rest cheaper, the sign traded where it costs least: 32 and 86
+        # (-3,000 each), 160 and 233 (-2,000), 180 and 336 (-1,000), 256 (-6,000), 319 (-5,000).
+        # Two rest dearer by 3,000, 97 and 274, by the search's path.
+        # ONE PRICE FOR A SIGN (2026-10-19): 55,795,451 -> 55,127,866. A sign costs one bit
+        # wherever it sits (a negation standing alone paid a `Mul` head, a -1 beside other factors
+        # nothing), so the measure moved: the previous answers price 55,158,451 under it. 67 walk
+        # rows move; 11 rest cheaper (7, 18, 46, 67, 83, 95, 133, 149, 262, 327, 373: -30,585 in
+        # all), none dearer, and 56 respell at an equal price, the sign key placing their signs.
+        # GROUND NaN FACTS (2026-10-19): 55,127,866 -> 54,750,550. A family of `<constant>` values
+        # that is NaN at every constant folds to NaN: rows 205 (`acosh(cos(c)/5)`, -136,229) and
+        # 343 (`acos(cosh(c))`, finite only at c = 0; -241,087) are NaN. Both used to keep the
+        # family read as a free constant, `acosh(c)` and `acos(c)`, which is defined.
+        # AN OVERFLOW CUTS NO BAND (2026-10-19): 54,750,550 -> 54,718,550. Where sinh overflows
+        # the collapse of `asinh(sinh(t))` gives the true value, so f64 collapses it for every
+        # t: row 380 rests 32,000 milli-bits cheaper.
+        # POWERS OF e COLLECT: 54,718,550 -> 54,715,550. The product constructor merges
+        # `exp(a) exp(b)` into `exp(a + b)`: row 7's `exp(x6) exp(-x3)` is `exp(x6 - x3)`
+        # (-3,000).
+        # A CONSTANT ABSORBS EVERY CLASS'S ORIENTATION SIGN: 54,715,550 -> 54,705,550. Beside a bare
+        # `<constant>` a sum holding `<constant>`s of its own takes the orientation with the fewer
+        # signs: rows 203 (-2,000), 296 (-1,000), 312 (-4,000), 321 (-2,000) and 364
+        # (`<constant>*(<constant> - x7)/x3` is `<constant>*(x7 + <constant>)/x3`, -1,000) rest
+        # cheaper, and row 274 takes its tied orientation by its own sum (0).
+        # A ZERO KEEPS ITS SIGN WHERE IT IS INVERTED (f64): 54,705,550 -> 54,728,550. The
+        # inverse of a product holding an exact zero distributes over its members, the zero
+        # giving +inf, as IEEE's signed zero has it: rows 20 (`inf*x14*(x11 - x17)` is
+        # `-inf*x14*(x17/x11 - 1)`, +8,000) and 283 (+15,000) keep the members' signs.
+        # ONE ORIENTATION WHEREVER A CLASS STANDS: 54,728,550 -> 54,727,550. A site alone takes
+        # the orientation it takes as a product's one factor: row 163's odd root of a sum under
+        # `cos` takes its sign outside, where `cos` drops it (-1,000), and row 82 respells its
+        # `tan(tan(.)^3)` at an equal price.
+        # A ZERO SET IS READ ON THE DOMAIN: 54,727,550 -> 54,672,228. The zero-set certificate
+        # applies the identity theorem on an expression's domain, so sums over log, roots, acosh,
+        # asin and quotients are null there, and inverses split and signs move over them. 15
+        # walk rows move: ten rest cheaper (50, 286 and 351 -6,000 each, 68 -1,000, 119
+        # -16,737, 156 -4,000, 196 -6,585, 318 -2,000, 362 -7,000, 366 -3,000), four respell
+        # at an equal price (65, 87, 160, 239) and row 55 rests dearer (+3,000): its inverse
+        # now splits over `acosh(acos(<constant>))`, which takes the constant's inverse.
+        # A SUM THAT VANISHES ON A REGION KEEPS ITS ZERO'S SIGN WHERE IT IS INVERTED:
+        # 54,672,228 -> 54,657,536. Where a product holding a sum the certificate cannot show
+        # null is inverted, f64 keeps the sign with the inverse and distributes it over the
+        # members. 10 walk rows move: five rest cheaper (77 -3,000, 135 -1,000, 154 -1,000, 160
+        # -8,000, 331 -2,692), four respell at an equal price (176, 325, 329, 336) and row 163
+        # rests dearer (+1,000): its odd root under `cos` keeps the orientation it is written in.
+        # A ZERO SET IS READ ON A SLICE: 54,657,536 -> 54,615,636. The zero-set certificate reads a
+        # sum one variable at a time (the sum moves with it on every slice, by its slope or its
+        # derivative's zero set), through a factor every term shares, and past the horizon for
+        # an entire function, so more inverses split and more signs move. 11 walk rows move:
+        # seven rest cheaper (82 -1,000, 87 -6,000, 117 -3,000, 125 -19,000, 163 -8,900, 290
+        # -1,000, 341 -3,000) and four respell at an equal price (55, 113, 160, 297).
+        assert walk['complexity_out'] == 54615636, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
-        # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)
-        # and row 263 (exp-argument respell, 7/64 points -- the old dead band's in-suite
-        # witness) flag deterministically under the pinned corpus/config/X. An empty or
-        # shrunken flag set here means the numeric tier stopped seeing disagreements --
-        # vacuity, not health.
-        assert [(i, n) for (i, n, *_) in walk['flagged']] == [(20, 43), (263, 7)], \
+        # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old
+        # dead band's in-suite witness) flags deterministically under the pinned
+        # corpus/config/X. An empty flag set here means the numeric tier stopped seeing
+        # disagreements -- vacuity, not health. (Row 20's structural zero no longer flags:
+        # f64 keeps the sign IEEE gives it.)
+        assert [(i, n) for (i, n, *_) in walk['flagged']] == [(263, 7)], \
             walk['flagged']
 
     def test_flagged_rows_adjudicate_sound(self, walk):

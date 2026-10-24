@@ -29,18 +29,17 @@ silently fails to match explicit-era keys. So the CONTENT must be
 dialect-invariant: every input is canonicalised into the ONE internal AC state,
 masked there, and only then rendered back into the caller's dialect.
 """
-import json
 import os
 
 import numpy as np
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.normalization import to_expression, to_skeleton
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 
 @pytest.fixture(scope="module")
@@ -170,11 +169,25 @@ class TestDialectInvariance:
         b = engine.simplify(engine.to_prefix(to_skeleton(right, engine)))
         assert list(a) == list(b), f'{left} -> {a} vs {right} -> {b}'
 
+    #: No corpus row (of the first 120) has skeletons that differ by dialect. The last one held a
+    #: negated sum beside a masked number, `-(A + B)/(4*x17)`, whose sum holds `<constant>`s of
+    #: its own (the masked exponent and root index): a bare `<constant>` absorbs every constant
+    #: factor of its product, a class's orientation sign -1 included, so both dialects give
+    #: `<constant> * (A + B)/x17`.
+    KNOWN_DIALECT_DEPENDENT: list = []
+
+    @pytest.mark.parametrize('route', ['-(x1 + x2^c)/c', 'c*-(x1 + x2^c)', 'c*(-x1 - x2^c)'])
+    def test_a_constant_absorbs_the_orientation_sign_of_a_sum(
+            self, engine: SimpliPyEngine, route: str) -> None:
+        """A sum holding a `<constant>` beside a bare `<constant>` takes the orientation with
+        the fewer signs, whatever route built the product: the constant absorbs the sign."""
+        tokens = engine.to_prefix(route.replace('c', '<constant>'))
+        assert engine.simplify(tokens) == engine.to_prefix('<constant>*(x1 + x2^<constant>)')
+        assert to_skeleton(tokens, engine) == to_skeleton(
+            engine.to_prefix('<constant>*(x1 + x2^<constant>)'), engine)
+
     def test_the_corpus_agrees_across_dialects(self, engine: SimpliPyEngine) -> None:
-        if not os.path.exists(CORPUS):
-            pytest.skip('corpus not present')
-        with open(CORPUS) as fh:
-            corpus = json.load(fh)
+        corpus = default_corpus()
         disagreeing = []
         for tokens in corpus[:120]:
             prefix, tagged = engine.to_prefix(tokens), engine.to_tagged(tokens)
@@ -185,7 +198,8 @@ class TestDialectInvariance:
             from_tagged = engine.simplify(engine.to_prefix(to_skeleton(tagged, engine)))
             if list(from_tagged) != to_skeleton(prefix, engine):
                 disagreeing.append(tokens)
-        assert not disagreeing, f'{len(disagreeing)} rows still dialect-dependent'
+        assert [list(t) for t in disagreeing] == self.KNOWN_DIALECT_DEPENDENT, \
+            f'{len(disagreeing)} rows dialect-dependent: {disagreeing}'
 
 
 class TestSkeletonMasksEveryNumeric:

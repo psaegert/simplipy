@@ -81,6 +81,15 @@ class TestReadingBackNeedsAnInjectiveMap:
     def test_the_shipped_engine_is_invertible(self, eng) -> None:
         eng._assert_realizations_are_invertible()  # must not raise
 
+    def test_reading_realization_notation_back_runs_the_check(self, tmp_path) -> None:
+        # The check is wired into the one reader: `np.abs` names both `abs` and `absolute`
+        # here, so reading it back refuses instead of picking one.
+        eng = self._colliding(tmp_path)
+        for entry in (eng.to_prefix, eng.simplify):
+            with pytest.raises(ValueError, match='not invertible'):
+                entry(['np.abs', 'x0'])
+        assert eng.to_prefix(['abs', 'x0']) == ['abs', 'x0']  # operator notation still reads
+
     def test_writing_never_refuses(self, tmp_path) -> None:
         # Only READING needs injectivity; producing the notation is always well defined.
         eng = self._colliding(tmp_path)
@@ -114,5 +123,5 @@ class TestTheCompilePipelineIsTerminal:
 
     def test_a_callable_is_not_accepted_as_conversion_input(self, eng) -> None:
         f = eng.as_callable('x0 + 1')
-        with pytest.raises(TypeError, match='conversion expects'):
+        with pytest.raises(TypeError, match='expected an infix str or a token sequence'):
             eng.to_prefix(f)

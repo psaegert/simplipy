@@ -10,7 +10,6 @@ generic nested-container utilities.
 import re
 import time
 import math
-import warnings
 import itertools
 from collections import Counter
 from types import CodeType
@@ -18,6 +17,25 @@ from typing import Any, Generator, Callable
 from copy import deepcopy
 from tqdm import tqdm
 import numpy as np
+
+# The numeral grammar and the reserved numeric spellings have ONE definition, in the core
+# (`rust/utils.rs`); the functions below call it rather than keep a copy in sync. The import is
+# guarded as the engine's is (`simplipy.engine`), so a missing or unbuilt extension does not
+# stop `import simplipy`: the engine refuses at construction, naming the failure, and these two
+# refuse when called.
+try:
+    from simplipy._core import (  # type: ignore[attr-defined]
+        is_numeric_string as _core_is_numeric_string,
+        reserved_numeric_spelling as _core_reserved_numeric_spelling,
+    )
+except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
+    _CORE_IMPORT_ERROR = _exc
+
+    def _core_missing(token: str) -> bool:
+        raise ImportError('simplipy._core is required (the pure-Python engine was removed): the '
+                          f'compiled extension failed to import ({_CORE_IMPORT_ERROR!r})')
+
+    _core_is_numeric_string = _core_reserved_numeric_spelling = _core_missing
 
 # The declared public surface of this module (D11 column R18, owner-ratified
 # 2026-08-16): the evidence-backed names. Everything else here is reachable
@@ -162,7 +180,7 @@ def get_used_modules(infix_expression: str) -> list[str]:
     .. note::
        This is a plain string scanner and carries no trust decision. Since 0.13 the
        engine derives its own realization roots and checks them against
-       :mod:`simplipy.trust` before importing anything (register C1.12) -- consult
+       :mod:`simplipy.trust` before importing anything -- consult
        that module, not this function, for what a config is allowed to import.
 
     Parameters
@@ -304,7 +322,7 @@ def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[
     return list(map(lambda token: variable_mapping.get(token, token), prefix_expression))
 
 
-def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, *, convert_numbers_to_constant: bool) -> tuple[list[str], list[str]]:
+def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False) -> tuple[list[str], list[str]]:
     """Rename abstract-constant slots to explicit identifiers (``C_0``, ``C_1``, ...).
 
     A purely MECHANICAL code-generation step: every placeholder slot -- ``"<constant>"``
@@ -323,14 +341,6 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     inplace : bool, optional
         If ``True``, modifies the input list; otherwise, works on a shallow copy.
         Defaults to ``False``.
-    convert_numbers_to_constant : bool, optional
-        Deprecated. When ``True``, digit-only numeric tokens are ALSO converted into
-        fittable constants -- a masking decision smuggled into a mechanical helper, and
-        an incoherent one (``3`` converts, ``-3``/``2.0``/``3.14`` do not; a ``pow``
-        exponent's integrality controls the DOMAIN, so converting it silently changes
-        semantics). Kept accepted through this release so pinned consumers keep
-        working; decide abstraction upstream with ``simplipy.masking`` instead.
-        Defaults to ``False`` (it defaulted to ``True`` before 0.13.0).
 
     Returns
     -------
@@ -341,20 +351,12 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     Examples
     --------
     >>> expr = ['*', '<constant>', '+', 'x', '2']
-    >>> explicit_constant_placeholders(expr, convert_numbers_to_constant=False)
+    >>> explicit_constant_placeholders(expr)
     (['*', 'C_0', '+', 'x', '2'], ['C_0'])
 
-    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'],
-    ...                                convert_numbers_to_constant=False)
+    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'])
     (['+', 'K', 'C_0'], ['K', 'C_0'])
     """
-    if convert_numbers_to_constant:
-        warnings.warn(
-            "explicit_constant_placeholders(convert_numbers_to_constant=True) is "
-            "deprecated: which literals become fittable constants is a masking-policy "
-            "decision -- apply simplipy.masking upstream and let this helper only "
-            "rename explicit placeholder slots.",
-            DeprecationWarning, stacklevel=2)
 
     if inplace:
         modified_prefix_expression = prefix_expression
@@ -367,10 +369,10 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     generated_index = 0
 
     for i, token in enumerate(prefix_expression):
-        # C_i re-numbering is part of the MECHANICAL contract and is unconditional; the
-        # deprecated flag only gates the numeral conversion. (Before 0.13.0 the flag
-        # gated BOTH, conflating codegen renaming with a masking decision.)
-        if is_constant_placeholder(token) or (convert_numbers_to_constant and token.isnumeric()):
+        # C_i re-numbering is the helper's whole contract: it renames placeholder slots and
+        # never numerals (which literals become constants is decided upstream, by
+        # `simplipy.masking`).
+        if is_constant_placeholder(token):
             if provided_index < len(provided_constants):
                 constant_name = provided_constants[provided_index]
                 provided_index += 1
@@ -551,8 +553,14 @@ def _dedup_keyed_rules(
         dummy_variables: list[str],
         engine: Any,
         variable_prefix: str = '?',
-        verbose: bool = False) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
-    """The variable-remapped rules paired with their dedup keys, in input order.
+        verbose: bool = False,
+        *,
+        rule_mode: str,
+        canon: str | None = None) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
+    """The variable-remapped rules paired with their dedup keys, in input order. The key is
+    the canonical form as ``rule_mode``'s load reads a rule side: in the canon the rules were
+    certified in (``canon``, :class:`~simplipy.SimpliPyEngine`'s ``rule_canons``; ``None``
+    is ``rule_mode``'s own).
 
     ONE key, every consumer: :func:`deduplicate_rules` folds this list, and the mine's
     per-proposal duplicate accounting folds it identically. A second copy of the keying
@@ -576,7 +584,8 @@ def _dedup_keyed_rules(
     # THE KEY IS THE INTERNAL FORM, not the spelling (owner ruling 2026-08-18). Batched
     # through the core in ONE call: a ruleset is keyed side-by-side and a per-rule call
     # would re-pay the token-overlay setup for every entry.
-    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped])
+    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped], rule_mode=rule_mode,
+                                          canon=canon)
     out: list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]] = []
     for key, pair in zip(keys, remapped):
         # A side the AC parser refuses keeps its SPELLING as the key: the loader drops
@@ -586,31 +595,37 @@ def _dedup_keyed_rules(
     return out
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def dedup_target_wins(engine: Any, new: Any, kept: Any, rule_mode: str) -> bool:
+    """THE DEDUP TIE-BREAK: does a target replace the kept one for the same source? Iff it is
+    strictly below it in ``rule_mode``'s serve ordering -- the order the rewrite pass fires
+    under, never a token count. A pair the ordering cannot read keeps the earlier target."""
+    try:
+        return bool(engine._core.ac_ordered_below_in(list(new), list(kept), rule_mode=rule_mode))
+    except ValueError:
+        return False
+
+
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: Any, canon: str | None = None) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     """Deduplicate a list of simplification rules by canonicalizing variables.
 
     This function processes a list of (source, target) simplification rules. It
-    standardizes the variables in each rule to a canonical form and then
-
-    removes duplicates. If multiple rules simplify to different targets from
-    the same canonical source, it keeps the one with the shortest target.
+    standardizes the variables in each rule to a canonical form and then removes
+    duplicates. If several rules rewrite the same canonical source to different targets,
+    it keeps the rule whose target is lower in ``rule_mode``'s serve ordering (the order
+    the rewrite pass fires under), not the one with fewer tokens; the whole pair is kept,
+    so a source is never crossed with another rule's target.
 
     Two rules are the SAME rule when ``engine`` translates their sources into the same
-    internal pattern -- not when they are spelled alike (owner ruling 2026-08-18,
-    "instead of comparing spelling, compare internal form"). ``* (-1) asin _0`` and
-    ``* asin _0 (-1)`` are one rule; keying on the spelling shipped both, and the second
-    could never fire because the first already owns every subject it matches.
+    internal pattern, not when they are spelled alike: ``* (-1) asin _0`` and
+    ``* asin _0 (-1)`` are one rule. Keying on the spelling would keep both, and the
+    second could never fire because the first already matches every subject it matches.
 
-    The key is the BARE-context canonical form -- the one
-    :func:`~simplipy._core.Engine.ac_canonical_keys` computes, which is literally what
-    the rule loader builds for a rule side. It is deliberately NOT
+    The key is the canonical form as ``rule_mode`` reads a rule side, which is what the
+    rule loader builds for it. It is deliberately NOT
     :meth:`~simplipy.engine.SimpliPyEngine.to_prefix`/``to_tagged``: those run the
-    rewrite pass under the LOADED ruleset and the full certificate context, so on an
-    engine holding acj-4-3 ``to_prefix(['*','(-1)','asin','_0'])`` returns
-    ``asin neg _0`` -- that rule's own target -- while a rules-less engine over the same
-    vocabulary returns ``neg asin _0``. A dedup key that depends on the ruleset being
-    deduplicated is circular; this one is a pure function of the operator table and
-    returns the same answer on both engines.
+    rewrite pass under the LOADED ruleset, so a rule's source could come back as that
+    rule's own target. A key that depends on the ruleset being deduplicated would be
+    circular; this one depends only on the operator table and the mode.
 
     Parameters
     ----------
@@ -624,32 +639,49 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
         REQUIRED, keyword-only: the engine whose operator table defines the internal
         form. Keyword-only on purpose -- a positional third argument would have
         silently swallowed an existing caller's positional ``verbose``.
+    rule_mode : str or Mode
+        REQUIRED, keyword-only: the mode the rules serve in, ``'f64'`` (also
+        ``'default'``), ``'real'``, ``'permissive'`` or a :class:`~simplipy.Mode` member.
+        It decides how a rule side is read (the key) and which target wins (its serve
+        ordering).
+    canon : str or None, optional
+        The canon the rules were certified in, which keys them (``'legacy'`` or a rule
+        mode); ``None`` is ``rule_mode``'s own.
 
     Returns
     -------
     list[tuple[tuple[str, ...], tuple[str, ...]]]
-        The deduplicated and optimized list of simplification rules.
+        The deduplicated list of simplification rules, in first-seen order of their keys.
     """
-    deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-    for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose):
-        existing = deduplicated_rules.get(key)
-        # The WHOLE PAIR wins or loses: a strictly shorter target brings its own source
-        # spelling with it, so every emitted rule is a (source, target) that was
-        # certified together -- never a cross of one rule's source with another's target.
-        if existing is None or len(pair[1]) < len(existing[1]):
-            deduplicated_rules[key] = pair
-
-    return list(deduplicated_rules.values())
+    from .engine import _coerce_rule_mode
+    rule_mode = _coerce_rule_mode(rule_mode)
+    keyed = _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
+                               rule_mode=rule_mode, canon=canon)
+    return [keyed[p][1] for p in _dedup_fold(keyed, engine, rule_mode)]
 
 
-_DECIMAL_NUMERAL = re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
-_FRACTION_NUMERAL = re.compile(r'[+-]?[0-9]+/[0-9]*[1-9][0-9]*')
+def _dedup_fold(keyed: list, engine: Any, rule_mode: str) -> list[int]:
+    """THE DEDUP FOLD over :func:`_dedup_keyed_rules` output: one slot per key, at its first
+    occurrence, held by the pair whose target :func:`dedup_target_wins` puts lowest (the
+    earlier on ties). -> the winning positions, in slot order. :func:`deduplicate_rules` is
+    this fold; a consumer that must know which input row holds which slot (the promotion
+    refund) reads it here rather than replicate it."""
+    slots: dict[_DedupKey, int] = {}
+    for p, (key, pair) in enumerate(keyed):
+        held = slots.get(key)
+        # The WHOLE PAIR wins or loses: a target strictly below the kept one in the mode's
+        # ordering brings its own source spelling with it, so every emitted rule is a
+        # (source, target) that was certified together -- never a cross of one rule's source
+        # with another's target.
+        if held is None or dedup_target_wins(engine, pair[1], keyed[held][1][1], rule_mode):
+            slots[key] = p
+    return list(slots.values())
 
 
 def is_numeric_string(s: str) -> bool:
     """Check if a string is a numeral of the engine's grammar.
 
-    THE NUMERAL GRAMMAR, shared with the Rust core (``utils::is_numeric_string``): a
+    THE NUMERAL GRAMMAR, defined once in the compiled core (``utils::is_numeric_string``): a
     decimal ``[+-]? (D+ (. D*)? | . D+) ([eE] [+-]? D+)?`` or an exact fraction
     ``[+-]? D+ / D+`` with a nonzero denominator, D an ASCII digit. Value-free:
     ``1e400`` is a numeral although no float holds it.
@@ -677,9 +709,7 @@ def is_numeric_string(s: str) -> bool:
     >>> is_numeric_string("abc")
     False
     """
-    if not isinstance(s, str):
-        return False
-    return bool(_DECIMAL_NUMERAL.fullmatch(s) or _FRACTION_NUMERAL.fullmatch(s))
+    return isinstance(s, str) and _core_is_numeric_string(s)
 
 
 _INTEGER_NUMERAL = re.compile(r'[+-]?[0-9]+')
@@ -723,7 +753,7 @@ def evaluator_literal(token: str) -> str:
             return repr(float(value))
         except OverflowError:
             return 'float("-inf")' if value < 0 else 'float("inf")'
-    if _FRACTION_NUMERAL.fullmatch(bare):
+    if '/' in bare and is_numeric_string(bare):
         p, q = bare.split('/')
         try:
             float(int(p) / int(q))
@@ -745,37 +775,25 @@ def literal_float(token: str) -> float | None:
     The mining oracles read literals here, so a fraction token or a huge integer reads the way
     the compiled expression does (:func:`evaluator_literal`).
     """
-    if _DECIMAL_NUMERAL.fullmatch(token):
+    if not is_numeric_string(token):
+        return None
+    if '/' not in token:
         value = float(token)
         # an integer spelling is an `int` to the compiled evaluator, so `-0` is +0.0
         return 0.0 if value == 0 and _INTEGER_NUMERAL.fullmatch(token) else value
-    if _FRACTION_NUMERAL.fullmatch(token):
-        p, q = token.split('/')
-        try:
-            return int(p) / int(q)
-        except OverflowError:
-            return -math.inf if p.startswith('-') else math.inf
-        except ValueError:  # beyond Python's integer-string limit
-            return None
-    return None
-
-
-def _looks_numeric(t: str) -> bool:
-    """A token that starts like a number: after one optional pair of parentheses and any
-    run of signs, a digit or ``.`` (mirror of the Rust ``looks_numeric``)."""
-    if t.startswith('(') and t.endswith(')'):
-        t = t[1:-1]
-    t = t.lstrip('+-')
-    return bool(t) and (t[0] in '0123456789.')
-
-
-_RADIX_DIGITS = {'0x': '0123456789abcdef', '0o': '01234567', '0b': '01'}
+    p, q = token.split('/')
+    try:
+        return int(p) / int(q)
+    except OverflowError:
+        return -math.inf if p.startswith('-') else math.inf
+    except ValueError:  # beyond Python's integer-string limit
+        return None
 
 
 def reserved_numeric_spelling(t: str) -> bool:
-    """H-007: a spelling a STANDARD numeric reader interprets but the engine's symbolic
-    core does not -- refused at every semantic boundary (kept in sync with the Rust
-    ``reserved_numeric_spelling``).
+    """A spelling a STANDARD numeric reader interprets but the engine's symbolic
+    core does not -- refused at every semantic boundary (defined once in the compiled core,
+    ``utils::reserved_numeric_spelling``).
 
     Such a token has two contradictory readings: the AC canon would treat it as a free
     symbol and apply symbol algebra (``inf - inf -> 0``) while Python ``float()`` reads a
@@ -783,41 +801,11 @@ def reserved_numeric_spelling(t: str) -> bool:
     ``infinity``/``nan``, any case, optional sign), underscore digit groupings
     (``1_000``), base-prefixed integer literals (``0x10``/``0o17``/``0b101``), and
     malformed numerals -- tokens that start like a number but are not numerals of the
-    grammar (``1/0``, ``1/6.28``, ``--5``, ``1e5.5``; B2). Canonical numeric literals
+    grammar (``1/0``, ``1/6.28``, ``--5``, ``1e5.5``). Canonical numeric literals
     (``5``, ``+5``, ``1e-05``, ``1/3``, ``np.pi``, ``float("inf")``) and genuine free
     symbols (``x0``, ``_0``, ``x_0``) are NOT reserved.
     """
-    core = t[1:] if t[:1] in '+-' else t
-    # Family 1: textual non-finites.
-    if core.lower() in ('inf', 'infinity', 'nan'):
-        return True
-    # Family 3: base-prefixed integer literals (loose underscore grouping: fail closed).
-    lower = core.lower()
-    for prefix, digits_ok in _RADIX_DIGITS.items():
-        if lower.startswith(prefix):
-            digits = lower[len(prefix):].replace('_', '')
-            if digits and all(c in digits_ok for c in digits):
-                return True
-    # Family 2: underscore digit groupings -- every ``_`` strictly between two ASCII
-    # digits (Python's float-literal placement rule), and the cleaned spelling must be
-    # a float literal (non-finite words were handled above).
-    if '_' in t:
-        placed = all(
-            0 < i < len(t) - 1 and t[i - 1].isdigit() and t[i + 1].isdigit()
-            for i, c in enumerate(t) if c == '_'
-        )
-        if placed:
-            try:
-                float(t.replace('_', ''))
-                return True
-            except ValueError:
-                pass
-    # Family 4: malformed numerals.
-    if _looks_numeric(t):
-        inner = t[1:-1] if t.startswith('(') and t.endswith(')') else t
-        if not is_numeric_string(inner):
-            return True
-    return False
+    return _core_reserved_numeric_spelling(t)
 
 
 def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
@@ -1207,46 +1195,6 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
     return True, mapping
 
 
-def remove_pow1(prefix_expression: list[str]) -> list[str]:
-    """Remove identity power operations from a prefix expression.
-
-    This utility cleans up an expression by removing `pow1` operators, which
-    represent raising to the power of 1 (an identity operation), and replaces
-    `pow_1` (power of -1) with its canonical equivalent, `inv`.
-
-    Parameters
-    ----------
-    prefix_expression : list[str]
-        The prefix expression to clean.
-
-    Returns
-    -------
-    list[str]
-        The cleaned prefix expression without `pow1` or `pow_1` tokens.
-
-    Examples
-    --------
-    >>> expr = ['pow1', 'x', '+', 'y', 'pow_1', 'z']
-    >>> remove_pow1(expr)
-    ['x', '+', 'y', 'inv', 'z']
-    """
-    filtered_expression = []
-    for token in prefix_expression:
-        if token == 'pow1':
-            continue
-
-        if token == 'pow_1':
-            filtered_expression.append('inv')
-            continue
-
-        filtered_expression.append(token)
-
-    return filtered_expression
-
-
-# four sorts: `_N` any subtree, `!N` a subtree the interval engine certifies
-# defined-and-finite a.e., `$N` a subtree certified defined-finite-AND-nonzero a.e.
-# (the multiplicative-cancellation sort), `?N` a variable leaf.
 _WILDCARD_RE = re.compile(r'^[_?!$]\d+$')
 
 

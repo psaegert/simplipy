@@ -36,11 +36,11 @@ import os
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 MUL = {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True}
 ADD = {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True}
@@ -145,14 +145,14 @@ class TestTranslationCountGate:
         rule = (('pow', '+', '?0', '<constant>', '2'),
                 ('+', '<constant>', '*', '<constant>', '?0'))
         engine = SimpliPyEngine(operators=self._OPS, rules=[rule])
-        kept, subsumed, dropped, twins = engine._core.ac_rules_info()
+        kept, subsumed, dropped, twins = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert (kept, subsumed, dropped, twins) == (0, 0, 1, 0)
 
     def test_count_preserving_rule_loads(self) -> None:
         """Control: the servable Const algebra (1 -> 1) passes the count gate."""
         rule = (('pow', 'exp', '<constant>', 'np.pi'), ('<constant>',))
         engine = SimpliPyEngine(operators=self._OPS, rules=[rule])
-        kept, subsumed, dropped, twins = engine._core.ac_rules_info()
+        kept, subsumed, dropped, twins = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert (kept, subsumed, dropped, twins) == (1, 0, 0, 0)
 
 
@@ -187,8 +187,7 @@ class TestEndToEndInvariant:
         """The serve-side statement of the invariant, on the shipped pairing and the
         tracked 400-row corpus plus a Const-bearing battery, in both dialects."""
         engine = SimpliPyEngine.from_config(CONFIG)
-        with open(CORPUS) as fh:
-            corpus = json.load(fh)
+        corpus = default_corpus()
         extra = [['acos', 'cos', '<constant>'],
                  ['*', '<constant>', '<constant>'],
                  ['+', 'x0', '*', '<constant>', 'x1'],

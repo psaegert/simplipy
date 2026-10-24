@@ -28,7 +28,7 @@ descent, differing exactly at w=1 (-inf vs +inf under one-zero).
 import pytest
 
 from simplipy import SimpliPyEngine
-from conftest import acj_config_path
+from conftest import ACJ4_INTERIM_SUBSUMED, ACJ4_INTERIM_UPHILL, acj_config_path
 
 NEG = {"realization": "simplipy.operators.neg", "alias": [], "inverse": None,
        "arity": 1, "precedence": 2.5, "commutative": False}
@@ -80,7 +80,7 @@ class TestLoadConsumer:
         # The earlier comment here justified the pin with the 2026-08-18 dedup (6602 ->
         # 5553, an artifact of 6,594 rows, complexity 294,730,680). Every one of those
         # numbers is false for the artifact under test.
-        kept, subsumed, dropped, twins = eng._core.ac_rules_info()
+        kept, subsumed, dropped, twins = eng._core.ac_rules_info_in_mode(rule_mode='default')
         assert eng._core.ac_registry_dropped() == 0
         # 5553 -> 5558 at the INVERSE-PAIR BAND (2026-08-19): five rules the
         # constructor used to fold away now survive translation, because the band
@@ -91,7 +91,16 @@ class TestLoadConsumer:
         # under the current instrument ships 5,338 f64 rows (widened judge admits the
         # atanh-tanh np.e literal and the F104-band refinements); translation stays
         # PRISTINE 0/0 and the orientation twins go 8 -> 9 with the new row.
-        assert (kept, subsumed, dropped, twins) == (5347, 0, 0, 9)
+        # READ IN THE CANON IT WAS CERTIFIED IN (the legacy one: the file is a pre-0.15 mine),
+        # nothing is subsumed: pristine (5347, 0, 0, 9) again. (Read in f64's folded canon,
+        # `atanh pow (-10) (-9) -> -1e-09` was subsumed: (5346, 1, 0, 9).)
+        # INTERIM (2026-10-18), until the re-mine restores (5347, 0, 0, 9): the sign key
+        # makes the 16 rows pinned in conftest subsumed, and the one-bit sign makes the 2 rows
+        # pinned there climb; the twins go 9 -> 44 (a negation no longer pays a `Mul` head, so
+        # fewer of them climb). The product constructor's collection of powers of e subsumes
+        # one more pinned row (`exp(2)/e -> e`): (5364, 16, 2, 44) -> (5363, 17, 2, 44).
+        assert (subsumed, dropped) == (len(ACJ4_INTERIM_SUBSUMED), len(ACJ4_INTERIM_UPHILL))
+        assert (kept, subsumed, dropped, twins) == (5363, 17, 2, 44)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads

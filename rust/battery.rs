@@ -313,10 +313,15 @@ fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointC
 ///     precision-roulette seam class);
 ///   - snapped (symbolic-cancellation / pole-proximity at the point) -> row passes (the f64
 ///     algebra evaluates a DIFFERENT point there; measurement error, not a value claim).
+///
+/// `events` (f64 only) marks the rows where an operation of either side overflowed or
+/// underflowed (`numeric::RangeKind`): there f64 accepts the true value, so a row the contract
+/// finds equal passes however the deployed sides diverge, as in the contract judge's battery.
 #[allow(clippy::too_many_arguments)]
 pub fn rows_consistent(
     y_src: &[f64],
     y_cand: &[f64],
+    events: Option<&[bool]>,
     battery: &SpecialBattery,
     source: &[String],
     src_params: &[f64],
@@ -349,6 +354,7 @@ pub fn rows_consistent(
             // DIVERGENCE -- and that is the structural question, not the realisation one.
             // A few ULP between two spellings is rounding; asking the realisation bar here
             // would reject sound rules for it.
+            Some(P::Eq) if events.is_some_and(|e| e[r]) => false,
             Some(P::Eq) | None => {
                 !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
             }
@@ -469,5 +475,233 @@ mod tests {
         assert_eq!(snap_candidates(&[std::f64::consts::FRAC_PI_2]), None);
         // already canonical: no change to report
         assert_eq!(snap_candidates(&[3.0]), None);
+    }
+}
+
+// ===== THE DEPLOYED-ONLY BAR ===================================================================
+
+/// The probe values of the deployed-only bar beyond `BATTERY`, the infinities and NaN: where the
+/// step heads jump and the special functions meet a cell (a signed zero, the float neighbours of
+/// the integers, tiny and huge magnitudes, the negative integers of `harmonic`'s poles, erf's
+/// saturation), so that a law of the reals float64 breaks there is seen
+/// (`floor(x + 1) = floor(x) + 1` at x = -1e-17, `ceil(x) = floor(x) + 1` at every integer).
+pub const DEPLOYED_ONLY_EXTRA: [f64; 33] = [
+    -0.0,
+    1e-17,
+    -1e-17,
+    5e-324,
+    -5e-324,
+    1e-300,
+    -1e-300,
+    0.9999999999999999,
+    1.0000000000000002,
+    -0.9999999999999999,
+    -1.0000000000000002,
+    1.9999999999999998,
+    2.0000000000000004,
+    -1.9999999999999998,
+    -2.0000000000000004,
+    2.9999999999999996,
+    3.0000000000000004,
+    -2.9999999999999996,
+    -3.0000000000000004,
+    4.0,
+    -4.0,
+    2.5,
+    -2.5,
+    6.0,
+    -6.0,
+    7.0,
+    -7.0,
+    1e17,
+    -1e17,
+    1e300,
+    -1e300,
+    0.1,
+    -0.1,
+];
+
+/// Rows of the product past this many are thinned to an even stride (four or more variables).
+const DEPLOYED_ONLY_MAX_ROWS: usize = 250_000;
+
+/// What the deployed-only bar found: the verdict, the number of probes, and the first probe
+/// where the sides differ.
+pub struct DeployedExact {
+    pub ok: bool,
+    pub probes: usize,
+    pub first: Option<Vec<f64>>,
+}
+
+/// THE DEPLOYED-ONLY BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero
+/// included, since an inverse or `atan2` reads it; NaN equal to NaN), with the engine's own
+/// kernels, at every probe? The probes are, per
+/// variable of `var_names` either side uses, the `BATTERY` points, +-inf, NaN and
+/// `DEPLOYED_ONLY_EXTRA` (their full product); a generic grid per variable with the others at
+/// 1.7 and -1.3; and the diagonal of that grid. No probe is excused: no tolerance, no range
+/// event, no extension of a NaN.
+///
+/// It is the whole verdict on a rule spelled with a head the contract has no kernel for
+/// (`hiprec::evaluable`): the contract judge's deployed lane calls it (`_core.deployed_exact`)
+/// and the mint applies it to every such pair it would accept, so the judge licenses exactly what
+/// the mint accepts. A side holding a `<constant>`, or one that does not compile, fails.
+pub fn deployed_exact(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> DeployedExact {
+    let refused = DeployedExact {
+        ok: false,
+        probes: 0,
+        first: None,
+    };
+    if lhs.iter().chain(rhs).any(|t| t == "<constant>") {
+        return refused;
+    }
+    let (Ok(tl), Ok(tr)) = (
+        crate::eval::Tape::compile(lhs, ops, var_names),
+        crate::eval::Tape::compile(rhs, ops, var_names),
+    ) else {
+        return refused;
+    };
+    let used: Vec<usize> = (0..var_names.len())
+        .filter(|&i| lhs.iter().chain(rhs).any(|t| *t == var_names[i]))
+        .collect();
+    let mut values: Vec<f64> = Vec::new();
+    for v in BATTERY
+        .iter()
+        .map(|a| a.value())
+        .chain([f64::INFINITY, f64::NEG_INFINITY, f64::NAN])
+        .chain(DEPLOYED_ONLY_EXTRA)
+    {
+        if !values.iter().any(|w| w.to_bits() == v.to_bits()) {
+            values.push(v);
+        }
+    }
+    let width = var_names.len().max(1);
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    let total = values.len().saturating_pow(used.len() as u32);
+    let stride = total.div_ceil(DEPLOYED_ONLY_MAX_ROWS).max(1);
+    for pick in (0..total).step_by(stride) {
+        let mut row = vec![1.7f64; width];
+        let mut rem = pick;
+        for &v in &used {
+            row[v] = values[rem % values.len()];
+            rem /= values.len();
+        }
+        rows.push(row);
+    }
+    let grid = generic_grid();
+    for cfg in [1.7f64, -1.3] {
+        for &v in &used {
+            for &g in &grid {
+                let mut row = vec![cfg; width];
+                row[v] = g;
+                rows.push(row);
+            }
+        }
+    }
+    if used.len() >= 2 {
+        for &g in &grid {
+            let mut row = vec![1.7f64; width];
+            for &v in &used {
+                row[v] = g;
+            }
+            rows.push(row);
+        }
+    }
+    let n = rows.len();
+    let cols: Vec<Vec<f64>> = (0..width)
+        .map(|c| rows.iter().map(|r| r[c]).collect())
+        .collect();
+    let (yl, yr) = (
+        tl.eval_columns(&cols, &[], n),
+        tr.eval_columns(&cols, &[], n),
+    );
+    let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits();
+    match (0..n).find(|&i| !same(yl[i], yr[i])) {
+        Some(i) => DeployedExact {
+            ok: false,
+            probes: n,
+            first: Some(used.iter().map(|&v| rows[i][v]).collect()),
+        },
+        None => DeployedExact {
+            ok: true,
+            probes: n,
+            first: None,
+        },
+    }
+}
+
+/// The generic grid of the deployed-only bar: every 0.05 in [-25, 25] and a magnitude tail,
+/// shifted off the integers. Dense enough to land between a saturation and the next integer,
+/// where a step head and a saturating one part (`erf(floor(x))` is below 1 on [5.9216, 6) while
+/// `erf(x)` is 1 there; `tanh` likewise on [19.06, 20)).
+fn generic_grid() -> Vec<f64> {
+    let mut g: Vec<f64> = Vec::new();
+    g.extend((0..=1000).map(|i| -25.0 + 0.05 * i as f64));
+    g.extend([
+        -1e4, -1e3, -300.0, -100.0, -50.0, -30.0, 30.0, 50.0, 100.0, 300.0, 1e3, 1e4,
+    ]);
+    let mut out: Vec<f64> = Vec::new();
+    for v in g.into_iter().map(|v| v + 0.0137421) {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod deployed_only_tests {
+    use super::*;
+
+    fn s(t: &str) -> Vec<String> {
+        t.split(' ').map(String::from).collect()
+    }
+
+    /// The bar refuses the laws of the reals that float64 breaks at a jump or a pole, and passes
+    /// the float64 identities.
+    #[test]
+    fn deployed_exact_sees_the_jumps() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        for (l, r) in [
+            ("+ floor x0 1", "ceil x0"),
+            ("floor + x0 1", "+ floor x0 1"),
+            ("mod + x0 1 1", "mod x0 1"),
+            ("floor mod x0 1", "0"),
+            ("mod x0 x0", "0"),
+            ("harmonic x0", "- harmonic + x0 1 inv + x0 1"),
+            ("besselj 0.5 x0", "besselj 0.5 abs x0"),
+            ("* floor x0 0", "0"),
+            ("max x0 x1", "* 0.5 + + x0 x1 abs - x0 x1"),
+            ("floor <constant>", "<constant>"),
+            // a saturation and the next integer part the step head from the smooth one
+            ("acosh erf floor x0", "acosh erf x0"),
+            ("acosh tanh floor x0", "acosh tanh x0"),
+            // a zero's sign is a value an inverse reads: ceil(asinh(-1)) is -0
+            ("ceil asinh -1", "0"),
+            ("mod floor x0 1", "* 0 x0"),
+        ] {
+            assert!(!deployed_exact(&s(l), &s(r), &v, ops).ok, "{l} -> {r}");
+        }
+        for (l, r) in [
+            ("floor floor x0", "floor x0"),
+            ("ceil neg x0", "neg floor x0"),
+            ("max x0 x0", "x0"),
+            ("max x0 x1", "max x1 x0"),
+            ("min x0 float(\"inf\")", "x0"),
+            ("erf neg x0", "neg erf x0"),
+        ] {
+            let d = deployed_exact(&s(l), &s(r), &v, ops);
+            assert!(d.ok, "{l} -> {r} at {:?}", d.first);
+            assert!(d.probes > 300);
+        }
     }
 }
