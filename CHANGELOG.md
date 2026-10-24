@@ -207,7 +207,14 @@ model predictions.
   are one answer, `1/(3 - x1)`, and so are `-atan(1/(x1 - 3))` and `atan(1/(3 - x1))` (0.14.7
   gives two answers for each pair). `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`, which is `-inf`
   at `x1 = 3` like its limit (0.14.7 and the input give `+inf` there), and
-  `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf` (0.14.7: `1/(x1 - 3)/(6 - 2*x1)`, `+inf`). A class
+  `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf` (0.14.7: `1/(x1 - 3)/(6 - 2*x1)`, `+inf`). A sum that
+  holds the class's sum as an exact polynomial factor is read in the class too, odd or even in it
+  by the multiplicity of that factor, where the class's sum is linear in one of its variables:
+  `9 - x1^2` is `-(x1 - 3)*(x1 + 3)`, so `1/((9 - x1^2)*(x1 - 3))`, `1/((x1^2 - 9)*(3 - x1))` and
+  `-1/((x1^2 - 9)*(x1 - 3))` are one answer, `-1/((x1 - 3)*(x1^2 - 9))`, `-inf` at `x1 = 3` like
+  their limit (the first two inputs give `+inf` there, and so did their answer). Only a factor
+  proven by exact polynomial division counts, and its cofactor's sign at the zero is read where
+  it is a constant there (`x1 + 3` is 6 at `x1 = 3`). A class
   trades its sign only as a whole, so no sign moves through a pole whose two sides agree. A member
   defined on one side of the zero only (a log, an even root, a fractional or symbolic power) fixes
   the class's orientation, positive on that side, so the value at the zero is that side's limit:
@@ -236,16 +243,17 @@ model predictions.
   Known limits: where a member's value at the zero is not read, the class takes its cheapest
   orientation, which can leave that value off the limit (`log(x2*(x1 - 3))/(3 - x1)`, a class
   scaled by a factor of unknown sign, is `+inf` at `x1 = 3, x2 = -1` where its limit from
-  `x1 < 3` is `-inf`, and with the search off, `effort=0`, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))`,
-  a sum holding the class among terms free of it, is `+inf` at `x1 = 3` where its limit is
-  `-inf`, which `f64` and `real` reach at the default effort);
-  one class split across the terms of a sum with a dominant even term can give NaN at its zero,
-  where the limit is infinite (`x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3`), because no
-  single orientation is right at every such point; a class is read up to constant factors, not
-  polynomial ones (`9 - x1^2` is not seen to hold `3 - x1`), and a sum that vanishes at a class's
-  zero only through a term that vanishes faster there (`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is
-  read as a class of its own, so its sign can move alone and flip the infinity at that zero (also
-  in 0.14.7).
+  `x1 < 3` is `-inf`, and so can `1/((x2^2 - x3^2)*(x2 - x3))`, whose cofactor `x2 + x3` has no
+  one sign at `x2 = x3`); a polynomial multiple of a class whose sum is linear in none of its
+  variables (`x1^2 - 2`) is not read; one class split across the terms of a sum with a dominant
+  even term can give NaN at its zero where the limit is infinite, as the input does at other such
+  points: `x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3` has the limit `+inf` where
+  `x5 > 2*abs(x1)`, and its answer `2*x1/tan(x3 - x2) + x5*abs(1/(x2 - x3))` is `+inf` there for
+  `x1 > 0` and NaN for `x1 < 0`, the input the other way round; the sign of the odd term's
+  infinity at the zero follows `x1`, so no spelling of that cost is right at every such point; and
+  a sum that vanishes at a class's zero only through a term that vanishes faster there
+  (`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is read as a class of its own, so its sign can move alone
+  and flip the infinity at that zero (also in 0.14.7).
 - **Fewest signs, then outermost.** Where two spellings cost the same, the answer is the one with
   fewer signs, then the one whose signs stand further out, wherever such a tie is decided: the sign
   placement, the product table, a sum's orientation and the order the rules fire under (a mined

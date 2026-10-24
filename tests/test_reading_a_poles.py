@@ -194,14 +194,40 @@ def test_a_one_sided_member_fixes_the_orientation(eng, mode, spellings, side):
         assert f_ans(3.0, -0.5) == math.copysign(math.inf, beside), ' '.join(ans)
 
 
-# A sum that holds the class among terms free of it (`S - S^3` written flat, `(x1 - 3)^3 + 3 - x1`) is not read at the
-# zero, so its product keeps no value there and takes its cheapest orientation: one answer for every spelling of the
-# function, whose value at x1 = 3 need not be the limit (a registered residual).
+# A sum that holds the class's sum as an exact polynomial factor is a member of the class (`9 - x1^2` is
+# `-(x1 - 3)(x1 + 3)`, `x1 - 3 - (x1 - 3)^3` is `(x1 - 3)(1 - (x1 - 3)^2)`): odd or even in it by the multiplicity of
+# the factor, with the sign its cofactor has at the zero. Each product below is even in `x1 - 3`, so its pole at
+# x1 = 3 is one-signed: every spelling is one answer, with the limit there, with the search on and off.
+POLYNOMIAL_MULTIPLES = [(['1/((9 - x1^2)*(x1 - 3))', '1/((x1^2 - 9)*(3 - x1))', '-1/((x1^2 - 9)*(x1 - 3))'], -1.0),
+                        (['1/((9 - x1^2)*(3 - x1))', '1/((x1^2 - 9)*(x1 - 3))'], 1.0),
+                        (['1/((x1^3 - 27)*(3 - x1))', '-1/((x1^3 - 27)*(x1 - 3))'], -1.0),
+                        (['1/((2*x1 - 6)*(x1^2 - 9))', '1/((6 - 2*x1)*(9 - x1^2))'], 1.0),
+                        (['1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))', '1/(((x1 - 3)^3 - (x1 - 3))*(x1 - 3))',
+                          '-1/((x1 - 3 - (x1 - 3)^3)*(x1 - 3))'], -1.0)]
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('spellings,side', POLYNOMIAL_MULTIPLES)
+def test_a_polynomial_multiple_of_a_class_is_a_member(eng, mode, effort, spellings, side):
+    answers = {' '.join(eng.simplify(eng.to_prefix(s), mode=mode, effort=effort)) for s in spellings}
+    assert len(answers) == 1, answers
+    ans = answers.pop().split()
+    f_src = eng.as_callable(eng.to_prefix(spellings[0]), ['x1'])
+    f_ans = eng.as_callable(ans, ['x1'])
+    with np.errstate(all='ignore'):
+        for h in (1e-7, -1e-7):
+            assert abs(f_src(3.0 + h)) > 1e6 and math.copysign(1.0, f_src(3.0 + h)) == side
+        assert f_ans(3.0) == math.copysign(math.inf, side), ' '.join(ans)
+
+
+# A class whose cofactor's sign at the zero is not a constant (`x2^2 - x3^2` is `(x2 - x3)(x2 + x3)`, and `x2 + x3` is
+# `2 x2` at `x2 = x3`) is not read there, so its product keeps no value there and takes its cheapest orientation: one
+# answer for every spelling of the function, whose value at x2 = x3 need not be the limit (a registered residual).
 @pytest.mark.parametrize('mode', ('f64', 'real'))
 def test_an_unread_class_takes_its_cheapest_orientation(eng, mode):
-    spellings = ['inv * - - x1 3 pow - x1 3 3 * -1 - x1 3', 'inv * - pow - x1 3 3 - x1 3 - x1 3',
-                 'neg inv * - - x1 3 pow - x1 3 3 - x1 3']
-    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    spellings = ['1/((x2^2 - x3^2)*(x2 - x3))', '1/((x3^2 - x2^2)*(x3 - x2))', '-1/((x3^2 - x2^2)*(x2 - x3))']
+    answers = {' '.join(eng.simplify(eng.to_prefix(s), mode=mode)) for s in spellings}
     assert len(answers) == 1, answers
 
 

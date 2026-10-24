@@ -5599,6 +5599,222 @@ fn class_of(ts: &[Ex], cx: &Cx) -> Option<(Ex, bool, bool)> {
     Some((Ex::Add(key), lead.is_negative(), scaled))
 }
 
+/// THE CLASS'S POLYNOMIAL MULTIPLES: a sum `T` (its terms `ts`) that holds the sum `S` of a class
+/// (its key, `class_of`'s) as an exact polynomial factor, `T = S^m R` with `S` not dividing `R`:
+/// `9 - x1^2` is `-(x1 - 3)(x1 + 3)`, `x1^2 - 6 x1 + 9` is `(x1 - 3)^2`. Read where `S` is linear in
+/// one of its variables `v` (`c v + r`, `c` a nonzero literal, `r` free of `v`, and no other atom
+/// holding `v`): such an `S` is irreducible, so `R` does not vanish on its zero set at a generic
+/// point, and `T` is odd in `S` for an odd `m` and even for an even one. Returned: whether `m` is
+/// odd, and the sign of `R` on the zero set where it is a constant there (`R` with `v = -r/c`;
+/// `true`: negative), else `None` (its sign is not read, as for a factor every term shares). The
+/// atoms are the factors that are neither literals nor sums nor positive integer powers of either
+/// (a variable, a function, any other power), each an indeterminate, so the factor is proven for
+/// every value they take; sums inside products and under positive integer powers are expanded,
+/// within `POLY_TERM_CAP` terms. `None` where `T` or `S` holds a `Const`, an infinity or a
+/// wildcard, or no factor is proven. A float screen comes first, so that the exact division runs
+/// only on a sum that vanishes at one point of the zero set of `S` (`linear_point`,
+/// `vanishes_at`); it only refuses.
+fn class_multiple(ts: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, Option<bool>)> {
+    use super::poly::Poly;
+    let Ex::Add(kts) = class else {
+        return None;
+    };
+    // The screen first (`linear_point`, `vanishes_at`): most sums are no multiple of the class.
+    let (lv, lx) = linear_point(kts, cx)?;
+    if !vanishes_at(ts, lv, lx) {
+        return None;
+    }
+    let unread =
+        |e: &Ex| e.contains_const() || e.contains_infinity() || e.contains_wildcard(cx.view);
+    if ts.iter().chain(kts).any(unread) {
+        return None;
+    }
+    fn to_poly(e: &Ex, atoms: &mut Vec<Ex>) -> Option<Poly> {
+        const POWER_CAP: i128 = 8;
+        let mut atom = |a: &Ex, k: u32| -> Option<Poly> {
+            let i = match atoms.iter().position(|x| x == a) {
+                Some(i) => i,
+                None => {
+                    atoms.push(a.clone());
+                    atoms.len() - 1
+                }
+            };
+            Some(Poly::atom(u16::try_from(i).ok()?, k))
+        };
+        match e {
+            Ex::Num(r) => Some(Poly::constant(r.clone())),
+            Ex::Add(v) => v
+                .iter()
+                .try_fold(Poly::zero(), |acc, t| acc.add(&to_poly(t, atoms)?)),
+            Ex::Mul(v) => v.iter().try_fold(Poly::constant(Rat::ONE), |acc, f| {
+                acc.mul(&to_poly(f, atoms)?)
+            }),
+            Ex::Pow(b, q) => {
+                let k = match &**q {
+                    Ex::Num(r) if r.is_integer() && r.signum() > 0 => r
+                        .small_int()
+                        .filter(|k| *k <= POWER_CAP)
+                        .and_then(|k| u32::try_from(k).ok()),
+                    _ => None,
+                };
+                match k {
+                    Some(k) if matches!(&**b, Ex::Add(_) | Ex::Num(_)) => to_poly(b, atoms)?.pow(k),
+                    Some(k) => atom(b, k),
+                    None => atom(e, 1),
+                }
+            }
+            Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
+            other => atom(other, 1),
+        }
+    }
+    let mut atoms: Vec<Ex> = Vec::new();
+    let s = to_poly(class, &mut atoms)?;
+    // Every atom of `S` is an atom of each of its multiples.
+    if !atoms.iter().all(|a| ts.iter().any(|t| poly_occurs(a, t))) {
+        return None;
+    }
+    let n_s = atoms.len();
+    let v = (0..n_s).find(|&i| {
+        matches!(atoms[i], Ex::Leaf(_))
+            && atoms[i].has_measure_space(cx.view)
+            && s.linear_in(i as u16).is_some()
+            && atoms
+                .iter()
+                .enumerate()
+                .all(|(j, a)| j == i || !poly_occurs(&atoms[i], a))
+    })? as u16;
+    let terms: Vec<Ex> = ts.iter().map(|t| odd_signs_out(t, cx)).collect();
+    let mut rest = to_poly(&Ex::Add(terms), &mut atoms)?;
+    if atoms
+        .iter()
+        .enumerate()
+        .any(|(j, a)| j != v as usize && poly_occurs(&atoms[v as usize], a))
+    {
+        return None;
+    }
+    let mut m = 0u32;
+    while let Some(q) = rest.div_exact(&s) {
+        m += 1;
+        rest = q;
+        if m > 32 {
+            return None;
+        }
+    }
+    if m == 0 {
+        return None;
+    }
+    let (c, r) = s.linear_in(v)?;
+    let at = Poly::constant(c.checked_inv()?.checked_neg()?).mul(&r)?;
+    let sign = rest
+        .substitute(v, &at)?
+        .as_constant()
+        .filter(|k| !k.is_zero())
+        .map(|k| k.is_negative());
+    Some((m % 2 == 1, sign))
+}
+
+/// `poly_screen` of the sum of `ts`.
+fn poly_screen_sum(ts: &[Ex], v: &Ex, x: f64) -> Option<(f64, f64)> {
+    ts.iter().try_fold((0.0, 0.0), |(a, b), t| {
+        let (y, m) = poly_screen(t, v, x)?;
+        Some((a + y, b + m))
+    })
+}
+
+/// A variable `v` a sum is linear in, `c v` one of its terms and `v` in no other, and the value of
+/// `v` that puts the sum to zero where every other atom takes its value (`poly_atom_value`): a
+/// point of the sum's zero set for `class_multiple`'s screen.
+fn linear_point<'a>(ts: &'a [Ex], cx: &Cx) -> Option<(&'a Ex, f64)> {
+    ts.iter().enumerate().find_map(|(i, t)| {
+        let (c, v) = match t {
+            Ex::Leaf(_) => (1.0, t),
+            Ex::Mul(fs) => match fs.as_slice() {
+                [Ex::Num(c), v @ Ex::Leaf(_)] => (c.to_f64(), v),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if !v.has_measure_space(cx.view)
+            || ts
+                .iter()
+                .enumerate()
+                .any(|(j, u)| j != i && poly_occurs(v, u))
+        {
+            return None;
+        }
+        let (r, _) = poly_screen_sum(&ts[..i], v, 0.0)?;
+        let (q, _) = poly_screen_sum(&ts[i + 1..], v, 0.0)?;
+        Some((v, -(r + q) / c))
+    })
+}
+
+/// Does the sum of `ts` vanish, up to rounding, at the point `linear_point` gives (`v = x`, every
+/// other atom at its value)? A multiple of a sum vanishes where it does; the screen only refuses.
+fn vanishes_at(ts: &[Ex], v: &Ex, x: f64) -> bool {
+    poly_screen_sum(ts, v, x).is_some_and(|(y, scale)| scale.is_finite() && y.abs() <= 1e-9 * scale)
+}
+
+/// Does `a` occur in `e` (`e` itself included)?
+fn poly_occurs(a: &Ex, e: &Ex) -> bool {
+    e == a
+        || match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|x| poly_occurs(a, x)),
+            Ex::Pow(b, q) => poly_occurs(a, b) || poly_occurs(a, q),
+            _ => false,
+        }
+}
+
+/// A value for an atom (`class_multiple`), the same wherever it stands: the screen reads the
+/// polynomials at one point of the atoms' space, each atom an independent coordinate.
+fn poly_atom_value(a: &Ex) -> f64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    a.hash(&mut h);
+    0.55 + (h.finish() >> 11) as f64 / (1u64 << 53) as f64 * 0.9
+}
+
+/// THE SCREEN of `class_multiple`: `e` at the atoms' point (`poly_atom_value`) with `x` for the
+/// atom `v`, and the same with every term made positive (the scale its rounding error is measured
+/// against); `None` where `v` stands inside another atom, where the formal identity would not be
+/// the function's.
+fn poly_screen(e: &Ex, v: &Ex, x: f64) -> Option<(f64, f64)> {
+    let atom = |a: &Ex| -> Option<(f64, f64)> {
+        if a == v {
+            Some((x, x.abs()))
+        } else if poly_occurs(v, a) {
+            None
+        } else {
+            let y = poly_atom_value(a);
+            Some((y, y))
+        }
+    };
+    match e {
+        Ex::Num(r) => {
+            let y = r.to_f64();
+            Some((y, y.abs()))
+        }
+        Ex::Add(ts) => poly_screen_sum(ts, v, x),
+        Ex::Mul(fs) => fs.iter().try_fold((1.0, 1.0), |(a, b), f| {
+            let (y, m) = poly_screen(f, v, x)?;
+            Some((a * y, b * m))
+        }),
+        Ex::Pow(b, q) => match &**q {
+            Ex::Num(r) if r.is_integer() && r.signum() > 0 && r.cmp_int(8) != Ordering::Greater => {
+                let k = r.small_int()? as i32;
+                let (y, m) = if matches!(&**b, Ex::Add(_) | Ex::Num(_)) {
+                    poly_screen(b, v, x)?
+                } else {
+                    atom(b)?
+                };
+                Some((y.powi(k), m.powi(k)))
+            }
+            _ => atom(e),
+        },
+        Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
+        other => atom(other),
+    }
+}
+
 /// A hash of a sum's terms as `class_of` reads them: the factors every term shares left out, and
 /// literals and signs ignored (`shape_sig`), so that two sums of one class always hash alike.
 fn class_shape(ts: &[Ex]) -> u64 {
@@ -5655,11 +5871,12 @@ fn shape_sig(e: &Ex) -> u64 {
 /// neither. Compositional: `S` and `-S` are odd; a product's parity is the product of its factors'
 /// (a factor free of `S` is even); an odd function or an odd root keeps its argument's; an even
 /// function of anything in `S`, an even integer power of it, or any function of something even in
-/// it, is even; a sum has the parity its terms share. A log, an even root or a fractional or
-/// symbolic power of something odd in `S` whose sign beside the zero is read is defined only on
-/// the side where that is positive (`Side(true)`: where `S` is negative), and so is a product or
-/// an integer power holding one; members defined on opposite sides leave no domain beside the
-/// zero, and are not read.
+/// it, is even; a sum that holds `S` as an exact polynomial factor has the parity of the factor's
+/// multiplicity (`class_multiple`), any other sum the parity its terms share. A log, an even root
+/// or a fractional or symbolic power of something odd in `S` whose sign beside the zero is read is
+/// defined only on the side where that is positive (`Side(true)`: where `S` is negative), and so
+/// is a product or an integer power holding one; members defined on opposite sides leave no domain
+/// beside the zero, and are not read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Parity {
     Free,
@@ -5677,8 +5894,8 @@ enum Parity {
 /// power, an odd function and an odd root keep the sign of zero; an even power or an even function
 /// differs nowhere, and neither does a one-sided head (`log(±0)` is `-inf`, a fractional power of
 /// `±0` is `+0` or `+inf`, each with the sign it has beside the zero). `None` where that is not
-/// read (a sum that holds `S` among other terms or times a factor its terms share,
-/// `3 x2 - x1 x2`, any other head).
+/// read (a sum that holds `S` times a factor its terms share, `3 x2 - x1 x2`, or as a polynomial
+/// factor beside a cofactor of no constant sign at the zero, any other head).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ZeroRead {
     parity: Parity,
@@ -5815,6 +6032,11 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
                         return read(Odd, sign, sign);
                     }
                 }
+            }
+            // A polynomial multiple of the class (`class_multiple`): odd or even in it, with the
+            // sign of its cofactor at the zero, and `+0` there as an exactly cancelling sum.
+            if let Some((odd, sign)) = class_multiple(ts, class, cx) {
+                return read(if odd { Odd } else { Even }, sign, sign);
             }
             let reads: Vec<ZeroRead> = ts.iter().map(|t| read_walk(t, class, n, nk, cx)).collect();
             // A sum holding a term defined on one side only reads as its one-sided terms where those
@@ -6035,6 +6257,7 @@ fn zero_mag(e: &Ex, class: &Ex, cx: &Cx) -> Mag {
     }
     match e {
         Ex::Add(ts) if matches!(class_of(ts, cx), Some((k, _, _)) if k == *class) => Mag::Zero,
+        Ex::Add(ts) if class_multiple(ts, class, cx).is_some() => Mag::Zero,
         Ex::Add(ts) => {
             let mut all_zero = true;
             for t in ts {
@@ -6771,8 +6994,62 @@ fn same_collection_base(f: &Ex, g: &Ex, cx: &Cx) -> bool {
 /// another site's sum or inside any factor? Only then are its classes read (`sign_place`). One
 /// pass over the product's sums with a hash of their shapes blind to literals and signs
 /// (`shape_sig`'s), so a sum meets its constant multiples too; a hash that merely collides only
-/// costs the full reading.
-fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
+/// costs the full reading. A sum meets its polynomial multiples as well (`class_multiple`).
+fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)], cx: &Cx) -> bool {
+    shapes_meet(out, site_flips) || multiples_meet(out, site_flips, cx)
+}
+
+/// Does another sum of the product, a factor or inside one, hold a site's sum as a polynomial
+/// factor (`class_multiple`)?
+fn multiples_meet(out: &[Ex], site_flips: &[(usize, Ex)], cx: &Cx) -> bool {
+    fn sums<'a>(e: &'a Ex, acc: &mut Vec<&'a [Ex]>) {
+        match e {
+            Ex::Add(v) => {
+                acc.push(v);
+                v.iter().for_each(|x| sums(x, acc));
+            }
+            Ex::Mul(v) | Ex::Fun(_, v) => v.iter().for_each(|x| sums(x, acc)),
+            Ex::Pow(b, q) => {
+                sums(b, acc);
+                sums(q, acc);
+            }
+            _ => {}
+        }
+    }
+    // Each site's sum with a variable it is linear in and the point of its zero set
+    // (`linear_point`): only a sum that vanishes there is read further.
+    let points: Vec<(&[Ex], &Ex, f64)> = site_flips
+        .iter()
+        .filter_map(|(pos, _)| {
+            let ts = site_sum_terms(&out[*pos])?;
+            let (v, x) = linear_point(ts, cx)?;
+            Some((ts, v, x))
+        })
+        .collect();
+    if points.is_empty() {
+        return false;
+    }
+    let mut all: Vec<&[Ex]> = Vec::new();
+    out.iter().for_each(|f| sums(f, &mut all));
+    if all.len() < 2 {
+        return false;
+    }
+    points.iter().any(|&(ts, v, x)| {
+        let mut key: Option<Option<Ex>> = None;
+        all.iter().any(|us| {
+            if std::ptr::eq(us.as_ptr(), ts.as_ptr()) || !vanishes_at(us, v, x) {
+                return false;
+            }
+            let Some(k) = key.get_or_insert_with(|| class_of(ts, cx).map(|(k, _, _)| k)) else {
+                return false;
+            };
+            !matches!(class_of(us, cx), Some((c, _, _)) if c == *k)
+                && class_multiple(us, k, cx).is_some()
+        })
+    })
+}
+
+fn shapes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
     fn one<T: std::hash::Hash>(t: &T) -> u64 {
         use std::hash::Hasher;
         let mut h = rustc_hash::FxHasher::default();
@@ -6966,7 +7243,7 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // A class is read only where its sum meets another occurrence of itself: two sites over
         // sums of one shape, or a sum inside another factor (`classes_meet`). Elsewhere each site
         // is a class of its own, which nothing pins and no other member checks.
-        let meets = classes_meet(&out, &site_flips);
+        let meets = classes_meet(&out, &site_flips, cx);
         // Each group: its sites (indices into `site_flips`) and, per site, whether it spells the
         // class against the class's own orientation (`site_class`). A configuration bit picks one
         // orientation for the whole group; the sites spelled against it flip.

@@ -344,7 +344,12 @@ value there is not part of the function (`1/(x1 - 3)` at `x1 = 3`); where they a
 has that limit. A *class* is the set of factors of a product that are odd in one sum $S$, read
 compositionally (`zero_read`): $S$, $-S$ and $cS$ for a constant $c \neq 0$ (sums equal up to a
 constant factor and to factors every term shares are one class, keyed by the primitive part, an
-odd function of a negated argument read as the negated term); the parity of a product is the
+odd function of a negated argument read as the negated term), and a sum $T = S^m R$ that holds $S$
+as an exact polynomial factor ($S \nmid R$, decided by division over the rationals with every
+non-polynomial subterm an indeterminate) where $S$ is linear in one of its variables $v$ with a
+literal coefficient, so irreducible: $T$ is odd in $S$ for odd $m$ and even for even $m$, and its
+sign beside the zero is read where $R$ with $v$ eliminated by $S = 0$ is a constant
+(`class_multiple`: `9 - x1^2` is odd in `x1 - 3` with cofactor `-(x1 + 3)`, `-6` at the zero); the parity of a product is the
 product of its factors' parities; an odd function or odd root of an odd argument is odd; an even
 function or an even integer power is even; a sum has a parity only if all its terms share it.
 A class is written in one orientation with its sign in the coefficient, in every mode, and is a
@@ -371,9 +376,9 @@ it binds any subtree, in `permissive`), the matcher retrying in one orientation 
 binding was refused by its own negation; the search's FACTOR move (§4) takes a factor shared up
 to sign the same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
 `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: where a member's value at the
-zero is not read, the class's cheapest orientation can leave that value off the limit (a sum holding
-the class among terms free of it: with the search off, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is
-`+inf` at `x1 = 3` where its limit is `-inf`; a class scaled by a factor of unknown sign:
+zero is not read, the class's cheapest orientation can leave that value off the limit (a polynomial
+multiple whose cofactor has no constant sign at the zero: `1/((x2^2 - x3^2)*(x2 - x3))` is `+inf`
+at `x2 = x3 = -1` where its limit is `-inf`; a class scaled by a factor of unknown sign:
 `log(x2*(x1 - 3))/(3 - x1)` is `+inf` at `x1 = 3, x2 = -1` where its limit from `x1 < 3` is
 `-inf`); a sum whose terms share a factor that is undefined on a region is not factored in `f64`
 and `real`, since FACTOR asks its content to be finite almost everywhere, which `log(3 - x3)` is
@@ -383,9 +388,12 @@ its own limit (`-inf + inf`), where the limit is `+inf`; joined, the product wou
 inside a sum among terms free of it, the residual above, and the cheapest orientation of that sum,
 `log(3 - x3)*(1/(x3 - 3) + 1)`, is `-inf` there, which is `permissive`'s answer (the joined
 `log(3 - x3)*(1 - 1/(3 - x3))` keeps the limit); one class split across the
-terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite;
+terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite, as
+the input does at other such points (`x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3`, limit
+`+inf` where `x5 > 2 abs(x1)`: the answer is NaN for `x1 < 0`, the input for `x1 > 0`; the sign of
+the odd term's infinity follows `x1`, so no orientation is right at every such point);
 where two singularities meet, the float value can differ from the joint limit (most such points
-have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that
+have none); a polynomial multiple of a sum linear in none of its variables is not read, and a sum that
 vanishes at a class's zero only through a term that vanishes faster there
 (`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is a class of its own, so its sign can move alone. An odd
 root keeps the sign of zero like every odd function (IEEE-754 `rootn(-0, n) = -0` for odd `n`), so
