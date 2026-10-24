@@ -1133,7 +1133,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     (NaN-propagating, `-0` below `+0`; like `np.maximum` they return the first NaN operand,
     whose payload the engine does not read), and each was put to the judge: equal members
     collapse (`max(a, a)` is `a`; two `<constant>`s stay apart), the literal members fold to
-    their extreme (`max(-0.0, 0)` is `0`, `min(-0.0, 0)` is `-0.0` in `f64`), `-inf` drops from
+    their extreme (`max(-0.0, 0)` is `0`, `min(-0.0, 0)` is `-0.0` in `f64`; in `real` and
+    `permissive` `pi` and `e` fold with them, each comparison decided by a certified enclosure:
+    `max(3, pi)` is `pi`, `min(e, pi, 4)` is `e`, while `f64`'s ground fold reads them as their
+    floats), `-inf` drops from
     a `max` and `+inf` from a `min`, and a NaN member makes the bag NaN. The absorber and the
     dual bag need their other members to be no NaN almost everywhere (the finite-a.e. licence;
     `max(+inf, nan)` is `nan`): `max(+inf, x0)` is `+inf` and `max(x0, min(x0, x1))` is `x0`,

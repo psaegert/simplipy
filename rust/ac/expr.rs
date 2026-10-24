@@ -9644,6 +9644,60 @@ fn lattice_number_lt(a: &(Rat, bool), b: &(Rat, bool)) -> bool {
     }
 }
 
+/// A certified rational enclosure `(lo, hi)`, `lo < v < hi`, of `pi` or `e` (20 decimals each,
+/// so the two never overlap, and each is irrational, so it ties with no rational); `None` for
+/// anything else.
+fn lattice_enclosure(e: &Ex) -> Option<(Rat, Rat)> {
+    let (lo, hi) = match e {
+        Ex::Pi => ("3.14159265358979323846", "3.14159265358979323847"),
+        Ex::E => ("2.71828182845904523536", "2.71828182845904523537"),
+        _ => return None,
+    };
+    let _exact = super::rat::number_domain(false);
+    Some((Rat::parse_decimal(lo)?, Rat::parse_decimal(hi)?))
+}
+
+/// Is `e` a NUMBER of a lattice bag: a literal, the written negative zero in `f64`
+/// ([`lattice_number`]), and outside `f64` `pi` and `e`, which `f64`'s ground fold reads as their
+/// floats instead?
+fn lattice_numeric(e: &Ex, cx: &Cx) -> bool {
+    lattice_number(e, cx).is_some() || (!cx.f64_semantics() && matches!(e, Ex::Pi | Ex::E))
+}
+
+/// The CERTAIN order of two lattice numbers ([`lattice_numeric`]): exact between literals (`-0`
+/// below `+0`), and through a certified enclosure for `pi` and `e` (`max(3, pi)` is `pi`,
+/// `min(e, pi)` is `e`); `None` where it is not decided (a literal inside an enclosure, or a
+/// member that is no number).
+fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
+    if let (Some(x), Some(y)) = (lattice_number(a, cx), lattice_number(b, cx)) {
+        return Some(if lattice_number_lt(&x, &y) {
+            Ordering::Less
+        } else if lattice_number_lt(&y, &x) {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        });
+    }
+    if cx.f64_semantics() || !lattice_numeric(a, cx) || !lattice_numeric(b, cx) {
+        return None;
+    }
+    if a == b {
+        return Some(Ordering::Equal);
+    }
+    let bounds = |e: &Ex| match e {
+        Ex::Num(r) => Some((r.clone(), r.clone())),
+        other => lattice_enclosure(other),
+    };
+    let ((alo, ahi), (blo, bhi)) = (bounds(a)?, bounds(b)?);
+    if ahi.cmp_exact(&blo) == Ordering::Less {
+        Some(Ordering::Less)
+    } else if alo.cmp_exact(&bhi) == Ordering::Greater {
+        Some(Ordering::Greater)
+    } else {
+        None
+    }
+}
+
 /// `MAX` AND `MIN` ARE LATTICE BAGS, as `+` and `*` are bags: `max(a, max(b, c))`, in any
 /// nesting and argument order, is ONE node, `Fun(max, [a, b, c])`, its members flattened,
 /// collected and in the canonical order. Every law below holds bit for bit in float64, whose
@@ -9662,7 +9716,9 @@ fn lattice_number_lt(a: &(Rat, bool), b: &(Rat, bool)) -> bool {
 ///   below, so the bag does not depend on its nesting: `max(3, max(2, min(2, x)))` and
 ///   `max(min(2, x), max(2, 3))` are both `3`.
 /// * NUMBERS: the literal members fold to their extreme, `-0` below `+0` (in `f64` the written
-///   `-0.0`): `max(-0.0, 0) = 0`, `min(-0.0, 0) = -0.0`.
+///   `-0.0`): `max(-0.0, 0) = 0`, `min(-0.0, 0) = -0.0`. Outside `f64`, `pi` and `e` are numbers
+///   too, ordered by certified enclosures (`max(3, pi) = pi`, `min(e, pi, 4) = e`); in `f64` the
+///   ground fold reads them as their floats.
 /// * The ABSORBER takes every member that is no NaN almost everywhere (`max(+inf, a) = +inf`,
 ///   while `max(+inf, nan) = nan`), and the IDENTITY drops (`max(-inf, a) = a`). "No NaN" is a
 ///   number, an infinity, or the finite-a.e. licence (`Cx::fin_licensed`).
@@ -9690,9 +9746,7 @@ pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         return Ex::NaN;
     }
     let no_nan = |e: &Ex| {
-        matches!(e, Ex::PosInf | Ex::NegInf)
-            || lattice_number(e, cx).is_some()
-            || cx.fin_licensed(e)
+        matches!(e, Ex::PosInf | Ex::NegInf) || lattice_numeric(e, cx) || cx.fin_licensed(e)
     };
     // `x` certainly at most `y` in a `max` bag (at least, in a `min` bag).
     let below = |x: &Ex, y: &Ex| -> bool {
@@ -9705,16 +9759,11 @@ pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         if x == y {
             return !x.contains_const();
         }
-        match (lattice_number(x, cx), lattice_number(y, cx)) {
-            (Some(a), Some(b)) => {
-                if is_max {
-                    !lattice_number_lt(&b, &a)
-                } else {
-                    !lattice_number_lt(&a, &b)
-                }
-            }
-            _ => false,
-        }
+        matches!(
+            (lattice_cmp(x, y, cx), is_max),
+            (Some(Ordering::Less | Ordering::Equal), true)
+                | (Some(Ordering::Greater | Ordering::Equal), false)
+        )
     };
     let absorbed: Vec<bool> = members
         .iter()
@@ -9738,33 +9787,29 @@ pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             .map(|(m, _)| m)
             .collect();
     }
-    // The numbers fold to their extreme.
-    let mut extreme: Option<(usize, (Rat, bool))> = None;
-    for (i, m) in members.iter().enumerate() {
-        let Some(n) = lattice_number(m, cx) else {
-            continue;
-        };
-        let wins = match &extreme {
-            None => true,
-            Some((_, best)) => {
-                if is_max {
-                    lattice_number_lt(best, &n)
-                } else {
-                    lattice_number_lt(&n, best)
-                }
-            }
-        };
-        if wins {
-            extreme = Some((i, n));
-        }
-    }
-    if let Some((e, _)) = extreme {
-        let mut k = 0;
-        members.retain(|m| {
-            let keep = k == e || lattice_number(m, cx).is_none();
-            k += 1;
-            keep
-        });
+    // The numbers fold to their extreme: a number another number certainly passes drops (an
+    // equal one is a duplicate, collapsed below).
+    let beaten = if is_max {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    };
+    let dropped: Vec<bool> = members
+        .iter()
+        .map(|m| {
+            lattice_numeric(m, cx)
+                && members
+                    .iter()
+                    .any(|n| lattice_cmp(m, n, cx) == Some(beaten))
+        })
+        .collect();
+    if dropped.iter().any(|&d| d) {
+        members = members
+            .into_iter()
+            .zip(dropped)
+            .filter(|(_, d)| !d)
+            .map(|(m, _)| m)
+            .collect();
     }
     // The absorber takes every member that is no NaN, and the identity drops.
     if members.contains(&top) {

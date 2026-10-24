@@ -150,6 +150,24 @@ def test_lattice_laws(bare, src, want):
     assert ' '.join(bare.simplify(src.split(), mode='f64')) == want
 
 
+@pytest.mark.parametrize('mode', ('real', 'permissive'))
+def test_pi_and_e_are_numbers_of_a_lattice_bag(bare, mode):
+    """Outside f64, pi and e fold with the literal members, each comparison decided by a
+    certified enclosure; f64's ground fold reads them as their floats instead."""
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('max 3 np.pi') == 'np.pi'
+    assert s('min np.e min np.pi 4') == 'np.e'
+    assert s('max np.e np.pi') == 'np.pi' and s('min np.pi np.e') == 'np.e'
+    assert s('max x0 max 3 np.pi') == s('max x0 np.pi')
+    assert s('min x0 max np.pi 4') == s('min x0 4')
+    # a rational that close to pi is decided by the enclosure
+    assert s('max np.pi 3.1415926535897932') == 'np.pi'
+    # (permissive reads a literal at its float, 3.141592653589793, which is below pi)
+    assert s('min np.pi 3.1415926535897933') == ('np.pi' if mode == 'real' else '3.141592653589793')
+    # the dual bag is absorbed through the same order: min(e, x0) <= e < pi
+    assert s('max np.pi min np.e x0') == 'np.pi'
+
+
 def test_lattice_laws_are_the_judges():
     """The laws the bag applies unconditionally are float64 identities bit for bit by the judge;
     the absorber and the absorption are refused there only at a NaN operand, which is why the
