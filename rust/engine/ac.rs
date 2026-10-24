@@ -1920,6 +1920,28 @@ mod tests {
             assert_eq!(run(&["mod", "1", "0"], mode), "float(\"nan\")", "{mode:?}");
             assert_eq!(run(&["erf", "1"], mode), "erf 1", "{mode:?}");
             assert_eq!(run(&["floor", "x0"], mode), "floor x0", "{mode:?}");
+            // besselj: a literal order at 0 exactly, the reflection and the parity
+            assert_eq!(run(&["besselj", "0", "0"], mode), "1", "{mode:?}");
+            assert_eq!(
+                run(&["besselj", "-1.5", "0"], mode),
+                "float(\"-inf\")",
+                "{mode:?}"
+            );
+            assert_eq!(
+                run(&["besselj", "-3", "x0"], mode),
+                "neg besselj 3 x0",
+                "{mode:?}"
+            );
+            assert_eq!(
+                run(&["besselj", "2", "neg", "x0"], mode),
+                "besselj 2 x0",
+                "{mode:?}"
+            );
+            assert_eq!(
+                run(&["besselj", "3", "neg", "x0"], mode),
+                "neg besselj 3 x0",
+                "{mode:?}"
+            );
         }
         // f64 reads a literal at its float, real at its rational
         assert_eq!(

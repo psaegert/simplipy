@@ -633,38 +633,58 @@ mod tests {
     }
 
     /// A side the contract cannot evaluate has no adjudication: a pattern with exceptional
-    /// points is refused rather than passed, and the point verdict itself is none.
+    /// points is refused rather than passed, and the point verdict itself is none. Every head of
+    /// the shipped configs has its high-precision kernels, so the head here is one a config
+    /// could declare without them.
     #[test]
     fn an_unevaluable_side_fails_closed() {
-        let e = Engine::from_strs(
-            include_str!("../../assets/engines/acj2-4/config.yaml"),
-            "[]",
-        )
-        .expect("acj2-4 builds");
+        let names = ["gamma", "inv", "-"];
+        let specs = names
+            .iter()
+            .map(|&n| {
+                let spec = crate::operators::OperatorSpec {
+                    realization: String::new(),
+                    alias: vec![],
+                    inverse: None,
+                    arity: if n == "-" { 2 } else { 1 },
+                    precedence: None,
+                    commutative: false,
+                };
+                (n.to_string(), spec)
+            })
+            .collect();
+        let ops = crate::operators::Operators::from_specs(
+            names.iter().map(|n| n.to_string()).collect(),
+            specs,
+        );
         let vars = s(&["x0"]);
-        let src = s(&["besselj", "1", "inv", "-", "1", "x0"]);
+        let src = s(&["gamma", "inv", "-", "1", "x0"]);
         assert_eq!(
-            pole_refusal(&src, &src, &e.operators, &vars),
+            pole_refusal(&src, &src, &ops, &vars),
             Some(Refusal::PoleClassChange)
         );
         // no exceptional point: nothing to adjudicate
-        let (a, b) = (
-            s(&["besselj", "1", "besselj", "1", "x0"]),
-            s(&["besselj", "1", "x0"]),
-        );
-        assert_eq!(pole_refusal(&a, &b, &e.operators, &vars), None);
+        let (a, b) = (s(&["gamma", "gamma", "x0"]), s(&["gamma", "x0"]));
+        assert_eq!(pole_refusal(&a, &b, &ops, &vars), None);
         let verdict = contract_point_verdict(
             &b,
             &[],
             &s(&["x0"]),
             &[],
-            &e.operators,
+            &ops,
             &vars,
             &[ProbeAtom::Val(0.5)],
         );
         assert_eq!(verdict, (None, false));
-        assert!(!crate::hiprec::evaluable(&b, &e.operators));
-        assert!(crate::hiprec::evaluable(&s(&["floor", "x0"]), &e.operators));
+        assert!(!crate::hiprec::evaluable(&b, &ops));
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        for t in [&["floor", "x0"][..], &["besselj", "1", "x0"][..]] {
+            assert!(crate::hiprec::evaluable(&s(t), &e.operators), "{t:?}");
+        }
     }
 
     /// The 0.15 heads' discontinuities are exceptional points, adjudicated like poles: a rule

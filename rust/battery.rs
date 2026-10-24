@@ -478,14 +478,14 @@ mod tests {
     }
 }
 
-// ===== THE DEPLOYED-ONLY BAR ===================================================================
+// ===== THE DEPLOYED BAR ========================================================================
 
-/// The probe values of the deployed-only bar beyond `BATTERY`, the infinities and NaN: where the
+/// The probe values of the deployed bar beyond `BATTERY`, the infinities and NaN: where the
 /// step heads jump and the special functions meet a cell (a signed zero, the float neighbours of
 /// the integers, tiny and huge magnitudes, the negative integers of `harmonic`'s poles, erf's
 /// saturation), so that a law of the reals float64 breaks there is seen
 /// (`floor(x + 1) = floor(x) + 1` at x = -1e-17, `ceil(x) = floor(x) + 1` at every integer).
-pub const DEPLOYED_ONLY_EXTRA: [f64; 33] = [
+pub const DEPLOYED_EXTRA: [f64; 33] = [
     -0.0,
     1e-17,
     -1e-17,
@@ -522,35 +522,14 @@ pub const DEPLOYED_ONLY_EXTRA: [f64; 33] = [
 ];
 
 /// Rows of the product past this many are thinned to an even stride (four or more variables).
-const DEPLOYED_ONLY_MAX_ROWS: usize = 250_000;
+const DEPLOYED_MAX_ROWS: usize = 250_000;
 
-/// What the deployed-only bar found: the verdict, the number of probes, and the first probe
+/// What the deployed bar found: the verdict, the number of probes, and the first probe
 /// where the sides differ.
 pub struct DeployedExact {
     pub ok: bool,
     pub probes: usize,
     pub first: Option<Vec<f64>>,
-}
-
-/// THE DEPLOYED-ONLY BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero
-/// included, since an inverse or `atan2` reads it; NaN equal to NaN), with the engine's own
-/// kernels, at every probe? The probes are, per
-/// variable of `var_names` either side uses, the `BATTERY` points, +-inf, NaN and
-/// `DEPLOYED_ONLY_EXTRA` (their full product); a generic grid per variable with the others at
-/// 1.7 and -1.3; and the diagonal of that grid. No probe is excused: no tolerance, no range
-/// event, no extension of a NaN.
-///
-/// It is the whole verdict on a rule spelled with a head the contract has no kernel for
-/// (`hiprec::evaluable`): the contract judge's deployed lane calls it (`_core.deployed_exact`)
-/// and the mint applies it to every such pair it would accept, so the judge licenses exactly what
-/// the mint accepts. A side holding a `<constant>`, or one that does not compile, fails.
-pub fn deployed_exact(
-    lhs: &[String],
-    rhs: &[String],
-    var_names: &[String],
-    ops: &Operators,
-) -> DeployedExact {
-    deployed_exact_over(lhs, rhs, var_names, 0, ops)
 }
 
 /// The 0.15 heads. A rule spelled with one answers to the deployed bar for its float64
@@ -561,9 +540,9 @@ pub const NEW_HEADS: [&str; 9] = [
     "floor", "ceil", "erf", "harmonic", "max", "min", "mod", "atan2", "besselj",
 ];
 
-/// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap, or a head the contract
-/// cannot evaluate at all): a fitted target constant cannot be judged bit for bit beside them.
-const JUMP_HEADS: [&str; 4] = ["floor", "ceil", "mod", "besselj"];
+/// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
+/// constant cannot be judged bit for bit beside them.
+const JUMP_HEADS: [&str; 3] = ["floor", "ceil", "mod"];
 
 /// Does `tokens` hold a 0.15 head (as an operator of `ops`)?
 pub fn holds_new_head(tokens: &[String], ops: &Operators) -> bool {
@@ -575,7 +554,7 @@ pub fn holds_new_head(tokens: &[String], ops: &Operators) -> bool {
 /// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary
 /// realisation axis decides (no 0.15 head; a bare `<constant>` target, whose witness is the
 /// source's own value; a fitted target constant beside heads without jumps), else the deployed
-/// bar's verdict (`deployed_exact`), each source `<constant>` probed as a variable over the
+/// bar's verdict (`deployed_exact_over`), each source `<constant>` probed as a variable over the
 /// finite probes (a fitted constant is a finite float). A fitted target constant beside a jump
 /// head cannot be judged bit for bit, so it is refused. The contract judge ANDs this into a
 /// rule's `realised` (`_core.f64_bar`) and the f64 mint applies it to every pick, so the two
@@ -621,8 +600,18 @@ pub fn f64_bar(
     Some(deployed_exact_over(&lhs_v, rhs, &names, n_c, ops))
 }
 
-/// `deployed_exact` over `var_names`, whose last `n_finite` names are fitted constants, probed
-/// over the finite values only.
+/// THE DEPLOYED BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero
+/// included, since an inverse or `atan2` reads it; NaN equal to NaN), with the engine's own
+/// kernels, at every probe? The probes are, per
+/// variable of `var_names` either side uses, the `BATTERY` points, +-inf, NaN and
+/// `DEPLOYED_EXTRA` (their full product); a generic grid per variable with the others at
+/// 1.7 and -1.3; and the diagonal of that grid. No probe is excused: no tolerance, no range
+/// event, no extension of a NaN. The last `n_finite` names of `var_names` are fitted constants,
+/// probed over the finite values only.
+///
+/// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into a rule's
+/// `realised` and the f64 mint applies to every pick, so the judge licenses exactly what the
+/// mint accepts. A side holding a `<constant>`, or one that does not compile, fails.
 fn deployed_exact_over(
     lhs: &[String],
     rhs: &[String],
@@ -652,7 +641,7 @@ fn deployed_exact_over(
         .iter()
         .map(|a| a.value())
         .chain([f64::INFINITY, f64::NEG_INFINITY, f64::NAN])
-        .chain(DEPLOYED_ONLY_EXTRA)
+        .chain(DEPLOYED_EXTRA)
     {
         if !values.iter().any(|w| w.to_bits() == v.to_bits()) {
             values.push(v);
@@ -666,7 +655,7 @@ fn deployed_exact_over(
     let total = used
         .iter()
         .fold(1usize, |acc, &v| acc.saturating_mul(probes_of(v).len()));
-    let stride = total.div_ceil(DEPLOYED_ONLY_MAX_ROWS).max(1);
+    let stride = total.div_ceil(DEPLOYED_MAX_ROWS).max(1);
     for pick in (0..total).step_by(stride) {
         let mut row = vec![1.7f64; width];
         let mut rem = pick;
@@ -719,7 +708,7 @@ fn deployed_exact_over(
     }
 }
 
-/// The generic grid of the deployed-only bar: every 0.05 in [-25, 25] and a magnitude tail,
+/// The generic grid of the deployed bar: every 0.05 in [-25, 25] and a magnitude tail,
 /// shifted off the integers. Dense enough to land between a saturation and the next integer,
 /// where a step head and a saturating one part (`erf(floor(x))` is below 1 on [5.9216, 6) while
 /// `erf(x)` is 1 there; `tanh` likewise on [19.06, 20)).
@@ -739,7 +728,7 @@ fn generic_grid() -> Vec<f64> {
 }
 
 #[cfg(test)]
-mod deployed_only_tests {
+mod deployed_bar_tests {
     use super::*;
 
     fn s(t: &str) -> Vec<String> {
@@ -775,7 +764,10 @@ mod deployed_only_tests {
             ("ceil asinh -1", "0"),
             ("mod floor x0 1", "* 0 x0"),
         ] {
-            assert!(!deployed_exact(&s(l), &s(r), &v, ops).ok, "{l} -> {r}");
+            assert!(
+                !deployed_exact_over(&s(l), &s(r), &v, 0, ops).ok,
+                "{l} -> {r}"
+            );
         }
         for (l, r) in [
             ("floor floor x0", "floor x0"),
@@ -785,7 +777,7 @@ mod deployed_only_tests {
             ("min x0 float(\"inf\")", "x0"),
             ("erf neg x0", "neg erf x0"),
         ] {
-            let d = deployed_exact(&s(l), &s(r), &v, ops);
+            let d = deployed_exact_over(&s(l), &s(r), &v, 0, ops);
             assert!(d.ok, "{l} -> {r} at {:?}", d.first);
             assert!(d.probes > 300);
         }

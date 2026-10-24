@@ -127,6 +127,8 @@ UN = {
     'atanh': lambda x: nan if abs(x) > 1 else ((inf if x > 0 else -inf) if abs(x) == 1 else mp.atanh(x)),
     'exp': mp.exp, 'log': lambda x: (-inf) if x == 0 else (nan if x < 0 else mp.log(x)),
 }
+
+
 BIN = {
     '+': lambda a, b: a + b, '-': lambda a, b: a - b, '*': lambda a, b: a * b,
     '/': lambda a, b: ((nan if a == 0 else (-inf if (a < 0) != (b < 0) else inf)) if b == 0 else a / b),
@@ -138,7 +140,7 @@ def _contract_kernel(name):
     """The contract judge's kernel of a 0.15 head (`verify._contract.OPS`): numpy's cells (D7),
     one zero, and a refusal (its `Unresolved`, which every caller here reads as no evidence)
     inside the working-precision band of a jump, a pole, erf's asymptote or atan2's cut, where
-    the value is not determined. besselj has no kernel yet: it stays unevaluable."""
+    the value is not determined, and beyond `besselj`'s order and argument caps."""
     def f(*args):
         from simplipy.verify._contract import OPS
         return OPS[name](*args)
@@ -146,7 +148,7 @@ def _contract_kernel(name):
 
 
 UN.update({name: _contract_kernel(name) for name in ('floor', 'ceil', 'erf', 'harmonic')})
-BIN.update({name: _contract_kernel(name) for name in ('max', 'min', 'mod', 'atan2')})
+BIN.update({name: _contract_kernel(name) for name in ('max', 'min', 'mod', 'atan2', 'besselj')})
 
 
 #: Periodic functions are the sharpest case -- reducing mod 2*pi needs pi to as many digits

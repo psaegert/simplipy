@@ -1496,6 +1496,12 @@ impl<'a> Cx<'a> {
                 self.certainly_finite(b)
                     && matches!(&**ex, Ex::Num(r) if r.is_integer() && !r.is_negative())
             }
+            // `besselj` of an integer literal order is finite at every finite argument (|J_n| <= 1;
+            // the kernel is NaN-free there up to order 1e3, `interval::BESSELJ_NU_MEASURED`).
+            Ex::Fun(f, v) if v.len() == 2 && self.view.tok_is(*f, "besselj") => {
+                matches!(&v[0], Ex::Num(n) if n.is_integer() && n.abs().cmp_int(1000) != Ordering::Greater)
+                    && self.certainly_finite(&v[1])
+            }
             Ex::Fun(f, v) => {
                 let s = self.view.resolve_owned(*f);
                 // (D3: the retired `pow1_3`/`pow1_5` names were dropped from this list --
@@ -1777,6 +1783,11 @@ impl<'a> Cx<'a> {
             }
             Ex::Fun(f, a) if a.len() == 1 && self.is_odd_fun(*f) => {
                 self.sign_blind_rep(&a[0]).map(|s| fun(*f, vec![s], self))
+            }
+            Ex::Fun(f, a) if a.len() == 2 && self.view.tok_is(*f, "besselj") => {
+                let (pos, _) = odd_head(self.view, *f, a)?;
+                self.sign_blind_rep(&a[pos])
+                    .map(|s| fun(*f, vec![a[0].clone(), s], self))
             }
             Ex::Pow(b, ex) => {
                 let ok = matches!(&**ex, Ex::Num(r)
@@ -2696,7 +2707,8 @@ fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
             let ClassBase { head: Some(_), arg } = class_base(b, cx.view)? else {
                 return None;
             };
-            let (a, s) = match (orient_base(&args[0], cx, turns), arg) {
+            let (pos, _) = odd_head(cx.view, *fk, args)?;
+            let (a, s) = match (orient_base(&args[pos], cx, turns), arg) {
                 (Some(o), _) => o,
                 (None, ClassArg::Multiple(m)) if multiple_literal(m)?.is_negative() => {
                     (positive_multiple(m)?, true)
@@ -2704,7 +2716,7 @@ fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
                 _ => return None,
             };
             let mut v = args.clone();
-            v[0] = a;
+            v[pos] = a;
             Some((Ex::Fun(*fk, v), s))
         }
         // An integer power of a class carrier: odd powers move the sign out, even ones do not. A
@@ -2985,6 +2997,31 @@ pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
         "sin", "sinh", "tan", "tanh", "asin", "asinh", "atan", "atanh", "erf",
     ];
     ODD.iter().any(|s| view.tok_is(f, s))
+}
+
+/// THE ODD HEADS, the one table every class owner reads: `f` is odd in one argument, at every value
+/// and in float64 bit for bit, the sign of a zero included. The position of that argument and the
+/// head's fixed operand: an odd function (`odd_fun`) in its argument; `rootn` of an odd literal
+/// index of at least 3 in its radicand (the index); `besselj` of an odd integer literal order in
+/// its argument (the order: `J_n(-t) = -J_n(t)`, which the kernel reads bit for bit).
+pub(crate) fn odd_head<'a>(
+    view: &TokenView,
+    op: Tok,
+    a: &'a [Ex],
+) -> Option<(usize, Option<&'a Ex>)> {
+    match a {
+        [_] if odd_fun(view, op) => Some((0, None)),
+        [_, k]
+            if view.tok_is(op, "rootn")
+                && matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less) =>
+        {
+            Some((0, Some(k)))
+        }
+        [n, _] if view.tok_is(op, "besselj") && matches!(n, Ex::Num(n) if n.is_odd_integer()) => {
+            Some((1, Some(n)))
+        }
+        _ => None,
+    }
 }
 
 /// The literal of an odd head of a literal multiple (`class_base`'s `{B, -B}` over a multiple):
@@ -5260,7 +5297,7 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             c.sums.swap(0, 1);
         }
     }
-    classes.sort_by(|a, b| cmp_ex(&a.base(0), &b.base(0), cx.view));
+    classes.sort_by(|a, b| cmp_ex(&a.base(0, cx.view), &b.base(0, cx.view), cx.view));
     // The rest of the bag: the factors outside every class, collected as `mul()` collects them.
     // It is read from the factors as they arrived, not from `mul()`'s collection, where a class's
     // members can merge into a factor outside it (an odd root's cube is its radicand) that the
@@ -5665,17 +5702,8 @@ fn class_base<'a>(b: &'a Ex, view: &TokenView) -> Option<ClassBase<'a>> {
             arg: sum(ts)?,
         }),
         Ex::Fun(op, a) => {
-            let index = match a.as_slice() {
-                [_] if odd_fun(view, *op) => None,
-                [_, k]
-                    if view.tok_is(*op, "rootn")
-                        && matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less) =>
-                {
-                    Some(k)
-                }
-                _ => return None,
-            };
-            let arg = match &a[0] {
+            let (pos, index) = odd_head(view, *op, a)?;
+            let arg = match &a[pos] {
                 Ex::Add(ts) => sum(ts)?,
                 m => {
                     multiple_literal(m)?;
@@ -5765,8 +5793,9 @@ fn positive_head(b: &Ex, view: &TokenView) -> Option<Ex> {
         return None;
     };
     let Ex::Fun(op, a) = b else { return None };
+    let (pos, _) = odd_head(view, *op, a)?;
     let mut args = a.clone();
-    args[0] = positive_multiple(m)?;
+    args[pos] = positive_multiple(m)?;
     Some(Ex::Fun(*op, args))
 }
 
@@ -5828,7 +5857,7 @@ fn site_class(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     };
     let terms = match m {
         Ex::Add(ts) => ts,
-        Ex::Fun(_, a) => match a.first() {
+        Ex::Fun(op, a) => match odd_head(cx.view, *op, a).map(|(p, _)| &a[p]) {
             Some(Ex::Add(ts)) => ts,
             _ => return None,
         },
@@ -6663,13 +6692,15 @@ impl<'a> Class<'a> {
     fn complete(&mut self, cx: &Cx) -> bool {
         let first = &self.sums[0];
         let multiple = self.multiple();
-        let base = self.base(0);
+        let base = self.base(0, cx.view);
         let flip = self.flip.get_or_init(|| {
             if multiple {
                 // The head's own flip where it is a sign-trade site (a literal folds through
                 // `fun()`), else the argument negated.
                 let negated = match sign_trade_flip(&base, cx) {
-                    Some(Ex::Fun(_, a)) => a[0].clone(),
+                    Some(Ex::Fun(f, a)) => {
+                        a[odd_head(cx.view, f, &a).map_or(0, |(p, _)| p)].clone()
+                    }
                     _ => negate_term(&first[0], cx)?,
                 };
                 return multiple_literal(&negated).map(|_| vec![negated]);
@@ -6721,7 +6752,7 @@ impl<'a> Class<'a> {
     }
 
     /// The base over one side's sum (a literal multiple as itself).
-    fn base(&self, side: usize) -> Ex {
+    fn base(&self, side: usize, view: &TokenView) -> Ex {
         let sum = match self.sums[side].as_slice() {
             [m] if self.head.is_some() => m.clone(),
             ts => Ex::Add(ts.to_vec()),
@@ -6729,6 +6760,10 @@ impl<'a> Class<'a> {
         match &self.head {
             None => sum,
             Some((op, None)) => Ex::Fun(*op, vec![sum]),
+            // `besselj`'s fixed operand (the order) stands first, `rootn`'s (the index) second
+            Some((op, Some(k))) if view.tok_is(*op, "besselj") => {
+                Ex::Fun(*op, vec![(*k).clone(), sum])
+            }
             Some((op, Some(k))) => Ex::Fun(*op, vec![sum, (*k).clone()]),
         }
     }
@@ -6762,7 +6797,7 @@ impl<'a> Class<'a> {
                 side.fixed.push(if whole == 0 {
                     f.clone()
                 } else {
-                    pow(self.base(s), Ex::Num(frac), cx)
+                    pow(self.base(s, cx.view), Ex::Num(frac), cx)
                 });
             }
         }
@@ -6772,7 +6807,7 @@ impl<'a> Class<'a> {
         // (`1/((x1 - 3)(3 - x1))` is `-1/(x1 - 3)^2`); where the product keeps a value at the
         // zero (`zero_limit`), only to a placement that keeps it. A class whose zero set may hold
         // a region keeps its inverse, infinite on the region.
-        t.free_inverse = zero_set_null(&self.base(0), cx);
+        t.free_inverse = zero_set_null(&self.base(0, cx.view), cx);
         for side in t.sides.iter_mut() {
             side.fixed.sort_by(|a, b| cmp_ex(a, b, cx.view));
         }
@@ -6826,7 +6861,7 @@ impl<'a> Class<'a> {
         let mut lists: Vec<Vec<Ex>> = vec![Vec::new()];
         for s in 0..2 {
             let side = &t.sides[s];
-            let b = self.base(s);
+            let b = self.base(s, cx.view);
             let int_pow = |k: i128| -> Ex {
                 if k == 1 {
                     b.clone()
@@ -7447,10 +7482,11 @@ fn site_sum_terms(f: &Ex) -> Option<&[Ex]> {
     };
     match m {
         Ex::Add(ts) => Some(ts),
-        Ex::Fun(_, a) => match a.first() {
-            Some(Ex::Add(ts)) => Some(ts),
+        // the sum under an odd head: its one sum argument (a site's index or order is a literal)
+        Ex::Fun(_, a) => a.iter().find_map(|x| match x {
+            Ex::Add(ts) => Some(ts.as_slice()),
             _ => None,
-        },
+        }),
         _ => None,
     }
 }
@@ -8341,10 +8377,12 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
                 // `f(-u)^n = -f(u)^n`, for a negative `n` as for a positive one. A constant
                 // argument keeps its sign on its literal under a power (`1/tanh(-2)`), as the
                 // sign key files it.
-                Ex::Fun(_, args)
-                    if args.first().is_some_and(|a| {
-                        a.has_measure_space(cx.view) || a.contains_wildcard(cx.view)
-                    }) =>
+                Ex::Fun(op, args)
+                    if odd_head(cx.view, *op, args)
+                        .map_or(args.first(), |(p, _)| args.get(p))
+                        .is_some_and(|a| {
+                            a.has_measure_space(cx.view) || a.contains_wildcard(cx.view)
+                        }) =>
                 {
                     trade_flip(b, cx, refit).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
                 }
@@ -8364,34 +8402,47 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
             };
             flip_sum(ts).map(|s| Ex::Fun(*op, vec![Ex::Add(s), args[1].clone()]))
         }
-        Ex::Fun(op, args) if args.len() == 1 && odd_fun(cx.view, *op) => match &args[0] {
-            Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Fun(*op, vec![Ex::Add(s)])),
-            // B5+B19: an odd function of a LITERAL is a trade site too -- f(-r) = -f(r)
-            // exactly, so the sign relocates between the coefficient slot and the
-            // literal, and the orbit argmin (mu, then the NON-NEGATIVE-coefficient tie,
-            // then cmp_ex) lands every route on I4's ratified direction: the literal
-            // owns the sign (`-5 * sin(2)` files as `5 * sin(-2)`; `-1 * sin(2)` as
-            // `sin(-2)`, the Mul node dissolving). This is the hoist of `term_join`'s
-            // former private fusion arm into the shared owner: `mul()`'s direct
-            // assembly and the collector's rebuild now price the SAME orbit. Rebuilt
-            // through `fun()`, NEVER raw, so a boundary ground keeps folding
-            // (`atanh(-1)` must reach `-inf`); a rebuild that FOLDS to a non-Fun is
-            // refused as a site (fail-safe: the orbit stays type-stable, and such
-            // grounds fold on their own paths).
-            //
-            // In `f64` an odd function of the literal ZERO is no site: `-sin(0)` is -0 in float64
-            // and `sin(-0)` would need the written negative zero, so the sign stays on the
-            // coefficient, where the ground fold of a ground product writes float64's -0 and the
-            // zero of a product with a variable is the one zero (`-x1*sin(0)` is `0`). Read as the
-            // zero again, the flip would drop the sign (`-sin(0)` as `sin(0)`, a +0). `real` and
-            // `permissive` read one zero.
-            Ex::Num(r) if r.is_zero() && cx.f64_semantics() && cx.f64_numbers() => None,
-            Ex::Num(r) => {
-                let flipped = fun(*op, vec![Ex::Num(r.checked_neg()?)], cx);
-                matches!(flipped, Ex::Fun(..)).then_some(flipped)
+        Ex::Fun(op, args)
+            if (args.len() == 1 && odd_fun(cx.view, *op))
+                || (args.len() == 2
+                    && cx.view.tok_is(*op, "besselj")
+                    && odd_head(cx.view, *op, args).is_some()) =>
+        {
+            let pos = args.len() - 1;
+            let with = |a: Ex| {
+                let mut v = args.clone();
+                v[pos] = a;
+                v
+            };
+            match &args[pos] {
+                Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Fun(*op, with(Ex::Add(s)))),
+                // B5+B19: an odd function of a LITERAL is a trade site too -- f(-r) = -f(r)
+                // exactly, so the sign relocates between the coefficient slot and the
+                // literal, and the orbit argmin (mu, then the NON-NEGATIVE-coefficient tie,
+                // then cmp_ex) lands every route on I4's ratified direction: the literal
+                // owns the sign (`-5 * sin(2)` files as `5 * sin(-2)`; `-1 * sin(2)` as
+                // `sin(-2)`, the Mul node dissolving). This is the hoist of `term_join`'s
+                // former private fusion arm into the shared owner: `mul()`'s direct
+                // assembly and the collector's rebuild now price the SAME orbit. Rebuilt
+                // through `fun()`, NEVER raw, so a boundary ground keeps folding
+                // (`atanh(-1)` must reach `-inf`); a rebuild that FOLDS to a non-Fun is
+                // refused as a site (fail-safe: the orbit stays type-stable, and such
+                // grounds fold on their own paths).
+                //
+                // In `f64` an odd function of the literal ZERO is no site: `-sin(0)` is -0 in
+                // float64 and `sin(-0)` would need the written negative zero, so the sign stays on
+                // the coefficient, where the ground fold of a ground product writes float64's -0
+                // and the zero of a product with a variable is the one zero (`-x1*sin(0)` is
+                // `0`). Read as the zero again, the flip would drop the sign (`-sin(0)` as
+                // `sin(0)`, a +0). `real` and `permissive` read one zero.
+                Ex::Num(r) if r.is_zero() && cx.f64_semantics() && cx.f64_numbers() => None,
+                Ex::Num(r) => {
+                    let flipped = fun(*op, with(Ex::Num(r.checked_neg()?)), cx);
+                    matches!(flipped, Ex::Fun(..)).then_some(flipped)
+                }
+                _ => literal_multiple_flip(f, cx),
             }
-            _ => literal_multiple_flip(f, cx),
-        },
+        }
         Ex::Fun(..) => literal_multiple_flip(f, cx),
         _ => None,
     }
@@ -8404,14 +8455,15 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
 fn literal_multiple_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
     let c = odd_of_literal_multiple(f, cx.view)?;
     let Ex::Fun(op, args) = f else { return None };
+    let (pos, _) = odd_head(cx.view, *op, args)?;
     let mut items = vec![Ex::Num(c.checked_neg()?)];
-    match &args[0] {
+    match &args[pos] {
         Ex::Num(_) => {}
         Ex::Mul(v) if matches!(v.first(), Some(Ex::Num(_))) => items.extend(v[1..].iter().cloned()),
         u => items.push(u.clone()),
     }
     let mut flipped_args = args.clone();
-    flipped_args[0] = mul(items, cx);
+    flipped_args[pos] = mul(items, cx);
     let flipped = fun(*op, flipped_args, cx);
     matches!(
         class_base(&flipped, cx.view),
@@ -9362,11 +9414,10 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // (-f(S))^2k = f(S)^2k exactly, so `tanh(x2 - x1)^2` and `tanh(x1 - x2)^2` are one value,
     // filed with the argument the sum itself would take.
     if let (Ex::Fun(op, args), Ex::Num(r)) = (&base, &exp) {
-        let odd = (args.len() == 1 && odd_fun(cx.view, *op))
-            || (args.len() == 2
-                && cx.view.tok_is(*op, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less));
-        if let (true, Ex::Add(ts)) = (odd && r.is_even_integer() && !r.is_zero(), &args[0]) {
+        let pos = odd_head(cx.view, *op, args).map(|(p, _)| p);
+        let odd = pos.is_some();
+        let pos = pos.unwrap_or(0);
+        if let (true, Ex::Add(ts)) = (odd && r.is_even_integer() && !r.is_zero(), &args[pos]) {
             if !ts.iter().any(Ex::contains_const)
                 && !ts.iter().any(term_absorbs_negation)
                 && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
@@ -9380,7 +9431,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         let mut args = args.clone();
-                        args[0] = Ex::Add(flipped);
+                        args[pos] = Ex::Add(flipped);
                         return pow_member(Ex::Fun(*op, args), exp, cx);
                     }
                 }
@@ -9884,6 +9935,119 @@ pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     Ex::Fun(op, members)
 }
 
+/// The argument an EVEN function reads in place of `a`, or `None` when `a` is already it: the
+/// sign-blind representative (`sign_blind_rep`), or else the other orientation of a sum where it
+/// wins.
+///
+/// F63 even-carrier orientation (owner-ruled 2026-08-08, full family): beyond the CARRIED sign
+/// `sign_blind_rep` drops, an even function also erases its argument's ORIENTATION -- `cos(x - y)`
+/// and `cos(y - x)` are one value -- and bag orientation is invisible to `sign_blind_rep` (a
+/// mixed-sign sum carries no top-level sign to drop). Same doctrine as the even-power base: fow
+/// picks, exact ties (pure mirrors) to the lex rule, Const-bearing and absorbing sums keep their
+/// absorption owners, and the flip re-enters `fun` exactly once (class-antisymmetry answers keep
+/// on the flipped orientation).
+fn even_argument(a: &Ex, cx: &Cx) -> Option<Ex> {
+    if let Some(sign_free) = cx.sign_blind_rep(a) {
+        return Some(sign_free);
+    }
+    let Ex::Add(ts) = a else { return None };
+    if ts.iter().any(Ex::contains_const)
+        || ts.iter().any(term_absorbs_negation)
+        || ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
+        || !flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
+    {
+        return None;
+    }
+    let mut flipped = ts
+        .iter()
+        .map(|t| negate_term(t, cx))
+        .collect::<Option<Vec<Ex>>>()?;
+    // FILES-BARE gate (same rule as sign_trade_flip).
+    if flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
+        return None;
+    }
+    flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
+    Some(Ex::Add(flipped))
+}
+
+/// `besselj(+-inf, x)` at a literal `x`: 0 at `x >= 0`, NaN below (scipy's cells). And
+/// `besselj(nu, 0)` at a literal order, exactly, in every mode: `J_0(0) = 1`, `J_nu(0) = 0` for
+/// `nu > 0` and for a negative integer `nu` (float64's `-0.0` under an odd one in `f64`, as the
+/// kernel writes `J_{-n}(0) = (-1)^n J_n(0)`), and at a negative non-integer order the pole's
+/// one-sided limit (the order's domain is `x >= 0`), the infinity of the sign of
+/// `1/Gamma(nu + 1)`: `J_{-1/2}(0) = inf`, `J_{-3/2}(0) = -inf` (scipy's cells, D7).
+fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
+    // An infinite order (scipy's cells): 0 at a literal x >= 0, NaN below.
+    if let [Ex::PosInf | Ex::NegInf, Ex::Num(x)] = args {
+        return Some(if x.is_negative() {
+            Ex::NaN
+        } else {
+            Ex::Num(Rat::ZERO)
+        });
+    }
+    let [Ex::Num(nu), Ex::Num(x)] = args else {
+        return None;
+    };
+    if !x.is_zero() {
+        return None;
+    }
+    if nu.is_zero() {
+        return Some(Ex::Num(Rat::ONE));
+    }
+    if !nu.is_negative() {
+        return Some(Ex::Num(Rat::ZERO));
+    }
+    if nu.is_integer() {
+        return Some(if nu.is_odd_integer() && cx.f64_semantics() {
+            Ex::Leaf(cx.view.intern(NEG_ZERO))
+        } else {
+            Ex::Num(Rat::ZERO)
+        });
+    }
+    // Gamma(z) is positive for z > 0 and has the sign (-1)^ceil(-z) at a negative non-integer z.
+    let z = nu.checked_add(&Rat::ONE)?;
+    let positive = !z.is_negative() || !rat_floor(&z.checked_neg()?, true)?.is_odd_integer();
+    Some(if positive { Ex::PosInf } else { Ex::NegInf })
+}
+
+/// `besselj(n, t)` at an INTEGER literal order `n`: two identities of `J_n` that hold at every
+/// value, NaN and the sign of a zero included -- in float64 too, where the kernel reads both
+/// (`numeric::besselj`):
+///
+///   * the reflection `J_{-n}(t) = (-1)^n J_n(t)`: the canonical order is non-negative
+///     (`besselj(-3, x)` is `-besselj(3, x)`);
+///   * the parity `J_n(-t) = (-1)^n J_n(t)`: an even order is an even function of `t`, so it reads
+///     the argument an even function reads (`even_argument`: `besselj(2, -x)` and
+///     `besselj(2, |x|)` are `besselj(2, x)`, `besselj(0, y - x)` is `besselj(0, x - y)`); an odd
+///     order is an odd head (`odd_head`), so its sign and its sum's orientation are the class
+///     owners', as an odd function's are (`besselj(1, -2 x)` is `-besselj(1, 2 x)`,
+///     `-besselj(1, x0 - x1)` is `besselj(1, x1 - x0)`).
+///
+/// A sign the reflection moves out of a GROUND argument under an odd order stays where it is in
+/// `f64` (the value is the ground fold's, from the kernel, and a derived zero would lose the sign
+/// the kernel writes).
+fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
+    let Ex::Num(n) = &args[0] else { return None };
+    if !n.is_integer() {
+        return None;
+    }
+    let ground = !args[1].has_measure_space(cx.view) && !args[1].contains_wildcard(cx.view);
+    let negated = |e: Ex| mul(vec![Ex::Num(Rat::NEG_ONE), e], cx);
+    if n.is_negative() {
+        if n.is_odd_integer() && ground && cx.f64_semantics() {
+            return None;
+        }
+        let j = fun(op, vec![Ex::Num(n.checked_neg()?), args[1].clone()], cx);
+        return Some(if n.is_odd_integer() { negated(j) } else { j });
+    }
+    if n.is_even_integer() {
+        let t = even_argument(&args[1], cx)?;
+        return Some(fun(op, vec![args[0].clone(), t], cx));
+    }
+    // An odd order is an odd head (`odd_head`): the class owners place its sign.
+    None
+}
+
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal argument LANDS here (permissive's ρ, [`land`]).
@@ -9981,35 +10145,16 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // TOTAL, no licence needed: evenness is a pointwise identity on the whole extension,
     // and `is_even_fun` is a certified table, not a config field.
     if args.len() == 1 && cx.is_even_fun(op) {
-        if let Some(sign_free) = cx.sign_blind_rep(&args[0]) {
-            return fun(op, vec![sign_free], cx);
+        if let Some(arg) = even_argument(&args[0], cx) {
+            return fun(op, vec![arg], cx);
         }
-        // F63 even-carrier orientation (owner-ruled 2026-08-08, full family): beyond
-        // the CARRIED sign `sign_blind_rep` drops, an even function also erases its
-        // argument's ORIENTATION -- `cos(x - y)` and `cos(y - x)` are one value --
-        // and bag orientation is invisible to `sign_blind_rep` (a mixed-sign sum
-        // carries no top-level sign to drop). Same doctrine as the even-power base:
-        // fow picks, exact ties (pure mirrors) to the lex rule, Const-bearing and
-        // absorbing sums keep their absorption owners, and the flip re-enters `fun`
-        // exactly once (class-antisymmetry answers keep on the flipped orientation).
-        if let Ex::Add(ts) = &args[0] {
-            if !ts.iter().any(Ex::contains_const)
-                && !ts.iter().any(term_absorbs_negation)
-                && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-                && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
-            {
-                if let Some(mut flipped) = ts
-                    .iter()
-                    .map(|t| negate_term(t, cx))
-                    .collect::<Option<Vec<Ex>>>()
-                {
-                    // FILES-BARE gate (same rule as sign_trade_flip).
-                    if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
-                        flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
-                        return fun(op, vec![Ex::Add(flipped)], cx);
-                    }
-                }
-            }
+    }
+    // `besselj` OF LITERALS AT ZERO, and OF AN INTEGER ORDER: its reflection and its parity.
+    if args.len() == 2 && cx.view.tok_is(op, "besselj") {
+        if let Some(e) =
+            besselj_of_literals_at_zero(&args, cx).or_else(|| besselj_integer_order(op, &args, cx))
+        {
+            return e;
         }
     }
     // A HALF-PERIOD SHIFT DROPS OUT: `f(t +- pi)` for f in {sin, cos, tan}. C1.19 family C.
@@ -10289,8 +10434,14 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // stands in decides again over all its members (`sign_place`). A constant argument keeps its
     // sign on its literal (`sin(-2)`).
     let head = Ex::Fun(op, args);
+    let pos = match &head {
+        Ex::Fun(f, a) => odd_head(cx.view, *f, a).map_or(0, |(p, _)| p),
+        _ => 0,
+    };
     if let (Some(r), Ex::Fun(_, a)) = (odd_of_literal_multiple(&head, cx.view), &head) {
-        if r.is_negative() && (a[0].has_measure_space(cx.view) || a[0].contains_wildcard(cx.view)) {
+        if r.is_negative()
+            && (a[pos].has_measure_space(cx.view) || a[pos].contains_wildcard(cx.view))
+        {
             if let Some(p) = positive_head(&head, cx.view) {
                 let mut v = vec![Ex::Num(Rat::NEG_ONE), p];
                 v.sort_by(|x, y| mul_factor_cmp(x, y, cx.view));
@@ -10308,7 +10459,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     }
     // A head of a sum is a class site: alone it takes the orientation it takes as a product's one
     // factor (`lone_site`). Its flip negates the sum in place, so asking it builds no head.
-    if matches!(&head, Ex::Fun(_, a) if matches!(a.first(), Some(Ex::Add(_)))) {
+    if matches!(&head, Ex::Fun(_, a) if matches!(a.get(pos), Some(Ex::Add(_)))) {
         return lone_site(head, cx);
     }
     head

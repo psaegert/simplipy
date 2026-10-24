@@ -78,13 +78,11 @@ def test_the_judge_reads_the_new_heads_on_both_axes():
                      ('harmonic <constant>', '<constant>'), ('atan2 <constant> 1', '<constant>')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'core', (lhs, rhs, r)
-    # besselj has no contract kernel yet: the deployed lane alone, and no constant
+    # besselj too has its contract kernel: an even order's parity is core
     ok = j('besselj 0 neg _0'.split(), 'besselj 0 _0'.split())
-    assert ok['verdict'] == 'F64-ONLY' and ok['tier'] == 'f64', ok
-    assert j('besselj 1 <constant>'.split(), '<constant>'.split())['verdict'] == 'UNSUPPORTED-SHAPE'
+    assert ok['verdict'] == 'CERTIFIED' and ok['tier'] == 'core', ok
     # a head the judge does not know at all stays refused
     assert j('gamma _0'.split(), '_0'.split())['verdict'] == 'UNSUPPORTED-SHAPE'
-    assert _contract._tier('F64-ONLY', None) == 'reject'
 
 
 def test_the_constant_witness_is_polished_where_it_is_determined():
@@ -148,22 +146,20 @@ def test_contract_kernels_and_their_bands():
 
 
 def test_monitor_and_oracle_read_the_new_heads():
-    """The corpus monitor and sort promotion's high-precision oracle evaluate the eight heads
-    with the contract's kernels (the monitor with IEEE's zero signs); besselj stays unknown to
-    both."""
+    """The corpus monitor and sort promotion's high-precision oracle evaluate the nine heads
+    with the contract's kernels (the monitor with IEEE's zero signs, and besselj with its own
+    kernel of the same cells)."""
     assert not _monitor.unknown_tokens(['floor', 'mod', 'x0', 'atan2', 'x1', 'erf', 'x0'])
-    assert 'besselj' in _monitor.unknown_tokens(['besselj', '1', 'x0'])
+    assert not _monitor.unknown_tokens(['besselj', '1', 'x0'])
     neg0 = _monitor._NegZero(0)
     assert _monitor._zero_signbit('ceil', [-0.5]) and not _monitor._zero_signbit('floor', [0.5])
     assert _monitor._zero_signbit('mod', [3.0, -3.0]) and _monitor._zero_signbit('atan2', [neg0, 1.0])
     assert not _monitor._zero_signbit('max', [neg0, 0.0]) and _monitor._zero_signbit('min', [neg0, 0.0])
-    with pytest.raises(_monitor.Unresolved):
-        _monitor._zero_signbit('besselj', [1.0, 0.0])
     from mpmath import mpf
+    assert not _monitor._zero_signbit('besselj', [mpf(1), mpf(0)])
     from simplipy.promotion._hp_equiv import evaluate
     assert evaluate(['floor', 'x0'], {'x0': mpf(1.5)}, []) == 1
-    with pytest.raises(ValueError):
-        evaluate(['besselj', '1', 'x0'], {'x0': mpf(1.5)}, [])
+    assert abs(evaluate(['besselj', '1', 'x0'], {'x0': mpf(1.5)}, []) - mpf('0.5579365079100996')) < 1e-15
 
 
 def test_a_small_mine_mines_new_head_rules():
@@ -256,14 +252,15 @@ def test_pi_and_e_are_numbers_of_a_lattice_bag(bare, mode):
 
 
 def test_lattice_laws_are_the_judges():
-    """The laws the bag applies unconditionally are float64 identities bit for bit by the judge;
-    the absorber and the absorption are refused there only at a NaN operand, which is why the
-    bag takes them under the no-NaN licence alone."""
+    """The laws the bag applies unconditionally are true over the reals and float64 identities
+    bit for bit, a zero's sign and a NaN included (the contract's `max` and `min` and the f64 bar
+    agree with the bag's folds): `core`. The absorber and the absorption are refused only at a
+    NaN operand, which is why the bag takes them under the no-NaN licence alone."""
     j = lambda lhs, rhs: _contract.judge_rule(lhs.split(), rhs.split())  # noqa: E731
     for lhs, rhs in (('max _0 max _1 _2', 'max max _0 _1 _2'), ('min _0 _1', 'min _1 _0'),
                      ('max _0 _0', '_0'), ('max float("-inf") _0', '_0'), ('max -0.0 0', '0'),
                      ('min 0 -0.0', '-0.0'), ('max _0 float("nan")', 'float("nan")')):
-        assert j(lhs, rhs)['tier'] == 'f64', (lhs, rhs)
+        assert j(lhs, rhs)['tier'] == 'core', (lhs, rhs)
     for lhs, rhs in (('max float("inf") _0', 'float("inf")'), ('max _0 min _0 _1', '_0')):
         v = j(lhs, rhs)
         assert v['tier'] == 'reject' and any(np.isnan(x) for x in v['points'][0].values()), v
@@ -412,20 +409,22 @@ def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
 
 @pytest.mark.parametrize('mode', MODES)
 def test_sort_promotion_reads_the_new_heads(bare, mode):
-    """Rules with the eight heads are promoted to the sorts they certify at, the contract atom
+    """Rules with the nine heads are promoted to the sorts they certify at, the contract atom
     bar reading their contract values, and a rule false only where a step head's argument
     crosses an integer at no atom (sinh(x) + 1/2 = k) is killed at that preimage."""
     from simplipy.promotion import promote
     rules = [(lhs.split(), rhs.split()) for lhs, rhs in (
         ('floor floor ?0', 'floor ?0'), ('mod ?0 1', '- ?0 floor ?0'),
         ('atan2 neg ?0 1', 'neg atan2 ?0 1'), ('erf neg ?0', 'neg erf ?0'),
+        ('besselj 1 neg ?0', 'neg besselj 1 ?0'), ('besselj 0.5 neg ?0', 'besselj 0.5 ?0'),
         ('- ceil + sinh ?0 0.5 floor + sinh ?0 0.5', '1'))]
     kept, report = promote(rules, bare, rule_mode=mode, run_positive_controls=False)
     kept = {' '.join(a) + ' -> ' + ' '.join(b) for a, b in kept}
     for rule in ('floor floor _0 -> floor _0', 'mod _0 1 -> - _0 floor _0',
-                 'atan2 neg _0 1 -> neg atan2 _0 1', 'erf neg _0 -> neg erf _0'):
+                 'atan2 neg _0 1 -> neg atan2 _0 1', 'erf neg _0 -> neg erf _0',
+                 'besselj 1 neg _0 -> neg besselj 1 _0'):
         assert rule in kept, (rule, kept)
-    assert not any(r.startswith('- ceil') for r in kept), kept
+    assert not any(r.startswith('- ceil') or r.startswith('besselj 0.5') for r in kept), kept
     assert any('PREIMAGE' in str(k[2]) for k in report['killed_q']), report['killed_q']
 
 
@@ -443,3 +442,106 @@ def test_a_constant_collapse_through_a_band_survives_promotion(bare):
             'acos erf sinh <constant>'} <= kept
     # harmonic(c) has no finite witness at its poles: refused, as before
     assert 'harmonic <constant>' not in kept and report['killed_ground']
+
+
+# --------------------------------------------------------------------------- besselj, complete
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_besselj_reflection_and_parity_in_every_mode(bare, mode):
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('besselj -3 x0') == 'neg besselj 3 x0'          # J_-n = (-1)^n J_n
+    assert s('besselj -2 x0') == 'besselj 2 x0'
+    assert s('besselj 2 neg x0') == 'besselj 2 x0'           # an even order is even
+    assert s('besselj 0 abs x0') == 'besselj 0 x0'
+    assert s('besselj 2 sin neg x0') == 'besselj 2 sin x0'
+    assert s('besselj 0 - x1 x0') == s('besselj 0 - x0 x1')
+    assert s('besselj 3 neg x0') == 'neg besselj 3 x0'       # an odd order carries a sign out
+    assert s('besselj 3 * -2 x0') == 'neg besselj 3 * 2 x0'
+    assert s('besselj -1 neg x0') == 'besselj 1 x0'
+    assert s('besselj 0.5 neg x0') == 'besselj / 1 2 neg x0'  # a non-integer order has no parity
+    assert s('besselj 1 - x1 x0') == 'besselj 1 - x1 x0'     # a sum alone keeps its orientation
+    assert s('neg besselj 1 - x0 x1') == 'besselj 1 - x1 x0'  # ... and a sign trades into it
+    assert s('besselj 2 - x1 x0') == s('besselj 2 - x0 x1')
+    assert s('besselj 1 -2') == 'besselj 1 -2'               # a constant keeps its sign
+    for t in ('besselj -3 x0', 'besselj 3 * -2 x0', 'besselj 0 - x1 x0'):
+        once = bare.simplify(t.split(), mode=mode)
+        assert bare.simplify(once, mode=mode) == once
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_besselj_of_literals_at_zero_folds_exactly(bare, mode):
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('besselj 0 0') == '1'
+    assert s('besselj 2.5 0') == '0' and s('besselj -2 0') == '0'
+    assert s('besselj -1 0') == ('-0.0' if mode == 'f64' else '0')
+    # the pole's one-sided limit, the sign of 1/Gamma(nu + 1), as scipy has it
+    assert s('besselj -0.5 0') == 'float("inf")'
+    assert s('besselj -1.5 0') == 'float("-inf")'
+    assert s('besselj -2.5 0') == 'float("inf")'
+    # an infinite order: 0 at x >= 0, NaN below (scipy's cells)
+    assert s('besselj atanh 1 2') == '0' and s('besselj atanh 1 -2') == 'float("nan")'
+
+
+def test_besselj_identities_hold_bit_for_bit_in_float64():
+    from simplipy._core import f64_bar
+    ext = _contract.ARITY
+    for lhs, rhs in (('besselj -3 x0', 'neg besselj 3 x0'), ('besselj -2 x0', 'besselj 2 x0'),
+                     ('besselj 2 neg x0', 'besselj 2 x0'), ('besselj 0 abs x0', 'besselj 0 x0'),
+                     ('besselj 0 - x0 x1', 'besselj 0 - x1 x0'), ('besselj 3 neg x0', 'neg besselj 3 x0'),
+                     ('besselj 1 * -2 x0', 'neg besselj 1 * 2 x0'), ('besselj -1 neg x0', 'besselj 1 x0')):
+        names = sorted({t for t in (lhs + ' ' + rhs).split() if t in ('x0', 'x1')})
+        assert f64_bar(lhs.split(), rhs.split(), names, ext)[0], (lhs, rhs)
+    # the bar can fail: no parity at a non-integer order, and an odd order's sum keeps its zero
+    assert not f64_bar('besselj 0.5 neg x0'.split(), 'besselj 0.5 x0'.split(), ['x0'], ext)[0]
+    assert not f64_bar('besselj 1 - x0 x1'.split(), 'neg besselj 1 - x1 x0'.split(), ['x0', 'x1'],
+                       ext)[0]
+
+
+def test_besselj_is_judged_by_the_contract():
+    j = lambda lhs, rhs: _contract.judge_rule(lhs.split(), rhs.split())  # noqa: E731
+    v = j('besselj 1 neg _0', 'neg besselj 1 _0')
+    assert v['verdict'] == 'CERTIFIED' and v['tier'] == 'core', v
+    assert j('besselj -0.5 0', 'float("inf")')['tier'] == 'core'
+    # true over the reals, a few ulp apart in float64
+    assert j('besselj 0.5 _0', '* rootn / 2 * np.pi _0 2 / sin _0 1')['tier'] == 'real'
+    assert j('besselj 0.5 neg _0', 'besselj 0.5 _0')['verdict'] == 'KILL'
+    assert j('besselj _0 0', '0')['verdict'] == 'KILL'          # J_0(0) = 1
+    # a <constant> is witnessed by the contract
+    assert j('* <constant> besselj 0 _0', '* <constant> besselj 0 neg _0')['verdict'] == 'CERTIFIED'
+    # the cells
+    c = _contract.c_besselj
+    mpf = _contract.mpf
+    assert c(mpf(-1.5), mpf(0)) == _contract.NINF and c(mpf(-0.5), mpf(0)) == _contract.PINF
+    assert _contract.misnan(c(mpf(0.5), mpf(-1))) and _contract.misnan(c(mpf(1), _contract.PINF))
+    assert c(mpf(3), mpf(-2)) == -c(mpf(3), mpf(2)) == c(mpf(-3), mpf(2))
+    with pytest.raises(_contract.Unresolved):
+        c(mpf(2000), mpf(1))
+
+
+def test_monitor_and_oracle_read_besselj():
+    from mpmath import mpf
+    from simplipy.promotion._hp_equiv import equiv, evaluate
+    assert 'besselj' not in _monitor.unknown_tokens(['besselj', '1', 'x0'])
+    neg_zero = _monitor._NegZero(0)
+    assert _monitor._zero_signbit('besselj', [mpf(1), neg_zero]) is True      # J_1(-0) = -0
+    assert _monitor._zero_signbit('besselj', [mpf(2), neg_zero]) is False
+    assert _monitor._zero_signbit('besselj', [mpf(-1), mpf(0)]) is True       # J_-1(+0) = -0
+    j = lambda t: evaluate(t.split(), {'x0': mpf(2)}, [])  # noqa: E731
+    assert abs(j('besselj 1 neg x0') + j('besselj 1 x0')) < 1e-14
+    assert equiv('besselj 1 neg _0'.split(), 'neg besselj 1 _0'.split())['ok']
+    assert not equiv('besselj 2 neg _0'.split(), 'neg besselj 2 _0'.split())['ok']
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_an_odd_order_is_an_odd_head(bare, mode):
+    """besselj of an odd order places its sign and orients its sum as an odd function does: each
+    shape gives sin's answer, with sin spelled besselj(1, .)."""
+    shapes = ('neg H - x0 x1', '* -3 H - x0 x1', '* x2 H neg - x0 x1', 'pow H - x1 x0 2', 'pow H neg x0 3',
+              'abs H neg - x0 x1', '+ H - x0 x1 H - x1 x0', '+ H -2 H 2', 'neg H * -2 - x0 x1',
+              '* -1 H - abs x1 x1', 'cos H neg x0')
+    for shape in shapes:
+        want = ' '.join(bare.simplify(shape.replace('H', 'sin').split(), mode=mode))
+        got = bare.simplify(shape.replace('H', 'besselj 1').split(), mode=mode)
+        assert ' '.join(got) == want.replace('sin', 'besselj 1'), (shape, got, want)
+        assert bare.simplify(got, mode=mode) == got

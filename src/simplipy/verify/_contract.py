@@ -64,18 +64,10 @@ ARITY = {**_CORE_ARITY,
          'pow1_2': 1, 'pow1_3': 1, 'pow1_4': 1, 'pow1_5': 1,
          'div2': 1, 'div3': 1, 'div4': 1, 'div5': 1,
          'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1,
-         # the 0.15 heads with contract kernels (`OPS`)
+         # the 0.15 heads (`OPS`)
          'floor': 1, 'ceil': 1, 'erf': 1, 'harmonic': 1,
-         'max': 2, 'min': 2, 'mod': 2, 'atan2': 2}
+         'max': 2, 'min': 2, 'mod': 2, 'atan2': 2, 'besselj': 2}
 SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
-
-#: Heads the DEPLOYED lane evaluates (`simplipy.operators` realizes each with the engine's own
-#: float64 kernel) and the contract cannot: this judge has no extended-real kernel for them yet.
-#: A rule spelled with one is judged in the deployed lane alone (`_judge_deployed_only`), so the
-#: most it can earn is the `f64` tier -- never `core` or `real`, which need the contract. Every
-#: other unknown head stays UNSUPPORTED-SHAPE. A head leaves this table for `ARITY` with its
-#: kernel in `OPS` (and in the core's high-precision evaluators, `hiprec::knows_operator`).
-DEPLOYED_ONLY_ARITY = {'besselj': 2}
 
 #: The 0.15 heads. A rule spelled with one answers to the core's f64 bar for its float64
 #: realisation (`_core.f64_bar`, ANDed into `realised` by `judge_rule`): float64 parts from the
@@ -567,6 +559,56 @@ def c_atan2(y, x):
     if misinf(x):
         return mpf(0) if x > 0 else (mp.pi if y > 0 else -mp.pi)
     return _z(mp.atan2(y, x))
+#: The largest order and argument `c_besselj` evaluates (beyond: Unresolved; the core's
+#: `hiprec::besselj` shares both). Past order 1e3 mpmath stops converging in seconds per point
+#: (NoConvergence at order 3e3 and twice the order, dps 50), and the argument cap is the trig
+#: one (`_trig`): the phase x - (nu/2 + 1/4) pi is a trig argument.
+BESSELJ_NU_CAP = mpf('1e3')
+BESSELJ_X_CAP = mpf('1e12')
+
+
+def c_besselj(nu, x):
+    """`besselj(nu, x)`, the Bessel function of the first kind, at contract semantics, with
+    scipy's cells (D7) -- the table the core's high-precision kernel (`hiprec::besselj`) and its
+    float64 kernel (`numeric::besselj`) share:
+
+    * NaN at a NaN operand and at `x = +-inf` (scipy's cell; the limit, 0, is not taken);
+    * NaN for a non-integer order at a negative argument, where J is complex;
+    * an infinite order gives 0 at `x >= 0` (scipy's cell);
+    * at `x = 0`: `J_0(0) = 1`, `J_nu(0) = 0` for `nu > 0` and for a negative integer `nu`, and
+      at a negative non-integer order the pole's one-sided limit (the domain is `x >= 0`), the
+      infinity of the sign of `1/Gamma(nu + 1)`: `J_-1/2(0) = inf`, `J_-3/2(0) = -inf`;
+    * an integer order reads its reflection `J_-n = (-1)^n J_n` and its parity
+      `J_n(-x) = (-1)^n J_n(x)`; every other value is mpmath's, Unresolved beyond the caps.
+    """
+    if misnan(nu) or misnan(x) or misinf(x):
+        return NAN
+    integer = not misinf(nu) and nu == mp.floor(nu)
+    if x < 0 and not integer:
+        return NAN
+    if misinf(nu):
+        return mpf(0)
+    if x == 0:
+        if nu == 0:
+            return mpf(1)
+        if nu > 0 or integer:
+            return mpf(0)
+        # Gamma(z), z = nu + 1, is positive for z > 0 and has the sign (-1)^ceil(-z) below 0.
+        z = nu + 1
+        return PINF if (z > 0 or int(mp.ceil(-z)) % 2 == 0) else NINF
+    if abs(nu) > BESSELJ_NU_CAP or abs(x) > BESSELJ_X_CAP:
+        raise Unresolved()
+    sign = 1
+    if integer:
+        n = int(nu)
+        if n % 2 and (n < 0) != (x < 0):
+            sign = -1
+        nu, x = mpf(abs(n)), abs(x)
+    try:
+        v = mp.besselj(nu, x)
+    except mp.NoConvergence:
+        raise Unresolved() from None
+    return _z(sign * v)
 
 
 OPS = {
@@ -666,6 +708,7 @@ OPS = {
     'erf': c_erf, 'harmonic': c_harmonic, 'mod': c_mod, 'atan2': c_atan2,
     'max': lambda a, b: NAN if (misnan(a) or misnan(b)) else _z(max(a, b)),
     'min': lambda a, b: NAN if (misnan(a) or misnan(b)) else _z(min(a, b)),
+    'besselj': c_besselj,
 }
 
 
@@ -846,7 +889,7 @@ DEP_OPS = {
     'pow1_2': _legacy_even_root(0.5), 'pow1_4': _legacy_even_root(0.25),
     'pow1_3': _legacy_odd_root(1 / 3), 'pow1_5': _legacy_odd_root(1 / 5),
 }
-for _n in (*ARITY, *DEPLOYED_ONLY_ARITY):
+for _n in ARITY:
     _fn = getattr(_spo, _n, None)
     if callable(_fn):
         DEP_OPS[_n] = _wrap_arr(_fn)
@@ -1910,43 +1953,6 @@ def _point_verdict(tl, tr, env_mp):
         mp.dps = old
 
 
-def _judge_deployed_only(lhs, rhs, deployed_check=True):
-    """Judge a rule spelled with a `DEPLOYED_ONLY_ARITY` head in the deployed lane ALONE.
-
-    The contract has no kernel for the head, so nothing here can say the rule is true over
-    the reals, and the verdict is `F64-ONLY`: tier `f64` when the two sides agree BIT FOR BIT in
-    float64 (the sign of a zero included, NaN equal to NaN) at every probe of the core's
-    deployed-only bar (`_core.deployed_exact`: per slot the battery, +-inf, NaN, the jumps and
-    cells of the 0.15 heads, a generic grid, the diagonal; whatever the slot's sort), and
-    `reject` otherwise. The mint applies the same function to every such pair it accepts, so the
-    two cannot disagree. A rule with a `<constant>` is refused: its witness needs the
-    contract."""
-    heads = sorted({t for t in list(lhs) + list(rhs) if t in DEPLOYED_ONLY_ARITY})
-    why = f'no contract kernel for {", ".join(heads)}: judged in the deployed lane alone'
-    ext = {**ARITY, **DEPLOYED_ONLY_ARITY}
-    try:
-        parse(lhs, '<C_L>', ext)
-        parse(rhs, '<C_R>', ext)
-    except UnsupportedToken as ex:
-        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
-    if not deployed_check or '<constant>' in lhs or '<constant>' in rhs:
-        return {'verdict': 'UNSUPPORTED-SHAPE',
-                'detail': why + '; a <constant> needs the contract'}
-    from simplipy._core import deployed_exact  # type: ignore[attr-defined]
-    slot = {}
-    for t in list(lhs) + list(rhs):
-        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
-        if SLOT_RE.match(key) and key not in slot:
-            slot[key] = None
-    names = {key: f'x{i}' for i, key in enumerate(sorted(slot))}
-    spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
-                        for t in ts]
-    realised, probes, first = deployed_exact(spell(lhs), spell(rhs), list(names.values()), ext)
-    return {'verdict': 'F64-ONLY', 'detail': why, 'realised': realised,
-            'points': [] if first is None else [dict(zip(names, first))],
-            'probes': probes, 'tier': _tier('F64-ONLY', realised)}
-
-
 #: The four cells of the soundness LATTICE. The two notions are INCOMPARABLE -- a rule
 #: can be true and unrealised (`atanh(tanh t) -> t`, exact on R, `inf` in f64) or
 #: realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by 1.7e-17) --
@@ -1972,10 +1978,7 @@ def _tier(verdict, realised):
         return 'core' if realised is True else 'real'
     if verdict == 'ENGINE-MISALIGN':
         return 'real'
-    if verdict in ('KILL', 'F64-ONLY'):
-        # F64-ONLY: the deployed lane alone judged it (`_judge_deployed_only`); bit-exact
-        # agreement there is all the `f64` tier asks, and nothing earns more without the
-        # contract.
+    if verdict == 'KILL':
         return 'f64' if realised is True else 'reject'
     return 'reject'
 
@@ -1990,8 +1993,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
     `floor(x + 1) -> floor(x) + 1` is CERTIFIED and not realised (float64 breaks it at
     x = -1e-17): tier `real`. The mint applies the same bar in f64, so the two agree."""
     r = _judge_contract(lhs, rhs, deployed_check)
-    if (not deployed_check or 'tier' not in r or r['verdict'] == 'F64-ONLY'
-            or not NEW_HEADS & (set(lhs) | set(rhs))):
+    if not deployed_check or 'tier' not in r or not NEW_HEADS & (set(lhs) | set(rhs)):
         return r
     from simplipy._core import f64_bar  # type: ignore[attr-defined]
     slot = {}
@@ -2002,7 +2004,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
     names = {key: f'x{i}' for i, key in enumerate(sorted(slot))}
     spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
                         for t in ts]
-    bar = f64_bar(spell(lhs), spell(rhs), list(names.values()), {**ARITY, **DEPLOYED_ONLY_ARITY})
+    bar = f64_bar(spell(lhs), spell(rhs), list(names.values()), ARITY)
     if bar is None:
         return r
     ok, probes, first = bar
@@ -2025,8 +2027,6 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         tl = parse(lhs, '<C_L>')
         tr = parse(rhs, '<C_R>')
     except UnsupportedToken as ex:
-        if any(t in DEPLOYED_ONLY_ARITY for t in list(lhs) + list(rhs)):
-            return _judge_deployed_only(list(lhs), list(rhs), deployed_check)
         # a token outside the numeric grammar: refuse the SHAPE, do not evaluate it
         return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
     sl = slots_of(lhs, '<C_L>')
@@ -2515,6 +2515,12 @@ TOUCHSTONES = [
      'nan-erasure at a `_` binding: `_` quantifies nan (S14, owner ruling '
      '2026-08-22) -- `log x0 - log x0` is nan on the whole negative half-line and '
      'this rewrite defines it'),
+    ('besselj 3 neg _0', 'besselj -3 _0', 'CERTIFIED',
+     'J_3(-x) = -J_3(x) = J_-3(x) at every value: an integer order reads its parity and its '
+     'reflection, in the contract and bit for bit in float64'),
+    ('besselj 0.5 neg _0', 'besselj 0.5 _0', 'KILL',
+     'a non-integer order is NaN on the whole negative half-line, where the right side is '
+     'defined (clause b, positive measure)'),
 ]
 
 

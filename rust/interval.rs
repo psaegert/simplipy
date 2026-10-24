@@ -1472,34 +1472,114 @@ fn b_mod(a: &Vs, b: &Vs) -> Option<Vs> {
     Some(with_plateau(r, lo, hi, false))
 }
 
-/// `besselj(nu, x)`: |J_nu(x)| <= 1 for every order nu >= 0 at every real x, so the box is
-/// [-1, 1], widened one ulp (J_0 is exactly 1.0 on |x| < 1e-8 in float64, a plateau). NaN at
-/// +-inf (scipy's cell), under an order that may be a non-integer at a negative argument, and
-/// under an order beyond `BESSELJ_NU_MEASURED`, where the kernel's own routines give up (it is
-/// NaN at order 3.8e16, x = 2.05). An order that may be negative or infinite is refused.
+/// `besselj(nu, x)`, at every real order.
+///
+/// * An order nu >= 0, or a negative integer one (`J_{-n} = (-1)^n J_n`, which the kernel reads):
+///   |J_nu(x)| <= 1 at every real x, so the box is [-1, 1], widened one ulp (J_0 is exactly 1.0
+///   on |x| < 1e-8 in float64, a plateau).
+/// * An order that is no integer on an argument below 0: NaN alone; at the point x = 0, a
+///   negative such order's pole, the infinity of the sign of 1/Gamma(nu + 1).
+/// * An order that may be negative and no integer: unbounded near x = 0 (a pole) and NaN below,
+///   so an argument that may reach 0 among other values is refused; at x >= x_lo > 0 the recurrence
+///   `J_nu = (2 (nu + 1)/x) J_{nu+1} - J_{nu+2}` bounds |J_nu| from the orders nu + j >= 0
+///   (`negative_order_bound`), doubled for the kernel's error, refused where it nears the float
+///   range's end (the kernel overflows there).
+///
+/// NaN at +-inf (scipy's cell), under an order that may be a non-integer at a negative argument,
+/// under an order beyond `BESSELJ_NU_MEASURED` in magnitude, where the kernel's own routines give
+/// up (it is NaN at order 3.8e16, x = 2.05), and under a negative non-integer order beyond
+/// `BESSELJ_NEG_NU_MEASURED` (NaN at order -470.8, x = 78.7, where the value nears the float
+/// range's end). A NaN order is NaN, an infinite one 0 at x >= 0 and NaN below (scipy's cells);
+/// a range of orders holding both finite and infinite ones is refused.
 /// The orders up to which the besselj kernel is read as NaN-free at every finite argument
 /// (measured: no NaN at orders up to 1.1e9 over 3,200 arguments out to the largest float, so
-/// this keeps a wide margin).
+/// this keeps a wide margin), integer orders of both signs alike.
 const BESSELJ_NU_MEASURED: f64 = 1e3;
+/// The magnitude of a negative non-integer order up to which the kernel is read as NaN-free at
+/// every finite x > 0 (measured: the first NaN at -470.8 over 5,600 orders and 1,100 arguments).
+const BESSELJ_NEG_NU_MEASURED: f64 = 400.0;
 
 fn b_besselj(nu: &Vs, x: &Vs) -> Option<Vs> {
-    if !nu.has_fin || nu.pinf || nu.ninf || nu.lo < 0.0 {
+    if !nu.has_fin {
+        // A NaN order gives NaN; an infinite one 0 at x >= 0 and NaN below (scipy's cells).
+        let mut r = Vs::empty();
+        r.nan = nu.nan
+            || ((nu.pinf || nu.ninf) && (x.nan || x.pinf || x.ninf || (x.has_fin && x.lo < 0.0)));
+        if (nu.pinf || nu.ninf) && x.has_fin && x.hi >= 0.0 {
+            r.has_fin = true;
+            r.lo = 0.0;
+            r.hi = 0.0;
+        }
+        return Some(r);
+    }
+    if nu.pinf || nu.ninf {
         return None;
     }
     let integer_order = nu.is_const() && nu.lo.fract() == 0.0;
+    // May the order be an integer: a point that is one, or a range that holds one?
+    let may_be_integer = integer_order
+        || (!nu.is_const() && (nu.lo.floor() != nu.hi.floor() || nu.lo.fract() == 0.0));
     let mut r = Vs::empty();
     r.nan = nu.nan
         || x.nan
         || x.pinf
         || x.ninf
         || (!integer_order && x.has_fin && x.lo < 0.0)
-        || nu.hi > BESSELJ_NU_MEASURED;
-    if x.has_fin {
+        || nu.lo.abs().max(nu.hi.abs()) > BESSELJ_NU_MEASURED;
+    if !x.has_fin {
+        return Some(r);
+    }
+    if !may_be_integer && x.hi < 0.0 {
+        return Some(r); // a non-integer order on the negative axis: NaN alone
+    }
+    if !may_be_integer && nu.hi < 0.0 && x.lo == 0.0 && x.hi == 0.0 {
+        // the pole at x = 0 of an order in (-k-1, -k): the infinity of the sign of
+        // 1/Gamma(nu + 1), (-1)^k (nu + 1 lies in (-k, -k+1))
+        if (-nu.hi).floor() % 2.0 == 0.0 {
+            r.pinf = true;
+        } else {
+            r.ninf = true;
+        }
+        return Some(r);
+    }
+    if nu.lo >= 0.0 || integer_order {
         r.has_fin = true;
         r.lo = out_lo(-1.0, ULP_ARITH);
         r.hi = out_hi(1.0, ULP_ARITH);
+        return Some(r);
     }
+    if x.lo <= 0.0 {
+        return None;
+    }
+    r.nan |= nu.lo < -BESSELJ_NEG_NU_MEASURED;
+    let b = negative_order_bound(nu.lo, nu.hi, x.lo)?;
+    r.has_fin = true;
+    r.lo = -b;
+    r.hi = b;
     Some(r)
+}
+
+/// A bound on |J_nu(x)| over every order nu in [lo, hi] (lo < 0) and every x >= `x` > 0: with
+/// B(j) bounding |J_{nu+j}|, B(j) = 1 once lo + j >= 0 (|J_mu| <= 1 for mu >= 0), and below,
+/// by the recurrence, B(j) = 2 max|nu + j + 1| / x B(j+1) + B(j+2), each step rounded up. Every
+/// B(j) falls as x grows, so the bound at the least x holds on the whole range. Doubled for the
+/// kernel's error; `None` where it nears the float range's end, or past 1,000 steps.
+fn negative_order_bound(lo: f64, hi: f64, x: f64) -> Option<f64> {
+    let m = (-lo).ceil();
+    if m.is_nan() || m > 1000.0 {
+        return None;
+    }
+    let up = 1.0 + 4.0 * f64::EPSILON;
+    let (mut b, mut b_next) = (1.0f64, 1.0f64);
+    for j in (0..m as usize).rev() {
+        let j = j as f64;
+        let s = (lo + j + 1.0).abs().max((hi + j + 1.0).abs());
+        let bj = (2.0 * s / x * up * b * up + b_next) * up;
+        b_next = b;
+        b = bj;
+    }
+    let b = 2.0 * b;
+    (b.is_finite() && b < 1e300).then_some(b)
 }
 
 fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
@@ -7761,8 +7841,19 @@ mod new_head_tests {
         // harmonic meets its poles at or below -1
         assert!(vs(&["harmonic", "x0"], &[iv(-1.0, 2.0)]).is_none());
         assert!(vs(&["harmonic", "x0"], &[iv(-0.5, 2.0)]).is_some());
-        // besselj: a negative or unknown-sign order
+        // besselj: an order that may be a negative non-integer, at an argument that may reach
+        // its pole at 0; away from 0 the recurrence bounds it, and a negative integer order is
+        // bounded by 1
         assert!(vs(&["besselj", "x0", "x1"], &[iv(-0.5, 0.5), iv(0.0, 1.0)]).is_none());
+        let b = vs(&["besselj", "x0", "x1"], &[iv(-0.5, 0.5), iv(0.5, 1.0)]).unwrap();
+        assert!(b.has_fin && !b.nan && b.hi >= 14.0 && b.hi < 15.0, "{b:?}");
+        let b = vs(&["besselj", "-1.5", "x0"], &[iv(2.0, 3.0)]).unwrap();
+        assert!(
+            b.has_fin && b.lo < -1.0 && b.hi > 1.0 && b.hi < 10.0,
+            "{b:?}"
+        );
+        let n = vs(&["besselj", "-3", "x0"], &[iv(-1.0, 1.0)]).unwrap();
+        assert!(n.has_fin && !n.nan && n.hi < 1.01 && n.lo > -1.01, "{n:?}");
         assert!(vs(&["besselj", "x0", "x1"], &[iv(0.0, 3.0), iv(-1.0, 1.0)]).is_some());
         // mod: a divisor that may be zero among other values
         assert!(vs(&["mod", "x0", "x1"], &[iv(0.0, 1.0), iv(-1.0, 1.0)]).is_none());
@@ -7799,7 +7890,39 @@ mod new_head_tests {
             value_class(&s(&["erf", "float(\"-inf\")"]), ops),
             Some(Class::Finite)
         );
-        assert_eq!(value_class(&s(&["besselj", "-0.5", "0"]), ops), None);
+        assert_eq!(
+            value_class(&s(&["besselj", "-0.5", "0"]), ops),
+            Some(Class::PosInf)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "-1.5", "0"]), ops),
+            Some(Class::NegInf)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "sin", "-1", "0"]), ops),
+            Some(Class::PosInf)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "sin", "-1", "-1"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "0.5", "-2"]), ops),
+            Some(Class::Nan)
+        );
+        // a NaN order, and an infinite one on the negative axis (scipy's cells)
+        assert_eq!(
+            value_class(&s(&["besselj", "log", "-1", "1"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "atanh", "1", "-1"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "atanh", "1", "2"]), ops),
+            Some(Class::Finite)
+        );
         assert_eq!(value_class(&s(&["harmonic", "-2"]), ops), None);
     }
 

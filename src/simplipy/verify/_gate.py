@@ -99,7 +99,7 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
 
 
 def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_report):
-    buckets = {'CERTIFIED': [], 'TOLERATED': [], 'KILL': [], 'F64-ONLY': [],
+    buckets = {'CERTIFIED': [], 'TOLERATED': [], 'KILL': [],
                'ENGINE-MISALIGN': [], 'NO-WITNESS': [],
                'UNRESOLVED-COVERAGE': [], 'UNSUPPORTED-SHAPE': [], 'JUDGE-TIMEOUT': []}
     detail = []
@@ -160,7 +160,7 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
     print('\n================ GATE RESULT ================')
     for k, v in buckets.items():
         print(f'  {k:16s} {len(v)}')
-    for k in ('KILL', 'F64-ONLY', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
+    for k in ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
               'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT'):
         for i in buckets[k]:
             d = detail[i]
@@ -180,6 +180,6 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         keep = [rules[i] for i in sorted(buckets['CERTIFIED'] + buckets['TOLERATED'])]
         json.dump(keep, open(build_path, 'w'))
         print(f'built {len(keep)} kept rules -> {build_path}')
-    return 0 if not (buckets['KILL'] or buckets['F64-ONLY'] or buckets['ENGINE-MISALIGN']
+    return 0 if not (buckets['KILL'] or buckets['ENGINE-MISALIGN']
                      or buckets['NO-WITNESS'] or buckets['UNRESOLVED-COVERAGE']
                      or buckets['UNSUPPORTED-SHAPE'] or buckets['JUDGE-TIMEOUT']) else 1

@@ -28,7 +28,7 @@ from . import _contract, _gate, _monitor
 #: ``certify_rules`` gate, so the three sites cannot drift apart. A rule the judge
 #: cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) is exactly as
 #: unshippable as a KILL: the second authority never passed it.
-FATAL_BUCKETS = ('KILL', 'F64-ONLY', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
+FATAL_BUCKETS = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
                  'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
 
 #: The one exemption from the fatal drop (B7/D36): the judge's own non-jurisdiction

@@ -2002,23 +2002,6 @@ fn range_event(op: &str, args: Vec<f64>, value: f64) -> Option<bool> {
     crate::numeric::range_event(op, &args, value)
 }
 
-/// THE DEPLOYED-ONLY BAR (`battery::deployed_exact`) on `lhs -> rhs` over `var_names`, under an
-/// operator table of `arity` (name -> arity): `(agree bit for bit at every probe, the number of
-/// probes, the first probe where they differ)`. `simplipy.verify._contract` judges a rule spelled
-/// with a head the contract has no kernel for by it, and the mint applies the same function.
-#[pyfunction]
-fn deployed_exact(
-    py: Python<'_>,
-    lhs: Vec<String>,
-    rhs: Vec<String>,
-    var_names: Vec<String>,
-    arity: std::collections::BTreeMap<String, u8>,
-) -> (bool, usize, Option<Vec<f64>>) {
-    let ops = arity_table(arity);
-    let d = py.detach(|| crate::battery::deployed_exact(&lhs, &rhs, &var_names, &ops));
-    (d.ok, d.probes, d.first)
-}
-
 /// THE f64 REALISATION BAR of a rule spelled with a 0.15 head (`battery::f64_bar`), under an
 /// operator table of `arity`: `None` when the ordinary realisation axis decides, else the
 /// deployed bar's `(agree, probes, first differing probe)`. `simplipy.verify._contract` ANDs it
@@ -2202,7 +2185,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;
-    m.add_function(wrap_pyfunction!(deployed_exact, m)?)?;
     m.add_function(wrap_pyfunction!(f64_bar, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_binary, m)?)?;

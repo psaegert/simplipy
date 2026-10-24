@@ -2150,12 +2150,9 @@ fn certify_candidate(
             return None;
         }
     }
-    // THE DEPLOYED-ONLY BAR (`battery::deployed_exact`): a rule spelled with a head the contract
-    // has no kernel for is judged in the deployed lane alone, bit for bit at that bar's probes.
-    // The mint applies the same function, so the judge licenses what the mint accepts.
-    if !(crate::hiprec::evaluable(source, ops) && crate::hiprec::evaluable(&target, ops))
-        && !crate::battery::deployed_exact(source, &target, var_names, ops).ok
-    {
+    // A head the high-precision evaluators do not know has no contract verdict, so the judge
+    // refuses its rule (UNSUPPORTED-SHAPE): the mint refuses it too.
+    if !(crate::hiprec::evaluable(source, ops) && crate::hiprec::evaluable(&target, ops)) {
         return None;
     }
     Some(Certified {
@@ -2219,15 +2216,14 @@ pub fn find_rule_with_lib(
     // Every return path honors the caller's acceptance -- the short-circuits included: a
     // refused short-circuit target falls through to the candidate scan instead of being
     // returned for the caller to veto (there is no caller-side veto anymore).
-    // A source spelled with a head the contract has no kernel for answers to the deployed-only
-    // bar on every path, the ground arms below included (`battery::deployed_exact`, which the
-    // contract judge applies to it too): `ceil(asinh(-1))` is -0 in float64, so it is no `0`.
-    let deployed_only = !crate::hiprec::evaluable(source, ops);
-    let accepted = |t: &[String]| {
-        (match accept {
-            Some(f) => f(t),
-            None => true,
-        }) && (!deployed_only || crate::battery::deployed_exact(source, t, &lib.var_names, ops).ok)
+    // A source spelled with a head the high-precision evaluators do not know has no contract
+    // verdict on any path, the ground arms below included: nothing is accepted for it.
+    if !crate::hiprec::evaluable(source, ops) {
+        return Ok(None);
+    }
+    let accepted = |t: &[String]| match accept {
+        Some(f) => f(t),
+        None => true,
     };
     // all-constant short-circuit, reached only after the guard passes.
     // A leaf counts as constant when `leaf_value` resolves it to a FINITE value: numeric

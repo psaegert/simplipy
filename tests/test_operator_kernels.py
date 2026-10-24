@@ -3,7 +3,8 @@
 
 floor, ceil, max, min, mod and harmonic are the core's own; erf and atan2 are the platform's
 libm through the core's elementary-function source, as every other transcendental is;
-besselj is scipy 1.18.1's jv, carried in the core and gated bit for bit against scipy. Two
+besselj is scipy 1.18.1's jv, carried in the core and gated bit for bit against scipy (an
+integer order's parity read on the negative axis, where scipy loses a zero's sign). Two
 gates per kernel:
 
 * BIT IDENTITY with numpy where numpy's own operation is the deployed one: floor and ceil
@@ -341,16 +342,55 @@ def besselj_grid() -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
 
 
+def scipy_besselj(nu, x) -> np.ndarray:
+    """scipy 1.18.1's jv as the core reads it: at an integer order the reflection
+    `(-1)^n jv(-n, x)` of a negative one and, at a negative argument (`-0.0` included), the
+    parity `(-1)^n jv(n, -x)`."""
+    special = pytest.importorskip('scipy.special')
+    nu, x = np.broadcast_arrays(np.asarray(nu, dtype=F), np.asarray(x, dtype=F))
+    integer = np.isfinite(nu) & (nu == np.floor(nu))
+    flip = integer & ((x < 0) | ((x == 0) & np.signbit(x)))
+    with np.errstate(all='ignore'):
+        want = special.jv(np.where(integer, np.abs(nu), nu), np.where(flip, -x, x))
+    odd = integer & (np.mod(nu, 2) == 1)
+    return np.where(odd & (flip != (nu < 0)), -want, want)
+
+
 def test_besselj_is_scipy_bit_for_bit() -> None:
     """The core carries scipy 1.18.1's jv (AMOS, the reflection through Y, the Cephes
-    fallback), so its value is scipy's, bit for bit; a scipy release that changed jv would
-    show here first."""
-    special = pytest.importorskip('scipy.special')
+    fallback), so its value is scipy's, bit for bit, with an integer order's parity read on
+    the negative axis; a scipy release that changed jv would show here first."""
     nu, x = besselj_grid()
-    with np.errstate(all='ignore'):
-        want = special.jv(nu, x)
-    same = bits_equal(core2('besselj', nu, x), want)
+    got, want = core2('besselj', nu, x), scipy_besselj(nu, x)
+    # where scipy gives up under an order beyond 1e17, the core's value may be a proven
+    # underflow (`test_besselj_has_every_order`)
+    filled = np.isnan(want) & (got == 0) & (np.abs(nu) >= 1e17)
+    same = bits_equal(got, want) | filled
     assert same.all(), list(zip(nu[~same][:5], x[~same][:5]))
+
+
+def test_besselj_has_every_order() -> None:
+    """Every real order: integer orders of both signs to 2^53 and beyond keep their parity and
+    reflection bit for bit, the sign of a zero included (scipy writes +0 at `J_1(-1e-320)` and
+    NaN at `jv(2**31, -1)`); orders to 1e308 equal scipy wherever scipy has a value, and are
+    +0 where scipy gives up and the value underflows."""
+    orders = np.concatenate([np.arange(-60.0, 61.0), [2.0 ** 31, 2.0 ** 31 + 1, 2.0 ** 52 + 1,
+                                                      2.0 ** 53, 1e17, 1e300]])
+    xs = np.concatenate([[0.0, TINY, 1e-320, 1e-300, 1e-10, 3e9, 1e20, 1e300],
+                         RNG.uniform(0, 100, 300), 10.0 ** RNG.uniform(-5, 6, 100)])
+    nu, x = np.meshgrid(np.concatenate([orders, -orders]), xs)
+    nu, x = nu.ravel(), x.ravel()
+    odd = np.mod(nu, 2) == 1
+    plus, minus = core2('besselj', nu, x), core2('besselj', nu, -x)
+    assert bits_equal(minus, np.where(odd, -plus, plus)).all()                  # parity
+    assert bits_equal(core2('besselj', -nu, x), np.where(odd, -plus, plus)).all()  # reflection
+    assert bits_equal(core2('besselj', 1.0, -0.0), -0.0).all()
+    raw = scipy_besselj(nu, x)
+    kept = ~np.isnan(raw)
+    assert bits_equal(plus[kept], raw[kept]).all()
+    filled = np.isnan(plus) != np.isnan(raw)
+    assert (plus[filled] == 0).all() and (np.abs(nu[filled]) >= 1e17).all()
+    assert bits_equal(core2('besselj', [3.2e17, 1e300, -1e300], [3.2, 100.0, 100.0]), 0.0).all()
 
 
 def test_besselj_cells() -> None:

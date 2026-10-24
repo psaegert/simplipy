@@ -314,11 +314,6 @@ def is_numeric_string(token: str) -> bool: ...
 #: numeric reader or malformed numerals, refused at every boundary; the one definition
 #: `simplipy.utils` calls.
 def reserved_numeric_spelling(token: str) -> bool: ...
-#: The deployed-only bar (`rust/battery.rs`): do `lhs` and `rhs` agree bit for bit in float64
-#: at every probe? (agree, number of probes, first differing probe). The one definition the
-#: mint and `simplipy.verify` share for heads the contract has no kernel for.
-def deployed_exact(lhs: list[str], rhs: list[str], var_names: list[str],
-                   arity: dict[str, int]) -> tuple[bool, int, list[float] | None]: ...
 #: The f64 realisation bar of a rule spelled with a 0.15 head (`rust/battery.rs`): None when the
 #: ordinary realisation axis decides, else the deployed bar's (agree, probes, first differing
 #: probe). The contract judge ANDs it into `realised`; the f64 mine applies the same function.

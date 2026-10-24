@@ -42,6 +42,7 @@
 use crate::operators::Operators;
 use astro_float::{BigFloat, Consts, RoundingMode, INF_NEG, INF_POS, NAN};
 
+mod besselj;
 mod special;
 
 /// Re-export for callers that rank arbiter values without naming the backing crate
@@ -1025,11 +1026,11 @@ fn powi_sr_at(x: &BigFloat, k: u64, g: usize) -> BigFloat {
 /// The operators both high-precision evaluators (the rescue `apply_unary`/`apply_binary` and the
 /// contract `ct_unary`/`ct_binary`) know. Any other head is unevaluable, at a NaN operand too,
 /// so every verdict that needs one refuses it. A head joins this table together with its arms in
-/// all four evaluators (`special` holds the 0.15 heads' kernels); `besselj` has none yet.
+/// all four evaluators (`special` and `besselj` hold the 0.15 heads' kernels).
 pub(crate) fn knows_operator(name: &str) -> bool {
     matches!(
         name,
-        "floor" | "ceil" | "erf" | "harmonic" | "max" | "min" | "mod" | "atan2"
+        "floor" | "ceil" | "erf" | "harmonic" | "max" | "min" | "mod" | "atan2" | "besselj"
     ) || matches!(
         name,
         "neg"
@@ -1441,6 +1442,8 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         }
         "mod" => ct_mod(a, b, ctx),
         "atan2" => ct_atan2(a, b, ctx),
+        // `besselj(nu, x)`: the contract's cells, the value or Unresolved (`besselj`).
+        "besselj" => besselj::besselj(a, b, p, &mut ctx.cc),
         _ => return None,
     };
     Some(v)
@@ -2313,6 +2316,7 @@ fn apply_binary(
         "max" | "min" => special::lattice(a, b, name == "max", p),
         "mod" => special::modulo(a, b, p),
         "atan2" => special::atan2(a, b, p, cc),
+        "besselj" => return besselj::besselj(a, b, p, cc),
         _ => return None,
     };
     Some(v)
@@ -3289,8 +3293,12 @@ mod new_head_tests {
                 "{name}({a}, {b}): {got} vs {want}"
             );
         }
-        // besselj has no high-precision kernel yet: unevaluable
+        // besselj's kernel is its own module's (`besselj`): J_1(1)
         let one = BigFloat::from_f64(1.0, p);
-        assert!(apply_binary("besselj", &one, &one, p, &mut cc).is_none());
+        let j = read(&apply_binary("besselj", &one, &one, p, &mut cc).expect("evaluable"));
+        assert!(
+            (j - 0.44005058574493355).abs() <= 2.5e-16 * j,
+            "J_1(1) = {j}"
+        );
     }
 }
