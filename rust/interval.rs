@@ -3551,6 +3551,7 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return zero_set_null_generic_const(&d[0], ops, f64);
     }
+    let _memo = ZsnScope::open();
     let real = |t: &[String]| zsn(t, ops, 0, true);
     let read = |t: &[String]| {
         if f64 {
@@ -3694,13 +3695,62 @@ fn replace_subtree(t: &[String], site: &[String], c: f64, ops: &Operators) -> Ve
 /// licence's scoped certificate, mirroring E1's deliberate scoping. The plain
 /// `zero_set_null` (and through it `finite_nonzero_ae`, the `$`-cancel) keeps
 /// its current strength, pinned by test; widening is a separate future ruling.
-/// The identity theorem on the expression's domain (`domain_witness`) is scoped
-/// the same way: it serves the zero-set certificate the core reads
-/// (`engine::ac::ac_zsn`: reading A, the distribution licences, orientation).
+/// The identity theorem on the expression's domain (`domain_witness`), a factor
+/// the terms of a sum share (`common_factor_witness`) and a slope in one
+/// variable (`slice_witness`) are scoped the same way: they serve the zero-set
+/// certificate the core reads (`engine::ac::ac_zsn`: reading A, the
+/// distribution licences, orientation).
 fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     if d > CERT_RECURSION_MAX || t.is_empty() {
         return false;
     }
+    let key = (t.to_vec(), e2);
+    if let Some(hit) = ZSN_MEMO.with(|m| m.borrow().as_ref().and_then(|m| m.get(&key).copied())) {
+        return hit;
+    }
+    let r = zsn_read(t, ops, d, e2);
+    ZSN_MEMO.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.insert(key, r);
+        }
+    });
+    r
+}
+
+/// `zsn`'s verdicts within one reading (`ZsnScope`), by expression and scope: a verdict that holds
+/// is a proof wherever it is read again, and one that does not, read again with more of the
+/// recursion budget left, only fails closed where it might have held.
+type ZsnMemo = rustc_hash::FxHashMap<(Vec<String>, bool), bool>;
+
+thread_local! {
+    static ZSN_MEMO: std::cell::RefCell<Option<ZsnMemo>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Holds `zsn`'s memo open for one reading (the outermost opens it) and restores the caller's.
+struct ZsnScope(bool);
+
+impl ZsnScope {
+    fn open() -> Self {
+        ZsnScope(ZSN_MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            let fresh = m.is_none();
+            if fresh {
+                *m = Some(Default::default());
+            }
+            fresh
+        }))
+    }
+}
+
+impl Drop for ZsnScope {
+    fn drop(&mut self) {
+        if self.0 {
+            ZSN_MEMO.with(|m| *m.borrow_mut() = None);
+        }
+    }
+}
+
+fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     let tok = t[0].as_str();
     if !ops.is_operator(tok) {
         if var_index(tok).is_some() {
@@ -3741,7 +3791,7 @@ fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
         // the INFINITE-set certificate; a fat NaN domain of `g` is harmless here.
         // (Sharpened 2026-08-03 from `nfn`, which conflated NaN with ±inf and refused
         // every acosh/log-bearing denominator -- the division-tower campaign's Hole 2.)
-        ("inv", Some(1)) => isn(&t[1..], ops, d + 1) || (e2 && cleared_witness(t, ops)),
+        ("inv", Some(1)) => isn_e(&t[1..], ops, d + 1, e2) || (e2 && cleared_witness(t, ops)),
         ("*", Some(2)) => {
             let Some(ja) = subtree_end(t, 1, ops) else {
                 return false;
@@ -3755,7 +3805,7 @@ fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
             let Some(ja) = subtree_end(t, 1, ops) else {
                 return false;
             };
-            (zsn(&t[1..ja], ops, d + 1, e2) && isn(&t[ja..], ops, d + 1))
+            (zsn(&t[1..ja], ops, d + 1, e2) && isn_e(&t[ja..], ops, d + 1, e2))
                 || (e2 && cleared_witness(t, ops))
         }
         // Literal integer exponents have EXACT zero sets (2026-08-03 sharpening):
@@ -3771,12 +3821,14 @@ fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
             };
             match int_literal(&t[ja..]) {
                 Some(q) if q > 0 => zsn(&t[1..ja], ops, d + 1, e2),
-                Some(q) if q < 0 => isn(&t[1..ja], ops, d + 1) || (e2 && cleared_witness(t, ops)),
+                Some(q) if q < 0 => {
+                    isn_e(&t[1..ja], ops, d + 1, e2) || (e2 && cleared_witness(t, ops))
+                }
                 Some(_) => true,
                 None => {
                     zsn(&t[1..ja], ops, d + 1, e2)
-                        && isn(&t[1..ja], ops, d + 1)
-                        && isn(&t[ja..], ops, d + 1)
+                        && isn_e(&t[1..ja], ops, d + 1, e2)
+                        && isn_e(&t[ja..], ops, d + 1, e2)
                 }
             }
         }
@@ -3793,11 +3845,16 @@ fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
             }
         }
         // sums, sin, cos, and any other analytic composition: identity theorem + witness; on
-        // refusal, the identity theorem on the expression's domain (`domain_witness`) and the E2
-        // clearing fallback, both scoped as E2 is (see the fn doc).
+        // refusal, a factor every term of a sum shares (`common_factor_witness`), a slope in one
+        // variable (`slice_witness`), the identity theorem on the expression's domain
+        // (`domain_witness`) and the E2 clearing fallback, each scoped as E2 is (see the fn doc).
         _ => {
-            analytic_nonzero_witness(t, ops)
-                || (e2 && (domain_witness(t, ops) || cleared_witness(t, ops)))
+            analytic_nonzero_witness_in(t, ops, e2)
+                || (e2
+                    && (common_factor_witness(t, ops, d)
+                        || slice_witness(t, ops, d)
+                        || domain_witness(t, ops)
+                        || cleared_witness(t, ops)))
         }
     }
 }
@@ -4102,12 +4159,21 @@ fn cleared_witness(t: &[String], ops: &Operators) -> bool {
 }
 
 fn analytic_nonzero_witness(t: &[String], ops: &Operators) -> bool {
+    analytic_nonzero_witness_in(t, ops, false)
+}
+
+/// `analytic_nonzero_witness`, where `far` searches the largest box (`horizon`'s `R_MAX`) when the
+/// expression's literals put its horizon past it, instead of refusing: one cell anywhere on which
+/// an entire function is certainly nonzero proves its zero set null (the identity theorem on the
+/// connected R^n), so the horizon only says where to look. `zsn` takes it in `e2`'s scope:
+/// `0.41*x1^5 + 182*x1^4 + ... + 1.9e9` is read, its literals past `R_MAX / 2`.
+fn analytic_nonzero_witness_in(t: &[String], ops: &Operators, far: bool) -> bool {
     const WITNESS_BUDGET: u32 = 2_000;
     if !entire_analytic_composition(t, ops) {
         return false;
     }
     let (r, depth_per_dim, decidable) = horizon(&[t], &[&[]], ops);
-    if !decidable {
+    if !decidable && !far {
         return false;
     }
     let used = distinct_vars(&[t]);
@@ -4499,6 +4565,532 @@ fn domain_witness(t: &[String], ops: &Operators) -> bool {
     found.iter().all(|&f| f)
 }
 
+// ---------------------------------------------------------------------------
+// THE ZERO SET IS NULL ON A SLICE (`slice_witness`). A sum over restricted arguments that are not
+// affine (`log(x1*x2) - x1`, `sqrt(x1 - x2^2) - x3`, `log(log(x1)) - x2`) has a domain whose
+// pieces `domain_witness` cannot list. The test reads it one variable at a time instead.
+//
+// Fix a variable x_k and write x' for the others. For a subexpression e and a value of x', the
+// SLICE of e is the function t -> e(x', t) of one real variable. A SLOPE of e in x_k is a claim
+// about the slice for almost every x' (all but a null set of x'): there is an open set U of the
+// line on which the slice is a finite real-analytic function, with only countably many points
+// outside U where the slice is a number or an infinity (not NaN), and
+//   * Free: e does not hold x_k (its slice is one value, whatever t);
+//   * Inc / Dec: on each interval of U the slice is strictly increasing / decreasing;
+//   * Mono: on each interval of U it is strictly monotone (the direction may depend on x');
+//   * Moving: on each interval of U it is not constant.
+// Every slope but Free implies Moving. If the whole expression has a slope other than Free, its
+// slice vanishes only at countably many points for almost every x': on an interval of U a
+// nonconstant analytic function has isolated zeros, U has countably many intervals, and the
+// points outside U are countable. By Fubini (the zero set is Borel) the zero set is then null.
+//
+// The slopes are built bottom-up; anything outside the rules below has no slope and the test
+// fails closed.
+//   * x_k is Inc. A subtree without x_k is Free.
+//   * A Free summand c needs {c = +-inf} null (`isn`), so for almost every x' it is a finite
+//     number or NaN, which shifts the slice or makes it NaN. A Free factor or divisor c needs
+//     {c = 0} and {c = +-inf} null (`zsn`, `isn`), so it scales the slice by a finite nonzero
+//     number (a direction flip where its sign is not certain: Mono) or makes it NaN.
+//   * Two summands with x_k: both Inc or both Dec (on an interval of the intersection of their U
+//     both are monotone the same way).
+//   * A product or quotient of two strictly monotone factors with x_k whose signs are certain
+//     (interval evaluation over the whole space): where their magnitudes rise together (or fall
+//     together) on each interval, so does the product's, so it is Inc or Dec by its sign.
+//   * Any other mix of two summands, and a product or quotient of two factors with x_k, each with
+//     a slope: Moving where the derivative in x_k (`slice_derivative`, the textbook rules, exact
+//     on the analytic domain) has a null zero set (`zsn`, read again). On an interval of the
+//     intersection of their U both are analytic, so is the result, and its derivative there is
+//     the derivative's slice; for almost every x' that slice vanishes on a null set, so the
+//     result is constant on no interval. `x1 - log(x1)` (derivative `1 - 1/x1`) moves, and
+//     `x1*(1/x1)` (derivative `1/x1 - x1/x1^2`, zero wherever defined) does not.
+//   * h(g) for a unary h with g Moving: h is real-analytic on an open set D_h, its domain outside
+//     D_h is countably many points (`log` and `sqrt` at 0, `abs` and `inv` at 0, `asin` at
+//     +-1, `tan` at its poles), and h is not constant on any interval of D_h. A level set of
+//     g on an interval of U is countable (g is analytic and not constant there), so h(g) has a
+//     U of its own: U_g minus the countably many points where g leaves D_h; on each of its
+//     intervals g covers an interval of D_h, where h is not constant (identity theorem), so h(g)
+//     is Moving, and Inc / Dec / Mono where h is monotone on each interval of D_h. An infinity
+//     of g that h maps to a number (`exp(-inf) = 0`, `1/inf = 0`) is one of g's countably many
+//     points outside U_g.
+//   * An integer power: odd ones are increasing, even ones Moving, negative ones the inverse of
+//     the positive; a non-integer literal power is analytic and monotone where its base is
+//     positive and NaN where it is negative (`numeric::aligned_pow`); a root of literal index is
+//     increasing where it is defined.
+// The reading is the real one, as `zsn`'s (the float64 tails are `on_float64_tails`'s).
+// ---------------------------------------------------------------------------
+
+/// A slope of a subexpression in one variable (see the section note).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slope {
+    Free,
+    Inc,
+    Dec,
+    Mono,
+    Moving,
+}
+
+impl Slope {
+    /// The slope of `-e` (and of `h(e)` for a decreasing `h`).
+    fn flip(self) -> Slope {
+        match self {
+            Slope::Inc => Slope::Dec,
+            Slope::Dec => Slope::Inc,
+            s => s,
+        }
+    }
+
+    /// The slope of `h(e)` for an `h` that is not constant on any interval of its analytic
+    /// domain, nor monotone on each.
+    fn moving(self) -> Slope {
+        match self {
+            Slope::Free => Slope::Free,
+            _ => Slope::Moving,
+        }
+    }
+}
+
+/// THE ZERO SET IS NULL ON A SLICE (see the section note): some variable of `t` in which `t` has a
+/// slope other than `Free`. Fail-closed: a subtree outside the rules has no slope.
+fn slice_witness(t: &[String], ops: &Operators, d: u32) -> bool {
+    let mut vars: Vec<usize> = t.iter().filter_map(|x| var_index(x)).collect();
+    vars.sort_unstable();
+    vars.dedup();
+    vars.into_iter()
+        .any(|k| matches!(slope(t, 0, ops, k, d), Some((j, s)) if j == t.len() && s != Slope::Free))
+}
+
+/// The slope of the subtree at `i` in the variable `x_k`, with its end; `None` where it has none.
+fn slope(t: &[String], i: usize, ops: &Operators, k: usize, d: u32) -> Option<(usize, Slope)> {
+    if d > CERT_RECURSION_MAX {
+        return None;
+    }
+    let end = subtree_end(t, i, ops)?;
+    if !t[i..end].iter().any(|x| var_index(x) == Some(k)) {
+        return Some((end, Slope::Free));
+    }
+    let tok = t[i].as_str();
+    if !ops.is_operator(tok) {
+        return Some((end, Slope::Inc)); // x_k itself
+    }
+    // A Free summand: finite or NaN almost everywhere. A Free factor: finite, nonzero or NaN.
+    let summand = |c: &[String]| isn_e(c, ops, d + 1, true);
+    let factor = |c: &[String]| zsn(c, ops, d + 1, true) && isn_e(c, ops, d + 1, true);
+    // The one sign `c` takes wherever it is a finite number other than zero (`Some(true)`: negative):
+    // the zeros of a factor here are a null set of x' (a Free factor) or countably many points of a
+    // slice (one with x_k), which U leaves out.
+    let sign = |c: &[String]| match whole_range(c, ops) {
+        Some(v) if v.has_fin && v.lo >= 0.0 => Some(false),
+        Some(v) if v.has_fin && v.hi <= 0.0 => Some(true),
+        _ => None,
+    };
+    // `c * s` for a Free factor `c`: the direction where the sign of `c` is certain.
+    let scaled = |c: &[String], s: Slope| -> Slope {
+        match sign(c) {
+            Some(false) => s,
+            Some(true) => s.flip(),
+            None => match s {
+                Slope::Inc | Slope::Dec => Slope::Mono,
+                s => s,
+            },
+        }
+    };
+    // `a * b` for two strictly monotone factors of certain signs: where their magnitudes move the
+    // same way, so does the magnitude of the product, whose sign is certain too.
+    let monotone_product = |a: (Slope, Option<bool>), b: (Slope, Option<bool>)| -> Option<Slope> {
+        let rises = |(s, neg): (Slope, Option<bool>)| match (s, neg?) {
+            (Slope::Inc, n) | (Slope::Dec, n) => Some((s == Slope::Inc) != n),
+            _ => None,
+        };
+        let (ra, rb) = (rises(a)?, rises(b)?);
+        let negative = a.1? != b.1?;
+        (ra == rb).then_some(if ra != negative {
+            Slope::Inc
+        } else {
+            Slope::Dec
+        })
+    };
+    let sum = |a: Slope, b: Slope| -> Option<Slope> {
+        match (a, b) {
+            (Slope::Free, s) | (s, Slope::Free) => Some(s),
+            (Slope::Inc, Slope::Inc) => Some(Slope::Inc),
+            (Slope::Dec, Slope::Dec) => Some(Slope::Dec),
+            _ => None,
+        }
+    };
+    let unary = |f: fn(Slope) -> Slope| -> Option<(usize, Slope)> {
+        let (j, s) = slope(t, i + 1, ops, k, d + 1)?;
+        Some((j, f(s)))
+    };
+    // Does the subtree ending at `j` move by its derivative (see the section note)? A derivative
+    // is read with `DERIVATIVE_DEPTH` more of the recursion budget spent, and no derivative is read
+    // within the reading of another (a cost bound: each would differentiate a larger tree).
+    let moves = |j: usize| {
+        d < DERIVATIVE_DEPTH
+            && slice_derivative(&t[i..j], ops, k, 0)
+                .is_some_and(|dt| zsn(&dt, ops, d + DERIVATIVE_DEPTH, true))
+    };
+    match (tok, ops.arity_of(tok)?) {
+        // increasing on each interval of an analytic domain whose edge is countably many points
+        (
+            "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5" | "exp"
+            | "log" | "sinh" | "tanh" | "atan" | "asinh" | "asin" | "atanh" | "acosh" | "erf"
+            | "tan" | "pow3" | "pow5" | "pow1_2" | "pow1_3" | "pow1_4" | "pow1_5",
+            1,
+        ) => unary(|s| s),
+        // decreasing so
+        ("neg" | "acos" | "inv", 1) => unary(Slope::flip),
+        // not constant on any interval of such a domain
+        ("sin" | "cos" | "cosh" | "abs" | "pow2" | "pow4", 1) => unary(Slope::moving),
+        ("+" | "-", 2) => {
+            let (ja, a) = slope(t, i + 1, ops, k, d + 1)?;
+            let (jb, b) = slope(t, ja, ops, k, d + 1)?;
+            if (a == Slope::Free && !summand(&t[i + 1..ja]))
+                || (b == Slope::Free && !summand(&t[ja..jb]))
+            {
+                return None;
+            }
+            let b = if tok == "-" { b.flip() } else { b };
+            match sum(a, b) {
+                Some(s) => Some((jb, s)),
+                None => moves(jb).then_some((jb, Slope::Moving)),
+            }
+        }
+        ("*" | "/", 2) => {
+            let (ja, a) = slope(t, i + 1, ops, k, d + 1)?;
+            let (jb, b) = slope(t, ja, ops, k, d + 1)?;
+            // a divisor is the inverse of its slope; a Free one scales as a factor (its zero and
+            // infinite sets swap, its sign stays)
+            let b = if tok == "/" { b.flip() } else { b };
+            match (a, b) {
+                (Slope::Free, s) if factor(&t[i + 1..ja]) => Some((jb, scaled(&t[i + 1..ja], s))),
+                (s, Slope::Free) if factor(&t[ja..jb]) => Some((jb, scaled(&t[ja..jb], s))),
+                (Slope::Free, _) | (_, Slope::Free) => None,
+                _ => match monotone_product((a, sign(&t[i + 1..ja])), (b, sign(&t[ja..jb]))) {
+                    Some(s) => Some((jb, s)),
+                    None => moves(jb).then_some((jb, Slope::Moving)),
+                },
+            }
+        }
+        ("pow", 2) => {
+            let (ja, b) = slope(t, i + 1, ops, k, d + 1)?;
+            let jb = subtree_end(t, ja, ops)?;
+            // the exponent: a ground subtree (a literal or a literal's spelling, `/ 1 2`)
+            ground_leaf(t, ja, ops)?;
+            let p = crate::numeric::evaluate_constant_value(&t[ja..jb], ops)?;
+            if !p.is_finite() || p == 0.0 {
+                return None;
+            }
+            // an integer power: odd ones increase, even ones move; a non-integer one is
+            // x^p = exp(p log x) where x > 0, NaN where x < 0 (`numeric::aligned_pow`)
+            let s = if p.fract() == 0.0 && (p / 2.0).fract() == 0.0 {
+                b.moving()
+            } else {
+                b
+            };
+            Some((jb, if p < 0.0 { s.flip() } else { s }))
+        }
+        ("rootn", 2) => {
+            let (ja, b) = slope(t, i + 1, ops, k, d + 1)?;
+            let jb = subtree_end(t, ja, ops)?;
+            match int_literal(&t[ja..jb]) {
+                Some(n) if n >= 2 => Some((jb, b)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A COMMON FACTOR OF A SUM: `t` a sum (of `+`, `-` and `neg`) whose every term is a product (of
+/// `*`, `neg` and literal scalings) holding one factor `g` in common. Where `g` is finite the sum
+/// is `g` times the sum of the cofactors, and where `g` is infinite each term is infinite or NaN,
+/// so the sum is never zero there: its zero set lies in `Z(g)` and the cofactors' sum's, and is
+/// null where both are (`zsn`, read again). So `-10.7*cos(u) - 8.9*x2*cos(u)` is null, its
+/// cofactors' sum `-10.7 - 8.9*x2` being so, wherever `cos(u)` is; interval evaluation alone loses
+/// it where `u` moves fast. False where `t` is no such sum.
+fn common_factor_witness(t: &[String], ops: &Operators, d: u32) -> bool {
+    // the terms of the sum `t`, each with its sign
+    fn terms<'a>(t: &'a [String], ops: &Operators, neg: bool, out: &mut Vec<(bool, &'a [String])>) {
+        match t[0].as_str() {
+            "+" | "-" if ops.arity_of(&t[0]) == Some(2) => {
+                let Some(ja) = subtree_end(t, 1, ops) else {
+                    out.clear();
+                    return;
+                };
+                terms(&t[1..ja], ops, neg, out);
+                terms(&t[ja..], ops, neg != (t[0] == "-"), out);
+            }
+            "neg" if ops.arity_of("neg") == Some(1) => terms(&t[1..], ops, !neg, out),
+            _ => out.push((neg, t)),
+        }
+    }
+    // the factors of a term (its signs and literal scalings dropped: they scale by a nonzero)
+    fn factors<'a>(t: &'a [String], ops: &Operators, out: &mut Vec<&'a [String]>) -> Option<()> {
+        match (t[0].as_str(), ops.arity_of(&t[0])) {
+            ("*", Some(2)) => {
+                let ja = subtree_end(t, 1, ops)?;
+                factors(&t[1..ja], ops, out)?;
+                factors(&t[ja..], ops, out)
+            }
+            (
+                "neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5",
+                Some(1),
+            ) => factors(&t[1..], ops, out),
+            _ => {
+                out.push(t);
+                Some(())
+            }
+        }
+    }
+    if !matches!(t[0].as_str(), "+" | "-") || ops.arity_of(&t[0]) != Some(2) {
+        return false;
+    }
+    let mut ts = Vec::new();
+    terms(t, ops, false, &mut ts);
+    if ts.len() < 2 {
+        return false;
+    }
+    let mut fs: Vec<Vec<&[String]>> = Vec::with_capacity(ts.len());
+    for (_, term) in &ts {
+        let mut f = Vec::new();
+        if factors(term, ops, &mut f).is_none() {
+            return false;
+        }
+        fs.push(f);
+    }
+    // the first factor of the first term, holding a variable, that every other term holds
+    let shared = fs[0].iter().copied().find(|g| {
+        g.iter().any(|x| var_index(x).is_some()) && fs[1..].iter().all(|f| f.contains(g))
+    });
+    let Some(g) = shared else {
+        return false;
+    };
+    // the cofactors' sum, each term's sign and literal scalings kept on its cofactor
+    let mut rest: Vec<String> = Vec::new();
+    for (n, ((neg, term), _)) in ts.iter().zip(&fs).enumerate() {
+        let cof = drop_factor(term, g, ops).unwrap_or_else(|| vec!["1".to_string()]);
+        let signed = if *neg {
+            [vec!["neg".to_string()], cof].concat()
+        } else {
+            cof
+        };
+        rest = if n == 0 {
+            signed
+        } else {
+            [vec!["+".to_string()], rest, signed].concat()
+        };
+        if rest.len() > DERIVATIVE_BUDGET {
+            return false;
+        }
+    }
+    zsn(g, ops, d + 1, true) && zsn(&rest, ops, d + 1, true)
+}
+
+/// `t` (a product of `*`, `neg` and literal scalings) with one occurrence of the factor `g`
+/// removed; `None` where nothing is left (the term is `g` up to its scalings, a cofactor of 1).
+fn drop_factor(t: &[String], g: &[String], ops: &Operators) -> Option<Vec<String>> {
+    if t == g {
+        return None;
+    }
+    match (t[0].as_str(), ops.arity_of(&t[0])) {
+        ("*", Some(2)) => {
+            let ja = subtree_end(t, 1, ops)?;
+            let (a, b) = (&t[1..ja], &t[ja..]);
+            if contains_factor(a, g, ops) {
+                Some(match drop_factor(a, g, ops) {
+                    Some(ra) => [vec!["*".to_string()], ra, b.to_vec()].concat(),
+                    None => b.to_vec(),
+                })
+            } else {
+                Some(match drop_factor(b, g, ops) {
+                    Some(rb) => [vec!["*".to_string()], a.to_vec(), rb].concat(),
+                    None => a.to_vec(),
+                })
+            }
+        }
+        (
+            "neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5",
+            Some(1),
+        ) => {
+            let inner = drop_factor(&t[1..], g, ops).unwrap_or_else(|| vec!["1".to_string()]);
+            Some([vec![t[0].clone()], inner].concat())
+        }
+        _ => Some(t.to_vec()),
+    }
+}
+
+/// Does the product `t` hold the factor `g`?
+fn contains_factor(t: &[String], g: &[String], ops: &Operators) -> bool {
+    if t == g {
+        return true;
+    }
+    match (t[0].as_str(), ops.arity_of(&t[0])) {
+        ("*", Some(2)) => subtree_end(t, 1, ops).is_some_and(|ja| {
+            contains_factor(&t[1..ja], g, ops) || contains_factor(&t[ja..], g, ops)
+        }),
+        (
+            "neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5",
+            Some(1),
+        ) => contains_factor(&t[1..], g, ops),
+        _ => false,
+    }
+}
+
+/// The recursion budget reading a derivative costs (`slope`), and the most tokens it may hold.
+const DERIVATIVE_DEPTH: u32 = 16;
+const DERIVATIVE_BUDGET: usize = 1_000;
+
+/// The derivative of `t` in the variable `x_k`, as tokens, by the textbook rules: the derivative
+/// wherever every operator of `t` is analytic (the domain `slope` reads). `None` past the token
+/// budget, where an operator is outside the analytic vocabulary, or where a power's exponent is
+/// not a ground subtree. The rules' constants are exact: integers, and a power's own exponent.
+fn slice_derivative(t: &[String], ops: &Operators, k: usize, d: u32) -> Option<Vec<String>> {
+    type T = Vec<String>;
+    fn w(s: &str) -> T {
+        vec![s.to_string()]
+    }
+    fn is(a: &[String], s: &str) -> bool {
+        a.len() == 1 && a[0] == s
+    }
+    fn node(op: &str, args: &[&[String]]) -> Option<T> {
+        let n = 1 + args.iter().map(|a| a.len()).sum::<usize>();
+        (n <= DERIVATIVE_BUDGET).then(|| {
+            let mut out = Vec::with_capacity(n);
+            out.push(op.to_string());
+            for a in args {
+                out.extend_from_slice(a);
+            }
+            out
+        })
+    }
+    // The builders drop the zeros and ones the rules make (`x_k` reads 1, a subtree without it 0).
+    fn add(a: T, b: T) -> Option<T> {
+        match (is(&a, "0"), is(&b, "0")) {
+            (true, _) => Some(b),
+            (_, true) => Some(a),
+            _ => node("+", &[&a, &b]),
+        }
+    }
+    fn sub(a: T, b: T) -> Option<T> {
+        match (is(&a, "0"), is(&b, "0")) {
+            (_, true) => Some(a),
+            (true, _) => node("neg", &[&b]),
+            _ => node("-", &[&a, &b]),
+        }
+    }
+    fn mul(a: &[String], b: &[String]) -> Option<T> {
+        if is(a, "0") || is(b, "0") {
+            return Some(w("0"));
+        }
+        match (is(a, "1"), is(b, "1")) {
+            (true, _) => Some(b.to_vec()),
+            (_, true) => Some(a.to_vec()),
+            _ => node("*", &[a, b]),
+        }
+    }
+    fn div(a: &[String], b: &[String]) -> Option<T> {
+        if is(a, "0") {
+            return Some(w("0"));
+        }
+        if is(b, "1") {
+            return Some(a.to_vec());
+        }
+        node("/", &[a, b])
+    }
+    // `u^(q - 1)` for an exponent subtree `q`: exact, an integer where `q` is one.
+    fn power_less_one(u: &[String], q: &[String]) -> Option<T> {
+        match int_literal(q) {
+            Some(2) => Some(u.to_vec()),
+            Some(1) => Some(w("1")),
+            Some(n) => node("pow", &[u, &w(&(n - 1).to_string())]),
+            None => node("pow", &[u, &node("-", &[q, &w("1")])?]),
+        }
+    }
+    if d > CERT_RECURSION_MAX {
+        return None;
+    }
+    if !t.iter().any(|x| var_index(x) == Some(k)) {
+        return Some(w("0"));
+    }
+    let tok = t[0].as_str();
+    if !ops.is_operator(tok) {
+        return Some(w("1")); // x_k itself
+    }
+    let ja = subtree_end(t, 1, ops)?;
+    let u = &t[1..ja];
+    let v = &t[ja..];
+    let du = slice_derivative(u, ops, k, d + 1)?;
+    let dv = || slice_derivative(v, ops, k, d + 1);
+    let one = w("1");
+    let two = w("2");
+    match (tok, ops.arity_of(tok)?) {
+        ("+", 2) => add(du, dv()?),
+        ("-", 2) => sub(du, dv()?),
+        // u'v + uv'
+        ("*", 2) => add(mul(&du, v)?, mul(u, &dv()?)?),
+        // (u'v - uv') / v^2
+        ("/", 2) => div(
+            &sub(mul(&du, v)?, mul(u, &dv()?)?)?,
+            &node("pow", &[v, &two])?,
+        ),
+        // q u^(q - 1) u', the exponent a ground subtree
+        ("pow", 2) => {
+            ground_leaf(t, ja, ops)?;
+            mul(&mul(v, &power_less_one(u, v)?)?, &du)
+        }
+        // u' / (n rootn(u, n)^(n - 1))
+        ("rootn", 2) => {
+            int_literal(v).filter(|&n| n >= 2)?;
+            let root = node("rootn", &[u, v])?;
+            div(&du, &mul(v, &power_less_one(&root, v)?)?)
+        }
+        ("neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5", 1) => {
+            if is(&du, "0") {
+                Some(du)
+            } else {
+                node(tok, &[&du])
+            }
+        }
+        (op, 1) => {
+            // h'(u), then times u'
+            let sq = node("pow", &[u, &two])?;
+            let inv = |a: T| node("inv", &[&a]);
+            let sqrt = |a: T| node("rootn", &[&a, &two]);
+            let dh: T = match op {
+                "exp" => node("exp", &[u])?,
+                "log" => inv(u.to_vec())?,
+                "inv" => node("neg", &[&inv(sq)?])?,
+                "sin" => node("cos", &[u])?,
+                "cos" => node("neg", &[&node("sin", &[u])?])?,
+                "tan" => inv(node("pow", &[&node("cos", &[u])?, &two])?)?,
+                "sinh" => node("cosh", &[u])?,
+                "cosh" => node("sinh", &[u])?,
+                "tanh" => inv(node("pow", &[&node("cosh", &[u])?, &two])?)?,
+                "asin" => inv(sqrt(node("-", &[&one, &sq])?)?)?,
+                "acos" => node("neg", &[&inv(sqrt(node("-", &[&one, &sq])?)?)?])?,
+                "atan" => inv(node("+", &[&one, &sq])?)?,
+                "asinh" => inv(sqrt(node("+", &[&sq, &one])?)?)?,
+                "acosh" => inv(sqrt(node("-", &[&sq, &one])?)?)?,
+                "atanh" => inv(node("-", &[&one, &sq])?)?,
+                // the sign of u, off its zero
+                "abs" => node("/", &[u, &node("abs", &[u])?])?,
+                "pow2" | "pow3" | "pow4" | "pow5" => {
+                    let q = w(&op[3..]);
+                    mul(&q, &power_less_one(u, &q)?)?
+                }
+                "pow1_2" | "pow1_3" | "pow1_4" | "pow1_5" => {
+                    let n = w(&op[5..]);
+                    let root = node("rootn", &[u, &n])?;
+                    inv(mul(&n, &power_less_one(&root, &n)?)?)?
+                }
+                _ => return None,
+            };
+            mul(&dh, &du)
+        }
+        _ => None,
+    }
+}
+
 /// Is `g` kept positive or above one by another restriction of `t`, so that it needs no sign?
 fn needs_positive_elsewhere(g: &[String], needs: &[(usize, usize, Need)], t: &[String]) -> bool {
     needs
@@ -4661,6 +5253,13 @@ pub fn infinite_set_null(tokens: &[String], ops: &Operators) -> bool {
 }
 
 fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
+    isn_e(t, ops, d, false)
+}
+
+/// `isn` in the scope of `zsn`'s `e2`: its zero-set sub-claims read as `zsn` does in that scope,
+/// and a power of a ground exponent that is not an integer is read (`x^p` is infinite only where
+/// `x` is, for `p > 0`, and where `x` is zero, for `p < 0`; NaN where `x < 0`).
+fn isn_e(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     if d > CERT_RECURSION_MAX || t.is_empty() {
         return false;
     }
@@ -4682,13 +5281,13 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
         // fat-NaN domain-restricted ops whose only infinities are inherited
         // (`pow1_2(+inf) = +inf` but `pow1_2(finite)` is finite or NaN, etc.).
         (op, Some(1)) if op_total_finite(op) || matches!(op, "pow1_2" | "pow1_4" | "acosh") => {
-            isn(&t[1..], ops, d + 1)
+            isn_e(&t[1..], ops, d + 1, e2)
         }
         // {log u = ±inf} = {u = 0} ∪ {u = +inf} (one-zero: log 0 = -inf).
         ("log", Some(1)) => {
-            isn(&t[1..], ops, d + 1)
+            isn_e(&t[1..], ops, d + 1, e2)
                 && !t[1..].iter().any(|s| s == "<constant>")
-                && zsn(&t[1..], ops, d + 1, false)
+                && zsn(&t[1..], ops, d + 1, e2)
         }
         // {atanh u = ±inf} = {u = ±1}: both level sets must be null (shift trick).
         ("atanh", Some(1)) => {
@@ -4703,7 +5302,7 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
             p.push("+".into());
             p.extend_from_slice(&t[1..]);
             p.push("1".into());
-            zsn(&m, ops, d + 1, false) && zsn(&p, ops, d + 1, false)
+            zsn(&m, ops, d + 1, e2) && zsn(&p, ops, d + 1, e2)
         }
         // tan's poles sit on {cos(g) = 0}.
         ("tan", Some(1)) => {
@@ -4713,11 +5312,11 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
             let mut c: Vec<String> = Vec::with_capacity(t.len());
             c.push("cos".into());
             c.extend_from_slice(&t[1..]);
-            zsn(&c, ops, d + 1, false)
+            zsn(&c, ops, d + 1, e2)
         }
         // {1/g = ±inf} = {g = 0} (1/±inf = 0, 1/nan = nan).
         ("inv", Some(1)) => {
-            !t[1..].iter().any(|s| s == "<constant>") && zsn(&t[1..], ops, d + 1, false)
+            !t[1..].iter().any(|s| s == "<constant>") && zsn(&t[1..], ops, d + 1, e2)
         }
         // An infinite sum/product needs an infinite operand (finite ∘ finite is
         // finite; overflow is representation; NaN propagates).
@@ -4725,16 +5324,16 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
             let Some(ja) = subtree_end(t, 1, ops) else {
                 return false;
             };
-            isn(&t[1..ja], ops, d + 1) && isn(&t[ja..], ops, d + 1)
+            isn_e(&t[1..ja], ops, d + 1, e2) && isn_e(&t[ja..], ops, d + 1, e2)
         }
         // {a/b = ±inf} ⊆ {a = ±inf} ∪ {b = 0} (a/±inf = 0; NaN propagates).
         ("/", Some(2)) => {
             let Some(ja) = subtree_end(t, 1, ops) else {
                 return false;
             };
-            isn(&t[1..ja], ops, d + 1)
+            isn_e(&t[1..ja], ops, d + 1, e2)
                 && !t[ja..].iter().any(|s| s == "<constant>")
-                && zsn(&t[ja..], ops, d + 1, false)
+                && zsn(&t[ja..], ops, d + 1, e2)
         }
         // pow with a literal integer exponent: k > 0 → {b = ±inf}; k < 0 → {b = 0}
         // (0^-k = +inf one-zero; ±inf^-k = 0); k = 0 → b^0 = 1, never infinite.
@@ -4743,11 +5342,22 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
                 return false;
             };
             match int_literal(&t[ja..]) {
-                Some(k) if k > 0 => isn(&t[1..ja], ops, d + 1),
+                Some(k) if k > 0 => isn_e(&t[1..ja], ops, d + 1, e2),
                 Some(k) if k < 0 => {
-                    !t[1..ja].iter().any(|s| s == "<constant>") && zsn(&t[1..ja], ops, d + 1, false)
+                    !t[1..ja].iter().any(|s| s == "<constant>") && zsn(&t[1..ja], ops, d + 1, e2)
                 }
                 Some(_) => true,
+                None if e2 && ground_leaf(t, ja, ops).is_some() => {
+                    match crate::numeric::evaluate_constant_value(&t[ja..], ops) {
+                        Some(p) if p.is_finite() && p > 0.0 => isn_e(&t[1..ja], ops, d + 1, e2),
+                        Some(p) if p.is_finite() && p < 0.0 => {
+                            !t[1..ja].iter().any(|s| s == "<constant>")
+                                && zsn(&t[1..ja], ops, d + 1, e2)
+                        }
+                        Some(p) => p == 0.0,
+                        None => false,
+                    }
+                }
                 None => false,
             }
         }
@@ -4758,7 +5368,7 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
                 return false;
             };
             match int_literal(&t[ja..]) {
-                Some(n) if n >= 2 => isn(&t[1..ja], ops, d + 1),
+                Some(n) if n >= 2 => isn_e(&t[1..ja], ops, d + 1, e2),
                 _ => false,
             }
         }
@@ -5521,10 +6131,15 @@ mod tests {
             ),
             "an identically-zero factor has no nonzero witness cell"
         );
-        // Branch-cut exponent: the pair algebra refuses non-integer powers.
+        // Branch-cut exponent: the pair algebra refuses non-integer powers, but `1/x^(1/2)` is zero
+        // only where `x^(1/2)` is infinite, which a finite `x` never makes it (`isn_e`).
         assert!(
-            !zero_set_null_generic_const(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops, false),
-            "x^(-1/2): non-integer exponents stay out of scope"
+            zero_set_null_generic_const(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops, false),
+            "x^(-1/2) is never zero"
+        );
+        assert!(
+            !zero_set_null(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops, false),
+            "the plain certificate keeps its strength"
         );
         // Ground infinity: x1 + 1/0 = +inf everywhere -- EMPTY zero set, so a
         // TRUE verdict is sound. The pair is (1 + x1*0, 0): the two-sided
@@ -5590,6 +6205,90 @@ mod tests {
             assert!(
                 !zero_set_null_generic_const(&s(region), ops, false),
                 "{region:?} vanishes on a region"
+            );
+        }
+    }
+
+    /// A slope in one variable: a sum over restricted arguments that are not affine has a null zero
+    /// set where it moves strictly with one variable on each piece of every slice; a sum that may
+    /// vanish on a region never has such a slope.
+    #[test]
+    fn a_zero_set_is_read_on_a_slice() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for null in [
+            &["-", "log", "*", "x1", "x2", "x1"][..],
+            &["-", "rootn", "-", "x1", "pow", "x2", "2", "2", "x3"],
+            &["-", "log", "log", "x1", "x2"],
+            &["-", "rootn", "sin", "x1", "2", "x2"],
+            &["+", "log", "cos", "x2", "x1"],
+            &["-", "rootn", "*", "x2", "+", "x4", "x5", "2", "x1"],
+            &["-", "tan", "x1", "x2"],
+            &["+", "x2", "-", "x1", "abs", "x1"],
+            &["-", "inv", "log", "*", "x1", "x2", "exp", "x3"],
+            &["-", "*", "x3", "log", "*", "x1", "x2", "sin", "x1"],
+            &["-", "pow", "-", "x1", "pow", "x2", "2", "/", "3", "2", "x3"],
+            // by the derivative: `1 - tan(x1)`,
+            // `log(x1) + 1`, `1 - 0.5 x2/|x2|`
+            &["+", "x1", "log", "cos", "x1"],
+            &["-", "*", "x1", "log", "x1", "1"],
+            &["-", "x2", "*", "0.5", "abs", "x2"],
+            &["-", "x1", "log", "rootn", "x1", "2"],
+        ] {
+            assert!(
+                zero_set_null_generic_const(&s(null), ops, false),
+                "{null:?}: moves with a variable on every slice"
+            );
+            assert!(!zero_set_null(&s(null), ops, false), "{null:?}");
+        }
+        // a factor every term shares: `cos(500 x1 x2)*(2 - x3)`, which interval evaluation alone
+        // does not read; a polynomial whose literals put the horizon past the largest box
+        for null in [
+            &[
+                "-", "*", "2", "cos", "*", "500", "*", "x1", "x2", "*", "x3", "cos", "*", "500",
+                "*", "x1", "x2",
+            ][..],
+            &[
+                "+",
+                "*",
+                "x1",
+                "+",
+                "*",
+                "x1",
+                "+",
+                "*",
+                "0.41",
+                "x1",
+                "182.26",
+                "2763462.464",
+                "1916567309.85",
+            ],
+        ] {
+            assert!(
+                zero_set_null_generic_const(&s(null), ops, false),
+                "{null:?}"
+            );
+        }
+        for region in [
+            &["-", "x1", "abs", "x1"][..],
+            &["*", "x2", "-", "abs", "x1", "x1"],
+            &["-", "log", "exp", "x1", "x1"],
+            &["-", "x2", "pow", "rootn", "x2", "2", "2"],
+            &["-", "*", "x1", "inv", "x1", "1"],
+            &["-", "pow", "x1", "+", "1", "1", "pow", "abs", "x1", "2"],
+            &["-", "exp", "neg", "+", "x1", "inv", "*", "0", "x2", "0"],
+            &["+", "x1", "abs", "x1"],
+            &["-", "x2", "*", "1", "abs", "x2"],
+            &["-", "*", "x2", "*", "x1", "inv", "x1", "x2"],
+            &["-", "log", "exp", "*", "x1", "x2", "*", "x2", "x1"],
+            &["-", "*", "x2", "abs", "x1", "*", "x2", "x1"],
+            &["+", "*", "x1", "abs", "inv", "x1", "1"],
+        ] {
+            assert!(
+                !zero_set_null_generic_const(&s(region), ops, false),
+                "{region:?} may vanish on a region"
             );
         }
     }

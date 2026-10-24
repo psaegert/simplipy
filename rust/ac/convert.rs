@@ -91,11 +91,7 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
             }
             let (p, next) = parse_one(tokens, at, cx)?;
             // The inverse section applies the bag's group inverse to each of its members.
-            let p = if inverted {
-                mul(vec![Ex::Num(Rat::NEG_ONE), p], cx)
-            } else {
-                p
-            };
+            let p = if inverted { negated(p, cx) } else { p };
             parts.push(p);
             at = next;
         }
@@ -433,6 +429,18 @@ fn fraction_literal(s: &str) -> Option<Rat> {
     Rat::from_big(p, q)
 }
 
+/// The subtrahend `b` of a written difference, negated: float64 subtracts by adding the
+/// negation (`a - b` is `a + (-b)` bit for bit), so in `f64` a written zero subtrahend is the zero
+/// of the other sign (`signed_zero_product`): `-0.0 - 0` is `-0.0`, and `1/(0*(-2) - 0)` is
+/// `-inf`.
+fn negated(b: Ex, cx: &Cx) -> Ex {
+    let members = vec![Ex::int(-1), b];
+    match signed_zero_product(&members, cx) {
+        Some(zero) => zero,
+        None => mul(members, cx),
+    }
+}
+
 /// Desugar one LEGACY operator application into the core (input-side compatibility only --
 /// the vocabulary itself is deleted): `mult{k} x = k * x`, `div{k} x = (1/k) * x`,
 /// `pow{k} x = x^k`, `pow1_2/pow1_4 x = x^(1/2 | 1/4)` (even roots agree with rational
@@ -446,8 +454,7 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
         ("-", 2) => {
             let b = args.pop().unwrap();
             let a = args.pop().unwrap();
-            let neg_b = mul(vec![Ex::int(-1), b], cx);
-            add(vec![a, neg_b], cx)
+            add(vec![a, negated(b, cx)], cx)
         }
         ("/", 2) => {
             let b = args.pop().unwrap();

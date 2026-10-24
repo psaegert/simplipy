@@ -375,7 +375,13 @@ class TestCorpusGate:
         # members. 10 walk rows move: five rest cheaper (77 -3,000, 135 -1,000, 154 -1,000, 160
         # -8,000, 331 -2,692), four respell at an equal price (176, 325, 329, 336) and row 163
         # rests dearer (+1,000): its odd root under `cos` keeps the orientation it is written in.
-        assert walk['complexity_out'] == 54657536, walk['complexity_out']
+        # A ZERO SET IS READ ON A SLICE: 54,657,536 -> 54,615,636. The zero-set certificate reads a
+        # sum one variable at a time (the sum moves with it on every slice, by its slope or its
+        # derivative's zero set), through a factor every term shares, and past the horizon for
+        # an entire function, so more inverses split and more signs move. 11 walk rows move:
+        # seven rest cheaper (82 -1,000, 87 -6,000, 117 -3,000, 125 -19,000, 163 -8,900, 290
+        # -1,000, 341 -3,000) and four respell at an equal price (55, 113, 160, 297).
+        assert walk['complexity_out'] == 54615636, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

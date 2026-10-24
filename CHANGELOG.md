@@ -60,7 +60,9 @@ organised by who you are, then the highlights, then every change in detail.
   exactly, -0 included, and the floats of pi and e as `np.pi` and `np.e`: `1/(-0.0)` is `-inf`
   (it was `inf`), `atan2(0, -0.0)` is `np.pi` (it was `0`), `x + -0.0` is `x`. A written
   product or negation of numbers that is zero takes float64's sign: `-1*0`, `0*(-2)` and `-(0)`
-  are `-0.0` (they were `0`), `-1*-0.0` is `0`; a zero the search derives keeps the one zero
+  are `-0.0` (they were `0`), `-1*-0.0` is `0`; a written difference subtracts by adding the
+  negation, as float64 does, so `-0.0 - 0` and `0*(-2) - 0` are `-0.0` and `1/(0*(-2) - 0)` is
+  `-inf` (it was `inf`), while `-0.0 + 0` is `0`. A zero the search derives keeps the one zero
   (`x1*0` is unchanged). A nonzero literal that underflows to -0 stays the leaf it is written
   as.
 - **Long exact coefficients.** An answer carries every digit of an exact number
@@ -387,9 +389,10 @@ model predictions.
   `1/(x1*(x2 - x2))` is `inf/x1` (it was `inf`), `1/-(x1 - x1)` is `-inf`, `1/(0/tanh(-2))` and
   `1/(0/(-2))` are `-inf`, and `permissive` keeps `S` in `x/(0/S)` (`inf*x*S`). `real` reasons
   over the reals, whose one zero inverts to `+inf`, and keeps its answers (`inf`, `inf`,
-  `inf*x`). The canonical form holds one exact zero, so a sign a zero takes through an odd
-  function or a sum is not kept: `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf`, where
-  float64 gives `-inf`. On a tenth of the training-data inputs 85 `f64` answers change (14
+  `inf*x`). The canonical form holds one exact zero, so a sign a derived zero takes through an
+  odd function or a sum is not kept: `1/sin(0*x1)` and `1/(0*x1 + 0*x2)` are `+inf`, where
+  float64 gives `-inf` for `x1 < 0`, resp. `x1, x2 < 0` (a written signed zero keeps float64's
+  sign, see "`f64` writes the negative zero"). On a tenth of the training-data inputs 85 `f64` answers change (14
   cheaper, 64 dearer, 7 at an equal price) and 81 `permissive` ones (14, 61, 6); evaluated beside
   their inputs on 256 points, the `f64` answers that give an infinity of the other sign fall from
   50 rows to 1, and the `permissive` ones from 48 to 13. srbf's ground truths and predictions do
@@ -461,6 +464,29 @@ model predictions.
   searches that start from those forms. One `real` training-data answer no longer shows the
   input's float64 infinity: a denominator `x2*tanh(u) - x2`, which float64 rounds to exactly zero
   where `tanh` saturates to 1 and the real `tanh` never does (`f64` reads float64's `tanh`, below).
+- **A zero set is read on a slice.** The certificate of a null zero set that reading A, the
+  distribution licences and the orientation of a pole read applied the identity theorem on the
+  expression's domain only where every restricted argument is affine. So a sum over
+  `log(x1*x2)`, `sqrt(x1 - x2^2)`, `log(log(x1))` or a root of `cos(x1)` was never shown null;
+  nor was a sum whose terms share a factor that moves too fast for interval evaluation
+  (`cos(500*x1*x2)*(2 - x3)` written out), nor an entire function whose literals put the search
+  horizon past its largest box (`0.41*x1^5 + 182*x1^4 + ... + 1.9e9`). The certificate now also
+  reads an expression one variable at a time. Where, for almost every value of the other
+  variables, it is constant on no interval of its domain in that variable (its strictly
+  monotone parts add up in one direction, or its derivative's zero set is null), it vanishes at
+  countably many points of each line, and its zero set is null. A sum is also read through a
+  factor every term shares (`g*a + g*b` vanishes only where `g` or `a + b` does), and an entire
+  function's witness is searched in the largest box. `log(x1*x2) - x1`, `sqrt(x1 - x2^2) - x3`,
+  `log(log(x1)) - x2`, `x1 + log(cos(x1))` and `x1 - log(sqrt(x1))` are now null. `x1 - |x1|` and
+  `x1*|1/x1| + 1`, which vanish on a region, are not, nor is `x1 + 1/log(x1)`, whose derivative
+  needs a second derivative to read. The plain certificate behind the `$`-cancel keeps its
+  strength. On srbf's ground truths 25 `f64` answers change (1 cheaper, 24 at an equal price), 52
+  in `real` (3 cheaper, 1 dearer, 48 at an equal price) and 10 in `permissive` (all at an equal
+  price). On a tenth of the training-data inputs 470 (21, 4, 445), 906 (40, 10, 856) and 246
+  change; on a tenth of the predictions 501 (66, 19, 416), 744 (87, 32, 625) and 131. No answer
+  changes on a second call, and none loses the input's infinities and NaNs on 256 points. The
+  dearer answers are inverses the stronger licence distributes over a product, and the searches
+  that start from them. The time per call does not change.
 - **`f64` reads `tanh` and `atan` on their float64 range.** float64's `tanh(u)` is exactly ±1 for
   every |u| ≥ 18.99 and its `atan(u)` exactly ±fl(π/2) for every |u| ≥ 5.8e15, in the deployed
   evaluator as in the engine's. No other operator is constant on a tail: measured on each out to
@@ -530,9 +556,11 @@ model predictions.
   there the orientation written decides which infinity the answer gives. A sum turned around
   before it is inverted can still lose its zero's sign: `1/(-x1 - |x1|)` is `+inf` for every
   x1 ≤ 0, but the sum is held as `-(x1 + |x1|)` when it is built, and the answer
-  `-1/(x1 + |x1|)` is `-inf` there. Keeping every such sum as written needs the zero-set test to
-  also show null the sums over restricted arguments that are not affine (`log(x1*x2)`,
-  `sqrt(x1 - x2^2)`); until then it would make many answers dearer.
+  `-1/(x1 + |x1|)` is `-inf` there. Keeping every sum the zero-set test cannot clear as written
+  would reach it, but even with the slice reading ("a zero set is read on a slice", above) it
+  makes 594 of the `f64` answers on a tenth of the predictions dearer, all but 3 over sums whose
+  zero set is null and unread (univariate sums over `log`, roots, `abs` or `tan` that mix
+  directions), so it is not done.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

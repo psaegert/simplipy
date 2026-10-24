@@ -188,6 +188,32 @@ finds no such cell, on a restricted argument that is not affine, on `tan` (whose
 line into infinitely many pieces) and on more than three arguments that must be nonzero. The
 plain certificate behind the `$`-cancel keeps its strength.
 
+**Where the pieces cannot be listed, the certificate reads one variable at a time.** Fix a
+variable $x_k$ and the others $x'$; the *slice* of an expression is $t \mapsto f(x', t)$. If for
+almost every $x'$ the slice is real-analytic on an open set $U$ of the line, with countably many
+defined points outside $U$, and constant on no interval of $U$, then it vanishes on a countable
+set, and by Fubini the zero set is null. The certificate builds that claim bottom-up, as a
+*slope* of each subexpression: free of $x_k$, increasing or decreasing on each interval of $U$,
+monotone, or merely nonconstant. $x_k$ increases; a summand free of $x_k$ must be finite almost
+everywhere, a factor free of it finite and nonzero almost everywhere (a factor of uncertain sign
+leaves the direction to $x'$); two summands that increase (or decrease) together do so, as do
+two factors of certain sign whose magnitudes do; an analytic function that is constant on no
+interval of its domain, whose domain edge is countably many points (`log` at 0, `asin` at ±1,
+`tan` at its poles), keeps nonconstancy and, where it is monotone on each interval, the
+direction. Any other sum or product of two parts that move is nonconstant where its derivative
+in $x_k$ (the textbook rules, exact where every operator is analytic) has a null zero set, read
+again, though not through a second derivative. So `log(x1*x2) - x1`, `sqrt(x1 - x2^2) - x3`,
+`log(log(x1)) - x2`, `x1 + log(cos(x1))` and `x1 - log(sqrt(x1))` are null, and `x1 - |x1|`,
+`x2*(x1/x1) - x2` and `x1*|1/x1| + 1` are not. A sum whose terms all share a factor $g$ is $g$
+times the sum of its cofactors wherever $g$ is finite, and infinite or NaN where $g$ is not, so its
+zero set is null where both are: `-10.7*cos(u) - 8.9*x2*cos(u)` is null wherever `cos(u)` is,
+although interval evaluation loses it where `u` moves fast. An entire function's witness cell is
+searched in the largest box when its literals put the horizon past it, since one cell anywhere
+proves the zero set null. These readings serve the certificate the core reads; the plain one
+keeps its strength. They fail closed on a sum mixing directions whose derivative needs a second
+derivative to read (`x1 + 1/log(x1)`, `log(log(x1)) - x1`), and on two parts that move whose
+product has neither a certain sign nor a readable derivative.
+
 **In `f64` the zero-set certificate reads each function on its float64 range.** Two functions of
 the vocabulary are exactly constant on a whole tail in float64: `tanh(u)` is ±1 for every
 |u| ≥ 18.990341103219276 (the deployed evaluator; the engine's own saturates at 19.06) and
@@ -416,9 +442,14 @@ other member its own power, so the answer keeps the sign the members give the ze
 `real` reads the one zero of the reals, whose inverse is `+inf` (`c/0 = sign(c)*inf`): there the
 three are `inf`, `inf` and `inf*x1`. In `f64` a written product or negation of numbers that is
 zero is float64's signed zero, `-0.0` where its sign is negative, which an odd function keeps:
-`1/tan(-(x1 - x1))` is `-inf` there. Otherwise a zero's sign survives only as a member of the
-product that is inverted, since the canonical form holds one exact zero: through a sum it is
-lost, so `1/(0*(-2) - 0)` is `+inf` in every mode, where float64 gives `-inf`.
+`1/tan(-(x1 - x1))` is `-inf` there. float64 subtracts by adding the negation, so a written zero
+subtrahend is the zero of the other sign: `-0.0 - 0` is `-0.0` and `1/(0*(-2) - 0)` is `-inf`
+in `f64`, as float64 gives it (`-0.0 + 0` is `+0`, and `x - 0` is `x`). Otherwise a zero's sign
+survives only as a member of the product that is inverted, since the canonical form holds one
+exact zero: a product of a zero and a variable collapses to that zero when it is built, so
+through an odd function, an odd power or a sum before the inverse its sign is lost
+(`1/sin(0*x1)` and `1/(0*x1 + 0*x2)` are `+inf` in every mode, where float64 gives `-inf` for
+`x1 < 0`, resp. `x1, x2 < 0`).
 
 **A sum that vanishes on a region keeps its zero's sign where it is inverted, in `f64`.** float64
 adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` and `x1 - |x1|` are
@@ -438,10 +469,11 @@ and `permissive` a value up to the sign of a zero.
 The rule acts where an inverse meets the sum, and a sum turned around before that can still lose
 its zero's sign. `1/(-x1 - |x1|)` is `+inf` for every x1 ≤ 0, where the sum is `+0`, but the sum
 `-x1 - |x1|` is held as `-(x1 + |x1|)` when it is built, before the inverse reaches it, and the
-answer `-1/(x1 + |x1|)` is `-inf` there. To keep every such sum in the orientation it is written
-in, the zero-set test must first show null the sums it cannot read today. These are mostly sums
-over restricted arguments that are not affine, such as `log(x1*x2)` or `sqrt(x1 - x2^2)`. Without
-that, keeping the orientation of every sum the test cannot clear makes many answers dearer.
+answer `-1/(x1 + |x1|)` is `-inf` there. Keeping every sum the zero-set test cannot clear in the
+orientation it is written in reaches it, but costs answers: with the slice reading above, on a
+tenth of srbf's predictions 594 `f64` answers rest dearer, all but 3 over sums whose zero set is
+null but which the test cannot read (univariate sums over `log`, roots, `abs` or `tan` that mix
+directions), and it is not done.
 
 **Convention (factored vs. flat scaling, finite and infinite alike).** The constructors
 extract a sum's content only in the unanimity case (it must never lengthen a term), so with
