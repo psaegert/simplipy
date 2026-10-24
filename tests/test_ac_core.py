@@ -845,14 +845,18 @@ class TestZeroPoles:
         assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode=mode) == \
             ['*', 'float("inf")', '*', 'x1', 'x2']
 
-    def test_a_zero_signed_outside_the_inverted_product_reads_plus(self, engine) -> None:
-        # The known residual (docs/formal.md): the canonical form holds one exact zero, so a
-        # sign a zero takes through a sum is gone before the inverse; float64 gives -inf for
-        # both. A written negation of a zero is f64's `-0.0`, which an odd function keeps.
+    def test_a_written_signed_zero_keeps_float64s_sign_in_f64(self, engine) -> None:
+        # A written negation of a zero is f64's `-0.0`, which an odd function keeps, and a written
+        # difference subtracts by adding the negation (`-0 - 0` is `-0`): float64 gives -inf for
+        # all three. real reads its one zero, permissive a value up to the sign of a zero.
         for mode in ('f64', 'permissive', 'real'):
-            for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0']):
-                want = 'float("-inf")' if mode == 'f64' and tokens[0] == 'inv' else 'float("inf")'
+            for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0'],
+                           ['inv', '-', '-0.0', '0']):
+                want = 'float("-inf")' if mode == 'f64' else 'float("inf")'
                 assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
+        # -0 + 0 is +0, and x - 0 is x bit for bit
+        assert engine.simplify(['inv', '+', '-0.0', '0'], mode='f64') == ['float("inf")']
+        assert engine.simplify(['-', 'x1', '0'], mode='f64') == ['x1']
 
     def test_real_reads_one_zero(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['inv', '*', '0', 'x1'], mode='real') == ['float("inf")']
@@ -1387,14 +1391,13 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
     def test_neg_one_coefficient_stands_outside_the_join(self, engine: SimpliPyEngine) -> None:
         # The -1 inside the joined base and the negation outside it cost the same (a sign is
         # one bit wherever it sits), so the sign key places it outermost. (The join is offered
-        # where the sound certificate does not split the inverse: `exp(x3) + log(sin(x4))`,
-        # whose `log` argument is not affine; `exp(x3) + x3^x4` it reads null on its domain.)
-        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'log', 'sin', 'x4'])
+        # where the sound certificate does not split the inverse: `x3 + |x3|`, zero on all of
+        # x3 <= 0; `exp(x3) + log(sin(x4))` it reads null, moving with x3 on every slice.)
+        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'x3', 'abs', 'x3'])
         out = engine.simplify(list(x), mode=Mode.permissive)
-        assert out == ['<mul>', '-1', '<div>', '<mul>', 'x0', '<add>', 'exp', 'x3', 'log',
-                       'sin', 'x4', '</add>', '</mul>', '</mul>'], out
-        inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'log', 'sin', 'x4', '</add>',
-                  '</mul>']
+        assert out == ['<mul>', '-1', '<div>', '<mul>', 'x0', '<add>', 'x3', 'abs', 'x3',
+                       '</add>', '</mul>', '</mul>'], out
+        inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'x3', 'abs', 'x3', '</add>', '</mul>']
         assert engine.complexity(out, mode=Mode.permissive) == \
             engine.complexity(inside, mode=Mode.permissive)
         assert engine.simplify(list(out), mode=Mode.permissive) == out
