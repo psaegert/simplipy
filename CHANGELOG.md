@@ -180,7 +180,11 @@ model predictions.
   `x1/(sin(x3)*(x2 + 1))`). A function of numbers that would all be written as floats is one
   float, computed as the evaluator computes it and rounded to the precision
   (`1.8488479557720672e-83*x1` for `x1*exp(-381/2)`), and never 0, inf or a subnormal; a function
-  of a number written exactly stays (`sin(2)`). It changes how a number is written, never the
+  of a number written exactly stays (`sin(2)`), and so does one whose float would let reading the
+  display distribute it over a sum or collect a like term (`x1 + atan(1.2345678)*(x2 + x3)`,
+  `x1 + x2 + x1/log(0.7377233226141932)`). Numbers a product keeps apart for their size are one
+  float, the product of the floats they are written as (`x1 + 0.11030062109689767*x2` in `real`
+  for a 330-digit literal times `0.893435038202104*x2`). It changes how a number is written, never the
   structure: a number whose spelling would let parts collect or cancel, drop a multiplier or an
   exponent of 1, or make a non-integer exponent an integer is written as that spelling and the
   rest to its value (`(1 + 3.1e-21)*x1` for `1.0000000000000000000031*x1`,

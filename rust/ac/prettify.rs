@@ -54,9 +54,13 @@
 //!    `1.8488479557720672e-83*x1`, `1.85e-83*x1` at precision 3). It is judged bottom up, on its
 //!    parts as the display writes them: `asinh(atan(c) + 0.4)` is a function of one float once
 //!    `atan(c)` folds and combines with `0.4`. A function of a number written
-//!    exactly stays (`sin(2)`), and so does one whose float is 0, infinite or subnormal. An
-//!    integer power of a float the state keeps for its size is that float's power, exactly.
-//!    Exponents, root indices and Bessel orders are not numbers inside it.
+//!    exactly stays (`sin(2)`), and so does one whose float is 0, infinite or subnormal, and
+//!    one whose float would let the canonical constructors build its sum otherwise -- a number
+//!    times a sum distributed over the sum it stands in (`x2 + atan(c)*(x1 + x3)`), a term
+//!    collected with a like term (`x1 + x1/log(c)`); a fold that only turns a sum around
+//!    (`cos(c) - x1` is `-(x1 + 0.997)`) is made. An integer power of a float the state keeps
+//!    for its size is that float's power, exactly. Exponents, root indices and Bessel orders
+//!    are not numbers inside it.
 //! 7. **Exponents** are numbers like any other; `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is
 //!    `1/rootn(x, n)` for even `n`.
 //! 8. **Layout**: one coefficient in front and ONE SLASH: every divisor of a product joins a
@@ -71,7 +75,10 @@
 //!    member on its own, so there a joined reciprocal stays one bag unless its members are
 //!    numbers, variables and their powers and roots. Scientific notation from 10^6 and below
 //!    10^-3 with a lowercase `e`.
-//! 9. **Range**: no numbers combine to inf, 0 or a subnormal.
+//! 9. **Range**: no numbers combine to inf, 0 or a subnormal. Numbers the state keeps apart
+//!    for their size (a product of two literals beyond the domain's cap) are one number, the
+//!    product or sum of the values they are written at in full precision, as reading the
+//!    display combines them.
 //! 10. **Grouping** (`keep_grouping`, off by default): every sum and product is written with
 //!     the grouping of SimpliPy's explicit token form, the order in which it evaluates the
 //!     state. A sum's positive terms are a right-nested chain, then each subtracted term follows
@@ -537,6 +544,10 @@ pub struct Display<'a, 'v> {
     holds_pi: Cell<bool>,
     /// A number is written with pi factored out as the symbol.
     wrote_pi_symbol: Cell<bool>,
+    /// A function of floats folded (rule 6), or numbers combined at the values they are
+    /// written at (rule 9): the display writes a number where the state holds another
+    /// expression.
+    folds: Cell<bool>,
     /// Sums and products are written with the grouping of the explicit token form (rule 10).
     keep_grouping: bool,
     /// The number domain the display reads back in (f64: `f64` and `permissive`).
@@ -558,6 +569,7 @@ impl<'a, 'v> Display<'a, 'v> {
             changed: RefCell::new(Vec::new()),
             holds_pi: Cell::new(false),
             wrote_pi_symbol: Cell::new(false),
+            folds: Cell::new(false),
             keep_grouping: false,
             f64_domain: super::rat::f64_numbers(),
             sums: RefCell::new(Default::default()),
@@ -588,6 +600,13 @@ impl<'a, 'v> Display<'a, 'v> {
     /// back as a factor, which takes its own place in the canonical order of a sum's terms.
     pub fn pi_symbol_written(&self) -> bool {
         self.wrote_pi_symbol.get()
+    }
+
+    /// Does the display write a number where the state holds another expression: a function of
+    /// floats folded (rule 6), or numbers combined at the values they are written at (rule 9)?
+    /// That number reads back with its own place in the canonical order and orientation.
+    pub fn folds(&self) -> bool {
+        self.folds.get()
     }
 
     /// The magnitudes whose short spelling changes their value, in the order first written.
@@ -908,8 +927,8 @@ impl<'a, 'v> Display<'a, 'v> {
     /// with its parts as the display writes them, so a function of a sum whose own function
     /// folded and combined with a float (`asinh(atan(c) + 0.4)`) is a function of one float.
     /// A changed expression is built again by the canonical constructors, as reading the
-    /// display back builds it; a sum's numbers combine only under rule 9, and a sum that its
-    /// constructor would collect further keeps its terms apart.
+    /// display back builds it; a sum's numbers combine only under rule 9, and a fold that would
+    /// let the sum's constructor change its shape is not made ([`Display::folded_sum`]).
     fn folded(&self, e: &Ex) -> Ex {
         let cx = self.cx;
         let all = |v: &[Ex]| -> Vec<Ex> { v.iter().map(|x| self.folded(x)).collect() };
@@ -943,20 +962,42 @@ impl<'a, 'v> Display<'a, 'v> {
                 if w == *v {
                     e.clone()
                 } else {
-                    self.folded_sum(w)
+                    self.folded_sum(v, w)
                 }
             }
             other => other.clone(),
         };
         match self.fold(&inner) {
-            Some(v) => Ex::Num(v),
+            Some(v) => {
+                self.folds.set(true);
+                Ex::Num(v)
+            }
             None => inner,
         }
     }
 
-    /// A sum of folded terms: its numbers combined into one under rule 9, then built by the
-    /// canonical constructor unless that would collect its terms further.
-    fn folded_sum(&self, w: Vec<Ex>) -> Ex {
+    /// A sum of folded terms `w` (of the terms `v`): its numbers combined into one under rule 9,
+    /// then built by the canonical constructor. A fold that would let the constructor change
+    /// the sum's shape -- distribute a number over a sum (`x2 + atan(c)*(x1 + x3)`), collect like
+    /// terms (`x1 + x1/log(c)`) -- would change its structure, so the last term that folded is
+    /// written as it stands: first its own factors that fold to numbers, then the whole term,
+    /// until the constructor keeps the shape.
+    fn folded_sum(&self, v: &[Ex], mut w: Vec<Ex>) -> Ex {
+        loop {
+            if let Some(built) = self.sum_kept(w.clone()) {
+                return built;
+            }
+            let Some(i) = (0..w.len()).rev().find(|&i| w[i] != v[i]) else {
+                return Ex::Add(w);
+            };
+            let top = self.unfolded_factors(&v[i]);
+            w[i] = if top != w[i] { top } else { v[i].clone() };
+        }
+    }
+
+    /// The sum of the terms `w`, its numbers combined into one under rule 9 and built by the
+    /// canonical constructor; `None` where the constructor changes its shape.
+    fn sum_kept(&self, w: Vec<Ex>) -> Option<Ex> {
         let (numbers, mut terms): (Vec<Ex>, Vec<Ex>) =
             w.into_iter().partition(|t| matches!(t, Ex::Num(_)));
         let values: Vec<Rat> = numbers
@@ -966,21 +1007,34 @@ impl<'a, 'v> Display<'a, 'v> {
                 _ => None,
             })
             .collect();
-        match combine(&values, Rat::checked_add) {
+        match self.combined(&values, Rat::checked_add) {
             Some(c) if values.len() > 1 => terms.push(Ex::Num(c)),
             _ => terms.extend(numbers),
         }
-        let built = add(terms.clone(), self.cx);
-        let kept = match &built {
-            Ex::Add(t) => t.len(),
-            Ex::Num(z) if z.is_zero() => 0,
-            _ => 1,
-        };
-        if kept == terms.len() {
-            built
-        } else {
-            Ex::Add(terms)
+        if terms.len() < 2 {
+            return Some(add(terms, self.cx));
         }
+        // The constructor keeps the sum where it builds the same shape: it may turn the sum
+        // around (`-x1 - 0.5` is `-(x1 + 0.5)`, a sign is no structure), but not distribute a
+        // number over a sum or collect terms.
+        let built = add(terms.clone(), self.cx);
+        (shape(&built, self.cx) == shape(&Ex::Add(terms), self.cx)).then_some(built)
+    }
+
+    /// The term `t` with its folds, except that a factor of it that would fold to a number stays
+    /// as it stands.
+    fn unfolded_factors(&self, t: &Ex) -> Ex {
+        let Ex::Mul(factors) = t else {
+            return t.clone();
+        };
+        let w: Vec<Ex> = factors
+            .iter()
+            .map(|f| match self.folded(f) {
+                Ex::Num(_) if !matches!(f, Ex::Num(_)) => f.clone(),
+                g => g,
+            })
+            .collect();
+        mul(w, self.cx)
     }
 
     /// Rule 6: the number a ground expression stands for when it holds a function and every
@@ -1223,7 +1277,7 @@ impl<'a, 'v> Display<'a, 'v> {
         let mut neg = false;
         let mut lead: Vec<Node> = Vec::new();
         let mut lead_den: Vec<Node> = Vec::new();
-        match coefficient(&numbers, &divisors) {
+        match self.coefficient_of(&numbers, &divisors) {
             Some(c) => {
                 neg = c.is_negative();
                 match self.coefficient(&c.abs(), !num.is_empty(), !den.is_empty()) {
@@ -1301,7 +1355,7 @@ impl<'a, 'v> Display<'a, 'v> {
         }
         let den_neg = divisors.iter().filter(|r| r.is_negative()).count() % 2 == 1;
         let magnitudes: Vec<Rat> = divisors.iter().map(Rat::abs).collect();
-        match coefficient(&numbers, &magnitudes) {
+        match self.coefficient_of(&numbers, &magnitudes) {
             Some(c) => {
                 // The coefficient as the display writes it: its numerator beside the factors,
                 // its denominator in the joined reciprocal, which keeps the sign it holds.
@@ -1410,6 +1464,54 @@ impl<'a, 'v> Display<'a, 'v> {
         Some((Node::Num(float_text(&inv)), inv))
     }
 
+    /// Numbers combined into one as reading the display back combines them (rule 9): exactly,
+    /// or, where their exact result is no number of the domain (it holds more digits than the
+    /// domain's cap), at the values they are written at in full precision, which reading the
+    /// display combines (`c1*c2*x1` with `c1` of 300 digits is one float times `x1`).
+    fn combined(&self, numbers: &[Rat], op: fn(&Rat, &Rat) -> Option<Rat>) -> Option<Rat> {
+        combine(numbers, op).or_else(|| {
+            if numbers.len() < 2 {
+                return None;
+            }
+            let c = combine(&self.shown_values(numbers)?, op)?;
+            self.folds.set(true);
+            Some(c)
+        })
+    }
+
+    /// The coefficient of a product as reading the display back builds it: its numbers over
+    /// the numbers of its joined reciprocals, exactly, else at the values they are written at
+    /// in full precision ([`Display::combined`]).
+    fn coefficient_of(&self, numbers: &[Rat], divisors: &[Rat]) -> Option<Rat> {
+        coefficient(numbers, divisors).or_else(|| {
+            if numbers.len() + divisors.len() < 2 {
+                return None;
+            }
+            let c = coefficient(&self.shown_values(numbers)?, &self.shown_values(divisors)?)?;
+            self.folds.set(true);
+            Some(c)
+        })
+    }
+
+    /// The signed values the numbers are written at in full precision, each on its own.
+    fn shown_values(&self, numbers: &[Rat]) -> Option<Vec<Rat>> {
+        let full = self.at_full_precision();
+        numbers
+            .iter()
+            .map(|r| {
+                if r.is_zero() {
+                    return Some(Rat::ZERO);
+                }
+                let (_, v) = full.spell_short(&r.abs(), NumberPlace::Alone);
+                if r.is_negative() {
+                    v.checked_neg()
+                } else {
+                    Some(v)
+                }
+            })
+            .collect()
+    }
+
     fn sum(&self, v: &[Ex]) -> Node {
         let mut numbers: Vec<Rat> = Vec::new();
         let mut terms: Vec<(bool, Node)> = Vec::new();
@@ -1420,7 +1522,7 @@ impl<'a, 'v> Display<'a, 'v> {
                 terms.push(odd_literal_hoist(split_neg(self.write(t)), self.cx));
             }
         }
-        let constants: Vec<Rat> = match combine(&numbers, Rat::checked_add) {
+        let constants: Vec<Rat> = match self.combined(&numbers, Rat::checked_add) {
             Some(c) if c.is_zero() => vec![],
             Some(c) => vec![c],
             None => numbers,

@@ -92,8 +92,10 @@ struct Kept {
     kept: bool,
     /// The shape it keeps.
     reference: Option<String>,
-    /// Whether it writes a number with pi factored out as the symbol.
-    pi_symbol: bool,
+    /// Whether it writes a number with pi factored out as the symbol, or a number where the
+    /// state holds another expression (a fold): either reads back with its own place in the
+    /// canonical order.
+    reorders: bool,
 }
 
 fn render(node: &Node, form: PrettyForm, grouped: bool) -> Pretty {
@@ -144,8 +146,10 @@ impl Engine {
     /// checked to be the same, is the one that is its own display. The symbol pi does the same
     /// at every precision: it reads back as a factor, with its own place in the canonical order
     /// of a sum's terms (`3.141592653589793*x2 + sin(x1)` reads back from `pi*x2 + sin(x1)` as
-    /// `sin(x1) + pi*x2`). At full precision with no symbol pi written, rounding to the nearest
-    /// float keeps every order, and the display needs no second look.
+    /// `sin(x1) + pi*x2`). So does a number written where the state holds another expression, a
+    /// function of floats folded or numbers combined at their floats: `cos(c) - x2` folds to
+    /// `-x2 - 0.997`, which reads back as `-(x2 + 0.997)`. At full precision with neither,
+    /// rounding to the nearest float keeps every order, and the display needs no second look.
     pub fn ac_prettify_structure(
         &self,
         tokens: &[String],
@@ -154,7 +158,7 @@ impl Engine {
         verify: bool,
     ) -> Option<(Pretty, bool)> {
         let first = self.display_keeping(tokens, options, mode, verify)?;
-        if (options.precision.is_none() && !first.pi_symbol) || !first.kept {
+        if (options.precision.is_none() && !first.reorders) || !first.kept {
             return Some((first.shown, first.kept));
         }
         let Some(read) = self.read_display(&first.shown) else {
@@ -206,7 +210,7 @@ impl Engine {
             (
                 render(&node, form, keep_grouping),
                 display.changed(),
-                display.pi_symbol_written(),
+                display.pi_symbol_written() || display.folds(),
             )
         };
         let reference = Some(
@@ -215,7 +219,7 @@ impl Engine {
                 .kept_shape(&state),
         );
         let kept = |p: &Pretty| self.read_shape(p, mode) == reference;
-        let (shown, changed, pi_symbol) = pass(&Choices::default());
+        let (shown, changed, reorders) = pass(&Choices::default());
         if changed.is_empty() {
             // Every number is written at its value.
             let held = !verify || kept(&shown);
@@ -223,7 +227,7 @@ impl Engine {
                 shown,
                 kept: held,
                 reference,
-                pi_symbol,
+                reorders,
             });
         }
         if kept(&shown) {
@@ -231,7 +235,7 @@ impl Engine {
                 shown,
                 kept: true,
                 reference,
-                pi_symbol,
+                reorders,
             });
         }
         let mut choices = Choices::all(Choice::Exact);
@@ -254,13 +258,13 @@ impl Engine {
                 }
             }
         }
-        let (shown, _, pi_symbol) = pass(&choices);
+        let (shown, _, reorders) = pass(&choices);
         let held = kept(&shown);
         Some(Kept {
             shown,
             kept: held,
             reference,
-            pi_symbol,
+            reorders,
         })
     }
 }

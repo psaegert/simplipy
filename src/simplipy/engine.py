@@ -2251,8 +2251,12 @@ class SimpliPyEngine:
           float64 as SimpliPy's evaluator computes it, shown at the ``precision``
           (``x1*exp(-381/2)`` is ``1.8488479557720672e-83*x1``, ``1.85e-83*x1`` at
           ``precision=3``). A function of a number written exactly stays (``sin(2)``), and so
-          does one whose float would be 0, inf or subnormal. No numbers combine to inf, 0 or a
-          subnormal.
+          does one whose float would be 0, inf or subnormal, and one whose float would let
+          reading the display build another sum, a number distributed over a sum or a term
+          collected with a like term (``x1 + atan(1.2345678)*(x2 + x3)``,
+          ``x1 + x2 + x1/log(0.7377233226141932)``). Numbers a product keeps apart for their
+          size (a number of ``real`` has at most 1,100 bits) are one float, the product of the
+          floats they are written as. No numbers combine to inf, 0 or a subnormal.
         * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
           ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
         * One slash: every divisor of a product joins one denominator, functions and sums
@@ -2266,7 +2270,9 @@ class SimpliPyEngine:
 
         At the default ``precision=None`` a number is written exactly, as a short exact sum or
         as the float64 nearest to it, so the display reads back to the same float64 values: it evaluates as the expression does, up to the order of its
-        operations. A sum is written as one flat chain, ``x1 + x2 + exp(x3)``, and an infix
+        operations (a number the explicit tokens write as a quotient, ``x1/0.225147640565301``,
+        is written as the float of that quotient, ``4.441529999999994*x1``, one rounding
+        apart). A sum is written as one flat chain, ``x1 + x2 + exp(x3)``, and an infix
         product as one run of factors, which reading groups from the left; SimpliPy's explicit
         tokens group them from the right (``+ x1 + x2 exp x3``), and where terms nearly cancel,
         or a function amplifies its argument, the two orders give different float64 values.

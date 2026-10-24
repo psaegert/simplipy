@@ -148,7 +148,11 @@ reciprocal of a product holding a sum or a function stays one bag in the section
 **A function of floats is one float.** A function of numbers that would all be written as
 floats is written as its float64, computed as SimpliPy's evaluator computes it and shown at the
 `precision`. A function of a number written exactly stays a function, and so does one whose
-float would be 0, infinite or subnormal. No numbers combine to inf, 0 or a subnormal.
+float would be 0, infinite or subnormal, and one whose float would let reading the display
+build another sum: a number times a sum is distributed over the sum it stands in, and a term
+collects with a like term. Numbers a product keeps apart for their size (a number of `real` has
+at most 1,100 bits) are one float, the product of the floats they are written as. No numbers
+combine to inf, 0 or a subnormal.
 
 ```python
 engine.prettify(engine.simplify("x1*exp(-381/2)"))
@@ -159,6 +163,8 @@ engine.prettify(engine.simplify("sin(sin(9463/890))"))
 # -> '-0.8045036621463277'
 engine.prettify(engine.simplify("x1 + sin(2)"))
 # -> 'x1 + sin(2)'
+engine.prettify(engine.simplify("x3 + atan(1.2345678)*(x1 + x2)"))
+# -> 'x3 + atan(1.2345678)*(x1 + x2)'
 ```
 
 **Exponents** follow the same rules, and `x^(1/n)` and `x^(-1/n)` are written `rootn(x, n)`
@@ -192,7 +198,9 @@ engine.prettify(tokens, form="tagged")
 At the default `precision=None` a number is written exactly, as a short exact sum, or as the
 float64 nearest to it, so the display reads back to the same float64 values: it
 evaluates as the expression does, up to
-the order of its operations. A display at a `precision` does not read back to them.
+the order of its operations (a number the explicit tokens write as a quotient,
+`x1/0.225147640565301`, is written as the float of that quotient, `4.441529999999994*x1`, one
+rounding apart). A display at a `precision` does not read back to them.
 The display keeps the structure, and displaying a display gives it back, at every precision:
 
 ```python

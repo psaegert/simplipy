@@ -402,6 +402,69 @@ def test_any_other_function_of_numbers_stays(eng, text, expected):
     assert show(eng, text) == expected
 
 
+# A fold reads back as a number, which the canonical constructors can build into a sum otherwise
+# than the function stood: distributed over a sum, collected with a like term. Such a fold is not
+# made and the function stays. A fold that only turns a sum around (`cos(c) - x2` is
+# `-(x2 + 0.997)`) is made, and the display is of the sum reading it back builds. Numbers a
+# product keeps apart for their size (`real` admits a number of at most 1,100 bits) are one
+# float: the product of the floats they are written as, which reading the display combines.
+LONG = '0.' + '1234567891' * 33
+CONTRACT = [
+    ('x1 + atan(1.2345678)*(x2 + x3)', 'f64', None, 'x1 + atan(1.2345678)*(x2 + x3)'),
+    ('x1 + atan(1.2345678)*(x2 + x3)', 'f64', 3, 'x1 + atan(1.23)*(x2 + x3)'),
+    ('x1 + x2 + x1/log(0.7377233226141932)', 'real', None, 'x1 + x2 + x1/log(0.7377233226141932)'),
+    ('x1 + x2 + x1/log(0.7377233226141932)', 'real', 3, 'x1 + x2 + x1/log(0.738)'),
+    # distributed and its numbers combined: as many terms, another structure
+    ('x2*(0.35 - exp(23.145219203872042)*(0.0087/x1 + 0.113))', 'real', None,
+     'x2*(0.35 - exp(23.145219203872042)*(0.0087/x1 + 0.113))'),
+    ('x3/(x1*(cos(273.2392845492178) - x2))', 'real', None, 'x3/(-x1*(x2 + 0.9968592784913302))'),
+    ('x3/(x1*(cos(273.2392845492178) - x2))', 'real', 3, 'x3/(-x1*(x2 + 0.997))'),
+    (f'x1 + {LONG}*0.893435038202104*x2', 'real', None, 'x1 + 0.11030062109689767*x2'),
+    (f'x1 + {LONG}*0.893435038202104*x2', 'real', 3, 'x1 + 0.11*x2'),
+]
+
+
+@pytest.mark.parametrize('text,mode,precision,expected', CONTRACT,
+                         ids=[f'{t[:40]}-{m}-{p}' for t, m, p, _ in CONTRACT])
+def test_the_contract_holds_where_a_fold_or_a_size_would_break_it(eng, text, mode, precision, expected):
+    """The display reads back to the structure, is its own display, and at full precision
+    evaluates as the expression."""
+    import numpy as np
+    from simplipy.engine import _RULE_MODE, _coerce_mode
+    shown = eng.prettify(text, mode=mode, precision=precision)
+    assert shown == expected
+    assert eng.prettify(shown, mode=mode, precision=precision) == shown
+    tokens = list(eng._core.parse(text, True, False, True))
+    rule_mode = _RULE_MODE[_coerce_mode(mode)]
+    _, kept = eng._core.prettify(tokens, 3, 'infix', precision, rule_mode=rule_mode, check_structure=True)
+    assert kept
+    if precision is None:
+        back = list(eng._core.parse(shown, True, False, True))
+        names = sorted({t for t in tokens if re.fullmatch(r'x\d+', t)})
+        xs = np.random.default_rng(0).uniform(0.5, 2.0, size=(32, len(names)))
+        assert np.allclose(values(eng, tokens, names, xs), values(eng, back, names, xs),
+                           rtol=P2_RTOL, atol=0)
+
+
+@pytest.mark.parametrize('mode', ['f64', 'real'])
+@pytest.mark.parametrize('precision', [None, 3])
+def test_a_fold_in_a_sum_keeps_the_structure_on_a_fuzz(eng, mode, precision):
+    """Functions of numbers beside a sum, a like term and a sign: every display reads back to
+    the structure and is its own display."""
+    from simplipy.engine import _RULE_MODE, _coerce_mode
+    shapes = ['x1 + {g}*(x2 + x3)', 'x1 + x2 + x1/{g}', 'x3/(x1*({g} - x2))', 'x1 + {g}*x1*(x2 - x3)',
+              'x2*(0.35 - {g}*(0.0087/x1 + 0.113))']
+    rule_mode = _RULE_MODE[_coerce_mode(mode)]
+    lost = []
+    for text in fold_fuzz(200, seed=5, shapes=shapes):
+        tokens = list(eng._core.parse(text, True, False, True))
+        shown, kept = eng._core.prettify(tokens, 3, 'infix', precision, rule_mode=rule_mode,
+                                         check_structure=True)
+        if not kept or eng.prettify(shown, mode=mode, precision=precision) != shown:
+            lost.append((text, shown))
+    assert not lost, lost[:5]
+
+
 # prettify changes how a number is written, never the structure. A number whose short spelling
 # would let reading the display build another structure -- a multiplier or an exponent of 1 that
 # drops, an integer where a non-integer exponent stood, two parts made alike -- is written as its
@@ -529,9 +592,10 @@ def test_p1_displaying_a_display_gives_it_back_on_the_corpus(eng, form):
 FUNS = ['sin', 'cos', 'exp', 'log', 'tanh', 'atan', 'sinh', 'asinh', 'cosh']
 
 
-def fold_fuzz(n, seed=11):
-    """Expressions whose canonical state keeps a function of numbers, in the shapes of a product,
-    a sum, a quotient, a reciprocal of a product, a function argument and an exponent."""
+def fold_fuzz(n, seed=11, shapes=None):
+    """Expressions whose canonical state keeps a function of numbers `{g}`, in the shapes of a
+    product, a sum, a quotient, a reciprocal of a product, a function argument and an exponent
+    (or in `shapes`)."""
     import random
     rng = random.Random(seed)
 
@@ -556,6 +620,9 @@ def fold_fuzz(n, seed=11):
     out = []
     for _ in range(n):
         g = ground(rng.randint(1, 3))
+        if shapes:
+            out.append(shapes[rng.randint(0, len(shapes) - 1)].format(g=g))
+            continue
         out.append([f'x1*{g}', f'x1 + {g}', f'x1/{g}/x2', f'x1/({g}*(x2 + 1))', f'sin(x1 + {g})',
                     f'{g}*{ground(1)}*x1 + x2', f'x1^({g})'][rng.randint(0, 6)])
     return out
