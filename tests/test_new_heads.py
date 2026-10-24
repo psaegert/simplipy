@@ -147,10 +147,10 @@ def test_contract_kernels_and_their_bands():
         mp.dps = old
 
 
-def test_monitor_reads_the_new_heads_and_the_oracle_refuses_them():
-    """The corpus monitor evaluates the eight heads with the contract's kernels and IEEE's zero
-    signs; besselj stays unknown to it. Sort promotion's oracle refuses every 0.15 head (a rule
-    it cannot certify at a stronger sort ships at `?`)."""
+def test_monitor_and_oracle_read_the_new_heads():
+    """The corpus monitor and sort promotion's high-precision oracle evaluate the eight heads
+    with the contract's kernels (the monitor with IEEE's zero signs); besselj stays unknown to
+    both."""
     assert not _monitor.unknown_tokens(['floor', 'mod', 'x0', 'atan2', 'x1', 'erf', 'x0'])
     assert 'besselj' in _monitor.unknown_tokens(['besselj', '1', 'x0'])
     neg0 = _monitor._NegZero(0)
@@ -159,9 +159,11 @@ def test_monitor_reads_the_new_heads_and_the_oracle_refuses_them():
     assert not _monitor._zero_signbit('max', [neg0, 0.0]) and _monitor._zero_signbit('min', [neg0, 0.0])
     with pytest.raises(_monitor.Unresolved):
         _monitor._zero_signbit('besselj', [1.0, 0.0])
+    from mpmath import mpf
     from simplipy.promotion._hp_equiv import evaluate
+    assert evaluate(['floor', 'x0'], {'x0': mpf(1.5)}, []) == 1
     with pytest.raises(ValueError):
-        evaluate(['floor', 'x0'], {'x0': 1.5}, [])
+        evaluate(['besselj', '1', 'x0'], {'x0': mpf(1.5)}, [])
 
 
 def test_a_small_mine_mines_new_head_rules():
@@ -260,3 +262,22 @@ def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
     for mode in ('default', 'real', 'permissive'):
         assert not certified('+ floor x0 1', 'ceil x0', mode)
         assert certified('floor floor x0', 'floor x0', mode)
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_sort_promotion_reads_the_new_heads(bare, mode):
+    """Rules with the eight heads are promoted to the sorts they certify at, the contract atom
+    bar reading their contract values, and a rule false only where a step head's argument
+    crosses an integer at no atom (sinh(x) + 1/2 = k) is killed at that preimage."""
+    from simplipy.promotion import promote
+    rules = [(lhs.split(), rhs.split()) for lhs, rhs in (
+        ('floor floor ?0', 'floor ?0'), ('mod ?0 1', '- ?0 floor ?0'),
+        ('atan2 neg ?0 1', 'neg atan2 ?0 1'), ('erf neg ?0', 'neg erf ?0'),
+        ('- ceil + sinh ?0 0.5 floor + sinh ?0 0.5', '1'))]
+    kept, report = promote(rules, bare, rule_mode=mode, run_positive_controls=False)
+    kept = {' '.join(a) + ' -> ' + ' '.join(b) for a, b in kept}
+    for rule in ('floor floor _0 -> floor _0', 'mod _0 1 -> - _0 floor _0',
+                 'atan2 neg _0 1 -> neg atan2 _0 1', 'erf neg _0 -> neg erf _0'):
+        assert rule in kept, (rule, kept)
+    assert not any(r.startswith('- ceil') for r in kept), kept
+    assert any('PREIMAGE' in str(k[2]) for k in report['killed_q']), report['killed_q']

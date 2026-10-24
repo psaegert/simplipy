@@ -1180,8 +1180,15 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     with it that the judge could never license (in `real`, or with a `<constant>`). The corpus
     monitor evaluates the eight with the contract's kernels and float64's zero signs, and reads
     no zero sign for an operator its table does not name; the high-precision oracle reads a
-    complex value as NaN. Sort promotion does not promote a rule spelled with a new head: it
-    ships at `?`.
+    complex value as NaN.
+  - *Sort promotion.* Sort promotion's high-precision oracle evaluates the eight heads with the
+    contract's kernels, so its contract atom bar and its exact-arbiter overturn read their
+    contract values (the atom bar fell back to float64 for them), and `floor(floor(x)) ->
+    floor(x)` and `mod(x, 1) -> x - floor(x)` ship at `_` in every mode. Beside the `pow`
+    integer-preimage probe a step-preimage probe solves where a `floor`, `ceil` or `harmonic`
+    argument, or a `mod` dividend by a literal divisor, crosses its jump or pole at a point no
+    atom holds: `ceil(sinh(x) + 1/2) - floor(sinh(x) + 1/2) -> 1`, true at every atom, is
+    killed at x = asinh(-5.5).
   - *The judge's constant witness.* The witness of a target `<constant>` is polished at the
     generic point the fit determined it at (it was always the first one, where a lattice head
     can make the target flat in the witness: `max(x, acos(c)) -> max(c_t, x)` at x = 1.7), and

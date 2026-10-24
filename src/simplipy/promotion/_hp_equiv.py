@@ -134,6 +134,21 @@ BIN = {
 }
 
 
+def _contract_kernel(name):
+    """The contract judge's kernel of a 0.15 head (`verify._contract.OPS`): numpy's cells (D7),
+    one zero, and a refusal (its `Unresolved`, which every caller here reads as no evidence)
+    inside the working-precision band of a jump, a pole, erf's asymptote or atan2's cut, where
+    the value is not determined. besselj has no kernel yet: it stays unevaluable."""
+    def f(*args):
+        from simplipy.verify._contract import OPS
+        return OPS[name](*args)
+    return f
+
+
+UN.update({name: _contract_kernel(name) for name in ('floor', 'ceil', 'erf', 'harmonic')})
+BIN.update({name: _contract_kernel(name) for name in ('max', 'min', 'mod', 'atan2')})
+
+
 #: Periodic functions are the sharpest case -- reducing mod 2*pi needs pi to as many digits
 #: as the argument's exponent -- but they are not the only one. Any intermediate with an
 #: astronomical exponent is unbounded to compute with, because mpf carries no exponent limit
