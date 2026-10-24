@@ -1178,13 +1178,17 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     integer order is an even function, so `besselj(2, -x)`, `besselj(2, |x|)` and
     `besselj(2, sin(-x))` are `besselj(2, x)` and `besselj(0, x2 - x1)` is
     `besselj(0, x1 - x2)`; an odd one carries a sign out, so `besselj(3, -2*x)` is
-    `-besselj(3, 2*x)`. All of them hold bit for bit in float64, a zero's sign included. A
+    `-besselj(3, 2*x)`. An odd order is an odd head, as `sin` is: its sign trades into a sum
+    argument's orientation and the class owners place it (`-besselj(1, x0 - x1)` is
+    `besselj(1, x1 - x0)`, `besselj(1, -2) + besselj(1, 2)` is `0`), and an even order's sum
+    takes one orientation (`besselj(2, x1 - x0)` is `besselj(2, x0 - x1)`). The reflection and
+    the parity hold bit for bit in float64, a zero's sign included; a sum's orientation keeps
+    the sign of its zero exactly where `sin`'s does (where the zero set may hold a region). A
     literal order at 0 folds exactly: `besselj(0, 0)` is `1`, `besselj(5/2, 0)` and
     `besselj(-2, 0)` are `0` (`besselj(-1, 0)` is `-0.0` in `f64`), and a negative non-integer
     order gives its pole's one-sided limit, the sign of `1/Gamma(nu + 1)`: `besselj(-1/2, 0)` is
     `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy has them; an infinite order gives 0 at a
-    literal `x >= 0` and NaN below (`besselj(atanh(1), 2)` is `0`). A sum argument under an odd order
-    keeps its orientation (`besselj(1, x1 - x0)` stays).
+    literal `x >= 0` and NaN below (`besselj(atanh(1), 2)` is `0`).
   - *The kernel.* An integer order reads its reflection and its parity, so both hold bit for
     bit: `besselj(1, -0.0)` and `besselj(3, -1e-300)` are `-0.0` (scipy gives `0.0`),
     `besselj(2**31, -1.0)` is `0.0` (scipy gives NaN: its integer test is a C `int` cast).

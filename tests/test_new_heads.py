@@ -188,7 +188,9 @@ def test_besselj_reflection_and_parity_in_every_mode(bare, mode):
     assert s('besselj 3 * -2 x0') == 'neg besselj 3 * 2 x0'
     assert s('besselj -1 neg x0') == 'besselj 1 x0'
     assert s('besselj 0.5 neg x0') == 'besselj / 1 2 neg x0'  # a non-integer order has no parity
-    assert s('besselj 1 - x1 x0') == 'besselj 1 - x1 x0'     # a sum keeps its orientation
+    assert s('besselj 1 - x1 x0') == 'besselj 1 - x1 x0'     # a sum alone keeps its orientation
+    assert s('neg besselj 1 - x0 x1') == 'besselj 1 - x1 x0'  # ... and a sign trades into it
+    assert s('besselj 2 - x1 x0') == s('besselj 2 - x0 x1')
     assert s('besselj 1 -2') == 'besselj 1 -2'               # a constant keeps its sign
     for t in ('besselj -3 x0', 'besselj 3 * -2 x0', 'besselj 0 - x1 x0'):
         once = bare.simplify(t.split(), mode=mode)
@@ -265,3 +267,17 @@ def test_monitor_and_oracle_read_besselj():
     assert abs(j('besselj 1 neg x0') + j('besselj 1 x0')) < 1e-14
     assert equiv('besselj 1 neg _0'.split(), 'neg besselj 1 _0'.split())['ok']
     assert not equiv('besselj 2 neg _0'.split(), 'neg besselj 2 _0'.split())['ok']
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_an_odd_order_is_an_odd_head(bare, mode):
+    """besselj of an odd order places its sign and orients its sum as an odd function does: each
+    shape gives sin's answer, with sin spelled besselj(1, .)."""
+    shapes = ('neg H - x0 x1', '* -3 H - x0 x1', '* x2 H neg - x0 x1', 'pow H - x1 x0 2', 'pow H neg x0 3',
+              'abs H neg - x0 x1', '+ H - x0 x1 H - x1 x0', '+ H -2 H 2', 'neg H * -2 - x0 x1',
+              '* -1 H - abs x1 x1', 'cos H neg x0')
+    for shape in shapes:
+        want = ' '.join(bare.simplify(shape.replace('H', 'sin').split(), mode=mode))
+        got = bare.simplify(shape.replace('H', 'besselj 1').split(), mode=mode)
+        assert ' '.join(got) == want.replace('sin', 'besselj 1'), (shape, got, want)
+        assert bare.simplify(got, mode=mode) == got
