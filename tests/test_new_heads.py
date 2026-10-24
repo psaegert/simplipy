@@ -205,6 +205,8 @@ def test_besselj_of_literals_at_zero_folds_exactly(bare, mode):
     assert s('besselj -0.5 0') == 'float("inf")'
     assert s('besselj -1.5 0') == 'float("-inf")'
     assert s('besselj -2.5 0') == 'float("inf")'
+    # an infinite order: 0 at x >= 0, NaN below (scipy's cells)
+    assert s('besselj atanh 1 2') == '0' and s('besselj atanh 1 -2') == 'float("nan")'
 
 
 def test_besselj_identities_hold_bit_for_bit_in_float64():

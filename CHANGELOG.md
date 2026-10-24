@@ -1204,7 +1204,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   - *Enclosures.* A negative integer order lies in [-1, 1] like a non-negative one; an order
     that may be a negative non-integer is bounded away from its pole at 0 by the recurrence
     `J_nu = (2 (nu + 1)/x) J_{nu+1} - J_{nu+2}` (`besselj(-3/2, x)` over [2, 3] within +-3.5),
-    and refused where the argument may reach 0.
+    and refused where the argument may reach 0 among other values. A non-integer order on the
+    negative axis is NaN alone and its pole at 0 has its sign, so ground cases fold in every
+    mode: `besselj(1/2, -1)` is `nan`, `besselj(sin(-1), 0)` is `inf`, `besselj(tan(-1), 0)`
+    is `-inf`.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

@@ -1489,7 +1489,8 @@ fn b_mod(a: &Vs, b: &Vs) -> Option<Vs> {
 /// under an order beyond `BESSELJ_NU_MEASURED` in magnitude, where the kernel's own routines give
 /// up (it is NaN at order 3.8e16, x = 2.05), and under a negative non-integer order beyond
 /// `BESSELJ_NEG_NU_MEASURED` (NaN at order -470.8, x = 78.7, where the value nears the float
-/// range's end). An order that may be infinite is refused.
+/// range's end). A NaN order is NaN, an infinite one 0 at x >= 0 and NaN below (scipy's cells);
+/// a range of orders holding both finite and infinite ones is refused.
 /// The orders up to which the besselj kernel is read as NaN-free at every finite argument
 /// (measured: no NaN at orders up to 1.1e9 over 3,200 arguments out to the largest float, so
 /// this keeps a wide margin), integer orders of both signs alike.
@@ -1499,7 +1500,19 @@ const BESSELJ_NU_MEASURED: f64 = 1e3;
 const BESSELJ_NEG_NU_MEASURED: f64 = 400.0;
 
 fn b_besselj(nu: &Vs, x: &Vs) -> Option<Vs> {
-    if !nu.has_fin || nu.pinf || nu.ninf {
+    if !nu.has_fin {
+        // A NaN order gives NaN; an infinite one 0 at x >= 0 and NaN below (scipy's cells).
+        let mut r = Vs::empty();
+        r.nan = nu.nan
+            || ((nu.pinf || nu.ninf) && (x.nan || x.pinf || x.ninf || (x.has_fin && x.lo < 0.0)));
+        if (nu.pinf || nu.ninf) && x.has_fin && x.hi >= 0.0 {
+            r.has_fin = true;
+            r.lo = 0.0;
+            r.hi = 0.0;
+        }
+        return Some(r);
+    }
+    if nu.pinf || nu.ninf {
         return None;
     }
     let integer_order = nu.is_const() && nu.lo.fract() == 0.0;
@@ -7896,6 +7909,19 @@ mod new_head_tests {
         assert_eq!(
             value_class(&s(&["besselj", "0.5", "-2"]), ops),
             Some(Class::Nan)
+        );
+        // a NaN order, and an infinite one on the negative axis (scipy's cells)
+        assert_eq!(
+            value_class(&s(&["besselj", "log", "-1", "1"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "atanh", "1", "-1"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["besselj", "atanh", "1", "2"]), ops),
+            Some(Class::Finite)
         );
         assert_eq!(value_class(&s(&["harmonic", "-2"]), ops), None);
     }

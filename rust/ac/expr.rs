@@ -9619,12 +9619,21 @@ fn even_argument(a: &Ex, cx: &Cx) -> Option<Ex> {
     Some(Ex::Add(flipped))
 }
 
+/// `besselj(+-inf, x)` at a literal `x`: 0 at `x >= 0`, NaN below (scipy's cells). And
 /// `besselj(nu, 0)` at a literal order, exactly, in every mode: `J_0(0) = 1`, `J_nu(0) = 0` for
 /// `nu > 0` and for a negative integer `nu` (float64's `-0.0` under an odd one in `f64`, as the
 /// kernel writes `J_{-n}(0) = (-1)^n J_n(0)`), and at a negative non-integer order the pole's
 /// one-sided limit (the order's domain is `x >= 0`), the infinity of the sign of
 /// `1/Gamma(nu + 1)`: `J_{-1/2}(0) = inf`, `J_{-3/2}(0) = -inf` (scipy's cells, D7).
 fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
+    // An infinite order (scipy's cells): 0 at a literal x >= 0, NaN below.
+    if let [Ex::PosInf | Ex::NegInf, Ex::Num(x)] = args {
+        return Some(if x.is_negative() {
+            Ex::NaN
+        } else {
+            Ex::Num(Rat::ZERO)
+        });
+    }
     let [Ex::Num(nu), Ex::Num(x)] = args else {
         return None;
     };
