@@ -123,8 +123,12 @@ class Role(enum.Enum):
 #: its whole subtree (the exponent ``3/2`` is three literals, each an exponent).
 _TYPED = (Role.EXPONENT, Role.ROOT_INDEX, Role.ORDER)
 
+# A lattice bag's members are function arguments (VALUE), as in ``max a b``; it has no
+# inverse section.
 _OPENERS = {"<add>": ("</add>", "<sub>", Role.ADDEND),
-            "<mul>": ("</mul>", "<div>", Role.COEFFICIENT)}
+            "<mul>": ("</mul>", "<div>", Role.COEFFICIENT),
+            "<max>": ("</max>", None, Role.VALUE),
+            "<min>": ("</min>", None, Role.VALUE)}
 # Sign/reciprocal wrappers are role-transparent: the literal in ``neg 2`` plays whatever
 # role the wrapped position plays.
 _TRANSPARENT = {"neg", "inv"}

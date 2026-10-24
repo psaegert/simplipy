@@ -68,10 +68,13 @@ terms with $|M| \geq 2$.
 serialization-stability check `stable()` in `ac_simplify_ex`]:
 
 - **I1 (flatness):** no $\mathrm{Add}$ directly inside an $\mathrm{Add}$, no $\mathrm{Mul}$
-  directly inside a $\mathrm{Mul}$.
+  directly inside a $\mathrm{Mul}$, and no `max` (`min`) application directly inside a `max`
+  (`min`): the lattice heads are bags of two members or more (`lattice`), held as
+  $f(M)$ and written as the right-nested chain of their members.
 - **I2 (bag order):** $\mathrm{Add}$ members are sorted by their coefficient-stripped
   structural key (constant-like terms last); $\mathrm{Mul}$ members by their
-  exponent-stripped base (rational coefficient first). Stripping makes the order invariant
+  exponent-stripped base (rational coefficient first); a lattice bag's members by the canonical
+  total order, distinct (a `<constant>`-bearing member aside). Stripping makes the order invariant
   under sign and exponent edits, which is what makes the sign orientation of sums
   well-defined (`rust/ac/expr.rs`, "STRIPPED comparators").
 - **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries one rational factor and an

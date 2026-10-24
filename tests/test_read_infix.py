@@ -247,6 +247,19 @@ class TestCallArgumentCounts:
         assert e.read_infix('min(x0, 2, -x1, x2)') == ['min', 'x0', 'min', '2', 'min', 'neg', 'x1', 'x2']
         assert e.to_prefix('Max(x0, x1, x2)') == e.to_prefix('max(x0, max(x1, x2))')
 
+    def test_a_right_nested_chain_prints_as_one_call(self, minmax_engine: SimpliPyEngine) -> None:
+        """The engine reads every nesting of `max` as one bag, and the printer writes the
+        right-nested chain it answers with as one call, which reads back to the same tokens."""
+        e = minmax_engine
+        assert e.simplify('Max(x2, Max(x0, x1))') == 'max(x0, x1, x2)'
+        assert e.prefix_to_infix(['max', 'x0', 'max', 'x1', 'x2']) == 'max(x0, x1, x2)'
+        assert e.read_infix('max(x0, x1, x2)') == ['max', 'x0', 'max', 'x1', 'x2']
+        # a left nesting is no chain to the reader, so it keeps its call
+        assert e.prefix_to_infix(['max', 'max', 'x0', 'x1', 'x2']) == 'max(max(x0, x1), x2)'
+        # a realization is a binary function
+        assert e.prefix_to_infix(['max', 'x0', 'max', 'x1', 'x2'], realization=True) == \
+            'simplipy.operators.max(x0, simplipy.operators.max(x1, x2))'
+
     @pytest.mark.parametrize('text, message', [
         ('sin(x0, x1)', 'sin takes 1 argument, got 2'),
         ('pow(x0)', 'pow takes 2 arguments, got 1'),

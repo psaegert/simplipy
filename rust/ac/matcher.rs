@@ -1,9 +1,9 @@
 //! AC pattern matching -- the SEMANTIC WIDENING.
 //!
-//! A rule rooted at `Add`/`Mul` matches any SUB-MULTISET of a subject bag; the unmatched
-//! remainder is preserved around the replacement. Combined with the bags being flat and sorted,
-//! this removes both axes of the old invariance defect: there is no operand order to be
-//! sensitive to, and no bracketing to hide a match behind.
+//! A rule rooted at `Add`/`Mul` (or a lattice bag, `max`/`min`) matches any SUB-MULTISET of a
+//! subject bag; the unmatched remainder is preserved around the replacement. Combined with the
+//! bags being flat and sorted, this removes both axes of the old invariance defect: there is no
+//! operand order to be sensitive to, and no bracketing to hide a match behind.
 //!
 //! Wildcard sorts are carried over from the shipped matcher unchanged -- the sort rides in the
 //! token: `?N` binds a variable leaf only; `_N` binds anything; `!N` binds a variable leaf
@@ -33,7 +33,7 @@ use rustc_hash::FxHashMap;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::expr::{orientation_near_miss, Ex};
+use super::expr::{lattice_head, orientation_near_miss, Ex};
 
 /// A repeated wildcard bound to `bound` refused `subject`: count it in the match context if
 /// they are negations of each other through their classes' orientation.
@@ -166,19 +166,18 @@ pub fn matches_each(subject: &Ex, pattern: &Ex, binds: &mut Binds, cx: &MCx, k: 
         Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const => {
             subject == pattern && k(binds)
         }
+        // `max` and `min` are lattice BAGS (`expr::lattice`), matched as sums and products are.
+        Ex::Fun(pf, pa) if lattice_head(*pf, cx.view) => match subject {
+            Ex::Fun(sf, sa) if sf == pf => {
+                match_bag_each(pa, sa, BagKind::Lat(*pf), false, binds, cx, &mut |b, _| {
+                    k(b)
+                })
+            }
+            _ => false,
+        },
         Ex::Fun(pf, pa) => match subject {
             Ex::Fun(sf, sa) if sf == pf && sa.len() == pa.len() => {
-                if matches_seq(sa, pa, 0, binds, cx, &mut *k) {
-                    return true;
-                }
-                // `max` and `min` are commutative: their canonical argument order
-                // (`expr::fun`) sorts a pattern's wildcards apart from what they bind, so
-                // the other order is tried too.
-                if sa.len() == 2 && (cx.view.tok_is(*pf, "max") || cx.view.tok_is(*pf, "min")) {
-                    let swapped = [sa[1].clone(), sa[0].clone()];
-                    return matches_seq(&swapped, pa, 0, binds, cx, k);
-                }
-                false
+                matches_seq(sa, pa, 0, binds, cx, k)
             }
             _ => false,
         },
@@ -216,6 +215,8 @@ fn matches_seq(sub: &[Ex], pat: &[Ex], i: usize, binds: &mut Binds, cx: &MCx, k:
 pub enum BagKind {
     Add,
     Mul,
+    /// A lattice bag, `max` or `min` by its head (`expr::lattice`).
+    Lat(Tok),
 }
 
 fn make_bag(kind: BagKind, mut v: Vec<Ex>) -> Ex {
@@ -226,6 +227,7 @@ fn make_bag(kind: BagKind, mut v: Vec<Ex>) -> Ex {
     match kind {
         BagKind::Add => Ex::Add(v),
         BagKind::Mul => Ex::Mul(v),
+        BagKind::Lat(f) => Ex::Fun(f, v),
     }
 }
 
@@ -370,6 +372,7 @@ fn try_assign(
             let bag_elems: Option<&[Ex]> = match (bound, kind) {
                 (Ex::Add(b), BagKind::Add) => Some(b),
                 (Ex::Mul(b), BagKind::Mul) => Some(b),
+                (Ex::Fun(f, b), BagKind::Lat(h)) if *f == h => Some(b),
                 _ => None,
             };
             let consume: Result<Vec<usize>, Option<usize>> = match bag_elems {

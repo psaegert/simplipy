@@ -11,7 +11,9 @@
 //! rewrites only the foreign structure.** [`tagged_to_prefix`] expands bags and touches
 //! nothing else, so it is the identity on tag-free input by construction; [`prefix_to_tagged`]
 //! regroups `+ - * / neg inv` into bags and merges only a SAME-POLARITY same-kind nesting, so
-//! it is the identity on input already in tagged normal form.
+//! it is the identity on input already in tagged normal form. The lattice heads `max` and `min`
+//! (where the config declares them binary) are bags too: `max a max b c` regroups into
+//! `<max> a b c </max>`, which expands back to the right-nested chain.
 //!
 //! FLATTENING IS CONSERVATIVE -- same polarity only. The right operand of `-`/`/` and the
 //! operand of `neg`/`inv` become ONE section member, never a flattened run, because
@@ -22,8 +24,20 @@
 use crate::operators::Operators;
 
 /// The tagged dialect's delimiters and inverse-section markers. They belong to the AC
-/// language, not to any operator config, so no vocabulary can shadow them.
-pub const TAG_TOKENS: [&str; 6] = ["<add>", "</add>", "<mul>", "</mul>", "<sub>", "<div>"];
+/// language, not to any operator config, so no vocabulary can shadow them. The lattice bags'
+/// delimiters read only where the config declares `max` (`min`) as a binary operator.
+pub const TAG_TOKENS: [&str; 10] = [
+    "<add>", "</add>", "<mul>", "</mul>", "<sub>", "<div>", "<max>", "</max>", "<min>", "</min>",
+];
+
+/// The lattice bags' (opener, closer, head).
+const LATTICE_TAGS: [(&str, &str, &str); 2] =
+    [("<max>", "</max>", "max"), ("<min>", "</min>", "min")];
+
+/// Is `op`, applied to `n` operands, a lattice head the config declares binary?
+fn lattice_app(op: &str, n: usize, ops: &Operators) -> bool {
+    n == 2 && (op == "max" || op == "min") && ops.arity_of(op) == Some(2)
+}
 
 /// One node of the shared syntax tree. `Add`/`Mul` are the tagged bags, carrying their
 /// members in SOURCE ORDER and their inverse section separately.
@@ -32,13 +46,15 @@ enum Node {
     App(String, Vec<Node>),
     Add(Vec<Node>, Vec<Node>),
     Mul(Vec<Node>, Vec<Node>),
+    /// A lattice bag, `<max> ... </max>` or `<min> ... </min>`: its head and members.
+    Lat(String, Vec<Node>),
 }
 
 /// Regroup a PREFIX token sequence into the TAGGED dialect. `Err` names the malformation.
 pub fn prefix_to_tagged(tokens: &[String], ops: &Operators) -> Result<Vec<String>, String> {
     let node = parse(tokens, ops)?;
     let mut out = Vec::with_capacity(tokens.len() + 4);
-    emit_tagged(&node, &mut out);
+    emit_tagged(&node, ops, &mut out);
     Ok(out)
 }
 
@@ -124,6 +140,33 @@ fn parse_one(tokens: &[String], idx: usize, ops: &Operators) -> Result<(Node, us
         };
         return Ok((node, at));
     }
+    if let Some(&(open, closer, head)) = LATTICE_TAGS.iter().find(|(o, ..)| o == t) {
+        if ops.arity_of(head) != Some(2) {
+            return Err(format!(
+                "malformed expression: {open} needs {head} declared as a binary operator"
+            ));
+        }
+        let mut members = Vec::new();
+        let mut at = idx + 1;
+        loop {
+            let s = tokens.get(at).ok_or_else(|| {
+                format!("malformed expression: bag opened with {open} is never closed")
+            })?;
+            if s == closer {
+                at += 1;
+                break;
+            }
+            let (child, next) = parse_one(tokens, at, ops)?;
+            members.push(child);
+            at = next;
+        }
+        if members.len() < 2 {
+            return Err(format!(
+                "malformed expression: bag opened with {open} holds fewer than two members"
+            ));
+        }
+        return Ok((Node::Lat(head.to_string(), members), at));
+    }
     if TAG_TOKENS.contains(&t.as_str()) {
         return Err(format!("malformed expression: {t} with no enclosing bag"));
     }
@@ -197,17 +240,54 @@ fn is_mul_shaped(node: &Node) -> bool {
             if (op == "*" || op == "/") && args.len() == 2 || op == "inv" && args.len() == 1)
 }
 
-fn emit_tagged(node: &Node, out: &mut Vec<String>) {
+/// Collect one lattice run of the head `head`: a same-head application or bag gives its
+/// operands, anything else is one member.
+fn flatten_lat<'a>(node: &'a Node, head: &str, ops: &Operators, out: &mut Vec<&'a Node>) {
+    match node {
+        Node::App(op, args) if op == head && lattice_app(op, args.len(), ops) => {
+            for a in args {
+                flatten_lat(a, head, ops, out);
+            }
+        }
+        Node::Lat(op, members) if op == head => {
+            for m in members {
+                flatten_lat(m, head, ops, out);
+            }
+        }
+        other => out.push(other),
+    }
+}
+
+fn emit_tagged(node: &Node, ops: &Operators, out: &mut Vec<String>) {
     if is_add_shaped(node) {
         let (mut pos, mut neg) = (Vec::new(), Vec::new());
         flatten_add(node, &mut pos, &mut neg);
-        emit_bag(&pos, &neg, "<add>", "<sub>", "</add>", "neg", out);
+        emit_bag(&pos, &neg, "<add>", "<sub>", "</add>", "neg", ops, out);
         return;
     }
     if is_mul_shaped(node) {
         let (mut num, mut den) = (Vec::new(), Vec::new());
         flatten_mul(node, &mut num, &mut den);
-        emit_bag(&num, &den, "<mul>", "<div>", "</mul>", "inv", out);
+        emit_bag(&num, &den, "<mul>", "<div>", "</mul>", "inv", ops, out);
+        return;
+    }
+    let lattice = match node {
+        Node::App(op, args) if lattice_app(op, args.len(), ops) => Some(op.as_str()),
+        Node::Lat(op, _) => Some(op.as_str()),
+        _ => None,
+    };
+    if let Some(head) = lattice {
+        let (open, close, _) = LATTICE_TAGS
+            .iter()
+            .find(|(.., h)| *h == head)
+            .expect("a lattice head");
+        let mut members = Vec::new();
+        flatten_lat(node, head, ops, &mut members);
+        out.push(open.to_string());
+        for m in members {
+            emit_tagged(m, ops, out);
+        }
+        out.push(close.to_string());
         return;
     }
     match node {
@@ -220,7 +300,7 @@ fn emit_tagged(node: &Node, out: &mut Vec<String>) {
         Node::App(op, args) => {
             out.push(op.clone());
             for a in args {
-                emit_tagged(a, out);
+                emit_tagged(a, ops, out);
             }
         }
         _ => unreachable!("bags are handled above"),
@@ -241,6 +321,7 @@ fn fraction_parts(t: &str) -> Option<(&str, &str)> {
 /// sequence carries a bag and the sequence declares its dialect (review T7: `neg inv x1` declared
 /// none, so `simplify` read it as explicit and answered explicit); a negation keeps its unary
 /// spelling `neg x`, which both dialects read and answer alike.
+#[allow(clippy::too_many_arguments)]
 fn emit_bag(
     pos: &[&Node],
     neg: &[&Node],
@@ -248,28 +329,29 @@ fn emit_bag(
     section: &str,
     close: &str,
     unary: &str,
+    ops: &Operators,
     out: &mut Vec<String>,
 ) {
     if pos.len() + neg.len() < 2 {
         // One member, inverted: there is no one-member bag.
         if unary == "inv" {
             out.extend(["<mul>", "1", "<div>"].map(String::from));
-            emit_tagged(neg[0], out);
+            emit_tagged(neg[0], ops, out);
             out.push(close.to_string());
         } else {
             out.push(unary.to_string());
-            emit_tagged(neg[0], out);
+            emit_tagged(neg[0], ops, out);
         }
         return;
     }
     out.push(open.to_string());
     for m in pos {
-        emit_tagged(m, out);
+        emit_tagged(m, ops, out);
     }
     if !neg.is_empty() {
         out.push(section.to_string());
         for m in neg {
-            emit_tagged(m, out);
+            emit_tagged(m, ops, out);
         }
     }
     out.push(close.to_string());
@@ -288,6 +370,14 @@ fn emit_prefix(node: &Node, out: &mut Vec<String>) {
         }
         Node::Add(pos, neg) => emit_expansion(pos, neg, "+", "-", "neg", out),
         Node::Mul(num, den) => emit_expansion(num, den, "*", "/", "inv", out),
+        // A lattice bag expands to the right-nested chain of its members, in their order.
+        Node::Lat(op, members) => {
+            for m in &members[..members.len() - 1] {
+                out.push(op.clone());
+                emit_prefix(m, out);
+            }
+            emit_prefix(&members[members.len() - 1], out);
+        }
     }
 }
 

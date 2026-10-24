@@ -23,8 +23,8 @@
 use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
-    add, atan2_of, canon, fun, inverts_a_signed_zero, mul, mul_undecided, pow, pow_member,
-    raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
+    add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pow,
+    pow_member, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -102,7 +102,36 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
         }
         return Some((add(parts, cx), at));
     }
-    if s == "</add>" || s == "</mul>" || s == "<sub>" || s == "<div>" {
+    // The LATTICE bags `<max> ... </max>` / `<min> ... </min>` (`expr::lattice`), read where the
+    // config declares the head as a binary operator: two members or more and the closer, no
+    // section.
+    if let Some(head) = lattice_opener(&s) {
+        let op = view.intern(head);
+        if view.arity(op) != Some(2) {
+            return None;
+        }
+        let closer = if head == "max" { "</max>" } else { "</min>" };
+        let mut members = Vec::new();
+        let mut at = idx + 1;
+        loop {
+            let nt = *tokens.get(at)?;
+            if view.tok_is(nt, closer) {
+                at += 1;
+                break;
+            }
+            let (m, next) = parse_one(tokens, at, cx)?;
+            members.push(m);
+            at = next;
+        }
+        if members.len() < 2 {
+            return None;
+        }
+        return Some((fun(op, members, cx), at));
+    }
+    if matches!(
+        s.as_str(),
+        "</add>" | "</mul>" | "<sub>" | "<div>" | "</max>" | "</min>"
+    ) {
         return None; // a closer or section marker with no enclosing bag
     }
     // The general signed root `rootn x n` (IEEE 754's rootn): binary, config-independent
@@ -153,6 +182,15 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
             }
             Some((desugar(&s, t, args, cx), at))
         }
+    }
+}
+
+/// The lattice head a tagged lattice bag opens (`<max>` opens `max`), if `s` opens one.
+fn lattice_opener(s: &str) -> Option<&'static str> {
+    match s {
+        "<max>" => Some("max"),
+        "<min>" => Some("min"),
+        _ => None,
     }
 }
 
@@ -841,6 +879,11 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
         Ex::NaN => out.push(view.intern("float(\"nan\")")),
         Ex::Const => out.push(view.intern("<constant>")),
         Ex::Leaf(t) => out.push(*t),
+        // A lattice bag is the binary chain of its members in the canonical order, nested to
+        // the right (`max a max b c`), as a sum's positive part is.
+        Ex::Fun(f, args) if args.len() > 2 && lattice_head(*f, view) => {
+            emit_chain(*f, args, cx, out);
+        }
         Ex::Fun(f, args) => {
             // `rootn` emits NATIVELY (the pow1_k spellings are
             // deleted from the vocabulary). The interval certificates and every evaluator
@@ -1058,7 +1101,12 @@ pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
     emit_tagged(e, cx, &mut out);
     // A spelling without a bag reads back as explicit notation, so a tagged answer either
     // carries a bag or is the spelling the explicit printer gives the same state (`exp 1.5`).
-    let bags = [cx.view.intern("<add>"), cx.view.intern("<mul>")];
+    let bags = [
+        cx.view.intern("<add>"),
+        cx.view.intern("<mul>"),
+        cx.view.intern("<max>"),
+        cx.view.intern("<min>"),
+    ];
     if !out.iter().any(|t| bags.contains(t)) {
         return to_prefix(e, cx);
     }
@@ -1123,6 +1171,15 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
         Ex::NaN => out.push(view.intern("float(\"nan\")")),
         Ex::Const => out.push(view.intern("<constant>")),
         Ex::Leaf(t) => out.push(*t),
+        // A lattice bag is delimited, as a sum and a product are: `<max> a b c </max>`.
+        Ex::Fun(f, args) if lattice_head(*f, view) => {
+            let max = view.tok_is(*f, "max");
+            out.push(view.intern(if max { "<max>" } else { "<min>" }));
+            for a in args {
+                emit_tagged(a, cx, out);
+            }
+            out.push(view.intern(if max { "</max>" } else { "</min>" }));
+        }
         Ex::Fun(f, args) => {
             out.push(*f);
             let reads_signs = args.len() == 2 && cx.ieee_zeros() && view.tok_is(*f, "atan2");

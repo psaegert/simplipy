@@ -58,8 +58,8 @@
 //! is sound (candidates then settle high and are refused by the ordering test).
 
 use super::expr::{
-    add, complexity, distributes_power, fun, keeps_zero_sign, mul, orient_term_classes,
-    orientation_near_miss, pow, Cx, Ex,
+    add, atan2_of, complexity, distributes_power, fun, keeps_zero_sign, mul, orient_term_classes,
+    orientation_near_miss, pow, product_members, vanishes_with_a_sign, Cx, Ex,
 };
 use super::rat::Rat;
 use super::rules::{no_nested_bags, ordered_below, rewrite_pass, PassCtx};
@@ -166,9 +166,32 @@ fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &
         out.push((path.clone(), m));
     }
     match e {
-        // `atan2` reads the signs of its arguments' zeros, which a move inside them may trade
-        // with a sum's orientation (`expr::atan2_of`): no exploration move inside one.
-        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {}
+        // `atan2` reads the signs of its arguments' zeros (`expr::atan2_of`): in `f64` a move
+        // inside an argument is taken only where neither the product member it rewrites (the
+        // whole argument, for a move at the argument) nor what it writes vanishes with a sign of
+        // its own (`expr::vanishes_with_a_sign`), so no move turns `atan2(+0, -1) = pi` into
+        // `-pi`.
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
+            for (i, arg) in v.iter().enumerate() {
+                let mut inner = Vec::new();
+                site_list(arg, cx, None, &mut Vec::new(), &mut inner);
+                for (rel, moved) in inner {
+                    let (old, new) = match (arg, rel.split_first()) {
+                        (Ex::Mul(w), Some((&j, rest))) => {
+                            (&w[j], rebuild(&w[j], rest, moved.clone(), cx))
+                        }
+                        _ => (arg, rebuild(arg, &rel, moved.clone(), cx)),
+                    };
+                    if vanishes_with_a_sign(old, cx) || vanishes_with_a_sign(&new, cx) {
+                        continue;
+                    }
+                    let mut at = path.clone();
+                    at.push(i);
+                    at.extend(rel);
+                    out.push((at, moved));
+                }
+            }
+        }
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
@@ -208,6 +231,20 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
             let mut items = v.clone();
             items[i] = rebuild(&v[i], rest, moved, cx);
             mul(items, cx)
+        }
+        // `atan2` is rebuilt from its arguments' members (`expr::atan2_of`), as the parse and the
+        // rule pass build it: a rewritten member is not re-decided with the others as a product.
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
+            let mut members: Vec<Vec<Ex>> = v.iter().map(|a| product_members(a.clone())).collect();
+            match (&v[i], rest.split_first()) {
+                (Ex::Mul(w), Some((&j, deeper))) => {
+                    members[i][j] = rebuild(&w[j], deeper, moved, cx);
+                }
+                _ => members[i] = product_members(rebuild(&v[i], rest, moved, cx)),
+            }
+            let xm = members.pop().expect("two arguments");
+            let ym = members.pop().expect("two arguments");
+            atan2_of(*f, ym, xm, cx)
         }
         Ex::Fun(f, v) => {
             let mut items = v.clone();

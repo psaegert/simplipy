@@ -115,10 +115,13 @@ _CORE_SERIALIZATION_ARITIES = (
 
 
 # The bag delimiters and inverse-section markers of the TAGGED serialization --
-# `simplify`'s default token output (`<add> ... <sub> ... </add>`). The explicit-dialect
-# entry points (`is_valid`, `prefix_to_infix`) do not read this form; they use this set
-# to NAME the dialect in their diagnostics instead of failing with a bare arity error (B1).
-_TAGGED_DIALECT_TOKENS = frozenset({'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>'})
+# `simplify`'s default token output (`<add> ... <sub> ... </add>`, and the lattice bags
+# `<max> ... </max>` / `<min> ... </min>` of an engine that declares `max` / `min`). The
+# explicit-dialect entry points (`is_valid`, `prefix_to_infix`) do not read this form; they
+# use this set to NAME the dialect in their diagnostics instead of failing with a bare arity
+# error (B1).
+_TAGGED_DIALECT_TOKENS = frozenset({'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>',
+                                    '<max>', '</max>', '<min>', '</min>'})
 
 #: (C1.18) Every key an operator spec must carry. `precedence` is deliberately NOT
 #: required: non-core operators render as function calls, which never consult it; a

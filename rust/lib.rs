@@ -267,7 +267,7 @@ fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<
     // once at the boundary instead.
     if tokens
         .iter()
-        .any(|t| t == "<add>" || t == "<mul>" || t == "rootn")
+        .any(|t| matches!(t.as_str(), "<add>" | "<mul>" | "<max>" | "<min>" | "rootn"))
     {
         return Ok(()); // capped + alphabet-checked above; the AC parser is the arbiter
     }

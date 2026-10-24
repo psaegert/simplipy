@@ -1665,7 +1665,16 @@ fn evaluate(e: &Ex, cx: &Cx) -> Option<f64> {
         Ex::Fun(f, args) => {
             let name = cx.view.resolve_owned(*f);
             let vals: Option<Vec<f64>> = args.iter().map(|a| evaluate(a, cx)).collect();
-            crate::numeric::apply_op(&name, &vals?)
+            let vals = vals?;
+            // A lattice bag is the right-nested chain of its members, as it is written.
+            if vals.len() > 2 && lattice_name(&name) {
+                let (last, rest) = vals.split_last()?;
+                return rest
+                    .iter()
+                    .rev()
+                    .try_fold(*last, |acc, v| crate::numeric::apply_op(&name, &[*v, acc]));
+            }
+            crate::numeric::apply_op(&name, &vals)
         }
         _ => None,
     }
@@ -1810,6 +1819,11 @@ pub fn shape(e: &Ex, cx: &Cx) -> String {
         Ex::Fun(f, args) => match args.as_slice() {
             [base, Ex::Num(n)] if cx.view.tok_is(*f, "rootn") && n.is_even_integer() => {
                 format!("^({},#f)", shape(base, cx))
+            }
+            _ if super::expr::lattice_head(*f, cx.view) => {
+                let mut inner: Vec<String> = args.iter().map(|a| shape(a, cx)).collect();
+                inner.sort();
+                format!("{}({})", cx.view.resolve_owned(*f), inner.join(","))
             }
             _ => {
                 let inner: Vec<String> = args.iter().map(|a| shape(a, cx)).collect();
@@ -2109,11 +2123,24 @@ fn emit_prefix(node: &Node, out: &mut Vec<String>) {
             emit_prefix(b, out);
             emit_prefix(x, out);
         }
+        // A lattice bag of more than two members is the right-nested chain of its members.
+        Node::Call(f, args) if args.len() > 2 && lattice_name(f) => {
+            for a in &args[..args.len() - 1] {
+                out.push(f.clone());
+                emit_prefix(a, out);
+            }
+            emit_prefix(&args[args.len() - 1], out);
+        }
         Node::Call(f, args) => {
             out.push(f.clone());
             args.iter().for_each(|a| emit_prefix(a, out));
         }
     }
+}
+
+/// Is `f` the name of a lattice head (`expr::lattice`)? A call of one is a bag of members.
+fn lattice_name(f: &str) -> bool {
+    f == "max" || f == "min"
 }
 
 /// A right-nested `*` chain; `neg` signs its leading numeral, or wraps it in `neg`.
@@ -2142,9 +2169,9 @@ fn emit_chain(parts: &[Node], neg: bool, out: &mut Vec<String>) {
     }
 }
 
-/// The tagged tokens: `<add> ... <sub> ... </add>` and `<mul> ... <div> ... </mul>` bags, the
-/// sign of a product in a leading numeral (or a `-1` member), plain prefix for `pow` and
-/// functions.
+/// The tagged tokens: `<add> ... <sub> ... </add>` and `<mul> ... <div> ... </mul>` bags and the
+/// lattice bags `<max> ... </max>`, `<min> ... </min>`, the sign of a product in a leading
+/// numeral (or a `-1` member), plain prefix for `pow` and the other functions.
 pub fn to_tagged(node: &Node) -> Vec<String> {
     let mut out = Vec::new();
     emit_tagged(node, &mut out);
@@ -2218,6 +2245,12 @@ fn emit_tagged(node: &Node, out: &mut Vec<String>) {
             out.push("pow".to_string());
             emit_tagged(b, out);
             emit_tagged(x, out);
+        }
+        // A lattice bag is delimited, as a sum and a product are: `<max> a b c </max>`.
+        Node::Call(f, args) if lattice_name(f) => {
+            out.push(format!("<{f}>"));
+            args.iter().for_each(|a| emit_tagged(a, out));
+            out.push(format!("</{f}>"));
         }
         Node::Call(f, args) => {
             out.push(f.clone());

@@ -1083,8 +1083,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   argument count is not its operator's (`sin(x0, x1)`: "sin takes 1 argument, got 2") and a
   comma outside a call's argument list, where they used to emit a malformed prefix list.
   `max` and `min` take any number of at least two, nested to the right, as sympy prints them:
-  `Max(x0, x1, x2)` reads as `max(x0, max(x1, x2))`. A call of an undeclared name still reads
-  tolerantly in `read_infix`.
+  `Max(x0, x1, x2)` reads as `max(x0, max(x1, x2))`, which the engine reads as one bag, and the
+  infix printer writes a right-nested chain as one call again (`max(x0, x1, x2)`; a
+  realization stays binary). A call of an undeclared name still reads tolerantly in
+  `read_infix`.
 - **Every realization is the engine's own kernel.** Each function in `simplipy.operators`
   evaluates, on real operands, the float64 kernel the engine's evaluator uses for its token
   (`simplipy._core`), so the deployed value, the constant fold, the miner and the rule judge
@@ -1110,20 +1112,35 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   (AMOS and Cephes, BSD-3-Clause, notices in `LICENSES_bundled.txt`), identical to
   `scipy.special.jv` bit for bit, and so with scipy's accuracy. Each is a core kernel, and the
   evaluator dispatches it, so the folds, the miner, simplify and the realization compute the
-  same bits. `max(a, b, c)` reads as `max(a, max(b, c))` (and `min` alike).
+  same bits. `max(a, b, c)` reads as one bag of three members (and `min` alike).
   `assets/engines/acj2-4/config.yaml` declares acj-4's operators plus the nine, every
   realization in `simplipy.operators`, with no rule sets yet: an engine loaded from it
   simplifies with the constructors alone. The mine kits are `acj2-4/mine.yaml` and
   `acj2-5-4-llm/`.
 - **The nine heads in every layer, failing closed where a layer has no sound treatment.**
-  - *Folds.* `max` and `min` of literals fold exactly in every mode; `floor`, `ceil` and `mod`
-    of literals fold exactly in `real` (`mod(a, 0)` is NaN) and to their float in `f64` and
-    `permissive`, where a literal reads as its float (`floor(0.99999999999999999)` is 1 there,
-    0 in `real`). A function of literals whose float is dearer than it stays written
-    (`erf(1)`), as for the other heads. `erf` is odd, so `erf(-x)` is `-erf(x)`. `max` and
-    `min` take a canonical argument order and `max(a, a)` is `a` (bit for bit: their kernels
-    follow IEEE 754-2019 at the zero tie and propagate NaN in either order); a nested
-    `max(a, max(b, c))` stays as written, and a pattern matches either argument order.
+  - *Folds.* `floor`, `ceil` and `mod` of literals fold exactly in `real` (`mod(a, 0)` is NaN)
+    and to their float in `f64` and `permissive`, where a literal reads as its float
+    (`floor(0.99999999999999999)` is 1 there, 0 in `real`). A function of literals whose float
+    is dearer than it stays written (`erf(1)`), as for the other heads. `erf` is odd, so
+    `erf(-x)` is `-erf(x)`.
+  - *`max` and `min` are bags,* as sums and products are: `max(x2, max(x0, x1))`,
+    `max(max(x1, x2), x0)` and `max(x0, x1, x2)` are one answer, written `max x0 max x1 x2`
+    in the explicit form (the right-nested chain of the members in the canonical order),
+    `<max> x0 x1 x2 </max>` in the tagged form (a two-member bag too, as a two-term sum is
+    bagged; `<min> ... </min>` alike, read only where the config declares the head) and
+    `max(x0, x1, x2)` in infix. A bag costs one head whatever its size, as a sum does. Its laws
+    hold bit for bit in float64, whose kernels are IEEE 754-2019's `maximum` and `minimum`
+    (NaN-propagating, `-0` below `+0`; like `np.maximum` they return the first NaN operand,
+    whose payload the engine does not read), and each was put to the judge: equal members
+    collapse (`max(a, a)` is `a`; two `<constant>`s stay apart), the literal members fold to
+    their extreme (`max(-0.0, 0)` is `0`, `min(-0.0, 0)` is `-0.0` in `f64`), `-inf` drops from
+    a `max` and `+inf` from a `min`, and a NaN member makes the bag NaN. The absorber and the
+    dual bag need their other members to be no NaN almost everywhere (the finite-a.e. licence;
+    `max(+inf, nan)` is `nan`): `max(+inf, x0)` is `+inf` and `max(x0, min(x0, x1))` is `x0`,
+    while `max(+inf, log(x0))` and `max(x0, min(x0, log(x1)))` stay; a number of the dual bag
+    at most a number of the bag absorbs it too (`max(3, min(2, x0))` is `3`). A rule matches any
+    sub-bag of a bag, in any nesting, the other members kept: `max(|x|, x) -> |x|` turns
+    `max(max(|x0|, x1), x0)` into `max(x1, |x0|)`.
   - *Enclosures.* `floor`, `ceil`, `erf`, `max` and `min` map their operands' bounds (`erf`
     reaches exactly +-1 from |x| = 5.921587195794507); `atan2` lies in [-pi, pi];
     `besselj(nu, x)` in [-1, 1] for an order nu >= 0, NaN where a non-integer order meets a
@@ -1141,8 +1158,13 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     side, the pass's rebuild): a negative coefficient of the first leaves the call,
     `atan2(-S, x) = -atan2(S, x)` (exact in float64, not in `real`), and no argument's sign
     moves into a sum's orientation, so a sum that vanishes on a region keeps the sign of its
-    zero in either argument (printed as the negation it is); the search makes no move inside
-    an `atan2`. The step and lattice heads count as region zeros wherever an inverse reads one.
+    zero in either argument (printed as the negation it is). The search moves inside an
+    `atan2`'s arguments as inside any other head's (`atan2((x0 + 1)^2 - x0^2 - 1, x1)` is
+    `atan2(2*x0, x1)`), and in `f64` takes no move where the product member it rewrites, or what
+    it writes, vanishes with a sign of its own, the bar an inverse keeps:
+    `atan2(x0*x1 - x0*|x1|, -1)` stays, since the factored `x0*(x1 - |x1|)` is -0 for every
+    x1 >= 0 where x0 < 0 and the call would read -pi for pi. The step and lattice heads count as
+    region zeros wherever an inverse reads one.
   - *Discontinuities.* A rule spelled with one of the nine is judged by one function in the core
     (`deployed_exact`), which the contract judge calls and the miner applies to every such pair
     it would accept, so the judge licenses exactly what the miner accepts: both sides bit for

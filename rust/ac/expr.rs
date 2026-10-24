@@ -1502,9 +1502,20 @@ impl<'a> Cx<'a> {
                 // `from_prefix` maps those spellings to `rootn` unconditionally, so no
                 // `Fun` ever carries them. `rootn` itself stays OUT: an even literal
                 // index on a negative base is NaN, so it is not finiteness-preserving.)
+                // `max` and `min` pick a member (a bag of any size, `lattice`).
                 matches!(
                     s.as_str(),
-                    "sin" | "cos" | "tanh" | "atan" | "abs" | "exp" | "sinh" | "cosh" | "asinh"
+                    "sin"
+                        | "cos"
+                        | "tanh"
+                        | "atan"
+                        | "abs"
+                        | "exp"
+                        | "sinh"
+                        | "cosh"
+                        | "asinh"
+                        | "max"
+                        | "min"
                 ) && v.iter().all(|x| self.certainly_finite(x))
             }
             _ => false,
@@ -8752,6 +8763,12 @@ fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
         Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(f, "atan2") => {
             Ex::Fun(f, v.into_iter().map(|x| rejoin_walk(x, true, cx)).collect())
         }
+        // A lattice bag keeps its members in the canonical order (`lattice`).
+        Ex::Fun(f, v) if lattice_head(f, cx.view) => {
+            let mut m: Vec<Ex> = v.into_iter().map(|x| rejoin_walk(x, false, cx)).collect();
+            m.sort_by(|a, b| cmp_ex(a, b, cx.view));
+            Ex::Fun(f, m)
+        }
         Ex::Fun(f, v) => Ex::Fun(
             f,
             v.into_iter().map(|x| rejoin_walk(x, false, cx)).collect(),
@@ -9507,8 +9524,29 @@ pub(crate) fn atan2_of(op: Tok, mut ym: Vec<Ex>, xm: Vec<Ex>, cx: &Cx) -> Ex {
     fun(op, vec![build(ym), build(xm)], cx)
 }
 
+/// Does `e`, an argument of `atan2` or a product member of one, VANISH WITH A SIGN OF ITS OWN in
+/// `f64`: does one of its product members spell a zero (a literal zero or the written `-0.0`) or
+/// vanish on a region with the sign its form gives it (`region_signed_zero`, the bar an inverse
+/// keeps, `inverts_a_signed_zero`)? `atan2` reads that sign (`atan2(+0, -1) = pi`,
+/// `atan2(-0, -1) = -pi`), so a search move inside an argument is taken only where neither the
+/// part it rewrites nor the part it writes does (`search::site_list`): elsewhere the part's zero
+/// set is null, and a move that keeps the value almost everywhere keeps its sign there. `false`
+/// outside `f64`: `real` reads one zero and `permissive` a value up to the sign of a zero.
+pub(crate) fn vanishes_with_a_sign(e: &Ex, cx: &Cx) -> bool {
+    let signed = |m: &Ex| {
+        matches!(m, Ex::Num(r) if r.is_zero())
+            || is_neg_zero(m, cx.view)
+            || region_signed_zero(m, cx)
+    };
+    cx.f64_semantics()
+        && match e {
+            Ex::Mul(v) => v.iter().any(signed),
+            other => signed(other),
+        }
+}
+
 /// The product members of `e` (itself where it is no product).
-fn product_members(e: Ex) -> Vec<Ex> {
+pub(crate) fn product_members(e: Ex) -> Vec<Ex> {
     match e {
         Ex::Mul(v) => v,
         other => vec![other],
@@ -9560,18 +9598,14 @@ fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
     Rat::from_big(if ceil { f + 1 } else { f }, BigInt::from(1))
 }
 
-/// The exact value of `max` or `min` at rational arguments, and with `real` of `floor`, `ceil`
-/// or `mod` too (the real `mod`: `a - b floor(a/b)`, NaN at `b = 0`); `None` for any other head
-/// or a result that leaves `Rat`.
+/// The exact value with `real` of `floor`, `ceil` or `mod` at rational arguments (the real
+/// `mod`: `a - b floor(a/b)`, NaN at `b = 0`); `None` for any other head or a result that leaves
+/// `Rat`.
 fn exact_step_fold(op: Tok, args: &[Ex], real: bool, cx: &Cx) -> Option<Ex> {
     let v = cx.view;
     match args {
         [Ex::Num(r)] if real && v.tok_is(op, "floor") => rat_floor(r, false).map(Ex::Num),
         [Ex::Num(r)] if real && v.tok_is(op, "ceil") => rat_floor(r, true).map(Ex::Num),
-        [Ex::Num(a), Ex::Num(b)] if v.tok_is(op, "max") || v.tok_is(op, "min") => {
-            let a_wins = (a.cmp_exact(b) == Ordering::Less) != v.tok_is(op, "max");
-            Some(Ex::Num(if a_wins { a.clone() } else { b.clone() }))
-        }
         [Ex::Num(a), Ex::Num(b)] if real && v.tok_is(op, "mod") => {
             if b.is_zero() {
                 return Some(Ex::NaN);
@@ -9582,6 +9616,169 @@ fn exact_step_fold(op: Tok, args: &[Ex], real: bool, cx: &Cx) -> Option<Ex> {
         }
         _ => None,
     }
+}
+
+/// Is `op` a LATTICE head, `max` or `min` (a bag of members, [`lattice`])?
+pub(crate) fn lattice_head(op: Tok, view: &TokenView) -> bool {
+    view.tok_is(op, "max") || view.tok_is(op, "min")
+}
+
+/// A lattice member read as a number in the order `max` and `min` read: a literal, or in `f64`
+/// the written negative zero (`NEG_ZERO`), which orders below `+0`: `(value, negative zero)`.
+/// `None` for anything else.
+fn lattice_number(e: &Ex, cx: &Cx) -> Option<(Rat, bool)> {
+    match e {
+        Ex::Num(r) => Some((r.clone(), false)),
+        e if cx.f64_semantics() && is_neg_zero(e, cx.view) => Some((Rat::ZERO, true)),
+        _ => None,
+    }
+}
+
+/// `a` below `b` in the order of IEEE 754-2019's `maximum` and `minimum`: by value, and `-0`
+/// below `+0` (both as [`lattice_number`] reads them).
+fn lattice_number_lt(a: &(Rat, bool), b: &(Rat, bool)) -> bool {
+    match a.0.cmp_exact(&b.0) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => a.1 && !b.1,
+    }
+}
+
+/// `MAX` AND `MIN` ARE LATTICE BAGS, as `+` and `*` are bags: `max(a, max(b, c))`, in any
+/// nesting and argument order, is ONE node, `Fun(max, [a, b, c])`, its members flattened,
+/// collected and in the canonical order. Every law below holds bit for bit in float64, whose
+/// kernels are IEEE 754-2019's `maximum` and `minimum` (NaN-propagating, `-0` below `+0`, both
+/// commutative and associative: `max(-0, +0) = +0` in either order), and over the reals, up to
+/// the payload of a NaN: like `np.maximum`, the kernels return their FIRST NaN operand
+/// (`max(nan, -nan)` keeps the first one's sign bit), which the engine's one NaN does not read.
+///
+/// * FLATTENING: a member that is itself a bag of the same head gives its members.
+/// * NaN: a NaN member makes the bag NaN.
+/// * ABSORPTION by the dual bag: a member `min(N)` of a `max` bag (dually `max(N)` of a `min`
+///   bag) drops when some `x` in `N` is at most some other member `y` -- `x` is `y`, two numbers
+///   in order, `x` is the bottom `-inf`, or `y` is the top `+inf` -- and every other member of
+///   `N` is no NaN almost everywhere: `max(a, min(a, b)) = a`, while a NaN `b` makes
+///   `min(a, b)` NaN and the bag with it. Every member is read as it stands before the drops
+///   below, so the bag does not depend on its nesting: `max(3, max(2, min(2, x)))` and
+///   `max(min(2, x), max(2, 3))` are both `3`.
+/// * NUMBERS: the literal members fold to their extreme, `-0` below `+0` (in `f64` the written
+///   `-0.0`): `max(-0.0, 0) = 0`, `min(-0.0, 0) = -0.0`.
+/// * The ABSORBER takes every member that is no NaN almost everywhere (`max(+inf, a) = +inf`,
+///   while `max(+inf, nan) = nan`), and the IDENTITY drops (`max(-inf, a) = a`). "No NaN" is a
+///   number, an infinity, or the finite-a.e. licence (`Cx::fin_licensed`).
+/// * IDEMPOTENCE: equal members collapse (`max(a, a) = a`), except where they hold a
+///   `<constant>` (two `<constant>`s are independent constants).
+///
+/// A bag left with one member is that member.
+pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
+    let view = cx.view;
+    let is_max = view.tok_is(op, "max");
+    let dual = view.intern(if is_max { "min" } else { "max" });
+    let (top, bottom) = if is_max {
+        (Ex::PosInf, Ex::NegInf)
+    } else {
+        (Ex::NegInf, Ex::PosInf)
+    };
+    let mut members: Vec<Ex> = Vec::with_capacity(args.len());
+    for a in args {
+        match a {
+            Ex::Fun(f, v) if f == op => members.extend(v),
+            other => members.push(other),
+        }
+    }
+    if members.iter().any(|m| matches!(m, Ex::NaN)) {
+        return Ex::NaN;
+    }
+    let no_nan = |e: &Ex| {
+        matches!(e, Ex::PosInf | Ex::NegInf)
+            || lattice_number(e, cx).is_some()
+            || cx.fin_licensed(e)
+    };
+    // `x` certainly at most `y` in a `max` bag (at least, in a `min` bag).
+    let below = |x: &Ex, y: &Ex| -> bool {
+        if *x == bottom {
+            return true;
+        }
+        if *y == top {
+            return no_nan(x);
+        }
+        if x == y {
+            return !x.contains_const();
+        }
+        match (lattice_number(x, cx), lattice_number(y, cx)) {
+            (Some(a), Some(b)) => {
+                if is_max {
+                    !lattice_number_lt(&b, &a)
+                } else {
+                    !lattice_number_lt(&a, &b)
+                }
+            }
+            _ => false,
+        }
+    };
+    let absorbed: Vec<bool> = members
+        .iter()
+        .enumerate()
+        .map(|(i, m)| match m {
+            Ex::Fun(f, inner) if *f == dual => inner.iter().enumerate().any(|(k, x)| {
+                members
+                    .iter()
+                    .enumerate()
+                    .any(|(j, y)| j != i && below(x, y))
+                    && inner.iter().enumerate().all(|(l, z)| l == k || no_nan(z))
+            }),
+            _ => false,
+        })
+        .collect();
+    if absorbed.iter().any(|&a| a) {
+        members = members
+            .into_iter()
+            .zip(absorbed)
+            .filter(|(_, a)| !a)
+            .map(|(m, _)| m)
+            .collect();
+    }
+    // The numbers fold to their extreme.
+    let mut extreme: Option<(usize, (Rat, bool))> = None;
+    for (i, m) in members.iter().enumerate() {
+        let Some(n) = lattice_number(m, cx) else {
+            continue;
+        };
+        let wins = match &extreme {
+            None => true,
+            Some((_, best)) => {
+                if is_max {
+                    lattice_number_lt(best, &n)
+                } else {
+                    lattice_number_lt(&n, best)
+                }
+            }
+        };
+        if wins {
+            extreme = Some((i, n));
+        }
+    }
+    if let Some((e, _)) = extreme {
+        let mut k = 0;
+        members.retain(|m| {
+            let keep = k == e || lattice_number(m, cx).is_none();
+            k += 1;
+            keep
+        });
+    }
+    // The absorber takes every member that is no NaN, and the identity drops.
+    if members.contains(&top) {
+        members.retain(|m| *m == top || !no_nan(m));
+    }
+    if members.iter().any(|m| *m != bottom) {
+        members.retain(|m| *m != bottom);
+    }
+    members.sort_by(|a, b| cmp_ex(a, b, view));
+    members.dedup_by(|a, b| a == b && !a.contains_const());
+    if members.len() == 1 {
+        return members.pop().expect("one member");
+    }
+    Ex::Fun(op, members)
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
@@ -9630,9 +9827,11 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
-    // THE STEP AND LATTICE HEADS OF RATIONALS ARE EXACT ARITHMETIC, so they fold here as
-    // `abs` does: `max` and `min` in every mode (they pick an operand, and rounding to the
-    // nearest float keeps the order, so the float of the pick is the pick of the floats), and
+    // `max` AND `min` ARE LATTICE BAGS, as sums and products are bags: `lattice`.
+    if !args.is_empty() && lattice_head(op, cx.view) {
+        return lattice(op, args, cx);
+    }
+    // THE STEP HEADS OF RATIONALS ARE EXACT ARITHMETIC, so they fold here as `abs` does:
     // `floor`, `ceil` and `mod` (`mod(a, 0)` is NaN) in `real` only, where a literal is its
     // rational: `f64` and `permissive` read a literal at its nearest float
     // (`floor(0.99999999999999999)` is 1 there), so their ground fold computes these with the
@@ -9642,11 +9841,6 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             return folded;
         }
     }
-    // `max` AND `min` ARE COMMUTATIVE AND IDEMPOTENT, bit for bit: their kernels are IEEE
-    // 754-2019's maximum and minimum, NaN-propagating in both orders and ordering -0 below +0,
-    // and so are the real functions. The arguments take the canonical order, and `max(a, a)` is
-    // `a` (two `<constant>`s are independent, so a `Const`-bearing pair stays). Nesting stays
-    // as written: `max(a, max(b, c))` is no bag.
     let mut args = args;
     if args.len() == 2
         && cx.ieee_zeros()
@@ -9656,14 +9850,6 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         let x = args.pop().expect("two arguments");
         let y = args.pop().expect("two arguments");
         return atan2_of(op, product_members(y), product_members(x), cx);
-    }
-    if args.len() == 2 && (cx.view.tok_is(op, "max") || cx.view.tok_is(op, "min")) {
-        if args[0] == args[1] && !args[0].contains_const() {
-            return args.into_iter().next().unwrap();
-        }
-        if cmp_ex(&args[1], &args[0], cx.view) == Ordering::Less {
-            args.swap(0, 1);
-        }
     }
     // AN EVEN FUNCTION EATS THE SIGN OF ITS ARGUMENT: `g(-t) -> g(t)`.
     //

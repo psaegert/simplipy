@@ -210,5 +210,5 @@ def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         engine = sp.SimpliPyEngine.from_config(path)
-    assert engine.simplify('max(x1, x2, x3)') == 'max(x1, max(x2, x3))'
+    assert engine.simplify('max(x1, max(x3, x2))') == 'max(x1, x2, x3)'
     assert engine.simplify('besselj(2, x1) + 0') == 'besselj(2, x1)'

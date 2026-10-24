@@ -1933,6 +1933,59 @@ mod tests {
         // erf is odd: the sign leaves it
         assert_eq!(run(&["erf", "neg", "x0"], RuleMode::Default), "neg erf x0");
     }
+
+    /// `max` and `min` are lattice bags: every nesting and order of one bag is one answer,
+    /// written as the right-nested chain in the explicit form and delimited in the tagged form,
+    /// and a rule matches any sub-bag of the members, in any nesting.
+    #[test]
+    fn max_and_min_are_bags_and_rules_match_their_sub_bags() {
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            r#"[[["max", "abs", "_0", "_0"], ["abs", "_0"]]]"#,
+        )
+        .expect("acj2-4 builds");
+        let run = |t: &str, form: crate::engine::AcForm| {
+            let v: Vec<String> = t.split(' ').map(String::from).collect();
+            e.ac_simplify_proj(&v, 48, RuleMode::Default, form)
+                .unwrap()
+                .join(" ")
+        };
+        let explicit = |t: &str| run(t, crate::engine::AcForm::Explicit);
+        for src in [
+            "max x0 max x1 x2",
+            "max max x2 x0 x1",
+            "max x1 max x2 max x0 x0",
+        ] {
+            assert_eq!(explicit(src), "max x0 max x1 x2", "{src}");
+            assert_eq!(
+                run(src, crate::engine::AcForm::Tagged),
+                "<max> x0 x1 x2 </max>",
+                "{src}"
+            );
+        }
+        assert_eq!(
+            explicit("<min> x1 x0 <min> x2 x0 </min> </min>"),
+            "min x0 min x1 x2"
+        );
+        // the rule fires on a sub-bag, the other members kept, however the bag is nested
+        assert_eq!(explicit("max max abs x0 x1 x0"), "max x1 abs x0");
+        assert_eq!(
+            explicit("max x2 max abs x0 max x1 x0"),
+            "max x1 max x2 abs x0"
+        );
+        // absorption needs the other members of the dual bag to be no NaN almost everywhere
+        assert_eq!(explicit("max x0 min x0 x1"), "x0");
+        assert_eq!(explicit("max x0 min x0 log x1"), "max x0 min x0 log x1");
+        // the numbers fold to their extreme, -0 below +0; the infinities are identity and absorber
+        assert_eq!(explicit("max 3 max 2 min 2 x0"), "3");
+        assert_eq!(explicit("min -0.0 max x0 0"), "-0.0");
+        assert_eq!(explicit("max float(\"-inf\") x0"), "x0");
+        assert_eq!(explicit("max float(\"inf\") x0"), "float(\"inf\")");
+        assert_eq!(
+            explicit("max float(\"inf\") float(\"nan\")"),
+            "float(\"nan\")"
+        );
+    }
     use crate::engine::RuleMode;
     use crate::Engine;
 

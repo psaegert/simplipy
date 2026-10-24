@@ -37,7 +37,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
-use super::expr::{add, canon, complexity, mul, orient_term_classes, tie_cmp, Cx, Ex};
+use super::expr::{
+    add, canon, complexity, fun, lattice_head, mul, orient_term_classes, tie_cmp, Cx, Ex,
+};
 use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
 
@@ -761,6 +763,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     const EMPTY: &[usize] = &[];
     let (exact_hits, scan): (&[usize], &[usize]) = match e {
         Ex::Add(_) | Ex::Mul(_) => (EMPTY, p.rules.bucket_for(e)),
+        Ex::Fun(f, _) if lattice_head(*f, p.cx.view) => (EMPTY, p.rules.bucket_for(e)),
         _ => {
             let bucket = p.rules.bucket_for(e);
             let end = match e {
@@ -890,6 +893,43 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                             .collect();
                         parts.push(replacement);
                         let next = mul(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
+                        if oriented_mu(&next, node_mu(), e, p) {
+                            out = Some(next);
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                );
+                out
+            }
+            // A lattice bag (`expr::lattice`) matches any sub-bag of its members, the remainder
+            // kept beside the replacement, as a sum or a product does.
+            (Ex::Fun(pf, pv), Ex::Fun(sf, sv)) if pf == sf && lattice_head(*sf, p.cx.view) => {
+                let mut binds = Binds::default();
+                let mut out: Option<Ex> = None;
+                match_bag_each_cls(
+                    pv,
+                    sv,
+                    &bag_cls,
+                    BagKind::Lat(*sf),
+                    true,
+                    &mut binds,
+                    p.mcx,
+                    &mut |b, used| {
+                        let replacement = substitute(&rule.rhs, b, p.cx.view);
+                        let mut parts: Vec<Ex> = sv
+                            .iter()
+                            .zip(used.iter())
+                            .filter(|(_, &u)| !u)
+                            .map(|(x, _)| x.clone())
+                            .collect();
+                        parts.push(replacement);
+                        let next = fun(
+                            *sf,
+                            parts.into_iter().map(|x| canon(x, p.cx)).collect(),
+                            p.cx,
+                        );
                         if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true

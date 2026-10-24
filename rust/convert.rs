@@ -144,7 +144,7 @@ pub fn prefix_to_infix(
 
         if arity == 2 {
             let (mut left_str, left_prec, _left_root) = operands_data[0].clone();
-            let (mut right_str, right_prec, _right_root) = operands_data[1].clone();
+            let (mut right_str, right_prec, right_root) = operands_data[1].clone();
             let mut write_operator = write_operator;
 
             // `rootn` is a FUNCTION in every dialect: the infix parser reads
@@ -176,8 +176,22 @@ pub fn prefix_to_infix(
             // `hypot2`) -- a serialization that does not re-parse, the same defect the
             // `rootn` arm above was added for. Config-declared binaries render as calls.
             if !matches!(canonical, "+" | "-" | "*" | "/" | "pow" | "**") {
+                // `max` and `min` are lattice bags: a right operand of the same head is one
+                // call with it, `max(a, max(b, c))` is `max(a, b, c)`, which the reader nests to
+                // the right again (`VARIADIC`), so the rendering re-reads as the same tokens. A
+                // realization is a binary function and keeps its nesting.
+                let inner = (!realization
+                    && VARIADIC.contains(&canonical)
+                    && right_root.as_deref() == Some(canonical))
+                .then(|| {
+                    right_str
+                        .strip_prefix(&format!("{write_operator}("))
+                        .and_then(|r| r.strip_suffix(')'))
+                })
+                .flatten();
+                let joined = inner.unwrap_or(&right_str);
                 stack.push((
-                    format!("{write_operator}({left_str}, {right_str})"),
+                    format!("{write_operator}({left_str}, {joined})"),
                     INF,
                     Some(canonical.to_string()),
                 ));
@@ -756,7 +770,9 @@ struct Group {
 const STRAY_COMMA: &str = "a comma outside a call's argument list";
 
 /// The operators a call may give any number (at least two) of arguments, read nested to the
-/// right: `max(a, b, c)` is `max(a, max(b, c))`, as sympy writes `Max` n-ary.
+/// right: `max(a, b, c)` is `max(a, max(b, c))`, as sympy writes `Max` n-ary. The engine reads
+/// any nesting of one of them as ONE lattice bag of members (`ac::expr::lattice`), and the
+/// infix printer writes a right-nested chain back as one call.
 const VARIADIC: [&str; 2] = ["max", "min"];
 
 /// Close a parenthesized group at its `(`. A group a declared operator's name calls (`callee`,
