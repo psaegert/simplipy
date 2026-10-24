@@ -158,14 +158,17 @@ model predictions.
 
 - **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
-  explicit or tagged tokens. A number that fits the digit budget is written exactly, as
-  `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`), any other number is its
-  float64 in shortest form (`9.765625e-4*x1`,
-  `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
-  `precision=k` (`2.15*x1`), written as that number is so that the display reads back as itself.
-  A number shown as a float is read as a float; one that would show as a short exact number it
-  is not gets its rest where the rest fits the budget (`x1 + 1 + 3e-21` for
-  `x1 + 1.000000000000000000003`).
+  explicit or tagged tokens. The budget counts significant digits, never an exponent's
+  (`2.5e307` counts 2), and each number is written in the first form that fits it: exactly, as
+  `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`); as a short exact sum, its
+  first digits and the rest to its value (`x1 + 1 + 3e-21` for `x1 + 1.000000000000000000003`,
+  `(2.5e30 + 1e15)*x1`, `(1e20 + 1)*x1`, `(0.3 + 4e-17)*x1` for `0.30000000000000004*x1`), for
+  a number float64 does not write exactly in 15 digits (`1905` and `1.0001` stay as they are);
+  or as its float64 in shortest form (`9.765625e-4*x1`, `2.1458314277221002*x1` for a 33-digit
+  literal), with `k` significant digits at `precision=k` (`2.15*x1`), written as that number is
+  so that the display reads back as itself (and no short sum: `0.043*x1` at `precision=3` for
+  `0.043000000000000003*x1`, `(0.043 + 3e-18)*x1` in full). A number shown as a float is read
+  as a float.
   A multiple of the literal `3.141592653589793` is written with pi factored out as the symbol
   `pi` where the rest fits (`1/(2*pi)`; `np.pi` in the token forms, the float the literal is),
   at every precision and never shortened, and with the literal where the symbol would read back
@@ -180,8 +183,8 @@ model predictions.
   exponent of 1, or make a non-integer exponent an integer is written as that spelling and the
   rest to its value (`(1 + 3.1e-21)*x1` for `1.0000000000000000000031*x1`,
   `sin((1 + 1e-4)*x1) - sin(x1)` for `sin(1.0001*x1) - sin(x1)` at `precision=3`).
-  At the default `precision=None` a number is written exactly or as its float64 (and its rest
-  where that fits), so the display reads back to the same float64 values; at every precision it
+  At the default `precision=None` a number is written exactly, as a short exact sum or as its
+  float64, so the display reads back to the same float64 values; at every precision it
   reads back to the structure, and
   displaying a display gives it back. `keep_grouping=True` (off by default) writes every sum and
   product with the grouping of SimpliPy's explicit tokens, the order in which it evaluates the

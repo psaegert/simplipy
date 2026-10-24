@@ -155,6 +155,8 @@ REST_FITS = [
     ('x1*sin(1.000000000000000000003)', 'x1*sin(1 + 3e-21)'),
     ('x1^(0.50000000000000000001)', 'x1^(1/2 + 1e-20)'),
     ('0.99999999999999999999*x1', '(1 - 1e-20)*x1'),
+    # the budget counts significant digits, not the exponent's: 1 and 3.1e-21 write three
+    ('x1 + 1.0000000000000000000031', 'x1 + 1 + 3.1e-21'),
 ]
 NO_REST = [
     # a number shown as a float: a fitted constant with 17 significant digits, one unit in the
@@ -163,8 +165,8 @@ NO_REST = [
      '9.853704666076429e-4*x1 - 0.008884402634549989'),
     ('2.1458314277221002000000000001*x1', None, '2.1458314277221002*x1'),
     ('2.14583142772210003669120562399025*x1', None, '2.1458314277221002*x1'),
-    # a rest beyond the budget
-    ('x1 + 1.0000000000000000000031', None, 'x1 + 1'),
+    # a rest beyond the budget (1/2 and 1/6e20 write four)
+    ('x1 + 1.00000000000000000000314', None, 'x1 + 1'),
     ('x1^(300000000000000000001/600000000000000000000)', None, 'rootn(x1, 2)'),
     # at a precision
     ('x1 + 1.000000000000000000003', 3, 'x1 + 1'),
@@ -178,6 +180,40 @@ def test_a_number_that_would_show_as_a_short_number_it_is_not_gets_its_rest(eng,
     assert structure(eng, eng.simplify(text)) == (expected, True)
     # the display reads back to the state's own numbers
     assert eng.simplify(expected) == eng.simplify(text)
+
+
+# A number is written in the first form that fits the budget of significant digits: exactly, as a
+# short exact sum (its first digits and the rest), or as its float. Exponents count no digits.
+SHORT_SUMS = [
+    ('x1*(2.5e307 + 1e170)', 'f64', '(2.5e307 + 1e170)*x1'),
+    ('x1*(2.5e30 + 1e10)', 'f64', '(2.5e30 + 1e10)*x1'),
+    ('x1*(2.5e30 + 1e15)', 'f64', '(2.5e30 + 1e15)*x1'),
+    ('x1*(1e20 + 1)', 'f64', '(1e20 + 1)*x1'),
+    ('x1 + 1.000000000000000000003', 'f64', 'x1 + 1 + 3e-21'),
+    ('0.30000000000000004*x1', 'f64', '(0.3 + 4e-17)*x1'),
+    # a decimal float64 writes exactly in 15 digits is written as its float, not as a sum
+    ('x1*exp(1905)', 'f64', 'x1*exp(1905)'),
+    ('1.0001*x1', 'f64', '1.0001*x1'),
+    ('x1*1e10', 'f64', '1e10*x1'),
+]
+
+
+@pytest.mark.parametrize('text,mode,expected', SHORT_SUMS, ids=[t for t, _, _ in SHORT_SUMS])
+def test_a_number_is_written_exactly_as_a_short_sum_or_as_its_float(eng, text, mode, expected):
+    answer = eng.simplify(text, mode=mode)
+    assert eng.prettify(answer, mode=mode) == expected
+    assert eng.prettify(expected, mode=mode) == expected
+    # every display here is exact: it reads back to the answer itself
+    assert eng.simplify(expected, mode=mode) == answer
+
+
+def test_a_precision_writes_a_float_of_its_digits_not_a_short_sum(eng):
+    # the reader asked for k digits: `0.043` for 0.043000000000000003, not `0.043 + 3e-18`
+    assert show(eng, '0.043000000000000003*x1') == '(0.043 + 3e-18)*x1'
+    assert show(eng, '0.043000000000000003*x1', precision=3) == '0.043*x1'
+    assert show(eng, 'x1*(1e20 + 1)', precision=3) == '1e20*x1'
+    # a rest is one number: 0.07980000000000001 is no `0.08 + 1e-17 - 2e-4`
+    assert show(eng, '0.07980000000000001*x1') == '0.07980000000000001*x1'
 
 
 @pytest.mark.parametrize('text,precision,expected', NO_REST, ids=[f'{t}-{p}' for t, p, _ in NO_REST])
@@ -385,9 +421,9 @@ SPLITS = [
     ('1.000000000000000000003*x1', None, '(1 + 3e-21)*x1'),
     ('x1^(3.00000000000000000001)', None, 'x1^(3 + 1e-20)'),
     ('x1^(1.00000000000000000001)*x2', None, 'x1^(1 + 1e-20)*x2'),
-    ('x1^(600000000000000000001/300000000000000000000)', None, 'x1^(2 + 3.3333333333333333e-21)'),
+    ('x1^(600000000000000000001/300000000000000000000)', None, 'x1^(2 + 1/3e20)'),
     ('x3 + (1815963197375679774584911*x1/1.1784e19)^(9000000000000000000001/3000000000000000000000)',
-     None, 'x3 + (154104.1409857162*x1)^(3 + 3.333333333333333e-22)'),
+     None, 'x3 + (154104.1409857162*x1)^(3 + 1/3e21)'),
     # a constant term written as `s + r` is two terms of its sum
     ('(1.12345*x1 + 111.0001)*(1.12346*x1 + 111.0002)', 3, '(1.12*x1 + 111)*(1.12*x1 + 111 + 2e-4)'),
 ]

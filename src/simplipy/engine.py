@@ -2207,22 +2207,28 @@ class SimpliPyEngine:
             engine.prettify(engine.simplify('x1*exp(-381/2)'))
             # '1.8488479557720672e-83*x1'
 
-        The rules, at the digit budget ``D = digits`` (every digit a spelling writes counts,
-        a numerator of 1 included: ``1/12`` counts 3):
+        The rules, at the digit budget ``D = digits`` (the significant digits a spelling
+        writes count, never an exponent's, a numerator of 1 included: ``1/12`` counts 3,
+        ``2.5e307`` counts 2, ``0.05`` counts 1). Each number is written in the first form
+        that fits ``D``:
 
-        * A number whose exact spelling fits ``D`` is written exactly, as :meth:`simplify`
-          writes it: the budget decides only whether a number is exact or its float
-          (``3*x1/10`` is ``0.3*x1``, ``x2 + 0.5`` is ``x2 + 1/2``, ``5/21`` beside a factor is
-          ``x1/4.2``, ``22/7`` stays ``22*x1/7``, ``x1/2`` stays ``x1/2``).
-        * Otherwise the value is the float64 nearest to it, in its shortest form, as a
-          multiplier (``x1/1024`` is ``9.765625e-4*x1``). A number shown as a float is read as a
-          float. One that would show as a short exact number it is not gets its rest, where the
-          rest fits ``D``: ``x1 + 1.000000000000000000003`` is ``x1 + 1 + 3e-21``, which keeps
-          its value, while ``0.0009853704666076428*x1`` is ``9.853704666076429e-4*x1``. With
+        * Exactly, as one number, as :meth:`simplify` writes it, a decimal in the notation
+          below (``3*x1/10`` is ``0.3*x1``, ``x2 + 0.5`` is ``x2 + 1/2``, ``5/21`` beside a
+          factor is ``x1/4.2``, ``22/7`` stays ``22*x1/7``, ``x1/2`` stays ``x1/2``).
+        * At full precision, as a short exact sum ``s + r`` or ``s - r``: ``s`` the number's
+          first significant digits, ``r`` the rest to its value, each written exactly as one
+          number, within ``D`` in total; so it keeps the value (``x1 + 1.000000000000000000003`` is ``x1 + 1 + 3e-21``,
+          ``2.5e30 + 1e15`` is ``2.5e30 + 1e15``, ``0.30000000000000004`` is ``0.3 + 4e-17``).
+          A number float64 writes exactly in 15 digits (``1905``, ``1.0001``) is written as its
+          float instead.
+        * Otherwise the float64 nearest to it, in its shortest form, as a multiplier
+          (``x1/1024`` is ``9.765625e-4*x1``, ``0.0009853704666076428*x1`` is
+          ``9.853704666076429e-4*x1``). A number shown as a float is read as a float. With
           ``precision=k`` such a float shows ``k`` significant digits instead, with no rest
           (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), and that number is
           written by these rules as every number is, so the display reads back as itself
-          (``0.175`` is 7/40, written ``7/40``); a number written exactly is not affected.
+          (``0.175`` is 7/40, written ``7/40``) and no short sum is written; a number written
+          exactly is not affected.
         * pi: a value that is an exact number within ``D`` times or over the literal
           ``3.141592653589793`` is written with pi factored out as the symbol ``pi``
           (``np.pi`` in the token forms): ``x0/(2*pi)``, ``0.15*x0^2/(pi*x1*x2)``. In ``f64``
@@ -2258,9 +2264,8 @@ class SimpliPyEngine:
           reciprocal of a product with a sum or a function stays one bag in the section.
         * Scientific notation from ``1e6`` and below ``1e-3``.
 
-        At the default ``precision=None`` a number is written exactly or as the float64
-        nearest to it (with its rest where that fits), so the display reads back to the same
-        float64 values: it evaluates as the expression does, up to the order of its
+        At the default ``precision=None`` a number is written exactly, as a short exact sum or
+        as the float64 nearest to it, so the display reads back to the same float64 values: it evaluates as the expression does, up to the order of its
         operations. A sum is written as one flat chain, ``x1 + x2 + exp(x3)``, and an infix
         product as one run of factors, which reading groups from the left; SimpliPy's explicit
         tokens group them from the right (``+ x1 + x2 exp x3``), and where terms nearly cancel,
