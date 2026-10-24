@@ -68,6 +68,10 @@ organised by who you are, then the highlights, then every change in detail.
   `-sin(0)`, `-2*atan(0)` and `-erf(0)` are `-0.0` (they were `0`). A zero the search derives
   keeps the one zero (`x1*0` is unchanged). A nonzero literal that underflows to -0 stays the
   leaf it is written as.
+- **Known `f64` limit: a zero term at -0.** `x + 0` is `x`, and `x1 + sin(0)` is `x1`: at the
+  single point `x = -0` the answer is -0 where float64's sum is +0 (`-0 + 0 = +0`). A point is
+  a null set, whose zero sign `f64` does not keep. `x + -0.0` is `x` exactly, since float64's
+  `x + -0` is `x` at every `x`, -0 included.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with
