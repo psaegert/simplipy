@@ -2014,6 +2014,30 @@ fn deployed_exact(
     var_names: Vec<String>,
     arity: std::collections::BTreeMap<String, u8>,
 ) -> (bool, usize, Option<Vec<f64>>) {
+    let ops = arity_table(arity);
+    let d = py.detach(|| crate::battery::deployed_exact(&lhs, &rhs, &var_names, &ops));
+    (d.ok, d.probes, d.first)
+}
+
+/// THE f64 REALISATION BAR of a rule spelled with a 0.15 head (`battery::f64_bar`), under an
+/// operator table of `arity`: `None` when the ordinary realisation axis decides, else the
+/// deployed bar's `(agree, probes, first differing probe)`. `simplipy.verify._contract` ANDs it
+/// into a rule's `realised`, and the f64 mint applies the same function.
+#[pyfunction]
+fn f64_bar(
+    py: Python<'_>,
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    var_names: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<(bool, usize, Option<Vec<f64>>)> {
+    let ops = arity_table(arity);
+    py.detach(|| crate::battery::f64_bar(&lhs, &rhs, &var_names, &ops))
+        .map(|d| (d.ok, d.probes, d.first))
+}
+
+/// An operator table from a name -> arity map (no realizations: the core's own kernels).
+fn arity_table(arity: std::collections::BTreeMap<String, u8>) -> crate::operators::Operators {
     let order: Vec<String> = arity.keys().cloned().collect();
     let specs = arity
         .into_iter()
@@ -2029,9 +2053,7 @@ fn deployed_exact(
             (name, spec)
         })
         .collect();
-    let ops = crate::operators::Operators::from_specs(order, specs);
-    let d = py.detach(|| crate::battery::deployed_exact(&lhs, &rhs, &var_names, &ops));
-    (d.ok, d.probes, d.first)
+    crate::operators::Operators::from_specs(order, specs)
 }
 
 /// The data of a float64 buffer, carried across the GIL release. The `PyBuffer` it was read
@@ -2181,6 +2203,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;
     m.add_function(wrap_pyfunction!(deployed_exact, m)?)?;
+    m.add_function(wrap_pyfunction!(f64_bar, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_binary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary_scalar, m)?)?;

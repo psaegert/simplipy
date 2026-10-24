@@ -113,6 +113,8 @@ pub enum MineRefusal {
     Excluded,
     /// Stage 2: the pair does not certify on the independent rows.
     Unconfirmed,
+    /// f64 mode: float64 does not realise the pick (`battery::f64_bar`).
+    NotRealised,
 }
 
 impl MineRefusal {
@@ -126,6 +128,7 @@ impl MineRefusal {
             MineRefusal::EngineOwnedLaw => "engine-owned-law",
             MineRefusal::Excluded => "excluded",
             MineRefusal::Unconfirmed => "unconfirmed",
+            MineRefusal::NotRealised => "not_realised",
         }
     }
 }
@@ -245,6 +248,16 @@ impl<'a> Acceptor<'a> {
             == Some(Some("engine-owned-law"))
         {
             return Err(MineRefusal::EngineOwnedLaw);
+        }
+        // f64's own file holds only what float64 realises: a pick spelled with a 0.15 head answers
+        // to the f64 bar (`battery::f64_bar`), the function the contract judge ANDs into a rule's
+        // `realised`. `floor(x + 1) -> floor(x) + 1` is true over the reals, so real and
+        // permissive mint it, and float64 breaks it at x = -1e-17, so f64 refuses it here.
+        if matches!(self.spec.mode, RuleMode::Default)
+            && crate::battery::f64_bar(self.src, t, self.vars, &self.eng.operators)
+                .is_some_and(|d| !d.ok)
+        {
+            return Err(MineRefusal::NotRealised);
         }
         if super::refusals::pole_refusal(self.src, t, &self.eng.operators, self.vars).is_some() {
             return Err(MineRefusal::Pole);
@@ -478,7 +491,7 @@ impl Engine {
         seed: u64,
     ) -> Result<Option<&'static str>, String> {
         let cols = crate::worker::x_columns(x_flat, n_rows, var_names.len())?;
-        crate::worker::judge_pair(
+        let why = crate::worker::judge_pair(
             &self.operators,
             src,
             tgt,
@@ -492,7 +505,15 @@ impl Engine {
             spec.atol,
             spec.min_informative,
             spec.rescue(),
-        )
+        )?;
+        // f64 holds only what float64 realises (`Acceptor::license`'s f64 bar)
+        if why.is_none()
+            && matches!(spec.mode, RuleMode::Default)
+            && crate::battery::f64_bar(src, tgt, var_names, &self.operators).is_some_and(|d| !d.ok)
+        {
+            return Ok(Some(MineRefusal::NotRealised.name()));
+        }
+        Ok(why)
     }
 
     /// OFFLINE miner kernel: vectorized evaluation of a prefix expression over a batch of

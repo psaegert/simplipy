@@ -311,6 +311,117 @@ def pow_preimage_witness(lhs, rhs):
     return None
 
 
+#: The step heads' exceptional levels, the pow integer-preimage probe's siblings: `floor` and
+#: `ceil` jump at the integers, `harmonic` has its poles at the negative ones, and `mod` by a
+#: literal divisor c jumps at the multiples of c. Each maps (level k, divisor) to the head's
+#: EXACT value at an argument of exactly that level.
+_STEP_LEVELS = {
+    'floor': (range(-5, 6), lambda k, c: float(k)),
+    'ceil': (range(-5, 6), lambda k, c: float(k)),
+    'harmonic': (range(-5, 0), lambda k, c: float('nan')),
+    'mod': (range(-5, 6), lambda k, c: 0.0),
+}
+
+
+def step_preimage_witness(lhs, rhs):
+    """Search for a jump-preimage witness killing the rule; None if none found.
+
+    The pow probe's mechanism for the step heads: a rule like `ceil(asinh(_0)) ->
+    floor(asinh(_0)) + 1` is false exactly where asinh(x) crosses an integer (x = sinh(1)), a
+    point no atom lattice contains. Scope: single-wildcard rules where `floor`, `ceil` or
+    `harmonic` holds the wildcard in its argument, or `mod` in its dividend with a literal
+    divisor. Solve chain(x*) = level by bisection; at x* every such head whose chain is
+    TOKEN-IDENTICAL to the solved one takes its exact value at the level (k, NaN at a pole, 0
+    at a multiple), substituted as a token, and the surroundings are evaluated numerically.
+    Comparison follows the atom bar, as `pow_preimage_witness`'s."""
+    from ._f64_eval import ARITY, LITERALS as LITS, _num
+    toks_l, toks_r = list(lhs), list(rhs)
+    ws = wildcards(toks_l + toks_r)
+    if len(ws) != 1:
+        return None
+    w = ws[0]
+
+    def step_sites(tokens):
+        out = []
+        for i, t in enumerate(tokens):
+            if t not in _STEP_LEVELS or ARITY.get(t) not in (1, 2):
+                continue
+            a0 = i + 1
+            a1 = _subtree_end(tokens, a0, ARITY)
+            end, c = a1, None
+            if ARITY[t] == 2:
+                end = _subtree_end(tokens, a1, ARITY)
+                if end != a1 + 1:
+                    continue                  # the divisor must be a single literal token
+                c = LITS.get(tokens[a1], _num(tokens[a1]))
+                if c is None or not np.isfinite(c) or c == 0.0:
+                    continue
+            if w in tokens[a0:a1]:
+                out.append((i, end, t, c, tuple(tokens[a0:a1])))
+        return out
+
+    def f64_at(tokens, x):
+        try:
+            return eval_point(substitute(list(tokens), {w: _val_token(x)}))
+        except Exception:
+            return float('nan')
+
+    def side_at(tokens, chain, level, x):
+        toks = list(tokens)
+        for i, end, head, c, ch in sorted(step_sites(toks), reverse=True):
+            if ch != chain:
+                continue
+            k = level / c if c is not None else level
+            if c is not None and k != round(k):
+                continue                      # another divisor: not at its jump here
+            toks[i:end] = [_val_token(_STEP_LEVELS[head][1](round(k), c))]
+        return f64_at(toks, x)
+
+    sites = step_sites(toks_l) + step_sites(toks_r)
+    if not sites:
+        return None
+    grid = np.linspace(-40.0, 40.0, 4001)
+    seen = set()
+    for _, _, head, c, chain in sites:
+        levels = sorted({k * (c if c is not None else 1.0) for k in _STEP_LEVELS[head][0]})
+        if (chain, tuple(levels)) in seen:
+            continue
+        seen.add((chain, tuple(levels)))
+        hv = np.array([f64_at(list(chain), x) for x in grid])
+        for level in levels:
+            d = hv - level
+            sgn = np.sign(d)
+            roots = [float(grid[i]) for i in np.where(d == 0.0)[0][:3]]
+            hits = np.where((sgn[:-1] * sgn[1:] < 0) & np.isfinite(d[:-1]) & np.isfinite(d[1:]))[0]
+            for i in hits[:3]:
+                lo, hi = grid[i], grid[i + 1]
+                slo = np.sign(f64_at(list(chain), lo) - level)
+                for _ in range(80):
+                    mid = 0.5 * (lo + hi)
+                    if np.sign(f64_at(list(chain), mid) - level) == slo:
+                        lo = mid
+                    else:
+                        hi = mid
+                roots.append(0.5 * (lo + hi))
+            for x_star in roots:
+                a = side_at(toks_l, chain, level, x_star)
+                b = side_at(toks_r, chain, level, x_star)
+                if np.isnan(a):
+                    continue                              # extension toward target: tolerated
+                kill = np.isnan(b) or ((np.isinf(a) or np.isinf(b)) and a != b) or \
+                    (np.isfinite(a) and np.isfinite(b)
+                     and abs(a - b) > 1e-6 * max(1.0, abs(a), abs(b)))
+                if kill:
+                    return {'x*': float(x_star), 'level': level, 'lhs_val': a, 'rhs_val': b}
+    return None
+
+
+def preimage_witness(lhs, rhs):
+    """A witness at a point no atom lattice holds: an integer preimage of a literal-base
+    pow's exponent, or a jump preimage of a step head's argument; None if neither finds one."""
+    return pow_preimage_witness(lhs, rhs) or step_preimage_witness(lhs, rhs)
+
+
 def mp_finite(v):
     return not (isnan(v) or isinf(v))
 
@@ -342,11 +453,19 @@ def judge_ground(lhs, rhs, rng):
     # symbolically (sin = 1) and kills it -- a tier inconsistency that ships an unsound rule.
     probes = ([_symbolic_atom(a) for a in FINITE_ATOMS]
               + [mpf(repr(float(v))) for v in np.round(rng.normal(0, 5, GROUND_DRAWS), 6)])
+    from ..verify._contract import Unresolved
+    resolved = 0
     for c in probes:
         try:
             v = hp_eval(list(lhs), {}, [c])
+        except Unresolved:
+            # a contract kernel's band (a 0.15 head at a jump, a pole or erf's asymptote, say
+            # `erf(1e20)`): the value is not determined at this precision -- no evidence either
+            # way, so the probe is skipped, never read as a failure to evaluate the rule
+            continue
         except Exception as ex:
             return 'EVAL-ERR', f'{type(ex).__name__}: {ex}'
+        resolved += 1
         if bare_slot:
             if not mp_finite(v):
                 return 'KILL', (float(c), str(v), '<no finite c_t>')
@@ -358,6 +477,10 @@ def judge_ground(lhs, rhs, rng):
             if not mp_eq(v, w):
                 return 'KILL', (float(c), str(v), str(w))
             # (No f64 zero-sign check here: a single zero makes `/ <constant> inf -> 0` sound.)
+    if 4 * resolved < len(probes):
+        # the contract judge's coverage floor (`UNRESOLVED-COVERAGE` below a quarter): skipping
+        # an undecided probe must not become acquitting on no evidence
+        return 'EVAL-ERR', f'{len(probes) - resolved} of {len(probes)} probes unresolved'
     return 'PASS', None
 
 
@@ -454,7 +577,7 @@ def judge_bang(lhs, rhs, rng):
         v2, _kill = judge_exact(list(lhs), list(rhs), vals)
         if v2 == 'PROMOTE':
             v, info = 'PROMOTE', 'exact-arbiter'
-    if v == 'PROMOTE' and pow_preimage_witness(lhs, rhs) is not None:
+    if v == 'PROMOTE' and preimage_witness(lhs, rhs) is not None:
         return 'DEMOTE', 'POW-PREIMAGE'
     return v, info
 
@@ -492,7 +615,7 @@ def judge_bang_mult(lhs, rhs, rng):
         v2, _kill = judge_exact(list(lhs), list(rhs), vals)
         if v2 == 'PROMOTE':
             v, info = 'PROMOTE', 'exact-arbiter'
-    if v == 'PROMOTE' and pow_preimage_witness(lhs, rhs) is not None:
+    if v == 'PROMOTE' and preimage_witness(lhs, rhs) is not None:
         return 'DEMOTE', 'POW-PREIMAGE'
     return v, info
 
@@ -674,7 +797,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         ws = wildcards(list(lhs) + list(rhs))
         v, info = judge(list(lhs), list(rhs), valuations_for(ws, rng))
         if v == 'PROMOTE':
-            pw = pow_preimage_witness(lhs, rhs)
+            pw = preimage_witness(lhs, rhs)
             if pw is not None:
                 ladder_cf(lhs, rhs, 'POW-PREIMAGE', pw)
                 continue
@@ -704,7 +827,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
             if av != 'PROMOTE':
                 bv, _ = certify_rule(lhs, rhs, rng, vals_override=finite_only(
                     valuations_for(ws, rng)))
-                if bv == 'PROMOTE' and pow_preimage_witness(lhs, rhs) is None:
+                if bv == 'PROMOTE' and preimage_witness(lhs, rhs) is None:
                     report['promoted_bang'].append((lhs, rhs, 'CONTRACT-ATOM', str(ainfo)[:120]))
                     kept.append((respell_bang(lhs), respell_bang(rhs)))
                 else:
@@ -715,7 +838,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         elif v in ('DEMOTE', 'NO-WITNESS'):
             bv, _ = certify_rule(lhs, rhs, rng, vals_override=finite_only(
                 valuations_for(wildcards(list(lhs) + list(rhs)), rng)))
-            if bv == 'PROMOTE' and pow_preimage_witness(lhs, rhs) is None:
+            if bv == 'PROMOTE' and preimage_witness(lhs, rhs) is None:
                 report['promoted_bang'].append((lhs, rhs, v, str(info)[:120]))
                 kept.append((respell_bang(lhs), respell_bang(rhs)))
             else:
@@ -733,7 +856,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         seen.add((lhs, rhs))
         v, info = judge_r2prime(list(lhs), list(rhs), atom_valuations(wildcards(list(lhs) + list(rhs)), rng))
         if v == 'PASS':
-            pw = pow_preimage_witness(lhs, rhs)
+            pw = preimage_witness(lhs, rhs)
             if pw is not None:
                 # a preimage witness is a REAL variable-leaf input (x = sinh(1) etc.), so at
                 # the ? sort this is a defined-value change on an actual point: killed.
@@ -769,7 +892,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         if v == 'PROMOTE':
             bv, _ = certify_rule(lhs, rhs, rng, vals_override=finite_only(
                 valuations_for(ws, rng)))
-            if bv == 'PROMOTE' and pow_preimage_witness(lhs, rhs) is None:
+            if bv == 'PROMOTE' and preimage_witness(lhs, rhs) is None:
                 report['promoted_bang'].append((lhs, rhs, '?-upgrade', ''))
                 kept.append((respell_bang(lhs), respell_bang(rhs)))
             else:

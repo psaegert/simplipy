@@ -983,11 +983,11 @@ class TestTheExistsWitnessIsActuallySearchedFor:
 
         real_fit = C.fit_witness
 
-        def blind_at_pi(tl, tr, shared, cl_val=None):
+        def blind_at_pi(tl, tr, shared, cl_val=None, env_out=None):
             # pi is NOT in CONSTS, so the old code appended it to `skipped_cl`
             if cl_val is not None and abs(cl_val - math.pi) < 1e-12:
                 return None
-            return real_fit(tl, tr, shared, cl_val)
+            return real_fit(tl, tr, shared, cl_val, env_out)
 
         C.fit_witness = blind_at_pi
         try:
@@ -1258,9 +1258,10 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
         # rung 1 lost a side entirely and the drop was measured from the rail
         (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -100.0, ('CERTIFIED', 'core')),
         (['log', 'cosh', 'exp', '<constant>'], ['<constant>'], -100.0, ('CERTIFIED', 'core')),
-        # an absolute snap band inside the evaluator
-        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'real')),
-        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'real')),
+        # an absolute snap band inside the evaluator; realised since the fit keeps its own
+        # witness (5.1e-131), which the band used to snap to 0
+        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'core')),
+        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'core')),
         # past MAX_DPS, where the judge documents abstention and used to convict
         (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0, ('UNRESOLVED-COVERAGE', None)),
         # the witness search stopped eight decades short of the f64 ceiling

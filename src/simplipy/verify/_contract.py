@@ -63,16 +63,26 @@ ARITY = {**_CORE_ARITY,
          'pow2': 1, 'pow3': 1, 'pow4': 1, 'pow5': 1,
          'pow1_2': 1, 'pow1_3': 1, 'pow1_4': 1, 'pow1_5': 1,
          'div2': 1, 'div3': 1, 'div4': 1, 'div5': 1,
-         'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1}
+         'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1,
+         # the 0.15 heads with contract kernels (`OPS`)
+         'floor': 1, 'ceil': 1, 'erf': 1, 'harmonic': 1,
+         'max': 2, 'min': 2, 'mod': 2, 'atan2': 2}
 SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 
 #: Heads the DEPLOYED lane evaluates (`simplipy.operators` realizes each with the engine's own
 #: float64 kernel) and the contract cannot: this judge has no extended-real kernel for them yet.
 #: A rule spelled with one is judged in the deployed lane alone (`_judge_deployed_only`), so the
 #: most it can earn is the `f64` tier -- never `core` or `real`, which need the contract. Every
-#: other unknown head stays UNSUPPORTED-SHAPE.
-DEPLOYED_ONLY_ARITY = {'floor': 1, 'ceil': 1, 'erf': 1, 'harmonic': 1,
-                       'max': 2, 'min': 2, 'mod': 2, 'atan2': 2, 'besselj': 2}
+#: other unknown head stays UNSUPPORTED-SHAPE. A head leaves this table for `ARITY` with its
+#: kernel in `OPS` (and in the core's high-precision evaluators, `hiprec::knows_operator`).
+DEPLOYED_ONLY_ARITY = {'besselj': 2}
+
+#: The 0.15 heads. A rule spelled with one answers to the core's f64 bar for its float64
+#: realisation (`_core.f64_bar`, ANDed into `realised` by `judge_rule`): float64 parts from the
+#: reals at a step head's jump (`floor(x + 1)` at x = -1e-17), at a zero's sign `atan2` reads,
+#: and at a pole of `harmonic`, points the battery and the grid below do not reach.
+NEW_HEADS = frozenset({'floor', 'ceil', 'erf', 'harmonic', 'max', 'min', 'mod', 'atan2',
+                       'besselj'})
 
 
 class Unresolved(Exception):
@@ -386,6 +396,179 @@ def c_rootn(a, b):
     return _z(mp.sign(a) * mp.power(abs(a), mpf(1) / ib))
 
 
+# ---- the 0.15 heads. The step heads read the representation exactly; where a value sits
+# inside the working-precision band of a jump, a pole or an asymptote it is indistinguishable
+# from it, and the point is Unresolved -- the BOUNDARY HONESTY of `asin`'s +-1, `tan`'s poles
+# and `tanh`'s asymptote, at the new heads' own boundaries. The core's high-precision evaluators
+# carry the same kernels (`hiprec::ct_unary` / `ct_binary`).
+def _band():
+    """The working-precision band, 10^(-dps+10)."""
+    return mpf(10) ** (-mp.dps + 10)
+
+
+def _near_jump(a):
+    """Is the finite `a` inside the band of an integer it is not? A step head cannot tell
+    there which side of its jump the argument lies, nor `harmonic` whether it is at a pole."""
+    d = abs(a - mp.nint(a))
+    return d != 0 and d < max(mpf(1), abs(a)) * _band()
+
+
+def _past_resolution(a):
+    """|a| >= 10^(dps-10): every value reads as an integer there, whatever it truly is."""
+    return abs(a) >= mpf(10) ** (mp.dps - 10)
+
+
+def _step(fn):
+    def g(a):
+        if misnan(a):
+            return NAN
+        if misinf(a):
+            return a
+        if _past_resolution(a) or _near_jump(a):
+            raise Unresolved()
+        return _z(fn(a))
+    return g
+
+
+def c_erf(a):
+    """erf, with the band at its asymptotes +-1 (tanh's class): erfc(|a|) is below
+    e^(-a^2) / (|a| sqrt(pi)), so past that bound's band the value is lost."""
+    if misnan(a):
+        return NAN
+    if misinf(a):
+        return mpf(1) if a > 0 else mpf(-1)
+    if a == 0:
+        return mpf(0)
+    if abs(a) > 1e5 or mp.exp(-a * a) / (abs(a) * mp.sqrt(mp.pi)) < _band():
+        raise Unresolved()
+    v = mp.erf(a)
+    if abs(abs(v) - 1) < _band():
+        raise Unresolved()
+    return v
+
+
+#: |B_2k| as exact fractions (p, q), k = 1, 2, ..., grown on demand (`mp.bernfrac` recomputes
+#: on every call, and `mp.bernoulli` caches per precision, which the judge's ladder keeps moving).
+_BERNOULLI: list = []
+
+
+def _harmonic_principal(x):
+    """H(x) on x > -1 (x != 0) at the ambient precision: the finite sum to m and the digamma
+    difference psi(x + 1 + m) - psi(1 + m) by its asymptotic series at the two large arguments,
+    no Euler gamma and no cancellation beyond the guard bits the caller adds. The core's
+    high-precision evaluators carry the same construction (`hiprec::special::harmonic`)."""
+    q = mp.prec
+    m = q // 2 + 16
+    s = mpf(0)
+    for i in range(1, m + 1):
+        s += x / (i * (i + x))
+    w0 = mpf(m + 1)
+    w1 = x + w0
+    d = mp.log(w1) - mp.log(w0) - (1 / (2 * w1) - 1 / (2 * w0))
+    r1, r0 = 1 / (w1 * w1), 1 / (w0 * w0)
+    wmin = min(w0, w1)
+    rmin = 1 / (wmin * wmin)
+    p1, p0, pmin = r1, r0, rmin
+    tol = mpf(2) ** (-q - 8)
+    k = 1
+    while True:
+        while len(_BERNOULLI) < k:
+            num, den = mp.bernfrac(2 * len(_BERNOULLI) + 2)
+            _BERNOULLI.append((abs(num), den))
+        num, den = _BERNOULLI[k - 1]
+        c = mpf(num) / den / (2 * k)
+        if c * pmin < tol:
+            return s + d
+        d = d - c * (p1 - p0) if k % 2 else d + c * (p1 - p0)   # B_2 > 0, then alternating
+        p1, p0, pmin = p1 * r1, p0 * r0, pmin * rmin
+        k += 1
+
+
+def _harmonic_value(a):
+    """H(a) to the working precision. mpmath's `harmonic` is digamma(a + 1) + gamma, which
+    cancels near 0 (`mp.harmonic(1e-300)` is -4e-84 at dps 80, against a true 1.6e-300) and is
+    slow at the ladder's high rungs; this carries the digits the cancellation eats as guard bits.
+    Below the working resolution the leading term pi^2/6 a is the value; below -1 the
+    reflection H(a) = H(-a - 1) - pi cot(pi a)."""
+    if abs(a) < mpf(2) ** (-mp.prec - 16):
+        return a * mp.pi ** 2 / 6
+    if a < -1:
+        f = a - mp.floor(a)
+        with mp.extraprec(64 + max(0, int(mp.mag(a)))):
+            v = _harmonic_principal(-a - 1) - mp.pi * mp.cot(mp.pi * f)
+        return +v
+    with mp.extraprec(64 + max(0, -int(mp.mag(a)))):
+        v = _harmonic_principal(a)
+    return +v
+
+
+def c_harmonic(a):
+    """The harmonic number psi(a + 1) + gamma: NaN at every negative integer (the one-sided
+    limits differ, D6) and at -inf, +inf at +inf, the band at the poles (tan's class)."""
+    if misnan(a):
+        return NAN
+    if misinf(a):
+        return PINF if a > 0 else NAN
+    if a == 0:
+        return mpf(0)
+    if mp.dps > MAX_DPS:
+        # past the ladder's ceiling: its cost grows as dps^2.6, and only a witness polish asks
+        # (which then keeps its float64 fit, never convicting on it)
+        raise Unresolved()
+    if a < 0:
+        if _past_resolution(a):
+            raise Unresolved()
+        if a == mp.floor(a):
+            return NAN
+        if a < -0.5 and _near_jump(a):
+            raise Unresolved()
+    return _z(_harmonic_value(a))
+
+
+def c_mod(a, b):
+    """numpy's `mod` (the floored remainder, the divisor's sign) under the contract: NaN at a
+    zero divisor and at an infinite dividend; against an infinite divisor the dividend where
+    the signs agree and the divisor otherwise (D7); one zero. mpmath's `%` is the exact floored
+    remainder, rounded once. A remainder inside the band of 0 or of `b` sits at a multiple of
+    `b`, where a residue's sign picks the side of the jump: Unresolved."""
+    if misnan(a) or misnan(b):
+        return NAN
+    if b == 0 or misinf(a):
+        return NAN
+    if misinf(b):
+        if a == 0:
+            return mpf(0)
+        return a if (a > 0) == (b > 0) else b
+    if abs(a) >= abs(b) * mpf(10) ** (mp.dps - 10):
+        raise Unresolved()   # the quotient's integer part is past the working resolution
+    r = a % b
+    if r == 0:
+        return mpf(0)
+    band = abs(b) * _band()
+    if abs(r) < band or abs(abs(b) - abs(r)) < band:
+        raise Unresolved()
+    return r
+
+
+def c_atan2(y, x):
+    """atan2 with C99's cells off the cut, one zero. THE CUT (D18: a null set, no special
+    case in the engine): on y = 0 with x < 0, and at the origin, float64 reads the zero's sign
+    and the contract has one zero, so the point is Unresolved; so is a y inside the band of 0
+    there, a residue whose sign picks the branch."""
+    if misnan(y) or misnan(x):
+        return NAN
+    if y == 0 and x <= 0:
+        raise Unresolved()
+    if x < 0 and not misinf(y) and abs(y) < (mpf(1) if misinf(x) else abs(x)) * _band():
+        raise Unresolved()
+    if misinf(y):
+        v = (mp.pi / 4 if x > 0 else 3 * mp.pi / 4) if misinf(x) else mp.pi / 2
+        return v if y > 0 else -v
+    if misinf(x):
+        return mpf(0) if x > 0 else (mp.pi if y > 0 else -mp.pi)
+    return _z(mp.atan2(y, x))
+
+
 OPS = {
     '+': lambda a, b: NAN if (misnan(a) or misnan(b)) else
          (NAN if (misinf(a) and misinf(b) and mp.sign(a) != mp.sign(b)) else _z(a + b)),
@@ -479,6 +662,10 @@ OPS = {
     'div4': lambda a: c_div(a, mpf(4)), 'div5': lambda a: c_div(a, mpf(5)),
     'mult2': lambda a: OPS['*'](a, mpf(2)), 'mult3': lambda a: OPS['*'](a, mpf(3)),
     'mult4': lambda a: OPS['*'](a, mpf(4)), 'mult5': lambda a: OPS['*'](a, mpf(5)),
+    'floor': _step(mp.floor), 'ceil': _step(mp.ceil),
+    'erf': c_erf, 'harmonic': c_harmonic, 'mod': c_mod, 'atan2': c_atan2,
+    'max': lambda a, b: NAN if (misnan(a) or misnan(b)) else _z(max(a, b)),
+    'min': lambda a, b: NAN if (misnan(a) or misnan(b)) else _z(min(a, b)),
 }
 
 
@@ -530,7 +717,8 @@ def c_eval(tree, env):
                 # (pi/2, -pi/2) the seam `(x^3 + x^2 y)/(x + y)` would set its own rung
                 # from its own ~1e-50 residue, and the precision roulette that rung exists
                 # to expose would confirm itself instead.
-                if (a != 0 and op not in ('+', '-')
+                # (a remainder is a difference too: `mod`'s output can be the residue)
+                if (a != 0 and op not in ('+', '-', 'mod')
                         and (_MAG_SINK[-1][1] == 0 or a < _MAG_SINK[-1][1])):
                     _MAG_SINK[-1][1] = a
         except Exception:
@@ -838,6 +1026,7 @@ SATURATING = {
     'tanh': (-1.0, 1.0),   # |tanh a| < 1 strictly, for every finite a
     'exp': (0.0,),         # exp a > 0 strictly, for every finite a
     'inv': (0.0,),         # 1/a reaches 0 only in the limit
+    'erf': (-1.0, 1.0),    # |erf a| < 1 strictly, for every finite a
 }
 
 
@@ -872,6 +1061,11 @@ def saturation_verdict(tl, tr, env_mp):
             arg = c_eval(src[1], env_mp())
             if tgt[0] == 'lit':
                 lim = c_eval(tgt, env_mp())
+            elif tgt == ('slot', '<C_R>'):
+                # a FITTED witness is no written bound: `erf(30) -> c_t` has the real witness
+                # 1 - 2.6e-393, which no float64 fit can carry, so the fit reads 1.0 and this
+                # test convicted a rule true by construction
+                continue
             elif tgt[0] == 'slot':
                 lim = env_mp()[tgt[1]]
             else:
@@ -1189,9 +1383,10 @@ def _fit_target_env(tl, tr, shared, cl_val=None):
     return None
 
 
-def fit_witness(tl, tr, shared, cl_val=None):
+def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
     """fit the exists-witness for a RHS <constant> on generic reals (deployed algebra);
-    validated on two further generic envs; None if no witness exists/found"""
+    validated on two further generic envs; None if no witness exists/found. With `env_out` (a
+    list), the generic env the witness was determined at is appended to it, for `mp_polish`."""
     def lhs_at(env):
         e = dict(env)
         if cl_val is not None:
@@ -1209,6 +1404,8 @@ def fit_witness(tl, tr, shared, cl_val=None):
     if found is None:
         return None
     env0, L0, g, vals, ok = found
+    if env_out is not None:
+        env_out.append(env0)
     best = None
     if tr == ('slot', '<C_R>'):
         # BARE-<C_R> SHORTCUT (audit §7.2, 2026-08-22): the whole target IS the
@@ -1279,8 +1476,18 @@ def fit_witness(tl, tr, shared, cl_val=None):
         # absolute 1e-6 tolerance flattened every tiny TRUE witness to round(best) = 0
         # (pow(exp(-5), pi) = 1.5e-7 snapped to 0), fabricating clause-(a) kills of
         # sound constant-space rules
+        #
+        # AND ONLY WHERE THE SNAPPED VALUE IS AT LEAST AS GOOD A WITNESS. A snap exists to
+        # remove the fit's own noise (a bisection's 2.9999999999999996 for an exact 3); it
+        # must never replace a witness the fit found exactly. `asinh(exp(-100)) -> c_t` fits
+        # c_t = 3.7e-44, its own value, with residual 0, and the 1e-15 floor snapped it to 0;
+        # `erf(5) -> c_t` fits 0.9999999999984626 and the relative band snapped it to 1. The
+        # deployed lane then compared 0 and 1 against the source and found the true rule
+        # unrealised. So a candidate is taken only where its residual is no larger.
         if abs(c - best) < max(1e-9 * max(abs(best), abs(c)), 1e-15):
-            best = float(c)
+            rc, rb = g(float(c)), g(best)
+            if np.isfinite(rc) and (not np.isfinite(rb) or abs(rc) <= abs(rb)):
+                best = float(c)
             break
     for k in (2, 3):
         env = _gen_env(shared, k)
@@ -1295,14 +1502,21 @@ def fit_witness(tl, tr, shared, cl_val=None):
     return float(best)
 
 
-def mp_polish(tl, tr, nvars, clb, c0):
+def mp_polish(tl, tr, nvars, clb, c0, env0=None):
     """Refine an f64-fitted exists-witness to mp precision against the CONTRACT
     evaluator (the quantifier ranges over R; the f64 fit is only a starting point --
     left at f64 it manufactures 1e-17 'real changes' against exact transcendental
     literals like np.e, producing false clause-(a) kills). mp secant at a generic
     point; falls back to the f64 value if the landscape defeats it (any residual kill
-    then surfaces in the sweep for investigation, never silently)."""
+    then surfaces in the sweep for investigation, never silently).
+
+    THE GENERIC POINT IS THE ONE THE FIT WAS DETERMINED AT (`env0`, from `fit_witness`). A
+    lattice head can make the target flat in the witness at the first generic point:
+    `max(x, acos(c)) -> max(c_t, x)` at x = 1.7 reads 1.7 for every c_t below it, so the secant
+    found no slope there, kept the float64 seed, and the frozen 1e-17 gap convicted the
+    identity at x = 0. The fit already moved on to a point that pins the witness."""
     old = mp.dps
+    gen = None if env0 is None else {n: float(v) for n, v in env0.items()}
     try:
         # THE WITNESS MUST OUT-RESOLVE THE LADDER. `<C_L>` is rebuilt exactly at each
         # rung while `<C_R>` is this fitted value merely re-rounded, so a witness good to
@@ -1314,7 +1528,7 @@ def mp_polish(tl, tr, nvars, clb, c0):
         def build_env():
             e = {}
             for i, n in enumerate(sorted(nvars)):
-                e[n] = mpf(GEN[i % len(GEN)])
+                e[n] = mpf(GEN[i % len(GEN)] if gen is None else gen[n])
             if clb is not None:
                 # the EXACT battery value (symbolic builder), NOT its f64 rendering: a
                 # witness polished against f64-pi differs from the judge's exact mp.pi by
@@ -1767,6 +1981,38 @@ def _tier(verdict, realised):
 
 
 def judge_rule(lhs, rhs, deployed_check=True):
+    """-> dict: verdict CERTIFIED | TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS, with
+    clause/class, points, measures (`_judge_contract`), and the tier the two axes give.
+
+    A rule spelled with a 0.15 head (`NEW_HEADS`) is realised in float64 only where the core's
+    f64 bar agrees too (`_core.f64_bar`: bit for bit at the jumps, the signed zeros and the poles
+    float64 parts from the reals at, which the battery and the grid do not reach), so
+    `floor(x + 1) -> floor(x) + 1` is CERTIFIED and not realised (float64 breaks it at
+    x = -1e-17): tier `real`. The mint applies the same bar in f64, so the two agree."""
+    r = _judge_contract(lhs, rhs, deployed_check)
+    if (not deployed_check or 'tier' not in r or r['verdict'] == 'F64-ONLY'
+            or not NEW_HEADS & (set(lhs) | set(rhs))):
+        return r
+    from simplipy._core import f64_bar  # type: ignore[attr-defined]
+    slot = {}
+    for t in list(lhs) + list(rhs):
+        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+        if SLOT_RE.match(key) and key not in slot:
+            slot[key] = None
+    names = {key: f'x{i}' for i, key in enumerate(sorted(slot))}
+    spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
+                        for t in ts]
+    bar = f64_bar(spell(lhs), spell(rhs), list(names.values()), {**ARITY, **DEPLOYED_ONLY_ARITY})
+    if bar is None:
+        return r
+    ok, probes, first = bar
+    realised = r.get('realised') is not False and ok
+    return dict(r, realised=realised, tier=_tier(r['verdict'], realised),
+                f64_bar={'ok': ok, 'probes': probes,
+                         'first': None if first is None else dict(zip(names, first))})
+
+
+def _judge_contract(lhs, rhs, deployed_check=True):
     """-> dict: verdict CERTIFIED | TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS,
     with clause/class, points, measures. Implements the kill bar:
       KILL   iff a REAL-CHANGE exists at any resolved point (clause a)
@@ -1832,7 +2078,8 @@ def judge_rule(lhs, rhs, deployed_check=True):
         kept_cl = []
         any_fit = False
         for b, key in cl_battery:
-            w = fit_witness(tl, tr, set(nvars), key)
+            fit_env = []
+            w = fit_witness(tl, tr, set(nvars), key, fit_env)
             if w is None:
                 # distinguish: LHS UNDEFINED at this cl for the generic envs -> the rows
                 # are tolerated degenerate extensions (the acos(pow(c,-inf)) class),
@@ -1859,7 +2106,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 skipped_cl.append(key)
                 continue
             any_fit = True
-            witness[key] = mp_polish(tl, tr, nvars, b, w)
+            witness[key] = mp_polish(tl, tr, nvars, b, w, fit_env[0] if fit_env else None)
             witness_f64[key] = w
             kept_cl.append((b, key))
         if has_cr and not any_fit:
@@ -2014,7 +2261,11 @@ def judge_rule(lhs, rhs, deployed_check=True):
                         wv = witness.get(float(CONSTS[0]) if has_cl else None)
                         if wv is None:
                             continue
-                        e['<C_R>'] = +wv
+                        # the polished witness, re-rounded at each rung as the battery lane
+                        # does: frozen at this lane's dps 50, it left a fixed 1e-51 gap against
+                        # an exact `<C_L>` at every higher rung, which the decay test read as
+                        # analytic (`x + log(c) -> c_t + x` scored measure 1.0)
+                        e['<C_R>'] = wv
                     # PRECISION-COUPLED (F96). This lane took a SINGLE dps-50 reading,
                     # while `_point_verdict` -- the battery's own comparison -- has always
                     # confirmed each non-eq verdict at a second rung and returned
@@ -2027,7 +2278,8 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     # tail points and it would have convicted a true rule. Escalate, and
                     # never convict on a reading a second rung will not repeat.
                     snap0 = SNAP_EVENTS[0]
-                    cv, _snapped = _point_verdict(tl, tr, lambda e=e: e)
+                    cv, _snapped = _point_verdict(tl, tr,
+                                                  lambda e=e: {k: +v for k, v in e.items()})
                     if cv is None:
                         continue
                     res.append(cv)
@@ -2104,13 +2356,13 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     wv = witness.get(float(CONSTS[0]) if has_cl else None)
                     if wv is None:
                         continue
-                    e['<C_R>'] = +wv
+                    e['<C_R>'] = wv   # re-rounded at each rung, as above
                 # PRECISION-COUPLED like every other lane (F96 completed 2026-08-20).
                 # This took a single bare reading at rung 1 and fed the SAME `meas` that
                 # KILLs, so one dps-50 rounding on the diagonal could convict a rule that
                 # the per-slot lane -- two-rung since F96 -- would have cleared. The
                 # asymmetry was invisible because both lanes write into one accumulator.
-                v, _ = _point_verdict(tl, tr, lambda e=e: e)
+                v, _ = _point_verdict(tl, tr, lambda e=e: {k: +v for k, v in e.items()})
                 if v is not None:
                     res.append(v)
             if res:

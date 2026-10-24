@@ -286,11 +286,21 @@ fn affine_of(tokens: &[String], w: &str, var_names: &[String], ops: &Operators) 
     }
 }
 
+/// The integers at which a step head's argument is probed for its jump (`harmonic`'s negative
+/// ones are its poles; the multiples of a constant `mod` divisor are these times it).
+const JUMP_LEVELS: [i64; 5] = [-2, -1, 0, 1, 2];
+
+/// A subtree and the exact rationals `(n, d)` at which it is exceptional.
+type Level<'a> = (&'a [String], Vec<(i64, i64)>);
+
 /// Collect the EXCEPTIONAL POINTS of a pattern: exact rational bindings of one
 /// variable at which a denominator (or `log` argument) vanishes. Scope (documented in
 /// SWEEP.md row 3): `inv X` / `/ A B` / `pow B <negative integer>` denominators and
 /// `log X` at X=0, with the vanishing subtree AFFINE in exactly one variable. This is
 /// the entire F63 orbit surface; transcendental locations (tan) are H-017's lane.
+/// The 0.15 heads' discontinuities join it (`floor`/`ceil` at the integers, `harmonic` at
+/// its poles, `mod` at a zero divisor and at the multiples of a constant one): a rule true off
+/// a jump and false on it is the pole-mirror family with a jump for a pole.
 fn exceptional_points(
     tokens: &[String],
     var_names: &[String],
@@ -301,15 +311,21 @@ fn exceptional_points(
         return;
     }
     let t = &tokens[0];
-    let mut denoms: Vec<&[String]> = Vec::new();
+    // (subtree, the values at which it is exceptional): a denominator at 0, and the 0.15
+    // heads' discontinuities, which the pole handling treats alike -- the step heads' jumps at
+    // the integers, `harmonic`'s poles at the negative integers, `mod`'s zero divisor and the
+    // multiples of a constant divisor. The jump sets are infinite; the small integers are the
+    // representatives a rule false at a jump is false at.
+    let mut levels: Vec<Level> = Vec::new();
+    let zero = vec![(0, 1)];
     match (t.as_str(), ops.arity_of(t.as_str())) {
         // The token names are only trusted as structure when the config's own arity
         // table agrees -- a leaf that happens to be SPELLED "inv" must not have the
         // following tokens read as its child.
-        ("inv" | "log", Some(1)) => denoms.push(&tokens[1..]),
+        ("inv" | "log", Some(1)) => levels.push((&tokens[1..], zero.clone())),
         ("/", Some(2)) => {
             if let Some(la) = subtree_len(&tokens[1..], ops) {
-                denoms.push(&tokens[1 + la..]);
+                levels.push((&tokens[1 + la..], zero.clone()));
             }
         }
         ("pow", Some(2)) => {
@@ -318,23 +334,56 @@ fn exceptional_points(
                 if exp.len() == 1 {
                     if let Some((n, 1)) = lit_q(&exp[0]) {
                         if n < 0 {
-                            denoms.push(&tokens[1..1 + lb]);
+                            levels.push((&tokens[1..1 + lb], zero.clone()));
                         }
+                    }
+                }
+            }
+        }
+        ("floor" | "ceil", Some(1)) => {
+            levels.push((&tokens[1..], JUMP_LEVELS.iter().map(|&k| (k, 1)).collect()))
+        }
+        ("harmonic", Some(1)) => levels.push((
+            &tokens[1..],
+            JUMP_LEVELS
+                .iter()
+                .filter(|&&k| k < 0)
+                .map(|&k| (k, 1))
+                .collect(),
+        )),
+        ("mod", Some(2)) => {
+            if let Some(la) = subtree_len(&tokens[1..], ops) {
+                let (a, b) = (&tokens[1..1 + la], &tokens[1 + la..]);
+                levels.push((b, zero.clone()));
+                // a constant divisor c: the dividend's multiples of c are the jumps
+                if let Some(c) = affine_of(b, "", var_names, ops).filter(|c| c.bn == 0) {
+                    if c.an != 0 {
+                        let mults = JUMP_LEVELS
+                            .iter()
+                            .filter_map(|&k| mul_q(k, 1, c.an, c.ad))
+                            .collect();
+                        levels.push((a, mults));
                     }
                 }
             }
         }
         _ => {}
     }
-    for d in denoms {
+    for (d, values) in levels {
         // exactly one variable, occurring exactly once, affine
         let vars: Vec<&String> = d.iter().filter(|x| var_names.contains(x)).collect();
         if vars.len() == 1 {
             let w = vars[0].clone();
             if let Some(aff) = affine_of(d, &w, var_names, ops) {
-                if let Some(root) = aff.root() {
-                    if !out.iter().any(|(v, r)| *v == w && *r == root) {
-                        out.push((w, root));
+                for (n, dd) in values {
+                    let Some(shifted) = Affine::constant(n, dd).and_then(|c| aff.add(c.neg()))
+                    else {
+                        continue;
+                    };
+                    if let Some(root) = shifted.root() {
+                        if !out.iter().any(|(v, r)| *v == w && *r == root) {
+                            out.push((w.clone(), root));
+                        }
                     }
                 }
             }
@@ -593,13 +642,16 @@ mod tests {
         )
         .expect("acj2-4 builds");
         let vars = s(&["x0"]);
-        let src = s(&["floor", "inv", "-", "1", "x0"]);
+        let src = s(&["besselj", "1", "inv", "-", "1", "x0"]);
         assert_eq!(
             pole_refusal(&src, &src, &e.operators, &vars),
             Some(Refusal::PoleClassChange)
         );
         // no exceptional point: nothing to adjudicate
-        let (a, b) = (s(&["floor", "floor", "x0"]), s(&["floor", "x0"]));
+        let (a, b) = (
+            s(&["besselj", "1", "besselj", "1", "x0"]),
+            s(&["besselj", "1", "x0"]),
+        );
         assert_eq!(pole_refusal(&a, &b, &e.operators, &vars), None);
         let verdict = contract_point_verdict(
             &b,
@@ -612,6 +664,63 @@ mod tests {
         );
         assert_eq!(verdict, (None, false));
         assert!(!crate::hiprec::evaluable(&b, &e.operators));
-        assert!(crate::hiprec::evaluable(&s(&["inv", "x0"]), &e.operators));
+        assert!(crate::hiprec::evaluable(&s(&["floor", "x0"]), &e.operators));
+    }
+
+    /// The 0.15 heads' discontinuities are exceptional points, adjudicated like poles: a rule
+    /// true off a jump and false on it is refused there, and one true at the jumps passes.
+    #[test]
+    fn jumps_are_exceptional_points() {
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let vars = s(&["x0"]);
+        let mut pts = Vec::new();
+        exceptional_points(
+            &s(&["floor", "*", "3", "x0"]),
+            &vars,
+            &e.operators,
+            &mut pts,
+        );
+        assert!(pts.contains(&("x0".to_string(), (1, 3))), "{pts:?}");
+        pts.clear();
+        exceptional_points(&s(&["mod", "x0", "2"]), &vars, &e.operators, &mut pts);
+        assert!(pts.contains(&("x0".to_string(), (-4, 1))), "{pts:?}");
+        pts.clear();
+        exceptional_points(
+            &s(&["harmonic", "+", "x0", "1"]),
+            &vars,
+            &e.operators,
+            &mut pts,
+        );
+        assert_eq!(
+            pts,
+            vec![("x0".to_string(), (-3, 1)), ("x0".to_string(), (-2, 1))]
+        );
+        let refused = |l: &[&str], r: &[&str]| pole_refusal(&s(l), &s(r), &e.operators, &vars);
+        // ceil(3x) = floor(3x) + 1 off the jumps, and not at x = 1/3
+        assert_eq!(
+            refused(
+                &["ceil", "*", "3", "x0"],
+                &["+", "floor", "*", "3", "x0", "1"]
+            ),
+            Some(Refusal::PoleClassChange)
+        );
+        // floor(x + 1) = floor(x) + 1 holds at every jump too
+        assert_eq!(
+            refused(&["floor", "+", "x0", "1"], &["+", "floor", "x0", "1"]),
+            None
+        );
+        // mod(x, 1) = x - floor(x) holds everywhere; mod(x, 1) = x only on [0, 1)
+        assert_eq!(
+            refused(&["mod", "x0", "1"], &["-", "x0", "floor", "x0"]),
+            None
+        );
+        assert_eq!(
+            refused(&["mod", "x0", "1"], &["x0"]),
+            Some(Refusal::PoleClassChange)
+        );
     }
 }

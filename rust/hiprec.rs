@@ -42,6 +42,8 @@
 use crate::operators::Operators;
 use astro_float::{BigFloat, Consts, RoundingMode, INF_NEG, INF_POS, NAN};
 
+mod special;
+
 /// Re-export for callers that rank arbiter values without naming the backing crate
 /// (worker's literal resolution).
 pub use astro_float::BigFloat as ArbFloat;
@@ -1022,9 +1024,13 @@ fn powi_sr_at(x: &BigFloat, k: u64, g: usize) -> BigFloat {
 
 /// The operators both high-precision evaluators (the rescue `apply_unary`/`apply_binary` and the
 /// contract `ct_unary`/`ct_binary`) know. Any other head is unevaluable, at a NaN operand too,
-/// so every verdict that needs one refuses it.
+/// so every verdict that needs one refuses it. A head joins this table together with its arms in
+/// all four evaluators (`special` holds the 0.15 heads' kernels); `besselj` has none yet.
 pub(crate) fn knows_operator(name: &str) -> bool {
     matches!(
+        name,
+        "floor" | "ceil" | "erf" | "harmonic" | "max" | "min" | "mod" | "atan2"
+    ) || matches!(
         name,
         "neg"
             | "abs"
@@ -1276,9 +1282,122 @@ fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat
                 }
             }
         }
+        "floor" | "ceil" => ct_step(x, name == "floor", ctx),
+        // erf's +-1 is an asymptote, tanh's class: inside the band of it the value is lost
+        "erf" => {
+            if x.is_inf() {
+                Some(if is_pos(x) { one(p) } else { one(p).neg() })
+            } else if x.is_zero() {
+                Some(small_int(0, p))
+            } else if special::erfc_below(&x.abs(), &ctx.floor, p, &mut ctx.cc) {
+                None
+            } else {
+                special::erf(x, p, &mut ctx.cc)
+                    .filter(|v| !cmp_lt(&v.abs().sub(&one(p), p, RM).abs(), &ctx.floor))
+            }
+        }
+        // harmonic: NaN at every negative integer (the one-sided limits differ, D6) and at -inf;
+        // an argument inside the band of a pole is indistinguishable from it, tan's class
+        "harmonic" => {
+            if x.is_inf() {
+                Some(if is_pos(x) { INF_POS } else { NAN })
+            } else if x.is_zero() {
+                Some(small_int(0, p))
+            } else if x.is_negative() && !cmp_lt(&x.abs(), &ctx.ceil) {
+                None // integrality past the working resolution
+            } else if x.is_negative() && x.is_int() {
+                Some(NAN)
+            } else if cmp_lt(x, &bf(-0.5, p)) && near_jump(x, ctx) {
+                None
+            } else {
+                special::harmonic(x, p, &mut ctx.cc)
+            }
+        }
         _ => return None,
     };
     Some(v)
+}
+
+/// Is the finite `x` inside the working-precision band of an integer it is not? A step head
+/// cannot tell there which side of its jump the argument lies, nor `harmonic` whether it is at
+/// a pole: the boundary-honesty band of `asin`'s +-1 and `tan`'s poles, at the integers.
+fn near_jump(x: &BigFloat, ctx: &CtCtx) -> bool {
+    let p = ctx.p;
+    let d = x.sub(&x.round(0, RM), p, RM).abs();
+    if d.is_zero() {
+        return false;
+    }
+    let a = x.abs();
+    let scale = if cmp_gt(&a, &one(p)) { a } else { one(p) };
+    cmp_lt(&d, &scale.mul(&ctx.floor, p, RM))
+}
+
+/// `floor` / `ceil` under the contract: exact on the representation, with the band at the jumps
+/// (`near_jump`); +-inf are fixed points. Past the working resolution (|x| >= 10^(dps-10)) every
+/// value reads as an integer whatever it truly is, so the point is Unresolved.
+fn ct_step(x: &BigFloat, floor: bool, ctx: &CtCtx) -> Option<BigFloat> {
+    if x.is_inf() {
+        return Some(x.clone());
+    }
+    if !cmp_lt(&x.abs(), &ctx.ceil) || near_jump(x, ctx) {
+        return None;
+    }
+    let v = if floor { x.floor() } else { x.ceil() };
+    Some(if v.is_zero() { small_int(0, ctx.p) } else { v })
+}
+
+/// `mod(a, b)` under the contract: numpy's cells (D7: NaN at b = 0 and at an infinite dividend;
+/// against an infinite divisor the dividend where the signs agree, the divisor otherwise), the
+/// exact floored remainder, one zero, and the band at the jumps: a remainder inside the band of
+/// 0 or of `b` sits at a multiple of `b`, where the residue's sign picks the side.
+fn ct_mod(a: &BigFloat, b: &BigFloat, ctx: &CtCtx) -> Option<BigFloat> {
+    let p = ctx.p;
+    if b.is_zero() || a.is_inf() {
+        return Some(NAN);
+    }
+    if b.is_inf() {
+        if a.is_zero() {
+            return Some(small_int(0, p));
+        }
+        return Some(if a.is_negative() == b.is_negative() {
+            a.clone()
+        } else {
+            b.clone()
+        });
+    }
+    let bb = b.abs();
+    if !cmp_lt(&a.abs(), &bb.mul(&ctx.ceil, p, RM)) {
+        return None; // the quotient's integer part is past the working resolution
+    }
+    let r = special::modulo(a, b, p);
+    if r.is_zero() {
+        return Some(small_int(0, p));
+    }
+    let band = bb.mul(&ctx.floor, p, RM);
+    let ra = r.abs();
+    if cmp_lt(&ra, &band) || cmp_lt(&bb.sub(&ra, p, RM).abs(), &band) {
+        return None;
+    }
+    Some(r)
+}
+
+/// `atan2(y, x)` under the contract: C99's cells off the cut, one zero. THE CUT (D18: a null
+/// set, no special case in the engine): on y = 0 with x < 0, and at the origin, float64 reads
+/// the zero's sign and the contract has one zero, so the point is Unresolved; so is a y inside
+/// the band of 0 there, a residue whose sign picks the branch.
+fn ct_atan2(y: &BigFloat, x: &BigFloat, ctx: &mut CtCtx) -> Option<BigFloat> {
+    let p = ctx.p;
+    if y.is_zero() && (x.is_zero() || x.is_negative()) {
+        return None;
+    }
+    if x.is_negative() && !y.is_inf() {
+        let scale = if x.is_inf() { one(p) } else { x.abs() };
+        if cmp_lt(&y.abs(), &scale.mul(&ctx.floor, p, RM)) {
+            return None;
+        }
+    }
+    let v = special::atan2(y, x, p, &mut ctx.cc);
+    Some(if v.is_zero() { small_int(0, p) } else { v })
 }
 
 fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
@@ -1315,6 +1434,13 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         "pow" => ct_pow(a, b, ctx),
         // `rootn(x, n)`: IEEE-754 rootn, honest for every integer index.
         "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc, ct_div)),
+        // continuous, and exact on the representation
+        "max" | "min" => {
+            let v = special::lattice(a, b, name == "max", p);
+            Some(if v.is_zero() { small_int(0, p) } else { v })
+        }
+        "mod" => ct_mod(a, b, ctx),
+        "atan2" => ct_atan2(a, b, ctx),
         _ => return None,
     };
     Some(v)
@@ -1433,7 +1559,8 @@ fn ct_node(
         };
         let v = ct_binary(&tok, &a, &b, ctx)?;
         if let Some(u) = &v {
-            ctx.note_mag(u, tok == "+" || tok == "-");
+            // a remainder is a difference too: `mod`'s output can be the residue
+            ctx.note_mag(u, tok == "+" || tok == "-" || tok == "mod");
         }
         return Some(v);
     }
@@ -1550,6 +1677,7 @@ fn saturating_bounds(op: &str) -> Option<&'static [f64]> {
         "tanh" => Some(&[-1.0, 1.0]), // |tanh a| < 1 strictly, for every finite a
         "exp" => Some(&[0.0]),        // exp a > 0 strictly, for every finite a
         "inv" => Some(&[0.0]),        // 1/a reaches 0 only in the limit
+        "erf" => Some(&[-1.0, 1.0]),  // |erf a| < 1 strictly, for every finite a
         _ => None,
     }
 }
@@ -1584,15 +1712,20 @@ fn ct_saturation_verdict(
 ) -> Option<PointCmp> {
     let dps = GAP_RUNGS[0];
     let p = dps_to_prec(dps);
-    for (src, sp, tgt, tp) in [
-        (source, src_params, target, tgt_params),
-        (target, tgt_params, source, src_params),
+    for (src, sp, tgt, tp, tgt_is_target) in [
+        (source, src_params, target, tgt_params, true),
+        (target, tgt_params, source, src_params, false),
     ] {
         let Some(bounds) = src.first().and_then(|o| saturating_bounds(o)) else {
             continue;
         };
         if src.len() < 2 || tgt.len() != 1 {
             continue; // computed side: provenance is not a written bound
+        }
+        if tgt_is_target && tgt[0] == "<constant>" {
+            // a FITTED target constant is no written bound: `erf(30) -> c_t` has the real
+            // witness 1 - 2.6e-393, which no float64 fit carries (`_contract.saturation_verdict`)
+            continue;
         }
         let Some(mut ctx) = CtCtx::new(p, dps) else {
             continue;
@@ -2058,6 +2191,43 @@ fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<Bi
                 x.ln(p, RM, cc)
             }
         }
+        // the 0.15 heads, with float64's cells and signed zeros (`numeric::kernels`)
+        "floor" | "ceil" => {
+            let v = if name == "floor" { x.floor() } else { x.ceil() };
+            if v.is_zero() && x.is_negative() {
+                small_int(0, p).neg() // floor(-0) = ceil(-0.5) = -0
+            } else {
+                v
+            }
+        }
+        "erf" => {
+            if x.is_zero() {
+                x.clone()
+            } else if x.is_inf() {
+                if x.is_negative() {
+                    one(p).neg()
+                } else {
+                    one(p)
+                }
+            } else {
+                special::erf(x, p, cc)?
+            }
+        }
+        "harmonic" => {
+            if x.is_zero() {
+                x.clone() // H(+-0) = +-0
+            } else if x.is_inf() {
+                if x.is_negative() {
+                    NAN
+                } else {
+                    INF_POS
+                }
+            } else if x.is_negative() && x.is_int() {
+                NAN // a pole (D6)
+            } else {
+                special::harmonic(x, p, cc)?
+            }
+        }
         _ => return None,
     };
     Some(v)
@@ -2140,6 +2310,9 @@ fn apply_binary(
         }
         // `rootn(x, n)`: IEEE-754 rootn, same table as the ct_binary arm.
         "rootn" => rootn_hiprec(a, b, p, cc, ieee_div),
+        "max" | "min" => special::lattice(a, b, name == "max", p),
+        "mod" => special::modulo(a, b, p),
+        "atan2" => special::atan2(a, b, p, cc),
         _ => return None,
     };
     Some(v)
@@ -2992,5 +3165,132 @@ mod magnitude_probe {
         );
         assert!(snapped, "pole proximity must flag the snap (got {v:?})");
         assert_ne!(v, Some(PointCmp::RealChange));
+    }
+}
+
+#[cfg(test)]
+mod new_head_tests {
+    use super::*;
+
+    fn s(t: &str) -> Vec<String> {
+        t.split(' ').map(String::from).collect()
+    }
+
+    fn acj2() -> crate::engine::Engine {
+        crate::engine::Engine::from_strs(include_str!("../assets/engines/acj2-4/config.yaml"), "[]")
+            .expect("acj2-4 builds")
+    }
+
+    /// The contract point verdict on the 0.15 heads: exact at the jumps and the poles where the
+    /// reals decide, Unresolved on atan2's cut, a real change where a rule is false at a jump.
+    #[test]
+    fn contract_verdicts_at_the_jumps_and_the_cut() {
+        let e = acj2();
+        let ops = e.operators_ref();
+        let v = s("x0");
+        let at = |l: &str, r: &str, x: ProbeAtom| {
+            contract_point_verdict(&s(l), &[], &s(r), &[], ops, &v, &[x]).0
+        };
+        // floor(x + 1) = floor(x) + 1 at the jump x = -1, exactly
+        assert_eq!(
+            at("floor + x0 1", "+ floor x0 1", ProbeAtom::Val(-1.0)),
+            Some(PointCmp::Eq)
+        );
+        // ceil(x) = floor(x) + 1 is false at every integer
+        assert_eq!(
+            at("ceil x0", "+ floor x0 1", ProbeAtom::Val(2.0)),
+            Some(PointCmp::RealChange)
+        );
+        assert_eq!(
+            at("ceil x0", "+ floor x0 1", ProbeAtom::Val(0.5)),
+            Some(PointCmp::Eq)
+        );
+        // harmonic is NaN at its poles, and H(x) - H(x - 1) = 1/x off them
+        assert_eq!(
+            at("harmonic x0", "float(\"nan\")", ProbeAtom::Val(-2.0)),
+            Some(PointCmp::Eq)
+        );
+        assert_eq!(
+            at(
+                "- harmonic x0 harmonic - x0 1",
+                "inv x0",
+                ProbeAtom::PiFrac(1, 3)
+            ),
+            Some(PointCmp::Eq)
+        );
+        // mod(x, 1) = x - floor(x), at a jump too; mod(x, 1) = x is false at -1/2
+        assert_eq!(
+            at("mod x0 1", "- x0 floor x0", ProbeAtom::Val(-2.0)),
+            Some(PointCmp::Eq)
+        );
+        assert_eq!(
+            at("mod x0 1", "x0", ProbeAtom::Val(-0.5)),
+            Some(PointCmp::RealChange)
+        );
+        // erf is odd; its asymptote is never attained at a finite argument
+        assert_eq!(
+            at("erf neg x0", "neg erf x0", ProbeAtom::E),
+            Some(PointCmp::Eq)
+        );
+        assert_eq!(
+            at("erf * x0 30", "1", ProbeAtom::Val(1.0)),
+            Some(PointCmp::RealChange)
+        );
+        // atan2 on its cut (y = 0, x < 0) is Unresolved; off it, atan2(-y, x) = -atan2(y, x)
+        let w = s("x0 x1");
+        let at2 = |l: &str, r: &str, y: f64, x: f64| {
+            let atoms = [ProbeAtom::Val(y), ProbeAtom::Val(x)];
+            contract_point_verdict(&s(l), &[], &s(r), &[], ops, &w, &atoms).0
+        };
+        assert_eq!(at2("atan2 neg x0 x1", "neg atan2 x0 x1", 0.0, -1.0), None);
+        assert_eq!(
+            at2("atan2 neg x0 x1", "neg atan2 x0 x1", 0.5, -1.0),
+            Some(PointCmp::Eq)
+        );
+        assert_eq!(at2("max x0 x1", "max x1 x0", -0.5, 1.5), Some(PointCmp::Eq));
+    }
+
+    /// The rescue evaluator's 0.15 arms against the float64 kernels on ordinary points: the
+    /// high-precision value rounds to within an ulp of the kernel's.
+    #[test]
+    fn rescue_arms_round_to_the_f64_kernels() {
+        let mut cc = Consts::new().unwrap();
+        let p = 256;
+        let read = |v: &BigFloat| -> f64 { format!("{v}").parse().unwrap() };
+        for (name, x) in [
+            ("floor", -2.5),
+            ("ceil", -0.5),
+            ("erf", 0.7),
+            ("erf", -3.25),
+            ("harmonic", 2.5),
+            ("harmonic", -1.25),
+        ] {
+            let f = crate::numeric::unary_fn(name).expect("kernel");
+            let v = apply_unary(name, &BigFloat::from_f64(x, p), p, &mut cc).expect("evaluable");
+            let (got, want) = (read(&v), f(x));
+            assert!(
+                (got - want).abs() <= want.abs() * 2.5e-16,
+                "{name}({x}): {got} vs {want}"
+            );
+        }
+        for (name, a, b) in [
+            ("mod", -7.0, 3.0),
+            ("mod", 7.5, -2.0),
+            ("max", -1.0, 2.0),
+            ("min", -1.0, 2.0),
+            ("atan2", -1.0, -2.0),
+        ] {
+            let f = crate::numeric::binary_fn(name).expect("kernel");
+            let (ba, bb) = (BigFloat::from_f64(a, p), BigFloat::from_f64(b, p));
+            let v = apply_binary(name, &ba, &bb, p, &mut cc).expect("evaluable");
+            let (got, want) = (read(&v), f(a, b));
+            assert!(
+                (got - want).abs() <= want.abs() * 2.5e-16,
+                "{name}({a}, {b}): {got} vs {want}"
+            );
+        }
+        // besselj has no high-precision kernel yet: unevaluable
+        let one = BigFloat::from_f64(1.0, p);
+        assert!(apply_binary("besselj", &one, &one, p, &mut cc).is_none());
     }
 }
