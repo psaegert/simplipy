@@ -182,7 +182,12 @@ def test_engine_construction_drops_ac_duplicates_of_the_shipped_artifact():
     served = {(tuple(lhs), tuple(rhs)) for lhs, rhs in dup_engine.simplification_rules}
     assert len(served) == len(engine.simplification_rules)
     dropped = {(tuple(a), tuple(b)) for a, b in raw + respelled} - served
-    assert dropped == {(tuple(a), tuple(b)) for a, b in respelled}
+    # the raw file read on its own drops its own duplicates (in f64's reading a written zero
+    # times a positive ground, `* 0 acosh 2 -> 0`, is the zero, so such rows are one rule);
+    # the respellings drop on top of those
+    own = {(tuple(a), tuple(b)) for a, b in raw} - \
+        {(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules}
+    assert dropped - own == {(tuple(a), tuple(b)) for a, b in respelled}
     # No two SERVED rules share an internal form.
     keys = dup_engine._core.ac_canonical_keys([list(lhs) for lhs, _ in served], rule_mode="default")
     assert len(keys) == len(set(map(tuple, keys)))

@@ -62,9 +62,12 @@ organised by who you are, then the highlights, then every change in detail.
   product or negation of numbers that is zero takes float64's sign: `-1*0`, `0*(-2)` and `-(0)`
   are `-0.0` (they were `0`), `-1*-0.0` is `0`; a written difference subtracts by adding the
   negation, as float64 does, so `-0.0 - 0` and `0*(-2) - 0` are `-0.0` and `1/(0*(-2) - 0)` is
-  `-inf` (it was `inf`), while `-0.0 + 0` is `0`. A zero the search derives keeps the one zero
-  (`x1*0` is unchanged). A nonzero literal that underflows to -0 stays the leaf it is written
-  as.
+  `-inf` (it was `inf`), while `-0.0 + 0` is `0`. A written product of a zero with ground
+  factors takes the sign of their float64 values (`0*sin(-1)` and `sinh(-0.0)*0` are `-0.0`,
+  `ceil(-0.0)*(-0)` is `0`), and a sign moved into an odd function of the zero keeps it:
+  `-sin(0)`, `-2*atan(0)` and `-erf(0)` are `-0.0` (they were `0`). A zero the search derives
+  keeps the one zero (`x1*0` is unchanged). A nonzero literal that underflows to -0 stays the
+  leaf it is written as.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with

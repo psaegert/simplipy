@@ -216,6 +216,48 @@ def test_the_search_moves_inside_atan2(bare):
     assert s('atan2 * x2 - pow + x0 1 2 pow x0 2 - x1 abs x1') == 'atan2 * x2 + * 2 x0 1 - x1 abs x1'
 
 
+def test_f64_ground_folds_keep_float64s_zero_sign(bare):
+    """A negated or scaled odd function of 0 and a written product of ground zeros are what
+    float64 computes, the sign of the zero included."""
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    for head in ('sin', 'tan', 'asin', 'atan', 'sinh', 'tanh', 'asinh', 'atanh', 'erf'):
+        assert f64(f'neg {head} 0') == '-0.0', head
+        assert f64(f'* -2 {head} 0') == '-0.0', head
+        assert f64(f'neg {head} -0.0') == '0', head
+    assert f64('neg rootn 0 3') == '-0.0' and f64('neg ceil -0.5') == '0'
+    assert f64('* 0 sin -1') == '-0.0' and f64('* sinh -0.0 min 0 2') == '-0.0'
+    assert f64('* ceil -0.0 neg 0') == '0' and f64('neg * atanh -0.0 neg 0') == '-0.0'
+    assert f64('max x2 neg sin 0') == 'max -0.0 x2'
+    # real reads one zero, and a zero the search derives beside a variable keeps it
+    assert ' '.join(bare.simplify('neg sin 0'.split(), mode='real')) == 'sin 0'
+    assert f64('* x1 0') == '0'
+
+
+def test_f64_ground_fold_is_the_evaluator_at_zero_and_small_inputs(bare):
+    """Every unary and binary head at +-0 and small ground inputs, bare, negated, scaled and in
+    products of zeros: the f64 answer evaluates bit for bit as the input does. (A negative root
+    index is excluded: `rootn(x, -n)` is written `1/rootn(x, n)`, which float64 can round 1 ulp
+    apart.)"""
+    import itertools
+    import struct
+    arity = dict(bare.operator_arity)
+    leaves = ['0', '-0.0', '1', '-1', '0.5', '-0.5', '2', '-2', '3', '-3']
+    grounds = [[h, a] for h, n in arity.items() if n == 1 for a in leaves]
+    grounds += [[h, a, b] for h, n in arity.items() if n == 2 for a, b in itertools.product(leaves, leaves)
+                if not (h == 'rootn' and b.startswith('-') and b != '-0.0')]
+
+    def ev(t):
+        return float(np.asarray(bare._core.evaluate_batch(t, ['x0'], [0.0], 1, []))[0])
+
+    def bits(v):
+        return 'nan' if v != v else struct.pack('<d', v)
+    zeros = [g for g in grounds if ev(g) == 0.0]
+    srcs = [c + g for g in grounds for c in ([], ['neg'], ['*', '-1'], ['*', '2'], ['*', '-2'])]
+    srcs += [p + g + h for g in zeros[::7] for h in zeros[::11] for p in (['*'], ['neg', '*'])]
+    bad = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
+    assert not bad, (len(bad), bad[:5])
+
+
 def test_f64_writes_the_negative_zero_and_reads_it(bare):
     """f64 follows float64: a -0 is written `-0.0` (Python's `-0` is the integer zero, +0), a
     ground fold writes its float exactly, and an inverse or `atan2` reads the sign. `real` and

@@ -8378,6 +8378,14 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
             // (`atanh(-1)` must reach `-inf`); a rebuild that FOLDS to a non-Fun is
             // refused as a site (fail-safe: the orbit stays type-stable, and such
             // grounds fold on their own paths).
+            //
+            // In `f64` an odd function of the literal ZERO is no site: `-sin(0)` is -0 in float64
+            // and `sin(-0)` would need the written negative zero, so the sign stays on the
+            // coefficient, where the ground fold of a ground product writes float64's -0 and the
+            // zero of a product with a variable is the one zero (`-x1*sin(0)` is `0`). Read as the
+            // zero again, the flip would drop the sign (`-sin(0)` as `sin(0)`, a +0). `real` and
+            // `permissive` read one zero.
+            Ex::Num(r) if r.is_zero() && cx.f64_semantics() && cx.f64_numbers() => None,
             Ex::Num(r) => {
                 let flipped = fun(*op, vec![Ex::Num(r.checked_neg()?)], cx);
                 matches!(flipped, Ex::Fun(..)).then_some(flipped)
@@ -9553,18 +9561,55 @@ pub(crate) fn product_members(e: Ex) -> Vec<Ex> {
     }
 }
 
-/// The float64 value of a written product of numbers that is zero, in `f64`: the product of the
-/// signs of its factors (`-1*0`, `0*(-2)` and `-(0)` are -0, `-1*-0.0` is +0), which the exact
-/// coefficient, one zero, cannot hold, so `-0.0` (`NEG_ZERO`) where an odd number of the factors
-/// are negative or the written negative zero, else `0`. `None` outside `f64` and for any other
-/// product (a factor that is no number, an infinity, or no zero factor). The parse builds a
-/// written product through it; a zero the search derives keeps the one zero (the region rule).
+/// The float64 value of a GROUND factor (no variable, `<constant>` or wildcard) as the deployed
+/// evaluator computes it, the sign of a zero included: its literal-token spelling, the one the
+/// ground fold evaluates (`convert::to_prefix_literal_tokens`), through the evaluator's kernels
+/// (`numeric::apply_op`). `None` for anything else, or a head no kernel evaluates.
+fn ground_value(e: &Ex, cx: &Cx) -> Option<f64> {
+    if e.has_measure_space(cx.view) || e.contains_wildcard(cx.view) {
+        return None;
+    }
+    let view = cx.view;
+    let tokens = super::convert::to_prefix_literal_tokens(e, &Cx::bare(view));
+    fn node(tokens: &[Tok], at: &mut usize, view: &TokenView) -> Option<f64> {
+        let t = *tokens.get(*at)?;
+        *at += 1;
+        let s = view.resolve_owned(t);
+        match crate::operators::core_arity(&s).or_else(|| view.arity(t)) {
+            Some(n) if n <= 2 => {
+                let mut args = [0.0f64; 2];
+                for a in args.iter_mut().take(usize::from(n)) {
+                    *a = node(tokens, at, view)?;
+                }
+                crate::numeric::apply_op(&s, &args[..usize::from(n)])
+            }
+            Some(_) => None,
+            None => crate::numeric::leaf_value(&s),
+        }
+    }
+    let mut at = 0;
+    let v = node(&tokens, &mut at, view)?;
+    (at == tokens.len()).then_some(v)
+}
+
+/// The float64 value of a written product that is zero, in `f64`: the product of the signs of its
+/// factors (`-1*0`, `0*(-2)` and `-(0)` are -0, `-1*-0.0` is +0), which the exact coefficient,
+/// one zero, cannot hold, so `-0.0` (`NEG_ZERO`) where an odd number of the factors are negative
+/// or the written negative zero, else `0`. A factor that is no number but ground gives the sign
+/// of its float64 value (`ground_value`): `0*sin(-1)` is -0 and `sinh(-0.0)*0` is -0, as float64
+/// computes them, where the zero would drop the factor and keep +0; this is the ground fold's
+/// reading (`Cx::fold_f64`), so a rule file read in the canon it was certified in (`RuleCanon`),
+/// which does not fold, keeps its rows. `None` outside `f64` and for
+/// any other product (a factor that is neither a number nor ground and finite, or no zero
+/// literal). The parse builds a written product through it; a zero the search derives keeps the
+/// one zero (the region rule).
 pub(crate) fn signed_zero_product(items: &[Ex], cx: &Cx) -> Option<Ex> {
     if !cx.f64_semantics() {
         return None;
     }
     let mut zero = false;
     let mut negative = false;
+    let mut ground: Vec<&Ex> = Vec::new();
     for f in items {
         match f {
             Ex::Num(r) => {
@@ -9575,8 +9620,21 @@ pub(crate) fn signed_zero_product(items: &[Ex], cx: &Cx) -> Option<Ex> {
                 zero = true;
                 negative = !negative;
             }
+            f if cx.fold_f64 && !f.has_measure_space(cx.view) && !f.contains_wildcard(cx.view) => {
+                ground.push(f)
+            }
             _ => return None,
         }
+    }
+    if !zero {
+        return None;
+    }
+    for f in ground {
+        let v = ground_value(f, cx)?;
+        if !v.is_finite() {
+            return None;
+        }
+        negative ^= v.is_sign_negative();
     }
     zero.then(|| {
         if negative {
