@@ -97,7 +97,10 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   odd-function sign extraction. The like-term class is closed: a term's coefficient is every
   literal member of the term, the whole partition, so `add`'s collection, its scaling of a
   factored sum and the primitive-sum content all read one coefficient, and two of a key fold
-  over the members they share (`{2e300, 1e300} - {1e300, 1e300} = {1e300, 1e300}`); on 20,000
+  over the members they share (`{2e300, 1e300} - {1e300, 1e300} = {1e300, 1e300}`); the product
+  decides its placements with the sign on the coefficient slot and writes a negative
+  partition's sign on its smallest member (`-1e300*1e300*x1`), which a re-read factors out
+  again; on 20,000
   sums of products of boundary literals, no answer changes on a second call in any mode at
   effort 0 (before: 80 f64, 39 real, 81 permissive). A class independent of literal size is
   closed: a product with more than six sign-trade sites kept the placement it entered with, two

@@ -789,7 +789,11 @@ model predictions.
   the others part of the term, so which terms collected depended on which ones a construction
   saw together, and an answer could change on a second call (also in 0.14.7, at 128 bits):
   `-1e300*1e300*x1 - 1e300*1e300*x2` gave `-1e300*(1e300*x1 + 1e300*x2)`, whose second call
-  gave `-1*1e300*1e300*(x1 + x2)`, the answer now. On 20,000 random sums of products of
+  gave `-1*1e300*1e300*(x1 + x2)`; the answer is now `-1e300*1e300*(x1 + x2)`. A negative such
+  coefficient writes its sign on its smallest literal, as a single number carries its own sign,
+  in every notation: `-1e300*1e300*x1` in the text answer, `* -1e300 * 1e300 x1` in the explicit
+  list and `<mul> -1e300 1e300 x1 </mul>` in the tagged list (it was a separate `-1`, `neg` in
+  the explicit list, priced as a sign either way). On 20,000 random sums of products of
   literals at the cap and float64 boundaries no answer changes on a second call in any mode
   with the search off (before: 80 in `f64`, 39 in `real`, 81 in `permissive`), nor on 6,000 at
   the default effort (before: 2, 4, 3). srbf's ground truths, a tenth of its predictions and a

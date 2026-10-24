@@ -230,6 +230,16 @@ class TestRefusedCoefficient:
         spellings = ('x3 + 1e300*x2 + 1e300*1e300*x1', 'x3 + 1e300*(x2 + 1e300*x1)')
         assert len({engine.simplify(s, mode=mode) for s in spellings}) == 1
 
+    @pytest.mark.parametrize('mode', MODES3)
+    def test_a_negative_partition_writes_its_sign_on_a_literal(self, engine: SimpliPyEngine, mode: str) -> None:
+        # on its smallest member, as a ground constant carries its sign (`-3e300*x1`), in every
+        # dialect; it was a separate `-1` (`neg` in the explicit list, `-1` in the tagged one)
+        assert engine.simplify('-1*1e300*1e300*x1', mode=mode) == '-1e300*1e300*x1'
+        assert engine.simplify('-1e300*1e300*x1 - 1e300*1e300*x2', mode=mode) == '-1e300*1e300*(x1 + x2)'
+        assert simplify(engine, '- 0 * 1e300 * 1e300 x1', mode) == ['*', '-1e300', '*', '1e300', 'x1']
+        tagged = engine.to_tagged('- 0 * 1e300 * 1e300 x1'.split())
+        assert list(engine.simplify(list(tagged), mode=mode)) == ['<mul>', '-1e300', '1e300', 'x1', '</mul>']
+
     @pytest.mark.parametrize('effort', [0, None])
     @pytest.mark.parametrize('mode', MODES3)
     @pytest.mark.parametrize('src', REFUSED_ROWS)

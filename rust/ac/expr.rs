@@ -2292,21 +2292,16 @@ impl Coef {
         }
     }
 
-    /// The literal members of a product with this coefficient, as `mul()` reads them (it places
-    /// the sign: on the one member, or beside several as -1).
+    /// The literal members of a product with this coefficient, as `mul()` writes them: the sign
+    /// on the one member, or on the smallest of several ([`host_partition_sign`]).
     pub(crate) fn items(&self) -> Vec<Ex> {
-        if let Some(r) = self.rat() {
-            return if r.is_one() {
-                Vec::new()
-            } else {
-                vec![Ex::Num(r)]
-            };
-        }
-        let mut v = Vec::with_capacity(self.mags.len() + 1);
+        let mut v: Vec<Ex> = self.mags.iter().cloned().map(Ex::Num).collect();
         if self.neg {
-            v.push(Ex::Num(Rat::NEG_ONE));
+            match v.first_mut() {
+                Some(Ex::Num(m)) => *m = m.checked_neg().expect("a Rat negates"),
+                _ => v.push(Ex::Num(Rat::NEG_ONE)),
+            }
         }
-        v.extend(self.mags.iter().cloned().map(Ex::Num));
         v
     }
 }
@@ -4448,6 +4443,39 @@ pub(crate) fn mul_undecided(items: Vec<Ex>, cx: &Cx) -> Ex {
 }
 
 fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
+    host_partition_sign(mul_assembled(items, cx, decide))
+}
+
+/// A product's sign, where its coefficient is a partition of several literals (a fold refused),
+/// written on the smallest of them: `-1e300*1e300*x1`, not `-1*1e300*1e300*x1`. The assembly
+/// decides every placement with the sign on the coefficient slot (F72: `-1` beside the
+/// magnitudes), and a re-read factors the signs of the members out again, so the decisions are
+/// the same however the sign is written; the written product carries it on a literal, as a
+/// ground constant carries its own sign, one sign and no extra member.
+fn host_partition_sign(e: Ex) -> Ex {
+    let Ex::Mul(mut v) = e else {
+        return e;
+    };
+    // The literals lead (`mul_factor_cmp`); `-1` sorts before the positive magnitudes.
+    let n = v.iter().take_while(|f| matches!(f, Ex::Num(_))).count();
+    if n >= 2 && matches!(&v[0], Ex::Num(r) if *r == Rat::NEG_ONE) {
+        if let Ex::Num(m) = &v[1] {
+            if !m.is_negative() && !m.is_zero() {
+                let host = m.checked_neg().expect("a Rat negates");
+                v.remove(0);
+                v[0] = Ex::Num(host);
+                return if v.len() == 1 {
+                    v.pop().expect("one member")
+                } else {
+                    Ex::Mul(v)
+                };
+            }
+        }
+    }
+    Ex::Mul(v)
+}
+
+fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
@@ -11040,6 +11068,18 @@ mod tests {
                 let (c, k) = term_split(t.clone(), view);
                 assert_eq!((c.rat(), &k), (None, &x));
                 assert_eq!(term_split(neg(&t), view), (c.negated(), x.clone()));
+                // The sign is written on the smallest member, not as a `-1` beside them, however
+                // it arrives.
+                let minus_n = Ex::Num(n.checked_neg().unwrap());
+                let written = Ex::Mul(vec![minus_n.clone(), Ex::Num(n.clone()), x.clone()]);
+                assert_eq!(neg(&t), written);
+                assert_eq!(mul(vec![Ex::int(-1), t.clone()], &cx), written);
+                assert_eq!(nn(mul(vec![Ex::int(-1), x.clone()], &cx)), written);
+                assert_eq!(mul(vec![written.clone()], &cx), written);
+                assert_eq!(
+                    mul(vec![Ex::Num(n.clone()), minus_n, x.clone()], &cx),
+                    written
+                );
                 // Like terms cancel, and add over their shared member: {2N, N} - {N, N} = {N, N}.
                 assert_eq!(add(vec![t.clone(), neg(&t)], &cx), Ex::Num(Rat::ZERO));
                 let two_t = mul(vec![Ex::int(2), t.clone()], &cx);
