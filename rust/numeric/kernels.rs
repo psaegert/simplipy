@@ -9,8 +9,9 @@
 //! transcendentals come from `numeric::elementary`, the one elementary-function source.
 //!
 //! The operators added in 0.15 (`floor`, `ceil`, `max`, `min`, `mod`, `harmonic`, `erf`,
-//! `atan2`, `besselj`) are in the evaluator's dispatch too. They have interval enclosures but no
-//! high-precision or contract kernels yet, so every certificate that needs one refuses them.
+//! `atan2`, `besselj`) are in the evaluator's dispatch too. They have interval enclosures;
+//! `besselj` also has its high-precision and contract kernel (`hiprec::besselj`), and every
+//! certificate that needs one refuses the others.
 
 pub use super::besselj::besselj;
 use super::elementary;

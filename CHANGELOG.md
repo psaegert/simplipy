@@ -1129,7 +1129,8 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `besselj(nu, x)` in [-1, 1] for an order nu >= 0, NaN where a non-integer order meets a
     negative argument; `harmonic` is increasing on (-1, inf); `mod(a, b)` lies between 0 and
     `b`, NaN at `b = 0`. `harmonic` of an argument that may reach -1, `besselj` of an order
-    that may be negative, `mod` by a divisor that may be zero, and every head without an arm
+    that may be a negative non-integer at an argument that may reach 0, `mod` by a divisor that
+    may be zero, and every head without an arm
     are unanalyzable: every certificate refuses them, and the miner accepts no candidate for a
     variable-free source it cannot analyze. The tail certificate's table of
     pole-free operators names the operators that are, so an unnamed head is pole-bearing.
@@ -1155,7 +1156,8 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     integers and half-integers, and the refuter's witnesses read the new heads (integer
     neighbours for `floor`, `ceil` and `harmonic`; preimages through `atan2`, `mod`, `max`
     and `min`).
-  - *High precision and the judge.* The nine have no high-precision or contract kernels yet.
+  - *High precision and the judge.* The other eight have no high-precision or contract
+    kernels yet (`besselj` has, see below).
     An operator the high-precision evaluators do not know is unevaluable, even at a NaN
     operand: the contract point verdict is none (it read as equal), and the licence registry
     refuses a pattern with exceptional points that holds one. The contract judge judges a rule
@@ -1169,6 +1171,40 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   - *besselj* accepts torch tensors: the core kernel on the host, returned in the tensor's dtype
     and device (not differentiable). The port carries no branch a real argument cannot reach
     (AMOS's overflow rescaling and its `kscl`); its bits stay scipy's.
+- **`besselj` is complete at every real order.**
+  - *Identities in the engine, in every mode.* The canonical order is non-negative:
+    `besselj(-3, x)` is `-besselj(3, x)` and `besselj(-2, x)` is `besselj(2, x)`. An even
+    integer order is an even function, so `besselj(2, -x)`, `besselj(2, |x|)` and
+    `besselj(2, sin(-x))` are `besselj(2, x)` and `besselj(0, x2 - x1)` is
+    `besselj(0, x1 - x2)`; an odd one carries a sign out, so `besselj(3, -2*x)` is
+    `-besselj(3, 2*x)`. All of them hold bit for bit in float64, a zero's sign included. A
+    literal order at 0 folds exactly: `besselj(0, 0)` is `1`, `besselj(5/2, 0)` and
+    `besselj(-2, 0)` are `0` (`besselj(-1, 0)` is `-0.0` in `f64`), and a negative non-integer
+    order gives its pole's one-sided limit, the sign of `1/Gamma(nu + 1)`: `besselj(-1/2, 0)` is
+    `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy has them. A sum argument under an odd order
+    keeps its orientation (`besselj(1, x1 - x0)` stays).
+  - *The kernel.* An integer order reads its reflection and its parity, so both hold bit for
+    bit: `besselj(1, -0.0)` and `besselj(3, -1e-300)` are `-0.0` (scipy gives `0.0`),
+    `besselj(2**31, -1.0)` is `0.0` (scipy gives NaN: its integer test is a C `int` cast).
+    Where scipy's routines give up under orders of about 3e17 and more, a value a bound puts
+    below the subnormals is `0.0` (`besselj(1e300, 100)`; scipy gives NaN). Everywhere else the
+    value is `scipy.special.jv`'s bit for bit, over 2.5 million (order, argument) pairs with
+    orders to 1e308. scipy's other NaN cells stay: the oscillating region of orders beyond
+    3e17, and negative non-integer orders below about -470 where the value nears the float
+    range's end.
+  - *High precision and the judge.* `besselj` has a high-precision kernel in the core (the
+    Hankel expansion where its bounded error reaches the target, the power series elsewhere at
+    a precision that carries the cancellation, Gamma by Stirling's series), within the last
+    place of mpmath's `besselj` at 169 to 3,325 bits over 980 points, and the contract judge
+    evaluates it with mpmath. Both read scipy's cells and refuse an order beyond 1e3 or an
+    argument beyond 1e12. So a `besselj` rule is judged like any other: `besselj(1, -x) ->
+    -besselj(1, x)` is `core`, `besselj(1/2, x) -> sqrt(2/(pi*x))*sin(x)` is `real` (equal over
+    the reals, a few ulp apart in float64), and `besselj` rules enter the `real` file and the
+    `<constant>` lanes. The corpus monitor reads `besselj`, with float64's zero signs.
+  - *Enclosures.* A negative integer order lies in [-1, 1] like a non-negative one; an order
+    that may be a negative non-integer is bounded away from its pole at 0 by the recurrence
+    `J_nu = (2 (nu + 1)/x) J_{nu+1} - J_{nu+2}` (`besselj(-3/2, x)` over [2, 3] within +-3.5),
+    and refused where the argument may reach 0.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

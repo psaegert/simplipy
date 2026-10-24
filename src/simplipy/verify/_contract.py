@@ -63,7 +63,8 @@ ARITY = {**_CORE_ARITY,
          'pow2': 1, 'pow3': 1, 'pow4': 1, 'pow5': 1,
          'pow1_2': 1, 'pow1_3': 1, 'pow1_4': 1, 'pow1_5': 1,
          'div2': 1, 'div3': 1, 'div4': 1, 'div5': 1,
-         'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1}
+         'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1,
+         'besselj': 2}
 SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 
 #: Heads the DEPLOYED lane evaluates (`simplipy.operators` realizes each with the engine's own
@@ -72,7 +73,7 @@ SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 #: most it can earn is the `f64` tier -- never `core` or `real`, which need the contract. Every
 #: other unknown head stays UNSUPPORTED-SHAPE.
 DEPLOYED_ONLY_ARITY = {'floor': 1, 'ceil': 1, 'erf': 1, 'harmonic': 1,
-                       'max': 2, 'min': 2, 'mod': 2, 'atan2': 2, 'besselj': 2}
+                       'max': 2, 'min': 2, 'mod': 2, 'atan2': 2}
 
 
 class Unresolved(Exception):
@@ -386,6 +387,58 @@ def c_rootn(a, b):
     return _z(mp.sign(a) * mp.power(abs(a), mpf(1) / ib))
 
 
+#: The largest order and argument `c_besselj` evaluates (beyond: Unresolved; the core's
+#: `hiprec::besselj` shares both). Past order 1e3 mpmath stops converging in seconds per point
+#: (NoConvergence at order 3e3 and twice the order, dps 50), and the argument cap is the trig
+#: one (`_trig`): the phase x - (nu/2 + 1/4) pi is a trig argument.
+BESSELJ_NU_CAP = mpf('1e3')
+BESSELJ_X_CAP = mpf('1e12')
+
+
+def c_besselj(nu, x):
+    """`besselj(nu, x)`, the Bessel function of the first kind, at contract semantics, with
+    scipy's cells (D7) -- the table the core's high-precision kernel (`hiprec::besselj`) and its
+    float64 kernel (`numeric::besselj`) share:
+
+    * NaN at a NaN operand and at `x = +-inf` (scipy's cell; the limit, 0, is not taken);
+    * NaN for a non-integer order at a negative argument, where J is complex;
+    * an infinite order gives 0 at `x >= 0` (scipy's cell);
+    * at `x = 0`: `J_0(0) = 1`, `J_nu(0) = 0` for `nu > 0` and for a negative integer `nu`, and
+      at a negative non-integer order the pole's one-sided limit (the domain is `x >= 0`), the
+      infinity of the sign of `1/Gamma(nu + 1)`: `J_-1/2(0) = inf`, `J_-3/2(0) = -inf`;
+    * an integer order reads its reflection `J_-n = (-1)^n J_n` and its parity
+      `J_n(-x) = (-1)^n J_n(x)`; every other value is mpmath's, Unresolved beyond the caps.
+    """
+    if misnan(nu) or misnan(x) or misinf(x):
+        return NAN
+    integer = not misinf(nu) and nu == mp.floor(nu)
+    if x < 0 and not integer:
+        return NAN
+    if misinf(nu):
+        return mpf(0)
+    if x == 0:
+        if nu == 0:
+            return mpf(1)
+        if nu > 0 or integer:
+            return mpf(0)
+        # Gamma(z), z = nu + 1, is positive for z > 0 and has the sign (-1)^ceil(-z) below 0.
+        z = nu + 1
+        return PINF if (z > 0 or int(mp.ceil(-z)) % 2 == 0) else NINF
+    if abs(nu) > BESSELJ_NU_CAP or abs(x) > BESSELJ_X_CAP:
+        raise Unresolved()
+    sign = 1
+    if integer:
+        n = int(nu)
+        if n % 2 and (n < 0) != (x < 0):
+            sign = -1
+        nu, x = mpf(abs(n)), abs(x)
+    try:
+        v = mp.besselj(nu, x)
+    except mp.NoConvergence:
+        raise Unresolved() from None
+    return _z(sign * v)
+
+
 OPS = {
     '+': lambda a, b: NAN if (misnan(a) or misnan(b)) else
          (NAN if (misinf(a) and misinf(b) and mp.sign(a) != mp.sign(b)) else _z(a + b)),
@@ -479,6 +532,7 @@ OPS = {
     'div4': lambda a: c_div(a, mpf(4)), 'div5': lambda a: c_div(a, mpf(5)),
     'mult2': lambda a: OPS['*'](a, mpf(2)), 'mult3': lambda a: OPS['*'](a, mpf(3)),
     'mult4': lambda a: OPS['*'](a, mpf(4)), 'mult5': lambda a: OPS['*'](a, mpf(5)),
+    'besselj': c_besselj,
 }
 
 
@@ -2263,6 +2317,12 @@ TOUCHSTONES = [
      'nan-erasure at a `_` binding: `_` quantifies nan (S14, owner ruling '
      '2026-08-22) -- `log x0 - log x0` is nan on the whole negative half-line and '
      'this rewrite defines it'),
+    ('besselj 3 neg _0', 'besselj -3 _0', 'CERTIFIED',
+     'J_3(-x) = -J_3(x) = J_-3(x) at every value: an integer order reads its parity and its '
+     'reflection, in the contract and bit for bit in float64'),
+    ('besselj 0.5 neg _0', 'besselj 0.5 _0', 'KILL',
+     'a non-integer order is NaN on the whole negative half-line, where the right side is '
+     'defined (clause b, positive measure)'),
 ]
 
 

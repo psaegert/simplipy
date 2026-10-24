@@ -170,3 +170,96 @@ def test_the_mint_refuses_laws_float64_breaks_at_a_jump(bare):
                      ('floor mod x0 1', '0'), ('+ floor x0 1', 'ceil x0')):
         assert not certified(src, tgt), (src, tgt)
     assert certified('floor floor x0', 'floor x0')
+
+
+# --------------------------------------------------------------------------- besselj, complete
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_besselj_reflection_and_parity_in_every_mode(bare, mode):
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('besselj -3 x0') == 'neg besselj 3 x0'          # J_-n = (-1)^n J_n
+    assert s('besselj -2 x0') == 'besselj 2 x0'
+    assert s('besselj 2 neg x0') == 'besselj 2 x0'           # an even order is even
+    assert s('besselj 0 abs x0') == 'besselj 0 x0'
+    assert s('besselj 2 sin neg x0') == 'besselj 2 sin x0'
+    assert s('besselj 0 - x1 x0') == s('besselj 0 - x0 x1')
+    assert s('besselj 3 neg x0') == 'neg besselj 3 x0'       # an odd order carries a sign out
+    assert s('besselj 3 * -2 x0') == 'neg besselj 3 * 2 x0'
+    assert s('besselj -1 neg x0') == 'besselj 1 x0'
+    assert s('besselj 0.5 neg x0') == 'besselj / 1 2 neg x0'  # a non-integer order has no parity
+    assert s('besselj 1 - x1 x0') == 'besselj 1 - x1 x0'     # a sum keeps its orientation
+    assert s('besselj 1 -2') == 'besselj 1 -2'               # a constant keeps its sign
+    for t in ('besselj -3 x0', 'besselj 3 * -2 x0', 'besselj 0 - x1 x0'):
+        once = bare.simplify(t.split(), mode=mode)
+        assert bare.simplify(once, mode=mode) == once
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_besselj_of_literals_at_zero_folds_exactly(bare, mode):
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('besselj 0 0') == '1'
+    assert s('besselj 2.5 0') == '0' and s('besselj -2 0') == '0'
+    assert s('besselj -1 0') == ('-0.0' if mode == 'f64' else '0')
+    # the pole's one-sided limit, the sign of 1/Gamma(nu + 1), as scipy has it
+    assert s('besselj -0.5 0') == 'float("inf")'
+    assert s('besselj -1.5 0') == 'float("-inf")'
+    assert s('besselj -2.5 0') == 'float("inf")'
+
+
+def test_besselj_identities_hold_bit_for_bit_in_float64():
+    from simplipy._core import deployed_exact
+    ext = {**_contract.ARITY, **_contract.DEPLOYED_ONLY_ARITY}
+    for lhs, rhs in (('besselj -3 x0', 'neg besselj 3 x0'), ('besselj -2 x0', 'besselj 2 x0'),
+                     ('besselj 2 neg x0', 'besselj 2 x0'), ('besselj 0 abs x0', 'besselj 0 x0'),
+                     ('besselj 0 - x0 x1', 'besselj 0 - x1 x0'), ('besselj 3 neg x0', 'neg besselj 3 x0'),
+                     ('besselj 1 * -2 x0', 'neg besselj 1 * 2 x0'), ('besselj -1 neg x0', 'besselj 1 x0')):
+        names = sorted({t for t in (lhs + ' ' + rhs).split() if t in ('x0', 'x1')})
+        assert deployed_exact(lhs.split(), rhs.split(), names, ext)[0], (lhs, rhs)
+    # the bar can fail: no parity at a non-integer order, and an odd order's sum keeps its zero
+    assert not deployed_exact('besselj 0.5 neg x0'.split(), 'besselj 0.5 x0'.split(), ['x0'], ext)[0]
+    assert not deployed_exact('besselj 1 - x0 x1'.split(), 'neg besselj 1 - x1 x0'.split(), ['x0', 'x1'],
+                              ext)[0]
+
+
+def test_besselj_is_judged_by_the_contract():
+    j = lambda lhs, rhs: _contract.judge_rule(lhs.split(), rhs.split())  # noqa: E731
+    assert 'besselj' not in _contract.DEPLOYED_ONLY_ARITY
+    v = j('besselj 1 neg _0', 'neg besselj 1 _0')
+    assert v['verdict'] == 'CERTIFIED' and v['tier'] == 'core', v
+    assert j('besselj -0.5 0', 'float("inf")')['tier'] == 'core'
+    # true over the reals, a few ulp apart in float64
+    assert j('besselj 0.5 _0', '* rootn / 2 * np.pi _0 2 / sin _0 1')['tier'] == 'real'
+    assert j('besselj 0.5 neg _0', 'besselj 0.5 _0')['verdict'] == 'KILL'
+    assert j('besselj _0 0', '0')['verdict'] == 'KILL'          # J_0(0) = 1
+    # a <constant> is witnessed by the contract
+    assert j('* <constant> besselj 0 _0', '* <constant> besselj 0 neg _0')['verdict'] == 'CERTIFIED'
+    # the cells
+    c = _contract.c_besselj
+    mpf = _contract.mpf
+    assert c(mpf(-1.5), mpf(0)) == _contract.NINF and c(mpf(-0.5), mpf(0)) == _contract.PINF
+    assert _contract.misnan(c(mpf(0.5), mpf(-1))) and _contract.misnan(c(mpf(1), _contract.PINF))
+    assert c(mpf(3), mpf(-2)) == -c(mpf(3), mpf(2)) == c(mpf(-3), mpf(2))
+    with pytest.raises(_contract.Unresolved):
+        c(mpf(2000), mpf(1))
+
+
+def test_besselj_rules_are_licensable_in_every_file():
+    from simplipy.mining import _licensable
+    for mode in ('default', 'real', 'permissive'):
+        assert _licensable('besselj 1 neg <constant>'.split(), mode)
+    assert not _licensable('floor <constant>'.split(), 'default')
+
+
+def test_monitor_and_oracle_read_besselj():
+    from mpmath import mpf
+    from simplipy.promotion._hp_equiv import equiv, evaluate
+    assert 'besselj' not in _monitor.unknown_tokens(['besselj', '1', 'x0'])
+    neg_zero = _monitor._NegZero(0)
+    assert _monitor._zero_signbit('besselj', [mpf(1), neg_zero]) is True      # J_1(-0) = -0
+    assert _monitor._zero_signbit('besselj', [mpf(2), neg_zero]) is False
+    assert _monitor._zero_signbit('besselj', [mpf(-1), mpf(0)]) is True       # J_-1(+0) = -0
+    j = lambda t: evaluate(t.split(), {'x0': mpf(2)}, [])  # noqa: E731
+    assert abs(j('besselj 1 neg x0') + j('besselj 1 x0')) < 1e-14
+    assert equiv('besselj 1 neg _0'.split(), 'neg besselj 1 _0'.split())['ok']
+    assert not equiv('besselj 2 neg _0'.split(), 'neg besselj 2 _0'.split())['ok']

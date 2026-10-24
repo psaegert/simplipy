@@ -9584,6 +9584,111 @@ fn exact_step_fold(op: Tok, args: &[Ex], real: bool, cx: &Cx) -> Option<Ex> {
     }
 }
 
+/// The argument an EVEN function reads in place of `a`, or `None` when `a` is already it: the
+/// sign-blind representative (`sign_blind_rep`), or else the other orientation of a sum where it
+/// wins.
+///
+/// F63 even-carrier orientation (owner-ruled 2026-08-08, full family): beyond the CARRIED sign
+/// `sign_blind_rep` drops, an even function also erases its argument's ORIENTATION -- `cos(x - y)`
+/// and `cos(y - x)` are one value -- and bag orientation is invisible to `sign_blind_rep` (a
+/// mixed-sign sum carries no top-level sign to drop). Same doctrine as the even-power base: fow
+/// picks, exact ties (pure mirrors) to the lex rule, Const-bearing and absorbing sums keep their
+/// absorption owners, and the flip re-enters `fun` exactly once (class-antisymmetry answers keep
+/// on the flipped orientation).
+fn even_argument(a: &Ex, cx: &Cx) -> Option<Ex> {
+    if let Some(sign_free) = cx.sign_blind_rep(a) {
+        return Some(sign_free);
+    }
+    let Ex::Add(ts) = a else { return None };
+    if ts.iter().any(Ex::contains_const)
+        || ts.iter().any(term_absorbs_negation)
+        || ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
+        || !flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
+    {
+        return None;
+    }
+    let mut flipped = ts
+        .iter()
+        .map(|t| negate_term(t, cx))
+        .collect::<Option<Vec<Ex>>>()?;
+    // FILES-BARE gate (same rule as sign_trade_flip).
+    if flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
+        return None;
+    }
+    flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
+    Some(Ex::Add(flipped))
+}
+
+/// `besselj(nu, 0)` at a literal order, exactly, in every mode: `J_0(0) = 1`, `J_nu(0) = 0` for
+/// `nu > 0` and for a negative integer `nu` (float64's `-0.0` under an odd one in `f64`, as the
+/// kernel writes `J_{-n}(0) = (-1)^n J_n(0)`), and at a negative non-integer order the pole's
+/// one-sided limit (the order's domain is `x >= 0`), the infinity of the sign of
+/// `1/Gamma(nu + 1)`: `J_{-1/2}(0) = inf`, `J_{-3/2}(0) = -inf` (scipy's cells, D7).
+fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
+    let [Ex::Num(nu), Ex::Num(x)] = args else {
+        return None;
+    };
+    if !x.is_zero() {
+        return None;
+    }
+    if nu.is_zero() {
+        return Some(Ex::Num(Rat::ONE));
+    }
+    if !nu.is_negative() {
+        return Some(Ex::Num(Rat::ZERO));
+    }
+    if nu.is_integer() {
+        return Some(if nu.is_odd_integer() && cx.f64_semantics() {
+            Ex::Leaf(cx.view.intern(NEG_ZERO))
+        } else {
+            Ex::Num(Rat::ZERO)
+        });
+    }
+    // Gamma(z) is positive for z > 0 and has the sign (-1)^ceil(-z) at a negative non-integer z.
+    let z = nu.checked_add(&Rat::ONE)?;
+    let positive = !z.is_negative() || !rat_floor(&z.checked_neg()?, true)?.is_odd_integer();
+    Some(if positive { Ex::PosInf } else { Ex::NegInf })
+}
+
+/// `besselj(n, t)` at an INTEGER literal order `n`: two identities of `J_n` that hold at every
+/// value, NaN and the sign of a zero included -- in float64 too, where the kernel reads both
+/// (`numeric::besselj`):
+///
+///   * the reflection `J_{-n}(t) = (-1)^n J_n(t)`: the canonical order is non-negative
+///     (`besselj(-3, x)` is `-besselj(3, x)`);
+///   * the parity `J_n(-t) = (-1)^n J_n(t)`: an even order is an even function of `t`, so it reads
+///     the argument an even function reads (`even_argument`: `besselj(2, -x)` and
+///     `besselj(2, |x|)` are `besselj(2, x)`, `besselj(0, y - x)` is `besselj(0, x - y)`); an odd
+///     order carries a carried sign out (`besselj(1, -2 x)` is `-besselj(1, 2 x)`).
+///
+/// A sign either identity moves out of a GROUND argument stays where it is in `f64` (the value is
+/// the ground fold's, from the kernel, and a derived zero would lose the sign the kernel writes),
+/// and under an odd order in every mode: a constant keeps its sign on its literal (`sign_key`).
+fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
+    let Ex::Num(n) = &args[0] else { return None };
+    if !n.is_integer() {
+        return None;
+    }
+    let ground = !args[1].has_measure_space(cx.view) && !args[1].contains_wildcard(cx.view);
+    let negated = |e: Ex| mul(vec![Ex::Num(Rat::NEG_ONE), e], cx);
+    if n.is_negative() {
+        if n.is_odd_integer() && ground && cx.f64_semantics() {
+            return None;
+        }
+        let j = fun(op, vec![Ex::Num(n.checked_neg()?), args[1].clone()], cx);
+        return Some(if n.is_odd_integer() { negated(j) } else { j });
+    }
+    if n.is_even_integer() {
+        let t = even_argument(&args[1], cx)?;
+        return Some(fun(op, vec![args[0].clone(), t], cx));
+    }
+    if ground {
+        return None;
+    }
+    let t = cx.carried_negative(&args[1])?;
+    Some(negated(fun(op, vec![args[0].clone(), t], cx)))
+}
+
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal argument LANDS here (permissive's ρ, [`land`]).
@@ -9692,35 +9797,16 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // TOTAL, no licence needed: evenness is a pointwise identity on the whole extension,
     // and `is_even_fun` is a certified table, not a config field.
     if args.len() == 1 && cx.is_even_fun(op) {
-        if let Some(sign_free) = cx.sign_blind_rep(&args[0]) {
-            return fun(op, vec![sign_free], cx);
+        if let Some(arg) = even_argument(&args[0], cx) {
+            return fun(op, vec![arg], cx);
         }
-        // F63 even-carrier orientation (owner-ruled 2026-08-08, full family): beyond
-        // the CARRIED sign `sign_blind_rep` drops, an even function also erases its
-        // argument's ORIENTATION -- `cos(x - y)` and `cos(y - x)` are one value --
-        // and bag orientation is invisible to `sign_blind_rep` (a mixed-sign sum
-        // carries no top-level sign to drop). Same doctrine as the even-power base:
-        // fow picks, exact ties (pure mirrors) to the lex rule, Const-bearing and
-        // absorbing sums keep their absorption owners, and the flip re-enters `fun`
-        // exactly once (class-antisymmetry answers keep on the flipped orientation).
-        if let Ex::Add(ts) = &args[0] {
-            if !ts.iter().any(Ex::contains_const)
-                && !ts.iter().any(term_absorbs_negation)
-                && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-                && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
-            {
-                if let Some(mut flipped) = ts
-                    .iter()
-                    .map(|t| negate_term(t, cx))
-                    .collect::<Option<Vec<Ex>>>()
-                {
-                    // FILES-BARE gate (same rule as sign_trade_flip).
-                    if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
-                        flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
-                        return fun(op, vec![Ex::Add(flipped)], cx);
-                    }
-                }
-            }
+    }
+    // `besselj` OF LITERALS AT ZERO, and OF AN INTEGER ORDER: its reflection and its parity.
+    if args.len() == 2 && cx.view.tok_is(op, "besselj") {
+        if let Some(e) =
+            besselj_of_literals_at_zero(&args, cx).or_else(|| besselj_integer_order(op, &args, cx))
+        {
+            return e;
         }
     }
     // A HALF-PERIOD SHIFT DROPS OUT: `f(t +- pi)` for f in {sin, cos, tan}. C1.19 family C.

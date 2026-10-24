@@ -127,10 +127,36 @@ UN = {
     'atanh': lambda x: nan if abs(x) > 1 else ((inf if x > 0 else -inf) if abs(x) == 1 else mp.atanh(x)),
     'exp': mp.exp, 'log': lambda x: (-inf) if x == 0 else (nan if x < 0 else mp.log(x)),
 }
+
+
+def _besselj(nu, x):
+    # J_nu(x) with scipy's cells (D7), as every surface reads them (numeric::besselj,
+    # verify._contract.c_besselj): NaN at x = +-inf and for a non-integer order at x < 0, 0 under
+    # an infinite order, J_0(0) = 1, J_nu(0) = 0 for nu > 0 and for a negative integer nu, and
+    # the one-sided pole limit at a negative non-integer order (the sign of 1/Gamma(nu + 1)).
+    # An order beyond 1e3 or an argument beyond 1e12 is beyond decidable range: FAIL-CLOSED.
+    if isinf(x):
+        return nan
+    integer = not isinf(nu) and nu == mp.floor(nu)
+    if x < 0 and not integer:
+        return nan
+    if isinf(nu):
+        return mpf(0)
+    if x == 0:
+        if nu == 0:
+            return mpf(1)
+        if nu > 0 or integer:
+            return mpf(0)
+        return inf if mp.rgamma(nu + 1) > 0 else -inf
+    if abs(nu) > 1000 or abs(x) > mpf('1e12'):
+        raise RangeRefusal(f"besselj({nu}, {x}): beyond the range where the value is decidable")
+    return mp.besselj(nu, x)
+
+
 BIN = {
     '+': lambda a, b: a + b, '-': lambda a, b: a - b, '*': lambda a, b: a * b,
     '/': lambda a, b: ((nan if a == 0 else (-inf if (a < 0) != (b < 0) else inf)) if b == 0 else a / b),
-    'pow': _pow, 'rootn': _rootn,
+    'pow': _pow, 'rootn': _rootn, 'besselj': _besselj,
 }
 
 

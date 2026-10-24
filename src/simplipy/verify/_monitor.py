@@ -441,6 +441,39 @@ def c_rootn(x, n):
     return (_even_root(ni) if ni % 2 == 0 else _odd_root(ni))(x)
 
 
+def c_besselj(nu, x):
+    """J_nu(x), the Bessel function of the first kind, with scipy's cells (D7): NaN at a NaN
+    operand and at x = +-inf; NaN for a non-integer order at x < 0 (J is complex there); 0 under
+    an infinite order at x >= 0; J_0(0) = 1, J_nu(0) = 0 for nu > 0 and for a negative integer
+    nu, and the pole's one-sided limit at a negative non-integer order, the infinity of the sign
+    of 1/Gamma(nu + 1). An order whose integrality is unknowable at working precision, an order
+    beyond 1e3 or an argument beyond 1e12 is Unresolved."""
+    if isnan(nu) or isnan(x) or isinf(x):
+        return _nan()
+    n = None if isinf(nu) else _int_or_none(nu)
+    if n == 'unresolvable':
+        raise Unresolved()
+    if x < 0 and n is None:
+        return _nan()
+    if isinf(nu):
+        return mpf(0)
+    if x == 0:
+        if nu == 0:
+            return mpf(1)
+        if nu > 0 or n is not None:
+            return mpf(0)
+        return mpf('inf') if mp.rgamma(nu + 1) > 0 else mpf('-inf')
+    if abs(nu) > 1000 or abs(x) > mpf('1e12'):
+        raise Unresolved()
+    if n is not None:  # J_-n = (-1)^n J_n and J_n(-x) = (-1)^n J_n(x)
+        v = mp.besselj(abs(n), abs(x))
+        return -v if n % 2 and (n < 0) != (x < 0) else v
+    try:
+        return mp.besselj(nu, x)
+    except mp.NoConvergence:
+        raise Unresolved() from None
+
+
 def _tot(f, dom=None, lo=None, hi=None):
     def g(x):
         if isnan(x):
@@ -509,6 +542,7 @@ OPS = {
     'mult4': (1, lambda x: _nan() if isnan(x) else 4 * x), 'mult5': (1, lambda x: _nan() if isnan(x) else 5 * x),
     'div2': (1, lambda x: _nan() if isnan(x) else x / 2), 'div3': (1, lambda x: _nan() if isnan(x) else x / 3),
     'div4': (1, lambda x: _nan() if isnan(x) else x / 4), 'div5': (1, lambda x: _nan() if isnan(x) else x / 5),
+    'besselj': (2, c_besselj),
 }
 
 LITS = {'0': lambda: mpf(0), '1': lambda: mpf(1), '(-1)': lambda: mpf(-1),
@@ -604,6 +638,9 @@ def _zero_signbit(op, args):
         if base == 0:
             return sb[0] and k > 0 and _odd_integer(k)
         return isinf(base) and base < 0 and k < 0 and _odd_integer(k)
+    if op == 'besselj':                   # J_n(-0) = (-1)^n J_n(+0) and J_-n = (-1)^n J_n
+        n = _int_value_or_none(args[0]) if not isinf(args[0]) else None
+        return n is not None and n % 2 == 1 and sb[1] != (n < 0)
     if op in _PLUS_ZERO:
         return False                      # abs, an even power, exp(-inf), log(1), acos(1), ...
     # A head whose zero sign this table does not know: no reading, rather than a guessed +0.

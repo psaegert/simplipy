@@ -42,6 +42,8 @@
 use crate::operators::Operators;
 use astro_float::{BigFloat, Consts, RoundingMode, INF_NEG, INF_POS, NAN};
 
+mod besselj;
+
 /// Re-export for callers that rank arbiter values without naming the backing crate
 /// (worker's literal resolution).
 pub use astro_float::BigFloat as ArbFloat;
@@ -1065,6 +1067,7 @@ pub(crate) fn knows_operator(name: &str) -> bool {
             | "/"
             | "pow"
             | "rootn"
+            | "besselj"
     )
 }
 
@@ -1315,6 +1318,8 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         "pow" => ct_pow(a, b, ctx),
         // `rootn(x, n)`: IEEE-754 rootn, honest for every integer index.
         "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc, ct_div)),
+        // `besselj(nu, x)`: the contract's cells, the value or Unresolved (`besselj`).
+        "besselj" => besselj::besselj(a, b, p, &mut ctx.cc),
         _ => return None,
     };
     Some(v)
@@ -2140,6 +2145,7 @@ fn apply_binary(
         }
         // `rootn(x, n)`: IEEE-754 rootn, same table as the ct_binary arm.
         "rootn" => rootn_hiprec(a, b, p, cc, ieee_div),
+        "besselj" => return besselj::besselj(a, b, p, cc),
         _ => return None,
     };
     Some(v)
