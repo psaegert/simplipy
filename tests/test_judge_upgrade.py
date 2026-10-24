@@ -535,7 +535,7 @@ class TestTwinInstrumentInLockstep:
 
         from simplipy.verify import _contract as C
         from simplipy.verify import _monitor as M
-        assert 'REAL-CHANGE@singular' in inspect.getsource(C.judge_rule)
+        assert 'REAL-CHANGE@singular' in inspect.getsource(C._judge_contract)
         assert 'singular-real-null' in M.TOL_COUNTS
 
 

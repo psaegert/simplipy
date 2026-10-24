@@ -58,6 +58,7 @@ from mpmath import mp, mpf, isnan, isinf
 
 from ..engine import SimpliPyEngine
 from ..utils import count_expressions, sample_expression
+from . import _contract
 
 DPS = 50
 REL_TOL = mpf('1e-30')
@@ -511,6 +512,23 @@ OPS = {
     'div4': (1, lambda x: _nan() if isnan(x) else x / 4), 'div5': (1, lambda x: _nan() if isnan(x) else x / 5),
 }
 
+
+def _contract_kernel(f):
+    """One of the contract judge's 0.15-head kernels (`_contract.OPS`), whose bands at the jumps,
+    the poles, the asymptotes and atan2's cut ride the ambient precision as this module's do; its
+    refusal is this module's Unresolved."""
+    def g(*a):
+        try:
+            return f(*a)
+        except _contract.Unresolved:
+            raise Unresolved() from None
+    return g
+
+
+OPS.update({name: (arity, _contract_kernel(_contract.OPS[name]))
+            for name, arity in (('floor', 1), ('ceil', 1), ('erf', 1), ('harmonic', 1),
+                                ('max', 2), ('min', 2), ('mod', 2), ('atan2', 2))})
+
 LITS = {'0': lambda: mpf(0), '1': lambda: mpf(1), '(-1)': lambda: mpf(-1),
         'np.pi': lambda: +mp.pi, 'np.e': lambda: +mp.e,
         'float("inf")': lambda: mpf('inf'), 'float("-inf")': lambda: mpf('-inf'),
@@ -578,10 +596,11 @@ def _odd_integer(b):
     return ib is not None and ib % 2 == 1
 
 
-#: Odd at zero, `f(-0) = -0`: the odd functions and roots, and scaling by a positive constant.
+#: Odd at zero, `f(-0) = -0`: the odd functions and roots, and scaling by a positive constant
+#: (and `floor`, whose only zero argument giving a zero is a zero).
 _ODD_AT_ZERO = frozenset({'sin', 'tan', 'asin', 'atan', 'sinh', 'tanh', 'asinh', 'atanh',
                           'pow1_3', 'pow1_5', 'pow3', 'pow5', 'mult2', 'mult3', 'mult4',
-                          'mult5', 'div2', 'div3', 'div4', 'div5'})
+                          'mult5', 'div2', 'div3', 'div4', 'div5', 'erf', 'harmonic', 'floor'})
 
 
 def _zero_signbit(op, args):
@@ -599,6 +618,15 @@ def _zero_signbit(op, args):
         return not sb[0]
     if op in _ODD_AT_ZERO:
         return args[0] == 0 and sb[0]
+    if op == 'ceil':                      # ceil on (-1, 0] is -0: ceil(-0.5) and ceil(-0)
+        return sb[0]
+    if op == 'mod':                       # a zero remainder takes the divisor's sign
+        return sb[1]
+    if op == 'atan2':                     # atan2(+-0, x > 0) and atan2(y, +inf) keep y's sign
+        return sb[0]
+    if op in ('max', 'min'):              # the zero operand's sign; on the -0/+0 tie max is
+        zs = [s for a, s in zip(args, sb) if a == 0]      # +0 and min is -0
+        return all(zs) if op == 'max' else any(zs)
     if op in ('pow', 'rootn'):            # (-0)^odd and rootn(-0, odd) are -0; 1/(-inf)^odd
         base, k = args
         if base == 0:

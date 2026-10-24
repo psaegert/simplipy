@@ -319,6 +319,11 @@ def reserved_numeric_spelling(token: str) -> bool: ...
 #: mint and `simplipy.verify` share for heads the contract has no kernel for.
 def deployed_exact(lhs: list[str], rhs: list[str], var_names: list[str],
                    arity: dict[str, int]) -> tuple[bool, int, list[float] | None]: ...
+#: The f64 realisation bar of a rule spelled with a 0.15 head (`rust/battery.rs`): None when the
+#: ordinary realisation axis decides, else the deployed bar's (agree, probes, first differing
+#: probe). The contract judge ANDs it into `realised`; the f64 mine applies the same function.
+def f64_bar(lhs: list[str], rhs: list[str], var_names: list[str],
+            arity: dict[str, int]) -> tuple[bool, int, list[float] | None] | None: ...
 #: The f64 range event (`rust/numeric.rs`): did the operation `op` on `args` overflow or
 #: underflow to `value`? None for an operator outside the table. The one definition the
 #: miner's scan and `simplipy.verify` share.

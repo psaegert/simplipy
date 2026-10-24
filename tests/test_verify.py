@@ -983,11 +983,11 @@ class TestTheExistsWitnessIsActuallySearchedFor:
 
         real_fit = C.fit_witness
 
-        def blind_at_pi(tl, tr, shared, cl_val=None):
+        def blind_at_pi(tl, tr, shared, cl_val=None, env_out=None):
             # pi is NOT in CONSTS, so the old code appended it to `skipped_cl`
             if cl_val is not None and abs(cl_val - math.pi) < 1e-12:
                 return None
-            return real_fit(tl, tr, shared, cl_val)
+            return real_fit(tl, tr, shared, cl_val, env_out)
 
         C.fit_witness = blind_at_pi
         try:

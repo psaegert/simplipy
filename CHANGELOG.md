@@ -1143,27 +1143,52 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     moves into a sum's orientation, so a sum that vanishes on a region keeps the sign of its
     zero in either argument (printed as the negation it is); the search makes no move inside
     an `atan2`. The step and lattice heads count as region zeros wherever an inverse reads one.
-  - *Discontinuities.* A rule spelled with one of the nine is judged by one function in the core
-    (`deployed_exact`), which the contract judge calls and the miner applies to every such pair
-    it would accept, so the judge licenses exactly what the miner accepts: both sides bit for
-    bit in float64, a zero's sign included, at each variable's battery, +-inf, NaN, -0, the
-    float neighbours of the integers, tiny and huge magnitudes and the negative integers, every 0.05 over [-25, 25]
-    and on the diagonal. So `floor(x + 1) -> floor(x) + 1`, `mod(x + 1, 1) -> mod(x, 1)` and
-    `floor(mod(x, 1)) -> 0`, true over the reals and false in float64 just below an integer,
-    are refused, and so is `acosh(erf(floor(x))) -> acosh(erf(x))`, false on [5.9216, 6)
-    where erf saturates first. A source constant of such a source is also swept over zero and the small
+  - *Discontinuities.* The jumps of `floor`, `ceil` and `mod`, the poles of `harmonic` and the
+    cut of `atan2` are read the way poles are. Over the reals a rule must hold at every jump: the
+    contract evaluates the step heads exactly, a value inside the working-precision band of a
+    jump, a pole or the cut is unresolved rather than guessed, and the licence registry probes
+    the jumps of an argument affine in one variable, so `ceil(3x) -> floor(3x) + 1` is refused
+    at x = 1/3. In float64 a rule spelled with one of the nine must also agree bit for bit with
+    the float64 kernels, a zero's sign included, at each variable's battery, +-inf, NaN, -0, the
+    float neighbours of the integers, tiny and huge magnitudes and the negative integers, every
+    0.05 over [-25, 25] and on the diagonal: one function in the core (`f64_bar`), which the
+    contract judge ANDs into a rule's realisation and the `f64` mine applies to every pick. So
+    `floor(x + 1) -> floor(x) + 1`, `mod(x + 1, 1) -> mod(x, 1)` and `floor(mod(x, 1)) -> 0`,
+    true over the reals and false in float64 just below an integer, are minted in `real` and
+    `permissive` and refused in `f64`, and `ceil(x) -> floor(x) + 1`, false at every integer,
+    is refused everywhere. A source `<constant>` is probed as a finite variable; a fitted target
+    constant beside a step head or `mod` cannot be judged bit for bit, so such a rule is not
+    served in `f64`. A source constant of such a source is also swept over zero and the small
     integers and half-integers, and the refuter's witnesses read the new heads (integer
     neighbours for `floor`, `ceil` and `harmonic`; preimages through `atan2`, `mod`, `max`
     and `min`).
-  - *High precision and the judge.* The nine have no high-precision or contract kernels yet.
-    An operator the high-precision evaluators do not know is unevaluable, even at a NaN
-    operand: the contract point verdict is none (it read as equal), and the licence registry
-    refuses a pattern with exceptional points that holds one. The contract judge judges a rule
-    spelled with one of the nine in the deployed float64 lane alone (new verdict `F64-ONLY`):
-    tier `f64` when both sides agree bit for bit at every probe, `reject` otherwise, never
-    `core` or `real`. So these rules can enter the `f64` and `permissive` files and never the
-    `real` one. The corpus monitor reads no zero sign for an operator its table does not
-    name, and the high-precision oracle reads a complex value as NaN.
+  - *High precision and the judge.* Eight of the nine have high-precision and contract kernels:
+    `floor`, `ceil`, `max`, `min` and `mod` exact on the representation, `atan2` from `atan`,
+    `erf` by a series without cancellation (`2a/sqrt(pi) e^(-a^2) sum (2a^2)^n / (2n+1)!!`) and
+    `harmonic` without the sum `digamma(x + 1) + gamma` (a finite sum and a digamma difference
+    at two large arguments, the Bernoulli numbers from the tangent numbers), each within the
+    working precision of mpmath's value at 400 digits, `H(1e-300)` included (mpmath's own
+    `harmonic` gives -4e-84 there at 80 digits), and unresolved past the judge's 2000-digit
+    ceiling, where it costs seconds a call. So the contract judges a rule with them like
+    any other, and such rules enter all three files: `floor(floor(x)) -> floor(x)` is `core`,
+    `floor(x + 1) -> floor(x) + 1` is `real`, `floor(<constant>) -> <constant>` and
+    `harmonic(<constant>) -> <constant>` are `core`. `besselj` has no contract kernel yet and
+    keeps the deployed float64 lane alone (verdict `F64-ONLY`: tier `f64` when both sides agree
+    bit for bit at every probe, `reject` otherwise): an operator the high-precision evaluators
+    do not know is unevaluable, even at a NaN operand, the licence registry refuses a pattern
+    with exceptional points that holds one, and the mine leaves out the sources and candidates
+    with it that the judge could never license (in `real`, or with a `<constant>`). The corpus
+    monitor evaluates the eight with the contract's kernels and float64's zero signs, and reads
+    no zero sign for an operator its table does not name; the high-precision oracle reads a
+    complex value as NaN. Sort promotion does not promote a rule spelled with a new head: it
+    ships at `?`.
+  - *The judge's constant witness.* The witness of a target `<constant>` is polished at the
+    generic point the fit determined it at (it was always the first one, where a lattice head
+    can make the target flat in the witness: `max(x, acos(c)) -> max(c_t, x)` at x = 1.7), and
+    the measure and diagonal lanes re-round it at each rung as the battery lane does (frozen at
+    50 digits it left a fixed gap against an exact `<constant>` at every higher rung). Both
+    convicted identities at every head: `x + log(c) -> c_t + x`, `max(x, log(c)) -> max(c_t, x)`
+    and `atan2(x, acosh(c)) -> atan2(x, c_t)` were KILLs and are certified.
   - *Fingerprints.* The libm fingerprint probes `erf` and `atan2`, and the measure fingerprint
     prices `atan2(x0, x1)`, so every host's fingerprint moves.
   - *besselj* accepts torch tensors: the core kernel on the host, returned in the tensor's dtype

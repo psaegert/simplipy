@@ -550,6 +550,86 @@ pub fn deployed_exact(
     var_names: &[String],
     ops: &Operators,
 ) -> DeployedExact {
+    deployed_exact_over(lhs, rhs, var_names, 0, ops)
+}
+
+/// The 0.15 heads. A rule spelled with one answers to the deployed bar for its float64
+/// realisation (`f64_bar`): a step head's jump (`floor(x + 1) = floor(x) + 1` fails at
+/// x = -1e-17), a zero's sign that `atan2` reads, a pole of `harmonic` -- float64 parts from
+/// the reals there, at points the contract's battery does not reach.
+pub const NEW_HEADS: [&str; 9] = [
+    "floor", "ceil", "erf", "harmonic", "max", "min", "mod", "atan2", "besselj",
+];
+
+/// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap, or a head the contract
+/// cannot evaluate at all): a fitted target constant cannot be judged bit for bit beside them.
+const JUMP_HEADS: [&str; 4] = ["floor", "ceil", "mod", "besselj"];
+
+/// Does `tokens` hold a 0.15 head (as an operator of `ops`)?
+pub fn holds_new_head(tokens: &[String], ops: &Operators) -> bool {
+    tokens
+        .iter()
+        .any(|t| ops.arity_of(t).is_some() && NEW_HEADS.contains(&t.as_str()))
+}
+
+/// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary
+/// realisation axis decides (no 0.15 head; a bare `<constant>` target, whose witness is the
+/// source's own value; a fitted target constant beside heads without jumps), else the deployed
+/// bar's verdict (`deployed_exact`), each source `<constant>` probed as a variable over the
+/// finite probes (a fitted constant is a finite float). A fitted target constant beside a jump
+/// head cannot be judged bit for bit, so it is refused. The contract judge ANDs this into a
+/// rule's `realised` (`_core.f64_bar`) and the f64 mint applies it to every pick, so the two
+/// cannot disagree.
+pub fn f64_bar(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> Option<DeployedExact> {
+    if !holds_new_head(lhs, ops) && !holds_new_head(rhs, ops) {
+        return None;
+    }
+    let is_c = |t: &String| t == "<constant>";
+    if rhs.iter().any(is_c) {
+        let jumps = lhs
+            .iter()
+            .chain(rhs)
+            .any(|t| ops.arity_of(t).is_some() && JUMP_HEADS.contains(&t.as_str()));
+        return if rhs.len() == 1 || !jumps {
+            None
+        } else {
+            Some(DeployedExact {
+                ok: false,
+                probes: 0,
+                first: None,
+            })
+        };
+    }
+    let mut names = var_names.to_vec();
+    let mut lhs_v = Vec::with_capacity(lhs.len());
+    let mut n_c = 0usize;
+    for t in lhs {
+        if is_c(t) {
+            let name = format!("<c{n_c}>");
+            names.push(name.clone());
+            lhs_v.push(name);
+            n_c += 1;
+        } else {
+            lhs_v.push(t.clone());
+        }
+    }
+    Some(deployed_exact_over(&lhs_v, rhs, &names, n_c, ops))
+}
+
+/// `deployed_exact` over `var_names`, whose last `n_finite` names are fitted constants, probed
+/// over the finite values only.
+fn deployed_exact_over(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    n_finite: usize,
+    ops: &Operators,
+) -> DeployedExact {
     let refused = DeployedExact {
         ok: false,
         probes: 0,
@@ -578,16 +658,22 @@ pub fn deployed_exact(
             values.push(v);
         }
     }
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let first_finite = var_names.len().saturating_sub(n_finite);
+    let probes_of = |v: usize| if v >= first_finite { &finite } else { &values };
     let width = var_names.len().max(1);
     let mut rows: Vec<Vec<f64>> = Vec::new();
-    let total = values.len().saturating_pow(used.len() as u32);
+    let total = used
+        .iter()
+        .fold(1usize, |acc, &v| acc.saturating_mul(probes_of(v).len()));
     let stride = total.div_ceil(DEPLOYED_ONLY_MAX_ROWS).max(1);
     for pick in (0..total).step_by(stride) {
         let mut row = vec![1.7f64; width];
         let mut rem = pick;
         for &v in &used {
-            row[v] = values[rem % values.len()];
-            rem /= values.len();
+            let vals = probes_of(v);
+            row[v] = vals[rem % vals.len()];
+            rem /= vals.len();
         }
         rows.push(row);
     }
@@ -703,5 +789,40 @@ mod deployed_only_tests {
             assert!(d.ok, "{l} -> {r} at {:?}", d.first);
             assert!(d.probes > 300);
         }
+    }
+
+    /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a
+    /// finite variable; the ordinary axis for a bare constant target or a fitted target constant
+    /// beside smooth heads; refused for a fitted target constant beside a jump head.
+    #[test]
+    fn f64_bar_reads_constants() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        let bar = |l: &str, r: &str| f64_bar(&s(l), &s(r), &v, ops).map(|d| d.ok);
+        assert_eq!(bar("sin x0", "sin x0"), None);
+        assert_eq!(bar("floor + x0 1", "+ floor x0 1"), Some(false));
+        assert_eq!(bar("floor floor x0", "floor x0"), Some(true));
+        // a source constant alone is a variable over the finite probes
+        assert_eq!(
+            bar("max <constant> float(\"nan\")", "float(\"nan\")"),
+            Some(true)
+        );
+        assert_eq!(bar("floor + <constant> 1", "+ floor x0 1"), Some(false));
+        // a fitted target constant beside a jump head is refused
+        assert_eq!(
+            bar("floor floor <constant>", "floor <constant>"),
+            Some(false)
+        );
+        assert_eq!(bar("floor <constant>", "<constant>"), None);
+        assert_eq!(bar("erf * x0 <constant>", "erf * <constant> x0"), None);
+        assert_eq!(
+            bar("floor * x0 <constant>", "floor * <constant> x0"),
+            Some(false)
+        );
     }
 }

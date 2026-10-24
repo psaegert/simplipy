@@ -54,33 +54,106 @@ def test_the_evaluator_folds_with_the_deployed_kernels(bare):
         assert float(ev(toks)) == want, toks
 
 
-def test_judge_lane_for_heads_without_a_contract_kernel():
+def test_the_judge_reads_the_new_heads_on_both_axes():
+    """The contract decides whether a rule is true over the reals; float64's realisation of a
+    rule with a 0.15 head also answers to the core's f64 bar (the jumps, the signed zeros)."""
     j = _contract.judge_rule
-    ok = j('floor floor _0'.split(), 'floor _0'.split())
+    for lhs, rhs in (('floor floor _0', 'floor _0'), ('max _0 _0', '_0'),
+                     ('ceil neg _0', 'neg floor _0'), ('erf neg _0', 'neg erf _0'),
+                     ('mod _0 1', '- _0 floor _0'), ('atan2 neg _0 1', 'neg atan2 _0 1')):
+        r = j(lhs.split(), rhs.split())
+        assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'core', (lhs, rhs, r)
+    # true over the reals, broken by float64 at x = -1e-17: the real tier, never f64's
+    for lhs, rhs in (('floor + _0 1', '+ floor _0 1'), ('mod + _0 1 1', 'mod _0 1'),
+                     ('floor mod ?0 1', '0')):
+        r = j(lhs.split(), rhs.split())
+        assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'real', (lhs, rhs, r)
+        assert r['f64_bar']['ok'] is False
+    # false over the reals at a jump, and in float64: no tier
+    for lhs, rhs in (('+ floor _0 1', 'ceil _0'), ('mod _0 1', '_0'), ('harmonic _0', 'log _0')):
+        r = j(lhs.split(), rhs.split())
+        assert r['verdict'] == 'KILL' and r['tier'] == 'reject', (lhs, rhs, r)
+    # the constant lane: a fitted witness, as for every other head
+    for lhs, rhs in (('floor <constant>', '<constant>'), ('max <constant> 1', '<constant>'),
+                     ('harmonic <constant>', '<constant>'), ('atan2 <constant> 1', '<constant>')):
+        r = j(lhs.split(), rhs.split())
+        assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'core', (lhs, rhs, r)
+    # besselj has no contract kernel yet: the deployed lane alone, and no constant
+    ok = j('besselj 0 neg _0'.split(), 'besselj 0 _0'.split())
     assert ok['verdict'] == 'F64-ONLY' and ok['tier'] == 'f64', ok
-    assert j('max _0 _0'.split(), '_0'.split())['tier'] == 'f64'
-    # a law of the reals that float64 breaks (x = -1e-17): no tier at all
-    bad = j('floor + _0 1'.split(), '+ floor _0 1'.split())
-    assert bad['verdict'] == 'F64-ONLY' and bad['tier'] == 'reject', bad
-    # a constant needs the contract's witness: refused
-    assert j('floor <constant>'.split(), '<constant>'.split())['verdict'] == 'UNSUPPORTED-SHAPE'
+    assert j('besselj 1 <constant>'.split(), '<constant>'.split())['verdict'] == 'UNSUPPORTED-SHAPE'
     # a head the judge does not know at all stays refused
     assert j('gamma _0'.split(), '_0'.split())['verdict'] == 'UNSUPPORTED-SHAPE'
     assert _contract._tier('F64-ONLY', None) == 'reject'
 
 
-def test_monitor_and_oracle_refuse_unknown_heads():
-    assert 'floor' in _monitor.unknown_tokens(['floor', 'x0'])
+def test_the_constant_witness_is_polished_where_it_is_determined():
+    """A target constant's witness is polished at the generic point its fit was determined at
+    (a lattice head is flat in it at the first one), and re-rounded at every rung of the measure
+    lane: these identities were convicted."""
+    j = _contract.judge_rule
+    for lhs, rhs in (('max x0 acos <constant>', 'max <constant> x0'),
+                     ('max x0 log <constant>', 'max <constant> x0'),
+                     ('atan2 x0 acosh <constant>', 'atan2 x0 <constant>'),
+                     ('+ x0 log <constant>', '+ <constant> x0')):
+        r = j(lhs.split(), rhs.split())
+        assert r['verdict'] == 'CERTIFIED', (lhs, rhs, r)
+
+
+def test_contract_kernels_and_their_bands():
+    """The contract's 0.15 kernels against mpmath at a higher precision, and the bands: a value
+    inside the working-precision band of a jump, a pole, an asymptote or atan2's cut is
+    Unresolved, an exact one is read exactly."""
+    from mpmath import mp, mpf
+    ops, U = _contract.OPS, _contract.Unresolved
+    old = mp.dps
+    try:
+        mp.dps = 50
+        for x in ('1e-300', '1e-20', '0.5', '-0.5', '-2.25', '10.25', '1e17', '-0.999'):
+            with mp.workdps(400):
+                want = mp.harmonic(mpf(x))
+            got = ops['harmonic'](mpf(x))
+            assert abs(got - want) <= abs(want) * mpf(10) ** -45, (x, got, want)
+        assert _contract.misnan(ops['harmonic'](mpf(-2))) and ops['harmonic'](mpf(0)) == 0
+        assert ops['floor'](mpf(-1)) == -1 and ops['ceil'](mpf('-0.5')) == 0
+        assert ops['mod'](mpf(-7), mpf(3)) == 2 and ops['mod'](mpf(7), mpf(-3)) == -2
+        assert ops['mod'](mpf(-3), mpf('inf')) == mpf('inf')
+        assert _contract.misnan(ops['mod'](mpf(1), mpf(0)))
+        assert ops['atan2'](mpf(1), mpf(0)) == mp.pi / 2
+        tiny = mpf(10) ** -45
+        for f, args in (('floor', (1 + tiny,)), ('ceil', (-tiny,)), ('harmonic', (-2 + tiny,)),
+                        ('mod', (3 - tiny, mpf(3))), ('mod', (tiny, mpf(3))),
+                        ('atan2', (mpf(0), mpf(-1))), ('atan2', (tiny, mpf(-1))),
+                        ('atan2', (mpf(0), mpf(0))), ('erf', (mpf(12),))):
+            with pytest.raises(U):
+                ops[f](*args)
+        # outside the band the value is read: erf(9) is 1 - 4e-37, harmonic near a pole is large
+        assert 1 - ops['erf'](mpf(9)) > 0
+        assert ops['harmonic'](-2 + mpf(10) ** -30) < -1e29
+    finally:
+        mp.dps = old
+
+
+def test_monitor_reads_the_new_heads_and_the_oracle_refuses_them():
+    """The corpus monitor evaluates the eight heads with the contract's kernels and IEEE's zero
+    signs; besselj stays unknown to it. Sort promotion's oracle refuses every 0.15 head (a rule
+    it cannot certify at a stronger sort ships at `?`)."""
+    assert not _monitor.unknown_tokens(['floor', 'mod', 'x0', 'atan2', 'x1', 'erf', 'x0'])
+    assert 'besselj' in _monitor.unknown_tokens(['besselj', '1', 'x0'])
+    neg0 = _monitor._NegZero(0)
+    assert _monitor._zero_signbit('ceil', [-0.5]) and not _monitor._zero_signbit('floor', [0.5])
+    assert _monitor._zero_signbit('mod', [3.0, -3.0]) and _monitor._zero_signbit('atan2', [neg0, 1.0])
+    assert not _monitor._zero_signbit('max', [neg0, 0.0]) and _monitor._zero_signbit('min', [neg0, 0.0])
     with pytest.raises(_monitor.Unresolved):
-        _monitor._zero_signbit('floor', [0.0])
+        _monitor._zero_signbit('besselj', [1.0, 0.0])
     from simplipy.promotion._hp_equiv import evaluate
     with pytest.raises(ValueError):
         evaluate(['floor', 'x0'], {'x0': 1.5}, [])
 
 
 def test_a_small_mine_mines_new_head_rules():
-    """End to end, in every mode: rules the float64 comparison certifies appear in the f64 and
-    permissive files; the real file holds none (the contract cannot judge the heads)."""
+    """End to end, in every mode: the rules true over the reals and realised in float64 appear
+    in all three files."""
     full = yaml.safe_load(open(ACJ2_4))['operators']
     ops = {k: full[k] for k in ('neg', 'floor', 'ceil', 'max')}
     e = SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
@@ -93,14 +166,13 @@ def test_a_small_mine_mines_new_head_rules():
                            for x in t]
         return any(strip(list(a)) == lhs.split() and strip(list(b)) == rhs.split() for a, b in rules)
 
-    for rules in (e.simplification_rules, e.permissive_simplification_rules):
+    for rules in (e.simplification_rules, e.real_simplification_rules,
+                  e.permissive_simplification_rules):
         assert has(rules, 'floor floor #0', 'floor #0'), rules
         assert has(rules, 'ceil floor #0', 'floor #0'), rules
         # max(x, x) = x and the argument order are the engine's: no rule states them
         assert not any(a[0] == 'max' and b[0] == 'max' for a, b in rules), rules
         assert not has(rules, 'max #0 #0', '#0'), rules
-    heads = {'floor', 'ceil', 'max'}
-    assert not any(heads & set(list(a) + list(b)) for a, b in e.real_simplification_rules)
 
 
 def test_max_and_min_are_order_independent_and_idempotent(bare):
@@ -159,14 +231,19 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
         assert e.simplify(src.split(), mode='f64') == want
 
 
-def test_the_mint_refuses_laws_float64_breaks_at_a_jump(bare):
+def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
+    """A law of the reals float64 breaks at a jump is minted in real and permissive and refused
+    in f64; a rule false at a jump over the reals too is refused in every mode."""
     from simplipy.mining import RuleMiner
     X = RuleMiner(bare)._mining_sample_x(256, 2, np.random.default_rng(0))
 
-    def certified(src, tgt):
+    def certified(src, tgt, mode):
         return bare._core.judge_pair(src.split(), tgt.split(), ['x0', 'x1'], X.flatten().tolist(),
-                                     X.shape[0], rtol=1e-11, atol=1e-12, rule_mode='default')[0]
+                                     X.shape[0], rtol=1e-11, atol=1e-12, rule_mode=mode)[0]
     for src, tgt in (('floor + x0 1', '+ floor x0 1'), ('mod + x0 1 1', 'mod x0 1'),
-                     ('floor mod x0 1', '0'), ('+ floor x0 1', 'ceil x0')):
-        assert not certified(src, tgt), (src, tgt)
-    assert certified('floor floor x0', 'floor x0')
+                     ('floor mod x0 1', '0')):
+        assert not certified(src, tgt, 'default'), (src, tgt)
+        assert certified(src, tgt, 'real') and certified(src, tgt, 'permissive'), (src, tgt)
+    for mode in ('default', 'real', 'permissive'):
+        assert not certified('+ floor x0 1', 'ceil x0', mode)
+        assert certified('floor floor x0', 'floor x0', mode)

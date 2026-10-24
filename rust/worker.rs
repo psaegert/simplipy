@@ -99,8 +99,8 @@ const POLE_GRID: [f64; 26] = [
 /// step-function artifacts (`pow(asin(C), inf) -> 0`, and its multi-constant scalings
 /// `* C1 pow(asin(C2), inf) -> 0`, which random sampling lands in only ~2%/draw). Fully-random
 /// rounds are appended for off-grid decorrelation and joint coverage.
-/// The magnitudes swept, beside `POLE_GRID`, on each constant of a source holding a head the
-/// contract has no kernel for (`hiprec::evaluable`): zero and the integers, where the step heads
+/// The magnitudes swept, beside `POLE_GRID`, on each constant of a source holding a 0.15 head
+/// (`battery::holds_new_head`): zero and the integers, where the step heads
 /// jump, `harmonic` has its poles (with the negative sign combos) and `mod` divides exactly, and a
 /// half-integer, `besselj`'s order and the floor/ceil midpoint.
 const POLE_GRID_STEP: [f64; 6] = [0.0, 1.0, 1.5, 2.0, 3.0, 4.0];
@@ -916,7 +916,7 @@ fn equivalent_no_const(
             rng,
             n_src_const,
             eff_challenges,
-            !crate::hiprec::evaluable(source_tokens, ops),
+            crate::battery::holds_new_head(source_tokens, ops),
         )
     };
     let mut instances: Vec<Vec<f64>> = Vec::with_capacity(mags.len() * combos.len());
@@ -1897,7 +1897,7 @@ impl<'s> SourceCtx<'s> {
             n_rows,
             challenges,
             &mut rng,
-            !crate::hiprec::evaluable(source, ops),
+            crate::battery::holds_new_head(source, ops),
         );
         let events = if f64_range {
             y.iter()
