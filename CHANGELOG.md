@@ -1181,7 +1181,8 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     literal order at 0 folds exactly: `besselj(0, 0)` is `1`, `besselj(5/2, 0)` and
     `besselj(-2, 0)` are `0` (`besselj(-1, 0)` is `-0.0` in `f64`), and a negative non-integer
     order gives its pole's one-sided limit, the sign of `1/Gamma(nu + 1)`: `besselj(-1/2, 0)` is
-    `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy has them. A sum argument under an odd order
+    `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy has them; an infinite order gives 0 at a
+    literal `x >= 0` and NaN below (`besselj(atanh(1), 2)` is `0`). A sum argument under an odd order
     keeps its orientation (`besselj(1, x1 - x0)` stays).
   - *The kernel.* An integer order reads its reflection and its parity, so both hold bit for
     bit: `besselj(1, -0.0)` and `besselj(3, -1e-300)` are `-0.0` (scipy gives `0.0`),
