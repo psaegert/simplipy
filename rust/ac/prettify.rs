@@ -8,20 +8,24 @@
 //! the display build another structure is written with its rest (rule 3). The one value it
 //! computes is a function of numbers all shown as floats (rule 6).
 //!
-//! 1. **Digit budget.** A spelling's digits are every digit it writes, a numerator of 1
-//!    included (`1/12` counts 3, `3/123` counts 4, `0.05` counts 3).
+//! 1. **Digit budget.** A spelling's digits are the significant digits it writes, never an
+//!    exponent's, a numerator of 1 included (`1/12` counts 3, `3/123` counts 4, `0.05` counts
+//!    1, `2.5e307` counts 2). Each number is written in the first form that fits: exactly
+//!    (rule 2), as a short exact sum (rule 3), or as its float (rule 3).
 //! 2. **A number that fits is written exactly, as `simplify` writes it.** The budget decides
 //!    only whether a number is written exactly; how an exact number is written is the core's
 //!    own rule, the one `simplify`'s text follows (`convert::infix_number_parts`): an integer,
 //!    the decimal where its codeword is the cheaper (`0.3*x1`, `x2 + 1/2`), beside a factor
-//!    the reciprocal where it spells shorter (`x1/4.2` for `5/21`), else `p/q` (`22*x1/7`). If
-//!    that spelling fits `D` it is written.
-//! 3. **Otherwise one float**: the float64 nearest to the value, in its shortest form, as a
-//!    multiplier. The display writes the value that float reads back as, by these rules (an
-//!    exponent a hair from 1/2 is a square root). A number shown as a float is read as a float.
-//!    One that would show as a short exact number it is not (`1` for
-//!    `1.000000000000000000003`) is written, at full precision, with the rest to its value
-//!    where the rest is written exactly within `D`: `x1 + 1 + 3e-21`.
+//!    the reciprocal where it spells shorter (`x1/4.2` for `5/21`), else `p/q` (`22*x1/7`),
+//!    each decimal numeral in rule 8's notation (`1e10`). If that spelling fits `D` it is
+//!    written.
+//! 3. **Else a short exact sum, otherwise one float.** A number float64 does not write
+//!    exactly in its 15 digits is written `s + r` (or `s - r`) where that fits `D` in total:
+//!    `s` its first significant digits and `r` the rest to its value, each written exactly as
+//!    one number (`2.5e307 + 1e170`, `1 + 3e-21`, `1e20 + 1/3`), at full precision: it keeps
+//!    the value. Otherwise the float64 nearest to the value, in its shortest form, as a multiplier. The
+//!    display writes the value that float reads back as, by these rules (an exponent a hair
+//!    from 1/2 is a square root). A number shown as a float is read as a float.
 //!    With a precision `k`, the float shows `k` significant digits instead (round half to
 //!    even) and no rest is written for its own sake, since the reader asked for `k` digits;
 //!    that number is written by these rules as every number is (`0.175` is 7/40, written
@@ -221,10 +225,15 @@ impl Spelling {
                     let (num, den) = sp.parts();
                     one_number(num, den)
                 };
-                (
-                    vec![Node::Sum(vec![(false, node(s)), (*minus, node(r))])],
-                    vec![],
-                )
+                // A rest that is a short sum itself joins the one sum: `1e20 + 1e10 + 1`.
+                let mut terms = vec![(false, node(s))];
+                let (mut rest, mut sign) = (&**r, *minus);
+                while let Spelling::Split { s, r, minus } = rest {
+                    terms.push((sign, node(s)));
+                    (rest, sign) = (&**r, sign != *minus);
+                }
+                terms.push((sign, node(rest)));
+                (vec![Node::Sum(terms)], vec![])
             }
         }
     }
@@ -337,21 +346,92 @@ impl ExactParts {
     }
 }
 
-fn digits_of(s: &str) -> usize {
-    s.chars().filter(char::is_ascii_digit).count()
+/// The significant digits a numeral writes (rule 1): the digits of its mantissa from the first
+/// nonzero one, never an exponent's (`2.5e307` counts 2, `0.05` counts 1, `2500` and `40`
+/// count as written, 4 and 2).
+fn significant_of(s: &str) -> usize {
+    let mantissa = s.split(['e', 'E']).next().unwrap_or(s);
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    digits.trim_start_matches('0').len().max(1)
+}
+
+/// A numeral of an exact spelling in the display's notation (rule 8): a decimal is written as a
+/// float of its value would be (`10000000000` is `1e10`, `0.0001` is `1e-4`), the same value.
+fn notated(s: String) -> String {
+    let _exact = number_domain(false);
+    match Rat::parse_decimal(&s) {
+        Some(r) if !r.is_zero() && r.decimal_parts().is_some() => float_text(&r),
+        _ => s,
+    }
+}
+
+/// float64's decimal precision (`DBL_DIG`): every decimal of at most 15 significant digits is
+/// the shortest spelling of its nearest float64.
+const DBL_DIG: usize = f64::DIGITS as usize;
+
+/// Is `a` a decimal of at most [`DBL_DIG`] significant digits? Its float then writes it exactly
+/// and short (`1905`, `1.0001`), and rule 3's short sum is not for it (`2000 - 95`); a longer
+/// number (`2.500000000000001e30`, `0.30000000000000004`) or one with no decimal (`1e20 + 1/3`)
+/// is a short number and a rest where that fits.
+fn short_decimal(a: &Rat) -> bool {
+    let _exact = number_domain(false);
+    a.decimal_parts()
+        .is_some_and(|p| p.mantissa.digits().len() <= DBL_DIG)
+}
+
+/// `a > 0` rounded to its first `k >= 1` significant digits, half to even, exactly.
+fn round_significant(a: &Rat, k: usize) -> Option<Rat> {
+    use num_bigint::BigInt;
+    use num_integer::Integer;
+    let _exact = number_domain(false);
+    let (p, q) = a.big_parts();
+    let ten = |n: i64| num_traits::pow(BigInt::from(10u8), n as usize);
+    // `a >= 10^e`, the leading exponent found from the bit lengths and corrected
+    let at_least = |e: i64| {
+        if e >= 0 {
+            p >= &q * ten(e)
+        } else {
+            &p * ten(-e) >= q
+        }
+    };
+    let mut e = ((p.bits() as f64 - q.bits() as f64) * std::f64::consts::LOG10_2).floor() as i64;
+    while !at_least(e) {
+        e -= 1;
+    }
+    while at_least(e + 1) {
+        e += 1;
+    }
+    let t = e - k as i64 + 1;
+    let (num, den) = if t >= 0 {
+        (p, q * ten(t))
+    } else {
+        (p * ten(-t), q)
+    };
+    let (mut n, r) = num.div_rem(&den);
+    let twice = r * 2u8;
+    if twice > den || (twice == den && n.is_odd()) {
+        n += 1u8;
+    }
+    if t >= 0 {
+        Rat::from_big(n * ten(t), BigInt::from(1u8))
+    } else {
+        Rat::from_big(n, ten(-t))
+    }
 }
 
 fn power_of(base: u32, k: usize) -> BigUint {
     num_traits::pow(BigUint::from(base), k)
 }
 
-/// The exact spelling of a positive value `a` at `place` when it fits `d` digits (rules 1 and
-/// 2): the core's own spelling (`convert::infix_number_parts`), counted digit by digit.
+/// The exact spelling of a positive value `a` at `place` when it fits `d` significant digits
+/// (rules 1 and 2): the core's own spelling (`convert::infix_number_parts`), its decimal
+/// numerals in the display's notation ([`notated`]), counted by [`significant_of`].
 fn exact_fit(a: &Rat, d: usize, place: NumberPlace) -> Option<ExactParts> {
     let (num, den) = infix_number_parts(a, place);
+    let (num, den) = (num.map(notated), den.map(notated));
     let digits = match (&num, &den) {
-        (Some(n), den) => digits_of(n) + den.as_deref().map_or(0, digits_of),
-        (None, Some(den)) => 1 + digits_of(den),
+        (Some(n), den) => significant_of(n) + den.as_deref().map_or(0, significant_of),
+        (None, Some(den)) => 1 + significant_of(den),
         (None, None) => return None,
     };
     (digits <= d).then_some(ExactParts { num, den, digits })
@@ -434,6 +514,9 @@ pub enum Layout {
     Sections,
 }
 
+/// The short sums of [`Display::short_sum`], by value and budget, with the digits each writes.
+type ShortSums = rustc_hash::FxHashMap<(Rat, usize), Option<(Spelling, usize)>>;
+
 /// The DISPLAY of one canonical state under a digit budget.
 pub struct Display<'a, 'v> {
     cx: &'a Cx<'v>,
@@ -456,6 +539,10 @@ pub struct Display<'a, 'v> {
     wrote_pi_symbol: Cell<bool>,
     /// Sums and products are written with the grouping of the explicit token form (rule 10).
     keep_grouping: bool,
+    /// The number domain the display reads back in (f64: `f64` and `permissive`).
+    f64_domain: bool,
+    /// The short sums found, by value and budget (rule 3).
+    sums: RefCell<ShortSums>,
 }
 
 impl<'a, 'v> Display<'a, 'v> {
@@ -472,7 +559,16 @@ impl<'a, 'v> Display<'a, 'v> {
             holds_pi: Cell::new(false),
             wrote_pi_symbol: Cell::new(false),
             keep_grouping: false,
+            f64_domain: super::rat::f64_numbers(),
+            sums: RefCell::new(Default::default()),
         }
+    }
+
+    /// The display at full precision, with the same budget, layout and number domain.
+    fn at_full_precision(&self) -> Display<'a, 'v> {
+        let mut full = Display::new(self.cx, self.digits, None, self.layout);
+        full.f64_domain = self.f64_domain;
+        full
     }
 
     /// The display with every sum and product written with the grouping of the explicit token
@@ -531,17 +627,11 @@ impl<'a, 'v> Display<'a, 'v> {
     }
 
     /// The spelling of `a > 0` given its short spelling: that spelling where it keeps `a`'s
-    /// value; at full precision, a short exact-looking spelling with the rest that fits the
-    /// budget; else as the choices say.
+    /// value, else as the choices say.
     fn choose(&self, a: &Rat, short: (Spelling, Rat)) -> (Spelling, Rat) {
         let short = self.pi_written(a, short);
         if short.1 == *a {
             return short;
-        }
-        if self.precision.is_none() {
-            if let Some(at_value) = self.with_fitting_rest(a, &short) {
-                return at_value;
-            }
         }
         self.note(a);
         match self.choice(a) {
@@ -581,23 +671,57 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// `a` written at its value as its short spelling `s` and the rest `r = a - s`, where `s`
-    /// reads as an exact number (it is no float: `1`, `0.1`, `1/2`) and the rest is written
-    /// exactly within the digit budget (rules 1 and 2): `1 + 3e-21`. A number shown as a float
-    /// is read as a float and is written without its rest. `None` where there is no such rest.
-    fn with_fitting_rest(&self, a: &Rat, short: &(Spelling, Rat)) -> Option<(Spelling, Rat)> {
-        if matches!(short.0, Spelling::Float(_)) {
+    /// Rule 3's short sum: `a > 0` written at its value as `s + r` (or `s - r`) within `d`
+    /// significant digits in total, `s` the value rounded to its first `k` significant digits
+    /// (the fewest that work) and `r = a - s` the rest, each written exactly as one number:
+    /// `2.5e307 + 1e170`, `1 + 3e-21`, `1e20 + 1/3`. Each part is a number of the display's
+    /// domain, so the sum reads back as `a`. With the digits it writes.
+    fn short_sum(&self, a: &Rat, d: usize) -> Option<(Spelling, usize)> {
+        if d < 2 {
             return None;
         }
-        let _exact = number_domain(false);
-        let r = a.checked_add(&short.1.checked_neg()?)?;
-        let rest = exact_fit(&r.abs(), self.digits, NumberPlace::Alone)?;
-        let spelling = Spelling::Split {
-            s: Box::new(short.0.clone()),
-            r: Box::new(rest.spelling()),
-            minus: r.is_negative(),
-        };
-        Some((spelling, a.clone()))
+        let key = (a.clone(), d);
+        if let Some(found) = self.sums.borrow().get(&key) {
+            return found.clone();
+        }
+        let found = (|| {
+            let _exact = number_domain(false);
+            for k in 1..d {
+                let Some(s) = round_significant(a, k) else {
+                    continue;
+                };
+                let Some(r) = a.checked_add(&s.checked_neg()?) else {
+                    continue;
+                };
+                if r.is_zero() || !self.admissible(&s) || !self.admissible(&r) {
+                    continue;
+                }
+                let Some(sf) = exact_fit(&s, d - 1, NumberPlace::Alone) else {
+                    continue;
+                };
+                let left = d - sf.digits;
+                let magnitude = r.abs();
+                if let Some(rf) = exact_fit(&magnitude, left, NumberPlace::Alone) {
+                    let digits = sf.digits + rf.digits;
+                    let spelling = Spelling::Split {
+                        s: Box::new(sf.spelling()),
+                        r: Box::new(rf.spelling()),
+                        minus: r.is_negative(),
+                    };
+                    return Some((spelling, digits));
+                }
+            }
+            None
+        })();
+        self.sums.borrow_mut().insert(key, found.clone());
+        found
+    }
+
+    /// Is `r` a number of the display's domain, which reading the display builds as one?
+    fn admissible(&self, r: &Rat) -> bool {
+        let _domain = number_domain(self.f64_domain);
+        let (p, q) = r.big_parts();
+        Rat::from_big(p, q).is_some()
     }
 
     /// `a` written as its short spelling `s` and the rest `r = a - s`, the rest written as
@@ -614,7 +738,8 @@ impl<'a, 'v> Display<'a, 'v> {
         let (r_spelling, r_value) = match rest {
             Rest::Exact => (self.exact_spelling(&magnitude), magnitude),
             Rest::Short => self.spell_short(&magnitude, NumberPlace::Alone),
-            Rest::Full => Display::new(self.cx, self.digits, None, self.layout)
+            Rest::Full => self
+                .at_full_precision()
                 .spell_short(&magnitude, NumberPlace::Alone),
         };
         let minus = r.is_negative();
@@ -643,7 +768,8 @@ impl<'a, 'v> Display<'a, 'v> {
     }
 
     /// The short spelling of a positive value at `place` and the value it reads back as (rules
-    /// 2-4).
+    /// 2-4): exactly, with pi factored out, as a short exact sum, or as its float, the first
+    /// that fits the budget.
     fn spell_short(&self, a: &Rat, place: NumberPlace) -> (Spelling, Rat) {
         let _exact = number_domain(false);
         if let Some(f) = exact_fit(a, self.digits, place) {
@@ -653,6 +779,13 @@ impl<'a, 'v> Display<'a, 'v> {
         // display reads back to the same multiple of it.
         if let Some(sp) = self.pi_fit(a, place) {
             return (sp, a.clone());
+        }
+        // A short exact sum, for a number float64 does not write exactly in its 15 decimal
+        // digits, at full precision: a precision asks for a float of `k` digits instead.
+        if self.precision.is_none() && !short_decimal(a) {
+            if let Some((sp, _)) = self.short_sum(a, self.digits) {
+                return (sp, a.clone());
+            }
         }
         let y = a.to_f64_nearest();
         let Some(s) = Rat::shortest_reading_as(y).filter(|_| writable(y)) else {
@@ -863,7 +996,7 @@ impl<'a, 'v> Display<'a, 'v> {
                         return None;
                     }
                     let _exact = number_domain(false);
-                    let full = Display::new(self.cx, self.digits, None, self.layout);
+                    let full = self.at_full_precision();
                     let (_, shown) = full.spell_short(&base.abs(), NumberPlace::Alone);
                     let shown = if base.is_negative() {
                         shown.checked_neg()?
@@ -896,7 +1029,7 @@ impl<'a, 'v> Display<'a, 'v> {
 
     /// Would the number `r` be shown as a float (rule 3), at any precision?
     fn shown_as_float(&self, r: &Rat) -> bool {
-        let full = Display::new(self.cx, self.digits, None, self.layout);
+        let full = self.at_full_precision();
         matches!(
             full.spell_short(&r.abs(), NumberPlace::Alone).0,
             Spelling::Float(_)
@@ -2007,8 +2140,9 @@ mod tests {
         })
     }
 
-    /// Rules 1 and 2: an exact number is written as the core writes it, and every digit of
-    /// that spelling counts, a numerator of 1 included.
+    /// Rules 1 and 2: an exact number is written as the core writes it, a decimal in the
+    /// display's notation, and its significant digits count, a numerator of 1 included, never
+    /// an exponent's digits.
     #[test]
     fn exact_numbers_are_written_as_the_core_writes_them() {
         let beside = NumberPlace::Coefficient { plain: true };
@@ -2017,8 +2151,20 @@ mod tests {
         assert_eq!(fit(&rat(3, 10), 3, beside).as_deref(), Some("0.3"));
         assert_eq!(fit(&rat(1, 5), 3, beside).as_deref(), Some("0.2"));
         assert_eq!(fit(&rat(1, 20), 3, beside).as_deref(), Some("0.05"));
-        assert_eq!(fit(&rat(1, 200), 3, beside), None);
-        assert_eq!(fit(&rat(1, 200), 4, beside).as_deref(), Some("0.005"));
+        assert_eq!(fit(&rat(1, 200), 1, beside).as_deref(), Some("0.005"));
+        // significant digits: neither the zeros around them nor an exponent count
+        assert_eq!(fit(&rat(2500, 1), 4, alone).as_deref(), Some("2500"));
+        assert_eq!(fit(&rat(2500, 1), 3, alone), None);
+        assert_eq!(
+            fit(&rat(10_000_000_000, 1), 1, alone).as_deref(),
+            Some("1e10")
+        );
+        assert_eq!(fit(&rat(1, 10_000), 1, alone).as_deref(), Some("1e-4"));
+        assert_eq!(
+            fit(&rat(25, 10_000_000), 2, alone).as_deref(),
+            Some("2.5e-6")
+        );
+        assert_eq!(fit(&rat(1_234_567, 1), 6, alone), None);
         // a fraction where it is the cheaper, and beside a factor the reciprocal that spells
         // shorter
         assert_eq!(fit(&rat(1, 2), 3, alone).as_deref(), Some("1/2"));

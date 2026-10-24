@@ -133,6 +133,38 @@ fn small_of(x: &BigInt) -> Option<i128> {
     x.to_i128().filter(|&v| v != i128::MIN)
 }
 
+/// [`Rat::partition_with`] over members of any kind, sorted by the total order `cmp`: a like
+/// term's coefficients, each of which can be a refused product, fold by the same rule.
+pub(crate) fn partition_by<T>(
+    mut members: Vec<T>,
+    cmp: impl Fn(&T, &T) -> Ordering,
+    fold: impl Fn(&T, &T) -> Option<T>,
+    neutral: impl Fn(&T) -> bool,
+) -> Vec<T> {
+    members.sort_unstable_by(&cmp);
+    let mut queue: std::collections::VecDeque<T> = members.into();
+    let mut kept: Vec<T> = Vec::new();
+    while let Some(m) = queue.pop_front() {
+        match kept
+            .iter()
+            .enumerate()
+            .find_map(|(i, k)| fold(k, &m).map(|x| (i, x)))
+        {
+            Some((i, x)) => {
+                kept.remove(i);
+                if !neutral(&x) {
+                    queue.push_front(x);
+                }
+            }
+            None => {
+                let at = kept.partition_point(|k| cmp(k, &m) == Ordering::Less);
+                kept.insert(at, m);
+            }
+        }
+    }
+    kept
+}
+
 /// Exact 128x128 -> 256-bit unsigned multiplication by the schoolbook double-word method:
 /// split each operand into 64-bit halves, take the four partial products (each fits a
 /// u128 exactly: 64x64 -> 128), and assemble with carries. Returns (hi, lo); two results
@@ -420,32 +452,11 @@ impl Rat {
     /// the kept members and every fold removes one, so the cost is quadratic in the bag, and
     /// a refusal that the magnitudes decide costs no big-integer arithmetic (`log2_window`).
     pub fn partition_with(
-        mut members: Vec<Rat>,
+        members: Vec<Rat>,
         fold: impl Fn(&Rat, &Rat) -> Option<Rat>,
         neutral: impl Fn(&Rat) -> bool,
     ) -> Vec<Rat> {
-        members.sort_unstable_by(|a, b| a.cmp_exact(b));
-        let mut queue: std::collections::VecDeque<Rat> = members.into();
-        let mut kept: Vec<Rat> = Vec::new();
-        while let Some(m) = queue.pop_front() {
-            match kept
-                .iter()
-                .enumerate()
-                .find_map(|(i, k)| fold(k, &m).map(|x| (i, x)))
-            {
-                Some((i, x)) => {
-                    kept.remove(i);
-                    if !neutral(&x) {
-                        queue.push_front(x);
-                    }
-                }
-                None => {
-                    let at = kept.partition_point(|k| k.cmp_exact(&m) == Ordering::Less);
-                    kept.insert(at, m);
-                }
-            }
-        }
-        kept
+        partition_by(members, Rat::cmp_exact, fold, neutral)
     }
 
     pub fn checked_add(&self, o: &Rat) -> Option<Rat> {

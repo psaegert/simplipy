@@ -158,14 +158,17 @@ model predictions.
 
 - **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
-  explicit or tagged tokens. A number that fits the digit budget is written exactly, as
-  `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`), any other number is its
-  float64 in shortest form (`9.765625e-4*x1`,
-  `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
-  `precision=k` (`2.15*x1`), written as that number is so that the display reads back as itself.
-  A number shown as a float is read as a float; one that would show as a short exact number it
-  is not gets its rest where the rest fits the budget (`x1 + 1 + 3e-21` for
-  `x1 + 1.000000000000000000003`).
+  explicit or tagged tokens. The budget counts significant digits, never an exponent's
+  (`2.5e307` counts 2), and each number is written in the first form that fits it: exactly, as
+  `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`); as a short exact sum, its
+  first digits and the rest to its value (`x1 + 1 + 3e-21` for `x1 + 1.000000000000000000003`,
+  `(2.5e30 + 1e15)*x1`, `(1e20 + 1)*x1`, `(0.3 + 4e-17)*x1` for `0.30000000000000004*x1`), for
+  a number float64 does not write exactly in 15 digits (`1905` and `1.0001` stay as they are);
+  or as its float64 in shortest form (`9.765625e-4*x1`, `2.1458314277221002*x1` for a 33-digit
+  literal), with `k` significant digits at `precision=k` (`2.15*x1`), written as that number is
+  so that the display reads back as itself (and no short sum: `0.043*x1` at `precision=3` for
+  `0.043000000000000003*x1`, `(0.043 + 3e-18)*x1` in full). A number shown as a float is read
+  as a float.
   A multiple of the literal `3.141592653589793` is written with pi factored out as the symbol
   `pi` where the rest fits (`1/(2*pi)`; `np.pi` in the token forms, the float the literal is),
   at every precision and never shortened, and with the literal where the symbol would read back
@@ -180,8 +183,8 @@ model predictions.
   exponent of 1, or make a non-integer exponent an integer is written as that spelling and the
   rest to its value (`(1 + 3.1e-21)*x1` for `1.0000000000000000000031*x1`,
   `sin((1 + 1e-4)*x1) - sin(x1)` for `sin(1.0001*x1) - sin(x1)` at `precision=3`).
-  At the default `precision=None` a number is written exactly or as its float64 (and its rest
-  where that fits), so the display reads back to the same float64 values; at every precision it
+  At the default `precision=None` a number is written exactly, as a short exact sum or as its
+  float64, so the display reads back to the same float64 values; at every precision it
   reads back to the structure, and
   displaying a display gives it back. `keep_grouping=True` (off by default) writes every sum and
   product with the grouping of SimpliPy's explicit tokens, the order in which it evaluates the
@@ -787,8 +790,26 @@ model predictions.
   `<mul> p <div> q </mul>` in the tagged list answer, its own `/ p q` in the explicit list answer)
   instead of being split across a product (the evaluator multiplied a 300-digit numerator in
   before dividing and overflowed).
-  Known limit: a like term whose coefficient is itself a refused two-number product can split
-  coefficient and term differently on a second call (also in earlier versions, at 128 bits).
+- **A term's coefficient is all of its literals.** Where a fold is refused (`1e300*1e300` has
+  more than 1,100 bits, and is beyond float64 in `f64`), a product keeps both literals, and the
+  coefficient of the term is now both of them. Like terms of one such coefficient collect and
+  cancel (`1e300*1e300*x1 - 1e300*1e300*x1` is `0`, and `2*1e300*1e300*x1 - 1e300*1e300*x1` is
+  `1e300*1e300*x1`; both stayed as written), a sum scales by it as by one number
+  (`1e300*1e300*(x1 + x2) + x3` is `1e300*1e300*x1 + 1e300*1e300*x2 + x3`), and no literal of it
+  is a factor it shares with a term of one literal. Only the first literal was the coefficient,
+  the others part of the term, so which terms collected depended on which ones a construction
+  saw together, and an answer could change on a second call (also in 0.14.7, at 128 bits):
+  `-1e300*1e300*x1 - 1e300*1e300*x2` gave `-1e300*(1e300*x1 + 1e300*x2)`, whose second call
+  gave `-1*1e300*1e300*(x1 + x2)`; the answer is now `-1e300*1e300*(x1 + x2)`. A negative such
+  coefficient writes its sign on its smallest literal, as a single number carries its own sign,
+  in every notation: `-1e300*1e300*x1` in the text answer, `* -1e300 * 1e300 x1` in the explicit
+  list and `<mul> -1e300 1e300 x1 </mul>` in the tagged list (it was a separate `-1`, `neg` in
+  the explicit list, priced as a sign either way). On 20,000 random sums of products of
+  literals at the cap and float64 boundaries no answer changes on a second call in any mode
+  with the search off (before: 80 in `f64`, 39 in `real`, 81 in `permissive`), nor on 6,000 at
+  the default effort (before: 2, 4, 3). srbf's ground truths, a tenth of its predictions and a
+  tenth of the T8.1 training inputs keep their answers in every mode, except one prediction in
+  `real` whose terms change order at the same price, and none changes on a second call.
 - **What the wider range moves.** Against the same code at 128 bits: none of the 400 corpus
   rows; 23 of srbf's 6,531 ground truths, all by literal arithmetic the 128-bit limit refused
   (two of them are coefficient sums that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more

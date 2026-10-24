@@ -2062,7 +2062,7 @@ pub fn add_term_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
     let gb = is_constlike(&kb) as u8;
     ga.cmp(&gb)
         .then_with(|| cmp_ex(&ka, &kb, view))
-        .then_with(|| ca.cmp_exact(&cb))
+        .then_with(|| ca.order(&cb))
 }
 
 pub fn mul_factor_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
@@ -2086,10 +2086,265 @@ fn factor_split_ref(e: &Ex) -> (&Ex, &Ex) {
     }
 }
 
+/// A term's rational coefficient ([`term_split`]): a sign and the magnitudes of the term's
+/// literal members, which `mul()` keeps as their canonical product partition
+/// (`Rat::partition_product`): one member wherever the product is representable, none for a
+/// unit, several where a fold is refused (`1e160*1e170*x` in f64 has the coefficient
+/// `{1e160, 1e170}` and the key `x`). The whole partition is the coefficient. With only its
+/// first member as the coefficient and the others left in the key, `1e160*1e170*x` and
+/// `1e160*x` shared the content 1e160 and `-1e160*1e170*x` kept a key of its own, so a sum's
+/// content and like terms depended on which terms a construction saw together, and a second
+/// call could split them again.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Coef {
+    neg: bool,
+    /// Positive, sorted ascending (`cmp_exact`), no unit; `[0]` is the zero.
+    mags: Vec<Rat>,
+}
+
+impl Coef {
+    pub(crate) const ONE: Coef = Coef {
+        neg: false,
+        mags: Vec::new(),
+    };
+
+    fn zero() -> Coef {
+        Coef {
+            neg: false,
+            mags: vec![Rat::ZERO],
+        }
+    }
+
+    /// The coefficient `r`.
+    pub(crate) fn of(r: &Rat) -> Coef {
+        Coef::from_members(std::iter::once(r))
+    }
+
+    /// The product of literal members (of any sign), as they stand: a canonical product holds
+    /// its partition already, and a re-partition here could run in another number domain.
+    fn from_members<'a>(members: impl IntoIterator<Item = &'a Rat>) -> Coef {
+        let mut neg = false;
+        let mut mags: Vec<Rat> = Vec::new();
+        for r in members {
+            if r.is_zero() {
+                return Coef::zero();
+            }
+            neg ^= r.is_negative();
+            if !r.is_one() && *r != Rat::NEG_ONE {
+                mags.push(r.abs());
+            }
+        }
+        mags.sort_unstable_by(|a, b| a.cmp_exact(b));
+        Coef { neg, mags }
+    }
+
+    pub(crate) fn is_one(&self) -> bool {
+        !self.neg && self.mags.is_empty()
+    }
+
+    fn is_neg_one(&self) -> bool {
+        self.neg && self.mags.is_empty()
+    }
+
+    pub(crate) fn is_zero(&self) -> bool {
+        matches!(self.mags.as_slice(), [m] if m.is_zero())
+    }
+
+    pub(crate) fn is_negative(&self) -> bool {
+        self.neg
+    }
+
+    /// The coefficient as one rational, where its partition has at most one member.
+    pub(crate) fn rat(&self) -> Option<Rat> {
+        let m = match self.mags.as_slice() {
+            [] => Rat::ONE,
+            [m] => m.clone(),
+            _ => return None,
+        };
+        if self.neg {
+            m.checked_neg()
+        } else {
+            Some(m)
+        }
+    }
+
+    pub(crate) fn negated(&self) -> Coef {
+        Coef {
+            neg: !self.neg && !self.is_zero(),
+            mags: self.mags.clone(),
+        }
+    }
+
+    fn abs(&self) -> Coef {
+        Coef {
+            neg: false,
+            mags: self.mags.clone(),
+        }
+    }
+
+    /// The product of two coefficients, partitioned in the current number domain.
+    fn times(&self, o: &Coef) -> Coef {
+        if self.is_zero() || o.is_zero() {
+            return Coef::zero();
+        }
+        let mut mags = self.mags.clone();
+        mags.extend(o.mags.iter().cloned());
+        Coef {
+            neg: self.neg != o.neg,
+            mags: Rat::partition_product(mags),
+        }
+    }
+
+    /// The quotient by a nonzero `o`, exactly: the members left once `o`'s are taken out, or
+    /// the rational quotient of two one-member coefficients; `None` otherwise.
+    fn over(&self, o: &Coef) -> Option<Coef> {
+        if o.is_zero() {
+            return None;
+        }
+        if let Some(rest) = take_members(&self.mags, &o.mags) {
+            return Some(Coef {
+                neg: (self.neg != o.neg) && !self.is_zero(),
+                mags: rest,
+            });
+        }
+        let (a, b) = (self.rat()?, o.rat()?);
+        Some(Coef::of(&a.checked_mul(&b.checked_inv()?)?))
+    }
+
+    /// The sum of two coefficients of one key, where it is a coefficient of the domain: the
+    /// rational sum of two one-member coefficients, or the members both share times the sum
+    /// of what remains of each (`{2e300, 1e300} - {1e300, 1e300}` is `{1e300, 1e300}`, and
+    /// `{1e160, 1e170} + {1e160, 1e170}` is `{2e160, 1e170}`); `None` where neither applies.
+    /// A function of the pair, so a pool folds by [`partition_by`] as a literal pool does.
+    fn checked_add(&self, o: &Coef) -> Option<Coef> {
+        if let (Some(a), Some(b)) = (self.rat(), o.rat()) {
+            if let Some(s) = a.checked_add(&b) {
+                return Some(Coef::of(&s));
+            }
+        }
+        let (shared, p, q) = common_members(&self.mags, &o.mags);
+        if shared.is_empty() {
+            return None;
+        }
+        let rest = |neg: bool, ms: &[Rat]| -> Option<Rat> {
+            let m = match ms {
+                [] => Rat::ONE,
+                [m] => m.clone(),
+                _ => return None,
+            };
+            if neg {
+                m.checked_neg()
+            } else {
+                Some(m)
+            }
+        };
+        let s = rest(self.neg, &p)?.checked_add(&rest(o.neg, &q)?)?;
+        if s.is_zero() {
+            return Some(Coef::zero());
+        }
+        let mut mags = shared;
+        mags.push(s.abs());
+        Some(Coef {
+            neg: s.is_negative(),
+            mags: Rat::partition_product(mags),
+        })
+    }
+
+    /// The canonical order: by exact value (the products formed without a cap), then by the
+    /// members. On one-member coefficients it is the rational order.
+    pub(crate) fn order(&self, o: &Coef) -> Ordering {
+        if let (Some(a), Some(b)) = (self.rat(), o.rat()) {
+            return a.cmp_exact(&b);
+        }
+        let sign = |c: &Coef| {
+            if c.is_zero() {
+                0
+            } else if c.neg {
+                -1
+            } else {
+                1
+            }
+        };
+        let (sa, sb) = (sign(self), sign(o));
+        if sa != sb {
+            return sa.cmp(&sb);
+        }
+        let product = |ms: &[Rat]| {
+            ms.iter()
+                .fold((BigInt::from(1u8), BigInt::from(1u8)), |(p, q), m| {
+                    let (a, b) = m.big_parts();
+                    (p * a, q * b)
+                })
+        };
+        let ((p1, q1), (p2, q2)) = (product(&self.mags), product(&o.mags));
+        let mag = (p1 * q2).cmp(&(p2 * q1)).then_with(|| {
+            self.mags
+                .iter()
+                .zip(&o.mags)
+                .map(|(a, b)| a.cmp_exact(b))
+                .find(|c| c.is_ne())
+                .unwrap_or_else(|| self.mags.len().cmp(&o.mags.len()))
+        });
+        if sa < 0 {
+            mag.reverse()
+        } else {
+            mag
+        }
+    }
+
+    /// The literal members of a product with this coefficient, as `mul()` writes them: the sign
+    /// on the one member, or on the smallest of several ([`host_partition_sign`]).
+    pub(crate) fn items(&self) -> Vec<Ex> {
+        let mut v: Vec<Ex> = self.mags.iter().cloned().map(Ex::Num).collect();
+        if self.neg {
+            match v.first_mut() {
+                Some(Ex::Num(m)) => *m = m.checked_neg().expect("a Rat negates"),
+                _ => v.push(Ex::Num(Rat::NEG_ONE)),
+            }
+        }
+        v
+    }
+}
+
+/// `ms` without the members of `sub` (both sorted), or `None` where `sub` is no sub-multiset.
+fn take_members(ms: &[Rat], sub: &[Rat]) -> Option<Vec<Rat>> {
+    let (shared, rest, left) = common_members(ms, sub);
+    (shared.len() == sub.len() && left.is_empty()).then_some(rest)
+}
+
+/// The members two sorted lists share (as multisets), and what remains of each.
+fn common_members(a: &[Rat], b: &[Rat]) -> (Vec<Rat>, Vec<Rat>, Vec<Rat>) {
+    let (mut shared, mut ra, mut rb) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp_exact(&b[j]) {
+            Ordering::Equal => {
+                shared.push(a[i].clone());
+                i += 1;
+                j += 1;
+            }
+            Ordering::Less => {
+                ra.push(a[i].clone());
+                i += 1;
+            }
+            Ordering::Greater => {
+                rb.push(b[j].clone());
+                j += 1;
+            }
+        }
+    }
+    ra.extend(a[i..].iter().cloned());
+    rb.extend(b[j..].iter().cloned());
+    (shared, ra, rb)
+}
+
 /// Split an addend into `(rational coefficient, term key)`. The key is what like-term collection
 /// compares: `Mul[3, x, y] -> (3, Mul[x, y])`, `Mul[x, y] -> (1, Mul[x, y])`, `sin(x) -> (1,
-/// sin(x))`. A `Mul` whose coefficient is 0 (the uncertified `0 * t` form) is NOT split -- it
-/// stays an opaque term so collection cannot manufacture a licence it does not have.
+/// sin(x))`. The coefficient is every literal member of the product ([`Coef`]): a refused
+/// partition splits as `Mul[-1, 1e160, 1e170, x] -> (-{1e160, 1e170}, x)`, and a product of
+/// literals alone keys as `1`. A `Mul` whose coefficient is 0 (the uncertified `0 * t` form)
+/// is NOT split -- it stays an opaque term so collection cannot manufacture a licence it does
+/// not have.
 ///
 /// The key is SIGN-NORMALIZED (audit B19): an odd function's negative-literal sign
 /// lifts out of the key into the coefficient (`sin(-2)` splits as `(-1, sin(2))`;
@@ -2099,7 +2354,7 @@ fn factor_split_ref(e: &Ex) -> (&Ex, &Ex) {
 /// trade-site route (`mul()` -> `sign_place`), so split/join still round-trips onto
 /// the canonical spelling. Scope: top-level factors with a literal argument only -- a
 /// sign under a `Pow` base is structure, not a spelling choice, and stays put.
-fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
+fn term_split(e: Ex, view: &TokenView) -> (Coef, Ex) {
     // Flip `f(-r)` -> `f(r)` in place for odd f; true iff a sign was extracted. RAW
     // rebuild on purpose: keys are comparison objects, and every re-JOIN routes
     // through `fun()` (which folds boundary grounds); a fold here would change the
@@ -2126,29 +2381,33 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
             _ => false,
         }
     }
-    let (c, key) = match e {
-        Ex::Mul(v) => match v.first() {
-            Some(Ex::Num(r)) if !r.is_zero() => {
-                let r = r.clone();
-                let mut rest = v;
-                rest.remove(0);
-                let key = if rest.len() == 1 {
-                    rest.pop().unwrap()
-                } else {
-                    Ex::Mul(rest) // still flat + sorted: removing the leading Num keeps both
+    let (c, mut key) = match e {
+        Ex::Mul(v) => {
+            // The literal members lead a canonical product (`mul_factor_cmp`).
+            let n = v.iter().take_while(|f| matches!(f, Ex::Num(_))).count();
+            if n == 0
+                || v[..n]
+                    .iter()
+                    .any(|f| matches!(f, Ex::Num(r) if r.is_zero()))
+            {
+                (Coef::ONE, Ex::Mul(v))
+            } else {
+                let mut lits = v;
+                let mut rest = lits.split_off(n);
+                let c = Coef::from_members(lits.iter().map(|f| match f {
+                    Ex::Num(r) => r,
+                    _ => unreachable!("a literal prefix"),
+                }));
+                let key = match rest.len() {
+                    0 => Ex::Num(Rat::ONE),
+                    1 => rest.pop().expect("one factor"),
+                    _ => Ex::Mul(rest), // still flat + sorted: the literals led
                 };
-                (r, key)
+                (c, key)
             }
-            _ => (Rat::ONE, Ex::Mul(v)),
-        },
-        other => (Rat::ONE, other),
+        }
+        other => (Coef::ONE, other),
     };
-    // The coefficient must be able to host the sign before any factor flips (the
-    // i128::MIN edge fails safe: unnormalized split, exactly the pre-B19 behavior).
-    let Some(nc) = c.checked_neg() else {
-        return (c, key);
-    };
-    let mut key = key;
     let mut flips = 0usize;
     match &mut key {
         Ex::Mul(v) => {
@@ -2169,7 +2428,7 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
             }
         }
     }
-    (if flips % 2 == 1 { nc } else { c }, key)
+    (if flips % 2 == 1 { c.negated() } else { c }, key)
 }
 
 /// Negate an addend exactly. Literals and infinities negate DIRECTLY; everything else
@@ -2642,13 +2901,15 @@ pub(crate) fn negate_term(t: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::NaN => Some(Ex::NaN),
         _ => {
             let (c, key) = term_split(t.clone(), cx.view);
-            Some(term_join(c.checked_neg()?, key, cx))
+            Some(term_join(c.negated(), key, cx))
         }
     }
 }
 
-/// Scale an addend by a rational, exactly (`None` on overflow). The distribution step of the
-/// Add flatten (see the `Mul[Num, Add]` arm there).
+/// Scale an addend by a coefficient, exactly. The distribution step of the Add flatten (see the
+/// `Mul[Num.., Add]` arm there). A product a fold refuses keeps both members in the term's
+/// coefficient (`1e160 * (x + 1e170*y)` scales `1e170*y` to `1e160*1e170*y`), so only `0 * inf`
+/// returns `None`.
 ///
 /// The ZERO product routes through `mul()` (H-031): `term_join` is canonical-form-
 /// preserving only for NONZERO coefficients -- `term_join(0, x0)` would mint `Mul[0, x0]`,
@@ -2659,9 +2920,12 @@ pub(crate) fn negate_term(t: &Ex, cx: &Cx) -> Option<Ex> {
 /// not a consequence of who re-walks them. `mul()` owns the kept-zero licence logic
 /// (licensed factors collapse, unlicensed keep `Mul[0, t]`), so the zero case lands on
 /// exactly the state the healing used to reach.
-fn scale_term(t: &Ex, r: &Rat, cx: &Cx) -> Option<Ex> {
+fn scale_term(t: &Ex, r: &Coef, cx: &Cx) -> Option<Ex> {
     match t {
-        Ex::Num(v) => Some(Ex::Num(v.checked_mul(r)?)),
+        Ex::Num(v) => Some(match Coef::of(v).times(r) {
+            p if p.rat().is_some() => Ex::Num(p.rat().expect("one member")),
+            p => mul(p.items(), cx),
+        }),
         Ex::Const => {
             if r.is_zero() {
                 // 0 * c = 0 EXACTLY (masked constants are FINITE by doctrine): the
@@ -2687,7 +2951,7 @@ fn scale_term(t: &Ex, r: &Rat, cx: &Cx) -> Option<Ex> {
         Ex::NaN => Some(Ex::NaN),
         _ => {
             let (c, key) = term_split(t.clone(), cx.view);
-            let p = c.checked_mul(r)?;
+            let p = c.times(r);
             if p.is_zero() {
                 // r == 0 (term_split never yields c == 0): the kept-zero licence
                 // decision belongs to mul() -- see the doc above.
@@ -2754,7 +3018,25 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     }
 }
 
-fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
+fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
+    // A coefficient a fold refused joins through `mul()`, which owns the partition and its sign
+    // host (F72), and folds it into a constant or an infinity of the key.
+    let c = match c.rat() {
+        Some(c) => c,
+        None => {
+            let mut items = c.items();
+            match key {
+                Ex::Mul(v) => items.extend(v),
+                k => items.push(k),
+            }
+            let placed = mul(items, cx);
+            debug_assert!(
+                !matches!(placed, Ex::Add(_)),
+                "term_join produced a bare Add term: {placed:?}"
+            );
+            return placed;
+        }
+    };
     // The coefficient LANDS on its key here (permissive's ρ, [`land`]); a literal key is a
     // product of literals, which `mul` keeps exact.
     let c = if matches!(key, Ex::Num(_)) {
@@ -3125,11 +3407,21 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             // `2a + (2b + c)`). Extraction decisions are thereby always made once, on the
             // complete bag. Scaled terms re-enter the flatten stack so every classification
             // (literals, Const, infinities, nested sums) reruns on them.
+            // The literal may be a refused partition (`Mul[1e160, 1e170, Add]`): its members are
+            // one coefficient.
             Ex::Mul(v)
-                if v.len() == 2 && matches!(&v[0], Ex::Num(_)) && matches!(&v[1], Ex::Add(_)) =>
+                if v.len() >= 2
+                    && matches!(v.last(), Some(Ex::Add(_)))
+                    && v[..v.len() - 1].iter().all(|f| matches!(f, Ex::Num(_))) =>
             {
-                let (r, inner) = match (&v[0], &v[1]) {
-                    (Ex::Num(r), Ex::Add(inner)) => (r.clone(), inner.clone()),
+                let (r, inner) = match v.split_last() {
+                    Some((Ex::Add(inner), lits)) => (
+                        Coef::from_members(lits.iter().map(|f| match f {
+                            Ex::Num(r) => r,
+                            _ => unreachable!("literal members"),
+                        })),
+                        inner.clone(),
+                    ),
                     _ => unreachable!(),
                 };
                 let mut scaled: Vec<Ex> = Vec::with_capacity(inner.len());
@@ -3146,7 +3438,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 if ok {
                     stack.extend(scaled.into_iter().rev());
                 } else {
-                    terms.push(Ex::Mul(v)); // overflow: keep the factored term opaque
+                    terms.push(Ex::Mul(v)); // `0 * inf`: keep the factored term opaque
                 }
             }
             Ex::Num(r) => lits.push(r),
@@ -3178,7 +3470,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         /// ALL same-key coefficients, collected raw; the fold happens at rebuild in
         /// SORTED order (B3b: an arrival-order fold made the overflow partition depend
         /// on the input spelling).
-        coeffs: Vec<Rat>,
+        coeffs: Vec<Coef>,
     }
     let mut buckets: Vec<Bucket> = Vec::new();
     let mut const_terms = false; // any r*Const term seen (merges into the bare-Const pool)
@@ -3250,7 +3542,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 .map(|&i| match orient_term_classes(&buckets[i].key, cx) {
                     Some(o) => match term_split(o, cx.view) {
                         (c, k) if c.is_one() => (k, false),
-                        (c, k) if c == Rat::NEG_ONE => (k, true),
+                        (c, k) if c.is_neg_one() => (k, true),
                         _ => (buckets[i].key.clone(), false),
                     },
                     None => (buckets[i].key.clone(), false),
@@ -3267,22 +3559,11 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 if group.len() < 2 {
                     continue;
                 }
-                let mut coeffs: Vec<Rat> = Vec::new();
-                let mut ok = true;
+                let mut coeffs: Vec<Coef> = Vec::new();
                 for &b in &group {
                     for c in &buckets[hit[b]].coeffs {
-                        match if read[b].1 {
-                            c.checked_neg()
-                        } else {
-                            Some(c.clone())
-                        } {
-                            Some(c) => coeffs.push(c),
-                            None => ok = false,
-                        }
+                        coeffs.push(if read[b].1 { c.negated() } else { c.clone() });
                     }
-                }
-                if !ok {
-                    continue;
                 }
                 let target = hit[group[0]];
                 buckets[target].key = read[a].0.clone();
@@ -3336,18 +3617,22 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         let Bucket { key, coeffs } = b;
         let mixed =
             coeffs.iter().any(|c| c.is_negative()) && coeffs.iter().any(|c| !c.is_negative());
-        let pools: Vec<Vec<Rat>> = if mixed && cx.fin_licensed(&key) {
+        let pools: Vec<Vec<Coef>> = if mixed && cx.fin_licensed(&key) {
             vec![coeffs]
         } else {
-            let (negs, poss): (Vec<Rat>, Vec<Rat>) =
+            let (negs, poss): (Vec<Coef>, Vec<Coef>) =
                 coeffs.into_iter().partition(|c| c.is_negative());
             vec![poss, negs]
         };
-        for pool in pools {
-            for c in Rat::partition_sum(pool) {
+        for mut pool in pools {
+            // Each coefficient may be a refused partition, folded by `Coef::checked_add`.
+            pool.retain(|c| !c.is_zero());
+            for c in super::rat::partition_by(pool, Coef::order, Coef::checked_add, Coef::is_zero) {
                 // a fully cancelled bucket leaves nothing: 0 * (finite-a.e. t) -> 0 licensed
                 let t = if rebuilt && !c.is_zero() {
-                    mul(vec![Ex::Num(c), canon(key.clone(), cx)], cx)
+                    let mut items = c.items();
+                    items.push(canon(key.clone(), cx));
+                    mul(items, cx)
                 } else {
                     term_join(c, key.clone(), cx)
                 };
@@ -3534,21 +3819,15 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     }
     // Unanimity: every term's |coefficient| equal (Const counts as 1; NaN cannot appear --
     // it collapses the whole sum earlier).
-    let mut magnitudes: Vec<Rat> = Vec::with_capacity(terms.len());
+    // A coefficient a fold refused is one magnitude with all its members (`Coef`).
+    let mut magnitudes: Vec<Coef> = Vec::with_capacity(terms.len());
     for t in &terms {
         let c = match t {
-            Ex::Const => Rat::ONE,
-            Ex::Num(r) => r.clone(),
+            Ex::Const => Coef::ONE,
+            Ex::Num(r) => Coef::of(r),
             _ => term_split(t.clone(), cx.view).0,
         };
-        magnitudes.push(if c.is_negative() {
-            match c.checked_neg() {
-                Some(m) => m,
-                None => return Ex::Add(terms), // overflow: skip extraction
-            }
-        } else {
-            c
-        });
+        magnitudes.push(c.abs());
     }
     let unanimous = magnitudes.windows(2).all(|w| w[0] == w[1]);
     // H-030: a sum holding a negation-absorbing member (see `term_absorbs_negation`)
@@ -3561,7 +3840,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let g = if unanimous {
         magnitudes[0].clone()
     } else {
-        Rat::ONE
+        Coef::ONE
     };
     // (b), owner ruling 2026-08-08: the filed orientation is the mu-CHEAPER one ("the
     // mirrors score equal; the bigger expression scores bigger"); the historical
@@ -3576,51 +3855,37 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     } else if g.is_one() {
         flipped_orientation_wins(&terms, Wrapper::Flipped, Tie::Keep, cx)
     } else {
-        let Some(ng) = g.checked_neg() else {
-            return Ex::Add(terms);
-        };
         match divide_terms(&terms, &g, cx) {
             Some(divided_pos) => {
-                let wsd = mu_rat(&ng) as i128 - mu_rat(&g) as i128;
+                let wsd = match g.rat() {
+                    Some(r) => {
+                        mu_rat(&r.checked_neg().expect("a Rat negates")) as i128
+                            - mu_rat(&r) as i128
+                    }
+                    // A partition's sign is a member of its own (`Mul[-1, 1e160, 1e170, S]`):
+                    // the two wrappers priced as they stand.
+                    None => {
+                        let wrap = |c: &Coef| {
+                            let mut v = c.items();
+                            v.push(Ex::Add(divided_pos.clone()));
+                            complexity(&Ex::Mul(v), cx.view) as i128
+                        };
+                        wrap(&g.negated()) - wrap(&g)
+                    }
+                };
                 flipped_orientation_wins(&divided_pos, Wrapper::Both(wsd), Tie::Keep, cx)
             }
             None => return Ex::Add(terms),
         }
     };
-    let u = if sign_neg {
-        match g.checked_neg() {
-            Some(n) => n,
-            None => return Ex::Add(terms),
-        }
-    } else {
-        g
-    };
+    let u = if sign_neg { g.negated() } else { g };
     if u.is_one() || u.is_zero() {
         return Ex::Add(terms);
     }
-    let inv_u = match u.checked_inv() {
-        Some(i) => i,
-        None => return Ex::Add(terms),
-    };
     // Divide every term by u (exact; total -- see the doc above).
-    let mut divided: Vec<Ex> = Vec::with_capacity(terms.len());
-    for t in terms.iter() {
-        let d = match t {
-            Ex::Const => Ex::Const,
-            Ex::Num(r) => match r.checked_mul(&inv_u) {
-                Some(v) => Ex::Num(v),
-                None => return Ex::Add(terms),
-            },
-            _ => {
-                let (c, key) = term_split(t.clone(), cx.view);
-                match c.checked_mul(&inv_u) {
-                    Some(v) => term_join(v, key, cx),
-                    None => return Ex::Add(terms),
-                }
-            }
-        };
-        divided.push(d);
-    }
+    let Some(mut divided) = divide_terms(&terms, &u, cx) else {
+        return Ex::Add(terms);
+    };
     // Re-sort (coefficient ties may reorder) and wrap. `mul`'s sign-orientation arm
     // (H-014) re-enters `add` only when the FLIPPED orientation wins -- and `divided`
     // is the winning orientation by construction (sign_neg came from the same
@@ -3637,22 +3902,23 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     if divided == terms {
         return Ex::Add(terms);
     }
-    mul(vec![Ex::Num(u), Ex::Add(divided)], cx)
+    let mut items = u.items();
+    items.push(Ex::Add(divided));
+    mul(items, cx)
 }
 
 /// Divide every term by `u` exactly (`None` on any overflow) -- the same loop as
 /// `primitive_sum`'s tail, factored so the orientation decision can price the DIVIDED
 /// candidates for a non-unit content.
-fn divide_terms(terms: &[Ex], u: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
-    let inv_u = u.checked_inv()?;
+fn divide_terms(terms: &[Ex], u: &Coef, cx: &Cx) -> Option<Vec<Ex>> {
     let mut divided: Vec<Ex> = Vec::with_capacity(terms.len());
     for t in terms {
         let d = match t {
             Ex::Const => Ex::Const,
-            Ex::Num(r) => Ex::Num(r.checked_mul(&inv_u)?),
+            Ex::Num(r) => Ex::Num(Coef::of(r).over(u)?.rat()?),
             _ => {
                 let (c, key) = term_split(t.clone(), cx.view);
-                term_join(c.checked_mul(&inv_u)?, key, cx)
+                term_join(c.over(u)?, key, cx)
             }
         };
         divided.push(d);
@@ -3774,7 +4040,7 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
     for (a, b) in terms.iter().zip(flipped.iter()) {
         let ca = orientation_coeff(a, cx.view);
         let cb = orientation_coeff(b, cx.view);
-        match ca.cmp_exact(&cb) {
+        match ca.order(&cb) {
             std::cmp::Ordering::Less => return true,
             std::cmp::Ordering::Greater => return false,
             std::cmp::Ordering::Equal => {}
@@ -3817,12 +4083,12 @@ fn term_absorbs_negation(t: &Ex) -> bool {
     }))
 }
 
-fn orientation_coeff(t: &Ex, view: &TokenView) -> Rat {
+fn orientation_coeff(t: &Ex, view: &TokenView) -> Coef {
     match t {
-        Ex::Const => Rat::ONE,
-        Ex::PosInf => Rat::ONE,
-        Ex::NegInf => Rat::NEG_ONE,
-        Ex::Num(r) => r.clone(),
+        Ex::Const => Coef::ONE,
+        Ex::PosInf => Coef::ONE,
+        Ex::NegInf => Coef::ONE.negated(),
+        Ex::Num(r) => Coef::of(r),
         // Sign-normalized split (B19): an odd-literal term's sign is SEMANTIC and the
         // orientation comparison must see it -- sin(-2) contributes -1, not +1.
         _ => term_split(t.clone(), view).0,
@@ -4177,6 +4443,39 @@ pub(crate) fn mul_undecided(items: Vec<Ex>, cx: &Cx) -> Ex {
 }
 
 fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
+    host_partition_sign(mul_assembled(items, cx, decide))
+}
+
+/// A product's sign, where its coefficient is a partition of several literals (a fold refused),
+/// written on the smallest of them: `-1e300*1e300*x1`, not `-1*1e300*1e300*x1`. The assembly
+/// decides every placement with the sign on the coefficient slot (F72: `-1` beside the
+/// magnitudes), and a re-read factors the signs of the members out again, so the decisions are
+/// the same however the sign is written; the written product carries it on a literal, as a
+/// ground constant carries its own sign, one sign and no extra member.
+fn host_partition_sign(e: Ex) -> Ex {
+    let Ex::Mul(mut v) = e else {
+        return e;
+    };
+    // The literals lead (`mul_factor_cmp`); `-1` sorts before the positive magnitudes.
+    let n = v.iter().take_while(|f| matches!(f, Ex::Num(_))).count();
+    if n >= 2 && matches!(&v[0], Ex::Num(r) if *r == Rat::NEG_ONE) {
+        if let Ex::Num(m) = &v[1] {
+            if !m.is_negative() && !m.is_zero() {
+                let host = m.checked_neg().expect("a Rat negates");
+                v.remove(0);
+                v[0] = Ex::Num(host);
+                return if v.len() == 1 {
+                    v.pop().expect("one member")
+                } else {
+                    Ex::Mul(v)
+                };
+            }
+        }
+    }
+    Ex::Mul(v)
+}
+
+fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
@@ -5545,12 +5844,16 @@ fn class_of(ts: &[Ex], cx: &Cx) -> Option<(Ex, bool, bool)> {
     let mut parts: Vec<(Rat, Ex)> = ts
         .iter()
         .map(|t| match t {
-            Ex::Num(r) => (r.clone(), Ex::Num(Rat::ONE)),
+            Ex::Num(r) => Some((r.clone(), Ex::Num(Rat::ONE))),
             // Each term read as the orientation reads it (`odd_signs_out`, as `orient_base` and
             // `up_to_sign_key` do): an odd function of a negated argument is the negated term.
-            t => term_split(odd_signs_out(t, cx), cx.view),
+            // A term whose coefficient is a refused partition has no class here.
+            t => {
+                let (c, k) = term_split(odd_signs_out(t, cx), cx.view);
+                Some((c.rat()?, k))
+            }
         })
-        .collect();
+        .collect::<Option<_>>()?;
     // The factors every term shares, divided out.
     let factors = |k: &Ex| -> Vec<Ex> {
         match k {
@@ -6943,23 +7246,32 @@ fn opposite_sums(a: &[Ex], b: &[Ex], view: &TokenView) -> bool {
 
 /// Is the term `y` the term `x` with its coefficient negated?
 fn opposite_terms(x: &Ex, y: &Ex, view: &TokenView) -> bool {
-    // A term's coefficient and the factors that remain (borrowed: no key is built).
-    fn split(t: &Ex) -> (Rat, &[Ex]) {
+    // A term's literal members and the factors that remain (borrowed: no key is built).
+    fn split(t: &Ex) -> (&[Ex], &[Ex]) {
         match t {
-            Ex::Mul(v) => match v.first() {
-                Some(Ex::Num(c)) => (c.clone(), &v[1..]),
-                _ => (Rat::ONE, v.as_slice()),
-            },
-            other => (Rat::ONE, std::slice::from_ref(other)),
+            Ex::Mul(v) => v.split_at(v.iter().take_while(|f| matches!(f, Ex::Num(_))).count()),
+            other => (&[], std::slice::from_ref(other)),
         }
+    }
+    // The coefficient those members denote, all of them (`Coef`).
+    fn coef(lits: &[Ex]) -> Coef {
+        Coef::from_members(lits.iter().filter_map(|f| match f {
+            Ex::Num(r) => Some(r),
+            _ => None,
+        }))
     }
     match (x, y) {
         (Ex::Num(p), Ex::Num(q)) => p.checked_neg().is_some_and(|n| n == *q),
         (Ex::Num(_), _) | (_, Ex::Num(_)) => false,
         _ => {
-            let ((cx_, kx), (cy, ky)) = (split(x), split(y));
+            let ((lx, kx), (ly, ky)) = (split(x), split(y));
             if kx == ky {
-                return cx_.checked_neg().is_some_and(|n| n == cy);
+                return match (lx, ly) {
+                    ([], []) => false,
+                    ([Ex::Num(c)], []) | ([], [Ex::Num(c)]) => *c == Rat::NEG_ONE,
+                    ([Ex::Num(p)], [Ex::Num(q)]) => p.checked_neg().is_some_and(|n| n == *q),
+                    _ => coef(lx).negated() == coef(ly) && !coef(lx).is_zero(),
+                };
             }
             // An odd function of a literal carries its sign inside (`sin(-2)`): only
             // `term_split`'s sign-normalized keys can match then.
@@ -6970,7 +7282,7 @@ fn opposite_terms(x: &Ex, y: &Ex, view: &TokenView) -> bool {
             }
             let (cx_, kx) = term_split(x.clone(), view);
             let (cy, ky) = term_split(y.clone(), view);
-            kx == ky && cx_.checked_neg().is_some_and(|n| n == cy)
+            kx == ky && cx_.negated() == cy
         }
     }
 }
@@ -10874,7 +11186,7 @@ mod tests {
             // The two routes must agree, and on the ratified I4 direction (the
             // literal owns the sign): -5 * sin(2) spells 5 * sin(-2).
             let via_mul = mul(vec![Ex::int(-5), sin2.clone()], &cx);
-            let via_join = term_join(Rat::int(-5), sin2.clone(), &cx);
+            let via_join = term_join(Coef::of(&Rat::int(-5)), sin2.clone(), &cx);
             assert_eq!(
                 via_mul, via_join,
                 "mul() and term_join disagree on the sign"
@@ -10991,7 +11303,8 @@ mod tests {
             );
             let route_negated_bag =
                 negate_term(&mul(vec![Ex::Num(n.clone()), Ex::Num(p.clone())], &cx), &cx).unwrap();
-            let route_other_host = term_join(p.checked_neg().unwrap(), Ex::Num(n.clone()), &cx);
+            let route_other_host =
+                term_join(Coef::of(&p.checked_neg().unwrap()), Ex::Num(n.clone()), &cx);
             let route_swapped = mul(vec![Ex::Num(p), Ex::Num(n.checked_neg().unwrap())], &cx);
             assert_eq!(route_signed_member, route_negated_bag);
             assert_eq!(route_signed_member, route_other_host);
@@ -11002,6 +11315,73 @@ mod tests {
             };
             assert_eq!(mul(v, &cx), route_signed_member);
         });
+    }
+
+    /// A term's coefficient is its whole literal partition (`Coef`). With only the first member
+    /// as the coefficient, `-N*N*x` kept a key of its own beside `N*N*x`, `N*N*x` and `N*y`
+    /// shared the content `N`, and a sum's content and like terms depended on which terms a
+    /// construction saw together: a state and the parse of its own print differed.
+    #[test]
+    fn refused_partition_is_one_coefficient() {
+        for mode in [RuleMode::Real, RuleMode::Default] {
+            with_view(|view| {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                // 10^300 * 10^300 is beyond 2^1022 and beyond 1,100 bits: refused in both domains.
+                let n = Rat::from_big(
+                    num_traits::pow(num_bigint::BigInt::from(10), 300),
+                    num_bigint::BigInt::from(1),
+                )
+                .unwrap();
+                let leaf = |s: &str| Ex::Leaf(view.intern(s));
+                let (x, y, z) = (leaf("x1"), leaf("x2"), leaf("x3"));
+                let nn = |e: Ex| mul(vec![Ex::Num(n.clone()), Ex::Num(n.clone()), e], &cx);
+                let neg = |e: &Ex| negate_term(e, &cx).unwrap();
+                let t = nn(x.clone());
+                assert!(
+                    matches!(&t, Ex::Mul(v) if v.len() == 3),
+                    "partition bag expected: {t:?}"
+                );
+                let (c, k) = term_split(t.clone(), view);
+                assert_eq!((c.rat(), &k), (None, &x));
+                assert_eq!(term_split(neg(&t), view), (c.negated(), x.clone()));
+                // The sign is written on the smallest member, not as a `-1` beside them, however
+                // it arrives.
+                let minus_n = Ex::Num(n.checked_neg().unwrap());
+                let written = Ex::Mul(vec![minus_n.clone(), Ex::Num(n.clone()), x.clone()]);
+                assert_eq!(neg(&t), written);
+                assert_eq!(mul(vec![Ex::int(-1), t.clone()], &cx), written);
+                assert_eq!(nn(mul(vec![Ex::int(-1), x.clone()], &cx)), written);
+                assert_eq!(mul(vec![written.clone()], &cx), written);
+                assert_eq!(
+                    mul(vec![Ex::Num(n.clone()), minus_n, x.clone()], &cx),
+                    written
+                );
+                // Like terms cancel, and add over their shared member: {2N, N} - {N, N} = {N, N}.
+                assert_eq!(add(vec![t.clone(), neg(&t)], &cx), Ex::Num(Rat::ZERO));
+                let two_t = mul(vec![Ex::int(2), t.clone()], &cx);
+                assert_eq!(add(vec![two_t, neg(&t)], &cx), t);
+                // The grouping does not decide: flat, a sub-sum first, and factored.
+                let flat = add(vec![nn(x.clone()), nn(y.clone()), z.clone()], &cx);
+                let nested = add(
+                    vec![z.clone(), add(vec![nn(x.clone()), nn(y.clone())], &cx)],
+                    &cx,
+                );
+                let xy = add(vec![x.clone(), y.clone()], &cx);
+                let factored = add(vec![nn(xy.clone()), z.clone()], &cx);
+                assert_eq!(flat, nested);
+                assert_eq!(flat, factored);
+                // A member of a partition is no content shared with a one-member coefficient.
+                let mixed = add(
+                    vec![nn(x.clone()), mul(vec![Ex::Num(n.clone()), y.clone()], &cx)],
+                    &cx,
+                );
+                assert!(matches!(&mixed, Ex::Add(_)), "{mixed:?}");
+                // The negated pair's content is the partition, its sign the partition's.
+                let negated = add(vec![neg(&nn(x.clone())), neg(&nn(y.clone()))], &cx);
+                assert_eq!(negated, neg(&nn(xy)));
+            });
+        }
     }
 
     /// Integers beyond 128 bits are integers (number plan phase 2). The map of the 128-bit

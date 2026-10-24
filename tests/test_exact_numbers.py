@@ -171,6 +171,95 @@ class TestFixedPoint:
         assert list(engine.simplify(answer)) == answer
 
 
+# 1e300*1e300 leaves the domain in every mode (10^600 is beyond 1,100 bits): the product keeps
+# both members, and the term's coefficient is that partition, both members together.
+MODES3 = ('f64', 'real', 'permissive')
+REFUSED_ROWS = [
+    # each changed on a second call before (boundary-literal fuzz)
+    '-1e300*1e300*x1 - 1e300*1e300*x2',
+    'x1*(1e160*4.5e250*x1 + x3*x3*1e300*x1 + 1e160*x3*x1*4.5e250)',
+    'x2*(x2*x2*1/3*1e200 - x1*1e300*x3 - 1e308*1e300*1e300*x3)',
+    '1e160*1e170*x3*x1*x2 - x3*3.7*1e-200*x2 - x1*1e200*2*x1*1e-200 + x2*1e160',
+    'x2*x2*1e154 + 1e300*x3*1e300*x2 - 1e160*1e200*1e308*x3 + 1e154*1e160*x3*x1*x1',
+    '1e170*7*1e160*x3 - x2*0.5*1e154 + 2.5e307*1e160*x3*7 + 1e308*x1*x3*1/3',
+]
+
+
+def boundary_fuzz(n: int, seed: int) -> list[str]:
+    """Sums of products of literals whose folds the cap or the f64 domain refuse."""
+    import random
+    rng = random.Random(seed)
+    lits = ['1e300', '1e200', '1e154', '2.5e307', '1e-200', '7', '1/3', '3', '2', '0.5', '1e-300',
+            '4.5e250', '1e170', '1e160', '3.7', '1e308', '1e-308']
+    xs = ['x1', 'x2', 'x3']
+
+    def term() -> str:
+        fs = [rng.choice(lits) for _ in range(rng.randint(1, 3))] + [rng.choice(xs) for _ in range(rng.randint(1, 3))]
+        rng.shuffle(fs)
+        return '*'.join(fs)
+
+    out = []
+    for _ in range(n):
+        s = term()
+        for _ in range(rng.randint(1, 3)):
+            s += rng.choice([' + ', ' - ']) + term()
+        out.append(f'{rng.choice(xs)}*({s})' if rng.random() < 0.3 else s)
+    return out
+
+
+class TestRefusedCoefficient:
+    @pytest.mark.parametrize('mode', MODES3)
+    def test_like_terms_of_a_refused_coefficient_cancel(self, engine: SimpliPyEngine, mode: str) -> None:
+        # the negated term kept its own key before (`-1*1e300*1e300*x1` beside `1e300*1e300*x1`)
+        assert engine.simplify('1e300*1e300*x1 - 1e300*1e300*x1', mode=mode) == '0'
+        assert engine.simplify('-1e300*1e300*x1 + 1e300*x1*1e300', mode=mode) == '0'
+
+    @pytest.mark.parametrize('mode', MODES3)
+    def test_refused_coefficients_add_over_their_shared_members(self, engine: SimpliPyEngine, mode: str) -> None:
+        # {2e300, 1e300} - {1e300, 1e300} = 1e300 * (2e300 - 1e300)
+        once = engine.simplify('2*1e300*1e300*x1 - 1e300*1e300*x1', mode=mode)
+        assert once == engine.simplify('1e300*1e300*x1', mode=mode)
+
+    @pytest.mark.parametrize('mode', MODES3)
+    def test_the_grouping_does_not_decide_the_terms(self, engine: SimpliPyEngine, mode: str) -> None:
+        # a refused partition scales into a sum like one literal, and a member it holds is not
+        # content it shares with a one-member coefficient
+        spellings = ('1e300*1e300*x1 + 1e300*1e300*x2 + x3', 'x3 + 1e300*1e300*x1 + 1e300*1e300*x2',
+                     '1e300*1e300*(x1 + x2) + x3')
+        assert len({engine.simplify(s, mode=mode) for s in spellings}) == 1
+        spellings = ('x3 + 1e300*x2 + 1e300*1e300*x1', 'x3 + 1e300*(x2 + 1e300*x1)')
+        assert len({engine.simplify(s, mode=mode) for s in spellings}) == 1
+
+    @pytest.mark.parametrize('mode', MODES3)
+    def test_a_negative_partition_writes_its_sign_on_a_literal(self, engine: SimpliPyEngine, mode: str) -> None:
+        # on its smallest member, as a ground constant carries its sign (`-3e300*x1`), in every
+        # dialect; it was a separate `-1` (`neg` in the explicit list, `-1` in the tagged one)
+        assert engine.simplify('-1*1e300*1e300*x1', mode=mode) == '-1e300*1e300*x1'
+        assert engine.simplify('-1e300*1e300*x1 - 1e300*1e300*x2', mode=mode) == '-1e300*1e300*(x1 + x2)'
+        assert simplify(engine, '- 0 * 1e300 * 1e300 x1', mode) == ['*', '-1e300', '*', '1e300', 'x1']
+        tagged = engine.to_tagged('- 0 * 1e300 * 1e300 x1'.split())
+        assert list(engine.simplify(list(tagged), mode=mode)) == ['<mul>', '-1e300', '1e300', 'x1', '</mul>']
+
+    @pytest.mark.parametrize('effort', [0, None])
+    @pytest.mark.parametrize('mode', MODES3)
+    @pytest.mark.parametrize('src', REFUSED_ROWS)
+    def test_simplify_is_idempotent(self, engine: SimpliPyEngine, src: str, mode: str, effort: int | None) -> None:
+        kw = {} if effort is None else {'effort': effort}
+        once = engine.simplify(src, mode=mode, **kw)
+        assert engine.simplify(once, mode=mode, **kw) == once
+
+    @pytest.mark.parametrize('mode', MODES3)
+    def test_the_boundary_fuzz_is_a_fixed_point(self, engine: SimpliPyEngine, mode: str) -> None:
+        # 0.14.7 and 0.15 before the whole-partition coefficient: 0.2% to 0.5% of such inputs
+        # changed on a second call
+        moved = []
+        for src in boundary_fuzz(1000, 7):
+            once = engine.simplify(src, mode=mode, effort=0)
+            if engine.simplify(once, mode=mode, effort=0) != once:
+                moved.append(src)
+        assert moved == []
+
+
 class TestLeftovers:
     @pytest.mark.parametrize('mode', MODES)
     def test_leading_zeros_are_normalised(self, engine: SimpliPyEngine, mode: str) -> None:

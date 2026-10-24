@@ -3,10 +3,9 @@
 //! state's structure. It applies no rules, and nothing in the engine calls it.
 //!
 //! **Numbers that would change the structure.** The display writes a number as its short
-//! spelling: exactly where that fits the digit budget, else as its float (`k` significant digits
-//! at a precision). At full precision a number whose float writes as a short exact number it is
-//! not is written with the rest to its value where the rest fits the budget (`x1 + 1 + 3e-21`),
-//! which keeps its value. A short spelling that changes the number's value can change what
+//! spelling: exactly where that fits the digit budget of significant digits, else as a short exact
+//! sum where that fits (`x1 + 1 + 3e-21`, `(2.5e30 + 1e15)*x1`), which keeps its value, else as
+//! its float (`k` significant digits at a precision). A short spelling that changes the number's value can change what
 //! reading the display back builds: the number becomes 1 and a multiplier or an exponent drops,
 //! an integer where a non-integer exponent stood, or equal to another number so that parts
 //! collect, cancel or merge. Such a number is written as its short spelling and the rest to its

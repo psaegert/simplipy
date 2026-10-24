@@ -24,8 +24,10 @@ plots, logs and reports.
 
 ## The rules
 
-The digit budget `digits` (default 3) counts every digit a spelling writes, a numerator of 1
-included: `1/12` counts 3.
+The digit budget `digits` (default 3) counts the significant digits a spelling writes, never an
+exponent's, a numerator of 1 included: `1/12` counts 3, `2.5e307` counts 2, `0.05` counts 1.
+Each number is written in the first of three forms that fits: exactly, as one number; as a
+short exact sum; or as its float.
 
 A **number that fits the budget is written exactly, as `simplify` writes it**. The budget
 decides only whether a number is written exactly or as its float; how an exact number is
@@ -44,18 +46,28 @@ engine.prettify(engine.simplify("x2 + 0.5"))
 # -> 'x2 + 1/2'
 ```
 
+**Else a short exact sum**, `s + r` or `s - r`: `s` the number's first significant digits and
+`r` the rest to its value, each written exactly as one number, within the budget in total. It
+keeps the value, so `1.000000000000000000003` is not 1. A number float64 writes exactly in 15 digits (`1905`,
+`1.0001`) is written as its float instead, never as a sum.
+
+```python
+engine.prettify(engine.simplify("x1 + 1.000000000000000000003"))
+# -> 'x1 + 1 + 3e-21'
+engine.prettify(engine.simplify("x1*(2.5e30 + 1e15)"))
+# -> '(2.5e30 + 1e15)*x1'
+engine.prettify(engine.simplify("0.30000000000000004*x1"))
+# -> '(0.3 + 4e-17)*x1'
+```
+
 **Otherwise the value is one float**: the float64 nearest to it, in its shortest form, as a
-multiplier. A number shown as a float is read as a float. A number that would show as a short
-exact number it is not gets its rest, where the rest fits the budget, so the display keeps its
-value; `1.000000000000000000003` is not 1.
+multiplier. A number shown as a float is read as a float.
 
 ```python
 engine.prettify(engine.simplify("x1/1024"))
 # -> '9.765625e-4*x1'
 engine.prettify(engine.simplify("x1/0.225147640565301"))
 # -> '4.441529999999994*x1'
-engine.prettify(engine.simplify("x1 + 1.000000000000000000003"))
-# -> 'x1 + 1 + 3e-21'
 engine.prettify(engine.simplify("0.0009853704666076428*x1"))
 # -> '9.853704666076429e-4*x1'
 ```
@@ -77,7 +89,9 @@ engine.prettify(engine.simplify("sin(1.0001*x1) - sin(x1)"))
 
 **Precision.** `precision=k` shows a number written as a float with `k` significant digits
 instead of its shortest float64 form, and with no rest unless the structure needs one: the
-reader asked for `k` digits. A number written exactly is not affected. The shortened
+reader asked for `k` digits, so no short exact sum is written either (`0.043000000000000003`
+is `0.043 + 3e-18` in full and `0.043` at `precision=3`). A number written exactly is not
+affected. The shortened
 number is written as every number is, so the display reads back as itself: `0.175` is 7/40,
 written `7/40`. Pi stays pi (below). The default, `precision=None`, writes floats in full.
 
@@ -175,8 +189,8 @@ engine.prettify(tokens, form="tagged")
 # -> ['<mul>', '1', '<div>', '2', 'np.pi', '</mul>']
 ```
 
-At the default `precision=None` a number is written exactly or as the float64 nearest to it
-(with its rest where that fits), so the display reads back to the same float64 values: it
+At the default `precision=None` a number is written exactly, as a short exact sum, or as the
+float64 nearest to it, so the display reads back to the same float64 values: it
 evaluates as the expression does, up to
 the order of its operations. A display at a `precision` does not read back to them.
 The display keeps the structure, and displaying a display gives it back, at every precision:
