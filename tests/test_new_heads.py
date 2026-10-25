@@ -576,12 +576,12 @@ def test_ground_members_of_a_lattice_bag_are_ordered_by_enclosure(bare, mode):
     assert s('max 1 tanh 1') == '1' and s('min -1 asinh 1') == '-1'
     assert s('max x0 max sin 1 0.5') == s('max x0 sin 1')
     assert s('max sin 1 min 0.5 x0') == 'sin 1'
-    # overlapping enclosures leave both members: no tie-breaking (permissive then folds the
-    # bag to its float)
+    # overlapping enclosures leave both members: no tie-breaking (permissive, where both are one
+    # float, then folds the bag to the cheaper member)
     if mode == 'real':
         assert s('max sin 1 + 1 neg 0.1585290151921035') == 'max 0.8414709848078965 sin 1'
-    # f64 reads the bag through its ground fold, unchanged
-    assert ' '.join(bare.simplify('max sin 1 0.5'.split(), mode='f64')) == 'max / 1 2 sin 1'
+    # f64 reads the bag through its ground fold, which folds it to the member whose float it is
+    assert ' '.join(bare.simplify('max sin 1 0.5'.split(), mode='f64')) == 'sin 1'
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -702,3 +702,34 @@ def test_f64_reciprocal_of_an_infinity_keeps_float64s_zero_sign(bare):
     srcs = [s for s in srcs if ev(s) == 0.0 or abs(ev(s)) == np.inf]
     bad = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
     assert len(srcs) > 1000 and not bad, (len(bad), bad[:5])
+
+
+@pytest.mark.parametrize('mode', ('f64', 'permissive'))
+def test_a_ground_lattice_bag_folds_to_its_cheapest_equal_member(bare, mode):
+    """A ground `max` or `min` folds to one of its members, never to a newly written float: the
+    member whose float64 value is the bag's, the cheapest under the mode's measure where members
+    tie (one float64 value, the same bits)."""
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('sin 1') == 'sin 1'
+    for src in ('max sin 1 0.8414709848078965', 'min sin 1 0.8414709848078965',
+                'max 0.8414709848078965 sin 1', 'max sin 1 + 1 neg 0.1585290151921035'):
+        assert s(src) == 'sin 1', src
+    assert s('max cosh 1 1.5430806348152437') == 'cosh 1'
+    assert s('max sin 1 0.5') == 'sin 1' and s('min sin 1 0.5') == '/ 1 2'
+    assert s('min sin 1 tan 1') == 'sin 1'
+    assert s('max np.pi 3.1415926535897933') == 'np.pi'
+    # a NaN member makes the bag NaN
+    assert s('max sin 1 log -1') == 'float("nan")'
+
+
+def test_a_lattice_member_fold_keeps_the_zero_sign_and_real_needs_a_proven_tie(bare):
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    # +0 and -0 are no tie: each bag folds to the member with its bits
+    assert f64('max -0.0 0') == '0' and f64('min -0.0 0') == '-0.0'
+    assert f64('max sin -0.0 0') == '0' and f64('min sin -0.0 0') == '-0.0'
+    assert f64('inv min sin -0.0 0') == 'float("-inf")' and f64('inv max sin -0.0 0') == 'float("inf")'
+    # real compares by certified enclosures: sin(1) and the decimal 0.8414709848078965 differ in
+    # the 17th digit, which no enclosure here decides, so both stay
+    real = lambda t: ' '.join(bare.simplify(t.split(), mode='real'))  # noqa: E731
+    assert real('max sin 1 0.8414709848078965') == 'max 0.8414709848078965 sin 1'
+    assert real('max np.pi 3.1415926535897933') == '3.1415926535897933'

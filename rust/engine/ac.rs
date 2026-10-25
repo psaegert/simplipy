@@ -765,6 +765,44 @@ impl Engine {
         crate::ac::rat::Rat::parse_decimal(&format!("{y:?}")).map(Ex::Num)
     }
 
+    /// THE GROUND FOLD OF A LATTICE BAG (`f64` and `permissive`): `max` and `min` return one of
+    /// their members (IEEE 754-2019 `maximum`/`minimum`: an operand's bits, a NaN aside), so a
+    /// ground bag folds to the MEMBER whose float64 value is the bag's, bit for bit, never to a
+    /// newly written float: `max(sin(1), 0.8414709848078965)` is `sin(1)`, where the float would
+    /// be the dearer spelling of the same value. Members that tie (one float64 value, the same
+    /// bits: `+0` and `-0` are no tie) are decided by price under the mode's measure, the
+    /// canonical order breaking an equal price. `None` for any other node, or where no member
+    /// carries the bag's bits (a NaN, which the class fold decides): the float fold then reads it.
+    fn lattice_member_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
+        let Ex::Fun(op, members) = e else {
+            return None;
+        };
+        if !crate::ac::expr::lattice_head(*op, view) {
+            return None;
+        }
+        let bare = Cx::bare(view);
+        let value = |x: &Ex| {
+            let literal = crate::ac::convert::to_prefix_literal_tokens(x, &bare);
+            crate::numeric::evaluate_constant_value(
+                &self.resolve_seq(&literal, ctx),
+                &self.operators,
+            )
+        };
+        let bag = value(e)?;
+        if bag.is_nan() {
+            return None;
+        }
+        members
+            .iter()
+            .filter(|m| value(m).is_some_and(|v| v.to_bits() == bag.to_bits()))
+            .min_by(|a, b| {
+                complexity(a, view)
+                    .cmp(&complexity(b, view))
+                    .then_with(|| crate::ac::expr::cmp_ex(a, b, view))
+            })
+            .cloned()
+    }
+
     fn ac_fold(
         &self,
         e: &Ex,
@@ -859,8 +897,10 @@ impl Engine {
             let signed = fold_f64 && !lossy;
             let verdict = match verdict {
                 None if lossy || fold_f64 => {
-                    let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
-                    self.ground_fold(&self.resolve_seq(&literal, ctx), signed, &view)
+                    self.lattice_member_fold(e, ctx, &view).or_else(|| {
+                        let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
+                        self.ground_fold(&self.resolve_seq(&literal, ctx), signed, &view)
+                    })
                 }
                 // THE EXACT GROUND FOLD (`real`): a value a certified enclosure decides.
                 None if real => self.exact_ground_fold(e, ctx, &view),

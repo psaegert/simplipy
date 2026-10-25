@@ -1173,7 +1173,12 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     certainly is a finite real, `max(sin(1), 1/2)` is `sin(1)` and `min(-1, asinh(1))` is `-1`,
     and two members whose enclosures overlap both stay; `f64`'s ground fold reads them all as
     their floats), `-inf` drops from
-    a `max` and `+inf` from a `min`, and a NaN member makes the bag NaN. The absorber and the
+    a `max` and `+inf` from a `min`, and a NaN member makes the bag NaN. A ground bag folds in
+    `f64` and `permissive` to the member whose float64 value is the bag's, never to a newly
+    written float, and members of one value (the same float64 bits; `+0` and `-0` are two) are
+    decided by price: `max(sin(1), 0.8414709848078965)` is `sin(1)` (it was the literal, 7 times
+    the price), `max(np.pi, 3.1415926535897933)` is `np.pi`, `min(sin(-0.0), 0)` is `-0.0`. `real`
+    keeps both members of such a pair, whose enclosures overlap. The absorber and the
     dual bag need their other members to be no NaN almost everywhere (the finite-a.e. licence;
     `max(+inf, nan)` is `nan`): `max(+inf, x0)` is `+inf` and `max(x0, min(x0, x1))` is `x0`,
     while `max(+inf, log(x0))` and `max(x0, min(x0, log(x1)))` stay; a number of the dual bag
