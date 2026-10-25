@@ -733,3 +733,22 @@ def test_a_lattice_member_fold_keeps_the_zero_sign_and_real_needs_a_proven_tie(b
     real = lambda t: ' '.join(bare.simplify(t.split(), mode='real'))  # noqa: E731
     assert real('max sin 1 0.8414709848078965') == 'max 0.8414709848078965 sin 1'
     assert real('max np.pi 3.1415926535897933') == '3.1415926535897933'
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_a_ground_fold_returns_a_member_with_the_nodes_value(bare, mode):
+    """A ground node whose value is one of its arguments' returns that member, never a newly
+    written float: in `f64` and `permissive` where float64 gives the member's bits, in `real`
+    where a certified enclosure proves it."""
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('mod sin 1 123456.78912345678') == 'sin 1'
+    assert s('mod sin 1 2') == 'sin 1' and s('mod sin 1 1e300') == 'sin 1'
+    assert s('abs sin 1') == 'sin 1' and s('abs neg sin 1') == 'sin 1'
+    assert s('mod neg sin 1 -123456.78912345678') == 'sin -1'
+    if mode != 'real':
+        # float64's sin(1) + 1e-30 is sin(1)'s float, bit for bit; the reals keep the sum
+        assert s('+ sin 1 1e-30') == 'sin 1'
+    else:
+        assert s('+ sin 1 1e-30') == '+ sin 1 1e-30'
+    # a -0 is no +0 (f64), and a node with no equal member keeps its float fold
+    assert s('abs -0.0') == '0' and s('floor cosh 0') == '1'

@@ -95,8 +95,11 @@ class TestAdmissibleInF64Mode:
 class TestF64SeesWhatTheEvaluatorSees:
     def test_a_literal_read_as_inf_is_not_certainly_finite(self, engine: SimpliPyEngine) -> None:
         for prefix in ('* 0 1e400', '- exp 1e400 exp 1e400'):
-            assert simplify(engine, prefix, 'f64') == prefix.split()
             assert simplify(engine, prefix, 'real') == ['0']
+        assert simplify(engine, '* 0 1e400', 'f64') == ['*', '0', '1e400']
+        # float64's exp of the infinity 1e400 reads as is that infinity: the member 1e400 (the
+        # member fold), and the difference stays the NaN it is
+        assert simplify(engine, '- exp 1e400 exp 1e400', 'f64') == ['-', '1e400', '1e400']
         assert np.isnan(constant(engine, ['*', '0', '1e400']))
 
     def test_parity_beyond_2_53_is_unknown(self, engine: SimpliPyEngine) -> None:

@@ -99,6 +99,11 @@ fn variable_free(e: &Ex, view: &TokenView) -> bool {
     }
 }
 
+/// A literal: a number, or a numeric leaf the engine holds as written.
+fn is_literal(e: &Ex, view: &TokenView) -> bool {
+    matches!(e, Ex::Num(_)) || (matches!(e, Ex::Leaf(_)) && is_ground(e, view))
+}
+
 fn is_ground(e: &Ex, view: &TokenView) -> bool {
     match e {
         Ex::Const => false,
@@ -565,6 +570,8 @@ impl Engine {
     ///   under an infinite divisor, `a` where it is zero or has the divisor's sign (numpy's
     ///   cells, D7: `mod(-1, -inf) = -1`). The divisor 0, an infinite dividend and the infinite
     ///   remainders are classes, folded above.
+    /// * `abs(a)` at an `a` certainly non-negative is the member `a` (`abs(sin 1) = sin 1`), as
+    ///   `mod(a, b)` is `a` where the quotient's floor is 0.
     ///
     /// An undecided enclosure leaves the node as written: nothing breaks a tie.
     fn exact_ground_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
@@ -587,6 +594,10 @@ impl Engine {
                 } else {
                     None
                 }
+            }
+            ("abs", [a]) => {
+                let v = value_set(a)?;
+                (v.has_fin && !v.nan && !v.ninf && v.lo >= 0.0).then(|| a.clone())
             }
             ("mod", [a, b]) => {
                 let va = value_set(a)?;
@@ -765,21 +776,25 @@ impl Engine {
         crate::ac::rat::Rat::parse_decimal(&format!("{y:?}")).map(Ex::Num)
     }
 
-    /// THE GROUND FOLD OF A LATTICE BAG (`f64` and `permissive`): `max` and `min` return one of
-    /// their members (IEEE 754-2019 `maximum`/`minimum`: an operand's bits, a NaN aside), so a
-    /// ground bag folds to the MEMBER whose float64 value is the bag's, bit for bit, never to a
-    /// newly written float: `max(sin(1), 0.8414709848078965)` is `sin(1)`, where the float would
-    /// be the dearer spelling of the same value. Members that tie (one float64 value, the same
-    /// bits: `+0` and `-0` are no tie) are decided by price under the mode's measure, the
-    /// canonical order breaking an equal price. `None` for any other node, or where no member
-    /// carries the bag's bits (a NaN, which the class fold decides): the float fold then reads it.
-    fn lattice_member_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
-        let Ex::Fun(op, members) = e else {
-            return None;
+    /// THE MEMBER FOLD (`f64` and `permissive`): a ground node whose float64 value is, bit for
+    /// bit, the value of one of its own arguments (or bag members) folds to that MEMBER, never to
+    /// a newly written float. Float64 evaluates the node and the member to the same bits, so
+    /// writing the member keeps the deployed value exactly, and it is cheaper than the node. `max`
+    /// and `min` return one of their members (IEEE 754-2019 `maximum`/`minimum`):
+    /// `max(sin(1), 0.8414709848078965)` is `sin(1)`, where the float would be the dearer
+    /// spelling of the same value; `mod(a, b)` is `a` wherever `0 <= a < b`
+    /// (`mod(sin(1), 123456.78912345678)` is `sin(1)`), `abs(a)` is `a` at a positive `a`
+    /// (`abs(sin(1))`), `floor(a)` and `ceil(a)` are `a` at an integer `a`. Members that tie
+    /// (one float64 value, the same bits: `+0` and `-0` are no tie) are decided by price under
+    /// the mode's measure, the canonical order breaking an equal price. `None` where no member
+    /// carries the node's bits, or the node is NaN (the class fold decides it): the float fold
+    /// then reads it.
+    fn member_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
+        let members: Vec<&Ex> = match e {
+            Ex::Fun(_, v) | Ex::Add(v) | Ex::Mul(v) => v.iter().collect(),
+            Ex::Pow(b, x) => vec![&**b, &**x],
+            _ => return None,
         };
-        if !crate::ac::expr::lattice_head(*op, view) {
-            return None;
-        }
         let bare = Cx::bare(view);
         let value = |x: &Ex| {
             let literal = crate::ac::convert::to_prefix_literal_tokens(x, &bare);
@@ -788,13 +803,13 @@ impl Engine {
                 &self.operators,
             )
         };
-        let bag = value(e)?;
-        if bag.is_nan() {
+        let node = value(e)?;
+        if node.is_nan() {
             return None;
         }
         members
-            .iter()
-            .filter(|m| value(m).is_some_and(|v| v.to_bits() == bag.to_bits()))
+            .into_iter()
+            .filter(|m| value(m).is_some_and(|v| v.to_bits() == node.to_bits()))
             .min_by(|a, b| {
                 complexity(a, view)
                     .cmp(&complexity(b, view))
@@ -897,9 +912,19 @@ impl Engine {
             let signed = fold_f64 && !lossy;
             let verdict = match verdict {
                 None if lossy || fold_f64 => {
-                    self.lattice_member_fold(e, ctx, &view).or_else(|| {
-                        let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
-                        self.ground_fold(&self.resolve_seq(&literal, ctx), signed, &view)
+                    // The member of the node's value or its float, whichever is cheaper, the
+                    // canonical order breaking an equal price: `mod(sin(1), 2)` is `sin(1)`. A
+                    // member that is itself a literal is that float written another way, and
+                    // the float is its spelling (`floor(0.99999999999999999)` in `f64` is `1`).
+                    let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
+                    let float = self.ground_fold(&self.resolve_seq(&literal, ctx), signed, &view);
+                    let member = self
+                        .member_fold(e, ctx, &view)
+                        .filter(|m| float.is_none() || !is_literal(m, &view));
+                    [member, float].into_iter().flatten().min_by(|a, b| {
+                        complexity(a, &view)
+                            .cmp(&complexity(b, &view))
+                            .then_with(|| crate::ac::expr::cmp_ex(a, b, &view))
                     })
                 }
                 // THE EXACT GROUND FOLD (`real`): a value a certified enclosure decides.

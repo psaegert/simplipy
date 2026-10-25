@@ -1157,6 +1157,15 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `floor(tanh(40))` and `ceil(exp(-800))` stay, where float64 gives `1` and `0` and the reals
     `0` and `1`. `f64` and `permissive` keep their float folds. The `real` rule file no longer
     states these values one spelling at a time (the length-4 mine drops 816 such facts).
+  - *A ground fold returns a member.* A ground node whose value is one of its own arguments'
+    folds to that argument, never to a newly written float: in `f64` and `permissive` where
+    float64 gives the argument's bits, in `real` where an enclosure proves it.
+    `mod(sin(1), 123456.78912345678)` and `mod(sin(1), 2)` are `sin(1)` in every mode (`f64` and
+    `permissive` wrote the float `0.8414709848078965`, or kept the call), `abs(sin(1))` and
+    `abs(-sin(1))` are `sin(1)`, and in `f64` and `permissive` `sin(1) + 1e-30` is `sin(1)`,
+    float64's value of the sum (`real` keeps it). Where several arguments carry the value the
+    cheapest is taken; a literal argument is its float (`floor(0.99999999999999999)` is `1` in
+    `f64`).
   - *`max` and `min` are bags,* as sums and products are: `max(x2, max(x0, x1))`,
     `max(max(x1, x2), x0)` and `max(x0, x1, x2)` are one answer, written `max x0 max x1 x2`
     in the explicit form (the right-nested chain of the members in the canonical order),
