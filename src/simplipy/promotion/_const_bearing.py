@@ -23,9 +23,11 @@ MECHANISM:
      atom bar as the const-free certifier (``_pointwise.judge``).
 
 VERDICTS:
-  PROMOTE    -- every sampled c_s has a witness passing all valuations (sampling-based,
-                so acceptance is falsification-survival at these draws, with the
-                false-promote rate bounded by the sample count).
+  PROMOTE    -- every probed c_s has a witness passing all valuations (falsification-
+                survival at these probes, with the false-promote rate bounded by their
+                count). The probes are a function of the rule alone: the draws come from a
+                generator seeded afresh with `SEED` for each rule, never from a shared
+                stream whose position depends on the rules judged before.
   DEMOTE     -- some c_s where a witness reproduces the finite behaviour but dies at an
                 atom, or every tried witness dies; recorded with the killing
                 (c_s, c_t, valuation).
@@ -171,11 +173,13 @@ def solve_witness(lhs_b, rhs, ws, nt, y_src, V, rng):
     return out
 
 
-def certify_rule(lhs, rhs, rng, judge_fn=None, vals_override=None):
+def certify_rule(lhs, rhs, judge_fn=None, vals_override=None):
     """The `forall c_s exists c_t` certifier. `judge_fn` and `vals_override` let a caller
     hold the instantiated pairs to a different bar (e.g. an atom-only, extension-tolerant
     valuation set) instead of the default `_pointwise.judge` bar -- the witness machinery
-    is identical."""
+    is identical. Deterministic: its draws (constant probes past the atoms, the fit draws,
+    the solver's starts) come from a generator seeded with `SEED` for this rule alone."""
+    rng = np.random.default_rng(SEED)
     if judge_fn is None:
         judge_fn = judge
     ws = wildcards(list(lhs) + list(rhs))
@@ -188,7 +192,7 @@ def certify_rule(lhs, rhs, rng, judge_fn=None, vals_override=None):
     V = np.column_stack([np.concatenate([rng.normal(0, 2, N_V_FIT // 2),
                                          rng.uniform(-30, 30, N_V_FIT - N_V_FIT // 2)])
                          for _ in ws]) if ws else np.zeros((N_V_FIT, 1))
-    vals = vals_override if vals_override is not None else valuations_for(ws, rng)
+    vals = vals_override if vals_override is not None else valuations_for(ws)
     n_no_witness = n_defined = 0
     t_start = time.monotonic()
     for k, cs in enumerate(cs_list):

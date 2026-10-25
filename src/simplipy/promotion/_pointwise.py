@@ -22,8 +22,10 @@ Verdicts (per rule):
 
 Scope: const-free wildcard rules. `<constant>`-bearing rules need a
 forall-exists witness map and are handled by a separate promotion stage.
-Acceptance is sampling-based: a PROMOTE is falsification-survival at these
-valuations, with the false-promote rate bounded by the valuation count.
+Acceptance is falsification-survival at FIXED valuations (the atoms, the
+generic probes `GENERIC`, the rule-correlated points): a rule's verdict is a
+function of the rule alone, never of a random stream or of the rules judged
+before it.
 """
 
 import numpy as np
@@ -72,9 +74,19 @@ ATOMS = ['0.0', '1.0', '(-1.0)', 'float("inf")', 'float("-inf")', 'float("nan")'
          '1.2e77', '(-1.2e77)', '1e100', '(-1e100)',
          '1.35e154', '(-1.35e154)', '1e300', '(-1e300)',
          '1e-300', '(-1e-300)', '1.5e-162', '(-1.5e-162)', '1e-10', '(-1e-10)']
-N_RAND = 24            # random finite draws appended per wildcard (mixture, seeded)
+#: The atoms that are not finite: a valuation holding one is special-value algebra, which
+#: float64 decides exactly (no exact arbiter overturns a kill there).
+NONFINITE_TOKENS = frozenset({'float("inf")', 'float("-inf")', 'float("nan")'})
+N_RAND = 24            # generic finite probes per wildcard (a fixed mixture draw, `GENERIC`)
 MAX_PRODUCT = 131072   # cap on the valuation product (50 atoms: full product through k=3)
 SEED = 20260717
+
+#: float64's HARD POINTS off the atom lattice: where `tanh` approaches +-1 closer than
+#: float64 resolves (17.5, 18.5: a function of it, `asin(tanh(x))`, keeps only half its
+#: digits) and where it rounds to exactly +-1 (19.5), and either side of `exp`, `sinh` and
+#: `cosh` overflowing (709.5, 710.5). A true identity disagrees in float64 there and the exact
+#: arbiter decides it; a false one is refuted. Being fixed, they are judged for every rule.
+HARD_POINTS = [17.5, 18.5, 19.5, 709.5, 710.5]
 
 
 def wildcards(tokens):
@@ -91,10 +103,23 @@ def is_const_free(tokens):
     return '<constant>' not in tokens
 
 
-def rand_pool(rng):
-    vals = list(np.round(rng.normal(0, 2, N_RAND // 2), 6)) + \
-           list(np.round(rng.uniform(-40, 40, N_RAND - N_RAND // 2), 6))
-    return [repr(float(v)) if v >= 0 else f'({float(v)!r})' for v in vals]
+def _spell(v):
+    return repr(float(v)) if v >= 0 else f'({float(v)!r})'
+
+
+def _generic_pool():
+    """The generic probes: one fixed draw of the historical mixture (half N(0, 2), half
+    U(-40, 40), six decimals) plus the hard points, both signs. Drawn ONCE: per-rule random
+    draws made a rule's sort depend on where the shared stream stood when its turn came
+    (`atan(sinh(x)) -> asin(tanh(x))` read `!` or `?` by luck, 4 of 12 seeds)."""
+    g = np.random.default_rng(SEED)
+    vals = list(np.round(g.normal(0, 2, N_RAND // 2), 6)) + \
+        list(np.round(g.uniform(-40, 40, N_RAND - N_RAND // 2), 6))
+    return [_spell(v) for v in vals] + [_spell(s * v) for v in HARD_POINTS for s in (1, -1)]
+
+
+#: The fixed generic probes every bar appends to the atoms (see `_generic_pool`).
+GENERIC = _generic_pool()
 
 
 MAX_CORRELATED = 512   # cap on the per-rule correlated-atom product
@@ -236,15 +261,21 @@ def eval_point(tokens):
     return float(np.asarray(evaluate(list(tokens), env)).reshape(-1)[0])
 
 
-def judge(lhs, rhs, valuations):
+def judge(lhs, rhs, valuations, disagreements=None):
     """PROMOTE / DEMOTE(+witness) / UNDECIDED / EVAL-ERR over the given valuations.
     Rules are zero-snap prefolded first (exact-zero literal subtrees -> '0'), so the
     f64 evaluation below judges the intended denotation, not f64's rendering of it.
     Rule-correlated atom valuations are appended to whatever grid the caller
-    supplies."""
+    supplies.
+
+    With a list as `disagreements`, the scan does not stop at the first kill: every
+    valuation float64 did not read as agreement (the kills and the rounding band) is
+    appended to it, so an exact arbiter can decide precisely those
+    (`._overturn.judge_arbitrated`); the verdict is the same."""
     lhs, rhs = prefold(lhs), prefold(rhs)
     valuations = list(valuations) + correlated_valuations(lhs, rhs, wildcards(list(lhs) + list(rhs)))
     near = 0
+    kill = None
     for wmap in valuations:
         try:
             a = eval_point(substitute(lhs, wmap))
@@ -254,26 +285,37 @@ def judge(lhs, rhs, valuations):
         an, bn = np.isnan(a), np.isnan(b)
         if an and bn:
             continue
-        if an != bn:
-            return 'DEMOTE', (dict(wmap), a, b)          # hole filled or value lost: exact kill
-        if np.isinf(a) or np.isinf(b):
-            if a == b:
-                continue
-            return 'DEMOTE', (dict(wmap), a, b)          # inf sign/finiteness mismatch: exact kill
-        # ONE ZERO: there is a single zero and 1/0 = +inf; the sign of an f64 zero
-        # is measurement rendering, never a value difference. No sign tie-break is
-        # applied to a `-> 0` collapse -- float == already treats -0.0 == +0.0.
-        rel = abs(a - b) / max(1.0, abs(a), abs(b))
-        if rel <= 1e-9:
+        # hole filled or value lost, or an inf sign/finiteness mismatch: an exact kill
+        killed = an != bn or ((np.isinf(a) or np.isinf(b)) and a != b)
+        if not killed and (np.isinf(a) or np.isinf(b)):
             continue
-        if rel > 1e-6:
-            return 'DEMOTE', (dict(wmap), a, b)          # gross finite disagreement
-        near += 1                                        # rounding band: not convicting evidence (f64 lacks authority here)
+        if not killed:
+            # ONE ZERO: there is a single zero and 1/0 = +inf; the sign of an f64 zero
+            # is measurement rendering, never a value difference. No sign tie-break is
+            # applied to a `-> 0` collapse -- float == already treats -0.0 == +0.0.
+            rel = abs(a - b) / max(1.0, abs(a), abs(b))
+            if rel <= 1e-9:
+                continue
+            killed = rel > 1e-6                          # gross finite disagreement
+        if killed:
+            if disagreements is None:
+                return 'DEMOTE', (dict(wmap), a, b)
+            kill = kill or (dict(wmap), a, b)
+        else:
+            near += 1                                    # rounding band: not convicting evidence (f64 lacks authority here)
+        if disagreements is not None:
+            disagreements.append(dict(wmap))
+    if kill is not None:
+        return 'DEMOTE', kill
     return ('UNDECIDED', near) if near else ('PROMOTE', None)
 
 
-def valuations_for(ws, rng):
-    pool = ATOMS + rand_pool(rng)
+def valuations_for(ws):
+    """The atom and generic-probe product over the slots `ws`, capped at `MAX_PRODUCT`.
+    Deterministic: past the cap the completions come from a generator seeded afresh with
+    `SEED` on every call, so they too are a function of the slot count alone."""
+    rng = np.random.default_rng(SEED)
+    pool = ATOMS + GENERIC
     k = len(ws)
     total = len(pool) ** k
     if total <= MAX_PRODUCT:

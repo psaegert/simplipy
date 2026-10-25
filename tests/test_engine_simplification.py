@@ -1038,22 +1038,20 @@ class TestMultSort:
         # 0); the multiplicative bar promotes it on the finite-nonzero lattice. The judges
         # REQUIRE the f64 oracle to be configured first (`configure(engine)`) -- calling them
         # bare now raises instead of looping (the _literal_spans termination guard).
-        import numpy as np
         import pytest as _pytest
         from simplipy.promotion._f64_eval import configure
         from simplipy.promotion._ladder import judge_bang, judge_bang_mult
         from simplipy.promotion._pointwise import prefold
-        rng = np.random.default_rng(0)
         from simplipy.promotion._f64_eval import ARITY
         if not ARITY:  # order-independent: another test may have configured the module state
             with _pytest.raises(RuntimeError, match='oracle not configured'):
                 prefold(['/', '1', '1'])
         configure(self._engine(tmp_path))
-        v_bang, _ = judge_bang(('/', '!0', '!0'), ('1',), rng)
+        v_bang, _ = judge_bang(('/', '!0', '!0'), ('1',))
         assert v_bang != 'PROMOTE'
-        v_mult, _ = judge_bang_mult(('/', '$0', '$0'), ('1',), rng)
+        v_mult, _ = judge_bang_mult(('/', '$0', '$0'), ('1',))
         assert v_mult == 'PROMOTE'
-        v_zero, _ = judge_bang_mult(('/', '0', '$0'), ('0',), rng)
+        v_zero, _ = judge_bang_mult(('/', '0', '$0'), ('0',))
         assert v_zero == 'PROMOTE'
 
 

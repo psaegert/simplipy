@@ -2696,21 +2696,17 @@ class TestWitnessWallClock:
         # mine for 21 hours inside certify_rule with nothing on the log. Every inner
         # piece is bounded; the PRODUCT was not. The budget turns that stall into a
         # loud NO-WITNESS in bounded time.
-        import numpy as np
         import pytest as _pytest
         from simplipy.promotion import _const_bearing as cb
         monkeypatch.setattr(cb, 'WITNESS_WALL_CLOCK_S', -1.0)   # budget already spent
-        rng = np.random.default_rng(0)
         with _pytest.warns(RuntimeWarning, match='wall-clock budget'):
-            v, info = cb.certify_rule(['*', '<constant>', '_0'], ['<constant>'], rng)
+            v, info = cb.certify_rule(['*', '<constant>', '_0'], ['<constant>'])
         assert v == 'NO-WITNESS'
         assert 'wall-clock' in str(info)
 
     def test_normal_rules_are_untouched_by_the_budget(self) -> None:
-        import numpy as np
         from simplipy.promotion import _const_bearing as cb
-        rng = np.random.default_rng(0)
-        v, info = cb.certify_rule(['+', '<constant>', '_0'], ['+', '_0', '<constant>'], rng)
+        v, info = cb.certify_rule(['+', '<constant>', '_0'], ['+', '_0', '<constant>'])
         assert v != 'NO-WITNESS' or 'wall-clock' not in str(info)
 
 
@@ -2728,7 +2724,6 @@ class TestBoundaryMagnitudeProbes:
         assert any(0 < m <= 1.6e-162 for m in mags)      # subnormal-square underflow
 
     def test_sqrt_square_is_convicted_at_the_f64_bar(self) -> None:
-        import numpy as np
         from conftest import acj_config_path, require_or_skip
         require_or_skip(acj_config_path(), 'acj asset not staged')
         from simplipy import SimpliPyEngine
@@ -2737,6 +2732,5 @@ class TestBoundaryMagnitudeProbes:
         _f64_eval.configure(SimpliPyEngine.from_config(acj_config_path()))
         lhs, rhs = ['rootn', 'pow', '_0', '2', '2'], ['abs', '_0']
         ws = wildcards(lhs + rhs)
-        rng = np.random.default_rng(0)
-        v, info = judge(lhs, rhs, valuations_for(ws, rng))
+        v, info = judge(lhs, rhs, valuations_for(ws))
         assert v not in ('PROMOTE', 'PASS'), (v, info)

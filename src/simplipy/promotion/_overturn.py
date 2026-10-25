@@ -18,10 +18,16 @@ A rule is overturned (DEMOTE -> PROMOTE) only when every valuation agrees exactl
 arbitration. Atom-only kills are not re-judged here: they are special-value algebra that is
 already exact in float64, so a driver should exclude any demotion whose valuation is drawn
 entirely from ``ATOMS`` before calling ``judge_exact``.
+
+``judge_arbitrated`` is the float64 bar with this arbitration: the arbiter decides exactly the
+valuations float64 did not read as agreement. It must not re-judge the others: an agreement
+float64 already read at ``1e20`` needs 10^20 digits here, which made every arbitration over the
+full set UNDECIDABLE, so a true identity's sort was decided by whether a random draw happened to
+land in float64's rounding band.
 """
 import numpy as np
 
-from ._pointwise import ATOMS, wildcards, valuations_for
+from ._pointwise import ATOMS, NONFINITE_TOKENS, judge, wildcards, valuations_for
 from ._hp_equiv import evaluate as hp_eval, _restores_dps
 from mpmath import mp, mpf, isnan, isinf, inf, nan, fabs
 
@@ -76,3 +82,29 @@ def judge_exact(lhs, rhs, valuations):
         if not (verdicts[0] and verdicts[1]):
             return 'DEMOTE-EXACT', dict(wmap)
     return 'PROMOTE', None
+
+
+def _finite(wmap):
+    return not any(t in NONFINITE_TOKENS for t in wmap.values())
+
+
+def arbitrable(verdict, info):
+    """Can the arbiter overturn this `._pointwise.judge` verdict? A rounding band always; a
+    kill only at a finite valuation (a kill at inf or NaN is special-value algebra, exact in
+    float64)."""
+    return verdict == 'UNDECIDED' or (verdict == 'DEMOTE' and _finite(info[0]))
+
+
+def judge_arbitrated(lhs, rhs, valuations):
+    """`._pointwise.judge` over `valuations`, its float64 disagreements (the rounding band and
+    the kills at finite valuations, where saturation may be all float64 sees:
+    `atanh(tanh(37))` reads inf) decided by `judge_exact`. PROMOTE when float64 agrees
+    everywhere or the arbiter finds every disagreement exactly equal (info
+    ``'exact-arbiter'``); else float64's verdict stands, so a disagreement at inf or NaN, or
+    an UNDECIDABLE one, never promotes. Deterministic in the rule and the valuations."""
+    pending = []
+    v, info = judge(list(lhs), list(rhs), valuations, disagreements=pending)
+    if v in ('UNDECIDED', 'DEMOTE') and all(_finite(w) for w in pending) \
+            and judge_exact(list(lhs), list(rhs), pending)[0] == 'PROMOTE':
+        return 'PROMOTE', 'exact-arbiter'
+    return v, info

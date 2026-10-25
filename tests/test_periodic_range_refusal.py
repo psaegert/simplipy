@@ -10,7 +10,6 @@ unbounded, and a real mine sat in one of them for over 26 hours with no output.
 """
 import time
 
-import numpy as np
 import pytest
 from mpmath import mp, mpf
 
@@ -49,8 +48,7 @@ def test_the_evaluator_refuses_a_periodic_call_beyond_the_bound() -> None:
 @pytest.mark.parametrize("lhs,rhs", OFFENDERS)
 def test_offenders_resolve_promptly_and_fail_closed(engine, lhs, rhs) -> None:
     start = time.monotonic()
-    verdict, _ = _ladder.judge_ground(list(lhs), list(rhs),
-                                      np.random.default_rng(_ladder.SEED))
+    verdict, _ = _ladder.judge_ground(list(lhs), list(rhs))
     elapsed = time.monotonic() - start
     # FAIL-CLOSED: refused, never certified. EVAL-ERR drops the rule.
     assert verdict == 'EVAL-ERR', f"{' '.join(lhs)} returned {verdict}"
@@ -61,8 +59,7 @@ def test_offenders_resolve_promptly_and_fail_closed(engine, lhs, rhs) -> None:
 def test_the_bound_does_not_touch_ordinary_rules(engine, fn) -> None:
     """The probe atom lattice reaches 1e300 (binary exponent ~997). Those are legitimate
     and must still be judged, so the bound has to sit above them."""
-    verdict, _ = _ladder.judge_ground([fn[0], '<constant>'], ['<constant>'],
-                                      np.random.default_rng(_ladder.SEED))
+    verdict, _ = _ladder.judge_ground([fn[0], '<constant>'], ['<constant>'])
     assert verdict == 'PASS', f"{fn[0]} <constant> regressed to {verdict}"
 
 
