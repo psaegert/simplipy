@@ -2,8 +2,9 @@
 //!
 //! Canonical invariants (established by [`add`], [`mul`], [`pow`], [`fun`]; every consumer may
 //! rely on them):
-//! * `Add(v)`: `v.len() >= 2`; no element is an `Add`; at most one `Num` (never 0); at most one
-//!   `Const`; like terms collected as far as the soundness gates allow; sorted by [`cmp_ex`].
+//! * `Add(v)`: `v.len() >= 2`; no element is an `Add`; at most one `Num` (0 only in `f64`, the
+//!   `+0` term kept where every other term may be -0 on a region, see `signed_zero_null`); at most
+//!   one `Const`; like terms collected as far as the soundness gates allow; sorted by [`cmp_ex`].
 //! * `Mul(v)`: `v.len() >= 2`; no element is a `Mul`; at most one `Num` (never 1; 0 only in the
 //!   uncertified `0 * t` case documented at the zero-coefficient gate); at most one bare `Const`;
 //!   like bases collected under the gates, and at most one power of e (`exp(a) exp(b)` is
@@ -2933,8 +2934,12 @@ fn raw_negate_term(t: &Ex) -> Option<Ex> {
     })
 }
 
+/// `None` on a negation overflow, and for the zero term an `f64` sum holds (`add`): float64's
+/// `-(t + 0)` is `-0` wherever `t` vanishes, which no sum of the negated terms spells (`-t + -0` is
+/// `-t`), so a sum holding that zero has no other orientation.
 pub(crate) fn negate_term(t: &Ex, cx: &Cx) -> Option<Ex> {
     match t {
+        Ex::Num(r) if r.is_zero() && f64_zero_signs(cx) => None,
         Ex::Num(r) => Some(Ex::Num(r.checked_neg()?)),
         Ex::PosInf => Some(Ex::NegInf),
         Ex::NegInf => Some(Ex::PosInf),
@@ -3528,6 +3533,11 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     // CANONICAL literal partition (design 2c, `Rat::partition_sum`): the literals summed as
     // far as the sums stay representable, as a fixed point a re-read reproduces.
     lits.sort_unstable_by(|a, b| a.cmp_exact(b));
+    // ZERO TERMS IN `f64` (`signed_zero_null`). Literals that sum to zero are float64's `+0` term
+    // (`t + 0`, `t + 2 - 2`), and two like terms of opposite signs are a `+0` wherever their key
+    // vanishes (`2t - t` is `-0 + 0` where `t = -0`): either way the sum is never `-0`. Where what
+    // remains may be `-0` on a region, the sum keeps a `+0` term.
+    let mut owes_zero = f64_zero_signs(cx) && !lits.is_empty();
     let mut acc = Rat::ZERO;
     let mut lits = Rat::partition_sum(lits);
     if lits.len() == 1 {
@@ -3629,7 +3639,10 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 let group: Vec<usize> = (a..hit.len())
                     .filter(|&b| !gone[hit[b]] && read[b].0 == read[a].0)
                     .collect();
-                if group.len() < 2 {
+                // In `f64` a class turned around is no negation where its sum vanishes on a region
+                // (both orientations of `x1 - |x1|` are `+0` for `x1 >= 0`), so terms whose key may
+                // vanish on a region stay apart (`signed_zero_null`).
+                if group.len() < 2 || vanishes_on_a_region(&read[a].0, cx) {
                     continue;
                 }
                 let mut coeffs: Vec<Coef> = Vec::new();
@@ -3691,6 +3704,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         let mixed =
             coeffs.iter().any(|c| c.is_negative()) && coeffs.iter().any(|c| !c.is_negative());
         let pools: Vec<Vec<Coef>> = if mixed && cx.fin_licensed(&key) {
+            owes_zero |= f64_zero_signs(cx);
             vec![coeffs]
         } else {
             let (negs, poss): (Vec<Coef>, Vec<Coef>) =
@@ -3730,6 +3744,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         }
         if !acc.is_zero() {
             out.push(Ex::Num(acc));
+        } else if owes_zero {
+            out.push(Ex::Num(Rat::ZERO));
         }
         return add(out, cx);
     }
@@ -3787,6 +3803,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         }
         if !acc.is_zero() {
             out.push(Ex::Num(acc));
+        } else if owes_zero {
+            out.push(Ex::Num(Rat::ZERO));
         }
         return add(out, cx);
     }
@@ -3829,6 +3847,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         out.retain(|f| is_inf_carrying(f) || !cx.fin_licensed(f));
         acc = Rat::ZERO;
         has_const = false;
+        owes_zero = false;
     }
     if has_const {
         out.push(Ex::Const);
@@ -3837,6 +3856,11 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         // of literals alone stays exact.
         let acc = if out.is_empty() { acc } else { land(acc, cx) };
         out.push(Ex::Num(acc));
+    } else if owes_zero && !out.is_empty() && !out.iter().any(|t| signed_zero_null(t, true, cx)) {
+        // Every remaining term may be `-0` on a region: the zero term stays (`ceil(x1) + 0`), so
+        // the sum is `+0` there as float64's is. Where one term cannot be (`x1 + 0` is `x1`, -0 at
+        // the one point `x1 = -0`), it goes.
+        out.push(Ex::Num(Rat::ZERO));
     }
 
     match out.len() {
@@ -4304,14 +4328,169 @@ pub(crate) fn keeps_zero_sign(s: &Ex, cx: &Cx) -> bool {
         || matches!(s, Ex::Add(ts) if ts.iter().any(|t| {
             matches!(t, Ex::PosInf | Ex::NegInf) || term_absorbs_negation(t)
         }));
-    cx.f64_semantics()
-        && s.has_measure_space(cx.view)
-        && !owned
-        && !zero_set_null_by_form(s, cx)
-        && !match cx.cert_region {
-            Some(f) => f(s),
-            None => zero_set_null(s, cx),
+    cx.f64_semantics() && s.has_measure_space(cx.view) && !owned && !region_zero_null(s, cx)
+}
+
+/// The region test of `f64`'s zero signs (`keeps_zero_sign`, `signed_zero_null`): is the zero set
+/// of `e` null, by its form (`zero_set_null_by_form`) or by the certificate -- the context's region
+/// certificate where it has one (`Cx::cert_region`, the parse's), else `zero_set_null`?
+fn region_zero_null(e: &Ex, cx: &Cx) -> bool {
+    zero_set_null_by_form(e, cx)
+        || match cx.cert_region {
+            Some(f) => f(e),
+            None => zero_set_null(e, cx),
         }
+}
+
+/// Is `f64` the construction, in the run's float64 numbers? A certificate-free context inside a
+/// `real` run is mode `f64` only for its licences (`Cx::f64_numbers`), and reads one zero.
+fn f64_zero_signs(cx: &Cx) -> bool {
+    cx.f64_semantics() && cx.f64_numbers()
+}
+
+/// In `f64`, may `e` vanish on a region: its zero set not shown null by the region test? A ground
+/// expression and a pattern have no region (as in `keeps_zero_sign`).
+fn vanishes_on_a_region(e: &Ex, cx: &Cx) -> bool {
+    f64_zero_signs(cx)
+        && e.has_measure_space(cx.view)
+        && !e.contains_wildcard(cx.view)
+        && !region_zero_null(e, cx)
+}
+
+/// A SUM OF ZEROS IS -0 ONLY WHERE EVERY TERM IS, in float64: `-0 + 0` is `+0`, and so is any
+/// cancellation of nonzero terms. Is the set where `e` is float64's zero of one sign null --
+/// where it is `-0` (`neg`), else where it is `+0` -- PROVEN, in `f64`? Fail closed: `false`
+/// wherever it is not shown. The sum constructor reads it (`add`): it drops a `+0` term, and
+/// collects two like terms of opposite signs, only where what remains cannot be `-0` on a region.
+///
+/// `ceil(x1)` is `-0` on the whole interval (-1, 0), so `ceil(x1) + 0` is `+0` there and
+/// `1/(ceil(x1) + 0)` is `+inf`, while `1/ceil(x1)` is `-inf`. The heads and carriers, as the
+/// evaluator computes them: a term whose zero set is null has no such region (the region test,
+/// `region_zero_null`); `floor` is the sign of its argument's zero (`floor(-0) = -0`) and `+0` on
+/// [0, 1), `ceil` the sign of its argument's (`ceil(+0) = +0`) and `-0` on (-1, 0); an odd
+/// function, an odd root or an odd power keeps its argument's sign; `abs`, `cos`, `cosh`, `exp`,
+/// `log`, `acos`, `acosh`, an even root and an even or fractional power are never `-0` (the power
+/// `1/2` is numpy's `sqrt`, `sqrt(-0) = -0`, and keeps it); `max` and `min` are one of their
+/// members; `mod` takes the sign of its divisor and `atan2` of its first argument (read where its
+/// second is finite: `atan2(y, +inf)` is `+-0`); a product's zero has the sign of its members, so
+/// a product is read through its one member that may vanish on a region where every other member
+/// is positive, and a product holding a zero is that zero everywhere, of the members' sign; a sum
+/// is `-0` only where every term is. `harmonic`, `besselj` (`besselj(1.5, 0) = -0`) and any
+/// other head are read by the region test alone. A ground term is its float64 value
+/// (`ground_value`); a pattern has no region (as in `keeps_zero_sign`).
+fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
+    let view = cx.view;
+    if e.contains_wildcard(view) {
+        return true;
+    }
+    if !e.has_measure_space(view) {
+        return match e {
+            Ex::Num(r) => neg || !r.is_zero(),
+            _ if is_neg_zero(e, view) => !neg,
+            _ => ground_value(e, cx).is_some_and(|v| v != 0.0 || v.is_sign_negative() != neg),
+        };
+    }
+    if region_zero_null(e, cx) {
+        return true;
+    }
+    let rec = |g: &Ex, n: bool| signed_zero_null(g, n, cx);
+    // `b^k` as the evaluator's `pow` computes it (`simplipy.operators.pow`).
+    let power = |b: &Ex, k: &Rat| {
+        if k.is_integer() && k.signum() > 0 {
+            if k.is_even_integer() {
+                neg
+            } else {
+                rec(b, neg)
+            }
+        } else if *k == Rat::new(1, 2).expect("1/2") {
+            rec(b, neg)
+        } else {
+            // a fractional power of a zero is +0; a negative power vanishes only where `b` is
+            // infinite, which the region test reads
+            k.signum() > 0 && neg
+        }
+    };
+    match e {
+        Ex::Add(ts) => neg && ts.iter().any(|t| rec(t, true)),
+        Ex::Mul(v) => {
+            // The zero of a product carries the members' signs. `sign` is the sign asked, turned
+            // by each negative ground member; the other members must be positive wherever they
+            // are defined and nonzero (a power of a non-integer exponent is NaN below 0).
+            let positive = |f: &Ex| {
+                cx.certainly_nonneg(f)
+                    || matches!(f, Ex::Pow(_, k) if matches!(&**k, Ex::Num(k) if !k.is_integer()))
+            };
+            let mut sign = neg;
+            let mut zero = false;
+            let mut carrier: Option<&Ex> = None;
+            let mut unsigned = false;
+            for f in v {
+                if !f.has_measure_space(view) {
+                    // a ground member: its float64 value, a zero making the product one everywhere
+                    match ground_value(f, cx) {
+                        Some(x) if x.is_finite() => {
+                            zero |= x == 0.0;
+                            sign ^= x.is_sign_negative();
+                        }
+                        _ => return false,
+                    }
+                } else if region_zero_null(f, cx) {
+                    unsigned |= !positive(f);
+                } else if carrier.is_none() {
+                    carrier = Some(f);
+                } else {
+                    // a second member that may vanish on a region
+                    return false;
+                }
+            }
+            if zero {
+                // zero wherever it is defined, of the members' sign: never the sign asked where
+                // every other member is positive and never -0
+                sign && !unsigned && carrier.is_none_or(|g| positive(g) && rec(g, true))
+            } else {
+                carrier.is_none_or(|g| !unsigned && rec(g, sign))
+            }
+        }
+        Ex::Pow(b, k) => matches!(&**k, Ex::Num(k) if power(b, k)),
+        Ex::Fun(op, a) => {
+            let is = |s: &str| view.tok_is(*op, s);
+            match a.as_slice() {
+                [g] if odd_fun(view, *op) => rec(g, neg),
+                [_] if ["abs", "cos", "cosh", "exp", "log", "acos", "acosh"]
+                    .iter()
+                    .any(|s| is(s)) =>
+                {
+                    neg
+                }
+                [g] if is("floor") => neg && rec(g, true),
+                [g] if is("ceil") => !neg && rec(g, false),
+                [b, Ex::Num(k)] if is("rootn") => {
+                    if k.is_integer() && k.signum() > 0 {
+                        if k.is_even_integer() {
+                            neg
+                        } else {
+                            rec(b, neg)
+                        }
+                    } else {
+                        false
+                    }
+                }
+                [b, Ex::Num(k)] if is("pow") => power(b, k),
+                [_, b] if is("mod") => {
+                    if neg {
+                        cx.certainly_nonneg(b)
+                    } else {
+                        cx.carried_negative(b)
+                            .is_some_and(|p| cx.certainly_nonneg(&p))
+                    }
+                }
+                [y, x] if is("atan2") => rec(y, neg) && cx.fin_certified(x),
+                ms if lattice_head(*op, view) => ms.iter().all(|m| rec(m, neg)),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Does `f` vanish on a region with the sign its orientation gives it: a sum that keeps the sign
@@ -11010,6 +11189,48 @@ mod tests {
                 } else {
                     assert!(matches!(held, Ex::Pow(..)), "{mode:?}: {held:?}");
                 }
+            }
+        });
+    }
+
+    #[test]
+    fn a_zero_term_stays_where_the_rest_may_be_neg_zero_on_a_region() {
+        with_view(|view| {
+            for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let x1 = Ex::Leaf(view.intern("x1"));
+                let ab = fun(view.intern("abs"), vec![x(view)], &cx);
+                // t = x1*(x0 - |x0|): -0 wherever x0 >= 0 and x1 < 0, a region
+                let s = add(vec![x(view), mul(vec![Ex::int(-1), ab], &cx)], &cx);
+                let t = mul(vec![x1.clone(), s], &cx);
+                let plus_zero = add(vec![t.clone(), Ex::int(0)], &cx);
+                // 2t - t with both terms over the one key (a product holding the sum: `mul`
+                // would turn the negated sum around, a class in its other orientation)
+                let scaled = |c: i128| match &t {
+                    Ex::Mul(v) => Ex::Mul([vec![Ex::int(c)], v.clone()].concat()),
+                    other => panic!("a product expected: {other:?}"),
+                };
+                let collected = add(vec![scaled(2), scaled(-1)], &cx);
+                if matches!(mode, RuleMode::Default) {
+                    // t + 0 and 2t - t are +0 there, as float64 sums them
+                    let kept = Ex::Add(vec![t.clone(), Ex::int(0)]);
+                    assert_eq!(plus_zero, kept);
+                    assert_eq!(collected, kept);
+                    // the sum keeps its orientation: -(t + 0) is no sum of negated terms
+                    assert_eq!(negate_term(&Ex::int(0), &cx), None);
+                    // the class in its two orientations does not collect where it may vanish
+                    let turned = add(vec![t.clone(), mul(vec![Ex::int(-1), t.clone()], &cx)], &cx);
+                    assert!(matches!(&turned, Ex::Add(v) if v.len() == 2), "{turned:?}");
+                } else {
+                    assert_eq!(plus_zero, t, "{mode:?}");
+                    assert_eq!(collected, t, "{mode:?}");
+                }
+                // x0 + 0 is x0 in every mode: its zero set is null
+                assert_eq!(add(vec![x(view), Ex::int(0)], &cx), x(view));
+                // x1 + t + 0 is x1 + t: x1 is -0 only at a point
+                let sum = add(vec![x1.clone(), t.clone()], &cx);
+                assert_eq!(add(vec![sum.clone(), Ex::int(0)], &cx), sum, "{mode:?}");
             }
         });
     }

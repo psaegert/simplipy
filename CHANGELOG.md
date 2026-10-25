@@ -73,8 +73,10 @@ organised by who you are, then the highlights, then every change in detail.
   written as.
 - **Known `f64` limit: a zero term at -0.** `x + 0` is `x`, and `x1 + sin(0)` is `x1`: at the
   single point `x = -0` the answer is -0 where float64's sum is +0 (`-0 + 0 = +0`). A point is
-  a null set, whose zero sign `f64` does not keep. `x + -0.0` is `x` exactly, since float64's
-  `x + -0` is `x` at every `x`, -0 included.
+  a null set, whose zero sign `f64` does not keep. A term that is -0 on a whole region keeps the
+  zero: `ceil(x1) + 0` and `2*ceil(x1) - ceil(x1)` are `ceil(x1) + 0`, since `ceil(x1)` is -0 on
+  all of (-1, 0). `x + -0.0` is `x` exactly, since float64's `x + -0` is `x` at every `x`, -0
+  included.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with
@@ -575,6 +577,31 @@ model predictions.
   makes 594 of the `f64` answers on a tenth of the predictions dearer, all but 3 over sums whose
   zero set is null and unread (univariate sums over `log`, roots, `abs` or `tan` that mix
   directions), so it is not done.
+- **In `f64` a sum keeps a `+0` term where its other terms may all be -0 on a region.** float64's
+  sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`), and some terms are -0 on a
+  whole region: `ceil(x1)` on (-1, 0), `-floor(x1)` on [0, 1), `min(x1, -0.0)` for x1 ≥ 0,
+  `mod(floor(x1), -1)` everywhere, `x2*ceil(x1)` wherever x2 > 0 there, `sin`, `atan2` or an odd
+  root of such a term. The sum constructor dropped a zero term (`ceil(x1) + 0` was `ceil(x1)`)
+  and collected like terms of opposite signs (`2*ceil(x1) - ceil(x1)` was `ceil(x1)`), so
+  `1/(ceil(x1) + 0)` and `1/(2*ceil(x1) - ceil(x1))` were `-inf` on (-1, 0), where float64 gives
+  `+inf`. Now both are `ceil(x1) + 0` and their inverses `1/(ceil(x1) + 0)`, `+inf` there;
+  `0 - floor(x1)` and `x2*ceil(x1) + 0` stay as written. A zero term goes, and a pair collects,
+  where one remaining term is shown not to be -0 on a region, its zero set null or its zero `+0`:
+  `x1 + 0` is `x1`, `0 - ceil(x1)` is `-ceil(x1)` (`+0` on (-1, 0)), `|ceil(x1)| + 0` is
+  `|ceil(x1)|`, `ceil(|x1|) + 0` is `ceil(|x1|)`. Where the certificate cannot show it, the zero
+  term stays. Two terms of one class written in its two orientations no longer collect where
+  their key may vanish on a region, since both orientations of `x1 - |x1|` are `+0` for x1 ≥ 0.
+  The zero-set certificate reads `exp(g)` as vanishing where `g` is -inf (`exp(1/ceil(x1))` is 0
+  on (-1, 0), and `exp(-1/(x1 - |x1|))` for x1 ≥ 0), and `ceil(g)` and `floor(g)` over a range that
+  meets their zero interval only at `g = 0` as zero where `g` is (`ceil(|x1|)` vanishes only at
+  x1 = 0). `real` and `permissive` do not change. On srbf's ground truths and a tenth of its
+  predictions no answer changes in any mode; on a tenth of the training-data inputs 14 `f64`
+  answers change, 3 cheaper and 11 dearer by a kept `+0` term where the certificate cannot show
+  the remaining product's zero set null (`0 - x13*(x13 + 1/(2*log(x13)))` after an `x13 - x13`,
+  where it was `-x13*(x13 + 1/(2*log(x13)))`). No answer changes on a second call, and none
+  loses the input's infinities and NaNs on 256 points. A sum that cancels on a region
+  (`ceil(x1) + ceil(x2)` is `1 - 1 = +0` on (0, 1) × (-2, -1)), or a product holding one, is
+  still turned around when it is negated, as described above.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
