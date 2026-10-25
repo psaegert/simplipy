@@ -576,10 +576,9 @@ def test_ground_members_of_a_lattice_bag_are_ordered_by_enclosure(bare, mode):
     assert s('max 1 tanh 1') == '1' and s('min -1 asinh 1') == '-1'
     assert s('max x0 max sin 1 0.5') == s('max x0 sin 1')
     assert s('max sin 1 min 0.5 x0') == 'sin 1'
-    # overlapping enclosures leave both members: no tie-breaking (permissive, where both are one
-    # float, then folds the bag to the cheaper member)
-    if mode == 'real':
-        assert s('max sin 1 + 1 neg 0.1585290151921035') == 'max 0.8414709848078965 sin 1'
+    # overlapping enclosures: `real` reads the two at high precision (sin(1) is 6.7e-18 above
+    # the decimal); permissive, where both are one float, folds the bag to the cheaper member
+    assert s('max sin 1 + 1 neg 0.1585290151921035') == 'sin 1'
     # f64 reads the bag through its ground fold, which folds it to the member whose float it is
     assert ' '.join(bare.simplify('max sin 1 0.5'.split(), mode='f64')) == 'sin 1'
 
@@ -728,10 +727,11 @@ def test_a_lattice_member_fold_keeps_the_zero_sign_and_real_needs_a_proven_tie(b
     assert f64('max -0.0 0') == '0' and f64('min -0.0 0') == '-0.0'
     assert f64('max sin -0.0 0') == '0' and f64('min sin -0.0 0') == '-0.0'
     assert f64('inv min sin -0.0 0') == 'float("-inf")' and f64('inv max sin -0.0 0') == 'float("inf")'
-    # real compares by certified enclosures: sin(1) and the decimal 0.8414709848078965 differ in
-    # the 17th digit, which no enclosure here decides, so both stay
+    # real compares by certified enclosures, and where they overlap at high precision: sin(1) and
+    # the decimal 0.8414709848078965 differ in the 17th digit; a tie no precision proves stays
     real = lambda t: ' '.join(bare.simplify(t.split(), mode='real'))  # noqa: E731
-    assert real('max sin 1 0.8414709848078965') == 'max 0.8414709848078965 sin 1'
+    assert real('max sin 1 0.8414709848078965') == 'sin 1'
+    assert real('max cosh acosh 2 2').startswith('max')
     assert real('max np.pi 3.1415926535897933') == '3.1415926535897933'
 
 
@@ -752,3 +752,26 @@ def test_a_ground_fold_returns_a_member_with_the_nodes_value(bare, mode):
         assert s('+ sin 1 1e-30') == '+ sin 1 1e-30'
     # a -0 is no +0 (f64), and a node with no equal member keeps its float fold
     assert s('abs -0.0') == '0' and s('floor cosh 0') == '1'
+
+
+def test_real_orders_lattice_members_at_high_precision_and_f64_by_float64_bits(bare):
+    """`real` decides the order of two ground members whose float64-wide enclosures overlap at
+    high precision, each literal its exact number; `f64` and `permissive` order them by the
+    float64 values the deployed kernels compute, even where the two orders disagree."""
+    real = lambda t: ' '.join(bare.simplify(t.split(), mode='real'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    # sin(1) = 0.84147098480789650665..., 6.7e-18 above the decimal
+    assert real('max sin 1 0.8414709848078965') == 'sin 1'
+    assert real('min sin 1 0.8414709848078965') == '0.8414709848078965'
+    assert real('max np.pi 3.14159265358979323846264338327950288') == 'np.pi'
+    assert real('max np.pi 3.14159265358979323846264338327950289') == '3.14159265358979323846264338327950289'
+    # 1.9e-66 apart: decided at 512 bits and confirmed at 1024
+    assert real('max sin 1 0.84147098480789650665250232163029899962256306079837106567275170999') == 'sin 1'
+    # equal reals are no order that a finite precision proves: both members stay
+    assert real('max cosh acosh 2 2').startswith('max')
+    # cosh(acosh(3)) is 3 over the reals and 3.0000000000000004 in float64, where the decimal
+    # 3.0000000000000001 reads as 3.0: the two readings pick different members
+    assert real('max cosh acosh 3 3.0000000000000001') == '3.0000000000000001'
+    for mode in ('f64', 'permissive'):
+        assert ' '.join(bare.simplify('max cosh acosh 3 3.0000000000000001'.split(), mode=mode)) == 'cosh acosh 3'
+    assert f64('min cosh acosh 3 3.0000000000000001') == '3'

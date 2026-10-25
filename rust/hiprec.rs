@@ -459,6 +459,118 @@ pub fn point_diff(
     Some(t.sub(&s, P, RM))
 }
 
+/// The precisions [`ground_order`] climbs: an order is read at one rung and confirmed at the
+/// next, and an order no two adjacent rungs agree on is undecided (fail closed).
+const ORDER_LADDER: [usize; 4] = [128, 256, 512, 1024];
+
+/// The guard bits an order keeps below a rung's precision: a difference of two values smaller
+/// than `2^-(p - ORDER_GUARD)` of their magnitude is no order at `p` bits.
+const ORDER_GUARD: usize = 40;
+
+/// THE ORDER OF TWO GROUND VALUES over the reals, at high precision: `a` below, equal to (never
+/// decided) or above `b`, each a ground prefix expression whose literal tokens denote exact
+/// numbers (`ac::convert::to_prefix_literal_tokens`: an integer, a decimal, `p/q`; `np.pi` and
+/// `np.e` rendered at the rung's precision). The difference is read at each rung of
+/// `ORDER_LADDER` and counts where it exceeds the rung's error band (`ORDER_GUARD` bits below
+/// the operands' magnitude); two adjacent rungs agreeing in its sign decide the order. `None`
+/// where they never agree within the ladder, where a value is not finite, or where an operator
+/// or leaf has no high-precision reading. The real reading's lattice bags consult it where the
+/// float64-wide enclosures overlap (`max(sin(1), 0.8414709848078965)`, 6.7e-18 apart).
+pub(crate) fn ground_order(
+    a: &[String],
+    b: &[String],
+    ops: &Operators,
+) -> Option<std::cmp::Ordering> {
+    let mut cc = Consts::new().ok()?;
+    let mut last: Option<std::cmp::Ordering> = None;
+    for &p in &ORDER_LADDER {
+        let va = eval_exact(a, ops, p, &mut cc)?;
+        let vb = eval_exact(b, ops, p, &mut cc)?;
+        if !is_fin(&va) || !is_fin(&vb) {
+            return None;
+        }
+        let d = va.sub(&vb, p, RM);
+        let scale = [va.exponent(), vb.exponent(), Some(1)]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(1) as i64;
+        let decided = !d.is_zero()
+            && d.exponent()
+                .is_some_and(|e| (e as i64) > scale - (p - ORDER_GUARD) as i64);
+        let here = decided.then(|| {
+            if d.is_negative() {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        });
+        if here.is_some() && here == last {
+            return here;
+        }
+        last = here;
+    }
+    None
+}
+
+/// A ground prefix expression at `p` bits, its literal tokens read exactly (`exact_leaf`).
+fn eval_exact(tokens: &[String], ops: &Operators, p: usize, cc: &mut Consts) -> Option<BigFloat> {
+    fn node(
+        tokens: &[String],
+        idx: &mut usize,
+        ops: &Operators,
+        p: usize,
+        cc: &mut Consts,
+    ) -> Option<BigFloat> {
+        let tok = tokens.get(*idx)?;
+        *idx += 1;
+        match ops.arity_of(tok) {
+            Some(1) => {
+                let a = node(tokens, idx, ops, p, cc)?;
+                apply_unary(tok, &a, p, cc)
+            }
+            Some(2) => {
+                let a = node(tokens, idx, ops, p, cc)?;
+                let b = node(tokens, idx, ops, p, cc)?;
+                apply_binary(tok, &a, &b, p, cc)
+            }
+            Some(_) => None,
+            None => exact_leaf(tok, p, cc),
+        }
+    }
+    let mut idx = 0usize;
+    let v = node(tokens, &mut idx, ops, p, cc)?;
+    (idx == tokens.len()).then_some(v)
+}
+
+/// The value of a literal token at `p` bits: a decimal (with an exponent) or a fraction `p/q`
+/// read from its digits, so `0.1` is one tenth and not its float; `np.pi` and `np.e` at `p`
+/// bits; any other leaf the evaluator reads (an infinity, `(-1)`) as its float, which is exact.
+fn exact_leaf(tok: &str, p: usize, cc: &mut Consts) -> Option<BigFloat> {
+    match tok {
+        "np.pi" => return Some(cc.pi(p, RM)),
+        "np.e" => return Some(cc.e(p, RM)),
+        _ => {}
+    }
+    let t = tok
+        .strip_prefix('(')
+        .and_then(|t| t.strip_suffix(')'))
+        .unwrap_or(tok);
+    let decimal = |s: &str, cc: &mut Consts| -> Option<BigFloat> {
+        let ok = !s.is_empty()
+            && s.bytes()
+                .all(|c| c.is_ascii_digit() || matches!(c, b'.' | b'e' | b'E' | b'+' | b'-'))
+            && s.parse::<f64>().is_ok();
+        let v = ok.then(|| BigFloat::parse(s, astro_float::Radix::Dec, p, RM, cc))?;
+        (!v.is_nan()).then_some(v)
+    };
+    if let Some((n, d)) = t.split_once('/') {
+        let (n, d) = (decimal(n, cc)?, decimal(d, cc)?);
+        return (!d.is_zero()).then(|| n.div(&d, p, RM));
+    }
+    decimal(t, cc).or_else(|| crate::numeric::leaf_value(tok).map(|v| BigFloat::from_f64(v, p)))
+}
+
 /// Strict BigFloat `|a| < |b|` (residual ranking; incomparable = false, fail closed).
 /// Zeros are judged explicitly: astro-float keeps a SIGNED zero whose `cmp` orders
 /// `-0 < +0`, which would rank a negative-zero residual strictly below an exact-zero
@@ -2328,6 +2440,34 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// `ground_order` reads each literal as its exact number and decides an order two adjacent
+    /// precisions agree on: sin(1) is 6.7e-18 above the decimal 0.8414709848078965 and 1.8e-18
+    /// above its float; 1/10 equals the decimal 0.1 (no order), and is below 0.1's float.
+    #[test]
+    fn ground_order_reads_literals_exactly() {
+        use std::cmp::Ordering::{Greater, Less};
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let ord = |a: &[&str], b: &[&str]| ground_order(&s(a), &s(b), ops);
+        assert_eq!(ord(&["sin", "1"], &["0.8414709848078965"]), Some(Greater));
+        assert_eq!(ord(&["0.8414709848078965"], &["sin", "1"]), Some(Less));
+        assert_eq!(ord(&["1/10"], &["0.1"]), None);
+        assert_eq!(
+            ord(&["1/10"], &["0.1000000000000000055511151231257827"]),
+            Some(Less)
+        );
+        assert_eq!(
+            ord(&["np.pi"], &["3.14159265358979323846264338327950289"]),
+            Some(Less)
+        );
+        assert_eq!(ord(&["cosh", "acosh", "2"], &["2"]), None);
+        assert_eq!(ord(&["log", "-1"], &["0"]), None);
     }
 
     /// THE f64 RANGE STANDARD (`range_rescue`): at a row where an operation overflowed or

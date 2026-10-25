@@ -1332,6 +1332,9 @@ fn cmp_vec(a: &[Ex], b: &[Ex], view: &TokenView) -> Ordering {
 /// The enclosure certificate's type ([`Cx::cert_encl`]): a ground composite's closed float64 box.
 pub type EnclosureCert<'a> = &'a dyn Fn(&Ex) -> Option<(f64, f64)>;
 
+/// The order certificate's type ([`Cx::cert_order`]): the real order of two ground values.
+pub type OrderCert<'a> = &'a dyn Fn(&Ex, &Ex) -> Option<Ordering>;
+
 /// The canonicalization context: the token view (leaf classification, string order) plus the two
 /// OPTIONAL soundness certificates. With a certificate absent the corresponding gated collection
 /// simply does not happen -- fail-closed, exactly like the old matcher's certifier plumbing.
@@ -1366,6 +1369,10 @@ pub struct Cx<'a> {
     /// real function and for the deployed kernel), `None` for anything else. Read outside `f64`
     /// alone, where a lattice bag orders its ground members by it (`max(sin 1, 1/2) = sin 1`).
     pub cert_encl: Option<EnclosureCert<'a>>,
+    /// The ORDER certificate, `real` alone: the order of two ground lattice members whose
+    /// enclosures overlap, decided at high precision (`hiprec::ground_order`), `None` where it is
+    /// not (fail closed). `f64` and `permissive` order members by their float64 values.
+    pub cert_order: Option<OrderCert<'a>>,
     /// WHICH SOUNDNESS this construction preserves. Was a `lossy: bool`, which could only
     /// ask "may I skip certification?" -- and that is the wrong question for a guard whose
     /// reason is f64 saturation rather than recall. `real` needs those guards OFF (the
@@ -1459,6 +1466,7 @@ impl<'a> Cx<'a> {
             cert_nce: None,
             cert_region: None,
             cert_encl: None,
+            cert_order: None,
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
@@ -9937,6 +9945,9 @@ fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
         Some(Ordering::Less)
     } else if alo.cmp_exact(&bhi) == Ordering::Greater {
         Some(Ordering::Greater)
+    } else if matches!(cx.mode, RuleMode::Real) {
+        // Overlapping enclosures: `real` reads the two at high precision (`Cx::cert_order`).
+        (cx.cert_order?)(a, b)
     } else {
         None
     }
@@ -10826,6 +10837,7 @@ mod tests {
                 cert_nce: None,
                 cert_region: None,
                 cert_encl: None,
+                cert_order: None,
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,

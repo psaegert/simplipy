@@ -66,6 +66,10 @@ impl BangCache {
 /// A memoized enclosure certificate: a closed float64 box, or `None`.
 type Enclosure = Option<(f64, f64)>;
 
+/// The order certificate's memo: the real order of two ground values (by their tokens), or
+/// `None`.
+type OrderMemo = FxHashMap<(Vec<Tok>, Vec<Tok>), Option<std::cmp::Ordering>>;
+
 /// Per-simplify-call memo context: the certificate scratches (`cert_scratch` for the
 /// `!`-certificate, `cert_mult_scratch` for its `$`-sort twin -- both consumed by
 /// `engine/ac.rs::ac_cert`, the successor of the deleted kernel's `bang_certified`) plus
@@ -80,6 +84,8 @@ pub(super) struct SimplifyCtx {
     pub(super) cert_mult_scratch: [RefCell<FxHashMap<Vec<Tok>, bool>>; 2],
     /// The enclosure certificate's memo (`engine/ac.rs::ac_encl`, behind `Cx::cert_encl`).
     pub(super) encl_scratch: RefCell<FxHashMap<Vec<Tok>, Enclosure>>,
+    /// The order certificate's memo (`engine/ac.rs::ac_order`, behind `Cx::cert_order`).
+    pub(super) order_scratch: RefCell<OrderMemo>,
 }
 
 impl SimplifyCtx {
@@ -89,6 +95,7 @@ impl SimplifyCtx {
             cert_scratch: Default::default(),
             cert_mult_scratch: Default::default(),
             encl_scratch: Default::default(),
+            order_scratch: Default::default(),
         }
     }
 }

@@ -1187,7 +1187,13 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     written float, and members of one value (the same float64 bits; `+0` and `-0` are two) are
     decided by price: `max(sin(1), 0.8414709848078965)` is `sin(1)` (it was the literal, 7 times
     the price), `max(np.pi, 3.1415926535897933)` is `np.pi`, `min(sin(-0.0), 0)` is `-0.0`. `real`
-    keeps both members of such a pair, whose enclosures overlap. The absorber and the
+    orders two ground members whose enclosures overlap at high precision, each literal its exact
+    number, up to 1024 bits (an order two adjacent precisions agree on), and keeps both where
+    none decides: `max(sin(1), 0.8414709848078965)` is `sin(1)` (6.7e-18 apart; it kept both),
+    `max(cosh(acosh(2)), 2)` keeps both. The readings can pick differently:
+    `max(cosh(acosh(3)), 3.0000000000000001)` is the literal in `real` (3 is below it) and
+    `cosh(acosh(3))` in `f64` and `permissive`, whose kernels give 3.0000000000000004 and read
+    the literal as 3.0. The absorber and the
     dual bag need their other members to be no NaN almost everywhere (the finite-a.e. licence;
     `max(+inf, nan)` is `nan`): `max(+inf, x0)` is `+inf` and `max(x0, min(x0, x1))` is `x0`,
     while `max(+inf, log(x0))` and `max(x0, min(x0, log(x1)))` stay; a number of the dual bag

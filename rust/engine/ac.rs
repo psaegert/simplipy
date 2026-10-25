@@ -289,6 +289,7 @@ impl Engine {
             cert_nce: None,
             cert_region: None,
             cert_encl: None,
+            cert_order: None,
             mode,
             fold_f64,
             sentinels_expired: false,
@@ -554,6 +555,30 @@ impl Engine {
                 .map(|v| (v.lo, v.hi));
         ctx.encl_scratch.borrow_mut().insert(flat, enclosure);
         enclosure
+    }
+
+    /// The order certificate behind `Cx::cert_order` (`real`): the order of two GROUND values
+    /// read at high precision (`hiprec::ground_order`, each literal its exact number), where the
+    /// float64-wide enclosures overlap. Memoized per call.
+    fn ac_order(&self, a: &Ex, b: &Ex, ctx: &SimplifyCtx) -> Option<std::cmp::Ordering> {
+        let view = self.view(ctx);
+        if !is_ground(a, &view) || !is_ground(b, &view) {
+            return None;
+        }
+        let bare = Cx::bare(&view);
+        let ta = crate::ac::convert::to_prefix_literal_tokens(a, &bare);
+        let tb = crate::ac::convert::to_prefix_literal_tokens(b, &bare);
+        let key = (ta, tb);
+        if let Some(hit) = ctx.order_scratch.borrow().get(&key) {
+            return *hit;
+        }
+        let order = crate::hiprec::ground_order(
+            &self.resolve_seq(&key.0, ctx),
+            &self.resolve_seq(&key.1, ctx),
+            &self.operators,
+        );
+        ctx.order_scratch.borrow_mut().insert(key, order);
+        order
     }
 
     /// THE EXACT GROUND FOLD (`real`): a ground node of a head whose value is an exact number
@@ -1565,6 +1590,7 @@ impl Engine {
         let czn = |e: &Ex| self.ac_zsn(e, ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, ctx, f64);
         let cen = |e: &Ex| self.ac_encl(e, ctx);
+        let cor = |a: &Ex, b: &Ex| self.ac_order(a, b, ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1573,6 +1599,7 @@ impl Engine {
             cert_nce: Some(&cnc),
             cert_region: None,
             cert_encl: Some(&cen),
+            cert_order: Some(&cor),
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
@@ -1718,6 +1745,7 @@ impl Engine {
         let czn = |e: &Ex| self.ac_zsn(e, &ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, &ctx, f64);
         let cen = |e: &Ex| self.ac_encl(e, &ctx);
+        let cor = |a: &Ex, b: &Ex| self.ac_order(a, b, &ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1726,6 +1754,7 @@ impl Engine {
             cert_nce: Some(&cnc),
             cert_region: None,
             cert_encl: Some(&cen),
+            cert_order: Some(&cor),
             mode,
             fold_f64: fold_tr,
             sentinels_expired: false,
@@ -1917,6 +1946,7 @@ impl Engine {
                 cert_nce: Some(&cnc),
                 cert_region: None,
                 cert_encl: Some(&cen),
+                cert_order: Some(&cor),
                 mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
