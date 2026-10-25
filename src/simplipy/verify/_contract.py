@@ -101,6 +101,22 @@ SNAP_EVENTS = [0]  # incremented when a symbolic-cancellation snap / pole-guard 
 CONST_CHANNEL_DETAIL = 'multiple LHS <constant>'
 
 
+def source_defined(value):
+    """THE CONSTANT-COLLAPSE CRITERION, the one definition every gate reads: is the SOURCE
+    defined at this value, i.e. finite (element-wise over an array; mpmath values too)?
+
+    A target `<constant>` is fitted to data, and a fitted expression is finite on the data,
+    so a source constant at which the source is NaN or infinite is never the fit. A collapse
+    therefore owes a witness exactly where the source is finite, and nothing elsewhere: the
+    evidence gate's rule, which counts source-finite rows only. `acos(c) -> c` holds for
+    |c| <= 1 and is vacuous beyond. A source finite at no probed constant
+    (`log(neg(cosh(c)))`) has no evidence at all and gets no rule. Read by the witness fit
+    below (`_fit_target_env`), the sort ladder's ground tier and the const-bearing witness
+    bar (`simplipy.promotion`)."""
+    with np.errstate(over='ignore', invalid='ignore'):
+        return np.isfinite(np.asarray(value, dtype=np.float64))
+
+
 # ---------------------------------------------------------------- literal acceptor
 class UnsupportedToken(ValueError):
     """a leaf token outside the accepted numeric grammar -- REFUSED, never evaluated.
@@ -1408,7 +1424,7 @@ def _fit_target_env(tl, tr, shared, cl_val=None):
             L0 = lhs_at(env0)
         except Exception:
             continue
-        if not np.isfinite(L0):
+        if not source_defined(L0):
             continue
 
         def g(c, _env0=env0, _L0=L0):

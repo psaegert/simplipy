@@ -28,9 +28,10 @@ THREE TIERS over a rules artifact (each with its own bar, by the pushforward the
       c_t. Probed over the finite constant lattice (fitted constants are finite; no inf/nan
       constants exist to bind):
         - literal RHS: exact value equality at EVERY probed c (mpmath, high precision);
-        - bare `<constant>` RHS: the LHS value must be FINITE at every probed c (a finite
-          fitted constant must exist; nan/inf values are not constant-representable --
-          e.g. `pow(c/5, nan) -> c` would invent a value for an undefined expression).
+        - bare `<constant>` RHS: a finite witness is owed exactly where the source is
+          defined (`verify._contract.source_defined`, the judge's own criterion): a c at
+          which the LHS is NaN or infinite is never the fit, so `acos(c) -> c` holds; a
+          source defined at NO probed c has no evidence and is killed.
       Any other RHS shape with `<constant>` is UNSUPPORTED -> conservative kill.
 
 Positive controls are checked first (raise on any miss). The public entry point is
@@ -38,7 +39,7 @@ Positive controls are checked first (raise on any miss). The public entry point 
 """
 import numpy as np
 
-from ._pointwise import (ATOMS, MAX_PRODUCT, judge, prefold,  # noqa: E402
+from ._pointwise import (ATOMS, MAX_PRODUCT, NONFINITE_TOKENS, judge, prefold,  # noqa: E402
                          substitute, eval_point, wildcards, valuations_for,
                          correlated_valuations)
 from ._const_bearing import certify_rule  # noqa: E402
@@ -47,14 +48,19 @@ from simplipy.utils import reserved_numeric_spelling  # noqa: E402
 from mpmath import mp, mpf, isnan, isinf  # noqa: E402
 
 SEED = 20260718
-GROUND_DRAWS = 16     # seeded finite draws on the constant axis, atop the finite atom lattice
+GROUND_DRAWS = 16     # generic finite probes on the constant axis, atop the finite atom lattice
 DPS = 60              # ground expressions are special-value algebra; 60 digits is ample
 
 FINITE_ATOMS = [a for a in ATOMS if not a.startswith('float(')]
+#: The ground tier's generic constants: one fixed draw, so a verdict never depends on a stream.
+GROUND_PROBES = [repr(float(v))
+                 for v in np.round(np.random.default_rng(SEED).normal(0, 5, GROUND_DRAWS), 6)]
 
 
-def atom_valuations(ws, rng):
-    """FULL atom product for the `?` bar (no random draws); sampled past MAX_PRODUCT (k>=4)."""
+def atom_valuations(ws):
+    """FULL atom product for the `?` bar (no random draws); past MAX_PRODUCT (k>=4) a sample
+    from a generator seeded afresh with `SEED` on every call, so a function of `ws` alone."""
+    rng = np.random.default_rng(SEED)
     k = len(ws)
     if k == 0:
         return [{}]                     # ground expression: one empty valuation
@@ -422,10 +428,6 @@ def preimage_witness(lhs, rhs):
     return pow_preimage_witness(lhs, rhs) or step_preimage_witness(lhs, rhs)
 
 
-def mp_finite(v):
-    return not (isnan(v) or isinf(v))
-
-
 def mp_eq(a, b):
     if isnan(a) and isnan(b):
         return True
@@ -438,7 +440,7 @@ def mp_eq(a, b):
 
 
 @_restores_dps
-def judge_ground(lhs, rhs, rng):
+def judge_ground(lhs, rhs):
     """SKELETON semantics for `<constant>`-bearing ground rules: for-all c exists finite c_t."""
     ns = lhs.count('<constant>')
     if ns != 1:
@@ -452,9 +454,9 @@ def judge_ground(lhs, rhs, rng):
     # rational (sin < 1) would pass `pow sin <constant> inf -> 0` while the `?` bar binds it
     # symbolically (sin = 1) and kills it -- a tier inconsistency that ships an unsound rule.
     probes = ([_symbolic_atom(a) for a in FINITE_ATOMS]
-              + [mpf(repr(float(v))) for v in np.round(rng.normal(0, 5, GROUND_DRAWS), 6)])
-    from ..verify._contract import Unresolved
-    resolved = 0
+              + [mpf(t) for t in GROUND_PROBES])
+    from ..verify._contract import Unresolved, source_defined
+    resolved = defined = 0
     for c in probes:
         try:
             v = hp_eval(list(lhs), {}, [c])
@@ -467,8 +469,9 @@ def judge_ground(lhs, rhs, rng):
             return 'EVAL-ERR', f'{type(ex).__name__}: {ex}'
         resolved += 1
         if bare_slot:
-            if not mp_finite(v):
-                return 'KILL', (float(c), str(v), '<no finite c_t>')
+            # the collapse owes a witness only where the source is defined, and there the
+            # witness is the value itself; elsewhere the c is never the fit
+            defined += bool(source_defined(v))
         else:
             try:
                 w = hp_eval(list(rhs), {}, [])
@@ -481,6 +484,8 @@ def judge_ground(lhs, rhs, rng):
         # the contract judge's coverage floor (`UNRESOLVED-COVERAGE` below a quarter): skipping
         # an undecided probe must not become acquitting on no evidence
         return 'EVAL-ERR', f'{len(probes) - resolved} of {len(probes)} probes unresolved'
+    if bare_slot and not defined:
+        return 'KILL', (None, 'nan', '<source defined at no probed constant>')
     return 'PASS', None
 
 
@@ -547,36 +552,27 @@ def spike_flattener_witness(lhs, rhs, core):
     return {'spiky_base': ' '.join(l_spiky[0])}
 
 
-NONFINITE_TOKENS = {'float("inf")', 'float("-inf")', 'float("nan")'}
-
-
 def finite_only(valuations):
     return [v for v in valuations if not any(t in NONFINITE_TOKENS for t in v.values())]
 
 
-def judge_bang(lhs, rhs, rng):
-    """The `!`-sort promotion bar: exact pointwise over FINITE valuations only (atoms + draws
+def judge_bang(lhs, rhs):
+    """The `!`-sort promotion bar: exact pointwise over FINITE valuations only (atoms + probes
     + correlated), plus the pow-preimage probe. A `!`-bound subtree is certified finite a.e.,
     so its pushforward puts NO mass on {nan, +-inf}: behaviour at nonfinite valuations is
     a.e.-irrelevant and dropped from the bar. A constant subtree is a Dirac at a FINITE value,
     which is why the finite bar must stay EXACT.
 
-    An UNDECIDED near-band (f64 rounding is denied the authority to convict) escalates to the
-    exact arbiter (`._overturn.judge_exact`) on the same finite valuations -- this is what lets
-    saturating true identities (`atanh tanh ?0 -> ?0`) clear the bar and regain subtree
-    binding."""
+    Every valuation float64 does not read as agreement -- the near-band, where f64 rounding is
+    denied the authority to convict, and the kills, which at a FINITE valuation can be pure
+    saturation (tanh(37) == 1.0 exactly, so atanh(tanh(37)) reads inf) -- is decided by the
+    exact arbiter (`._overturn.judge_arbitrated`; real semantics governs). That is what lets
+    saturating true identities (`atanh tanh ?0 -> ?0`, `atan sinh ?0 -> asin tanh ?0`) clear
+    the bar and regain subtree binding, decisively: the valuations are fixed and the arbiter
+    is asked only what float64 left open."""
+    from ._overturn import judge_arbitrated
     ws = wildcards(list(lhs) + list(rhs))
-    vals = finite_only(valuations_for(ws, rng))
-    v, info = judge(list(lhs), list(rhs), vals)
-    if v in ('UNDECIDED', 'DEMOTE'):
-        # DEMOTE escalates too: an f64 kill at a FINITE valuation can be pure saturation
-        # (tanh(37) == 1.0 exactly, so atanh(tanh(37)) reads inf), and f64 is denied the
-        # authority to convict; the exact arbiter confirms real kills and overturns
-        # saturation artifacts (real semantics governs).
-        from ._overturn import judge_exact
-        v2, _kill = judge_exact(list(lhs), list(rhs), vals)
-        if v2 == 'PROMOTE':
-            v, info = 'PROMOTE', 'exact-arbiter'
+    v, info = judge_arbitrated(lhs, rhs, finite_only(valuations_for(ws)))
     if v == 'PROMOTE' and preimage_witness(lhs, rhs) is not None:
         return 'DEMOTE', 'POW-PREIMAGE'
     return v, info
@@ -599,7 +595,7 @@ def finite_nonzero_only(valuations):
     return [v for v in finite_only(valuations) if not any(_is_zero_token(t) for t in v.values())]
 
 
-def judge_bang_mult(lhs, rhs, rng):
+def judge_bang_mult(lhs, rhs):
     """The `$`-sort promotion bar: `judge_bang` restricted to the finite-NONZERO atom lattice
     (SELFCANCEL Part 2 / judge_bang_mult). A `$`-bound subtree is certified defined, finite AND
     nonzero a.e. at match time (`interval::finite_nonzero_ae`), so its pushforward puts no mass
@@ -607,14 +603,9 @@ def judge_bang_mult(lhs, rhs, rng):
     dropped from the bar -- exactly as `judge_bang` drops the nonfinite ones for `!`. On the
     remaining atoms `v / v = 1` holds with no hole, the same exactness footing as the additive
     seed's `v - v = 0`."""
+    from ._overturn import judge_arbitrated
     ws = wildcards(list(lhs) + list(rhs))
-    vals = finite_nonzero_only(valuations_for(ws, rng))
-    v, info = judge(list(lhs), list(rhs), vals)
-    if v in ('UNDECIDED', 'DEMOTE'):
-        from ._overturn import judge_exact
-        v2, _kill = judge_exact(list(lhs), list(rhs), vals)
-        if v2 == 'PROMOTE':
-            v, info = 'PROMOTE', 'exact-arbiter'
+    v, info = judge_arbitrated(lhs, rhs, finite_nonzero_only(valuations_for(ws)))
     if v == 'PROMOTE' and preimage_witness(lhs, rhs) is not None:
         return 'DEMOTE', 'POW-PREIMAGE'
     return v, info
@@ -641,7 +632,7 @@ def respell(tokens):
     return tuple('?' + t[1:] if t.startswith('_') else t for t in tokens)
 
 
-def run_controls(rng, core):
+def run_controls(core):
     """Positive-control self-test: run each labelled control through its judge and raise
     RuntimeError on any verdict that does not match the expected outcome. This guards against
     a miscalibrated judge silently mis-promoting rules."""
@@ -667,10 +658,13 @@ def run_controls(rng, core):
         # real semantics: sin attains 1 AT the real point pi/2, so pow(sin(?0),inf) -> 0
         # changes a defined value at a real point -- KILL. The symbolic pi/2 atom sees it.
         ('?', (['pow', 'sin', '?0', 'float("inf")'], ['0']), 'KILL'),
-        # pow(c/5, nan) is nan for c != 5: cannot be simplified to a fitted <constant>
-        ('ground', (['pow', 'div5', '<constant>', 'float("nan")'], ['<constant>']), 'KILL'),
-        # the acos(pow(c, inf)) family: nan on ALL of c > 1 -- positive-measure, not just an atom
-        ('ground', (['acos', 'pow', '<constant>', 'float("inf")'], ['<constant>']), 'KILL'),
+        # a collapse owes a witness only where the source is defined: acos(c) is undefined
+        # for |c| > 1, where c is never the fit, and is its own witness elsewhere
+        ('ground', (['acos', '<constant>'], ['<constant>']), 'PASS'),
+        # the acos(pow(c, inf)) family: nan on ALL of c > 1, pi/2 or 0 wherever defined
+        ('ground', (['acos', 'pow', '<constant>', 'float("inf")'], ['<constant>']), 'PASS'),
+        # log(-cosh(c)) is defined at no constant: no evidence, no rule
+        ('ground', (['log', 'neg', 'cosh', '<constant>'], ['<constant>']), 'KILL'),
         # sound ground rule: c + log(0) = -inf for every finite c
         ('ground', (['+', '<constant>', 'log', '0'], ['float("-inf")']), 'PASS'),
         # single zero: c/inf = 0 for every finite c -- sound
@@ -718,20 +712,19 @@ def run_controls(rng, core):
         if not _vocab_covers(list(lhs) + list(rhs)):
             continue
         if tier == '?':
-            v, info = judge_r2prime(lhs, rhs, atom_valuations(wildcards(lhs + rhs), rng))
+            v, info = judge_r2prime(lhs, rhs, atom_valuations(wildcards(lhs + rhs)))
         elif tier == 'spike':
             w = spike_flattener_witness(lhs, rhs, core)
             v, info = ('REFUSE', w) if w is not None else ('ALLOW', None)
         else:
-            v, info = judge_ground(lhs, rhs, rng)
+            v, info = judge_ground(lhs, rhs)
         if v != want:
             raise RuntimeError(
                 f'positive control failed: [{tier}] {" ".join(lhs)} -> {" ".join(rhs)} '
                 f'got {v} want {want} ({str(info)[:120]})')
 
 
-def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progress=None,
-                  rule_mode):
+def promote_rules(rules, engine, *, run_positive_controls=True, progress=None, rule_mode):
     """Certify `rules` down the `_` -> `!` -> `?` ladder (plus the ground tier) and return the
     promoted rules alongside a per-bucket report.
 
@@ -745,9 +738,6 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         Supplies the compiled interval core via `engine._core`; its `interval_value_set_box`
         FFI query drives the spike-flattener refusal. The interval query is over raw
         expressions, so a rules-empty engine is sufficient (and matches the original setup).
-    seed : int
-        Seed for the single shared numpy RNG (all sampling flows from it); defaults to the
-        pass's fixed seed so behaviour is reproducible.
     run_positive_controls : bool
         Run the positive-control self-test first (raising on any miss) before promotion.
     progress : simplipy.progress.Progress or None
@@ -762,9 +752,8 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         `killed_q`, `killed_ground`, `undecided`, `no_witness`, `eval_err`, `unsupported`).
     """
     core = engine._core
-    rng = np.random.default_rng(seed)
     if run_positive_controls:
-        run_controls(rng, core)
+        run_controls(core)
     from ..progress import Progress
     prog = progress if progress is not None else Progress(False)
     rules = list(rules)
@@ -785,7 +774,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
 
     def ladder_cf(lhs, rhs, verdict, info):
         """A `_cf` failure tries `!` (finite-exact bar) before falling to `?`."""
-        bv, _ = judge_bang(lhs, rhs, rng)
+        bv, _ = judge_bang(lhs, rhs)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, verdict, str(info)[:120]))
             kept.append((respell_bang(lhs), respell_bang(rhs)))
@@ -793,9 +782,14 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
             report['demoted_to_q'].append((lhs, rhs, verdict, str(info)[:120]))
             q_cf.append((respell(lhs), respell(rhs)))
 
+    from ._overturn import judge_arbitrated, arbitrable
     for lhs, rhs in prog.track(tiers['_cf'], "  tier _cf (exact-pointwise bar)"):
         ws = wildcards(list(lhs) + list(rhs))
-        v, info = judge(list(lhs), list(rhs), valuations_for(ws, rng))
+        v, info = judge(list(lhs), list(rhs), valuations_for(ws))
+        if arbitrable(v, info):
+            # float64's rounding band and its kills at finite valuations are decided exactly,
+            # as stage 3 decided them for the refund, so the two agree on what is `_`
+            v, info = judge_arbitrated(lhs, rhs, valuations_for(ws))
         if v == 'PROMOTE':
             pw = preimage_witness(lhs, rhs)
             if pw is not None:
@@ -806,7 +800,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
             # is single-zero real (the mp arm). A `_` promote must ALSO hold at the mp-contract
             # atoms, else it takes the ladder -- otherwise `pow _0 div4 1 -> pow1_4 _0` would
             # ship while the certifier kills its own ?-tier div2 twin on the identical witness.
-            av, ainfo = judge_r2prime(list(lhs), list(rhs), atom_valuations(ws, rng))
+            av, ainfo = judge_r2prime(list(lhs), list(rhs), atom_valuations(ws))
             if av != 'PASS':
                 ladder_cf(lhs, rhs, 'CONTRACT-ATOM', ainfo)
                 continue
@@ -819,14 +813,14 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
             report['eval_err'].append((lhs, rhs, v, str(info)[:120]))
 
     for lhs, rhs in prog.track(tiers['_cb'], "  tier _cb (const-bearing bar)"):
-        v, info = certify_rule(lhs, rhs, rng)
+        v, info = certify_rule(lhs, rhs)
         if v == 'PROMOTE':
             ws = wildcards(list(lhs) + list(rhs))
-            av, ainfo = certify_rule(lhs, rhs, rng, judge_fn=judge_r2prime,
-                                     vals_override=atom_valuations(ws, rng))
+            av, ainfo = certify_rule(lhs, rhs, judge_fn=judge_r2prime,
+                                     vals_override=atom_valuations(ws))
             if av != 'PROMOTE':
-                bv, _ = certify_rule(lhs, rhs, rng, vals_override=finite_only(
-                    valuations_for(ws, rng)))
+                bv, _ = certify_rule(lhs, rhs, vals_override=finite_only(
+                    valuations_for(ws)))
                 if bv == 'PROMOTE' and preimage_witness(lhs, rhs) is None:
                     report['promoted_bang'].append((lhs, rhs, 'CONTRACT-ATOM', str(ainfo)[:120]))
                     kept.append((respell_bang(lhs), respell_bang(rhs)))
@@ -836,8 +830,8 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
                 continue
             kept.append((lhs, rhs))
         elif v in ('DEMOTE', 'NO-WITNESS'):
-            bv, _ = certify_rule(lhs, rhs, rng, vals_override=finite_only(
-                valuations_for(wildcards(list(lhs) + list(rhs)), rng)))
+            bv, _ = certify_rule(lhs, rhs, vals_override=finite_only(
+                valuations_for(wildcards(list(lhs) + list(rhs)))))
             if bv == 'PROMOTE' and preimage_witness(lhs, rhs) is None:
                 report['promoted_bang'].append((lhs, rhs, v, str(info)[:120]))
                 kept.append((respell_bang(lhs), respell_bang(rhs)))
@@ -854,7 +848,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
         if (lhs, rhs) in seen:
             continue
         seen.add((lhs, rhs))
-        v, info = judge_r2prime(list(lhs), list(rhs), atom_valuations(wildcards(list(lhs) + list(rhs)), rng))
+        v, info = judge_r2prime(list(lhs), list(rhs), atom_valuations(wildcards(list(lhs) + list(rhs))))
         if v == 'PASS':
             pw = preimage_witness(lhs, rhs)
             if pw is not None:
@@ -865,7 +859,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
             # UPGRADE attempt: `!` strictly generalizes `?` (a variable leaf is trivially
             # finite a.e.), so a ? rule that also clears the finite-exact bar ships as `!`
             # and gains certified-subtree recall for free.
-            bv, _ = judge_bang(lhs, rhs, rng)
+            bv, _ = judge_bang(lhs, rhs)
             if bv == 'PROMOTE':
                 report['promoted_bang'].append((lhs, rhs, '?-upgrade', ''))
                 kept.append((respell_bang(lhs), respell_bang(rhs)))
@@ -887,11 +881,11 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
             continue
         seen.add((lhs, rhs))
         ws = wildcards(list(lhs) + list(rhs))
-        v, info = certify_rule(lhs, rhs, rng, judge_fn=judge_r2prime,
-                               vals_override=atom_valuations(ws, rng))
+        v, info = certify_rule(lhs, rhs, judge_fn=judge_r2prime,
+                               vals_override=atom_valuations(ws))
         if v == 'PROMOTE':
-            bv, _ = certify_rule(lhs, rhs, rng, vals_override=finite_only(
-                valuations_for(ws, rng)))
+            bv, _ = certify_rule(lhs, rhs, vals_override=finite_only(
+                valuations_for(ws)))
             if bv == 'PROMOTE' and preimage_witness(lhs, rhs) is None:
                 report['promoted_bang'].append((lhs, rhs, '?-upgrade', ''))
                 kept.append((respell_bang(lhs), respell_bang(rhs)))
@@ -942,7 +936,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
     for (lhs, rhs), key in zip(add_seeds, ac_key([l for l, _ in add_seeds])):
         if key in lhs_seen:
             continue
-        bv, _ = judge_bang(lhs, rhs, rng)
+        bv, _ = judge_bang(lhs, rhs)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed', ''))
             kept.append((lhs, rhs))
@@ -960,7 +954,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
     for (lhs, rhs), key in zip(mult_seeds, ac_key([l for l, _ in mult_seeds])):
         if key in lhs_seen:
             continue
-        bv, _ = judge_bang_mult(lhs, rhs, rng)
+        bv, _ = judge_bang_mult(lhs, rhs)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed-mult', ''))
             kept.append((lhs, rhs))
@@ -968,7 +962,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
 
     # ground tier: skeleton semantics, mpmath
     for lhs, rhs in prog.track(tiers['ground'], "  tier ground"):
-        v, info = judge_ground(list(lhs), list(rhs), rng)
+        v, info = judge_ground(list(lhs), list(rhs))
         if v == 'PASS':
             kept.append((lhs, rhs))
         elif v == 'KILL':

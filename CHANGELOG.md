@@ -1030,6 +1030,31 @@ model predictions.
   the judged tier of each served pattern; the default (`None`) is the contract judge, run on
   `judge_processes` worker processes (default 4). Verdicts do not depend on the number of
   processes. `simplipy verify-mine` takes `--judge-processes`.
+- **A constant collapse owes a witness only where its source is defined.** A `<constant>` is
+  fitted, and a value that makes the source NaN or infinite is never the fit, so the judge
+  licenses `acos(c) -> c_t` from |c| <= 1 alone. Sort promotion refused a collapse at the first
+  probed constant where its source was NaN or infinite, so licensed rules never reached a file:
+  `atanh(cos(c)) -> c_t` (infinite where cos(c) = +-1), `log(abs(c)) -> c_t`,
+  `x*log(c) -> c_t*x` and `max(x, acos(c)) -> max(c_t, x)`, and with them `f64` left
+  `atan(atanh(tanh(c)))` at `atan(atanh(c))`; it now reduces it to `c_t`. On the reduced
+  length-4 mine the `f64` and `real` files gain 139 rules each and `permissive` 24. The judge,
+  the sort ladder's ground tier and its witness bar now read one definition of "the source is
+  defined" (finite, the rule the evidence gate counts rows by); a source defined at no constant
+  (`log(-cosh(c))`) still gets no rule.
+- **Sort promotion is deterministic.** A rule's sort depended on random draws from one
+  stream shared by the whole pass, so on where the stream stood when the rule's turn came,
+  and on whether a draw fell where float64 rounds too coarsely to decide: `atan(sinh(x)) ->
+  asin(tanh(x))` passed the `!` bar on 4 of 12 seeds and shipped at `?` otherwise. Its exact
+  arbiter re-judged every valuation, and the `1e20` probe needs 10^20 digits, so it never
+  overturned anything. Every bar now judges fixed valuations (the atoms, a fixed set of generic
+  points that includes float64's hard points: `tanh` within or at its rounding of 1, at
+  `x = 17.5, 18.5, 19.5`, and `exp` either side of overflow, at `x = 709.5, 710.5`), and the
+  arbiter decides exactly the finite valuations float64 left open, in the `_` and `!` bars
+  alike. So `atan(sinh(x)) -> asin(tanh(x))` and `sin(acos(tanh(x))) -> 1/cosh(x)` ship at `_`
+  in `real` and `permissive`, and a mine's rules promoted in any order get the same sorts (they
+  got four different files in four orders). The mine's seed still decides which rules reach
+  promotion: a source finite on a narrow band, such as `atanh(floor(x))` on [0, 1), may fall
+  short of the evidence floor under another seed.
 
 ### Removed
 

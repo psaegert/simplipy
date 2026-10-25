@@ -26,10 +26,10 @@ Five stages, matching the reference pipeline exactly:
      (``judge_bang_mult``, the finite-nonzero atom lattice).
 
 Promotion is fail-safe: a rule that cannot be certified at a stronger sort ships at ``?`` and
-loses only composite-subtree recall, never soundness.
+loses only composite-subtree recall, never soundness. It is deterministic: every bar judges
+fixed valuations (the atoms, the generic probes, the rule-correlated points), so a rule's sort
+is a function of the rule, never of a random stream or of the rules judged before it.
 """
-import numpy as np
-
 from . import _f64_eval, _pointwise, _const_bearing, _overturn, _refund, _ladder
 
 # The declared surface: the entry point alone -- the stages are private.
@@ -93,38 +93,38 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     prog.stage("split", ground_passthrough=len(ground), to_judge=len(rules))
 
     # STAGE 1 -- pointwise `_`-bar on const-free wildcard rules.
-    rng1 = np.random.default_rng(_pointwise.SEED)
     scoped_cf = [(l, r) for l, r in rules
                  if _pointwise.wildcards(l) and _pointwise.is_const_free(list(l) + list(r))]
     pw = {'PROMOTE': [], 'DEMOTE': [], 'UNDECIDED': [], 'EVAL-ERR': []}
     for lhs, rhs in prog.track(scoped_cf, "stage 1/5 pointwise const-free bar"):
         ws = _pointwise.wildcards(list(lhs) + list(rhs))
-        v, info = _pointwise.judge(list(lhs), list(rhs), _pointwise.valuations_for(ws, rng1))
+        v, info = _pointwise.judge(list(lhs), list(rhs), _pointwise.valuations_for(ws))
         pw[v].append((lhs, rhs, info))
 
     # STAGE 2 -- const-bearing witness-map bar.
-    rng2 = np.random.default_rng(_const_bearing.SEED)
     scoped_cb = [(l, r) for l, r in rules
                  if _pointwise.wildcards(list(l)) and '<constant>' in (list(l) + list(r))]
     cb = {'PROMOTE': [], 'DEMOTE': [], 'NO-WITNESS': [], 'EVAL-ERR': []}
     for lhs, rhs in prog.track(scoped_cb, "stage 2/5 const-bearing witness bar"):
-        v, info = _const_bearing.certify_rule(lhs, rhs, rng2)
+        v, info = _const_bearing.certify_rule(lhs, rhs)
         cb[v].append((lhs, rhs, info))
 
     # STAGE 3 -- exact-arbiter overturn of finite-draw demotions. A kill at an ATOM valuation
     # is exact special-value algebra; a kill at a FINITE draw is f64 evidence that may be pure
-    # saturation (atanh(tanh(37)) since tanh(37) == 1.0), so it is re-judged at high precision.
-    rng3 = np.random.default_rng(_overturn.SEED)
-    finite_kills = [(l, r, info) for l, r, info in pw['DEMOTE']
-                    if not all(v in _pointwise.ATOMS for v in info[0].values())]
+    # saturation (atanh(tanh(37)) since tanh(37) == 1.0), so it is re-judged at high precision:
+    # the arbiter decides every valuation float64 did not read as agreement (its rounding band
+    # too, which stage 1 leaves UNDECIDED), exactly as the ladder's `_` tier will.
+    open_verdicts = [(l, r, info) for verdict in ('DEMOTE', 'UNDECIDED') for l, r, info in pw[verdict]
+                     if _overturn.arbitrable(verdict, info)]
     overturned = []
-    for lhs, rhs, info in prog.track(finite_kills, "stage 3/5 exact-arbiter overturn"):
+    for lhs, rhs, info in prog.track(open_verdicts, "stage 3/5 exact-arbiter overturn"):
         ws = _pointwise.wildcards(list(lhs) + list(rhs))
-        v, _kill = _overturn.judge_exact(list(lhs), list(rhs), _pointwise.valuations_for(ws, rng3))
+        v, _info = _overturn.judge_arbitrated(lhs, rhs, _pointwise.valuations_for(ws))
         if v == 'PROMOTE':
             overturned.append((lhs, rhs, info))
     ot_keys = {(tuple(l), tuple(r)) for l, r, _ in overturned}
     pw['DEMOTE'] = [x for x in pw['DEMOTE'] if (tuple(x[0]), tuple(x[1])) not in ot_keys]
+    pw['UNDECIDED'] = [x for x in pw['UNDECIDED'] if (tuple(x[0]), tuple(x[1])) not in ot_keys]
     pw['PROMOTE'] = pw['PROMOTE'] + [(l, r, 'overturned-by-exact-arbiter') for l, r, _ in overturned]
 
     # STAGE 4 -- apply ?->_ for the promoted set, then refund the derivable instances.
