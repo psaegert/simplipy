@@ -1066,7 +1066,8 @@ model predictions.
   rules before patterns and file order among equals, as the engines before 0.12 tried the
   longest pattern first; `sin(acos(tanh(x)))` is `1/cosh(x)` (17,000). No answer changes on
   the training-data inputs, the ground truths or the predictions (a tenth of each large set,
-  all three modes), with `acj-5-4-llm` or with the reduced mine's files.
+  all three modes), with `acj-5-4-llm` or with the reduced mine's files, and simplify takes
+  the same time on them (within 0.3%).
   `cos(asin(tanh(x)))` itself keeps its form: the mine does not certify
   `cos(asin(tanh(_0))) -> 1/cosh(_0)` on its evaluation rows.
 - **`verify-mine` and the mine check that every rule fires** (`dead`). On every generic
@@ -1076,7 +1077,8 @@ model predictions.
   decides an answer. The mine lists such rules in the sidecar (`gates.dead`) and on its
   final-gate line, and `verify-mine` fails on them. Under file-order matching the gate lists
   `sin(acos(tanh(_0))) -> 1/cosh(_0)` in the reduced mine's `real` and `permissive` files
-  (the only rule it lists); it lists none now.
+  (the only rule it lists); it lists none now, and mined again the reduced mine writes the
+  same three files.
 
 ### Removed
 
