@@ -28,9 +28,10 @@ THREE TIERS over a rules artifact (each with its own bar, by the pushforward the
       c_t. Probed over the finite constant lattice (fitted constants are finite; no inf/nan
       constants exist to bind):
         - literal RHS: exact value equality at EVERY probed c (mpmath, high precision);
-        - bare `<constant>` RHS: the LHS value must be FINITE at every probed c (a finite
-          fitted constant must exist; nan/inf values are not constant-representable --
-          e.g. `pow(c/5, nan) -> c` would invent a value for an undefined expression).
+        - bare `<constant>` RHS: a finite witness is owed exactly where the source is
+          defined (`verify._contract.source_defined`, the judge's own criterion): a c at
+          which the LHS is NaN or infinite is never the fit, so `acos(c) -> c` holds; a
+          source defined at NO probed c has no evidence and is killed.
       Any other RHS shape with `<constant>` is UNSUPPORTED -> conservative kill.
 
 Positive controls are checked first (raise on any miss). The public entry point is
@@ -422,10 +423,6 @@ def preimage_witness(lhs, rhs):
     return pow_preimage_witness(lhs, rhs) or step_preimage_witness(lhs, rhs)
 
 
-def mp_finite(v):
-    return not (isnan(v) or isinf(v))
-
-
 def mp_eq(a, b):
     if isnan(a) and isnan(b):
         return True
@@ -453,8 +450,8 @@ def judge_ground(lhs, rhs, rng):
     # symbolically (sin = 1) and kills it -- a tier inconsistency that ships an unsound rule.
     probes = ([_symbolic_atom(a) for a in FINITE_ATOMS]
               + [mpf(repr(float(v))) for v in np.round(rng.normal(0, 5, GROUND_DRAWS), 6)])
-    from ..verify._contract import Unresolved
-    resolved = 0
+    from ..verify._contract import Unresolved, source_defined
+    resolved = defined = 0
     for c in probes:
         try:
             v = hp_eval(list(lhs), {}, [c])
@@ -467,8 +464,9 @@ def judge_ground(lhs, rhs, rng):
             return 'EVAL-ERR', f'{type(ex).__name__}: {ex}'
         resolved += 1
         if bare_slot:
-            if not mp_finite(v):
-                return 'KILL', (float(c), str(v), '<no finite c_t>')
+            # the collapse owes a witness only where the source is defined, and there the
+            # witness is the value itself; elsewhere the c is never the fit
+            defined += bool(source_defined(v))
         else:
             try:
                 w = hp_eval(list(rhs), {}, [])
@@ -481,6 +479,8 @@ def judge_ground(lhs, rhs, rng):
         # the contract judge's coverage floor (`UNRESOLVED-COVERAGE` below a quarter): skipping
         # an undecided probe must not become acquitting on no evidence
         return 'EVAL-ERR', f'{len(probes) - resolved} of {len(probes)} probes unresolved'
+    if bare_slot and not defined:
+        return 'KILL', (None, 'nan', '<source defined at no probed constant>')
     return 'PASS', None
 
 
@@ -667,10 +667,13 @@ def run_controls(rng, core):
         # real semantics: sin attains 1 AT the real point pi/2, so pow(sin(?0),inf) -> 0
         # changes a defined value at a real point -- KILL. The symbolic pi/2 atom sees it.
         ('?', (['pow', 'sin', '?0', 'float("inf")'], ['0']), 'KILL'),
-        # pow(c/5, nan) is nan for c != 5: cannot be simplified to a fitted <constant>
-        ('ground', (['pow', 'div5', '<constant>', 'float("nan")'], ['<constant>']), 'KILL'),
-        # the acos(pow(c, inf)) family: nan on ALL of c > 1 -- positive-measure, not just an atom
-        ('ground', (['acos', 'pow', '<constant>', 'float("inf")'], ['<constant>']), 'KILL'),
+        # a collapse owes a witness only where the source is defined: acos(c) is undefined
+        # for |c| > 1, where c is never the fit, and is its own witness elsewhere
+        ('ground', (['acos', '<constant>'], ['<constant>']), 'PASS'),
+        # the acos(pow(c, inf)) family: nan on ALL of c > 1, pi/2 or 0 wherever defined
+        ('ground', (['acos', 'pow', '<constant>', 'float("inf")'], ['<constant>']), 'PASS'),
+        # log(-cosh(c)) is defined at no constant: no evidence, no rule
+        ('ground', (['log', 'neg', 'cosh', '<constant>'], ['<constant>']), 'KILL'),
         # sound ground rule: c + log(0) = -inf for every finite c
         ('ground', (['+', '<constant>', 'log', '0'], ['float("-inf")']), 'PASS'),
         # single zero: c/inf = 0 for every finite c -- sound

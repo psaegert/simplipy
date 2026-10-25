@@ -13,7 +13,9 @@ never on the wildcard valuation v.
 MECHANISM:
   1. Draw c_s vectors adversarially: integer atoms first ({-2,-1,0,1,2,3}), because the
      singular behaviour that breaks a candidate identity concentrates on the integers,
-     then half-integers and continuous draws.
+     then half-integers and continuous draws. A c_s at which the source is defined at no
+     draw is never the fit and owes no witness (`verify._contract.source_defined`, the
+     judge's criterion): `max(?0, acos(c)) -> max(c, ?0)` needs one only for |c| <= 1.
   2. Find the existential witness c_t: a STRUCTURAL MENU (c1*c2, c1+c2, +-sqrt|c1|, 1/c1,
      ...), exact for the constant-merge/absorb family that dominates recall, then a
      bounded numeric least-squares fallback fitted on finite wildcard draws.
@@ -41,6 +43,7 @@ import numpy as np
 
 from ._pointwise import judge, valuations_for, wildcards
 from ._f64_eval import evaluate
+from ..verify._contract import source_defined
 
 SEED = 20260717
 # The constant axis gets atom probes too -- appended at the END so the `[:5]` product
@@ -145,7 +148,7 @@ def solve_witness(lhs_b, rhs, ws, nt, y_src, V, rng):
         raise RuntimeError(
             'simplipy.promotion requires scipy for witness solving; refusing to '
             'silently mine a different artifact without it') from ex
-    defined = ~np.isnan(y_src) & np.isfinite(y_src)
+    defined = source_defined(y_src)
     if defined.sum() < max(4, nt + 2):
         return []
     Vd, yd = V[defined], y_src[defined]
@@ -186,7 +189,7 @@ def certify_rule(lhs, rhs, rng, judge_fn=None, vals_override=None):
                                          rng.uniform(-30, 30, N_V_FIT - N_V_FIT // 2)])
                          for _ in ws]) if ws else np.zeros((N_V_FIT, 1))
     vals = vals_override if vals_override is not None else valuations_for(ws, rng)
-    n_no_witness = 0
+    n_no_witness = n_defined = 0
     t_start = time.monotonic()
     for k, cs in enumerate(cs_list):
         if time.monotonic() - t_start > WITNESS_WALL_CLOCK_S:
@@ -200,6 +203,10 @@ def certify_rule(lhs, rhs, rng, judge_fn=None, vals_override=None):
             y_src = eval_on(lhs_b, ws, V)
         except Exception as ex:
             return 'EVAL-ERR', f'{type(ex).__name__}: {ex}'
+        if nt:
+            if not source_defined(y_src).any():
+                continue                # the source is defined at no draw: never the fit
+            n_defined += 1
         found, atom_kill = None, None
         cands = witness_menu(cs, nt) if nt else [[]]
         seen_finite_match = False
@@ -235,4 +242,6 @@ def certify_rule(lhs, rhs, rng, judge_fn=None, vals_override=None):
                 return 'NO-WITNESS', cs
     if n_no_witness:
         return 'NO-WITNESS', None
+    if nt and not n_defined:
+        return 'NO-WITNESS', 'the source is defined at no constant draw'
     return 'PROMOTE', None

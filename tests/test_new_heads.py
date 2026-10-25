@@ -440,8 +440,31 @@ def test_a_constant_collapse_through_a_band_survives_promotion(bare):
     kept = {' '.join(a) for a, _ in kept}
     assert {'acos erf <constant>', 'floor <constant>', 'harmonic exp <constant>',
             'acos erf sinh <constant>'} <= kept
-    # harmonic(c) has no finite witness at its poles: refused, as before
-    assert 'harmonic <constant>' not in kept and report['killed_ground']
+    # harmonic(c) is NaN at its poles, where c is never the fit, and its own witness elsewhere:
+    # the judge's criterion, so the ground tier keeps it too
+    assert 'harmonic <constant>' in kept and not report['killed_ground']
+
+
+def test_a_constant_collapse_owes_a_witness_only_where_the_source_is_defined(bare):
+    """A fitted `<constant>` never takes a value that makes the source NaN, so the judge
+    licenses `acos(c) -> c` from |c| <= 1 alone. Promotion reads the same definition
+    (`_contract.source_defined`) in its ground tier and in its witness bar, and still refuses
+    a source defined at no constant: there is no evidence for it."""
+    from simplipy.promotion import promote
+    for lhs in ('acos <constant>', 'atan atanh <constant>', 'atan atanh tanh <constant>'):
+        assert _contract.judge_rule(lhs.split(), ['<constant>'])['tier'] == 'core', lhs
+    rules = [('acos <constant>'.split(), ['<constant>']),
+             ('atan atanh <constant>'.split(), ['<constant>']),
+             ('max ?0 acos <constant>'.split(), 'max <constant> ?0'.split()),
+             ('log neg cosh <constant>'.split(), ['<constant>'])]
+    for mode in MODES:
+        kept, report = promote(rules, bare, rule_mode=mode)
+        kept = {' '.join(a) + ' -> ' + ' '.join(b) for a, b in kept}
+        assert {'acos <constant> -> <constant>', 'atan atanh <constant> -> <constant>',
+                'max _0 acos <constant> -> max <constant> _0'} <= kept, (mode, kept)
+        assert [' '.join(x[0]) for x in report['killed_ground']] == ['log neg cosh <constant>']
+    assert list(_contract.source_defined([0.5, np.nan, np.inf, -np.inf])) == [True, False,
+                                                                              False, False]
 
 
 # --------------------------------------------------------------------------- besselj, complete

@@ -1027,6 +1027,17 @@ model predictions.
   the judged tier of each served pattern; the default (`None`) is the contract judge, run on
   `judge_processes` worker processes (default 4). Verdicts do not depend on the number of
   processes. `simplipy verify-mine` takes `--judge-processes`.
+- **A constant collapse owes a witness only where its source is defined.** A `<constant>` is
+  fitted, and a value that makes the source NaN or infinite is never the fit, so the judge
+  licenses `acos(c) -> c_t` from |c| <= 1 alone. Sort promotion refused a collapse at the first
+  probed constant where its source was NaN or infinite, so licensed rules never reached a file:
+  `atanh(cos(c)) -> c_t` (infinite where cos(c) = +-1), `log(abs(c)) -> c_t`,
+  `x*log(c) -> c_t*x` and `max(x, acos(c)) -> max(c_t, x)`, and with them `f64` left
+  `atan(atanh(tanh(c)))` at `atan(atanh(c))`; it now reduces it to `c_t`. On the reduced
+  length-4 mine the `f64` and `real` files gain 139 rules each and `permissive` 24. The judge,
+  the sort ladder's ground tier and its witness bar now read one definition of "the source is
+  defined" (finite, the rule the evidence gate counts rows by); a source defined at no constant
+  (`log(-cosh(c))`) still gets no rule.
 
 ### Removed
 

@@ -309,6 +309,7 @@ def equiv(lhs, rhs, dps=200, n_rows=48, challenges=6, seed=0, rtol=1e-12, atol=1
     lhs = _wild_to_var(list(lhs))
     rhs = _wild_to_var(list(rhs))
     allvars = sorted(set(_vars_in(lhs)) | set(_vars_in(rhs)))
+    from ..verify._contract import source_defined
     rng = np.random.default_rng(seed)
     nlc, nrc = _n_const(lhs), _n_const(rhs)
     # var draws (shared across constant challenges)
@@ -335,8 +336,8 @@ def equiv(lhs, rhs, dps=200, n_rows=48, challenges=6, seed=0, rtol=1e-12, atol=1
         rows_kept = []
         for row in Xrows:
             a = evaluate(lhs, row, lc)
-            if isnan(a) or isinf(a):
-                continue
+            if not source_defined(a):
+                continue        # the judge's criterion: no witness owed where undefined
             yv.append(a)
             rows_kept.append(row)
         if len(yv) < min_binding:
