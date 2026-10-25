@@ -699,7 +699,7 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
         z ^ (z >> 31)
     }
-    fn next_f64(&mut self) -> f64 {
+    pub(crate) fn next_f64(&mut self) -> f64 {
         // 53-bit mantissa in [0, 1)
         (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
     }

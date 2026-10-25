@@ -1052,9 +1052,28 @@ model predictions.
   arbiter decides exactly the finite valuations float64 left open, in the `_` and `!` bars
   alike. So `atan(sinh(x)) -> asin(tanh(x))` and `sin(acos(tanh(x))) -> 1/cosh(x)` ship at `_`
   in `real` and `permissive`, and a mine's rules promoted in any order get the same sorts (they
-  got four different files in four orders). The mine's seed still decides which rules reach
-  promotion: a source finite on a narrow band, such as `atanh(floor(x))` on [0, 1), may fall
-  short of the evidence floor under another seed.
+  got four different files in four orders).
+- **A source's evidence is decided from its domain, not from a count of sampled rows.** A mine
+  certifies a rewrite on the rows where the source is finite, so a source finite only on a null
+  set (`asin(cosh(x))`, finite at 0 alone) gets no rule. Whether a source had evidence was a
+  count of the rows of the mine's random matrix where it was finite, held against the floor
+  (`min_informative`, an eighth of the rows), and a source finite on a narrow band fell on
+  either side of it by seed: `atanh(floor(x))` is finite on [0, 1) alone, about 13% of the
+  mixture, so `asinh(atanh(floor(x))) -> atanh(floor(x))` and three siblings were mined at seed
+  42 (79 rows of 512) and not at seed 7 (63). A source now has evidence iff the interval layer
+  certifies a cell of its box on which float64 evaluates it finite everywhere, its exact tails
+  included (`acosh(erf(x))` is finite where float64's erf is 1, x >= 5.92); an undecided search
+  certifies nothing. Where the matrix holds fewer rows than the floor inside that set, the
+  missing rows are drawn from the certified cells, by a stream the seed fixes, and judged with
+  the rest.
+- **A high-precision refutation needs converged values.** `real` and `permissive` re-judge an
+  f64 near miss at 1024 and 2048 bits. A row whose values still moved between the two was taken
+  as a refutation: `tanh(x)` is exactly -1 at both precisions once x < -710, so
+  `sin(acos(tanh(x)))` read the residue of `sin(pi)` against `1/cosh(x)` ~ 1e-407 at x = -937,
+  and `sin(acos(tanh(x))) -> 1/cosh(x)` was mined only when the matrices held no row below
+  -700 (one variable at seed 42, none at seed 7). Such a row is now judged again at 4096 and
+  8192 bits, the precision the mine's range (|x| <= 1e3) needs, by the same rule; a converged
+  false row (`exp(sinh(-5)) -> 0`) is refuted at 2048 bits as before.
 
 ### Removed
 

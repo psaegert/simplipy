@@ -869,99 +869,68 @@ fn battery_rows_ok(
 
 /// The NO-CONSTANT equivalence test: the candidate has no `<constant>`, so it is
 /// a fixed function -- evaluate it once. The SOURCE may carry `n_src_const` constants, and the rule
-/// must hold for ALL of them, so we resample the source's constants over the `source_const_magnitudes`
-/// rounds and every sign combination and require `allclose_extends(source, candidate)` EVERY time
+/// must hold for ALL of them, so the source's instances (`SourceCtx`: the `source_const_magnitudes`
+/// rounds times every sign combination) each require `allclose_extends(source, candidate)`
 /// (generic equivalence: source-finite rows bind, source-nonfinite rows are extendable).
 /// Rejects on the first mismatch (the guard against a coincidental single-value match).
 /// PARITY: a fast-path reject is re-judged by the SAME `hiprec::rescue` the production arm
-/// (`candidate_matches`) applies -- the two entry points must never diverge (inf rows are
+/// (`candidate_matches`) applies, and the evidence decision is the source's own
+/// (`evidence_rows`, on the same rows) -- the two entry points must never diverge (inf rows are
 /// must-match at f64, so without the rescue `log(exp(x)) -> x` would be rejected here while
 /// certified there).
 #[allow(clippy::too_many_arguments)]
 fn equivalent_no_const(
-    source: &Tape,
+    sc: &SourceCtx<'_>,
     candidate: &Tape,
-    source_tokens: &[String],
     cand_tokens: &[String],
     ops: &Operators,
     var_names: &[String],
-    n_src_const: usize,
-    x_cols: &[Vec<f64>],
-    n_rows: usize,
-    challenges: usize,
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    rng: &mut Rng,
 ) -> bool {
+    let (x_cols, n_rows) = (&sc.cols[..], sc.n_rows);
+    let source_tokens = sc.source;
     let y_cand = candidate.eval_columns(x_cols, &[], n_rows);
-    let combos = sign_combos(n_src_const);
-    // A const-free source has exactly one distinct instance (see `source_instances`).
-    let eff_challenges = if n_src_const == 0 { 1 } else { challenges };
     // Fast NECESSARY-condition gate: every evidence row needs the candidate finite on it, and
     // evidence rows are UNIQUE rows, so finite(y_cand) bounds the evidence from above. Kills
     // all-NaN/all-inf candidates (the asin(cosh(_0)) -> nan family) outright.
     if crate::eval::count_finite(&y_cand) < min_informative {
         return false;
     }
-    // EVIDENCE = UNIQUE rows where SOME instance's source is finite. Unique, NOT accumulated
-    // with multiplicity: 16 challenges x sign-combos over the same ~7 defined rows must count
-    // as 7 evidence points, else an almost-nowhere-defined const-bearing source (e.g.
-    // asin(cosh(C*_0)), finite only at 0 for every C) would clear the gate by repetition.
-    let mut evidence = vec![false; n_rows];
-    let mags = if n_src_const == 0 {
-        vec![vec![]]
-    } else {
-        source_const_magnitudes(
-            rng,
-            n_src_const,
-            eff_challenges,
-            crate::battery::holds_new_head(source_tokens, ops),
-        )
-    };
-    let mut instances: Vec<Vec<f64>> = Vec::with_capacity(mags.len() * combos.len());
-    for rc in &mags {
-        for combo in &combos {
-            let params: Vec<f64> = rc.iter().zip(combo).map(|(r, c)| r * c).collect();
-            let y = source.eval_columns(x_cols, &params, n_rows);
-            // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
-            // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
-            // Inf rows are must-match at f64; the near-miss rescue then re-judges the
-            // failing rows by escalation (saturation inf resolves finite, a true pole stays).
-            // A const-free pair agrees RELATIVELY (see `candidate_matches`): no absolute band.
-            if !allclose_extends(&y, &y_cand, rtol, 0.0)
-                && !crate::hiprec::rescue(
-                    &y,
-                    &y_cand,
-                    source_tokens,
-                    &params,
-                    cand_tokens,
-                    &[],
-                    ops,
-                    var_names,
-                    x_cols,
-                    rtol,
-                    0.0,
-                )
-            {
-                return false;
-            }
-            for (e, v) in evidence.iter_mut().zip(&y) {
-                *e |= v.is_finite();
-            }
-            instances.push(params);
-        }
-    }
-    // EVIDENCE GATE: enough distinct defined points must back the certification, else an
-    // (almost-)nowhere-defined source would be rewritten from its corner rows alone.
-    if evidence.iter().filter(|&&e| e).count() < min_informative {
+    // EVIDENCE GATE: the source's own decision -- an (almost-)nowhere-defined source is not
+    // rewritten from its corner rows alone.
+    if !sc.informative {
         return false;
+    }
+    for (params, y) in &sc.y {
+        // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
+        // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
+        // Inf rows are must-match at f64; the near-miss rescue then re-judges the
+        // failing rows by escalation (saturation inf resolves finite, a true pole stays).
+        // A const-free pair agrees RELATIVELY (see `candidate_matches`): no absolute band.
+        if !allclose_extends(y, &y_cand, rtol, 0.0)
+            && !crate::hiprec::rescue(
+                y,
+                &y_cand,
+                source_tokens,
+                params,
+                cand_tokens,
+                &[],
+                ops,
+                var_names,
+                x_cols,
+                rtol,
+                0.0,
+            )
+        {
+            return false;
+        }
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`). PARITY: identical to the
     // const-free arm of `candidate_matches` -- the two entry points must never diverge.
-    let used = crate::battery::used_variables(source_tokens, var_names);
-    let battery = crate::battery::SpecialBattery::build(var_names.len(), &used);
-    for params in &instances {
+    let source = &sc.tape;
+    for (params, _) in &sc.y {
         if !battery_rows_ok(
             source,
             source_tokens,
@@ -969,7 +938,7 @@ fn equivalent_no_const(
             candidate,
             cand_tokens,
             &[],
-            battery.as_ref(),
+            sc.battery.as_ref(),
             ops,
             var_names,
             rtol,
@@ -982,7 +951,7 @@ fn equivalent_no_const(
     // the special source-constant sweep (skip semantics: an instance where the
     // source is nowhere finite binds nothing; a binding instance is judged at the
     // CONTRACT points only -- the sweep never binds generic X rows)
-    if n_src_const == 1 {
+    if sc.n_const == 1 {
         for &s in crate::battery::SPECIAL_CONSTS.iter() {
             let sp = vec![s];
             let y_s = source.eval_columns(x_cols, &sp, n_rows);
@@ -996,7 +965,7 @@ fn equivalent_no_const(
                 candidate,
                 cand_tokens,
                 &[],
-                battery.as_ref(),
+                sc.battery.as_ref(),
                 ops,
                 var_names,
                 rtol,
@@ -1027,7 +996,6 @@ pub fn equivalent_no_const_check(
     min_informative: usize,
     seed: u64,
 ) -> Result<bool, String> {
-    let src_tape = Tape::compile(source, ops, var_names)?;
     let cand_tape = Tape::compile(candidate, ops, var_names)?;
     if cand_tape.n_params != 0 {
         return Err("candidate has <constant> tokens; use exist_constants_fit for constant-bearing candidates".to_string());
@@ -1037,22 +1005,26 @@ pub fn equivalent_no_const_check(
         return Err("x_flat shape mismatch".to_string());
     }
     let cols = columns_from_row_major(x_flat, n_rows, n_vars);
-    let mut rng = Rng::new(seed);
-    Ok(equivalent_no_const(
-        &src_tape,
-        &cand_tape,
-        source,
-        candidate,
+    let sc = SourceCtx::new(
         ops,
+        source,
         var_names,
-        src_tape.n_params,
         &cols,
         n_rows,
         challenges,
+        seed,
+        false,
+        min_informative,
+    )?;
+    Ok(equivalent_no_const(
+        &sc,
+        &cand_tape,
+        candidate,
+        ops,
+        var_names,
         rtol,
         atol,
         min_informative,
-        &mut rng,
     ))
 }
 
@@ -1189,6 +1161,43 @@ impl CandEntry {
     }
 }
 
+/// A const-free candidate's values on the rows a source is judged on: the library's cached
+/// values when those are the library's own rows, or computed on a source whose evidence
+/// decision appended rows (`SourceCtx::augmented`).
+struct CandRows<'c> {
+    y: Option<std::borrow::Cow<'c, [f64]>>,
+    events: Option<std::borrow::Cow<'c, [bool]>>,
+    /// `count_finite(y)` (0 for a const-bearing candidate)
+    finite_y: usize,
+}
+
+impl<'c> CandRows<'c> {
+    /// The library's cached values.
+    fn cached(cand: &'c CandEntry) -> Self {
+        CandRows {
+            y: cand.y_const_free.as_deref().map(std::borrow::Cow::Borrowed),
+            events: cand
+                .events_const_free
+                .as_deref()
+                .map(std::borrow::Cow::Borrowed),
+            finite_y: cand.finite_y,
+        }
+    }
+
+    /// The values on `sc`'s rows.
+    fn on(cand: &'c CandEntry, sc: &SourceCtx<'_>) -> Self {
+        if !sc.augmented || cand.n_const > 0 {
+            return CandRows::cached(cand);
+        }
+        let (y, events) = events_if_any(cand.tape.eval_columns_events(&sc.cols, &[], sc.n_rows));
+        CandRows {
+            finite_y: crate::eval::count_finite(&y),
+            y: Some(std::borrow::Cow::Owned(y)),
+            events: events.map(std::borrow::Cow::Owned),
+        }
+    }
+}
+
 /// FNV-1a over a token slice, with a separator byte so ["ab","c"] != ["a","bc"].
 fn token_hash(tokens: &[String]) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
@@ -1229,6 +1238,8 @@ fn candidate_matches(
     y_src: &[(Vec<f64>, Vec<f64>)],
     src_events: &[Option<Vec<bool>>],
     cand: &CandEntry,
+    cand_rows: &CandRows<'_>,
+    informative: bool,
     source: &[String],
     src_tape: &Tape,
     battery: Option<&crate::battery::SpecialBattery>,
@@ -1245,12 +1256,9 @@ fn candidate_matches(
 ) -> Option<Option<Vec<f64>>> {
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
-    if cand.n_const == 0 && cand.finite_y < min_informative {
+    if cand.n_const == 0 && cand_rows.finite_y < min_informative {
         return None;
     }
-    // EVIDENCE = UNIQUE rows where SOME instance's source is finite (BOTH arms; see
-    // `equivalent_no_const` for why repetition across instances must not count).
-    let mut evidence = vec![false; n_rows];
     // the certified (source-constants, target-witness) pairs, for the special-point phase
     let mut certified: Vec<(Vec<f64>, Option<Vec<f64>>)> = Vec::with_capacity(y_src.len());
     for (inst, (inst_params, y)) in y_src.iter().enumerate() {
@@ -1278,7 +1286,7 @@ fn candidate_matches(
             //   where a zero is a residual that collapses as the precision doubles. True
             //   identities whose f64 evaluation loses precision -- atanh(tanh(x)) -> x,
             //   sin(np.pi) -> 0 -- certify; a value that only looks like zero does not.
-            let y_cand = cand.y_const_free.as_ref().unwrap();
+            let y_cand: &[f64] = cand_rows.y.as_deref().unwrap();
             let hit = allclose_extends(y, y_cand, rtol, 0.0)
                 || if rescue {
                     crate::hiprec::rescue(
@@ -1299,7 +1307,7 @@ fn candidate_matches(
                         y,
                         y_cand,
                         ev_src,
-                        cand.events_const_free.as_deref(),
+                        cand_rows.events.as_deref(),
                         source,
                         inst_params,
                         &cand.tokens,
@@ -1547,12 +1555,11 @@ fn candidate_matches(
                 return None;
             }
         }
-        for (e, v) in evidence.iter_mut().zip(y) {
-            *e |= v.is_finite();
-        }
         certified.push((inst_params.clone(), fitted));
     }
-    if evidence.iter().filter(|&&e| e).count() < min_informative {
+    // THE EVIDENCE GATE: the source's own decision (`evidence_rows`), the same for every
+    // candidate -- a source finite only on a null set binds nothing generic.
+    if !informative {
         return None;
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`): runs only for candidates
@@ -1692,6 +1699,126 @@ fn source_instances(
         }
     }
     out
+}
+
+/// Witness cells collected for an evidence top-up (`evidence_rows`): enough that the drawn
+/// rows spread over the certified finite set, not only over its widest cell.
+const TOPUP_CELLS: usize = 32;
+/// Draws per missing row before a top-up gives up (fail closed): every draw lies in a
+/// certified finite cell, so only a disagreement between the certificate and the evaluator
+/// can reject one.
+const TOPUP_DRAWS_PER_ROW: usize = 4;
+/// Salt of the top-up stream, so it never coincides with the instance stream of the same seed.
+const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
+
+/// THE EVIDENCE DECISION for one source on the rows it is judged on: `None` when the source is
+/// UNINFORMATIVE, else the rows to append to `cols` (one vector per column, possibly empty).
+///
+/// A mine certifies a rewrite on the rows where the source is finite (`allclose_extends`
+/// binds those and extends the rest), so a source finite only on a null set -- `asin(cosh x)`,
+/// finite at 0 alone -- has no evidence and cannot be rewritten from its corner values. That
+/// is decided HERE, from the source's domain and never from a count of sampled rows: the source
+/// is informative iff `interval::finite_cells` certifies, at one of its instances (in instance
+/// order), a cell of the horizon box on which it is finite everywhere. Fail closed: an
+/// undecided search certifies nothing.
+///
+/// An informative source then needs `min_informative` rows where some instance is finite,
+/// and the rows it is given are a random sample: `atanh(floor x)` is finite on [0, 1) alone,
+/// which holds about 13% of the mine's mixture, so the 64-row floor of a 512-row matrix was met
+/// at one seed and missed at another. When the given rows fall short, the missing ones are
+/// DRAWN from the certified cells -- a cell chosen in proportion to its volume, a point uniform in
+/// it, columns the source does not read uniform on the horizon -- from a stream fixed by `seed`,
+/// until the floor is met; the rows already there are kept. A draw the evaluator does not find
+/// finite is skipped, and a top-up that exhausts its draws fails closed.
+#[allow(clippy::too_many_arguments)]
+fn evidence_rows(
+    source: &[String],
+    tape: &Tape,
+    ops: &Operators,
+    var_names: &[String],
+    y: &[(Vec<f64>, Vec<f64>)],
+    n_rows: usize,
+    min_informative: usize,
+    seed: u64,
+) -> Option<Vec<Vec<f64>>> {
+    // PROVEN nowhere finite on positive measure over ALL of its variables and constants (the
+    // value set over the reals encloses every instance): no instance can hold a witness. An
+    // unanalyzable set over the reals proves nothing (`rootn` with an expression index, `harmonic`
+    // across its poles); the instances, their constants bound, are searched as usual.
+    if crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
+        .is_some_and(|v| !v.fin_pm())
+    {
+        return None;
+    }
+    let mut evidence = vec![false; n_rows];
+    for (_, yi) in y {
+        for (e, v) in evidence.iter_mut().zip(yi) {
+            *e |= v.is_finite();
+        }
+    }
+    let have = evidence.iter().filter(|&&e| e).count();
+    // The instances are searched most-evidenced first: whether SOME instance holds a witness
+    // does not depend on the order, which only lets the common case stop at the first.
+    let mut order: Vec<usize> = (0..y.len()).collect();
+    order.sort_by_key(|&k| std::cmp::Reverse(crate::eval::count_finite(&y[k].1)));
+    let witness = order.iter().find_map(|&k| {
+        let p = &y[k].0;
+        crate::interval::finite_cells(source, p, ops, 1)
+            .filter(|fc| !fc.cells.is_empty())
+            .map(|_| p)
+    })?;
+    let mut extra: Vec<Vec<f64>> = vec![Vec::new(); var_names.len()];
+    if have >= min_informative {
+        return Some(extra);
+    }
+    let fc = crate::interval::finite_cells(source, witness, ops, TOPUP_CELLS)?;
+    if fc.cells.is_empty() {
+        return None;
+    }
+    // the column each box dimension samples, and the horizon the other columns sample
+    let dims: Vec<Option<usize>> = fc
+        .vars
+        .iter()
+        .map(|v| var_names.iter().position(|w| w == v))
+        .collect();
+    let r = fc.r;
+    let volume = |c: &Vec<(f64, f64)>| c.iter().map(|&(lo, hi)| hi - lo).product::<f64>();
+    let total: f64 = fc.cells.iter().map(volume).sum();
+    let need = min_informative - have;
+    let mut rng = Rng::new(seed ^ TOPUP_SALT);
+    let mut got = 0usize;
+    for _ in 0..need * TOPUP_DRAWS_PER_ROW {
+        if got == need {
+            break;
+        }
+        let mut u = rng.next_f64() * total;
+        let cell = fc
+            .cells
+            .iter()
+            .find(|c| {
+                u -= volume(c);
+                u < 0.0
+            })
+            .unwrap_or(&fc.cells[fc.cells.len() - 1]);
+        let mut row: Vec<f64> = (0..var_names.len())
+            .map(|_| -r + 2.0 * r * rng.next_f64())
+            .collect();
+        for (d, &(lo, hi)) in cell.iter().enumerate() {
+            if let Some(Some(c)) = dims.get(d) {
+                row[*c] = lo + (hi - lo) * rng.next_f64();
+            }
+        }
+        let cols1: Vec<Vec<f64>> = row.iter().map(|&v| vec![v]).collect();
+        if y.iter()
+            .any(|(p, _)| tape.eval_columns(&cols1, p, 1)[0].is_finite())
+        {
+            for (col, v) in extra.iter_mut().zip(&row) {
+                col.push(*v);
+            }
+            got += 1;
+        }
+    }
+    (got == need).then_some(extra)
 }
 
 /// A RESIDENT candidate library: every candidate precompiled to a tape and indexed by length,
@@ -1851,14 +1978,23 @@ struct Certified {
 }
 
 /// One SOURCE's certification context: its tape, its challenge instances (drawn once, from
-/// the source's own seed), its reachability set and its special-point battery. The scan
-/// builds it once and judges every candidate against it; `judge_pair` builds it for one
-/// pair. Rows are the caller's X (`cols`), which the context does not own.
+/// the source's own seed), its evidence decision and rows, its reachability set and its
+/// special-point battery. The scan builds it once and judges every candidate against it;
+/// `judge_pair` builds it for one pair. Rows are the caller's X (`cols`), borrowed, unless the
+/// evidence decision appended rows to them (`evidence_rows`).
 struct SourceCtx<'s> {
     source: &'s [String],
     tape: Tape,
     n_const: usize,
     mask: u32,
+    /// The rows every candidate is judged on: the caller's, or the caller's with the evidence
+    /// top-up appended.
+    cols: std::borrow::Cow<'s, [Vec<f64>]>,
+    n_rows: usize,
+    /// Rows were appended, so a library candidate's cached values do not cover them.
+    augmented: bool,
+    /// The evidence decision (`evidence_rows`): an uninformative source certifies nothing.
+    informative: bool,
     y: Vec<(Vec<f64>, Vec<f64>)>,
     /// Per instance of `y`, the rows where an operation overflowed or underflowed
     /// (`numeric::RangeKind`), `None` where none did; read by f64's range standard only, and
@@ -1878,18 +2014,19 @@ impl<'s> SourceCtx<'s> {
         ops: &Operators,
         source: &'s [String],
         var_names: &[String],
-        cols: &[Vec<f64>],
+        cols: &'s [Vec<f64>],
         n_rows: usize,
         challenges: usize,
         seed: u64,
         f64_range: bool,
+        min_informative: usize,
     ) -> Result<Self, String> {
         let tape = Tape::compile(source, ops, var_names)?;
         let n_const = tape.n_params;
         let combos = sign_combos(n_const);
         let mut rng = Rng::new(seed);
         // Source instances shared across the whole candidate scan (see `source_instances`).
-        let y = source_instances(
+        let mut y = source_instances(
             &tape,
             n_const,
             &combos,
@@ -1899,9 +2036,38 @@ impl<'s> SourceCtx<'s> {
             &mut rng,
             crate::battery::holds_new_head(source, ops),
         );
+        // THE EVIDENCE DECISION, and the rows it needs (`evidence_rows`).
+        let plan = evidence_rows(
+            source,
+            &tape,
+            ops,
+            var_names,
+            &y,
+            n_rows,
+            min_informative,
+            seed,
+        );
+        let informative = plan.is_some();
+        let n_extra = plan.as_ref().map_or(0, |e| e.first().map_or(0, Vec::len));
+        let (cols, n_rows): (std::borrow::Cow<'s, [Vec<f64>]>, usize) = match plan {
+            Some(extra) if n_extra > 0 => {
+                // rows evaluate independently, so the instances' values on the appended rows
+                // are appended to their values on the given ones
+                for (p, yi) in y.iter_mut() {
+                    yi.extend(tape.eval_columns(&extra, p, n_extra));
+                }
+                let joined: Vec<Vec<f64>> = cols
+                    .iter()
+                    .zip(&extra)
+                    .map(|(c, e)| c.iter().chain(e).copied().collect())
+                    .collect();
+                (std::borrow::Cow::Owned(joined), n_rows + n_extra)
+            }
+            _ => (std::borrow::Cow::Borrowed(cols), n_rows),
+        };
         let events = if f64_range {
             y.iter()
-                .map(|(p, _)| events_if_any(tape.eval_columns_events(cols, p, n_rows)).1)
+                .map(|(p, _)| events_if_any(tape.eval_columns_events(&cols, p, n_rows)).1)
                 .collect()
         } else {
             Vec::new()
@@ -1930,6 +2096,10 @@ impl<'s> SourceCtx<'s> {
             tape,
             n_const,
             mask: var_mask(source, var_names),
+            cols,
+            n_rows,
+            augmented: n_extra > 0,
+            informative,
             y,
             events,
             reach,
@@ -1951,8 +2121,6 @@ fn certify_candidate(
     cand: &CandEntry,
     ops: &Operators,
     var_names: &[String],
-    cols: &[Vec<f64>],
-    n_rows: usize,
     retries: usize,
     rtol: f64,
     atol: f64,
@@ -1962,6 +2130,9 @@ fn certify_candidate(
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Option<Certified> {
     let source = sc.source;
+    // the rows this source is judged on (`SourceCtx::cols`)
+    let cols: &[Vec<f64>] = &sc.cols;
+    let n_rows = sc.n_rows;
     if cand.var_mask & !sc.mask != 0 {
         return None; // candidate uses a variable the source lacks
     }
@@ -1990,6 +2161,8 @@ fn certify_candidate(
         &sc.y,
         &sc.events,
         cand,
+        &CandRows::on(cand, sc),
+        sc.informative,
         source,
         &sc.tape,
         sc.battery.as_ref(),
@@ -2043,6 +2216,8 @@ fn certify_candidate(
                     &sc.y,
                     &sc.events,
                     &entry,
+                    &CandRows::cached(&entry),
+                    sc.informative,
                     source,
                     &sc.tape,
                     sc.battery.as_ref(),
@@ -2380,6 +2555,7 @@ pub fn find_rule_with_lib(
         challenges,
         seed,
         !rescue,
+        min_informative,
     )?;
     // THE SEARCH BOUND. `max_mu` (the caller's mark, i.e. mu of the engine's own endpoint
     // for this source) makes the search bound the SAME predicate as the acceptance gate:
@@ -2427,8 +2603,6 @@ pub fn find_rule_with_lib(
                 cand,
                 ops,
                 &lib.var_names,
-                &lib.cols,
-                lib.n_rows,
                 retries,
                 rtol,
                 atol,
@@ -2555,16 +2729,23 @@ pub fn judge_pair(
     rescue: bool,
 ) -> Result<Option<&'static str>, String> {
     let sc = SourceCtx::new(
-        ops, source, var_names, cols, n_rows, challenges, seed, !rescue,
+        ops,
+        source,
+        var_names,
+        cols,
+        n_rows,
+        challenges,
+        seed,
+        !rescue,
+        min_informative,
     )?;
-    let cand = CandEntry::compile(target, ops, var_names, cols, n_rows, u64::MAX)?;
+    // compiled on the rows the source is judged on (the evidence top-up included)
+    let cand = CandEntry::compile(target, ops, var_names, &sc.cols, sc.n_rows, u64::MAX)?;
     let Some(c) = certify_candidate(
         &sc,
         &cand,
         ops,
         var_names,
-        cols,
-        n_rows,
         retries,
         rtol,
         atol,

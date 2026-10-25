@@ -6173,6 +6173,182 @@ pub fn defined_measure_p_at(
     Some(best)
 }
 
+/// FLOAT64'S TAILS on one cell, for the evidence certificate (`finite_cells`): `tanh`, `atan` and
+/// `erf` ARE their limit wherever float64 rounds them to it (`tail_of`), but the enclosure of such
+/// a node straddles the limit by its outward step, so a source finite only because a tail is exact
+/// -- `acosh(erf(x))`, finite where float64's erf is 1, x >= 5.92 -- never reads finite. Where a
+/// node's argument lies past the threshold over the whole cell (`doms`), the node is its limit
+/// at every point of it: this returns the expression with each such node replaced by the literal
+/// limit, its `<constant>` bindings dropped with it, or `None` where no node is. A float64
+/// reading, sound for the evidence a mine counts (its rows are evaluated in float64 in every
+/// mode) and for nothing that reads the reals.
+fn f64_tail_reading(
+    e: &[String],
+    ops: &Operators,
+    doms: &[Vs],
+    params: &[f64],
+) -> Option<(Vec<String>, Vec<f64>)> {
+    let mut t = e.to_vec();
+    let mut p = params.to_vec();
+    let mut changed = false;
+    let mut i = 0usize;
+    while i < t.len() {
+        let tail = tail_of(&t[i]).filter(|_| ops.arity_of(&t[i]) == Some(1));
+        let Some((threshold, limit)) = tail else {
+            i += 1;
+            continue;
+        };
+        let j = subtree_end(&t, i, ops)?;
+        let k0 = t[..i].iter().filter(|x| *x == "<constant>").count();
+        let kn = t[i + 1..j].iter().filter(|x| *x == "<constant>").count();
+        let side = (p.len() >= k0 + kn)
+            .then(|| value_set_p(&t[i + 1..j], ops, doms, &p[k0..k0 + kn]))
+            .flatten()
+            .filter(|a| a.has_fin && !a.nan && !a.pinf && !a.ninf)
+            .and_then(|a| {
+                if a.lo >= threshold {
+                    Some(limit)
+                } else if a.hi <= -threshold {
+                    Some(-limit)
+                } else {
+                    None
+                }
+            });
+        if let Some(c) = side {
+            t.splice(i..j, [format!("{c}")]);
+            p.drain(k0..k0 + kn);
+            changed = true;
+        }
+        i += 1;
+    }
+    changed.then_some((t, p))
+}
+
+/// Cells of the horizon box on which an expression is FINITE everywhere (`finite_cells`): one
+/// interval per variable the expression references, `vars[d]` naming the variable of dimension
+/// `d` in the expression's own spelling, inside the box `[-r, r]^n`.
+pub struct FiniteCells {
+    pub vars: Vec<String>,
+    pub cells: Vec<Vec<(f64, f64)>>,
+    pub r: f64,
+}
+
+/// THE EVIDENCE CERTIFICATE: is `expr` (its `<constant>`s bound to `params`) FINITE on a
+/// positive-measure set of its horizon box, and where?
+///
+/// A cell is a witness when the outward-rounded value set over it holds a finite part and
+/// nothing else (no NaN, no infinity, and the finite part not confined to a null set): every
+/// point of the cell evaluates finite in the deployed float64 evaluator, which is the
+/// evidence a mine counts (`worker::candidate_matches` binds source-finite rows only, every
+/// mode evaluating its rows in float64). A cell is read through float64's tails as well
+/// (`f64_tail_reading`), where the evaluator is exact. The cells come from the same box,
+/// horizon and dyadic subdivision `defined_measure_p_at` reads, so "positive measure" means the
+/// same thing to the evidence decision and to the domain gate.
+///
+/// The search is BREADTH-FIRST, so the witnesses are the coarsest cells of the finite set and
+/// spread over all of it: it stops at the end of the first level holding at least `want`
+/// cells. A cell with no positive-measure finite part is dropped (it holds no witness); a mixed
+/// cell is split along its widest dimension down to the resolution floor.
+///
+/// FAIL CLOSED: `None` when the horizon is undecidable, the node budget runs out, or an
+/// unanalyzable cell was met before any witness; `Some` with no cells when the search completed
+/// without one. Only a witness certifies; the caller reads both other outcomes as "no evidence".
+pub fn finite_cells(
+    expr: &[String],
+    params: &[f64],
+    ops: &Operators,
+    want: usize,
+) -> Option<FiniteCells> {
+    let respelled = dummy_spelling(&[expr], ops);
+    let e: &[String] = respelled.as_ref().map_or(expr, |d| &d[0]);
+    let (r, depth_per_dim, decidable) = horizon(&[e], &[params], ops);
+    if !decidable {
+        HORIZON_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    }
+    let used = distinct_vars(&[e]);
+    let width = n_var_slots(&[e]);
+    // `dummy_spelling` renames token for token, so a dimension's variable is the original
+    // token at the position of its dummy.
+    let vars: Vec<String> = used
+        .iter()
+        .map(|&i| {
+            e.iter()
+                .position(|t| var_index(t) == Some(i))
+                .map(|j| expr[j].clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    let n = used.len().max(1);
+    // A variable-free expression at bound constants is one value: its box has nothing to split.
+    let depth_max = if used.is_empty() {
+        0
+    } else {
+        depth_per_dim * n as u32
+    };
+    let mut budget = max_nodes_budget();
+    let mut undecided = false;
+    let mut cells: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut level: Vec<Vec<(f64, f64)>> = vec![vec![(-r, r); n]];
+    let mut d = 0u32;
+    while !level.is_empty() && cells.len() < want && budget > 0 {
+        let mut next: Vec<Vec<(f64, f64)>> = Vec::new();
+        for bx in level {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let doms = doms_from_box(&bx, &used, width, (-r, r));
+            let Some(v) = value_set_p(e, ops, &doms, params) else {
+                undecided = true;
+                continue;
+            };
+            if !v.fin_pm() {
+                continue; // no positive-measure finite part anywhere in this cell
+            }
+            let finite = |w: &Vs| w.fin_pm() && !w.nan && !w.pinf && !w.ninf;
+            if finite(&v)
+                || f64_tail_reading(e, ops, &doms, params).is_some_and(|(t, p)| {
+                    value_set_p(&t, ops, &doms, &p).is_some_and(|w| finite(&w))
+                })
+            {
+                cells.push(bx);
+                continue;
+            }
+            if d < depth_max {
+                let i = (0..bx.len())
+                    .max_by(|&a, &b| {
+                        (bx[a].1 - bx[a].0)
+                            .partial_cmp(&(bx[b].1 - bx[b].0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .unwrap();
+                let (lo, hi) = bx[i];
+                let mid = 0.5 * (lo + hi);
+                let mut left = bx.clone();
+                left[i] = (lo, mid);
+                let mut right = bx;
+                right[i] = (mid, hi);
+                next.push(left);
+                next.push(right);
+            }
+        }
+        level = next;
+        d += 1;
+    }
+    if cells.is_empty() {
+        if budget == 0 {
+            NODE_BUDGET_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        if undecided {
+            UNANALYZABLE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+    }
+    Some(FiniteCells { vars, cells, r })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -83,21 +83,38 @@ enum RowVerdict {
     Fail,
 }
 
+/// `|a - b| <= atol + rtol*|b|` at `p` bits.
+fn within(a: &BigFloat, b: &BigFloat, rtol: f64, atol: f64, p: usize) -> bool {
+    let diff = a.sub(b, p, RM).abs();
+    let tol =
+        BigFloat::from_f64(atol, p).add(&BigFloat::from_f64(rtol, p).mul(&b.abs(), p, RM), p, RM);
+    matches!(diff.cmp(&tol), Some(ord) if ord <= 0)
+}
+
 /// Finite `s ~= c` within `atol + rtol*|c|` at `p` bits -- the f64 row predicate of
 /// `eval::allclose_extends`, lifted (the candidate is the reference). A `Fail` carries the
-/// residual `|s - c|`, which `judge_row_confirmed` compares across precisions.
+/// residual `|s - c|` and both values, which `judge_row_confirmed` compares across precisions.
 fn cmp_finite(s: &BigFloat, c: &BigFloat, rtol: f64, atol: f64, p: usize) -> Judged {
-    let diff = s.sub(c, p, RM).abs();
-    let tol =
-        BigFloat::from_f64(atol, p).add(&BigFloat::from_f64(rtol, p).mul(&c.abs(), p, RM), p, RM);
-    match diff.cmp(&tol) {
-        Some(ord) if ord <= 0 => (RowVerdict::Pass, None),
-        _ => (RowVerdict::Fail, Some(diff)),
+    if within(s, c, rtol, atol, p) {
+        return (RowVerdict::Pass, None);
     }
+    let residual = Residual {
+        diff: s.sub(c, p, RM).abs(),
+        s: s.clone(),
+        c: c.clone(),
+    };
+    (RowVerdict::Fail, Some(residual))
+}
+
+/// A failed finite comparison: the residual `|s - c|` and the two values it came from.
+struct Residual {
+    diff: BigFloat,
+    s: BigFloat,
+    c: BigFloat,
 }
 
 /// A row verdict at one precision, with the residual of a failed finite comparison.
-type Judged = (RowVerdict, Option<BigFloat>);
+type Judged = (RowVerdict, Option<Residual>);
 
 /// `BigFloat` has no `is_finite`; a value is finite when it is neither inf nor NaN.
 fn is_fin(x: &BigFloat) -> bool {
@@ -195,6 +212,16 @@ fn judge_row(
 /// leaves the same residual at every precision. So a row that fails at both precisions
 /// passes iff its residual COLLAPSES as the precision doubles: it shrinks by at least
 /// `2^(P/2)`, the precision-stability discriminator the symbolic judge applies.
+///
+/// A REFUTATION NEEDS CONVERGED VALUES. A row whose source or candidate value itself moves
+/// between `P` and `2P` bits by more than the tolerance has not been evaluated yet: an inner
+/// saturation (`tanh(x)` is exactly -1 at `P` and at `2P` bits once |x| passes ~355 and ~710,
+/// so `sin(acos(tanh(x)))` reads `sin(pi)`'s residue, ~2^-P, against `sech(x)` ~ 1e-407 at
+/// x = -937) refutes a true identity at both precisions while its value halves its exponent.
+/// Such a row is judged again at `P_INF` and `2*P_INF` bits, the precision matched to the mine
+/// X range (|x| <= ~1e3), by the same rule; a row still unconverged there fails (fail closed).
+/// Only a finite source row climbs: an infinite one is decided by `judge_row`'s own ladder.
+/// A converged false row (`exp(sinh(-5)) -> 0`) is refuted at `2P` and pays nothing more.
 #[allow(clippy::too_many_arguments)]
 fn judge_row_confirmed(
     source: &[String],
@@ -211,59 +238,59 @@ fn judge_row_confirmed(
     atol: f64,
     cc: &mut Consts,
 ) -> Option<RowVerdict> {
-    let (v, d_p) = judge_row(
-        source,
-        src_params,
-        candidate,
-        cand_params,
-        ops,
-        var_names,
-        x_cols,
-        row,
-        f64_src,
-        f64_cand,
-        rtol,
-        atol,
-        P,
-        cc,
-    )?;
-    if v != RowVerdict::Fail {
-        return Some(v);
-    }
-    match judge_row(
-        source,
-        src_params,
-        candidate,
-        cand_params,
-        ops,
-        var_names,
-        x_cols,
-        row,
-        f64_src,
-        f64_cand,
-        rtol,
-        atol,
-        2 * P,
-        cc,
-    ) {
-        Some((RowVerdict::Fail, Some(d_2p))) => {
-            let collapsed = d_p.is_some_and(|d_p| {
-                let bound = d_p.mul(
-                    &BigFloat::from_f64(2f64.powi(-((P / 2) as i32)), 2 * P),
-                    2 * P,
+    let pairs: &[usize] = if f64_src.is_finite() {
+        &[P, P_INF]
+    } else {
+        &[P]
+    };
+    for &p in pairs {
+        let judge = |pp: usize, cc: &mut Consts| {
+            judge_row(
+                source,
+                src_params,
+                candidate,
+                cand_params,
+                ops,
+                var_names,
+                x_cols,
+                row,
+                f64_src,
+                f64_cand,
+                rtol,
+                atol,
+                pp,
+                cc,
+            )
+        };
+        let (v, r_p) = judge(p, cc)?;
+        if v != RowVerdict::Fail {
+            return Some(v);
+        }
+        match judge(2 * p, cc) {
+            Some((RowVerdict::Fail, Some(r_2p))) => {
+                let Some(r_p) = r_p else {
+                    return Some(RowVerdict::Fail);
+                };
+                let bound = r_p.diff.mul(
+                    &BigFloat::from_f64(2f64.powi(-((p / 2) as i32)), 2 * p),
+                    2 * p,
                     RM,
                 );
-                matches!(d_2p.cmp(&bound), Some(ord) if ord <= 0)
-            });
-            Some(if collapsed {
-                RowVerdict::Pass
-            } else {
-                RowVerdict::Fail
-            })
+                if matches!(r_2p.diff.cmp(&bound), Some(ord) if ord <= 0) {
+                    return Some(RowVerdict::Pass); // the residual collapsed: an exact zero
+                }
+                let converged = within(&r_p.s, &r_2p.s, rtol, atol, 2 * p)
+                    && within(&r_p.c, &r_2p.c, rtol, atol, 2 * p);
+                if converged {
+                    return Some(RowVerdict::Fail);
+                }
+                // unconverged: the next pair decides
+            }
+            Some((RowVerdict::Fail, None)) | None => return Some(RowVerdict::Fail),
+            Some((other, _)) => return Some(other), // P-bit cliff artifact: the higher precision decides
         }
-        Some((RowVerdict::Fail, None)) | None => Some(RowVerdict::Fail),
-        Some((other, _)) => Some(other), // P-bit cliff artifact: the higher precision decides
     }
+    Some(RowVerdict::Fail)
 }
 
 /// The near-miss rescue: `y_src` / `y_cand` are the instance's f64 evaluations, `source`
