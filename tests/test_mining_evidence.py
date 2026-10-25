@@ -3,7 +3,8 @@
 A source has evidence iff the interval layer certifies a cell of its box on which it is finite
 everywhere -- a property of the source, never of how many rows of the sampled matrix happen to
 fall where it is finite -- and the rows it is judged on are topped up to the evidence floor from
-that set. A near miss re-judged at high precision is refuted only by converged values."""
+that set. A near miss re-judged at high precision is refuted only by converged values, and a
+collapse to `<constant>` is minted by the judge's criterion."""
 import os
 
 import numpy as np
@@ -98,3 +99,23 @@ def test_float64_tails_are_read_exactly(bare):
                                     ['x0', 'x1'], X.flatten().tolist(), 512, rtol=1e-11,
                                     atol=1e-12, rule_mode='default')
     assert ok, why
+
+
+def test_a_constant_collapse_is_minted_where_the_judge_licenses_it(bare):
+    """A collapse to `<constant>` owes a witness only where its source is finite (the judge's
+    `source_defined`), so the mint asks for a positive-measure finite part and nothing more of
+    the source's class: `atan(atanh(c))` (finite on |c| <= 1, NaN beyond) and `acos(c)`
+    certify, where the class guard refused them as a finite target for a mixed source. A source
+    finite only at the integers (`(-1)^c`) has no evidence, and one that takes an infinity on a
+    band (`0^c` for c < 0) is not reached by a finite constant."""
+    X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
+    xf = X.flatten().tolist()
+
+    def certified(src, mode):
+        return bare._core.judge_pair(src.split(), ['<constant>'], ['x0', 'x1'], xf, 512,
+                                     rtol=1e-11, atol=1e-12, rule_mode=mode)[0]
+    for mode in MODES:
+        for src in ('atan atanh <constant>', 'acos <constant>', 'exp log <constant>'):
+            assert certified(src, mode), (src, mode)
+        for src in ('pow (-1) <constant>', 'pow 0 <constant>', 'log neg cosh <constant>'):
+            assert not certified(src, mode), (src, mode)

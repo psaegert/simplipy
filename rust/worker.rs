@@ -2279,46 +2279,45 @@ fn certify_candidate(
     {
         return None;
     }
-    // COLLAPSE-TO-`<constant>` guard, the ratified zoo-collapse predicate applied at
-    // the MINT rather than only at the online fold: a source may collapse to a free
-    // finite constant only if its finite part has POSITIVE MEASURE. `inv <constant>`
-    // qualifies (finite off the measure-zero pole, which is why the family is
-    // ratified); `pow (-1) <constant>` does not (finite only at the integers, a null
-    // set), and without this the literal refuter above merely diverts it into an
-    // equally false `-> <constant>`. Same predicate as the engine's value-set
-    // collapse fold (`engine/ac.rs::ac_fold`, `cls()==Finite && fin_pm()`), so
-    // the two paths cannot disagree about what "collapses to a constant" means.
     // CLASS PRESERVATION for a VARIABLE-FREE source (ratified licence).
     // Such a source is a constant-family: its whole behaviour is a function of its
-    // `<constant>` slots, so a rewrite must preserve the value CLASS, which is a
-    // measure statement over the constant axis. `reaches_all_of` above deliberately
+    // `<constant>` slots, so a rewrite to a LITERAL must preserve the value CLASS, which
+    // is a measure statement over the constant axis. `reaches_all_of` above deliberately
     // ignores nan (a nan row is extendable, "decided by measure rather than by
-    // reachability") -- this is where that measure decision is made.
-    //   `exp log <constant>` is MIXED (finite on C>0, undefined on C<0) while
-    //   `exp <constant>` is FINITE: the rewrite would DEFINE a positive-measure
-    //   undefined region, which §4 R3 and §9.8.3(b) put in the kill set.
-    //   `pow 0 <constant>` (MIXED: 0 on C>0, +inf on C<0) likewise cannot become a
-    //   bare `<constant>`, and `pow (-1) <constant>` (nan a.e.) cannot become
-    //   anything finite.
-    // Null-set exceptions stay tolerated because the CLASS ignores them: `inv
-    // <constant>` is FINITE (its +inf lives only at C=0) and keeps collapsing, per
-    // §9.8.3(c) and the §9.8.4 degenerate-literal carve-out.
+    // reachability") -- this is where that measure decision is made: `pow (-1)
+    // <constant>` (nan a.e.) cannot become anything finite.
+    //
+    // A COLLAPSE TO `<constant>` answers to the judge's constant-collapse criterion
+    // instead (`verify._contract.source_defined`): the target constant is fitted, and a
+    // source constant at which the source is NaN or infinite is never the fit, so the
+    // collapse owes a witness exactly where the source is finite and nothing elsewhere.
+    // It needs that finite part to have POSITIVE MEASURE over the constants, CERTIFIED
+    // (`interval::finite_cells` over the source's free constants: a cell of the constant
+    // box on which it is finite everywhere) -- `pow (-1) <constant>`, finite only at the
+    // integers, has none -- and nothing more of the class: `atan atanh <constant>`
+    // (finite on |C| < 1, NaN beyond) and `acos <constant>` collapse, as the judge
+    // licenses them. An infinity the source takes stays `reaches_all_of`'s, which a finite
+    // constant cannot reach (`pow 0 <constant>`). The serve-time fold
+    // (`engine/ac.rs::ac_fold`) still collapses only the FINITE class: a mixed collapse is
+    // a mined, judged rule, never the engine's own move.
     if let Some(sv) = &sc.reach {
-        // `target` is the candidate's own tokens unless literal resolution
-        // respelled it -- reuse the build-time value set where it is.
-        let tv = if is_resolution {
-            crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
+        if target.len() == 1 && target[0] == "<constant>" {
+            let certified = crate::interval::finite_cells(source, &[], ops, 1)
+                .is_some_and(|fc| !fc.cells.is_empty());
+            if !(sv.fin_pm() && certified) {
+                return None;
+            }
         } else {
-            cand.reals_vs
-        };
-        let same_class = tv.is_some_and(|cv| cv.cls() == sv.cls());
-        if !same_class {
-            return None;
-        }
-        // A source finite only on a NULL set additionally may not collapse to a free
-        // constant (the ratified zoo-collapse predicate, mint-side).
-        if target.len() == 1 && target[0] == "<constant>" && !sv.fin_pm() {
-            return None;
+            // `target` is the candidate's own tokens unless literal resolution
+            // respelled it -- reuse the build-time value set where it is.
+            let tv = if is_resolution {
+                crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
+            } else {
+                cand.reals_vs
+            };
+            if !tv.is_some_and(|cv| cv.cls() == sv.cls()) {
+                return None;
+            }
         }
     }
     // A head the high-precision evaluators do not know has no contract verdict, so the judge

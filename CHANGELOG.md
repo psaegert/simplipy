@@ -1065,7 +1065,8 @@ model predictions.
   included (`acosh(erf(x))` is finite where float64's erf is 1, x >= 5.92); an undecided search
   certifies nothing. Where the matrix holds fewer rows than the floor inside that set, the
   missing rows are drawn from the certified cells, by a stream the seed fixes, and judged with
-  the rest.
+  the rest. `abs(atanh(acos(x))) -> atanh(acos(x))`, finite for x in (cos 1, 1] (15 rows of
+  512), is mined now.
 - **A high-precision refutation needs converged values.** `real` and `permissive` re-judge an
   f64 near miss at 1024 and 2048 bits. A row whose values still moved between the two was taken
   as a refutation: `tanh(x)` is exactly -1 at both precisions once x < -710, so
@@ -1073,13 +1074,34 @@ model predictions.
   and `sin(acos(tanh(x))) -> 1/cosh(x)` was mined only when the matrices held no row below
   -700 (one variable at seed 42, none at seed 7). Such a row is now judged again at 4096 and
   8192 bits, the precision the mine's range (|x| <= 1e3) needs, by the same rule; a converged
-  false row (`exp(sinh(-5)) -> 0`) is refuted at 2048 bits as before.
+  false row (`exp(sinh(-5)) -> 0`) is refuted at 2048 bits as before. With these two changes the
+  reduced length-4 mines at seeds 42 and 7 write byte-identical files in all three modes, and
+  the files gain 16 `f64` rules, 7 `real` and 6 `permissive` (`cos(asin(tanh(x))) ->
+  1/cosh(x)` among them) and lose none that is not served by the rest.
 - **A source without evidence is not scanned.** The evidence decision is the source's, the
   same for every candidate, but it was read at the end of each candidate's judgment, after its
   constant fits, domain gates and high-precision rescues, so a source finite nowhere
   (`log(-cosh(x))`) was judged against the whole library to be refused by every candidate. It
   is now read once, before the source's context is built, and such a source returns at once;
-  the files are unchanged.
+  the files are unchanged. On the reduced length-4 mine about 14% of the scanned sources have
+  no evidence and held a quarter of the length-4 scan's time; the mine ran in 3232 s instead
+  of 4258 s (4 threads).
+- **A constant collapse is minted where the judge licenses it.** The judge licenses
+  `acos(c) -> c_t` from |c| <= 1 alone (a fitted constant owes a witness only where its source
+  is finite), but the mint kept a stricter rule of its own for a source without variables: its
+  value class over the constant axis had to equal the target's, and a source finite on part of
+  the axis and NaN on the rest is mixed, never the finite class of `<constant>`. So
+  `atan(atanh(c)) -> c_t`, `acos(c) -> c_t` and `exp(log(c)) -> c_t` were never mined, three
+  tokens or fewer though they are. A collapse to `<constant>` now asks the judge's question
+  alone: the interval layer certifies a cell of constants on which the source is finite. A
+  literal target keeps the class guard, a source finite only at the integers (`(-1)^c`) has no
+  such cell, and one infinite on a band (`0^c`) is still out of a finite constant's reach. The
+  engine's own fold still collapses only the finite class. On the reduced length-4 mine the
+  `f64` and `real` files gain `acos`, `asin`, `acosh`, `atanh` and `log` of `<constant>` to
+  `<constant>`, which cover about 280 longer collapses and 21 (`f64`) and 31 (`real`) rules
+  such as `x * acos(c) -> c_t * x` that the mine no longer writes: with the evidence decision,
+  `f64` holds 589 rules (was 767), `real` 751 (913) and `permissive` 441 (400), every dropped
+  rule served by the rest.
 
 ### Removed
 

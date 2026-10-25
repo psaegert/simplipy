@@ -6234,7 +6234,9 @@ pub struct FiniteCells {
 }
 
 /// THE EVIDENCE CERTIFICATE: is `expr` (its `<constant>`s bound to `params`) FINITE on a
-/// positive-measure set of its horizon box, and where?
+/// positive-measure set of its horizon box, and where? With no `params`, its `<constant>`s are
+/// free and range over the box too (dimension 0, beside a first variable), so the question is
+/// asked of the constants themselves.
 ///
 /// A cell is a witness when the outward-rounded value set over it holds a finite part and
 /// nothing else (no NaN, no infinity, and the finite part not confined to a null set): every
@@ -6281,7 +6283,10 @@ pub fn finite_cells(
         .collect();
     let n = used.len().max(1);
     // A variable-free expression at bound constants is one value: its box has nothing to split.
-    let depth_max = if used.is_empty() {
+    // Free constants (fewer `params` than `<constant>`s) live on dimension 0 (`leaf_vs`), and
+    // the box over them is split like a variable's.
+    let free = e.iter().filter(|t| *t == "<constant>").count() > params.len();
+    let depth_max = if used.is_empty() && !free {
         0
     } else {
         depth_per_dim * n as u32
