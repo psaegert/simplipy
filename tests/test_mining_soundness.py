@@ -2316,6 +2316,7 @@ class TestTheSidecarRecordsTheGates:
         # present even when empty: a key that appears only on failure cannot be audited
         assert isinstance(prov['gates']['unlicensed'], list)
         assert isinstance(prov['gates']['preempted'], list)
+        assert prov['gates']['dead'] == []  # every mined rule fires on its own instance
         assert prov['gates']['file'] == 'mined.json'
         assert set(prov['per_length']) == {'1', '2', '3'}
         for row in prov['per_length'].values():

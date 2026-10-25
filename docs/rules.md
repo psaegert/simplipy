@@ -62,8 +62,16 @@ of the judge loop), the symbolic gate on the entries the mode serves, the covere
 (asked of the mode's answer, on the instances each slot binds in that mode), sort
 promotion, the covered prune again, and the file gates — every file spelling and served
 entry the mode does not license is dropped, and so is a ground rule the mode's constructor
-already performs; both are listed in the sidecar. Then the file and its sidecar are
-written.
+already performs; both are listed in the sidecar, and so is every rule that is not live
+(`gates.dead`, expected empty): a rule the engine holding the file does not serve on its own
+left side, because another rule takes that instance first and ends dearer. Then the file
+and its sidecar are written.
+
+At each node the engine tries the rules of the node's head most specific first — the nodes
+a match must find beyond one per placeholder, so `sin acos tanh _0` before `sin acos _0` —
+exact rules before patterns and file order among equals; the first rule that matches and
+descends fires. A rule mined for a longer source therefore takes its instances wherever
+the file places it.
 
 The permissive mine runs last, and its post-pass is also offered the finished f64 and real
 files (`offer_final_rules`, on by default). Permissive promises less than either mode, so
@@ -256,6 +264,7 @@ simplipy verify-mine rules_real.json --mode real -e config.yaml
 | `engine_owned_law` | no rule respells one canonical state or states the distributive law as the search factors (a sign pull such as `neg sin _0 -> sin neg _0` still passes) |
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
 | `preempted` | no ground rule is one the rule-less engine already performs, such as a ground fact it folds (`log (-3) → nan`) |
+| `dead` | every rule is live: on each generic instance of its left side (each placeholder a fresh variable, a wide one also `sin(x)`), the engine holding the file reaches the right side or below, so no rule is shadowed by another that takes its instance and ends dearer |
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |

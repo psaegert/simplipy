@@ -67,7 +67,9 @@ _NON_FINITE_LITERALS = ('float("inf")', 'float("-inf")', 'float("nan")')
 def _coverage_variants(
         lhs: tuple[str, ...],
         rhs: tuple[str, ...],
-        rule_mode: str) -> list[tuple[list[str], list[str]]]:
+        rule_mode: str,
+        non_finite: bool = True,
+        composite: str | None = 'sin') -> list[tuple[list[str], list[str]]]:
     """Instantiation variants a rule must survive to count as covered in ``rule_mode``:
     the instances its slots bind there.
 
@@ -75,25 +77,50 @@ def _coverage_variants(
     ``<constant>`` stays LITERAL (substituting a numeral would let native constant
     folding fake coverage). Additionally, every subset of up to 3 wide slots
     (``_``/``!``/``$`` sigils, which bind composites) is probed with the composite
-    ``sin(x{i})``: leaf-only instantiation under-tests what a wide slot claims to match.
+    ``sin(x{i})`` (``composite`` names the unary head; ``None`` probes none): leaf-only
+    instantiation under-tests what a wide slot claims to match.
     In ``permissive``, where every slot binds any subtree, each non-finite literal is a
     variant too (all slots at once): `$0 / $0 -> 1` is what takes `inf/inf` to `1` there,
     which the constructor takes to `nan`. (In ``f64`` and ``real`` the ground fold reads
-    such an instance before any rule.)
+    such an instance before any rule.) ``non_finite=False`` leaves that tier out: the
+    GENERIC instances only, which the liveness gate asks a rule to fire on.
     """
     slots = list(dict.fromkeys(t for t in lhs if _is_slot_token(t)))
-    wide = [s for s in slots if s[0] in '_!$'][:3]
+    wide = [s for s in slots if s[0] in '_!$'][:3] if composite is not None else []
     bindings_list = []
     for mask in product((0, 1), repeat=len(wide)):
         bindings = {s: ['x' + s[1:]] for s in slots}
-        for slot, composite in zip(wide, mask):
-            if composite:
-                bindings[slot] = ['sin', 'x' + slot[1:]]
+        for slot, wrapped in zip(wide, mask):
+            if wrapped:
+                bindings[slot] = [str(composite), 'x' + slot[1:]]
         bindings_list.append(bindings)
-    if rule_mode == 'permissive' and slots:
+    if non_finite and rule_mode == 'permissive' and slots:
         bindings_list += [{s: [value] for s in slots} for value in _NON_FINITE_LITERALS]
     return [([out for t in lhs for out in b.get(t, [t])],
              [out for t in rhs for out in b.get(t, [t])]) for b in bindings_list]
+
+
+def _reaches_promise(core: Any, rule_mode: str, variant_lhs: list[str],
+                     variant_rhs: list[str], arity: dict[str, int]) -> bool:
+    """Does ``core``'s serve answer in ``rule_mode`` take the instance ``variant_lhs`` to at
+    most the promised ``variant_rhs`` in the serve-time reduction ordering?
+
+    ``probe_out <= rhs`` is spelled ``!(rhs < probe_out)`` in the total order, so equality is
+    state identity: the answer literally reaches the promise or something below it, never
+    merely something that SCORES the same. One tier needs more than the ordering: a
+    ``<constant>`` in a promise is EXISTENTIAL, so an answer reaching an INSTANCE of the
+    promise (each Const slot bound to a ground subterm -- ``0`` fulfills ``<constant>``,
+    ``* 2.71... x0`` fulfills ``* <constant> x0``) has fulfilled it, though the total order
+    sees only unrelated leaf kinds there. The covered-rule prune asks it of the engine
+    WITHOUT the rule, the liveness gate of the engine WITH it.
+    """
+    probe_out = core.mine_mark(list(variant_lhs), rule_mode=rule_mode)
+    if not core.ac_ordered_below_in(list(variant_rhs), probe_out, rule_mode=rule_mode):
+        return True
+    if '<constant>' in variant_rhs:
+        promise = core.mine_mark(list(variant_rhs), rule_mode=rule_mode)
+        return _fulfills_constant_promise(promise, probe_out, arity)
+    return False
 
 
 # The core serialization language's arities (config-independent built-ins): the
@@ -1024,29 +1051,13 @@ class SimpliPyEngine:
         arity = {**_CORE_SERIALIZATION_ARITIES, **self.operator_arity}
 
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
-            # State-coverage in the serve-time reduction ordering: the probe engine
-            # must reach at most the promised rhs-state -- probe_out <= rhs, spelled
-            # !(rhs < probe_out) in the total order. The complexity-score judge this
-            # replaces was blind on the tie tier (equal-score DIFFERENT states:
-            # `abs neg ?0 -> abs ?0` read 2 <= 2 "covered" while nothing performed
-            # the rewrite), deleting rules mint acceptance had certified as strict
-            # improvements. One tier needs more than the ordering: `<constant>` in a
-            # promise is EXISTENTIAL, so a probe reaching an INSTANCE of the promise
-            # (each Const slot bound to a ground subterm -- `0` fulfills
-            # `<constant>`, `* 2.71... x0` fulfills `* <constant> x0`) has fulfilled
-            # it, though the total order sees only unrelated leaf kinds there.
-            # (mine_mark/ac_ordered_below_in: the AC parser is the arbiter, no
+            # State-coverage in the serve-time reduction ordering (`_reaches_promise`). The
+            # complexity-score judge this replaces was blind on the tie tier (equal-score
+            # DIFFERENT states: `abs neg ?0 -> abs ?0` read 2 <= 2 "covered" while nothing
+            # performed the rewrite), deleting rules mint acceptance had certified as strict
+            # improvements. (mine_mark/ac_ordered_below_in: the AC parser is the arbiter, no
             # config-vocabulary gate; an undecidable ordering raises.)
-            def fulfilled(variant_lhs: list[str], variant_rhs: list[str]) -> bool:
-                probe_out = core.mine_mark(variant_lhs, rule_mode=rule_mode)
-                if not core.ac_ordered_below_in(list(variant_rhs), probe_out, rule_mode=rule_mode):
-                    return True
-                if '<constant>' in variant_rhs:
-                    promise = core.mine_mark(list(variant_rhs), rule_mode=rule_mode)
-                    return _fulfills_constant_promise(promise, probe_out, arity)
-                return False
-
-            return all(fulfilled(variant_lhs, variant_rhs)
+            return all(_reaches_promise(core, rule_mode, variant_lhs, variant_rhs, arity)
                        for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs, rule_mode))
 
         kept = set(full)

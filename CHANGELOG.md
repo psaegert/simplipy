@@ -1017,9 +1017,10 @@ model predictions.
 - **`simplipy verify-mine <file> --mode m -e <engine>`** (and `simplipy.mining.verify_mine`)
   checks a mined file against the re-mine gates in its own mode: no twin-shadowed row, no
   engine-owned law, every spelling licensed, nothing preempted (no ground fact the rule-less
-  engine folds, such as `log (-3) -> nan`), a translation that subsumes and drops nothing, a
-  clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when one fails. `-e`
-  names the engine (an official name or a config path) whose operators read the file.
+  engine folds, such as `log (-3) -> nan`), every rule live (`dead`, below), a translation
+  that subsumes and drops nothing, a clean measure fingerprint and no `SIMPLIPY_*` switch; it
+  exits non-zero when one fails. `-e` names the engine (an official name or a config path)
+  whose operators read the file.
 - **The sidecar records each file's own mine**: `acceptance` (tolerances, whether and at
   which gate a near miss is re-judged, the licensed tiers, the judge's digest), `per_length`
   (classes, picks, judge rounds, exclusions, twin-shadowed rows), `gates` and
@@ -1055,6 +1056,27 @@ model predictions.
   got four different files in four orders). The mine's seed still decides which rules reach
   promotion: a source finite on a narrow band, such as `atanh(floor(x))` on [0, 1), may fall
   short of the evidence floor under another seed.
+- **The most specific rule fires first.** At a node the engine fired the first rule of the
+  node's head that matched, in file order, so a rule mined for a longer source never fired
+  where a shorter rule that also matches stood before it. The `real` and `permissive` files
+  of the reduced length-4 mine hold `sin(acos(_0)) -> cos(asin(_0))` and, after it,
+  `sin(acos(tanh(_0))) -> 1/cosh(_0)`: `sin(acos(tanh(x)))` took the first and stopped at
+  `cos(asin(tanh(x)))` (28,000 milli-bits), which no rule continues. The rules of a head now
+  fire most specific first, by the nodes a match must find beyond one per placeholder, exact
+  rules before patterns and file order among equals, as the engines before 0.12 tried the
+  longest pattern first; `sin(acos(tanh(x)))` is `1/cosh(x)` (17,000). No answer changes on
+  the training-data inputs, the ground truths or the predictions (a tenth of each large set,
+  all three modes), with `acj-5-4-llm` or with the reduced mine's files.
+  `cos(asin(tanh(x)))` itself keeps its form: the mine does not certify
+  `cos(asin(tanh(_0))) -> 1/cosh(_0)` on its evaluation rows.
+- **`verify-mine` and the mine check that every rule fires** (`dead`). On every generic
+  instance of a rule's left side (each placeholder a fresh variable, a wide one also
+  `sin(x)`) the engine holding the file must reach the rule's right side or something
+  cheaper; a rule another rule takes from its own instance, ending dearer, ships and never
+  decides an answer. The mine lists such rules in the sidecar (`gates.dead`) and on its
+  final-gate line, and `verify-mine` fails on them. Under file-order matching the gate lists
+  `sin(acos(tanh(_0))) -> 1/cosh(_0)` in the reduced mine's `real` and `permissive` files
+  (the only rule it lists); it lists none now.
 
 ### Removed
 

@@ -121,6 +121,31 @@ def test_the_preempted_gate(tmp_path, mine) -> None:
     assert not gate['ok'] and gate['count'] == 1, gate
 
 
+def test_the_dead_gate(tmp_path, mine) -> None:
+    """A rule another rule takes from its own instance, ending dearer, never decides an answer:
+    here two rows of one left side, the first ending at `2*x` where the second promises `x`."""
+    first, second = (('log', 'exp', '_0'), ('*', '2', '_0')), (('log', 'exp', '_0'), ('_0',))
+    path = _plant(tmp_path, mine, 'f64', [first, second])
+    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'dead')
+    assert not gate['ok'] and [e[:2] for e in gate['examples']] == [[list(second[0]),
+                                                                     list(second[1])]], gate
+    assert gate['examples'][0][2:] == [['log', 'exp', 'x0'], ['*', '2', 'x0']], gate
+
+
+def test_a_longer_rule_is_live_beside_its_prefix(tmp_path, mine) -> None:
+    """The most specific rule fires first: with `sin acos _0 -> cos asin _0` first in the file,
+    `sin acos tanh _0 -> inv cosh _0` used to be dead (`sin(acos(tanh(x)))` ended at
+    `cos(asin(tanh(x)))`)."""
+    rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
+             (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
+    path = _plant(tmp_path, mine, 'real', rules)
+    ops = _acj_operators()
+    assert _gate(verify_mine(path, 'real', ops, judge=core_judge), 'dead')['ok']
+    engine = SimpliPyEngine(operators=ops, rules=[], rules_real=rules)
+    assert engine.simplify('sin acos tanh x0'.split(), mode='real') == ['inv', 'cosh', 'x0']
+    assert engine.simplify('sin acos x0'.split(), mode='real') == ['cos', 'asin', 'x0']
+
+
 def test_the_translation_gate(tmp_path, mine) -> None:
     """A rule the load subsumes by exact arithmetic (`* 1 ?0 -> ?0`)."""
     path = _plant(tmp_path, mine, 'f64', [(('*', '1', '?0'), ('?0',))])
