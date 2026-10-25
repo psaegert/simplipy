@@ -65,9 +65,12 @@ organised by who you are, then the highlights, then every change in detail.
   `-inf` (it was `inf`), while `-0.0 + 0` is `0`. A written product of a zero with ground
   factors takes the sign of their float64 values (`0*sin(-1)` and `sinh(-0.0)*0` are `-0.0`,
   `ceil(-0.0)*(-0)` is `0`), and a sign moved into an odd function of the zero keeps it:
-  `-sin(0)`, `-2*atan(0)` and `-erf(0)` are `-0.0` (they were `0`). A zero the search derives
-  keeps the one zero (`x1*0` is unchanged). A nonzero literal that underflows to -0 stays the
-  leaf it is written as.
+  `-sin(0)`, `-2*atan(0)` and `-erf(0)` are `-0.0` (they were `0`). In a ground expression the
+  reciprocal of `-inf` is float64's -0 too: `1/float("-inf")`, `1/(-float("inf"))` and
+  `(-inf)^-3` are `-0.0` (they were `0`), so `1/(1/float("-inf"))` is `-inf` (it was `inf`);
+  `(-inf)^-2` is `0`. A zero the search derives keeps the one zero (`x1*0` and
+  `x1/float("-inf")` are `0`). A nonzero literal that underflows to -0 stays the leaf it is
+  written as.
 - **Known `f64` limit: a zero term at -0.** `x + 0` is `x`, and `x1 + sin(0)` is `x1`: at the
   single point `x = -0` the answer is -0 where float64's sum is +0 (`-0 + 0 = +0`). A point is
   a null set, whose zero sign `f64` does not keep. `x + -0.0` is `x` exactly, since float64's

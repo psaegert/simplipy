@@ -8988,6 +8988,34 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     }
 }
 
+thread_local! {
+    /// Set while the parse reads a ground expression (`GroundParse`).
+    static GROUND_PARSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Is the parse reading a GROUND expression (no variable, `<constant>` or wildcard: every leaf a
+/// value the evaluator reads)? There, as the ground fold writes a ground value's float, a
+/// constructor writes float64's signed zero where the one zero would drop its sign.
+pub(crate) fn ground_parse() -> bool {
+    GROUND_PARSE.with(|g| g.get())
+}
+
+/// Holds [`ground_parse`] for one parse and restores the caller's when it drops.
+pub(crate) struct GroundParse(bool);
+
+impl GroundParse {
+    pub(crate) fn open(ground: bool) -> Self {
+        GroundParse(GROUND_PARSE.with(|g| g.replace(ground)))
+    }
+}
+
+impl Drop for GroundParse {
+    fn drop(&mut self) {
+        let outer = self.0;
+        GROUND_PARSE.with(|g| g.set(outer));
+    }
+}
+
 /// The SPELLING `pow(b, e)`, as the parse reads it: [`pow`], except numpy's square root in `f64`.
 /// Float64's `b ** 0.5` is `sqrt(b)` (`numeric::aligned_pow`), which keeps a zero's sign
 /// (`sqrt(-0) = -0`) where `rootn(b, 2)`, the engine's reading of `b^(1/2)`, gives +0. Where `b`
@@ -9107,11 +9135,23 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // keep EXPIRES at the phase-1 fixpoint (`sentinels_expired`, H-015): a
     // surviving reciprocal is unpartnered, IS the value 0, and blocks the rules
     // its unfolded shape hides from.
+    // In `f64` a GROUND expression's zero keeps float64's sign, the dual of the written negative
+    // zero's pole above (`ground_parse`): `(-inf)^-1` is `1/-inf = -0` and `(-inf)^-3` is -0,
+    // `(-inf)^-2` is +0; beside a variable or a `<constant>` the zero is the one zero, as a zero
+    // the search derives is (`x1/-inf` is 0). And `+inf` under a positive exponent is `+inf`
+    // (`inf^(1/2)` is `sqrt(inf)`), decided here, so a product holding it inverts to the zero of
+    // its sign: `1/-(inf^(1/2))` is -0.
     if !cx.lossy() || cx.sentinels_expired {
         if let Ex::Num(e) = &exp {
+            if matches!(base, Ex::PosInf) && e.signum() > 0 {
+                return Ex::PosInf;
+            }
             if e.is_negative() {
                 match &base {
                     Ex::PosInf => return Ex::Num(Rat::ZERO),
+                    Ex::NegInf if e.is_odd_integer() && cx.f64_semantics() && ground_parse() => {
+                        return Ex::Leaf(cx.view.intern(NEG_ZERO))
+                    }
                     Ex::NegInf if e.is_integer() => return Ex::Num(Rat::ZERO),
                     _ => {}
                 }

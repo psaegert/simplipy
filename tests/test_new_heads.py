@@ -673,3 +673,32 @@ def test_f64_square_root_spellings_keep_float64s_zero_signs(bare):
     f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
     assert f64('pow -0.0 0.5') == '-0.0' and f64('rootn -0.0 2') == '0'
     assert f64('pow x0 0.5') == 'rootn x0 2'
+
+
+def test_f64_reciprocal_of_an_infinity_keeps_float64s_zero_sign(bare):
+    """`1/(-inf)` is -0.0 in float64, and an inverse of it -inf: every head at +-inf and +-0
+    ground operands, bare, negated, scaled and inverted, folds in `f64` to what the evaluator
+    computes wherever the input's value is a zero or an infinity, its sign included."""
+    import itertools
+    import struct
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    inf, ninf = 'float("inf")', 'float("-inf")'
+    assert f64(f'inv {ninf}') == '-0.0' and f64(f'inv inv {ninf}') == ninf
+    assert f64(f'pow {ninf} -3') == '-0.0' and f64(f'pow {ninf} -2') == '0'
+    assert f64(f'inv neg {inf}') == '-0.0' and f64(f'inv / 1 {ninf}') == ninf
+    assert ' '.join(bare.simplify(f'inv {ninf}'.split(), mode='real')) == '0'
+    arity = dict(bare.operator_arity)
+    leaves = ['0', '-0.0', inf, ninf, '1', '-1', '0.5', '-2']
+    grounds = [[h, a] for h, n in arity.items() if n == 1 for a in leaves]
+    grounds += [[h, a, b] for h, n in arity.items() if n == 2 for a, b in itertools.product(leaves, leaves)
+                if (a in leaves[:4] or b in leaves[:4]) and not (h == 'rootn' and b.startswith('-') and b != '-0.0')]
+
+    def ev(t):
+        return float(np.asarray(bare._core.evaluate_batch(t, ['x0'], [0.0], 1, []))[0])
+
+    def bits(v):
+        return 'nan' if v != v else struct.pack('<d', v)
+    srcs = [c + g for g in grounds for c in ([], ['neg'], ['*', '-1'], ['*', '-2'], ['inv'], ['inv', 'neg'])]
+    srcs = [s for s in srcs if ev(s) == 0.0 or abs(ev(s)) == np.inf]
+    bad = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
+    assert len(srcs) > 1000 and not bad, (len(bad), bad[:5])

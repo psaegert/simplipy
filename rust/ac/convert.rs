@@ -24,7 +24,8 @@ use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
     add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pow,
-    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
+    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, GroundParse,
+    NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -39,6 +40,12 @@ pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // One scope for the whole parse: a product met again is decided once (`FlipScope`).
     let _memo = FlipScope::open();
+    // A ground expression: every token an operator or a value the evaluator reads.
+    let view = cx.view;
+    let ground = tokens.iter().all(|&t| {
+        view.arity(t).is_some() || view.with_str(t, |s| crate::numeric::leaf_value(s).is_some())
+    });
+    let _ground = GroundParse::open(ground);
     let (e, next) = parse_one(tokens, 0, cx)?;
     if next != tokens.len() {
         return None;
