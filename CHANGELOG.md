@@ -1182,6 +1182,21 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     head without an arm are unanalyzable: every certificate refuses them, and the miner accepts
     no candidate for a variable-free source it cannot analyze. The tail certificate's table of
     pole-free operators names the operators that are, so an unnamed head is pole-bearing.
+  - *Certificates.* The finite-almost-everywhere, nonzero-almost-everywhere and zero-set
+    certificates read each of the nine by its argument, so a cancellation or a zero product
+    over one is licensed where it was refused: `x1*erf(x2)/erf(x2)`,
+    `x1*besselj(0, x2)/besselj(0, x2)`, `max(x1, x2)/max(x1, x2)` and
+    `x3*mod(x1, x2)/mod(x1, x2)` are `x1`, `1` and `x3`, and `mod(x1, x2)*0` is `0`, in `f64`
+    and `real`. `erf` vanishes only at 0; `besselj` at a literal order has isolated zeros in x;
+    `harmonic` is finite off its poles at the negative integers and vanishes once between each
+    two; `max` and `min` vanish only where a member does; `mod(x, y)` vanishes on countably many
+    hyperplanes x = k y and is NaN only at y = 0; `atan2(y, x)` vanishes only where y = 0. They
+    stay refused where the head vanishes, is NaN or has a pole on a region: `floor(x2)` (0 on
+    [0, 1)), `ceil(x2)`, `besselj(3/2, x2)` (NaN below 0), `besselj(x1, x2)` (an order that is
+    no literal), and `mod(x1, 2)`, which float64 makes 0 at every |x1| >= 2^53. A step head of
+    an argument that certainly misses the interval is nonzero (`floor(exp(x2) + 2)`). In `f64`,
+    `harmonic(x2)*0` and `x1*harmonic(x2)/harmonic(x2)` stay: float64's `harmonic` is NaN at
+    every float at or below -2^52, each a negative integer; `real` gives `0` and `x1`.
   - *Signed zeros.* `ceil(-0.5)`, `mod(3, -3)` and their kin are -0 in float64, and `atan2`
     reads the sign of a zero in both arguments, as an inverse does (`atan2(-0, -1)` is -pi,
     `atan2(+0, -0)` is pi). In `f64` such a ground folds to `-0.0` and a ground infinity takes

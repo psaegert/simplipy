@@ -3438,7 +3438,7 @@ pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
         nonfinite_null(t, ops) || (finite_ae_subdivision(t, ops) && tail_finite_ae(t, ops))
     };
     if f64 {
-        on_float64_tails(tokens, ops, 0, &real, &real)
+        !harmonic_nan_tail(tokens, ops) && on_float64_tails(tokens, ops, 0, &real, &real)
     } else {
         real(tokens)
     }
@@ -3669,11 +3669,17 @@ fn op_total_finite(op: &str) -> bool {
             | "tanh"
             | "atan"
             | "asinh"
+            // the 0.15 heads that map every finite real to a finite real
+            | "floor"
+            | "ceil"
+            | "erf"
     )
 }
 
 /// Everywhere-defined and REAL-ANALYTIC on all of R: the identity-theorem class. `abs`,
-/// `pow1_3`, `pow1_5` are total but not analytic at 0 and are excluded on purpose.
+/// `pow1_3`, `pow1_5` are total but not analytic at 0 and are excluded on purpose. `erf` is
+/// entire (its float64 saturation at +-1 is a tail, `tail_of`); the other 0.15 heads are not
+/// analytic (steps, kinks, poles, a branch cut) and are read by their own arms.
 fn op_entire_analytic(op: &str) -> bool {
     matches!(
         op,
@@ -3700,6 +3706,7 @@ fn op_entire_analytic(op: &str) -> bool {
             | "tanh"
             | "atan"
             | "asinh"
+            | "erf"
     )
 }
 
@@ -3735,6 +3742,78 @@ fn int_literal(t: &[String]) -> Option<i64> {
 /// all finite reals -- containment proofs made on it are valid for EVERY fitted constant.
 fn whole_range(t: &[String], ops: &Operators) -> Option<Vs> {
     value_set(t, ops, &Vs::reals())
+}
+
+/// Is every level set {g = c} of `g` null, for every real c at once? Where `g` is an
+/// entire-analytic composition (`entire_analytic_composition`: entire heads, integer powers,
+/// ground subtrees; a variable is one) certified nonconstant (`disjoint_value_pair`), the
+/// identity theorem gives it. A `<constant>` fails closed: at C = 0, `C*x1` is constant. The
+/// consumers take a countable union of level sets (the zeros of `harmonic`, of `besselj` at a
+/// literal order, the multiples of a `mod` divisor).
+fn levels_null(g: &[String], ops: &Operators) -> bool {
+    !g.iter().any(|s| s == "<constant>")
+        && entire_analytic_composition(g, ops)
+        && disjoint_value_pair(g, ops, true)
+}
+
+/// The class of a `besselj` order the certificates read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BesseljOrder {
+    /// An integer: J_n is entire in x.
+    Integer,
+    /// Certainly positive and no integer: NaN at every x < 0, 0 at x = 0.
+    PositiveFraction,
+    /// Certainly negative and no integer: NaN at every x < 0, a pole at x = 0.
+    NegativeFraction,
+}
+
+/// The class of the order of `besselj(nu, x)` where it is a ground subtree whose enclosure
+/// decides it in every reading: one integer point, or an interval holding no integer and of one
+/// sign (a decimal literal such as `1.5` encloses its value and its float's), inside the range
+/// the kernel is read as NaN-free at every finite argument (`BESSELJ_NU_MEASURED`, and
+/// `BESSELJ_NEG_NU_MEASURED` for a negative non-integer order). `None` for any other order: the
+/// certificates fail closed.
+fn besselj_order(nu: &[String], ops: &Operators) -> Option<BesseljOrder> {
+    if nu
+        .iter()
+        .any(|s| var_index(s).is_some() || s == "<constant>")
+    {
+        return None;
+    }
+    let v = whole_range(nu, ops)?;
+    if !v.has_fin || v.nan || v.pinf || v.ninf || !(v.lo.is_finite() && v.hi.is_finite()) {
+        return None;
+    }
+    let order = if v.is_const() && v.lo.fract() == 0.0 {
+        BesseljOrder::Integer
+    } else if v.lo.floor() == v.hi.floor() && v.lo.fract() != 0.0 && v.lo > 0.0 {
+        BesseljOrder::PositiveFraction
+    } else if v.lo.floor() == v.hi.floor() && v.lo.fract() != 0.0 && v.hi < 0.0 {
+        BesseljOrder::NegativeFraction
+    } else {
+        return None;
+    };
+    let bound = if order == BesseljOrder::NegativeFraction {
+        BESSELJ_NEG_NU_MEASURED
+    } else {
+        BESSELJ_NU_MEASURED
+    };
+    (v.lo.abs().max(v.hi.abs()) <= bound).then_some(order)
+}
+
+/// float64's `harmonic` is NaN at every float at or below -2^52 (each is a negative integer, a
+/// pole): a NaN tail on a whole ray, which the real reading does not have. In `f64` a tree
+/// holding `harmonic` of an argument that may reach that ray is not finite almost everywhere.
+fn harmonic_nan_tail(t: &[String], ops: &Operators) -> bool {
+    const NAN_TAIL: f64 = -4503599627370496.0; // -2^52
+    t.iter().enumerate().any(|(i, tok)| {
+        tok == "harmonic"
+            && ops.arity_of(tok) == Some(1)
+            && subtree_end(t, i + 1, ops).is_none_or(|j| {
+                whole_range(&t[i + 1..j], ops)
+                    .is_none_or(|v| v.ninf || (v.has_fin && v.lo <= NAN_TAIL))
+            })
+    })
 }
 
 const CERT_RECURSION_MAX: u32 = 32;
@@ -3990,7 +4069,7 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
         (
             "neg" | "abs" | "pow2" | "pow3" | "pow4" | "pow5" | "pow1_2" | "pow1_3" | "pow1_4"
             | "pow1_5" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5"
-            | "sinh" | "tanh" | "asinh" | "atan" | "asin" | "atanh",
+            | "sinh" | "tanh" | "asinh" | "atan" | "asin" | "atanh" | "erf",
             Some(1),
         ) => zsn(&t[1..], ops, d + 1, e2),
         // never zero on their real range
@@ -4066,6 +4145,81 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
                 Some(n) if n >= 2 => zsn(&t[1..ja], ops, d + 1, e2),
                 _ => false,
             }
+        }
+        // The 0.15 heads (`erf` is above: it vanishes only at 0, `erf(y) = 0` iff `y = 0`, and
+        // float64's `erf` keeps every nonzero argument nonzero, `erf(5e-324) = 5e-324`; its
+        // saturation at +-1 is a float64 tail, `tail_of`).
+        //
+        // `floor(g)` is 0 exactly on {0 <= g < 1} and `ceil(g)` on {-1 < g <= 0}: whole
+        // intervals, so a step head is nonzero almost everywhere only where `g`'s whole-space
+        // range misses that interval, and then it is never zero (NaN and +-inf pass through,
+        // and are no zero). Exact in float64 too (the steps are exact).
+        ("floor", Some(1)) => whole_range(&t[1..], ops)
+            .is_some_and(|v| !v.has_fin || v.hi < 0.0 || (v.hi == 0.0 && v.hi_open) || v.lo >= 1.0),
+        ("ceil", Some(1)) => whole_range(&t[1..], ops).is_some_and(|v| {
+            !v.has_fin || v.lo > 0.0 || (v.lo == 0.0 && v.lo_open) || v.hi <= -1.0
+        }),
+        // `max(a, b)` and `min(a, b)` are one of their members or NaN at every point (IEEE
+        // 754-2019 `maximum`/`minimum`; at the zero tie a zero), so Z(max(a, b)) ⊆ Z(a) ∪ Z(b).
+        ("max" | "min", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            zsn(&t[1..ja], ops, d + 1, e2) && zsn(&t[ja..], ops, d + 1, e2)
+        }
+        // `mod(a, b)` is 0 exactly where `a` is an integer multiple of a finite nonzero `b`
+        // (`fmod` is exact), or at `a = 0` under an infinite `b`: countably many level sets
+        // {a = k b}. Two shapes are read, each by Fubini over one variable:
+        //   * `a` a variable x not in `b`: for fixed other variables `b` is one value, and
+        //     {x = k b} ∪ {x = 0} is countable in x. `b` must hold a variable and have null
+        //     level sets: a `b` constant on a region (`max(x2, 1)`, or a ground power of two)
+        //     makes float64's `mod(x, b)` exactly 0 on the whole ray |x| >= 2^52 |b| there, a
+        //     float64 tail the real reading does not see.
+        //   * `b` a variable y not in `a`: for fixed other variables `a` is one value c; c = 0
+        //     is `a`'s zero set (null by `zsn(a)`), and for c != 0, {y = c/k} is countable (an
+        //     infinite `a` is NaN, no zero).
+        // Anything else fails closed (`mod(x1, 2)`, `mod(x1 + x2, x1)`).
+        ("mod", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            let (a, b) = (&t[1..ja], &t[ja..]);
+            let lone_var = |s: &[String], other: &[String]| matches!(s, [x] if var_index(x).is_some() && !other.contains(x));
+            (lone_var(a, b) && levels_null(b, ops)) || (lone_var(b, a) && zsn(a, ops, d + 1, e2))
+        }
+        // `harmonic(g)` = digamma(g + 1) + gamma vanishes at g = 0, increasing on (-1, inf),
+        // and once more between each two of its poles -n-1 and -n (it runs from -inf to +inf
+        // there); its poles are NaN, no zero. A `g` that stays >= -1 has Z(harmonic(g)) = Z(g)
+        // (float64's kernel keeps every nonzero argument nonzero, `harmonic(5e-324) =
+        // 1e-323`); otherwise the zero set is the union of countably many level sets of `g`,
+        // null where every level set of `g` is (`levels_null`).
+        ("harmonic", Some(1)) => {
+            let g = &t[1..];
+            if whole_range(g, ops).is_some_and(|v| v.has_fin && v.lo >= -1.0) {
+                zsn(g, ops, d + 1, e2)
+            } else {
+                levels_null(g, ops)
+            }
+        }
+        // `besselj(nu, x)` at a literal order: for each order J_nu is analytic in x on x > 0
+        // (entire at an integer order) and not identically zero, so its zeros in x are
+        // isolated -- countably many points z_k -- and Z ⊆ ∪_k {x = z_k}, null where every level
+        // set of `x` is. Off x > 0 a non-integer order is NaN (x < 0) or a pole (x = 0, a
+        // negative order), no zero. A non-literal order fails closed: `besselj(nu, 0)` vanishes
+        // for every nu > 0, and a large order underflows to 0 on whole intervals of x.
+        ("besselj", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            besselj_order(&t[1..ja], ops).is_some() && levels_null(&t[ja..], ops)
+        }
+        // `atan2(y, x)` is 0 where y = 0 (and x >= 0) and at x = +inf for a finite y; elsewhere
+        // it is nonzero (underflow aside, the overflow reading's). Z ⊆ Z(y) ∪ {x = +inf}.
+        ("atan2", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            zsn(&t[1..ja], ops, d + 1, e2) && isn_e(&t[ja..], ops, d + 1, e2)
         }
         // sums, sin, cos, and any other analytic composition: identity theorem + witness; on
         // refusal, a factor every term of a sum shares (`common_factor_witness`), a slope in one
@@ -5453,6 +5607,67 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
                 _ => false,
             }
         }
+        // The 0.15 heads (`floor`, `ceil`, `erf` are total-finite, above).
+        // `max`, `min` and `atan2` map two finite reals to a finite real (`atan2(0, 0) = 0`), so
+        // they are not finite only where an operand is not.
+        ("max" | "min" | "atan2", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            nfn(&t[1..ja], ops, d + 1) && nfn(&t[ja..], ops, d + 1)
+        }
+        // `mod(a, b)` of finite reals is finite (|mod| <= |b|) except at b = 0, where it is NaN:
+        // nonfinite(mod) ⊆ nonfinite(a) ∪ nonfinite(b) ∪ Z(b), as for a quotient (`zsn` refuses
+        // a `<constant>`-bearing divisor, which keeps the claim ∀C-sound).
+        ("mod", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            nfn(&t[1..ja], ops, d + 1)
+                && nfn(&t[ja..], ops, d + 1)
+                && (!t[ja..].iter().any(|s| s == "<constant>") && zsn(&t[ja..], ops, d + 1, false))
+        }
+        // `harmonic(g)` is finite at every finite g but the negative integers (its poles, NaN):
+        // nonfinite ⊆ nonfinite(g) ∪ ∪_{n >= 1} {g = -n}, null where `g` stays above -1 or
+        // between two poles, or every level set of `g` is null. (float64's NaN tail at or below
+        // -2^52 is the `f64` reading's, `harmonic_nan_tail`.)
+        ("harmonic", Some(1)) => {
+            let g = &t[1..];
+            nfn(g, ops, d + 1)
+                && (whole_range(g, ops).is_some_and(|v| {
+                    v.has_fin && {
+                        let k = v.lo.floor();
+                        v.lo > -1.0
+                            || (v.lo == -1.0 && v.lo_open)
+                            || (v.lo > k && v.hi < k + 1.0 && v.hi < -1.0)
+                    }
+                }) || levels_null(g, ops))
+        }
+        // `besselj(nu, x)` at a literal order (`besselj_order`): an integer order is entire in x,
+        // finite at every finite x; a positive non-integer order is NaN at every x < 0, so `x`
+        // must stay >= 0; a negative non-integer order is NaN below 0 and a pole at x = 0, so `x`
+        // must stay >= 0 with a null zero set. (Overflow near the pole is the overflow reading's.)
+        // A non-literal order fails closed.
+        ("besselj", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            let x = &t[ja..];
+            let Some(nu) = besselj_order(&t[1..ja], ops) else {
+                return false;
+            };
+            let nonneg = || whole_range(x, ops).is_some_and(|v| v.has_fin && v.lo >= 0.0);
+            nfn(x, ops, d + 1)
+                && match nu {
+                    BesseljOrder::Integer => true,
+                    BesseljOrder::PositiveFraction => nonneg(),
+                    BesseljOrder::NegativeFraction => {
+                        nonneg()
+                            && !x.iter().any(|s| s == "<constant>")
+                            && zsn(x, ops, d + 1, false)
+                    }
+                }
+        }
         _ => false, // unknown ops: fail-closed
     }
 }
@@ -5498,7 +5713,9 @@ fn isn_e(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     match (tok, ops.arity_of(tok)) {
         // Bounded real range: never ±inf anywhere (sin/cos/asin/acos are NaN
         // outside their domains resp. at infinite arguments -- NaN, not ±inf).
-        ("sin" | "cos" | "tanh" | "atan" | "asin" | "acos", Some(1)) => true,
+        ("sin" | "cos" | "tanh" | "atan" | "asin" | "acos" | "erf", Some(1)) => true,
+        // `atan2` lies in [-pi, pi] at every pair of operands it is defined at.
+        ("atan2", Some(2)) => true,
         // {op(u) = ±inf} ⊆ {u = ±inf}: every op here maps finite reals to
         // finite-or-NaN and propagates NaN -- the total-finite class plus the
         // fat-NaN domain-restricted ops whose only infinities are inherited
@@ -5595,6 +5812,45 @@ fn isn_e(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
                 _ => false,
             }
         }
+        // `max(a, b)` and `min(a, b)` are a member or NaN: infinite only where a member is.
+        ("max" | "min", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            isn_e(&t[1..ja], ops, d + 1, e2) && isn_e(&t[ja..], ops, d + 1, e2)
+        }
+        // `mod(a, b)` lies between 0 and a finite `b`; it is infinite only under an infinite `b`
+        // (`mod(-3, inf) = inf`); an infinite `a` is NaN.
+        ("mod", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            isn_e(&t[ja..], ops, d + 1, e2)
+        }
+        // `harmonic(g)` is +inf at g = +inf and finite or NaN elsewhere (its poles are NaN); the
+        // poles' level sets are asked to be null as well, as the real function's infinities.
+        ("harmonic", Some(1)) => {
+            let g = &t[1..];
+            isn_e(g, ops, d + 1, e2)
+                && (whole_range(g, ops).is_some_and(|v| v.has_fin && v.lo >= -1.0)
+                    || levels_null(g, ops))
+        }
+        // `besselj(nu, x)` at a literal order: never infinite at an integer or a positive order
+        // (finite at every finite x, NaN at +-inf); at a negative non-integer order infinite only
+        // at its pole x = 0.
+        ("besselj", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            let x = &t[ja..];
+            match besselj_order(&t[1..ja], ops) {
+                Some(BesseljOrder::Integer | BesseljOrder::PositiveFraction) => true,
+                Some(BesseljOrder::NegativeFraction) => {
+                    !x.iter().any(|s| s == "<constant>") && zsn(x, ops, d + 1, e2)
+                }
+                None => false,
+            }
+        }
         _ => false, // unknown ops: fail-closed
     }
 }
@@ -5646,6 +5902,13 @@ fn nonconstant_entire_real(t: &[String], ops: &Operators) -> bool {
     {
         return false;
     }
+    disjoint_value_pair(t, ops, false)
+}
+
+/// A pair of boxes whose rigorous value intervals of `t` are disjoint: `t` is not constant.
+/// `fine` also tries the pairs at the scales r/4, ..., r/4^6 of the horizon r, where a periodic
+/// or saturating `t` (`sin(x)` over boxes wider than its period) can part.
+fn disjoint_value_pair(t: &[String], ops: &Operators, fine: bool) -> bool {
     let (r, _depth, decidable) = horizon(&[t], &[&[]], ops);
     if !decidable {
         return false;
@@ -5656,9 +5919,6 @@ fn nonconstant_entire_real(t: &[String], ops: &Operators) -> bool {
     }
     let width = n_var_slots(&[t]);
     let n = used.len();
-    let center = (0.05 * r, 0.15 * r);
-    let lo = (-0.95 * r, -0.8 * r);
-    let hi = (0.8 * r, 0.95 * r);
     let disjoint = |a: &Vs, b: &Vs| {
         a.has_fin
             && b.has_fin
@@ -5668,17 +5928,23 @@ fn nonconstant_entire_real(t: &[String], ops: &Operators) -> bool {
             && b.hi.is_finite()
             && (a.hi < b.lo || b.hi < a.lo)
     };
-    for i in 0..n {
-        for (wa, wb) in [(lo, hi), (center, hi), (lo, center)] {
-            let mut ba = vec![center; n];
-            let mut bb = vec![center; n];
-            ba[i] = wa;
-            bb[i] = wb;
-            let va = value_set_p(t, ops, &doms_from_box(&ba, &used, width, (-r, r)), &[]);
-            let vb = value_set_p(t, ops, &doms_from_box(&bb, &used, width, (-r, r)), &[]);
-            if let (Some(a), Some(b)) = (va, vb) {
-                if disjoint(&a, &b) {
-                    return true;
+    for k in 0..=if fine { 6 } else { 0 } {
+        let s = r / 4f64.powi(k);
+        let center = (0.05 * s, 0.15 * s);
+        let lo = (-0.95 * s, -0.8 * s);
+        let hi = (0.8 * s, 0.95 * s);
+        for i in 0..n {
+            for (wa, wb) in [(lo, hi), (center, hi), (lo, center)] {
+                let mut ba = vec![center; n];
+                let mut bb = vec![center; n];
+                ba[i] = wa;
+                bb[i] = wb;
+                let va = value_set_p(t, ops, &doms_from_box(&ba, &used, width, (-r, r)), &[]);
+                let vb = value_set_p(t, ops, &doms_from_box(&bb, &used, width, (-r, r)), &[]);
+                if let (Some(a), Some(b)) = (va, vb) {
+                    if disjoint(&a, &b) {
+                        return true;
+                    }
                 }
             }
         }
@@ -8269,5 +8535,142 @@ mod new_head_tests {
         assert_eq!(kernels::erf(ERF_SAT), 1.0);
         assert!(kernels::erf(f64::from_bits(ERF_SAT.to_bits() - 1)) < 1.0);
         assert_eq!(tail_of("erf"), Some((ERF_SAT, 1.0)));
+    }
+
+    /// The `!` (finite a.e.), `$` (finite and nonzero a.e.) and zero-set certificates read each
+    /// 0.15 head by its own argument, and refuse where the head is undefined, zero or infinite
+    /// on a region: a step head on [0, 1) or (-1, 0], `mod` by a ground divisor (float64's zero
+    /// tail), `besselj` at a non-literal order or a non-integer order below 0, `harmonic`'s
+    /// float64 NaN tail at or below -2^52.
+    #[test]
+    fn certificates_read_the_new_heads() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let t = |x: &str| x.split(' ').map(String::from).collect::<Vec<String>>();
+        let fin = |x: &str, f64: bool| finite_ae(&t(x), ops, f64);
+        let fnz = |x: &str, f64: bool| finite_nonzero_ae(&t(x), ops, f64);
+        let zs = |x: &str| zero_set_null(&t(x), ops, true) && zero_set_null(&t(x), ops, false);
+        let isn = |x: &str| infinite_set_null(&t(x), ops);
+        for x in [
+            "erf x0",
+            "erf - x0 x1",
+            "besselj 0 x0",
+            "besselj 1 x0",
+            "besselj 3 * 2 x0",
+            "besselj 1.5 exp x0",
+            "besselj -1.5 pow x0 2",
+            "harmonic exp x0",
+            "harmonic sin x0",
+            "max x0 x1",
+            "min x0 sin x1",
+            "mod x0 x1",
+            "mod x0 sinh x1",
+            "mod exp x0 x1",
+            "atan2 x0 x1",
+            "atan2 sin x0 exp x1",
+            "floor + exp x0 2",
+            "ceil - -2 exp x0",
+        ] {
+            for f64 in [true, false] {
+                assert!(fnz(x, f64), "$ {x} f64={f64}");
+                assert!(fin(x, f64), "! {x} f64={f64}");
+            }
+        }
+        // real: harmonic's poles are a null set; float64: its NaN tail at or below -2^52 is not
+        for x in [
+            "harmonic x0",
+            "harmonic neg exp x0",
+            "harmonic + -1.5 sin x0",
+        ] {
+            assert!(fnz(x, false) && fin(x, false), "{x}");
+        }
+        assert!(!fin("harmonic x0", true) && !fnz("harmonic x0", true));
+        assert!(!fin("harmonic neg exp x0", true));
+        assert!(fin("harmonic + -1.5 sin x0", true));
+        // finite, but zero on a region: `!` holds, `$` and the zero set do not
+        for x in [
+            "floor x0",
+            "ceil x0",
+            "floor sin x0",
+            "ceil + exp x0 -1",
+            "max x0 0",
+            "min x0 0",
+            "max x0 floor x1",
+            "mod x0 2",
+            "mod x0 1",
+            "mod x0 max x1 1",
+            "atan2 0 x0",
+            "atan2 floor x0 x1",
+        ] {
+            assert!(!zs(x), "zero set of {x}");
+            assert!(!fnz(x, true) && !fnz(x, false), "$ {x}");
+        }
+        assert!(fin("mod x0 2", true) && fin("floor x0", true) && fin("max x0 0", true));
+        // the pole of a negative non-integer order at |x0| = 0 is a point; `abs` is no entire
+        // head, so the zero set of the argument's levels fails closed
+        assert!(fin("besselj -1.5 abs x0", true) && !fnz("besselj -1.5 abs x0", false));
+        // float64's `mod(x, 1)` is 0 on |x| >= 2^52, the tail `tanh(x1) = 1` reaches
+        assert!(fnz("mod x0 tanh x1", false) && !fnz("mod x0 tanh x1", true));
+        // NaN or a pole on a region: neither `!` nor `$`
+        for x in [
+            "besselj 1.5 x0",
+            "besselj -1.5 x0",
+            "besselj x1 x0",
+            "besselj 2000 x0",
+            "mod x0 0",
+            "mod x0 floor x1",
+            "harmonic floor x0",
+            "harmonic neg abs floor x0",
+        ] {
+            for f64 in [true, false] {
+                assert!(!fin(x, f64), "! {x} f64={f64}");
+                assert!(!fnz(x, f64), "$ {x} f64={f64}");
+            }
+        }
+        // a `<constant>` never certifies a zero set or a divisor
+        for x in [
+            "mod x0 <constant>",
+            "besselj -1.5 + x0 <constant>",
+            "erf * <constant> x0",
+        ] {
+            assert!(!zs(x) && !fnz(x, false), "{x}");
+        }
+        assert!(fin("mod <constant> x0", false) && fin("erf * <constant> x0", false));
+        // infinite sets: the bounded heads never, `mod` only under an infinite divisor,
+        // `besselj` only at a negative non-integer order's pole
+        for x in [
+            "erf x0",
+            "atan2 x0 x1",
+            "max x0 x1",
+            "mod x0 x1",
+            "mod inv x0 x1",
+            "harmonic x0",
+            "floor x0",
+            "besselj 2 x0",
+            "besselj 0.5 x0",
+            "besselj -1.5 x0",
+        ] {
+            assert!(isn(x), "infinite set of {x}");
+        }
+        for x in [
+            "mod x0 float(\"inf\")",
+            "max x0 float(\"inf\")",
+            "besselj -1.5 0",
+            "besselj x1 x0",
+        ] {
+            assert!(!isn(x), "infinite set of {x}");
+        }
+        // the float64 kernels behind the arms: no nonzero argument of erf or harmonic rounds to
+        // zero, harmonic is NaN at every float at or below -2^52, besselj at a non-integer order
+        // is NaN below 0, and float64's mod by 2 is 0 on the whole ray past 2^53
+        for x in [5e-324, -5e-324, 1e-300, -1e-300] {
+            assert!(kernels::erf(x) != 0.0 && kernels::harmonic(x) != 0.0, "{x}");
+        }
+        for x in [-4503599627370496.0, -4503599627370498.0, -1e300] {
+            assert!(kernels::harmonic(x).is_nan(), "{x}");
+        }
+        assert!(!kernels::harmonic(-4503599627370495.5).is_nan());
+        assert!(kernels::besselj(1.5, -1e-300).is_nan() && kernels::besselj(-1.5, -2.0).is_nan());
+        assert_eq!(kernels::modulo(9007199254740993.0 * 2.0 + 2.0, 2.0), 0.0);
     }
 }

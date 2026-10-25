@@ -620,3 +620,26 @@ def test_f64_besselj_at_zero_is_the_kernel_with_its_zero_sign(bare):
         if want == 0:
             inv = bare.simplify(['inv', 'besselj', nu, '0'], mode='f64')
             assert bits(ev(inv)) == bits(np.copysign(np.inf, want)), (nu, inv)
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+def test_match_time_certificates_read_the_new_heads(bare, mode):
+    """The `!` (finite a.e.) and `$` (finite and nonzero a.e.) certificates read each 0.15 head by
+    its own argument: a cancellation or a zero product is licensed where the head is finite (and
+    nonzero) off a null set, and refused where it vanishes, is NaN or has a pole on a region."""
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    for head in ('sin x2', 'erf x2', 'besselj 0 x2', 'besselj 1 x2', 'harmonic exp x2', 'max x2 x3',
+                 'min x2 x3', 'mod x2 x3', 'atan2 x2 x3', 'floor + exp x2 2'):
+        assert s(f'* x1 / {head} {head}') == 'x1', head
+    for head in ('erf x1', 'tan x1', 'mod x1 x2', 'harmonic exp x1', 'atan2 x1 x2', 'max x1 x2'):
+        assert s(f'* {head} 0') == '0', head
+    # a step head vanishes on an interval, a non-integer order of besselj is NaN below 0,
+    # `mod` by a literal divisor is 0 on float64's whole ray past 2^52 times it
+    for head in ('floor x2', 'ceil x2', 'besselj 1.5 x2', 'besselj -1.5 x2', 'mod x2 2'):
+        assert s(f'* x1 / {head} {head}') != 'x1', head
+    for head in ('besselj 1.5 x1', 'besselj -1.5 x1', 'mod x1 floor x2'):
+        assert s(f'* {head} 0') != '0', head
+    # harmonic's poles at the negative integers are a null set over the reals; float64's
+    # harmonic is NaN at every float at or below -2^52, a whole ray
+    assert (s('* x1 / harmonic x2 harmonic x2') == 'x1') == (mode == 'real')
+    assert (s('* harmonic x1 0') == '0') == (mode == 'real')
