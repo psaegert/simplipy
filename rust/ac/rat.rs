@@ -757,6 +757,35 @@ impl Rat {
         }
     }
 
+    /// The EXACT value of a finite float64 (every one is a dyadic fraction within the cap);
+    /// `None` for a non-finite one, or one the thread's number domain does not admit (a
+    /// subnormal in the f64 domain).
+    pub fn from_f64_exact(x: f64) -> Option<Rat> {
+        if !x.is_finite() {
+            return None;
+        }
+        if x == 0.0 {
+            return Some(Rat::ZERO);
+        }
+        let bits = x.to_bits();
+        let biased = ((bits >> 52) & 0x7ff) as i64;
+        let fraction = bits & ((1u64 << 52) - 1);
+        let (mantissa, exponent) = if biased == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1u64 << 52), biased - 1075)
+        };
+        let mut p = BigInt::from(mantissa);
+        if x < 0.0 {
+            p = -p;
+        }
+        if exponent >= 0 {
+            Rat::from_big(p << exponent as usize, BigInt::from(1))
+        } else {
+            Rat::from_big(p, BigInt::from(1) << (-exponent) as usize)
+        }
+    }
+
     /// The f64 NEAREST to this value. `to_f64` rounds each component to f64 before the
     /// division, which is off by an ulp or two once either leaves 53 bits (the permissive
     /// literal fold's inputs routinely do: `2e29 / 426738538271436458205631863649`); here

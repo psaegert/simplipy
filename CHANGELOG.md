@@ -1130,6 +1130,18 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     (`floor(0.99999999999999999)` is 1 there, 0 in `real`). A function of literals whose float
     is dearer than it stays written (`erf(1)`), as for the other heads. `erf` is odd, so
     `erf(-x)` is `-erf(x)`.
+  - *Exact ground folds in `real`.* Where a certified enclosure (the interval layer's value
+    set, sound for the real function) decides it, a ground node of these heads folds to the
+    exact number it denotes: `floor` and `ceil` of an argument between two integers or exactly
+    one (`floor(tanh(1))` is `0`, `ceil(cos(0))` is `1`, `floor(atan2(1, 0))` is `1`), `erf` at
+    0 and +-inf, `mod` where the floor of the quotient is decided (`mod(1, sinh(1))` is `1`,
+    `mod(cosh(1), 1)` is `cosh(1) - 1`; under an infinite divisor, a dividend of the divisor's
+    sign, `mod(-1, log(0))` is `-1`), `besselj(nu, 0)` at an order certainly positive, zero or
+    a negative integer (`besselj(sin(1), 0)` is `0`) and `atan2(0, x)` at an `x` certainly
+    positive (`atan2(0, cosh(1))` is `0`). An undecided enclosure leaves the node as written:
+    `floor(tanh(40))` and `ceil(exp(-800))` stay, where float64 gives `1` and `0` and the reals
+    `0` and `1`. `f64` and `permissive` keep their float folds. The `real` rule file no longer
+    states these values one spelling at a time (the length-4 mine drops 816 such facts).
   - *`max` and `min` are bags,* as sums and products are: `max(x2, max(x0, x1))`,
     `max(max(x1, x2), x0)` and `max(x0, x1, x2)` are one answer, written `max x0 max x1 x2`
     in the explicit form (the right-nested chain of the members in the canonical order),
@@ -1142,8 +1154,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     collapse (`max(a, a)` is `a`; two `<constant>`s stay apart), the literal members fold to
     their extreme (`max(-0.0, 0)` is `0`, `min(-0.0, 0)` is `-0.0` in `f64`; in `real` and
     `permissive` `pi` and `e` fold with them, each comparison decided by a certified enclosure:
-    `max(3, pi)` is `pi`, `min(e, pi, 4)` is `e`, while `f64`'s ground fold reads them as their
-    floats), `-inf` drops from
+    `max(3, pi)` is `pi`, `min(e, pi, 4)` is `e`; so does every ground member whose value set
+    certainly is a finite real, `max(sin(1), 1/2)` is `sin(1)` and `min(-1, asinh(1))` is `-1`,
+    and two members whose enclosures overlap both stay; `f64`'s ground fold reads them all as
+    their floats), `-inf` drops from
     a `max` and `+inf` from a `min`, and a NaN member makes the bag NaN. The absorber and the
     dual bag need their other members to be no NaN almost everywhere (the finite-a.e. licence;
     `max(+inf, nan)` is `nan`): `max(+inf, x0)` is `+inf` and `max(x0, min(x0, x1))` is `x0`,
@@ -1153,13 +1167,20 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `max(max(|x0|, x1), x0)` into `max(x1, |x0|)`.
   - *Enclosures.* `floor`, `ceil`, `erf`, `max` and `min` map their operands' bounds (`erf`
     reaches exactly +-1 from |x| = 5.921587195794507); `atan2` lies in [-pi, pi];
-    `besselj(nu, x)` in [-1, 1] for an order nu >= 0, NaN where a non-integer order meets a
-    negative argument; `harmonic` is increasing on (-1, inf); `mod(a, b)` lies between 0 and
-    `b`, NaN at `b = 0`. `harmonic` of an argument that may reach -1, `besselj` of an order
-    that may be a negative non-integer at an argument that may reach 0, `mod` by a divisor that
-    may be zero, and every head without an arm
-    are unanalyzable: every certificate refuses them, and the miner accepts no candidate for a
-    variable-free source it cannot analyze. The tail certificate's table of
+    `besselj(nu, x)` in [-1, 1] for an order nu >= 0, within 1/sqrt(2) at an integer order
+    n != 0, between partial sums of its series at an integer order on 0 < |x| <= 2, exactly 0
+    or 1 at x = 0, NaN where a non-integer order meets a negative argument; `harmonic` is
+    increasing on (-1, inf) and between any two of its poles, NaN at -inf and at every negative
+    integer; `mod(a, b)` lies between 0 and `b`, NaN at `b = 0` and at an infinite `a`, and is
+    numpy's under an infinite `b` (`mod(1, -inf)` is `-inf`, `mod(-1, inf)` is `inf`,
+    `mod(-1, -inf)` is `-1`); `atan2(0, x)` is 0 at x > 0 and `atan2(y, 0)` is +-pi/2 at
+    y != 0. So a ground NaN or infinity these decide folds in every mode:
+    `harmonic(atanh(ceil(-1)))`, `acos(harmonic(sinh(-1)))`, `acosh(besselj(-1, 1))` and
+    `log(besselj(-1, 1))` are NaN, `mod(1, log(0))` is `-inf`. `harmonic` of an argument that
+    may reach a pole among other values, `besselj` of an order that may be a negative
+    non-integer at an argument that may reach 0, `mod` by a divisor that may be zero, and every
+    head without an arm are unanalyzable: every certificate refuses them, and the miner accepts
+    no candidate for a variable-free source it cannot analyze. The tail certificate's table of
     pole-free operators names the operators that are, so an unnamed head is pole-bearing.
   - *Signed zeros.* `ceil(-0.5)`, `mod(3, -3)` and their kin are -0 in float64, and `atan2`
     reads the sign of a zero in both arguments, as an inverse does (`atan2(-0, -1)` is -pi,
@@ -1257,10 +1278,12 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     the parity hold bit for bit in float64, a zero's sign included; a sum's orientation keeps
     the sign of its zero exactly where `sin`'s does (where the zero set may hold a region). A
     literal order at 0 folds exactly: `besselj(0, 0)` is `1`, `besselj(5/2, 0)` and
-    `besselj(-2, 0)` are `0` (`besselj(-1, 0)` is `-0.0` in `f64`), and a negative non-integer
-    order gives its pole's one-sided limit, the sign of `1/Gamma(nu + 1)`: `besselj(-1/2, 0)` is
-    `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy has them; an infinite order gives 0 at a
-    literal `x >= 0` and NaN below (`besselj(atanh(1), 2)` is `0`).
+    `besselj(-2, 0)` are `0` (in `f64` the kernel's zero, whose sign varies with the order:
+    `besselj(-1, 0)` and `besselj(1.5, 0)` are `-0.0`, so `1/besselj(1.5, 0)` is `-inf`, as in
+    scipy), and a negative non-integer order gives its pole's one-sided limit, the sign of
+    `1/Gamma(nu + 1)`: `besselj(-1/2, 0)` is `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy
+    has them; an infinite order gives 0 at a literal `x >= 0` and NaN below
+    (`besselj(atanh(1), 2)` is `0`).
   - *The kernel.* An integer order reads its reflection and its parity, so both hold bit for
     bit: `besselj(1, -0.0)` and `besselj(3, -1e-300)` are `-0.0` (scipy gives `0.0`),
     `besselj(2**31, -1.0)` is `0.0` (scipy gives NaN: its integer test is a C `int` cast).

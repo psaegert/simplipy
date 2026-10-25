@@ -1329,6 +1329,9 @@ fn cmp_vec(a: &[Ex], b: &[Ex], view: &TokenView) -> Ordering {
     a.len().cmp(&b.len())
 }
 
+/// The enclosure certificate's type ([`Cx::cert_encl`]): a ground composite's closed float64 box.
+pub type EnclosureCert<'a> = &'a dyn Fn(&Ex) -> Option<(f64, f64)>;
+
 /// The canonicalization context: the token view (leaf classification, string order) plus the two
 /// OPTIONAL soundness certificates. With a certificate absent the corresponding gated collection
 /// simply does not happen -- fail-closed, exactly like the old matcher's certifier plumbing.
@@ -1358,6 +1361,11 @@ pub struct Cx<'a> {
     /// every licence of the parse stays certificate-free. `None`: reading A's test
     /// (`zero_set_null`).
     pub cert_region: Option<&'a dyn Fn(&Ex) -> bool>,
+    /// The ENCLOSURE certificate: a closed float64 box `[lo, hi]` holding the value of a ground
+    /// composite that is certainly a finite real (the interval layer's value set, sound for the
+    /// real function and for the deployed kernel), `None` for anything else. Read outside `f64`
+    /// alone, where a lattice bag orders its ground members by it (`max(sin 1, 1/2) = sin 1`).
+    pub cert_encl: Option<EnclosureCert<'a>>,
     /// WHICH SOUNDNESS this construction preserves. Was a `lossy: bool`, which could only
     /// ask "may I skip certification?" -- and that is the wrong question for a guard whose
     /// reason is f64 saturation rather than recall. `real` needs those guards OFF (the
@@ -1450,6 +1458,7 @@ impl<'a> Cx<'a> {
             cert_nzae: None,
             cert_nce: None,
             cert_region: None,
+            cert_encl: None,
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
@@ -9766,17 +9775,34 @@ fn lattice_enclosure(e: &Ex) -> Option<(Rat, Rat)> {
     Some((Rat::parse_decimal(lo)?, Rat::parse_decimal(hi)?))
 }
 
+/// The certified enclosure of a GROUND lattice member outside `f64` ([`Cx::cert_encl`]): a
+/// composite whose value is certainly a finite real, as an exact rational box `(lo, hi)`,
+/// `lo <= v <= hi`; `None` in `f64` (whose ground fold reads such a member as its float), for
+/// a leaf, and wherever the certificate is absent or undecided.
+fn lattice_ground_enclosure(e: &Ex, cx: &Cx) -> Option<(Rat, Rat)> {
+    if cx.f64_semantics() || !matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)) {
+        return None;
+    }
+    let (lo, hi) = (cx.cert_encl?)(e)?;
+    let _exact = super::rat::number_domain(false);
+    Some((Rat::from_f64_exact(lo)?, Rat::from_f64_exact(hi)?))
+}
+
 /// Is `e` a NUMBER of a lattice bag: a literal, the written negative zero in `f64`
-/// ([`lattice_number`]), and outside `f64` `pi` and `e`, which `f64`'s ground fold reads as their
-/// floats instead?
+/// ([`lattice_number`]), and outside `f64` `pi`, `e` and every ground composite with a certified
+/// enclosure ([`lattice_ground_enclosure`]), which `f64`'s ground fold reads as their floats
+/// instead?
 fn lattice_numeric(e: &Ex, cx: &Cx) -> bool {
-    lattice_number(e, cx).is_some() || (!cx.f64_semantics() && matches!(e, Ex::Pi | Ex::E))
+    lattice_number(e, cx).is_some()
+        || (!cx.f64_semantics()
+            && (matches!(e, Ex::Pi | Ex::E) || lattice_ground_enclosure(e, cx).is_some()))
 }
 
 /// The CERTAIN order of two lattice numbers ([`lattice_numeric`]): exact between literals (`-0`
-/// below `+0`), and through a certified enclosure for `pi` and `e` (`max(3, pi)` is `pi`,
-/// `min(e, pi)` is `e`); `None` where it is not decided (a literal inside an enclosure, or a
-/// member that is no number).
+/// below `+0`), and through certified enclosures for `pi`, `e` and the ground composites
+/// (`max(3, pi)` is `pi`, `min(e, pi)` is `e`, `max(sin 1, 1/2)` is `sin 1`); `None` where it is
+/// not decided (two enclosures that overlap, a literal inside an enclosure, or a member that is
+/// no number). Nothing breaks a tie the enclosures leave open: the bag keeps both members.
 fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
     if let (Some(x), Some(y)) = (lattice_number(a, cx), lattice_number(b, cx)) {
         return Some(if lattice_number_lt(&x, &y) {
@@ -9795,7 +9821,8 @@ fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
     }
     let bounds = |e: &Ex| match e {
         Ex::Num(r) => Some((r.clone(), r.clone())),
-        other => lattice_enclosure(other),
+        Ex::Pi | Ex::E => lattice_enclosure(e),
+        other => lattice_ground_enclosure(other, cx),
     };
     let ((alo, ahi), (blo, bhi)) = (bounds(a)?, bounds(b)?);
     if ahi.cmp_exact(&blo) == Ordering::Less {
@@ -9825,9 +9852,10 @@ fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
 ///   below, so the bag does not depend on its nesting: `max(3, max(2, min(2, x)))` and
 ///   `max(min(2, x), max(2, 3))` are both `3`.
 /// * NUMBERS: the literal members fold to their extreme, `-0` below `+0` (in `f64` the written
-///   `-0.0`): `max(-0.0, 0) = 0`, `min(-0.0, 0) = -0.0`. Outside `f64`, `pi` and `e` are numbers
-///   too, ordered by certified enclosures (`max(3, pi) = pi`, `min(e, pi, 4) = e`); in `f64` the
-///   ground fold reads them as their floats.
+///   `-0.0`): `max(-0.0, 0) = 0`, `min(-0.0, 0) = -0.0`. Outside `f64`, `pi`, `e` and every
+///   ground composite are numbers too, ordered by certified enclosures (`max(3, pi) = pi`,
+///   `min(e, pi, 4) = e`, `max(sin 1, 1/2) = sin 1`); an order the enclosures leave open keeps
+///   both members. In `f64` the ground fold reads them as their floats.
 /// * The ABSORBER takes every member that is no NaN almost everywhere (`max(+inf, a) = +inf`,
 ///   while `max(+inf, nan) = nan`), and the IDENTITY drops (`max(-inf, a) = a`). "No NaN" is a
 ///   number, an infinity, or the finite-a.e. licence (`Cx::fin_licensed`).
@@ -9971,11 +9999,12 @@ fn even_argument(a: &Ex, cx: &Cx) -> Option<Ex> {
 }
 
 /// `besselj(+-inf, x)` at a literal `x`: 0 at `x >= 0`, NaN below (scipy's cells). And
-/// `besselj(nu, 0)` at a literal order, exactly, in every mode: `J_0(0) = 1`, `J_nu(0) = 0` for
-/// `nu > 0` and for a negative integer `nu` (float64's `-0.0` under an odd one in `f64`, as the
-/// kernel writes `J_{-n}(0) = (-1)^n J_n(0)`), and at a negative non-integer order the pole's
-/// one-sided limit (the order's domain is `x >= 0`), the infinity of the sign of
-/// `1/Gamma(nu + 1)`: `J_{-1/2}(0) = inf`, `J_{-3/2}(0) = -inf` (scipy's cells, D7).
+/// `besselj(nu, 0)` at a literal order, exactly: `J_0(0) = 1`, `J_nu(0) = 0` for `nu > 0` and for
+/// a negative integer `nu`, and at a negative non-integer order the pole's one-sided limit (the
+/// order's domain is `x >= 0`), the infinity of the sign of `1/Gamma(nu + 1)`:
+/// `J_{-1/2}(0) = inf`, `J_{-3/2}(0) = -inf` (scipy's cells, D7). In `f64` the value is the
+/// deployed kernel's, whose zero carries a sign of its own at some orders (`J_{1.5}(0)` and
+/// `J_{-1}(0)` are `-0.0`, `J_{2.5}(0)` is `0.0`), which an inverse reads as an infinity's sign.
 fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
     // An infinite order (scipy's cells): 0 at a literal x >= 0, NaN below.
     if let [Ex::PosInf | Ex::NegInf, Ex::Num(x)] = args {
@@ -9991,6 +10020,22 @@ fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
     if !x.is_zero() {
         return None;
     }
+    if cx.f64_semantics() {
+        let y = crate::numeric::kernels::besselj(nu.to_f64(), 0.0);
+        return if y == 1.0 {
+            Some(Ex::Num(Rat::ONE))
+        } else if y == 0.0 && y.is_sign_negative() {
+            Some(Ex::Leaf(cx.view.intern(NEG_ZERO)))
+        } else if y == 0.0 {
+            Some(Ex::Num(Rat::ZERO))
+        } else if y == f64::INFINITY {
+            Some(Ex::PosInf)
+        } else if y == f64::NEG_INFINITY {
+            Some(Ex::NegInf)
+        } else {
+            None
+        };
+    }
     if nu.is_zero() {
         return Some(Ex::Num(Rat::ONE));
     }
@@ -9998,11 +10043,7 @@ fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
         return Some(Ex::Num(Rat::ZERO));
     }
     if nu.is_integer() {
-        return Some(if nu.is_odd_integer() && cx.f64_semantics() {
-            Ex::Leaf(cx.view.intern(NEG_ZERO))
-        } else {
-            Ex::Num(Rat::ZERO)
-        });
+        return Some(Ex::Num(Rat::ZERO));
     }
     // Gamma(z) is positive for z > 0 and has the sign (-1)^ceil(-z) at a negative non-integer z.
     let z = nu.checked_add(&Rat::ONE)?;
@@ -10669,6 +10710,7 @@ mod tests {
                 cert_nzae: None,
                 cert_nce: None,
                 cert_region: None,
+                cert_encl: None,
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,

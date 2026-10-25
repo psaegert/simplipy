@@ -1066,7 +1066,9 @@ pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
 enum Visit {
     /// The node is a normal form of this pass (memo-marked unless the cap has bound).
     Normal,
-    /// The numeric fold replaced the node by a leaf: final, no re-entry.
+    /// The numeric fold replaced the node by a leaf: final, no re-entry. (A fold whose result
+    /// is no leaf -- an absorbed bag, `mod(a, b) = a - k b` -- is a [`Visit::Step`]: its
+    /// members have not been visited yet.)
     Folded(Ex),
     /// An accepted descent step (a fire, an oriented rebuild, or a committed composite
     /// step): the walk re-enters on the new node.
@@ -1105,7 +1107,11 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
     // priced, so `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds).
     if let Some(folded) = (p.fold)(node) {
         if oriented(&folded, node, p) {
-            return Visit::Folded(folded);
+            return if matches!(folded, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)) {
+                Visit::Step(folded)
+            } else {
+                Visit::Folded(folded)
+            };
         }
     }
 

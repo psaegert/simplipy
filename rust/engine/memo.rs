@@ -63,6 +63,9 @@ impl BangCache {
     }
 }
 
+/// A memoized enclosure certificate: a closed float64 box, or `None`.
+type Enclosure = Option<(f64, f64)>;
+
 /// Per-simplify-call memo context: the certificate scratches (`cert_scratch` for the
 /// `!`-certificate, `cert_mult_scratch` for its `$`-sort twin -- both consumed by
 /// `engine/ac.rs::ac_cert`, the successor of the deleted kernel's `bang_certified`) plus
@@ -75,6 +78,8 @@ pub(super) struct SimplifyCtx {
     pub(super) cert_scratch: [RefCell<FxHashMap<Vec<Tok>, bool>>; 2],
     /// The `$`-sort twin of `cert_scratch` (see `ac_cert`'s `mult` arm).
     pub(super) cert_mult_scratch: [RefCell<FxHashMap<Vec<Tok>, bool>>; 2],
+    /// The enclosure certificate's memo (`engine/ac.rs::ac_encl`, behind `Cx::cert_encl`).
+    pub(super) encl_scratch: RefCell<FxHashMap<Vec<Tok>, Enclosure>>,
 }
 
 impl SimplifyCtx {
@@ -83,6 +88,7 @@ impl SimplifyCtx {
             overlay: RefCell::new(TokenOverlay::new(table_len)),
             cert_scratch: Default::default(),
             cert_mult_scratch: Default::default(),
+            encl_scratch: Default::default(),
         }
     }
 }

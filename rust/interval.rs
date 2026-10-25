@@ -1345,15 +1345,40 @@ fn u_erf(v: &Vs) -> Vs {
     r
 }
 
-/// `harmonic`: increasing on (-1, inf), +inf at +inf. An operand that may reach -1 or below
-/// meets the poles (and NaN at -inf): refused.
+/// `harmonic`: increasing on (-1, inf) and between any two of its poles, +inf at +inf, NaN at
+/// -inf and at every negative integer (D6). A finite operand on (-1, inf), the point of a
+/// negative integer, or a box strictly between two poles is enclosed; one that may reach a pole
+/// among other values is refused.
 fn u_harmonic(v: &Vs) -> Option<Vs> {
-    if v.ninf || (v.has_fin && v.lo <= -1.0) {
-        return None;
-    }
     let mut r = Vs::empty();
-    r.nan = v.nan;
+    r.nan = v.nan || v.ninf;
     r.pinf = v.pinf;
+    if v.has_fin && v.lo <= -1.0 {
+        if v.is_const() && v.lo.fract() == 0.0 {
+            r.nan = true; // a pole: the one-sided limits differ
+            return Some(r);
+        }
+        // Strictly between the poles -n-1 and -n (n >= 1), where H increases. The kernel's
+        // error there is absolute (`numeric::harmonic`): at most ulp(H) + 2^-58 max(|H(-x-1)|,
+        // |pi cot(pi x)|), where 0 <= H(-x-1) <= 1 + ln(-x) and |pi cot(pi x)| <= H(-x-1) + |H(x)|.
+        let k = v.lo.floor();
+        if !(v.lo > k && v.hi < k + 1.0 && v.hi < -1.0 && v.lo.is_finite()) {
+            return None;
+        }
+        let h = crate::numeric::kernels::harmonic;
+        let (a, b) = (h(v.lo), h(v.hi));
+        if !(a.is_finite() && b.is_finite()) {
+            return None;
+        }
+        let m = a.abs().max(b.abs());
+        let reflected = 1.0 + (-v.lo).ln() + 1.0;
+        let margin = 2.0 * m * f64::EPSILON + (2.0 * reflected + 2.0 * m) * 2f64.powi(-55);
+        r.has_fin = true;
+        r.lo = out_lo(a - margin, ULP_LIBM);
+        r.hi = out_hi(b + margin, ULP_LIBM);
+        r.fin_null = v.fin_null;
+        return Some(r);
+    }
     if v.has_fin {
         let h = crate::numeric::kernels::harmonic;
         r.has_fin = true;
@@ -1427,6 +1452,22 @@ fn b_atan2(y: &Vs, x: &Vs) -> Vs {
         return r;
     }
     r.has_fin = true;
+    // On the positive x axis, and at x = +inf for a finite y, the angle is a zero (of y's sign).
+    let y_finite = y.has_fin && !y.pinf && !y.ninf;
+    let x_positive = !x.ninf && (x.has_fin || x.pinf) && (!x.has_fin || x.lo > 0.0);
+    if y_finite && ((y.lo == 0.0 && y.hi == 0.0 && x_positive) || (x.pinf && !x.has_fin && !x.ninf))
+    {
+        r.lo = 0.0;
+        r.hi = 0.0;
+        return r;
+    }
+    // On the y axis (x = 0 of either sign), at a finite y certainly nonzero: +-pi/2 by y's sign.
+    if y_finite && x.is_const() && x.lo == 0.0 && (y.lo > 0.0 || y.hi < 0.0) {
+        let half = std::f64::consts::FRAC_PI_2;
+        let (lo, hi) = (out_lo(half, ULP_LIBM), out_hi(half, ULP_LIBM));
+        (r.lo, r.hi) = if y.lo > 0.0 { (lo, hi) } else { (-hi, -lo) };
+        return r;
+    }
     if y.is_const() && x.is_const() && y.lo != 0.0 && x.lo != 0.0 && !r.nan {
         let t = crate::numeric::kernels::atan2(y.lo, x.lo);
         r.lo = out_lo(t, ULP_LIBM);
@@ -1443,33 +1484,52 @@ fn b_atan2(y: &Vs, x: &Vs) -> Vs {
 /// `mod(a, b)` (numpy's: the sign of the divisor). Two points are the kernel's value, one ulp
 /// wide (the remainder is exact, its adjustment one rounded addition). Otherwise the value
 /// lies between 0 and the divisor, both closed (a tiny negative dividend gives `b` itself),
-/// and a zero divisor is NaN. A divisor that may be zero among other values, and an infinite
-/// operand, are refused.
+/// and a zero divisor is NaN. A divisor that may be zero among other values is refused.
+///
+/// The infinite cells are numpy's (D7): an infinite dividend is NaN; under an infinite divisor
+/// the dividend is its own remainder where it is zero or has the divisor's sign, and the
+/// divisor's infinity otherwise (`mod(3, inf) = 3`, `mod(-3, inf) = inf`, `mod(3, -inf) = -inf`,
+/// `mod(-3, -inf) = -3`).
 fn b_mod(a: &Vs, b: &Vs) -> Option<Vs> {
-    if a.pinf || a.ninf || b.pinf || b.ninf {
-        return None;
-    }
     let mut r = Vs::empty();
-    r.nan = a.nan || b.nan;
-    if !(a.has_fin && b.has_fin) {
-        return Some(r);
+    r.nan = a.nan || b.nan || ((a.pinf || a.ninf) && b.defined());
+    // The finite remainders, as boxes (lo, hi), joined at the end.
+    let mut boxes: Vec<(f64, f64)> = Vec::new();
+    if a.has_fin && b.pinf {
+        if a.hi >= 0.0 {
+            boxes.push((a.lo.max(0.0), a.hi));
+        }
+        r.pinf |= a.lo < 0.0;
     }
-    if b.lo == 0.0 && b.hi == 0.0 {
-        r.nan = true;
-        return Some(r);
+    if a.has_fin && b.ninf {
+        if a.lo <= 0.0 {
+            boxes.push((a.lo, a.hi.min(0.0)));
+        }
+        r.ninf |= a.hi > 0.0;
     }
-    if b.lo <= 0.0 && 0.0 <= b.hi {
-        return None;
+    if a.has_fin && b.has_fin {
+        if b.lo == 0.0 && b.hi == 0.0 {
+            r.nan = true;
+        } else if b.lo <= 0.0 && 0.0 <= b.hi {
+            return None;
+        } else if a.is_const() && b.is_const() {
+            let m = crate::numeric::kernels::modulo(a.lo, b.lo);
+            boxes.push((out_lo(m, ULP_ARITH), out_hi(m, ULP_ARITH)));
+        } else {
+            let (lo, hi) = if b.lo > 0.0 { (0.0, b.hi) } else { (b.lo, 0.0) };
+            let w = with_plateau(Vs::empty(), lo, hi, false);
+            boxes.push((w.lo, w.hi));
+        }
     }
-    if a.is_const() && b.is_const() {
-        let m = crate::numeric::kernels::modulo(a.lo, b.lo);
+    if let Some(lo) = boxes.iter().map(|b| b.0).reduce(f64::min) {
+        let hi = boxes.iter().map(|b| b.1).fold(lo, f64::max);
         r.has_fin = true;
-        r.lo = out_lo(m, ULP_ARITH);
-        r.hi = out_hi(m, ULP_ARITH);
-        return Some(r);
+        r.lo = lo;
+        r.hi = hi;
+        r.lo_open = lo == -INF;
+        r.hi_open = hi == INF;
     }
-    let (lo, hi) = if b.lo > 0.0 { (0.0, b.hi) } else { (b.lo, 0.0) };
-    Some(with_plateau(r, lo, hi, false))
+    Some(r)
 }
 
 /// `besselj(nu, x)`, at every real order.
@@ -1542,7 +1602,32 @@ fn b_besselj(nu: &Vs, x: &Vs) -> Option<Vs> {
         }
         return Some(r);
     }
-    if nu.lo >= 0.0 || integer_order {
+    // At the point x = 0: J_0(0) = 1, and J_nu(0) = 0 for nu > 0 and at a negative integer nu
+    // (the kernel writes a zero of either sign, which the point holds).
+    if x.is_const() && x.lo == 0.0 && (nu.lo > 0.0 || integer_order) {
+        r.has_fin = true;
+        let one = nu.is_const() && nu.lo == 0.0;
+        r.lo = if one { 1.0 } else { 0.0 };
+        r.hi = r.lo;
+        return Some(r);
+    }
+    if integer_order {
+        // An integer order on 0 < |x| <= 2: the alternating series' first two partial sums;
+        // elsewhere |J_n| <= 1/sqrt(2) at every n != 0 (Abramowitz and Stegun 9.1.60).
+        let (lo, hi) = besselj_integer_small_argument(nu.lo, x).unwrap_or(if nu.lo == 0.0 {
+            (-1.0, 1.0)
+        } else {
+            (
+                -std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            )
+        });
+        r.has_fin = true;
+        r.lo = out_lo(lo, ULP_ARITH);
+        r.hi = out_hi(hi, ULP_ARITH);
+        return Some(r);
+    }
+    if nu.lo >= 0.0 {
         r.has_fin = true;
         r.lo = out_lo(-1.0, ULP_ARITH);
         r.hi = out_hi(1.0, ULP_ARITH);
@@ -1580,6 +1665,52 @@ fn negative_order_bound(lo: f64, hi: f64, x: f64) -> Option<f64> {
     }
     let b = 2.0 * b;
     (b.is_finite() && b < 1e300).then_some(b)
+}
+
+/// Bounds on J_n(x) at an integer order n, |n| <= 50, over a finite box x of one sign with
+/// 0 < |x| <= 2: there the series J_m(t) = sum_j (-1)^j (t/2)^(2j+m) / (j! (m+j)!) alternates
+/// with decreasing terms, so t0 - t1 <= J_m(t) <= t0 - t1 + t2, with t0 = (t/2)^m / m!
+/// increasing in t, t1 / t0 = (t/2)^2 / (m+1) and t2 / t0 = (t/2)^4 / (2 (m+1) (m+2)). Widened
+/// by 2^-36 relative (the kernel's error, measured within
+/// about 2,600 ulp, and this arithmetic's); the sign follows `J_-m = (-1)^m J_m` and
+/// `J_m(-t) = (-1)^m J_m(t)`. `None` outside that region, or where the bound nears underflow.
+fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
+    if !x.has_fin || x.pinf || x.ninf {
+        return None;
+    }
+    let (lo, hi, mirrored) = if x.lo > 0.0 && x.hi <= 2.0 {
+        (x.lo, x.hi, false)
+    } else if x.hi < 0.0 && x.lo >= -2.0 {
+        (-x.hi, -x.lo, true)
+    } else {
+        return None;
+    };
+    let m = n.abs();
+    if m > 50.0 {
+        return None;
+    }
+    let k = m as i32;
+    let factorial: f64 = (1..=k).map(f64::from).product();
+    let t0 = |t: f64| (t / 2.0).powi(k) / factorial;
+    let (qlo, qhi) = ((lo / 2.0).powi(2), (hi / 2.0).powi(2));
+    let upper = t0(hi) * (1.0 - qlo / (m + 1.0) + qhi * qhi / (2.0 * (m + 1.0) * (m + 2.0)));
+    if upper.is_nan() || upper < 1e-290 {
+        return None;
+    }
+    let lower = t0(lo) * (1.0 - qhi / (m + 1.0));
+    let w = 2f64.powi(-36);
+    let a = if lower > 0.0 {
+        lower * (1.0 - w)
+    } else {
+        lower * (1.0 + w) - 1e-300
+    };
+    let b = (upper * (1.0 + w)).min(1.0);
+    let odd = k % 2 == 1;
+    Some(if odd && ((n < 0.0) != mirrored) {
+        (-b, -a)
+    } else {
+        (a, b)
+    })
 }
 
 fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
@@ -2324,6 +2455,18 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
         }
     }
     r
+}
+
+/// The floor of the quotient `a / b` where it is one integer at every value of the two sets: a
+/// certainly finite `a` over a divisor certainly finite and nonzero (the `floor(a/b)` of the
+/// real `mod`); `None` where it is not decided.
+pub(crate) fn quotient_floor(a: &Vs, b: &Vs) -> Option<f64> {
+    let finite = |v: &Vs| v.has_fin && !(v.nan || v.pinf || v.ninf);
+    if !finite(a) || !finite(b) || (b.lo <= 0.0 && 0.0 <= b.hi) {
+        return None;
+    }
+    let q = u_step(&b_mul(a, &u_inv(b)), f64::floor);
+    q.is_const().then_some(q.lo)
 }
 
 fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
@@ -7923,7 +8066,194 @@ mod new_head_tests {
             value_class(&s(&["besselj", "atanh", "1", "2"]), ops),
             Some(Class::Finite)
         );
-        assert_eq!(value_class(&s(&["harmonic", "-2"]), ops), None);
+        // harmonic is NaN at a negative integer (D6) and at -inf
+        assert_eq!(value_class(&s(&["harmonic", "-2"]), ops), Some(Class::Nan));
+        assert_eq!(
+            value_class(&s(&["harmonic", "atanh", "ceil", "-1"]), ops),
+            Some(Class::Nan)
+        );
+    }
+
+    /// The infinite cells of `mod` are numpy's (D7): an infinite dividend is NaN; under an
+    /// infinite divisor the dividend is its own remainder where it is zero or has the divisor's
+    /// sign, and the divisor's infinity otherwise.
+    #[test]
+    fn mod_reads_numpys_infinite_cells() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let class = |t: &[&str]| value_class(&s(t), ops);
+        let set = |t: &[&str]| value_set(&s(t), ops, &Vs::reals()).unwrap();
+        let (pinf, ninf) = ("float(\"inf\")", "float(\"-inf\")");
+        assert_eq!(class(&["mod", "1", ninf]), Some(Class::NegInf));
+        assert_eq!(class(&["mod", "-1", pinf]), Some(Class::PosInf));
+        assert_eq!(class(&["mod", pinf, "1"]), Some(Class::Nan));
+        assert_eq!(class(&["mod", "log", "0", "0"]), Some(Class::Nan));
+        for (a, b, v) in [("-1", ninf, -1.0), ("1", pinf, 1.0), ("0", ninf, 0.0)] {
+            let r = set(&["mod", a, b]);
+            assert!(r.is_const() && r.lo == v, "mod({a}, {b}): {r:?}");
+        }
+        for (a, b) in [
+            (-1.0, INF),
+            (1.0, -INF),
+            (0.0, INF),
+            (-0.0, -INF),
+            (2.5, INF),
+            (-2.5, -INF),
+        ] {
+            let r = set(&["mod", &format!("{a:?}"), if b > 0.0 { pinf } else { ninf }]);
+            assert!(
+                inside(&r, kernels::modulo(a, b)),
+                "mod({a}, {b}) outside {r:?}"
+            );
+        }
+        // a dividend of either sign under +inf: itself where non-negative, +inf below
+        let r = value_set_p(
+            &s(&["mod", "x0", pinf]),
+            ops,
+            &[Vs::interval(-1.0, 2.0, false, false)],
+            &[],
+        )
+        .unwrap();
+        assert!(
+            r.has_fin && r.lo == 0.0 && r.hi == 2.0 && r.pinf && !r.ninf,
+            "{r:?}"
+        );
+    }
+
+    /// harmonic is enclosed strictly between two poles, where it increases: the enclosure holds
+    /// the kernel at every sample and the true value `H(-3/2) = 2 - 2 ln 2`.
+    #[test]
+    fn harmonic_between_its_poles() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let vs = |lo: f64, hi: f64| {
+            value_set_p(
+                &s(&["harmonic", "x0"]),
+                ops,
+                &[Vs::interval(lo, hi, false, false)],
+                &[],
+            )
+        };
+        let h = vs(-1.5, -1.5).unwrap();
+        let exact = 2.0 - 2.0 * std::f64::consts::LN_2;
+        assert!(h.lo < exact && exact < h.hi && h.hi - h.lo < 1e-13, "{h:?}");
+        for n in 1..40 {
+            let k = -(n as f64) - 1.0;
+            for (lo, hi) in [
+                (k + 1e-9, k + 0.5),
+                (k + 0.25, k + 0.75),
+                (k + 0.5, k + 1.0 - 1e-9),
+            ] {
+                let v = vs(lo, hi).unwrap();
+                assert!(!v.nan && v.has_fin, "{v:?}");
+                for x in samples(lo, hi) {
+                    assert!(
+                        inside(&v, kernels::harmonic(x)),
+                        "harmonic({x}) outside {v:?}"
+                    );
+                }
+            }
+            // a box that reaches a pole is refused
+            assert!(vs(k - 0.5, k + 0.5).is_none());
+            assert!(vs(k, k + 0.5).is_none());
+        }
+    }
+
+    /// besselj's exact and bounded cells: `J_nu(0)` at a positive order, an integer order and
+    /// order 0; `|J_n| <= 1/sqrt(2)` at an integer n != 0, and the alternating series' bracket on
+    /// 0 < |x| <= 2, with its sign, each holding the kernel.
+    #[test]
+    fn besselj_exact_and_bounded_cells() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let set = |t: &[&str]| value_set(&s(t), ops, &Vs::reals()).unwrap();
+        for (nu, v) in [
+            (&["sin", "1"][..], 0.0),
+            (&["-2"][..], 0.0),
+            (&["0"][..], 1.0),
+        ] {
+            let mut t = vec!["besselj"];
+            t.extend_from_slice(nu);
+            t.push("0");
+            let r = set(&t);
+            assert!(r.is_const() && r.lo == v, "{t:?}: {r:?}");
+        }
+        let r = set(&["besselj", "1", "1"]);
+        assert!(r.lo > 0.43 && r.hi < 0.51, "{r:?}");
+        let r = set(&["besselj", "-1", "1"]);
+        assert!(r.hi < -0.43 && r.lo > -0.51, "{r:?}");
+        let r = set(&["besselj", "1", "-1"]);
+        assert!(r.hi < -0.43, "{r:?}");
+        let r = set(&["besselj", "-2", "-1"]);
+        assert!(r.lo > 0.1, "{r:?}");
+        let r = set(&["besselj", "0", "1"]);
+        assert!(r.lo > 0.74 && r.hi < 0.77, "{r:?}");
+        assert_eq!(
+            value_class(&s(&["acosh", "besselj", "-1", "1"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["acosh", "besselj", "3", "x0"]), ops),
+            Some(Class::Nan)
+        );
+        assert_eq!(
+            value_class(&s(&["log", "besselj", "-1", "1"]), ops),
+            Some(Class::Nan)
+        );
+        // the brackets hold the kernel, every integer order to 50 and both signs of x
+        let mut checked = 0;
+        for n in -50..=50 {
+            for (lo, hi) in [
+                (1e-3, 0.5),
+                (0.5, 1.0),
+                (1.0, 2.0),
+                (1.9, 2.0),
+                (0.01, 0.01),
+            ] {
+                for (a, b) in [(lo, hi), (-hi, -lo)] {
+                    let order = format!("{n}");
+                    let v = value_set_p(
+                        &s(&["besselj", &order, "x0"]),
+                        ops,
+                        &[Vs::interval(a, b, false, false)],
+                        &[],
+                    )
+                    .unwrap();
+                    for x in samples(a, b) {
+                        checked += 1;
+                        let y = kernels::besselj(n as f64, x);
+                        assert!(inside(&v, y), "J_{n}({x}) = {y} outside {v:?}");
+                    }
+                }
+            }
+        }
+        assert!(checked > 10_000, "{checked}");
+    }
+
+    /// atan2 on the positive x axis and at x = +inf is a zero.
+    #[test]
+    fn atan2_zero_on_the_positive_axis() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let set = |t: &[&str]| value_set(&s(t), ops, &Vs::reals()).unwrap();
+        for t in [
+            &["atan2", "0", "cosh", "1"][..],
+            &["atan2", "sin", "1", "float(\"inf\")"][..],
+        ] {
+            let r = set(t);
+            assert!(r.is_const() && r.lo == 0.0, "{t:?}: {r:?}");
+        }
+        let r = set(&["atan2", "0", "neg", "cosh", "1"]);
+        assert!(!r.is_const(), "{r:?}");
+        // on the y axis: +-pi/2 by y's sign, holding the kernel at both zeros
+        let half = std::f64::consts::FRAC_PI_2;
+        let r = set(&["atan2", "1", "0"]);
+        assert!(r.lo < half && half < r.hi && r.hi - r.lo < 1e-14, "{r:?}");
+        let r = set(&["atan2", "neg", "sin", "1", "-0.0"]);
+        assert!(
+            inside(&r, kernels::atan2(-1.0, -0.0)) && r.hi < -1.5,
+            "{r:?}"
+        );
     }
 
     /// The pole-free table is keyed the safe way round: a head it does not name makes the tree

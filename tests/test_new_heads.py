@@ -545,3 +545,78 @@ def test_an_odd_order_is_an_odd_head(bare, mode):
         got = bare.simplify(shape.replace('H', 'besselj 1').split(), mode=mode)
         assert ' '.join(got) == want.replace('sin', 'besselj 1'), (shape, got, want)
         assert bare.simplify(got, mode=mode) == got
+
+
+def test_real_folds_a_ground_value_a_certified_enclosure_decides(bare):
+    """In real, floor, ceil, mod, besselj at 0 and atan2 on the positive axis fold a ground
+    argument to the exact number its enclosure decides; an undecided enclosure stays as written."""
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode='real'))  # noqa: E731
+    assert s('floor tanh 1') == '0' and s('ceil tanh 1') == '1' and s('floor asinh asin -1') == '-2'
+    assert s('ceil cos 0') == '1' and s('ceil tanh 40') == '1'
+    assert s('mod 1 sinh 1') == '1' and s('mod -1 tan -1') == '-1' and s('mod 0 sin 1') == '0'
+    assert s('mod cosh 1 1') == s('- cosh 1 1')
+    assert s('besselj sin 1 0') == '0' and s('besselj cosh 1 0') == '0'
+    assert s('atan2 0 cosh 1') == '0' and s('atan2 1 float("inf")') == '0'
+    assert s('floor atan2 1 0') == '1' and s('ceil atan2 -1 0') == '-1' and s('ceil besselj 0 1') == '1'
+    assert s('erf float("-inf")') == '-1'
+    # an infinite divisor (numpy's cells, D7): the dividend where it is zero or has its sign
+    assert s('mod -1 log 0') == '-1' and s('mod 0 log 0') == '0' and s('mod 1 float("inf")') == '1'
+    # fail closed: float64 and the reals disagree inside these enclosures (f64: 1 and 0)
+    assert s('floor tanh 40') == 'floor tanh 40' and s('ceil exp -800') == 'ceil exp -800'
+    # f64 keeps its own ground fold, with float64's zero sign
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    assert f64('floor tanh 40') == '1' and f64('mod 0 log 0') == '-0.0'
+    assert f64('besselj cosh 1 0') == '-0.0'
+
+
+@pytest.mark.parametrize('mode', ('real', 'permissive'))
+def test_ground_members_of_a_lattice_bag_are_ordered_by_enclosure(bare, mode):
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    assert s('max sin 1 0.5') == 'sin 1' and s('min sin 1 cos 1') == 'cos 1'
+    assert s('max 1 tanh 1') == '1' and s('min -1 asinh 1') == '-1'
+    assert s('max x0 max sin 1 0.5') == s('max x0 sin 1')
+    assert s('max sin 1 min 0.5 x0') == 'sin 1'
+    # overlapping enclosures leave both members: no tie-breaking (permissive then folds the
+    # bag to its float)
+    if mode == 'real':
+        assert s('max sin 1 + 1 neg 0.1585290151921035') == 'max 0.8414709848078965 sin 1'
+    # f64 reads the bag through its ground fold, unchanged
+    assert ' '.join(bare.simplify('max sin 1 0.5'.split(), mode='f64')) == 'max / 1 2 sin 1'
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_ground_nan_and_inf_the_domain_decides(bare, mode):
+    """harmonic is NaN at -inf and at a negative integer (D6) and enclosed between its poles;
+    mod's infinite cells are numpy's (D7); besselj of an integer order is bounded by 1/sqrt(2)
+    and signed on 0 < |x| <= 2: each decides a ground NaN or infinity."""
+    s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
+    nan, inf = 'float("nan")', 'float("inf")'
+    for src in ('harmonic atanh ceil -1', 'harmonic log 0', 'harmonic -2', 'acos harmonic sinh -1',
+                'log harmonic asin -1', 'mod log 0 1', 'mod atanh 1 0', 'acosh besselj -1 1',
+                'acosh besselj -1 -1', 'log besselj -1 1'):
+        assert s(src) == nan, src
+    assert s('mod 1 atanh -1') == 'float("-inf")'
+    assert s('mod -1 atanh 1') == inf
+
+
+def test_f64_besselj_at_zero_is_the_kernel_with_its_zero_sign(bare):
+    """`besselj(nu, 0)` at a literal order is the deployed kernel's value in f64, the sign of a
+    zero included, and the inverse of a zero the infinity of that sign, at every order swept."""
+    import struct
+
+    from simplipy._core import kernel_binary_scalar
+    orders = [str(n) for n in range(-12, 13)] + [f'{n}.5' for n in range(-6, 12)]
+    orders += [f'{n}.{q}' for n in range(0, 5) for q in (25, 75, 1, 9)] + ['1e-300', '123.456', '999.5']
+
+    def bits(v):
+        return 'nan' if v != v else struct.pack('<d', v)
+
+    def ev(t):
+        return float(np.asarray(bare._core.evaluate_batch(t, ['x0'], [0.0], 1, []))[0])
+    for nu in orders:
+        want = kernel_binary_scalar('besselj', float(nu), 0.0)
+        got = bare.simplify(['besselj', nu, '0'], mode='f64')
+        assert bits(ev(got)) == bits(want), (nu, got, want)
+        if want == 0:
+            inv = bare.simplify(['inv', 'besselj', nu, '0'], mode='f64')
+            assert bits(ev(inv)) == bits(np.copysign(np.inf, want)), (nu, inv)

@@ -283,6 +283,7 @@ impl Engine {
             cert_nzae: None,
             cert_nce: None,
             cert_region: None,
+            cert_encl: None,
             mode,
             fold_f64,
             sentinels_expired: false,
@@ -519,6 +520,95 @@ impl Engine {
         b
     }
 
+    /// The enclosure certificate behind `Cx::cert_encl`: the closed float64 box of a GROUND
+    /// composite whose rigorous value set (`interval::value_set`) is certainly a finite real --
+    /// no NaN, no infinity, finite bounds -- and `None` for anything else, a composite over a
+    /// bracket-poisoned power included. Memoized per call.
+    fn ac_encl(&self, e: &Ex, ctx: &SimplifyCtx) -> Option<(f64, f64)> {
+        if !matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)) {
+            return None;
+        }
+        let view = self.view(ctx);
+        if !is_ground(e, &view) || contains_bracket_poisoned_pow(e, &view) {
+            return None;
+        }
+        let bare = Cx::bare(&view);
+        let flat = to_prefix(e, &bare);
+        if let Some(hit) = ctx.encl_scratch.borrow().get(&flat) {
+            return *hit;
+        }
+        let strs = self.resolve_seq(&flat, ctx);
+        let enclosure =
+            crate::interval::value_set(&strs, &self.operators, &crate::interval::Vs::reals())
+                .filter(|v| {
+                    v.has_fin
+                        && !(v.nan || v.pinf || v.ninf)
+                        && v.lo.is_finite()
+                        && v.hi.is_finite()
+                })
+                .map(|v| (v.lo, v.hi));
+        ctx.encl_scratch.borrow_mut().insert(flat, enclosure);
+        enclosure
+    }
+
+    /// THE EXACT GROUND FOLD (`real`): a ground node of a head whose value is an exact number
+    /// wherever a certified enclosure decides it folds to that number, the interval layer's
+    /// value set (sound for the real function) being the certificate:
+    ///
+    /// * `floor` and `ceil` of an argument whose enclosure lies between two integers, or that is
+    ///   exactly one (`floor(tanh 1) = 0`, `ceil(cos 0) = 1`, `floor(atan2(1, 0)) = 1`); `erf`
+    ///   at 0 and at +-inf; `besselj(nu, 0)` at an order certainly positive, zero or a negative
+    ///   integer (`besselj(sin 1, 0) = 0`); `atan2(0, x)` at an `x` certainly positive
+    ///   (`atan2(0, cosh 1) = 0`): a value set that is one point;
+    /// * `mod(a, b)` at a certainly finite `a`, where the floor of the quotient is decided the
+    ///   same way: `a - b floor(a/b)` (`mod(1, sinh 1) = 1`, `mod(2, sin 1) = 2 - 2 sin 1`);
+    ///   under an infinite divisor, `a` where it is zero or has the divisor's sign (numpy's
+    ///   cells, D7: `mod(-1, -inf) = -1`). The divisor 0, an infinite dividend and the infinite
+    ///   remainders are classes, folded above.
+    ///
+    /// An undecided enclosure leaves the node as written: nothing breaks a tie.
+    fn exact_ground_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
+        let Ex::Fun(op, args) = e else { return None };
+        let bare = Cx::bare(view);
+        let value_set = |e: &Ex| {
+            let strs = self.resolve_seq(&to_prefix(e, &bare), ctx);
+            crate::interval::value_set(&strs, &self.operators, &crate::interval::Vs::reals())
+        };
+        let exact = |x: f64| {
+            let _exact = crate::ac::rat::number_domain(false);
+            crate::ac::rat::Rat::from_f64_exact(x)
+        };
+        let name = view.resolve_owned(*op);
+        match (name.as_str(), args.as_slice()) {
+            ("floor" | "ceil" | "erf", [_]) | ("besselj" | "atan2", [_, _]) => {
+                let v = value_set(e)?;
+                if v.is_const() {
+                    exact(v.lo).map(Ex::Num)
+                } else {
+                    None
+                }
+            }
+            ("mod", [a, b]) => {
+                let va = value_set(a)?;
+                if !(va.has_fin && !(va.nan || va.pinf || va.ninf)) {
+                    return None;
+                }
+                let vb = value_set(b)?;
+                if !vb.nan && !vb.has_fin && vb.pinf != vb.ninf {
+                    let keeps = if vb.pinf { va.lo >= 0.0 } else { va.hi <= 0.0 };
+                    return keeps.then(|| a.clone());
+                }
+                let k = exact(crate::interval::quotient_floor(&va, &vb)?)?;
+                if k.is_zero() {
+                    return Some(a.clone());
+                }
+                let shift = crate::ac::expr::mul(vec![Ex::Num(k.checked_neg()?), b.clone()], &bare);
+                Some(crate::ac::expr::add(vec![a.clone(), shift], &bare))
+            }
+            _ => None,
+        }
+    }
+
     /// The zero-set certificate behind `Cx::cert_nzae`: NONZERO a.e., decided by the
     /// structural zero-set analysis (`interval::zero_set_null_generic_const` --
     /// identity-theorem witness for analytic compositions, `<constant>` analyzed as a
@@ -681,6 +771,7 @@ impl Engine {
         ctx: &SimplifyCtx,
         lossy: bool,
         fold_f64: bool,
+        real: bool,
         class_memo: &RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>>,
     ) -> Option<Ex> {
         let children: Vec<&Ex> = match e {
@@ -771,6 +862,8 @@ impl Engine {
                     let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
                     self.ground_fold(&self.resolve_seq(&literal, ctx), signed, &view)
                 }
+                // THE EXACT GROUND FOLD (`real`): a value a certified enclosure decides.
+                None if real => self.exact_ground_fold(e, ctx, &view),
                 // In `f64` an infinity takes the sign float64 gives it, which a signed zero
                 // decides (`1/ceil(-0.5)` is -inf, where the interval layer's one zero reads
                 // +inf): a class the evaluator contradicts does not fold.
@@ -1406,6 +1499,7 @@ impl Engine {
         let cfz = |e: &Ex| self.ac_cert(e, ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, ctx, f64);
+        let cen = |e: &Ex| self.ac_encl(e, ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1413,6 +1507,7 @@ impl Engine {
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
             cert_region: None,
+            cert_encl: Some(&cen),
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
@@ -1557,6 +1652,7 @@ impl Engine {
         let cfz = |e: &Ex| self.ac_cert(e, &ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, &ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, &ctx, f64);
+        let cen = |e: &Ex| self.ac_encl(e, &ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1564,6 +1660,7 @@ impl Engine {
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
             cert_region: None,
+            cert_encl: Some(&cen),
             mode,
             fold_f64: fold_tr,
             sentinels_expired: false,
@@ -1602,7 +1699,8 @@ impl Engine {
         };
         let class_memo: RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>> =
             RefCell::new(FxHashMap::default());
-        let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, fold_tr, &class_memo);
+        let real = matches!(mode, RuleMode::Real);
+        let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, fold_tr, real, &class_memo);
         let pass = PassCtx {
             // MODE SELECTION, half of it: the pass serves the mode's OWN complete set.
             // The twin below (phase 2) is the other half and MUST agree -- leaving the
@@ -1753,6 +1851,7 @@ impl Engine {
                 cert_nzae: Some(&czn),
                 cert_nce: Some(&cnc),
                 cert_region: None,
+                cert_encl: Some(&cen),
                 mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
