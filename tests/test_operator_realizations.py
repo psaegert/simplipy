@@ -105,7 +105,8 @@ def test_cells() -> None:
     assert bits_equal(ops.erf(-0.0), -0.0) and ops.erf(inf) == 1.0 and ops.erf(-inf) == -1.0
     assert ops.atan2(0.0, -0.0) == np.pi and bits_equal(ops.atan2(-0.0, 0.0), -0.0)
     assert ops.inv(-0.0) == -inf and ops.div(1.0, -0.0) == -inf and np.isnan(ops.div(0.0, 0.0))
-    assert np.isnan(ops.pow(-inf, 0.5)) and ops.pow(-inf, 3.0) == -inf and bits_equal(ops.pow(-0.0, 0.5), 0.0)
+    assert np.isnan(ops.pow(-inf, 0.5)) and ops.pow(-inf, 3.0) == -inf and bits_equal(ops.pow(-0.0, 0.5), -0.0)
+    assert bits_equal(ops.pow(-0.0, 0.25), 0.0)  # numpy's sqrt at 0.5 keeps the sign; pow at 1/4 does not
     assert ops.rootn(-8.0, 3.0) == -2.0 and np.isnan(ops.rootn(-8.0, 2.0)) and bits_equal(ops.rootn(-0.0, 3), -0.0)
 
 

@@ -49,7 +49,7 @@ organised by who you are, then the highlights, then every change in detail.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
   them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
   `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit.
-- **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/2)` is `+0`,
+- **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/4)` is `+0`,
   the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
   an exact zero is inverted, `f64` (and `permissive`) keep the sign float64 gives it:
   `1/(x1*(x2 - x2))` is `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` reads
@@ -1109,7 +1109,16 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   calling thread), the GIL released. A complex operand of a function with a complex
   continuation takes numpy's, and a torch tensor takes torch's. New realizations name the
   arithmetic, `add`, `sub` and `mul`, for configs that spell every operator in
-  `simplipy.operators`.
+  `simplipy.operators`. `pow` takes numpy's fast paths, as numpy's `array ** scalar` does:
+  the exponent 2 is `x*x`, -1 is `1/x`, 0.5 is `sqrt(x)`, 0 is `1` and 1 is `x`, bit for bit
+  numpy's, in the realization, the constant fold and the evaluator alike. So `(-0.0)**0.5` is
+  `-0.0` (C's `pow` gives `+0.0`), and the other cells are unchanged (`(-inf)**0.5` is NaN, as
+  every negative base under a non-integer exponent). `pow(b, 1/2)` and `rootn(b, 2)` are then
+  two functions at `b = -0`, which `f64` keeps apart where `b` may be a zero with a sign of its
+  own: `pow(-0.0, 1/2)` is `-0.0` and `rootn(-0.0, 2)` is `0`; over a base that vanishes with a
+  sign on a region, `pow(ceil(x0), 1/2)` stays the call it is, so `1/pow(ceil(x0), 1/2)` is
+  `-inf` and `1/rootn(ceil(x0), 2)` is `inf` on (-1, 0), and `ceil(x0)^(-1/2)` is
+  `1/rootn(ceil(x0), 2)`. Elsewhere `pow(x0, 1/2)` is `rootn(x0, 2)`, as before.
 - **Nine new operators and the `acj2-4` engine config.** `simplipy.operators` gains `floor`,
   `ceil`, `max`, `min` (IEEE 754-2019 at the zero tie: `max(-0, +0) = +0`, `min(+0, -0) = -0`),
   `mod` (numpy's `np.mod`, the divisor's sign), `harmonic` (H(x) = digamma(x + 1) +

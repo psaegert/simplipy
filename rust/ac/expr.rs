@@ -3289,10 +3289,15 @@ fn factor_split(e: Ex, cx: &Cx) -> (Ex, FactorExp) {
     // `sqrt(x) * x -> x^(3/2)` working now that even roots are no longer spelled as powers.
     // An ODD root must NEVER be read this way: `rootn(-8,3) = -2` where `(-8)^(1/3)` is
     // NaN, so they are different functions and collecting them would fabricate values.
+    // In `f64` a square root of a base that may be a signed zero is not `b^(1/2)`, the `pow` call
+    // (`pow_member`'s half powers: `sqrt(-0) = -0`, `rootn(-0, 2) = +0`).
     if let Ex::Fun(op, args) = &e {
         if args.len() == 2 && cx.view.tok_is(*op, "rootn") {
             if let Ex::Num(idx) = &args[1] {
-                if idx.is_even_integer() && idx.cmp_int(2) != Ordering::Less {
+                if idx.is_even_integer()
+                    && idx.cmp_int(2) != Ordering::Less
+                    && !(idx.cmp_int(2) == Ordering::Equal && sqrt_parts_from_rootn(&args[0], cx))
+                {
                     {
                         if let Some(r) = idx.checked_inv() {
                             let Ex::Fun(_, args) = e else { unreachable!() };
@@ -3326,7 +3331,10 @@ fn as_rational_power<'a>(e: &'a Ex, cx: &Cx) -> Option<(&'a Ex, Rat)> {
             let Ex::Num(idx) = &args[1] else {
                 return None;
             };
-            if idx.is_even_integer() && idx.cmp_int(2) != Ordering::Less {
+            if idx.is_even_integer()
+                && idx.cmp_int(2) != Ordering::Less
+                && !(idx.cmp_int(2) == Ordering::Equal && sqrt_parts_from_rootn(&args[0], cx))
+            {
                 idx.checked_inv().map(|r| (&args[0], r))
             } else {
                 None
@@ -4302,15 +4310,21 @@ pub(crate) fn keeps_zero_sign(s: &Ex, cx: &Cx) -> bool {
 /// of its zero (`keeps_zero_sign`), or an odd power, an odd function or an odd root of one, each
 /// odd at a signed zero as everywhere else?
 fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
+    signed_zero_of(f, cx, true)
+}
+
+/// [`region_signed_zero`], reading a sum's zero (`keeps_zero_sign`) where `sums`, and no sum's
+/// where not: the heads that vanish with a sign of their own and the odd carriers of them.
+fn signed_zero_of(f: &Ex, cx: &Cx, sums: bool) -> bool {
+    let rec = |g: &Ex| signed_zero_of(g, cx, sums);
     match f {
-        Ex::Add(_) => keeps_zero_sign(f, cx),
+        Ex::Add(_) => sums && keeps_zero_sign(f, cx),
         Ex::Pow(b, e) => {
-            matches!(&**e, Ex::Num(r) if r.is_odd_integer() && !r.is_negative())
-                && region_signed_zero(b, cx)
+            matches!(&**e, Ex::Num(r) if r.is_odd_integer() && !r.is_negative()) && rec(b)
         }
-        Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => region_signed_zero(&a[0], cx),
+        Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => rec(&a[0]),
         Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => {
-            matches!(&a[1], Ex::Num(k) if k.is_odd_integer()) && region_signed_zero(&a[0], cx)
+            matches!(&a[1], Ex::Num(k) if k.is_odd_integer()) && rec(&a[0])
         }
         // The 0.15 heads. A step or lattice head vanishes on whole intervals with a sign of its
         // own (`ceil` is -0 on (-1, 0), `mod` takes the divisor's, `max(x, -0)` and `min(x, 0)`
@@ -4324,17 +4338,35 @@ fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
         {
             cx.f64_semantics() && f.has_measure_space(cx.view)
         }
-        Ex::Fun(op, a) if a.len() == 1 && cx.view.tok_is(*op, "harmonic") => {
-            region_signed_zero(&a[0], cx)
-        }
-        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "atan2") => {
-            region_signed_zero(&a[0], cx)
-        }
-        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "besselj") => {
-            region_signed_zero(&a[1], cx)
+        Ex::Fun(op, a) if a.len() == 1 && cx.view.tok_is(*op, "harmonic") => rec(&a[0]),
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "atan2") => rec(&a[0]),
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "besselj") => rec(&a[1]),
+        // `pow(b, 1/2)` kept as the call it is (`pow_spelled`): `sqrt` keeps the sign of its
+        // argument's zero.
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "pow") => {
+            matches!(&a[1], Ex::Num(h) if *h == Rat::new(1, 2).expect("1/2"))
+                && sqrt_parts_from_rootn(&a[0], cx)
         }
         _ => false,
     }
+}
+
+/// In `f64`, may `b` be a zero with a sign of its own where `b ** 0.5` (numpy's `sqrt`, which keeps
+/// it) and `rootn(b, 2)` (+0) part: the written negative zero, a ground composite whose float64
+/// value is -0 (in the reading that folds ground nodes, `Cx::fold_f64`, as `signed_zero_product`
+/// reads one), a head that vanishes on a region with a sign of its own or an odd carrier of one
+/// (`signed_zero_of`), or a product holding such a member (its zero takes the members' signs)?
+/// A sum is not read: its orientation is canonical before a power sees it, so the sign of its
+/// zero is not the written one, and a sum whose zero set the certificate cannot show null (most
+/// quotients) would keep every square root of it as a call.
+fn sqrt_parts_from_rootn(b: &Ex, cx: &Cx) -> bool {
+    cx.f64_semantics()
+        && (is_neg_zero(b, cx.view)
+            || signed_zero_of(b, cx, false)
+            || matches!(b, Ex::Mul(v) if v.iter().any(|f| sqrt_parts_from_rootn(f, cx)))
+            || (cx.fold_f64
+                && matches!(b, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..))
+                && ground_value(b, cx).is_some_and(|v| v == 0.0 && v.is_sign_negative())))
 }
 
 /// Is the zero set of `e` null by its form alone, without the certificate (which the parse has
@@ -8956,6 +8988,27 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     }
 }
 
+/// The SPELLING `pow(b, e)`, as the parse reads it: [`pow`], except numpy's square root in `f64`.
+/// Float64's `b ** 0.5` is `sqrt(b)` (`numeric::aligned_pow`), which keeps a zero's sign
+/// (`sqrt(-0) = -0`) where `rootn(b, 2)`, the engine's reading of `b^(1/2)`, gives +0. Where `b`
+/// may be a zero with a sign of its own (`sqrt_parts_from_rootn`) the two are different functions
+/// there, as an inverse or `atan2` reads them: the written negative zero's root is the written
+/// negative zero, and any other such `b` keeps the call as written, a node no exponent arithmetic
+/// reads (`1/pow(ceil(x), 1/2)` is -inf on (-1, 0), `1/rootn(ceil(x), 2)` +inf).
+pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
+    let pow_tok = cx.view.intern("pow");
+    if matches!(&exp, Ex::Num(h) if *h == Rat::new(1, 2).expect("1/2"))
+        && cx.view.arity(pow_tok) == Some(2)
+        && sqrt_parts_from_rootn(&base, cx)
+    {
+        if is_neg_zero(&base, cx.view) {
+            return base;
+        }
+        return Ex::Fun(pow_tok, vec![base, exp]);
+    }
+    pow(base, exp, cx)
+}
+
 /// [`pow`] for a member of a product, whose sign placement decides the member's orientation with
 /// the product's other members (`sign_place`): the same power, a sign-trade site left in the
 /// orientation it was built in.
@@ -8990,6 +9043,21 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     Ex::PosInf
                 };
             }
+        }
+    }
+    // THE NEGATIVE HALF POWER OF A SIGNED ZERO (`f64` only). Float64 reads `b^(1/2)` the way
+    // `rootn(b, 2)` is, +0 at -0 (C's `pow` at every non-integer exponent but numpy's 0.5), and
+    // prints `b^(-1/2)` as `inv pow b 1/2`, whose `pow b 0.5` numpy computes as `sqrt(b)`, -0
+    // at -0 (`numeric::aligned_pow`): where `b` may be a zero with a sign of its own
+    // (`sqrt_parts_from_rootn`), the power is `1/rootn(b, 2)`, which prints as the value it
+    // is (+inf at -0). (The SPELLING `pow b 0.5` is numpy's `sqrt`: `pow_spelled`.)
+    if let Ex::Num(e) = &exp {
+        if *e == Rat::new(-1, 2).expect("-1/2") && sqrt_parts_from_rootn(&base, cx) {
+            if is_neg_zero(&base, cx.view) {
+                return Ex::PosInf;
+            }
+            let root = fun(cx.view.intern("rootn"), vec![base, Ex::int(2)], cx);
+            return pow_member(root, Ex::int(-1), cx);
         }
     }
     // rational^rational exact folds.
@@ -10091,6 +10159,13 @@ fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // A `pow` call (`pow_spelled`: numpy's `sqrt` of a signed zero) is rebuilt as the spelling
+    // it is, which decides again whether it stays a call.
+    if args.len() == 2 && cx.view.tok_is(op, "pow") {
+        let mut it = args.into_iter();
+        let (b, e) = (it.next().expect("base"), it.next().expect("exponent"));
+        return pow_spelled(b, e, cx);
+    }
     // A literal argument LANDS here (permissive's ρ, [`land`]).
     let args: Vec<Ex> = if cx.lossy() {
         args.into_iter().map(|a| land_operand(a, cx)).collect()

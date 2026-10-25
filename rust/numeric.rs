@@ -39,8 +39,32 @@ pub(crate) fn libm_atanh(x: f64) -> f64 {
 /// convention) is deliberately overridden, so the override changes only the −∞-base row.
 /// Infinite exponents keep the C99 magnitude-step semantics (`pow(t, ±∞)` decided by
 /// |t| — including negative `t`), which the contract ratifies as-is.
+///
+/// NUMPY'S FAST PATHS. numpy computes `array ** scalar` (its float64 `power` loop under a
+/// broadcast exponent, numpy 2.5.4 `loops_umath_fp.dispatch.c.src`, and `fast_scalar_power` in
+/// `multiarray/number.c`) without `pow` at five exponents: -1 as `1/x`, 0 (either zero) as 1,
+/// 0.5 as `sqrt(x)`, 1 as `x` and 2 as `x*x`. Each is taken here, so the deployed realization
+/// gives numpy's bits, and the fold and the evaluator, which call this function, give the
+/// realization's. The cells that differ from `pow`: `sqrt(-0) = -0` (`pow` gives +0),
+/// `sqrt(-inf)` is NaN as the override above has it, and the correctly rounded `1/x`, `sqrt`
+/// and `x*x` where libm's `pow` is not.
 #[inline]
 pub(crate) fn aligned_pow(x: f64, y: f64) -> f64 {
+    if y == 2.0 {
+        return x * x;
+    }
+    if y == 0.5 {
+        return x.sqrt();
+    }
+    if y == -1.0 {
+        return 1.0 / x;
+    }
+    if y == 0.0 {
+        return 1.0;
+    }
+    if y == 1.0 {
+        return x;
+    }
     if x < 0.0 && y.is_finite() && y.fract() != 0.0 {
         return f64::NAN;
     }
@@ -765,11 +789,56 @@ mod aligned_pow_tests {
         // IEEE-definitional nan-pow cells (ratified):
         assert_eq!(p(1.0, f64::NAN), 1.0);
         assert_eq!(p(f64::NAN, 0.0), 1.0);
-        // -0.0 is not a negative base, and a fractional power has no odd part to sign: +0
-        assert_eq!(p(-0.0, 0.5).to_bits(), 0.0f64.to_bits());
+        // -0.0 is not a negative base, and a fractional power has no odd part to sign: +0;
+        // the exponent 0.5 is numpy's `sqrt`, which keeps the zero's sign
+        assert_eq!(p(-0.0, 0.25).to_bits(), 0.0f64.to_bits());
+        assert_eq!(p(-0.0, 1.5).to_bits(), 0.0f64.to_bits());
+        assert_eq!(p(-0.0, 0.5).to_bits(), (-0.0f64).to_bits());
         // odd real roots stay sign-folded and defined:
         let r3 = unary_fn("pow1_3").unwrap();
         assert_eq!(r3(-8.0), -2.0);
+    }
+
+    /// numpy's fast paths (`array ** scalar`): the exponents 2, -1, 0.5, 0 and 1 are `x*x`,
+    /// `1/x`, `sqrt(x)`, 1 and `x`, bit for bit, at every cell, through the kernel, the fold's
+    /// dispatch and the unary sugar alike.
+    #[test]
+    fn pow_takes_numpys_fast_paths() {
+        let p = binary_fn("pow").unwrap();
+        let cells = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            2.5,
+            -2.5,
+            5e-324,
+            -5e-324,
+            1e-160,
+            1e200,
+            -1e200,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            std::f64::consts::PI,
+        ];
+        let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits();
+        for x in cells {
+            assert!(same(p(x, 2.0), x * x), "{x}^2");
+            assert!(same(p(x, -1.0), 1.0 / x), "{x}^-1");
+            assert!(same(p(x, 0.5), x.sqrt()), "{x}^0.5");
+            assert!(same(p(x, 0.0), 1.0) && same(p(x, -0.0), 1.0), "{x}^0");
+            assert!(same(p(x, 1.0), x), "{x}^1");
+            assert!(same(kernels::pow(x, 2.0), x * x), "kernel {x}^2");
+            assert!(same(unary_fn("pow2").unwrap()(x), x * x), "pow2({x})");
+            assert!(
+                same(unary_fn("pow1_2").unwrap()(x), x.sqrt()),
+                "pow1_2({x})"
+            );
+        }
+        assert_eq!(p(-0.0, 0.5).to_bits(), (-0.0f64).to_bits());
+        assert!(p(f64::NEG_INFINITY, 0.5).is_nan() && p(-4.0, 0.5).is_nan());
     }
 
     /// IEEE-754 `rootn` at a zero: an odd index keeps the sign of zero (and a negative odd index

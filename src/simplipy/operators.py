@@ -341,12 +341,14 @@ def pow(x: float, y: float) -> float:
     base, ``-inf`` included, under a finite non-integer exponent is NaN (the real-analysis
     reading; C99 gives ``pow(-inf, 0.5) = inf``). A zero base under a finite non-integer
     exponent gives +0 (or +inf for a negative exponent) whatever the zero's sign, and integer
-    exponents keep IEEE's signed results (``pow(-0, 3) = -0``)."""
+    exponents keep IEEE's signed results (``pow(-0, 3) = -0``). At the exponents numpy computes
+    without ``pow`` the value is numpy's ``array ** scalar``: ``x*x`` at 2, ``1/x`` at -1,
+    ``sqrt(x)`` at 0.5 (so ``pow(-0, 0.5) = -0``), 1 at 0 and ``x`` at 1."""
     if not (_plain(x) and _plain(y)):
         torch = _torch_of(x)
         if torch is not None:
             yt = torch.as_tensor(y, dtype=x.dtype, device=x.device)  # type: ignore[attr-defined]
-            nonint = torch.isfinite(yt) & (yt != torch.floor(yt))
+            nonint = torch.isfinite(yt) & (yt != torch.floor(yt)) & (yt != 0.5)
             return torch.pow(torch.where((x == 0) & nonint, torch.zeros_like(x), x), y)
         if np.iscomplexobj(x) or np.iscomplexobj(y):
             return np.power(x, y)

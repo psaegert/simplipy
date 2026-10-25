@@ -117,6 +117,23 @@ def test_max_min_are_numpy_off_the_zero_tie_and_ieee_on_it(name, npf, ieee) -> N
     assert bits_equal(got, core2(name, b, a)).all()  # commutative bit for bit
 
 
+@pytest.mark.parametrize('y', [2, 2.0, -1, -1.0, 0.5, 0, 0.0, -0.0, 1, 1.0])
+def test_pow_takes_numpys_fast_paths(y) -> None:
+    """At the exponents numpy computes without `pow` (`x*x`, `1/x`, `sqrt(x)`, 1 and `x`), the
+    core's power, the deployed realization and the evaluator give numpy's `array ** scalar` bit
+    for bit: the sign of a zero under `sqrt` (`(-0.0) ** 0.5` is -0.0) included."""
+    import simplipy.operators as ops
+    x = np.concatenate([dense_unary_grid(), RNG.uniform(-1e154, 1e154, 20_000), RNG.uniform(-1e-160, 1e-160, 20_000)])
+    with np.errstate(all='ignore'):
+        want = x ** y
+    assert bits_equal(core2('pow', x, float(y)), want).all()
+    assert bits_equal(ops.pow(x, y), want).all()
+    ev = _core.kernel_binary_scalar
+    for v in SPECIAL:
+        with np.errstate(all='ignore'):
+            assert bits_equal(ev('pow', float(v), float(y)), np.array([v]) ** y).all(), (v, y)
+
+
 # --------------------------------------------------------------------------- the cells
 
 def test_max_min_cells() -> None:

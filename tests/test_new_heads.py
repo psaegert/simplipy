@@ -643,3 +643,33 @@ def test_match_time_certificates_read_the_new_heads(bare, mode):
     # harmonic is NaN at every float at or below -2^52, a whole ray
     assert (s('* x1 / harmonic x2 harmonic x2') == 'x1') == (mode == 'real')
     assert (s('* harmonic x1 0') == '0') == (mode == 'real')
+
+
+def test_f64_square_root_spellings_keep_float64s_zero_signs(bare):
+    """float64's `b ** 0.5` is numpy's `sqrt(b)`, -0 at -0, where `rootn(b, 2)` and `b ** -0.5`
+    read +0 there: where the base may be a zero with a sign of its own (the written -0, a ground
+    -0, a step head on the interval it vanishes on), each spelling's `f64` answer evaluates as the
+    input does, under an inverse and `atan2` too."""
+    import struct
+    bases = ['ceil x0', '* x1 ceil x0', 'floor neg x0', 'max x0 -0.0', '-0.0', 'ceil -0.5', 'sin -0.0', 'x0']
+    shapes = ['pow {} 0.5', 'rootn {} 2', 'pow {} -0.5', 'inv pow {} 0.5', 'inv rootn {} 2',
+              'atan2 pow {} 0.5 -1', 'atan2 rootn {} 2 -1', 'inv * x1 pow {} 0.5', 'neg inv pow {} 0.5']
+    X = np.array([[a, b] for a in (-0.75, -0.25, 0.3, 1.7, 2.5) for b in (-2.0, 3.0)])
+
+    def ev(t):
+        return np.asarray(bare._core.evaluate_batch(t, ['x0', 'x1'], X.flatten().tolist(), len(X), []))
+
+    def bits(v):
+        return ['nan' if x != x else struct.pack('<d', x) for x in v]
+    for b in bases:
+        for shape in shapes:
+            src = shape.format(b).split()
+            got = bare.simplify(src, mode='f64')
+            want, have = ev(src), ev(got)
+            # the zeros and infinities bit for bit (their signs); other values to rounding
+            exact = (want == 0) | np.isinf(want) | np.isnan(want)
+            assert bits(have[exact]) == bits(want[exact]), (src, got)
+            assert np.allclose(have[~exact], want[~exact], rtol=1e-15, atol=0), (src, got)
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    assert f64('pow -0.0 0.5') == '-0.0' and f64('rootn -0.0 2') == '0'
+    assert f64('pow x0 0.5') == 'rootn x0 2'

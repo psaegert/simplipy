@@ -222,18 +222,21 @@ class TestExplicitConstants:
 
     def test_fractional_power_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
         # A finite non-integer exponent has no odd part to carry a sign: pow(-0, y) is +0
-        # (y > 0) or +inf (y < 0), as IEEE-754 pow and rootn give, on every input path.
-        # Integer exponents keep IEEE's signed zeros. The two spellings of a square root
-        # therefore agree at -0, so respelling one as the other cannot flip a pole.
+        # (y > 0) or +inf (y < 0), as IEEE-754 pow and rootn give, on every input path, except
+        # at y = 0.5, numpy's sqrt (`array ** 0.5`), which keeps the zero's sign. Integer
+        # exponents keep IEEE's signed zeros. So the two spellings of a square root part at -0,
+        # and the engine keeps them apart where a base may be such a zero (`pow_spelled`).
         import math
 
         import numpy as np
 
         from simplipy import operators as ops
 
-        for y in (0.5, 1.5, 1 / 3, 2.5):
+        for y in (1.5, 1 / 3, 2.5, 0.25):
             for got in (ops.pow(-0.0, y), ops.pow(np.array([-0.0]), y)[0]):
                 assert got == 0.0 and math.copysign(1.0, got) == 1.0, (y, got)
+        for got in (ops.pow(-0.0, 0.5), ops.pow(np.array([-0.0]), 0.5)[0]):
+            assert got == 0.0 and math.copysign(1.0, got) == -1.0, got
         for y in (-0.5, -1.5):
             assert ops.pow(-0.0, y) == math.inf
             assert ops.pow(np.array([-0.0]), y)[0] == math.inf
@@ -244,7 +247,7 @@ class TestExplicitConstants:
         with np.errstate(divide='ignore'):
             by_pow = engine.as_callable(['inv', 'pow', 'neg', 'x1', '/', '1', '2'], ['x1'])(x)
             by_root = engine.as_callable(['inv', 'rootn', 'neg', 'x1', '2'], ['x1'])(x)
-        assert by_pow.tolist() == by_root.tolist() == [math.inf]
+        assert by_pow.tolist() == [-math.inf] and by_root.tolist() == [math.inf]
 
     def test_abs_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
         # abs is even: |-0| is +0 on scalars as on arrays, so its inverse is +inf on every path.

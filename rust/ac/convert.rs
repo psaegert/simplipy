@@ -24,7 +24,7 @@ use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
     add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pow,
-    pow_member, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
+    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -355,7 +355,7 @@ fn product_power(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)
             let k = k.clone();
             Some((powered_members(members, &k, cx), at))
         }
-        _ => Some((vec![pow(mul(members, cx), e, cx)], at)),
+        _ => Some((vec![pow_spelled(mul(members, cx), e, cx)], at)),
     }
 }
 
@@ -505,7 +505,7 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
         ("pow", 2) => {
             let e = args.pop().unwrap();
             let b = args.pop().unwrap();
-            pow(b, e, cx)
+            pow_spelled(b, e, cx)
         }
         ("pow1_3", 1) | ("pow1_5", 1) => {
             let k = if name == "pow1_3" { 3 } else { 5 };
