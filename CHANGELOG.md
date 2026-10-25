@@ -1074,6 +1074,12 @@ model predictions.
   -700 (one variable at seed 42, none at seed 7). Such a row is now judged again at 4096 and
   8192 bits, the precision the mine's range (|x| <= 1e3) needs, by the same rule; a converged
   false row (`exp(sinh(-5)) -> 0`) is refuted at 2048 bits as before.
+- **A source without evidence is not scanned.** The evidence decision is the source's, the
+  same for every candidate, but it was read at the end of each candidate's judgment, after its
+  constant fits, domain gates and high-precision rescues, so a source finite nowhere
+  (`log(-cosh(x))`) was judged against the whole library to be refused by every candidate. It
+  is now read once, before the source's context is built, and such a source returns at once;
+  the files are unchanged.
 
 ### Removed
 

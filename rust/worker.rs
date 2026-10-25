@@ -898,11 +898,6 @@ fn equivalent_no_const(
     if crate::eval::count_finite(&y_cand) < min_informative {
         return false;
     }
-    // EVIDENCE GATE: the source's own decision -- an (almost-)nowhere-defined source is not
-    // rewritten from its corner rows alone.
-    if !sc.informative {
-        return false;
-    }
     for (params, y) in &sc.y {
         // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
         // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
@@ -1005,7 +1000,9 @@ pub fn equivalent_no_const_check(
         return Err("x_flat shape mismatch".to_string());
     }
     let cols = columns_from_row_major(x_flat, n_rows, n_vars);
-    let sc = SourceCtx::new(
+    // EVIDENCE GATE: the source's own decision -- an (almost-)nowhere-defined source is not
+    // rewritten from its corner rows alone.
+    let Some(sc) = SourceCtx::new(
         ops,
         source,
         var_names,
@@ -1015,7 +1012,10 @@ pub fn equivalent_no_const_check(
         seed,
         false,
         min_informative,
-    )?;
+    )?
+    else {
+        return Ok(false);
+    };
     Ok(equivalent_no_const(
         &sc,
         &cand_tape,
@@ -1239,7 +1239,6 @@ fn candidate_matches(
     src_events: &[Option<Vec<bool>>],
     cand: &CandEntry,
     cand_rows: &CandRows<'_>,
-    informative: bool,
     source: &[String],
     src_tape: &Tape,
     battery: Option<&crate::battery::SpecialBattery>,
@@ -1557,11 +1556,8 @@ fn candidate_matches(
         }
         certified.push((inst_params.clone(), fitted));
     }
-    // THE EVIDENCE GATE: the source's own decision (`evidence_rows`), the same for every
-    // candidate -- a source finite only on a null set binds nothing generic.
-    if !informative {
-        return None;
-    }
+    // (THE EVIDENCE GATE is the source's own decision, `evidence_rows`: a source finite only on
+    // a null set binds nothing generic, and has no `SourceCtx` to be judged against.)
     // SPECIAL-POINT PHASE (see `rust/battery.rs`): runs only for candidates
     // that certified everything above, so its cost is per accepted (source, candidate) pair.
     // 1. Contract points at every certified instance's witness. A vacuous instance pins
@@ -1718,9 +1714,9 @@ const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
 /// binds those and extends the rest), so a source finite only on a null set -- `asin(cosh x)`,
 /// finite at 0 alone -- has no evidence and cannot be rewritten from its corner values. That
 /// is decided HERE, from the source's domain and never from a count of sampled rows: the source
-/// is informative iff `interval::finite_cells` certifies, at one of its instances (in instance
-/// order), a cell of the horizon box on which it is finite everywhere. Fail closed: an
-/// undecided search certifies nothing.
+/// is informative iff `interval::finite_cells` certifies, at one of its instances, a cell of the
+/// horizon box on which it is finite everywhere. Fail closed: an undecided search certifies
+/// nothing.
 ///
 /// An informative source then needs `min_informative` rows where some instance is finite,
 /// and the rows it is given are a random sample: `atanh(floor x)` is finite on [0, 1) alone,
@@ -1981,7 +1977,8 @@ struct Certified {
 /// the source's own seed), its evidence decision and rows, its reachability set and its
 /// special-point battery. The scan builds it once and judges every candidate against it;
 /// `judge_pair` builds it for one pair. Rows are the caller's X (`cols`), borrowed, unless the
-/// evidence decision appended rows to them (`evidence_rows`).
+/// evidence decision appended rows to them (`evidence_rows`). Only an INFORMATIVE source has
+/// one: `new` returns `None` for the rest, before any of the per-source work below.
 struct SourceCtx<'s> {
     source: &'s [String],
     tape: Tape,
@@ -1993,8 +1990,6 @@ struct SourceCtx<'s> {
     n_rows: usize,
     /// Rows were appended, so a library candidate's cached values do not cover them.
     augmented: bool,
-    /// The evidence decision (`evidence_rows`): an uninformative source certifies nothing.
-    informative: bool,
     y: Vec<(Vec<f64>, Vec<f64>)>,
     /// Per instance of `y`, the rows where an operation overflowed or underflowed
     /// (`numeric::RangeKind`), `None` where none did; read by f64's range standard only, and
@@ -2020,7 +2015,7 @@ impl<'s> SourceCtx<'s> {
         seed: u64,
         f64_range: bool,
         min_informative: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Option<Self>, String> {
         let tape = Tape::compile(source, ops, var_names)?;
         let n_const = tape.n_params;
         let combos = sign_combos(n_const);
@@ -2036,8 +2031,11 @@ impl<'s> SourceCtx<'s> {
             &mut rng,
             crate::battery::holds_new_head(source, ops),
         );
-        // THE EVIDENCE DECISION, and the rows it needs (`evidence_rows`).
-        let plan = evidence_rows(
+        // THE EVIDENCE DECISION, and the rows it needs (`evidence_rows`). An uninformative
+        // source certifies no candidate (the evidence gate is the source's, the same for every
+        // candidate), so nothing below is built for it: no range events, value set or battery,
+        // and its scan judges nothing -- no domain gate, no high-precision rescue.
+        let Some(extra) = evidence_rows(
             source,
             &tape,
             ops,
@@ -2046,11 +2044,12 @@ impl<'s> SourceCtx<'s> {
             n_rows,
             min_informative,
             seed,
-        );
-        let informative = plan.is_some();
-        let n_extra = plan.as_ref().map_or(0, |e| e.first().map_or(0, Vec::len));
-        let (cols, n_rows): (std::borrow::Cow<'s, [Vec<f64>]>, usize) = match plan {
-            Some(extra) if n_extra > 0 => {
+        ) else {
+            return Ok(None);
+        };
+        let n_extra = extra.first().map_or(0, Vec::len);
+        let (cols, n_rows): (std::borrow::Cow<'s, [Vec<f64>]>, usize) = match extra {
+            extra if n_extra > 0 => {
                 // rows evaluate independently, so the instances' values on the appended rows
                 // are appended to their values on the given ones
                 for (p, yi) in y.iter_mut() {
@@ -2091,7 +2090,7 @@ impl<'s> SourceCtx<'s> {
             var_names.len(),
             &crate::battery::used_variables(source, var_names),
         );
-        Ok(SourceCtx {
+        Ok(Some(SourceCtx {
             source,
             tape,
             n_const,
@@ -2099,13 +2098,12 @@ impl<'s> SourceCtx<'s> {
             cols,
             n_rows,
             augmented: n_extra > 0,
-            informative,
             y,
             events,
             reach,
             blind,
             battery,
-        })
+        }))
     }
 }
 
@@ -2162,7 +2160,6 @@ fn certify_candidate(
         &sc.events,
         cand,
         &CandRows::on(cand, sc),
-        sc.informative,
         source,
         &sc.tape,
         sc.battery.as_ref(),
@@ -2217,7 +2214,6 @@ fn certify_candidate(
                     &sc.events,
                     &entry,
                     &CandRows::cached(&entry),
-                    sc.informative,
                     source,
                     &sc.tape,
                     sc.battery.as_ref(),
@@ -2546,7 +2542,10 @@ pub fn find_rule_with_lib(
             _ => {} // Mixed / Empty / unevaluable -> not a clean collapse: candidate scan below
         }
     }
-    let sc = SourceCtx::new(
+    // THE EVIDENCE GUARD: an uninformative source certifies no candidate, so its scan would
+    // return `None` after judging the whole library; it returns here, before the per-source
+    // context and every candidate's gates.
+    let Some(sc) = SourceCtx::new(
         ops,
         source,
         &lib.var_names,
@@ -2556,7 +2555,10 @@ pub fn find_rule_with_lib(
         seed,
         !rescue,
         min_informative,
-    )?;
+    )?
+    else {
+        return Ok(None);
+    };
     // THE SEARCH BOUND. `max_mu` (the caller's mark, i.e. mu of the engine's own endpoint
     // for this source) makes the search bound the SAME predicate as the acceptance gate:
     // walk mu tiers ascending and stop at the first tier that cannot descend. The token
@@ -2728,7 +2730,7 @@ pub fn judge_pair(
     min_informative: usize,
     rescue: bool,
 ) -> Result<Option<&'static str>, String> {
-    let sc = SourceCtx::new(
+    let Some(sc) = SourceCtx::new(
         ops,
         source,
         var_names,
@@ -2738,7 +2740,10 @@ pub fn judge_pair(
         seed,
         !rescue,
         min_informative,
-    )?;
+    )?
+    else {
+        return Ok(Some("uncertified")); // uninformative: no candidate certifies (the guard)
+    };
     // compiled on the rows the source is judged on (the evidence top-up included)
     let cand = CandEntry::compile(target, ops, var_names, &sc.cols, sc.n_rows, u64::MAX)?;
     let Some(c) = certify_candidate(
