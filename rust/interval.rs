@@ -8132,6 +8132,10 @@ mod new_head_tests {
     use super::*;
     use crate::numeric::kernels;
 
+    /// A named unary and binary kernel.
+    type Unary = (&'static str, fn(f64) -> f64);
+    type Binary = (&'static str, fn(f64, f64) -> f64);
+
     fn engine() -> crate::engine::Engine {
         crate::engine::Engine::from_strs(include_str!("../assets/engines/acj2-4/config.yaml"), "[]")
             .expect("acj2-4 builds")
@@ -8184,7 +8188,7 @@ mod new_head_tests {
     fn new_head_enclosures_contain_the_kernel() {
         let e = engine();
         let ops = e.operators_ref();
-        let unary: [(&str, fn(f64) -> f64); 4] = [
+        let unary: [Unary; 4] = [
             ("floor", kernels::floor),
             ("ceil", kernels::ceil),
             ("erf", kernels::erf),
@@ -8207,7 +8211,7 @@ mod new_head_tests {
                 }
             }
         }
-        let binary: [(&str, fn(f64, f64) -> f64); 5] = [
+        let binary: [Binary; 5] = [
             ("max", kernels::max),
             ("min", kernels::min),
             ("mod", kernels::modulo),

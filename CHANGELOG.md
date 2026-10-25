@@ -1086,6 +1086,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **The core's tests are lint-clean.** `cargo clippy --all-targets -- -D warnings` passes, the
+  test targets included (it stopped at four lints in the tests of the interval layer and the
+  high-precision `besselj`).
 - **`masking.Role.ORDER`** is the role of `besselj`'s order (its first operand). Like a `pow`
   exponent it decides the domain (a non-integer order is NaN for every negative argument), so
   it types its whole subtree and `mask_fittable` keeps it; `mask_all` masks it.

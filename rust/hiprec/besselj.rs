@@ -555,8 +555,8 @@ mod tests {
         assert!(j("0", "0", &mut cc).unwrap().cmp(&small(1, p)) == Some(0));
         assert!(j("2.5", "0", &mut cc).unwrap().is_zero());
         assert!(j("-3", "0", &mut cc).unwrap().is_zero());
-        assert_eq!(j("-0.5", "0", &mut cc).unwrap().is_inf_pos(), true);
-        assert_eq!(j("-1.5", "0", &mut cc).unwrap().is_inf_neg(), true);
+        assert!(j("-0.5", "0", &mut cc).unwrap().is_inf_pos());
+        assert!(j("-1.5", "0", &mut cc).unwrap().is_inf_neg());
         assert!(j("0.5", "-1", &mut cc).unwrap().is_nan());
         assert!(j("1", "inf", &mut cc).unwrap().is_nan());
         assert!(j("1e5", "3", &mut cc).is_none());
