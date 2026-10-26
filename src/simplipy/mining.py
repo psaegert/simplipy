@@ -505,9 +505,9 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     """THE LIVENESS GATE: the rows of ``rules`` that the engine holding them does not serve.
 
     A shipped rule is live when, on every generic instance of its left side (each slot a
-    fresh variable, each wide slot also a composite, ``sin(x)`` or the first unary head of a
-    vocabulary without ``sin``: the covered-rule prune's variants without its non-finite
-    tier, ``engine._coverage_variants``), the mode's serve answer reaches its right side's
+    fresh variable, each wide slot also a composite: the covered-rule prune's variants without
+    its non-finite tier, ``engine._coverage_variants``), the mode's serve answer reaches its
+    right side's
     instance or something below it (``engine._reaches_promise``). A rule that misses is dead
     or shadowed: another rule takes its instance first and ends dearer, so the row ships and
     never decides an answer. Expected empty.
@@ -516,13 +516,10 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants, _reaches_promise
     core = engine._core
     arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
-    unary = sorted(t for t, n in engine.operator_arity.items() if n == 1)
-    composite = 'sin' if 'sin' in unary else (unary[0] if unary else None)
     dead: list = []
     for lhs, rhs in rules:
         for variant_lhs, variant_rhs in _coverage_variants(tuple(lhs), tuple(rhs), rule_mode,
-                                                           non_finite=False,
-                                                           composite=composite):
+                                                           non_finite=False):
             if not _reaches_promise(core, rule_mode, variant_lhs, variant_rhs, arity):
                 dead.append([list(lhs), list(rhs), variant_lhs,
                              list(core.mine_mark(variant_lhs, rule_mode=rule_mode))])

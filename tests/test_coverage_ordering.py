@@ -247,3 +247,38 @@ class TestPruneProbesWhatTheSlotBinds:
         before = [engine.simplify(p) for p in probes]
         assert engine.prune_covered_rules(rule_mode='default') == 1
         assert [engine.simplify(p) for p in probes] == before
+
+
+_NO_SIN_OPS = {
+    "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
+    "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+    "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
+}
+
+
+class TestProbesReadEveryAlphabet:
+    def test_the_composite_instance_is_in_the_core_language(self) -> None:
+        """A wide slot is probed with a composite as well as a leaf, and the composite is a
+        sum with a variable of its own: the core language every engine reads, so the probes
+        need no head of the alphabet (an alphabet without `sin` built `sin(x0)`)."""
+        from simplipy.engine import _coverage_variants
+        variants = _coverage_variants(('log', 'exp', '_0'), ('_0',), 'f64')
+        assert (['log', 'exp', 'x0'], ['x0']) in variants
+        assert (['log', 'exp', '+', 'x0', 'x1'], ['+', 'x0', 'x1']) in variants
+        assert not any('sin' in v for pair in variants for v in pair)
+
+    def test_prune_and_liveness_without_sin(self) -> None:
+        """On an alphabet without `sin` the covered prune drops a rule its shorter twin
+        covers on the leaf and on the composite instance, keeps the twin, and the liveness
+        gate finds both rules of a live set live."""
+        from simplipy.mining import _dead_rules
+        short = (('log', 'exp', '_0'), ('_0',))
+        covered = (('neg', 'log', 'exp', '_0'), ('neg', '_0'))
+        engine = SimpliPyEngine(operators=_NO_SIN_OPS, rules=[short, covered])
+        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.simplification_rules == [short]
+        assert engine.simplify(['neg', 'log', 'exp', '+', 'x0', 'x1']) != \
+            ['neg', 'log', 'exp', '+', 'x0', 'x1']
+        assert _dead_rules(engine, 'default', [short]) == []

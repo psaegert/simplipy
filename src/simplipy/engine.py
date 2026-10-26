@@ -69,16 +69,18 @@ def _coverage_variants(
         rhs: tuple[str, ...],
         rule_mode: str,
         non_finite: bool = True,
-        composite: str | None = 'sin') -> list[tuple[list[str], list[str]]]:
+        composite: bool = True) -> list[tuple[list[str], list[str]]]:
     """Instantiation variants a rule must survive to count as covered in ``rule_mode``:
     the instances its slots bind there.
 
     Every slot in ``lhs`` is instantiated as a distinct variable leaf ``x{i}``;
     ``<constant>`` stays LITERAL (substituting a numeral would let native constant
     folding fake coverage). Additionally, every subset of up to 3 wide slots
-    (``_``/``!``/``$`` sigils, which bind composites) is probed with the composite
-    ``sin(x{i})`` (``composite`` names the unary head; ``None`` probes none): leaf-only
-    instantiation under-tests what a wide slot claims to match.
+    (``_``/``!``/``$`` sigils, which bind composites) is probed with a composite
+    (``composite=False`` probes none): leaf-only instantiation under-tests what a wide slot
+    claims to match. The composite is ``x{i} + x{k}``, ``x{k}`` a variable of its own: a
+    sum is in the core language every engine reads whatever its alphabet, finite and nonzero
+    almost everywhere, so every wide sort binds it.
     In ``permissive``, where every slot binds any subtree, each non-finite literal is a
     variant too (all slots at once): `$0 / $0 -> 1` is what takes `inf/inf` to `1` there,
     which the constructor takes to `nan`. (In ``f64`` and ``real`` the ground fold reads
@@ -86,13 +88,15 @@ def _coverage_variants(
     GENERIC instances only, which the liveness gate asks a rule to fire on.
     """
     slots = list(dict.fromkeys(t for t in lhs if _is_slot_token(t)))
-    wide = [s for s in slots if s[0] in '_!$'][:3] if composite is not None else []
+    wide = [s for s in slots if s[0] in '_!$'][:3] if composite else []
+    # the composite's own variables: past every index the rule's slots take
+    fresh = 1 + max((int(s[1:]) for s in slots if s[1:].isdigit()), default=-1)
     bindings_list = []
     for mask in product((0, 1), repeat=len(wide)):
         bindings = {s: ['x' + s[1:]] for s in slots}
-        for slot, wrapped in zip(wide, mask):
+        for k, (slot, wrapped) in enumerate(zip(wide, mask)):
             if wrapped:
-                bindings[slot] = [str(composite), 'x' + slot[1:]]
+                bindings[slot] = ['+', 'x' + slot[1:], f'x{fresh + k}']
         bindings_list.append(bindings)
     if non_finite and rule_mode == 'permissive' and slots:
         bindings_list += [{s: [value] for s in slots} for value in _NON_FINITE_LITERALS]
@@ -997,8 +1001,9 @@ class SimpliPyEngine:
         Variants: each slot instantiated as a
         distinct variable leaf ``x{i}``, with ``<constant>`` kept LITERAL
         (native constant folding must not fake coverage), plus every subset of
-        up to 3 wide slots (``_``/``!`` sigils) probed with the composite
-        ``sin(x{i})`` -- leaf-only instantiation under-tests wide-sort claims.
+        up to 3 wide slots (``_``/``!``/``$`` sigils) probed with the composite
+        ``x{i} + x{k}`` (``_coverage_variants``) -- leaf-only instantiation under-tests
+        wide-sort claims.
         A rule is covered only if ALL variants pass.
 
         Batch remove-and-repair, longest sources first: rules are processed in

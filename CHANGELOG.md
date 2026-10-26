@@ -1139,8 +1139,8 @@ model predictions.
   `cos(asin(tanh(x)))` itself keeps its form: the mine does not certify
   `cos(asin(tanh(_0))) -> 1/cosh(_0)` on its evaluation rows.
 - **`verify-mine` and the mine check that every rule fires** (`dead`). On every generic
-  instance of a rule's left side (each placeholder a fresh variable, a wide one also
-  `sin(x)`) the engine holding the file must reach the rule's right side or something
+  instance of a rule's left side (each placeholder a fresh variable, a wide one also a sum
+  with a variable of its own) the engine holding the file must reach the rule's right side or something
   cheaper; a rule another rule takes from its own instance, ending dearer, ships and never
   decides an answer. The mine lists such rules in the sidecar (`gates.dead`) and on its
   final-gate line, and `verify-mine` fails on them. Under file-order matching the gate lists
@@ -1161,6 +1161,10 @@ model predictions.
   reaches. So `log(c)`, `acos(c)`, `exp(log(c))` and `atan(atanh(c))` are `<constant>` in every
   mode, `x * acos(c)` is `c * x`, and the mine has none of them to write; `(-1)^c`, finite only
   at the integers, and `0^c`, infinite for c < 0, keep their form outside `permissive`.
+- **The covered prune and the liveness gate read every alphabet.** Their probe instance for a
+  wide placeholder wrapped it in `sin(x)`, which an engine without `sin` cannot read; it is
+  now `x + x'`, a sum with a variable of its own, which every engine reads (the core language)
+  and every placeholder sort binds.
 
 ### Removed
 
