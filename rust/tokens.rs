@@ -64,7 +64,7 @@ fn sigil_of(s: &str) -> u8 {
 /// Per-Engine interner: strings, ids, properties.
 ///
 /// (The deleted binary kernel's distinguished-token FIELDS -- `constant`/`nan`/`plus`/
-/// .../`cc_inverse_op`, its id-comparison anchors -- were removed in D3, 2026-08-05:
+/// .../`cc_inverse_op`, its id-comparison anchors -- are gone:
 /// zero consumers since the 0.12.0 kernel deletion. The AC core interns through
 /// `TokenView::intern` and compares by string, never against stored ids. Their eager
 /// `intern` CALLS survive at the FRONT of [`TokenTable::build`]'s literal list, in the
@@ -85,7 +85,7 @@ impl TokenTable {
         // Eager membership is PERFORMANCE-only (a missing literal just lands in the
         // per-call overlay) -- except `rootn`, see below. The first eleven entries are
         // the deleted kernel's distinguished tokens, kept FIRST in their historical
-        // order so the D3 field removal left every table id unchanged.
+        // order so removing the fields left every table id unchanged.
         for s in [
             "<constant>",
             "float(\"nan\")",
@@ -149,7 +149,7 @@ impl TokenTable {
         // eagerly interned above, and an inverse naming another OPERATOR is interned
         // via operator_order; only a malformed non-operator inverse name ever added a
         // token, and such a string now simply lands in per-call overlays, where the
-        // string-based comparisons treat it identically. Removed in D3 with the dead
+        // string-based comparisons treat it identically. Removed with the dead
         // field it fed.)
         t
     }

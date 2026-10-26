@@ -4,8 +4,7 @@
 //! This module is deliberately not the AC core. It never builds an [`crate::ac::expr::Ex`],
 //! never runs a canonical constructor, never consults the ruleset, never reorders a bag and
 //! never re-spells a literal. Its answers therefore do not depend on the engine ARTIFACT,
-//! which is the whole point of the split: `simplify` canonicalises, a conversion re-notates
-//! (design: the research harness).
+//! which is the whole point of the split: `simplify` canonicalises, a conversion re-notates.
 //!
 //! The governing rule: **`to_X` leaves structure that is already in form X untouched and
 //! rewrites only the foreign structure.** [`tagged_to_prefix`] expands bags and touches
@@ -293,7 +292,7 @@ fn emit_tagged(node: &Node, ops: &Operators, out: &mut Vec<String>) {
     match node {
         Node::Leaf(t) => match fraction_parts(t) {
             // A fraction is a quotient, so the tagged dialect spells it as one: a tagged sequence
-            // declares its dialect by its bags, and `exp 1/2` declared none (review T7).
+            // declares its dialect by its bags, and `exp 1/2` declared none.
             Some((p, q)) => out.extend(["<mul>", p, "<div>", q, "</mul>"].map(String::from)),
             None => out.push(t.clone()),
         },
@@ -318,7 +317,7 @@ fn fraction_parts(t: &str) -> Option<(&str, &str)> {
 
 /// One bag. A LONE inverted member has no bag of its own (a bag holds two members or more): a
 /// reciprocal is bagged with the unit, `<mul> 1 <div> x </mul>`, so every quotient of a tagged
-/// sequence carries a bag and the sequence declares its dialect (review T7: `neg inv x1` declared
+/// sequence carries a bag and the sequence declares its dialect (`neg inv x1` declared
 /// none, so `simplify` read it as explicit and answered explicit); a negation keeps its unary
 /// spelling `neg x`, which both dialects read and answer alike.
 #[allow(clippy::too_many_arguments)]
@@ -493,7 +492,7 @@ mod tests {
         }
     }
 
-    /// Every quotient of a tagged sequence carries a bag (review T7): a lone reciprocal is
+    /// Every quotient of a tagged sequence carries a bag: a lone reciprocal is
     /// bagged with the unit and a fraction token as its quotient, a negation stays unary.
     #[test]
     fn every_reciprocal_and_fraction_is_bagged() {

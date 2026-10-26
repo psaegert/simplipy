@@ -1,4 +1,4 @@
-"""A rule file is read in the canon it was certified in (P1).
+"""A rule file is read in the canon it was certified in.
 
 A rule is judged on the pattern its mine wrote, read in its mine's canon. Read in another
 canon, its LHS can become a pattern nothing judged: real's canon reads the f64 fact

@@ -11,10 +11,10 @@ gate the checker against regressions of:
 4. Phase-1 non-exhaustiveness (enumeration stopping at max length REACHED, not SATURATED),
 5. non-reproducibility (unseeded X / hash-order iteration),
 6. end-to-end: a small mine on operators that CAN express the vacuous pair must not ship it,
-7. extension-measure blindness (F0): a source that is NaN almost everywhere (rootn with an
+7. extension-measure blindness: a source that is NaN almost everywhere (rootn with an
    expression-position index) must not ship a rule rewriting it to a defined value. The
    interval domain gate must treat an UNANALYZABLE region as undecided (fail-closed), not
-   as proven-clean -- the 2026-07-29 acj-4-3 incident, where five such rules shipped and
+   as proven-clean -- an early acj-4-3 mine shipped five such rules, which
    had to be killed post hoc by verify_ruleset (bc-positive-measure).
 """
 import json
@@ -236,8 +236,8 @@ class TestCheckerSoundness:
 
     def test_confirm_primitive_rejects_shipped_defect(self, engine, mining_x) -> None:
         """The exact dev_7-3 defect asin(cosh(_0)) -> nan, via the stage-2 confirm
-        primitive (find_rule with the single paired candidate). TWO layers refuse it
-        (D4/H-043): the old artifact's bare `nan` spelling is a reserved numeric
+        primitive (find_rule with the single paired candidate). TWO layers refuse it:
+        the old artifact's bare `nan` spelling is a reserved numeric
         spelling and dies at the alphabet boundary before any numerics run; the
         canonical `float("nan")` spelling reaches the checker and is killed by the
         finite-evidence gate."""
@@ -370,7 +370,7 @@ class TestEndToEndMineGate:
         env_base = {**os.environ,
                     "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
                     "OMP_NUM_THREADS": "1"}
-        # missed-007: docs/rules.md promises reproducibility independent of process,
+        # Docs/rules.md promises reproducibility independent of process,
         # hash randomization AND thread count -- this test used to pin
         # RAYON_NUM_THREADS=2 in BOTH arms, leaving the thread-count leg of the
         # published promise untested. The arms now vary it (1 vs 4) alongside the
@@ -388,9 +388,9 @@ class TestEndToEndMineGate:
         assert all(json.loads(outs[0])), "vacuous: a mode mined nothing"
 
 
-# Failure mode 7 (F0): rootn's expression-position index is a non-integer almost everywhere,
+# Failure mode 7: rootn's expression-position index is a non-integer almost everywhere,
 # so any `rootn <lit> tanh/cosh ?0` source is NaN a.e. -- the exact vocabulary of the five
-# rules the 2026-07-29 acj-4-3 mine shipped. abs/neg are the anti-vacuity anchor: their
+# rules an early acj-4-3 mine shipped. abs/neg are the anti-vacuity anchor: their
 # parity family (cosh(neg .) -> cosh(.), ...) mints SOUND rules in the same mine, so the
 # "no poison shipped" assertion can never hold by the mine minting nothing at all.
 _ROOTN_OPERATORS = {
@@ -412,11 +412,11 @@ def _subtree_end(tokens, i, arity):
 
 
 class TestExtensionMeasureGate:
-    """Failure mode 7 -- the F0 incident, end to end. A mine over a vocabulary that CAN
+    """Failure mode 7, end to end. A mine over a vocabulary that CAN
     express the NaN-a.e. rootn sources must not ship any rule whose LHS applies rootn
     with an expression-position index: such a source is undefined almost everywhere, so
-    the rewrite is a positive-measure domain extension (contract R3 forbids it at any
-    positive measure). At the pre-fix HEAD this exact mine minted four of the five
+    the rewrite is a positive-measure domain extension (the contract forbids it at any
+    positive measure). Without the fix this exact mine minted four of the five
     production poison rules (`rootn (-1) tanh ?0 -> (-1)`, ...) because the interval
     domain gate treated its unanalyzable boxes as proven-clean."""
 
@@ -437,7 +437,7 @@ class TestExtensionMeasureGate:
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules}
         # anti-vacuity tripwire: something sound must mint in this same mine, or every
         # assertion below holds vacuously. It was the parity family (`cosh neg ?0 ->
-        # cosh ?0`) until 2026-08-07, when the parity arm took that whole family into
+        # cosh ?0`) until the parity arm took that whole family into
         # the CONSTRUCTORS and the mine stopped minting it -- the tripwire fired exactly
         # as designed. The successor is a transcendental inverse pair, which no
         # constructor evaluates and so no fold can absorb. This vocabulary has no
@@ -470,7 +470,7 @@ class TestExtensionMeasureGate:
 
 
 class TestFoldFilter:
-    """The library filter MIRRORS THE EMIT GUARD (2026-08-22): every var-free candidate
+    """The library filter MIRRORS THE EMIT GUARD: every var-free candidate
     of length >= 2 is dropped unconditionally, because the shared scan refuses every
     var-free composite TARGET at the mint and such a candidate can therefore never
     emit. Two 400-source byte-identity controls certified the drop changes no mined
@@ -562,7 +562,7 @@ class TestFoldFilter:
 
 
 class TestTheLibraryIsQuotientedByCanonicalClass:
-    """audit §7.1 (2026-08-22). One canonical class, many spellings: the scan judged
+    """One canonical class, many spellings: the scan judged
     every spelling. The quotient keeps, per (class, variable multiset, `<constant>`
     count), the spelling the scan would pick -- cheapest mu, then library order --
     and it is byte-identity-gated: two 400-source control slices mine the same 28
@@ -675,10 +675,10 @@ class TestProvenance:
         assert all(isinstance(v, int) and v >= 0 for v in undecided.values())
 
     def test_sidecar_records_the_environment(self, tmp_path) -> None:
-        """R5 + C23c-prov (the G2 gate): the artifact's identity includes the numeric
-        stack that minted it -- scipy's PRESENCE alone changes mined output (N3:
-        a rule reads PROMOTE with scipy and NO-WITNESS without), at least 5 shipped
-        rules exist only because glibc 2.43 is 1 ulp wrong (L9), and none of it was
+        """The artifact's identity includes the numeric
+        stack that minted it -- scipy's PRESENCE alone changes mined output
+        (a rule reads PROMOTE with scipy and NO-WITNESS without), at least 5 shipped
+        rules exist only because glibc 2.43 is 1 ulp wrong, and none of it was
         recorded anywhere. The sidecar now carries the environment and a
         `libm_fingerprint` computed through the folder's OWN FFI path, so two
         machines can tell whether their mines are even comparable."""
@@ -810,7 +810,7 @@ class TestCertifyRules:
         assert v["clause"] == "a-real-change"
 
     def test_symbolic_gate_kills_what_the_tolerance_cannot_see(self, engine) -> None:
-        """B3: the docstring promises certified output "exactly as sound as mined
+        """The docstring promises certified output "exactly as sound as mined
         rules", and the mining path earns that at the symbolic gate in `_finalize`
         (KILLs dropped before anything downstream sees the set). The public API ran
         no such gate, so `tanh(exp(e)) -> 1` -- false by 1.37e-13, below every usable
@@ -825,7 +825,7 @@ class TestCertifyRules:
         # The control must be a true identity the deployed engine ALSO performs, or its
         # own refusal would mask the gate's verdict. `log(e^a e^b) -> a+b` used to sit
         # here and no longer qualifies: true on R, but ENGINE-MISALIGN past exp's
-        # overflow (F95). `-tanh(-a) = tanh a` followed it until the sign of an odd function
+        # overflow. `-tanh(-a) = tanh a` followed it until the sign of an odd function
         # became the construction's own decision (a source certification skips).
         # `1/exp(a) = exp(-a)` is true, certified, and a rule's to perform: the negation is two
         # bits cheaper than the reciprocal, and the construction keeps either spelling.
@@ -836,7 +836,7 @@ class TestCertifyRules:
 
 
 class TestSymbolicGateFatalBuckets:
-    """B7: the symbolic gate dropped only `verdict == 'KILL'`; the other six non-sound
+    """The symbolic gate dropped only `verdict == 'KILL'`; the other six non-sound
     buckets (ENGINE-MISALIGN / NO-WITNESS / UNRESOLVED-COVERAGE / UNSUPPORTED-SHAPE /
     JUDGE-TIMEOUT) passed silently -- so a rule the judge COULD NOT EVALUATE shipped
     with the same standing as a certified one, and the sidecar recorded nothing. The
@@ -904,7 +904,7 @@ class TestSymbolicGateFatalBuckets:
                                 + len(prov["gates"]["preempted"]))
 
     def test_certify_rules_refuses_the_same_buckets(self, engine, monkeypatch) -> None:
-        """The B3 gate site must apply the same fatal set: a certification the judge
+        """The certify_rules gate site must apply the same fatal set: a certification the judge
         cannot evaluate is refused, not returned 'minimal'. The log-free control in
         the same call proves the refusal is the gate's."""
         self._withdraw_log(monkeypatch)
@@ -920,8 +920,8 @@ class TestSymbolicGateFatalBuckets:
 
 
 class TestCoverageGateSearches:
-    """The coverage gate must SEARCH, never decide from a spelling shrink (finding F2,
-    audit D14). `* exp x0 exp x0` canon-respells to `pow(exp x0, 2)`: the token count
+    """The coverage gate must SEARCH, never decide from a spelling shrink.
+    `* exp x0 exp x0` canon-respells to `pow(exp x0, 2)`: the token count
     drops (5 -> 4) while the semantic complexity does not move (4 -> 4). The old gate
     read that shrink as "already covered" and short-circuited, so the strictly better
     `exp(x0+x0)` (complexity 3) was never searched for -- and because the respelled
@@ -929,7 +929,7 @@ class TestCoverageGateSearches:
     deferred to a later tier; it is lost. Acceptance ("strictly below the engine's own
     result in the serve ordering") rides the candidate scan itself: a refused match asks
     for the next candidate and an exhausted length moves to the next length, exactly the
-    assignment-enumeration doctrine of finding F1."""
+    assignment-enumeration doctrine."""
 
     DIAG = ["*", "exp", "x0", "exp", "x0"]
     BETTER = ("exp", "+", "x0", "x0")
@@ -980,7 +980,7 @@ class TestEmitParseClosure:
     """The engine must be able to read its own output (emit alphabet <= parse alphabet).
     `pow` and `rootn` are AC-language built-ins the serializer emits regardless of the
     config vocabulary; both must parse and validate under a config that declares
-    neither. Found via F2: under this file's pow-less operator set,
+    neither. Found this way: under this file's pow-less operator set,
     `simplify(simplify(x))` raised ValueError and the mine's relaxed acceptance
     (`ac_ordered_below` on the engine's own output) silently errored into a refusal."""
 
@@ -999,8 +999,8 @@ class TestEmitParseClosure:
 @pytest.fixture(scope="module")
 def dev():
     # The full-vocabulary battery engine (this file's minimal test operator set has
-    # no pow/trig): acj-4-3, generation-2 spellings throughout (audit Tier-1 #3 --
-    # these batteries were the last dev_7-3-ruleset consumers).
+    # no pow/trig): acj-4-3, generation-2 spellings throughout (no
+    # asset dependence).
     from conftest import acj_config_path, require_or_skip
     config = acj_config_path()
     require_or_skip(config, 'acj-4-3 config not staged')
@@ -1201,7 +1201,7 @@ class TestProposalChannel:
         assert [(e["verdict"], e["stage"]) for e in trail] == [
             # exp*exp collects to pow(exp,2) -- the same state respelled, no serve-
             # ordering reduction, and nothing expressible at L3 beats it: search-
-            # rejected, never a coverage claim (state-coverage, the F5 ruling)
+            # rejected, never a coverage claim (state coverage)
             ("rejected", "search"),
             ("already_covered", "covered"),   # + x0 0 IS x0: atomic state, genuine coverage
             ("rejected", "vocabulary"),
@@ -1241,11 +1241,11 @@ class TestProposalChannel:
 
 
 class TestProposalTargetAllowance:
-    """The proposals target allowance (owner ruling 2026-08-18: "If we allow that, the
-    rules should still strictly decrease *something*, probably mu' then").
+    """The proposals target allowance: a rule
+    should still strictly decrease *something*, here mu'.
 
-    PINS, DOES NOT CHANGE: measured 2026-08-18, the shipped hint arm ALREADY implements
-    the ruling. `_certify_proposals` never bounds a hint by ``max_target_pattern_length``
+    PINS, DOES NOT CHANGE: the hint arm ALREADY implements
+    the allowance. `_certify_proposals` never bounds a hint by ``max_target_pattern_length``
     (the bound caps only the mine's own candidate SEARCH); what every hinted target must
     pass instead is the strict-descent gate ``ac_ordered_below(hint, ac_out)`` against
     the engine's own endpoint -- the serve-time reduction ordering
@@ -1341,7 +1341,7 @@ class TestProposalTargetAllowance:
         """`exp(x0)*exp(x0) -> pow(exp(x0), 2)`: the hint IS the source's canonical
         state respelled -- an exact TIE in the (measure, canonical-order) pair. Nothing
         may certify on an equal-measure tie: the strict gate refuses both directions and
-        the proposal dies 'rejected'/'search', never as a coverage claim (F2/F5: a
+        the proposal dies 'rejected'/'search', never as a coverage claim (a
         respell is not a reduction)."""
         src = ["*", "exp", "x0", "exp", "x0"]
         tgt = ["pow", "exp", "x0", "2"]
@@ -1432,13 +1432,13 @@ class TestLadderSnapshots:
 
 
 class TestMineSingleFlight:
-    """Hardening H-002/H-008/H-009 (2026-08-03).
+    """Mining is single-flight.
 
     The interval soundness counters the provenance sidecar reads are process-global,
     so mining is SINGLE-FLIGHT per process -- enforced by a real lock with a loud
-    error, not by accident. The old accident was H-008: ``find_rules`` installed its
+    error, not by accident. ``find_rules`` once installed its
     SIGINT handler unconditionally, which made any non-main-thread mine die with
-    ``ValueError: signal only works in main thread`` at entry. And H-009: the handler
+    ``ValueError: signal only works in main thread`` at entry. And the handler
     used to be installed ~100 lines before the try/finally that restores it, so an
     early validation raise (a malformed proposals file -- the documented fail-fast)
     leaked the custom handler into the process."""
@@ -1585,7 +1585,7 @@ class TestMeasureFingerprintAtLoad:
 
 
 class TestMissed003SingleFlightPreservesRules:
-    """missed-003: `find_rules` cleared the ruleset BEFORE acquiring the single-flight
+    """`find_rules` cleared the ruleset BEFORE acquiring the single-flight
     lock, so a call REJECTED by single-flight had already destroyed the caller's rules
     (measured in the audit: 6,671 -> RuntimeError -> 0, with `simplify` silently
     answering from native arithmetic afterwards). The reset now happens under the
@@ -1608,7 +1608,7 @@ class TestMissed003SingleFlightPreservesRules:
 
 
 class TestD28CertifyLock:
-    """D28: one-miner-per-process is doctrine, and `certify_rules` was found
+    """One-miner-per-process is doctrine, and `certify_rules` was found
     UNGUARDED -- it runs the same certification machinery (and mutates the same
     process-global interval counters the sidecar records) as a mine, so it must
     hold the same single-flight lock."""
@@ -1625,9 +1625,8 @@ class TestD28CertifyLock:
 
 class TestProposalHintLengthAllowance:
     """The proposal hint arm's LENGTH gate, removed in favour of the serve ordering
-    (owner ruling 2026-08-18: "Only 'remove' the length gate for the LLM proposed
-    rules. We can't afford to do 5-5 in general, for example, that would be way to
-    expensive to mine").
+    (the LLM proposed rules may exceed the mine's length; mining 5-5
+    in general is far too expensive).
 
     Both hint arms -- :meth:`certify_rules` (the standalone proposal API) and the
     ``find_rules(proposals=...)`` channel -- used to require ``len(hint) < len(source)``
@@ -1644,8 +1643,8 @@ class TestProposalHintLengthAllowance:
     The owner's cost argument is untouched: a proposal skips the candidate search
     entirely (the hint IS the target), so dropping its pre-filter costs no mining time.
 
-    THE MINED-CANDIDATE SEARCH NO LONGER KEEPS A TOKEN BOUND (owner ruling, re-mine
-    2026-08-20). It is bounded by mu instead: the scan walks mu tiers ascending and stops
+    THE MINED-CANDIDATE SEARCH KEEPS NO TOKEN BOUND.
+    It is bounded by mu instead: the scan walks mu tiers ascending and stops
     at the first tier that cannot be ordered below the source's mark, which is the SAME
     predicate acceptance applies. What used to be two criteria -- a token count for search,
     mu for acceptance -- is one, and the half that was refusing mu-descending targets for
@@ -1737,7 +1736,7 @@ class TestProposalHintLengthAllowance:
         saved = {tuple(tuple(side) for side in rule) for rule in json.load(open(real))}
         assert (("-", "1", "cos", "*", "2", "?0"),
                 ("*", "2", "pow", "sin", "?0", "2")) in saved
-        # SERVE. `simplify` is DIALECT-PRESERVING (owner-ruled): it answers in the
+        # SERVE. `simplify` is DIALECT-PRESERVING: it answers in the
         # dialect it was handed, and SIN_SRC is explicit binary prefix, so the answer is
         # too -- `to_tagged` is the separate step for the bag spelling. The mine's mark
         # (`mine_mark`) is the same state in the mine's binary alphabet. Before the merge both
@@ -1814,7 +1813,7 @@ class TestProposalHintLengthAllowance:
         """(d) `2*sin(x0)*sin(x0) -> 2*sin(x0)^2` is the SAME canonical state respelled
         -- an exact tie. The retired token gate would have waved it through (7 -> 6
         tokens); the ordering is STRICT in both directions, so it dies 'rejected'.
-        Nothing certifies on an equal-measure tie (F2/F5: a respell is not a
+        Nothing certifies on an equal-measure tie (a respell is not a
         reduction)."""
         eng = self._engine(str(tmp_path / "probe"))
         core = eng._core
@@ -1831,7 +1830,7 @@ class TestProposalHintLengthAllowance:
         assert sidecar["proposals"]["trail"][-1]["verdict"] == "rejected"
 
     def test_the_mined_candidate_search_is_bounded_by_mu_not_length(self, tmp_path) -> None:
-        """(e) THE BOUND IS mu (owner ruling, re-mine 2026-08-20). This test used to pin
+        """(e) THE BOUND IS mu. This test used to pin
         the opposite: a 6-token target was hidden from a 6-token source purely by the
         token bound, and raising `simplified_length` to 7 revealed it. Both calls now
         return the target, because the token count was never the criterion the mine
@@ -1899,13 +1898,13 @@ _HYPERBOLIC_OPERATORS = {
 # finite sample, but in float64 the two squares overflow to the SAME finite value long
 # before they overflow to inf (|x| >~ 12.7 already disagrees; |x| > 355 gives inf - inf
 # = nan), so the symbolic gate kills it for positive-measure disagreement. It is the
-# 2026-08-18 acj-4-3-llm-v2 finding in miniature: certified by the proposal channel,
+# acj-4-3-llm-v2 finding in miniature: certified by the proposal channel,
 # then dropped by a LATER stage that the census never heard about.
 _KILLED_PAIR = (["-", "pow2", "cosh", "x0", "pow2", "sinh", "x0"], ["1"])
 
 
 class TestCertifiedThenDropped:
-    """F94: the proposal census must never advertise a rule the artifact does not contain.
+    """The proposal census must never advertise a rule the artifact does not contain.
 
     `_certify_proposals` writes its verdicts BEFORE the symbolic gate, the covered-prune
     and the sort promotion have run, and each of those stages may still drop a certified
@@ -1978,7 +1977,7 @@ class TestCertifiedThenDropped:
                               ["neg", "log", "*", "x0", "x0"], dummies) != base
 
     def test_a_convicted_pair_with_a_tier_is_ROUTED_not_dropped(self, tmp_path) -> None:
-        """THE 2026-08-18 DEFECT, re-pointed by the triple. `cosh(x0)^2 - sinh(x0)^2 = 1`
+        """A convicted pair with a tier, re-pointed by the triple. `cosh(x0)^2 - sinh(x0)^2 = 1`
         certifies and the symbolic gate then convicts it -- and when `rules.json` was the
         only destination, the right thing to do was delete it and say so in the census.
 
@@ -2097,7 +2096,7 @@ class TestTheFinalGate:
 
     def test_a_file_spelling_the_mode_does_not_license_is_dropped(self) -> None:
         """The file spelling is what release verification reads: a row whose served
-        respelling judges clean but whose own spelling does not must go (task #83)."""
+        respelling judges clean but whose own spelling does not must go."""
         a = (('+', 'tanh', 'log', '9', '_0'), ('+', 'inv', '1.025', '_0'))
         b = (('+', 'exp', '?0', 'neg', 'exp', '?0'), ('0',))
         engine, miner = self._miner([a, b])
@@ -2328,7 +2327,7 @@ class TestTheSidecarRecordsTheGates:
 
 
 class TestTheFinalGateJudgesTheFileSpelling:
-    """Task #83 regression: the constant-fold offender family. Mined spelling
+    """The constant-fold offender family. Mined spelling
     `op(hyperbolic(log n), slot)` with an exact-rational decimal respelling on the RHS:
     true on R (the fold IS an exact rational -- tanh(log 9) = 40/41 = 1/1.025), 1-6 ulp
     drift in deployed f64, so the file-level gate says `real`. The served canon folds the
@@ -2339,10 +2338,10 @@ class TestTheFinalGateJudgesTheFileSpelling:
     with the real contract judge on a real engine -- no mine required.
     """
 
-    #: The two named exemplars (task #83) verbatim, plus the measured divergent family
+    #: The two named exemplars verbatim, plus the measured divergent family
     #: from the run-5 f64 set (the verify_triple report itself is gone; these are the
     #: family members whose served respelling judges `core`/`f64` while their file
-    #: spelling judges `real` -- reconstructed with the shipped judge, 2026-08-30).
+    #: spelling judges `real` -- reconstructed with the shipped judge).
     OFFENDERS = [
         (['pow', 'cosh', 'log', '3', '_0'], ['pow', '0.6', 'neg', '_0']),
         (['+', 'tanh', 'log', '9', '_0'], ['+', 'inv', '1.025', '_0']),
@@ -2542,7 +2541,7 @@ class TestThePruneIsInstanceSafe:
 
 
 class TestCanonicalSourceClassCertification:
-    """CERTIFY THE CANONICAL REPRESENTATIVE ONLY (owner ruling, re-mine 2026-08-20).
+    """CERTIFY THE CANONICAL REPRESENTATIVE ONLY.
 
     Certification runs in f64 on whichever spelling the enumerator produced, while AC
     treats all regroupings of `a*b*c` as ONE expression. f64 does not: `(1e200*1e200)/1e200`
@@ -2607,7 +2606,7 @@ class TestCanonicalSourceClassCertification:
 
 
 class TestVarFreeCandidatesNeverEnterTheLibrary:
-    """The library filter mirrors the emit guard (2026-08-22, replacing the 2026-08-21
+    """The library filter mirrors the emit guard (replacing a
     folds-to-leaf lemma).
 
     History, kept because both halves earned their scars: the mu-dominance criterion
@@ -2617,7 +2616,7 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
     real mine then minted `rootn 1 <constant> -> pow 1 <constant>`, because the scan
     emits the candidate's own token form, not its fold. The emit guard fixed that at
     the mint; the library exemption it obsoleted survived for a day and was spending
-    30x of the scan on candidates that could never emit (audit U2, two byte-identity
+    30x of the scan on candidates that could never emit (two byte-identity
     controls). Now the library refuses the whole class at admission AND the emit
     guard still refuses the spelling at the mint -- one invariant, both layers.
     """
@@ -2664,9 +2663,9 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
 
 
 class TestTriplePaths:
-    """The triple's file names derive from the requested output path (owner ruling
-    2026-08-24: the f64 file is named ``rules_f64.json``; the siblings replace the
-    mode marker rather than append to it)."""
+    """The triple's file names derive from the requested output path:
+    the f64 file is named ``rules_f64.json``; the siblings replace the
+    mode marker rather than append to it."""
 
     def test_the_f64_marker_is_replaced_not_appended(self) -> None:
         from simplipy.mining import _triple_paths
@@ -2693,7 +2692,7 @@ class TestTriplePaths:
 
 class TestWitnessWallClock:
     def test_budget_exceeded_reads_no_witness_loudly(self, monkeypatch) -> None:
-        # acj-5-4 run 1 (2026-08-24): one pathological overflow landscape ground the
+        # acj-5-4 run 1: one pathological overflow landscape ground the
         # mine for 21 hours inside certify_rule with nothing on the log. Every inner
         # piece is bounded; the PRODUCT was not. The budget turns that stall into a
         # loud NO-WITNESS in bounded time.
@@ -2715,7 +2714,7 @@ class TestBoundaryMagnitudeProbes:
     def test_pool_reaches_the_overflow_boundaries(self) -> None:
         # sqrt(x^2)=|x| diverges from its LHS only above 1.34e154 (fl(x^2) = inf);
         # x^6 versions from 4.6e51. A pool ending at |v| <= 40 certified all three
-        # into the acj-5-4 f64 tier (2026-08-26). The probes must stay.
+        # into the acj-5-4 f64 tier. The probes must stay.
         from simplipy.promotion._pointwise import ATOMS
         mags = [abs(float(a.strip('()'))) for a in ATOMS
                 if 'inf' not in a and 'nan' not in a]

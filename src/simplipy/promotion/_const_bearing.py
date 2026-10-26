@@ -62,7 +62,7 @@ MAX_SOLVER_STARTS = 6
 #: Per-RULE wall-clock budget for the whole forall-exists certification. Every inner
 #: piece is bounded (max_nfev, MAX_SOLVER_STARTS, finite draw counts) but their product
 #: is not, and one pathological overflow landscape ground a mine for 21 hours inside
-#: this loop with nothing on the log (acj-5-4 run 1, 2026-08-24, killed). Typical rules
+#: this loop with nothing on the log. Typical rules
 #: certify in milliseconds; on exceed the rule reads NO-WITNESS -- the fail-safe
 #: outcome both callers already handle (it ships without composite binding) -- with a
 #: LOUD marker and a warning, never a silent stall.
@@ -141,11 +141,11 @@ def solve_witness(lhs_b, rhs, ws, nt, y_src, V, rng):
     try:
         from scipy.optimize import least_squares
     except ImportError as ex:
-        # C23c-loud (audit N3, G2 gate): this `return []` used to be SILENT, and
+        # This `return []` used to be SILENT, and
         # scipy's absence then changed the mined artifact with no record and no
         # error -- a certifiable rule read NO-WITNESS instead of PROMOTE. The
         # mine's numeric stack is part of the artifact's identity (the sidecar's
-        # `environment` block records it, R5/C23c-prov); a missing member is a
+        # `environment` block records it); a missing member is a
         # hard failure, never a silent degradation.
         raise RuntimeError(
             'simplipy.promotion requires scipy for witness solving; refusing to '

@@ -1,6 +1,5 @@
 # mypy: ignore-errors
-"""The promotion instruments must speak the FULL generation-2 vocabulary (audit Tier-1 #2,
-2026-08-03): `rootn` was missing from the high-precision equivalence table, so every
+"""The promotion instruments must speak the FULL generation-2 vocabulary: `rootn` was missing from the high-precision equivalence table, so every
 rootn-bearing rule silently lost the mp arm -- `contract_value_at` fell back to deployed
 f64 (whose atom-level unreliability is exactly what the mp arm exists to fix),
 `_overturn.judge_exact` returned UNDECIDABLE, and `prefold`'s zero-snap skipped rootn
@@ -118,12 +117,12 @@ class TestPowConventionStillHolds:
 
 
 class TestC23cLoud:
-    """C23c-loud (the G2 gate, audit N3): `solve_witness`'s scipy import failure
+    """`solve_witness`'s scipy import failure
     silently degraded the mine -- a certifiable rule read NO-WITNESS instead of
     PROMOTE (`+ <constant> * <constant> _0 -> * <constant> + _0 <constant>` flips
     verdict on scipy's presence alone) and the artifact changed with no record and
     no error. The mine's numeric stack is part of the artifact's identity
-    (C23c-prov records it); a missing member must be a hard failure."""
+    (the sidecar records it); a missing member must be a hard failure."""
 
     def test_scipy_absence_is_fatal_not_silent(self, monkeypatch):
         import sys
@@ -139,7 +138,7 @@ class TestC23cLoud:
 
 
 class TestC35NoHostStateMutation:
-    """C35 (G4 prerequisite): a library must not mutate its embedder's numeric state.
+    """A library must not mutate its embedder's numeric state.
     `import simplipy.verify` used to call `np.seterr(all='ignore')` process-wide, and
     the promotion certifiers set `mp.dps` without restoring -- an embedder's numpy
     error handling and mpmath precision silently changed because a rule was judged."""

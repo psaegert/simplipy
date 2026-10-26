@@ -26,7 +26,7 @@ pub mod kernels;
 /// arm (`interval.rs::u_atanh`) must evaluate endpoint images with the SAME function the
 /// fold ships, because its outward-rounding budget (`ULP_LIBM` = 8 ulps) only covers
 /// libm's own rounding error -- not the unbounded std-vs-libm composition gap documented
-/// in `elementary` (audit B6: the fold at -0.999 sat 161 ulps below the std-computed
+/// in `elementary` (the fold at -0.999 sat 161 ulps below the std-computed
 /// box's lower bound, an enclosure violation).
 #[inline]
 pub(crate) fn libm_atanh(x: f64) -> f64 {
@@ -136,8 +136,8 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
     }
     // Bare or parenthesized, decimal or exact-fraction: the wrapping composes with
     // both grammars. The old paren branch `return`ed parse_pyfloat(inner) EVEN ON
-    // None, so "(-1/3)" never reached the fraction arm below it (hardening H-012,
-    // 2026-08-03 -- the engine-side reader had the same hole, kept aligned).
+    // None, so "(-1/3)" never reached the fraction arm below it.
+    // The engine-side reader had the same hole, kept aligned.
     fn bare_value(t: &str) -> Option<f64> {
         if let Some(v) = parse_pyfloat(t) {
             // An INTEGER spelling is an integer to the deployed evaluator (Python reads `-0`
@@ -167,7 +167,7 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
 /// `i128`, and from the exact big-integer components beyond that (up to
 /// `rat::READER_DIGITS` digits; `10^400/10^399` is 10.0, not inf/inf). Only beyond that limit
 /// is the f64 `float(p) / float(q)`, which three roundings can leave up to three ulps from the
-/// fraction (the old reader, B6: `673107593011939307760027002528 /
+/// fraction (the old reader: `673107593011939307760027002528 /
 /// 810572757194796821120128085049` read 1.5 ulps low, outside the interval kernel's
 /// one-ulp leaf bracket).
 pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
@@ -198,7 +198,7 @@ pub(crate) fn leaf_value_is_nearest(tok: &str) -> bool {
     parse_pyfloat(t).is_some() || fraction_value(t).is_none_or(|(_, certified)| certified)
 }
 
-/// H-045-R (owner Option B, 2026-08-05): sign and parity of an INTEGER-denoting decimal
+/// Sign and parity of an INTEGER-denoting decimal
 /// literal, read from the SPELLING -- exact at every magnitude, no `i128`/f64 limit.
 /// `Some((negative, odd))` iff the token is a decimal/e-notation literal whose denoted
 /// value is a nonzero integer: the digit string `D` with decimal shift `s` denotes
@@ -786,7 +786,7 @@ mod aligned_pow_tests {
         assert_eq!(p(-2.0, f64::INFINITY), f64::INFINITY);
         assert_eq!(p(-0.5, f64::INFINITY), 0.0);
         assert_eq!(p(-1.0, f64::INFINITY), 1.0);
-        // IEEE-definitional nan-pow cells (ratified):
+        // IEEE-definitional nan-pow cells:
         assert_eq!(p(1.0, f64::NAN), 1.0);
         assert_eq!(p(f64::NAN, 0.0), 1.0);
         // -0.0 is not a negative base, and a fractional power has no odd part to sign: +0;

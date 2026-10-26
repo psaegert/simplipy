@@ -1,24 +1,24 @@
-"""F74: the judge upgrade -- honest-instrument falsifiers (2026-08-10).
+"""The judge upgrade -- honest-instrument falsifiers.
 
 Every case here is a REAL row from the extreme-lane 1M fuzz stream (record
-fuzz_extreme_f73_1M.json) or a distilled base-lane adjudication-table shape. The
-2026-08-09 decomposition left 190 LIVE judge convictions; tracing them found the
+fuzz_extreme_f73_1M.json) or a distilled base-lane adjudication-table shape. A
+decomposition left 190 LIVE judge convictions; tracing them found the
 convictions were overwhelmingly fabricated by the instrument, via five mechanisms:
 
-  D1  c_pow swallowed the Unresolved refusal raised by _pow_mag_capped
+  (1) c_pow swallowed the Unresolved refusal raised by _pow_mag_capped
       (`except Exception: return nan`), turning "cannot evaluate at working
       precision" into a fabricated nan -- which then read as positive-measure
       EXTENSION/SHRINK against correct engine outputs (~150 rows).
-  D2  MAG_CAP at 1e50 refused magnitudes mpmath evaluates exactly in
+  (2) MAG_CAP at 1e50 refused magnitudes mpmath evaluates exactly in
       milliseconds (extreme-literal pows reach ~10^(3e311); measured cost 23 ms).
-  D3  _snap_literal_zeros tested only MAXIMAL variable-free spans at HARDCODED
+  (3) _snap_literal_zeros tested only MAXIMAL variable-free spans at HARDCODED
       dps 50/110: a true nonzero difference spanning 272 digits read zero on
       both rungs (the judge then rewrote the input to '0' and convicted the
       correct engine), and an inner exact-zero span (tan pi) was never snapped
       when the outer span evaluated cleanly.
-  D4  working precision was fixed at dps 50, so cos(1e-320) rounded to
+  (4) working precision was fixed at dps 50, so cos(1e-320) rounded to
       exactly 1 and pow(<1, -inf) = +inf was convicted as INF-CHANGE.
-  D5  tanh/cosh values whose distance from +-1/1 lies below any working
+  (5) tanh/cosh values whose distance from +-1/1 lies below any working
       precision (tanh(9e15) = 1 - 2e^{-1.8e16}) rounded to the boundary
       exactly, fabricating acosh(1)=0 / pow(1,-inf)=1 against correct nan/inf.
 
@@ -51,7 +51,7 @@ def rng():
 # ---------------------------------------------------------------------------------------
 
 FLIP_TO_OK = [
-    # D3 (adaptive rungs): 1e309 + (-1e309 - 2.55e38) needs 272 digits; the two-rung
+    # (3), adaptive rungs: 1e309 + (-1e309 - 2.55e38) needs 272 digits; the two-rung
     # zero test at 50/110 read it as exact zero and rewrote the input to '0'.
     (13391,
      ['+', '1e309', '-', '-1e309', '2.552117751907039e38'],
@@ -66,14 +66,14 @@ FLIP_TO_OK = [
      ['*', '+', '-1e309', '-', '4503599627370496', '-1e309', '-', 'np.pi',
       'pow', '-2', '-2'],
      ['*', '4503599627370496', '-', 'np.pi', '/', '1', '4']),
-    # D3 via exact-rational folding: the f64-max cancellation resolves in Fraction.
+    # (3) via exact-rational folding: the f64-max cancellation resolves in Fraction.
     (908611,
      ['*', 'pow', '-', '1.7976931348623157e308', '+', '0.9999999999999999',
       '1.7976931348623157e308', '3', '-', '+', 'pow', 'x1',
       '3.402823669209385e38', '/', 'x1', '-2', '2'],
      ['*', 'pow', '-0.9999999999999999', '3', '-', '-', 'pow', 'x1',
       '3.402823669209385e38', '/', 'x1', '2', '2']),
-    # D1+D2: pow(1.79e308, 1.79e308) is a huge FINITE number, so finite - inf = -inf
+    # (1)+(2): pow(1.79e308, 1.79e308) is a huge FINITE number, so finite - inf = -inf
     # is exactly right; the swallowed refusal fabricated nan - inf = nan.
     (228289,
      ['-', 'pow', '1.7976931348623157e308', '1.7976931348623157e308',
@@ -100,19 +100,19 @@ FLIP_TO_OK = [
       '170141183460469231731687303715884105727'],
      ['atanh', '*', '0', 'pow', 'inv', 'pow', 'x4', '9007199254740992',
       '170141183460469231731687303715884105727']),
-    # D3 (recursive snap): sin(pi) is exactly zero, so 0 * inf = nan on both sides;
+    # (3), recursive snap: sin(pi) is exactly zero, so 0 * inf = nan on both sides;
     # the maximal-span-only snap left the inner residue alive as +-inf.
     (360075,
      ['*', 'sin', 'np.pi', 'float("inf")'],
      ['float("nan")']),
-    # D3 (recursive snap): tan(pi) = 0 exactly, so pow(nan, 0) = 1 (ratified
+    # (3), recursive snap: tan(pi) = 0 exactly, so pow(nan, 0) = 1 (ratified
     # totality) on the input side too; the outer span evaluated cleanly, so the
     # inner exact zero was never snapped and nan propagated.
     (636919,
      ['pow', '/', 'cosh', '1/170141183460469231731687303715884105727', 'acosh',
       '1e-320', 'tan', 'np.pi'],
      ['1']),
-    # D4 (adaptive dps): cos(1e-320) = 1 - 5e-641 < 1 strictly, so
+    # (4), adaptive dps: cos(1e-320) = 1 - 5e-641 < 1 strictly, so
     # pow(<1, -inf) = +inf; at dps 50 the base rounded to exactly 1.
     (38796,
      ['pow', 'cos', '1e-320', 'float("-inf")'],
@@ -129,7 +129,7 @@ def test_fabricated_conviction_now_ok(row, inp, out):
 
 
 # ---------------------------------------------------------------------------------------
-# D5 rows: the truth is UNKNOWABLE at any working precision (tanh(9e15) sits
+# The truth is UNKNOWABLE at any working precision (tanh(9e15) sits
 # 10^{-8e15} below 1). The honest verdict is a refusal -- UNSCORED, recorded --
 # never the old fabricated conviction of a correct output.
 # ---------------------------------------------------------------------------------------
@@ -172,7 +172,7 @@ STILL_VIOLATION = [
      ['float("nan")']),
 ]
 
-# RE-ADJUDICATED 2026-08-11 (owner: "this should be fixed properly"). Row 508487 --
+# RE-ADJUDICATED. Row 508487 --
 # `rootn(0, -1) = +inf` vs `-3/0 = -inf`, downstream exp/pow turning that into 0 vs 1
 # at the x0 = 0 atom -- was pinned here as a VIOLATION with its own comment calling it
 # "a real convention-boundary item for the owner". It is the singular-input class: the
@@ -213,8 +213,8 @@ def test_singular_class_agrees_under_deployed_realizations(row, inp, out):
     from simplipy import SimpliPyEngine
     from simplipy.promotion import _f64_eval as F
 
-    # R6 hygiene: the suite must never WRITE the real user cache (the audit watched
-    # the shared cache change mid-pytest-run); resolve the asset the same
+    # Hygiene: the suite must never WRITE the real user cache (the shared cache
+    # once changed mid-pytest-run); resolve the asset the same
     # local-then-cache way every other suite does.
     from conftest import acj_config_path
     engine = SimpliPyEngine.from_config(acj_config_path())
@@ -304,7 +304,7 @@ class TestExactSnap:
         assert out == ['pow', 'x0', '0']
 
     def test_identity_roundtrip_snaps_to_the_integer(self):
-        # direct-internal call: the caller owns the ambient precision (C35)
+        # direct-internal call: the caller owns the ambient precision
         from mpmath import mp
         from simplipy.verify._monitor import DPS
         with mp.workdps(DPS):
@@ -313,7 +313,7 @@ class TestExactSnap:
     def test_true_nonzero_across_many_digits_does_not_snap(self):
         toks = ['+', '1e309', '-', '-1e309', '2.552117751907039e38']
         # (pre-folding handles this exactly; the ladder alone must also refuse
-        # to snap it -- the F74 defect was snapping it to '0' at dps 50/110)
+        # to snap it -- the old defect was snapping it to '0' at dps 50/110)
         out = _snap_literal_exacts(list(toks))
         assert '0' not in out
 
@@ -343,7 +343,7 @@ class TestSaturationHonesty:
         # snap ladder accepted exp(exp(-1e309)) as exactly 1 through every rung
         # (the true value is 1 + 10^{-4.34e308}, above ANY precision), snapped the
         # span to '1', and the judge convicted the engine's CORRECT nan for
-        # asin(above-1) -- a fabrication introduced by the F74 upgrade itself
+        # asin(above-1) -- a fabrication introduced by the exact-snap itself
         # (extreme row 924168).
         with pytest.raises(Unresolved):
             OPS['exp'][1](evaluate(['exp', '-1e309'], {}))
@@ -405,8 +405,8 @@ class TestPairDps:
 
 
 # ---------------------------------------------------------------------------------------
-# The SINGULAR-INPUT gate (9.8.3(a) boundary, second rung; fbench pilot row 733,
-# 2026-08-11). At a REAL probe on the input's singular manifold (an internal +-inf
+# The SINGULAR-INPUT gate (fbench pilot row 733). At a REAL probe on the input's
+# singular manifold (an internal +-inf
 # arises during evaluation) the input has no mathematical value; the reals both sides
 # evaluate to are convention-completions (one-zero + limit-completion) and may
 # legitimately differ between spellings: 1/(0/t) = +inf but (1/0)*t = -inf for t < 0,
@@ -417,7 +417,7 @@ class TestPairDps:
 # ---------------------------------------------------------------------------------------
 
 class TestSingularInputGate:
-    # the pilot's minimal witness (P1 reduction of corpus row 733): the engine's sound
+    # the pilot's minimal witness (a reduction of corpus row 733): the engine's sound
     # rewrite x4 - atan(E) -> x4 + atan(-E) with the division chain restructured; the
     # two spellings are a.e.-identical (independent 60-point full-measure check) and
     # diverge ONLY on the correlated diagonal where x3 - x1 = 0 zeroes a denominator.
@@ -502,9 +502,9 @@ class TestSingularInputGate:
 
 
 class TestTwinInstrumentInLockstep:
-    """The 9.8.3(a) scoping must hold in BOTH instruments. The 2026-07-19 refinement
-    landed in both (`_contract` REAL-CHANGE@ext / `_monitor` inf-input-null); the
-    2026-08-11 singular scoping does the same (`_contract` REAL-CHANGE@singular /
+    """The singular-input scoping must hold in BOTH instruments. The extension
+    refinement is in both (`_contract` REAL-CHANGE@ext / `_monitor` inf-input-null); the
+    singular scoping does the same (`_contract` REAL-CHANGE@singular /
     `_monitor` singular-real-null). A divergence would mean two different contracts."""
 
     def test_contract_twin_detects_the_same_singularity(self):
@@ -540,7 +540,7 @@ class TestTwinInstrumentInLockstep:
 
 
 class TestMagnitudeResolutionGuard:
-    """F93 (2026-08-11): the snap ladder's shrink test reads a large rung-to-rung ratio
+    """The snap ladder's shrink test reads a large rung-to-rung ratio
     as a dying precision residue. That inference needs each rung to have RESOLVED the
     value's magnitude. `exp(-1e309)` renders as 10^(-4.34e308) whose EXPONENT is only
     accurate to the working precision, so two rungs differ by ~10^(1e258) and the ratio
@@ -586,7 +586,7 @@ class TestMagnitudeResolutionGuard:
         erased to '0', `log(0) = -inf` poisoned every draw, and the judge returned
         `positive-measure INF-CHANGE on 40/40 continuum draws` against a correct
         rewrite. The honest verdict is a REFUSAL: at this precision the value cannot be
-        resolved, so UNSCORED -- never a fabricated conviction (the F74 doctrine)."""
+        resolved, so UNSCORED -- never a fabricated conviction."""
         from mpmath import mp
         old = mp.dps
         try:

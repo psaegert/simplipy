@@ -214,7 +214,7 @@ def _no_sidecar(side):
     (_unfinished, 'sidecar'), (_interrupted, 'sidecar'), (_another_mode, 'sidecar'),
     (_no_probes, 'fingerprint'), (_no_sidecar, 'sidecar')])
 def test_a_vacuous_or_foreign_sidecar_fails(tmp_path, mine, edit, gate) -> None:
-    """S6/F3: verify-mine passes only a finished mine of the mode it is asked about."""
+    """Verify-mine passes only a finished mine of the mode it is asked about."""
     rules = json.load(open(mine / FILES['permissive']))
     path = _plant(tmp_path, mine, 'permissive', rules, edit)
     if edit is _no_sidecar:

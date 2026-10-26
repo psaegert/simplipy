@@ -132,7 +132,7 @@ _OPENERS = {"<add>": ("</add>", "<sub>", Role.ADDEND),
 # Sign/reciprocal wrappers are role-transparent: the literal in ``neg 2`` plays whatever
 # role the wrapped position plays.
 _TRANSPARENT = {"neg", "inv"}
-# Special constants are SITES like any numeric literal (owner ruling 2026-07-31: "mask
+# Special constants are SITES like any numeric literal ("mask
 # all should mask all, even pi or e or other specials") -- the POLICY decides their fate,
 # which keeps a future pi-vocabulary pipeline a one-line policy away. Poles and nan are
 # deliberately NOT here: a fitted `<constant>` is finite by doctrine, so masking an
@@ -153,7 +153,7 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
     # degrade the walk to an empty arity map -- function tokens would read as leaves,
     # giving misleading "malformed" errors on explicit input and silently wrong roles
     # on tagged input (the argument literal takes the enclosing bag's role).
-    # H-007: the same token-boundary ruling as the core -- a reserved numeric spelling
+    # The same token-boundary ruling as the core -- a reserved numeric spelling
     # (``inf``, ``1_000``, ``0x10``) must never reach the role walk as a "symbol".
     for t in tokens:
         if reserved_numeric_spelling(t):
@@ -250,8 +250,8 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
         if replacement is not None:
             out[idx] = replacement
     if collect and out != list(tokens):
-        # simplify mirrors the input container AND the input DIALECT (owner ruling
-        # 2026-08-18), so the collect stage needs no projection argument: a tagged
+        # simplify mirrors the input container AND the input DIALECT, so the collect
+        # stage needs no projection argument: a tagged
         # sequence comes back tagged, an explicit one explicit. The masked `out` carries
         # the same delimiters as `tokens` -- a policy replaces literals, never tags.
         out = cast(list[str], engine.simplify(out))

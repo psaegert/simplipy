@@ -55,7 +55,7 @@ def build_oracle(engine: "SimpliPyEngine"):
             # (import the leading module, walk the attribute path; `np` is the
             # numpy alias the configs use). The engine accepts `np.cos`-style
             # realizations, so the oracle must too -- with promotion on by
-            # default (2026-08-01) every small non-canonical config takes this
+            # default every small non-canonical config takes this
             # path. Anything unresolvable still raises: no token is silently
             # dropped.
             parts = real.split('.')
@@ -99,7 +99,7 @@ def configure(engine: "SimpliPyEngine"):
     FNS.clear(); FNS.update(fns)
     # Engine-DEPENDENT caches must die with the old oracle: the prefold zero-snap
     # parses spans through ARITY, so an entry computed under one vocabulary is
-    # WRONG under another (measured 2026-08-01, promotion-on-by-default: an
+    # WRONG under another (measured with promotion on by default: an
     # all-infix mini engine cached `* sin np.pi ?0` UNSNAPPED -- `sin` absent from
     # its ARITY -- and the canonical promote later replayed the stale entry,
     # killing its own positive control at the inf atom with 1.2246e-16 * inf).
@@ -115,7 +115,7 @@ LITERALS = {
 
 
 def _num(tok):
-    # H-007: never bare float() -- a reserved spelling ('inf', '1_000') is neither a
+    # Never bare float() -- a reserved spelling ('inf', '1_000') is neither a
     # literal nor a symbol; the boundary forbids it, so seeing one here is a defect.
     core = tok.strip('()')
     if reserved_numeric_spelling(core):

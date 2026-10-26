@@ -210,7 +210,7 @@ pub fn prefix_to_infix(
             {
                 left_str = format!("({left_str})");
             }
-            // X10 (2026-08-15): a LEADING UNARY MINUS must parenthesize under '**'
+            // A LEADING UNARY MINUS must parenthesize under '**'
             // regardless of precedence bookkeeping -- a bare negative literal is one
             // atomic-precedence token, so the generic rule above never fires, yet the
             // re-parse (this engine, Python, and SymPy 1.14 alike) binds '**' TIGHTER
@@ -271,7 +271,7 @@ pub fn prefix_to_infix(
                 // x**N / x**(1/N); operand parens iff operand_prec <= power_prec.
                 let power_precedence = ops.precedence_get("**").unwrap_or(current_precedence);
                 if operand_prec <= power_precedence || operand_str.starts_with('-') {
-                    // the leading-minus arm is X10's render site 2: same defect,
+                    // the leading-minus arm is render site 2: same defect,
                     // same re-parse inversion -- see the binary '**' site's comment.
                     operand_str = format!("({operand_str})");
                 }
@@ -339,7 +339,7 @@ fn join_operands(operands_data: &[Item]) -> String {
 /// (`insert_implicit_products`) applies only to touching tokens, so a dropped char never turns
 /// two operands into a product; whitespace still counts as touching.
 ///
-/// WHITESPACE SEPARATES TOKENS (owner ruling 2026-10-05): `sin x0` is two tokens, never the
+/// WHITESPACE SEPARATES TOKENS: `sin x0` is two tokens, never the
 /// name `sinx0`, and `2 3` is two numbers, never `23`. Two joins survive it, because the text
 /// can only mean one thing: `* *` is the power operator (`x0 * * 2` is `x0**2`), and an
 /// exponent part after a number joins it (`1 e-5` is `1e-5`; but `1e -5` is `1*e - 5`, since
@@ -431,7 +431,7 @@ fn tokenize_infix(s: &str) -> Vec<Token> {
             // emits (`rootn(x0, 3)`, `pow(a, b)`). It used to fall into the silent
             // drop below, which FUSED the two arguments and let operators bind across
             // the boundary: `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1)
-            // (hardening H-011, 2026-08-03 -- a round-trip break of the parser's own
+            // (a round-trip break of the parser's own
             // output language; 97/2000 fuzz rows).
             push(
                 &mut tokens,
@@ -473,7 +473,7 @@ fn match_exponent(s: &[char], i: usize) -> Option<usize> {
     (j > start).then_some(j)
 }
 
-/// IMPLICIT MULTIPLICATION (owner ruling 2026-10-05, infix only -- token lists are expected
+/// IMPLICIT MULTIPLICATION (infix only -- token lists are expected
 /// well formed): an explicit `*` is inserted between two touching tokens when the left one
 /// is a number or a `)` and the right one starts an operand (a name, a `(`, or -- after a
 /// `)` -- a number). So `2x` reads `2*x`, `0x` reads `0*x`, `2(x1 + 1)` reads `2*(x1 + 1)`,
@@ -487,7 +487,7 @@ fn match_exponent(s: &[char], i: usize) -> Option<usize> {
 /// `_`: that is Python's digit grouping (`1_000`, `3.14_15`), which must not become a product
 /// with a rule-placeholder name (`1*_000`).
 ///
-/// A FUNCTION WITHOUT PARENTHESES (owner ruling 2026-10-05): a declared one-argument operator
+/// A FUNCTION WITHOUT PARENTHESES: a declared one-argument operator
 /// separated by whitespace from the operand after it, or followed by a minus sign, applies to
 /// that operand: `sin x0` is `sin(x0)`, `sin -x0` and `sin-x0` are `sin(-x0)` (the latter used to
 /// read `-(sin x0)`), and `sin cos x0` is `sin(cos(x0))`. Its argument takes powers and signs, but
@@ -910,7 +910,7 @@ fn read_infix_tokens(
         } else if token == "," {
             // Argument separator: flush the just-finished argument's pending operators
             // down to the enclosing ')' (the paren boundary WITHOUT consuming it), so
-            // each argument of a call parses independently (H-011), and mark where the
+            // each argument of a call parses independently, and mark where the
             // argument ends.
             while stack.last().is_some_and(|t| t != ")") {
                 prefix_expr.push(unmark(stack.pop().unwrap()));
@@ -940,13 +940,13 @@ fn read_infix_tokens(
                 && (next_raw.is_none()
                     || after_function
                     || next_norm == Some("(")
-                    || next_norm == Some(",")  // `pow(x0, -2)`: unary after a separator (H-011)
+                    || next_norm == Some(",")  // `pow(x0, -2)`: unary after a separator
                     || next_norm
                         .map(|t| ops.precedence_get(t).is_some())
                         .unwrap_or(false))
             {
                 token = "neg".to_string();
-                // EXPONENT POSITION (audit 9.10). A unary minus whose original LEFT
+                // EXPONENT POSITION. A unary minus whose original LEFT
                 // neighbor is a power operator is the exponent's sign: `x ^ -2` is
                 // x^(-2), never -(x^2). The generic precedence machinery cannot say
                 // this -- `neg` binds looser than `**` on the base side (`-x ** 2` is
@@ -1088,9 +1088,9 @@ fn int_chain_exp(op: &str) -> Option<i128> {
 
 // The legacy float-approximation chain (`exact_ratio` -> `limit_denominator` ->
 // `fraction_limit_denominator`, the CPython `Fraction(float(s)).limit_denominator(1e6)`
-// port that H-044 patched) was RETIRED by H-047 (2026-08-05): the `**`-exponent fold
-// gate is now spelling-exact (`Rat::parse_decimal`), so nothing approximates. See the
-// register rows H-044/H-047 for the mechanisms; git history holds the port.
+// port) is RETIRED: the `**`-exponent fold
+// gate is spelling-exact (`Rat::parse_decimal`), so nothing approximates;
+// git history holds the port.
 
 /// `['pow', [base, exponent]]` -- the KEEP fallback (gate-fail / non-numeric exponent).
 fn pow_keep(base: Ir, exponent: Ir) -> Ir {
@@ -1110,12 +1110,12 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
             _ => return Ok(pow_keep(base, exponent)),
         };
         if is_int_string(&tok) {
-            // H-049 (2026-08-05): a beyond-i128 integer spelling KEEPS the binary pow.
+            // A beyond-i128 integer spelling KEEPS the binary pow.
             // The legacy CPython `int(tok)` was arbitrary-precision and NEVER failed on
             // a digit string (the huge power then died at the factorize gate and kept
-            // binary pow anyway) -- the i128 parse error was PORT-MINTED (H-044's
-            // sibling), and it raised on the engine's OWN rendered infix
-            // (`^(170141183460469231731687303715884105728)`, extreme-lane P9 rows).
+            // binary pow anyway) -- the i128 parse error was PORT-MINTED, and it
+            // raised on the engine's OWN rendered infix
+            // (`^(170141183460469231731687303715884105728)`, extreme-lane fuzz rows).
             let Ok(v) = tok.parse::<i128>() else {
                 return Ok(pow_keep(base, exponent));
             };
@@ -1142,7 +1142,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
                 Ok(Ir::L(vec![Ir::S(pow_op), Ir::L(vec![base])])) // [pow_op, [base]]
             }
         } else if is_numeric_string(&tok) {
-            // H-047 (2026-08-05): the fold gate is SPELLING-EXACT. The port (and the
+            // The fold gate is SPELLING-EXACT. The port (and the
             // legacy CPython original) gated on `limit_denominator(1e6)` of the f64
             // VALUE -- an APPROXIMATION: any exponent within ~5e-7 of 1 collapsed the
             // pow entirely (`x**(1.0000000000000002) -> x`, `x**(0.9999995) -> x`),
@@ -1151,7 +1151,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
             // snapped to the wrong function (`x**(0.5000000000000001) -> sqrt(x)`).
             // The (1,1) case emitted NO token, so no vocabulary gate protected it in
             // ANY config -- a silent value change on the DEFAULT parse path, found by
-            // the extreme-literal fuzz lane (P7-infix, 146/2k smoke rows). The exact
+            // the extreme-literal fuzz lane (146/2k smoke rows). The exact
             // decimal denotation now decides: every legacy-intended fold survives
             // (nice spellings ARE exact -- "0.5", "0.2", "1.0", "2.5"), every
             // approximation keeps the verbatim binary pow (the AC core reads the
@@ -1211,7 +1211,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
         match (op0_is_div, num_tok, den_tok) {
             (true, Some(nt), Some(dt)) if is_numeric_string(nt) && is_numeric_string(dt) => {
                 if is_int_string(nt) && is_int_string(dt) {
-                    // H-049: beyond-i128 operands keep binary pow (see the unary arm).
+                    // Beyond-i128 operands keep binary pow (see the unary arm).
                     let (Ok(numerator), Ok(denominator)) = (nt.parse::<i128>(), dt.parse::<i128>())
                     else {
                         return Ok(pow_keep(base, exponent));
@@ -1241,17 +1241,17 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
                     let inner = Ir::L(vec![Ir::S(num_power), Ir::L(vec![base])]);
                     let dnode = Ir::L(vec![Ir::S(den_power), Ir::L(vec![inner])]);
                     // Sign via comparison, not the product: `numerator * denominator`
-                    // can overflow i128 (H-049 collateral; wrapping would flip the inv).
+                    // can overflow i128; wrapping would flip the inv.
                     if (numerator < 0) != (denominator < 0) {
                         Ok(Ir::L(vec![Ir::S("inv".into()), Ir::L(vec![dnode])]))
                     } else {
                         Ok(dnode)
                     }
                 } else {
-                    // H-049: the legacy dead branch RAISED here (`int('2.0')`
+                    // The legacy dead branch RAISED here (`int('2.0')`
                     // failure-parity) -- but the ENGINE'S OWN infix can render an
                     // exponent as a float division (divisor-side literal spelling,
-                    // extreme-lane P9 row 355), and the engine's own serialization
+                    // extreme-lane fuzz row 355), and the engine's own serialization
                     // must always re-parse. KEEP binary pow; the AC core reads the
                     // division exactly.
                     Ok(pow_keep(base, exponent))
@@ -1469,7 +1469,7 @@ pub fn parse(
     strict: bool,
 ) -> Result<Vec<String>, String> {
     let parsed = read_infix_tokens(infix_expression, ops, strict, true)?;
-    // H-043/D4: the tokenize + shunting stages above are iterative, but
+    // The tokenize + shunting stages above are iterative, but
     // `convert_expression` below recurses (its IR flatten) -- cap the TOKENIZED length
     // exactly like the token-list boundary caps its input, or a deep infix string
     // aborts the process where the equivalent token list would raise.
@@ -1481,7 +1481,7 @@ pub fn parse(
             crate::MAX_TOKENS
         ));
     }
-    // H-007: the tokenizer reads `inf`/`nan`/`1_000` as NAME tokens; refuse them HERE,
+    // The tokenizer reads `inf`/`nan`/`1_000` as NAME tokens; refuse them HERE,
     // before `numbers_to_constant` (whose `float()` semantics WOULD read them) can
     // silently absorb a reserved spelling into `<constant>`. Same ruling as the token-list
     // boundary (`ensure_tokens_are_tokens`).
@@ -1515,7 +1515,7 @@ mod tests {
 
     /// The conversion layer's subject is the INPUT LANGUAGE of a table that declares the
     /// legacy sugar (unary hyper-operators, `**`, chain combining) -- exactly what the
-    /// in-repo legacy-vocabulary fixture provides (audit Tier-1 #3: no asset dependence;
+    /// in-repo legacy-vocabulary fixture provides (no asset dependence;
     /// the historical expectations below are unchanged, dev_7-3's table verbatim).
     fn engine() -> Option<Engine> {
         Some(crate::legacy_sugar_engine())
@@ -1638,8 +1638,8 @@ mod tests {
             v(&["**", "a", "neg", "**", "b", "c"])
         );
         assert_eq!(i2p(&e, "x0 ^ (-2)"), v(&["**", "x0", "neg", "2"]));
-        // function-name left neighbor -> unary, and the function applies to it (owner
-        // 2026-10-05; it used to read -(sin x1)); neg float precedence both ways.
+        // function-name left neighbor -> unary, and the function applies to it (it
+        // used to read -(sin x1)); neg float precedence both ways.
         assert_eq!(i2p(&e, "sin - x1"), v(&["sin", "neg", "x1"]));
         assert_eq!(i2p(&e, "sin-x1"), v(&["sin", "neg", "x1"]));
         assert_eq!(i2p(&e, "-x1 ** 2"), v(&["neg", "**", "x1", "2"]));
@@ -1661,7 +1661,7 @@ mod tests {
         assert_eq!(i2p(&e, "x1 $ x2"), v(&["x1", "x2"]));
         assert_eq!(i2p(&e, "()"), Vec::<String>::new());
         assert_eq!(i2p(&e, ""), Vec::<String>::new());
-        // Implicit multiplication (owner 2026-10-05): an ordinary `*`, same precedence.
+        // Implicit multiplication: an ordinary `*`, same precedence.
         assert_eq!(i2p(&e, "2x"), v(&["*", "2", "x"]));
         assert_eq!(i2p(&e, "0x10"), v(&["*", "0", "x10"]));
         assert_eq!(i2p(&e, "2(x1 + 1)"), v(&["*", "2", "+", "x1", "1"]));
@@ -1679,7 +1679,7 @@ mod tests {
         // Touching numbers stay malformed, and so does Python's digit grouping.
         assert_eq!(i2p(&e, "1.5.3"), v(&["1.5", ".3"]));
         assert_eq!(i2p(&e, "1_000"), v(&["1", "_000"]));
-        // Whitespace separates tokens; every whitespace char like a space (owner 2026-10-05).
+        // Whitespace separates tokens; every whitespace char like a space.
         assert_eq!(i2p(&e, "2\tx1"), v(&["*", "2", "x1"]));
         assert_eq!(i2p(&e, "x1 * * 2"), v(&["**", "x1", "2"]));
         assert_eq!(i2p(&e, "1 e-5 * x1"), v(&["*", "1e-5", "x1"]));
@@ -1729,7 +1729,7 @@ mod tests {
         }
         // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
-        // 2-ary CALL SYNTAX (H-011): the comma is a real argument separator -- it
+        // 2-ary CALL SYNTAX: the comma is a real argument separator -- it
         // used to be silently dropped, fusing the arguments (`rootn(x0, x1 - 1)`
         // parsed as rootn(x0 - x1, 1)). Composite args on either side, nesting,
         // and unary minus directly after the separator.
@@ -1982,7 +1982,7 @@ mod tests {
             conv(&e, &["**", "x1", "/", "-2", "3"]).unwrap(),
             v(&["inv", "pow1_3", "pow2", "x1"])
         );
-        // H-044 pin: a float exponent whose exact ratio exceeds i128 KEEPS binary pow.
+        // A float exponent whose exact ratio exceeds i128 KEEPS binary pow.
         // 2^128 / 2^129 wrapped `num0 << e` to numerator 0 and folded x**3.4e38 to `1`;
         // 3*2^127 wrapped to i128::MIN (debug: abs() overflow panic in `reduce`).
         for huge in [
@@ -1999,7 +1999,7 @@ mod tests {
         // Raw unconfigured powN tokens no longer KeyError: kept (pow7) / combined away (pow1).
         assert_eq!(conv(&e, &["pow7", "x1"]).unwrap(), v(&["pow7", "x1"]));
         assert_eq!(conv(&e, &["pow1", "x1"]).unwrap(), v(&["x1"]));
-        // H-049 (2026-08-05): the dead float-division branch KEEPS binary pow now --
+        // The dead float-division branch KEEPS binary pow now --
         // the legacy raise (int('2.0') failure-parity) fired on the engine's OWN
         // divisor-side rendered infix, and the engine's own output must always
         // re-parse.

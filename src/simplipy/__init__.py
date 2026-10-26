@@ -32,8 +32,8 @@ try:
 except _PackageNotFoundError:  # running from a source checkout without an installed dist
     __version__ = "0.0.0+unknown"
 
-# The declared public surface (D11 column, owner-ratified 2026-08-16; see the
-# compatibility policy). Submodule names are deliberately NOT declared (DP-A):
+# The declared public surface (see the
+# compatibility policy). Submodule names are deliberately NOT declared:
 # they stay importable and documented, but `from simplipy import *` no longer
 # injects modules into the caller's namespace (simplipy.io shadowed stdlib io).
 __all__ = [

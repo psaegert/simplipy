@@ -83,7 +83,7 @@ fn bind_ok(sigil: u8, subject: &Ex, cx: &MCx) -> bool {
             // is defense-in-depth, not a bug fix: it makes soundness on ground independent of
             // interval edge behavior, at the cost of also refusing ground FINITE composites
             // (`+ 1 np.e`) that the old matcher would bind. Since fold unification
-            // (2026-08-02) nothing rescues those: rational grounds never reach this gate
+            // nothing rescues those: rational grounds never reach this gate
             // (exact constructor arithmetic collapses them to literals at build, `+ 1 2`
             // -> `3`), while transcendental-bearing grounds stay composite BY DESIGN (no
             // numeric fold exists) and this refusal is permanent -- an accepted, bounded
@@ -330,7 +330,7 @@ fn equality_classes(sv: &[Ex]) -> Vec<usize> {
 /// choice point. (The pre-CPS version returned `bool` from nested member matches, freezing
 /// their first internal assignment -- an assignment refused by a LATER sibling sharing a
 /// wildcard, or by the caller's acceptance check, could never be revised, so rule reach
-/// depended on where the canonical order placed a shared subterm: finding F1.)
+/// depended on where the canonical order placed a shared subterm.)
 #[allow(clippy::too_many_arguments)]
 fn try_assign(
     order: &[usize],
@@ -538,7 +538,7 @@ fn try_assign(
         }
     } else {
         // Structured pattern element: enumerate subject elements AND, per element, every
-        // internal assignment of the member match (the F1 fix -- the continuation resumes
+        // internal assignment of the member match (the continuation resumes
         // INSIDE the member before the search moves to the next subject element).
         // The classes of the shapes whose whole enumeration failed this slot: the same test as
         // comparing the shapes (`equality_classes`), without cloning or re-comparing them --
@@ -803,7 +803,7 @@ mod tests {
         // canonical arrangement of the subject bags -- whether the shared factor sorts
         // first, last, or is a composite. A matcher that commits to the first internal
         // assignment of a member match loses the arrangements where the shared factor does
-        // not sort first (finding F1: reach must not depend on where the canonical order
+        // not sort first (reach must not depend on where the canonical order
         // happens to place the shared subterm).
         with_view(|view| {
             let cx = Cx::bare(view);

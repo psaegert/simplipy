@@ -152,8 +152,8 @@ impl<'a> Acceptor<'a> {
     /// `None` for an ATOMIC mark: nothing is mintable. When the engine folds the source to a
     /// single atom, no sound target exists strictly below it -- a different atom is a
     /// different VALUE, and the ordering tiebreak happily ranks atoms among themselves
-    /// (+inf sits below -inf), so searching mints value-changes (signed-zero finding,
-    /// 2026-08-02: two artifact rows claimed the IEEE value for states the engine's
+    /// (+inf sits below -inf), so searching mints value-changes (signed-zero finding:
+    /// two artifact rows claimed the IEEE value for states the engine's
     /// one-zero convention constructs away).
     pub(crate) fn new(
         eng: &'a Engine,
@@ -178,7 +178,7 @@ impl<'a> Acceptor<'a> {
         })
     }
 
-    /// THE SEARCH BOUND IS THE ACCEPTANCE MARK (owner ruling, re-mine 2026-08-20): the
+    /// THE SEARCH BOUND IS THE ACCEPTANCE MARK: the
     /// scan stops at the first mu tier that cannot descend below the mark, so a token
     /// ceiling no longer splits search from acceptance.
     pub(crate) fn scan_bound(&self) -> Option<u64> {
@@ -191,7 +191,7 @@ impl<'a> Acceptor<'a> {
     ///
     /// The registry (`refusals::mint_refusals`) holds the determined-source Const gate
     /// and the special-absorption count, the latter taken on the MAX of the raw source
-    /// and the mark (spelling independence, F49). The ordering is the one the rewrite
+    /// and the mark (spelling independence). The ordering is the one the rewrite
     /// pass fires under, so the serving engine never refuses a mined rule. The POLE entry
     /// runs LAST, only on candidates that pass the cheap licences and the ordering: it
     /// constructs the exceptional points of both sides and refuses a candidate that
@@ -655,7 +655,7 @@ impl Engine {
             .iter()
             .map(|c| self.mine_price(c, mode))
             .collect();
-        // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
+        // THE AC-CLASS QUOTIENT. The enumeration spells one
         // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
         // pairs -- and the scan judged every spelling: 31.6% of the variable-carrying
         // acj-4 library was duplicate classes. Two spellings of one class compute the
@@ -804,7 +804,7 @@ impl Engine {
     ///
     /// `relaxed_kruskal=true` (the production default): EVERY source is searched with the
     /// mark to beat set to the engine's own result -- the serve-time ordering acceptance
-    /// rides the candidate scan (finding F2), so only targets strictly below that mark are
+    /// rides the candidate scan, so only targets strictly below that mark are
     /// selectable and a refused candidate yields to the next one (next length included);
     /// such rules fire top-down as one-step shortcuts. With `false` (strict Kruskal), a
     /// source is skipped iff the engine already strictly reduces its STATE in the serve

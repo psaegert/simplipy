@@ -1,6 +1,6 @@
 //! Mining observability. (The deleted binary kernel's twelve simplify-hot-path counters,
 //! phase timers, `bump`/`Timer` plumbing and the `snapshot`/`reset` FFI schema were
-//! removed in D3, 2026-08-05, together with the `stats-counters`/`stats-timers`/
+//! removed, together with the `stats-counters`/`stats-timers`/
 //! `profiling` feature gates that existed only for them: their bump sites went with the
 //! kernel, so every read was 0 under any build -- schema without signal. Everything below
 //! is LIVE and unconditional: once-per-mined-source frequency, off any hot path.)
@@ -36,6 +36,6 @@ pub fn mine_progress() -> (u64, u64) {
 /// Mining ordering-acceptance decisions REFUSED because `ac_ordered_below` could not parse
 /// a side. The core serialization language is config-independent, so the engine's own
 /// output and every library candidate always parse -- any nonzero count is a BUG tripwire
-/// (the F0 dormancy lesson: a silent conservative arm hides its own trigger), asserted
+/// (a silent conservative arm hides its own trigger), asserted
 /// loudly in debug builds at the refusal site.
 pub static ACCEPT_UNDECIDED_REFUSALS: AtomicU64 = AtomicU64::new(0);

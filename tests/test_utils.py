@@ -105,7 +105,7 @@ def test_flatten_nested_list():
     (4, False),
     (30, False),
     (91, False),  # 7 * 13
-    (1, False),   # D2: vacuous `all` over the empty divisor range said True
+    (1, False),   # Vacuous `all` over the empty divisor range said True
     (0, False),
     (-7, False),
 ])

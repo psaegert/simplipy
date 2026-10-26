@@ -86,7 +86,7 @@ class TestCLI:
             "proposals": str(proposals_file),
             # MINT-level pin; the smoke vocabulary also carries hyper-operators,
             # whose Python realizations left simplipy.operators in 0.12, so the
-            # promotion oracle (default-on since 2026-08-01) cannot realize them.
+            # promotion oracle (default-on) cannot realize them.
             "promote_sorts": False,
         }))
         out = tmp_path / "out" / "mined.json"

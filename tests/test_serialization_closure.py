@@ -36,13 +36,13 @@ OPS_FULL = {
     "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
     "inv": {"realization": "simplipy.operators.inv", "alias": ["inverse"], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
     "pow": {"realization": "simplipy.operators.pow", "alias": ["power"], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
-    # C1.18: rootn was the ONE core sugar token no config in the suite declared.
+    # rootn was the ONE core sugar token no config in the suite declared.
     "rootn": {"realization": "simplipy.operators.rootn", "alias": [], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     "sin": {"realization": "np.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 3, "commutative": False},
     "abs": {"realization": "simplipy.operators.abs", "alias": [], "inverse": None, "arity": 1, "precedence": 3, "commutative": False},
-    # C1.18: a non-core BINARY operator (every non-core op used to be unary) and an
+    # A non-core BINARY operator (every non-core op used to be unary) and an
     # ARITY-3 operator -- both stay opaque nodes with call rendering, and the battery
     # proves the emit-parse closure survives them anywhere in a term.
     "hypot2": {"realization": "np.hypot", "alias": [], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
@@ -54,7 +54,7 @@ MAX_LEN = 4
 
 # Each core sugar spelling individually missing from an otherwise-full config, plus
 # minimal vocabularies: the adversarial configs the emit side must survive.
-# (C1.18 additions: no_pow and no_rootn complete the per-core-token family, and
+# (no_pow and no_rootn complete the per-core-token family, and
 # minimal_call_ops is a vocabulary of pure call-rendered operators.)
 DEGENERATE = {
     "no_neg": [k for k in OPS_FULL if k != "neg"],
@@ -85,7 +85,7 @@ def make_engine(op_names: list[str], operators: dict | None = None) -> SimpliPyE
 def universe(op_names: list[str], max_len: int) -> list[list[str]]:
     """The COMPLETE set of prefix expressions over ops+LEAVES with <= max_len tokens.
 
-    n-ary (C1.18): the old generator hard-assumed arity <= 2 and would emit
+    n-ary: the old generator hard-assumed arity <= 2 and would emit
     malformed prefixes for a ternary operator.
     """
     arity = {k: OPS_FULL[k]["arity"] for k in op_names}
@@ -148,7 +148,7 @@ class TestPrefixClosureExhaustive:
                                   ("explicit", engine.to_prefix)):
                 given = convert(list(src))
                 # A tagged sequence declares its dialect by its bags, so every quotient and sum
-                # of the source is bagged (review T7: `neg inv x0` and `exp 1/2` declared none,
+                # of the source is bagged (`neg inv x0` and `exp 1/2` declared none,
                 # so `simplify` read them as explicit and answered explicit).
                 bagged = any(t in ("<add>", "<mul>") for t in given)
                 if form == "tagged" and not bagged and any(_holds_quotient(t) for t in src):
@@ -174,7 +174,7 @@ class TestPrefixClosureExhaustive:
 
     @pytest.mark.parametrize("config", list(DEGENERATE))
     def test_mine_acceptance_reads_own_output(self, config: str) -> None:
-        """The F2 acceptance path: ordered_below(out, out) must DECIDE (False), never error,
+        """The acceptance path: ordered_below(out, out) must DECIDE (False), never error,
         on the engine's own explicit output -- a None there silently refuses mined rules."""
         op_names = DEGENERATE[config]
         engine = make_engine(op_names)
@@ -200,9 +200,9 @@ class TestInfixClosure:
         ["rootn", "x0", "3"],          # function-call rendering 'rootn(x0, 3)'
         ["+", "x0", "/", "1", "3"],    # exact fraction literal
         ["+", "x0", "inv", "x0"],      # 'x0 + 1/x0' -- precedence of the core symbols
-        ["pow", "x0", "-2"],           # negative-literal exponent -> '1/x0^2' (audit 9.10)
-        ["pow", "x0", "neg", "x1"],    # negated-variable exponent -> 'x0^(-x1)' (audit 9.10)
-        ["pow", "2", "-3"],            # fully literal negative power -> folds to '1/8' (audit 9.10)
+        ["pow", "x0", "-2"],           # negative-literal exponent -> '1/x0^2'
+        ["pow", "x0", "neg", "x1"],    # negated-variable exponent -> 'x0^(-x1)'
+        ["pow", "2", "-3"],            # fully literal negative power -> folds to '1/8'
     ]
 
     @pytest.mark.parametrize("src", CASES, ids=lambda s: " ".join(s))
@@ -293,7 +293,7 @@ class TestCoreTokenGuard:
             make_engine(["*", "exp"], operators=ops)
 
     def test_conflicting_precedence_is_a_config_error(self) -> None:
-        """C1.8: the guard covered arity and aliases but NOT precedence, which left the
+        """The guard covered arity and aliases but NOT precedence, which left the
         closure breach open from the other side.
 
         The realization rendering is a string PYTHON evaluates, and Python's precedence is
@@ -311,8 +311,8 @@ class TestCoreTokenGuard:
         assert engine.simplify(["+", "x0", "x0"]) == ["*", "2", "x0"]
 
     def test_core_token_without_precedence_gets_the_core_value(self) -> None:
-        """C1.18 guard hole: a core token declared WITHOUT `precedence:` used to slip
-        past the C1.8 conflicting-precedence guard entirely (it compares only present
+        """Guard hole: a core token declared WITHOUT `precedence:` used to slip
+        past the conflicting-precedence guard entirely (it compares only present
         values). Absence now means the core's own value -- verified through the one
         consumer that would silently corrupt: the infix rendering Python evaluates."""
         ops = {"+": OPS_FULL["+"],
@@ -322,7 +322,7 @@ class TestCoreTokenGuard:
 
 
 class TestOperatorSpecValidation:
-    """C1.18: the configs the DEGENERATE battery never built, at the load boundary.
+    """The configs the DEGENERATE battery never built, at the load boundary.
 
     A spec missing a key used to die as a bare ``KeyError: 'alias'`` naming neither
     the operator nor the file; ``commutative: true`` on a non-core operator was
@@ -353,7 +353,7 @@ class TestOperatorSpecValidation:
         assert engine.simplify(engine.to_infix(["sq", "+", "x0", "x1"])) == "sq(x0 + x1)"
 
     def test_declared_rootn_realization_wins_and_evaluates(self) -> None:
-        # rootn was the one core sugar token no suite config DECLARED (C1.18): a
+        # rootn was the one core sugar token no suite config DECLARED: a
         # declared realization must win over the core fallback and evaluate.
         from simplipy import codify
         engine = make_engine(list(OPS_FULL))
@@ -372,7 +372,7 @@ class TestOperatorSpecValidation:
 
 
 class TestSignedNumericLeafSplit:
-    """H-048 (2026-08-05, extreme-literal lane): a SIGNED numeric spelling never
+    """A SIGNED numeric spelling never
     becomes a leaf -- the sign is STRUCTURE. Beyond-i128 spellings used to keep the
     sign inside the opaque leaf token, while the same value built structurally kept a
     positive leaf under a subtracted section: two canonical states, one function,
@@ -398,7 +398,7 @@ class TestSignedNumericLeafSplit:
 
 
 class TestProvenanceRecordsTheMeasure:
-    """C1.4: an artifact mined under one measure must be distinguishable from one mined
+    """An artifact mined under one measure must be distinguishable from one mined
     under another.
 
     The sidecar records version, build and parameters, and EVERY one of those can be
@@ -457,7 +457,7 @@ class TestProvenanceRecordsTheMeasure:
 
 
 class TestCoreTableHasOneSource:
-    """C1.10: the core serialization language was declared in FIVE hand-maintained places.
+    """The core serialization language was declared in FIVE hand-maintained places.
 
     A drifting copy is a soundness problem, not a tidiness one: the masking walk treats an
     unknown operator as a LEAF, so its operands inherit the enclosing bag's role and a
@@ -502,7 +502,7 @@ class TestCoreTableHasOneSource:
 
 
 class TestTheMeasureFingerprintReadsTheWholeMeasure:
-    """D25/R6 exists so an artifact mined under one measure cannot be mistaken for one
+    """The measure fingerprint exists so an artifact mined under one measure cannot be mistaken for one
     mined under another. That only works if every dial the measure turns moves at least
     one probe -- and for a while six of the symbol table's nine entries turned nothing.
     Changing `Pow` from 4 bits to 3 left the digest at `355f6ba90801f603`.

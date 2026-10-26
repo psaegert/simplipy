@@ -67,12 +67,12 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     # instantiation: itself, certified at mint + stage-2 confirmation + the hiprec
     # arbiter, which reads specials as their transcendental values). `judge_ground`
     # scored them UNSUPPORTED -- a scoping refusal, not a verdict -- and they silently
-    # vanished (measured 2026-08-01: the owner-ruled exact collapses `cos np.pi -> (-1)`,
+    # vanished (measured: the exact collapses `cos np.pi -> (-1)`,
     # `sin np.pi -> 0`, `tan np.pi -> 0`, `log np.e -> 1` minted, confirmed, survived
     # the covered-prune, then dropped here). They pass through unchanged, appended after
     # the ladder's kept set.
     #
-    # WIDENED to ALL pure-literal ground rules (fold unification, 2026-08-02): with
+    # WIDENED to ALL pure-literal ground rules (fold unification): with
     # the engine's transcendental fold deleted, legitimate SPECIAL-FREE exact hits
     # (`cos 0 -> 1`, `exp 0 -> 1`, `log 1 -> 0`) now arrive as mined ground rules and
     # must pass through like their special-bearing siblings -- same argument: zero

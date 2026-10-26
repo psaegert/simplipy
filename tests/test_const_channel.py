@@ -18,10 +18,9 @@ now holds at every layer:
   family, `* sin (-1) _0`) lands on the mark's own state and dies there, while a
   genuine SPECIAL-FREE restructuring mints as a zero-mask SERVING rule -- recovered
   content the old channel minted abstractly and translation then discarded.
-  Since the stage-1 special-constant policy (owner-ratified 2026-07-31/08-01,
-  design/UNIFIED_SIMPLICITY_MEASURE.md §5) the resolution channel additionally refuses
+  Under the special-constant policy the resolution channel additionally refuses
   every SPECIAL-BEARING source: `exp(pi*x) -> pow(23.14069263277927, x)` -- once this
-  file's flagship recovery -- is now the flagship REFUSAL (the owner prefers the exact
+  file's flagship recovery -- is now the flagship REFUSAL (the exact
   symbolic form; the literal is its ~52-bit rounding).
 * TRANSLATE -- the load gate is the count form on the canonical sides, subsuming the
   boolean gate and additionally refusing Const-bearing count-increasing shapes
@@ -61,7 +60,7 @@ def _mine(tmp_path, ops, extra, max_src=4, max_tgt=3, proposals=None):
     cfg.write_text(yaml.safe_dump({'operators': ops, 'rules': 'rules.json'}))
     engine = SimpliPyEngine.from_config(str(cfg))
     out = str(tmp_path / 'mined.json')
-    # promote_sorts EXPLICITLY off (defaults ON since 2026-08-01): these tests pin
+    # promote_sorts EXPLICITLY off (defaults ON): these tests pin
     # MINT-level invariants, and promotion both reshapes sorts and adds the ladder's
     # seeded identities, which would shadow the mint-level assertions.
     engine.find_rules(max_source_pattern_length=max_src, max_target_pattern_length=max_tgt,
@@ -77,7 +76,7 @@ class TestMintCountInvariant:
         """`* sin (-1) _0 -> * <constant> _0`-class never mints -- under mu (stage 2)
         for the STRONGEST reason yet: `<constant>` is the priciest atom (128), so a
         Const-introducing target ASCENDS from any cheap symbolic mark. And since the
-        generalized Const-shift absorption arm (P3', 2026-08-02) the value-set
+        generalized Const-shift absorption arm the value-set
         absorption family is ENGINE-NATIVE too: `C * sin(-1)` folds to `<constant>`
         at serve (special-free ground member, interval-certified finite nonzero), so
         the source reaches an atomic mark and the previously-mined absorption pair
@@ -90,9 +89,8 @@ class TestMintCountInvariant:
         assert engine.simplify(['*', 'sin', '(-1)', '<constant>']) == ['<constant>']
 
     def test_restructure_family_refused_for_special_sources(self, tmp_path) -> None:
-        """POLICY REVERSAL (owner-ratified 2026-07-31, stage-1 resolution licence;
-        design/UNIFIED_SIMPLICITY_MEASURE.md T2/P-B2). This test USED to pin
-        `exp(pi*x) -> pow(23.14069263277927, x)` as recovered mint content -- the F3
+        """POLICY REVERSAL (the resolution licence). This test USED to pin
+        `exp(pi*x) -> pow(23.14069263277927, x)` as recovered mint content -- the literal
         resolution channel's flagship. The special-constant policy inverts the
         preference: `exp(pi*x)` IS the preferred form (pi is one exact symbol; the
         literal is its ~52-bit rounding), so literal resolution refuses every
@@ -107,7 +105,7 @@ class TestMintCountInvariant:
                 assert not any('.' in t for t in rhs), (lhs, rhs)
         # the invariant holds across the whole mined set
         assert all(_n_const(rhs) <= _n_const(lhs) for lhs, rhs in rules)
-        # and the state SERVES as itself: the owner-preferred symbolic form
+        # and the state SERVES as itself: the preferred symbolic form
         assert engine.simplify(['exp', '*', 'np.pi', 'x0']) == \
             ['exp', '*', 'np.pi', 'x0']
 
@@ -117,14 +115,14 @@ class TestMintCountInvariant:
         twin `pow exp <constant> np.pi -> <constant>` is REFUSED by the mint-side
         Const-absorption licence: the canon respells the source to `pow <constant>
         np.pi` (exp(C) -> C), where pi sits in a NON-absorbable pow position -- the
-        2026-08-08 amendment (contract 10.11) absorbs specials only at the bijective
+        contract absorbs specials only at the bijective
         bag sites, so the pow-position refusal stands."""
         engine, out = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
                             ['np.pi', '<constant>'])
         rules = [(list(lhs), list(rhs)) for lhs, rhs in engine.simplification_rules]
         assert (['pow', 'exp', '<constant>', '<constant>'], ['<constant>']) in rules
         assert (['pow', 'exp', '<constant>', 'np.pi'], ['<constant>']) not in rules
-        # The B7/D36 jurisdiction carve-out, pinned where it bites: the symbolic gate
+        # The jurisdiction carve-out, pinned where it bites: the symbolic gate
         # drops every fatal bucket, and a multi-<constant> LHS is the ONE exempted
         # shape (the judge's own non-jurisdiction sentinel; this family's soundness
         # authority is the Const-channel chain). The exemption must be VISIBLE in the
@@ -159,7 +157,7 @@ class TestTranslationCountGate:
 class TestProposalChannel:
     def test_const_introducing_hint_refused_end_to_end(self, tmp_path) -> None:
         """A proposal arriving with the masking-era hint spelling is now refused on
-        EVERY channel (stage 2, the T2 theorem): the hint itself dies at the count
+        EVERY channel: the hint itself dies at the count
         gate, and the library scan's resolved literal `pow(23.14..., x0)` is a ~117-
         unit materialization of the 32-unit `exp(pi*x0)` -- an ascent the strict mu
         gate rejects. Pre-mu, the proposal channel still resolved it (the stage-1

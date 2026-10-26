@@ -6,7 +6,7 @@
 //! Why the C symbols and not Rust's `f64::*` methods: Rust's std calls the platform libm for
 //! most of them (so they match it at 0 ULP), but `f64::atanh` is Rust's OWN composition
 //! (`0.5 * ln_1p(2x/(1-x))`), and its divergence from glibc is UNBOUNDED in ulps toward the
-//! domain edges: measured 2026-08-15 (audit B6), 161 ulps at -0.999 and 1.5e13 ulps at
+//! domain edges: measured 161 ulps at -0.999 and 1.5e13 ulps at
 //! -(1 - 1e-15) -- the 4th significant digit -- with 39% of a dense (-1,1) grid differing.
 //! (`asinh`/`acosh` measured 0-ulp identical to libm over 2.2M points on the same build.)
 //! Binding the C symbols directly makes every consumer of this module compute one function.

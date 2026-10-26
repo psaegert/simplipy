@@ -1,5 +1,4 @@
-"""The PERMISSIVE literal fold (owner ruling 2026-09-03: "in the permissive mode, we can relax
-this"). Falsifier-first: written red against 0.14.5, where the permissive tier printed
+"""The PERMISSIVE literal fold (the permissive mode relaxes the literal rule). Falsifier-first: written red against 0.14.5, where the permissive tier printed
 `2e29/426738538271436458205631863649` for `4 / (2.7167019109484434 * 3.1415926535897)`.
 
 The exact rational core prices a literal with the two-codeword mu' codebook and prints the
@@ -154,7 +153,7 @@ def test_fold_follows_the_mu_gate_and_lands_on_a_float_around_the_value(engine, 
         assert out == strict, (out, strict, engine.complexity(as_float), engine.complexity(strict))
 
 
-# A constant-only draw from the v25.0-T7 training stream (2026-09-03): the argument of the cosine
+# A constant-only draw from the v25.0-T7 training stream: the argument of the cosine
 # is a product of ten 16-digit constants whose exact value left i128, so before phase 2c the strict
 # tier kept the whole subtree, and the first fold cut left a 20-digit exact decimal behind (the
 # emitter folded two literals at print time that the constructor had kept apart). The permissive

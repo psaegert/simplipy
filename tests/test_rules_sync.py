@@ -1,4 +1,4 @@
-"""C1.9: the rule recipe is refused at pickle time when it is ambiguous.
+"""The rule recipe is refused at pickle time when it is ambiguous.
 
 The engine keeps rules twice: ``simplification_rules`` (the Python recipe) and the
 compiled core (what ``simplify`` executes). The documented contract is

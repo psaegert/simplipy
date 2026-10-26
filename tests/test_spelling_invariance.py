@@ -1,4 +1,4 @@
-"""Nothing reads the reader's spelling (owner 2026-10-02: "fix this properly"; plan v2 phase 1).
+"""Nothing reads the reader's spelling ("fix this properly").
 
 A printed token form is not only an answer. The interval certificates, the folds, the served
 rules, the mining judge and the promotion refund print a state and read the tokens back, and

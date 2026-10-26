@@ -1,4 +1,4 @@
-"""The realization trust model (register C1.12, owner-ruled 2026-08-09).
+"""The realization trust model.
 
 Two defects, both reproduced on the pre-fix engine before this file existed:
 
@@ -239,7 +239,7 @@ class TestDeployedEvaluationPath:
 
 
 class TestRealizationShapeIsTotal:
-    """R3/B14 (SEC-L1): the shape check must decide EVERY realization, not just dotted ones.
+    """The shape check must decide EVERY realization, not just dotted ones.
 
     ``realization_root`` returns ``None`` for anything that is not a dotted name, and the
     engine read that as "nothing to check" (``if root is not None:``, no else branch). So a
@@ -282,7 +282,7 @@ class TestRealizationShapeIsTotal:
 
 
 class TestTheWholeDottedPathIsChecked:
-    """SEC-L1 / audit S2: the root is only the FIRST hop, and the reach is in the rest.
+    """The root is only the FIRST hop, and the reach is in the rest.
 
     A realization is resolved by attribute traversal in generated source, and a module's
     attributes include every module IT imported. So ``simplipy.engine.os.system`` starts
@@ -414,7 +414,7 @@ class TestBareNamesAreAnAllowlist:
     Python's own builtins, where `eval`, `exec`, `compile`, `open` and `__import__` sit
     beside `abs`. Closing the dotted path while leaving this open would be false closure:
     both doors reach arbitrary code given a string argument, and neither reaches anything
-    given a float. So the accepted names are enumerated (audit S2 sibling)."""
+    given a float. So the accepted names are enumerated."""
 
     @pytest.mark.parametrize('realization', [
         'eval', 'exec', 'compile', 'open', 'input', 'breakpoint',

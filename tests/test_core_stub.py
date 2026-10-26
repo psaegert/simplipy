@@ -39,7 +39,7 @@ def test_module_names_match_the_stub() -> None:
 
 
 def test_a_missing_core_is_refused_at_construction_not_at_import() -> None:
-    """The core import is guarded in every module that imports it (review F6: an unguarded
+    """The core import is guarded in every module that imports it (an unguarded
     import in `simplipy.utils` made the engine's guard unreachable, so a missing extension
     failed `import simplipy` itself instead of the engine refusing, naming the failure)."""
     code = (

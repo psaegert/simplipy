@@ -124,7 +124,7 @@ def main(argv: str = None) -> None:
                       f'Known keys: {", ".join(sorted(known_keys))}', file=sys.stderr)
                 sys.exit(1)
 
-            # KEY-AWARE path resolution (D3): `proposals` is an INPUT that lives next to
+            # KEY-AWARE path resolution: `proposals` is an INPUT that lives next to
             # the config, so a relative spelling resolves against the CONFIG's directory
             # (the former io.py value-sniffing pass only caught `./`-prefixed spellings;
             # `proposals.json` silently stayed CWD-relative). `snapshot_at` values are

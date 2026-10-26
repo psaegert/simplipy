@@ -579,7 +579,7 @@ def judge_bang(lhs, rhs):
 
 
 def _is_zero_token(t):
-    # H-007: a reserved spelling is not a legal zero token ('0_0' would float() to 0.0).
+    # A reserved spelling is not a legal zero token ('0_0' would float() to 0.0).
     if isinstance(t, str) and reserved_numeric_spelling(t):
         return False
     try:
@@ -682,7 +682,7 @@ def run_controls(core):
         ('ground', (['+', '<constant>', 'atanh', '1'], ['float("inf")']), 'PASS'),
     ]
     # The controls are written in the CANONICAL vocabulary; under a reduced engine
-    # (promotion runs on every mine since promote_sorts defaulted on, 2026-08-01) a
+    # (promotion runs on every mine since promote_sorts defaulted on) a
     # control whose operators the engine does not define cannot be judged -- its
     # tokens parse as garbage (an all-infix engine read `sin` as an unknown leaf and
     # "killed" `* sin np.pi ?0 -> 0` at the inf atom). Such controls are SKIPPED:
@@ -698,7 +698,7 @@ def run_controls(core):
                 continue
             if t.startswith('float("'):
                 continue
-            # H-007: a reserved spelling ('inf', '1_000') is not an evaluable literal.
+            # A reserved spelling ('inf', '1_000') is not an evaluable literal.
             if reserved_numeric_spelling(t.strip('()')):
                 return False
             try:
@@ -912,9 +912,9 @@ def promote_rules(rules, engine, *, run_positive_controls=True, progress=None, r
     # drastically (a 27-token expression reaching 17 tokens instead of 1). The published 0.7.1
     # artifact carries the rule, so leaving it out is a REGRESSION, not a soundness gain: at the
     # `!` bar the slot is finite a.e., 0 * finite = 0, and the null set where the operand is
-    # +-inf/nan is licensed by R3. Certified through judge_bang like every other seed.
-    # THE RE-SEED GUARD IS KEYED ON THE INTERNAL FORM, not the spelling (owner ruling
-    # 2026-08-18; audit F49: "a gate keyed on a spelling breaks whenever the canon unifies
+    # +-inf/nan is licensed by the null-set licence. Certified through judge_bang like every other seed.
+    # THE RE-SEED GUARD IS KEYED ON THE INTERNAL FORM, not the spelling
+    # ("a gate keyed on a spelling breaks whenever the canon unifies
     # two spellings"). Each family below seeds THREE spellings of ONE cancellation identity
     # (`- !0 !0` / `+ !0 neg !0` / `+ neg !0 !0`; `/ $0 $0` / `* $0 inv $0` / `* inv $0 $0`),
     # which are AC-equal but textually distinct: a spelling key cannot see them as one, so

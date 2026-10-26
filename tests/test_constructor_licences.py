@@ -2,8 +2,8 @@
 
 The AC constructors rewrite spellings under algebraic identities that are theorems on the
 reals but NOT under the contract's extension semantics (one zero, 1/0 = +inf, NaN
-domains) once a degenerate configuration has POSITIVE measure. The 2026-07-29
-constructor-licence audit (8-agent sweep + adversarial hunt, adjudicated by the
+domains) once a degenerate configuration has POSITIVE measure. A constructor-licence
+audit (a sweep + adversarial hunt, adjudicated by the
 independent contract evaluator) confirmed three such gaps and this wall pins them shut:
 
 1. pow over Mul, odd negative exponents: (a*b)^-1 = a^-1 * b^-1 flips the infinity sign
@@ -185,7 +185,7 @@ class TestAbsElimination:
     """Constructor-level `abs t -> t` on a certainly-non-negative operand: a `_`-grade
     pointwise identity (abs(nan) = nan, abs(+inf) = +inf; one-zero contract makes signed
     zero non-normative). Living in the constructor makes the fold reachable from EVERY
-    entry path -- the 7-31 row-diff found 9/65,536 (64k) + 25/1M rows where the F5-era
+    entry path -- a row diff found 9/65,536 (64k) + 25/1M rows where the old
     `inv abs t -> abs inv t` orientation respelled |x^2| into |x^-2| BEFORE the
     exponent-literal abs rules could match, sticking a dead abs in the output. Serve-order
     shadowing of a constructor identity is structurally impossible."""
@@ -259,13 +259,13 @@ class TestJudgePoleBand:
         # asinh(sinh(x)) - x folds to an exact zero denominator; the judge's finite
         # precision leaves a sign-noise residue and must skip, never convict.
         # The vehicle is the CLEAN pair (worst 4 ULP over its whole band): log-exp
-        # gained a magnitude floor (task 46) that refuses a sin argument, and this
+        # gained a magnitude floor that refuses a sin argument, and this
         # test is about the judge's residue handling, not about collapse licences --
         # asinh o sinh collapses on sin x0 under the plain ceiling, subject unchanged.
         o1 = eng.simplify('tanh / 1 - asinh sinh sin x0 sin x0'.split())
         assert o1 == ['1']
         v, _ = judge_pair('tanh / 1 - asinh sinh sin x0 sin x0'.split(), list(o1), rng())
-        # the MEASURED verdict under the seeded rng (audit Tier-2, 2026-08-03): the judge
+        # the MEASURED verdict under the seeded rng: the judge
         # SCORES this pair and passes it. The old `in ('OK', 'UNSCORED')` tolerated a
         # judge that silently stopped scoring the row; a regression to UNSCORED means the
         # judge lost sight of it -- investigate, never widen the assertion back.
@@ -273,7 +273,7 @@ class TestJudgePoleBand:
 
 
 class TestCertificateCompletenessTowers:
-    """Division-tower campaign (2026-08-03, owner-approved): the odd-negative-power
+    """Division-tower campaign: the odd-negative-power
     distribution's per-factor licence is exactly as sharp as the true disagreement
     sets. A reciprocal factor's zero set is {A = +-inf} (`infinite_set_null`, NaN
     harmless), and the finiteness/zero-set recursions know the binary 0.12
@@ -333,7 +333,7 @@ class TestCertificateCompletenessTowers:
 
 
 class TestInfiniteTermAbsorption:
-    """Class C (owner-approved): a sum term that is an infinity-carrying product is
+    """Class C: a sum term that is an infinity-carrying product is
     never finite (its values are +-inf or NaN), so every finite-a.e. co-term is
     absorbed: F + inf*u = inf*u wherever F is finite (F = +-inf/NaN is null under
     the !-licence; at a NaN of the product both sides are NaN)."""
@@ -390,7 +390,7 @@ class TestRootnIsCertainlyNonNegative:
             ['rootn', 'abs', 'x0', '3']
 
     def test_the_folds_are_value_exact(self, eng) -> None:
-        # every shape above, on the H-057 grid: negatives, zero, both poles and nan
+        # every shape above, on the route-independence grid: negatives, zero, both poles and nan
         import simplipy
         X = np.array([-8., -2., -.5, 0., .5, 2., 8., np.inf, -np.inf, np.nan])
 
@@ -415,7 +415,7 @@ class TestPowerOfExpIsExp:
     `pow(e, 1/n)` into `rootn(e, n)` BEFORE it can match, so `sqrt(e)` shipped as
     `rootn np.e 2` at mu 18,000 where `exp 0.5` is 10,585.
 
-    The first fix (2026-08-07) was an arm for the LEAF `e` alone. The rule-reachability
+    The first fix was an arm for the LEAF `e` alone. The rule-reachability
     census written to check it (the research harness) then found the same
     mechanism still live on the very next base: `pow exp (-1) _0 -> exp neg _0` is also
     shipped, also blinded by the same rewrite, and `pow(exp(-1), 1/2)` was shipping as
@@ -488,14 +488,14 @@ class TestPowerOfExpIsExp:
         assert eng.simplify(['exp', '0']) == ['1']
 
     def test_it_is_a_descent(self, eng) -> None:
-        # `e` leaf: 19,000 -> 11,585 under mu' (was 18,000 -> 10,585 pre-D38; the
+        # `e` leaf: 19,000 -> 11,585 under mu' (was 18,000 -> 10,585 under the fraction-only code; the
         # rational exponent 1/2 pays the selector bit on both sides of the audit's
         # 7,415-lost comparison, so the descent and its margin are unchanged)
         assert eng.complexity(eng.simplify(['rootn', 'np.e', '2'])) < 12000
         # `exp(-1)` base: 21,000 -> 12,585, the sibling the census found
         assert eng.complexity(eng.simplify(['pow', 'exp', '(-1)', '0.5'])) < 13000
         # and the composition never lands on the dearer spelling of e: 10,000 -> 8,000
-        # -> 4,000, `np.e`'s own entry in the symbol table (2026-08-21)
+        # -> 4,000, `np.e`'s own entry in the symbol table
         assert eng.complexity(eng.simplify(['inv', 'inv', 'np.e'])) == 4000
 
     def test_a_symbolic_inner_exponent_is_REFUSED_by_the_fold_condition(self, eng) -> None:
@@ -505,7 +505,7 @@ class TestPowerOfExpIsExp:
 
         Under the flat unit the refusal also happened to be mu-justified: through `pow`
         the composition tied (26,000 = 26,000) and through `rootn` it ascended (26,000
-        against 27,000 for `exp(x0/3)`). THE SYMBOL TABLE (2026-08-21) SPLIT THOSE TWO.
+        against 27,000 for `exp(x0/3)`). THE SYMBOL TABLE SPLIT THOSE TWO.
         `pow` still ties, but `rootn(exp x0, 3)` is now 21,000 against 19,000 -- a
         `rootn` head (6, elementary) is dearer than the `Mul` plus unit-fraction literal
         the composed spelling pays, where the flat unit priced them the other way round.
@@ -524,7 +524,7 @@ class TestPowerOfExpIsExp:
 
     def test_an_INFINITE_inner_exponent_is_REFUSED_the_zero_times_inf_trap(self, eng) -> None:
         # `a = -inf, b = 0` is the one configuration where `(e^a)^b` and `e^(a*b)`
-        # disagree: `0^0 = 1` against `e^nan = nan`, defined -> undefined, which §9.1's R2
+        # disagree: `0^0 = 1` against `e^nan = nan`, defined -> undefined, which soundness
         # forbids at ZERO measure tolerance.  `Ex::Num` is finite by construction, so the
         # fold condition excludes it without needing a licence -- pinned here because a
         # future widening of the gate would silently reopen it.
@@ -552,7 +552,7 @@ class TestPowerOfExpIsExp:
 
 
 class TestEvenFunctionsAreSignBlind:
-    """C1.19: an even function's argument is taken modulo sign, at any depth.
+    """An even function's argument is taken modulo sign, at any depth.
 
     The thirty mined rules this replaces (`abs asinh neg _0 -> abs asinh _0` and its 29
     siblings) are not thirty facts. They are TWO -- an odd function propagates a sign, an
@@ -626,7 +626,7 @@ class TestEvenFunctionsAreSignBlind:
 
 
 class TestInversePairsCollapse:
-    """C1.19 family E: `f(g(t)) -> t` where the pair is an inverse pair and its licence holds.
+    """Inverse pairs: `f(g(t)) -> t` where the pair is an inverse pair and its licence holds.
 
     The census asked for ONE rule (`exp log abs _0 -> abs _0`). The artifact was carrying
     **101** identity-shaped inverse-pair rules -- the same picture family A showed, with the
@@ -644,8 +644,8 @@ class TestInversePairsCollapse:
 
     def test_total_pairs_collapse_only_within_the_f64_BAND(self, bare) -> None:
         """Genuine bijections of the EXTENDED LINE -- and not of f64, which is why most
-        carry magnitude licences, each derived from the realised 8-ULP criterion (S3,
-        task 46) wherever nothing overflows or underflows. Argument outside a band:
+        carry magnitude licences, each derived from the realised 8-ULP criterion
+        wherever nothing overflows or underflows. Argument outside a band:
         refused. Provably licensed argument: collapses, because the licence is a proof
         obligation, not a blanket ban. The sin vehicle (range [-1, 1]) satisfies every
         CEILING but sweeps through 0 -- so it still collapses only for the pairs without a
@@ -725,7 +725,7 @@ class TestInversePairsCollapse:
             assert bare.simplify(list(inside), mode=mode) == ['1']
 
     def test_real_is_equally_sound_not_more_permissive(self, bare) -> None:
-        """Owner ruling R2, 2026-08-20: "exp(log(-3)) must be rejected under real but
+        """The ruling: "exp(log(-3)) must be rejected under real but
         permitted under corpus. We do not want unsound simplifications in any of these
         two. That's what corpus is for."
 
@@ -760,7 +760,7 @@ class TestInversePairsCollapse:
     def test_acosh_of_cosh_is_ABS_not_the_identity(self, bare) -> None:
         # cosh is EVEN, so the collapse is |t|. The judge certifies this shape and KILLs
         # the identity one; getting it wrong would be a real change on t < 0.
-        # TWO-SIDED licence (task 46): cosh overflows at 710.475860 (the ceiling) and is
+        # TWO-SIDED licence: cosh overflows at 710.475860 (the ceiling) and is
         # quadratically FLAT at 0, where the roundtrip is wrong by up to ~4.5e18 ULP --
         # so sin(x0), inside every ceiling but sweeping the flat point, is refused, and
         # the ABS assertion rides a negative literal with a proven floor.
@@ -802,7 +802,7 @@ class TestInversePairsCollapse:
 
 
 class TestReciprocalBaseAndDeterminedInfinitePower:
-    """C1.19 family D: a literal base absorbs the exponent's sign, and a literal base at an
+    """Reciprocal bases: a literal base absorbs the exponent's sign, and a literal base at an
     infinite exponent is determined.
 
     The judge SPLIT this family three ways, which is why it is not one arm: the literal-base
@@ -825,7 +825,7 @@ class TestReciprocalBaseAndDeterminedInfinitePower:
         assert bare.simplify(['pow', '0', 'neg', 'x0']) == ['pow', 'float("inf")', 'x0']
 
     def test_the_flip_is_REFUSED_where_it_would_ascend(self, bare) -> None:
-        # The direction genuinely turns: the reciprocal costs the base one bit (§10.10), so
+        # The direction genuinely turns: the reciprocal costs the base one bit, so
         # the flip pays only if it buys back a whole node. With two or more members the Mul
         # survives the flip and nothing is bought -- 34,000 against 34,585.
         kept = bare.simplify(bare.to_tagged(['pow', '2', 'neg', '*', 'x0', 'x1']))
@@ -873,7 +873,7 @@ class TestReciprocalBaseAndDeterminedInfinitePower:
 
 
 class TestHalfPeriodShift:
-    """C1.19 family C: `f(t +- pi)` drops the pi, for f in {sin, cos, tan}.
+    """Half-period shifts: `f(t +- pi)` drops the pi, for f in {sin, cos, tan}.
 
     Eleven pattern rules said this and every one was blind at a LITERAL argument, for two
     DIFFERENT reasons that no rule could fix:
@@ -923,7 +923,7 @@ class TestHalfPeriodShift:
 
     def test_the_sign_goes_outside_at_a_variable_and_inside_at_a_literal(self, bare) -> None:
         # sin is ODD so -sin(t) = sin(-t) and the sign may sit on either side. The choice is
-        # STRUCTURAL, not a mu guard (F41: mu guards in constructor arms break idempotence):
+        # STRUCTURAL, not a mu guard (mu guards in constructor arms break idempotence):
         # a literal absorbs the sign and loses a node; a variable cannot, and the WRAPPED form
         # is what an outer `neg` can cancel.
         # a literal of EITHER sign absorbs it into its own sign
@@ -1083,7 +1083,7 @@ class TestCorpusTakesTheBestOfBoth:
         descent, so it exercised the ordinary arm and the stated numbers were wrong.)
         """
         from simplipy import Mode
-        # The strictness is pinned BEHAVIORALLY (F2, 2026-08-24): the FFI instrument
+        # The strictness is pinned BEHAVIORALLY: the FFI instrument
         # now prices tokens through the requested mode's parse route, so it folds an
         # f64-foldable spelling regardless of which mode produced it and can no
         # longer separate a real endpoint from its f64 fold. Which endpoint corpus

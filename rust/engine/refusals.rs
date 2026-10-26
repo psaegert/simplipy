@@ -1,23 +1,23 @@
-//! The licence registry -- C1.20's dual, owner-approved 2026-08-08.
+//! The licence registry.
 //!
 //! The miner's only probe used to be "does the engine already derive this?" (the
 //! Kruskal prune), which reads a doctrinal REFUSAL as ignorance and mints the
-//! forbidden rewrite as a discovery. Three shipped/blocked incidents (the 2026-08-01
-//! `+ <constant> np.pi -> <constant>` mint, F49's seven `e`-absorptions, the
-//! F55-closed `pow acos (-1) <constant>`) were each patched with a bespoke mint-side
+//! forbidden rewrite as a discovery. Three shipped/blocked incidents (a
+//! `+ <constant> np.pi -> <constant>` mint, seven `e`-absorptions, the
+//! `pow acos (-1) <constant>` rule) were each patched with a bespoke mint-side
 //! twin keyed on a proxy (tokens -> spellings -> endpoints), and each proxy rotted as
 //! the canon evolved. This module is the single home the register asked for: every
 //! reified refusal lives here, the mint path consults it at candidate judgment, and
 //! the AC load path consults it as defense in depth. The completeness argument -- one
 //! disposition per doctrinal refusal, with the proof or falsifier that earned it --
-//! is the research harness; the standing obligation (every future
+//! is kept outside this crate; the standing obligation (every future
 //! engine-side refusal ships with a registry disposition IN THE SAME COMMIT) is the
 //! contract clause recorded with this build.
 //!
 //! Design rules, all load-bearing:
 //! - Entries key on VALUES or STATES, never token spellings (the proxy-rot lesson).
 //! - The registry never over-refuses what the contract licenses: `Ext` at a point is
-//!   R3's null-set licence and passes; only defined-value changes (R2, "sign
+//!   the null-set licence and passes; only defined-value changes ("sign
 //!   included") refuse.
 //! - Fail-CLOSED on unevaluable adjudications: a pattern with exceptional points whose
 //!   source or target holds an operator the contract evaluator does not know
@@ -42,7 +42,7 @@ pub enum Refusal {
     /// the non-absorbable remainder (introduced masks; non-bag positions like
     /// `pow np.pi <constant>`).
     SpecialAbsorption,
-    /// SWEEP row 3 (new): R2 at a constructed exceptional point -- the candidate
+    /// SWEEP row 3: a defined-value change at a constructed exceptional point -- the candidate
     /// changes a DEFINED extended-real value (sign of infinity included) at a
     /// definable point of the pattern space. `1/(1-w)` vs `-1/(w-1)` at w=1.
     PoleClassChange,
@@ -60,7 +60,7 @@ impl Refusal {
     /// variant must be named here or the crate stops compiling. The callers used to spell
     /// these literals themselves, which put an UNREACHABLE arm in `lib.rs` (mint_refusals
     /// has three exits and none is `PoleClassChange`) and duplicated "pole_class_change"
-    /// at the two sites that can emit it (audit A9 / X9). A `_ =>` fallback would silence
+    /// at the two sites that can emit it. A `_ =>` fallback would silence
     /// exactly the rename this arm exists to catch, so there is none.
     pub(crate) fn name(&self) -> &'static str {
         match self {
@@ -78,7 +78,7 @@ impl Refusal {
 ///
 /// `src` is the enumerated source, `ac_out` the engine's own endpoint for it (the
 /// state a bare `<constant>` target would replace -- counting there is
-/// spelling-independent, F49's lesson), `target` the candidate.
+/// spelling-independent), `target` the candidate.
 pub fn mint_refusals(
     src: &[String],
     ac_out: &[String],
@@ -297,7 +297,7 @@ type Level<'a> = (&'a [String], Vec<(i64, i64)>);
 /// variable at which a denominator (or `log` argument) vanishes. Scope (documented in
 /// SWEEP.md row 3): `inv X` / `/ A B` / `pow B <negative integer>` denominators and
 /// `log X` at X=0, with the vanishing subtree AFFINE in exactly one variable. This is
-/// the entire F63 orbit surface; transcendental locations (tan) are H-017's lane.
+/// the entire sign-trade orbit surface; transcendental locations (tan) are another lane.
 /// The 0.15 heads' discontinuities join it (`floor`/`ceil` at the integers, `harmonic` at
 /// its poles, `mod` at a zero divisor and at the multiples of a constant one): a rule true off
 /// a jump and false on it is the pole-mirror family with a jump for a pole.
@@ -410,7 +410,7 @@ const GENERIC: [(i64, u64); 3] = [(3, 7), (-5, 11), (9, 13)];
 /// sides and adjudicates each with the contract evaluator (one-zero conventions,
 /// precision rungs): a candidate that changes a DEFINED extended-real value at a
 /// definable point (InfChange / RealChange / a lost value) is refused; `Ext` (a nan
-/// hole filled at the point) is R3's licence and passes. A side the contract cannot
+/// hole filled at the point) is the null-set licence and passes. A side the contract cannot
 /// evaluate (an operator it does not know) is refused outright: fail closed.
 ///
 /// Cost discipline: callers pre-screen (the function returns immediately when
@@ -492,8 +492,8 @@ mod tests {
         Engine::from_strs(cfg, "[]").expect("engine builds")
     }
 
-    /// THE falsifier this entry exists for -- the verified hostile pair of the C1.20
-    /// design session: `-(1/(1-w))` and `1/(w-1)` are stable states, a.e.-equal,
+    /// THE falsifier this entry exists for -- the verified hostile pair:
+    /// `-(1/(1-w))` and `1/(w-1)` are stable states, a.e.-equal,
     /// mu-ordered mirror-below-source (42,000 -> 26,000), invisible to every other
     /// gate (challenges sample no measure-zero set; POLE_GRID is constants-only; all
     /// seven load drops are syntactic; promotion is flatteners-only), and differ at
@@ -522,7 +522,7 @@ mod tests {
     }
 
     /// Sound denominator-bearing rewrites KEEP: agreement at the exceptional point is
-    /// what sound rules do there (`inv(inv(w))` at w=0: inv(+inf) = 0 = w), and R3's
+    /// what sound rules do there (`inv(inv(w))` at w=0: inv(+inf) = 0 = w), and the
     /// point-level licence (`Ext`: a nan hole filled) must not be over-refused --
     /// `w/w -> 1` at w=0 is 0/0 = nan -> 1, the contract's own forcing example.
     #[test]
@@ -562,7 +562,7 @@ mod tests {
             Some(Refusal::ConstIntroduction)
         );
         // Special-bearing source: a Const-bearing target may not lower the count --
-        // counted on the MAX of raw source and endpoint (spelling independence, F49).
+        // counted on the MAX of raw source and endpoint (spelling independence).
         assert_eq!(
             mint_refusals(
                 &s(&["pow", "np.pi", "<constant>"]),

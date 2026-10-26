@@ -1073,7 +1073,7 @@ fn ct_pow(a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<BigFloat> {
         return Some(one(p));
     }
     if b.is_zero() {
-        return Some(one(p)); // x^0 = 1 incl nan^0 (ratified v2 SS2)
+        return Some(one(p)); // x^0 = 1 incl nan^0
     }
     if a.is_nan() || b.is_nan() {
         return Some(NAN);
@@ -1082,7 +1082,7 @@ fn ct_pow(a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<BigFloat> {
         return Some(if is_pos(b) { small_int(0, p) } else { INF_POS });
     }
     if !a.is_inf() && a.abs().cmp(&one(p)).is_some_and(|o| o == 0) && b.is_inf() {
-        return Some(one(p)); // pow(+-1, +-inf) = 1 (ratified)
+        return Some(one(p)); // pow(+-1, +-inf) = 1
     }
     if b.is_inf() {
         // the RATIFIED SS9.4 spike-step semantics: magnitude limit incl negative bases
@@ -1436,7 +1436,7 @@ fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat
                     .filter(|v| !cmp_lt(&v.abs().sub(&one(p), p, RM).abs(), &ctx.floor))
             }
         }
-        // harmonic: NaN at every negative integer (the one-sided limits differ, D6) and at -inf;
+        // harmonic: NaN at every negative integer (the one-sided limits differ) and at -inf;
         // an argument inside the band of a pole is indistinguishable from it, tan's class
         "harmonic" => {
             if x.is_inf() {
@@ -1486,7 +1486,7 @@ fn ct_step(x: &BigFloat, floor: bool, ctx: &CtCtx) -> Option<BigFloat> {
     Some(if v.is_zero() { small_int(0, ctx.p) } else { v })
 }
 
-/// `mod(a, b)` under the contract: numpy's cells (D7: NaN at b = 0 and at an infinite dividend;
+/// `mod(a, b)` under the contract: numpy's cells (NaN at b = 0 and at an infinite dividend;
 /// against an infinite divisor the dividend where the signs agree, the divisor otherwise), the
 /// exact floored remainder, one zero, and the band at the jumps: a remainder inside the band of
 /// 0 or of `b` sits at a multiple of `b`, where the residue's sign picks the side.
@@ -1521,7 +1521,7 @@ fn ct_mod(a: &BigFloat, b: &BigFloat, ctx: &CtCtx) -> Option<BigFloat> {
     Some(r)
 }
 
-/// `atan2(y, x)` under the contract: C99's cells off the cut, one zero. THE CUT (D18: a null
+/// `atan2(y, x)` under the contract: C99's cells off the cut, one zero. THE CUT (a null
 /// set, no special case in the engine): on y = 0 with x < 0, and at the origin, float64 reads
 /// the zero's sign and the contract has one zero, so the point is Unresolved; so is a y inside
 /// the band of 0 there, a residue whose sign picks the branch.
@@ -1787,7 +1787,7 @@ fn ct_classes(l: &BigFloat, r: &BigFloat) -> Option<PointCmp> {
 /// replaced it spared the entire `tanh(x) -> +-1` saturation family. What the reading is
 /// FOR is `contract_point_verdict`'s decay test; its size decides nothing on its own.
 ///
-/// F105 (2026-08-21): THIS USED TO RETURN THE QUOTIENT, AND AGAINST AN EXACT ZERO THE
+/// THIS USED TO RETURN THE QUOTIENT, AND AGAINST AN EXACT ZERO THE
 /// QUOTIENT IS 1.0 AT EVERY PRECISION. The decay test compares this reading at two rungs,
 /// so any normaliser that is the SAME at both cancels out of the ratio and cannot change a
 /// verdict; `max(|l|, |r|)` is not the same at both. When one side is exactly 0 and the
@@ -1824,7 +1824,7 @@ fn saturating_bounds(op: &str) -> Option<&'static [f64]> {
     }
 }
 
-/// F106: A BOUNDED FUNCTION NEVER ATTAINS ITS LIMIT AT A FINITE ARGUMENT, so a rewrite
+/// A BOUNDED FUNCTION NEVER ATTAINS ITS LIMIT AT A FINITE ARGUMENT, so a rewrite
 /// claiming it does is false -- by a fact about the FUNCTION, at no precision at all.
 ///
 /// This is the family the gap ladder cannot reach, and depth is not the answer.
@@ -2014,7 +2014,7 @@ pub fn contract_point_verdict(
     }
     let Some((r_lo, lo_dps, hi_dps)) = climbed else {
         // Refused at every rung we can afford -- so ask the one question that needs no
-        // rung at all (F106). Reached only here, so it cannot move a verdict the ladder
+        // rung at all (the saturation rule). Reached only here, so it cannot move a verdict the ladder
         // was able to reach.
         let v = ct_saturation_verdict(
             source, src_params, target, tgt_params, ops, var_names, atoms,
@@ -2115,8 +2115,8 @@ pub fn contract_point_verdict(
             if d2.is_zero() {
                 return (Some(PointCmp::Eq), snap1);
             }
-            // ONE SCALE FOR BOTH RUNGS (F105), AND IT IS THE VALUE'S, NEVER THE
-            // COMPUTATION'S (S11, 2026-08-22, mirroring `_contract._point_verdict`).
+            // ONE SCALE FOR BOTH RUNGS, AND IT IS THE VALUE'S, NEVER THE
+            // COMPUTATION'S (mirroring `_contract._point_verdict`).
             // Taking the largest INTERMEDIATE into the max scaled the floor by
             // everything the computation passed through: `acos(inv(exp(exp 5)))
             // -> div2 np.pi` has a FIXED gap of -3.5e-65, the intermediate 2.85e64
@@ -2127,7 +2127,7 @@ pub fn contract_point_verdict(
             // cancellation), the sides offer no value to scale by and the residue
             // at the finer rung is residue OF the intermediate -- flooring by the
             // value scale convicts `log(exp x * exp -x) -> 0`. The distinguisher is
-            // s1 itself: the S11 family arrives with the coarse rung having SEEN
+            // s1 itself: the families the fixed gap exists for arrive with the coarse rung having SEEN
             // the value (s1 ~ pi/2), so the value sets the floor and the fixed
             // gap stands. Intermediates keep their say in how many digits a
             // reading NEEDS (`demanded_dps`) either way.
@@ -2365,7 +2365,7 @@ fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<Bi
                     INF_POS
                 }
             } else if x.is_negative() && x.is_int() {
-                NAN // a pole (D6)
+                NAN // a pole
             } else {
                 special::harmonic(x, p, cc)?
             }
@@ -2555,7 +2555,7 @@ mod tests {
     /// ONE SEMANTICS, FIVE SURFACES: the high-precision rootn must
     /// agree with the f64 evaluator cell-for-cell across the full index table --
     /// odd/even/unit/negative/zero indices, negative bases, zero, infinities, NaN. This
-    /// is the parity gate that makes the D2 class (divergent surfaces for one operator)
+    /// is the parity gate that makes divergent surfaces for one operator
     /// structurally impossible to reintroduce silently.
     #[test]
     fn rootn_parity_with_the_f64_evaluator() {
@@ -2940,7 +2940,7 @@ mod magnitude_probe {
 
         // DEEP SATURATION IS CONVICTED. At x = 1000 the gap is 1e-869, inside the boundary
         // band at every rung this ladder can afford, so no amount of precision reaches it.
-        // This asserted `None` until F106: abstention was the honest answer while the only
+        // This once asserted `None`: abstention was the honest answer while the only
         // instrument was numeric, and the requirement was never `Eq` -- which would certify
         // a false row. A bounded function does not attain its limit at a finite argument,
         // so the row is now REFUTED outright, which is strictly the better answer and the
@@ -2996,7 +2996,7 @@ mod magnitude_probe {
             "log(cosh + sinh) -> y must be spared"
         );
 
-        // F105: AN EXACT ZERO ON ONE SIDE IS NOT AN UNDECAYABLE GAP. `log(e^a e^-a) = 0`
+        // AN EXACT ZERO ON ONE SIDE IS NOT AN UNDECAYABLE GAP. `log(e^a e^-a) = 0`
         // exactly, so the target is a literal zero and the source is pure residue. While
         // the reading was a QUOTIENT of `max(|l|, |r|)` the scale WAS that residue, so the
         // gap read 1.0 at every rung, could not decay by construction, and clause (a)
@@ -3032,7 +3032,7 @@ mod magnitude_probe {
             "e^sinh(-10) -> 0 must still convict"
         );
 
-        // F106: DEEP SATURATION IS NOW CONVICTED, NOT MERELY REFUSED. tanh(cosh(10))
+        // DEEP SATURATION IS CONVICTED, NOT MERELY REFUSED. tanh(cosh(10))
         // differs from 1 by 2e-9566 -- inside the boundary band at every rung anyone can
         // afford, so the ladder abstains forever. A bounded function never attains its
         // limit at a finite argument, and that fact needs no precision.
@@ -3084,11 +3084,11 @@ mod magnitude_probe {
             "a computed side must not be read as a written bound"
         );
 
-        // F107, and the reason the constant quantifier could not widen: at magnitudes the
+        // The wide constant span, and the reason the constant quantifier could not widen: at magnitudes the
         // miner explores and the gate never checked, the instrument convicted rules true by
         // construction. Every assertion below read `RealChange` on the ladder it replaces.
         //
-        // Two of the F107 fixes -- the finer rung's exact zero, and the scale that stopped
+        // Two of its fixes -- the finer rung's exact zero, and the scale that stopped
         // being inflated by an intermediate that had already cancelled -- are mirrored here
         // for parity but are not reachable from this entry point, which has no witness to
         // fit; `tests/test_verify.py::TestTheQuantifierWidensWithoutConvictingTheTrue`
@@ -3151,7 +3151,7 @@ mod magnitude_probe {
         );
 
         // ...AND NOT WHERE A SIDE IS WRITTEN, which is what keeps that abstention from
-        // swallowing the F105 family. `10^sinh(-10)` is 5.8e-11014 and no closer to the 0
+        // swallowing the exact-zero family. `10^sinh(-10)` is 5.8e-11014 and no closer to the 0
         // the rule spells than it was at dps 50: no precision could close that gap, so
         // running out of precision is not the reason it is open.
         let (v, _) = contract_point_verdict(
@@ -3174,7 +3174,7 @@ mod magnitude_probe {
     /// `cargo test --release contract_verdict_cost -- --ignored --nocapture`).
     /// Not a correctness test.
     ///
-    /// Measured 2026-08-21 on this mix, against the rel-1e-25 ladder it replaced:
+    /// Measured on this mix, against the rel-1e-25 ladder it replaced:
     /// 1290 -> 4047 us/call in total, ~3.1x. The decay test pays for a SECOND rung on
     /// every point where the tolerance answered many of them at rung 1, and the climb
     /// pays for a third where rung 1 refuses (the sech tail, 227 -> 1764 us, is the

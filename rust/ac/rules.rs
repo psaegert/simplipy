@@ -134,13 +134,13 @@ pub struct AcRules {
     /// sign and every admission gate passes. Counted separately so the asset-rule accounting
     /// (`n_subsumed`/`n_dropped`) keeps its meaning.
     pub n_twins: usize,
-    /// Rules refused by the licence registry's load consumer (C1.20, SWEEP row 3): the
+    /// Rules refused by the licence registry's load consumer (SWEEP row 3): the
     /// rule changes a DEFINED extended-real value at a constructed exceptional point.
     /// The engine pre-filters the raw rules BEFORE translate (the caller sets this
     /// count); 0 for every artifact the mint-side registry produced -- a nonzero count
     /// means a stale or foreign artifact carried a violation past its own mine.
     pub n_registry_dropped: usize,
-    /// C36: the PER-REASON drop census -- the six translate-time drop reasons (plus
+    /// The PER-REASON drop census -- the six translate-time drop reasons (plus
     /// the registry's, filled by the caller) used to collapse into `n_dropped` with
     /// no accessor, so a user could not find out what was dropped from their own
     /// mine. Keys are stable strings; the FFI exposes this as a dict.
@@ -717,7 +717,7 @@ pub struct PassCtx<'a> {
 /// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size
 /// middle tier -- mu's literal component carries a literal's content up to float
 /// precision (the float cap), so the ordering loses a layer. The dense-literal chain its
-/// own tier existed for (T7: `Mul[3/2^k, x]`) ascends in k up to k = 55 and then sits at
+/// own tier existed for (`Mul[3/2^k, x]`) ascends in k up to k = 55 and then sits at
 /// 64-72 bits up to k = 200; it stays finite through the 1,100-bit cap (below).
 ///
 /// The pair is a strict total order (mu is a u64; cmp_ex is total by construction
@@ -762,7 +762,7 @@ fn trace_fires() -> bool {
 }
 
 /// Diagnostic: with `SIMPLIPY_AC_MEMO_TRACE=1` every normal-form-memo hit and insert is
-/// logged (H-014 instrumentation: the memo is the only walk state that changes
+/// logged (the memo is the only walk state that changes
 /// rule-attempt control flow, so shielded rule sites show up here and nowhere else).
 fn trace_memo() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -830,7 +830,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                 continue;
             }
         }
-        // Acceptance rides the assignment enumeration (finding F1): a disoriented
+        // Acceptance rides the assignment enumeration: a disoriented
         // assignment asks the matcher for the NEXT one, so a rule yields to later rules
         // only when NO assignment produces an oriented fire. (Shipped rules have unique
         // assignments, where this is exactly the old fire-then-check behavior.)
@@ -1134,7 +1134,7 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
             return Visit::Step(next);
         }
     }
-    // Fold fallback, GOVERNED BY THE MEASURE (stage 2; owner 2026-07-31, option (a)): the
+    // Fold fallback, GOVERNED BY THE MEASURE: the
     // fold fires exactly when its result descends the reduction ordering (literal bits are
     // priced, so `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds).
     if let Some(folded) = (p.fold)(node) {

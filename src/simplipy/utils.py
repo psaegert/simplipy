@@ -37,8 +37,8 @@ except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
 
     _core_is_numeric_string = _core_reserved_numeric_spelling = _core_missing
 
-# The declared public surface of this module (D11 column R18, owner-ratified
-# 2026-08-16): the evidence-backed names. Everything else here is reachable
+# The declared public surface of this module: the evidence-backed names.
+# Everything else here is reachable
 # but carries no stability promise (see the compatibility policy).
 __all__ = [
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
@@ -446,7 +446,7 @@ def is_prime(n: int) -> bool:
     """
     if n < 2:
         # Not prime. Without this guard, 0 and 1 hit an empty divisor range below and
-        # `all` vacuously said True; a negative n raised at `math.sqrt` (D2 finding).
+        # `all` vacuously said True; a negative n raised at `math.sqrt`.
         return False
     if n % 2 == 0 and n > 2:
         return False
@@ -581,7 +581,7 @@ def _dedup_keyed_rules(
         remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping, variable_prefix=variable_prefix)
         remapped.append((tuple(remapped_source), tuple(remapped_target)))
 
-    # THE KEY IS THE INTERNAL FORM, not the spelling (owner ruling 2026-08-18). Batched
+    # THE KEY IS THE INTERNAL FORM, not the spelling. Batched
     # through the core in ONE call: a ruleset is keyed side-by-side and a per-rule call
     # would re-pay the token-overlay setup for every entry.
     keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped], rule_mode=rule_mode,

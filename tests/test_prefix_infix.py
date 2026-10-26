@@ -105,7 +105,7 @@ def test_prefix_to_infix_names_the_tagged_dialect(engine: SimpliPyEngine) -> Non
 
 
 def test_is_valid_accepts_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
-    # SUPERSEDED CONTRACT (ruling 2026-08-18, evening batch 2 item 5): is_valid used to
+    # SUPERSEDED CONTRACT: is_valid used to
     # answer False for every tagged sequence and merely name the dialect in its verbose
     # diagnostic. It now READS all three forms, so a well-formed tagged sequence is
     # VALID and says nothing.
@@ -115,7 +115,7 @@ def test_is_valid_accepts_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> 
 
 
 def test_is_valid_verbose_names_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
-    # The B1 diagnostic survives where it is still true: a MALFORMED tagged sequence must
+    # The dialect diagnostic survives where it is still true: a MALFORMED tagged sequence must
     # be explained as malformed tagged, never as the misleading 'Variable must be leaf
     # node' the bare-prefix walk would print for the bag delimiters.
     tagged = ['<add>', '<mul>', '2', 'x0', '</mul>', '1']  # unclosed <add>

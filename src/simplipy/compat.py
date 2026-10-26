@@ -78,7 +78,7 @@ RETIRED_OPERATOR_TOKENS = frozenset({
     "div2", "div3", "div4", "div5",
     "pow2", "pow3", "pow4", "pow5",
     "pow1_2", "pow1_3", "pow1_4", "pow1_5",
-    # D12 (owner-ratified 2026-08-16): the identity/reciprocal sugar spellings.
+    # The identity/reciprocal sugar spellings.
     # A config declaring them was ACCEPTED while the parser unconditionally
     # rewrote their tokens away on input -- one engine, two answers for
     # one expression. Refused at load like the rest of the family; the parser
@@ -119,7 +119,7 @@ def check_config(config: dict[str, Any], source: str) -> None:
     declared = config.get("engine_generation")
     # bool is excluded explicitly: isinstance(True, int) holds in Python, so a YAML
     # `engine_generation: true` would otherwise classify as generation 1 and produce a
-    # nonsense "generation True" refusal message instead of naming the malformation (D3).
+    # nonsense "generation True" refusal message instead of naming the malformation.
     if declared is not None and (isinstance(declared, bool) or not isinstance(declared, int)):
         raise IncompatibleArtifactError(
             f"{source}: malformed engine_generation {declared!r} (expected an integer)")

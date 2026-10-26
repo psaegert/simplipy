@@ -1,4 +1,4 @@
-"""The token grammar boundary (H-007): reserved numeric spellings are REFUSED.
+"""The token grammar boundary: reserved numeric spellings are REFUSED.
 
 The engine has exactly three kinds of well-formed token:
 
@@ -14,7 +14,7 @@ The engine has exactly three kinds of well-formed token:
   case, optional sign), underscore digit groupings (``1_000``), and base-prefixed
   integer literals (``0x10``/``0o17``/``0b101``). Treating these as symbols is
   UNSOUND under the numeric reading (``inf - inf -> 0`` where IEEE says nan), and
-  before H-007 the engine did exactly that while its own numeric layer
+  once the engine did exactly that while its own numeric layer
   (``evaluate_constant_subtree``) read the SAME tokens as values -- one input, two
   contradictory public answers. They are refused at every semantic boundary.
 """
@@ -47,7 +47,7 @@ LEGAL_NUMERIC = [
     ("5", ["5"]),
     ("+5", ["5"]),
     # `.5` PARSES (the grammar guard); it then takes its argmin spelling, which for a
-    # 2^a denominator is the fraction -- §10.10(1), owner-ratified 2026-08-07. A bare
+    # 2^a denominator is the fraction. A bare
     # literal carries no bag delimiter, so it is EXPLICIT input and comes back in the
     # explicit dialect's structural division (the tagged twin is `<mul> 1 <div> 2 </mul>`).
     (".5", ["/", "1", "2"]),
@@ -58,7 +58,7 @@ LEGAL_NUMERIC = [
     ("1e+16", ["1e16"]),
 ]
 
-# Malformed numerals (B2): tokens that start like a number (a digit or `.`, after optional
+# Malformed numerals: tokens that start like a number (a digit or `.`, after optional
 # parentheses and signs) but are not numerals of the grammar. They used to pass as free
 # symbols (`1/0 - 1/0 -> 0`), or, in the tagged form, which skips `is_valid`, to be split
 # (`<mul> --5 x1 </mul>` became `<mul> -1 -5 x1 </mul>`) -- while the realized infix reads
@@ -90,7 +90,7 @@ class TestReservedSpellingsRefused:
         assert 'float("inf")' in str(exc.value)
 
     def test_evaluate_constant_subtree_refuses(self, engine: SimpliPyEngine) -> None:
-        # Before H-007 this returned float("nan") while simplify returned ["0"] for the
+        # This once returned float("nan") while simplify returned ["0"] for the
         # same tokens -- the contradiction this boundary exists to kill.
         with pytest.raises(ValueError, match="reserved numeric spelling"):
             engine._core.evaluate_constant_subtree(["-", "inf", "inf"])
@@ -199,7 +199,7 @@ class TestGrammarPredicates:
 
 
 class TestRecursionCapEveryEntry:
-    """H-043 (D4 doctrine-propagation, 2026-08-05): the MAX_TOKENS recursion cap lives in
+    """The MAX_TOKENS recursion cap lives in
     `ensure_tokens_are_tokens` (the one choke point) and EVERY token-taking FFI entry runs
     it. Before the sweep, twelve entries reached recursive walkers uncapped and a deep
     chain ABORTED the interpreter (SIGSEGV, probed empirically) -- pyo3 maps panics, not
@@ -237,7 +237,7 @@ class TestRecursionCapEveryEntry:
 
 
 class TestRealizationDialectIsClosed:
-    """C1.13: the realization dialect must be CLOSED over the operators the PROJECTIONS can
+    """The realization dialect must be CLOSED over the operators the PROJECTIONS can
     emit -- which are not the config's operators.
 
     `x0 * x0` serializes as `pow x0 2` under a config whose only operator is `*`, and
@@ -290,8 +290,8 @@ class TestRealizationDialectIsClosed:
 
 
 class TestThreatmodel3FromStrsCap:
-    """threatmodel-3: a deep-chain rules.json SIGSEGV'd the interpreter through
-    `from_strs` -- the ONE token-taking FFI entry H-043's recursion cap never
+    """A deep-chain rules.json SIGSEGV'd the interpreter through
+    `from_strs` -- the ONE token-taking FFI entry the recursion cap never
     reached (construction parses each rule side into a tree recursively, and the
     cap ran only on the later per-call surfaces). A hostile-or-corrupt artifact
     must refuse loudly at load, never abort the process."""

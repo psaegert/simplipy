@@ -1,6 +1,6 @@
 //! Exact rational arithmetic for the AC core.
 //!
-//! Contract D1: "number literals denote their exact rational values" -- so the core's numeric
+//! The contract: "number literals denote their exact rational values" -- so the core's numeric
 //! type is an exact rational, not an f64. Coefficient and exponent arithmetic thereby becomes
 //! COMPUTATION that cannot be wrong (replacing the mined-and-sampled coefficient rule family).
 //!
@@ -53,7 +53,7 @@ impl Drop for DomainGuard {
 /// Enter a number domain on this thread until the returned guard drops.
 ///
 /// In the f64 domain (`true`) a number is ADMISSIBLE when it is zero or its numerator and its
-/// denominator are both at most 2^1022 in magnitude (design 2c; reviews H1, H2 and #65's M1).
+/// denominator are both at most 2^1022 in magnitude.
 /// Such a number is normal and so is its reciprocal, so every printed spelling -- one token,
 /// `/ p q`, a divisor-side reciprocal -- reads back within one rounding as the same number,
 /// where a subnormal reads far from its exact value (`5e-324` is 4.94e-324) and a number beyond
@@ -354,7 +354,7 @@ impl Rat {
 
     /// The parity of an integer: `Some(true)` odd, `Some(false)` even. `None` for a non-integer
     /// and, in the f64 domain, for an integer beyond 2^53: the float64 evaluator reads such an
-    /// integer as an even float, so its parity is not known there (design 2c, review H3) and
+    /// integer as an even float, so its parity is not known there and
     /// every parity-dependent rewrite refuses. The exact domain has the exact parity.
     pub fn parity(&self) -> Option<bool> {
         match &self.0 {
@@ -909,7 +909,7 @@ impl Rat {
     /// `"1e-3" -> 1/1000`, `"1." -> 1`. This is a DECIMAL parse, not a float parse -- `"0.2"`
     /// means one fifth, exactly, even though the f64 nearest to it does not.
     pub fn parse_decimal(s: &str) -> Option<Rat> {
-        // Only the numeral grammar (B2): the parse below used to accept `-+5` as -5.
+        // Only the numeral grammar: the parse below used to accept `-+5` as -5.
         if !crate::utils::is_decimal_numeral(s) {
             return None;
         }
@@ -1635,7 +1635,7 @@ mod tests {
         assert_eq!(hi.cmp_exact(&lo), Ordering::Greater);
     }
 
-    /// COST measurement (owner request): the fast path is byte-identical to the historical
+    /// COST measurement: the fast path is byte-identical to the historical
     /// exact path; the wide path replaces an f64 fallback with the 256-bit multiply.
     /// Prints ns/op for all three under --nocapture.
     #[test]

@@ -1,5 +1,4 @@
-"""The masking redundancy, cleared (ruling 2026-08-18, evening batch 2 item 4):
-"The masking redundancies should be cleared of course and everything streamlined."
+"""The masking redundancy, cleared: the masking surface is streamlined.
 
 VERDICT: one policy, not two. `mask_values_keep_structure` and `mask_fittable`
 are the SAME function object today, and the evidence says that is not an

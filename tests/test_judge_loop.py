@@ -409,7 +409,7 @@ class _HeldJudge:
 
 
 def test_the_mine_judges_with_no_timeout_under_a_watchdog(monkeypatch, caplog) -> None:
-    """S2: a verdict never depends on the machine's load. The judge runs with no wall-clock
+    """A verdict never depends on the machine's load. The judge runs with no wall-clock
     timeout; a judgment past `warn_s` is logged, one past `fail_s` fails the mine by name.
     Which judgment runs long is the test's choice (`_HeldJudge`), not the machine's."""
     import simplipy.mining
@@ -436,7 +436,7 @@ class _Crash(Exception):
 
 
 def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
-    """S3: the checkpoint key holds the operator table, the data's content and the numeric
+    """The checkpoint key holds the operator table, the data's content and the numeric
     environment, and a resume keeps the mine's origin (`created`, `host`) and records itself."""
     import platform
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
@@ -476,7 +476,7 @@ def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
 
 
 def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
-    """S5: a source the judge keeps refusing is given up on by itself; the others converge."""
+    """A source the judge keeps refusing is given up on by itself; the others converge."""
     import simplipy.mining
     monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 2)
     other = ['tan', 'atan', 'sin', 'x0']
@@ -492,7 +492,7 @@ def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
 
 
 def test_the_final_gate_judges_before_every_prune_and_what_ships(tmp_path, monkeypatch) -> None:
-    """S7: a prune leans only on licensed rules (a rule pruned as covered by one the final gate
+    """A prune leans only on licensed rules (a rule pruned as covered by one the final gate
     then drops would be lost), and the final gate judges the set that ships."""
     events = []
     real_gate, real_prune = RuleMiner._final_gate, SimpliPyEngine.prune_covered_rules

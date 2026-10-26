@@ -1,4 +1,4 @@
-"""`parse` is RENAMED to `read_infix` (ruling 2026-08-18, evening batch 2 item 3).
+"""`parse` is RENAMED to `read_infix`.
 
 The name had to state the contract, because the contract is a CAPABILITY the rest
 of the 0.14 surface deliberately refuses: `read_infix` is a vocabulary-TOLERANT,
@@ -71,7 +71,7 @@ class TestTheContractTheNameStates:
     def test_legacy_spellings_are_read_where_they_are_called(
             self, engine: SimpliPyEngine) -> None:
         """`pow_1(a)` and `pow1(a)` are the legacy reciprocal and identity; a bare `pow_1` is a
-        symbol, as `pow_2` is (review F7: it read as `* x0 inv`, an operator with no operand)."""
+        symbol, as `pow_2` is (it read as `* x0 inv`, an operator with no operand)."""
         assert engine.read_infix('pow_1(x0)') == ['inv', 'x0']
         assert engine.read_infix('x1*pow1(x0)') == ['*', 'x1', 'x0']
         assert engine.read_infix('x0*pow_1') == ['*', 'x0', 'pow_1']
@@ -100,7 +100,7 @@ class TestTheContractTheNameStates:
 
 
 class TestImplicitMultiplication:
-    """Infix reads implicit products (owner ruling 2026-10-05); token lists, which are expected
+    """Infix reads implicit products; token lists, which are expected
     well formed, do not. The inserted `*` is an ordinary `*`, with its precedence."""
 
     @pytest.mark.parametrize("implicit, explicit", [
@@ -141,7 +141,7 @@ class TestImplicitMultiplication:
 
 
 class TestWhitespace:
-    """Whitespace separates tokens (owner ruling 2026-10-05). A declared one-argument function
+    """Whitespace separates tokens. A declared one-argument function
     without parentheses applies to the operand after it, taking powers and signs but not
     products, quotients or sums; `* *` and a spaced exponent part still join; any other two
     operands with only whitespace between them are a user error."""

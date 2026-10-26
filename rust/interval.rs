@@ -37,7 +37,7 @@ const INF: f64 = f64::INFINITY;
 // certified against exact-real images are applied by an f64 evaluator, and every place the
 // two differ is a place a certified rule can be false in production.
 //
-// HOST-DEPENDENT by nature (libm differs; D20 already routes minting to the reference mint host for that
+// HOST-DEPENDENT by nature (libm differs; minting runs on the reference mint host for that
 // reason). The deployed evaluator IS the engine's (`simplipy.operators` calls `numeric::kernels`),
 // so one measurement serves both. Derived on glibc 2.43 and pinned against the kernels by
 // `saturation_thresholds_are_the_deployed_kernels`; re-derive per host and stamp with the libm.
@@ -192,8 +192,8 @@ impl Vs {
     ///   - **finite together with nan is Mixed too**. That arm was missing, so
     ///     `log <constant>` -- components (has_fin, nan) = (true, true), finite on C>0 and
     ///     undefined on C<0, i.e. TWO positive-measure behaviours -- reported `Finite` and was
-    ///     collapsed to `<constant>`, filling a positive-measure undefined region. §4 R3 and
-    ///     §9.8.3(b) both put that in the kill set ("KILLED on positive measure"); only a NULL
+    ///     collapsed to `<constant>`, filling a positive-measure undefined region. The contract
+    ///     puts that in the kill set ("KILLED on positive measure"); only a NULL
     ///     hole may be filled. LOSSY mode is unaffected: the fold short-circuits on
     ///     `wildcard_all` before consulting any certificate, so the training-corpus path still
     ///     collapses these.
@@ -208,7 +208,7 @@ impl Vs {
         if self.has_fin && self.nan {
             return Class::Mixed;
         }
-        // An INFINITY together with nan is ambiguous too (H-019, 2026-08-04): the
+        // An INFINITY together with nan is ambiguous too: the
         // finite+nan arm above was added when that gap shipped `<constant>` for
         // `log <constant>`, but the inf+nan twin was left behind -- `{+inf, nan}`
         // classified PosInf and the ground fold shipped an inf LITERAL for
@@ -313,11 +313,11 @@ impl Vs {
     }
 }
 
-// ================= OUTWARD ROUNDING (H-019 option (a), owner-ruled 2026-08-04) ===============
+// ================= OUTWARD ROUNDING ===============
 // The arms below evaluate endpoint images in f64 round-to-nearest, and nearest results are
 // NOT bounds: each operation can land up to half an ulp on the wrong side, so a computed
 // "enclosure" could exclude true values -- and a certificate whose decision boundary sits
-// within an ulp of an endpoint could then certify something false (the H-016/H-018 family,
+// within an ulp of an endpoint could then certify something false (the leaf-rounding family,
 // arm-level). Every COMPUTED endpoint is therefore stepped outward: 1 ulp for IEEE
 // correctly-rounded arithmetic (+ - * /), a conservative budget for libm transcendentals
 // (not correctly rounded; typically <= 1-2 ulp, 8 is cheap insurance). Amplification through
@@ -448,7 +448,7 @@ fn clip(v: &Vs, dlo: f64, dhi: f64) -> (Option<Vs>, bool) {
         if open_at_graze {
             return (None, true);
         }
-        // Attained graze: under outward-rounded arms (H-019, 2026-08-04) a bracketed
+        // Attained graze: under outward-rounded arms a bracketed
         // POINT value grazes a domain edge in exactly this shape, and DROPPING the point
         // manufactured a Nan CLASS for a defined ground: `acosh(cos(0))` -- cos's honest
         // enclosure [1 - 8ulp, 1] met acosh's domain in {1}, the TRUE attained value,
@@ -456,7 +456,7 @@ fn clip(v: &Vs, dlo: f64, dhi: f64) -> (Option<Vs>, bool) {
         // a positive-measure SHRINK). Keep the point, NULL-supported: for a ground the
         // classification then reads Mixed (fold refused, the exact rules take over --
         // `cos 0 -> 1`, `acosh 1 -> 0`); for a variable/Const-parameterized family the
-        // measure-aware consumer (`value_class`) may still null-kill it (R3), restoring
+        // measure-aware consumer (`value_class`) may still null-kill it, restoring
         // the continuum verdicts. `defined_pm` witnesses stay blocked either way.
         //
         // NULL-supported is the DEFAULT, not the verdict. It is right for the artifact shape
@@ -572,7 +572,7 @@ fn domain_op(
     }
     if let Some(cl) = clipped {
         // `computed` marks endpoint images that came from f64 evaluation of `f` -- ONLY
-        // those are stepped outward (H-019). Pole reaches and caller limits are exact
+        // those are stepped outward. Pole reaches and caller limits are exact
         // semantics; an irrational limit is the CALLER's job to pre-step (atan).
         // `sat` rides along: only an EXACT image of a proven-attained bound stays proven.
         let (mut a, mut a_open, mut a_computed, mut a_sat) = if pole_lo && cl.lo == dlo {
@@ -628,7 +628,7 @@ fn domain_op(
         r.sat_lo = a_sat && !a_open;
         r.sat_hi = b_sat && !b_open;
         // Image of a null x-support is null-supported; a degenerate boundary overlap
-        // kept by `clip` (H-019) carries its own null marking.
+        // kept by `clip` carries its own null marking.
         r.fin_null = v.fin_null || cl.fin_null;
     }
     r
@@ -684,7 +684,7 @@ fn u_abs(v: &Vs) -> Vs {
 }
 
 /// 1/x is EXACT iff |x| is a power of two (finite, zero mantissa): those reciprocals --
-/// 1/1, 1/2, 1/(-4) -- never widen (H-019), keeping `inv(cosh C) <= 1` provable.
+/// 1/1, 1/2, 1/(-4) -- never widen, keeping `inv(cosh C) <= 1` provable.
 fn recip_exact(x: f64) -> bool {
     x.is_finite() && x != 0.0 && (x.to_bits() & ((1u64 << 52) - 1)) == 0
 }
@@ -704,19 +704,19 @@ fn u_inv(v: &Vs) -> Vs {
         // denominator produces on positive measure.
         if v.fin_is_point() {
             if v.lo == 0.0 {
-                // ONE ZERO (contract v2 §9.2, DECIDED 2026-07-18; H-016 2026-08-03): the point
+                // ONE ZERO: the point
                 // zero is THE unsigned zero and its pole is +inf by convention -- the sign of an
                 // f64 zero is measurement rendering, never a value. This branch used to read the
                 // sign bit (1/(-0) = -inf, referee-era deployment semantics) to protect the
-                // gates from under-reporting what IEEE evaluation reaches; §9.2 formally
-                // overturned that semantics (the miner-side R2'' signed-zero tie-break was
+                // gates from under-reporting what IEEE evaluation reaches; the one-zero convention formally
+                // overturned that semantics (the miner-side signed-zero tie-break was
                 // deleted at ratification) and the surviving read here shipped a `-inf` LITERAL
                 // for `inv(0/tanh(-2))` while every structurally-collapsing sibling spelling
                 // shipped +inf. Deployment still EMITS -inf on the -0 slice at runtime; that is
-                // documented measurement error (§9.2), not a value this layer may report.
+                // documented measurement error, not a value this layer may report.
                 r.pinf = true;
             } else {
-                // 1/c is generally inexact: bracket the computed reciprocal (H-019);
+                // 1/c is generally inexact: bracket the computed reciprocal;
                 // reciprocals of powers of two are exact and stay points.
                 let y = 1.0 / v.lo;
                 if recip_exact(v.lo) {
@@ -737,7 +737,7 @@ fn u_inv(v: &Vs) -> Vs {
             // Each endpoint reciprocal becomes its own bracket unless exact -- a
             // power-of-two source, or the exact 0 limit of an infinite edge (widening
             // 1/inf = 0 below zero manufactured a spurious log-domain escape); the
-            // hull of the brackets is the enclosure (H-019).
+            // hull of the brackets is the enclosure.
             let br = |src: f64, y: f64| -> (f64, f64) {
                 if !y.is_finite() || y == 0.0 || recip_exact(src) {
                     (y, y)
@@ -784,7 +784,7 @@ fn u_inv(v: &Vs) -> Vs {
 
 fn u_exp(v: &Vs) -> Vs {
     // exp over FINITE reals is finite and STRICTLY positive: (0, inf), OPEN at 0.
-    // The 0 floor is an a-priori mathematical bound: outward stepping (H-019) may push a
+    // The 0 floor is an a-priori mathematical bound: outward stepping may push a
     // computed endpoint below it (underflowed exp(-800) steps to a negative subnormal),
     // and the clamp restores the exact floor -- enclosure INTERSECT known range.
     let mut r = mono(v, |x| x.exp(), Some(0.0), Some(INF));
@@ -859,7 +859,7 @@ fn u_atanh(v: &Vs) -> Vs {
     // Endpoint images through the LIBM atanh (the fold's function), NOT Rust std's own
     // composition: their gap grows unbounded in ulps toward +-1 (161 ulps at -0.999,
     // 4th-significant-digit at 1 - 1e-15), and the 8-ulp outward budget only covers
-    // libm's rounding -- with std here the box EXCLUDED the fold's value (audit B6).
+    // libm's rounding -- with std here the box EXCLUDED the fold's value.
     let mut r = domain_op(
         v,
         -1.0,
@@ -994,10 +994,10 @@ fn u_cosh(v: &Vs) -> Vs {
     r.nan = v.nan;
     if v.has_fin {
         r.has_fin = true;
-        r.fin_null = v.fin_null; // image of a null x-support is null-supported (H-019)
+        r.fin_null = v.fin_null; // image of a null x-support is null-supported
                                  // The minimum 1 is ATTAINED only if 0 itself is in the set: an open-zero
                                  // endpoint ((0, b] -- exp's range) yields the OPEN exact bound (1, cosh b],
-                                 // which is what lets `acos(cosh(exp C))` keep its clean Nan (H-019).
+                                 // which is what lets `acos(cosh(exp C))` keep its clean Nan.
         let zero_attained = (v.lo < 0.0 || (v.lo == 0.0 && !v.lo_open))
             && (v.hi > 0.0 || (v.hi == 0.0 && !v.hi_open));
         if zero_attained {
@@ -1068,10 +1068,10 @@ fn u_tan(v: &Vs) -> Vs {
     }
     if v.has_fin {
         r.has_fin = true;
-        r.fin_null = v.fin_null; // image of a null x-support is null-supported (H-019)
+        r.fin_null = v.fin_null; // image of a null x-support is null-supported
                                  // The pole positions pi/2 + k*pi are irrational and computed in f64: a containment
                                  // test on the nearest-rounded position can MISS a true pole by an ulp, and a missed
-                                 // pole is an O(1) enclosure hole, not an ulp (H-019). The computed pole is therefore
+                                 // pole is an O(1) enclosure hole, not an ulp. The computed pole is therefore
                                  // BRACKETED and the test errs toward "spans" -- the unbounded verdict is the sound
                                  // direction. Three candidates cover the quotient's own rounding.
         let spans =
@@ -1115,7 +1115,7 @@ fn u_trig(v: &Vs, is_sin: bool) -> Vs {
     }
     if v.has_fin {
         r.has_fin = true;
-        r.fin_null = v.fin_null; // image of a null x-support is null-supported (H-019)
+        r.fin_null = v.fin_null; // image of a null x-support is null-supported
         let two_pi = 2.0 * std::f64::consts::PI;
         if v.lo.is_infinite() || v.hi.is_infinite() || (v.hi - v.lo) >= two_pi {
             r.lo = -1.0;
@@ -1129,7 +1129,7 @@ fn u_trig(v: &Vs, is_sin: bool) -> Vs {
             };
             // Peak positions are irrational, computed in f64: a missed peak is an O(1)
             // enclosure hole (the hull would exclude +-1). The computed position is
-            // BRACKETED and the test errs toward containment (H-019); the +-1 verdict is
+            // BRACKETED and the test errs toward containment; the +-1 verdict is
             // the a-priori exact bound, so over-claiming a peak is only recall loss.
             let contains = |c: f64| {
                 let k0 = ((v.lo - c) / two_pi).floor();
@@ -1172,7 +1172,7 @@ fn u_trig(v: &Vs, is_sin: bool) -> Vs {
 /// Integer power of a value set for the RETIRED unary arms (`pow2`..`pow5` only, k > 0):
 /// monotone-piece endpoint bounds, kept as cross-generation instrument support (marked
 /// legacy at the arm table). Deliberately NOT shared with the live binary path: `b_pow`'s
-/// const-integer-exponent branch (audit Tier-2, 2026-08-03) carries the module's
+/// const-integer-exponent branch carries the module's
 /// open-edge/pole conventions (pole reach as unbounded OPEN edges, `fin_null`
 /// propagation, attained base infinities by sign/parity) and negative exponents, none of
 /// which this positive-k instrument arm needs -- delegating either way would either lose
@@ -1181,7 +1181,7 @@ fn u_pow_int(v: &Vs, k: i32) -> Vs {
     let mut r = Vs::empty();
     r.nan = v.nan;
     if v.has_fin {
-        r.fin_null = v.fin_null; // image of a null x-support is null-supported (H-019)
+        r.fin_null = v.fin_null; // image of a null x-support is null-supported
         let ulps = 2 + k.unsigned_abs(); // powi compounds ~one rounding per multiply
         let p = |x: f64| safe(|z| z.powi(k), x);
         let (a, b) = if k % 2 == 0 {
@@ -1238,7 +1238,7 @@ fn u_scale(v: &Vs, c: f64) -> Vs {
     let mut r = Vs::empty();
     r.nan = v.nan;
     if v.has_fin {
-        r.fin_null = v.fin_null; // image of a null x-support is null-supported (H-019)
+        r.fin_null = v.fin_null; // image of a null x-support is null-supported
         let mut a = if v.lo.is_infinite() {
             -INF
         } else {
@@ -1346,7 +1346,7 @@ fn u_erf(v: &Vs) -> Vs {
 }
 
 /// `harmonic`: increasing on (-1, inf) and between any two of its poles, +inf at +inf, NaN at
-/// -inf and at every negative integer (D6). A finite operand on (-1, inf), the point of a
+/// -inf and at every negative integer. A finite operand on (-1, inf), the point of a
 /// negative integer, or a box strictly between two poles is enclosed; one that may reach a pole
 /// among other values is refused.
 fn u_harmonic(v: &Vs) -> Option<Vs> {
@@ -1486,7 +1486,7 @@ fn b_atan2(y: &Vs, x: &Vs) -> Vs {
 /// lies between 0 and the divisor, both closed (a tiny negative dividend gives `b` itself),
 /// and a zero divisor is NaN. A divisor that may be zero among other values is refused.
 ///
-/// The infinite cells are numpy's (D7): an infinite dividend is NaN; under an infinite divisor
+/// The infinite cells are numpy's: an infinite dividend is NaN; under an infinite divisor
 /// the dividend is its own remainder where it is zero or has the divisor's sign, and the
 /// divisor's infinity otherwise (`mod(3, inf) = 3`, `mod(-3, inf) = inf`, `mod(3, -inf) = -inf`,
 /// `mod(-3, -inf) = -3`).
@@ -1750,7 +1750,7 @@ fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
         "atan" => {
             // pi/2 is IRRATIONAL: the f64 constant sits BELOW the true limit, so both the
             // range limits and the attained values at +-inf must be stepped OUTWARD to be
-            // enclosures (true atan(1e300) exceeds f64(pi/2)) -- the leaf-level H-018
+            // enclosures (true atan(1e300) exceeds f64(pi/2)) -- the leaf-level outward-rounding
             // doctrine applied to a limit constant.
             let mut r = mono(
                 v,
@@ -1808,7 +1808,7 @@ fn b_add(a: &Vs, b: &Vs) -> Vs {
     if a.has_fin && b.has_fin {
         // A computed-zero SUM is exact (IEEE addition: x + y == 0 iff y == -x, and
         // near-zero sums are exactly representable), so the zero bound stays; every other
-        // computed sum steps outward (H-019).
+        // computed sum steps outward.
         let lo = if a.lo.is_infinite() || b.lo.is_infinite() {
             -INF
         } else {
@@ -1853,7 +1853,7 @@ fn b_add(a: &Vs, b: &Vs) -> Vs {
 fn b_mul(a: &Vs, b: &Vs) -> Vs {
     let mut r = Vs::empty();
     r.nan = a.nan || b.nan;
-    // F82 (2026-08-11, extreme row 433087): these three infinite blocks used to
+    // Extreme fuzz row 433087: these three infinite blocks used to
     // decide with `if x.pinf { .. } else { .. }` -- written for a SINGLE-signed
     // infinite operand. A MIXED operand (pinf AND ninf, e.g. `inf * sign-unknown`)
     // collapsed to one sign, DROPPING the other flag; `cls()` then read the
@@ -1907,7 +1907,7 @@ fn b_mul(a: &Vs, b: &Vs) -> Vs {
             let p = safe(|_| x * y, 0.0);
             // A computed-zero PRODUCT with nonzero factors is UNDERFLOW, not zero: the
             // true value is nonzero-tiny with the factors' sign product -- bound it by
-            // the signed minimum subnormal so the hull cannot exclude it (H-019). A
+            // the signed minimum subnormal so the hull cannot exclude it. A
             // zero FACTOR gives the exact zero and stays.
             if p == 0.0 && x != 0.0 && y != 0.0 {
                 return f64::from_bits(1).copysign(x) * y.signum();
@@ -1918,7 +1918,7 @@ fn b_mul(a: &Vs, b: &Vs) -> Vs {
         r.fin_null = a.fin_null || b.fin_null; // x-support of a*b is within both supports
         let mut lo = ps.iter().cloned().fold(INF, f64::min);
         let mut hi = ps.iter().cloned().fold(-INF, f64::max);
-        // Widen the computed corners outward (H-019); an exact-zero bound (a zero factor)
+        // Widen the computed corners outward; an exact-zero bound (a zero factor)
         // stays -- IEEE multiplication by zero is exact, and the one-zero flush below
         // depends on the bound being genuinely zero.
         if lo != 0.0 {
@@ -1927,10 +1927,10 @@ fn b_mul(a: &Vs, b: &Vs) -> Vs {
         if hi != 0.0 {
             hi = out_hi(hi, ULP_ARITH);
         }
-        // ONE ZERO (§9.2; H-016): zero endpoints are normalized to +0.0. This block used to do
+        // ONE ZERO: zero endpoints are normalized to +0.0. This block used to do
         // the OPPOSITE -- restore the IEEE sign of the endpoint products so that u_inv and
         // b_pow's zero-base branch could read the bit and pick a signed pole; §9.2 made that
-        // sign non-normative and H-016 caught it shipping `-inf` for `inv(0/tanh(-2))`. No
+        // sign non-normative and a fuzz row caught it shipping `-inf` for `inv(0/tanh(-2))`. No
         // consumer reads the bit anymore; flushing here keeps a `-0.0` that IEEE endpoint
         // arithmetic happens to produce (e.g. `0 * negative`) from ever leaving the fold, so
         // the representation cannot re-grow a reader.
@@ -1964,7 +1964,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
         return z;
     }
 
-    // H-029 (2026-08-05): the x^0 == 1 TOTALITY also holds on the {exponent == 0} SLICE
+    // The x^0 == 1 TOTALITY also holds on the {exponent == 0} SLICE
     // of a TIGHT exponent range -- an outward-rounded ENCLOSURE of a ground whose exact
     // value IS 0 but which could not fold to the literal (`sin(sin(acos 1))` brackets
     // 0). The value 1 is reachable there for EVERY base including nan and the
@@ -1975,7 +1975,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     // "`<constant>` does not qualify" note and the continuum nan convention -- because
     // Vs carries no null annotation on its inf flags and a broad hull would poison
     // downstream ranges (the `log(pow(0, <constant>))` pin). Null-supported: for a
-    // measured family the slice is measure-zero (value_class's R3 null-kill keeps the
+    // measured family the slice is measure-zero (value_class's null-kill keeps the
     // a.e. verdicts), while a GROUND has no measure space, the class reads Mixed, and
     // the fold REFUSES -- fail closed, the ground stays symbolic.
     if b.has_fin && b.lo <= 0.0 && 0.0 <= b.hi && b.lo.ceil() == 0.0 && b.hi.floor() == 0.0 {
@@ -1985,11 +1985,11 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
 
     // exponent is the +-inf LITERAL: a STEP function of |a| vs 1 (a REGION behaviour)
     //
-    // THE |t| = 1 ROW, in every magnitude-step arm (audit B1, D8(iii)): `pow(t, +-inf)`
+    // THE |t| = 1 ROW, in every magnitude-step arm (D8(iii)): `pow(t, +-inf)`
     // is 1 at |t| = 1 (the ratified Sec 9.8.2 magnitude-step exception, negative t
     // included), and that value is REACHABLE whenever the magnitude range CONTAINS 1 --
     // not only for an exact +-1 point base. The old `is_const && |lo| == 1` read missed
-    // every BRACKETED base (H-019 outward rounding: `cos(np.pi)` encloses
+    // every BRACKETED base (outward rounding: `cos(np.pi)` encloses
     // [-1, -0.9999999999999991]), so this arm asserted a DEFINITE infinity where the
     // contract value is 1 -- the 46-row fabricated-Inf family, escaping as
     // `x0 + pow(cos(np.pi), -inf) -> inf` -- and it under-reported every genuinely
@@ -2037,17 +2037,17 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     // base is the constant 0: 0^b = 0 (b>0), +inf (b<0), 1 (b=0, measure-zero)
     if a.is_const() && a.lo == 0.0 {
         if b.has_fin {
-            // ONE ZERO (§9.2; H-016): pow(0, y < 0) = +inf for EVERY y -- the base is THE
+            // ONE ZERO: pow(0, y < 0) = +inf for EVERY y -- the base is THE
             // unsigned zero, so the odd-integer null slice that IEEE `pow(-0.0, odd k < 0) =
             // -inf` carved out does not exist in the value model. The `a.lo.is_sign_negative()`
             // ninf-add that lived here was the referee-era deployment read (the "fix direction
-            // still flagged" thread in contract §7's R2/R3 row); deployment's -inf on the -0
+            // still flagged" thread of the contract); deployment's -inf on the -0
             // slice is documented measurement error, not a reachable value.
             if b.lo < 0.0 {
                 r.pinf = true;
             }
             if b.hi > 0.0 {
-                r.merge_pt(0.0); // measured; merge_pt clears the H-029 null annotation
+                r.merge_pt(0.0); // measured; merge_pt clears the null annotation
             }
         }
         if b.ninf {
@@ -2084,10 +2084,10 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
                 let k = b.lo;
                 if k.is_finite() && k.fract() == 0.0 {
                     if k > 0.0 {
-                        // Parity by EXACT float mod (the idiom of the H-029 arm below and
+                        // Parity by EXACT float mod (the idiom of the single-integer arm below and
                         // the rootn gate): `k as i64` SATURATES at i64::MAX (odd) for
                         // k >= 2^63, flipping the infinity sign -- every integer-valued
-                        // f64 with |k| >= 2^53 is even, and `% 2.0` is exact there (H-045).
+                        // f64 with |k| >= 2^53 is even, and `% 2.0` is exact there.
                         if k % 2.0 == 0.0 {
                             r.pinf = true;
                         } else {
@@ -2101,7 +2101,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
                 }
             } else if b.has_fin {
                 r.nan = true;
-                // H-029 (2026-08-05): a TIGHT exponent range containing EXACTLY ONE
+                // A TIGHT exponent range containing EXACTLY ONE
                 // integer -- an outward-rounded ENCLOSURE of a ground integer
                 // (`atan(0) + 3` brackets 3) -- reaches `(-inf)^k` on that slice.
                 // nan-only asserted "the exponent is not an integer" about enclosure
@@ -2138,7 +2138,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     // a NEGATIVE constant base with a CONTINUUM exponent: non-integer a.e. -> nan a.e.
     if a.is_const() && a.lo < 0.0 && !b.is_const() {
         r.nan = true;
-        // H-029 (2026-08-05): same single-contained-integer honesty as the -inf-base
+        // Same single-contained-integer honesty as the -inf-base
         // arm -- `(-2)^k` IS defined (finite) when a TIGHT exponent range encloses one
         // integer (the enclosure-of-a-ground-integer case). The exact point value,
         // null-supported: the class turns Mixed, ground folds refuse (the exact rule
@@ -2149,7 +2149,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
             if k != 0.0 {
                 let v = a.lo.powf(k);
                 if v.is_finite() {
-                    // libm point: bracket it (H-019); slice-supported only -> null
+                    // libm point: bracket it; slice-supported only -> null
                     r.merge_pt(out_lo(v, ULP_LIBM));
                     r.merge_pt(out_hi(v, ULP_LIBM));
                     r.fin_null = true;
@@ -2172,10 +2172,10 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
             }
         }
         // infinite exponent components: the magnitude step (|a| vs 1), same rows as
-        // the dedicated pure-inf arms (H-028: these were dropped by the early return).
-        // The |t| = 1 row was MISSING from this copy alone (audit B1 part (a): copies
-        // 1-3 carried at least the exact-point form under a comment here claiming
-        // parity; the F1 sweep family -- negative const base, mixed-inf exponent --
+        // the dedicated pure-inf arms (these were dropped by the early return).
+        // The |t| = 1 row was MISSING from this copy alone (the other
+        // copies carried at least the exact-point form under a comment here claiming
+        // parity; the sweep family -- negative const base, mixed-inf exponent --
         // shipped nan for a contract value of 1 through exactly this gap). Doc at the
         // dedicated arms; `r.nan` is already true on this path, so the merged 1 turns
         // the class Mixed and the ground fold refuses.
@@ -2215,7 +2215,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
         if v.is_nan() {
             z.nan = true;
         } else if v.is_finite() {
-            // powf is libm: bracket the computed point (H-019).
+            // powf is libm: bracket the computed point.
             z.merge_pt(out_lo(v, ULP_LIBM));
             z.merge_pt(out_hi(v, ULP_LIBM));
         } else {
@@ -2229,7 +2229,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     }
     // A POSITIVE base under a finite exponent range (all but a constant integer exponent, the
     // branch below): `a^b = exp(b ln a)` is monotone in each argument on (0, inf) x R, so its
-    // image over a box is the hull of the four corner powers, bracketed (libm, H-019); a closed
+    // image over a box is the hull of the four corner powers, bracketed (libm); a closed
     // hull over an open end only widens. The general branch below reports the whole half-line
     // here, so a ground `1/pi^(1/6)` (a root of even index, as the canon spells it, its exponent
     // the enclosure of 1/6) could not be read as the number below 1 it is, and `acos` of its
@@ -2265,8 +2265,8 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
             return z;
         }
     }
-    // CONST INTEGER EXPONENT, finite-capable base: the exact interval power (2026-08-03
-    // vocabulary completion). The retired unary pow2..pow5/inv evaluators bounded their
+    // CONST INTEGER EXPONENT, finite-capable base: the exact interval power. The
+    // retired unary pow2..pow5/inv evaluators bounded their
     // ranges by monotonicity; their binary replacement fell to the generic branch below,
     // which reports (-inf, inf) for every negative-capable base -- starving the analytic
     // witness (a sign-definite cell never excluded 0) and every downstream range proof.
@@ -2306,7 +2306,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
         // powi compounds ~one rounding per multiply: step the computed hull extremes by an
         // exponent-scaled budget AFTER the min/max fold (each bound steps in its own
         // direction); an underflowed power (computed 0 from a nonzero base) bounds by the
-        // signed minimum subnormal, exactly as in `b_mul` (H-019). The parity minimum 0
+        // signed minimum subnormal, exactly as in `b_mul`. The parity minimum 0
         // and the pole edges are exact and never widened.
         let ulps = 2 + k.unsigned_abs().min(64);
         let pw = |x: f64| {
@@ -2329,7 +2329,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
             if k > 0 {
                 cands.push((0.0, false)); // the parity minimum resp. the odd zero
             } else {
-                // PARITY, NOT REMAINDER (audit B4). Rust's `%` truncates toward zero, so
+                // PARITY, NOT REMAINDER. Rust's `%` truncates toward zero, so
                 // `(-1) % 2 == -1` and `k % 2 == 1` is FALSE for every negative odd k --
                 // exactly the k this branch handles. The -INF candidate was therefore never
                 // pushed, the two-sided pole came back as a one-sided reflected box, and the
@@ -2370,7 +2370,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     // numpy `1^y = 1` for EVERY y, nan included: when the base ENCLOSURE contains 1 but is
     // not the exact constant (handled above), the value 1 stays reachable on the null
     // {base == 1} slice. Without this, a nan-capable exponent collapsed the whole set to
-    // nan for a base BRACKETING 1 (H-019: `sinh(asinh(1))` encloses [1-u, 1+u]; the true
+    // nan for a base BRACKETING 1 (`sinh(asinh(1))` encloses [1-u, 1+u]; the true
     // value IS 1, and the exact inverse rule reduces it -- the fold must refuse, not
     // preempt). Null-supported: `cls` reads Mixed, `defined_pm` witnesses stay blocked.
     if b.nan && a.has_fin && a.lo <= 1.0 && 1.0 <= a.hi {
@@ -2414,7 +2414,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     }
     // Infinite exponent components on the GENERAL path (mixed with finite exponent
     // values, or both infinities at once -- the dedicated pure-inf arms above require
-    // `!b.has_fin` and a single infinity). H-028 (2026-08-05, fuzz row 540516): this
+    // `!b.has_fin` and a single infinity). Fuzz row 540516: this
     // fallback read `r.pinf = true` regardless of base magnitude, so
     // `pow(exp(np.e), -inf/x2)` -- exponent attaining BOTH infinities -- classified
     // PosInf-only where the true value set is {0 on one half-line, +inf on the other};
@@ -2439,7 +2439,7 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
                     r.merge_pt(0.0);
                 }
             }
-            // the |t| = 1 row, contains-1 form (B1/D8(iii); doc at the dedicated arms)
+            // the |t| = 1 row, contains-1 form (doc at the dedicated arms)
             if amin <= 1.0 && 1.0 <= amax {
                 r.merge_pt(1.0);
             }
@@ -2756,8 +2756,8 @@ fn max_const_magnitude(exprs: &[&[String]], params: &[&[f64]], ops: &Operators) 
 /// Widening R without deepening would silently COARSEN the gate everywhere -- the fix for one hole
 /// becoming a regression for every other rule. Returns `(R, depth_per_dim, decidable)`; `decidable`
 /// is false when the needed horizon exceeds `R_MAX`, on which every caller FAILS CLOSED
-/// (refuse/None) and `gate_horizon` counts the miss (`HORIZON_MISSES`) -- the F0 lesson;
-/// the pre-F0 code treated exactly this as a fail-open.
+/// (refuse/None) and `gate_horizon` counts the miss (`HORIZON_MISSES`): a miss
+/// never reads as clean.
 ///
 /// R_MAX is a real limit, not a formality: constant-foldable subtrees can reach magnitudes
 /// ~1e271, and a box that wide would need depth ~909 to hold the resolution -- 2^909 cells. So
@@ -2812,7 +2812,7 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
         *k += 1;
         return Some(v);
     }
-    // TRANSCENDENTAL ATOMS ARE ENCLOSURES, NOT POINTS (H-018, 2026-08-03): rendering
+    // TRANSCENDENTAL ATOMS ARE ENCLOSURES, NOT POINTS: rendering
     // `np.pi`/`np.e` as their exact f64 rationals let this layer certify facts about the
     // RENDERING that are false of the atom -- `sin(np.pi)` evaluated to the point
     // {1.22e-16}, a value interval excluding 0, and `analytic_nonzero_witness` minted a
@@ -2841,20 +2841,20 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
     if t == "np.e" {
         return Some(ulp_bracket(std::f64::consts::E));
     }
-    // H-019 amendment to the H-018 literal doctrine: a NON-integer literal's f64 parse is
+    // A NON-integer literal's f64 parse is
     // generally NOT the denoted rational (`1/3`, `0.515`) -- a point enclosure at the
     // rounded value is the same rendering-vs-atom lie as the old point pi, one ulp wide.
     // Integer-valued literals below 2^53 are exact and stay points (`0`, `1`, `-7`,
     // `2.0`); above 2^53 a literal stays a point IFF the DENOTED rational certifies as
-    // exactly the f64 (H-045: the old blanket bracket was NOT "fail-closed either way" --
+    // exactly the f64 (the old blanket bracket was NOT "fail-closed either way" --
     // a 1-ulp bracket at 1e19 spans ~4097 integers, so the `(-inf)^k` arms lost the
-    // H-029 single-integer honesty gate and the continuum convention ASSERTED Nan for a
+    // single-integer honesty gate and the continuum convention ASSERTED Nan for a
     // ground whose true value is +inf; the ground-classification fold shipped it).
     // (Exactly-representable non-integers like `0.5` are still bracketed: the one-ulp
     // cost to a certificate boundary is nil there -- no integer, so the pow arms stay
     // honest -- and the narrower change keeps the certified behavior envelope.)
     crate::numeric::leaf_value(t).map(|v| {
-        // H-052 (RULED 2026-08-06, option A -- exact-real denotation): a leaf's enclosure
+        // Exact-real denotation: a leaf's enclosure
         // must bracket what the spelling DENOTES, never merely its f64 image. `1e309`
         // denotes the finite real 10^309 and `1e-400` a positive real; reading them as the
         // POINTS {+inf} and {0} asserts a value the literal does not have, and was the one
@@ -2880,7 +2880,7 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
                 // threshold sits above f64::MAX, so the closed lower bound is sound and
                 // merely loose).
                 // In the f64 number domain the deployed evaluator READS such a literal as
-                // +-inf (design 2c, review M4), so the infinity joins the set; the exact domain
+                // +-inf, so the infinity joins the set; the exact domain
                 // keeps the finite denotation alone.
                 Some(Boundary::Overflow) if v > 0.0 => {
                     let mut vs = Vs::interval(f64::MAX, INF, false, true);
@@ -2943,7 +2943,7 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
     })
 }
 
-/// H-052: how a leaf's DENOTATION relates to its degenerate f64 image.
+/// How a leaf's DENOTATION relates to its degenerate f64 image.
 enum Boundary {
     /// A finite real of magnitude beyond `f64::MAX` (image `+-inf`).
     Overflow,
@@ -2953,7 +2953,7 @@ enum Boundary {
     UnknownFinite,
 }
 
-/// H-052: classify a leaf whose f64 image is non-finite or zero. `None` when the image IS
+/// Classify a leaf whose f64 image is non-finite or zero. `None` when the image IS
 /// the denotation -- the three spelled `float("...")` tokens, and every spelling of zero --
 /// in which case the caller's point enclosure is correct and stays.
 fn denotation_at_range_boundary(t: &str, v: f64) -> Option<Boundary> {
@@ -3006,10 +3006,10 @@ fn denotation_at_range_boundary(t: &str, v: f64) -> Option<Boundary> {
     })
 }
 
-/// H-045: certify that an integer-valued f64 leaf `v` is EXACTLY the literal's denoted
+/// Certify that an integer-valued f64 leaf `v` is EXACTLY the literal's denoted
 /// rational, via the same grammar `leaf_value` reads (paren-stripped decimal, `p/q`), at any
 /// size: the exact reader compares the denoted rational with `v` (this closes the beyond-i128
-/// residual registered on H-045; `2^200` written out is a point, `1e40` is not -- its nearest
+/// residual; `2^200` written out is a point, `1e40` is not -- its nearest
 /// f64 is not 10^40).
 fn exact_integer_literal(t: &str, v: f64) -> bool {
     let t = t
@@ -3081,7 +3081,7 @@ pub fn value_class(tokens: &[String], ops: &Operators) -> Option<Class> {
         return value_class(&d[0], ops);
     }
     let v = value_set(tokens, ops, &Vs::reals())?;
-    // R3 NULL-KILL at the measure-aware consumer (H-019, 2026-08-04): a finite part
+    // NULL-KILL at the measure-aware consumer: a finite part
     // supported ONLY on a null x-set (`fin_null` -- e.g. `clip`'s kept boundary graze,
     // or the negative-base pow integer slice) may be dropped for the CLASSIFICATION of
     // a variable/`<constant>`-parameterized family: collapsing kills only a null set,
@@ -3174,10 +3174,10 @@ pub static NODE_BUDGET_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic:
 /// Number of subdivision searches that visited at least one UNANALYZABLE box (`value_set_p`
 /// -> `None`: an operator arm that fails closed, e.g. `rootn` with an expression-position
 /// index) and found no witness. Such a search has NOT proven "no extension" / "no support":
-/// it returns `None` (undecided) and the gate fails closed. Before 2026-07-30 (F0) the
-/// abandoned box silently read as clean and the completed search as a DECIDED verdict --
-/// operator-level fail-closed laundered into gate-level fail-open, which is exactly how the
-/// five NaN-a.e. `rootn <lit> tanh/cosh ?0` rules of the 2026-07-29 acj-4-3 mine shipped.
+/// it returns `None` (undecided) and the gate fails closed. Otherwise the
+/// abandoned box silently reads as clean and the completed search as a DECIDED verdict --
+/// operator-level fail-closed launders into gate-level fail-open, which is exactly how
+/// five NaN-a.e. `rootn <lit> tanh/cosh ?0` rules once shipped.
 /// Read via `interval_unanalyzable_misses()`.
 pub static UNANALYZABLE_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -3331,7 +3331,7 @@ pub fn gate_horizon(
 /// witness was found (width > 0) or the subdivision COMPLETED without one (width == 0). An
 /// exhausted budget with no witness is `None` -- undecided, counted, and callers fail closed.
 /// So is a search that visited an UNANALYZABLE box (`value_set_p` fail-closed) and found no
-/// witness elsewhere (F0): a completion that skipped boxes it could not read has not earned
+/// witness elsewhere: a completion that skipped boxes it could not read has not earned
 /// the decided "no extension".
 pub fn domain_extension_p_at(
     source: &[String],
@@ -3413,7 +3413,7 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 ///      null measure of its x-support is a structural/analytic fact the certificate
 ///      section proves directly;
 ///   2. the SUBDIVISION path: bounded-clean cells over the horizon box, CONJOINED
-///      (audit B2) with the TAIL ARM below -- a bounded subdivision cannot discharge
+///      with the TAIL ARM below -- a bounded subdivision cannot discharge
 ///      an unbounded a.e. property, and before the conjunct nothing looked outside
 ///      `[-R, R]^n`, so `log(1 - 0.001*x1)` certified and `- !0 !0 -> 0` cancelled an
 ///      expression that is nan for every x1 > 1000 (the nan onset merely had to sit
@@ -3421,7 +3421,7 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 ///
 /// Exp/sinh/polynomial compositions certify at depth 0-2.
 ///
-/// SCOPE (D9 wording obligation): the tail arm removes the HORIZON failure class
+/// SCOPE: the tail arm removes the HORIZON failure class
 /// only; never read this as "`finite_ae` is sound". Certificates lost to interval
 /// DEPENDENCY LOSS remain unsound after it (`x3 - x3` widens to (-inf, inf) and the
 /// verdict fails closed the wrong way around), and the arm decides only the shipped
@@ -3444,35 +3444,35 @@ pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     }
 }
 
-/// The TAIL ARM (audit B2, ruling D9): discharge the a.e.-finiteness obligation on the
+/// The TAIL ARM: discharge the a.e.-finiteness obligation on the
 /// COMPLEMENT of the subdivision box. That complement is exactly the union over i of
 /// the slabs `{|x_i| > R}` with every other coordinate free over all of R, so
 /// discharging every slab plus the box covers R^n -- a global claim, not a wider box.
 /// Each slab is one interval evaluation over the unbounded ray (`value_set_p` already
-/// computes correct tail enclosures; X3 measured 0 containment violations across the
+/// computes correct tail enclosures; a sweep measured 0 containment violations across the
 /// shipped operators x 4 unbounded domains).
 ///
-/// The predicate is T3 (D9): a slab passes when no nan and no attained infinity is
+/// The predicate: a slab passes when no nan and no attained infinity is
 /// possible AND (the enclosure is BOUNDED or the tree is POLE-FREE). Unboundedness
 /// alone cannot be tolerated -- the module encodes a pole's reach in the (lo, hi)
 /// BOUNDS, not the pinf/ninf flags (see the boundedness note in
 /// `finite_ae_subdivision`), so `hi = +inf` does not distinguish growth (exp, sinh:
 /// finite everywhere, sup infinite) from an attained pole. For a pole-free tree every
 /// shipped operator maps finite -> finite-or-nan, so "no nan on the slab" already
-/// proves every point finite and the unbounded sup is irrelevant (T3's soundness
-/// argument); for pole-bearing trees the slab must be bounded. Declined: T1 (tolerate
-/// unbounded always -- loses nothing today and is unsound in principle, the exact
-/// claim-shape this audit exists to kill) and T2 (require bounded always -- kills
+/// proves every point finite and the unbounded sup is irrelevant (the soundness
+/// argument); for pole-bearing trees the slab must be bounded. Declined: tolerating
+/// unbounded always (loses nothing today and is unsound in principle, the exact
+/// claim-shape this check exists to kill) and requiring bounded always (kills
 /// exp(x), the flagship binder). Measured price on the real mined corpus: 18 sound
-/// certificates (verify_X3), owner-accepted in D9.
+/// certificates.
 ///
 /// HAZARD (finite_ae tail scope): the arm decides the operators of the SHIPPED
 /// vocabulary only; it is not a general procedure for discharging an unbounded a.e.
 /// property. `POLE_OPS` is a correctness-critical syntactic table: it must list every
 /// operator that can map a FINITE input to +-inf, and a new pole-bearing operator
 /// that is not listed makes the arm unsound for unbounded trees (the clean fix -- a
-/// faithful attains-infinity flag on `Vs` -- is the budgeted contingency, D9). The
-/// verify_X3 corrections are in: `atanh` (+-1 -> -+inf) and `rootn` (negative index:
+/// faithful attains-infinity flag on `Vs` -- is the budgeted contingency). The
+/// measured corrections are in: `atanh` (+-1 -> -+inf) and `rootn` (negative index:
 /// rootn(0, -2) = +inf) were missing from the prototype's table; `rootn` and `pow`
 /// are listed wholesale because the check is syntactic and an index's sign may not be
 /// a literal -- conservative, fail-closed (the benign families certify structurally
@@ -3511,7 +3511,7 @@ fn tail_finite_ae(tokens: &[String], ops: &Operators) -> bool {
                 return false;
             }
             if !(v.lo.is_finite() && v.hi.is_finite()) && !pole_free {
-                return false; // T3: an unbounded slab is tolerable only pole-free
+                return false; // An unbounded slab is tolerable only pole-free
             }
         }
     }
@@ -3835,7 +3835,7 @@ pub fn zero_set_null(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     }
 }
 
-/// E1 (F80, owner-ruled 2026-08-10): `zero_set_null` with `<constant>` as a GENERIC
+/// `zero_set_null` with `<constant>` as a GENERIC
 /// PARAMETER. Each occurrence is an INDEPENDENT existentially quantified constant
 /// (the ratified `Const` semantics), so the question moves to the JOINT (x, c)-space:
 /// occurrence j is renamed to the fresh variable `x<K+j>` and the ordinary analysis
@@ -3991,10 +3991,10 @@ fn replace_subtree(t: &[String], site: &[String], c: f64, ops: &Operators) -> Ve
     out
 }
 
-/// `e2` (owner-ratified 2026-08-11, audit F81; design in the research harness):
+/// `e2`:
 /// the denominator-clearing fallback (`cleared_witness`) fires only from the
 /// `zero_set_null_generic_const` entry -- the odd-negative distribution
-/// licence's scoped certificate, mirroring E1's deliberate scoping. The plain
+/// licence's scoped certificate, mirroring the generic-parameter scoping. The plain
 /// `zero_set_null` (and through it `finite_nonzero_ae`, the `$`-cancel) keeps
 /// its current strength, pinned by test; widening is a separate future ruling.
 /// The identity theorem on the expression's domain (`domain_witness`), a factor
@@ -4095,8 +4095,8 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
         }
         // Z(1/g) = {g = ±inf} EXACTLY (`1/0 = +inf`, `1/nan = nan`: neither is 0) --
         // the INFINITE-set certificate; a fat NaN domain of `g` is harmless here.
-        // (Sharpened 2026-08-03 from `nfn`, which conflated NaN with ±inf and refused
-        // every acosh/log-bearing denominator -- the division-tower campaign's Hole 2.)
+        // (Sharpened from `nfn`, which conflated NaN with ±inf and refused
+        // every acosh/log-bearing denominator.)
         ("inv", Some(1)) => isn_e(&t[1..], ops, d + 1, e2) || (e2 && cleared_witness(t, ops)),
         ("*", Some(2)) => {
             let Some(ja) = subtree_end(t, 1, ops) else {
@@ -4114,7 +4114,7 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
             (zsn(&t[1..ja], ops, d + 1, e2) && isn_e(&t[ja..], ops, d + 1, e2))
                 || (e2 && cleared_witness(t, ops))
         }
-        // Literal integer exponents have EXACT zero sets (2026-08-03 sharpening):
+        // Literal integer exponents have EXACT zero sets:
         //   q > 0: Z(b^q) = Z(b)      (±inf^q = ±inf; nan^q = nan; neither is 0)
         //   q < 0: Z(b^q) = {b = ±inf} (0^q = +inf one-zero; finite nonzero exact)
         //   q = 0: b^0 = 1 everywhere (incl. NaN base, contract §2): never zero.
@@ -4239,7 +4239,7 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
         // sums, sin, cos, and any other analytic composition: identity theorem + witness; on
         // refusal, a factor every term of a sum shares (`common_factor_witness`), a slope in one
         // variable (`slice_witness`), the identity theorem on the expression's domain
-        // (`domain_witness`) and the E2 clearing fallback, each scoped as E2 is (see the fn doc).
+        // (`domain_witness`) and the denominator-clearing fallback, each scoped as that one is (see the fn doc).
         _ => {
             analytic_nonzero_witness_in(t, ops, e2)
                 || (e2
@@ -4258,7 +4258,7 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
 /// entire-analytic, EXCEPT that `pow` with a bare non-negative integer literal
 /// exponent is admitted on an analytic base: an integer power of an entire function
 /// is entire -- exactly the class the retired unary `pow2`..`pow5` tables covered
-/// before the binary-vocabulary migration (2026-08-03 completion; the token-level
+/// before the binary-vocabulary migration (the token-level
 /// scan refused every polynomial spelled with binary `pow`). Negative or non-literal
 /// exponents refuse (poles / branch cuts). Leaf tokens pass as before: the witness
 /// gate's soundness never rests on leaf analyticity -- a non-real-valued leaf
@@ -4291,7 +4291,7 @@ fn entire_analytic_composition(t: &[String], ops: &Operators) -> bool {
     rec(t, 0, ops).is_some_and(|j| j == t.len())
 }
 
-/// Tier-0 (E2 rider, owner-ratified 2026-08-11, audit F81): a GROUND subtree --
+/// Tier 0 (denominator-clearing rider): a GROUND subtree --
 /// no variables, no `<constant>` -- denotes a constant, and a constant function
 /// is entire regardless of its SPELLING: the exact-fraction literal `/ 5 4` is
 /// the number 5/4, not a quotient of functions, yet the op scan used to refuse
@@ -4314,8 +4314,7 @@ fn ground_leaf(t: &[String], i: usize, ops: &Operators) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// E2 -- the denominator-clearing certificate (owner-ratified 2026-08-11, audit
-// F81; full design + soundness chain in the research harness).
+// The denominator-clearing certificate.
 //
 // A rational-level factor is rewritten as a PAIR (N, D) of ENTIRE spellings
 // with factor = N/D wherever the factor is defined, and the EXISTING identity-
@@ -4326,7 +4325,7 @@ fn ground_leaf(t: &[String], i: usize, ops: &Operators) -> Option<usize> {
 // that denominator into N, capturing them; D is entire, hence finite
 // everywhere (variables are finite reals by contract), so no third place
 // exists. `<constant>` never reaches this code un-renamed: the scoped entry
-// renames occurrences to fresh variables BEFORE any recursion (E1), so a
+// renames occurrences to fresh variables BEFORE any recursion, so a
 // subterm the clearing DUPLICATES (`a + tan u` puts u into N via sin AND cos)
 // keeps one shared variable per occurrence -- the rename-before-clear ordering
 // requirement of the design is satisfied by construction here.
@@ -4364,7 +4363,7 @@ fn rat_of_token(tok: &str) -> Option<crate::ac::rat::Rat> {
 /// One-token spelling of an exact rational for WITNESS-INTERNAL use only --
 /// this token feeds `analytic_nonzero_witness`, never the dialect, so no
 /// argmin aesthetics apply. Negatives spell parenthesized (the readers'
-/// composed grammar, H-012/H-048).
+/// composed grammar).
 fn rat_to_token(r: &crate::ac::rat::Rat) -> String {
     let s = if r.is_integer() {
         r.numer_string()
@@ -4529,7 +4528,7 @@ fn clear_pair(
     }
 }
 
-/// The E2 certificate body: clear the whole slice, witness the numerator.
+/// The denominator-clearing certificate body: clear the whole slice, witness the numerator.
 fn cleared_witness(t: &[String], ops: &Operators) -> bool {
     let Some((end, n, d)) = clear_pair(t, 0, ops, 0) else {
         return false;
@@ -4542,7 +4541,7 @@ fn cleared_witness(t: &[String], ops: &Operators) -> bool {
     // a FAT zero set the numerator never sees. Without this side condition the
     // certificate declared `inv(inf + h)` nonzero-a.e. while it is identically 0,
     // licensing a per-factor move that flips the sign of infinity on positive
-    // measure (F1, 2026-08-24, benchmark row 17425). `isn` is the existing
+    // measure (benchmark row 17425). `isn` is the existing
     // authority for exactly this question; an empty denominator cleared nothing.
     if !d.is_empty() && !isn(&d, ops, 0) {
         return false;
@@ -5580,7 +5579,7 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
                         && (v.hi < 1.0 || (v.hi == 1.0 && v.hi_open))
                 })
         }
-        // Binary `pow` with a literal integer exponent (2026-08-03 vocabulary
+        // Binary `pow` with a literal integer exponent (vocabulary
         // completion -- the retired unary `pow2`..`pow5` had arms, their binary
         // replacement did not):
         //   k ≥ 0: nonfinite(b^k) = nonfinite(b) (finite^k is finite -- overflow is
@@ -5688,7 +5687,7 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
 }
 
 /// {x : f(x) = ±inf} is Lebesgue-null, for every `<constant>` value -- the
-/// INFINITE-set certificate (2026-08-03, division-tower campaign). Strictly weaker
+/// INFINITE-set certificate (division-tower campaign). Strictly weaker
 /// than `nonfinite_null`: a NaN is NOT an infinity, and the domain-restricted
 /// operators (`acosh`, `asin`, `pow1_2`, ...) mint NaN, never new infinities --
 /// their fat NaN domains are harmless to consumers whose disagreement sets involve
@@ -5871,7 +5870,7 @@ fn isn_e(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
 }
 
 /// The multiplicative group's regular domain: defined, finite AND nonzero a.e. -- the
-/// exact soundness domain of `A/A -> 1` (SELFCANCEL T1). Refuses `<constant>`-bearing
+/// exact soundness domain of `A/A -> 1`. Refuses `<constant>`-bearing
 /// trees via `zero_set_null`.
 pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     zero_set_null(tokens, ops, f64) && finite_ae(tokens, ops, f64)
@@ -5968,7 +5967,7 @@ fn disjoint_value_pair(t: &[String], ops: &Operators, fine: bool) -> bool {
 }
 
 /// f > 0 a.e.: the pow-base predicate completing the algebra. Conservative v1, and test-only:
-/// it has no production consumer (the flatten-and-collect pass, proposal P4, would be one);
+/// it has no production consumer (a flatten-and-collect pass would be one);
 /// the certified/poison batteries below pin its behavior.
 #[cfg(test)]
 pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
@@ -5985,7 +5984,7 @@ pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
             zero_set_null(&tokens[1..], ops, false) && nonfinite_null(&tokens[1..], ops)
         }
         // the BINARY spelling of the even powers (generation-2 vocabulary completion,
-        // audit Tier-1 #3 -- the retired unary arm above never fires on a live engine):
+        // The retired unary arm above never fires on a live engine):
         // pow(b, k) with an EVEN positive literal integer exponent is b^k >= 0 with a
         // null zero set, under the same operand certificates as the unary arm.
         "pow" => {
@@ -6056,7 +6055,7 @@ pub fn defined_measure_p(expr: &[String], params: &[f64], ops: &Operators) -> Op
 /// budget-exhausted-with-no-witness is `None` -- NOT proven dead, so the deadness exemption
 /// must not apply (an unresolved search flipping a live source to "dead" widened the gate's
 /// accept exemption, the anti-conservative direction). An UNANALYZABLE box degrades the
-/// search the same way (F0): support may hide in a box `value_set_p` cannot read, so a
+/// search the same way: support may hide in a box `value_set_p` cannot read, so a
 /// completion that skipped one has not PROVEN deadness -- `None`, and the gate treats the
 /// side as live.
 pub fn defined_measure_p_at(
@@ -6541,14 +6540,14 @@ mod tests {
         );
     }
 
-    /// ONE ZERO (contract v2 §9.2, DECIDED 2026-07-18; H-016 2026-08-03): a point zero is THE
+    /// ONE ZERO: a point zero is THE
     /// unsigned zero, its inverse is +inf, and pow(0, y<0) = +inf for EVERY y -- there is no
     /// odd-integer -inf slice because there is no -0. This test used to pin the OPPOSITE
     /// (referee-era deployment semantics: b_mul minted -0.0 and u_inv/b_pow read the sign bit
-    /// to pick signed poles); §9.2 formally overturned that semantics, and H-016 caught the
+    /// to pick signed poles); the one-zero convention overturned that semantics, and a fuzz row caught the
     /// surviving device shipping a `-inf` LITERAL for `inv(0/tanh(-2))` while every
     /// structurally-collapsing sibling spelling shipped +inf. Deployment's -inf on the -0
-    /// slice at runtime is documented measurement error (§9.2), never a reachable value.
+    /// slice at runtime is documented measurement error, never a reachable value.
     /// A pole reached at a SATURATION-ATTAINED argument is an INF VALUE, not an unbounded
     /// finite edge. `exp` is exactly +0 on the whole ray below `EXP_UNDERFLOW` and `tanh`
     /// exactly +-1 past +-`TANH_SAT`, so `cosh(exp C) = 1` and `exp(exp C) = 1` on a ray of
@@ -6592,7 +6591,7 @@ mod tests {
 
     /// The twin of the above on the FINITE side: where the grazed domain edge carries no pole,
     /// the attained graze is a real finite value on positive measure, so it must survive the
-    /// R3 null-kill and classify Mixed -- not NAN. `acos(cosh(exp C)) = 0` on 2005 of 4177
+    /// null-kill and classify Mixed -- not NAN. `acos(cosh(exp C)) = 0` on 2005 of 4177
     /// sampled C. The pre-image branch kept the graze but marked it null, which deleted a
     /// finite part the evaluator really produces.
     #[test]
@@ -6696,7 +6695,7 @@ mod tests {
             g3.pinf && !g3.ninf,
             "pow(point zero, exponent spanning <0) is +inf only: {g3:?}"
         );
-        // The H-016 observable at the classification oracle: the surviving zero-times-
+        // The one-zero observable at the classification oracle: the surviving zero-times-
         // reciprocal bag classifies POSINF (it used to classify NEGINF and the ground fold
         // shipped the literal).
         let h = value_set(&s(&["inv", "/", "0", "-2"]), ops, &Vs::reals()).unwrap();
@@ -6706,12 +6705,12 @@ mod tests {
         );
     }
 
-    /// H-018 (2026-08-03): `np.pi`/`np.e` are outward-rounded ENCLOSURES inside this layer,
+    /// `np.pi`/`np.e` are outward-rounded ENCLOSURES inside this layer,
     /// never exact f64 points -- a point rendering certified `sin(np.pi) != 0` (the value of
     /// the RENDERING, {1.22e-16}) while the ratified exact value is 0, and that false
     /// NONZERO-a.e. certificate licensed a pow-over-mul distribution that split a true zero
     /// factor (`inv(sin(pi)*u)` shipped +-inf for a +inf truth; fuzz row 172346). The
-    /// E1 (F80): `<constant>` is a generic parameter for the DISTRIBUTION licence's
+    /// `<constant>` is a generic parameter for the DISTRIBUTION licence's
     /// zero-set question -- and ONLY there. The plain `zero_set_null` (and through it
     /// the `$`-certificate `finite_nonzero_ae`) keeps the blanket refusal: the
     /// SELFCANCEL asymmetry protects the c = 0 atom.
@@ -6747,7 +6746,7 @@ mod tests {
             "x - |x| vanishes on a half-line: must refuse"
         );
         // THE ASYMMETRY PINS: the plain certificate and the $-certificate are
-        // untouched by E1 -- Const-bearing streams still refuse there.
+        // untouched by the generic-parameter licence -- Const-bearing streams still refuse there.
         assert!(
             !zero_set_null(&s(&["acos", "<constant>"]), ops, false),
             "plain zero_set_null keeps the Const blanket"
@@ -6758,8 +6757,7 @@ mod tests {
         );
     }
 
-    /// E2 (F81, owner-ratified 2026-08-11; design + soundness chain in
-    /// the research harness): the denominator-clearing certificate -- rational-
+    /// The denominator-clearing certificate -- rational-
     /// level factors rewrite to an entire numerator N with Z(factor) subset
     /// Z(N), and the EXISTING identity-theorem witness decides N. Unlock pins,
     /// sound-refusal pins, the ratified boundary, the tier-0 ground-literal
@@ -6770,7 +6768,7 @@ mod tests {
             return;
         };
         let ops = e.operators_ref();
-        // --- UNLOCK PINS (refused before E2, certified now) ---
+        // --- UNLOCK PINS (refused without the clearing certificate, certified now) ---
         // The design's worked example: an affine sum whose literal spells as a
         // fraction; tier-0 ground-leaf acceptance lets the witness see it.
         assert!(
@@ -6797,7 +6795,7 @@ mod tests {
             zero_set_null_generic_const(&s(&["+", "x2", "tan", "x3"]), ops, false),
             "tan u = sin u / cos u clears; N is entire and not identically zero"
         );
-        // E1 x E2 composition: 1/c - c with the generic-parameter rename.
+        // Generic parameter x denominator clearing: 1/c - c with the generic-parameter rename.
         assert!(
             zero_set_null_generic_const(&s(&["-", "inv", "<constant>", "<constant>"]), ops, false),
             "Const renames to a generic variable BEFORE clearing (ordering law)"
@@ -6858,7 +6856,7 @@ mod tests {
             !zero_set_null_generic_const(&s(&["inv", "inv", "0"]), ops, false),
             "1/(1/0) = 1/inf = 0 identically: the swap parks it in N = 0"
         );
-        // --- SCOPING ASYMMETRY (ask b, ratified: ac_zsn-scoped only) ---
+        // --- SCOPING ASYMMETRY (ac_zsn-scoped only) ---
         assert!(
             !zero_set_null(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "the PLAIN certificate keeps its pre-E2 strength (scoped wiring)"
@@ -7139,7 +7137,7 @@ mod tests {
 
     /// enclosure makes every exact-zero identity ground contain 0 (certificates fail closed)
     /// while grounds rigorously bounded away from 0 keep certifying.
-    /// F82 (2026-08-11, extreme row 433087): b_mul's infinite blocks collapsed a
+    /// Extreme fuzz row 433087: b_mul's infinite blocks collapsed a
     /// MIXED operand to a single sign, and `cls()` read the under-set flags as a
     /// DEFINITE PosInf -- the classification fold then shipped `+inf` for a value
     /// whose exact truth is -inf. The flags are reachability claims and Vs is an
@@ -7418,12 +7416,12 @@ mod tests {
         );
     }
 
-    /// F0: an UNANALYZABLE box must read UNDECIDED, never "no extension". `value_set_p`
+    /// An UNANALYZABLE box must read UNDECIDED, never "no extension". `value_set_p`
     /// fails closed (`None`) on e.g. `rootn` with an expression-position index -- but
     /// `rec_ext` used to treat that `None` as "nothing to prove in this box" and return, so
     /// the subdivision COMPLETED with no witness and `domain_extension` reported the
     /// DECIDED `Some(0.0)`: operator-level fail-closed laundered into gate-level fail-open.
-    /// That is exactly how the five `rootn <lit> tanh/cosh ?0` rules of the 2026-07-29
+    /// That is exactly how five `rootn <lit> tanh/cosh ?0` rules of an early
     /// acj-4-3 mine shipped (LHS NaN a.e. -- a total domain extension -- killed post hoc by
     /// `verify_ruleset` as bc-positive-measure). The 0.12 vocabulary comes from the staged
     /// acj-4-3 asset via `test_engine()` (skip-if-absent; set SIMPLIPY_TEST_REQUIRE_ASSETS
@@ -7678,9 +7676,9 @@ mod tests {
         assert!(domain_extension_p(&src, &[2.0], &s(&["x0"]), &[], ops).is_some());
     }
 
-    /// H-045 (D2' closing re-sample, 2026-08-05): a huge INTEGER literal leaf is a
+    /// A huge INTEGER literal leaf is a
     /// certified-exact point, not a 1-ulp bracket. The bracket at 1e19 (ulp = 2048)
-    /// spans thousands of integers, so the `(-inf)^k` arm lost the H-029 single-integer
+    /// spans thousands of integers, so the `(-inf)^k` arm lost the single-integer
     /// honesty gate and ASSERTED Nan for a ground whose true value is +inf -- and the
     /// ground-classification fold shipped `float("nan")` from live simplify. Parity now
     /// reads by exact float mod: `k as i64` saturated at i64::MAX (odd) for k >= 2^63,
@@ -7716,15 +7714,15 @@ mod tests {
             value_class(&s(&["pow", "float(\"-inf\")", &two200]), ops),
             Some(Class::PosInf)
         );
-        // INTERVAL-LAYER CONVENTION, documented (H-045-R CLOSED 2026-08-05, owner
-        // Option B): an integer literal whose nearest f64 is NOT that integer (`1e40`:
+        // INTERVAL-LAYER CONVENTION, documented: an integer literal whose nearest f64 is NOT
+        // that integer (`1e40`:
         // 10^40 is no double) cannot certify here, keeps the
         // bracket, and THIS layer's continuum convention still reads Nan for
         // `(-inf)^1e40` -- but the ENGINE's ground fold now classifies the shape
         // exactly from the spelling's sign and parity BEFORE consulting this class
         // (engine/ac.rs::h045_exact_pow_class; live simplify answers +inf, pinned
         // there). Vs point-support provenance stays the RECORDED design direction
-        // if more point-derived-enclosure consumers appear (register H-045).
+        // if more point-derived-enclosure consumers appear.
         assert_eq!(
             value_class(&s(&["pow", "float(\"-inf\")", "1e40"]), ops),
             Some(Class::Nan)
@@ -7771,10 +7769,10 @@ mod tests {
         }
     }
 
-    /// B2: the subdivision arm proves finiteness on `[-R, R]^n` ONLY, and nothing in it
+    /// The subdivision arm proves finiteness on `[-R, R]^n` ONLY, and nothing in it
     /// looked outside -- so a nan onset past the horizon (R >= 64) was invisible and
     /// `- !0 !0 -> 0` cancelled expressions that are nan on a positive-measure tail.
-    /// The mechanism was bisected to exactly the box boundary (X3: k = 0.015625, onset
+    /// The mechanism was bisected to exactly the box boundary (k = 0.015625, onset
     /// 64.000, refuses; k = 0.015624, onset 64.004, collapses). The tail arm conjoins
     /// slab evaluations over `{|x_i| > R}` onto the SUBDIVISION disjunct only --
     /// `nonfinite_null` is already global and sound and must not pay for it.
@@ -7794,7 +7792,7 @@ mod tests {
                 "{expr:?} is nan on a positive-measure tail and must NOT certify"
             );
         }
-        // The T3 predicate's whole point: pole-free growth keeps its certificate even
+        // The slab predicate's whole point: pole-free growth keeps its certificate even
         // though its tail enclosure is unbounded (exp/sinh are the flagship binders).
         for expr in [
             vec!["exp", "x0"],
@@ -7937,7 +7935,7 @@ mod tests {
         }
     }
 
-    /// 2026-08-03 division-tower campaign: the certificate algebra on the BINARY
+    /// The certificate algebra on the BINARY
     /// 0.12 vocabulary (`pow`/`rootn` arms) and the new infinite-set certificate,
     /// with the poison batteries that pin the sharpened arms to their exact sets.
     #[test]
@@ -8013,7 +8011,7 @@ mod tests {
         // zero_set_null, sharpened arms: reciprocals of never-infinite trees
         // (REFUSED before: nfn conflated the fat NaN domains with infinities)
         for expr in [
-            vec!["inv", "-", "pow", "x0", "2", "x0"], // the P1 tower factor
+            vec!["inv", "-", "pow", "x0", "2", "x0"], // the polynomial tower factor
             vec!["inv", "-", "x0", "acosh", "*", "2", "x0"],
             vec!["/", "x0", "-", "x1", "log", "x1"],
             vec!["inv", "tan", "x0"], // zero only where tan is infinite: null
@@ -8097,7 +8095,7 @@ mod aligned_pow_interval_tests {
         assert!(r.has_fin && r.lo == 0.0 && r.hi == 0.0 && !r.nan);
         let r = b_pow(&ninf_base(), &range(0.1, 5.0));
         assert!(r.nan && !r.pinf && !r.ninf);
-        // magnitude-step at infinite exponents (ratified): |t| > 1
+        // magnitude-step at infinite exponents: |t| > 1
         let mut binf = Vs::empty();
         binf.pinf = true;
         let r = b_pow(&ninf_base(), &binf);
@@ -8137,8 +8135,8 @@ mod enclosure_fuzz {
     }
 
     /// THE enclosure property, and the reason it is written before the fixes it fails on
-    /// (audit B4/B6, plan sequencing: "write the enclosure fuzz before B4/B6, not after --
-    /// writing it afterwards loses the proof that it works").
+    /// (the enclosure fuzz must exist before the fixes, or nothing proves it
+    /// works).
     ///
     /// An interval box is only sound if it CONTAINS the pointwise value. The
     /// `interval_value_set_box` contract (rust/lib.rs) calls the opposite -- an
@@ -8156,7 +8154,7 @@ mod enclosure_fuzz {
         let mut violations: Vec<String> = Vec::new();
         let mut checked = 0usize; // anti-vacuity: a sweep that skipped every point is not a pass
 
-        // integer exponents, both signs, straddling the parity split that B4 gets wrong
+        // integer exponents, both signs, straddling the parity split that truncating `%` gets wrong
         for k in [-5i32, -4, -3, -2, -1, 1, 2, 3, 4, 5] {
             for step in 0..=80 {
                 let c = -4.0 + (step as f64) * 0.1; // [-4, 4], through 0
@@ -8199,7 +8197,7 @@ mod enclosure_fuzz {
         );
     }
 
-    /// B6, stated as the plan's general property: for EVERY unary operator over a dense
+    /// The fold kernels' general property: for EVERY unary operator over a dense
     /// grid (plus domain-edge-hugging points), the value the FOLD KERNEL computes at `c`
     /// (`numeric::apply_op` -- the system libm, exactly what `evaluate_constant_subtree`
     /// ships) lies inside the degenerate box `[c, c]`. The arms evaluate endpoint images
@@ -8207,7 +8205,7 @@ mod enclosure_fuzz {
     /// function DIFFERS from the fold's by more than that budget breaks enclosure. Not
     /// hypothetical: Rust std's `f64::atanh` is Rust's OWN composition (not a libm
     /// forward), and against glibc it is off by 161 ulps at -0.999 and by 1.5e13 ulps at
-    /// -(1 - 1e-15) -- the 4th significant digit (measured 2026-08-15; `asinh`/`acosh`
+    /// -(1 - 1e-15) -- the 4th significant digit (`asinh`/`acosh`
     /// measured 0-ulp identical to libm over 2.2M points on the same build).
     #[test]
     fn every_unary_fold_lands_inside_its_own_box() {
@@ -8243,7 +8241,7 @@ mod enclosure_fuzz {
                     continue;
                 };
                 if !expected.is_finite() {
-                    continue; // poles/domain misses: the finite-value containment is the B6 claim
+                    continue; // poles/domain misses: the finite-value containment is the claim
                 }
                 let Some(v) = value_set_p(&s(&[name, "x0"]), ops, &[pt(c)], &[]) else {
                     continue;
@@ -8282,7 +8280,7 @@ mod enclosure_fuzz {
         );
     }
 
-    /// B1/D8(iii): the magnitude-step arms must reach the value 1 whenever the base's
+    /// The magnitude-step arms must reach the value 1 whenever the base's
     /// magnitude range CONTAINS 1 -- `pow(t, +-inf)` is 1 at |t| = 1 (ratified
     /// exception), and the old exact-point row missed both the bracketed grounds
     /// (`cos(np.pi)`: the 46-row fabricated-Inf family) and every straddling range.
@@ -8307,7 +8305,7 @@ mod enclosure_fuzz {
         }
     }
 
-    /// B4, stated as the property rather than as the endpoint: for an ODD NEGATIVE exponent
+    /// Parity, stated as the property rather than as the endpoint: for an ODD NEGATIVE exponent
     /// the pole is two-sided, so a box straddling zero from below MUST reach -inf. Rust's `%`
     /// truncates, so `k % 2 == 1` is FALSE for every negative odd k -- the `-INF` candidate
     /// was never pushed and the box came back reflected. The correct idiom (`k % 2 != 0`)
@@ -8324,7 +8322,7 @@ mod enclosure_fuzz {
                 .expect("evaluable");
             // The pin is the PROPERTY -- unbounded below -- not an endpoint pair. The plan's
             // own acceptance value `(-inf, -0.25)` is NOT what a correct box returns here and
-            // was rewritten on that measurement (audit D10 / verify_X2): with the pole reached
+            // was rewritten on that measurement: with the pole reached
             // from both sides the enclosure is `(-inf, +inf)`, wider and sound, and a box may
             // always be wider. What must never happen again is the REFLECTED box that misses
             // the lower pole entirely (measured pre-fix: lo=-0.25000000000000017, hi=inf).
@@ -8550,7 +8548,7 @@ mod new_head_tests {
             value_class(&s(&["besselj", "atanh", "1", "2"]), ops),
             Some(Class::Finite)
         );
-        // harmonic is NaN at a negative integer (D6) and at -inf
+        // harmonic is NaN at a negative integer and at -inf
         assert_eq!(value_class(&s(&["harmonic", "-2"]), ops), Some(Class::Nan));
         assert_eq!(
             value_class(&s(&["harmonic", "atanh", "ceil", "-1"]), ops),
@@ -8558,7 +8556,7 @@ mod new_head_tests {
         );
     }
 
-    /// The infinite cells of `mod` are numpy's (D7): an infinite dividend is NaN; under an
+    /// The infinite cells of `mod` are numpy's: an infinite dividend is NaN; under an
     /// infinite divisor the dividend is its own remainder where it is zero or has the divisor's
     /// sign, and the divisor's infinity otherwise.
     #[test]

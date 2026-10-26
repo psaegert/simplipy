@@ -1,4 +1,4 @@
-"""The licence registry -- C1.20's dual (owner-approved design, 2026-08-08).
+"""The licence registry.
 
 The registry (``rust/engine/refusals.rs``) is the single home of every reified
 doctrinal refusal, consulted by EVERY mint channel and by the AC load path:
@@ -16,9 +16,9 @@ doctrinal refusal, consulted by EVERY mint channel and by the AC load path:
   points before translate -- a stale or foreign artifact cannot smuggle a
   defined-value change past serving.
 
-The pole entry's spec is contract R2 at constructed exceptional points: a DEFINED
+The pole entry's spec is the contract's value rule at constructed exceptional points: a DEFINED
 extended-real value (sign of infinity included) may never change at a definable
-point; ``Ext`` (a nan hole filled at the point) is R3's licence and passes. The
+point; ``Ext`` (a nan hole filled at the point) is the null-set licence and passes. The
 worked hostile pair throughout is the verified mirror family:
 ``-(1/(1-w)) -> 1/(w-1)`` -- stable states, a.e.-equal, mu 42,000 -> 26,000 strict
 descent, differing exactly at w=1 (-inf vs +inf under one-zero).
@@ -60,14 +60,6 @@ class TestLoadConsumer:
     def test_shipped_artifact_registry_clean(self, eng):
         # The audit pin: no shipped rule changes a defined value at a constructed
         # exceptional point, and the pass costs nothing the translation pins notice.
-        # ARTIFACT REFRESH 2026-08-11 (owner-ruled ADOPT, audit F83-adoption): the
-        # first post-F83 mine ships, 6,661 -> 6,671 rules (+10, 0 removed, ALL
-        # F83-caused by control mine; each judge-OK with zero pointwise
-        # exceptional-point disagreements). Translations 6671 -> 6681 (+10 =
-        # exactly the adopted rules), subsumed/dropped stay 0, twins stay 10.
-        # G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
-        # byte-identical, minted on the reference mint host per D20) -- pristine again: 6602/0/0 + 8
-        # twins, the B5+B19 interim discharged.
         # RE-PINNED for the 0.14.0 triple: (5558, 0, 0, 8) -> (5327, 0, 0, 8).
         #
         # WHY, and it is not the dedup. The shipped `rules.json` is now the f64 THIRD of a
@@ -76,25 +68,21 @@ class TestLoadConsumer:
         # evaluations folding now performs were pruned. `kept` counts SERVED patterns, so
         # it follows the file. Translation stays pristine 0/0 and twins stay 8: nothing
         # about the surviving rules changed.
-        #
-        # The earlier comment here justified the pin with the 2026-08-18 dedup (6602 ->
-        # 5553, an artifact of 6,594 rows, complexity 294,730,680). Every one of those
-        # numbers is false for the artifact under test.
         kept, subsumed, dropped, twins = eng._core.ac_rules_info_in_mode(rule_mode='default')
         assert eng._core.ac_registry_dropped() == 0
-        # 5553 -> 5558 at the INVERSE-PAIR BAND (2026-08-19): five rules the
+        # 5553 -> 5558 at the INVERSE-PAIR BAND: five rules the
         # constructor used to fold away now survive translation, because the band
         # declines the fold on an unbounded argument. Nothing is subsumed or dropped;
         # the artifact is untouched at 6,594 rows.
         # RE-PINNED for the 0.14.0 triple (the 0.13 artifact served 5,558).
-        # THE acj-4 TRIPLE (2026-08-23): (5327, 0, 0, 8) -> (5347, 0, 0, 9). The re-mine
+        # THE acj-4 TRIPLE: (5327, 0, 0, 8) -> (5347, 0, 0, 9). The re-mine
         # under the current instrument ships 5,338 f64 rows (widened judge admits the
-        # atanh-tanh np.e literal and the F104-band refinements); translation stays
+        # atanh-tanh np.e literal and the boundary-band refinements); translation stays
         # PRISTINE 0/0 and the orientation twins go 8 -> 9 with the new row.
         # READ IN THE CANON IT WAS CERTIFIED IN (the legacy one: the file is a pre-0.15 mine),
         # nothing is subsumed: pristine (5347, 0, 0, 9) again. (Read in f64's folded canon,
         # `atanh pow (-10) (-9) -> -1e-09` was subsumed: (5346, 1, 0, 9).)
-        # INTERIM (2026-10-18), until the re-mine restores (5347, 0, 0, 9): the sign key
+        # INTERIM, until the re-mine restores (5347, 0, 0, 9): the sign key
         # makes the 16 rows pinned in conftest subsumed, and the one-bit sign makes the 2 rows
         # pinned there climb; the twins go 9 -> 44 (a negation no longer pays a `Mul` head, so
         # fewer of them climb). The product constructor's collection of powers of e subsumes
@@ -149,7 +137,7 @@ class TestRegistryApi:
             ['<constant>'], []) == 'const_introduction'
 
     def test_sound_and_ext_pass(self, eng):
-        # Sound pole agreement and R3's point-level licence must NOT be refused.
+        # Sound pole agreement and the point-level null-set licence must NOT be refused.
         assert eng._core.registry_mint_refusal(
             ['inv', 'inv', 'x0'], ['x0'], ['x0'], ['x0']) is None
         assert eng._core.registry_mint_refusal(

@@ -1,27 +1,26 @@
-"""D39 B1 -- the row-156 falsifier and the post-fixpoint exploration scaffolding.
+"""The row-156 falsifier and the post-fixpoint exploration scaffolding.
 
-Ledger D39: the deterministic chain runs
+The deterministic chain runs
 UNCHANGED to its fixpoint (termination theorem intact), then an explicit,
 budgeted exploration phase tries expansion moves through the same certified
 machinery and accepts only endpoints STRICTLY below in the engine's own
-reduction ordering. This suite is the B1 acceptance: it is measure-agnostic --
+reduction ordering. This suite is the acceptance: it is measure-agnostic --
 no measure number appears anywhere below; every comparison goes through
 ``ac_ordered_below``, the one serve-time ordering (rust/ac/rules.rs).
 
-Row-156 (SOOSE, recorded in the research ledger; the ledger's
-named falsifier row): ``x2*(x2 + (x1+1)/x2)`` is a mu-hill. The valley
+Row 156 (a corpus row): ``x2*(x2 + (x1+1)/x2)`` is a mu-hill. The valley
 ``1 + x1 + x2**2`` is strictly ordered below it, but every step toward it
 ASCENDS at its node (distribute first, recollect after), so greedy strict
-descent can never reach it -- the exact class the D39 exploration phase
+descent can never reach it -- the exact class the exploration phase
 exists for. The falsifier: with an exploration budget the engine must land
 in the valley; with budget 0 the new entry point must be byte-identical to
-today's chain (the effort=0 semantics the ledger fixes).
+today's chain (the effort=0 semantics).
 
-Scaffolding surface pinned here (B1; the public ``effort=`` API is B7):
+Scaffolding surface pinned here (the public ``effort=`` API is separate):
 NOTE: this suite drives the core through the retired two-valued ``wildcard_all``
 bool, so it covers the default and corpus semantics and NOT ``real``. That is the
-D39 scaffolding's own surface (ledger D39 B7: the public ``effort=`` API is
-deliberately not wired to it yet), so the gap is scoped rather than accidental --
+scaffolding's own surface (the public ``effort=`` API is
+not wired to it), so the gap is scoped rather than accidental --
 but a ``real``-mode explore regression would not be caught here.
 
 ``Engine._core.ac_simplify_explore(tokens, max_passes, form, explore_budget, rule_mode=('permissive' if wildcard_all else 'default'))`` -- ``ac_simplify``'s signature plus the trailing budget,
@@ -40,7 +39,7 @@ import pytest
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
 
-# The ledger's named falsifier row and its SOOSE source spelling -- one hill.
+# The named falsifier row and its source spelling -- one hill.
 ROW156 = "x2*(x2+(x1+1)/x2)"
 ROW156_SOOSE = "x2*(x2-(-x1-1)/x2)"
 ROW156_VALLEY = "1+x1+x2**2"
@@ -92,13 +91,13 @@ def fix(engine: SimpliPyEngine, s: str, lossy: bool = False) -> list[str]:
 
 def explore(engine: SimpliPyEngine, tokens: list[str], budget: int,
             lossy: bool = False, form: str = 'tagged') -> list[str]:
-    """The B1 entry point under test (does not exist at HEAD -- red)."""
+    """The exploration entry point under test."""
     return engine._core.ac_simplify_explore(tokens, 48, form, budget, rule_mode=('permissive' if lossy else 'default'))
 
 
 class TestRow156Hill:
-    """Premise pins -- green at HEAD, and they must stay green: the DEFAULT
-    chain does not move under D39 (opt-in exploration, effort=0 default)."""
+    """Premise pins -- they must stay green: the DEFAULT
+    chain does not move (opt-in exploration, effort=0 default)."""
 
     def test_greedy_chain_stops_at_the_hill(self, engine: SimpliPyEngine) -> None:
         hill = fix(engine, ROW156)
@@ -151,7 +150,7 @@ class TestRow156Falsifier:
             == fix(engine, GATED_VALLEY, True)
 
     def test_endpoint_is_idempotent(self, engine: SimpliPyEngine) -> None:
-        # A reached valley re-explores to nothing (ledger D39, idempotence).
+        # A reached valley re-explores to nothing (idempotence).
         valley = explore(engine, tok(engine, ROW156), BUDGET)
         assert explore(engine, valley, BUDGET) == valley
         # And the valley is a fixpoint of the plain chain (the endpoint is a
@@ -164,7 +163,7 @@ class TestRow156Falsifier:
             assert explore(engine, t, BUDGET) == explore(engine, t, BUDGET)
 
     def test_never_worse(self, engine: SimpliPyEngine) -> None:
-        # Fall back to the fixpoint (ledger D39): whatever the budget, the
+        # Fall back to the fixpoint: whatever the budget, the
         # endpoint is the greedy fixpoint or strictly below it -- asserted in
         # the serve ordering, never with measure numbers.
         for s in BATTERY:
@@ -176,7 +175,7 @@ class TestRow156Falsifier:
                         engine._core.ac_ordered_below_in(out, f, rule_mode='default') is True
 
     def test_budget_zero_is_byte_identical(self, engine: SimpliPyEngine) -> None:
-        # The ledger's effort=0 semantics: unused exploration leaves every
+        # The effort=0 semantics: unused exploration leaves every
         # behavior byte-identical to today's chain, mode by mode, form by form.
         for s in BATTERY:
             t = tok(engine, s)
@@ -191,14 +190,14 @@ class TestRow156Falsifier:
             == engine._core.ac_simplify_in_mode(t, 48, 'tagged', 0, rule_mode='default')
 
     def test_boundary_contracts_match_ac_simplify(self, engine: SimpliPyEngine) -> None:
-        # Empty input: the documented `simplify([]) == []` contract (H-003).
+        # Empty input: the documented `simplify([]) == []` contract.
         assert engine._core.ac_simplify_explore([], 48, 'tagged', BUDGET, rule_mode='default') == []
         # Malformed input: ValueError, exactly as ac_simplify (fail loudly,
         # never pass garbage through).
         with pytest.raises(ValueError):
             engine._core.ac_simplify_explore(['+', 'x0'], 48, 'tagged', BUDGET, rule_mode='default')
         with pytest.raises(ValueError):
-            # unclosed tagged bag: the AC parser is the arbiter (H-003 sibling)
+            # unclosed tagged bag: the AC parser is the arbiter
             engine._core.ac_simplify_explore(['<add>', 'x0'], 48, 'tagged', BUDGET, rule_mode='default')
 
 

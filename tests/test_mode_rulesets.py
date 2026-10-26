@@ -1,8 +1,7 @@
 """ONE DISTINCT RULE SET PER MODE -- the triple, not a base plus supplements.
 
-Owner ruling (2026-08-19): "I'd like one distinct rule set for each mode", and "for
-provenance, the triple should be pinned. And we will only ever mine and distribute
-triples." So the artifact is three COMPLETE, self-contained files::
+One distinct rule set for each mode, and for provenance the triple is pinned:
+only triples are mined and distributed. So the artifact is three COMPLETE, self-contained files::
 
     rules.json          `Mode.f64`    -- every rule the deployed evaluator reproduces
     rules_real.json     `Mode.real`   -- every rule that is true over R

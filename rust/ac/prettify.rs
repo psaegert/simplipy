@@ -1732,7 +1732,7 @@ fn positive(f: &Ex, cx: &Cx) -> Option<Ex> {
     })
 }
 
-/// The canonical infix's sign hoist for a sum term (owner ruling 2026-08-08): an odd function
+/// The canonical infix's sign hoist for a sum term: an odd function
 /// of a negative literal gives its sign to the joiner (`x1 - sin(2)`, not `x1 + sin(-2)`).
 fn odd_literal_hoist((neg, node): (bool, Node), cx: &Cx) -> (bool, Node) {
     if let Node::Call(f, args) = &node {

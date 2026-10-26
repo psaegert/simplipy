@@ -582,7 +582,7 @@ def test_real_folds_a_ground_value_a_certified_enclosure_decides(bare):
     assert s('atan2 0 cosh 1') == '0' and s('atan2 1 float("inf")') == '0'
     assert s('floor atan2 1 0') == '1' and s('ceil atan2 -1 0') == '-1' and s('ceil besselj 0 1') == '1'
     assert s('erf float("-inf")') == '-1'
-    # an infinite divisor (numpy's cells, D7): the dividend where it is zero or has its sign
+    # an infinite divisor (numpy's cells): the dividend where it is zero or has its sign
     assert s('mod -1 log 0') == '-1' and s('mod 0 log 0') == '0' and s('mod 1 float("inf")') == '1'
     # fail closed: float64 and the reals disagree inside these enclosures (f64: 1 and 0)
     assert s('floor tanh 40') == 'floor tanh 40' and s('ceil exp -800') == 'ceil exp -800'
@@ -608,8 +608,8 @@ def test_ground_members_of_a_lattice_bag_are_ordered_by_enclosure(bare, mode):
 
 @pytest.mark.parametrize('mode', MODES)
 def test_ground_nan_and_inf_the_domain_decides(bare, mode):
-    """harmonic is NaN at -inf and at a negative integer (D6) and enclosed between its poles;
-    mod's infinite cells are numpy's (D7); besselj of an integer order is bounded by 1/sqrt(2)
+    """harmonic is NaN at -inf and at a negative integer and enclosed between its poles;
+    mod's infinite cells are numpy's; besselj of an integer order is bounded by 1/sqrt(2)
     and signed on 0 < |x| <= 2: each decides a ground NaN or infinity."""
     s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
     nan, inf = 'float("nan")', 'float("inf")'

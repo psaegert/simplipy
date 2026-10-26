@@ -1,6 +1,6 @@
 """Acceptance tests for the normalization rename + all-forms intake.
 
-Owner ruling 2026-08-18: `normalize_skeleton` -> `to_skeleton`,
+Renamed: `normalize_skeleton` -> `to_skeleton`,
 `normalize_expression` -> `to_expression`. The name must state the OUTPUT form,
 matching the engine's `to_infix`/`to_prefix`/`to_tagged`; the old names hid a
 load-bearing behaviour (a skeleton masks EVERY numeric literal, `pow` exponents
@@ -11,7 +11,7 @@ Follow-up ruling, same day: both take all three external forms (infix `str`,
 explicit binary prefix, tagged) and RETURN THE CALLER'S DIALECT -- masking names
 an abstraction level, not an output dialect, so it must not silently re-spell.
 
-And the correction that decides the mechanism (audit the research harness):
+And the correction that decides the mechanism:
 skeleton-ness is NOT a free axis over dialect. Positional masking of the caller's
 own spelling gives a DIFFERENT NUMBER of `<constant>` slots depending on which
 dialect the same expression arrived in, in both directions --
@@ -70,7 +70,7 @@ BATTERY = DIVERGENT_SHAPES + [
 
 class TestAllThreeInputForms:
     """Three forms in; the SAME dialect out (str->str, prefix->prefix,
-    tagged->tagged). Detection is the conversion API's (design D2): type first,
+    tagged->tagged). Detection is the conversion API's: type first,
     then a liberal read of the token sequence."""
 
     @pytest.mark.parametrize("fn", [to_skeleton, to_expression])

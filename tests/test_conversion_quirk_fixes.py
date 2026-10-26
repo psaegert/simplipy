@@ -54,7 +54,7 @@ def test_quirk3_neg_literal_toggles_one_minus(engine):
 # -- #4: '^' parses unary minus like '**' ---------------------------------------------------------
 def test_quirk4_caret_matches_starstar_for_unary_minus(engine):
     assert engine.infix_to_prefix("x1 ^ - x2") == engine.infix_to_prefix("x1 ** - x2")
-    # the minus is the EXPONENT'S sign (audit 9.10): x1^(-x2), never -(x1^x2). This
+    # the minus is the EXPONENT'S sign: x1^(-x2), never -(x1^x2). This
     # line pinned the wrong binding until the 9.10 fix.
     assert engine.infix_to_prefix("x1 ^ - x2") == ["**", "x1", "neg", "x2"]
 
@@ -107,7 +107,7 @@ def test_non_smooth_exponents_keep_binary_pow(engine):
     assert engine.read_infix("v1 ** (4/3)", mask_numbers=False) == ["pow1_3", "pow4", "v1"]
 
 
-# -- H-047 (2026-08-05): the **-exponent fold gate is SPELLING-EXACT --------------------------
+# -- The **-exponent fold gate is SPELLING-EXACT --------------------------
 # The port (and the legacy original) gated folds on limit_denominator(1e6) of the f64
 # VALUE: exponents within ~5e-7 of 1 collapsed the pow entirely (x**(1+ulp) -> x, with NO
 # vocabulary gate protecting the emit-nothing case), near-0 folded to 1, near -1 to inv,
@@ -133,7 +133,7 @@ def test_h047_near_fraction_no_longer_snaps(engine):
     assert engine.read_infix("v1 ** (0.5000000000000001)", mask_numbers=False) == ["pow", "v1", "0.5000000000000001"]
 
 
-# -- H-049 (2026-08-05): beyond-i128 exponent spellings KEEP binary pow, never raise ----------
+# -- Beyond-i128 exponent spellings KEEP binary pow, never raise ----------
 # The legacy CPython int() was arbitrary-precision and never failed on a digit string; the
 # i128 parse error was port-minted and raised on the engine's OWN rendered infix.
 def test_h049_beyond_i128_integer_exponent_keeps_pow(engine):
@@ -148,7 +148,7 @@ def test_h049_float_division_exponent_keeps_pow(engine):
     assert engine.read_infix("v1 ** (2.0/4.0)", mask_numbers=False) == ["pow", "v1", "/", "2.0", "4.0"]
 
 
-# -- X10 (2026-08-15): a negative-literal pow base parenthesizes under power='**' -------------
+# -- A negative-literal pow base parenthesizes under power='**' -------------
 # `['pow','-2','x0']` rendered as '-2 ** x0', which re-parses -- in this engine AND in
 # SymPy 1.14 -- as -(2 ** x0): '**' outbinds the unary minus, so the render changed the
 # value. Measured: an exact bijection, 59/5494 canonical outputs broke, every one a
@@ -173,7 +173,7 @@ def test_x10_site2_unary_pow_negative_literal_parenthesizes(engine):
 class TestEvaluateConstants:
     """The FRONT DOOR for numeric folding: explicit, opt-in, and priced by nothing.
 
-    The 2026-08-02 fold unification deleted serve's last f64-evaluation arm, because
+    Fold unification deleted serve's last f64-evaluation arm, because
     "an f64 evaluation landing exactly on a cheap literal while truly differing at
     1e-17" is a rounding, not a simplification. That removed a real capability. This
     method gives it back with a name and a door, so it can never contaminate a

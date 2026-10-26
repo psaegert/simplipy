@@ -1,4 +1,4 @@
-"""Mint-side guard for the f64-respell leak (finding (a) of the 2026-08-01 audit).
+"""Mint-side guard for the f64-respell leak.
 
 The miner's evaluate short-circuit answers a special-free all-literal ground source
 with its f64 evaluation. The engine's own fold answers the SAME source with exact
@@ -8,7 +8,7 @@ values differ whenever the exact sum picks up digits the f64 sum rounds away:
 while f64 arithmetic gives ``1.3678794411714423`` -- a DIFFERENT value that happens
 to print shorter. The full reduction ordering's literal tie tiers (lit_size) scored
 that shorter print "below" the engine's mark, so the family minted: ~1.4k
-mint-then-drop rules per canonical mine, measured 2026-08-01, surviving only because
+mint-then-drop rules per canonical mine, measured, surviving only because
 sort promotion's UNSUPPORTED bucket happened to eat them -- and ``promote_sorts``
 defaults to FALSE, so any default ``find_rules`` run shipped them as literal->literal
 rewrites that ROUND exact values at serve time.
@@ -36,7 +36,7 @@ def mined(tmp_path_factory):
     # {+, exp, cos} over {0, 1, (-1), np.pi}: length 4 reaches `+ 1 exp (-1)`
     # (the respell family's minimal member) and length 2 reaches `cos np.pi`
     # (the exact-collapse positive control). promote_sorts EXPLICITLY off (it
-    # defaults ON since 2026-08-01): the artifact must pin the MINT level with
+    # defaults ON): the artifact must pin the MINT level with
     # no downstream containment to hide behind.
     ops = {
         "+": {"realization": "+", "alias": [], "inverse": "-",
@@ -74,7 +74,7 @@ class TestF64RespellMintGuard:
             sorted(rules)
 
     def test_no_special_free_ground_respell_mints(self, mined):
-        # Sweep, re-earned under fold unification (2026-08-02): special-free
+        # Sweep, re-earned under fold unification: special-free
         # pure-literal ground sources no longer fold completely -- transcendental
         # evaluation left the engine, so exact collapses (`cos 0 -> 1`) now
         # legitimately ARRIVE AS RULES. What stays unmintable is the respell
@@ -95,7 +95,7 @@ class TestF64RespellMintGuard:
                             f'f64-respell RHS minted: {lhs} -> {rhs}'
 
     def test_exact_collapse_is_the_walks_fold(self, mined):
-        # Positive control: the owner-ruled exact collapse holds. The f64 walk folds a ground
+        # Positive control: the ruled exact collapse holds. The f64 walk folds a ground
         # node to the float the evaluator computes for it, here exactly -1, so the mine has
         # nothing to mint for it.
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
@@ -123,7 +123,7 @@ def mined_const(tmp_path_factory):
     # `+ 1 exp (-1) -> <constant>` instead -- a Const-INTRODUCING rule for a
     # DETERMINED source (var-free, Const-free, all leaves finite literals) that
     # only died because confirmation's unguarded short-circuit answers the f64
-    # literal, which is not the asked target (measured: canonical mine 2026-08-01,
+    # literal, which is not the asked target (measured: canonical mine,
     # mint counts unchanged at 15,579 and confirmation rejections up by exactly
     # the 210-rule family). A determined source is its own reduction: the engine
     # folds it to its exact value and never absorbs a determined value into a
@@ -155,7 +155,7 @@ def mined_acj():
 
 
 class TestMuEraResolutionRespell:
-    """Stage-2 reflection find (2026-08-01): mu REOPENED the respell disease at the
+    """Stage-2 reflection find: mu REOPENED the respell disease at the
     resolution channel for LONG-exact-literal marks. The morning's strict-descent
     guard worked because equal-value-class literals had EQUAL coarse complexity;
     under mu a rounded literal has FEWER BITS than a long exact rational, so for
@@ -185,14 +185,14 @@ class TestMuEraResolutionRespell:
         # resolving -- `/ acos 0 np.pi` has a SYMBOLIC mark when no rule covers it,
         # its skeleton differs from a bare literal, and the resolved value 0.5 is
         # exact. The guard keys on skeleton identity, not on resolution per se.
-        # (Since the 2026-08-01 artifact refresh the SHIPPED engine serves 0.5
+        # (The SHIPPED engine serves 0.5
         # directly -- pinned first -- so the resolution probe runs on a RULE-FREE
         # twin of the same vocabulary, the mining-time situation. The f64 walk folds the
         # ground quotient to its float itself, exactly 0.5, so the serve answer is no mark;
         # the resolution channel reads the source.)
         import numpy as np
         # The RESOLUTION is the guard; the resolved exact 1/2 then takes its argmin
-        # spelling (`/ 1 2`, not `0.5`) -- §10.10(1), owner-ratified 2026-08-07.
+        # spelling (`/ 1 2`, not `0.5`).
         assert mined_acj.simplify(['/', 'acos', '0', 'np.pi']) \
             == ['/', '1', '2']
         bare = SimpliPyEngine(operators=mined_acj._operators_config, rules=[])

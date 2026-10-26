@@ -84,7 +84,7 @@ def test_the_answer_prints_no_literal_beyond_float_precision(engine) -> None:
         assert price(engine, answer) <= price(engine, t)
 
 
-# Tiny values (review P4): the ground fold took `5/1.7976931348623157e308` to the normal float
+# Tiny values: the ground fold took `5/1.7976931348623157e308` to the normal float
 # 2.781342323134002e-308, whose shortest decimal (denominator 5e322) the f64 number domain does not
 # hold, so the state held a number its print read back as a symbol and the second call re-ordered
 # the sum. Beside it, values below 1e-290 that fold, stay or are written.

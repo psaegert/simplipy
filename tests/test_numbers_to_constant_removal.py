@@ -1,7 +1,6 @@
 """`simplipy.utils.numbers_to_constant` is REMOVED in 0.14.0.
 
-Owner ruling 2026-08-18, verbatim: "I'd like to have the removal in 0.14.0
-already and the downstream packages to adapt." The 0.13.0 CHANGELOG and
+The removal ships in 0.14.0, and the downstream packages adapt. The 0.13.0 CHANGELOG and
 `docs/compatibility.md` already stated the removal version; this suite lands it
 and pins the boundary of WHAT GOES against WHAT STAYS, because two nearby names
 are easy to remove by association and neither may move:
@@ -21,10 +20,10 @@ migration reads them here rather than discovering them in production:
 1. RESERVED SPELLINGS. The helper classified by a bare `float()` probe, so
    `inf`/`nan` (any case or sign) and underscore groupings (`1_000`) were minted
    into `<constant>` -- a finite-by-doctrine placeholder standing for a
-   non-finite literal. The masking module refuses them at the boundary (H-007).
+   non-finite literal. The masking module refuses them at the boundary.
    Laundering becomes a loud `ValueError`.
 2. `np.pi`/`np.e`. `float('np.pi')` raises, so the helper left the special
-   constants ALONE. They are masking SITES (owner ruling 2026-07-31), so
+   constants ALONE. They are masking SITES, so
    `mask_all` masks them.
 3. The exact-fraction literal `1/3`. `float('1/3')` raises, so the helper left
    it alone; `is_numeric_string` accepts it and `mask_all` masks it.
@@ -106,7 +105,7 @@ class TestTheReplacementIsNotADropIn:
     def test_reserved_spellings_raise_instead_of_being_laundered(
             self, engine: SimpliPyEngine, reserved: str) -> None:
         """The helper minted a finite `<constant>` for these. The masking module
-        refuses the token (H-007) -- the laundering becomes loud."""
+        refuses the token -- the laundering becomes loud."""
         with pytest.raises(ValueError, match='reserved numeric spelling'):
             masking.mask(['+', 'x0', reserved], engine, masking.mask_all, collect=False)
 

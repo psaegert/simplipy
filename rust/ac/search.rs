@@ -732,7 +732,7 @@ fn licensed(f: &Ex, cx: &Cx) -> bool {
     }
 }
 
-/// READING A AT A DISTRIBUTED POLE (review P3): does moving the product of `piece` into the
+/// READING A AT A DISTRIBUTED POLE: does moving the product of `piece` into the
 /// addends it `meets` -- each as `(co-piece, the addend built)` -- split a pole whose limit the
 /// product keeps? In the sound modes a pole is read by its limit. `P*(a + b)` keeps `P`'s
 /// one-signed limit (`1/x^2`, `abs(1/x)`, `log(x)`, `x^(-1/2)`) times `sign(a + b)`, while
@@ -1121,7 +1121,7 @@ mod tests {
     }
 
     /// Budget 0 is the no-phase case: byte-identical to the plain chain, both modes,
-    /// both projections (the ledger's effort=0 semantics at the engine boundary).
+    /// both projections (the effort=0 semantics at the engine boundary).
     #[test]
     fn d39_budget_zero_is_byte_identical() {
         let Some(e) = engine() else { return };
@@ -1142,7 +1142,7 @@ mod tests {
         }
     }
 
-    /// Row-156 (the ledger's falsifier row): exploration lands in the valley the
+    /// Row 156 (the falsifier row): exploration lands in the valley the
     /// greedy chain cannot reach, and the valley is strictly below in the serve
     /// ordering -- asserted through `ac_ordered_below`, measure-agnostic.
     #[test]
@@ -1167,7 +1167,7 @@ mod tests {
     }
 
     /// A reached valley re-explores to nothing, and two runs are identical
-    /// (idempotence + determinism, ledger D39).
+    /// (idempotence + determinism).
     #[test]
     fn d39_idempotent_and_deterministic() {
         let Some(e) = engine() else { return };

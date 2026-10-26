@@ -23,7 +23,7 @@ import warnings
 from . import _contract, _gate, _monitor
 
 #: Every bucket that is NOT sound to ship: all verdicts but CERTIFIED / TOLERATED.
-#: THE single source of truth for "fatal" (audit B7) -- consumed by this module's
+#: THE single source of truth for "fatal" -- consumed by this module's
 #: ``is_clean``, by the mining gate in ``engine._finalize`` and by the
 #: ``certify_rules`` gate, so the three sites cannot drift apart. A rule the judge
 #: cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) is exactly as
@@ -31,7 +31,7 @@ from . import _contract, _gate, _monitor
 FATAL_BUCKETS = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
                  'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
 
-#: The one exemption from the fatal drop (B7/D36): the judge's own non-jurisdiction
+#: The one exemption from the fatal drop: the judge's own non-jurisdiction
 #: sentinel for the multi-`<constant>` family (see `_contract.CONST_CHANNEL_DETAIL`).
 CONST_CHANNEL_DETAIL = _contract.CONST_CHANNEL_DETAIL
 

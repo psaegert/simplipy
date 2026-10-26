@@ -133,8 +133,8 @@ def _reaches_promise(core: Any, rule_mode: str, variant_lhs: list[str],
 
 
 #: Arities of the CORE SERIALIZATION LANGUAGE, read from the engine's own table rather
-#: than restated here. The audit counted five hand-maintained copies of this data
-#: (C1.10) -- and a copy that drifts is a soundness problem, not a tidiness one: the
+#: than restated here. A hand-maintained copy of this data that drifts
+#: is a soundness problem, not a tidiness one: the
 #: masking walk treats an unknown operator as a LEAF, so its operands inherit the
 #: enclosing bag's role and a `pow` exponent can be masked, exactly the accident the
 #: role API exists to make impossible.
@@ -150,16 +150,16 @@ _CORE_SERIALIZATION_ARITIES = (
 # `<max> ... </max>` / `<min> ... </min>` of an engine that declares `max` / `min`). The
 # explicit-dialect entry points (`is_valid`, `prefix_to_infix`) do not read this form; they
 # use this set to NAME the dialect in their diagnostics instead of failing with a bare arity
-# error (B1).
+# error.
 _TAGGED_DIALECT_TOKENS = frozenset({'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>',
                                     '<max>', '</max>', '<min>', '</min>'})
 
-#: (C1.18) Every key an operator spec must carry. `precedence` is deliberately NOT
+#: Every key an operator spec must carry. `precedence` is deliberately NOT
 #: required: non-core operators render as function calls, which never consult it; a
 #: core serialization token missing the key gets the core table's own value (a
 #: PRESENT-and-conflicting value still refuses in the core-token guard -- absence
 #: used to slip past that guard entirely).
-# D12 (owner-ratified 2026-08-16): `inverse` left the REQUIRED set -- nothing reads
+# `inverse` left the REQUIRED set -- nothing reads
 # it (parse-only since the relic layer's deletion), and requiring pure ceremony made
 # every wild config fail construction. Declared values are still accepted silently.
 _REQUIRED_OPERATOR_KEYS = ('realization', 'alias', 'arity', 'commutative')
@@ -238,17 +238,17 @@ def _fulfills_constant_promise(pattern: list[str], subject: list[str],
     return walk(0, 0) == (len(pattern), len(subject))
 
 
-# C23a (D27): the mine half lives in `simplipy.mining` as RuleMiner; the
+# The mine half lives in `simplipy.mining` as RuleMiner; the
 # engine keeps `find_rules`/`certify_rules` as thin delegators so the public
 # API does not move. These aliases keep the module surface stable (tests and
-# downstream reach ARTIFACT_ENV_SWITCHES and _MINE_LOCK here, and D28
-# requires the lock to stay ONE object across both modules).
+# downstream reach ARTIFACT_ENV_SWITCHES and _MINE_LOCK here, and one miner per
+# process requires the lock to stay ONE object across both modules).
 from .mining import (  # noqa: E402,F401
     ARTIFACT_ENV_SWITCHES, RuleMiner, _MINE_LOCK,
     _CONSTLIKE_LEAVES, _load_proposals, _tokens_in_vocabulary,
 )
 
-# D11 column R27 (owner-ratified 2026-08-16): ARTIFACT_ENV_SWITCHES is the
+# ARTIFACT_ENV_SWITCHES is the
 # documented machine-readable registry of artifact-affecting env switches.
 __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
 
@@ -266,7 +266,7 @@ __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
 #: it was tested against. `None` means "whatever the manifest currently points at", which
 #: is the right answer only for a release that ships no artifact of its own.
 #:
-#: The measure-fingerprint check (D25) remains the safety net for an artifact loaded by
+#: The measure-fingerprint check remains the safety net for an artifact loaded by
 #: NAME across a measure change; this pin is what stops that happening by default.
 DEFAULT_ENGINE = 'acj-5-4-llm'
 DEFAULT_ENGINE_REVISION: str | None = None
@@ -520,7 +520,7 @@ class SimpliPyEngine:
         # must never construct an engine that silently built the wrong sets.
         self._modes = self._normalized_modes(modes)
         self._rule_canons = self._normalized_rule_canons(rule_canons)
-        # C1.18: loud spec validation + normalization BEFORE anything reads a key --
+        # Loud spec validation + normalization BEFORE anything reads a key --
         # the first consumer used to be a bare `KeyError: 'alias'`.
         operators = _normalized_operator_specs(operators)
         # Cache operator metadata for quick access during parsing and evaluation.
@@ -534,7 +534,7 @@ class SimpliPyEngine:
         self.operator_arity_compat['**'] = 2
         self.operators = list(self.operator_arity.keys())
 
-        # THE REALIZATION TRUST MODEL (register C1.12, owner-ruled 2026-08-09).
+        # THE REALIZATION TRUST MODEL.
         # `_realization_roots` maps each CANONICAL module spelling to the operators
         # asking for it, so a refusal can point at the config line rather than at the
         # engine; `modules` keeps its historical meaning (importable PACKAGE names,
@@ -546,7 +546,7 @@ class SimpliPyEngine:
         for operator, realization in self.operator_realizations.items():
             # TOTAL by construction: returns a root, returns None for the shapes that
             # reference nothing, or REFUSES. The old `realization_root(...) is not None`
-            # test silently passed everything else through to code_to_lambda (B14).
+            # test silently passed everything else through to code_to_lambda.
             root = check_realization(str(realization), str(operator))
             if root is not None:
                 self._realization_roots.setdefault(root, []).append(operator)
@@ -559,7 +559,7 @@ class SimpliPyEngine:
 
         # Normalize the incoming rule list and eliminate duplicate patterns.
         #
-        # ORDER (owner ruling 2026-08-18): dedup keys on the engine's INTERNAL FORM, so it
+        # ORDER: dedup keys on the engine's INTERNAL FORM, so it
         # needs a core -- and the core is built FROM the deduplicated rules. The knot is
         # cut by the fact that the internal form is a function of the OPERATOR TABLE
         # alone: a rules-less core over this very config is a complete and correct
@@ -593,7 +593,7 @@ class SimpliPyEngine:
         # construction path (from_config/load AND direct in-memory construction) attaches it
         # here, from the SAME in-memory state, so no path can exist without a core.
         #
-        # LAZY MODES (task #88): only the EAGER sets are pushed. A mode outside the
+        # LAZY MODES: only the EAGER sets are pushed. A mode outside the
         # `modes=` selection keeps its recipe (the attribute above, or a file source
         # `from_config` attaches after construction) and builds on first use through
         # `_ensure_mode_loaded` -- see the class docstring's `modes` entry.
@@ -772,7 +772,7 @@ class SimpliPyEngine:
         # a worker unpickles is complete. `setdefault(..., None)` keeps pickles written
         # before the triple existed loadable: they rebuild with no set of their own,
         # which is exactly what they were. The same treatment keeps pickles written
-        # before the lazy-mode machinery (task #88) loadable: they rebuild as
+        # before the lazy-mode machinery loadable: they rebuild as
         # `modes='all'` engines with no file sources, which is exactly what they were.
         self.__dict__.setdefault('_modes', 'all')
         self.__dict__.setdefault('_mode_rule_sources', {})
@@ -970,7 +970,7 @@ class SimpliPyEngine:
             self._core_loaded_modes.discard(rule_mode)
 
     def _replace_rules(self, rules: list) -> None:
-        """Build-first-or-unchanged (conc-2): compile a fresh core from the CANDIDATE
+        """Build-first-or-unchanged: compile a fresh core from the CANDIDATE
         ruleset, and only on success assign both the list and the core. The shim
         mutators used to rewrite ``simplification_rules`` before pushing, so a failed
         push left the wrapper and the core silently diverged; this turns that into
@@ -1155,7 +1155,7 @@ class SimpliPyEngine:
             The number of rules whose replacement was resolved.
         """
         n_resolved = 0
-        candidate = list(self.simplification_rules)  # conc-2: mutate a copy, swap on success
+        candidate = list(self.simplification_rules)  # Mutate a copy, swap on success
         for i, rule in enumerate(candidate):
             lhs, rhs = rule
             if tuple(rhs) != ('<constant>',):
@@ -1205,7 +1205,7 @@ class SimpliPyEngine:
         for root, operators in sorted(self._realization_roots.items()):
             check_root(root, operators, self._trusted_modules)
             module = importlib.import_module(package_for(root))
-            # THE ROOT IS ONLY THE FIRST HOP (audit S2). The realization is resolved by
+            # THE ROOT IS ONLY THE FIRST HOP. The realization is resolved by
             # attribute traversal, and a module's attributes include every module it
             # imported, so a trusted root is a doorway to `os`, `shutil`, `importlib`.
             # `check_chain` walks the rest against the same allowlist. It runs AFTER the
@@ -1253,7 +1253,7 @@ class SimpliPyEngine:
         eager = cls._normalized_modes(modes)
         config_path = os.path.abspath(config_path)
         config = load_config(config_path)
-        # ARTIFACT-GENERATION GATE (owner ruling 2026-08-03): generation-1 artifacts
+        # ARTIFACT-GENERATION GATE: generation-1 artifacts
         # (retired hyper-operator vocabulary) serve only on simplipy <= 0.11; refusing
         # here -- the choke point of every artifact-loading path, including
         # SimpliPyEngine.load -- is what makes the compatibility matrix TRUE. Raw
@@ -1295,7 +1295,7 @@ class SimpliPyEngine:
         # THE OTHER TWO THIRDS OF THE TRIPLE (`rules_real:` / `rules_permissive:`), read by
         # the same resolver as `rules:` above. Each names a COMPLETE, self-contained set
         # for its mode -- not a supplement to `rules.json` -- so what is loaded is what
-        # is served (owner ruling, 2026-08-19). Only triples are mined and distributed;
+        # is served. Only triples are mined and distributed;
         # the keys are nonetheless OPTIONAL here, because every artifact that shipped
         # before the ruling is a single file and must keep loading unchanged.
         #
@@ -1357,8 +1357,8 @@ class SimpliPyEngine:
         # loader's knowledge, not `__init__`'s: a deferred set lazily loads from
         # here on first use, and `unload_mode` re-reads from here after a drop.
         engine._mode_rule_sources.update(mode_sources)
-        # WARNING ON THE RESULTING STATE (owner ruling 2026-08-18: "Warning on engine
-        # without rules"), broadened from the missing-file case it replaces: an engine
+        # WARNING ON THE RESULTING STATE (an engine
+        # without rules warns), broadened from the missing-file case it replaces: an engine
         # that ends up with zero rules says so however it got there. NON-FATAL by the
         # same ruling -- such an engine is fully functional, it simply never rewrites,
         # and that is exactly why the silence was dangerous.
@@ -1564,7 +1564,7 @@ class SimpliPyEngine:
         stack: list[str] = []
         if form == 'tagged':
             # Without this branch the walk below misreads the bag delimiters as variables
-            # and prints 'Variable must be leaf node' -- actively misleading (B1). is_valid
+            # and prints 'Variable must be leaf node' -- actively misleading. is_valid
             # READS this dialect, so reaching here means the sequence is malformed AS
             # tagged, not that the dialect was refused.
             tagged = _TAGGED_DIALECT_TOKENS.intersection(prefix_expression)
@@ -1874,8 +1874,7 @@ class SimpliPyEngine:
     def to_infix(self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:
         """Convert an expression to the INFIX form -- NOTATION ONLY.
 
-        One of the three PURE conversions (design
-        the research harness): a syntactic re-notation, never a
+        One of the three PURE conversions: a syntactic re-notation, never a
         simplification. No canonical state is built, no rule fires, nothing is
         collected, folded, reordered or re-spelled, and the answer does not depend on
         the engine ARTIFACT. Use :meth:`simplify` for content; compose them as
@@ -2155,7 +2154,7 @@ class SimpliPyEngine:
         if max_passes < 1:
             # 0 would run no pass at all (the core reads it literally), and a negative
             # value would surface as a raw pyo3 OverflowError at the usize conversion
-            # (hardening H-006, 2026-08-03)
+            #
             raise ValueError(f"max_passes must be at least 1, got {max_passes}")
         if effort is None:
             effort = DEFAULT_EFFORT
@@ -2178,7 +2177,7 @@ class SimpliPyEngine:
                 effort = None  # beyond the index range no cap binds: the uncapped search
         mode = _coerce_mode(mode)
 
-        # DIALECT-PRESERVING (owner ruling 2026-08-18): `simplify` only simplifies and
+        # DIALECT-PRESERVING: `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
         # a bag delimiter is tagged, anything else is the explicit binary prefix. This is
         # what closed the old "tagged leak" (a prefix-in token list used to come back
@@ -2187,7 +2186,7 @@ class SimpliPyEngine:
 
         # ONE lookup, both branches: the rule mode is decided here and the core is asked
         # for it by name, so the two output paths cannot end up serving different sets.
-        # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds in
+        # LAZY MODES: a set deferred by a lean `modes=` selection builds in
         # `_serve`, on the mode's first use -- once, lock-guarded, announced; under the
         # default `modes='all'` that is one set-membership test. `real` FAILS CLOSED there
         # (`_serve`): the 18-rule `f(+-10^-k) -> +-10^-k` family is f64-exact and false by a
@@ -2412,7 +2411,7 @@ class SimpliPyEngine:
         """
         _, tokens = self._read_input(expression)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
-        # LAZY MODES (task #88): same first-use hook as `simplify` -- the mode
+        # LAZY MODES: same first-use hook as `simplify` -- the mode
         # argument reaches the core below, so a deferred set must be built first.
         self._ensure_mode_loaded(rule_mode)
         if certified:
@@ -2458,8 +2457,8 @@ class SimpliPyEngine:
         # the LITERAL codebook: an integer (the L-formula), a unit fraction and a
         # non-unit one (the fraction code and the inversion bit), a decimal whose
         # denominator carries a five (the print/argmin split), a beyond-i128 leaf
-        # (the numeric-string pricer -- invisible until 2026-08-22: its clamp stayed
-        # at two bits after the floor ruling and NO probe moved, S15), and `<constant>`.
+        # (the numeric-string pricer -- its clamp once stayed
+        # at two bits after the floor moved and NO probe noticed), and `<constant>`.
         ('1000',), ('1/2',), ('355/113',), ('0.2',), ('1e-40',), ('<constant>',),
         # the FLOAT CAP: a literal costs at most the shortest decimal of the float64
         # it reads as, so a decimal carrying more than float precision costs that decimal. Every
@@ -2588,13 +2587,13 @@ class SimpliPyEngine:
                 f"minimality and ordering were decided under the other measure.",
                 UserWarning)
 
-    # The libm probe battery (R5, audit L9): expressions whose folded values are
+    # The libm probe battery: expressions whose folded values are
     # decided by the SYSTEM libm the deployed folder calls -- the C symbols bound in
     # rust/numeric.rs resolve on THIS machine at load, so the exposure is runtime, not
     # build-time, and no wheel qualification can cover it. Chosen to discriminate real
     # builds: the cosh(acosh(k)) family (>= 5 shipped acj-4-3 rules exist only because
     # glibc 2.43 is 1 ulp wrong exactly there), argument-reduction-sensitive trig at a
-    # large argument, atanh near its edge (libm-routed since B6), exp/log/pow at
+    # large argument, atanh near its edge (libm-routed), exp/log/pow at
     # spread magnitudes, and ulp-amplifying compositions. Fixed and ordered: the
     # fingerprint must be comparable across sidecars.
     _LIBM_PROBES: tuple[tuple[str, ...], ...] = (

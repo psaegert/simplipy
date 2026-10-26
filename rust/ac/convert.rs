@@ -36,7 +36,7 @@ use num_traits::{One, Zero};
 /// the shipped engine treats malformed expressions.
 pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     // Literals parse in the context's number domain: in the f64 domain a literal that is not
-    // admissible (subnormal, beyond float64's range) stays a leaf as written (design 2c).
+    // admissible (subnormal, beyond float64's range) stays a leaf as written.
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // One scope for the whole parse: a product met again is decided once (`FlipScope`).
     let _memo = FlipScope::open();
@@ -431,7 +431,7 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         return Ex::Num(r);
     }
     // Parenthesized literal forms: "(-1)", "(-0.5)", "(-1/3)" -- the wrapping composes
-    // with BOTH numeric grammars (hardening H-012, 2026-08-03: this branch knew only
+    // with BOTH numeric grammars (this branch once knew only
     // decimals, so "(-1/3)" silently became an OPAQUE leaf -- it even sorted as a
     // SYMBOL while "(-1)" and bare "1/3" were numbers).
     if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
@@ -442,7 +442,7 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
             return Ex::Num(r);
         }
     }
-    // H-048 (2026-08-05): a SIGNED numeric spelling never becomes a leaf -- the sign
+    // A SIGNED numeric spelling never becomes a leaf -- the sign
     // is STRUCTURE. Beyond-i128 spellings ("-1e309") fall through every exact parse
     // above and used to keep the sign inside the opaque leaf token, while the same
     // value built structurally kept a POSITIVE leaf under a subtracted section: two
@@ -620,8 +620,7 @@ fn add_sign_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
     (pos, neg)
 }
 
-/// DIVISOR-SIDE COEFFICIENT SPELLING (owner-ratified 2026-08-01;
-/// design/UNIFIED_SIMPLICITY_MEASURE.md §8) -- user-facing aesthetics, EMISSION ONLY.
+/// DIVISOR-SIDE COEFFICIENT SPELLING -- user-facing aesthetics, EMISSION ONLY.
 /// Every f64-born literal is a dyadic rational with a finite decimal spelling, but its
 /// exact reciprocal generally is not: canon of `x0 / 0.3333333333333333` holds the exact
 /// coefficient 10^16/3333333333333333, whose only exact one-token spelling is that
@@ -651,7 +650,7 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
         return None;
     }
     // A NEGATIVE coefficient never moves divisor-side: a signed literal inside a
-    // den/`<div>` group re-parses the sign INTO the divisor bag, where the H-020
+    // den/`<div>` group re-parses the sign INTO the divisor bag, where the Const
     // sign-fold clause may absorb it into a Const-bearing sum -- a different (family-
     // equal) state than the outer-coefficient parking the chain holds (caught by the
     // state-stability battery: `-1/3 * .. * inv(x17 + C)` spelled `-3` in the den,
@@ -680,10 +679,10 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     }
 }
 
-/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), for the INFIX text only
+/// The INTEGER-OVER-DECIMAL spelling of a fraction, for the INFIX text only
 /// (see [`to_infix_pretty`]): `Some((n, d))` with `r == n / d`, `n` an integer and `d` a
 /// non-integer whose argmin spelling is ONE exact decimal token, when the pair spells strictly
-/// shorter than `p` and `q`. The token printers keep `p/q` (owner 2026-10-05, plan v2 phase 1):
+/// shorter than `p` and `q`. The token printers keep `p/q`:
 /// the engine and its callers read tokens back, so a spelling chosen for a reader stays out of
 /// them.
 ///
@@ -746,7 +745,7 @@ fn has_plain_mul_factor(v: &[Ex]) -> bool {
 /// negated exponent is 1) to the denominator. A non-integer rational coefficient contributes
 /// its numerator and denominator to the respective sides -- unless the divisor-side rule
 /// (`divisor_side`) spells the whole coefficient as ONE reciprocal token in the denominator.
-/// F73: does this bag carry an i128-overflow PARTITION -- its exact rational content
+/// Does this bag carry an i128-overflow PARTITION -- its exact rational content
 /// split across two or more `Num` members because folding them would overflow? The
 /// atoms of a partition are load-bearing: any gathering (p/q splits into shared
 /// num/den chains, divisor-side respells, section pooling) destroys the boundaries
@@ -771,12 +770,12 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
     let partition = is_partition_bag(v);
     for f in v {
         match f {
-            // F73: partition atoms stay whole members -- `emit_num` prints each as one
+            // Partition atoms stay whole members -- `emit_num` prints each as one
             // token or a LOCAL `/ p q`, either of which re-folds to exactly this atom
             // before the bag pools.
             Ex::Num(r) if partition => num.push(Ex::Num(r.clone())),
             Ex::Num(r) => {
-                // H-020 amendment: the SIGN never enters the den group (a signed den
+                // The SIGN never enters the den group (a signed den
                 // literal re-parses the sign into the divisor bag, where the sign-fold
                 // clause may absorb it into a Const-bearing sum -- a different parking
                 // than the chain state's outer coefficient). The divisor-side rule is
@@ -808,7 +807,7 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                     }
                     den.push(Ex::Num(inv));
                 } else if r.small_parts().is_none() {
-                    // A fraction beyond 128 bits (design 2c) stays ONE member, printed as a
+                    // A fraction beyond 128 bits stays ONE member, printed as a
                     // local `/ p q` that re-folds to it: split across the product, the
                     // evaluator multiplied a 300-digit numerator in before dividing and
                     // overflowed to inf.
@@ -1158,7 +1157,7 @@ fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
         return;
     }
     // `Rat` normalizes the sign onto the numerator (`den > 0`), so the sign rides `p` and
-    // the `<div>` member stays positive -- the H-020 invariant that a signed literal never
+    // the `<div>` member stays positive -- the invariant that a signed literal never
     // enters a divisor group.
     out.push(view.intern("<mul>"));
     out.push(view.intern(&r.numer_token()));
@@ -1285,18 +1284,18 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             let mut den: Vec<Ex> = Vec::new();
             let mut num: Vec<&Ex> = Vec::new();
             let mut coeff_num: Option<Ex> = None; // the fraction's numerator, when split
-            let mut neg_one = false; // H-020: the sign never enters `<div>` -- split it out
-            let mut unit_coeff_split = false; // F80: a p=1 coefficient split happened
+            let mut neg_one = false; // The sign never enters `<div>` -- split it out
+            let mut unit_coeff_split = false; // A p=1 coefficient split happened
             let partition = is_partition_bag(v);
             for f in v {
                 match f {
-                    // F73: partition atoms render verbatim (`emit_rational_tagged`: one
+                    // Partition atoms render verbatim (`emit_rational_tagged`: one
                     // token beyond the vocabulary bound, the nested structural fraction
                     // inside it -- both re-fold locally to the atom before the bag
                     // pools). The split and divisor-side arms below would pool their
                     // pieces into the shared `<div>` section, where member-kind flips
                     // across the round-trip reordered the section (the 30 residual
-                    // P1 rows of the post-F72 census).
+                    // fuzz rows).
                     Ex::Num(_) if partition => num.push(f),
                     Ex::Num(r) => {
                         let mag = if r.is_negative() {
@@ -1311,13 +1310,13 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         // no atomic fraction or decimal token at all -- see
                         // `emit_rational_tagged`. A magnitude-1 numerator is the bare sign
                         // and is omitted; the sign itself is split out below.
-                        // F80 (owner-ruled spelling law, 2026-08-10): the split fires
+                        // Spelling law: the split fires
                         // UNCONDITIONALLY for in-bound fractions -- previously it demanded
                         // a plain factor (`has_plain_mul_factor`), and the div-only case
                         // fell through to the leaf renderer, whose structural spelling is
                         // a mul bag: the same-type nesting the census measured at 8,918
                         // events/1M. The grammar's >=1-numerator-member floor is kept by
-                        // the post-loop `1` (below); partition bags stay verbatim (F73).
+                        // the post-loop `1` (below); partition bags stay verbatim.
                         // Outside the bound the ratified divisor side comes first (below); a
                         // coefficient it does not move splits too when its one token would be a
                         // fraction (the tagged form writes none), and stays one token when it is
@@ -1351,7 +1350,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                                 }
                             }
                             None => {
-                                // H-059: §8 DIVISOR-SIDE, restored for the OUT-OF-BOUND
+                                // §8 DIVISOR-SIDE, restored for the OUT-OF-BOUND
                                 // case. The split above is what replaced `divisor_side`
                                 // in the tagged form, and its whole point is that the
                                 // dialect "carries no atomic fraction or decimal token
@@ -1365,7 +1364,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                                 // atom must be emitted regardless, the ratified rule
                                 // applies again: spell the coefficient on whichever side
                                 // has the shorter exact token. In-bound behaviour is
-                                // untouched. H-020 holds -- the sign never enters
+                                // untouched. The sign never enters
                                 // `<div>`; it splits out as a `-1` bag literal.
                                 match inv {
                                     Some(inv) => {
@@ -1384,7 +1383,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                     _ => num.push(f),
                 }
             }
-            // F80: when the COEFFICIENT SPLIT emptied the numerator side (unit
+            // When the COEFFICIENT SPLIT emptied the numerator side (unit
             // fraction, no plain factor, no sign to carry -- `(1/3)/x0`), the `1`
             // is the numerator member the owner-ratified table pins:
             // `<mul> 1 <div> 3 x0 </mul>`. With a sign, the split-out `-1` below
@@ -1392,7 +1391,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             // Coefficient-FREE den-only bags keep their established empty-numerator
             // spelling (`inv(acos(x0)*atan(x1))` -> `<mul> <div> acos x0 atan x1
             // </mul>`, pinned by TestLossyReciprocalRejoinProjection) -- that
-            // dialect predates F80 and the ruling did not touch it.
+            // dialect is older than the spelling law and keeps its shape.
             if unit_coeff_split && !neg_one && coeff_num.is_none() && num.is_empty() {
                 coeff_num = Some(Ex::Num(Rat::ONE));
             }
@@ -1498,7 +1497,7 @@ fn within_tagged_bound(r: &Rat) -> bool {
 /// carry built-in precedences under any config, and the bare constant names `pi`/`e`/
 /// `inf`/`nan` are reserved spellings the parser reads back as the constants.
 ///
-/// THE READER'S SPELLING LIVES HERE AND ONLY HERE (owner 2026-10-02, kept in plan v2). The
+/// THE READER'S SPELLING LIVES HERE AND ONLY HERE. The
 /// infix text is written for a person, so it alone writes a value with no finite decimal as
 /// an integer over a decimal (`ratio_spelling`). The explicit prefix form ([`to_prefix`]) is
 /// the engine's own dialect: the interval certificates, the folds, the served rules and the
@@ -1645,7 +1644,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             (format!("{base}^{expo}"), 3)
         }
         Ex::Add(v) => {
-            // Display rules (owner ruling 2026-08-08), DISPLAY-ONLY -- the bag order is
+            // Display rules, DISPLAY-ONLY -- the bag order is
             // the canonical one and stays untouched (tagged/explicit emit it verbatim),
             // and the infix parse is permutation-invariant, so round-trip is unaffected:
             //  1. POSITIVE terms print first, then negative ones, relative order
@@ -1692,11 +1691,11 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             let partition = is_partition_bag(v);
             for f in v {
                 match f {
-                    // F73: partition atoms render as self-contained factors, PARENTHESIZED
+                    // Partition atoms render as self-contained factors, PARENTHESIZED
                     // when fractional -- `(a/3)*(a/3)` re-parses each atom locally, while
                     // the bare chain `a/3*a/3` re-associates textually into a flat pool
                     // that re-cuts. The display sign still hoists to the front: sign
-                    // hosting is value-determined since F72, so the re-parse re-hosts it
+                    // hosting is value-determined, so the re-parse re-hosts it
                     // identically.
                     Ex::Num(r) if partition => {
                         let mut r = r.clone();
@@ -1756,7 +1755,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             let s = if den_parts.is_empty() {
                 num_s
             } else {
-                // ONE SLASH PER DIVISOR MEMBER (hardening H-013, 2026-08-03):
+                // ONE SLASH PER DIVISOR MEMBER:
                 // `a/(b*c)` re-parses as a NESTED product in divisor position, which
                 // only the licence-gated odd-negative-power distribution could
                 // re-flatten -- when a factor's zero-set licence refuses (`cos` has
@@ -1819,7 +1818,7 @@ fn holds_inf_reciprocal(e: &Ex) -> bool {
     }
 }
 
-/// Display-only odd-literal sign hoist (owner ruling 2026-08-08): inside a printed sum,
+/// Display-only odd-literal sign hoist: inside a printed sum,
 /// a term whose magnitude is an odd function of a NEGATIVE literal moves that sign out to
 /// the joiner (`- sin(-2)` becomes `+ sin(2)`), so no printed sum ever carries a double
 /// negation. Literal arguments only: the canonical form keeps a constant's sign on its literal
@@ -1940,7 +1939,7 @@ mod tests {
 
     /// Build the legacy-vocabulary operator universe from the IN-REPO fixture so desugaring
     /// sees the true arities (mult4, pow1_3, ...). The fixture ships with the repo (audit
-    /// Tier-1 #3: no test depends on the dev_7-3 HF asset), so this never skips.
+    /// No test depends on the dev_7-3 HF asset), so this never skips.
     fn full_ops() -> Option<(Vec<String>, Operators)> {
         let cfg = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1998,8 +1997,8 @@ mod tests {
             assert_eq!(roundtrip(view, &["mult4", "x0"]), ["*", "4", "x0"]);
             // div5 x -> * 0.2 x: in the EXPLICIT dialect the coefficient takes its argmin
             // spelling, and for a 5-carrying denominator the decimal code wins (2585
-            // milli-bits against the fraction's 3585) -- §10.10(1), owner-ratified
-            // 2026-08-07. A 2^a denominator goes the other way (`1/2` stays `/ 1 2`).
+            // milli-bits against the fraction's 3585).
+            // A 2^a denominator goes the other way (`1/2` stays `/ 1 2`).
             assert_eq!(roundtrip(view, &["div5", "x0"]), ["*", "0.2", "x0"]);
             // pow3 x -> pow x 3
             assert_eq!(roundtrip(view, &["pow3", "x0"]), ["pow", "x0", "3"]);
@@ -2042,7 +2041,7 @@ mod tests {
             let a = roundtrip(view, &["*", "x1", "x0"]);
             let b = roundtrip(view, &["*", "x0", "x1"]);
             assert_eq!(a, b);
-            // ADJACENCY: + x3 (+ x8 (div5 x3)) -- the campaign's proof case. The two x3 spellings
+            // ADJACENCY: + x3 (+ x8 (div5 x3)) -- the proof case. The two x3 spellings
             // meet in one bag and collect: x3 + x3/5 = (6/5) x3.
             // Stripped term order: the 1.2*x3 term (key x3) sorts before x8.
             // The 6/5 coefficient spells as the decimal in the EXPLICIT dialect (argmin;
@@ -2116,8 +2115,7 @@ mod tests {
                 roundtrip(view, &["*", "(-1)", "*", "np.pi", "x0"]),
                 ["neg", "*", "np.pi", "x0"]
             );
-            // -1/3: divisor-side spelling (2026-08-01, design §8) is AMENDED by H-020
-            // (2026-08-04): a sign never rides a DEN literal. A signed literal inside a
+            // -1/3: a sign never rides a DEN literal (divisor-side spelling). A signed literal inside a
             // divisor group re-parses the sign into the divisor BAG, where the sign-fold
             // clause may absorb it into a Const-bearing sum -- a different (family-equal)
             // state than the outer-coefficient parking the chain holds. The reciprocal
@@ -2166,11 +2164,11 @@ mod tests {
         });
     }
 
-    /// F73: a PARTITION's atoms survive every dialect's round-trip.
+    /// A PARTITION's atoms survive every dialect's round-trip.
     /// The gathering emitters pooled the atoms into shared num/den chains, and the
     /// re-parse re-CUT them (`* a/3 a/3` -> `/ (a*a) (3*3)` -> `{a, a, 1/9}` -- one
     /// value, a different partition per dialect; 884 of the extreme lane's 900
-    /// post-F72 hard rows). Partition members now render self-contained.
+    /// hard rows). Partition members now render self-contained.
     ///
     /// Phase 2c: partitions no longer come from i128 overflow but from a product the f64
     /// domain refuses (`10^400/9` is beyond DBL_MAX), so the probe pair is `10^200/3`.

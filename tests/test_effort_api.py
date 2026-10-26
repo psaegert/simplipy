@@ -1,4 +1,4 @@
-"""The public ``effort=`` API (ledger D39 B7): the search budget on ``simplify()``.
+"""The public ``effort=`` API: the search budget on ``simplify()``.
 
 The falsifier row is SOOSE row-156: ``x2*(x2 + (x1+1)/x2)`` is a mu-hill -- the
 valley ``1 + x1 + x2**2`` is strictly below it in the serve ordering, but every
@@ -52,7 +52,7 @@ class TestTheBudgetCrossesTheHill:
         assert engine.complexity(hi) < engine.complexity(tokens)
 
     def test_real_mode_fails_closed_regardless_of_effort(self, engine) -> None:
-        # The B1 scaffolding never covered `real`; the public wire must not
+        # The scaffolding suite never covered `real`; the public wire must not
         # weaken the fail-closed guard on an artifact without a real set.
         with pytest.raises(ValueError, match='real'):
             engine.simplify(HILL, mode=Mode.real, effort=BUDGET)
@@ -60,7 +60,7 @@ class TestTheBudgetCrossesTheHill:
 
 class TestRealModeExplores:
     def test_the_shipped_artifact_crosses_the_hill_in_real_mode(self) -> None:
-        # Closes the D39 B1 coverage gap: exploration under `real`, on an
+        # Closes the scaffolding suite's coverage gap: exploration under `real`, on an
         # artifact that serves a real set.
         try:
             engine = SimpliPyEngine.load('acj-4')
@@ -89,7 +89,7 @@ class TestEffortValidation:
         # budget gets what `simplify` gives, not the chain alone.
         assert engine._core.ac_simplify_in_mode(tagged, 48, "explicit", rule_mode="default") \
             == engine._core.ac_simplify_in_mode(tagged, 48, "explicit", None, rule_mode="default")
-        # The RULED default (owner 2026-10-06; 4 from 2026-08-24): None -- the default
+        # The RULED default (once 4): None -- the default
         # call explores until a round finds nothing, and explicitly asking for the
         # chain alone differs on a mu-hill.
         from simplipy import DEFAULT_EFFORT

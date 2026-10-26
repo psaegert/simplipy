@@ -96,9 +96,9 @@ pub struct Engine {
     /// `engine/ac.rs`) so consumers that never opt in pay nothing at construction.
     ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
     /// THE `real` MODE'S OWN COMPLETE RULE SET (`rules_real.json`), interned exactly like
-    /// `rules` -- NOT a supplement to it. Owner ruling, 2026-08-19: "one distinct rule set
-    /// for each mode", and "for provenance, the triple should be pinned; we will only ever
-    /// mine and distribute triples". So this file carries the core rules AND the real-only
+    /// `rules` -- NOT a supplement to it: one distinct rule set
+    /// for each mode, and the triple is pinned for provenance (only triples are
+    /// mined and distributed). So this file carries the core rules AND the real-only
     /// rules, complete, and the engine never computes a union to decide what `real` serves.
     ///
     /// `None` -- the state of every engine not handed one -- means the mode names NO SET

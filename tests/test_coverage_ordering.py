@@ -1,8 +1,8 @@
-"""One coverage ordering, used by every gate (the F5 ruling).
+"""One coverage ordering, used by every gate.
 
 Coverage is a redundancy claim about STATES, judged in the serve-time reduction
 ordering (semantic complexity, literal size, canonical total order) -- the ordering
-every fire strictly descends and mint acceptance already judges by (finding F2). The
+every fire strictly descends and mint acceptance already judges by. The
 score projection it replaces was blind exactly on the tie tier (equal-complexity
 DIFFERENT states): ``abs neg ?0 -> abs ?0`` scored 2 <= 2 "covered" and was pruned
 while nothing else performed the rewrite -- the prune deleted rules the acceptance
@@ -46,11 +46,11 @@ _PROPOSAL_OPS = {
 
 class TestPruneStateCoverage:
     def test_tie_tier_rule_survives_prune(self) -> None:
-        """The E5a witness: a strict serve-ordering descent whose complexity score is a
+        """The witness: a strict serve-ordering descent whose complexity score is a
         TIE. The score judge pruned it; the state judge must not --
         nothing else performs the rewrite, so pruning it lengthens serving output.
 
-        WITNESS REPLACED 2026-08-07. It was `abs neg ?0 -> abs ?0` until the parity
+        WITNESS REPLACED. It was `abs neg ?0 -> abs ?0` until the parity
         arm (`sign_blind_rep`) made that rewrite CONSTRUCTOR-NATIVE, at which point
         `prune_covered_rules` was right to prune it and the test was asserting a
         premise the engine had outgrown -- "nothing else performs the rewrite" is the

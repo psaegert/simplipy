@@ -128,7 +128,7 @@ IDEMPOTENCE_ROWS = [
     '/ 10 / / 250000000 1571 / * 3.141592653589793 3.141592653589793 x3',
     '/ 12.5 / / 808000000 1571 / * 3.141592653589793 3.141592653589793 x2',
     '/ / 12625000 11 / 299792458 / * 3.141592653589793 3.141592653589793 x1',
-    # the design review's H2 row, and a bag whose prefix folds where the whole bag does not
+    # a design-review row, and a bag whose prefix folds where the whole bag does not
     f'* x1 * / {A} {B} / {A} {B}',
     '* x1 * * 1e300 1e10 1e-100',
     '* * 1e200 1e100 * 1e100 x1',
@@ -304,7 +304,7 @@ class TestPythonReaders:
 
 
 class TestReviewFindings:
-    """#65's reviews: each a reproducer that misbehaved before the fix."""
+    """Review reproducers: each misbehaved before the fix."""
 
     def test_a_number_and_its_reciprocal_cancel_in_f64_mode(self, engine: SimpliPyEngine) -> None:
         assert simplify(engine, '/ 5e307 5e307', 'f64') == ['1']

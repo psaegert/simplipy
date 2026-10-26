@@ -139,7 +139,7 @@ fn source_const_magnitudes(
 ///
 /// WHY IT EXISTS. A variable-free `<constant>`-bearing source is quantified over its constants,
 /// and §5's proven theorem says a constant slot binds as a DIRAC: one disagreeing constant value
-/// carries FULL data measure, so R2's "where the source is DEFINED the target must be defined and
+/// carries FULL data measure, so the contract's "where the source is DEFINED the target must be defined and
 /// exactly equal" applies with ZERO tolerance. The interval classifier answers a MEASURE question
 /// ("what is the value class almost everywhere?") and the all-constant short-circuit then
 /// republished that answer as an ATTAINABILITY claim ("the source is nan, full stop"). Measured
@@ -469,7 +469,7 @@ fn dirac_refutes_literal(source: &[String], target: &[String], ops: &Operators) 
         let Some(got) = crate::numeric::leaf_value(&tok) else {
             continue;
         };
-        // Extended equality: nan matches nan, an infinity must match SIGN included (R2 counts
+        // Extended equality: nan matches nan, an infinity must match SIGN included (the contract counts
         // +-inf as DEFINED), and finite values must be exactly equal.
         let agrees = if got.is_nan() || want.is_nan() {
             got.is_nan() && want.is_nan()
@@ -628,7 +628,7 @@ fn f64_range_rescue(
     )
 }
 
-/// F3 literal resolution: pin a matched Const-bearing candidate's slots to literal
+/// Literal resolution: pin a matched Const-bearing candidate's slots to literal
 /// tokens, for a const-FREE source (whose slot values are fixed reals, not existential
 /// families). The fit's witness only SEEDS the pin -- its last bits are least-squares
 /// noise (measured: the log-linear closed form landed ~20 ulp off `e^pi`) -- so the
@@ -1034,8 +1034,8 @@ pub fn equivalent_no_const_check(
 ///
 /// `accept` is the CALLER's acceptance criterion (the serve-time reduction ordering in the
 /// mine and certify paths), threaded INTO the selection: a refused candidate asks for the
-/// next one instead of vetoing the whole selection (finding F2 -- the enumeration doctrine
-/// of finding F1 applied to candidate selection). It judges the candidate's FINAL spelling,
+/// next one instead of vetoing the whole selection (the enumeration doctrine
+/// applied to candidate selection). It judges the candidate's FINAL spelling,
 /// i.e. after the bare-`<constant>` literal fold.
 pub fn select_best(
     source: &[String],
@@ -1094,7 +1094,7 @@ struct CandEntry {
     loglin: Option<(crate::fit::LogLinForm, Tape)>,
     /// `interval::value_set` over the reals, computed ONCE at library build: it is a pure
     /// function of (tokens, ops), and the scan used to recompute it per (source,
-    /// candidate) -- measured at 14.4% of the scan (2026-08-22 audit). Cached, not
+    /// candidate) -- measured at 14.4% of the scan. Cached, not
     /// removed: the reachability refusal it feeds is a net saving on hot sources.
     reals_vs: Option<crate::interval::Vs>,
     /// mu of this candidate in the BARE context -- the SEARCH ORDER and the SEARCH BOUND.
@@ -1877,7 +1877,7 @@ impl CandidateLibrary {
     /// is var-free -- its own tokens, or `resolve_const_slots`' literal respelling of
     /// them -- so a var-free composite in the library is judged, fitted and battery-swept
     /// only to be refused at the end, on every path. Building it is pure waste: measured
-    /// 2026-08-22 over two independent 400-source length-4 slices, dropping the class cut
+    /// over two independent 400-source length-4 slices, dropping the class cut
     /// the scan from 101.5 s to 3.2 s (and 59.7 s to 2.2 s) with BYTE-IDENTICAL mined
     /// rules, and the shipped acj-4-3 artifact has 0 of 5,319 rules with a var-free
     /// composite RHS. Var-free LEAVES (`0`, `np.pi`) stay: admitting foldable sources to
@@ -1888,7 +1888,7 @@ impl CandidateLibrary {
     /// exact leaves -- `exp 1` -> the rounded literal 2.718... That concern died when the
     /// emit guard landed: the leaf itself is always a candidate, so the composite
     /// spelling adds nothing it can ever emit. The exemption admitted exactly the class
-    /// the emit guard refuses; the two were never reconciled until the 2026-08-22 audit.)
+    /// the emit guard refuses; the two were never reconciled.)
     pub fn build(
         ops: &Operators,
         candidates: &[Vec<String>],
@@ -2260,7 +2260,7 @@ fn certify_candidate(
     if dirac_refutes_literal(source, &target, ops) {
         return None;
     }
-    // THE EMITTED TARGET IS WHAT SHIPS (2026-08-21). The library's fold filter
+    // THE EMITTED TARGET IS WHAT SHIPS. The library's fold filter
     // asks what the CONSTRUCTOR folds a candidate to, but the scan emits the
     // candidate's OWN token form -- so a candidate admitted because it folds to
     // a leaf (`pow 1 <constant>` -> `1`) was still written out composite:
@@ -2334,7 +2334,7 @@ fn certify_candidate(
 /// `accept` (optional) is the caller's acceptance criterion, threaded into the scan: when every
 /// match at a length is refused, the scan CONTINUES to the next length -- token count is not the
 /// reduction ordering, so a longer spelling can still sit strictly below the caller's mark
-/// (finding F2: the old accept-after-scan shape returned one representative and let the caller
+/// (the old accept-after-scan shape returned one representative and let the caller
 /// veto the whole search).
 ///
 /// `accept_resolved` (optional) is an ADDITIONAL criterion for COMPUTED-literal targets:
@@ -2416,7 +2416,7 @@ pub fn find_rule_with_lib(
         if !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
             if let Some(tok) = crate::numeric::evaluate_constant_subtree(source, ops) {
                 // A NON-FINITE f64 verdict must be corroborated by the honest interval
-                // CLASS (H-019/H-021, 2026-08-04): f64 evaluation cannot distinguish an
+                // CLASS: f64 evaluation cannot distinguish an
                 // exact boundary hit from a true domain escape -- `acosh(acos(cos 1))`
                 // evaluates nan at EVERY float precision (the argument rounds below 1)
                 // while its exact value is acosh(1) = 0. Under the old point-precision
@@ -2433,7 +2433,7 @@ pub fn find_rule_with_lib(
                     Some(x) => match crate::interval::value_class(source, ops) {
                         // UNANALYZABLE: the honest layer has NO opinion (rootn's
                         // non-integer-index nan family lives here) -- the channel keeps
-                        // its pre-H-019 semantics. A registered residual, strictly no
+                        // its pre-outward-rounding semantics. A registered residual, strictly no
                         // wider than the ungated channel ever was.
                         None => true,
                         // An analyzed class must AGREE. Mismatches are exactly the two
@@ -2459,7 +2459,7 @@ pub fn find_rule_with_lib(
                     // own fold results: the engine reduces `+ 1 exp (-1)` by EXACT
                     // decimal-rational arithmetic to `1.36787944117144233`, f64
                     // arithmetic gives the DIFFERENT value `1.3678794411714423`, and the
-                    // shorter print won the lit_size tier -- measured 2026-08-01 at
+                    // shorter print won the lit_size tier -- measured at
                     // ~1.4k mint-then-drop rules per canonical mine, contained only by
                     // sort promotion's UNSUPPORTED bucket (and `promote_sorts` defaults
                     // to OFF, where they shipped as serve-time rounding rewrites).
@@ -2500,7 +2500,7 @@ pub fn find_rule_with_lib(
             // through once the strict resolved-target gate closed the respell leak),
             // and the arm minted `+ 1 exp (-1) -> <constant>` -- a Const-INTRODUCING
             // ground rule that died only because confirmation's answer-shape differs
-            // (measured 2026-08-01 on the canonical mine). The mining acceptance
+            // (measured on the canonical mine). The mining acceptance
             // carries the matching refusal so the candidate scan cannot re-mint what
             // this arm no longer answers.
             Some(crate::interval::Class::Finite) => {
@@ -3055,7 +3055,7 @@ mod tests {
     fn library_filter_mirrors_the_emit_guard() {
         // The library must drop EVERY var-free candidate of length >= 2, unconditionally:
         // the shared scan refuses every var-free composite TARGET at the mint, so such a
-        // candidate can never emit and building it is pure waste (2026-08-22 audit; two
+        // candidate can never emit and building it is pure waste (two
         // 400-source byte-identity controls). Leaves -- variables, `<constant>`, literals
         // -- always stay.
         let Some(e) = crate::test_engine() else {
@@ -3156,7 +3156,7 @@ mod tests {
         assert_eq!(select_best(&src, m, ops, None), Some(s(&["x0"])));
     }
 
-    /// Finding F2: the caller's acceptance rides the selection -- a refused candidate
+    /// The caller's acceptance rides the selection -- a refused candidate
     /// yields to the NEXT one instead of vetoing the whole selection (the old shape
     /// returned one representative and let the caller throw the search away).
     #[test]
@@ -3196,7 +3196,7 @@ mod tests {
         );
     }
 
-    /// Finding F2, the across-length half: when every match at the shortest matching
+    /// The across-length half: when every match at the shortest matching
     /// length is refused, the scan CONTINUES -- token count is not the reduction
     /// ordering, so a longer spelling can sit strictly below the caller's mark.
     #[test]

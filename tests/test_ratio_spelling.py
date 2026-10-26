@@ -1,4 +1,4 @@
-"""Integer-over-decimal spelling of a fraction (owner 2026-10-02) -- in the INFIX text only.
+"""Integer-over-decimal spelling of a fraction -- in the INFIX text only.
 
 Every literal is its exact rational value, so ``3.141592653589793`` is 3141592653589793/10^15
 and ``1/(2*3.141592653589793)`` folds to 500000000000000/3141592653589793. That value has no
@@ -9,7 +9,7 @@ integer. Taking the factors 2 and 5 out of the numerator always leaves a termina
 decimal in the denominator; the infix text uses that spelling wherever it is strictly
 shorter.
 
-The token answers keep ``p/q`` (test_spelling_invariance.py; plan v2 phase 1): tokens are
+The token answers keep ``p/q`` (test_spelling_invariance.py): tokens are
 what the engine and its callers read back, and a spelling chosen for a reader must not move
 what they decide.
 

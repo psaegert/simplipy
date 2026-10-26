@@ -189,7 +189,7 @@ def _canonical_expression(expression: str | list[str] | tuple[str, ...] | np.nda
     """The ONE internal representation both forms are computed on: the canonical
     explicit binary prefix, with variables and the constant placeholder
     canonicalised."""
-    # to_prefix is a pure NOTATION conversion since the split (2026-08-18), so the
+    # to_prefix is a pure NOTATION conversion since the split, so the
     # CANONICALISATION has to be asked for explicitly -- `simplify` is what folds,
     # collects and sorts. Converting first and simplifying second is the exact
     # composition: it reaches the same canonical state from all three dialects,

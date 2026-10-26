@@ -5,7 +5,7 @@
 //! * the two soundness certificates run through the SAME per-engine generational caches as the
 //!   old kernel (`bang_cache` / `mult_cache`), keyed by the serialized explicit form -- one
 //!   trust base, two engines;
-//! * the serve-time fold is EXACT-ONLY (fold unification, 2026-08-02): rational arithmetic
+//! * the serve-time fold is EXACT-ONLY (fold unification): rational arithmetic
 //!   lives in the constructors, the `<constant>` value-set collapse below, and NOTHING
 //!   transcendental folds at serve -- those identities are mined, symbolically certified rules;
 //! * the `<constant>` collapse reads the constant-collapse criterion the mint reads
@@ -25,7 +25,7 @@
 //! is WELL-FOUNDED (the measure mu, then the canonical order -- see `ordered_below`), so the
 //! chain never revisits a state and reaches its fixpoint in finitely many passes as a THEOREM;
 //! the step cap and the iteration budget are defense-in-depth against ordering-invariant bugs
-//! (the full ledger of what is theorem, what is enforced, and what is empirical:
+//! (the full account of what is theorem, what is enforced, and what is empirical:
 //! docs/formal.md). The answer is the chain's FINAL state -- by pass contraction (L3) it
 //! carries the chain's minimum complexity, and it is the fixpoint whenever the budget did not
 //! truncate (the input's canonical form is the first state, so the result never exceeds it);
@@ -45,7 +45,7 @@ use crate::tokens::{TokenOverlay, TokenView};
 use super::memo::SimplifyCtx;
 use super::Engine;
 
-/// H-051 (2026-08-05): does this expression contain a `pow` whose exponent denotes
+/// Does this expression contain a `pow` whose exponent denotes
 /// an exact INTEGER the interval layer can only BRACKET -- a beyond-2^53 `Num`, a
 /// beyond-i128 literal spelling, or its structural negation? The composite-level
 /// class fold must not trust a Nan verdict computed over such a node: the interval
@@ -132,8 +132,7 @@ impl Engine {
             .get_or_init(|| self.translate_rules(&self.rules, RuleMode::Default))
     }
 
-    /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE (owner
-    /// ruling, 2026-08-19: "I'd like one distinct rule set for each mode"), never a base
+    /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE, never a base
     /// plus a supplement. `rules.json` is the DEFAULT set, `rules_real.json` the `Real`
     /// set, `rules_permissive.json` the `Corpus` set; each file is self-contained, so WHAT IS
     /// LOADED IS WHAT IS SERVED, and nothing has to be unioned to answer "which rules
@@ -195,7 +194,7 @@ impl Engine {
     /// construction: `ac_served_rules_in_mode` points every served rule at a position in
     /// the file the mode names, with no offset arithmetic between tiers.
     ///
-    /// C1.20 LOAD CONSUMER (2026-08-08): before translate, every raw rule passes the
+    /// LOAD CONSUMER: before translate, every raw rule passes the
     /// licence registry's pole entry (`engine::refusals::pole_refusal`) on its
     /// mine-language sides -- defense in depth behind the mint-side gate, so a stale
     /// or foreign artifact cannot smuggle a defined-value change at a constructed
@@ -203,7 +202,7 @@ impl Engine {
     /// speak the same sugar the mint judged (`inv`, `/`, `pow`), and the walker's
     /// arity guard keeps foreign vocabularies safe. The two SYNTACTIC registry
     /// entries deliberately do NOT run here: the special count without the engine's
-    /// endpoint is exactly the spelling-keyed proxy F49 falsified, and the
+    /// endpoint is exactly the spelling-keyed proxy a gate must not use, and the
     /// Const-introduction case is already load-refused by the Const-count invariant.
     /// Refusals are counted (`n_registry_dropped`), expected 0 for every artifact the
     /// mint-side registry produced.
@@ -226,7 +225,7 @@ impl Engine {
         mode: RuleMode,
         canon: crate::ac::rules::RuleCanon,
     ) -> AcRules {
-        // A mode's rules are read in that mode's number domain (design 2c), whichever run
+        // A mode's rules are read in that mode's number domain, whichever run
         // first asks for them (translation is lazy and may start inside another mode's run).
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let is_wildcard = |s: &str| {
@@ -444,7 +443,7 @@ impl Engine {
         self.ac_rules().n_registry_dropped
     }
 
-    /// C36: the per-reason drop census -- every non-kept disposition of the loaded
+    /// The per-reason drop census -- every non-kept disposition of the loaded
     /// asset's rules, named: the six translate-time reasons, the registry refusal,
     /// and the arithmetic subsumption count, as (reason, count) pairs.
     pub fn ac_rules_drop_census(&self, mode: RuleMode) -> Vec<(String, usize)> {
@@ -594,7 +593,7 @@ impl Engine {
     /// * `mod(a, b)` at a certainly finite `a`, where the floor of the quotient is decided the
     ///   same way: `a - b floor(a/b)` (`mod(1, sinh 1) = 1`, `mod(2, sin 1) = 2 - 2 sin 1`);
     ///   under an infinite divisor, `a` where it is zero or has the divisor's sign (numpy's
-    ///   cells, D7: `mod(-1, -inf) = -1`). The divisor 0, an infinite dividend and the infinite
+    ///   cells: `mod(-1, -inf) = -1`). The divisor 0, an infinite dividend and the infinite
     ///   remainders are classes, folded above.
     /// * `abs(a)` at an `a` certainly non-negative is the member `a` (`abs(sin 1) = sin 1`), as
     ///   `mod(a, b)` is `a` where the quotient's floor is 0.
@@ -649,8 +648,8 @@ impl Engine {
     /// The zero-set certificate behind `Cx::cert_nzae`: NONZERO a.e., decided by the
     /// structural zero-set analysis (`interval::zero_set_null_generic_const` --
     /// identity-theorem witness for analytic compositions, `<constant>` analyzed as a
-    /// generic parameter in the joint space per the E1 lemma (F80, owner-ruled
-    /// 2026-08-10), fail-closed on everything else). Uncached: the structural
+    /// generic parameter in the joint space per the generic-parameter lemma,
+    /// fail-closed on everything else). Uncached: the structural
     /// recursion is cheap and the witness budget is small. `f64` (the `f64` mode) reads each
     /// function on its float64 range, where `tanh` and `atan` are constant on whole tails;
     /// `real` and `permissive` read the real functions.
@@ -678,7 +677,7 @@ impl Engine {
     /// constants) collapses to `<constant>` under the ratified value-set licence (unconditionally
     /// under LOSSY): `pow(2, C)`, `pow(np.pi, C)` and `exp(C)` alike.
     ///
-    /// FOLD UNIFICATION (owner-approved 2026-08-02): the engine folds ONLY what it
+    /// FOLD UNIFICATION: the engine folds ONLY what it
     /// computes EXACTLY -- rational arithmetic, which lives in the constructors (bag
     /// coefficient merging, integer/rational pow, exact roots) -- and this fallback's
     /// former all-literal arm, the ONE remaining f64-evaluation path at serve, is
@@ -695,13 +694,13 @@ impl Engine {
     /// `pow(2, C)` does); an infinity is no literal here (`C/0` keeps its pole). Structural exact
     /// symbol algebra (bag cancellation `pi/pi -> 1`) is outside the fold and deliberately
     /// unaffected.
-    /// H-045-R (owner Option B, 2026-08-05): exact-parity classification for
+    /// Exact-parity classification for
     /// `pow(<negative ground>, <beyond-certification integer literal>)`. Returns
     /// `Some(verdict)` when this arm DECIDES -- `Some(Some(lit))` folds, `Some(None)`
     /// refuses (the true class is Finite, which this fold never materializes) --
     /// and `None` to fall through to the interval class. Doctrine at the call site.
     ///
-    /// H-051 (2026-08-05, extreme-literal lane): the arm also reads `Ex::Num`
+    /// The arm also reads `Ex::Num`
     /// exponents -- an i128-parseable integer literal beyond 2^53 (e.g.
     /// `10000000000000000001`) parses to `Num`, whose f64 image differs from the
     /// denoted integer, so the interval layer brackets it and the continuum
@@ -709,7 +708,7 @@ impl Engine {
     /// (`pow(-9007199254740994, 10^19+1) -> nan` live, fuzz-extreme row 1756). The
     /// rational IS exact: integrality, sign, and parity come straight off it, at
     /// every magnitude. This is the "constructor parity fold on Num exponents"
-    /// direction the H-045-R closure recorded.
+    /// direction.
     fn h045_exact_pow_class(&self, e: &Ex, bare: &Cx, ctx: &SimplifyCtx) -> Option<Option<Ex>> {
         let Ex::Pow(b, ex) = e else { return None };
         let view = bare.view;
@@ -860,8 +859,8 @@ impl Engine {
         };
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
-        // EXTENDED-REAL GROUND CLASSIFICATION (owner-approved option B, 2026-08-02;
-        // generalized from bag absorption): exact arithmetic BY CERTIFICATION, never
+        // EXTENDED-REAL GROUND CLASSIFICATION (generalized from bag absorption):
+        // exact arithmetic BY CERTIFICATION, never
         // by evaluation. A GROUND composite (no variables, no Const anywhere) whose
         // rigorous interval CLASS is Nan / +inf / -inf folds to that literal: the
         // class of a ground expression is an exact fact (no finite value is read, so
@@ -875,7 +874,7 @@ impl Engine {
         // symbolic; the miner's hiprec channel still mints those rows as rules.
         let is_composite = matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..));
         if is_composite && is_ground(e, &view) {
-            // PER-CALL MEMO (2026-08-02): a ground composite that survives (Finite/
+            // PER-CALL MEMO: a ground composite that survives (Finite/
             // Mixed class) is re-visited by the fold on EVERY pass, and interval
             // classification is the expensive step -- without the memo the arm cost
             // ~24us of the 74us corpus-walk mean. Keyed on the interned
@@ -889,7 +888,7 @@ impl Engine {
                 return hit.clone();
             }
             let strs = self.resolve_seq(&flat, ctx);
-            // H-045-R OVERRIDE (owner Option B, 2026-08-05): `pow` with a NEGATIVE
+            // EXACT-PARITY OVERRIDE: `pow` with a NEGATIVE
             // ground base and a beyond-certification INTEGER literal exponent (an
             // overlay Leaf: the spelling's denoted integer exceeds `i128`, so it is
             // neither a `Num` nor an interval-certifiable point -- the bracket spans
@@ -906,11 +905,11 @@ impl Engine {
             // The interval layer keeps its documented continuum convention; this
             // arm reads the one thing the interval cannot see: the token. (Vs
             // point-support provenance is the RECORDED design direction if more
-            // point-derived-enclosure consumers appear -- register H-045.)
+            // point-derived-enclosure consumers appear.)
             let verdict = match self.h045_exact_pow_class(e, &bare, ctx) {
                 Some(decided) => decided,
                 None => match crate::interval::value_class(&strs, &self.operators) {
-                    // H-051 completion (2026-08-05): a Nan verdict on a composite
+                    // A Nan verdict on a composite
                     // CONTAINING a bracket-poisoned pow exponent (a Num or literal
                     // spelling whose exact integer the interval can only bracket) is
                     // untrustworthy -- the pow-node arm above cannot help once the
@@ -1031,7 +1030,7 @@ impl Engine {
                 return verdict;
             }
         }
-        // GENERALIZED CONST-SHIFT ABSORPTION (P3', owner-approved 2026-08-02): an
+        // GENERALIZED CONST-SHIFT ABSORPTION: an
         // Add/Mul bag holding a `<constant>` absorbs any GROUND member whose
         // interval-certified value is finite (Add) resp. finite and provably
         // nonzero (Mul): `C + g -> C'` is a bijective reparametrization of the fitted
@@ -1040,11 +1039,11 @@ impl Engine {
         // enumeration reaches -- the family is structural and closed under signs and
         // nesting the enumerator never sees (found live: `C + cosh(1)` absorbed by a
         // mined rule while `C - cosh(1)` survived for want of a sign twin).
-        // SPECIAL-bearing grounds absorb exactly like every other ground (contract
-        // amendment, owner-ratified 2026-08-08: `C + pi -> C'` is the same bijection
-        // as `C + cosh(1) -> C'`; the 2026-08-01 mask-x-special carve-out held the
-        // structure for a post-fit rationalizer that remains unbuilt, and the fa
-        // vocabulary carries no specials -- superseded). What stays refused is
+        // SPECIAL-bearing grounds absorb exactly like every other ground
+        // (`C + pi -> C'` is the same bijection
+        // as `C + cosh(1) -> C'`; a mask-x-special carve-out would hold the
+        // structure for a post-fit rationalizer that does not exist, and the fa
+        // vocabulary carries no specials). What stays refused is
         // UNCHANGED and lives elsewhere: a special may never be eaten by an
         // INTRODUCED `<constant>` (determined-source licence at mint, Const-count
         // invariant at load), and non-bijective positions (pow and kin) are not
@@ -1176,8 +1175,7 @@ impl Engine {
     /// The shared tail of both projections: malformed input is `None` -- the AC parser is
     /// the arbiter, and the FAILURE SIGNAL propagates to the caller (the FFI raises
     /// ValueError). The old contract returned the input unchanged, which silently passed
-    /// garbage through the one entry point whose inputs skip `is_valid` (audit Tier-2,
-    /// 2026-08-03).
+    /// garbage through the one entry point whose inputs skip `is_valid`.
     fn project(
         &self,
         ctx: SimplifyCtx,
@@ -1188,10 +1186,10 @@ impl Engine {
         // Malformed input is `None` -- the AC parser is the arbiter, and the FAILURE
         // SIGNAL propagates to the caller (the FFI raises ValueError). The old contract
         // returned the input unchanged, which silently passed garbage through the one
-        // entry point whose inputs skip `is_valid` (audit Tier-2, 2026-08-03).
+        // entry point whose inputs skip `is_valid`.
         let best = best?;
         let view = self.view(&ctx);
-        // Spelled in the run's number domain (design 2c): `mode` built these numbers. Only
+        // Spelled in the run's number domain: `mode` built these numbers. Only
         // the domain follows the run; the spelling context stays `bare` (a lossy mode's
         // licences would change the spelling).
         let bare = Cx::bare(&view);
@@ -1203,11 +1201,11 @@ impl Engine {
         Some(self.resolve_seq(&toks, &ctx))
     }
 
-    /// D39 B1 (ledger D39): [`Engine::ac_simplify_proj`] with the OPT-IN post-fixpoint
+    /// [`Engine::ac_simplify_proj`] with the OPT-IN post-fixpoint
     /// exploration phase. `explore_budget` counts candidate descents in `ac::search`;
     /// 0 never enters the phase, making this entry byte-identical to `ac_simplify_proj`
-    /// (the ledger's effort=0 semantics). The public `effort=` API (D39 B7, wired
-    /// 2026-08-24) reaches this through the `_in_mode` FFI entries' budget parameter.
+    /// (effort=0). The public `effort=` API
+    /// reaches this through the `_in_mode` FFI entries' budget parameter.
     pub fn ac_explore_proj(
         &self,
         tokens: &[String],
@@ -1219,7 +1217,7 @@ impl Engine {
         let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
-        // Spelled in the run's number domain (design 2c): `mode` built these numbers. Only
+        // Spelled in the run's number domain: `mode` built these numbers. Only
         // the domain follows the run; the spelling context stays `bare` (a lossy mode's
         // licences would change the spelling).
         let bare = Cx::bare(&view);
@@ -1274,7 +1272,7 @@ impl Engine {
     }
 
     /// The infix twin of [`Engine::ac_explore_proj`] -- `ac_simplify_infix` with the
-    /// D39 exploration budget threaded through, for the public `effort=` API.
+    /// exploration budget threaded through, for the public `effort=` API.
     pub fn ac_simplify_infix_explore(
         &self,
         tokens: &[String],
@@ -1321,7 +1319,7 @@ impl Engine {
         max_passes: usize,
     ) -> Option<(u64, u64, Vec<String>)> {
         let src_c = self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)?;
-        // THE MINE CANONICALISES UNFOLDED (owner ruling 2026-08-20). The default RULE
+        // THE MINE CANONICALISES UNFOLDED. The default RULE
         // SET, but with transcendental folding OFF -- `real`'s discipline, which is the
         // finest-grained canonical form there is, so every rule is discoverable.
         //
@@ -1358,8 +1356,8 @@ impl Engine {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
-        // Parse with the CHAIN'S context for the REQUESTED mode (F2 route fix,
-        // 2026-08-24): the instrument must price the state that mode's chain
+        // Parse with the CHAIN'S context for the REQUESTED mode: the
+        // instrument must price the state that mode's chain
         // actually starts from -- a fold-free parse reached a different canonical
         // fixpoint on 10 of 65,536 benchmark rows and broke
         // mu(simplify(e)) <= mu(e) as measured; pricing permissive outputs in the
@@ -1382,7 +1380,7 @@ impl Engine {
     ///
     /// Why NOT the public conversion API (`to_prefix`/`to_tagged`, i.e.
     /// `ac_simplify_proj(.., 0, ..)`): that runs the REWRITE PASS under the LOADED RULESET
-    /// and the full certificate-carrying context. Measured, 2026-08-18: on an engine
+    /// and the full certificate-carrying context. Measured: on an engine
     /// holding acj-4, `to_prefix(["sinh","asinh","_0"])` returns `_0` -- that rule's own
     /// RHS -- while on a RULES-LESS engine over the same vocabulary it returns
     /// `sinh asinh _0`. The two engines differ only in their rules, so the collapse
@@ -1550,7 +1548,7 @@ impl Engine {
                 // states could share one serialization, dedup would silently merge two
                 // DIFFERENT rules. Re-parsing the key under the same bare context must
                 // land back on the same state. (The explicit projection is the one with a
-                // known display-redistribution class -- see `stable_in`'s H-014 note --
+                // known display-redistribution class -- see `stable_in`'s orientation note --
                 // which is why the key is the tagged form.)
                 debug_assert!(
                     from_prefix(&key, &bare).map(|p| canon(p, &bare)).as_ref() == Some(&e),
@@ -1570,7 +1568,7 @@ impl Engine {
     /// bare pricing above cannot promise that: a certificate-licensed respelling the
     /// bare context cannot re-derive keeps its own (possibly higher) measure --
     /// found live as 0.48% of 64k corpus rows measuring above ratio 1, in quanta of
-    /// one symbol unit (2026-08-02).
+    /// one symbol unit.
     ///
     /// `canon_mode` is the mode the certified CANON itself runs in: `complexity()` passes
     /// the requested mode, pricing in that mode's own canon (its fold discipline and
@@ -1619,11 +1617,11 @@ impl Engine {
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
         };
-        // The whole call runs in the mode's number domain (design 2c): the
+        // The whole call runs in the mode's number domain: the
         // certificates and folds below build numbers too.
         let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
-        // Parse with the CHAIN'S context for the requested mode (F2 route fix,
-        // 2026-08-24) -- see ac_complexity; this is the theorem-bearing
+        // Parse with the CHAIN'S context for the requested mode
+        // -- see ac_complexity; this is the theorem-bearing
         // instrument, and its parse route must be the one the descent actually
         // starts from.
         let mut pbare = Cx::bare(&view);
@@ -1670,13 +1668,13 @@ impl Engine {
         max_passes: usize,
         mode: RuleMode,
     ) -> (SimplifyCtx, Option<Ex>) {
-        // explore_budget 0 = the exploration phase does not exist (D39's effort=0
-        // semantics): every pre-D39 entry point routes through here, byte-stable.
+        // explore_budget 0 = the exploration phase does not exist (effort=0):
+        // every entry point without a budget routes through here, byte-stable.
         self.ac_simplify_ex_explore(tokens, max_passes, mode, 0)
     }
 
-    /// [`Engine::ac_simplify_ex`] plus the D39 OPT-IN post-fixpoint exploration
-    /// phase (`ac::search`, ledger D39): after the calling mode's own chain settles,
+    /// [`Engine::ac_simplify_ex`] plus the OPT-IN post-fixpoint exploration
+    /// phase (`ac::search`): after the calling mode's own chain settles,
     /// `explore_budget > 0` runs the budgeted expansion search under the SAME pass
     /// context and accepts only endpoints strictly below in the reduction ordering.
     /// Every mode runs ONE walk with the fold discipline its mode derives
@@ -1774,7 +1772,7 @@ impl Engine {
             fold_f64: fold_tr,
             sentinels_expired: false,
         };
-        // The whole call runs in the mode's number domain (design 2c): the
+        // The whole call runs in the mode's number domain: the
         // certificates and folds below build numbers too.
         let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Each distinct base's region verdict is decided once per context in the call.
@@ -1782,8 +1780,8 @@ impl Engine {
         // Parse with the CALL's MODE: a bare (sound) parse let sound-only
         // constructor arms destroy structure lossy passes need -- `inv
         // float("inf")` folded to 0 AT PARSE, so the mul bag never saw the
-        // x * x^-1 pair the relaxed $-certificate cancels (`(inf/inf) * x0`,
-        // 2026-08-02). The parse Cx stays CERT-LESS: `canon(e0, &cx)` below
+        // x * x^-1 pair the relaxed $-certificate cancels (`(inf/inf) * x0`).
+        // The parse Cx stays CERT-LESS: `canon(e0, &cx)` below
         // immediately re-runs full cert-carrying construction, so certs at parse
         // are pure double work (measured +15us corpus-walk mean).
         let mut pbare = Cx::bare(&view);
@@ -1842,7 +1840,7 @@ impl Engine {
             // round-trip under the sentinel-expired canon, phase 1 states under the
             // sentinel-keeping one.
             //
-            // STATE-level identity, not token-level (H-014 hardening, 2026-08-03): two
+            // STATE-level identity, not token-level: two
             // DISTINCT canonical states can share one serialization (the display-
             // redistribution class), and a token comparison certifies both -- exactly
             // how the factored/distributed sign-orientation pair hid from this assert.
@@ -1851,12 +1849,12 @@ impl Engine {
                 .map(|p| {
                     let p = canon(p, cxx);
                     if p != *e {
-                        // C34b/D7 (owner-ratified): this assert is the LIVE route-equality
+                        // This assert is the LIVE route-equality
                         // instrument -- every constructor-built pass state must equal its
                         // parse-route canon. The measured divergence class (the odd-literal
-                        // sign pair) was REMOVED by B5+B19; zero specimens remain, so the
+                        // sign pair) was REMOVED by the odd-literal sign fusion; zero specimens remain, so the
                         // hard failure stays (strictly sound). The diagnostics below carry
-                        // the D7 trigger decision for any future specimen: mu-equal
+                        // the trigger decision for any future specimen: mu-equal
                         // divergence = the deferred route-invariance work reopens;
                         // mu-UNEQUAL divergence = treat as value-suspect and fix first.
                         let s = |v: &[crate::tokens::Tok]| {
@@ -1904,7 +1902,7 @@ impl Engine {
         // non-fixpoint, so idempotence would break). A budget-truncated run returns the
         // last state reached, which is sound.
         for _ in 0..max_passes {
-            // Clone-free fixpoint detection: `None` = the pass moved nothing (B1).
+            // Clone-free fixpoint detection: `None` = the pass moved nothing.
             let Some(next) = rewrite_pass_opt(&current, &pass) else {
                 break; // fixpoint, decided on the representation itself
             };
@@ -1922,12 +1920,12 @@ impl Engine {
             );
             current = land_root(next, &cx);
         }
-        // D39 EXPLORATION, sound mode (ledger D39; `ac::search`): the chain above ran
+        // EXPLORATION, sound mode (`ac::search`): the chain above ran
         // UNCHANGED to its fixpoint -- the theorems (T6, L3/L4) are already banked --
         // and only an explicit budget enters the phase at all. Lossy mode explores
         // its OWN final fixpoint after sentinel expiry instead (phase 2 below):
         // exploration is post-FIXPOINT by definition, and phase-1 lossy states are a
-        // search licence, not an answer (H-015).
+        // search licence, not an answer.
         if explore_budget > 0 && !wildcard_all {
             current = land_root(
                 crate::ac::search::explore(current, &pass, max_passes, explore_budget),
@@ -1938,7 +1936,7 @@ impl Engine {
                 "explored endpoint is not serialization-stable: {current:?}"
             );
         }
-        // SENTINEL EXPIRY, phase 2 (H-015 class (a), 2026-08-04): the lossy parse keeps
+        // SENTINEL EXPIRY, phase 2: the lossy parse keeps
         // `inv(inf)`-class reciprocals unfolded so the `$`-cancel can find its partner
         // (mask-sentinel doctrine) -- a licence for the SEARCH, not the answer. At the
         // phase-1 fixpoint every surviving sentinel is unpartnered and IS the value 0,
@@ -2008,7 +2006,7 @@ impl Engine {
                 );
                 current = land_root(next, &cx2);
             }
-            // D39 EXPLORATION, lossy mode: same phase, run on the sentinel-expired
+            // EXPLORATION, lossy mode: same phase, run on the sentinel-expired
             // final fixpoint under the phase-2 pass (blanket licences -- the shipped
             // wildcard_all semantics apply to the moves exactly as to the chain).
             if explore_budget > 0 {
@@ -2022,7 +2020,7 @@ impl Engine {
                 );
             }
         }
-        // LOSSY OUTPUT PROJECTION (H-015, 2026-08-04): the returned endpoint gets the
+        // LOSSY OUTPUT PROJECTION: the returned endpoint gets the
         // mu-cheaper reciprocal spelling (`(a*b)^-1` vs `a^-1 * b^-1`) where the joined
         // form wins. Boundary-only by design: the chain above runs entirely in the
         // distributed working canon (per-state `stable()` holds for THAT canon), and the
@@ -2220,7 +2218,7 @@ mod tests {
     use crate::engine::RuleMode;
     use crate::Engine;
 
-    /// THE DEDUP KEY (owner ruling 2026-08-18: "compare internal form, not spelling").
+    /// THE DEDUP KEY ("compare internal form, not spelling").
     /// `ac_canonical_key` must be the BARE-context canonical serialization -- literally
     /// what `AcRules::translate` builds for a rule side -- and NOT what the public
     /// `to_prefix`/`to_tagged` return: those run the rewrite pass under the LOADED
@@ -2317,7 +2315,7 @@ mod tests {
         s.iter().map(|x| x.to_string()).collect()
     }
 
-    // ---- ONE DISTINCT RULE SET PER MODE (owner ruling, 2026-08-19) --------------------
+    // ---- ONE DISTINCT RULE SET PER MODE --------------------
     //
     // Four PROBE RULES from the shipped artifact, each of which the canonical
     // constructors CANNOT reach unaided -- verified by construction below
@@ -2461,7 +2459,7 @@ mod tests {
         }
     }
 
-    /// A PUSH TRANSLATES ONLY THE SET IT REPLACES (F9): replacing the default set keeps the
+    /// A PUSH TRANSLATES ONLY THE SET IT REPLACES: replacing the default set keeps the
     /// other modes' translations, and a mode with no set of its own still serves the new
     /// default set (it reads the default translation itself, never its own cell).
     #[test]
@@ -2632,7 +2630,7 @@ mod tests {
         assert_eq!(d[0].2, 0);
     }
 
-    /// C1.11: the per-Engine certificate cache's no-overlay-ids invariant lives in
+    /// The per-Engine certificate cache's no-overlay-ids invariant lives in
     /// the TYPE (insert drops overlay-bearing keys; debug builds assert), not only in
     /// `ac_cert`'s call-site guard. The breach the drop prevents: the token table is
     /// append-only, so a poisoned overlay-keyed entry would not stay unreachable --
@@ -2680,7 +2678,7 @@ mod tests {
         e.bang_cache[0].lock().unwrap().insert(key, true, &e.tokens);
     }
 
-    /// H-051 (2026-08-05, extreme-literal lane): `Ex::Num` exponents classify by the
+    /// `Ex::Num` exponents classify by the
     /// exact rational -- an i128-parseable beyond-2^53 literal parses to Num, whose
     /// f64 image differs from the denoted integer; the interval bracket then made the
     /// continuum convention assert Nan for a genuinely FINITE value
@@ -2731,11 +2729,11 @@ mod tests {
         let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Real).unwrap();
         assert_eq!(
             kept,
-            // H-059 (2026-08-07): the coefficient now takes the DIVISOR side, per the
+            // The coefficient now takes the DIVISOR side, per the
             // ratified §8 rule restored for out-of-bound fractions -- `0.9999999999999999`
             // (18 chars) against `10000000000000000/9999999999999999` (34). Same value,
             // spelling only; the classification this test guards is the `pow` pair, which
-            // is unchanged. The sign splits out as `-1` (H-020: never inside `<div>`).
+            // is unchanged. The sign splits out as `-1` (never inside `<div>`).
             t(&[
                 "<mul>",
                 "-1",
@@ -2750,10 +2748,10 @@ mod tests {
         assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Real).unwrap(), kept);
     }
 
-    /// H-045-R (owner Option B, 2026-08-05): `pow` with a negative ground base and a
+    /// `pow` with a negative ground base and a
     /// beyond-i128 INTEGER literal exponent classifies EXACTLY from the spelling's
     /// sign and parity -- the old path asserted Nan through the interval bracket's
-    /// a.e. convention (the bracket at 1e40 spans many integers, so the H-029
+    /// a.e. convention (the bracket at 1e40 spans many integers, so the
     /// single-integer honesty gate could not fire). Finite negative bases REFUSE
     /// (the true value is a finite real at every integer exponent); (-inf) folds by
     /// parity; non-integer spellings keep the correct Nan; the certified-point
@@ -2776,11 +2774,11 @@ mod tests {
             t(&["float(\"-inf\")"])
         );
         // (-inf)^{-int} = 0 is FINITE: sound refusal, in both negation spellings.
-        // H-048: the SIGNED leaf spelling "-1e40" splits into structure at parse
+        // The SIGNED leaf spelling "-1e40" splits into structure at parse
         // (the sign is never inside an opaque leaf), so the kept form is the
         // structural negation -- identical to the `neg`-spelled twin below.
         // Phase 2c: 1e40 is an exact number (no longer an opaque leaf), so the negative
-        // exponent decomposes as H-051's Num exponents do: inv((-inf)^(10^40)) = 0 exactly.
+        // exponent decomposes as Num exponents do: inv((-inf)^(10^40)) = 0 exactly.
         assert_eq!(s(&["pow", "float(\"-inf\")", "-1e40"]), t(&["0"]));
         assert_eq!(s(&["pow", "float(\"-inf\")", "neg", "1e40"]), t(&["0"]));
         // Finite negative bases: finite class, REFUSE (the old path shipped nan).
@@ -2791,7 +2789,7 @@ mod tests {
         // A ground COMPOSITE base classifying -inf takes the same arm.
         assert_eq!(s(&["pow", "log", "0", "1e40"]), t(&["float(\"inf\")"]));
         // Untouched paths: +inf base; non-integer spelling keeps the correct Nan;
-        // the i128-certified point path (H-045 proper).
+        // the i128-certified point path.
         assert_eq!(
             s(&["pow", "float(\"inf\")", "1e40"]),
             t(&["float(\"inf\")"])
@@ -2803,7 +2801,7 @@ mod tests {
         );
     }
 
-    /// Phase 2c (design review H3): in f64 mode an integer beyond 2^53 has no known parity --
+    /// In f64 mode an integer beyond 2^53 has no known parity --
     /// the deployed evaluator reads it as an even float -- so a parity fold refuses. Main folded
     /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. Real mode keeps the exact
     /// parity (`h045_...`, `h051_...`, run in real mode). The walk's ground fold reads the node
@@ -2843,7 +2841,7 @@ mod tests {
     fn ac_kept_zero_sign_regression() {
         // Constructor-level mechanism (term_join's zero-head absorption): reproduces on
         // the generation-2 test engine; the legacy 4-3 pairing this row was FOUND on is
-        // refused at load since the generation gate (audit Tier-1 #1/#3).
+        // refused at load since the generation gate.
         let Some(e) = crate::test_engine() else {
             return;
         };
@@ -2856,7 +2854,7 @@ mod tests {
         assert_eq!(&t2[..2], &["<add>".to_string(), "<mul>".to_string()]);
     }
 
-    /// PIN (H-031, C1 spec-writing read, 2026-08-05): a kept-zero product over an
+    /// PIN: a kept-zero product over an
     /// UNLICENSED sum (`0 * (x0 + log x1)`) entering a wider Add distributes through the
     /// factored-sum flatten arm with r = 0. The scaled terms used to be rebuilt by raw
     /// `term_join` -- canonical-form-preserving only for NONZERO coefficients -- minting
@@ -3116,16 +3114,8 @@ mod tests {
     /// coefficient-rule family" -- retired with the dev_7-3 asset; the census numbers are
     /// pinned in the artifact gate REFS, this in-crate twin pins the PROPERTY.)
     ///
-    /// The fixture is the PUBLISHED asset in `~/.cache/simplipy`, and since the 2026-08-08
-    /// HF republish the pair is MATCHED again (asset mined 2026-08-08: 6661 rules), so both
-    /// counts sit at their pristine 0. History of the lag this pin surfaced while the pair
-    /// was unmatched: the 2026-08-04 asset (995 rules) fell 88 behind on 2026-08-07 (33 to
-    /// "a power of `exp` is an `exp`" incl. its `exp(1) -> E` write-half, 55 to the parity
-    /// lattice `sign_blind_rep`), then ran to 143 subsumed + 1 dropped as the inverse-pair
-    /// table, the reciprocal-base arms, the ground-fold value licence and the half-period
-    /// arm landed. The single drop was `tan - np.pi !0 -> neg tan !0`, whose LHS the
-    /// half-period arm canonicalizes to `tan(neg !0)` at the SAME mu -- a mu-neutral
-    /// respell, no capability lost, and the re-mined artifact no longer contains it.
+    /// The fixture is the PUBLISHED asset in `~/.cache/simplipy`; engine and asset are
+    /// matched, so both counts sit at their pristine 0.
     /// If either count moves off 0 again, the published asset lags the engine:
     /// REPUBLISH, do not re-pin.
     #[test]
@@ -3144,14 +3134,14 @@ mod tests {
             "published asset must translate loss-free but for the interim rows; a drop means it \
              lags the engine -- republish, do not re-pin"
         );
-        // INTERIM (2026-10-18), until the re-mine resets the count to 0: the sign key (fewest
+        // INTERIM, until the re-mine resets the count to 0: the sign key (fewest
         // signs, then outermost) makes the canon place a sign at an odd function itself, and the
         // product constructor merges powers of e (`exp(2)/e` is `e`), so 17 rows of the staged
         // asset are subsumed (G2). The suites pin them by rule (`tests/conftest.py`,
         // `ACJ4_INTERIM_SUBSUMED`); any other count still fails here.
-        // G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
-        // byte-identical on the reference mint host, D20's row-by-row accounting) and the pin returns
-        // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If
+        // G2 REPUBLISH: the full-lane re-mine ships (6,594 rules, x3
+        // byte-identical on the reference mint host) and the pin returns
+        // to its PRISTINE form. If
         // either count moves off 0 again, the published asset lags the engine:
         // REPUBLISH, do not re-pin.
         // The published asset is a pre-0.15 mine, read in the canon it was certified in (the
@@ -3166,7 +3156,7 @@ mod tests {
         let _ = twins;
     }
 
-    /// The campaign's two defect axes, closed at the representation level. Self-contained:
+    /// The two defect axes, closed at the representation level. Self-contained:
     /// an inline engine carrying exactly the rule the ORDER axis needs (the historical
     /// `* tan A cos A -> sin A`, whose 5-token source exceeds the acj-4-3 length-4 mine
     /// universe -- the axis is an ENGINE property, not an artifact property).
@@ -3265,7 +3255,7 @@ mod tests {
         );
         // The TAGGED projection above spells 6/5 structurally (both components inside the
         // vocabulary bound); the EXPLICIT one takes the argmin token, and a 5-carrying
-        // denominator wins as a decimal -- §10.10(1), owner-ratified 2026-08-07. Two
+        // denominator wins as a decimal. Two
         // dialects, one value; mu is spelling-independent.
         assert_eq!(
             e.ac_simplify_proj(&expr, 48, RuleMode::Default, super::AcForm::Explicit)
@@ -3290,7 +3280,7 @@ mod tests {
                 .unwrap(),
             t(&["<mul>", "x0", "<div>", "x1", "</mul>"])
         );
-        // Divisor-side spelling (2026-08-01, design §8): x0/3 spells through the
+        // Divisor-side spelling: x0/3 spells through the
         // `<div>` section, not as the `1/3` coefficient token (integer reciprocal is
         // the strictly shorter exact spelling; ties like 22/7 stay coefficient-side).
         assert_eq!(
@@ -3351,7 +3341,7 @@ mod tests {
         );
         // Tagged input parses back through the shared parser: the retired coefficient
         // spelling stays LIBERAL INPUT for the same state, whose canonical emission is
-        // now divisor-side (2026-08-01, design §8) -- and that emission is the fixpoint.
+        // now divisor-side -- and that emission is the fixpoint.
         let old_spelling = t(&["<mul>", "1/3", "x0", "</mul>"]);
         let tagged = t(&["<mul>", "x0", "<div>", "3", "</mul>"]);
         assert_eq!(
@@ -3469,7 +3459,7 @@ mod tests {
         // The `rootn` head is 6 bits (ELEMENTARY in the symbol table: 181 of the corpus
         // census's 10,996 charged nodes, far and away the commonest Fun), the leaf is 6,
         // and the INDEX is an ordinary priced literal. Under the two-bit floor index 2
-        // and index 3 tied at 15 each; at the one-bit floor (2026-08-22) cost(2) = 2.585
+        // and index 3 tied at 15 each; at the one-bit floor cost(2) = 2.585
         // clears the clamp and cost(3) = 3 does not, so a square root prices BELOW a cube
         // root -- which is the measure telling two different operators apart, not a
         // parity being lost. (The pow1_3 spelling needs the sugar-declaring fixture.)
@@ -3505,7 +3495,7 @@ mod tests {
         );
     }
 
-    /// H-014 (2026-08-03): sign-orientation canonical uniqueness. `Mul[-1, Add[S]]` and the
+    /// Sign-orientation canonical uniqueness. `Mul[-1, Add[S]]` and the
     /// sign-flipped Add were two derivation-reachable states sharing one serialization
     /// (the renderer's display redistribution), so one-call fixpoints differed from
     /// re-entry fixpoints. Three orientation owners now cover every sum class -- the
@@ -3537,10 +3527,10 @@ mod tests {
         }
     }
 
-    /// H-030 (2026-08-05): the H-014 orientation congruence completed for the
+    /// The orientation congruence completed for the
     /// negation-ABSORBING class (`term_absorbs_negation`: bare-inf products,
     /// inf-Add-factor products, recursive nestings). Three coordinated owners --
-    /// `mul()`'s H-030 sign arm (any negative coefficient, any co-factor multiset),
+    /// `mul()`'s absorbing sign arm (any negative coefficient, any co-factor multiset),
     /// `primitive_sum`'s sign-decision skip, and `add()`'s widened term re-settle --
     /// so every construction route lands on the distributed orientation in ONE call.
     /// Specimens: the 1M fuzz counterexamples (rows 212777 / 914946, the term-level
@@ -3571,10 +3561,10 @@ mod tests {
                     "x4",
                     "float(\"nan\")",
                 ],
-                // F63 (2026-08-08): pinned UNCHANGED through the sign-placement owner
+                // Pinned UNCHANGED through the sign-placement owner
                 // family. A mid-build over-wide site definition briefly traded this
                 // term's sign out of the inf-bearing sum (and this pin was briefly
-                // moved to match); the bare-infinity-term exclusion (the H-014
+                // moved to match); the bare-infinity-term exclusion (the bare-inf
                 // absorber owns that sign) restored the absorbed spelling -- this pin
                 // is the ORIGINAL orientation and now also guards that exclusion.
                 &[
@@ -3607,13 +3597,13 @@ mod tests {
                     "+", "0", "-", "*", "-", "atanh", "/", "x1", "x1", "pow", "pow", "x0", "x2",
                     "x3", "+", "pow", "x0", "cos", "x0", "+", "-", "1", "x3", "/", "x3", "3", "-2",
                 ],
-                // Re-pinned 2026-08-08 at the mu-argmin orientation ((b)) + the odd-literal
+                // Pinned at the mu-argmin orientation + the odd-literal
                 // sign fusion: the -atanh(1) term now spells atanh(-1) (same value, -inf;
                 // the boundary-fold rule is REFUSED here because firing it would rebuild
                 // into the structurally-inf sum spelling, which prices HIGHER than this
                 // state under the cheapest-orientation canon). Adjudicated: input-vs-state
                 // and old-vs-new spellings agree 400/400 on a random grid; idempotent.
-                // F63 (same day): pinned UNCHANGED through the sign-placement owner
+                // Pinned UNCHANGED through the sign-placement owner
                 // family -- a mid-build over-wide site definition briefly let the fold
                 // fire (and this pin briefly moved); the bare-infinity-term exclusion
                 // restored the refusal, and this pin now also guards it.
@@ -3697,7 +3687,7 @@ mod tests {
                     "0.5",
                     "-0.159",
                 ],
-                // H-059 (2026-08-07): the `2000/159` coefficient now takes the DIVISOR
+                // The `2000/159` coefficient now takes the DIVISOR
                 // side as `0.0795` (6 chars against 8), per the ratified §8 rule restored
                 // for out-of-bound fractions. Same value, spelling only -- the sign
                 // orientation this test guards is the `<add>` body, which is unchanged.
@@ -3768,7 +3758,7 @@ mod tests {
         }
     }
 
-    /// H-015 class (b) (2026-08-04): the lossy OUTPUT projection rejoins reciprocal
+    /// The lossy OUTPUT projection rejoins reciprocal
     /// products where the joined spelling prices strictly smaller AND sound's
     /// distribution licence would refuse to re-split it (`ac::expr::rejoin_projection`).
     /// Pins the three regimes: the registered row-1414 shape joins (mu 56 -> 53 under
@@ -3848,10 +3838,10 @@ mod tests {
         }
     }
 
-    /// H-027 (2026-08-05, found by the B3+ P1-lossy-idempotence oracle, fuzz rows
+    /// Found by the lossy-idempotence oracle (fuzz rows
     /// 92892 + 115616): the rejoin projection's coefficient completion is admissible
     /// only when the reciprocated coefficient SURVIVES VERBATIM as a member of the
-    /// joined base. `mul()` inside the completion runs the H-020 sign fold, so a
+    /// joined base. `mul()` inside the completion runs the Const sign fold, so a
     /// negative `cinv` beside a Const-bearing Add member was CONSUMED into the sum --
     /// a strict mu win whose source was the sign fold, not the join, and one the
     /// funnel cannot re-derive (the re-parsed state has no Num left, the completion
@@ -3888,7 +3878,7 @@ mod tests {
             let twice = e.ac_simplify(&once, 48, RuleMode::Permissive).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");
         }
-        // Const-bearing class: the sign stays SPELLED (the H-020 fold inside the
+        // Const-bearing class: the sign stays SPELLED (the Const sign fold inside the
         // completion would consume it -- absorbing it there was the defect).
         let l = e.ac_simplify(&minimal, 48, RuleMode::Permissive).unwrap();
         assert!(
@@ -3932,7 +3922,7 @@ mod tests {
         assert_eq!(nl2, nl, "and stay idempotent: {nonconst:?}");
     }
 
-    /// H-015 class (a) (2026-08-04): the two lossy endpoint mechanisms beyond the plain
+    /// The two lossy endpoint mechanisms beyond the plain
     /// rejoin. SENTINEL EXPIRY: the `inv(inf)` keep is a search licence that expires at
     /// the phase-1 fixpoint -- an unpartnered sentinel folds to its determined 0 and
     /// the chain continues descending (it had BLOCKED downstream rules: a kept
@@ -3941,7 +3931,7 @@ mod tests {
     /// COEFFICIENT COMPLETION: the rejoin candidate set includes the bag coefficient
     /// reciprocated into the joined base (`0.5 * (x4*S)^-1` IS `(2*x4*S)^-1`), which
     /// sound's licence-refusal spellings carry inside exactly like that. Measured
-    /// together with the narrowed Const-exclusion and the doctrine-exempt P6 oracle:
+    /// together with the narrowed Const-exclusion and the doctrine-exempt oracle:
     /// mode-ordering rows 822 (true baseline) -> 110/200k, all remaining rows
     /// characterized (69 greedy rule-reachability + 41 inf/nan mode-semantics).
     #[test]
@@ -3976,10 +3966,10 @@ mod tests {
             "*", "0.5", "inv", "*", "x4", "+", "x3", "+", "tan", "x0", "/", "1", "3",
         ]);
         let lc = e.ac_simplify(&coeff, 48, RuleMode::Permissive).unwrap();
-        // RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
+        // The tan-bearing sum passes the
         // zero-set licence (denominator clearing: N = (x3 + 1/3)*cos(x0) + sin(x0),
         // witnessed nonzero), so the kept carrier DISTRIBUTES and renders in the
-        // flat F80 spelling. The completion behavior this test pins is unchanged --
+        // flat divisor spelling. The completion behavior this test pins is unchanged --
         // 0.5 still reciprocates to the `2`, now a member of the flat `<div>`
         // section. Adjudicated: old spelling re-simplifies to this same state
         // (two-route convergence), fixpoint holds, 0/1000 value mismatches vs the
@@ -4104,17 +4094,17 @@ mod tests {
         );
     }
 
-    /// H-020 (2026-08-04, owner-ruled): the sign of a negative coefficient folds INTO a
+    /// The sign of a negative coefficient folds INTO a
     /// Const-bearing Add factor -- Const-carrying terms absorb it by the forall-exists
     /// refit, every other term negates as ordinary structure -- at EVERY parking (lone
     /// `-1 x Add` wrapper, bag coefficient, collected term), so no projection ever
     /// faces a sign it cannot spell on a Const term (`-<constant>` is not a token; the
     /// infix display silently ate it under pow bases -- fuzz rows 148693/166766,
-    /// P7-infix). The sign-parking congruence took three narrowings to get right: the
+    /// infix lane). The sign-parking congruence took three narrowings to get right: the
     /// lone-shape-only fold left the bag-coefficient and divisor-literal routes
-    /// diverging (47 P7-infix + 20 P7-explicit at 200k), and `divisor_side` had to stop
+    /// diverging (67 fuzz rows at 200k), and `divisor_side` had to stop
     /// parking signed literals in den groups.
-    /// H-019 option (a) (2026-08-04, owner-ruled) + H-021: outward-rounded interval
+    /// Outward-rounded interval
     /// arms with exact-hit carve-outs, and the corroboration-gated evaluate channel.
     /// Pins the three behavior families the hardening settled:
     /// * exact-boundary grounds the OLD arms folded UNSOUNDLY now reduce by the exact
@@ -4129,7 +4119,7 @@ mod tests {
     #[test]
     fn outward_rounded_interval_honesty() {
         let Some(e) = engine() else { return };
-        // Healed unsound folds: the exact rules now win. (D2 finding: the first case
+        // Healed unsound folds: the exact rules now win. (The first case
         // shipped as `acosh acos cos 0` -- a stray `acos` changed the value to nan, and
         // instead of the typo being caught the case was EXCLUDED from the loop, so the
         // doc's `acosh(cos(0))` bullet had no covering assertion. Restored to the
@@ -4159,7 +4149,7 @@ mod tests {
             assert_eq!(out, want, "healed fold regressed: {src:?}");
         }
         // Exactness-beyond-instruments: symbolic, never a false literal.
-        // `acosh atanh tanh 1` was a third specimen here until 2026-08-07. The
+        // `acosh atanh tanh 1` was once a third specimen here. The
         // inverse-pair table gives the engine an EXACT route to it -- `atanh(tanh 1)`
         // collapses to `1` by a judge-CERTIFIED total identity, and `acosh 1 -> 0` is a
         // certified rule -- so the answer 0 is exact algebra, not an instrument-derived
@@ -4178,16 +4168,15 @@ mod tests {
         }
     }
 
-    /// H-028 + H-029 (2026-08-05, found by the B3+ in-run judge on 1M fuzz): the
-    /// b_pow honesty holes the tenth-scale run exposed.
-    /// * H-028 (fuzz row 540516): the general-path infinite-exponent fallback read
+    /// The b_pow honesty holes the in-run judge found on 1M fuzz rows.
+    /// * Fuzz row 540516: the general-path infinite-exponent fallback read
     ///   `pinf = true` regardless of base magnitude, so `pow(exp(e), -inf/x2)`
     ///   (exponent attaining BOTH infinities) classified PosInf-only, its inverse
     ///   classified FINITE, and the zero-absorption licence folded
     ///   `0 / pow(exp(np.e), -inf/x2)` to 0 -- the true value is nan on a half-line.
     ///   Now the magnitude step runs per component, the class is Mixed, absorption
     ///   refuses.
-    /// * H-029 (fuzz rows 809604 + 662833): an outward-rounded ENCLOSURE of a ground
+    /// * Fuzz rows 809604 + 662833: an outward-rounded ENCLOSURE of a ground
     ///   exceptional exponent (a bracket around 3 from `atan(0) + 3`; around 0 from
     ///   `sin(sin(acos 1))`) was resolved to the enclosure-slack's a.e. class (nan)
     ///   although the ground's true exponent IS the exceptional point. Tight single-
@@ -4198,7 +4187,7 @@ mod tests {
     #[test]
     fn b_pow_exceptional_point_honesty() {
         let Some(e) = engine() else { return };
-        // H-028: the zero-absorption must refuse the mixed-class cofactor.
+        // The zero-absorption must refuse the mixed-class cofactor.
         let s1 = t(&["/", "0", "pow", "exp", "np.e", "/", "float(\"-inf\")", "x2"]);
         let out = e.ac_simplify(&s1, 48, RuleMode::Default).unwrap();
         assert_ne!(
@@ -4206,14 +4195,14 @@ mod tests {
             t(&["0"]),
             "0-absorption against a {{0, inf}} cofactor is unsound"
         );
-        // H-029 integer bracket: the exact path finishes with the true value.
+        // Integer bracket: the exact path finishes with the true value.
         let s2 = t(&["pow", "log", "0", "+", "atan", "0", "3"]);
         assert_eq!(
             e.ac_simplify(&s2, 48, RuleMode::Default).unwrap(),
             t(&["float(\"-inf\")"]),
             "(-inf)^3 must fold through the exact path, not ship the enclosure nan"
         );
-        // H-029 zero bracket: refusal, never the a.e. nan -- in the mode where the
+        // Zero bracket: refusal, never the a.e. nan -- in the mode where the
         // exponent really is only an ENCLOSURE around 0. In `real` the constructor
         // cannot evaluate `sin(sin(acos 1))`, so the interval layer's refusal stands and
         // this is the case the test was written for.
@@ -4369,8 +4358,8 @@ mod tests {
     /// Corpus gates, amortized over one engine build: output validity, idempotence,
     /// commutative-permutation invariance, complexity accounting, and no `<constant>`
     /// minting. (Numeric EQUIVALENCE gating is cross-installation territory by the clean-
-    /// release doctrine: the old kernel is gone from this crate, and the research harness
-    /// adjudicates equivalence against a pinned previous release.)
+    /// release doctrine: the old kernel is gone from this crate, and equivalence is
+    /// adjudicated against a pinned previous release outside it.)
     #[test]
     fn ac_corpus_gates() {
         let Some(e) = engine() else { return };

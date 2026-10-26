@@ -36,7 +36,7 @@ from simplipy.utils import (
 if TYPE_CHECKING:
     from .engine import SimpliPyEngine
 
-# D11 column R30 (owner-ratified 2026-08-16): the miner is this module's
+# The miner is this module's
 # power-user surface; the module helpers (_MINE_LOCK, ...) are private.
 __all__ = ['RuleMiner', 'verify_mine', 'cross_mode_complexity']
 
@@ -1115,7 +1115,7 @@ class RuleMiner:
         if judge is None:
             judge = functools.partial(judge_tiers, warn_s=judge_warn_s, fail_s=judge_fail_s)
 
-        # THE TARGET BOUND IS mu, NOT TOKENS (owner ruling, re-mine 2026-08-20).
+        # THE TARGET BOUND IS mu, NOT TOKENS.
         # `max_target_pattern_length=None` now admits EVERY enumerated expression to the
         # candidate library and lets the scan stop at the first mu tier that cannot descend
         # below the source's mark -- the same predicate acceptance already applied, so the
@@ -1163,7 +1163,7 @@ class RuleMiner:
         # stages would be free to drift from this one.
         def _finalize(mined: list, out_path: str | None, prov: dict | None) -> list:
             self._install(rule_mode, list(mined))
-            # --- F94 census reconciliation state -------------------------------------
+            # --- Census reconciliation state -------------------------------------
             # The proposal census is written at CERTIFICATION time, upstream of four
             # stages that may each still drop a certified pair (symbolic gate, both
             # covered-prunes, sort promotion). `_watch` follows every certified pair
@@ -1195,7 +1195,7 @@ class RuleMiner:
                     constants_fit_challenges, constants_fit_retries, rtol, atol,
                     min_informative, mine_seed, confirm_seed, verbose, rule_mode,
                     judge, judged)
-                # Arm the F94 watch on the pairs the census currently calls certified.
+                # Arm the census watch on the pairs the census currently calls certified.
                 # `deduplicate_rules` has already folded the batch in, so a pair missing
                 # from the ruleset ALREADY lost the merge -- attributed here, not left to
                 # the fail-closed hole check at the end.
@@ -1246,7 +1246,7 @@ class RuleMiner:
                 if prov is not None:
                     prov['offered'] = {'files': files, 'count': len(entries),
                                        'outcomes': outcomes, 'judge_loop': judge_loop}
-            # SYMBOLIC GATE (the third authority; owner-approved 2026-08-02): every
+            # SYMBOLIC GATE (the third authority): every
             # confirmed rule is re-judged by the independent symbolic verifier
             # (`simplipy.verify`) at exact symbolic trigger points with the
             # precision-stability discriminator -- a residual that COLLAPSES as
@@ -1277,13 +1277,13 @@ class RuleMiner:
                 _buckets: dict = {b: [] for b in ('CERTIFIED', 'TOLERATED', *FATAL_BUCKETS)}
                 for d in _detail:
                     _buckets.setdefault(d['verdict'], []).append(d['idx'])
-                # EVERY fatal bucket drops, not only KILL (audit B7): a rule the judge
+                # EVERY fatal bucket drops, not only KILL: a rule the judge
                 # cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) or
                 # cannot reconcile (ENGINE-MISALIGN / UNRESOLVED-COVERAGE) never passed
                 # the second authority, and "confirmed by two independent authorities"
                 # is the claim a shipped rule makes. Fail closed: a vocabulary the
                 # contract cannot judge yields no rules, visibly, rather than rules
-                # with an unearned certificate. ONE exemption (D36): the judge's own
+                # with an unearned certificate. ONE exemption: the judge's own
                 # non-jurisdiction sentinel for the multi-<constant> family, whose
                 # soundness authority is the Const-channel chain (fitting + count gate
                 # + licence registry) -- exempted rules ship and are recorded under
@@ -1324,7 +1324,7 @@ class RuleMiner:
                     self._install(rule_mode, [
                         (lhs, rhs) for lhs, rhs in self._mode_rules(rule_mode)
                         if (tuple(lhs), tuple(rhs)) not in _drop])
-                    # F94: the gate's own bucket IS the drop reason -- a certified
+                    # The gate's own bucket IS the drop reason -- a certified
                     # proposal killed here reads `certified_then_dropped(symbolic_gate,
                     # KILL)` in the sidecar rather than staying `certified`.
                     _gate_reason = {_rule_identity(bl, br, dummy_variables): bucket
@@ -1338,7 +1338,7 @@ class RuleMiner:
                           f'({", ".join(f"{k}={len(v)}" for k, v in sorted(_routed.items())) or "none"}), '
                           f'{len(self._mode_rules(rule_mode))} remain')
                 if prov is not None:
-                    # The full census travels with the artifact (B7): every fatal
+                    # The full census travels with the artifact: every fatal
                     # bucket has its own key, PRESENT EVEN WHEN EMPTY -- the sidecar
                     # must show what the gate saw, not only what it dropped.
                     prov['symbolic_gate'] = {
@@ -1374,7 +1374,7 @@ class RuleMiner:
             if prune == 'covered':
                 _final_gate()
                 self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
-                # F94: the prune removes only rules the REMAINING set already reaches,
+                # The prune removes only rules the REMAINING set already reaches,
                 # so a certified proposal dropped here is still served compositionally
                 # -- a harmless drop, but one the census must still name.
                 _note_drops('prune_covered',
@@ -1393,7 +1393,7 @@ class RuleMiner:
                 kept, promotion_report = promote(self._mode_rules(rule_mode), self.engine,
                                                  verbose=verbose, rule_mode=rule_mode)
                 self._install(rule_mode, kept)
-                # F94: the ladder's own per-rule verdict lists name the reason a pair
+                # The ladder's own per-rule verdict lists name the reason a pair
                 # left here (`killed_q` -- unsound at the `?` sort, `unsupported`, ...);
                 # a pair the refund pruned as derivable appears in none of them.
                 _promo_reason = {
@@ -1407,7 +1407,7 @@ class RuleMiner:
                     print(f'Sort promotion: {promotion_report.get("stage_counts")}')
                 if prov is not None:
                     prov['sort_promotion'] = promotion_report.get('stage_counts')
-                # POST-PROMOTION covered-prune (fold unification, 2026-08-02): the
+                # POST-PROMOTION covered-prune (fold unification): the
                 # ladder's seeded identities (`* 0 !0 -> 0`, the multiplicative
                 # twins) and the promoted sorts only exist AFTER promotion, so the
                 # pre-promotion prune cannot see that thousands of pure-literal
@@ -1462,7 +1462,7 @@ class RuleMiner:
                                     lambda _identity: 'behaviourally-covered-by-remaining-rules')
             if prov is not None:
                 prov['completion'] = _completion
-            # SOUNDNESS PROVENANCE, second half (audit Tier-1 #4): the interval layer's
+            # SOUNDNESS PROVENANCE, second half: the interval layer's
             # three fail-closed miss counters, read AFTER the mine as deltas over this
             # mine's baseline -- the exposure ("how often could the gate not decide?")
             # is a recorded number, never assumed zero. The counters mark UNDECIDED
@@ -1473,7 +1473,7 @@ class RuleMiner:
                     'node_budget': self.engine._core.interval_node_budget_misses() - _ivl_baseline[1],
                     'unanalyzable': self.engine._core.interval_unanalyzable_misses() - _ivl_baseline[2],
                 }
-            # F94: the census must describe the ARTIFACT, not the moment of
+            # The census must describe the ARTIFACT, not the moment of
             # certification. Runs before ANY of it is written (artifact and sidecar
             # alike) and fails closed on a certified pair that is neither present nor
             # attributable -- a census that can advertise an absent rule is exactly the
@@ -1572,7 +1572,7 @@ class RuleMiner:
                          self.engine._core.interval_unanalyzable_misses())
         if provenance is not None:
             provenance['soundness'] = {
-                # EVERY set non-inert SIMPLIPY_* variable, raw (H-042): a default run
+                # EVERY set non-inert SIMPLIPY_* variable, raw: a default run
                 # records {}, any override is visible verbatim.
                 'env_overrides': env_overrides(),
                 'interval_undecided': None,  # filled at finalize (deltas over this mine)
@@ -1688,7 +1688,7 @@ class RuleMiner:
                 continue
             # The mark is this mode's serve answer under ITS rules so far.
             self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs)) for lhs, rhs in rules])
-            # CERTIFY THE CANONICAL REPRESENTATIVE ONLY (owner ruling, re-mine 2026-08-20).
+            # CERTIFY THE CANONICAL REPRESENTATIVE ONLY.
             #
             # Certification runs in f64 on whichever spelling was enumerated, and AC says all
             # regroupings of `a*b*c` are ONE expression while f64 says they are not --
@@ -1935,11 +1935,11 @@ class RuleMiner:
                       'source': 'explicit_array (NOT reproducible from `seed`)',
                       'sha256': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest()}
 
-        # R5 + C23c-prov (the G2 gate): the numeric stack that minted the artifact is
-        # part of its identity. scipy's PRESENCE alone changes mined output (audit N3:
-        # a promotion reads PROMOTE with scipy, NO-WITNESS without -- now a hard error,
-        # C23c-loud, but the VERSION still matters); the host libm decides real rules
-        # (audit L9: >= 5 shipped rules exist only because glibc 2.43 is 1 ulp wrong,
+        # The numeric stack that minted the artifact is
+        # part of its identity. scipy's PRESENCE alone changes mined output
+        # (a promotion reads PROMOTE with scipy, NO-WITNESS without -- now
+        # a hard error, but the VERSION still matters); the host libm decides real rules
+        # (>= 5 shipped rules exist only because glibc 2.43 is 1 ulp wrong,
         # and libm resolves at runtime, so no wheel pin can carry this). The
         # "reproducible from the sidecar alone" claim holds AT THE RECORDED
         # ENVIRONMENT; this block is what makes that qualification checkable.
@@ -2069,11 +2069,11 @@ class RuleMiner:
         hint_list: list = list(targets) if targets is not None else [None] * len(sources)
         if len(hint_list) != len(sources):
             raise ValueError('targets must parallel sources')
-        # D28: one-miner-per-process is DOCTRINE, and this entry was found unguarded --
+        # One-miner-per-process is DOCTRINE, and this entry was found unguarded --
         # it runs the same certification machinery and mutates the same process-global
         # interval soundness counters the provenance sidecar records. Same lock, same
         # single-flight semantics, acquired after the cheap validation above (the
-        # H-002/H-009 leak discipline) and released in the finally below.
+        # leak discipline) and released in the finally below.
         if not _MINE_LOCK.acquire(blocking=False):
             raise RuntimeError(
                 "another find_rules mine is active in this process; certification is "
@@ -2134,8 +2134,8 @@ class RuleMiner:
         for index, (source, hint) in enumerate(zip(sources, hint_list)):
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
                 continue
-            # The engine's own result is the MARK TO BEAT, never a reason to skip
-            # (finding F2): a source canon merely RESPELLS shorter used to read as
+            # The engine's own result is the MARK TO BEAT, never a reason to skip:
+            # a source canon merely RESPELLS shorter used to read as
             # "already covered" and was never searched, losing e.g.
             # exp(t)*exp(t) -> exp(t+t) forever (the respelled form speaks tokens
             # outside the mining alphabet, so no later tier picks it up).
@@ -2150,7 +2150,7 @@ class RuleMiner:
             certified.append((source, tuple(target), certificate))
             if verbose:
                 print(f'certified ({certificate}): {list(source)} -> {list(target)}')
-        # SYMBOLIC GATE, matching the mining path (`_finalize`; audit B3, fatal set B7).
+        # SYMBOLIC GATE, matching the mining path (`_finalize`).
         # Every numeric acceptance above is tolerance-bounded, and the impostor family
         # lives BELOW any usable tolerance: `tanh(exp(e)) -> 1` is false by a stable
         # 1.37e-13 and came back certified 'verified' before this gate existed -- while
@@ -2167,7 +2167,7 @@ class RuleMiner:
             from .verify import effective_tier, verify_ruleset
             _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
             # detail entries carry lhs/rhs as SPACE-JOINED strings; the Const-channel
-            # sentinel is exempt exactly as at the mining gate (D36).
+            # sentinel is exempt exactly as at the mining gate.
             _drop = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d['verdict']
                      for d in _rep['detail']
                      if effective_tier(d) not in _mode_tiers(_CERTIFY_RULE_MODE)}
@@ -2284,8 +2284,8 @@ class RuleMiner:
         for index, (source, hint) in enumerate(proposal_entries):
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
                 continue
-            # The engine's own result is the MARK TO BEAT, never a reason to skip
-            # (finding F2): the serve-time ordering acceptance rides the candidate
+            # The engine's own result is the MARK TO BEAT, never a reason to skip:
+            # the serve-time ordering acceptance rides the candidate
             # scan, so 'already_covered' below is a SEARCH-VERIFIED
             # verdict ("the engine reduces it and nothing expressible beats its
             # result"), not a guess from a spelling shrink.
@@ -2597,7 +2597,7 @@ class RuleMiner:
         mined_modes = _mine_modes(modes)
         if prune is True:
             # Fail HERE, not after the length loop: the old late raise fired at the END
-            # of a potentially week-scale mine (audit Tier-2, 2026-08-03).
+            # of a potentially week-scale mine.
             raise ValueError(
                 "prune=True (the redundant-rule prune) died with the legacy kernel; "
                 "use prune='covered' (AC-judged behavioral coverage) or prune=False")
@@ -2643,9 +2643,9 @@ class RuleMiner:
                     f'max_source_pattern_length ({max_source_pattern_length}); the top cell is '
                     f'written to output_file.')
 
-        # (missed-003: the reset used to happen HERE, before the single-flight lock
-        # below -- a REJECTED call had already destroyed the caller's rules. It now
-        # runs under the lock; nothing between here and the acquire reads the
+        # (The reset runs under the single-flight lock
+        # below, so a REJECTED call cannot destroy the caller's rules; nothing between here
+        # and the acquire reads the
         # ruleset, so the mine's semantics are unchanged.)
 
         # The mine's X is SEEDED (reproducibility) and defaults to a heavy-tailed MIXTURE
@@ -2711,20 +2711,20 @@ class RuleMiner:
         # SINGLE-FLIGHT: fail fast if another mine is active in this process (see
         # _MINE_LOCK). Acquired HERE, directly above the try whose finally releases it
         # -- the validation/prep above may raise (that is its job), and acquiring any
-        # earlier would leak the lock on those paths (hardening H-002/H-009).
+        # earlier would leak the lock on those paths.
         if not _MINE_LOCK.acquire(blocking=False):
             raise RuntimeError(
                 "another find_rules mine is active in this process; mines are "
                 "single-flight (the interval soundness counters recorded in the "
                 "provenance sidecar are process-global)")
-        # The reset happens UNDER the single-flight lock (missed-003): a rejected
+        # The reset happens UNDER the single-flight lock: a rejected
         # call must leave the engine exactly as it found it.
         if reset_rules:
             self.engine._replace_rules([])
         # Graceful-interrupt handler: MAIN THREAD ONLY -- `signal.signal` raises
-        # ValueError anywhere else (hardening H-008: this used to make find_rules
+        # ValueError anywhere else (installing it there would make find_rules
         # unusable from worker threads, and installing it before the prep code could
-        # leak it past an early raise, H-009). Off the main thread the mine runs
+        # leak it past an early raise). Off the main thread the mine runs
         # without interrupt cleanup; `interrupted` then simply never fires.
         handler_installed = False
         old_handler = None

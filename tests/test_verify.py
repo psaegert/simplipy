@@ -1,4 +1,4 @@
-"""Regression wall for the verify package (E1): the judges must SPEAK THE ENGINE'S LANGUAGE.
+"""Regression wall for the verify package: the judges must SPEAK THE ENGINE'S LANGUAGE.
 
 The 0.12 cutover changed the operator vocabulary (hyper-ops deleted, rootn added), the
 boundary output format (n-ary bag tags), and the rule sorts ($-certified slots) -- and
@@ -17,7 +17,7 @@ emptied DEP_OPS slots. Each test here pins one of those failure modes shut:
    NO-WITNESS-by-SyntaxError),
 6. tiny exists-witnesses survive fitting (the absolute-snap / zero-freeze regression
    that fabricated clause-(a) kills of sound constant-space rules),
-7. the monitor's poison self-test runs ROUTINELY (E5): every production poison is
+7. the monitor's poison self-test runs ROUTINELY: every production poison is
    caught on a fast corpus and a sound rule is NOT -- the positive control that
    previously existed only for manual runs, now pinned into the wall.
 """
@@ -41,7 +41,7 @@ ACJ_CONFIG = acj_config_path()
 
 
 def _staged_or_skip(path):
-    """Asset gate, via the shared conftest helper (the E4-3 doctrine: a missing
+    """Asset gate, via the shared conftest helper (a missing
     asset under SIMPLIPY_TEST_REQUIRE_ASSETS is a FAILURE, never a silent skip)."""
     from conftest import require_or_skip
     require_or_skip(path, f'{path} not staged')
@@ -55,7 +55,7 @@ class TestMonitorSpeaksBagLanguage:
     def test_bag_evaluator_sections(self):
         from mpmath import mp, mpf
         from simplipy.verify._monitor import DPS
-        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision (C35)
+        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision
         env = {'x0': mpf(3), 'x1': mpf(5), 'x2': mpf(7)}
         cases = [
             (['<add>', 'x0', 'x1', '</add>'], mpf(8)),
@@ -70,7 +70,7 @@ class TestMonitorSpeaksBagLanguage:
             assert abs(evaluate(list(toks), env) - want) < mpf('1e-40'), toks
 
     def test_wrong_bag_rewrite_is_violation(self):
-        # THE E1 regression: this exact pair was judged OK before the fix
+        # THE bag regression: this exact pair was once judged OK
         verdict, _ = judge_pair(['+', 'x0', 'x1'], ['<mul>', 'x0', 'x1', '</mul>'], rng())
         assert verdict == 'VIOLATION'
 
@@ -115,7 +115,7 @@ class TestRootnSemantics:
         assert judge_rule(['pow', 'rootn', '!0', '2', '2'], ['!0'])['verdict'] == 'KILL'
 
     def test_vacuous_index_rules_are_killed(self):
-        # the artifact-defect class E1's repaired gate caught: a non-integer rootn index
+        # the artifact-defect class the repaired gate caught: a non-integer rootn index
         # is an invalid operation, so the LHS is NaN a.e. and the rewrite is a
         # positive-measure extension (the miner's generic-equivalence policy accepted it)
         r = judge_rule(['rootn', '(-1)', 'tanh', '?0'], ['(-1)'])
@@ -152,7 +152,7 @@ class TestZeroLanes:
     def test_the_signed_lane_follows_ieee_through_every_zero_sensitive_operator(self):
         from mpmath import mp, mpf
         from simplipy.verify._monitor import DPS
-        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision (C35)
+        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision
         env = {'x1': mpf(-2), 'x2': mpf(3)}
         for tokens, ieee in [
                 ('inv neg - x2 x2', -np.inf),          # -(+0) is -0
@@ -218,7 +218,7 @@ class TestTinyWitnesses:
 
 
 class TestMonitorPoisonSelftest:
-    """E5: the monitor's poison self-test is the proof its sweep CAN convict -- but
+    """The monitor's poison self-test is the proof its sweep CAN convict -- but
     nothing routine ever ran it (selftest defaults OFF; no pytest or CI step invoked
     it), so the positive control existed only for manual runs. This is the fast
     subset: the FULL production poison list against a rules-empty clean engine on a
@@ -260,39 +260,38 @@ class TestShippingArtifact:
             r = v.verify_rule(lhs, rhs)
             # every such rule gets a REAL verdict -- never a crash and never the
             # NO-WITNESS-by-judge-error that unjudgeable vocabulary produced. KILL is
-            # NOT admitted (audit Tier-2, 2026-08-03): a shipped rule the judge
+            # NOT admitted: a shipped rule the judge
             # convicts is an alarm, not a tolerated outcome -- the old three-outcome
             # form would have waved it through.
             assert r['verdict'] in census, (lhs, rhs, r)
             census[r['verdict']] += 1
-        # measured census of the shipped artifact (2026-08-07, acj-4-3 @ 7,147 rules;
-        # was 68/4 at 1008 rules on 2026-08-03, then 4330/4 at 7,153). An artifact
+        # measured census of the shipped artifact. An artifact
         # refresh re-pins this alongside the gate_acj REFS, with evidence. The 4330 ->
-        # 4325 step is B1(c): `certainly_nonneg` gained its `rootn` arm, so the five
+        # 4325 step: `certainly_nonneg` gained its `rootn` arm, so the five
         # `abs rootn _0 {2,4,6,8,10}` rules moved into the constructors and the re-mine
         # no longer mints them. (A sixth rule dropped, `sin acos tanh _0`, carries
         # neither `rootn` nor `$` and so was never in this subset.)
-        # 4325 -> 4322 is B1(d): `rootn(e,n) -> exp(1/n)` took the three
+        # 4325 -> 4322: `rootn(e,n) -> exp(1/n)` took the three
         # `log rootn np.e {2,4,8}` rules native as well (all three carry `rootn`).
-        # 4322 -> 4301 is F49 (`compose_e_power` + `exp(1) -> E`, artifact @ 7,006).
+        # 4322 -> 4301: `compose_e_power` + `exp(1) -> E`.
         # Single cause and fully enumerated: of the 140 rules the re-mine dropped, exactly
         # 21 carry `rootn` or `$`, and all 21 are `rootn <k> exp 1 -> nan` for
         # k in -10..10. Their index was the COMPOSITE `exp(1)`, which the constructor left
         # symbolic; folded to the LEAF `e` it meets the provably-non-integer-index arm and
         # the NaN is derived natively (`rootn 2 exp 1 -> nan` on a rules-free engine).
-        # 4301 -> 4258 at F53 (2026-08-07, the reciprocal-base arms, artifact @ 6,710).
+        # 4301 -> 4258: the reciprocal-base arms.
         # Single cause and fully enumerated: of the 90 rules that re-mine dropped, exactly 43
         # carry `rootn` or `$`, and all 43 are the `acosh rootn k (-m) -> nan` family for
         # k in {2,10} and m in -10..-2 -- a NEGATIVE root index, which the constructor now
         # reciprocates into a literal base and folds.
-        # 4258 -> 4237 at F55 (2026-08-08, a ground source may DENOTE a special by value;
-        # artifact @ 6,669). Single cause and fully enumerated, and it is F49's own shape a
+        # 4258 -> 4237: a ground source may DENOTE a special by value.
+        # Single cause and fully enumerated, and it is the previous step's shape a
         # second time: of the 55 rules the re-mine dropped, exactly 21 carry `rootn` or `$`,
         # and all 21 are `rootn <k> acos (-1) -> nan` for k in -10..10. Their INDEX was the
         # composite `acos (-1)`, left symbolic; once the bare `acos (-1) -> np.pi` rule folds
         # it to the LEAF `np.pi` the index meets the provably-non-integer-index arm and the NaN
         # is derived (`rootn 2 np.pi -> nan` holds on a rules-free engine; `rootn 2 acos (-1)`
-        # does NOT, because unlike F49's `exp(1) -> E` the fold here is a rule, not a
+        # does NOT, because unlike `exp(1) -> E` the fold here is a rule, not a
         # constructor arm). None of the 14 ADDED rules carries `rootn` or `$`, so the excused
         # set below is untouched.
         # RE-PINNED for the 0.14.0 triple: 4237/4 -> 3815/0, on the f64 file (5,319 rules
@@ -302,14 +301,14 @@ class TestShippingArtifact:
         # f64 THIRD of a triple, so every rule that is true but not f64-realised has
         # moved to rules_real.json. TOLERATED reaching 0 follows from the same split:
         # a tolerated-but-unrealised rule is `real`-tier and is not in this file.
-        # 3815 -> 3820 at THE acj-4 TRIPLE (2026-08-23, f64 5,319 -> 5,338). Fully
+        # 3815 -> 3820 at THE acj-4 TRIPLE (f64 5,319 -> 5,338). Fully
         # enumerated, two families: +21 structural rootn admissions (neg-through-odd-root
         # commutation, abs/rootn orderings, rootn->pow(+-0.2) respellings at |index| 5)
         # under the widened judge; -16 `rootn {cosh,exp} <constant> k -> <constant>`
         # constant-binding folds retired by the canonical-source-class certification.
         # Net +5 in this subset, every one CERTIFIED; TOLERATED stays 0.
         assert census == {'CERTIFIED': 3820, 'TOLERATED': 0}, census
-        # The f64 file excuses NOTHING: the four excused rules of the one documented R3
+        # The f64 file excuses NOTHING: the four excused rules of the one documented null-set
         # class (clause (b), undefined->defined on the null set {0} only) are TOLERATED
         # and not f64-realised, which is the `real` tier, so they live in rules_real.json
         # and are asserted there by the next test. A new excused rule in either place is
@@ -339,7 +338,7 @@ class TestShippingArtifact:
 
 
 class TestJudgeParityExactness:
-    """H-050 (2026-08-05, extreme-literal lane): the judge reads an exponent's
+    """The judge reads an exponent's
     integrality/parity off the mpf REPRESENTATION (odd-normalized mantissa: exp<0
     non-integer, exp==0 odd, exp>0 even) instead of refusing everything beyond the
     old PARITY_CAP=1e15 -- which convicted sound engine folds whose exponents are
@@ -349,7 +348,7 @@ class TestJudgeParityExactness:
     def test_pow_parity_exact_beyond_2_53(self):
         from mpmath import mp, mpf
         from simplipy.verify._monitor import DPS, c_pow
-        mp.dps = DPS  # direct-internal call (C35)
+        mp.dps = DPS  # direct-internal call
         assert c_pow(mpf('-inf'), mpf('9007199254740993')) == mpf('-inf')  # odd
         assert c_pow(mpf('-inf'), mpf('9007199254740992')) == mpf('inf')   # even
         assert c_pow(mpf('-inf'), mpf('1e40')) == mpf('inf')               # even
@@ -371,7 +370,7 @@ class TestJudgeParityExactness:
     def test_rootn_index_value_strict(self):
         from mpmath import isnan, mp, mpf
         from simplipy.verify._monitor import DPS, c_rootn
-        mp.dps = DPS  # direct-internal call (C35)
+        mp.dps = DPS  # direct-internal call
         r = c_rootn(mpf(2), mpf('9007199254740993'))  # huge odd index resolves
         assert abs(r - 1) < mpf('1e-14') and r > 1
         assert isnan(c_rootn(mpf(2), mpf(10) ** 400))  # bignum-hazard index refuses
@@ -391,7 +390,7 @@ class TestJudgeParityExactness:
 
 
 class TestRuleFilesAreDataNotCode:
-    """R2/B21: `verify_ruleset` adjudicates rule sets it did NOT produce -- so a leaf
+    """`verify_ruleset` adjudicates rule sets it did NOT produce -- so a leaf
     token is untrusted DATA. It used to reach `eval(t, {'np': np, 'float': float})`,
     whose globals dict omits __builtins__, so CPython injects the real ones and a token
     becomes an arbitrary Python expression. Demonstrated end to end before the fix: a
@@ -423,7 +422,7 @@ class TestRuleFilesAreDataNotCode:
         assert math.isnan(literal_value('float("nan")'))
         assert literal_value('1/3') == Fraction(1, 3)  # legal in a foreign ruleset
 
-        # F97: a decimal literal denotes the EXACT rational it spells, not the nearest
+        # A decimal literal denotes the EXACT rational it spells, not the nearest
         # double. Asserted where the two differ, because that difference is the defect:
         # a mis-rendered literal is wrong by the same 5.5e-17 at every precision rung, so
         # the gap does not decay and the judge reads it as an analytic difference. It
@@ -445,7 +444,7 @@ class TestRuleFilesAreDataNotCode:
 
 
 class TestD15DiagonalBinding:
-    """D15 / X11's opposite-polarity hole: `judge_rule` sampled wildcard slots
+    """The opposite-polarity hole: `judge_rule` sampled wildcard slots
     INDEPENDENTLY, so the diagonal binding {_0 = _1} was a null event to it -- yet
     for a rewrite rule the diagonal is a real, engine-reachable instance family:
     with _0 = _1 = log(x0) the collector refuses t - t -> 0 (nan-capable), the
@@ -463,7 +462,7 @@ class TestD15DiagonalBinding:
         # diagonal-safe multi-slot rules must not be collateral: x*y -> y*x is exact
         # everywhere including the diagonal (nan*x and x*nan agree at the atom too).
         assert verify_rule(['*', '_0', '_1'], ['*', '_1', '_0'])['verdict'] == 'CERTIFIED'
-        # (a-b)+(b-a) -> 0 at `_` died with S14 (2026-08-22): it erases nan whenever
+        # (a-b)+(b-a) -> 0 at `_` dies under the nan-erasure rule: it erases nan whenever
         # EITHER subtree is nan-valued -- off the diagonal, not because of it. The
         # data-sort spelling keeps this test's question -- the DIAGONAL must not
         # convict -- alive without the nan question: at ?0 = ?1 the residual is 0.
@@ -472,7 +471,7 @@ class TestD15DiagonalBinding:
 
 
 class TestTheRealisationAxis:
-    """F100: the judge reports WHICH AUTHORITY a rule answers to, not just a verdict.
+    """The judge reports WHICH AUTHORITY a rule answers to, not just a verdict.
 
     The two notions of soundness are INCOMPARABLE -- a rule can be true and
     unrealised (`atanh(tanh t) -> t`: exactly t on R, `inf` in f64 past 19.06) or
@@ -515,7 +514,7 @@ class TestTheRealisationAxis:
         assert got['realised'] is True
         assert got['tier'] == 'core'
         # the whole table, so a future edit has to move a documented cell on purpose
-        # `None` files as `real` too since the 2026-08-20 ruling: absent deployed
+        # `None` files as `real` too: absent deployed
         # evidence cannot support a claim of f64 soundness.
         assert [_tier(v, r) for v in ('CERTIFIED', 'TOLERATED') for r in (True, False, None)] \
             == ['core', 'real', 'real', 'core', 'real', 'real']
@@ -543,7 +542,7 @@ class TestTheRealisationAxis:
 class TestUlpGapZeroCanonicalization:
     """view(-0.0) is int64-min: the raw view subtraction against a positive double
     wrapped (RuntimeWarning at the F-flag site, seen live in the acj-5-4 sweep) and
-    convicted 1-ULP agreements as real changes. Owner-approved fix 2026-08-24: both
+    convicted 1-ULP agreements as real changes. The fix: both
     zeros canonicalize to +0.0 on entry; everything else is pinned unchanged."""
 
     def test_negative_zero_pairs_like_positive_zero(self) -> None:
@@ -739,7 +738,7 @@ class TestTheF64RangeStandard:
 
 class TestCleanlinessIsPerMode:
     """Before the triple there was one rule set and one contract, so "clean" could mean
-    "no fatal bucket". That is now wrong in both directions, and R3 ("0.14.0 is sound,
+    "no fatal bucket". That is now wrong in both directions, and the soundness claim ("0.14.0 is sound,
     full stop") makes the per-mode gate load-bearing rather than optional."""
 
     CORE = [['+', 'x0', '0'], ['x0']]
@@ -1022,13 +1021,13 @@ class TestTheExistsWitnessIsActuallySearchedFor:
 
 class TestTheWitnessOutResolvesTheLadder:
     """`mp_polish` says it in its own docstring -- "THE WITNESS MUST OUT-RESOLVE THE
-    LADDER" -- and then polished to a FIXED `GAP_RUNGS[-1] + 50`. F96 made the ladder's
-    depth operand-scaled, so that constant stopped naming its deepest rung."""
+    LADDER" -- and then polished to a FIXED `GAP_RUNGS[-1] + 50`. The ladder's
+    depth is operand-scaled, so that constant stopped naming its deepest rung."""
 
     def test_the_polish_depth_follows_the_operands(self) -> None:
         """`cosh(710) ~ 1.1e308` puts rung 2 at dps 668 and rung 3 at dps 1336. A witness
         frozen at 300 leaves the SAME ~1e-300 residue at both rungs: it does not decay,
-        so the F103 test reads it as an analytic gap."""
+        so the decay test reads it as an analytic gap."""
         from mpmath import cosh, log, mp, mpf
 
         from simplipy.verify._contract import mp_polish, parse
@@ -1061,7 +1060,7 @@ class TestTheWitnessOutResolvesTheLadder:
         assert got['verdict'] != 'KILL', got
 
     def test_a_witness_under_the_old_absolute_floor_is_not_flattened_to_zero(self) -> None:
-        """The witness ACCEPTANCE test kept the shape F99 deleted from the contract:
+        """The witness ACCEPTANCE test kept the shape removed from the contract:
         `|residual| <= _WIT_RESID * max(1, |target|)` is a pure absolute floor for every
         target below 1. `asin(inv(cosh(710))) = 8.95e-309` is under 1e-270 absolutely, so
         0 was accepted as its witness though it is 100% wrong; the contract then judged by
@@ -1095,7 +1094,7 @@ class TestTheWitnessOutResolvesTheLadder:
 
 
 class TestAnExactZeroIsNotAnUndecayableGap:
-    """F105. The decay test compares ONE reading at TWO rungs, so any normaliser that is
+    """The decay test compares ONE reading at TWO rungs, so any normaliser that is
     the same at both cancels out of the ratio and cannot change a verdict. The old
     `max(|l|, |r|)` was not the same at both: against an exact zero the scale IS the
     residue, so the quotient was 1.0 at EVERY precision. A gap that cannot move by
@@ -1103,7 +1102,7 @@ class TestAnExactZeroIsNotAnUndecayableGap:
 
     #: True on the reals, with one side EXACTLY zero -- so the judge is comparing pure
     #: precision residue against an exact zero, the shape that could never decay.
-    #: Spelled `?` since S14 (2026-08-22): every row drops its slot into a constant
+    #: Spelled `?` (the nan-erasure rule): every row drops its slot into a constant
     #: RHS, which erases nan at a `_` binding and correctly dies `a-nan-domain` there
     #: -- the exact-zero question this class pins is sort-independent.
     TRUE_ZERO_SIDE = [
@@ -1130,7 +1129,7 @@ class TestAnExactZeroIsNotAnUndecayableGap:
     def test_the_wildcard_spelling_of_a_slot_dropper_dies_at_the_nan_atom(self) -> None:
         """The same identities at `_` claim soundness for nan-valued subtrees they
         cannot deliver -- `atanh(tanh(log x0)) - log x0` is nan on x0 < 0 and the
-        rewrite defines it. S14 routes that to `a-nan-domain`, and the honest sort
+        rewrite defines it. The nan-erasure rule routes that to `a-nan-domain`, and the honest sort
         for a slot-dropping rule is `?` (above), never `_`."""
         from simplipy.verify._contract import judge_rule
         got = judge_rule(['-', 'atanh', 'tanh', '_0', '_0'], ['0'])
@@ -1168,9 +1167,9 @@ class TestAnExactZeroIsNotAnUndecayableGap:
 
 
 class TestABoundedFunctionNeverAttainsItsLimit:
-    """F106. The gap ladder cannot reach the saturation family and no affordable depth
+    """The gap ladder cannot reach the saturation family and no affordable depth
     can: `tanh(cosh(10))` differs from 1 by 2e-9566 and `tanh(exp(10))` by 1e-19132, both
-    inside F104's boundary band at every rung, so the honest numeric verdict is Unresolved
+    inside the boundary band at every rung, so the honest numeric verdict is Unresolved
     forever. The question does not need a precision -- a bounded function never attains its
     limit at a finite argument -- and 174 rows of the shipped artifact were judged by
     nobody for want of asking it."""
@@ -1228,7 +1227,7 @@ class TestABoundedFunctionNeverAttainsItsLimit:
         identities that live at the same asymptote stay untouched."""
         from simplipy.verify._contract import judge_rule
         assert judge_rule(['tanh', '30'], ['1'])['clause'] == 'a-real-change'
-        # the slot-dropping identity is spelled `?` since S14: its `_` spelling
+        # the slot-dropping identity is spelled `?`: its `_` spelling
         # correctly dies `a-nan-domain`, which is sort doctrine, not the ladder's.
         for lhs, rhs in ((['cos', 'asin', 'tanh', '_0'], ['inv', 'cosh', '_0']),
                          (['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0'])):
@@ -1238,7 +1237,7 @@ class TestABoundedFunctionNeverAttainsItsLimit:
 
 
 class TestTheQuantifierWidensWithoutConvictingTheTrue:
-    """F107. The judging battery for a source constant reaches |c| <= 5 (plus pi, e) for
+    """The judging battery for a source constant reaches |c| <= 5 (plus pi, e) for
     generic values, while the miner draws log-uniform over [1e-3, 1e3]; the gate cannot
     check what the miner explores. Widening it to +-1e4 convicted 97 of 343 shipped
     constant rows, and every one diagnosed was an artifact of the instrument at magnitudes
@@ -1464,7 +1463,7 @@ class TestTheWidenedQuantifierDoesNotConvictWhatItCannotResolve:
 
 
 class TestAtanGetsTheBoundaryBandTanhAlreadyHad:
-    """F104 refuses at `tanh`/`atanh`/`acosh` where a value is inside the working
+    """The boundary band refuses at `tanh`/`atanh`/`acosh` where a value is inside the working
     precision's band of a boundary. `atan` never got the same treatment, and its pi/2 is
     the same kind of boundary: an ASYMPTOTE, not an ordinary point. (That distinction is
     why `asin`/`acos` deliberately do NOT get a band -- their +-1 has a finite value and
@@ -1514,7 +1513,7 @@ class TestAtanGetsTheBoundaryBandTanhAlreadyHad:
 
 
 class TestNanIsInTheWidestSortsQuantifier:
-    """S14 (owner ruling 2026-08-22): `_` binds an ARBITRARY subtree, and a subtree can
+    """`_` binds an ARBITRARY subtree, and a subtree can
     evaluate to nan on a positive-measure set of its own inputs -- `log x0` on the whole
     negative half-line. The `_` battery therefore carries a nan atom, and any
     disagreement at that binding is the fatal clause `a-nan-domain`, not a tolerated
@@ -1524,8 +1523,8 @@ class TestNanIsInTheWidestSortsQuantifier:
     """
 
     def test_nan_erasure_at_a_wildcard_binding_is_fatal(self) -> None:
-        """`- _0 _0 -> 0` erases nan for every nan-valued subtree; before S14 this
-        judged TOLERATED/real and `verify_ruleset` called it clean."""
+        """`- _0 _0 -> 0` erases nan for every nan-valued subtree; without the nan-erasure rule
+        it judged TOLERATED/real and `verify_ruleset` called it clean."""
         r = judge_rule('- _0 _0'.split(), ['0'])
         assert r['verdict'] == 'KILL', r
         assert r['clause'] == 'a-nan-domain', r
@@ -1551,8 +1550,8 @@ class TestNanIsInTheWidestSortsQuantifier:
 
     def test_the_data_sorts_keep_their_own_licences(self) -> None:
         """`- ?0 ?0 -> 0` stays CERTIFIED (data slots never carry nan) and
-        `- !0 !0 -> 0` stays TOLERATED (its +-inf atoms are null-excused, and S14
-        deliberately does not extend to `!`)."""
+        `- !0 !0 -> 0` stays TOLERATED (its +-inf atoms are null-excused, and the nan-erasure
+        rule deliberately does not extend to `!`)."""
         r = judge_rule('- ?0 ?0'.split(), ['0'])
         assert r['verdict'] == 'CERTIFIED', r
         r = judge_rule('- !0 !0'.split(), ['0'])
@@ -1560,8 +1559,8 @@ class TestNanIsInTheWidestSortsQuantifier:
 
 
 class TestTheGateAgreesWithTheRouterAndTheClock:
-    """audit U3 (2026-08-22): two ways the gate's verdict depended on something other
-    than the rules. (a) `_route_triple` applies the ratified D36 multi-`<constant>`
+    """Two ways the gate's verdict depended on something other
+    than the rules. (a) `_route_triple` applies the ratified multi-`<constant>`
     carve-out and `verify_ruleset` did not, so the mine's own output judged dirty the
     moment it contained one such rule. (b) JUDGE-TIMEOUT is fatal and was decided by a
     single 30 s wall-clock alarm -- a fact about the box's load, not the rule -- so the

@@ -6,12 +6,12 @@ Pinned here:
   whose short spelling would change it is written as `s + r`; a function of numbers that are
   all shown as floats is one float, computed as the evaluator computes it, rounded to the
   precision, never 0, inf or a subnormal; any other function stays;
-* P1, idempotence: `prettify(prettify(c)) == prettify(c)` in all three forms on the release
+* idempotence: `prettify(prettify(c)) == prettify(c)` in all three forms on the release
   corpus and a fold fuzz, at full precision and at a precision, and the display does not depend
   on how the state holds its reciprocals;
 * the structure: the display reads back to the shape of the state after the display's folds,
   in all three forms on the corpus and the fold fuzz, at full precision and at a precision;
-* P2, the read-back: every number of the display reads back as the float64 of the value it
+* the read-back: every number of the display reads back as the float64 of the value it
   stands for -- the display evaluates as the state does on the corpus, and a one-ulp change to
   a displayed float is caught;
 * the grouping: with `keep_grouping=True` every sum and product is written as SimpliPy's
@@ -554,7 +554,7 @@ def test_a_number_beside_a_fitted_constant_keeps_its_place(eng):
     assert np.allclose(a, b, rtol=1e-12, atol=0)
 
 
-# ---------------------------------------------------------------- P1 and P2
+# ---------------------------------------------------------------- idempotence and read-back
 def corpus():
     from simplipy.verify import default_corpus
     return default_corpus()

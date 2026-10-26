@@ -82,7 +82,7 @@ class TestFractionLeaves:
         (88524220207673979580413052837552725604400, 89201998976178365554424057804963117690730),
     ])
     def test_the_interval_leaf_encloses_the_fraction(self, bare, p, q) -> None:
-        # B6: the old reader took float(p) / float(q) and bracketed it by one ulp, which
+        # The old reader took float(p) / float(q) and bracketed it by one ulp, which
         # missed 673107593011939307760027002528/810572757194796821120128085049 (1.5 ulps
         # away). Components beyond i128 cannot be certified and get a four-ulp bracket.
         box = bare._core.interval_value_set_box([f'{p}/{q}'], [0.0], [1.0])

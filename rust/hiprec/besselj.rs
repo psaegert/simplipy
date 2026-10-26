@@ -2,7 +2,7 @@
 //! and the contract's point machinery), with the contract's cells: the same table as
 //! `verify._contract.c_besselj`, which evaluates with mpmath.
 //!
-//! THE CELLS (scipy's, D7): NaN at a NaN operand and at `x = +-inf`; NaN for a non-integer
+//! THE CELLS (scipy's): NaN at a NaN operand and at `x = +-inf`; NaN for a non-integer
 //! order at a negative argument; an infinite order gives 0 at `x >= 0`; at `x = 0`,
 //! `J_0(0) = 1`, `J_nu(0) = 0` for `nu > 0` and for a negative integer `nu`, and at a negative
 //! non-integer order the pole's one-sided limit, the infinity of the sign of `1/Gamma(nu + 1)`.

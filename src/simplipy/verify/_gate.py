@@ -73,9 +73,9 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
           announce_report=True):
     # Install the timeout handler for the duration of the sweep ONLY: the process may
     # have its own SIGALRM use (a host harness, another timeout wrapper), and clobbering
-    # it without restore leaks our handler past this call (audit Tier-2, 2026-08-03).
+    # it without restore leaks our handler past this call.
     # MAIN THREAD ONLY: `signal.signal` raises anywhere else, which made every
-    # off-main-thread mine crash in its finalize gate (hardening H-010, 2026-08-03).
+    # off-main-thread mine crash in its finalize gate.
     # Off the main thread the sweep runs with timeouts DISARMED, as with no timeout asked:
     # arming a real alarm off-main would deliver SIGALRM to an unhandled main thread and
     # kill the process. WITH NO TIMEOUT (`judge_timeout_s=0`, as a mine judges) the sweep
@@ -123,11 +123,11 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         if idx % 200 == 0:
             print(f"[{idx}/{len(rules)}] " +
                   ' '.join(f'{k}={len(v)}' for k, v in buckets.items()), flush=True)
-    # THE TIMEOUT MUST NOT DECIDE UNDER LOAD (audit U3, 2026-08-22). JUDGE-TIMEOUT is
+    # THE TIMEOUT MUST NOT DECIDE UNDER LOAD. JUDGE-TIMEOUT is
     # fatal downstream, and a 30 s wall-clock alarm is a fact about the BOX, not the
     # rule: an ordinary CERTIFIED row measured 33-36 s on an idle 12-core host, so a
     # 32-worker mine drops rules its own gate would pass -- a non-reproducible
-    # artifact, which D29 byte-identity cannot survive. Every timed-out rule is
+    # artifact, which byte-identity cannot survive. Every timed-out rule is
     # therefore re-judged SERIALLY here, after the sweep, at 4x the budget -- the
     # retry environment is the quietest this process can offer, and the widened
     # budget is deterministic. A rule that times out twice stays JUDGE-TIMEOUT:
@@ -173,7 +173,7 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         # Announced only when the CALLER chose the path: verify_ruleset routes its
         # read-back through an anonymous tempdir, and printing that random path
         # makes otherwise byte-identical mine stdout differ across processes
-        # (found by the determinism-across-PYTHONHASHSEED pin, 2026-08-02).
+        # (found by the determinism-across-PYTHONHASHSEED pin).
         if announce_report:
             print(f'report -> {report_path}')
     if build_path:

@@ -13,7 +13,7 @@
 //!
 //! Parity policy is `numeric.rs`'s: per-element f64 + the SYSTEM libm. Differences vs numpy are at
 //! most a last ULP -- absorbed by the `allclose` decision gate at any deployed tolerance (the
-//! shipped mine runs rtol 1e-11, F4-audited in `mine.yaml`); the soundness-critical
+//! shipped mine runs rtol 1e-11, set in `mine.yaml`); the soundness-critical
 //! special values (div0 -> signed inf, sqrt(neg) -> nan) are bit-exact via the shared kernel.
 
 use crate::numeric::{binary_fn, unary_fn, RangeKind};

@@ -82,8 +82,8 @@ pub const BATTERY: [ProbeAtom; 21] = [
 /// witnesses plus the special rationals and the symbolic transcendental atoms. A fitted or
 /// pattern-bound source constant reaches every one of these in deployment.
 ///
-/// SPAN MIRRORS THE JUDGE (audit U8, 2026-08-22). This battery reached |c| <= 5 while
-/// the gate's constant quantifier reaches |c| = 1e4 generically (`WIDE_CONSTS`, F107)
+/// SPAN MIRRORS THE JUDGE. This battery reached |c| <= 5 while
+/// the gate's constant quantifier reaches |c| = 1e4 generically (`WIDE_CONSTS`)
 /// and probes the f64 attainment magnitudes out to 1e17 (`SATURATION_CONSTS`) -- so
 /// the miner minted rows the gate then convicted, and every such row was judged,
 /// confirmed and routed before dying. The span below is the judge's own: the 18 core
@@ -109,7 +109,7 @@ pub const SPECIAL_CONSTS: [f64; 48] = [
     -std::f64::consts::FRAC_PI_2,
     std::f64::consts::PI,
     std::f64::consts::E,
-    // WIDE_CONSTS: the generic magnitude span, decade-spaced, both signs (F107)
+    // WIDE_CONSTS: the generic magnitude span, decade-spaced, both signs
     10.0,
     -10.0,
     30.0,
@@ -250,7 +250,7 @@ fn dep_realised(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp
         return cl;
     }
     // The pre-screen's bar is the fit band PLUS ULP headroom, additively -- and that
-    // shape is deliberate, not sloppy (audit U8, resolved 2026-08-22 by measurement).
+    // shape is deliberate, not sloppy (resolved by measurement).
     // A strict bit-distance OR-form was tried and refused true rules at the band
     // EDGE: `adopt_snapped_witness` legitimately places a witness up to the band
     // boundary, and the boundary case then measured the SNAP displacement (124,875
@@ -273,7 +273,7 @@ fn dep_realised(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp
 
 /// The ulp SPACING at |x|, finite for every finite input: at `f64::MAX` the next
 /// representable is inf, so the spacing is taken to the lower neighbour instead --
-/// an infinite tolerance is not a bar (audit U8).
+/// an infinite tolerance is not a bar.
 fn ulp_at(x: f64) -> f64 {
     let a = x.abs();
     if !a.is_finite() {

@@ -1,17 +1,16 @@
-"""The declared public surface (D11): the ratified __all__ column, landed.
+"""The declared public surface: the ratified __all__ column.
 
-The column is the research harness (owner-ratified 2026-08-16); these
-tests pin its landing plan. Red on the pre-landing tree by construction: the
+These tests pin it. Red on a tree without it by construction: the
 root had no ``__all__``, so ``from simplipy import *`` injected eight
 submodules into the caller's namespace — one of which shadowed stdlib ``io``
-(N2 §2c, the measured probe).
+(the measured probe).
 """
 import importlib
 
 import pytest
 
 
-# R1-R13 + __version__ — the root column, verbatim.
+# The root column + __version__, verbatim.
 ROOT_ALL = {
     'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
     'Mode', 'SimpliPyEngine', '__version__',
@@ -19,14 +18,14 @@ ROOT_ALL = {
     'get_path', 'install', 'list_assets', 'uninstall',
     'normalize_variable_token', 'to_expression', 'to_skeleton',
 }
-# R11/R12 renamed 2026-08-18 (`normalize_skeleton` -> `to_skeleton`,
+# Renamed (`normalize_skeleton` -> `to_skeleton`,
 # `normalize_expression` -> `to_expression`): the name states the OUTPUT form, like
 # the engine's `to_infix`/`to_prefix`/`to_tagged`. The old spellings stay reachable
 # through the root's PEP 562 `__getattr__` with a DeprecationWarning (pinned in
 # test_normalization_forms.py) but are deliberately OUT of the declared column, the
 # same treatment `mask_values_keep_structure` got in `simplipy.masking`.
 
-# R18, R21, R22, R27, R30 — the module columns, verbatim.
+# The module columns, verbatim.
 MODULE_ALLS = {
     'simplipy.utils': {
         'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
@@ -42,7 +41,7 @@ MODULE_ALLS = {
     },
     'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT'},
     'simplipy.mining': {'RuleMiner', 'verify_mine', 'cross_mode_complexity'},
-    # Joined 2026-08-23: the two public modules the D11 landing missed. The
+    # The two public modules below were missed at first. The
     # compatibility policy says every public module declares its column; these
     # rows make that sentence literally true and pin it.
     'simplipy.operators': {
@@ -70,8 +69,8 @@ class TestRootSurface:
         assert bound == ROOT_ALL
 
     def test_star_import_does_not_shadow_stdlib_io(self) -> None:
-        """N2 §2c: `from simplipy import *` used to rebind `io` to
-        simplipy.io. DP-A: submodule names stay out of __all__."""
+        """`from simplipy import *` used to rebind `io` to
+        simplipy.io: submodule names stay out of __all__."""
         import io as stdlib_io
         ns: dict = {}
         exec('import io\nfrom simplipy import *', ns)
@@ -103,7 +102,7 @@ class TestModuleSurfaces:
 
 
 class TestPowerUserCaveatsInline:
-    """R13/R31: the compile-to-source caveat rides in the docstring, not only
+    """The compile-to-source caveat rides in the docstring, not only
     in index.md prose."""
 
     def test_codify_carries_the_caveat(self) -> None:
@@ -128,9 +127,9 @@ class TestRunningDeprecations:
 
 
 class TestD30ImportIsLight:
-    """D30 (ratified): the import-cost acceptance is structural —
+    """The import-cost acceptance is structural —
     `huggingface_hub` must be absent from sys.modules after `import simplipy`.
-    Measured motivation (N3): the hf import chain was 122 ms of a 282 ms
+    Measured motivation: the hf import chain was 122 ms of a 282 ms
     import paid by users who only call `simplify`."""
 
     def test_huggingface_hub_absent_after_import(self) -> None:

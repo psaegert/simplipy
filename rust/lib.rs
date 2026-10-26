@@ -114,7 +114,7 @@ fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine
 
 /// The `MineSpec` of one scan call: the mode must be the one the library was
 /// priced in, and the evidence floor defaults to 1/8 of the library's rows (never 0: an
-/// explicit 0 would silently disable the evidence gate, D3 / H-038).
+/// explicit 0 would silently disable the evidence gate).
 #[allow(clippy::too_many_arguments)]
 fn mine_spec(
     library: &PyCandidateLibrary,
@@ -172,8 +172,8 @@ fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
     }
 }
 
-/// The public `effort=` wire. `None` explores until a round finds nothing (owner,
-/// 2026-10-06): the search stops when a whole round of the answer's candidates finds
+/// The public `effort=` wire. `None` explores until a round finds nothing:
+/// the search stops when a whole round of the answer's candidates finds
 /// nothing, which the well-founded
 /// ordering bounds, so its answer re-explores to nothing on a second call. `Some(k)` caps
 /// it at `k` candidate descents; `Some(0)` never enters it.
@@ -206,13 +206,13 @@ fn ac_simplify_impl(
         ensure_own_set(&inner, mode, own_set)?;
         // The documented empty-input contract: `simplify([]) == []` (the one valid
         // case `is_valid` rejects). Restored explicitly after the malformed-input
-        // hardening accidentally made it raise (hardening H-003, 2026-08-03).
+        // hardening accidentally made it raise.
         if tokens.is_empty() {
             return Ok(Vec::new());
         }
         ensure_ac_well_formed(&inner, &tokens)?;
         // Budget 0 takes the chain's own entry, so unused exploration is byte-identical
-        // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
+        // BY ROUTING, not by trusting the explore path's early return.
         if explore_budget > 0 {
             inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
         } else {
@@ -237,7 +237,7 @@ fn ac_simplify_infix_impl(
     py.detach(|| {
         let inner = core.inner();
         ensure_own_set(&inner, mode, own_set)?;
-        // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
+        // Empty-input contract, as in `ac_simplify`: the empty rendering.
         if tokens.is_empty() {
             return Ok(String::new());
         }
@@ -255,8 +255,8 @@ fn ac_simplify_infix_impl(
 /// The AC entry accepts BOTH the old grammar and the tagged form; `is_valid` only understands
 /// the former, so tag-bearing inputs skip the arity scan (the shared AC parser is the
 /// authority there -- a malformed tagged input fails the parse, the kernel returns `None`,
-/// and the FFI raises the same ValueError as every other malformed input; audit Tier-2,
-/// 2026-08-03: it used to be returned UNCHANGED, silently). The length cap applies to both.
+/// and the FFI raises the same ValueError as every other malformed input;
+/// returning it UNCHANGED would pass garbage silently). The length cap applies to both.
 fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()> {
     ensure_tokens_are_tokens(tokens)?;
     // Tagged-form tokens and the `rootn` built-in live outside `is_valid`'s config
@@ -274,9 +274,9 @@ fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<
     ensure_well_formed(inner, tokens)
 }
 
-/// THE NORMATIVE TOKEN GRAMMAR (H-004 + H-007), enforced at every semantic boundary.
+/// THE NORMATIVE TOKEN GRAMMAR, enforced at every semantic boundary.
 /// A well-formed token (non-empty, whitespace-free -- an empty or whitespace-bearing
-/// "token" corrupts every space-joined serialization; H-004, 2026-08-03) is one of:
+/// "token" corrupts every space-joined serialization) is one of:
 ///   1. a NUMERIC LITERAL -- the canonical spellings every layer reads identically: a
 ///      numeral of the one grammar (`utils::is_numeric_string`: a decimal with optional
 ///      single sign, one optional `.` and an optional `e`/`E` exponent, or an exact
@@ -286,13 +286,13 @@ fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<
 ///   3. a FREE SYMBOL -- anything else that NO standard numeric reader interprets
 ///      (`x0`, `foo`, `_0`); symbol algebra applies, under the contract that a free
 ///      symbol denotes a finite real;
-///   4. a RESERVED NUMERIC SPELLING -- REFUSED here (H-007, 2026-08-04): a token that
+///   4. a RESERVED NUMERIC SPELLING -- REFUSED here: a token that
 ///      Python `float()`/literal syntax or Rust `f64` reads as a value but the symbolic
 ///      core would treat as a free symbol (`inf`, `1_000`, `0x10`; see
 ///      `utils::reserved_numeric_spelling`). Before this guard the SAME input had two
 ///      contradictory public answers: `simplify(["-","inf","inf"]) == ["0"]` (symbol
 ///      algebra) while `evaluate_constant_subtree` said `float("nan")` (value reading).
-///      Since B2 (2026-10-05) this includes every token that starts like a number but is
+///      This includes every token that starts like a number but is
 ///      not a numeral (`1/0`, `1/6.28`, `--5`, `1e5.5`), in every form, tagged included.
 ///
 /// `is_numeric_string` is the numeral grammar itself (the masking predicate and the
@@ -300,11 +300,11 @@ fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<
 /// pin is untouched); alphabet well-formedness and spelling reservation are the
 /// boundary's job, enforced here.
 fn ensure_tokens_are_tokens(tokens: &[String]) -> PyResult<()> {
-    // RECURSION CAP AT THE CHOKE POINT (H-043, D4): the recursive walkers behind the
+    // RECURSION CAP AT THE CHOKE POINT: the recursive walkers behind the
     // instrument surfaces (tape compile, constant-subtree eval, interval descent, rule
     // compile) overflow the stack on ~1e5-deep chains, which ABORTS the process --
     // pyo3 maps panics, not SIGSEGV. The cap lives HERE so every entry that checks its
-    // alphabet is depth-bounded by construction; before D4 it lived only on the
+    // alphabet is depth-bounded by construction; once it lived only on the
     // simplify/AC surfaces and twelve other entries aborted (probed, exit -11).
     if tokens.len() > MAX_TOKENS {
         return Err(PyValueError::new_err(format!(
@@ -387,9 +387,9 @@ pub(crate) fn assets_required() -> bool {
 /// asset-dependent tests early-return on `None` (skip) rather than panic; under
 /// `SIMPLIPY_TEST_REQUIRE_ASSETS` the skip path panics instead (see [`assets_required`]).
 ///
-/// HISTORY (audit Tier-1 #3, owner ruling 2026-08-03): this used to load the legacy `dev_7-3`
+/// HISTORY: this used to load the legacy `dev_7-3`
 /// asset, which made the RETIRED hyper-operator vocabulary the universe every rust test ran in
-/// -- exactly why the binary-vocabulary certificate holes (division towers, 2026-08-03) stayed
+/// -- exactly why the binary-vocabulary certificate holes (division towers) stayed
 /// invisible to the suite. Tests that legitimately need a legacy TABLE (the conversion layer's
 /// input language) use the in-repo fixture instead (`ac::convert::tests`), never a cached asset.
 #[cfg(test)]
@@ -474,7 +474,7 @@ pub(crate) fn legacy_sugar_engine() -> Engine {
 #[pyclass(name = "Engine", module = "simplipy._core", frozen)]
 struct PyEngine {
     engine: std::sync::RwLock<engine::Engine>,
-    /// C1.9: a digest of the rules AS PUSHED (from_strs' initial set or the last
+    /// A digest of the rules AS PUSHED (from_strs' initial set or the last
     /// `set_rules`), echoed back through [`PyEngine::rules_in_sync`] so the Python
     /// shim's `__getstate__` can refuse to pickle an engine whose rule list and
     /// compiled core have silently diverged. The digest is over the PUSHED
@@ -516,7 +516,7 @@ fn translate_held_sets(engine: &engine::Engine) {
     }
 }
 
-/// C1.9: deterministic digest of a pushed rule list (std SipHash with fixed keys --
+/// Deterministic digest of a pushed rule list (std SipHash with fixed keys --
 /// `DefaultHasher::new()` -- stable across processes of one build; both storers and
 /// the checker share this one function, so representation drift is impossible).
 /// One SERVED rule as the FFI hands it out: `(lhs, rhs, artifact index)`.
@@ -571,7 +571,7 @@ impl PyEngine {
         let canon = parse_rule_canon(canon, engine::RuleMode::Default)?;
         // threatmodel-3: parse and CAP the rules BEFORE the engine build -- rule
         // compile walks each side recursively, and this was the one token-taking
-        // FFI entry the H-043 cap never reached: a ~1e5-deep chain in a hostile or
+        // FFI entry the depth cap never reached: a ~1e5-deep chain in a hostile or
         // corrupt rules.json aborted the whole process (SIGSEGV, not a Python
         // exception) at plain `load()`. Same cap, same choke-point doctrine.
         let rules: Vec<(Vec<String>, Vec<String>)> = serde_json::from_str(rules_json)
@@ -583,7 +583,7 @@ impl PyEngine {
         let inner = engine::Engine::from_strs_read_in(config_yaml, rules_json, canon)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         py.detach(|| translate_held_sets(&inner));
-        // C1.9: digest the initial rules exactly as `set_rules` digests later pushes --
+        // Digest the initial rules exactly as `set_rules` digests later pushes --
         // the same (lhs, rhs) list representation the shim serialized into the JSON.
         Ok(Self {
             engine: std::sync::RwLock::new(inner),
@@ -1386,7 +1386,7 @@ impl PyEngine {
         crate::ac::rules::step_cap_binds()
     }
 
-    // (`simplify_counters`/`reset_simplify_counters` were removed in D3, 2026-08-05:
+    // (`simplify_counters`/`reset_simplify_counters` are gone:
     // they reported the DELETED binary kernel's hot-path counters, whose bump sites
     // went with the kernel -- an FFI answering all-zeros regardless of build features
     // is a record that misleads, not observability. See `engine::stats`.)
@@ -1443,7 +1443,7 @@ impl PyEngine {
         source: Vec<String>,
         target: Vec<String>,
     ) -> PyResult<Option<f64>> {
-        // H-043/D4: the guard its four sibling probes already run (alphabet + cap).
+        // The guard its four sibling probes already run (alphabet + cap).
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&target)?;
         Ok(py.detach(|| {
@@ -1771,7 +1771,7 @@ impl PyEngine {
     ) -> PyResult<()> {
         let mode = parse_rule_mode(rule_mode)?;
         let canon = parse_rule_canon(canon, mode)?;
-        // H-043/D4: same cap + alphabet as every other token-taking entry -- rule compile
+        // Same cap + alphabet as every other token-taking entry -- rule compile
         // parses each side into a tree, recursively.
         if let Some(rules) = &rules {
             for (lhs, rhs) in rules {

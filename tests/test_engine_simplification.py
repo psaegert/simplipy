@@ -48,7 +48,7 @@ class TestPruneCoveredRules:
         cannot bind the composite `sin(x{i})` probe, so the wide rule is kept.
         (The rules are variable-preserving: a ground-collapsing pair would ride
         the engine's arithmetic -- the original `sin(...) -> 0` fixture leaned on
-        the transcendental fold that fold unification removed, 2026-08-02, and a
+        the transcendental fold that fold unification removed, and a
         `neg` head is soundly STRIPPED by load canonicalization (`neg(A) -> 0`
         normalizes to `A -> 0`), which makes the wide rule genuinely wider than
         its cover and the prune of the cover correct.)
@@ -412,7 +412,7 @@ _FIND_RULES_OPERATORS = {
 #     abs abs ?0 -> abs ?0     and     abs neg ?0 -> abs ?0
 # in well under a second, so the property tests quantify over a NON-EMPTY rule set.
 # The vocabulary the minting helper below uses. `abs` alone used to mint (parity and
-# abs-idempotence rules); as of the 2026-08-07 parity arm the constructors own that whole
+# abs-idempotence rules); with the parity arm the constructors own that whole
 # family and an abs-only mine yields ZERO rules -- the anti-vacuity tripwire caught it.
 # `exp`/`log` are added because a transcendental inverse pair is something no constructor
 # evaluates, so this mine keeps minting no matter how far the canon grows.
@@ -452,7 +452,7 @@ class TestFindRules:
             X=128,
             constants_fit_challenges=2,
             constants_fit_retries=1,
-            # MINT-level pin (promote_sorts defaults ON since 2026-08-01): promotion
+            # MINT-level pin (promote_sorts defaults ON): promotion
             # adds the ladder's seeded identities and reshapes sorts; the default-on
             # path is pinned separately by test_default_mine_ships_promoted_seeds.
             promote_sorts=False,
@@ -482,7 +482,7 @@ class TestFindRules:
             ['*', '2', 'x0']
 
     def test_default_mine_ships_promoted_seeds(self, tmp_path) -> None:
-        """promote_sorts defaults ON (owner ruling 2026-08-01: features do not ship
+        """promote_sorts defaults ON (features do not ship
         disabled): a DEFAULT mine emits the deployment-strength artifact. Over pure
         arithmetic the mine itself mints nothing (identities are engine-native, see
         the mint-level twin below), so the default artifact is exactly the ladder's
@@ -510,7 +510,7 @@ class TestFindRules:
         # change and nothing more: `ac_rules_info()` is (4, 0, 0, 0) for the eight-row
         # set AND for this one -- the loader's `translate` already collapsed them to
         # four served patterns. Measured across the 400-row corpus in SOUND and LOSSY:
-        # 0 rows move. Owner-ratified 2026-08-19.
+        # 0 rows move.
         seeds = {(('-', '!0', '!0'), ('0',)),
                  (('*', '0', '!0'), ('0',)),
                  (('/', '$0', '$0'), ('1',)),
@@ -580,8 +580,7 @@ class TestFindRules:
         On pure arithmetic this reduced to `0 <= 0`; the prune never touched a
         single actual rule. On the abs vocabulary the mine mints both abs rules
         and the prune exercises its coverage judgment for real. Coverage is
-        judged in the serve-time reduction ordering (state-coverage, the F5
-        ruling): `abs neg ?0 -> abs ?0` is a strict descent there (a complexity
+        judged in the serve-time reduction ordering (state coverage): `abs neg ?0 -> abs ?0` is a strict descent there (a complexity
         TIE -- signs are free -- broken by the canonical order), and nothing
         else performs the rewrite, so the prune keeps BOTH rules. The old
         complexity-score judge read the tie as covered and dropped it, losing
@@ -749,7 +748,7 @@ class TestConstantFolding:
 
     def test_simplify_infix_numeric_constants(self) -> None:
         """End-to-end: infix '1.23 + 4.56' folds to one literal; the DOWNSTREAM masking
-        toolkit (masking is policy, not engine behavior -- owner ruling A2) abstracts it."""
+        toolkit (masking is policy, not engine behavior) abstracts it."""
         from simplipy import masking
         engine = self._engine()
         folded = engine.simplify("1.23 + 4.56")
@@ -850,7 +849,7 @@ class TestResolveConstantRules:
 class TestBangSort:
     """The `!` third sort: `!N` binds a variable leaf freely, or a
     SUBTREE only when the interval engine certifies it defined-and-finite a.e. (`finite_ae`).
-    This is what recovers the E3 family (`exp(x) - exp(x) -> 0`) without resurrecting the
+    This is what recovers the self-cancellation family (`exp(x) - exp(x) -> 0`) without resurrecting the
     unsound `_`-subtree binding (`log(x) - log(x)` is nan on half the line and must not fire).
     """
 
@@ -880,7 +879,7 @@ class TestBangSort:
         # variable leaf: always binds (a leaf is trivially finite a.e.)
         assert '<constant>' in engine.simplify(["-", "x0", "x0"]) or \
                list(engine.simplify(["-", "x0", "x0"])) == ["0"]
-        # exp/sinh: certified finite a.e. -> the rule fires (E3 recovered)
+        # exp/sinh: certified finite a.e. -> the rule fires (family recovered)
         for f in ("exp", "sinh"):
             out = list(engine.simplify(["-", f, "x0", f, "x0"]))
             assert out in (["0"], ["<constant>"]), (f, out)
@@ -906,14 +905,14 @@ class TestBangSort:
 
 
 class TestB2TailArm:
-    """B2 (ruling D9): `finite_ae`'s subdivision arm proved finiteness over
+    """`finite_ae`'s subdivision arm proved finiteness over
     `[-R, R]^n` only (R >= 64) and nothing looked outside, so a nan onset past the
     horizon was invisible: `- !0 !0 -> 0` cancelled `log(1-0.001*x1) - log(1-0.001*x1)`
     -- nan for EVERY x1 > 1000 -- and `A/A -> 1` collapsed the asin twin. The tail arm
-    conjoins slab evaluations over `{|x_i| > R}` onto the subdivision path (predicate
-    T3: bounded or pole-free), and these pins state the acceptance through the public
+    conjoins slab evaluations over `{|x_i| > R}` onto the subdivision path (predicate:
+    bounded or pole-free), and these pins state the acceptance through the public
     API. Scope honesty: the arm removes the HORIZON class only -- dependency-loss
-    unsoundness remains, and the D9 wording obligation forbids "finite_ae is sound"."""
+    unsoundness remains, and nothing may claim "finite_ae is sound"."""
 
     def test_tail_nan_no_longer_cancels(self, eng) -> None:
         assert eng.simplify('log(1 - 0.001*x1) - log(1 - 0.001*x1)') != '0'
@@ -923,17 +922,17 @@ class TestB2TailArm:
         # onset 1/0.0157 = 63.69 sits INSIDE the box: was refused before, stays refused
         ctl = 'log(1 - 0.0157*x1) - log(1 - 0.0157*x1)'
         assert eng.simplify(ctl) == ctl
-        # pole-free unbounded growth is T3's whole point: the flagship binder still fires
+        # pole-free unbounded growth is the slab predicate's whole point: the flagship binder still fires
         assert eng.simplify('exp(x0) - exp(x0)') == '0'
 
 
 class TestB5B19OddSignFusion:
-    """B5+B19: one owner for the odd-function literal sign, on every route. Before
+    """One owner for the odd-function literal sign, on every route. Before
     the hoist, the Add-collector's rebuild fused `-5*sin(2)` to `5*sin(-2)` while
     `mul()`'s direct assembly did not -- two fixpoints for one value, distinguished
     only by construction history -- and the collector could not split the sign back
     out, so `sin(-2) + sin(2)` needed a render/re-parse cycle to cancel. Both routes
-    now price one sign-trade orbit (I4's direction: the literal owns the sign), and
+    now price one sign-trade orbit (the ruled direction: the literal owns the sign), and
     the split half lifts the literal sign into the coefficient so the pair cancels
     at collection. Artifact effect, measured: 400-corpus row-identical; 30 shipped
     rules subsume at translation (0 dropped), twins 10 -> 8 -- the dated interim
@@ -943,7 +942,7 @@ class TestB5B19OddSignFusion:
         via_mul = list(eng.simplify(eng.to_tagged(['*', '-5', 'sin', '2'])))
         via_add = list(eng.simplify(eng.to_tagged(['+', '0', '*', '-5', 'sin', '2'])))
         assert via_mul == via_add == ['<mul>', '5', 'sin', '-2', '</mul>']
-        # I4's other example: the -1 case dissolves the product node entirely.
+        # The other example: the -1 case dissolves the product node entirely.
         assert list(eng.simplify(['*', '-1', 'sin', '2'])) == ['sin', '-2']
 
     def test_odd_literal_pair_cancels_in_one_pass(self, eng) -> None:
@@ -1056,7 +1055,7 @@ class TestMultSort:
 
 
 class TestB9MuGuarantee:
-    """B9: the only length-shaped claim docs/index.md makes is the mu-guarantee --
+    """The only length-shaped claim docs/index.md makes is the mu-guarantee --
     `complexity(simplify(e)) <= complexity(e)`, sound, idempotent -- because the
     token-count claims it replaced were FALSE: outputs can be longer in explicit
     tokens (a mu-cheaper literal can take more tokens to spell) and the tagged
@@ -1084,7 +1083,7 @@ class TestB9MuGuarantee:
 
 
 class TestApi1ModeParameter:
-    """api-1 + fmux-mode-1: the `mode` parameter accepted things it must refuse and
+    """The `mode` parameter accepted things it must refuse and
     then silently selected DIFFERENT semantics. `simplify(expr, Mode.permissive)` bound
     the Mode POSITIONALLY to the pass budget and ran SOUND; `mode=3` and
     `mode=np.float64(3.0)` silently selected LOSSY -- a caller whose mode came out
@@ -1114,7 +1113,7 @@ class TestApi1ModeParameter:
 
 
 class TestConc12CopyOnWrite:
-    """conc-1/conc-2: `compile_rules` pushed into the SAME core object, so a
+    """`compile_rules` pushed into the SAME core object, so a
     concurrent reader mid-`simplify` raced a half-updated ruleset; and the shim
     mutators rewrote `simplification_rules` BEFORE the push, so a failed push left
     the wrapper and the core silently diverged. `compile_rules` is copy-on-write

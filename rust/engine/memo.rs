@@ -13,7 +13,7 @@ use crate::tokens::{Tok, TokenOverlay, TokenTable};
 /// stays bounded; memoization never stops.
 ///
 /// Keys are `Vec<Tok>` of TABLE ids only -- per-call overlay ids must never enter this
-/// per-Engine map. C1.11: the TYPE owns that invariant at the one unsound door,
+/// per-Engine map. The TYPE owns that invariant at the one unsound door,
 /// insertion ([`BangCache::insert`] requires the table and DROPS any key carrying a
 /// non-table id): the table is append-only, so a poisoned overlay-keyed entry would not
 /// stay unreachable -- once the table grows past the overlay id, a legitimate key can

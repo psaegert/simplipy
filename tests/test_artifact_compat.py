@@ -1,4 +1,4 @@
-"""The artifact-generation allowlist (owner ruling 2026-08-03): generation-1 artifacts
+"""The artifact-generation allowlist: generation-1 artifacts
 (the retired hyper-operator vocabulary: 2-1/3-2/4-3, dev_7-*) load only on
 simplipy <= 0.11, and this package refuses them at every ARTIFACT-LOADING path with
 the actionable pin in the message. Generation-2 artifacts (acj-*) load exactly as
@@ -62,8 +62,8 @@ class TestConfigGate:
         config = load_config(ACJ_CONFIG)
         config.pop('engine_generation', None)
         config['operators']['mult3'] = {
-            # R3: a realization is compiled into generated source, so the shape is
-            # validated at load -- a dotted name, not an inline lambda (audit B14).
+            # A realization is compiled into generated source, so the shape is
+            # validated at load -- a dotted name, not an inline lambda.
             'realization': 'np.tan', 'alias': [], 'inverse': None,
             'arity': 1, 'precedence': None, 'commutative': False}
         config.pop('rules', None)
@@ -142,7 +142,7 @@ class TestDeliberateBoundaries:
 
 
 class TestD12CleanCut:
-    """D12's clean-cut rulings, owner-ratified 2026-08-16: `pow1`/`pow_1` join
+    """The clean-cut rulings: `pow1`/`pow_1` join
     RETIRED_OPERATOR_TOKENS (a config declaring them was accepted while the parser
     unconditionally rewrote their tokens away -- one engine, two answers for one
     expression); the `inverse` spec key is no longer REQUIRED (nothing reads it --
@@ -251,7 +251,7 @@ class TestRequiresSimplipy:
         ('0.15.0.dev2', '===0.15.0.dev2', True)])
     def test_an_exact_pin_of_a_prerelease_names_that_prerelease(self, monkeypatch, running,
                                                                 declared, served):
-        """F4: `==0.15.0.dev2` is the pre-release itself; a range still judges a pre-release
+        """`==0.15.0.dev2` is the pre-release itself; a range still judges a pre-release
         as the release it precedes."""
         from simplipy import compat
         monkeypatch.setattr(compat, '_package_version', lambda: running)

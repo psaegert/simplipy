@@ -37,13 +37,13 @@ from fractions import Fraction
 import numpy as np
 from mpmath import mp, mpf, isnan as misnan, isinf as misinf
 
-# C35: no `np.seterr(all='ignore')` here -- that call is PROCESS-WIDE and ran at
+# No `np.seterr(all='ignore')` here -- that call is PROCESS-WIDE and ran at
 # import, silently changing the embedder's numpy error handling because this module
 # was imported. The deployed-check evaluator scopes `np.errstate` around its own
 # operator applications instead (see `d_eval`); the host's configuration survives.
 F = np.float64
 
-try:  # the CORE serialization language, read from the engine's own table (C1.10):
+try:  # the CORE serialization language, read from the engine's own table:
     from simplipy._core import core_serialization_ops as _core_ops  # type: ignore[attr-defined]
     _CORE_ARITY = {t: s['arity'] for t, s in _core_ops().items()}
 except Exception:  # pragma: no cover  (missing/unbuilt extension)
@@ -92,7 +92,7 @@ SNAP_EVENTS = [0]  # incremented when a symbolic-cancellation snap / pole-guard 
                    # (a measurement artifact), so the deployed check is skipped
 
 
-#: The judge's statement of NON-JURISDICTION over the multi-Const family (B7/D36):
+#: The judge's statement of NON-JURISDICTION over the multi-Const family:
 #: a rule whose LHS binds more than one independent `<constant>` is outside what the
 #: one-shared-symbol contract can model, and is refused before judging with exactly
 #: this detail. The engine's gate sites exempt this detail -- and ONLY this detail --
@@ -145,7 +145,7 @@ def _exact(t):
     """A decimal literal as the EXACT rational it spells -- `-0.1` is -1/10, not the
     double 0.1000000000000000055511151231257827.
 
-    F97. Literals used to enter the tree through `float()`, so the engine's exact `Rat`
+    Literals used to enter the tree through `float()`, so the engine's exact `Rat`
     arrived at an arbitrary-precision judge already wrong in the 17th digit, and `c_eval`
     then did `mpf(that_double)` and preserved the error at every rung. It convicted
     `inv(-10/t) -> -0.1*t` -- an exact identity -- as a clause-(a) REAL-CHANGE at measure
@@ -512,7 +512,7 @@ def _harmonic_value(a):
 
 def c_harmonic(a):
     """The harmonic number psi(a + 1) + gamma: NaN at every negative integer (the one-sided
-    limits differ, D6) and at -inf, +inf at +inf, the band at the poles (tan's class)."""
+    limits differ) and at -inf, +inf at +inf, the band at the poles (tan's class)."""
     if misnan(a):
         return NAN
     if misinf(a):
@@ -536,7 +536,7 @@ def c_harmonic(a):
 def c_mod(a, b):
     """numpy's `mod` (the floored remainder, the divisor's sign) under the contract: NaN at a
     zero divisor and at an infinite dividend; against an infinite divisor the dividend where
-    the signs agree and the divisor otherwise (D7); one zero. mpmath's `%` is the exact floored
+    the signs agree and the divisor otherwise; one zero. mpmath's `%` is the exact floored
     remainder, rounded once. A remainder inside the band of 0 or of `b` sits at a multiple of
     `b`, where a residue's sign picks the side of the jump: Unresolved."""
     if misnan(a) or misnan(b):
@@ -559,7 +559,7 @@ def c_mod(a, b):
 
 
 def c_atan2(y, x):
-    """atan2 with C99's cells off the cut, one zero. THE CUT (D18: a null set, no special
+    """atan2 with C99's cells off the cut, one zero. THE CUT (a null set, no special
     case in the engine): on y = 0 with x < 0, and at the origin, float64 reads the zero's sign
     and the contract has one zero, so the point is Unresolved; so is a y inside the band of 0
     there, a residue whose sign picks the branch."""
@@ -585,7 +585,7 @@ BESSELJ_X_CAP = mpf('1e12')
 
 def c_besselj(nu, x):
     """`besselj(nu, x)`, the Bessel function of the first kind, at contract semantics, with
-    scipy's cells (D7) -- the table the core's high-precision kernel (`hiprec::besselj`) and its
+    scipy's cells -- the table the core's high-precision kernel (`hiprec::besselj`) and its
     float64 kernel (`numeric::besselj`) share:
 
     * NaN at a NaN operand and at `x = +-inf` (scipy's cell; the limit, 0, is not taken);
@@ -651,7 +651,7 @@ OPS = {
             ((_ for _ in ()).throw(Unresolved())
              if (not misinf(a) and abs(a) > 1 and abs(abs(a) - 1) < mpf(10) ** (-mp.dps + 10))
              else (NAN if abs(a) > 1 else _z(mp.acos(a)))),
-    # F104's band, extended to `atan` (2026-08-21). pi/2 is an ASYMPTOTE `atan` never
+    # The boundary band, extended to `atan`. pi/2 is an ASYMPTOTE `atan` never
     # attains at a finite argument -- the same class as `tanh`'s +-1, and NOT the class
     # `asin`/`acos` refuse to band, where +-1 is an ordinary point with a finite value.
     # Once |atan(a)| is inside the working-precision band of pi/2 the value is
@@ -675,13 +675,13 @@ OPS = {
     'cosh': lambda a: NAN if misnan(a) else
             (PINF if misinf(a) else (_z(mp.cosh(a)) if abs(a) < mpf('1e5')
              else (_ for _ in ()).throw(Unresolved()))),
-    # F104: BOUNDARY HONESTY AT THE ASYMPTOTE, the same doctrine `atanh` states below.
+    # BOUNDARY HONESTY AT THE ASYMPTOTE, the same doctrine `atanh` states below.
     # `tanh` is where the information is lost, so this is where the refusal belongs. Once
     # |tanh(x)| is inside the working-precision band of 1 the value is indistinguishable
     # from 1, and everything downstream inherits that: `asin(1) = pi/2` is returned as
     # though definite, `cos(pi/2)` is a ~1e-50 residue, and against a true `sech(1000)` of
     # 1e-434 that is a RELATIVE gap of 1.0 -- at EVERY rung, because tanh saturates at
-    # every affordable precision. F103's decay test reads that stability as analytic, which
+    # every affordable precision. The decay test reads that stability as analytic, which
     # is how the EXACT `cos asin tanh _0 -> inv cosh _0` reached 6 of 167 grid points.
     # Saturation makes a false rule look true AND a true rule look false; this is the
     # second half.
@@ -897,7 +897,7 @@ DEP_OPS = {
     # The hyper-op realizations were deleted from simplipy.operators at 0.12 ("the
     # hyper-operator vocabulary is deleted, once and for all"), which silently emptied
     # these DEP_OPS slots via the getattr fallback below and let a planted gate poison
-    # evaporate into NO-WITNESS (E1). Hand-coded here, transplanted from the pre-0.12
+    # evaporate into NO-WITNESS. Hand-coded here, transplanted from the pre-0.12
     # module, so the gate keeps judging rules spelled with those names: 0.15 refuses
     # generation-1 ARTIFACTS, but a generation-2 config may still declare the names.
     'pow2': lambda a: F(a) ** F(2), 'pow3': lambda a: F(a) ** F(3),
@@ -973,7 +973,7 @@ def d_eval(tree, env, in_range=None):
         except OverflowError:  # `tree[1]` is a Fraction: compare, never convert
             return F(math.inf if tree[1] > 0 else -math.inf)
     args = [d_eval(c, env, in_range) for c in tree[1:]]
-    # C35: the ignore-everything float semantics this judge needs are SCOPED to the
+    # The ignore-everything float semantics this judge needs are SCOPED to the
     # operator application, never set process-wide at import.
     with np.errstate(all='ignore'):
         value = F(DEP_OPS[op](*args))
@@ -1029,7 +1029,7 @@ def compare_classes(cl, cr):
 def gap_reading(cl, cr):
     """One rung's FINITE reading -> `(|l - r|, scale)`, both ABSOLUTE.
 
-    F105 (2026-08-21): THIS USED TO RETURN THE QUOTIENT, AND AGAINST AN EXACT ZERO THE
+    THIS USED TO RETURN THE QUOTIENT, AND AGAINST AN EXACT ZERO THE
     QUOTIENT IS 1.0 AT EVERY PRECISION. The decay test compares this reading at two
     rungs, so any normaliser that is the SAME at both cancels out of the ratio and
     cannot change a verdict. `max(|l|, |r|)` is not the same at both: when one side is
@@ -1045,7 +1045,7 @@ def gap_reading(cl, cr):
     return abs(a - b), max(abs(a), abs(b))
 
 
-# F103 (2026-08-21): THE FINITE CASE HAS NO MAGNITUDE BAR AT ALL. It asks how the gap
+# THE DECAY TEST: THE FINITE CASE HAS NO MAGNITUDE BAR AT ALL. It asks how the gap
 # RESPONDS TO PRECISION, which is the only question that separates the two populations.
 #
 # Every fixed tolerance was the wrong instrument, and the artifact proves it by ordering.
@@ -1063,12 +1063,12 @@ def gap_reading(cl, cr):
 # the two populations clear it by >=30 decades on either side -- a separator, not a knob.
 #
 # Crucially, the cancellation depth cancels out of a RATIO. `log(cosh y + sinh y) -> y` at
-# y = -50 -- exactly true, and the identity F99 recorded as wrongly KILLed -- carries a
+# y = -50 -- exactly true, and an identity a magnitude bar wrongly KILLs -- carries a
 # dps-50 residue of 8.5e-21 that ANY magnitude bar convicts; its gap still falls 10^69 by
 # dps 120, so the ratio spares it. That is the failure the old comment called NOT YET
 # FIXED, and it is what a size test structurally cannot see.
 #
-# This supersedes both earlier attempts. F99 deleted an ABSOLUTE 1e-25 floor because it
+# This supersedes both earlier attempts. An ABSOLUTE 1e-25 floor is gone because it
 # read `e**sinh(-5) -> 0` and `asin(1e-8) -> 1e-8` as equal; the RELATIVE 1e-25 that
 # replaced it still spared the whole tanh saturation family. Both are gone. `asin(1e-8) ->
 # 1e-8` and `sin(1e-3) -> 1e-3` now convict on decay, not on size.
@@ -1090,12 +1090,12 @@ SATURATING = {
 
 
 def saturation_verdict(tl, tr, env_mp):
-    """F106: A BOUNDED FUNCTION NEVER ATTAINS ITS LIMIT AT A FINITE ARGUMENT, so a
+    """A BOUNDED FUNCTION NEVER ATTAINS ITS LIMIT AT A FINITE ARGUMENT, so a
     rewrite claiming it does is false -- by a fact about the FUNCTION, at no precision
     at all. -> 'REAL-CHANGE' when the claim is refuted, else None (no opinion).
 
     This is the family the gap ladder cannot reach, and depth is not the answer.
-    `tanh(cosh(10))` differs from 1 by 2e-9566, inside F104's boundary band at every
+    `tanh(cosh(10))` differs from 1 by 2e-9566, inside the boundary band at every
     rung anyone can afford, so the honest numeric verdict is Unresolved forever;
     `tanh(exp(10))` differs by 1e-19132. Measured, one more rung bought ten rows for
     ~3x the cost of EVERY comparison. A symbolic fact costs nothing and settles all of
@@ -1148,7 +1148,7 @@ REALISED_ULP = 8
 def _ulp_gap(a, b):
     """ULP distance between two finite doubles of the same sign; inf across a sign
     change, which is never a rounding difference. Both zeros canonicalize to +0.0
-    first (owner-approved fix, 2026-08-24): view(-0.0) is int64-min, so the raw
+    first: view(-0.0) is int64-min, so the raw
     subtraction against a positive view wrapped and convicted 1-ULP agreements
     like -0.0 vs 5e-324 as real changes (fail-closed, but wrong and noisy)."""
     if a == 0.0:
@@ -1193,7 +1193,7 @@ def compare_deployed_realised(cl, cr):
     * Bit-exact: right in principle, wrong in practice. It convicts 390 acj-4-3 rules,
       310 of them over a SINGLE ULP, and it makes those 310 depend on the build host's
       libm -- so a pinned triple would not classify identically on another machine, which
-      D29 byte-identity cannot survive.
+      byte-identity cannot survive.
     * 4 ULP, the first proposal: rejected precisely because the number had to be
       defensible. The observed rounding cluster runs 1..7 ULP, so a bar at 4 splits one
       phenomenon down the middle.
@@ -1253,7 +1253,7 @@ def battery_for(sort):
     if sort == '?':
         return reals  # data is real; +-inf is outside the quantifier
     if sort == '_':
-        # nan atom (S14, owner ruling 2026-08-22): `_` binds an ARBITRARY subtree, and
+        # nan atom: `_` binds an ARBITRARY subtree, and
         # a subtree can evaluate to nan on a positive-measure set of its own inputs
         # (`log x0` on the whole negative half-line). nan is therefore IN `_`'s
         # quantification domain -- a full citizen, not an extension point -- and the
@@ -1261,7 +1261,7 @@ def battery_for(sort):
         # `a-nan-domain` instead of the EXT/SHRINK tolerance, which exists for events
         # arising on null sets of a REAL binding. The other sorts keep their
         # batteries: they are certificate-scoped, and whether `!`/`$` owe nan the
-        # same treatment is a separate doctrine question, not ruled by S14.
+        # same treatment is a separate doctrine question.
         return reals + [((lambda: PINF), 'dirac-inf'), ((lambda: NINF), 'dirac-inf'),
                         ((lambda: NAN), 'nan-dom')]
     if sort == '!':
@@ -1296,8 +1296,8 @@ CONSTS = [2.5, -1.5, 3.0, 0.5, -0.7]      # witness-fitting battery (generic val
 SATURATION_CONSTS = [c * s for c in (19., 20., 50., 750., 1e17) for s in (1., -1.)]
 
 
-#: The GENERIC magnitude span, decade-spaced, both signs (F107, owner-ratified
-#: 2026-08-21). `CONSTS` above reaches |c| <= 5, and the MINER does not: the Rust side
+#: The GENERIC magnitude span, decade-spaced, both signs.
+#: `CONSTS` above reaches |c| <= 5, and the MINER does not: the Rust side
 #: sweeps `POLE_GRID` to 500 and draws its fitted constants log-uniform over [1e-3, 1e3],
 #: so the quantifier explored a span the gate never checked. A `forall c over R` that
 #: only ever looks inside one decade is not a check of R; it is a check of [-5, 5].
@@ -1306,10 +1306,10 @@ SATURATION_CONSTS = [c * s for c in (19., 20., 50., 750., 1e17) for s in (1., -1
 #: f64 ATTAINS a bound) and not a denser re-run of |c| <= 5 -- more points inside a span
 #: already covered buy nothing. This is SPAN, not resolution.
 #:
-#: IT WAS NOT SAFE TO LAND BEFORE F107. Measured against the shipped acj-4-3 file with
+#: Measured against the shipped acj-4-3 file with
 #: the old ladder it convicted 97 rows and failed to witness 2 more, and every one was an
-#: instrument artifact -- six distinct defects, of which the roadmap had named two. After
-#: those fixes: 0 convictions, 0 unresolved. Evidence: `audit-2026-08-21/widen/`.
+#: instrument artifact -- six distinct defects. After
+#: those fixes: 0 convictions, 0 unresolved.
 WIDE_CONSTS = [c * s for c in (10., 30., 100., 300., 1e3, 3e3, 1e4, 0.1, 0.01, 0.001)
                for s in (1., -1.)]
 
@@ -1348,7 +1348,7 @@ GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
 # dense center (0.05 spacing: sub-unit undefined intervals like (0.2, 0.8) are visible),
 # unit-spaced mid-range, and a magnitude tail (half-line violations opening at |x|>20,
 # e.g. exp-shift constructions)
-# DEDUPED (F96): `linspace(-3,3,121)` and `linspace(-20,20,41)` overlap, so seven core
+# DEDUPED: `linspace(-3,3,121)` and `linspace(-20,20,41)` overlap, so seven core
 # values (-2.9862579, -1.9862579, -0.9862579, 0.0137421, 1.0137421, 2.0137421, 3.0137421)
 # were double-weighted -- 174 entries for 167 distinct points, silently giving those seven
 # twice the say in `meas`. Order preserved; the point SET is unchanged.
@@ -1467,12 +1467,12 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
         env_out.append(env0)
     best = None
     if tr == ('slot', '<C_R>'):
-        # BARE-<C_R> SHORTCUT (audit §7.2, 2026-08-22): the whole target IS the
+        # BARE-<C_R> SHORTCUT: the whole target IS the
         # constant, so the residual is g(c) = c - L0 exactly -- linear, monotone,
         # witness c_t = L0, nothing to search. 272 of the 343 constant-carrying
         # shipped rules have this shape, and each was paying the 500-point bracket
         # scan and up to 300 bisections per (rule, cl) to approximate the number the
-        # identity hands over. Beyond the cost, the scan machinery is where S20/S21's
+        # identity hands over. Beyond the cost, the scan machinery is where the
         # first-bracket and sign-of-zero misfires live -- this shape cannot reach
         # them any more. Every downstream check still applies: the snap candidates,
         # the two-env validation, and the caller's mp polish.
@@ -1503,7 +1503,7 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
         # constant, `c_R = c_L` is the first candidate worth trying -- it is the answer
         # for every identity -- and it costs one residual evaluation. It weakens nothing:
         # the candidate still has to satisfy the same residual bound and the same
-        # two-env validation as any other. (Same shape as F16d: a lane that cannot
+        # two-env validation as any other. (A lane that cannot
         # evaluate where the question is asked answers a different question.)
         seeds = ([float(cl_val)] if cl_val is not None else [])
         for c in seeds + [1., -1., 2., -2., 0.5, -0.5, math.e, -math.e,
@@ -1516,7 +1516,7 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
     # supply, i.e. an f64 -- that scoping is the whole basis of `c_free`'s derivation --
     # and no fit produces an infinity. The bisection can land on one when both ends
     # overflow, and `round(inf)` then raises OverflowError out of the middle of the
-    # judge. Found 2026-08-21 by widening the constant battery to |c| = 1e4: at
+    # judge. Found by widening the constant battery to |c| = 1e4: at
     # `pow(exp(9), c)` the deployed LHS is inf there, so the fit had nothing finite to
     # aim at. Returning None routes it to the ordinary no-witness tally, which is what a
     # cl with no fittable witness has always meant.
@@ -1580,7 +1580,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
         # THE WITNESS MUST OUT-RESOLVE THE LADDER. `<C_L>` is rebuilt exactly at each
         # rung while `<C_R>` is this fitted value merely re-rounded, so a witness good to
         # only 45 digits puts a FROZEN ~1e-45 gap between the two sides -- one that does
-        # not decay, and that the F103 decay test therefore reads as analytic. That
+        # not decay, and that the decay test therefore reads as analytic. That
         # convicted the identity `pow abs ?0 <constant> -> pow abs ?0 <constant>`, whose
         # two sides are the same tokens. Fitting deeper than the deepest rung keeps the
         # comparison a statement about the FUNCTIONS rather than about this fit.
@@ -1597,12 +1597,12 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
                 e['<C_L>'] = clb()
             return e
 
-        # ...AND THE LADDER'S DEPTH IS OPERAND-SCALED (F96), so `GAP_RUNGS[-1]` stopped
+        # ...AND THE LADDER'S DEPTH IS OPERAND-SCALED, so `GAP_RUNGS[-1]` stopped
         # naming its deepest rung. Size the rule's own intermediates first and match the
         # depth the ladder will actually climb to. Measured on `log(cosh(C)) -> c_t` at
         # C = 710: cosh(710) ~ 1.1e308 puts rung 2 at dps 668 and rung 3 at dps 1336,
         # against a witness frozen at 300 -- so the SAME ~1e-300 residue sat at both
-        # rungs, did not decay, and the F103 decay test read it as an analytic gap. A
+        # rungs, did not decay, and the decay test read it as an analytic gap. A
         # clause-(a) KILL of a rule that is true by construction. Costs nothing for an
         # ordinary rule: small intermediates give back exactly the old 300.
         mp.dps = GAP_RUNGS[-1] + 50
@@ -1639,7 +1639,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
         def target_is_residue():
             """Is `target` the RESIDUE of a cancellation, or a value in its own right?
 
-            The F103 question, asked of the target itself: a residue SHRINKS when the
+            The decay question, asked of the target itself: a residue SHRINKS when the
             working precision rises (`sin(pi)` reads ~1e-300 at dps 300 and ~1e-600 at
             dps 600), a value STANDS STILL. Only for a residue is an absolute noise
             floor the right instrument -- `pow(acos(0), -3000)` is 4.37e-589 at every
@@ -1669,7 +1669,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
             """Is this residual inside the noise of THIS computation?
 
             The test used to be `|r| <= _WIT_RESID * max(1, |target|)`, which for every
-            target below 1 is a pure ABSOLUTE floor -- the shape F99 deleted from the
+            target below 1 is a pure ABSOLUTE floor -- the shape removed from the
             contract's own comparison, left behind in the test that accepts a witness.
             It accepted 0 as the witness for `asin(inv(cosh(710))) = 8.9e-309`, since
             8.9e-309 is under 1e-270 absolutely though it is 100% wrong relatively; the
@@ -1763,7 +1763,7 @@ def _point_verdict(tl, tr, env_mp):
     "disagreeing" at dps 50, collapsing to 22, 17, 8, 4, 3 as the precision doubled.
 
     That monotone collapse IS the answer, and it is now what the finite half asks: a
-    residue decays with the working precision and an analytic gap does not (F103, above
+    residue decays with the working precision and an analytic gap does not (the decay test, above
     `compare_classes`). The identity above is spared on decay -- its dps-50 residue of
     8.5e-21 would fail any magnitude bar, and still falls 10^69 by dps 120.
 
@@ -1774,7 +1774,7 @@ def _point_verdict(tl, tr, env_mp):
     addresses that -- at t = -20 the cancellation is ~217 digits deep, and the rung sized
     from the operands actually seen reaches past it where a fixed 120 never could.
 
-    A SECOND hole, and F103 opened it wider before F104 closed it. The three EXACT
+    A SECOND hole, which the decay test opened wider before the boundary band closed it. The three EXACT
     identities that were three grid points from conviction -- `cos asin tanh _0 ->
     inv cosh _0` and two siblings -- moved TOWARD the bar rather than away from it: the bc
     measure rose from under 0.0167 to 0.03593 against a kill bar of 0.05. The decay test
@@ -1786,7 +1786,7 @@ def _point_verdict(tl, tr, env_mp):
     test reads as analytic. It is refused at the asymptote now (the band in `OPS`) and the
     rows that refuse at rung 1 are settled by the CLIMB below. Measured after both: those
     identities sit at 0 of 167 grid points, better than the 2 of 167 they scored before
-    F103 existed.
+    the decay test existed.
     """
     def once(dps, track=False):
         """One reading at `dps` -> (class_verdict|None, gap|None), or None if Unresolved.
@@ -1828,7 +1828,7 @@ def _point_verdict(tl, tr, env_mp):
         # its boundary-honesty band, and that band NARROWS as the precision rises:
         # tanh(60) is inside it at dps 50 (band 1e-40) and well outside at dps 120
         # (1e-110). Bailing out at rung 1 therefore abstained on rows a higher rung can
-        # settle -- measured, when F104 put the band on tanh, that short-circuit sent 275
+        # settle -- measured, when the band went on tanh, that short-circuit sent 275
         # rules of rules_real.json to UNRESOLVED-COVERAGE and dropped the kills from 65 to
         # 27. An Unresolved is a statement about the RUNG, not about the rule.
         rungs = (BASE_DPS, dps2, dps3)
@@ -1840,7 +1840,7 @@ def _point_verdict(tl, tr, env_mp):
                 break
         if r_lo is None:
             # Refused at every rung we can afford -- so ask the one question that needs
-            # no rung at all (F106). Reached only here, so it cannot move a verdict the
+            # no rung at all (the saturation rule). Reached only here, so it cannot move a verdict the
             # ladder was able to reach.
             return saturation_verdict(tl, tr, env_mp), snapped1
         cls1, gap1 = r_lo
@@ -1859,7 +1859,7 @@ def _point_verdict(tl, tr, env_mp):
             cls3 = r3[0] if r3 is not None else None
             return (r2[0] if r2[0] == cls3 else None), snapped1
 
-        # BOTH FINITE -- decided by DECAY, never by size (see F103 above).
+        # BOTH FINITE -- decided by DECAY, never by size (see the decay test above).
         hi = once(hi_dps)
         if hi is None or hi[0] is not None or hi[1] is None:
             return None, snapped1            # class flipped / Unresolved: never convict
@@ -1900,8 +1900,8 @@ def _point_verdict(tl, tr, env_mp):
         # case, which is why the scale below can no longer be zero.
         if d_hi == 0:
             return 'eq', snapped1
-        # ONE SCALE FOR BOTH RUNGS (F105), AND IT IS THE VALUE'S, NEVER THE
-        # COMPUTATION'S (S11, 2026-08-22). The separations are absolute; the scale is
+        # ONE SCALE FOR BOTH RUNGS, AND IT IS THE VALUE'S, NEVER THE
+        # COMPUTATION'S. The separations are absolute; the scale is
         # fixed here, so it divides out of the ratio and touches nothing but the floor.
         # This used to take the largest INTERMEDIATE into the max (`_MAG_SINK`'s
         # `once.mag`), on the argument that an exactly-cancelling source offers no
@@ -1918,7 +1918,7 @@ def _point_verdict(tl, tr, env_mp):
         # exact 0), the sides offer no value to scale by, the residue that appears
         # at the finer rung is residue OF the intermediate, and flooring by the
         # value scale (the residue itself) convicts the true identity at 19.8% of
-        # the grid. The distinguisher is s_lo itself: the S11 family arrives with
+        # the grid. The distinguisher is s_lo itself: the families the gap exists for arrive with
         # `s_lo ~ pi/2` -- the coarse rung SAW the value, so the value sets the
         # floor and the fixed 3.5e-65 gap stands. `_MAG_SINK` keeps its other
         # consumer, the precision-demand estimator, either way.
@@ -1959,7 +1959,7 @@ def _point_verdict(tl, tr, env_mp):
         # a gap against it is not one more precision could ever close. `10^sinh(-10)` is
         # 5.8e-11014 -- far below any affordable rung, and no closer to the 0 the rule
         # writes than it was at dps 50. Withholding there would abstain on 26 shipped
-        # rows the judge convicts correctly, which is the F105 family exactly.
+        # rows the judge convicts correctly, which is the exact-zero family exactly.
         if (_demanded_dps(getattr(once, 'mag', None),
                           getattr(once, 'small', None)) > MAX_DPS
                 and tl[0] != 'lit' and tr[0] != 'lit'):
@@ -2055,8 +2055,8 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         # the deployed matcher binds multiple <constant> leaves INDEPENDENTLY; this
         # judge models one shared symbol (diagonal only) -- rather than silently
         # under-judging the off-diagonal, the shape is refused fail-closed. The
-        # detail is the SENTINEL the gate sites key their jurisdiction carve-out on
-        # (B7/D36): this return is a statement of non-jurisdiction made BEFORE any
+        # detail is the SENTINEL the gate sites key their jurisdiction carve-out on:
+        # this return is a statement of non-jurisdiction made BEFORE any
         # judging (parse has already succeeded, so an unknown token cannot reach it
         # -- that raises UnsupportedToken above with its own detail), and the
         # multi-Const family's soundness authority is the Const-channel chain
@@ -2075,7 +2075,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
     # THE SATURATION PROBES ARE WITHHELD WHERE A WITNESS MUST BE RE-FITTED AT THEM.
     # Measured over the shipped rules.json: on the 71 rows whose constant appears only on
     # the SOURCE side, the probes move exactly 16 rows and every one moves cleanly from
-    # `core` to `real` -- they are the rules the deep audit found unrealised in f64. On
+    # `core` to `real` -- they are the rules found unrealised in f64. On
     # the 272 rows that also fit a TARGET constant they produce 88 clause-(a) KILLs, and
     # every one diagnosed is an artifact of the exists-witness machinery at magnitudes it
     # cannot resolve, not a false rule. So the probe is put where its answer can be read
@@ -2136,7 +2136,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         cl_battery = kept_cl if has_cl else [(None, None)]
 
     a_kills, nan_kills, tolerated, dep_div = [], [], [], []
-    # F100, the REALISATION axis. `dep_div` answers "the contract certifies but
+    # The REALISATION axis. `dep_div` answers "the contract certifies but
     # deployment diverges" and is therefore gated on the contract agreeing -- which
     # means a KILLed rule's realisation was never recorded, and the SOUND/LOSSY tier
     # split needs exactly that. `dep_bad`/`dep_seen` record the same comparison with no
@@ -2194,14 +2194,14 @@ def _judge_contract(lhs, rhs, deployed_check=True):
             if cr is not None:
                 point['<C_R>'] = float(cr)
             if v not in (None, 'eq') and any(t == 'nan-dom' for t in tags.values()):
-                # S14: at a nan binding of a `_` slot, every disagreement is a change
+                # At a nan binding of a `_` slot, every disagreement is a change
                 # of the function on a set the sort quantifies. EXT here is
                 # nan-ERASURE (`- _0 _0 -> 0` erasing `log x0 - log x0` on x0 < 0),
                 # SHRINK is nan-introduction. Fatal, not tolerated.
                 nan_kills.append((v, point))
             elif v == 'REAL-CHANGE':
                 if all(t == 'real' for t in tags.values()):
-                    # SINGULAR-INPUT gate (2026-08-11), the twin of the monitor's:
+                    # SINGULAR-INPUT gate, the twin of the monitor's:
                     # clause (a)'s authority is REAL points where mathematics answers.
                     # A real INPUT BINDING can still land on the LHS's own singular
                     # manifold (x1 = x3 zeroes a denominator); there the LHS value is a
@@ -2282,7 +2282,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                         # an exact `<C_L>` at every higher rung, which the decay test read as
                         # analytic (`x + log(c) -> c_t + x` scored measure 1.0)
                         e['<C_R>'] = wv
-                    # PRECISION-COUPLED (F96). This lane took a SINGLE dps-50 reading,
+                    # PRECISION-COUPLED. This lane took a SINGLE dps-50 reading,
                     # while `_point_verdict` -- the battery's own comparison -- has always
                     # confirmed each non-eq verdict at a second rung and returned
                     # Unresolved on rung disagreement. The gap was measurable:
@@ -2299,7 +2299,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                     if cv is None:
                         continue
                     res.append(cv)
-                    # DEPLOYED LANE (F95). ENGINE-MISALIGN asks "does the shipped f64
+                    # DEPLOYED LANE. ENGINE-MISALIGN asks "does the shipped f64
                     # engine realise what the contract certified?", and until now the only
                     # place that question was ever put ran over the BATTERY, whose largest
                     # magnitude is 3.0 -- below every point where f64 departs from the
@@ -2346,7 +2346,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                     if cv == 'eq' and compare_deployed_structural(_gcl, _gcr) != 'eq':
                         dep_div.append((dv, {'slot': n, 'grid': float(g)}))
                 if res:
-                    # DENOMINATOR IS THE GRID, not the resolved subset (F96). Dropping
+                    # DENOMINATOR IS THE GRID, not the resolved subset. Dropping
                     # Unresolved points from the divisor made the bar a moving target:
                     # two shipped rules already run at 154, and at a denominator of 19 a
                     # SINGLE disagreeing point scores 0.0526 and kills -- precisely the
@@ -2354,7 +2354,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                     # reach the bar. An unresolved point is absence of evidence and
                     # counts toward neither side.
                     meas = max(meas, sum(1 for c in res if c != 'eq') / len(GRID))
-        # D15 (X11's opposite-polarity hole): the DIAGONAL lane -- every wildcard
+        # THE DIAGONAL lane (the opposite-polarity hole) -- every wildcard
         # slot bound to ONE varying value. Independent-slot sampling makes
         # {_i = _j} a null event, but for a REWRITE RULE the diagonal is an
         # engine-reachable instance family: with _0 = _1 = log(x0) the collector
@@ -2373,10 +2373,10 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                     if wv is None:
                         continue
                     e['<C_R>'] = wv   # re-rounded at each rung, as above
-                # PRECISION-COUPLED like every other lane (F96 completed 2026-08-20).
+                # PRECISION-COUPLED like every other lane.
                 # This took a single bare reading at rung 1 and fed the SAME `meas` that
                 # KILLs, so one dps-50 rounding on the diagonal could convict a rule that
-                # the per-slot lane -- two-rung since F96 -- would have cleared. The
+                # the per-slot lane -- two-rung -- would have cleared. The
                 # asymmetry was invisible because both lanes write into one accumulator.
                 v, _ = _point_verdict(tl, tr, lambda e=e: {k: +v for k, v in e.items()})
                 if v is not None:

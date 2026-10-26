@@ -14,7 +14,7 @@ then every flagged row is adjudicated at contract precision by simplipy.verify's
 judge_pair. A flag the judge cannot certify sound FAILS the suite -- fail-closed, no
 orphaned flags.
 
-Two instrument corrections dated 2026-07-29 (the campaign harness moved in lockstep,
+Two instrument corrections (the campaign harness moved in lockstep,
 see the scale gate):
   * agreement is sign/kind-aware: both-NaN or isclose (numpy isclose certifies
     same-sign infinity pairs and rejects +inf vs -inf and NaN vs inf). The previous
@@ -66,9 +66,9 @@ The 135 masked (`<constant>`-bearing) rows are OUTSIDE the numeric tier -- and n
 for f64-evaluability parity with the harness: the contract judge binds every
 `<constant>` occurrence to one shared witness and assumes verbatim pass-through, while
 corpus simplification routinely TRANSFORMS constants (absorption, merges), so a direct
-judge pass over the masked rows returns 80/135 spurious convictions (measured
-2026-07-29). Masked-row numeric coverage needs the literal-provenance carve-out
-tracked on the monitor-polish ledger; until then their coverage here is structural.
+judge pass over the masked rows returns 80/135 spurious convictions (measured).
+Masked-row numeric coverage needs the literal-provenance carve-out
+not yet built; until then their coverage here is structural.
 """
 import numpy as np
 import pytest
@@ -188,7 +188,7 @@ class TestCorpusGate:
 
     def test_screen_coverage_exact(self, walk):
         # anti-vacuity, pinned exactly: 400 rows minus the 135 whose INPUT carries
-        # <constant> (measured 2026-07-29 on the tracked corpus). Engine-side
+        # <constant> (measured on the tracked corpus). Engine-side
         # <constant> leakage into the explicit output of a constant-free input would
         # shrink this count and must fail by count, not hide inside a loose floor.
         assert walk['screened'] == 265, f'{walk["screened"]}/{walk["n"]} rows screened'
@@ -197,27 +197,27 @@ class TestCorpusGate:
         # the self-describing bound: outputs never total above inputs
         assert walk['complexity_out'] <= walk['complexity_in'], (
             walk['complexity_in'], walk['complexity_out'])
-        # EXACT pin, tied to the instrument (audit Tier-2, 2026-08-03): this is the SAME
+        # EXACT pin, tied to the instrument: this is the SAME
         # number as the artifact gate REFS['acj-4-3']['complexity'] -- measured in
         # both the native and the explicit projection (complexity is computed on the
         # canonical state, form-independent). The old `<= 97911` ratchet had accumulated
         # two pin generations of slack (97911 mu-ship -> 97623 -> 96443), a silent
         # 1468-point regression window; drift in EITHER direction now fails, exactly as
-        # in the gate. Re-pin BOTH constants together, with the evidence recorded in
-        # the research harness 96443 -> 96683 at H-020 (2026-08-04): the sign-fold into
+        # in the gate. Re-pin BOTH constants together, with the evidence recorded.
+        # 96443 -> 96683: the sign-fold into
         # Const-bearing sums moved 48 corpus rows (family-equal re-spellings) and the
         # divisor-side sign amendment re-spelled 2 more; every moved row audited
         # against the pre-fold walk (see gate_acj REFS comment). 96,687,890 ->
-        # 295,677,890 at H-054 (2026-08-06): `mu_free` derived from the worst case
-        # (contract Sec 10.10(5)), which is exactly the 198 `<constant>` tokens in
+        # 295,677,890: `mu_free` derived from the worst case
+        # (the sup-construction), which is exactly the 198 `<constant>` tokens in
         # the walk times the 1005-bit rise -- no expression re-spelled, idem/perm/
         # translation/twins all unmoved.
-        # 295,646,776 -> 295,599,928 at F51 (2026-08-07): the parity arm. FIRST canon
+        # 295,646,776 -> 295,599,928: the parity arm. FIRST canon
         # change in this arc to move a corpus, and it moves DOWN (-46,848). Every moved row
         # in the 64k/1M corpora audited; see the gate_acj REFS comment.
-        # 295,599,928 -> 295,148,608 at (b), 2026-08-08: the mu-argmin orientation
+        # 295,599,928 -> 295,148,608: the mu-argmin orientation
         # ('mirrors equal; bigger scores bigger'); -451,320 milli-bits over 400 rows.
-        # 295,148,608 -> 294,961,873 at F63 (2026-08-08, owner-ruled FULL sign-owner
+        # 295,148,608 -> 294,961,873 (FULL sign-owner
         # family + tie convention A): the product-level sign-placement owner (Add /
         # Pow-odd / rootn-odd / odd-Fun trade sites, materialize-and-price, ties to
         # the positive coefficient), canonical negative joins in term_join, the
@@ -227,49 +227,48 @@ class TestCorpusGate:
         # rows 3/199/256/310, the pole-orientation
         # class, e.g. row 310's (1-x4) whose value class the one-zero contract
         # forbids conflating with the cheaper mirror, plus lone-neg odd-fun ties).
-        # 294,961,873 -> 294,953,873 same day: the CARRIER-aware placement (the sign
+        # 294,961,873 -> 294,953,873: the CARRIER-aware placement (the sign
         # toggle rides a bare infinity / the Const refit / an absorbing sum, per
-        # H-014/H-020/H-030, instead of minting an illegal raw -1 -- found as 9/50
+        # the bare-inf, Const and absorbing arms, instead of minting an illegal raw -1 -- found as 9/50
         # idem failures at 64k/1M, all closed) lets one more row rest cheaper.
-        # 294,953,873 -> 294,945,873 at F68 (2026-08-09): the kept-zero bag joins the
+        # 294,953,873 -> 294,945,873: the kept-zero bag joins the
         # sign owner (`Mul[0, ..]` assembled through sign_place with the zero as a
         # sign-eating carrier -- 0*X == 0*(-X) in every case -- instead of freezing
         # the arrival mirror, which had made the direct build and the parse of its
-        # own rendering two states: fuzz rows 392777/647852, introduced by F63).
+        # own rendering two states: fuzz rows 392777/647852).
         # ONE row moved, row 209 (0 * rootn(tan(u) - x3, 3)): the orbit files the
         # mirror with the sign traded through the odd rootn/tan chain, -8,000
         # milli-bits; value-equal by the kept-zero licence, re-screened in-walk.
-        # F80 E1 (2026-08-11): 294,945,873 -> 294,875,873 (-70,000, pure descent).
-        # NINE rows moved, all Const-bearing (the E1 fingerprint; counts preserved):
+        # Generic-parameter licence: 294,945,873 -> 294,875,873 (-70,000, pure descent).
+        # NINE rows moved, all Const-bearing (counts preserved):
         # 5 judge-OK; 4 shared-witness convictions adjudicated as sound Const-family
         # moves with EXHIBITED witness maps (79: -c; 244: -c; 274: 1/c; 301: 1/c,
         # maxrel 2e-15 on 311 deployed-evaluator draws); row 317 +16,000 is the
-        # H-015 greedy-endpoint phenomenon, judge-OK. Audit F80 BUILD 1 close.
-        # E2 (2026-08-11, audit F81): 294,875,873 -> 294,730,680 (-145,193). The
+        # lossy greedy-endpoint phenomenon, judge-OK.
+        # 294,875,873 -> 294,730,680 (-145,193). The
         # denominator-clearing certificate licenses odd-negative distributions on
         # analytic factors, so division towers restructure. NINETEEN rows moved
         # (5, 54, 63, 75, 128, 130, 149, 191, 201, 242, 257, 268, 288, 328, 330,
-        # 337, 349, 372, 388); ALL adjudicated OK against the pre-E2 worktree
+        # 337, 349, 372, 388); ALL adjudicated OK against the previous
         # baseline on 4,800 deployed-evaluator draws each (6 param sets x 800):
         # zero NaN-vs-value, zero inf-sign, zero value mismatches, worst rel
         # 6.5e-13; NaN domains matched where present; the four Const rows (54,
-        # 63, 337, 372) preserve occurrence counts. Row 288 +8,000 is the H-015
+        # 63, 337, 372) preserve occurrence counts. Row 288 +8,000 is the lossy
         # greedy-endpoint phenomenon again; five rows respell at +-0.
-        # B2 mu' (2026-08-17): 294,730,680 -> 84,650,486. The MEASURE changed (D38:
+        # mu': 294,730,680 -> 84,650,486. The MEASURE changed (the
         # two-codeword literal pricing + c_free' 1133 -> 67 bits), so the old pin is
         # incommensurable, not comparable row-by-row; re-earned by running this walk
         # under the mu' build. The drop is dominated by <constant> repricing (135
         # Const-bearing rows at -1,066,000 mB each); made-bigger rows under native
-        # mu' descent: ZERO (the D38 3.79%-class is empty by construction, checked
+        # mu' descent: ZERO (the made-bigger class is empty by construction, checked
         # per-row in tests/test_mu_prime.py::TestNativeDescentNeverWorse).
-        # 84,650,486 -> 84,698,486 (+48,000) at the INVERSE-PAIR BAND (2026-08-19,
-        # owner-ratified). The four unguarded inverse-pair arms now carry a magnitude
+        # 84,650,486 -> 84,698,486 (+48,000) at the INVERSE-PAIR BAND.
+        # The four unguarded inverse-pair arms now carry a magnitude
         # band in f64 mode, so one corpus row stops collapsing an `asinh(sinh(.))` the
         # deployed evaluator cannot reproduce (sinh overflows at 710.475860) and keeps
         # its larger form. LOSSY output is UNMOVED, 0 of 400 rows.
         # RE-PINNED for the 0.14.0 triple: 84,698,486 -> 84,714,486. TWO corpus rows,
-        # +8,000 each, and TWO rules -- an earlier version of this comment named only
-        # the first and attributed the whole +16,000 to it.
+        # +8,000 each, and TWO rules:
         #
         #   cos(asin(sin x)) -> |cos x|     true on R; f64 disagrees
         #   exp(x/0)         -> inf^x       true on R; at x = 0 f64 gives exp(nan) = nan
@@ -278,29 +277,29 @@ class TestCorpusGate:
         # Both are true and NOT f64-realised, so both serve `real` and no longer the
         # default mode, and f64's own constructor reaches a form that costs 8,000 more
         # in each case. This is the measured price of the mode split, not a regression.
-        # THE SYMBOL TABLE (2026-08-21): 84,714,486 -> 56,665,486. The MEASURE changed
+        # THE SYMBOL TABLE: 84,714,486 -> 56,665,486. The MEASURE changed
         # -- structure is no longer a flat 8 bits a node -- so the old pin is not
         # comparable and this is a re-pin, not a movement. What is comparable, and
         # measured beside it: sound (`f64`) and `real` outputs are BYTE-IDENTICAL on all
         # 400 rows across the change, and 14 corpus-mode rows re-spell through the
         # mu-driven reciprocal-rejoin projection, which is the one output decision the
         # prices own.
-        # 56,665,486 -> 56,521,606 at the ONE-BIT LITERAL FLOOR (owner 2026-08-22). Also
+        # 56,665,486 -> 56,521,606 at the ONE-BIT LITERAL FLOOR. Also
         # a measure change and also a re-pin, and this one DOES move outputs: four f64
         # rows and six corpus rows re-spell, and the corpus rests cheaper by 3,000
         # milli-bits. 0 of 5,451 shipped rules change direction; 0 of 105 printed literal
-        # spellings move. Evidence: research `audit-2026-08-21/floor/`.
-        # THE acj-4 TRIPLE (2026-08-23): same measure, new artifact -- a real movement,
+        # spellings move.
+        # THE acj-4 TRIPLE: same measure, new artifact -- a real movement,
         # not a re-pin: 56,521,606 -> 56,508,606 (the refreshed mine rests the corpus
         # 13,000 milli-bits cheaper; translation pristine 5347/0/0).
-        # THE F1/F2 SOUNDNESS ROUND (2026-08-24): 56,508,606 -> 56,310,982. Three
+        # THE SOUNDNESS ROUND: 56,508,606 -> 56,310,982. Three
         # movements land together: the cleared-witness certificate gains its
-        # denominator-finiteness side condition (F1), the instruments price the
-        # chain's own parse route (F2 -- the re-pin half), and the ruled
+        # denominator-finiteness side condition, the instruments price the
+        # chain's own parse route (the re-pin half), and the ruled
         # DEFAULT_EFFORT=4 explores every walk row (a real movement: outputs rest
         # 197,624 milli-bits cheaper). The inflation bound held throughout.
         # THE UNCAPPED SEARCH (0.15.0, DEFAULT_EFFORT=None): the walk does not move.
-        # DIVISOR PRODUCTS AND CONSTANT SUMS (2026-10-13): 56,310,982 -> 56,312,982. A
+        # DIVISOR PRODUCTS AND CONSTANT SUMS: 56,310,982 -> 56,312,982. A
         # divisor that is a product gives the enclosing product its members' inverses, each
         # keeping its pole as the product of the inverses does: rows 130 and 288 keep a
         # divisor sum's spelled orientation (+3,000 each). And a Const-bearing sum carries a
@@ -308,7 +307,7 @@ class TestCorpusGate:
         # as `(x1 + c)(x1 - x2)`): the five `<constant>` rows whose old answers let a sign
         # vanish so now keep it: 340 and 395 (-6,000 each), 111 (0), 172 (+6,000), 200
         # (+2,000).
-        # INVERTED QUOTIENTS (2026-10-14): 56,312,982 -> 56,307,982. A negative power is zero
+        # INVERTED QUOTIENTS: 56,312,982 -> 56,307,982. A negative power is zero
         # only where its base is infinite, so the inverse of a quotient distributes as the
         # quotient's members do: rows 279 (-2,000) and 399 (-3,000).
         # THE FACTOR STAGE: 56,307,982 -> 56,106,168. After the expansion moves, the search
@@ -329,21 +328,21 @@ class TestCorpusGate:
         # ONE CLASS READING: 55,815,451 -> 55,812,451. An odd function of a negated argument is a
         # class member like one of a sum, so an even power over it files the positive argument:
         # row 397's `sinh(sinh(-x15))^2` is `sinh(sinh(x15))^2` (-3,000).
-        # THE SIGN KEY (2026-10-18): 55,812,451 -> 55,795,451. Fewest signs, then outermost, on
+        # THE SIGN KEY: 55,812,451 -> 55,795,451. Fewest signs, then outermost, on
         # every equal price, and an odd function of any literal multiple trades its sign: 10
         # walk rows move. Eight rest cheaper, the sign traded where it costs least: 32 and 86
         # (-3,000 each), 160 and 233 (-2,000), 180 and 336 (-1,000), 256 (-6,000), 319 (-5,000).
         # Two rest dearer by 3,000, 97 and 274, by the search's path.
-        # ONE PRICE FOR A SIGN (2026-10-19): 55,795,451 -> 55,127,866. A sign costs one bit
+        # ONE PRICE FOR A SIGN: 55,795,451 -> 55,127,866. A sign costs one bit
         # wherever it sits (a negation standing alone paid a `Mul` head, a -1 beside other factors
         # nothing), so the measure moved: the previous answers price 55,158,451 under it. 67 walk
         # rows move; 11 rest cheaper (7, 18, 46, 67, 83, 95, 133, 149, 262, 327, 373: -30,585 in
         # all), none dearer, and 56 respell at an equal price, the sign key placing their signs.
-        # GROUND NaN FACTS (2026-10-19): 55,127,866 -> 54,750,550. A family of `<constant>` values
+        # GROUND NaN FACTS: 55,127,866 -> 54,750,550. A family of `<constant>` values
         # that is NaN at every constant folds to NaN: rows 205 (`acosh(cos(c)/5)`, -136,229) and
         # 343 (`acos(cosh(c))`, finite only at c = 0; -241,087) are NaN. Both used to keep the
         # family read as a free constant, `acosh(c)` and `acos(c)`, which is defined.
-        # AN OVERFLOW CUTS NO BAND (2026-10-19): 54,750,550 -> 54,718,550. Where sinh overflows
+        # AN OVERFLOW CUTS NO BAND: 54,750,550 -> 54,718,550. Where sinh overflows
         # the collapse of `asinh(sinh(t))` gives the true value, so f64 collapses it for every
         # t: row 380 rests 32,000 milli-bits cheaper.
         # POWERS OF e COLLECT: 54,718,550 -> 54,715,550. The product constructor merges
@@ -423,7 +422,7 @@ class TestScreenSensitivity:
         assert v == 'VIOLATION'
 
     def test_top_level_signed_inf_flags_directly(self, eng, X):
-        # the 2026-07-29 correction's own pin: at the TOP level a pole-sign flip used
+        # the sign-aware correction's own pin: at the TOP level a pole-sign flip used
         # to hide inside the both-nonfinite clause (this exact pair was pinned as
         # screen-BLIND before); the sign/kind-aware clause must now flag it, and the
         # judge convicts under the measure clause
@@ -435,7 +434,7 @@ class TestScreenSensitivity:
 
 
 class TestB4IntervalParityAtRuntime:
-    """B4: the interval layer's truncating-remainder parity test, seen from `simplify()`.
+    """The interval layer's truncating-remainder parity test, seen from `simplify()`.
 
     `interval.rs` dropped the `-INF` pole candidate for every odd NEGATIVE exponent
     (`k % 2 == 1` is false when Rust's `%` truncates: `(-1) % 2 == -1`), so the box for
@@ -471,12 +470,12 @@ class TestB4IntervalParityAtRuntime:
 
 
 class TestB1NanFabrication:
-    """B1 (numsem-1, ruling D8): SOUND `simplify` fabricated `nan` -- and in one family
+    """SOUND `simplify` fabricated `nan` -- and in one family
     a definite `inf` -- for grounds whose contract value is finite, and the fabrication
     escaped into enclosing variable-bearing expressions. Two mechanisms, both fixed:
 
     * the interval magnitude-step arms (`pow(t, +-inf)`) merged the attained value 1
-      only for an EXACT +-1 point base, so a BRACKETED base (H-019: `cos(np.pi)`
+      only for an EXACT +-1 point base, so a BRACKETED base (outward rounding: `cos(np.pi)`
       encloses `[-1, -0.9999999999999991]`) asserted a definite infinity where the
       contract value is 1 -- the 46-row fabricated-Inf family (D8(iii)), an
       under-approximation in the direction the module calls fatal;
@@ -490,12 +489,12 @@ class TestB1NanFabrication:
     must never assert a value class the contract contradicts."""
 
     def test_nan_no_longer_escapes_into_a_sum(self, eng):
-        # the plan's witness: contract value x0 + 1; shipped float("nan") pre-B1
+        # the witness: contract value x0 + 1; once answered float("nan")
         out = eng.simplify(['+', 'x0', 'pow', '(-1)', '/', '3', 'sin', 'np.pi'])
         assert list(out) != ['float("nan")']
 
     def test_mixed_exponent_family_refuses(self, eng):
-        # exponent attains an infinity component: judge value 1; shipped nan pre-B1
+        # exponent attains an infinity component: judge value 1; once answered nan
         out = eng.simplify(['pow', '-1', '/', 'float("inf")', 'sin', 'np.pi'])
         assert list(out) != ['float("nan")']
 

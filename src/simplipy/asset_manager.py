@@ -17,7 +17,7 @@ from typing import Literal
 import platformdirs
 from filelock import FileLock
 
-# D30 (ratified): huggingface_hub is imported inside the two functions that
+# Huggingface_hub is imported inside the two functions that
 # talk to the hub, never at module scope -- its import chain was 122 ms of a
 # 282 ms `import simplipy`, paid by users who only ever call `simplify`. The
 # acceptance is structural and tested: hf absent from sys.modules on import.
@@ -31,7 +31,7 @@ HF_MANIFEST_FILENAME = "manifest.json"
 
 AssetType = Literal['engine', 'test-data', 'all']
 
-# D11 column R21 (owner-ratified 2026-08-16). The deployment knobs
+# The deployment knobs
 # (HF_MANIFEST_REPO, ASSET_KEYS, ...) are deliberately undeclared.
 __all__ = ['get_path', 'install_asset', 'uninstall_asset', 'list_assets', 'AssetType']
 
@@ -85,7 +85,7 @@ def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = N
     )
     from huggingface_hub import hf_hub_download
 
-    # C51 + dep-4-hf-exception-miss: the online fetch used to be the ONLY path, and
+    # The online fetch used to be the ONLY path, and
     # only HfHubHTTPError was caught -- a user on a plane with the asset fully
     # installed got 23.5 s of retries and a raw LocalEntryNotFoundError. Any fetch
     # failure (the hub raises several exception families for network/offline states)
@@ -142,7 +142,7 @@ def _asset_root(local_dir: Path, asset_info: dict) -> Path:
     """Resolve the asset's directory STRICTLY INSIDE `local_dir`, or refuse.
 
     The manifest is DOWNLOADED DATA, and its `directory` reached every rmtree and
-    join unvalidated (missed-004/006, threatmodel-4). No `..` is needed for the
+    join unvalidated. No `..` is needed for the
     escape: `Path(cache) / '/etc/x'` IS `Path('/etc/x')` -- absolute paths defeat
     any fix that only rejects traversal segments, so the rule is resolve-and-contain,
     never segment filtering. Every consumer of `asset_info['directory']` (and the
@@ -258,7 +258,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     # asked only when the asset is not installed (or the cache holds no manifest).
     cached_info = _cached_manifest(repo_id=repo_id, manifest_filename=manifest_filename).get(asset)
     if cached_info and _asset_files_present(local_dir, cached_info):
-        _verify_asset_digests(local_dir, cached_info)  # R6: raises on a corrupted cache
+        _verify_asset_digests(local_dir, cached_info)  # Raises on a corrupted cache
         return str(_asset_root(local_dir, cached_info) / cached_info['entrypoint'])
 
     # Otherwise, treat 'asset' as an official asset name
@@ -274,7 +274,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     entrypoint_path = _asset_root(local_dir, asset_info) / asset_info['entrypoint']
 
     if _asset_files_present(local_dir, asset_info):
-        _verify_asset_digests(local_dir, asset_info)  # R6: raises on a corrupted cache
+        _verify_asset_digests(local_dir, asset_info)  # Raises on a corrupted cache
         return str(entrypoint_path)
 
     if install:
@@ -368,7 +368,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
         from huggingface_hub import hf_hub_download
         try:
             for file in asset_info['files']:
-                # R6: pin the download to the manifest's recorded revision when it
+                # Pin the download to the manifest's recorded revision when it
                 # carries one -- "latest" is whatever the repo holds at that instant,
                 # which is how the served ruleset changed under a running process.
                 hf_hub_download(
@@ -378,7 +378,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
                     local_dir=local_dir,
                     revision=asset_info.get('revision'),
                 )
-        except Exception as e:  # noqa: BLE001 -- the hub raises several families (C51)
+        except Exception as e:  # noqa: BLE001 -- the hub raises several families
             # Every download failure is the documented False, with its cause printed: the
             # hub raises HTTP, offline and connection errors from different families, and
             # catching only HfHubHTTPError let the others escape raw and leave a partial
@@ -389,7 +389,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
             if local_path.exists():
                 shutil.rmtree(local_path, ignore_errors=True)
             return False
-        # R6: verify what actually landed on disk against the manifest digests.
+        # Verify what actually landed on disk against the manifest digests.
         # An integrity failure RAISES (distinct from the network-failure False):
         # a corrupt artifact must never be reported as installed.
         try:
@@ -441,7 +441,7 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
 
     manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
     if not manifest:
-        # missed-004: this used to GUESS `local_dir / asset` and return True having
+        # This used to GUESS `local_dir / asset` and return True having
         # deleted nothing -- a silent no-op sold as success on every manifest-fetch
         # failure. A deleter that cannot resolve what it is deleting must say so.
         raise RuntimeError(
@@ -498,7 +498,7 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
         return
 
     # Name the type in the header: `list --type all` prints one section per type,
-    # and two identical "--- Installed Assets ---" banners read as a glitch (B1).
+    # and two identical "--- Installed Assets ---" banners read as a glitch.
     label = 'assets' if asset_type == 'all' else f'{asset_type} assets'
     print(f"--- {'Installed' if installed_only else 'Available'} {label} ---")
 
@@ -511,7 +511,7 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
     for name, info in manifest.items():
         if asset_type != 'all' and info.get('type') != asset_type:
             continue
-        # COMPLETE install only (D3, unifying with get_path): a bare directory-existence
+        # COMPLETE install only (unifying with get_path): a bare directory-existence
         # test showed "[installed]" for partial downloads that get_path would refuse.
         is_installed = _asset_files_present(local_dir, info)
 

@@ -1,10 +1,10 @@
-"""B2 falsifier suite: mu' -- the two-codeword numeric codebook as the NATIVE measure.
+"""Falsifier suite: mu' -- the two-codeword numeric codebook as the NATIVE measure.
 
-RED-FIRST (written 2026-08-17 against the mu build, where the pricing, fingerprint,
-c_free and boundary-seam tests FAIL): these tests pin the ratified D38 mu' spec as
-behavior BEFORE the measure lands.
+Written red-first (against the mu build, where the pricing, fingerprint,
+c_free and boundary-seam tests FAIL): these tests pin the ratified mu' spec as
+behavior.
 
-The spec (D38, ratified -- SOOSE_INVESTIGATION_2026-08-17.md "mu' stated precisely"):
+The spec (ratified):
 the numeric codebook gains a SECOND codeword, chosen by a one-bit selector:
 
     mu'(value) = 1 selector bit + min( L(p) + L(q),  L(m) + L(k) ) + sign bit
@@ -18,8 +18,8 @@ leaf pays exactly one selector bit and the codebook is a genuine prefix code.
 Operators, structure, state semantics, the <constant> sup-construction RECIPE:
 untouched. c_free' re-derives under the new codebook (~67 bits, was 1133).
 
-THE SELECTOR-BIT DELTA, stated prominently: the D38 study rescorer
-(the research harness) computed adjusted prices as min(old, dec) WITHOUT a
+THE SELECTOR-BIT DELTA, stated prominently: the study rescorer
+computed adjusted prices as min(old, dec) WITHOUT a
 selector; the NATIVE mu' adds the 1-bit (1000 mB) selector to every numeric leaf
 uniformly. Benchmark rescores under the study definition and native mu' therefore
 differ by a constant 1000 mB per priced numeric leaf -- EXPECTED, not a bug. A second,
@@ -39,12 +39,12 @@ from conftest import acj_config_path
 
 MILLI = 1000
 SEL = 1 * MILLI          # the selector bit: one bit, once per priced numeric leaf
-MU_SYM = 8 * MILLI       # the symbol UNIT; since 2026-08-21 a LEAF is priced separately
+MU_SYM = 8 * MILLI       # the symbol UNIT; a LEAF is priced separately
 MU_LEAF = 6 * MILLI      # the symbol table's leaf entry (rust/ac/expr.rs MU_BITS_LEAF)
 MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation earns it)
 
-# The digest acj-4-3 was MINED under (its provenance sidecar; mu, pre-D38). The mu'
-# engine must compute a DIFFERENT digest -- and still load the artifact (D25: warn,
+# The digest acj-4-3 was MINED under (its provenance sidecar; mu, before mu'). The mu'
+# engine must compute a DIFFERENT digest -- and still load the artifact (warn,
 # never refuse; the fingerprint is write-only at load).
 #: The digest the PRE-0.14 artifact was mined under, kept as a historical value a
 #: mismatch test can differ FROM.
@@ -72,15 +72,15 @@ def L(n) -> int:
 
 
 def old_int_price(m: int) -> int:
-    """What the pre-D38 engine charged for a bare non-negative integer token --
+    """What the fraction-only code charged for a bare non-negative integer token --
     the `c([str(mant)])` the rescorer's dec_price() calls."""
     assert m >= 0
     return max(MILLI, L(m))
 
 
 def old_rat_price(f: Fraction) -> int:
-    """The pre-D38 mu literal price (the rescorer's `old`): fraction code + sign,
-    floored at ONE bit (owner ruling 2026-08-22; it was two)."""
+    """The fraction-only mu literal price (the rescorer's `old`): fraction code + sign,
+    floored at ONE bit (it was two)."""
     p, q = abs(f.numerator), f.denominator
     raw = L(p) + (L(q) if q > 1 else 0)
     return max(MILLI, raw + (MILLI if f.numerator < 0 else 0))
@@ -138,7 +138,7 @@ class TestSpellingInvariance:
         assert c(eng, ['(-0.2)']) == c(eng, ['/', '(-1)', '5'])
 
     def test_boundary_seam_closes(self, eng):
-        # RED marker: under mu (H-055, min-over-codes revoked) these two spellings of
+        # RED marker: under mu (min-over-codes revoked) these two spellings of
         # one value sat ONE MILLI-BIT apart (133880 vs 133879) -- a pinned, tolerated
         # residue. Under mu' both take the decimal codeword and the seam CLOSES to 0.
         e_notation = c(eng, ['1e-40'])
@@ -177,7 +177,7 @@ class TestDecimalCodewordOracle:
         (['0.125'], Fraction(1, 8)),
         (['(-0.2)'], Fraction(-1, 5)),
         (['3.14'], Fraction(314, 100)),
-        # long decimals (the dominant SR population; the D38 headline specimen)
+        # long decimals (the dominant SR population; the headline specimen)
         (['2.177697277405848'], Fraction(2177697277405848, 10 ** 15)),
         (['1.4142135623730951'], Fraction(14142135623730951, 10 ** 16)),
         (['(-2.718281828459045)'], Fraction(-2718281828459045, 10 ** 15)),
@@ -215,8 +215,8 @@ class TestDecimalCodewordOracle:
         assert c(eng, ['2.177697277405848']) < 94_781
 
     def test_h055_asymmetry_dissolves(self, eng):
-        # H-055's named wart -- mu(1000) = 9.967 against mu(0.001) = 10.967 under the
-        # fraction-only code (and 9.967 vs 3.000 under the pre-H-055 min) -- lands at
+        # The named wart -- mu(1000) = 9.967 against mu(0.001) = 10.967 under the
+        # fraction-only code (and 9.967 vs 3.000 under an earlier min) -- lands at
         # the symmetric point: both are (m=1, k=3) codewords, 2 + 2 + selector bits.
         assert c(eng, ['1000']) == c(eng, ['0.001']) == 4 * MILLI
         # and the reciprocal pair 10 / 0.1 likewise
@@ -239,7 +239,7 @@ class TestNonDecimalFractions:
             assert c(eng, tokens) == SEL + old_rat_price(value), tokens
 
     def test_one_third_keeps_the_fraction_spelling(self, eng):
-        # simplify is DIALECT-PRESERVING (owner-ruled): prefix in, prefix out. The mu'
+        # simplify is DIALECT-PRESERVING: prefix in, prefix out. The mu'
         # property under test -- the fraction spelling survives -- holds in both dialects,
         # so both are pinned and `to_tagged` is the one explicit step between them.
         assert eng.simplify(['/', '1', '3']) == ['/', '1', '3']
@@ -266,7 +266,7 @@ class TestIntegerScientificCodeword:
 
     def test_ten_divisible_integers_take_the_scientific_codeword(self, eng):
         # 1000 = (m=1, k=3): selector + max(1, L(1)) + L(3) = 1 + 1 + 2 bits. The
-        # ratified D38/B2 note says 5; the FLOOR moved under it (2026-08-22) and the
+        # ratified note says 5; the FLOOR moved under it and the
         # finding it recorded -- the SYMMETRY mu(1000) == mu(0.001) -- holds at 4.
         assert c(eng, ['1000']) == 4 * MILLI
         assert c(eng, ['1e3']) == 4 * MILLI          # same value, same price
@@ -390,7 +390,7 @@ class TestSerializerArgmin:
     exception -- a fraction whose components fit the bounded integer vocabulary
     (SIMPLIPY_TAGGED_FRACTION_MAX) spells structurally regardless of the argmin,
     because the consumer's vocabulary carries no decimal tokens. That exception
-    predates mu' and is not B2's to move."""
+    predates mu' and is not mu''s to move."""
 
     def test_argmin_spelling_is_emitted(self, eng):
         # decimal codeword wins -> decimal token; rational wins -> structural fraction
@@ -446,7 +446,7 @@ class TestSerializerArgmin:
 class TestSooseStructuralSpecimens:
     """Falsifier 8: the SOOSE row-235/row-59 shapes (cos*tan). No behavior assertion
     beyond: the engine loads acj-4-3, simplifies, and mu'-never-worse holds -- the
-    cos*tan -> sin rule itself is the acj-5-4 mine's (B3), not this artifact's."""
+    cos*tan -> sin rule itself is the acj-5-4 mine's, not this artifact's."""
 
     SPECIMENS = [
         ['*', 'x1', '*', 'cos', 'x2', 'tan', 'x2'],           # row 235 shape
@@ -480,7 +480,7 @@ class TestNativeDescentNeverWorse:
 
 
 class TestTheFloorIsMirroredAcrossTheI128Boundary:
-    """S15: the codeword floor moved to one bit (2026-08-22) in `mu_rat`, but the
+    """The codeword floor moved to one bit in `mu_rat`, but the
     beyond-i128 leaf pricer kept its own clamp at two -- so `1e-39` (denominator past
     i128, priced as a numeric-string leaf) cost MORE than `3e-38` (in range, priced by
     `mu_rat`): the simpler mantissa at the adjacent magnitude, upcharged one bit purely
@@ -490,7 +490,7 @@ class TestTheFloorIsMirroredAcrossTheI128Boundary:
         assert eng.complexity(['1e-39']) < eng.complexity(['3e-38'])
 
     def test_the_two_spellings_of_one_value_still_price_equal(self, eng):
-        # the D38 seam stays closed under the mirrored floor: both sides moved together
+        # the seam stays closed under the mirrored floor: both sides moved together
         assert eng.complexity(['1e-40']) == eng.complexity(['1/1' + '0' * 40])
 
 
@@ -593,7 +593,7 @@ class TestTheFloatCapOnEveryPath:
 class TestFingerprintAndArtifactLoad:
     """The load contract: acj-4-3 (mined under mu) still loads and serves; the
     measure fingerprint MOVES (that is what it is for) and is write-only at load --
-    D25 warns on the mismatch, never refuses."""
+    the load warns on the mismatch, never refuses."""
 
     def test_fingerprint_probes_pin_mu_prime(self, eng):
         fp = eng._measure_fingerprint()

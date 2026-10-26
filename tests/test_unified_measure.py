@@ -1,53 +1,52 @@
-"""Stage-2 battery: the unified simplicity measure (design/UNIFIED_SIMPLICITY_MEASURE.md).
+"""The unified simplicity measure, pinned as behavior.
 
-RED-FIRST (written 2026-08-01 against the stage-1 build, where they fail): these tests
-pin the ratified measure -- T1-T7 of the design doc, the mu-governed fold, and the
-termination probe -- as behavior, before the measure lands.
+Written red-first, before the measure landed: these tests pin the ratified measure --
+its worked examples, the mu-governed fold, and the termination probe.
 
-The measure, as ratified (Sec. 2 of the design doc; costs in 1/8 units, exact u64):
+The measure, as ratified (costs in 1/8 units, exact u64):
 
-  structural node (bag / Pow / Fun head)   8   (SUPERSEDED 2026-08-21, see below)
-  variable leaf, special (pi, e), inf/nan  8   (SUPERSEDED 2026-08-21, see below)
+  structural node (bag / Pow / Fun head)   8   (SUPERSEDED, see below)
+  variable leaf, special (pi, e), inf/nan  8   (SUPERSEDED, see below)
   numeric literal p/q (the exact VALUE)    max(2, bitlen(|p|) + bitlen(q) - 1)
-                                           (floor amended to 1, owner 2026-08-22)
+                                           (floor amended to 1)
   bag coefficient slot                     the literal cost above (magnitude 1 free:
                                            a bare sign is not information -- "x - y is
                                            not more complex than x + y" stands)
-  <constant>                               c_free = 1133  (DERIVED: contract 10.10(5))
+  <constant>                               c_free = 1133  (DERIVED; 67 bits under mu', below)
 
 The literal formula is the unique reading consistent with ALL worked examples in the
-ratified doc: cost(2) = 2 (T4: mu(2x) = 18), cost(5/2) = 4 (T5: mu(2.5*pi) = 20),
-52-bit dyadic ~ 105 (T1/T2), alphabet ints <= 8 cost <= 4 (T4's constraint), and
-mu(0) = mu(1) = 2 (T3). The implicit denominator 1 is free; sign is free (|p|).
+ratified doc: cost(2) = 2 (mu(2x) = 18), cost(5/2) = 4 (mu(2.5*pi) = 20),
+52-bit dyadic ~ 105, alphabet ints <= 8 cost <= 4 (the collection constraint), and
+mu(0) = mu(1) = 2. The implicit denominator 1 is free; sign is free (|p|).
 
 The ordering becomes (mu, canonical total order): the lit_size tier is ABSORBED into
 mu (its bit-length content is mu's literal component), and well-foundedness carries
 over: mu bounds the node count AND every literal's bit length, so each mu level holds
 finitely many terms over the finite vocabulary.
 
-The fold is governed by mu (owner 2026-07-31, option (a)): it fires exactly when the
+The fold is governed by mu (option (a)): it fires exactly when the
 result descends. Exact arithmetic keeps folding (2+3 -> 5, cos 0 -> 1: tiny results
 are cheap); transcendental roundings refuse (exp 1 -> 2.718... is a ~105-unit literal
-against a 10-unit symbolic state) -- which dissolves the stage-1 symbol/literal seam
-(finding (b)): exp(1) stays symbolic. What does NOT change: the special-READ refusal
+against a 10-unit symbolic state) -- which dissolves the stage-1 symbol/literal seam:
+exp(1) stays symbolic. What does NOT change: the special-READ refusal
 (f64 cannot certify that a special-bearing evaluation is exact, and mu cannot either
 -- an f64-accidental short hit would be a value change; exact collapses stay MINED,
 hiprec-certified rules), the determined-source clause (contract), and the e^C
-exception (exact identity first). AMENDED 2026-08-08 (contract 10.11): the
+exception (exact identity first). AMENDED: the
 Const-absorption licence no longer beats the gradient at bag sites -- C*pi -> C
 absorbs like every ground; only non-bag positions (pi^C) still hold a special
 against mu.
 
-AMENDED 2026-08-21 (the SYMBOL TABLE): the two "8" rows above are gone. A description
+AMENDED (the SYMBOL TABLE): the two "8" rows above are gone. A description
 length is not flat, and the flatness was minting degenerate rules -- `pi - 2` and
 `asin(sin 2)` both priced 19 bits, so the mine preferred the composition. Each grammar
 symbol now carries its own price, informed by the node census and rounded to whole bits
 (rust/ac/expr.rs, the `MU_BITS_*` block); the module constants below mirror it.
-Everything BEHAVIORAL in this file is unchanged -- the T-battery inequalities all still
-hold, and T4's now holds with room it did not have at the design doc's first-draft
-leaf price.
+Everything BEHAVIORAL in this file is unchanged -- the worked-example inequalities all still
+hold, and the collection inequality now holds with room it did not have at the
+first-draft leaf price.
 
-AMENDED AT D38/B2 (2026-08-17, mu'): the literal row is now the TWO-codeword price
+AMENDED (mu'): the literal row is now the TWO-codeword price
 (selector + min(rational, decimal-scientific) + sign -- see tests/test_mu_prime.py,
 the falsifier suite that owns the codebook pins), and c_free re-derives to 67 bits
 under the new codebook. Everything BEHAVIORAL below (fold governance, policy rows,
@@ -61,11 +60,11 @@ import pytest
 from simplipy.engine import SimpliPyEngine
 from conftest import acj_config_path
 
-# The measure is carried in MILLI-BITS (owner ruling 2026-08-06): a literal's cost is the
+# The measure is carried in MILLI-BITS: a literal's cost is the
 # real quantity log2(1 + |n|), not a bit COUNT, so the ordering can tell 100 from 1000.
 # The unit stays an INTEGER so no float enters a comparison.
 MILLI = 1000
-# The SYMBOL TABLE (2026-08-21), mirroring rust/ac/expr.rs's `MU_BITS_*`. There is no
+# The SYMBOL TABLE, mirroring rust/ac/expr.rs's `MU_BITS_*`. There is no
 # single "one grammar symbol" price any more; 8 survives only as the UNIT the table is
 # read against and as the price of a head the table does not name.
 MU_LEAF = 6 * MILLI
@@ -77,10 +76,10 @@ MU_E = 4 * MILLI
 MU_FUN_ELEMENTARY = 6 * MILLI      # exp log abs sin cos tan rootn
 MU_FUN_TRANSCENDENTAL = 8 * MILLI  # asin acos atan sinh cosh tanh asinh acosh atanh
 MU_INF = 8 * MILLI                 # float("inf"), float("-inf"), float("nan")
-# <constant> is DERIVED, not chosen (contract 10.10(5) / H-054), and re-derived under the
-# mu' codebook at D38/B2 (2026-08-17): the supremum of mu' over f64 round-trip spellings
+# <constant> is DERIVED, not chosen, and re-derived under the
+# mu' codebook: the supremum of mu' over f64 round-trip spellings
 # (64.649 bits, at 8.9002954340287245e-308) plus the sign bit and the selector bit,
-# rounded up. Under the pre-D38 fraction-only code the same construction gave 1133 --
+# rounded up. Under the fraction-only code the same construction gave 1133 --
 # driven by the 10^324-scale denominators the decimal-scientific codeword now spells as
 # a ~8.3-bit exponent. TestB10CfreeDerivation below re-earns the number from a sweep.
 MU_FREE = 67 * MILLI
@@ -103,7 +102,7 @@ def L(n) -> int:
 def mu_lit(value) -> int:
     """The spec's literal cost, computed independently of the Rust implementation.
 
-    mu' (D38/B2, 2026-08-17 -- this REVOKES contract 10.10(1)/H-055's fraction-only
+    mu' (this replaces the fraction-only
     rule): the codebook offers TWO codewords behind a one-bit selector,
 
         mu'(value) = 1 + min( L(p) [+ L(q)],  max(1, L(m)) + L(|k|) ) + sign,
@@ -167,9 +166,9 @@ class TestMuValues:
         assert MU_E < MU_FUN_ELEMENTARY + mu_lit(1)
         # `acos(-1)` and `exp(1)` both cheapen at the one-bit floor; the LAW is the
         # inequality, not the numbers on either side of it.
-        # The ONE-bit FLOOR (owner 2026-08-22) covers 0, 1 and -1: L is below it only
+        # The ONE-bit FLOOR covers 0, 1 and -1: L is below it only
         # there, and the sign bit is invisible under it. Every priced literal
-        # additionally pays the mu' selector bit (D38), so the floor class sits at 2 bits
+        # additionally pays the mu' selector bit, so the floor class sits at 2 bits
         # total. At the old two-bit floor `2` and `3` were swallowed with them, which is
         # why mu could not tell x^2 from x^3.
         assert c(eng, ['0']) == mu_lit(0) == 2 * MILLI
@@ -225,8 +224,8 @@ class TestMuValues:
         # THE INEQUALITY ITSELF, which this test used to assert only the operands of.
         # The collected spellings are the ones `add`/`mul` build, so `ac_complexity`
         # cannot be handed the uncollected tree -- it canonicalizes on the way in --
-        # but the uncollected price is a sum of table entries and is exactly what T4
-        # compares against. The FIRST DRAFT of the symbol table failed here: a 2-bit
+        # but the uncollected price is a sum of table entries and is exactly what the collection
+        # inequality compares against. The FIRST DRAFT of the symbol table failed here: a 2-bit
         # leaf priced `Add[x, x]` BELOW `2x`, because the census prices a node CLASS
         # while a leaf must also say WHICH variable.
         assert MU_MUL + mu_lit(2) + MU_LEAF < MU_ADD + 2 * MU_LEAF
@@ -244,7 +243,7 @@ class TestMuValues:
         assert MU_FREE > mu_lit('2718281828459045/1000000000000000')
 
     def test_sign_costs_one_bit_in_atoms_and_slots(self, eng):
-        # REVOKED 2026-08-06 (owner): the sign is NOT free. Without a bit for it,
+        # The sign is NOT free. Without a bit for it,
         # mu(2) == mu(-2) -- the measure could not tell a number from its negation, which
         # a description length may not do. `Rat` normalises to q > 0 with the sign on the
         # numerator, so the bit is unambiguous and charged exactly once, in the atom.
@@ -269,7 +268,7 @@ class TestMuValues:
 
 
 class TestB22AstronomicSaturation:
-    """B22 at the public surface: the ceiling is not a price, and no sum wraps.
+    """The astronomic knee at the public surface: the ceiling is not a price, and no sum wraps.
 
     The exact linear schedule |scale| * log2(10) exhausts u64 at |scale| ~ 5.553e15.
     The old arms saturated there, so `1e5553000000000000` priced exactly 2^64 - 1,
@@ -284,7 +283,7 @@ class TestB22AstronomicSaturation:
     """
 
     def test_the_plan_acceptance_line(self, eng):
-        # the B22 acceptance criterion, verbatim
+        # the acceptance criterion, verbatim
         assert c(eng, ['1e5553000000000000']) != 2**64 - 1
 
     def test_astronomic_scales_stay_strictly_ordered(self, eng):
@@ -302,7 +301,7 @@ class TestB22AstronomicSaturation:
 
 
 class TestT7Termination:
-    """The dense-literal chain Mul[3/2^k, x] (the audit's O1 hang class). It ascends in mu
+    """The dense-literal chain Mul[3/2^k, x] (a former hang class). It ascends in mu
     while 3/2^k's exact spelling is no longer than its float's shortest decimal; from there
     the float cap holds its price at that decimal's. The chain stays finite (the
     1,100-bit cap bounds k, docs/formal.md L5), and a rewrite cannot walk it: a step keeps
@@ -334,7 +333,7 @@ class TestT7Termination:
 
 
 class TestMuGovernedFold:
-    """The fold fires exactly when it descends mu (owner: option (a))."""
+    """The fold fires exactly when it descends mu (option (a))."""
 
     def test_exact_arithmetic_keeps_folding(self, eng):
         assert eng.simplify(['+', '2', '3']) == ['5']
@@ -355,13 +354,12 @@ class TestMuGovernedFold:
         # symbolic state. exp(1) stays symbolic -- the finding-(b) seam dissolves
         # (no state e - 2.718... can form, so no rule can serve on a conflated
         # literal reading).
-        # REFRESH 2026-08-01: the shipped engine serves the SYMBOL rather than the
-        # bare-engine refusal this pinned pre-refresh.
-        # 2026-08-07: it is now the CONSTRUCTOR that serves it (`exp(1) -> E` in `fun`,
+        # The shipped engine serves the SYMBOL rather than the
+        # bare-engine refusal this once pinned.
+        # It is now the CONSTRUCTOR that serves it (`exp(1) -> E` in `fun`,
         # the write half of `compose_e_power`'s reading of `E` as `E^1`), so it is exact
         # and route-independent instead of arriving through the special-constant
-        # respelling of an f64. The 2026-08-01 note claimed an artifact rule
-        # `exp 1 -> np.e` was doing it; no such rule is in the artifact -- corrected here.
+        # respelling of an f64 (no artifact rule `exp 1 -> np.e` is involved).
         assert eng.simplify(['exp', '1']) == ['np.e']
 
         from simplipy.io import load_config
@@ -382,7 +380,7 @@ class TestMuGovernedFold:
         assert 'np.e' in out
 
     def test_policy_keeps_beating_mu_where_ratified(self, eng):
-        # Contract 10.11 (2026-08-08) RETIRED the one bag-site policy that beat the
+        # Contract 10.11 RETIRED the one bag-site policy that beat the
         # measure: C*pi -> C now follows mu's gradient like every ground absorption.
         assert eng.simplify(['*', '<constant>', 'np.pi']) == ['<constant>']
         # pi^C follows it too, as 2^C does: every positive base gives the same family of values.
@@ -390,8 +388,8 @@ class TestMuGovernedFold:
 
 
 class TestB10CfreeDerivation:
-    """B10: c_free is DERIVED, not asserted — re-derived under the mu' codebook at
-    D38/B2 (was 1133 under the fraction-only code). This pin recomputes the
+    """C_free is DERIVED, not asserted — derived under the mu' codebook
+    (1133 under the fraction-only code). This pin recomputes the
     derivation from first principles: the supremum over f64 round-trip spellings of
     the mu' two-codeword model min(rational, max(2, L(m)) + L(|scale|)), plus one
     sign bit and one selector bit, ceiled. If the measure's literal model or the
@@ -457,7 +455,7 @@ class TestB10CfreeDerivation:
 
 
 class TestTheSymbolTable:
-    """The 2026-08-21 re-pricing: what the table was FOR, and what it must stay.
+    """The symbol-table pricing: what the table is FOR, and what it must stay.
 
     mu' charged one flat 8 bits for every grammar symbol, and that flatness minted a
     degenerate family. `pi - 2 -> asin(sin 2)` is CORRECT (`asin(sin x) = pi - x` on
@@ -501,7 +499,7 @@ class TestTheSymbolTable:
         is exactly the term the census omits (it counts the class `Leaf`, 3519 of 10,996
         nodes at 1.65 bits, while a specific variable among 18 is 5.82). The first draft
         of the table took the class number, and at a 2-bit leaf this inequality admits
-        exactly ONE variable -- and T4's collection inequality inverts, which is the same
+        exactly ONE variable -- and the collection inequality inverts, which is the same
         defect showing up where it can be measured.
 
         The literal codebook is deliberately not in this sum: the table does not touch

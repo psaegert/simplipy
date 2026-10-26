@@ -1,4 +1,4 @@
-"""PER-MODE LAZY RULE LOADING (task #88) -- lean is opted into, never inherited.
+"""PER-MODE LAZY RULE LOADING -- lean is opted into, never inherited.
 
 The knob: ``modes=`` on ``load``/``from_config``/``__init__`` names the mode rule
 sets built EAGERLY. The default ``'all'`` is byte-identical to the historical
@@ -312,7 +312,7 @@ class TestLazyMachinery:
 
 
 class TestConcurrentCoreAccess:
-    """Calls racing a push or a retraction on other threads (review P5, P6)."""
+    """Calls racing a push or a retraction on other threads."""
 
     def test_real_is_never_served_the_default_set_while_it_is_unloaded(self):
         """`real` FAILS CLOSED inside the core call: an `unload_mode('real')` racing the

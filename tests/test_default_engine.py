@@ -6,7 +6,7 @@ cannot change under a user without a simplipy release.
 
 The revision is what disambiguates one NAME across simplipy versions: `acj-4` mined
 under 0.14's judge and `acj-4` mined under 0.15's are both legitimately `acj-4`, and
-only (name, revision) picks one. The measure-fingerprint check (D25/R6) stays the
+only (name, revision) picks one. The measure-fingerprint check stays the
 safety net for an artifact loaded by name across a measure change; this pin is what
 stops that happening on the path the user did not choose.
 

@@ -1,7 +1,6 @@
 """The rule dedup key is the engine's INTERNAL FORM, not the token spelling.
 
-Owner ruling 2026-08-18: "dedup key accepted (instead of comparing spelling, compare
-internal form)". Two rules that the loader translates into the SAME pattern are ONE
+The dedup key compares the internal form, not the spelling. Two rules that the loader translates into the SAME pattern are ONE
 rule; shipping both costs an artifact row, a match attempt per fire, and -- upstream --
 a full mining certification.
 
@@ -29,7 +28,7 @@ def vocab_engine() -> SimpliPyEngine:
     return SimpliPyEngine(operators=load_config(acj_config_path())['operators'], rules=[])
 
 
-# The specimen the form audit measured: one pattern, two AC spellings, one RHS.
+# The measured specimen: one pattern, two AC spellings, one RHS.
 ASIN_A = (('*', '(-1)', 'asin', '_0'), ('asin', 'neg', '_0'))
 ASIN_B = (('*', 'asin', '_0', '(-1)'), ('asin', 'neg', '_0'))
 LOG_A = (('*', '5', 'log', '_0'), ('log', 'pow', '_0', '5'))
@@ -58,7 +57,7 @@ def test_permuted_bags_and_chains_collapse(vocab_engine):
 
 
 def test_the_key_is_not_the_conversion_api(vocab_engine):
-    """THE WRINKLE the form audit flagged -- and why it no longer bites.
+    """THE WRINKLE -- and why it no longer bites.
 
     The audit found `to_prefix`/`to_tagged` running the rewrite pass under the LOADED
     RULESET, so `to_prefix(['*','(-1)','asin','_0'])` returned that rule's own target on
@@ -67,8 +66,7 @@ def test_the_key_is_not_the_conversion_api(vocab_engine):
     deduplicating the very artifact that caused the collapse.
 
     `feat/pure-conversions` removed the premise: conversions are NOTATION ONLY and fire
-    no rules (owner-ruled 2026-08-19, "pure-conversion wins because we don't fire
-    rules"). So the circularity cannot arise at all -- it is MOOT, not merely avoided.
+    no rules. So the circularity cannot arise at all -- it is MOOT, not merely avoided.
 
     The bare-context key is therefore still correct, and for a stronger reason than the
     one it was introduced with: not "we route around a ruleset-dependent conversion" but

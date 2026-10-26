@@ -1,6 +1,6 @@
 """Every surface removed in 0.14.0 and 0.15.0, pinned as ABSENT.
 
-Owner ruling 2026-08-20: everything ships in 0.14.0, no deferrals. These names each had
+Everything ships in 0.14.0, no deferrals. These names each had
 a deprecation shim and a test asserting the shim warned; those tests are replaced by
 these, because a removal needs pinning exactly as much as a deprecation did -- otherwise
 a future refactor can quietly reintroduce an alias nobody meant to keep.

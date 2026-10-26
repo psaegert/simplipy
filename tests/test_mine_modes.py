@@ -142,7 +142,7 @@ FACTORINGS = [
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('source,lhs,rhs', FACTORINGS)
 def test_the_law_gate_takes_the_searchs_licence(eng, mode, source, lhs, rhs):
-    """G8 (S1): the gate names the distributive law exactly where the search performs it on
+    """G8: the gate names the distributive law exactly where the search performs it on
     the rule's instances. The search factors `sin(x0)*x1 + sin(x0)*x2` in every mode, and the
     gate's own pattern licence used to refuse every function base."""
     instance = [{'?0': 'x0', '?1': 'x1', '?2': 'x2'}.get(t, t) for t in rhs]
@@ -156,7 +156,7 @@ def test_the_law_gate_takes_the_searchs_licence(eng, mode, source, lhs, rhs):
 
 def test_each_mode_mines_from_its_own_set():
     """Without `reset_rules`, a mode's mine starts from that mode's own set, never from
-    another mode's: the f64 set's rule does not seed the real and permissive files (S9)."""
+    another mode's: the f64 set's rule does not seed the real and permissive files."""
     ops = {
         "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
         "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},

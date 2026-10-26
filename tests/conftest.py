@@ -3,15 +3,15 @@
 `require_or_skip` is the ONE asset gate for python suites: a missing staged asset
 skips locally but FAILS under SIMPLIPY_TEST_REQUIRE_ASSETS (CI sets it right after
 staging) -- a suite that silently skips in CI reports green while running nothing,
-so the only honest failure mode is a loud one (the E4-3 doctrine, mirrored from the
+so the only honest failure mode is a loud one (mirrored from the
 cargo side).
 
 `construct_legacy_table` builds an engine over the GENERATION-1 (retired
 hyper-operator) vocabulary from the IN-REPO fixture (`tests/fixtures/
 legacy_vocab_config.yaml`, the dev_7-3 operator table verbatim, no rules, no asset
-dependence -- audit Tier-1 #3) through RAW construction, the sanctioned in-memory
+dependence) through RAW construction, the sanctioned in-memory
 path. The public artifact-loading boundary (`from_config`/`load`) refuses
-generation-1 artifacts outright (owner ruling 2026-08-03, `simplipy.compat`); the
+generation-1 artifacts outright (`simplipy.compat`); the
 suites that legitimately need the legacy TABLE -- the conversion layer's
 input-language tests and the chain-combining caps -- go through here instead, so
 the refusal stays total on the public surface and no test downloads a legacy asset.
@@ -94,7 +94,7 @@ def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
         require_or_skip(path, f'{why} ({os.path.basename(path)} is missing)')
 
 
-# INTERIM PINS (2026-10-18), until the acj-4 re-mine, which resets both lists to empty. The sign
+# INTERIM PINS, until the acj-4 re-mine, which resets both lists to empty. The sign
 # key (fewest signs, then outermost) and the one-bit sign moved the canon and the measure past the
 # staged acj-4 asset, which was mined under the earlier ones, and the f64 load refuses exactly
 # these rows of it:

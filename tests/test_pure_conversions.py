@@ -1,4 +1,4 @@
-"""PURE CONVERSIONS: notation only, never content (the research harness).
+"""PURE CONVERSIONS: notation only, never content.
 
 `to_infix` / `to_prefix` / `to_tagged` are SYNTACTIC token-level regroupings: no AC
 state, no canonical constructors, no rule application, no literal re-spelling, no
@@ -231,7 +231,7 @@ class TestAssociationAndSections:
 
     def test_a_lone_negation_is_unary_and_a_lone_reciprocal_is_bagged(self, engine) -> None:
         # A tagged sequence declares its dialect by its bags, so every quotient carries one: a
-        # reciprocal has no one-member bag and is bagged with the unit (review T7).
+        # reciprocal has no one-member bag and is bagged with the unit.
         assert engine.to_tagged(['neg', 'x0']) == ['neg', 'x0']
         assert engine.to_tagged(['inv', 'x0']) == ['<mul>', '1', '<div>', 'x0', '</mul>']
         assert engine.to_tagged(['neg', 'inv', 'x1']) == ['neg', '<mul>', '1', '<div>', 'x1', '</mul>']
@@ -250,7 +250,7 @@ class TestAssociationAndSections:
 
 # -------------------------------------------------- simplify: dialect-preserving
 class TestSimplifyPreservesTheDialect:
-    """Owner ruling: `simplify` only simplifies, and returns the form it was given."""
+    """`simplify` only simplifies, and returns the form it was given."""
 
     def test_prefix_in_prefix_out(self, engine) -> None:
         out = engine.simplify(['*', '2', 'atan', 'x0'])

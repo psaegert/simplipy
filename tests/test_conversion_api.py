@@ -1,11 +1,10 @@
-"""The conversion API's SURFACE: three forms, three entries, fixed return types
-(the research harness; the original brief was CONVERSION_API_DESIGN.md).
+"""The conversion API's SURFACE: three forms, three entries, fixed return types.
 
-D1 changed on 2026-08-18: the entries no longer route through the canonical AC state.
+The entries do not route through the canonical AC state.
 They are PURE, syntactic re-notations -- `tests/test_pure_conversions.py` owns that
 contract and its property tests. What stays here is the surface: input detection by
-type (D2), the target form fixing the return type (D3), `read_infix` keeping its
-tolerant contract (D4), composition with `simplify` (D5), and the error taxonomy (D6).
+type, the target form fixing the return type, `read_infix` keeping its
+tolerant contract, composition with `simplify`, and the error taxonomy.
 """
 import numpy as np
 import pytest
@@ -67,7 +66,7 @@ class TestNineDirections:
 
 
 class TestInputContainers:
-    """D2/D3: tuple and 1-D ndarray token inputs are read; the RETURN type is
+    """Tuple and 1-D ndarray token inputs are read; the RETURN type is
     fixed by the target form, never mirrored from the input container."""
 
     def test_tuple_input(self, engine: SimpliPyEngine) -> None:
@@ -83,7 +82,7 @@ class TestInputContainers:
 
 
 class TestRoundTrips:
-    """D5: a conversion never moves the CANONICAL STATE. The per-direction spelling
+    """A conversion never moves the CANONICAL STATE. The per-direction spelling
     relations live in tests/test_pure_conversions.py."""
 
     @pytest.mark.parametrize("expr", BATTERY)
@@ -131,16 +130,16 @@ class TestRoundTrips:
         assert engine.to_infix(engine.simplify(expr)) == engine.simplify(expr)
 
     def test_spelling_IS_preserved(self, engine: SimpliPyEngine) -> None:
-        # The 2026-08-18 split: a conversion is notation, so nothing collects.
+        # A conversion is notation, so nothing collects.
         assert engine.to_prefix(['+', 'x0', 'x0']) == ['+', 'x0', 'x0']
         assert engine.simplify(['+', 'x0', 'x0']) == ['*', '2', 'x0']
-        # D4: read_infix keeps its own (tolerant) contract.
+        # `read_infix` keeps its own (tolerant) contract.
         assert engine.read_infix('x0 + x0') == ['+', 'x0', 'x0']
 
 
 class TestUnchangedSurface:
-    """D7 is RETIRED: the tagged leak is gone by construction (owner ruling
-    2026-08-18), because `simplify` answers in the dialect it was handed."""
+    """The tagged leak is gone by construction, because `simplify` answers in the
+    dialect it was handed."""
 
     def test_simplify_token_default_is_the_input_dialect(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['*', '2', 'atan', 'x0']) == ['*', '2', 'atan', 'x0']
@@ -171,7 +170,7 @@ class TestUnchangedSurface:
 
 
 class TestErrors:
-    """D6: ValueError on malformed input in any form, TypeError on wrong type."""
+    """ValueError on malformed input in any form, TypeError on wrong type."""
 
     @pytest.mark.parametrize("bad", [
         pytest.param('2*+', id='malformed-infix'),
@@ -225,7 +224,7 @@ class TestOneReading:
         pytest.param(('+', 'x1', object()), id='object'),
     ])
     def test_a_token_that_is_no_str_or_number_is_refused(self, engine: SimpliPyEngine, entry, bad) -> None:
-        # review F5: `str(True)` and `str(None)` read as the symbols 'True' and 'None'
+        # `str(True)` and `str(None)` read as the symbols 'True' and 'None'
         with pytest.raises(ValueError, match='a token must be a str or a number'):
             getattr(engine, entry)(bad)
 

@@ -10,8 +10,7 @@ must re-check it, because one non-constant nan-absorbing operator breaks composi
 silently."
 
 The 0.12.0 vocabulary change (23 config operators + the AC built-in ``rootn``; the
-hyper-operator family deleted) had no discharge on record until the C2 conformance
-pass (2026-08-05, H-034). This module IS the discharge, pinned: it sweeps every
+hyper-operator family deleted) had no discharge on record. This module IS the discharge, pinned: it sweeps every
 operator slot of the CURRENT serving vocabulary under BOTH algebras -- the contract
 evaluator (``verify._contract.c_eval``, mp) and the deployed realization
 (``verify._contract.d_eval``, numpy) -- and asserts that

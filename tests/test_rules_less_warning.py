@@ -1,5 +1,4 @@
-"""A rules-less engine says so (ruling 2026-08-18, evening batch 2 item 2):
-"Warning on engine without rules" -- broadened from the missing-FILE case to the
+"""A rules-less engine says so: a warning on an engine without rules -- broadened from the missing-FILE case to the
 resulting STATE, and explicitly NON-FATAL.
 
 The failure this catches is silent success. A config that names a ruleset it

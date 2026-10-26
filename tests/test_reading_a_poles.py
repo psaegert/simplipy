@@ -265,7 +265,7 @@ def test_an_odd_function_of_a_negation_reads_as_the_negated_term(eng, mode, fn):
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('fn', ['sin', 'atan'])
 def test_an_odd_function_of_a_negation_reads_back_as_itself(eng, mode, fn):
-    # Apart from the reading above, so the sign placement waiting for D1 masks no fixed point.
+    # Apart from the reading above, so the open sign-placement question masks no fixed point.
     for src in (f'* - {fn} x1 x1 + x1 {fn} neg x1', f'neg pow - x1 {fn} x1 2'):
         ans = list(eng.simplify(src.split(), mode=mode))
         assert list(eng.simplify(ans, mode=mode)) == ans, src
@@ -286,7 +286,7 @@ def test_an_answer_reads_back_as_itself(eng, mode, src):
 
 
 # The search's distributive law keeps a one-signed pole joined where splitting it would leave two
-# addends infinite at the pole with signs that differ (review P3): `(1 + x3 - x1 + 5/3 exp(x2))/abs(x3)`
+# addends infinite at the pole with signs that differ: `(1 + x3 - x1 + 5/3 exp(x2))/abs(x3)`
 # split as `5/3 exp(x2) abs(1/x3) + (x3 + 1 - x1) abs(1/x3)` is NaN at `x3 = 0` on the whole slab
 # `1 < x1 < 1 + 5/3 exp(x2)`, where the product is `+inf`. A lossy mode keeps no value at a pole.
 POLE_DISTRIBUTIONS = ['(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/abs(x3)',

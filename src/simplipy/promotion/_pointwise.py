@@ -61,7 +61,7 @@ ATOMS = ['0.0', '1.0', '(-1.0)', 'float("inf")', 'float("-inf")', 'float("nan")'
          '1.5707963267948966', '(-1.5707963267948966)',
          '6.283185307179586', '(-6.283185307179586)',
          '0.7853981633974483', '(-0.7853981633974483)',
-         # BOUNDARY-MAGNITUDE PROBES (2026-08-26). The pool ended at |v| <= 40 with
+         # BOUNDARY-MAGNITUDE PROBES. The pool ended at |v| <= 40 with
          # +-inf beyond, so any rule whose sides diverge only at extreme magnitude --
          # overflow of an inner power (sqrt(x^2)=|x| breaks at 1.34e154 where fl(x^2)
          # is inf; x^4 at 1.19e77; x^6 at 4.6e51) or underflow of an inner square --

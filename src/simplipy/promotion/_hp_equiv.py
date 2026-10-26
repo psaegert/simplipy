@@ -137,7 +137,7 @@ BIN = {
 
 
 def _contract_kernel(name):
-    """The contract judge's kernel of a 0.15 head (`verify._contract.OPS`): numpy's cells (D7),
+    """The contract judge's kernel of a 0.15 head (`verify._contract.OPS`): numpy's cells,
     one zero, and a refusal (its `Unresolved`, which every caller here reads as no evidence)
     inside the working-precision band of a jump, a pole, erf's asymptote or atan2's cut, where
     the value is not determined, and beyond `besselj`'s order and argument caps."""
@@ -255,7 +255,7 @@ def _ev(tokens, i, env, consts, ci):
         return env[t], i, ci
     # numeric literal, including the paren-wrapped negative form ('(-8.0)') that the
     # valuation pools emit -- same grammar as the sibling f64 oracle (_f64_eval._num).
-    # H-007: never bare float() -- a reserved spelling ('inf', '1_000') would be silently
+    # Never bare float() -- a reserved spelling ('inf', '1_000') would be silently
     # misread as a value; the boundary forbids such tokens, so seeing one is a defect.
     core = t.strip('()')
     if reserved_numeric_spelling(core):
@@ -290,7 +290,7 @@ def _wild_to_var(tokens):
 
 
 def _restores_dps(fn):
-    """C35: a certifier picks its own working precision; the HOST's mp.dps must
+    """A certifier picks its own working precision; the HOST's mp.dps must
     survive the call -- a library must not mutate its embedder's numeric state."""
     def _wrap(*a, **k):
         old = mp.dps
