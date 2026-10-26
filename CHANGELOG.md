@@ -1169,7 +1169,7 @@ model predictions.
   With `acj-5-4-llm` no answer changes on the srbf ground truths or on a tenth of its
   predictions or of the training-data inputs, in any mode; with `acj-4-3` the 400-row corpus
   walk rests 141,510 milli-bits cheaper on 11 rows, none dearer. The reduced length-4 mine's
-  f64, real and permissive files hold 392, 543 and 425 rules (767, 913 and 400 before), 181,
+  f64, real and permissive files hold 392, 543 and 422 rules (767, 913 and 400 before), 181,
   182 and 162 of them with `<constant>` (582, 559 and 148): every rule they lose that has a
   variable is served by the engine and the rest of the file, but for the `acosh(erf(x))`
   family `real` and `permissive` no longer mine (below). Mined at seeds 42 and 7, the f64
@@ -1196,8 +1196,8 @@ model predictions.
   it refuses (`gates.overlaps_refused`) with its tier and verdict, and count the overlaps
   beyond the cell (`gates.overlaps_beyond_cell`); `verify-mine` fails on the first
   (`overlaps`), reading the cell from the sidecar. The step prints its progress
-  (`[complete]`, `[gate]`). On the reduced length-4 mine it takes 11 s in f64, 41 s in real and
-  15 s in permissive (the whole mine takes 631, 1,238 and 1,186 s, 3,057 s against 3,774 before,
+  (`[complete]`, `[gate]`). On the reduced length-4 mine it takes 11 s in f64, 40 s in real and
+  15 s in permissive (the whole mine takes 616, 1,118 and 1,246 s, 2,983 s against 3,774 before,
   4 threads), and the f64 file lacks no completion the judge licenses. The real and permissive
   files lack 20 and 7: ground overlaps whose completion has a composite target the mine never
   writes (`asin(1) -> acos(0)`, 17 and 6), `ceil(1/cosh(x)) -> 1` (certified, then killed by
