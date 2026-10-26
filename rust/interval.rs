@@ -4072,8 +4072,12 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
             | "sinh" | "tanh" | "asinh" | "atan" | "asin" | "atanh" | "erf",
             Some(1),
         ) => zsn(&t[1..], ops, d + 1, e2),
-        // never zero on their real range
-        ("exp" | "cosh", Some(1)) => true,
+        // never zero on their real range: `cosh` at every argument, `exp` at every finite one --
+        // `exp(-inf)` is 0, so `exp(g)` vanishes where `g` is `-inf`, a whole region where `g`
+        // inverts a zero that holds one (`exp(1/ceil(x1))` is 0 on (-1, 0) in float64, and
+        // `exp(-1/(x1 - |x1|))` on x1 >= 0 in any reading): Z(exp g) ⊆ {g = ±inf}.
+        ("cosh", Some(1)) => true,
+        ("exp", Some(1)) => isn_e(&t[1..], ops, d + 1, e2),
         // h(y) = 0 iff y = 1: shift and recurse
         ("log" | "acos" | "acosh", Some(1)) => {
             let mut shifted: Vec<String> = Vec::with_capacity(t.len() + 1);
@@ -4154,10 +4158,21 @@ fn zsn_read(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
         // intervals, so a step head is nonzero almost everywhere only where `g`'s whole-space
         // range misses that interval, and then it is never zero (NaN and +-inf pass through,
         // and are no zero). Exact in float64 too (the steps are exact).
-        ("floor", Some(1)) => whole_range(&t[1..], ops)
-            .is_some_and(|v| !v.has_fin || v.hi < 0.0 || (v.hi == 0.0 && v.hi_open) || v.lo >= 1.0),
+        // A range that meets the interval only at `g = 0` leaves `g`'s own zero set (`ceil(|x1|)`
+        // is 0 only where `x1` is).
+        ("floor", Some(1)) => whole_range(&t[1..], ops).is_some_and(|v| {
+            !v.has_fin
+                || v.hi < 0.0
+                || (v.hi == 0.0 && v.hi_open)
+                || v.lo >= 1.0
+                || (v.hi <= 0.0 && zsn(&t[1..], ops, d + 1, e2))
+        }),
         ("ceil", Some(1)) => whole_range(&t[1..], ops).is_some_and(|v| {
-            !v.has_fin || v.lo > 0.0 || (v.lo == 0.0 && v.lo_open) || v.hi <= -1.0
+            !v.has_fin
+                || v.lo > 0.0
+                || (v.lo == 0.0 && v.lo_open)
+                || v.hi <= -1.0
+                || (v.lo >= 0.0 && zsn(&t[1..], ops, d + 1, e2))
         }),
         // `max(a, b)` and `min(a, b)` are one of their members or NaN at every point (IEEE
         // 754-2019 `maximum`/`minimum`; at the zero tie a zero), so Z(max(a, b)) ⊆ Z(a) ∪ Z(b).

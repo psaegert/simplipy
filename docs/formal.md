@@ -478,6 +478,22 @@ tenth of srbf's predictions 594 `f64` answers rest dearer, all but 3 over sums w
 null but which the test cannot read (univariate sums over `log`, roots, `abs` or `tan` that mix
 directions), and it is not done.
 
+**A sum keeps a `+0` term where its other terms may all be -0 on a region, in `f64`.** float64's
+sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`, and a cancellation is `+0`), and
+some terms are -0 on a whole region: `ceil(x1)` on (-1, 0), `-floor(x1)` on [0, 1),
+`min(x1, -0.0)` on x1 ≥ 0, `mod(floor(x1), -1)` everywhere, `x2*ceil(x1)` wherever x2 > 0 there.
+A zero term (literals that sum to zero) and two like terms of opposite signs make a sum `+0`
+wherever its other terms vanish, so the constructor drops the zero term, or collects the pair,
+only where one remaining term is shown not to be -0 on a region: its zero set is null (the region
+test), or its sign at zero is `+0` (a step, lattice, `mod`, `atan2`, root, power or odd function
+read through to its argument, a product through its one member that may vanish where every other
+member is positive). Elsewhere the sum keeps a `+0` term: `ceil(x1) + 0` and
+`2*ceil(x1) - ceil(x1)` are `ceil(x1) + 0`, and their inverses `+inf` on (-1, 0) as float64
+gives them. Such a sum has no other orientation (`-(t + 0)` is no sum of the negated terms).
+Terms of one class written in its two orientations stay apart where their key may vanish on a
+region, since both orientations of a sum that cancels there are `+0`. `x1 + 0` is `x1`, -0 at the
+one point `x1 = -0`, a null set.
+
 **Convention (factored vs. flat scaling, finite and infinite alike).** The constructors
 extract a sum's content only in the unanimity case (it must never lengthen a term), so with
 the search off (`effort=0`) a factored spelling like `-2*(x1 - 5/2)` and its distributed equal
