@@ -826,6 +826,10 @@ APART = [
     '-cos(exp(2*x2 + 2*x3 + exp(x2 + x3) - x1))/(x2 + x3 + exp(x2 + x3) - x1)',
     'cos(221742068887.4986*x1 + 0.00331/(18.464400843893329*x2 - 7.698449108356519) + 62.24454675925565)',
     '0.7088195661797923*cos(21267013.501384924*x1^5*(x3 - 0.52035366738351248*x2)^5)/x1',
+    # srbf ground truths whose coefficient is a quotient, 3.1415926535897e37/3313: its float is
+    # one rounding apart, which sin at ~1e34 amplifies, so the grouped display writes it exactly
+    'sin(x1*x2/(6.626e-34/(2*3.1415926535897)))^2',
+    'sin(x2*x3/(6.626e-34/(2*3.1415926535897)))^2',
 ]
 
 

@@ -219,7 +219,17 @@ impl Engine {
                 .kept_shape(&state),
         );
         let kept = |p: &Pretty| self.read_shape(p, mode) == reference;
-        let (shown, changed, reorders) = pass(&Choices::default());
+        // With the grouping kept at full precision the display evaluates as the state does: its
+        // sums and products in the state's order (rule 10) and every number as the state's
+        // tokens write it, exactly. A float one rounding from a quotient the tokens divide by
+        // (`sin(3.1415926535897e37*x1*x2/3313)`) would not, and a function that amplifies its
+        // argument shows the rounding.
+        let first = if keep_grouping && precision.is_none() {
+            Choices::all(Choice::Exact)
+        } else {
+            Choices::default()
+        };
+        let (shown, changed, reorders) = pass(&first);
         if changed.is_empty() {
             // Every number is written at its value.
             let held = !verify || kept(&shown);

@@ -1180,6 +1180,15 @@ model predictions.
   mined beside an existing file reads it (`real` and `permissive` mine with the f64 file in
   the default slot, and `permissive` is offered the f64 and real files). Each mined file
   keeps its own sidecar and final-gate line.
+- **`prettify(keep_grouping=True)` writes every number as the expression holds it.** Its
+  promise is a display that evaluates as the expression does, but at full precision it wrote
+  a quotient the explicit tokens divide by as the quotient's float, one rounding apart, and a
+  function that amplifies its argument shows that rounding: two srbf ground truths,
+  `sin(x1*x2/(6.626e-34/(2*3.1415926535897)))^2`, read back from
+  `sin(9.482621954692726e33*(x1*x2))^2` with values up to 32 times off. At full precision the
+  grouped display now writes each number exactly, as the tokens do,
+  `sin(3.1415926535897e37*(x1*x2)/3313)^2`, and reads back bit for bit. The default display
+  still writes the float.
 
 ### Removed
 

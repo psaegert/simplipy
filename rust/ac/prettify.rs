@@ -85,8 +85,10 @@
 //!     in turn (`p1 + (p2 + p3) - n1 - n2`); a sum of subtracted terms alone is `-n1 - (n2 + n3)`,
 //!     and a number written with its rest is one term, `(s + r)`. A product's numerator and
 //!     denominator are right-nested chains (`c*(x1*x2)/(x3*(x4*x5))`), which the explicit
-//!     tokens write by default. Reading the display back, infix text or explicit tokens, then
-//!     evaluates every sum and product in the state's order. By default a sum is one flat
+//!     tokens write by default. At full precision every number is then written exactly, as the
+//!     tokens write it (a quotient the tokens divide by stays one: `3.1415926535897e37*(x1*x2)/3313`,
+//!     not its float `9.482621954692726e33`). Reading the display back, infix text or explicit
+//!     tokens, then evaluates every sum and product, and every number, as the state does. By default a sum is one flat
 //!     chain and an infix product one run of factors, which reading groups from the left. The
 //!     tagged form writes bags, which have no order of operations, and is the same either way.
 
@@ -876,9 +878,10 @@ impl<'a, 'v> Display<'a, 'v> {
         if a.decimal_parts().is_some() {
             return Spelling::Float(float_text(a));
         }
+        // each numeral in rule 8's notation, as rule 2 writes an exact number
         Spelling::Frac {
-            num: Some(a.numer_string()),
-            den: a.denom_string(),
+            num: Some(notated(a.numer_string())),
+            den: notated(a.denom_string()),
         }
     }
 

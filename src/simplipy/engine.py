@@ -2296,8 +2296,10 @@ class SimpliPyEngine:
         tokens group them from the right (``+ x1 + x2 exp x3``), and where terms nearly cancel,
         or a function amplifies its argument, the two orders give different float64 values.
         ``keep_grouping=True`` writes every sum and product with the grouping of the explicit
-        tokens, ``x1 + (x2 + exp(x3))``, ``2*(x1*(x2*x3))``, so the display evaluates every sum
-        and product in the state's order. With a ``precision`` the display does not read back
+        tokens, ``x1 + (x2 + exp(x3))``, ``2*(x1*(x2*x3))``, and at full precision every number
+        exactly, as the tokens write it (``sin(3.1415926535897e37*(x1*x2)/3313)``, where the
+        default writes the quotient's float ``9.482621954692726e33``), so the display evaluates
+        as the expression does, bit for bit. With a ``precision`` the display does not read back
         to the same values: a float shortened to ``k`` digits reads back as another number. At
         every precision the display reads back to the expression's structure, and displaying a
         display gives it back (``prettify(prettify(x)) == prettify(x)``).
@@ -2324,8 +2326,8 @@ class SimpliPyEngine:
             terms grouped from the right, then each subtracted term in turn
             (``x1 + (x2 + exp(x3)) - x4``), a number written with its rest as one term
             (``x1 + (1 + 3e-21)``), and a product's factors grouped from the right
-            (``x1*(x2*x3)/(x4*(x5*x6))``). Default ``False``: one flat chain per sum and
-            product. The tagged form writes bags, which have no order, and is the same either
+            (``x1*(x2*x3)/(x4*(x5*x6))``), and at full precision every number exactly, as the
+            tokens write it. Default ``False``: one flat chain per sum and product. The tagged form writes bags, which have no order, and is the same either
             way.
 
         Returns
