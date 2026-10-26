@@ -1136,8 +1136,7 @@ model predictions.
   the training-data inputs, the ground truths or the predictions (a tenth of each large set,
   all three modes), with `acj-5-4-llm` or with the reduced mine's files, and simplify takes
   the same time on them (within 0.3%).
-  `cos(asin(tanh(x)))` itself keeps its form: the mine does not certify
-  `cos(asin(tanh(_0))) -> 1/cosh(_0)` on its evaluation rows.
+  `cos(asin(tanh(x)))` itself is `1/cosh(x)` through the completion below.
 - **`verify-mine` and the mine check that every rule fires** (`dead`). On every generic
   instance of a rule's left side (each placeholder a fresh variable, a wide one also a sum
   with a variable of its own) the engine holding the file must reach the rule's right side or something
@@ -1165,6 +1164,17 @@ model predictions.
   wide placeholder wrapped it in `sin(x)`, which an engine without `sin` cannot read; it is
   now `x + x'`, a sum with a variable of its own, which every engine reads (the core language)
   and every placeholder sort binds.
+- **The mine completes the overlaps of its rules.** Where two rules overlap at an instance
+  (one's left side unifies with a subterm of the other's) and the two paths end in different
+  states, the rule between the two, from the dearer state to the cheaper, is offered to the
+  mine as a proposal and certified by its own scan, confirmation and judge, then pruned and
+  promoted with the rest, up to three rounds. `sin(acos(_0)) -> cos(asin(_0))` and
+  `sin(acos(tanh(_0))) -> 1/cosh(_0)` overlap on `sin(acos(tanh(x)))`, and the mine now writes
+  `cos(asin(tanh(_0))) -> 1/cosh(_0)`; `acos(cos(asin(_0)))` and `cos(asin(sin(_0)))` overlap
+  where the slot is `sin(x)`. The mine's final-gate line and sidecar (`gates.overlaps`) count
+  the completions the judge licenses that the file still lacks, and list those it refuses
+  (`gates.overlaps_refused`) with its tier and verdict; `verify-mine` fails on the first
+  (`overlaps`).
 
 ### Removed
 

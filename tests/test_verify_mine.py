@@ -146,6 +146,31 @@ def test_a_longer_rule_is_live_beside_its_prefix(tmp_path, mine) -> None:
     assert engine.simplify('sin acos x0'.split(), mode='real') == ['cos', 'asin', 'x0']
 
 
+def test_the_overlaps_gate(tmp_path, mine) -> None:
+    """Two rules overlap on `sin(acos(tanh(x)))`: one takes it to `1/cosh(x)`, the other to
+    `cos(asin(tanh(x)))`, and no rule joins the two. The completion the judge licenses,
+    `cos asin tanh x0 -> inv cosh x0`, is missing from the file, and the gate fails until it
+    is there."""
+    rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
+             (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
+    ops = _acj_operators()
+    path = _plant(tmp_path, mine, 'real', rules)
+    gate = _gate(verify_mine(path, 'real', ops, judge=core_judge), 'overlaps')
+    assert not gate['ok'], gate
+    assert {(' '.join(e['completion'][0]), ' '.join(e['completion'][1]))
+            for e in gate['examples']} == {('cos asin tanh x0', 'inv cosh x0')}, gate
+    completed = rules + [(('cos', 'asin', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
+    path = _plant(tmp_path, mine, 'real', completed)
+    assert _gate(verify_mine(path, 'real', ops, judge=core_judge), 'overlaps')['ok']
+
+    def refuse(pairs):
+        return ['reject'] * len(pairs)
+
+    path = _plant(tmp_path, mine, 'real', rules)
+    report = verify_mine(path, 'real', ops, judge=refuse)
+    assert _gate(report, 'overlaps')['ok'] and len(report['overlaps_refused']) == 1, report
+
+
 def test_the_translation_gate(tmp_path, mine) -> None:
     """A rule the load subsumes by exact arithmetic (`* 1 ?0 -> ?0`)."""
     path = _plant(tmp_path, mine, 'f64', [(('*', '1', '?0'), ('?0',))])

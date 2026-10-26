@@ -356,6 +356,27 @@ def judge_tiers(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
     return [tier for part in parts for tier in part]
 
 
+def _verdict_chunk(pairs: list, warn_s: float = JUDGE_WARN_S,
+                   fail_s: float = JUDGE_FAIL_S) -> list[str | None]:
+    return [d.get('verdict') for d in _watched_judgments(pairs, warn_s, fail_s)]
+
+
+def judge_verdicts(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
+                   fail_s: float = JUDGE_FAIL_S) -> list[str | None]:
+    """The contract judge's verdict name of each ``(lhs, rhs)`` pair, in order (``CERTIFIED``,
+    ``KILL``, ``NO-WITNESS``, ...): the reason beside :func:`judge_tiers`' tier, judged the
+    same way."""
+    pairs = [(list(lhs), list(rhs)) for lhs, rhs in pairs]
+    if processes <= 1 or len(pairs) < _JUDGE_POOL_MIN:
+        return _verdict_chunk(pairs, warn_s, fail_s) if pairs else []
+    import multiprocessing
+    size = -(-len(pairs) // processes)
+    chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
+    with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
+        parts = pool.map(functools.partial(_verdict_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
+    return [verdict for part in parts for verdict in part]
+
+
 def _file_mode(rule_mode: str) -> str:
     return dict(_MINE_MODES)[rule_mode]
 
@@ -525,6 +546,193 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
                              list(core.mine_mark(variant_lhs, rule_mode=rule_mode))])
                 break
     return dead
+
+
+#: Rounds of overlap completion per mine: each round offers the completions of the overlaps the
+#: previous one left, and the pass stops early when a round certifies nothing.
+_COMPLETION_ROUNDS = 3
+
+
+def _term(tokens: Any, arity: dict, side: str) -> Any:
+    """A rule side as a term: ``(token, *children)`` for an operator or a leaf, and
+    ``('#var', side, slot)`` for a slot, ``side`` keeping two rules' slots apart."""
+    def go(i: int) -> tuple[Any, int]:
+        token = str(tokens[i])
+        if _SLOT_SIGIL.match(token):
+            return ('#var', side, token), i + 1
+        children, j = [], i + 1
+        for _ in range(arity.get(token, 0)):
+            child, j = go(j)
+            children.append(child)
+        return (token, *children), j
+    return go(0)[0]
+
+
+def _resolve(term: Any, subst: dict) -> Any:
+    """``term`` under the substitution, every bound variable replaced throughout."""
+    while term[0] == '#var' and term in subst:
+        term = subst[term]
+    if term[0] == '#var':
+        return term
+    return (term[0], *(_resolve(child, subst) for child in term[1:]))
+
+
+def _unify(a: Any, b: Any, subst: dict) -> dict | None:
+    """Syntactic unification (occurs check included) of two terms under ``subst``."""
+    while a[0] == '#var' and a in subst:
+        a = subst[a]
+    while b[0] == '#var' and b in subst:
+        b = subst[b]
+    if a == b:
+        return subst
+    if b[0] == '#var' and a[0] != '#var':
+        a, b = b, a
+    if a[0] == '#var':
+        if a in _term_variables(_resolve(b, subst)):
+            return None
+        return {**subst, a: b}
+    if a[0] != b[0] or len(a) != len(b):
+        return None
+    for x, y in zip(a[1:], b[1:]):
+        found = _unify(x, y, subst)
+        if found is None:
+            return None
+        subst = found
+    return subst
+
+
+def _term_variables(term: Any) -> list:
+    if term[0] == '#var':
+        return [term]
+    return [v for child in term[1:] for v in _term_variables(child)]
+
+
+def _subterms(term: Any, path: tuple = ()) -> list:
+    """Every (path, subterm) of ``term`` that is not a variable, the root first."""
+    if term[0] == '#var':
+        return []
+    out = [(path, term)]
+    for k, child in enumerate(term[1:]):
+        out += _subterms(child, path + (k,))
+    return out
+
+
+def _tokens(term: Any, names: dict) -> list[str]:
+    """A term in prefix tokens, each variable spelled by ``names`` (filled in order of first
+    appearance as ``x0``, ``x1``, ...)."""
+    if term[0] == '#var':
+        if term not in names:
+            names[term] = f'x{len(names)}'
+        return [names[term]]
+    return [term[0]] + [t for child in term[1:] for t in _tokens(child, names)]
+
+
+def _critical_instances(rules: Any, arity: dict) -> list[tuple[int, list[str], list[str]]]:
+    """The instances on which two rules OVERLAP, as ``(row, instance, rhs_instance)``: the left
+    side of row ``i`` under the most general unifier of one of its non-variable subterms with
+    another rule's left side (the critical pairs of completion), the root included where the
+    two rows differ. A `?` slot binds a variable leaf only, so a unifier binding one to a
+    composite is no instance. Unification is syntactic, on the written prefix form; an
+    overlap only the AC matcher sees (inside a sum or product bag) is not found here."""
+    terms = [(_term(lhs, arity, 'a'), _term(rhs, arity, 'a')) for lhs, rhs in rules]
+    others = [_term(lhs, arity, 'b') for lhs, _ in rules]
+    by_head: dict = {}
+    for j, term in enumerate(others):
+        by_head.setdefault(term[0], []).append(j)
+    out, seen = [], set()
+    for i, (lhs, rhs) in enumerate(terms):
+        for path, sub in _subterms(lhs):
+            for j in by_head.get(sub[0], []):
+                if j == i and not path:
+                    continue
+                subst = _unify(sub, others[j], {})
+                if subst is None:
+                    continue
+                if any(v[2].startswith('?') and _resolve(v, subst)[0] != '#var'
+                       for v in set(_term_variables(lhs)) | set(_term_variables(others[j]))):
+                    continue
+                names: dict = {}
+                instance = _tokens(_resolve(lhs, subst), names)
+                rhs_instance = _tokens(_resolve(rhs, subst), names)
+                key = (i, tuple(instance))
+                if key not in seen:
+                    seen.add(key)
+                    out.append((i, instance, rhs_instance))
+    return out
+
+
+def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any) -> list[dict]:
+    """THE OVERLAPS THAT DO NOT JOIN: where two rules overlap at an instance of row ``i``'s left
+    side (a critical instance, ``_critical_instances``, or the row's own generic instance,
+    each slot a variable), the engine's answer on the instance with the row
+    suppressed (the other path, ``A``) is taken by the engine holding the file to a state other
+    than its answer on the row's right side (``B``). Each is listed with the rule completion
+    would add between the two, the dearer state to the cheaper one in the serve ordering:
+    ``{rule, instance, other_path, rhs_path, completion}``, once per completion. An instance
+    no other path moves (``A`` is the rule-less answer) is no overlap."""
+    from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants
+    core = engine._core
+    rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    every_row = list(range(len(rules)))
+    instances = _critical_instances(rules, arity)
+    for i, (lhs, rhs) in enumerate(rules):
+        instances += [(i, list(vl), list(vr)) for vl, vr in _coverage_variants(
+            lhs, rhs, rule_mode, non_finite=False, composite=False)]
+    out, seen, done = [], set(), set()
+    for i, instance, rhs_instance in instances:
+        if (i, tuple(instance)) in seen:
+            continue
+        seen.add((i, tuple(instance)))
+        other = core.ac_simplify_suppressed(list(instance), 48, 'explicit', None, [i],
+                                            rule_mode=rule_mode)
+        bare = core.ac_simplify_suppressed(list(instance), 48, 'explicit', None, every_row,
+                                           rule_mode=rule_mode)
+        if other == bare:
+            continue
+        a = list(core.mine_mark(list(other), rule_mode=rule_mode))
+        b = list(core.mine_mark(list(rhs_instance), rule_mode=rule_mode))
+        if a == b:
+            continue
+        completion = ((a, b) if core.ac_ordered_below_in(b, a, rule_mode=rule_mode)
+                      else (b, a))
+        if (tuple(completion[0]), tuple(completion[1])) in done:
+            continue  # one completion joins every overlap it is listed for
+        done.add((tuple(completion[0]), tuple(completion[1])))
+        out.append({'rule': [list(rules[i][0]), list(rules[i][1])], 'instance': list(instance),
+                    'other_path': a, 'rhs_path': b,
+                    'completion': [list(completion[0]), list(completion[1])]})
+    return out
+
+
+def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
+                  verdicts: Callable | None = None) -> tuple[list, list]:
+    """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) is judged as
+    the rule completion would add. -> ``(missing, refused)``: the completions the judge
+    licenses in the mode, which the file lacks (expected empty), and those it refuses, each
+    with the judge's tier and, with ``verdicts`` (``judge_verdicts``), its verdict."""
+    unjoined = _unjoined_overlaps(engine, rule_mode, rules)
+    if not unjoined:
+        return [], []
+    pairs = []
+    for o in unjoined:
+        src, tgt = o['completion']
+        names = [t for t in dict.fromkeys(src + tgt) if re.fullmatch(r'x\d+', t)]
+        both, _ = remap_expression(list(src) + list(tgt), names, variable_prefix='?')
+        pairs.append((tuple(both[:len(src)]), tuple(both[len(src):])))
+    distinct = list(dict.fromkeys(pairs))
+    tier_of = dict(zip(distinct, judge(distinct)))
+    allowed = _mode_tiers(rule_mode)
+    off = [pair for pair in distinct if tier_of[pair] not in allowed]
+    verdict_of = dict(zip(off, verdicts(off))) if verdicts is not None and off else {}
+    missing, refused = [], []
+    for o, pair in zip(unjoined, pairs):
+        tier = tier_of[pair]
+        if tier in allowed:
+            missing.append({**o, 'tier': tier})
+        else:
+            refused.append({**o, 'tier': tier, 'verdict': verdict_of.get(pair)})
+    return missing, refused
 
 
 class RuleMiner:
@@ -861,7 +1069,8 @@ class RuleMiner:
             judge_warn_s: float = JUDGE_WARN_S,
             judge_fail_s: float = JUDGE_FAIL_S,
             cells: dict[tuple[str, str | None], list] | None = None,
-            offer_final_rules: bool = False) -> None:
+            offer_final_rules: bool = False,
+            judge_processes: int = 4) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
         ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
         throughout (marks, sources, library, acceptance, the rules installed so far). The
@@ -1197,6 +1406,48 @@ class RuleMiner:
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                     _note_drops('prune_covered_post_promotion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
+            # OVERLAP COMPLETION: where two rules overlap at an instance and the two paths end
+            # in different states (`_unjoined_overlaps`), the rule between them, the dearer
+            # state to the cheaper, goes through the proposal channel: the mine's own scan,
+            # hint arm, stage-2 confirmation and judge loop, nothing bespoke. It runs on the
+            # promoted set, as the overlaps a stronger sort opens exist only there, and what it
+            # certifies goes through the same prune and promotion. A certified completion can
+            # overlap again, so the pass repeats, at most `_COMPLETION_ROUNDS` times.
+            _completion: list = []
+            _tried: set = set()
+            for _round in range(_COMPLETION_ROUNDS if not interrupted() else 0):
+                _entries = []
+                for o in _unjoined_overlaps(self.engine, rule_mode, self._mode_rules(rule_mode)):
+                    pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
+                    if pair not in _tried:
+                        _tried.add(pair)
+                        _entries.append(pair)
+                if not _entries:
+                    break
+                outcomes, _, judge_loop = _lane(_entries)
+                _completion.append({'offered': len(_entries), 'outcomes': dict(outcomes),
+                                    'judge_rounds': judge_loop['judge_rounds']})
+                if not outcomes['certified']:
+                    break
+                if prune == 'covered':
+                    _final_gate()
+                    self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                    _note_drops('prune_covered_completion',
+                                lambda _identity: 'behaviourally-covered-by-remaining-rules')
+                if promote_sorts:
+                    from .promotion import promote
+                    kept, _ = promote(self._mode_rules(rule_mode), self.engine,
+                                      verbose=verbose, rule_mode=rule_mode)
+                    self._install(rule_mode, kept)
+                    _note_drops('sort_promotion_completion',
+                                lambda _identity: 'derivable-refund')
+                    if prune == 'covered':
+                        _final_gate()
+                        self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                        _note_drops('prune_covered_completion',
+                                    lambda _identity: 'behaviourally-covered-by-remaining-rules')
+            if prov is not None:
+                prov['completion'] = _completion
             # SOUNDNESS PROVENANCE, second half (audit Tier-1 #4): the interval layer's
             # three fail-closed miss counters, read AFTER the mine as deltas over this
             # mine's baseline -- the exposure ("how often could the gate not decide?")
@@ -1231,6 +1482,13 @@ class RuleMiner:
             # The liveness gate on what ships (expected 0): a rule another rule shadows on its
             # own instance is recorded, not dropped, so `verify-mine` fails on the file.
             gate['dead'] = _dead_rules(self.engine, rule_mode, final)
+            # The overlap gate on what ships (expected no licensed completion missing): the
+            # overlaps that do not join, the judge-licensed completions the file lacks and the
+            # refused ones with the judge's reason, recorded, not dropped.
+            gate['overlaps'], gate['overlaps_refused'] = _overlap_gate(
+                self.engine, rule_mode, final, judge,
+                functools.partial(judge_verdicts, processes=judge_processes,
+                                  warn_s=judge_warn_s, fail_s=judge_fail_s))
             for lane_outcomes, lane_trail, lane_watch in _lanes:
                 if lane_watch:
                     _reconcile_proposal_census(
@@ -1243,6 +1501,8 @@ class RuleMiner:
             if verbose:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
                       f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
+                      f'{len(gate["overlaps"])} unjoined overlaps '
+                      f'({len(gate["overlaps_refused"])} more refused by the judge), '
                       f'{len(final)} rules')
             if out_path is not None:
                 _path = _triple_paths(out_path)[file_mode]
@@ -1265,6 +1525,8 @@ class RuleMiner:
                     prov['gates'] = {'unlicensed': gate['unlicensed'],
                                      'preempted': gate['preempted'],
                                      'dead': gate['dead'],
+                                     'overlaps': gate['overlaps'],
+                                     'overlaps_refused': gate['overlaps_refused'],
                                      'file': os.path.basename(_path)}
                     # A rerun of this mine reuses the file as it is (`_finished_cell`).
                     prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
@@ -2506,6 +2768,7 @@ class RuleMiner:
                     judge_fail_s=judge_fail_s,
                     cells=cells,
                     offer_final_rules=offer_final_rules,
+                    judge_processes=judge_processes,
                 )
             # The engine ends holding the three files it wrote, as it would load them.
             if 'default' in finals:
@@ -2544,6 +2807,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``dead``: every rule is live -- the engine holding the file takes each instance of a
       rule's left side to its right side or below (``_dead_rules``); a rule another rule
       shadows on its own instance ships and never decides an answer;
+    - ``overlaps``: where two rules overlap and the paths do not join, the completion the
+      judge licenses is in the file (``_overlap_gate``); the completions the judge refuses
+      are listed under ``overlaps_refused`` with its tier and verdict, and fail nothing;
     - ``translation``: the mode's load subsumes and drops nothing;
     - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
       prices each as this engine does;
@@ -2589,6 +2855,10 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     gates['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
                           if _preempted_by(engine, lhs, rhs, mode)]
     gates['dead'] = _dead_rules(engine, rule_mode, rules)
+    gates['overlaps'], overlaps_refused = _overlap_gate(
+        engine, rule_mode, rules,
+        judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
+        functools.partial(judge_verdicts, processes=judge_processes))
     _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
     gates['translation'] = ([{'subsumed': subsumed, 'dropped': dropped}]
                             if subsumed or dropped else [])
@@ -2614,7 +2884,7 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
               for name, found in gates.items()}
     return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
-            'gates': report}
+            'gates': report, 'overlaps_refused': overlaps_refused}
 
 
 def _offered_pins_broken(rules_path: str, offered: Any) -> list:
