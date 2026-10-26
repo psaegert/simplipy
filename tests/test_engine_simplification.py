@@ -45,7 +45,7 @@ class TestPruneCoveredRules:
         """Leaf-only probing would wrongly remove a `_`-rule whose cover is `?`-sorted.
 
         The `?`-rule rewrites the wide rule's leaf-instantiated LHS variant, but
-        cannot bind the composite `sin(x{i})` probe, so the wide rule is kept.
+        cannot bind the composite `1/(x{i} + x{k})` probe, so the wide rule is kept.
         (The rules are variable-preserving: a ground-collapsing pair would ride
         the engine's arithmetic -- the original `sin(...) -> 0` fixture leaned on
         the transcendental fold that fold unification removed, and a

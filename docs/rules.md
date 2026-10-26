@@ -265,7 +265,7 @@ simplipy verify-mine rules_real.json --mode real -e config.yaml
 | `engine_owned_law` | no rule respells one canonical state or states the distributive law as the search factors (a sign pull such as `neg sin _0 -> sin neg _0` still passes) |
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
 | `preempted` | no ground rule is one the rule-less engine already performs, such as a ground fact it folds (`log (-3) → nan`) |
-| `dead` | every rule is live: on each generic instance of its left side (each placeholder a fresh variable, a wide one also a sum with a variable of its own), the engine holding the file reaches the right side or below, so no rule is shadowed by another that takes its instance and ends dearer |
+| `dead` | every rule is live: on each generic instance of its left side (each placeholder a fresh variable, a wide one also `1/(x + x')`, with a variable of its own), the engine holding the file reaches the right side or below, so no rule is shadowed by another that takes its instance and ends dearer |
 | `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file; the overlaps whose completion the judge refuses are listed with its tier and verdict and fail nothing |
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |

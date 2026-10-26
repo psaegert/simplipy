@@ -260,13 +260,14 @@ _NO_SIN_OPS = {
 
 class TestProbesReadEveryAlphabet:
     def test_the_composite_instance_is_in_the_core_language(self) -> None:
-        """A wide slot is probed with a composite as well as a leaf, and the composite is a
-        sum with a variable of its own: the core language every engine reads, so the probes
-        need no head of the alphabet (an alphabet without `sin` built `sin(x0)`)."""
+        """A wide slot is probed with a composite as well as a leaf, and the composite is the
+        reciprocal of a sum with a variable of its own: the core language every engine reads,
+        so the probes need no head of the alphabet (an alphabet without `sin` built
+        `sin(x0)`)."""
         from simplipy.engine import _coverage_variants
         variants = _coverage_variants(('log', 'exp', '_0'), ('_0',), 'f64')
         assert (['log', 'exp', 'x0'], ['x0']) in variants
-        assert (['log', 'exp', '+', 'x0', 'x1'], ['+', 'x0', 'x1']) in variants
+        assert (['log', 'exp', 'inv', '+', 'x0', 'x1'], ['inv', '+', 'x0', 'x1']) in variants
         assert not any('sin' in v for pair in variants for v in pair)
 
     def test_prune_and_liveness_without_sin(self) -> None:
@@ -279,6 +280,6 @@ class TestProbesReadEveryAlphabet:
         engine = SimpliPyEngine(operators=_NO_SIN_OPS, rules=[short, covered])
         assert engine.prune_covered_rules(rule_mode='default') == 1
         assert engine.simplification_rules == [short]
-        assert engine.simplify(['neg', 'log', 'exp', '+', 'x0', 'x1']) != \
-            ['neg', 'log', 'exp', '+', 'x0', 'x1']
+        assert engine.simplify(['neg', 'log', 'exp', 'inv', '+', 'x0', 'x1']) != \
+            ['neg', 'log', 'exp', 'inv', '+', 'x0', 'x1']
         assert _dead_rules(engine, 'default', [short]) == []

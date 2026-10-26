@@ -1162,8 +1162,10 @@ model predictions.
   at the integers, and `0^c`, infinite for c < 0, keep their form outside `permissive`.
 - **The covered prune and the liveness gate read every alphabet.** Their probe instance for a
   wide placeholder wrapped it in `sin(x)`, which an engine without `sin` cannot read; it is
-  now `x + x'`, a sum with a variable of its own, which every engine reads (the core language)
-  and every placeholder sort binds.
+  now `1/(x + x')`, with a variable of its own, which every engine reads (the core language)
+  and every wide sort binds. It is no bag, so a narrower placeholder cannot take it apart: a
+  bare sum `x + x'` would read `sin(_0 + 1) -> sin(_0)` as covered by `?0 + 1 -> ?0`, which
+  rewrites `sin(x + x' + 1)` with `?0` bound to `x` alone.
 - **The mine completes the overlaps of its rules.** Where two rules overlap at an instance
   (one's left side unifies with a subterm of the other's) and the two paths end in different
   states, the rule between the two, from the dearer state to the cheaper, is offered to the

@@ -78,9 +78,11 @@ def _coverage_variants(
     folding fake coverage). Additionally, every subset of up to 3 wide slots
     (``_``/``!``/``$`` sigils, which bind composites) is probed with a composite
     (``composite=False`` probes none): leaf-only instantiation under-tests what a wide slot
-    claims to match. The composite is ``x{i} + x{k}``, ``x{k}`` a variable of its own: a
-    sum is in the core language every engine reads whatever its alphabet, finite and nonzero
-    almost everywhere, so every wide sort binds it.
+    claims to match. The composite is ``1/(x{i} + x{k})``, ``x{k}`` a variable of its own:
+    in the core language every engine reads whatever its alphabet, finite and nonzero almost
+    everywhere, so every wide sort binds it, and no bag, so a narrower slot cannot take it
+    apart -- a bare sum it can: ``?0 + 1`` rewrites ``(x{i} + x{k}) + 1`` with ``?0`` bound
+    to ``x{i}`` alone, which would read a ``_0 + 1`` rule as covered by it.
     In ``permissive``, where every slot binds any subtree, each non-finite literal is a
     variant too (all slots at once): `$0 / $0 -> 1` is what takes `inf/inf` to `1` there,
     which the constructor takes to `nan`. (In ``f64`` and ``real`` the ground fold reads
@@ -96,7 +98,7 @@ def _coverage_variants(
         bindings = {s: ['x' + s[1:]] for s in slots}
         for k, (slot, wrapped) in enumerate(zip(wide, mask)):
             if wrapped:
-                bindings[slot] = ['+', 'x' + slot[1:], f'x{fresh + k}']
+                bindings[slot] = ['inv', '+', 'x' + slot[1:], f'x{fresh + k}']
         bindings_list.append(bindings)
     if non_finite and rule_mode == 'permissive' and slots:
         bindings_list += [{s: [value] for s in slots} for value in _NON_FINITE_LITERALS]
