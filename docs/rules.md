@@ -157,6 +157,7 @@ simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yam
 - `-o` is the output path for the collected rules
 - `-v` enables verbose output
 - `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
+- `--modes f64,real` mines only the listed modes (default: all three) and leaves the other files as they are; a mode mined beside an existing file reads it (`real` and `permissive` mine beside the f64 file, and `permissive` is offered both)
 
 The published `acj-5-4-llm` artifact is this machinery at its shipped scale:
 complete sources through length 5, targets through length 4, plus the

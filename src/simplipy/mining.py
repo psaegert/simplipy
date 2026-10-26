@@ -381,6 +381,20 @@ def _file_mode(rule_mode: str) -> str:
     return dict(_MINE_MODES)[rule_mode]
 
 
+def _mine_modes(modes: Any) -> set:
+    """The rule modes a mine runs, from ``find_rules(modes=...)``: file mode names (``f64``,
+    also ``default``, ``real``, ``permissive``), all three when ``None``."""
+    if modes is None:
+        return {rule_mode for rule_mode, _ in _MINE_MODES}
+    names = [modes] if isinstance(modes, str) else list(modes)
+    by_name = {file_mode: rule_mode for rule_mode, file_mode in _MINE_MODES}
+    by_name['default'] = 'default'
+    unknown = [name for name in names if name not in by_name]
+    if unknown or not names:
+        raise ValueError(f'modes must name f64, real or permissive, got {modes!r}')
+    return {by_name[name] for name in names}
+
+
 def _mode_tiers(rule_mode: str) -> frozenset:
     """The judged tiers a rule mode's file may hold (`verify.MODE_TIERS`, the one table)."""
     from .verify import MODE_TIERS
@@ -2407,7 +2421,8 @@ class RuleMiner:
             interval_node_budget: int | None = None,
             judge_warn_s: float = JUDGE_WARN_S,
             judge_fail_s: float = JUDGE_FAIL_S,
-            offer_final_rules: bool = True) -> None:
+            offer_final_rules: bool = True,
+            modes: Any = None) -> None:
         """Systematically discovers new simplification rules.
 
         This method automates the discovery of simplification rules, one file per mode
@@ -2560,6 +2575,13 @@ class RuleMiner:
             permissive's answer is not already as low. The permissive sidecar pins both
             files (``offered``: name, sha256, count) beside the lane's outcomes. Config key
             ``offer_final_rules``; recorded in the sidecar's parameters.
+        modes : list[str] or None, optional
+            The modes to mine (``'f64'``, ``'real'``, ``'permissive'``; ``None``, the default,
+            mines all three). The other modes' files are left as they are. A listed mode that
+            mines beside another reads that one's file at the output path: ``real`` and
+            ``permissive`` mine with the ``f64`` file in the default slot, and ``permissive`` is
+            offered the ``f64`` and ``real`` files (``offer_final_rules``), which must then
+            exist. Each mined file's sidecar and final-gate line are its own, as in a full mine.
 
         Notes
         -----
@@ -2572,6 +2594,7 @@ class RuleMiner:
         """
         if not isinstance(prune, bool) and prune != 'covered':
             raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
+        mined_modes = _mine_modes(modes)
         if prune is True:
             # Fail HERE, not after the length loop: the old late raise fired at the END
             # of a potentially week-scale mine (audit Tier-2, 2026-08-03).
@@ -2727,9 +2750,23 @@ class RuleMiner:
             # permissive mine, which runs last, is offered the f64 and real cell it shares a
             # path with (`offer_final_rules`), a ladder snapshot as well as the run's own.
             cells: dict[tuple[str, str | None], list] = {}
+            # A mode left out of `modes` keeps its file, and the modes mined beside it read it.
+            for rule_mode, file_mode in _MINE_MODES:
+                if rule_mode in mined_modes:
+                    continue
+                for cell_path in [output_file, *snapshot_at.values()]:
+                    path = None if cell_path is None else _triple_paths(cell_path)[file_mode]
+                    if path is not None and os.path.exists(path):
+                        with open(path) as file:
+                            kept_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
+                        cells[(rule_mode, cell_path)] = kept_rules
+                        if cell_path == output_file:
+                            finals[rule_mode] = kept_rules
             for rule_mode, _file_mode in _MINE_MODES:
                 if interrupted:
                     break
+                if rule_mode not in mined_modes:
+                    continue
                 # Each mode after f64 mines against the finished f64 set in the default slot, as
                 # its file is served beside it.
                 self.engine._replace_rules(finals.get('default', initial['default']))

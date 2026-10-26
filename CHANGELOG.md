@@ -1175,6 +1175,11 @@ model predictions.
   the completions the judge licenses that the file still lacks, and list those it refuses
   (`gates.overlaps_refused`) with its tier and verdict; `verify-mine` fails on the first
   (`overlaps`).
+- **`simplipy find-rules --modes f64,real,permissive`** (and `find_rules(modes=...)`) mines
+  only the listed modes, all three by default, and leaves the other files as they are; a mode
+  mined beside an existing file reads it (`real` and `permissive` mine with the f64 file in
+  the default slot, and `permissive` is offered the f64 and real files). Each mined file
+  keeps its own sidecar and final-gate line.
 
 ### Removed
 

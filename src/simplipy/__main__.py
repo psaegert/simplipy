@@ -28,6 +28,11 @@ def main(argv: str = None) -> None:
              'siblings are derived from it with the _f64 marker replaced: '
              'rules_f64.json writes rules_real.json and rules_permissive.json beside it')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
+    find_simplifications_parser.add_argument(
+        '--modes', type=str, default='f64,real,permissive',
+        help='The modes to mine, comma-separated (default: f64,real,permissive). The other '
+             'files are left as they are, and a listed mode that mines beside them reads them '
+             '(real and permissive mine beside the f64 file; permissive is offered both)')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 
     # Prune-rules command
@@ -156,6 +161,7 @@ def main(argv: str = None) -> None:
                         os.path.dirname(os.path.abspath(args.output_file)), v)
                     for k, v in (rule_finding_config.get('snapshot_at') or {}).items()},
                 output_file=args.output_file,
+                modes=args.modes.split(','),
                 reset_rules=args.reset_rules,
                 prune=rule_finding_config.get('prune', False),
                 verbose=args.verbose)
