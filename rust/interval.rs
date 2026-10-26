@@ -6280,7 +6280,7 @@ pub struct FiniteCells {
 /// The search is BREADTH-FIRST, so the witnesses are the coarsest cells of the finite set and
 /// spread over all of it: it stops at the end of the first level holding at least `want`
 /// cells. A cell with no positive-measure finite part is dropped (it holds no witness); a mixed
-/// cell is split along its widest dimension down to the resolution floor.
+/// or unanalyzable cell is split along its widest dimension down to the resolution floor.
 ///
 /// FAIL CLOSED: `None` when the horizon is undecidable, the node budget runs out, or an
 /// unanalyzable cell was met before any witness; `Some` with no cells when the search completed
@@ -6335,22 +6335,24 @@ pub fn finite_cells(
             }
             budget -= 1;
             let doms = doms_from_box(&bx, &used, width, (-r, r));
-            let Some(v) = value_set_p(e, ops, &doms, params) else {
-                undecided = true;
-                continue;
-            };
-            if !v.fin_pm() {
-                continue; // no positive-measure finite part anywhere in this cell
-            }
-            let finite = |w: &Vs| w.fin_pm() && !w.nan && !w.pinf && !w.ninf;
-            if finite(&v)
-                || (f64
-                    && f64_tail_reading(e, ops, &doms, params).is_some_and(|(t, p)| {
-                        value_set_p(&t, ops, &doms, &p).is_some_and(|w| finite(&w))
-                    }))
-            {
-                cells.push(bx);
-                continue;
+            // An unanalyzable cell is split like a mixed one: its parts may be analyzable
+            // (`harmonic(c)` is refused over a box holding its poles and enclosed on [0, r]).
+            let v = value_set_p(e, ops, &doms, params);
+            undecided |= v.is_none();
+            if let Some(v) = v {
+                if !v.fin_pm() {
+                    continue; // no positive-measure finite part anywhere in this cell
+                }
+                let finite = |w: &Vs| w.fin_pm() && !w.nan && !w.pinf && !w.ninf;
+                if finite(&v)
+                    || (f64
+                        && f64_tail_reading(e, ops, &doms, params).is_some_and(|(t, p)| {
+                            value_set_p(&t, ops, &doms, &p).is_some_and(|w| finite(&w))
+                        }))
+                {
+                    cells.push(bx);
+                    continue;
+                }
             }
             if d < depth_max {
                 let i = (0..bx.len())
@@ -8600,6 +8602,30 @@ mod new_head_tests {
             r.has_fin && r.lo == 0.0 && r.hi == 2.0 && r.pinf && !r.ninf,
             "{r:?}"
         );
+    }
+
+    /// An unanalyzable cell is split, not dropped: `harmonic(c)` is refused over a box holding its
+    /// poles and enclosed on the parts of it past -1, so the evidence certificate finds cells there
+    /// and `harmonic(c)` collapses to a fitted constant, as the judge licenses.
+    #[test]
+    fn an_unanalyzable_cell_is_split() {
+        let e = engine();
+        let ops = e.operators_ref();
+        for f64 in [true, false] {
+            let fc = finite_cells(&s(&["harmonic", "<constant>"]), &[], ops, 1, f64).unwrap();
+            assert!(
+                !fc.cells.is_empty() && fc.cells.iter().all(|c| c[0].0 > -1.0),
+                "f64={f64}"
+            );
+            assert!(constant_collapse(&s(&["harmonic", "<constant>"]), ops, f64));
+            assert!(constant_collapse(
+                &s(&["log", "harmonic", "<constant>"]),
+                ops,
+                f64
+            ));
+            let x = finite_cells(&s(&["harmonic", "x0"]), &[], ops, 4, f64).unwrap();
+            assert!(x.cells.len() >= 4, "f64={f64}: {:?}", x.cells);
+        }
     }
 
     /// harmonic is enclosed strictly between two poles, where it increases: the enclosure holds

@@ -1090,7 +1090,10 @@ model predictions.
   mixture, so `asinh(atanh(floor(x))) -> atanh(floor(x))` and three siblings were mined at seed
   42 (79 rows of 512) and not at seed 7 (63). A source now has evidence iff the interval layer
   certifies a cell of its box on which it is finite everywhere, in the mode's own semantics
-  (below); an undecided search certifies nothing. Where the matrix holds fewer rows than the floor inside that set, the
+  (below); an undecided search certifies nothing. A cell the interval layer cannot read is
+  split like a mixed one, so a source holding `harmonic`, `besselj` or `mod` has evidence where
+  a part of its box is readable: `harmonic(x)` is refused over a box holding its poles and read
+  past -1, and `harmonic(c)` collapses to a fitted constant there, as the judge licenses. Where the matrix holds fewer rows than the floor inside that set, the
   missing rows are drawn from the certified cells, by a stream the seed fixes, and judged with
   the rest. `abs(atanh(acos(x))) -> atanh(acos(x))`, finite for x in (cos 1, 1] (15 rows of
   512), is mined now.
