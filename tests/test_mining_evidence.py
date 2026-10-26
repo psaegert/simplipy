@@ -89,16 +89,22 @@ def test_a_refutation_needs_converged_values(bare):
         assert not ok, mode
 
 
-def test_float64_tails_are_read_exactly(bare):
+def test_each_mode_reads_evidence_in_its_own_semantics(bare):
     """`acosh(erf(x0))` is NaN over the reals and finite (0) wherever float64 rounds erf to 1,
-    x0 >= 5.92: positive measure in the evaluator the evidence is counted in. The enclosure of
-    erf there straddles 1 by its outward step; the certificate reads the tail exactly, so the
-    f64 rule keeps its evidence."""
+    x0 >= 5.92. `f64` reads float64, its tails exactly (the enclosure of erf there straddles 1
+    by its outward step), so its rule has evidence; `real` and `permissive` judge over the
+    reals, where the source is finite nowhere, and certify nothing on it."""
     X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
-    ok, why = bare._core.judge_pair('atan acosh erf x0'.split(), 'acosh erf x0'.split(),
-                                    ['x0', 'x1'], X.flatten().tolist(), 512, rtol=1e-11,
-                                    atol=1e-12, rule_mode='default')
+
+    def certified(src, tgt, mode):
+        return bare._core.judge_pair(src.split(), tgt.split(), ['x0', 'x1'], X.flatten().tolist(),
+                                     512, rtol=1e-11, atol=1e-12, rule_mode=mode)
+    ok, why = certified('atan acosh erf x0', 'acosh erf x0', 'default')
     assert ok, why
+    for mode in ('real', 'permissive'):
+        for src, tgt in (('atan acosh erf x0', 'acosh erf x0'),
+                         ('acosh tanh x0', 'acosh erf x0')):
+            assert certified(src, tgt, mode) == (False, 'uncertified'), (src, mode)
 
 
 def test_a_constant_collapse_is_minted_where_the_judge_licenses_it(bare):

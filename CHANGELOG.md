@@ -1089,9 +1089,8 @@ model predictions.
   either side of it by seed: `atanh(floor(x))` is finite on [0, 1) alone, about 13% of the
   mixture, so `asinh(atanh(floor(x))) -> atanh(floor(x))` and three siblings were mined at seed
   42 (79 rows of 512) and not at seed 7 (63). A source now has evidence iff the interval layer
-  certifies a cell of its box on which float64 evaluates it finite everywhere, its exact tails
-  included (`acosh(erf(x))` is finite where float64's erf is 1, x >= 5.92); an undecided search
-  certifies nothing. Where the matrix holds fewer rows than the floor inside that set, the
+  certifies a cell of its box on which it is finite everywhere, in the mode's own semantics
+  (below); an undecided search certifies nothing. Where the matrix holds fewer rows than the floor inside that set, the
   missing rows are drawn from the certified cells, by a stream the seed fixes, and judged with
   the rest. `abs(atanh(acos(x))) -> atanh(acos(x))`, finite for x in (cos 1, 1] (15 rows of
   512), is mined now.
@@ -1153,6 +1152,12 @@ model predictions.
   `sin(acos(tanh(_0))) -> 1/cosh(_0)` in the reduced mine's `real` and `permissive` files
   (the only rule it lists); it lists none now, and mined again the reduced mine writes the
   same three files.
+- **Each mode reads a source's evidence in its own semantics.** `f64` certifies the cell where
+  float64 finds the source finite, its exact tails included; `real` and `permissive` judge over
+  the reals, and certify there. `acosh(erf(x))` is finite only where float64 rounds erf to 1
+  (x >= 5.92) and NaN everywhere over the reals, so `real` and `permissive` no longer mine
+  rules on it or on `acosh(tanh(x))`: `acosh(tanh(x)) -> acosh(erf(x))` and
+  `atan(acosh(erf(x))) -> acosh(erf(x))` stay in `f64` alone.
 
 ### Removed
 

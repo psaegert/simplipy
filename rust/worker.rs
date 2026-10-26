@@ -1715,8 +1715,9 @@ const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
 /// finite at 0 alone -- has no evidence and cannot be rewritten from its corner values. That
 /// is decided HERE, from the source's domain and never from a count of sampled rows: the source
 /// is informative iff `interval::finite_cells` certifies, at one of its instances, a cell of the
-/// horizon box on which it is finite everywhere. Fail closed: an undecided search certifies
-/// nothing.
+/// horizon box on which it is finite everywhere, in the mode's own semantics (`f64`: float64's,
+/// tails included; otherwise the reals', which `real` and `permissive` judge in). Fail closed:
+/// an undecided search certifies nothing.
 ///
 /// An informative source then needs `min_informative` rows where some instance is finite,
 /// and the rows it is given are a random sample: `atanh(floor x)` is finite on [0, 1) alone,
@@ -1736,6 +1737,7 @@ fn evidence_rows(
     n_rows: usize,
     min_informative: usize,
     seed: u64,
+    f64: bool,
 ) -> Option<Vec<Vec<f64>>> {
     // PROVEN nowhere finite on positive measure over ALL of its variables and constants (the
     // value set over the reals encloses every instance): no instance can hold a witness. An
@@ -1759,7 +1761,7 @@ fn evidence_rows(
     order.sort_by_key(|&k| std::cmp::Reverse(crate::eval::count_finite(&y[k].1)));
     let witness = order.iter().find_map(|&k| {
         let p = &y[k].0;
-        crate::interval::finite_cells(source, p, ops, 1)
+        crate::interval::finite_cells(source, p, ops, 1, f64)
             .filter(|fc| !fc.cells.is_empty())
             .map(|_| p)
     })?;
@@ -1767,7 +1769,7 @@ fn evidence_rows(
     if have >= min_informative {
         return Some(extra);
     }
-    let fc = crate::interval::finite_cells(source, witness, ops, TOPUP_CELLS)?;
+    let fc = crate::interval::finite_cells(source, witness, ops, TOPUP_CELLS, f64)?;
     if fc.cells.is_empty() {
         return None;
     }
@@ -2044,6 +2046,7 @@ impl<'s> SourceCtx<'s> {
             n_rows,
             min_informative,
             seed,
+            f64_range,
         ) else {
             return Ok(None);
         };
@@ -2302,7 +2305,7 @@ fn certify_candidate(
     // a mined, judged rule, never the engine's own move.
     if let Some(sv) = &sc.reach {
         if target.len() == 1 && target[0] == "<constant>" {
-            let certified = crate::interval::finite_cells(source, &[], ops, 1)
+            let certified = crate::interval::finite_cells(source, &[], ops, 1, !rescue)
                 .is_some_and(|fc| !fc.cells.is_empty());
             if !(sv.fin_pm() && certified) {
                 return None;

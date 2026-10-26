@@ -6255,12 +6255,13 @@ pub struct FiniteCells {
 ///
 /// A cell is a witness when the outward-rounded value set over it holds a finite part and
 /// nothing else (no NaN, no infinity, and the finite part not confined to a null set): every
-/// point of the cell evaluates finite in the deployed float64 evaluator, which is the
-/// evidence a mine counts (`worker::candidate_matches` binds source-finite rows only, every
-/// mode evaluating its rows in float64). A cell is read through float64's tails as well
-/// (`f64_tail_reading`), where the evaluator is exact. The cells come from the same box,
-/// horizon and dyadic subdivision `defined_measure_p_at` reads, so "positive measure" means the
-/// same thing to the evidence decision and to the domain gate.
+/// point of the cell is finite, which is the evidence a mine binds (`worker::candidate_matches`
+/// binds source-finite rows only). `f64` reads the cell as float64 evaluates it, its exact tails
+/// included (`f64_tail_reading`): `acosh(erf(x))` is finite where float64's erf is 1. Without
+/// it the cell is read over the reals, the semantics `real` and `permissive` judge in, where
+/// that source is NaN everywhere. The cells come from the same box, horizon and dyadic
+/// subdivision `defined_measure_p_at` reads, so "positive measure" means the same thing to the
+/// evidence decision and to the domain gate.
 ///
 /// The search is BREADTH-FIRST, so the witnesses are the coarsest cells of the finite set and
 /// spread over all of it: it stops at the end of the first level holding at least `want`
@@ -6275,6 +6276,7 @@ pub fn finite_cells(
     params: &[f64],
     ops: &Operators,
     want: usize,
+    f64: bool,
 ) -> Option<FiniteCells> {
     let respelled = dummy_spelling(&[expr], ops);
     let e: &[String] = respelled.as_ref().map_or(expr, |d| &d[0]);
@@ -6328,9 +6330,10 @@ pub fn finite_cells(
             }
             let finite = |w: &Vs| w.fin_pm() && !w.nan && !w.pinf && !w.ninf;
             if finite(&v)
-                || f64_tail_reading(e, ops, &doms, params).is_some_and(|(t, p)| {
-                    value_set_p(&t, ops, &doms, &p).is_some_and(|w| finite(&w))
-                })
+                || (f64
+                    && f64_tail_reading(e, ops, &doms, params).is_some_and(|(t, p)| {
+                        value_set_p(&t, ops, &doms, &p).is_some_and(|w| finite(&w))
+                    }))
             {
                 cells.push(bx);
                 continue;
