@@ -109,28 +109,19 @@ class TestMintCountInvariant:
         assert engine.simplify(['exp', '*', 'np.pi', 'x0']) == \
             ['exp', '*', 'np.pi', 'x0']
 
-    def test_const_preserving_family_still_mints(self, tmp_path) -> None:
-        """Anti-vacuity: the servable SPECIAL-FREE Const algebra must keep minting --
-        `(e^C1)^C2 = e^(C1*C2)` collapses to one fitted constant. The special-bearing
-        twin `pow exp <constant> np.pi -> <constant>` is REFUSED by the mint-side
-        Const-absorption licence: the canon respells the source to `pow <constant>
-        np.pi` (exp(C) -> C), where pi sits in a NON-absorbable pow position -- the
-        contract absorbs specials only at the bijective
-        bag sites, so the pow-position refusal stands."""
-        engine, out = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
-                            ['np.pi', '<constant>'])
+    def test_const_preserving_family_is_the_engines(self, tmp_path) -> None:
+        """The servable Const algebra collapses in the engine, so the mine has nothing to
+        write: `(e^C1)^C2 = e^(C1*C2)` is one fitted constant, and so is its special-bearing
+        twin, which the canon respells to `pow(C, pi)` (exp(C) -> C): finite for C >= 0, it
+        collapses by the constant-collapse criterion the mint reads, as `C^2.5` does -- pi is
+        a fixed positive real there like a literal, as at `pi^C`."""
+        engine, _ = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
+                          ['np.pi', '<constant>'])
         rules = [(list(lhs), list(rhs)) for lhs, rhs in engine.simplification_rules]
-        assert (['pow', 'exp', '<constant>', '<constant>'], ['<constant>']) in rules
-        assert (['pow', 'exp', '<constant>', 'np.pi'], ['<constant>']) not in rules
-        # The jurisdiction carve-out, pinned where it bites: the symbolic gate
-        # drops every fatal bucket, and a multi-<constant> LHS is the ONE exempted
-        # shape (the judge's own non-jurisdiction sentinel; this family's soundness
-        # authority is the Const-channel chain). The exemption must be VISIBLE in the
-        # sidecar, not silent -- and must not widen: nothing else may ride it.
-        gate = json.load(open(out + '.provenance.json'))['symbolic_gate']
-        assert [['pow', 'exp', '<constant>', '<constant>'], ['<constant>']] \
-            in gate['const_channel']
-        assert gate['unsupported_shape'] == []
+        for source in (['pow', 'exp', '<constant>', '<constant>'],
+                       ['pow', 'exp', '<constant>', 'np.pi']):
+            assert (source, ['<constant>']) not in rules
+            assert engine.simplify(source) == ['<constant>']
 
 
 class TestTranslationCountGate:

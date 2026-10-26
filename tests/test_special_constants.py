@@ -296,8 +296,9 @@ class TestExactCollapsesMint:
 
 
 class TestConstAbsorptionLicence:
-    """Contract 10.11: specials absorb into an EXISTING mask at
-    the bijective bag sites; introduced masks and non-bag positions still refuse."""
+    """Specials absorb into an EXISTING mask at the bijective bag sites; elsewhere a
+    special is a fixed real like a literal (the constant-collapse criterion), and an
+    introduced mask still refuses."""
 
     def test_const_times_special_absorbs(self, eng):
         # C*pi -> C: the Mul-scale bijection (c' = c*pi), same family as C*cosh(1).
@@ -333,9 +334,15 @@ class TestConstAbsorptionLicence:
         check(eng, ['*', '<constant>', '2.5'], ['<constant>'])
         check(eng, ['abs', '<constant>'], ['<constant>'])
 
-    def test_const_pow_special_still_refused(self, eng):
-        # C^pi was already refused (mixed value class); the licence must not regress it.
-        check(eng, ['pow', '<constant>', 'np.pi'], ['pow', '<constant>', 'np.pi'])
+    def test_const_pow_special_collapses_where_finite(self, eng):
+        # C^pi is finite for C >= 0 and NaN below: the fitted constant owes a value only
+        # where the source is finite, so it collapses as C^2.5 does (pi a fixed positive
+        # real, as at pi^C). (-1)^C, finite only at the integers, and 0^C, infinite for
+        # C < 0, keep their form.
+        check(eng, ['pow', '<constant>', 'np.pi'], ['<constant>'])
+        check(eng, ['pow', '<constant>', '2.5'], ['<constant>'])
+        check(eng, ['pow', '(-1)', '<constant>'], ['pow', '-1', '<constant>'])
+        check(eng, ['pow', '0', '<constant>'], ['pow', '0', '<constant>'])
 
     def test_const_inf_still_unabsorbed(self, eng):
         # Bare 'inf' is a reserved spelling; the canonical token

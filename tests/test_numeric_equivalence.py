@@ -380,7 +380,13 @@ class TestCorpusGate:
         # an entire function, so more inverses split and more signs move. 11 walk rows move:
         # seven rest cheaper (82 -1,000, 87 -6,000, 117 -3,000, 125 -19,000, 163 -8,900, 290
         # -1,000, 341 -3,000) and four respell at an equal price (55, 113, 160, 297).
-        assert walk['complexity_out'] == 54615636, walk['complexity_out']
+        # THE ENGINE COLLAPSES A CONSTANT WHERE THE MINT WOULD: 54,615,636 -> 54,474,126. A
+        # `<constant>` subtree collapses where a cell of its constants is finite, the mint's
+        # criterion: 11 walk rows rest cheaper (21 -7,000, 35 -8,000, 55 -19,000, 56 -16,000,
+        # 97 -9,000, 141 -7,585, 187 -7,000, 221 -17,170, 222 -30,170, 238 -9,585, 295
+        # -11,000), their `log(c)`, `atanh(c)`, `acos(atanh(c))`, `acosh(acos(c))`, `rootn(c, 2)`,
+        # `c^(1/2)` and `c^(5/2)` free constants now.
+        assert walk['complexity_out'] == 54474126, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

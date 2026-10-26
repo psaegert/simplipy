@@ -1159,7 +1159,12 @@ model predictions.
   a cell of the free constants on which the subtree is finite, and no infinity it provably
   reaches. So `log(c)`, `acos(c)`, `exp(log(c))` and `atan(atanh(c))` are `<constant>` in every
   mode, `x * acos(c)` is `c * x`, and the mine has none of them to write; `(-1)^c`, finite only
-  at the integers, and `0^c`, infinite for c < 0, keep their form outside `permissive`.
+  at the integers, and `0^c`, infinite for c < 0, keep their form outside `permissive`. A
+  special in the exponent is a fixed real like a literal, as it is in the base (`pi^c` was
+  already `<constant>`): `c^pi`, `c^e` and `c^2.5`, finite for c >= 0, are `<constant>`.
+  With `acj-5-4-llm` no answer changes on the srbf ground truths or on a tenth of its
+  predictions or of the training-data inputs, in any mode; with `acj-4-3` the 400-row corpus
+  walk rests 141,510 milli-bits cheaper on 11 rows, none dearer.
 - **The covered prune and the liveness gate read every alphabet.** Their probe instance for a
   wide placeholder wrapped it in `sin(x)`, which an engine without `sin` cannot read; it is
   now `1/(x + x')`, with a variable of its own, which every engine reads (the core language)

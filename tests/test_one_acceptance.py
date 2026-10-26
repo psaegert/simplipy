@@ -72,11 +72,15 @@ PAIRS = [
     # true but not strictly below the mark (the engine already collects the bag)
     (('+', '*', 'x0', 'x1', '*', 'x0', 'x1'), ('*', '2', '*', 'x0', 'x1'), False, 'not_below'),
     # SPECIAL ABSORPTION, by spelling and by the mark: the special sits in the source's
-    # tokens (`np.pi`), or only in the engine's endpoint (`exp 1` reads as `np.e`). The
-    # library scan without a mark used to count specials on the raw source alone.
+    # tokens (`np.pi`), or only in the engine's endpoint (`exp 1` reads as `np.e`, and
+    # `x0^e` with `C = e` is true). The library scan without a mark used to count specials
+    # on the raw source alone.
     (('+', 'x0', '*', 'np.pi', '<constant>'), ('+', 'x0', '<constant>'), False,
      'special_absorption'),
-    (('pow', '<constant>', 'exp', '1'), ('<constant>',), False, 'special_absorption'),
+    (('pow', 'x0', 'exp', '1'), ('pow', 'x0', '<constant>'), False, 'special_absorption'),
+    # A constant-only source the engine collapses itself (`C^e` is finite for C >= 0) has
+    # an atomic mark: nothing is below it.
+    (('pow', '<constant>', 'exp', '1'), ('<constant>',), False, 'atomic_mark'),
     # POLE: a.e. equal and below the mark, but the value at x0 = 0 changes (0 -> nan)
     (('*', 'x0', 'log', '1'), ('log', '/', 'x0', 'x0'), False, 'pole_class_change'),
 ]
