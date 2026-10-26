@@ -501,6 +501,35 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
     return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
 
 
+def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
+    """THE LIVENESS GATE: the rows of ``rules`` that the engine holding them does not serve.
+
+    A shipped rule is live when, on every generic instance of its left side (each slot a
+    fresh variable, each wide slot also a composite, ``sin(x)`` or the first unary head of a
+    vocabulary without ``sin``: the covered-rule prune's variants without its non-finite
+    tier, ``engine._coverage_variants``), the mode's serve answer reaches its right side's
+    instance or something below it (``engine._reaches_promise``). A rule that misses is dead
+    or shadowed: another rule takes its instance first and ends dearer, so the row ships and
+    never decides an answer. Expected empty.
+    -> ``[lhs, rhs, instance, answer]`` per dead row (the first instance it misses on).
+    """
+    from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants, _reaches_promise
+    core = engine._core
+    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    unary = sorted(t for t, n in engine.operator_arity.items() if n == 1)
+    composite = 'sin' if 'sin' in unary else (unary[0] if unary else None)
+    dead: list = []
+    for lhs, rhs in rules:
+        for variant_lhs, variant_rhs in _coverage_variants(tuple(lhs), tuple(rhs), rule_mode,
+                                                           non_finite=False,
+                                                           composite=composite):
+            if not _reaches_promise(core, rule_mode, variant_lhs, variant_rhs, arity):
+                dead.append([list(lhs), list(rhs), variant_lhs,
+                             list(core.mine_mark(variant_lhs, rule_mode=rule_mode))])
+                break
+    return dead
+
+
 class RuleMiner:
     """The rule miner of one engine: :meth:`find_rules` and :meth:`certify_rules`.
 
@@ -1202,6 +1231,9 @@ class RuleMiner:
                 final = _kept
                 self._install(rule_mode, final)
                 _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
+            # The liveness gate on what ships (expected 0): a rule another rule shadows on its
+            # own instance is recorded, not dropped, so `verify-mine` fails on the file.
+            gate['dead'] = _dead_rules(self.engine, rule_mode, final)
             for lane_outcomes, lane_trail, lane_watch in _lanes:
                 if lane_watch:
                     _reconcile_proposal_census(
@@ -1213,7 +1245,8 @@ class RuleMiner:
                                             if e['verdict'] != 'already_covered']
             if verbose:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
-                      f'{len(gate["preempted"])} preempted, {len(final)} rules')
+                      f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
+                      f'{len(final)} rules')
             if out_path is not None:
                 _path = _triple_paths(out_path)[file_mode]
                 with open(_path, 'w') as file:
@@ -1234,6 +1267,7 @@ class RuleMiner:
                     }
                     prov['gates'] = {'unlicensed': gate['unlicensed'],
                                      'preempted': gate['preempted'],
+                                     'dead': gate['dead'],
                                      'file': os.path.basename(_path)}
                     # A rerun of this mine reuses the file as it is (`_finished_cell`).
                     prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
@@ -2510,6 +2544,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``preempted``: no ground rule whose left side the rule-less engine of the mode already
       takes to its right side's state: a ground fact the engine folds (``log (-3) ->
       float("nan")``) is not a rule;
+    - ``dead``: every rule is live -- the engine holding the file takes each instance of a
+      rule's left side to its right side or below (``_dead_rules``); a rule another rule
+      shadows on its own instance ships and never decides an answer;
     - ``translation``: the mode's load subsumes and drops nothing;
     - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
       prices each as this engine does;
@@ -2554,6 +2591,7 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
             judge_tiers, processes=judge_processes), {})[1]
     gates['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
                           if _preempted_by(engine, lhs, rhs, mode)]
+    gates['dead'] = _dead_rules(engine, rule_mode, rules)
     _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
     gates['translation'] = ([{'subsumed': subsumed, 'dropped': dropped}]
                             if subsumed or dropped else [])

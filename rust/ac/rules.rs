@@ -18,8 +18,9 @@
 //!
 //! ## The rewrite pass
 //!
-//! `apply_rules_top_down`, ported to bags: at every node, try the rules for that root kind in
-//! ASSET ORDER (first-match-wins), with the bag rules matching SUB-MULTISETS and preserving the
+//! `apply_rules_top_down`, ported to bags: at every node, try the rules for that root kind
+//! MOST SPECIFIC FIRST (exact rules, then patterns, each by `specificity`, asset order among
+//! equals; first-match-wins), with the bag rules matching SUB-MULTISETS and preserving the
 //! remainder (the widening). If no rule fires, the NUMERIC FOLD fallback runs -- the exact
 //! ordering of the shipped engine, which is load-bearing: `sin(pi) -> 0` (a rule) must beat
 //! `sin(3.14159...) -> 1.22e-16` (the f64 fold). Then recurse into children, rebuild
@@ -92,7 +93,8 @@ fn repeated_wildcard(lhs: &Ex, view: &TokenView) -> Repeat {
 }
 
 /// The translated rule set, bucketed by root kind. Bucket vectors hold indices into `rules` in
-/// ascending = ASSET order (first-match-wins preserved globally within each bucket).
+/// FIRE order: exact rules before patterns, each class most specific first (`specificity`),
+/// ascending = ASSET order among equals.
 #[derive(Default)]
 pub struct AcRules {
     pub rules: Vec<AcRule>,
@@ -243,6 +245,26 @@ fn collect_wildcards(e: &Ex, view: &TokenView, out: &mut FxHashSet<Tok>) {
             collect_wildcards(ex, view, out);
         }
     }
+}
+
+/// The SPECIFICITY of a canonical LHS, the rule's priority at its root: its node count less
+/// its distinct wildcards -- the nodes a match must find beyond one binding per wildcard.
+/// Every proper syntactic instance of a pattern is more specific than it: binding a wildcard
+/// to a leaf, to a larger subtree, or to another wildcard of the pattern each raises it by
+/// at least one. (Narrowing a wildcard's sort keeps it; asset order decides those.) The
+/// legacy engine scanned the longest pattern first for the same reason; the count is taken
+/// on the canonical side, the shape the matcher meets.
+fn specificity(lhs: &Ex, view: &TokenView) -> usize {
+    fn nodes(e: &Ex) -> usize {
+        match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => 1 + v.iter().map(nodes).sum::<usize>(),
+            Ex::Pow(b, x) => 1 + nodes(b) + nodes(x),
+            _ => 1,
+        }
+    }
+    let mut ws = FxHashSet::default();
+    collect_wildcards(lhs, view, &mut ws);
+    nodes(lhs) - ws.len()
 }
 
 /// How often the leaf `tok` occurs in `e`.
@@ -502,8 +524,9 @@ impl AcRules {
         // ties), which is exactly why the closure materializes per-rule through the SAME
         // admission gates instead of quotienting the representation: each twin is
         // individually justified, and an unorientable one simply drops. Twins append
-        // AFTER all asset rules (lowest priority within their bucket) and count
-        // separately (`n_twins`), so the asset accounting keeps its meaning.
+        // AFTER all asset rules (last among the rules of their specificity in their
+        // bucket) and count separately (`n_twins`), so the asset accounting keeps its
+        // meaning.
         let mut seen_rules: FxHashMap<(Ex, Ex), (usize, bool)> = FxHashMap::default();
         for (r, &row) in out.rules.iter().zip(out.src.iter()) {
             seen_rules
@@ -575,11 +598,20 @@ impl AcRules {
             });
             out.n_twins += 1;
         }
-        // Exact-before-pattern within every bucket (stable: asset order within each class).
+        // Exact-before-pattern within every bucket, and MOST SPECIFIC FIRST within each class
+        // (`specificity`; stable, so asset order decides among equals). First-match-wins
+        // otherwise lets a general rule take the instances a more specific rule was mined
+        // for: with `sin acos _0 -> cos asin _0` first in the file, `sin acos tanh _0 ->
+        // inv cosh _0` never fired, and `sin acos tanh x` ended at `cos asin tanh x`. The
+        // order is a function of each rule alone, so a set without some rows orders the
+        // survivors as this one does (the suppression probes rely on it).
         let rules = &out.rules;
+        let spec: Vec<usize> = rules.iter().map(|r| specificity(&r.lhs, view)).collect();
         let partition = |v: &mut Vec<usize>| {
-            let (exact, pattern): (Vec<usize>, Vec<usize>) =
+            let (mut exact, mut pattern): (Vec<usize>, Vec<usize>) =
                 v.iter().partition(|&&i| !rules[i].is_pattern);
+            exact.sort_by_key(|&i| std::cmp::Reverse(spec[i]));
+            pattern.sort_by_key(|&i| std::cmp::Reverse(spec[i]));
             v.clear();
             v.extend(exact);
             v.extend(pattern);
@@ -743,7 +775,7 @@ fn memo_log(what: &str, e: &Ex) {
     eprintln!("AC memo {what}: {t}");
 }
 
-/// Try every applicable rule at this node (asset order, sig-prefiltered). On a bag fire the
+/// Try every applicable rule at this node (bucket fire order, sig-prefiltered). On a bag fire the
 /// remainder joins the substituted RHS in a fresh canonical bag.
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     let node_sig = atom_sig(e, p.cx.view);

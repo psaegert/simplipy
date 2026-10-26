@@ -78,7 +78,8 @@ it applies:
    pass that changes nothing (the fixpoint). Every changed pass output is strictly
    below its predecessor in the reduction ordering. Inside the pass, per subtree,
    top-down:
-    1. exact rule lookup; on a miss, the pattern scan, first match wins;
+    1. exact rule lookup; on a miss, the pattern scan, most specific pattern first (the
+       most nodes beyond one per placeholder; file order among equals), first match wins;
     2. a match that binds wide slots must pass the bind-time `!`/`$` certificates
        (skipped in permissive mode); verdicts are memoized per call and in a
        generational per-engine cache;
@@ -331,7 +332,7 @@ it must not change.
 	identical expressions share identical layouts under the stable canonical order.
 - **Rule execution** – `SimpliPyEngine.compile_rules` syncs machine-discovered or
 	human-authored simplifications into the compiled core, which performs fast
-	top-down, first-match-wins rewriting in each pass.
+	top-down rewriting in each pass, the most specific matching rule first.
 - **Rule discovery workflow** – `SimpliPyEngine.find_rules` explores expression
 	space natively on the compiled core (parallelized across all cores via rayon),
 	confirms identities with numeric sampling, and writes back deduplicated

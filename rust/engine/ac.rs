@@ -2424,6 +2424,28 @@ mod tests {
         }
     }
 
+    /// THE MOST SPECIFIC RULE FIRES FIRST, whatever the file order: `sin acos tanh _0 -> inv
+    /// cosh _0` takes `sin(acos(tanh(x)))` though `sin acos _0 -> cos asin _0` also matches
+    /// it and precedes it in the file (first-match-wins in file order ended at
+    /// `cos(asin(tanh(x)))`, for which no rule exists), and the shorter rule still serves
+    /// its own instance.
+    #[test]
+    fn the_most_specific_rule_fires_first() {
+        let Some(mut e) = engine() else { return };
+        let short = (t(&["sin", "acos", "_0"]), t(&["cos", "asin", "_0"]));
+        let long = (t(&["sin", "acos", "tanh", "_0"]), t(&["inv", "cosh", "_0"]));
+        for set in [
+            vec![short.clone(), long.clone()],
+            vec![long.clone(), short.clone()],
+        ] {
+            e.set_mode_rules(RuleMode::Real, Some(set));
+            let got = simp_mode(&e, &t(&["sin", "acos", "tanh", "x0"]), RuleMode::Real);
+            assert_eq!(got, t(&["inv", "cosh", "x0"]));
+            let got = simp_mode(&e, &t(&["sin", "acos", "x0"]), RuleMode::Real);
+            assert_eq!(got, t(&["cos", "asin", "x0"]));
+        }
+    }
+
     /// A PUSH TRANSLATES ONLY THE SET IT REPLACES (F9): replacing the default set keeps the
     /// other modes' translations, and a mode with no set of its own still serves the new
     /// default set (it reads the default translation itself, never its own cell).
