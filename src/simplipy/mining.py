@@ -1498,11 +1498,20 @@ class RuleMiner:
                 _added = [r for r in self._mode_rules(rule_mode) if r not in _before]
                 if promote_sorts and _added:
                     from .promotion import promote
-                    kept, _ = promote(_added, self.engine, verbose=verbose, rule_mode=rule_mode)
+                    kept, _report = promote(_added, self.engine, verbose=verbose,
+                                            rule_mode=rule_mode)
+                    # Promotion seeds the cancellation identities into a set that lacks them;
+                    # the promoted set holds them already, so a batch's seeds are not its rows
+                    # (seeded again, `- !0 !0 -> 0` and `* 0 !0 -> 0` twin-shadowed their own
+                    # rows in the reduced length-4 permissive file).
+                    _seeded = {(tuple(entry[0]), tuple(entry[1]))
+                               for entry in _report['promoted_bang']
+                               if str(entry[2]).startswith('seed')}
                     _added_set = set(_added)
                     self._install(rule_mode, [r for r in self._mode_rules(rule_mode)
                                               if r not in _added_set]
-                                  + [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept])
+                                  + [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept
+                                     if (tuple(lhs), tuple(rhs)) not in _seeded])
                     _note_drops('sort_promotion_completion',
                                 lambda _identity: 'derivable-refund')
                     if prune == 'covered':
