@@ -125,3 +125,19 @@ def test_a_constant_collapse_is_minted_where_the_judge_licenses_it(bare):
             assert certified(src, mode), (src, mode)
         for src in ('pow (-1) <constant>', 'pow 0 <constant>', 'log neg cosh <constant>'):
             assert not certified(src, mode), (src, mode)
+
+
+def test_the_engine_collapses_what_the_mint_would(bare):
+    """The engine's fold reads the mint's constant-collapse criterion: a constant-only subtree
+    is a fitted `<constant>` wherever a cell of its constants certifies it finite, so `log(c)`,
+    `acos(c)` and `atan(atanh(c))` are `<constant>` in every mode, and the mine has nothing
+    to write for them. `(-1)^c` (finite only at the integers) and `0^c` (+inf on c < 0) are
+    not, outside permissive's recall."""
+    for src in ('log <constant>', 'acos <constant>', 'atan atanh <constant>',
+                'exp log <constant>'):
+        for mode in ('f64', 'real', 'permissive'):
+            assert bare.simplify(src.split(), mode=mode) == ['<constant>'], (src, mode)
+    for src, kept in (('pow (-1) <constant>', 'pow -1 <constant>'),
+                      ('pow 0 <constant>', 'pow 0 <constant>')):
+        for mode in ('f64', 'real'):
+            assert ' '.join(bare.simplify(src.split(), mode=mode)) == kept, (src, mode)

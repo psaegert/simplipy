@@ -6188,6 +6188,21 @@ pub fn defined_measure_p_at(
     Some(best)
 }
 
+/// THE CONSTANT-COLLAPSE CRITERION, the one both the mint and the engine's fold read: may a
+/// variable-free, `<constant>`-bearing expression collapse to a free `<constant>`?
+///
+/// The judge's criterion (`verify._contract.source_defined`): the target constant is fitted, and
+/// a value of the source's constants at which the source is NaN or infinite is never the fit,
+/// so the collapse owes a witness exactly where the source is finite. It holds when
+/// `finite_cells` certifies a cell of the free constants on which the expression is finite
+/// (read in the mode's semantics, `f64`), and no value set proves it reaches an infinity, which
+/// a finite constant cannot stand for (`pow(0, C)` is +inf on C < 0). `log(C)` and `acos(C)`
+/// collapse; `(-1)^C`, finite only at the integers, has no finite cell and does not.
+pub fn constant_collapse(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    let reaches_inf = value_set(tokens, ops, &Vs::reals()).is_some_and(|v| v.pinf || v.ninf);
+    !reaches_inf && finite_cells(tokens, &[], ops, 1, f64).is_some_and(|fc| !fc.cells.is_empty())
+}
+
 /// FLOAT64'S TAILS on one cell, for the evidence certificate (`finite_cells`): `tanh`, `atan` and
 /// `erf` ARE their limit wherever float64 rounds them to it (`tail_of`), but the enclosure of such
 /// a node straddles the limit by its outward step, so a source finite only because a tail is exact

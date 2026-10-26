@@ -651,11 +651,10 @@ class TestApiFootguns:
     malformed input: it used to be returned unchanged, with no signal."""
 
     def test_mode_string_lossy_means_lossy(self, engine: SimpliPyEngine) -> None:
-        # exp(log(<constant>)): SOUND refuses the collapse (log's domain restriction,
-        # certificate-gated); LOSSY collapses to <constant> -- the documented
-        # training-canonicalisation example. The string and the enum must take the
-        # SAME branch.
-        expr = ['exp', 'log', '<constant>']
+        # (-1)^<constant>: SOUND refuses the collapse (finite only at the integers, which
+        # certify no fitted constant); LOSSY collapses to <constant>. The string and the
+        # enum must take the SAME branch.
+        expr = ['pow', '(-1)', '<constant>']
         enum_out = engine.simplify(list(expr), mode=Mode.permissive)
         str_out = engine.simplify(list(expr), mode='permissive')
         assert str_out == enum_out

@@ -697,8 +697,9 @@ class TestInversePairsCollapse:
         because f64 saturates (tanh attains 1.0 from 19.061547465398498, and atanh(1.0)
         is inf). So `real` and `corpus` collapse it and `f64` must not.
 
-        The RECALL axis: `exp(log c)` needs c > 0, a certificate only the permissive mode
-        skips. So `corpus` collapses it and `f64` AND `real` must not.
+        The RECALL axis: `(-1)^c` is finite only at the integers, a null set of constants,
+        so no certificate licenses its collapse to a fitted constant; only the permissive
+        mode skips the certificate. So `corpus` collapses it and `f64` AND `real` must not.
 
         `real` sits on the opposite side of each -- it relaxes the band and keeps the
         certificate -- so the two axes are genuinely independent and a single bool has no
@@ -714,9 +715,9 @@ class TestInversePairsCollapse:
         assert bare.simplify(list(band), mode=Mode.real) == ['30']
         assert bare.simplify(list(band), mode=Mode.permissive) == ['30']
 
-        recall = ['exp', 'log', '<constant>']   # needs <constant> > 0
-        assert bare.simplify(list(recall), mode=Mode.f64) == recall
-        assert bare.simplify(list(recall), mode=Mode.real) == recall
+        recall = ['pow', '(-1)', '<constant>']   # finite only at integer constants
+        assert bare.simplify(list(recall), mode=Mode.f64) == ['pow', '-1', '<constant>']
+        assert bare.simplify(list(recall), mode=Mode.real) == ['pow', '-1', '<constant>']
         assert bare.simplify(list(recall), mode=Mode.permissive) == ['<constant>']
 
         inside = ['atanh', 'tanh', '1']         # inside every band: all three agree
@@ -735,11 +736,16 @@ class TestInversePairsCollapse:
         from simplipy import Mode
         bare._core.set_mode_rules('real', [])
 
-        # The RULE question: with a fitted `<constant>` the side condition cannot be
-        # discharged, so `f64` and `real` both refuse and only `corpus` fires.
-        unproven = ['exp', 'log', '<constant>']
-        assert bare.simplify(list(unproven), mode=Mode.f64) == unproven
-        assert bare.simplify(list(unproven), mode=Mode.real) == unproven
+        # The CONSTANT question: a fitted `<constant>` owes a witness only where the source
+        # is finite (the judge's criterion, `interval::constant_collapse`), so `exp(log c)`
+        # is a fitted constant in every mode -- log(c) is finite on c > 0. `(-1)^c` is
+        # finite only at the integers, which certify nothing, so `f64` and `real` refuse it
+        # and only `corpus` collapses it.
+        for mode in (Mode.f64, Mode.real, Mode.permissive):
+            assert bare.simplify(['exp', 'log', '<constant>'], mode=mode) == ['<constant>']
+        unproven = ['pow', '(-1)', '<constant>']
+        assert bare.simplify(list(unproven), mode=Mode.f64) == ['pow', '-1', '<constant>']
+        assert bare.simplify(list(unproven), mode=Mode.real) == ['pow', '-1', '<constant>']
         assert bare.simplify(list(unproven), mode=Mode.permissive) == ['<constant>']
 
         # The owner's concrete example is GROUND, so no rule is involved at all: the

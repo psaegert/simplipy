@@ -233,10 +233,12 @@ file `rules.json`) — so selecting a mode selects a file, and what is loaded is
 ```python
 from simplipy import Mode
 
-# log(C) is undefined for C <= 0. The default is strict about it; only the permissive
-# mode collapses it.
-engine.simplify('exp(log(<constant>))', mode=Mode.f64)     # -> 'exp(log(<constant>))'
-engine.simplify('exp(log(<constant>))', mode=Mode.permissive)  # -> '<constant>'
+# A fitted constant owes a value only where its expression is finite: log(C) is finite on
+# C > 0, so every mode reads exp(log(C)) as a fitted constant. (-1)^C is finite only at the
+# integers, which no fit lands on; the default keeps it, the permissive mode collapses it.
+engine.simplify('exp(log(<constant>))', mode=Mode.f64)     # -> '<constant>'
+engine.simplify('(-1)^<constant>', mode=Mode.f64)          # -> '(-1)^(<constant>)'
+engine.simplify('(-1)^<constant>', mode=Mode.permissive)   # -> '<constant>'
 
 # sqrt(x^2) is |x| over the reals; the permissive mode takes the sign-ignoring
 # algebraic collapse instead:
@@ -308,7 +310,7 @@ uses each mode on a different side of its pipeline:
   data is then generated *from that simplified form* — so the target the model learns and the data
   it is trained on are the *same* expression (`target == data`). There is no external ground-truth
   function for `permissive` to violate, so the aggressive reductions are safe here and they give the model
-  the shortest, most canonical target. (An `exp(log(<constant>))` that survives cancellation, for
+  the shortest, most canonical target. (A `(-1)^<constant>` that survives cancellation, for
   instance, becomes a plain `<constant>`, which is what the generated data reflects.)
 
 - **Inference and recovery scoring use `Mode.f64`.** At test time the data comes from an unknown

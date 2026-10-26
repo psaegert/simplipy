@@ -1107,10 +1107,10 @@ class TestApi1ModeParameter:
 
     def test_mode_members_and_names_still_work(self, eng) -> None:
         from simplipy import Mode
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.permissive)) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='permissive')) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.f64)) \
-            == ['exp', 'log', '<constant>']
+        unproven = ['pow', '(-1)', '<constant>']  # finite only at integer constants
+        assert list(eng.simplify(unproven, mode=Mode.permissive)) == ['<constant>']
+        assert list(eng.simplify(unproven, mode='permissive')) == ['<constant>']
+        assert list(eng.simplify(unproven, mode=Mode.f64)) == ['pow', '-1', '<constant>']
 
 
 class TestConc12CopyOnWrite:

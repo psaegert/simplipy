@@ -300,7 +300,7 @@ class Mode(Enum):
       exact-arithmetic backends, publication), accepting that some of it is not what
       float64 computes.
     - ``permissive``: accepts what holds up to sign or domain as well (``(x^2)^(1/2)`` is
-      ``x``, ``exp(log(<constant>))`` is ``<constant>``), trading equivalence for shorter forms.
+      ``x``, ``(-1)^<constant>`` is ``<constant>``), trading equivalence for shorter forms.
       It is not equivalence-preserving and is meant for training-corpus canonicalisation,
       where the training data is generated from the simplified form, so there is no
       external function to violate. Do not use it on an inference or scoring path.

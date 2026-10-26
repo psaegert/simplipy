@@ -2290,37 +2290,29 @@ fn certify_candidate(
     // reachability") -- this is where that measure decision is made: `pow (-1)
     // <constant>` (nan a.e.) cannot become anything finite.
     //
-    // A COLLAPSE TO `<constant>` answers to the judge's constant-collapse criterion
-    // instead (`verify._contract.source_defined`): the target constant is fitted, and a
-    // source constant at which the source is NaN or infinite is never the fit, so the
-    // collapse owes a witness exactly where the source is finite and nothing elsewhere.
-    // It needs that finite part to have POSITIVE MEASURE over the constants, CERTIFIED
-    // (`interval::finite_cells` over the source's free constants: a cell of the constant
-    // box on which it is finite everywhere) -- `pow (-1) <constant>`, finite only at the
-    // integers, has none -- and nothing more of the class: `atan atanh <constant>`
-    // (finite on |C| < 1, NaN beyond) and `acos <constant>` collapse, as the judge
-    // licenses them. An infinity the source takes stays `reaches_all_of`'s, which a finite
-    // constant cannot reach (`pow 0 <constant>`). The serve-time fold
-    // (`engine/ac.rs::ac_fold`) still collapses only the FINITE class: a mixed collapse is
-    // a mined, judged rule, never the engine's own move.
-    if let Some(sv) = &sc.reach {
-        if target.len() == 1 && target[0] == "<constant>" {
-            let certified = crate::interval::finite_cells(source, &[], ops, 1, !rescue)
-                .is_some_and(|fc| !fc.cells.is_empty());
-            if !(sv.fin_pm() && certified) {
-                return None;
-            }
+    // A COLLAPSE TO `<constant>` answers to THE CONSTANT-COLLAPSE CRITERION instead
+    // (`interval::constant_collapse`, the judge's `verify._contract.source_defined`): the
+    // target constant is fitted, and a source constant at which the source is NaN or
+    // infinite is never the fit, so the collapse owes a witness exactly where the source is
+    // finite. `atan atanh <constant>` (finite on |C| < 1, NaN beyond) and `acos <constant>`
+    // collapse; `pow (-1) <constant>`, finite only at the integers, does not. The engine's
+    // fold (`engine/ac.rs::ac_fold`) reads the same function, so what the mint would collapse
+    // the engine already does, and the mine never writes it.
+    let var_free = !source.iter().any(|t| var_names.contains(t));
+    if var_free && sc.n_const > 0 && target.len() == 1 && target[0] == "<constant>" {
+        if !crate::interval::constant_collapse(source, ops, !rescue) {
+            return None;
+        }
+    } else if let Some(sv) = &sc.reach {
+        // `target` is the candidate's own tokens unless literal resolution
+        // respelled it -- reuse the build-time value set where it is.
+        let tv = if is_resolution {
+            crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
         } else {
-            // `target` is the candidate's own tokens unless literal resolution
-            // respelled it -- reuse the build-time value set where it is.
-            let tv = if is_resolution {
-                crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
-            } else {
-                cand.reals_vs
-            };
-            if !tv.is_some_and(|cv| cv.cls() == sv.cls()) {
-                return None;
-            }
+            cand.reals_vs
+        };
+        if !tv.is_some_and(|cv| cv.cls() == sv.cls()) {
+            return None;
         }
     }
     // A head the high-precision evaluators do not know has no contract verdict, so the judge

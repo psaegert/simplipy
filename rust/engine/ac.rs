@@ -8,8 +8,9 @@
 //! * the serve-time fold is EXACT-ONLY (fold unification, 2026-08-02): rational arithmetic
 //!   lives in the constructors, the `<constant>` value-set collapse below, and NOTHING
 //!   transcendental folds at serve -- those identities are mined, symbolically certified rules;
-//! * the `<constant>` collapse carries the owner-ratified licence verbatim (`cls() == Finite`,
-//!   positive-measure finite part) through `interval::value_set`;
+//! * the `<constant>` collapse reads the constant-collapse criterion the mint reads
+//!   (`interval::constant_collapse`: a certified cell of the free constants on which the
+//!   subtree is finite, and no infinity it provably reaches);
 //! * the loaded ruleset is TRANSLATED once, lazily, on first AC use -- construction cost is
 //!   untouched for consumers that never opt in.
 //!
@@ -1095,13 +1096,27 @@ impl Engine {
             if lossy {
                 return Some(Ex::Const);
             }
+            // THE CONSTANT-COLLAPSE CRITERION the mint reads (`interval::constant_collapse`),
+            // in the mode's semantics: `log(C)` and `acos(C)` are fitted constants wherever
+            // they are finite. Memoized per call beside the ground classes (the key holds a
+            // `<constant>`, so it never meets a ground key, and a tag past every token id keeps
+            // it apart from the NaN-family verdict of the same node).
             let flat = to_prefix(e, &bare);
-            let strs = self.resolve_seq(&flat, ctx);
-            let collapses =
-                crate::interval::value_set(&strs, &self.operators, &crate::interval::Vs::reals())
-                    .is_some_and(|vs| vs.cls() == crate::interval::Class::Finite && vs.fin_pm());
-            if collapses {
-                return Some(Ex::Const);
+            let mut key = flat.clone();
+            key.push(crate::tokens::Tok(u32::MAX));
+            let hit = class_memo.borrow().get(&key).cloned();
+            let collapsed = match hit {
+                Some(v) => v,
+                None => {
+                    let strs = self.resolve_seq(&flat, ctx);
+                    let v = crate::interval::constant_collapse(&strs, &self.operators, !real)
+                        .then_some(Ex::Const);
+                    class_memo.borrow_mut().insert(key, v.clone());
+                    v
+                }
+            };
+            if collapsed.is_some() {
+                return collapsed;
             }
         }
         None

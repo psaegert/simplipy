@@ -1123,12 +1123,7 @@ model predictions.
   alone: the interval layer certifies a cell of constants on which the source is finite. A
   literal target keeps the class guard, a source finite only at the integers (`(-1)^c`) has no
   such cell, and one infinite on a band (`0^c`) is still out of a finite constant's reach. The
-  engine's own fold still collapses only the finite class. On the reduced length-4 mine the
-  `f64` and `real` files gain `acos`, `asin`, `acosh`, `atanh` and `log` of `<constant>` to
-  `<constant>`, which cover about 280 longer collapses and 21 (`f64`) and 31 (`real`) rules
-  such as `x * acos(c) -> c_t * x` that the mine no longer writes: with the evidence decision,
-  `f64` holds 589 rules (was 767), `real` 751 (913) and `permissive` 441 (400), every dropped
-  rule served by the rest.
+  engine's own fold reads the same criterion (below), so these collapses are the engine's.
 - **The most specific rule fires first.** At a node the engine fired the first rule of the
   node's head that matched, in file order, so a rule mined for a longer source never fired
   where a shorter rule that also matches stood before it. The `real` and `permissive` files
@@ -1158,6 +1153,14 @@ model predictions.
   (x >= 5.92) and NaN everywhere over the reals, so `real` and `permissive` no longer mine
   rules on it or on `acosh(tanh(x))`: `acosh(tanh(x)) -> acosh(erf(x))` and
   `atan(acosh(erf(x))) -> acosh(erf(x))` stay in `f64` alone.
+- **The engine collapses a constant-only subtree wherever the mint would.** The engine's own
+  fold collapsed a `<constant>`-bearing subtree only when its value class was finite, while
+  the mint certifies the collapse by the judge's criterion: the fitted constant owes a value
+  only where the source is finite. Both now read one function, `interval::constant_collapse`:
+  a cell of the free constants on which the subtree is finite, and no infinity it provably
+  reaches. So `log(c)`, `acos(c)`, `exp(log(c))` and `atan(atanh(c))` are `<constant>` in every
+  mode, `x * acos(c)` is `c * x`, and the mine has none of them to write; `(-1)^c`, finite only
+  at the integers, and `0^c`, infinite for c < 0, keep their form outside `permissive`.
 
 ### Removed
 
