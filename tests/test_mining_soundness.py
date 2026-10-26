@@ -2316,6 +2316,9 @@ class TestTheSidecarRecordsTheGates:
         assert isinstance(prov['gates']['unlicensed'], list)
         assert isinstance(prov['gates']['preempted'], list)
         assert prov['gates']['dead'] == []  # every mined rule fires on its own instance
+        assert isinstance(prov['gates']['overlaps'], list)
+        assert isinstance(prov['gates']['overlaps_refused'], list)
+        assert isinstance(prov['gates']['overlaps_beyond_cell'], int)
         assert prov['gates']['file'] == 'mined.json'
         assert set(prov['per_length']) == {'1', '2', '3'}
         for row in prov['per_length'].values():

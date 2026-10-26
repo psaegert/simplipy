@@ -1478,6 +1478,7 @@ class RuleMiner:
                              new_completions=len(_entries))
                 if not _entries:
                     break
+                _before = set(self._mode_rules(rule_mode))
                 outcomes, _, judge_loop = _lane(_entries, _timed_judge, _cprog)
                 _completion.append({'offered': len(_entries), 'outcomes': dict(outcomes),
                                     'judge_rounds': judge_loop['judge_rounds'],
@@ -1491,11 +1492,17 @@ class RuleMiner:
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                     _note_drops('prune_covered_completion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
-                if promote_sorts:
+                # Promotion takes `?`-sorted rules: the set is promoted already, so the
+                # completions alone are (promoting a promoted rule again dropped `max(1,
+                # cos(!0)) -> 1` and 37 more rows of the reduced length-4 real file).
+                _added = [r for r in self._mode_rules(rule_mode) if r not in _before]
+                if promote_sorts and _added:
                     from .promotion import promote
-                    kept, _ = promote(self._mode_rules(rule_mode), self.engine,
-                                      verbose=verbose, rule_mode=rule_mode)
-                    self._install(rule_mode, kept)
+                    kept, _ = promote(_added, self.engine, verbose=verbose, rule_mode=rule_mode)
+                    _added_set = set(_added)
+                    self._install(rule_mode, [r for r in self._mode_rules(rule_mode)
+                                              if r not in _added_set]
+                                  + [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept])
                     _note_drops('sort_promotion_completion',
                                 lambda _identity: 'derivable-refund')
                     if prune == 'covered':
@@ -1589,6 +1596,7 @@ class RuleMiner:
                                      'dead': gate['dead'],
                                      'overlaps': gate['overlaps'],
                                      'overlaps_refused': gate['overlaps_refused'],
+                                     'overlaps_beyond_cell': gate['overlaps_beyond_cell'],
                                      'file': os.path.basename(_path)}
                     # A rerun of this mine reuses the file as it is (`_finished_cell`).
                     prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
