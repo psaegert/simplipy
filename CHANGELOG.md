@@ -1153,8 +1153,9 @@ model predictions.
   float64 finds the source finite, its exact tails included; `real` and `permissive` judge over
   the reals, and certify there. `acosh(erf(x))` is finite only where float64 rounds erf to 1
   (x >= 5.92) and NaN everywhere over the reals, so `real` and `permissive` no longer mine
-  rules on it or on `acosh(tanh(x))`: `acosh(tanh(x)) -> acosh(erf(x))` and
-  `atan(acosh(erf(x))) -> acosh(erf(x))` stay in `f64` alone.
+  rules on it or on `acosh(tanh(x))` (`acosh(tanh(x)) -> acosh(erf(x))` and the 15 rules
+  `f(acosh(erf(x))) -> acosh(erf(x))` leave both files), while `f64` keeps them on both
+  (`atan(acosh(erf(x))) -> acosh(erf(x))`, `atan(acosh(tanh(x))) -> acosh(tanh(x))`).
 - **The engine collapses a constant-only subtree wherever the mint would.** The engine's own
   fold collapsed a `<constant>`-bearing subtree only when its value class was finite, while
   the mint certifies the collapse by the judge's criterion: the fitted constant owes a value
@@ -1167,7 +1168,12 @@ model predictions.
   already `<constant>`): `c^pi`, `c^e` and `c^2.5`, finite for c >= 0, are `<constant>`.
   With `acj-5-4-llm` no answer changes on the srbf ground truths or on a tenth of its
   predictions or of the training-data inputs, in any mode; with `acj-4-3` the 400-row corpus
-  walk rests 141,510 milli-bits cheaper on 11 rows, none dearer.
+  walk rests 141,510 milli-bits cheaper on 11 rows, none dearer. The reduced length-4 mine's
+  f64, real and permissive files hold 392, 543 and 425 rules (767, 913 and 400 before), 181,
+  182 and 162 of them with `<constant>` (582, 559 and 148): every rule they lose that has a
+  variable is served by the engine and the rest of the file, but for the `acosh(erf(x))`
+  family `real` and `permissive` no longer mine (below). Mined at seeds 42 and 7, the f64
+  file is byte-identical.
 - **The covered prune and the liveness gate read every alphabet.** Their probe instance for a
   wide placeholder wrapped it in `sin(x)`, which an engine without `sin` cannot read; it is
   now `1/(x + x')`, with a variable of its own, which every engine reads (the core language)
@@ -1190,7 +1196,14 @@ model predictions.
   it refuses (`gates.overlaps_refused`) with its tier and verdict, and count the overlaps
   beyond the cell (`gates.overlaps_beyond_cell`); `verify-mine` fails on the first
   (`overlaps`), reading the cell from the sidecar. The step prints its progress
-  (`[complete]`, `[gate]`).
+  (`[complete]`, `[gate]`). On the reduced length-4 mine it takes 11 s in f64, 41 s in real and
+  15 s in permissive (the whole mine takes 631, 1,238 and 1,186 s, 3,057 s against 3,774 before,
+  4 threads), and the f64 file lacks no completion the judge licenses. The real and permissive
+  files lack 20 and 7: ground overlaps whose completion has a composite target the mine never
+  writes (`asin(1) -> acos(0)`, 17 and 6), `ceil(1/cosh(x)) -> 1` (certified, then killed by
+  sort promotion's atom bar, where x = ±inf gives `ceil(0) = 0`), and in real `tan(asin(ceil(x)))
+  -> atanh(ceil(x))` and its `floor` twin, which the judge licenses and the mine does not
+  certify at `ceil(x) = ±1`.
 - **`simplipy find-rules --modes f64,real,permissive`** (and `find_rules(modes=...)`) mines
   only the listed modes, all three by default, and leaves the other files as they are; a mode
   mined beside an existing file reads it (`real` and `permissive` mine with the f64 file in
