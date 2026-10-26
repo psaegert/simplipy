@@ -1178,10 +1178,16 @@ model predictions.
   promoted with the rest, up to three rounds. `sin(acos(_0)) -> cos(asin(_0))` and
   `sin(acos(tanh(_0))) -> 1/cosh(_0)` overlap on `sin(acos(tanh(x)))`, and the mine now writes
   `cos(asin(tanh(_0))) -> 1/cosh(_0)`; `acos(cos(asin(_0)))` and `cos(asin(sin(_0)))` overlap
-  where the slot is `sin(x)`. The mine's final-gate line and sidecar (`gates.overlaps`) count
-  the completions the judge licenses that the file still lacks, and list those it refuses
-  (`gates.overlaps_refused`) with its tier and verdict; `verify-mine` fails on the first
-  (`overlaps`).
+  where the slot is `sin(x)`. Only completions within the mine's cell are offered, their
+  source no longer than the mine's sources: beyond it a completion overlaps the rules again at
+  a longer instance, and completion breeds without end (on the reduced length-4 mine's f64
+  file, offering every overlap took 543 rules to 1,022 in one round, and the next round
+  offered 13,772). The mine's final-gate line and sidecar (`gates.overlaps`) count the
+  completions within the cell that the judge licenses and the file still lacks, list those
+  it refuses (`gates.overlaps_refused`) with its tier and verdict, and count the overlaps
+  beyond the cell (`gates.overlaps_beyond_cell`); `verify-mine` fails on the first
+  (`overlaps`), reading the cell from the sidecar. The step prints its progress
+  (`[complete]`, `[gate]`).
 - **`simplipy find-rules --modes f64,real,permissive`** (and `find_rules(modes=...)`) mines
   only the listed modes, all three by default, and leaves the other files as they are; a mode
   mined beside an existing file reads it (`real` and `permissive` mine with the f64 file in

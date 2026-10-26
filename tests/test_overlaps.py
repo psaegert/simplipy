@@ -7,7 +7,7 @@ import yaml
 
 from simplipy import SimpliPyEngine
 from simplipy.engine import _CORE_SERIALIZATION_ARITIES
-from simplipy.mining import RuleMiner, _critical_instances, _unjoined_overlaps
+from simplipy.mining import RuleMiner, _critical_instances, _overlap_gate, _unjoined_overlaps
 
 ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
 
@@ -50,3 +50,25 @@ def test_the_unjoined_overlap_names_its_completion():
         == {('cos asin tanh x0', 'inv cosh x0')}, found
     rules.append((('cos', 'asin', 'tanh', '_0'), ('inv', 'cosh', '_0')))
     assert _unjoined_overlaps(_engine('real', rules), 'real', rules) == []
+
+
+def test_the_gate_judges_the_cell_and_counts_the_rest():
+    """The completion `cos asin tanh x0 -> inv cosh x0` has a four-token source: a mine of
+    sources to length 4 holds it, so the gate judges it; one of sources to length 3 does not
+    enumerate it, so the gate counts it beyond the cell and judges nothing."""
+    rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
+             (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
+    asked = []
+
+    def judge(pairs):
+        asked.extend(pairs)
+        return ['core'] * len(pairs)
+
+    engine = _engine('real', rules)
+    missing, refused, beyond = _overlap_gate(engine, 'real', rules, judge, max_source=4)
+    assert [' '.join(o['completion'][0]) for o in missing] == ['cos asin tanh x0'], missing
+    assert refused == [] and beyond == [] and len(asked) == 1
+    asked.clear()
+    missing, refused, beyond = _overlap_gate(engine, 'real', rules, judge, max_source=3)
+    assert missing == [] and refused == [] and asked == []
+    assert [' '.join(o['completion'][0]) for o in beyond] == ['cos asin tanh x0'], beyond

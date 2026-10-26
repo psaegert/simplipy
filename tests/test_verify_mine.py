@@ -146,29 +146,37 @@ def test_a_longer_rule_is_live_beside_its_prefix(tmp_path, mine) -> None:
     assert engine.simplify('sin acos x0'.split(), mode='real') == ['cos', 'asin', 'x0']
 
 
+def _length_4(side) -> None:
+    side['params']['max_source_pattern_length'] = 4
+
+
 def test_the_overlaps_gate(tmp_path, mine) -> None:
     """Two rules overlap on `sin(acos(tanh(x)))`: one takes it to `1/cosh(x)`, the other to
     `cos(asin(tanh(x)))`, and no rule joins the two. The completion the judge licenses,
-    `cos asin tanh x0 -> inv cosh x0`, is missing from the file, and the gate fails until it
-    is there."""
+    `cos asin tanh x0 -> inv cosh x0`, is missing from a file of sources to length 4, and the
+    gate fails until it is there; a file of sources to length 3 does not reach its source, so
+    there it lies beyond the cell and fails nothing."""
     rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
              (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
     ops = _acj_operators()
-    path = _plant(tmp_path, mine, 'real', rules)
+    path = _plant(tmp_path, mine, 'real', rules, _length_4)
     gate = _gate(verify_mine(path, 'real', ops, judge=core_judge), 'overlaps')
     assert not gate['ok'], gate
     assert {(' '.join(e['completion'][0]), ' '.join(e['completion'][1]))
             for e in gate['examples']} == {('cos asin tanh x0', 'inv cosh x0')}, gate
     completed = rules + [(('cos', 'asin', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
-    path = _plant(tmp_path, mine, 'real', completed)
+    path = _plant(tmp_path, mine, 'real', completed, _length_4)
     assert _gate(verify_mine(path, 'real', ops, judge=core_judge), 'overlaps')['ok']
 
     def refuse(pairs):
         return ['reject'] * len(pairs)
 
-    path = _plant(tmp_path, mine, 'real', rules)
+    path = _plant(tmp_path, mine, 'real', rules, _length_4)
     report = verify_mine(path, 'real', ops, judge=refuse)
     assert _gate(report, 'overlaps')['ok'] and len(report['overlaps_refused']) == 1, report
+    path = _plant(tmp_path, mine, 'real', rules)
+    report = verify_mine(path, 'real', ops, judge=core_judge)
+    assert _gate(report, 'overlaps')['ok'] and report['overlaps_beyond_cell'] == 1, report
 
 
 def test_the_translation_gate(tmp_path, mine) -> None:

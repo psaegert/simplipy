@@ -178,7 +178,8 @@ def main(argv: str = None) -> None:
             for name, gate in report['gates'].items():
                 print(f'{"ok  " if gate["ok"] else "FAIL"} {name}: {gate["count"]}'
                       + ('' if gate['ok'] else f'  e.g. {gate["examples"][:3]}'))
-            print(f'     overlaps the judge refuses: {len(report["overlaps_refused"])}')
+            print(f'     overlaps the judge refuses: {len(report["overlaps_refused"])}; '
+                  f'beyond the cell: {report["overlaps_beyond_cell"]}')
             if args.report:
                 with open(args.report, 'w') as f:
                     json.dump(report, f, indent=2)

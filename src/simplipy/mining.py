@@ -675,7 +675,7 @@ def _critical_instances(rules: Any, arity: dict) -> list[tuple[int, list[str], l
     return out
 
 
-def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any) -> list[dict]:
+def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any, prog: Any = None) -> list[dict]:
     """THE OVERLAPS THAT DO NOT JOIN: where two rules overlap at an instance of row ``i``'s left
     side (a critical instance, ``_critical_instances``, or the row's own generic instance,
     each slot a variable), the engine's answer on the instance with the row
@@ -683,7 +683,8 @@ def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any) -> list[dict]:
     than its answer on the row's right side (``B``). Each is listed with the rule completion
     would add between the two, the dearer state to the cheaper one in the serve ordering:
     ``{rule, instance, other_path, rhs_path, completion}``, once per completion. An instance
-    no other path moves (``A`` is the rule-less answer) is no overlap."""
+    no other path moves (``A`` is the rule-less answer) is no overlap. ``prog`` (a
+    :class:`~simplipy.progress.Progress`) reports the instances as they are read."""
     from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants
     core = engine._core
     rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
@@ -694,7 +695,8 @@ def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any) -> list[dict]:
         instances += [(i, list(vl), list(vr)) for vl, vr in _coverage_variants(
             lhs, rhs, rule_mode, non_finite=False, composite=False)]
     out, seen, done = [], set(), set()
-    for i, instance, rhs_instance in instances:
+    for i, instance, rhs_instance in (instances if prog is None
+                                      else prog.track(instances, 'overlap instances')):
         if (i, tuple(instance)) in seen:
             continue
         seen.add((i, tuple(instance)))
@@ -719,15 +721,27 @@ def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any) -> list[dict]:
     return out
 
 
+def _in_cell(overlap: dict, max_source: int | None) -> bool:
+    """Is the overlap's completion a rule of the mine's cell: its source no longer than the
+    mine's sources (``max_source``, None for no bound)? A longer source lies outside the
+    universe the mine enumerates, and completing there breeds without end: each completion
+    overlaps the rules again at a longer instance."""
+    return max_source is None or len(overlap['completion'][0]) <= max_source
+
+
 def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
-                  verdicts: Callable | None = None) -> tuple[list, list]:
-    """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) is judged as
-    the rule completion would add. -> ``(missing, refused)``: the completions the judge
-    licenses in the mode, which the file lacks (expected empty), and those it refuses, each
-    with the judge's tier and, with ``verdicts`` (``judge_verdicts``), its verdict."""
+                  verdicts: Callable | None = None, max_source: int | None = None,
+                  prog: Any = None) -> tuple[list, list, list]:
+    """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) within the
+    mine's cell (``_in_cell``) is judged as the rule completion would add. -> ``(missing,
+    refused, beyond)``: the completions the judge licenses in the mode, which the file lacks
+    (expected empty), those it refuses, each with the judge's tier and, with ``verdicts``
+    (``judge_verdicts``), its verdict, and the overlaps whose completion lies beyond the cell,
+    unjudged."""
+    started = time.monotonic()
     unjoined = _unjoined_overlaps(engine, rule_mode, rules)
-    if not unjoined:
-        return [], []
+    beyond = [o for o in unjoined if not _in_cell(o, max_source)]
+    unjoined = [o for o in unjoined if _in_cell(o, max_source)]
     pairs = []
     for o in unjoined:
         src, tgt = o['completion']
@@ -735,7 +749,10 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
         both, _ = remap_expression(list(src) + list(tgt), names, variable_prefix='?')
         pairs.append((tuple(both[:len(src)]), tuple(both[len(src):])))
     distinct = list(dict.fromkeys(pairs))
-    tier_of = dict(zip(distinct, judge(distinct)))
+    tier_of = dict(zip(distinct, judge(distinct))) if distinct else {}
+    if prog is not None:
+        prog.stage('overlap gate', unjoined=len(unjoined), beyond_the_cell=len(beyond),
+                   judged=len(distinct), seconds=round(time.monotonic() - started, 1))
     allowed = _mode_tiers(rule_mode)
     off = [pair for pair in distinct if tier_of[pair] not in allowed]
     verdict_of = dict(zip(off, verdicts(off))) if verdicts is not None and off else {}
@@ -746,7 +763,7 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
             missing.append({**o, 'tier': tier})
         else:
             refused.append({**o, 'tier': tier, 'verdict': verdict_of.get(pair)})
-    return missing, refused
+    return missing, refused, beyond
 
 
 class RuleMiner:
@@ -1161,7 +1178,8 @@ class RuleMiner:
         # in its own right (see `snapshot_at`). Running the IDENTICAL block for every cell is
         # what makes a snapshot equal to a one-shot mine of that cell; a second copy of these
         # stages would be free to drift from this one.
-        def _finalize(mined: list, out_path: str | None, prov: dict | None) -> list:
+        def _finalize(mined: list, out_path: str | None, prov: dict | None,
+                      cell_source_length: int = max_source_pattern_length) -> list:
             self._install(rule_mode, list(mined))
             # --- Census reconciliation state -------------------------------------
             # The proposal census is written at CERTIFICATION time, upstream of four
@@ -1186,7 +1204,8 @@ class RuleMiner:
                     if identity not in _drops and identity not in alive:
                         _drops[identity] = (stage, reason_of(identity))
 
-            def _lane(entries: list) -> tuple[dict, list, dict]:
+            def _lane(entries: list, lane_judge: Callable | None = None,
+                      prog: Any = None) -> tuple[dict, list, dict]:
                 """Certify one batch through the proposal channel and merge it."""
                 outcomes, trail, judge_loop = self._certify_proposals(
                     entries, library,
@@ -1194,7 +1213,7 @@ class RuleMiner:
                     dummy_variables, X_data, X_confirm, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries, rtol, atol,
                     min_informative, mine_seed, confirm_seed, verbose, rule_mode,
-                    judge, judged)
+                    lane_judge or judge, judged, prog=prog)
                 # Arm the census watch on the pairs the census currently calls certified.
                 # `deduplicate_rules` has already folded the batch in, so a pair missing
                 # from the ruleset ALREADY lost the merge -- attributed here, not left to
@@ -1426,21 +1445,45 @@ class RuleMiner:
             # hint arm, stage-2 confirmation and judge loop, nothing bespoke. It runs on the
             # promoted set, as the overlaps a stronger sort opens exist only there, and what it
             # certifies goes through the same prune and promotion. A certified completion can
-            # overlap again, so the pass repeats, at most `_COMPLETION_ROUNDS` times.
+            # overlap again, so the pass repeats, at most `_COMPLETION_ROUNDS` times. Only
+            # completions within the mine's cell are offered (`_in_cell`): a longer source lies
+            # outside the universe the mine enumerates, and completing there breeds without
+            # end: on the reduced length-4 f64 mine, offering every unjoined overlap took the file
+            # from 543 rules to 1,022 in one round, and the next round offered 13,772.
             _completion: list = []
             _tried: set = set()
+            from .progress import Progress
+            _cprog = Progress(verbose, prefix='  [complete] ')
+
+            def _timed_judge(pairs: list) -> list:
+                _t0 = time.monotonic()
+                _cprog.write(f'judging {len(pairs)} pairs')
+                tiers = judge(pairs)
+                _cprog.write(f'judged {len(pairs)} pairs in {time.monotonic() - _t0:.1f}s')
+                return tiers
+
             for _round in range(_COMPLETION_ROUNDS if not interrupted() else 0):
+                _t_round = time.monotonic()
                 _entries = []
-                for o in _unjoined_overlaps(self.engine, rule_mode, self._mode_rules(rule_mode)):
+                _unjoined = _unjoined_overlaps(self.engine, rule_mode,
+                                               self._mode_rules(rule_mode), prog=_cprog)
+                _within = [o for o in _unjoined if _in_cell(o, cell_source_length)]
+                for o in _within:
                     pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
                     if pair not in _tried:
                         _tried.add(pair)
                         _entries.append(pair)
+                _cprog.stage(f'round {_round + 1}', rules=len(self._mode_rules(rule_mode)),
+                             unjoined=len(_unjoined), within_the_cell=len(_within),
+                             new_completions=len(_entries))
                 if not _entries:
                     break
-                outcomes, _, judge_loop = _lane(_entries)
+                outcomes, _, judge_loop = _lane(_entries, _timed_judge, _cprog)
                 _completion.append({'offered': len(_entries), 'outcomes': dict(outcomes),
-                                    'judge_rounds': judge_loop['judge_rounds']})
+                                    'judge_rounds': judge_loop['judge_rounds'],
+                                    'seconds': round(time.monotonic() - _t_round, 1)})
+                _cprog.stage(f'round {_round + 1} certified', **dict(outcomes),
+                             seconds=round(time.monotonic() - _t_round, 1))
                 if not outcomes['certified']:
                     break
                 if prune == 'covered':
@@ -1499,10 +1542,14 @@ class RuleMiner:
             # The overlap gate on what ships (expected no licensed completion missing): the
             # overlaps that do not join, the judge-licensed completions the file lacks and the
             # refused ones with the judge's reason, recorded, not dropped.
-            gate['overlaps'], gate['overlaps_refused'] = _overlap_gate(
+            from .progress import Progress
+            gate['overlaps'], gate['overlaps_refused'], _beyond = _overlap_gate(
                 self.engine, rule_mode, final, judge,
                 functools.partial(judge_verdicts, processes=judge_processes,
-                                  warn_s=judge_warn_s, fail_s=judge_fail_s))
+                                  warn_s=judge_warn_s, fail_s=judge_fail_s),
+                max_source=cell_source_length,
+                prog=Progress(verbose, prefix='  [gate] '))
+            gate['overlaps_beyond_cell'] = len(_beyond)
             for lane_outcomes, lane_trail, lane_watch in _lanes:
                 if lane_watch:
                     _reconcile_proposal_census(
@@ -1516,7 +1563,8 @@ class RuleMiner:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
                       f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
                       f'{len(gate["overlaps"])} unjoined overlaps '
-                      f'({len(gate["overlaps_refused"])} more refused by the judge), '
+                      f'({len(gate["overlaps_refused"])} more refused by the judge, '
+                      f'{gate["overlaps_beyond_cell"]} beyond the cell), '
                       f'{len(final)} rules')
             if out_path is not None:
                 _path = _triple_paths(out_path)[file_mode]
@@ -1784,7 +1832,8 @@ class RuleMiner:
                     print(f'--- ladder snapshot: cell ({length},{max_target_pattern_length})'
                           f' -> {snapshot_at[length]}')
                 _finalize(list(rules), snapshot_at[length],
-                          self._snapshot_provenance(provenance, length, max_source_pattern_length))
+                          self._snapshot_provenance(provenance, length, max_source_pattern_length),
+                          cell_source_length=length)
                 # `_finalize` prunes/promotes the engine's own rule state; put the raw mine back.
                 self._install(rule_mode, rules)
 
@@ -2200,9 +2249,11 @@ class RuleMiner:
             verbose: bool,
             rule_mode: str,
             judge: Callable,
-            judged: dict) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, Any]]:
+            judged: dict,
+            prog: Any = None) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, Any]]:
         """The proposal channel of :meth:`find_rules`: certify externally proposed rules
-        against the just-mined rule state and merge the survivors.
+        against the just-mined rule state and merge the survivors. ``prog`` (a
+        :class:`~simplipy.progress.Progress`) reports the certification as it runs.
 
         PLUMBING ONLY -- no new certification semantics. Each proposal runs the exact
         chain of :meth:`certify_rules` (vocabulary/validity check; shortest-first scan
@@ -2281,7 +2332,10 @@ class RuleMiner:
             return len(trail) - 1
 
         pending: dict[int, dict[str, Any]] = {}
-        for index, (source, hint) in enumerate(proposal_entries):
+        indexed = list(enumerate(proposal_entries))
+        if prog is not None:
+            indexed = prog.track(indexed, 'certify')
+        for index, (source, hint) in indexed:
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
                 continue
             # The engine's own result is the MARK TO BEAT, never a reason to skip:
@@ -2845,8 +2899,10 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       rule's left side to its right side or below (``_dead_rules``); a rule another rule
       shadows on its own instance ships and never decides an answer;
     - ``overlaps``: where two rules overlap and the paths do not join, the completion the
-      judge licenses is in the file (``_overlap_gate``); the completions the judge refuses
-      are listed under ``overlaps_refused`` with its tier and verdict, and fail nothing;
+      judge licenses is in the file (``_overlap_gate``), within the mine's cell (a completion
+      source no longer than the sidecar's ``max_source_pattern_length``); the completions the
+      judge refuses are listed under ``overlaps_refused`` with its tier and verdict, those
+      beyond the cell are counted under ``overlaps_beyond_cell``, and neither fails;
     - ``translation``: the mode's load subsumes and drops nothing;
     - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
       prices each as this engine does;
@@ -2892,10 +2948,11 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     gates['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
                           if _preempted_by(engine, lhs, rhs, mode)]
     gates['dead'] = _dead_rules(engine, rule_mode, rules)
-    gates['overlaps'], overlaps_refused = _overlap_gate(
+    gates['overlaps'], overlaps_refused, beyond = _overlap_gate(
         engine, rule_mode, rules,
         judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
-        functools.partial(judge_verdicts, processes=judge_processes))
+        functools.partial(judge_verdicts, processes=judge_processes),
+        max_source=(sidecar.get('params') or {}).get('max_source_pattern_length'))
     _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
     gates['translation'] = ([{'subsumed': subsumed, 'dropped': dropped}]
                             if subsumed or dropped else [])
@@ -2921,7 +2978,8 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
               for name, found in gates.items()}
     return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
-            'gates': report, 'overlaps_refused': overlaps_refused}
+            'gates': report, 'overlaps_refused': overlaps_refused,
+            'overlaps_beyond_cell': len(beyond)}
 
 
 def _offered_pins_broken(rules_path: str, offered: Any) -> list:
