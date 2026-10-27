@@ -164,132 +164,29 @@ pub(crate) fn ccosh(z: Complex) -> Complex {
 /// THE C RUNTIME'S COMPLEX PRODUCT AND QUOTIENT. A C compiler multiplies `(a + bi)(c + di)` as
 /// `(ac - bd) + (ad + bc)i` and calls the runtime's `__muldc3` only when both parts come out
 /// NaN (C99 Annex G's recovery of infinities); it divides by calling the runtime's `__divdc3`.
-/// The two are written out here, as libgcc (GCC 12 and later) computes them, rather than bound
-/// (the product: Annex G's recovery; the quotient: Smith's 1962 method with the scaling of
-/// Baudin and Smith 2012, the published algorithms libgcc implements):
-/// a Rust library carries `compiler_builtins`' own `__divdc3` (LLVM's, scaling by `logb`), which
-/// rounds differently, so linking the symbol would not reach libgcc's. Measured bit-identical to
-/// the host libgcc_s (GCC 15.2) on 200,000 random operand quadruples, extremes, zeros,
-/// infinities and NaN included.
+/// Both are called here, not written out. On Linux they are libgcc's, the ones the compiled
+/// scipy kernels call there, bound by their versioned names: a Rust library also carries
+/// `compiler_builtins`' own `__divdc3` and `__muldc3` (LLVM's, whose quotient rounds
+/// differently), and an unversioned reference resolves to those. Elsewhere the unversioned
+/// names are bound: LLVM's routines, `compiler_builtins`' or the system's compiler-rt.
 mod runtime {
     use super::Complex;
 
-    /// C99 Annex G, G.5.1: recover the infinities a NaN + NaN product hides.
-    pub(super) fn muldc3(mut a: f64, mut b: f64, mut c: f64, mut d: f64) -> Complex {
-        let (ac, bd, ad, bc) = (a * c, b * d, a * d, b * c);
-        let mut x = ac - bd;
-        let mut y = ad + bc;
-        if x.is_nan() && y.is_nan() {
-            let mut recalc = false;
-            let box_ = |v: f64| if v.is_infinite() { 1.0f64 } else { 0.0 }.copysign(v);
-            let unnan = |v: f64| if v.is_nan() { 0.0f64.copysign(v) } else { v };
-            if a.is_infinite() || b.is_infinite() {
-                a = box_(a);
-                b = box_(b);
-                c = unnan(c);
-                d = unnan(d);
-                recalc = true;
-            }
-            if c.is_infinite() || d.is_infinite() {
-                c = box_(c);
-                d = box_(d);
-                a = unnan(a);
-                b = unnan(b);
-                recalc = true;
-            }
-            if !recalc
-                && (ac.is_infinite() || bd.is_infinite() || ad.is_infinite() || bc.is_infinite())
-            {
-                a = unnan(a);
-                b = unnan(b);
-                c = unnan(c);
-                d = unnan(d);
-                recalc = true;
-            }
-            if recalc {
-                x = f64::INFINITY * (a * c - b * d);
-                y = f64::INFINITY * (a * d + b * c);
-            }
-        }
-        Complex { re: x, im: y }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[link(name = "gcc_s")]
+    extern "C" {
+        #[link_name = "__muldc3@GCC_4.0.0"]
+        pub(super) fn muldc3(a: f64, b: f64, c: f64, d: f64) -> Complex;
+        #[link_name = "__divdc3@GCC_4.0.0"]
+        pub(super) fn divdc3(a: f64, b: f64, c: f64, d: f64) -> Complex;
     }
 
-    /// Smith's method with libgcc's scaling: halve near overflow, scale up by `1/eps` when the
-    /// larger divisor part or a subnormal numerator part would lose bits, and the `ratio`
-    /// underflow branch; then Annex G's recovery of zero divisors and infinite parts.
-    pub(super) fn divdc3(mut a: f64, mut b: f64, mut c: f64, mut d: f64) -> Complex {
-        const RBIG: f64 = f64::MAX / 2.0;
-        const RMIN: f64 = f64::MIN_POSITIVE;
-        const RMIN2: f64 = f64::EPSILON;
-        const RMINSCAL: f64 = 1.0 / f64::EPSILON;
-        const RMAX2: f64 = RBIG * RMIN2;
-        let (x, y);
-        // the parts are named so the larger divisor part is `big` and the other `small`
-        let swap = c.abs() < d.abs();
-        let big = if swap { d } else { c };
-        if big.abs() >= RBIG {
-            a /= 2.0;
-            b /= 2.0;
-            c /= 2.0;
-            d /= 2.0;
-        }
-        let big = if swap { d } else { c };
-        if big.abs() < RMIN2
-            || (a.abs() < RMIN && b.abs() < RMAX2 && big.abs() < RMAX2)
-            || (b.abs() < RMIN && a.abs() < RMAX2 && big.abs() < RMAX2)
-        {
-            a *= RMINSCAL;
-            b *= RMINSCAL;
-            c *= RMINSCAL;
-            d *= RMINSCAL;
-        }
-        if swap {
-            let ratio = c / d;
-            let denom = c * ratio + d;
-            if ratio.abs() > RMIN {
-                x = (a * ratio + b) / denom;
-                y = (b * ratio - a) / denom;
-            } else {
-                x = (c * (a / d) + b) / denom;
-                y = (c * (b / d) - a) / denom;
-            }
-        } else {
-            let ratio = d / c;
-            let denom = d * ratio + c;
-            if ratio.abs() > RMIN {
-                x = (b * ratio + a) / denom;
-                y = (b - a * ratio) / denom;
-            } else {
-                x = (a + d * (b / c)) / denom;
-                y = (b - d * (a / c)) / denom;
-            }
-        }
-        if x.is_nan() && y.is_nan() {
-            if c == 0.0 && d == 0.0 && (!a.is_nan() || !b.is_nan()) {
-                let inf = f64::INFINITY.copysign(c);
-                return Complex {
-                    re: inf * a,
-                    im: inf * b,
-                };
-            }
-            if (a.is_infinite() || b.is_infinite()) && c.is_finite() && d.is_finite() {
-                let a = if a.is_infinite() { 1.0f64 } else { 0.0 }.copysign(a);
-                let b = if b.is_infinite() { 1.0f64 } else { 0.0 }.copysign(b);
-                return Complex {
-                    re: f64::INFINITY * (a * c + b * d),
-                    im: f64::INFINITY * (b * c - a * d),
-                };
-            }
-            if (c.is_infinite() || d.is_infinite()) && a.is_finite() && b.is_finite() {
-                let c = if c.is_infinite() { 1.0f64 } else { 0.0 }.copysign(c);
-                let d = if d.is_infinite() { 1.0f64 } else { 0.0 }.copysign(d);
-                return Complex {
-                    re: 0.0 * (a * c + b * d),
-                    im: 0.0 * (b * c - a * d),
-                };
-            }
-        }
-        Complex { re: x, im: y }
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    extern "C" {
+        #[link_name = "__muldc3"]
+        pub(super) fn muldc3(a: f64, b: f64, c: f64, d: f64) -> Complex;
+        #[link_name = "__divdc3"]
+        pub(super) fn divdc3(a: f64, b: f64, c: f64, d: f64) -> Complex;
     }
 }
 
@@ -299,7 +196,8 @@ pub(crate) fn cmul(a: f64, b: f64, c: f64, d: f64) -> Complex {
     let x = a * c - b * d;
     let y = a * d + b * c;
     if x.is_nan() && y.is_nan() {
-        return runtime::muldc3(a, b, c, d);
+        // SAFETY: a pure C runtime function of four doubles.
+        return unsafe { runtime::muldc3(a, b, c, d) };
     }
     Complex { re: x, im: y }
 }
@@ -307,10 +205,12 @@ pub(crate) fn cmul(a: f64, b: f64, c: f64, d: f64) -> Complex {
 /// `(a + bi) / (c + di)` as a C compiler computes it (see `runtime`).
 #[inline]
 pub(crate) fn cdiv(a: f64, b: f64, c: f64, d: f64) -> Complex {
-    runtime::divdc3(a, b, c, d)
+    // SAFETY: a pure C runtime function of four doubles.
+    unsafe { runtime::divdc3(a, b, c, d) }
 }
 
-#[cfg(test)]
+// The expected values are libgcc's, the runtime bound on Linux.
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 mod tests {
     use super::*;
 

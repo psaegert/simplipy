@@ -1218,6 +1218,14 @@ model predictions.
   grouped display now writes each number exactly, as the tokens do,
   `sin(3.1415926535897e37*(x1*x2)/3313)^2`, and reads back bit for bit. The default display
   still writes the float.
+- **`besselj` multiplies and divides complex numbers with the C runtime's own routines.** The
+  f64 kernel computes as the C++ it ports, whose complex product and quotient are the runtime's
+  `__muldc3` and `__divdc3`; it carried a transcription of libgcc's, and now calls them:
+  libgcc's on Linux, bound by version as scipy's compiled kernels bind them, and LLVM's on
+  macOS and Windows. On Linux nothing changes: 40 million random and edge-case operand sets
+  give the same values, and `besselj` the same bits on a million points. LLVM's quotient
+  rounds differently (its product is the same), so on macOS and Windows `besselj` differs
+  from Linux at about 9% of points, by 4.5e-16 relative at the median and 1e-10 at most.
 
 ### Removed
 
