@@ -42,8 +42,8 @@
 use crate::operators::Operators;
 use astro_float::{BigFloat, Consts, RoundingMode, INF_NEG, INF_POS, NAN};
 
-mod besselj;
-mod special;
+pub(crate) mod besselj;
+pub(crate) mod special;
 
 /// Re-export for callers that rank arbiter values without naming the backing crate
 /// (worker's literal resolution).
@@ -58,7 +58,7 @@ const P: usize = 1024;
 /// those true identities). A genuine pole/literal inf stays inf at every rung; only doubly-
 /// exponential saturations (`atanh(tanh(cosh(x)))`) never resolve and are treated as poles.
 const P_INF: usize = 4096;
-const RM: RoundingMode = RoundingMode::ToEven;
+pub(crate) const RM: RoundingMode = RoundingMode::ToEven;
 /// Escalate a candidate only when it fails f64 on at most this fraction of the instance's
 /// binding rows (the rows where the source is finite). This is the SINGLE near-miss gate:
 /// it selects candidates that are close to the source on the finite evidence, and because
@@ -758,7 +758,7 @@ const MAX_DPS: i32 = 2000;
 /// Decimal digits -> binary precision, mpmath's own mapping (`round((dps + 1) * log2 10)`),
 /// so a rung computed here lands on exactly the precision the Python judge would use:
 /// 50 -> 169, 120 -> 402, 250 -> 834.
-fn dps_to_prec(dps: i32) -> usize {
+pub(crate) fn dps_to_prec(dps: i32) -> usize {
     (f64::from(dps + 1) * 3.321_928_094_887_362_6)
         .round()
         .max(1.0) as usize
@@ -880,7 +880,7 @@ fn render_atom(a: &ProbeAtom, p: usize, cc: &mut Consts) -> BigFloat {
 }
 
 /// Round `v` to `p` bits (astro-float ops round their result to the requested precision).
-fn round_to(v: BigFloat, p: usize) -> BigFloat {
+pub(crate) fn round_to(v: BigFloat, p: usize) -> BigFloat {
     v.add(&small_int(0, p), p, RM)
 }
 
@@ -888,7 +888,7 @@ fn round_to(v: BigFloat, p: usize) -> BigFloat {
 /// `p` -- mirroring mpmath's correctly-rounded `mp.power`.
 /// (The rescue path's `powi` may double-round; the probe's whole point is that `pow3(x)` and
 /// `pow2(x)*x` round APART at the rung, so its own powers must be single-rounded.)
-fn powi_sr(x: &BigFloat, k: u64, p: usize) -> BigFloat {
+pub(crate) fn powi_sr(x: &BigFloat, k: u64, p: usize) -> BigFloat {
     let g = p + 128;
     let mut acc = x.clone();
     for _ in 1..k {
@@ -929,7 +929,7 @@ struct CtCtx {
     cc: Consts,
 }
 
-fn pow10(k: i32, p: usize) -> BigFloat {
+pub(crate) fn pow10(k: i32, p: usize) -> BigFloat {
     let ten = small_int(10, p);
     let mut acc = one(p);
     for _ in 0..k.unsigned_abs() {
@@ -942,19 +942,19 @@ fn pow10(k: i32, p: usize) -> BigFloat {
     }
 }
 
-fn bf(v: f64, p: usize) -> BigFloat {
+pub(crate) fn bf(v: f64, p: usize) -> BigFloat {
     BigFloat::from_f64(v, p)
 }
 
-fn cmp_gt(a: &BigFloat, b: &BigFloat) -> bool {
+pub(crate) fn cmp_gt(a: &BigFloat, b: &BigFloat) -> bool {
     a.cmp(b).is_some_and(|o| o > 0)
 }
 
-fn cmp_lt(a: &BigFloat, b: &BigFloat) -> bool {
+pub(crate) fn cmp_lt(a: &BigFloat, b: &BigFloat) -> bool {
     a.cmp(b).is_some_and(|o| o < 0)
 }
 
-fn is_pos(x: &BigFloat) -> bool {
+pub(crate) fn is_pos(x: &BigFloat) -> bool {
     !x.is_negative() && !x.is_zero()
 }
 
@@ -1131,7 +1131,7 @@ fn ct_pow(a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<BigFloat> {
 
 /// `a^b` for finite a > 0: single-rounded -- `powi_sr` on small integer exponents (keeps
 /// dyadic exactness: pow2(1/2) == 1/4 exactly), `pow_pos_base` guard-bit exp/ln otherwise.
-fn pow_finite_pos(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
+pub(crate) fn pow_finite_pos(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
     if b.is_int() && !cmp_gt(&b.abs(), &bf(64.0, p)) {
         let k = i64_of(b).unwrap_or(0);
         if k > 0 {
@@ -2194,16 +2194,16 @@ pub fn contract_point_verdict(
     }
 }
 
-fn small_int(n: u64, p: usize) -> BigFloat {
+pub(crate) fn small_int(n: u64, p: usize) -> BigFloat {
     BigFloat::from_u64(n, p)
 }
 
-fn one(p: usize) -> BigFloat {
+pub(crate) fn one(p: usize) -> BigFloat {
     small_int(1, p)
 }
 
 /// `x^(1/n)` for ODD n, sign-folded like `numeric::real_odd_root` (always real).
-fn odd_root(x: &BigFloat, n: u64, p: usize, cc: &mut Consts) -> BigFloat {
+pub(crate) fn odd_root(x: &BigFloat, n: u64, p: usize, cc: &mut Consts) -> BigFloat {
     if n == 3 {
         return x.cbrt(p, RM);
     }
@@ -2224,7 +2224,7 @@ fn odd_root(x: &BigFloat, n: u64, p: usize, cc: &mut Consts) -> BigFloat {
 /// precision stay bounded, and `p + 64` guard bits keep the relative error orders of
 /// magnitude below every tolerance used in this module (>= CERT_ATOL = 1e-280), which is
 /// all the tolerance-gated judging needs -- correctly-rounded pow was never required.
-fn pow_pos_base(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
+pub(crate) fn pow_pos_base(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
     let g = p + 64;
     let l = a.ln(g, RM, cc);
     b.mul(&l, g, RM).exp(g, RM, cc)

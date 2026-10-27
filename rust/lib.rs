@@ -357,6 +357,7 @@ mod interval;
 mod numeric;
 mod operators;
 mod rules;
+mod table;
 mod tokens;
 mod utils;
 mod worker;
@@ -2212,10 +2213,151 @@ fn kernel_binary(
     .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// A value's interchange spec (`table::val_spec`): `(kind, a, b)`.
+type TableSpec = (String, String, String);
+
+/// What `TableExpr.eval_real` returns: the value's spec, then Unresolved, snapped, an infinite
+/// intermediate, and the largest and smallest nonzero finite intermediates' specs.
+type TableReal = (TableSpec, bool, bool, bool, TableSpec, TableSpec);
+
+/// An expression compiled against THE TABLE (`table`): each mode's values, defined once in the
+/// core. The contract judge evaluates every point through it.
+#[pyclass(name = "TableExpr", module = "simplipy._core")]
+struct PyTableExpr {
+    inner: table::Expr,
+}
+
+#[pymethods]
+impl PyTableExpr {
+    /// Compile the prefix `tokens`; a token in `names` is a free name, an operator of `arity` an
+    /// operation, anything else a literal (`ValueError` naming one the table cannot read).
+    #[new]
+    fn new(
+        tokens: Vec<String>,
+        names: Vec<String>,
+        arity: std::collections::BTreeMap<String, u8>,
+    ) -> PyResult<Self> {
+        let arity: std::collections::HashMap<String, u8> = arity.into_iter().collect();
+        table::Expr::compile(&tokens, &names, &arity)
+            .map(|inner| PyTableExpr { inner })
+            .map_err(PyValueError::new_err)
+    }
+
+    /// The free names, in the order `eval_real` and `eval_f64` take their values.
+    #[getter]
+    fn names(&self) -> Vec<String> {
+        self.inner.names.clone()
+    }
+
+    /// The REAL value at `env` (one interchange spec per name, `table::val_from_spec`) at `dps`
+    /// decimal digits: see `TableReal`.
+    fn eval_real(&self, py: Python<'_>, env: Vec<TableSpec>, dps: i32) -> PyResult<TableReal> {
+        py.detach(|| {
+            let mut ctx = table::Ctx::new(dps).ok_or("no constants context")?;
+            let mut vals = Vec::with_capacity(env.len());
+            for (k, a, b) in &env {
+                vals.push(
+                    table::val_from_spec(k, a, b, &mut ctx)
+                        .ok_or_else(|| format!("unreadable value spec ({k}, {a}, {b})"))?,
+                );
+            }
+            let out = self
+                .inner
+                .eval_real(&vals, dps)
+                .ok_or("no constants context")?;
+            let value = match &out.value {
+                Some(v) => table::val_spec(v),
+                None => ("nan".to_string(), String::new(), String::new()),
+            };
+            Ok::<TableReal, String>((
+                value,
+                out.value.is_none(),
+                out.snapped,
+                out.inf_node,
+                table::bf_spec(&out.max_mag),
+                table::bf_spec(&out.min_mag),
+            ))
+        })
+        .map_err(PyValueError::new_err)
+    }
+
+    /// The f64 value at `env` and whether every operation stayed in range (the range standard).
+    fn eval_f64(&self, env: Vec<f64>) -> PyResult<(f64, bool)> {
+        self.inner
+            .eval_f64(&env)
+            .ok_or_else(|| PyValueError::new_err("an operator the f64 kernels do not know"))
+    }
+}
+
+/// THE TABLE's real reading of a literal token (`table::literal_real`): `(kind, a, b)` or `None`.
+#[pyfunction]
+fn table_literal_real(token: &str) -> Option<TableSpec> {
+    table::literal_real(token)
+}
+
+/// THE TABLE's f64 reading of a literal token: the nearest double, or `None`.
+#[pyfunction]
+fn table_literal_f64(token: &str) -> Option<f64> {
+    table::literal_f64(token)
+}
+
+/// THE TABLE's quantifier of a slot sort (`table::sort_atoms`): `[(spec, tag)]`, the tag `real`,
+/// `atom` (a non-finite binding judged with no excuse) or `null` (owed nothing).
+#[pyfunction]
+fn table_sort_atoms(sort: &str, permissive: bool) -> PyResult<Vec<(TableSpec, String)>> {
+    let mut chars = sort.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return Err(PyValueError::new_err(format!(
+            "a sort is one character: {sort:?}"
+        )));
+    };
+    Ok(table::sort_atoms(c, permissive)
+        .iter()
+        .map(|(leaf, tag)| (table::leaf_spec(leaf), tag.to_string()))
+        .collect())
+}
+
+/// THE TABLE's class comparison of two values' kinds (`"nan"`, `"+inf"`, `"-inf"`, `"fin"`):
+/// `eq`, `EXT`, `SHRINK`, `INF-CHANGE`, or `None` when both are finite.
+#[pyfunction]
+fn table_compare_classes(left: &str, right: &str) -> Option<&'static str> {
+    table::compare_classes(left, right).map(|c| c.name())
+}
+
+/// THE TABLE's f64 agreement of two doubles (F6): `eq`, `EXT`, `SHRINK`, `INF-CHANGE` or
+/// `REAL-CHANGE`.
+#[pyfunction]
+fn table_f64_agree(a: f64, b: f64) -> &'static str {
+    table::f64_agree(a, b).name()
+}
+
+/// The structural f64 comparison (has the deployed algebra diverged?).
+#[pyfunction]
+fn table_f64_structural(a: f64, b: f64) -> &'static str {
+    table::f64_structural(a, b).name()
+}
+
+/// The units in the last place between two doubles (the zeros as one); `None` across a sign
+/// change.
+#[pyfunction]
+fn table_ulp_gap(a: f64, b: f64) -> Option<u64> {
+    let g = table::ulp_gap(a, b);
+    (g != u64::MAX).then_some(g)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
     m.add_class::<PyCandidateLibrary>()?;
+    m.add_class::<PyTableExpr>()?;
+    m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
+    m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(table_sort_atoms, m)?)?;
+    m.add_function(wrap_pyfunction!(table_compare_classes, m)?)?;
+    m.add_function(wrap_pyfunction!(table_f64_agree, m)?)?;
+    m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
+    m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
+    m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;
     m.add("MissingModeSet", m.py().get_type::<MissingModeSet>())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
