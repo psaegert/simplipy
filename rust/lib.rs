@@ -516,6 +516,37 @@ fn translate_held_sets(engine: &engine::Engine) {
     }
 }
 
+/// The load's word on the rows of `mode`'s own set it refused for carrying more than one
+/// `<constant>` on the left (`ac::rules::MAX_LHS_CONSTANTS`, `rows` as
+/// `Engine::ac_multi_constant_rules` lists them): a `UserWarning` naming how many and the
+/// first, raised where the set is received, so every way of loading a rule file says it.
+/// Silent when there are none. Called with no engine lock held.
+fn warn_multi_constant_rules(
+    py: Python<'_>,
+    mode: engine::RuleMode,
+    rows: &[(Vec<String>, Vec<String>)],
+) -> PyResult<()> {
+    let Some((lhs, rhs)) = rows.first() else {
+        return Ok(());
+    };
+    let set = match mode {
+        engine::RuleMode::Default => "f64",
+        engine::RuleMode::Real => "real",
+        engine::RuleMode::Permissive => "permissive",
+    };
+    let message = format!(
+        "{} rule(s) of the {set} rule set have more than one <constant> on the left side and \
+         are not loaded: no judge decides such rules yet. The first: {} -> {}",
+        rows.len(),
+        lhs.join(" "),
+        rhs.join(" ")
+    );
+    let message = std::ffi::CString::new(message)
+        .map_err(|e| PyValueError::new_err(format!("warning text: {e}")))?;
+    let category = py.get_type::<pyo3::exceptions::PyUserWarning>();
+    PyErr::warn(py, category.as_any(), &message, 1)
+}
+
 /// Deterministic digest of a pushed rule list (std SipHash with fixed keys --
 /// `DefaultHasher::new()` -- stable across processes of one build; both storers and
 /// the checker share this one function, so representation drift is impossible).
@@ -582,7 +613,11 @@ impl PyEngine {
         }
         let inner = engine::Engine::from_strs_read_in(config_yaml, rules_json, canon)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        py.detach(|| translate_held_sets(&inner));
+        let refused = py.detach(|| {
+            translate_held_sets(&inner);
+            inner.ac_multi_constant_rules(engine::RuleMode::Default)
+        });
+        warn_multi_constant_rules(py, engine::RuleMode::Default, &refused)?;
         // Digest the initial rules exactly as `set_rules` digests later pushes --
         // the same (lhs, rhs) list representation the shim serialized into the JSON.
         Ok(Self {
@@ -1779,7 +1814,7 @@ impl PyEngine {
                 ensure_tokens_are_tokens(rhs)?;
             }
         }
-        py.detach(|| {
+        let refused = py.detach(|| {
             {
                 let mut engine = self
                     .engine
@@ -1799,9 +1834,11 @@ impl PyEngine {
             }
             // Only the pushed set changed; the others keep their translations (a mode with
             // no set of its own serves the default translation itself).
-            self.inner().ac_rules_for(mode);
+            let engine = self.inner();
+            engine.ac_rules_for(mode);
+            engine.ac_multi_constant_rules(mode)
         });
-        Ok(())
+        warn_multi_constant_rules(py, mode, &refused)
     }
 
     /// Does `rules` match what was last PUSHED into this core (`from_strs` or

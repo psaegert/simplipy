@@ -92,15 +92,6 @@ SNAP_EVENTS = [0]  # incremented when a symbolic-cancellation snap / pole-guard 
                    # (a measurement artifact), so the deployed check is skipped
 
 
-#: The judge's statement of NON-JURISDICTION over the multi-Const family:
-#: a rule whose LHS binds more than one independent `<constant>` is outside what the
-#: one-shared-symbol contract can model, and is refused before judging with exactly
-#: this detail. The engine's gate sites exempt this detail -- and ONLY this detail --
-#: from the fatal-bucket drop, because the family's soundness authority is the
-#: Const-channel chain, not this instrument.
-CONST_CHANNEL_DETAIL = 'multiple LHS <constant>'
-
-
 def source_defined(value):
     """THE CONSTANT-COLLAPSE CRITERION, the one definition every gate reads: is the SOURCE
     defined at this value, i.e. finite (element-wise over an array; mpmath values too)?
@@ -2052,16 +2043,12 @@ def _judge_contract(lhs, rhs, deployed_check=True):
     nvars = {n: s for n, s in slots.items() if not n.startswith('<C')}
     has_cl, has_cr = '<C_L>' in slots, '<C_R>' in slots
     if lhs.count('<constant>') > 1:
-        # the deployed matcher binds multiple <constant> leaves INDEPENDENTLY; this
-        # judge models one shared symbol (diagonal only) -- rather than silently
-        # under-judging the off-diagonal, the shape is refused fail-closed. The
-        # detail is the SENTINEL the gate sites key their jurisdiction carve-out on:
-        # this return is a statement of non-jurisdiction made BEFORE any
-        # judging (parse has already succeeded, so an unknown token cannot reach it
-        # -- that raises UnsupportedToken above with its own detail), and the
-        # multi-Const family's soundness authority is the Const-channel chain
-        # (constant fitting + the translation count gate + the licence registry).
-        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': CONST_CHANNEL_DETAIL}
+        # The deployed matcher binds each <constant> leaf of a left side to a value of its
+        # own; this judge models one shared symbol (the diagonal only). Rather than judge the
+        # off-diagonal silently short, the rule is refused: no tier, so no mode ships it. The
+        # mint and the load refuse such rules as well (`ac::rules::MAX_LHS_CONSTANTS`).
+        return {'verdict': 'UNSUPPORTED-SHAPE',
+                'detail': 'more than one <constant> on the left side'}
 
     # cl battery entries: (builder, f64key). builder() gives the EXACT value at the
     # current dps (symbolic atoms rebuild per rung); f64key indexes the witness maps

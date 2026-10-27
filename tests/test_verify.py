@@ -1559,22 +1559,27 @@ class TestNanIsInTheWidestSortsQuantifier:
 
 
 class TestTheGateAgreesWithTheRouterAndTheClock:
-    """Two ways the gate's verdict depended on something other
-    than the rules. (a) `_route_triple` applies the ratified multi-`<constant>`
-    carve-out and `verify_ruleset` did not, so the mine's own output judged dirty the
-    moment it contained one such rule. (b) JUDGE-TIMEOUT is fatal and was decided by a
-    single 30 s wall-clock alarm -- a fact about the box's load, not the rule -- so the
-    artifact was non-reproducible under load; timed-out rules are now retried serially
-    at 4x after the sweep."""
+    """Two ways the gate's verdict could depend on something other than the rules. (a) A
+    rule the judge cannot decide is dirty in every mode, whichever gate asks: one with more
+    than one `<constant>` on its left side is such a rule, for `verify_ruleset` exactly as
+    for the mine. (b) JUDGE-TIMEOUT is fatal and was decided by a single 30 s wall-clock
+    alarm -- a fact about the box's load, not the rule -- so the artifact was
+    non-reproducible under load; timed-out rules are now retried serially at 4x after the
+    sweep."""
 
-    def test_the_d36_carve_out_reaches_verify_ruleset(self) -> None:
-        from simplipy.verify import verify_ruleset
+    def test_a_rule_with_two_left_constants_is_dirty_in_every_mode(self) -> None:
+        from simplipy.verify import effective_tier, verify_rule, verify_ruleset
         rules = [[['+', '<constant>', '*', '<constant>', 'x0'],
-                  ['+', '*', '<constant>', 'x0', '<constant>']]]
+                  ['+', '*', '<constant>', 'x0', '<constant>']],
+                 [['pow', 'rootn', '?0', '<constant>', '<constant>'],
+                  ['pow', '?0', '<constant>']]]
+        for lhs, rhs in rules:
+            r = verify_rule(lhs, rhs)
+            assert r['verdict'] == 'UNSUPPORTED-SHAPE' and effective_tier(r) == 'reject', r
         for mode in (None, 'f64', 'real', 'permissive'):
             rep = verify_ruleset(rules, mode=mode)
-            assert rep['is_clean'] is True, (mode, rep)
-        # and the carve-out opens NOTHING else: a false rule stays dirty everywhere
+            assert rep['is_clean'] is False, (mode, rep)
+        # a false rule stays dirty everywhere too
         bad = [[['rootn', 'pow', '?0', '2', '2'], ['?0']]]
         for mode in (None, 'f64'):
             assert verify_ruleset(bad, mode=mode)['is_clean'] is False, mode

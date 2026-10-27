@@ -1278,7 +1278,7 @@ class RuleMiner:
             # BEFORE the prune and promotion see the set; TOLERATED (null-set
             # extension doctrine, matching the engine's own licences) passes.
             if symbolic_gate and not interrupted() and self._mode_rules(rule_mode):
-                from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS
+                from .verify import FATAL_BUCKETS
                 # JUDGE WHAT SERVES, NOT WHAT THE ARTIFACT SAYS. The gate used to judge
                 # `simplification_rules` -- the artifact -- but translation is not the
                 # identity on it: rules drop, and ORIENTATION TWINS are MINTED at load
@@ -1302,11 +1302,7 @@ class RuleMiner:
                 # the second authority, and "confirmed by two independent authorities"
                 # is the claim a shipped rule makes. Fail closed: a vocabulary the
                 # contract cannot judge yields no rules, visibly, rather than rules
-                # with an unearned certificate. ONE exemption: the judge's own
-                # non-jurisdiction sentinel for the multi-<constant> family, whose
-                # soundness authority is the Const-channel chain (fitting + count gate
-                # + licence registry) -- exempted rules ship and are recorded under
-                # their own sidecar key, so the carve-out is visible, never silent.
+                # with an unearned certificate.
                 # A verdict is attributed through the served entry's PROVENANCE, not
                 # through its spelling: the served side is canonical and the artifact side
                 # is the mine's, so `d['lhs'].split()` no longer names a droppable row
@@ -1315,7 +1311,6 @@ class RuleMiner:
                 # one drops the rule that mints it -- fail-closed, and the only action that
                 # removes a twin from a later load.
                 _fatal: dict = {b: set() for b in FATAL_BUCKETS}
-                _const_channel: set = set()
                 _routed: dict = {}
                 for d in _detail:
                     if d.get('verdict') not in _fatal:
@@ -1324,9 +1319,7 @@ class RuleMiner:
                         _served[d['idx']][2]]
                     _pair = (tuple(_src_lhs), tuple(_src_rhs))
                     _tier_of = d.get('tier') or 'reject'
-                    if d.get('detail') == CONST_CHANNEL_DETAIL:
-                        _const_channel.add(_pair)
-                    elif _tier_of in _mode_tiers(rule_mode):
+                    if _tier_of in _mode_tiers(rule_mode):
                         # THE MODE LICENSES THE TIER, so the gate must not delete it:
                         # a fatal bucket is fatal only where its tier is not licensed --
                         # ENGINE-MISALIGN is `real` (true, the deployed engine diverges),
@@ -1364,8 +1357,6 @@ class RuleMiner:
                         **{('killed' if b == 'KILL' else b.lower().replace('-', '_')):
                            sorted([list(bl), list(br)] for bl, br in _fatal[b])
                            for b in FATAL_BUCKETS},
-                        'const_channel': sorted(
-                            [list(cl), list(cr)] for cl, cr in _const_channel),
                         # Convicted by the contract but KEPT, because a mode tier owns
                         # them. Recorded so the carve-out is visible in the sidecar
                         # rather than looking like the gate simply missed them.
@@ -2232,8 +2223,7 @@ class RuleMiner:
         if certified:
             from .verify import effective_tier, verify_ruleset
             _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
-            # detail entries carry lhs/rhs as SPACE-JOINED strings; the Const-channel
-            # sentinel is exempt exactly as at the mining gate.
+            # detail entries carry lhs/rhs as SPACE-JOINED strings
             _drop = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d['verdict']
                      for d in _rep['detail']
                      if effective_tier(d) not in _mode_tiers(_CERTIFY_RULE_MODE)}

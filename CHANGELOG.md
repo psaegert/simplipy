@@ -123,6 +123,9 @@ organised by who you are, then the highlights, then every change in detail.
 - The load refuses a rule that states the distributive law (a rule one factoring turns from its
   left side into its right; drop reason `engine-owned-law`). A file mined before 0.15 loses such
   rows in `real` and `permissive`.
+- The load refuses a rule with more than one `<constant>` on its left side (drop reason
+  `multi-constant-lhs`) and warns, naming how many and the first; the miner no longer mints
+  one. A file that carries such rules loads without them.
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - `verify_triple(..., engine_config=)` checks the three rule sets it is given (the config
   contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which ships in
@@ -1226,6 +1229,14 @@ model predictions.
   give the same values, and `besselj` the same bits on a million points. LLVM's quotient
   rounds differently (its product is the same), so on macOS and Windows `besselj` differs
   from Linux at about 9% of points, by 4.5e-16 relative at the median and 1e-10 at most.
+- **A rule with more than one `<constant>` on its left side is refused, until the judge
+  decides such rules.** The matcher binds each `<constant>` of a left side to a value of its
+  own, but the judge reads a rule's constants as one shared value, so it refused these rules,
+  and the mine used to let them through anyway, unjudged, in every mode. One was false:
+  `pow(rootn(x, C1), C2) -> pow(x, C3)` at C1 = 3, C2 = 1 turns the real cube root, defined for
+  x < 0, into `pow(x, 1/3)`, which is not. The mine no longer mints such a rule,
+  `verify_ruleset` counts it as unjudgeable in every mode, and the load drops it from any rule
+  file with a warning.
 
 ### Removed
 
@@ -1261,6 +1272,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   is replaced by each file's `gates` and `per_length`. The sidecar key
   `soundness.node_budget_env` is gone with the variable it recorded; the node budget is in the
   mine's parameters (`interval_node_budget`).
+- **`simplipy.verify.CONST_CHANNEL_DETAIL`** and the sidecar's `symbolic_gate.const_channel`.
+  They named the exemption that let rules with more than one `<constant>` on the left side
+  ship unjudged; such rules are now refused like any rule the judge cannot decide (see In
+  detail).
 - **`utils.remove_pow1`**, a cleanup of the generation-1 `pow1`/`pow_1` operators that nothing
   called. Generation-2 configs that declare those names as operators still evaluate them.
 - **The `fast-assets` cargo feature**, which gated nothing. Builds that passed it drop the flag.

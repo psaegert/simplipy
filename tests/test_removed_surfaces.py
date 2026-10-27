@@ -140,6 +140,15 @@ class TestRemovedIn015:
         with pytest.raises(TypeError, match='save_every'):
             RuleMiner(eng).find_rules(save_every=10, prune=True)
 
+    def test_the_const_channel_exemption_is_gone(self) -> None:
+        """A rule with more than one `<constant>` on its left side is refused like any rule
+        the judge cannot decide, so the name its exemption keyed on goes with it."""
+        verify = importlib.import_module('simplipy.verify')
+        assert not hasattr(verify, 'CONST_CHANNEL_DETAIL')
+        assert 'CONST_CHANNEL_DETAIL' not in verify.__all__
+        assert not hasattr(importlib.import_module('simplipy.verify._contract'),
+                           'CONST_CHANNEL_DETAIL')
+
     @pytest.mark.parametrize('flag', ['-s', '--save-every'])
     def test_the_cli_has_no_save_every(self, flag, capsys) -> None:
         from simplipy.__main__ import main

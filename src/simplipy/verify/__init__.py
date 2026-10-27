@@ -31,10 +31,6 @@ from . import _contract, _gate, _monitor
 FATAL_BUCKETS = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
                  'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
 
-#: The one exemption from the fatal drop: the judge's own non-jurisdiction
-#: sentinel for the multi-`<constant>` family (see `_contract.CONST_CHANNEL_DETAIL`).
-CONST_CHANNEL_DETAIL = _contract.CONST_CHANNEL_DETAIL
-
 
 def _load(rules: list | str) -> list:
     """Accept a rule list ([lhs, rhs] pairs) or a path to a JSON rule file."""
@@ -63,11 +59,8 @@ MODE_TIERS: dict[str, frozenset] = {
 
 def effective_tier(detail: dict) -> str:
     """A judged rule's EFFECTIVE tier -- what ``MODE_TIERS`` licenses against. A verdict that
-    carries no tier reads ``reject`` (fail-closed). The Const-channel sentinel reads
-    ``core``: the multi-``<constant>`` family's soundness authority is the Const-channel
-    chain, not the contract, so its verdict here is not a verdict about the rule."""
-    if detail.get('detail') == CONST_CHANNEL_DETAIL:
-        return 'core'
+    carries no tier reads ``reject`` (fail-closed): a rule the judge could not decide, such as
+    one with more than one ``<constant>`` on its left side, ships in no mode."""
     return detail.get('tier') or 'reject'
 
 
@@ -118,17 +111,8 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
                            announce_report=report_path is not None)
         with open(tmp) as fh:
             report = json.load(fh)
-    # The Const-channel carve-out (`effective_tier`, which the mine's judge also reads):
-    # the multi-`<constant>` family's soundness authority is the Const-channel chain, not
-    # the contract, so the judge's non-jurisdiction sentinel (UNSUPPORTED-SHAPE +
-    # CONST_CHANNEL_DETAIL) is not a verdict about the rule. The mine files such a rule as
-    # `core`; without this mirror the mode-less sweep would count the sentinel as fatal and call
-    # the mine's own output dirty.
     if mode is None:
-        d36 = {d.get('idx') for d in report.get('detail', [])
-               if d.get('detail') == CONST_CHANNEL_DETAIL}
-        dirty = any(set(report['buckets'].get(k) or []) - d36 for k in FATAL_BUCKETS)
-        report['is_clean'] = not dirty
+        report['is_clean'] = not any(report['buckets'].get(k) for k in FATAL_BUCKETS)
         report['exit_code'] = code
         return report
 
@@ -259,6 +243,6 @@ def selftest() -> bool:
     return _gate.selftest() and _contract.selftest(verbose=False)
 
 
-__all__ = ['CONST_CHANNEL_DETAIL', 'FATAL_BUCKETS', 'MODE_TIERS', 'default_corpus',
+__all__ = ['FATAL_BUCKETS', 'MODE_TIERS', 'default_corpus',
            'effective_tier', 'verify_rule',
            'verify_ruleset', 'verify_triple', 'monitor_ruleset', 'selftest']

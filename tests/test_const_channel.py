@@ -145,6 +145,59 @@ class TestTranslationCountGate:
         assert (kept, subsumed, dropped, twins) == (1, 0, 0, 0)
 
 
+class TestAtMostOneConstantOnTheLeft:
+    """A rule with two or more `<constant>` on its left side is refused wherever a rule can
+    enter, until the judge decides such rules: the matcher binds each `<constant>` leaf to a
+    value of its own, the judge models one shared symbol. `pow(rootn(x, C1), C2) -> pow(x,
+    C3)` is false: at C1 = 3, C2 = 1 the left side is the real cube root, defined for x < 0,
+    where no `pow(x, C3)` is."""
+    ROOT_RULE = (('pow', 'rootn', '?0', '<constant>', '<constant>'), ('pow', '?0', '<constant>'))
+    ONE_CONSTANT = (('*', '<constant>', 'exp', '?0'), ('exp', '?0'))
+
+    @pytest.fixture(scope='class')
+    def ops(self) -> dict:
+        import yaml
+        return yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                                'config.yaml')))['operators']
+
+    @pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+    def test_the_load_drops_it_and_says_so(self, ops, mode) -> None:
+        keyword = {'f64': 'rules', 'real': 'rules_real', 'permissive': 'rules_permissive'}[mode]
+        sets: dict = {'rules': [], 'rules_real': [], 'rules_permissive': []}
+        sets[keyword] = [self.ROOT_RULE, self.ONE_CONSTANT]
+        with pytest.warns(UserWarning, match=rf'1 rule\(s\) of the {mode} rule set have more '
+                          r'than one <constant> on the left side and are not loaded') as caught:
+            engine = SimpliPyEngine(operators=ops, **sets)
+        assert any('pow rootn ?0 <constant> <constant> -> pow ?0 <constant>' in str(w.message)
+                   for w in caught)
+        rule_mode = 'default' if mode == 'f64' else mode
+        census = engine._core.ac_rules_drop_census(rule_mode=rule_mode)
+        assert census.get('multi-constant-lhs') == 1, census
+        # the rule with one constant on the left still loads, and the refused one never fires
+        assert engine._core.ac_rules_info_in_mode(rule_mode=rule_mode)[0] >= 1
+        source = ['pow', 'rootn', 'x0', '<constant>', '<constant>']
+        assert engine.simplify(source, mode=mode) == source
+
+    def test_a_set_without_one_loads_silently(self, ops, recwarn) -> None:
+        SimpliPyEngine(operators=ops, rules=[self.ONE_CONSTANT])
+        assert not [w for w in recwarn if 'on the left side' in str(w.message)]
+
+    @pytest.mark.parametrize('rule_mode', ['default', 'real', 'permissive'])
+    def test_the_mint_never_builds_it(self, ops, rule_mode) -> None:
+        """The mint accepted `pow(rootn(x, C), C) -> pow(x, C)` in every mode: its
+        special-constant sweep covers one constant only. A source with two constants now
+        mints nothing."""
+        import numpy as np
+        from simplipy.mining import RuleMiner
+        bare = SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+        X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
+        ok, why = bare._core.judge_pair(
+            ['pow', 'rootn', 'x0', '<constant>', '<constant>'], ['pow', 'x0', '<constant>'],
+            ['x0', 'x1'], X.flatten().tolist(), X.shape[0], rtol=1e-11, atol=1e-12,
+            rule_mode=rule_mode)
+        assert (ok, why) == (False, 'uncertified')
+
+
 class TestProposalChannel:
     def test_const_introducing_hint_refused_end_to_end(self, tmp_path) -> None:
         """A proposal arriving with the masking-era hint spelling is now refused on

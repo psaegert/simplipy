@@ -140,7 +140,7 @@ pub struct AcRules {
     /// count); 0 for every artifact the mint-side registry produced -- a nonzero count
     /// means a stale or foreign artifact carried a violation past its own mine.
     pub n_registry_dropped: usize,
-    /// The PER-REASON drop census -- the six translate-time drop reasons (plus
+    /// The PER-REASON drop census -- the translate-time drop reasons (plus
     /// the registry's, filled by the caller) used to collapse into `n_dropped` with
     /// no accessor, so a user could not find out what was dropped from their own
     /// mine. Keys are stable strings; the FFI exposes this as a dict.
@@ -162,6 +162,9 @@ pub struct AcRules {
     /// (the promotion refund's derivability probe) know for which rows fire-site
     /// suppression alone is NOT behaviorally a rebuild.
     pub shadow_census: Vec<(usize, usize, bool, &'static str)>,
+    /// The rows refused under [`MAX_LHS_CONSTANTS`], by their position in the artifact list,
+    /// so the load can name them.
+    pub multi_constant_rows: Vec<usize>,
 }
 
 impl AcRules {
@@ -212,8 +215,21 @@ pub fn atom_sig(e: &Ex, view: &TokenView) -> u64 {
     }
 }
 
+/// AT MOST ONE `<constant>` ON A RULE'S LEFT SIDE. The matcher binds each `<constant>` leaf of
+/// a left side to a value of its own, while the judge reads a rule's constants as one shared
+/// symbol, so a rule with two or more on the left is a rule no authority has decided. Such a
+/// rule is refused wherever a rule can enter: the mint never builds one (`worker`'s source
+/// context) and the load drops one from any rule file ([`AcRules::translate`], which the
+/// Python layer hears as a warning). `pow(rootn(x, C1), C2) -> pow(x, C3)` shows why: at
+/// C1 = 3, C2 = 1 its left side is the real cube root, defined for x < 0, where no
+/// `pow(x, C3)` is.
+pub const MAX_LHS_CONSTANTS: usize = 1;
+
+/// The drop census's name for a rule the load refuses under [`MAX_LHS_CONSTANTS`].
+pub const MULTI_CONSTANT_LHS: &str = "multi-constant-lhs";
+
 /// `<constant>` leaf count of an expression (the Const-count invariant's measure; see the
-/// translate-time gate below). Counted on canonical sides only.
+/// translate-time gates below).
 fn const_count(e: &Ex) -> usize {
     match e {
         Ex::Const => 1,
@@ -416,8 +432,17 @@ impl AcRules {
                 out.note_drop("unparseable-side");
                 continue;
             };
+            // At most one `<constant>` on the left ([`MAX_LHS_CONSTANTS`]), as spelled and as
+            // the matcher holds it, before any other disposition, so the census names every
+            // such row.
+            let spelled = const_count(&lhs0);
             let lhs = canon(lhs0, &cx);
             let rhs = canon(rhs0, &cx);
+            if spelled.max(const_count(&lhs)) > MAX_LHS_CONSTANTS {
+                out.note_drop(MULTI_CONSTANT_LHS);
+                out.multi_constant_rows.push(raw_idx);
+                continue;
+            }
             if lhs == rhs {
                 out.n_subsumed += 1;
                 continue;
