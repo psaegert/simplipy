@@ -501,42 +501,22 @@ class TestSingularInputGate:
         assert verdict == 'VIOLATION'
 
 
-class TestTwinInstrumentInLockstep:
-    """The singular-input scoping must hold in BOTH instruments. The extension
-    refinement is in both (`_contract` REAL-CHANGE@ext / `_monitor` inf-input-null); the
-    singular scoping does the same (`_contract` REAL-CHANGE@singular /
-    `_monitor` singular-real-null). A divergence would mean two different contracts."""
+class TestNoPointIsExcusedOnAPole:
+    """Clause (a) holds at every binding where the left side has a value, a binding on the
+    left side's singular set included: THE TABLE gives such a point its limit where every
+    direction agrees and no value otherwise, so there is no convention left to excuse
+    (the judge's former `REAL-CHANGE@singular` scoping is gone; the end-to-end monitor keeps
+    its own, `singular-real-null`, until it reads the table)."""
 
-    def test_contract_twin_detects_the_same_singularity(self):
-        from mpmath import mpf
-
-        from simplipy.verify import _contract as C
-        tree = ('inv', ('-', ('slot', 'a'), ('slot', 'b')))       # 1/(a-b)
-        assert C.lhs_singular(tree, {'a': mpf(2), 'b': mpf(2)})   # on the pole
-        assert not C.lhs_singular(tree, {'a': mpf(2), 'b': mpf(5)})
-        assert C.lhs_singular(('log', ('slot', 'a')), {'a': mpf(0)})
-        assert not C.lhs_singular(('+', ('slot', 'a'), ('lit', 2.0)), {'a': mpf(3)})
-
-    def test_contract_twin_does_not_taint_a_written_infinity(self):
-        from simplipy.verify import _contract as C
-        # a WRITTEN inf literal keeps its ratified limit-completed value, so the
-        # strict clause retains authority over it -- same boundary as the monitor's.
-        assert not C.lhs_singular(('atan', ('lit', float('inf'))), {})
-
-    def test_contract_twin_leaves_no_global_state(self):
-        from mpmath import mpf
-
-        from simplipy.verify import _contract as C
-        C.lhs_singular(('inv', ('-', ('slot', 'a'), ('slot', 'a'))), {'a': mpf(1)})
-        assert C._NODE_SINK == [], 'taint sink leaked -- would poison later evaluations'
-
-    def test_both_instruments_name_the_class(self):
-        import inspect
-
-        from simplipy.verify import _contract as C
-        from simplipy.verify import _monitor as M
-        assert 'REAL-CHANGE@singular' in inspect.getsource(C._judge_contract)
-        assert 'singular-real-null' in M.TOL_COUNTS
+    def test_a_disagreement_at_a_pole_is_judged(self):
+        from simplipy.verify._contract import judge_rule
+        # at x = 0, atan(pow(0, -2)) = atan(+inf) = pi/2, while 1/pow(0, 2) = 1/0 has no
+        # value: the right side loses the left side's value there (clause (a))
+        got = judge_rule('atan pow ?0 -2'.split(), 'atan inv pow ?0 2'.split())
+        assert (got['verdict'], got['points']) == ('KILL', [{'?0': 0.0}]), got
+        # the converse only extends at the one point x = 0: a null set
+        back = judge_rule('atan inv pow ?0 2'.split(), 'atan pow ?0 -2'.split())
+        assert back['verdict'] == 'TOLERATED', back
 
 
 class TestMagnitudeResolutionGuard:

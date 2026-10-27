@@ -1477,6 +1477,125 @@ impl Expr {
     }
 }
 
+// ------------------------------------------------------------- point readings
+
+/// THE TABLE's real value of one operation on exact or approximate arguments: `None` for an
+/// operator the table does not know, or a point it cannot judge honestly at `ctx`'s precision.
+/// The interval layer reads it where a subexpression is one point across a cell
+/// (`interval::with_table_points`).
+pub fn apply(name: &str, args: &[Val], ctx: &mut Ctx) -> Option<Val> {
+    let _exact = number_domain(false);
+    match args {
+        [a] => unary(name, a, ctx)?,
+        [a, b] => binary(name, a, b, ctx)?,
+        _ => None,
+    }
+}
+
+/// THE TABLE's real value of a literal token at `ctx`'s precision (`None`: no literal).
+pub fn literal_val(tok: &str, ctx: &mut Ctx) -> Option<Val> {
+    let leaf = real_leaf(tok)?;
+    let _exact = number_domain(false);
+    Some(match leaf {
+        Leaf::Exact(e) => Val::Exact(e),
+        Leaf::Big(p, q) => approx(ctx.ratio(&p, &q)),
+        Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
+    })
+}
+
+/// A double as an exact value: a finite double is the dyadic rational it is, an infinity is
+/// itself, NaN is undefined.
+pub fn val_of_f64(x: f64) -> Val {
+    if x.is_nan() {
+        return undef();
+    }
+    if x.is_infinite() {
+        return inf(x > 0.0);
+    }
+    let _exact = number_domain(false);
+    match Rat::from_f64_exact(x) {
+        Some(r) => rat(r),
+        None => approx(BigFloat::from_f64(x, 64)),
+    }
+}
+
+/// Is the value undefined, `Some(sign)` for an infinity, `None` otherwise.
+pub fn class_of(v: &Val) -> (bool, Option<bool>) {
+    (is_undef(v), inf_sign(v))
+}
+
+/// A float64 enclosure of a FINITE value: `(lo, hi, lo_open, hi_open)`, a point when the value
+/// is a double, otherwise doubles bracketing it (a value beyond the doubles' range is enclosed
+/// by the largest double and an open infinite end, a nonzero value below them by zero and the
+/// smallest subnormal, zero excluded). `None` for a value that is not finite.
+pub fn f64_enclosure(v: &Val, ctx: &mut Ctx) -> Option<(f64, f64, bool, bool)> {
+    let _exact = number_domain(false);
+    if let Val::Exact(Exact::Rat(r)) = v {
+        if r.is_zero() {
+            return Some((0.0, 0.0, false, false));
+        }
+        if let Some((y, other)) = r.float_bracket() {
+            return Some(match other {
+                None => (y, y, false, false),
+                Some(o) => (y.min(o), y.max(o), false, false),
+            });
+        }
+    }
+    let b = match v {
+        Val::Exact(Exact::PosInf | Exact::NegInf | Exact::Undef) => return None,
+        _ => ctx.bf(v),
+    };
+    if b.is_nan() || b.is_inf() {
+        return None;
+    }
+    if b.is_zero() {
+        return Some((0.0, 0.0, false, false));
+    }
+    let neg = b.is_negative();
+    let y = bf_to_f64(&b.abs());
+    let (lo, hi, lo_open, hi_open) = if y.is_infinite() {
+        (f64::MAX, f64::INFINITY, false, true)
+    } else if y < 4.0 * f64::MIN_POSITIVE {
+        (0.0, 4.0 * f64::MIN_POSITIVE, true, false)
+    } else {
+        // two units in the last place each way: the reading truncates the mantissa below its
+        // top word and rounds once
+        let down = |x: f64| f64::from_bits(x.to_bits() - 2);
+        let up = |x: f64| f64::from_bits(x.to_bits() + 2);
+        (down(y), up(y), false, false)
+    };
+    Some(if neg {
+        (-hi, -lo, hi_open, lo_open)
+    } else {
+        (lo, hi, lo_open, hi_open)
+    })
+}
+
+/// A positive finite BigFloat read to a double from its top mantissa word (within an ulp or
+/// two; `f64_enclosure` widens it).
+fn bf_to_f64(b: &BigFloat) -> f64 {
+    let (Some(words), Some(e)) = (b.mantissa_digits(), b.exponent()) else {
+        return f64::NAN;
+    };
+    let Some(&top) = words.last() else {
+        return 0.0;
+    };
+    // value = 0.top... * 2^e = top * 2^(e - 64)
+    let mut y = top as f64;
+    let mut k = i64::from(e) - 64;
+    while k > 0 && y.is_finite() {
+        let step = k.min(512);
+        y *= 2f64.powi(step as i32);
+        k -= step;
+    }
+    while k < 0 && y > 0.0 {
+        let step = (-k).min(512);
+        y /= 2f64.powi(step as i32);
+        k += step;
+    }
+    y
+}
+
 // -------------------------------------------------------------------------- comparison
 
 /// The comparison classes of two values at one point.

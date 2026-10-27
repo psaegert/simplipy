@@ -530,6 +530,10 @@ pub struct DeployedExact {
     pub ok: bool,
     pub probes: usize,
     pub first: Option<Vec<f64>>,
+    /// With `defer_range` (`f64_bar_sorted`): the probes where the sides differ and an
+    /// operation of either side overflowed or underflowed, left to the caller, which accepts
+    /// one where the rewrite gives the true value (the range standard). Empty otherwise.
+    pub range_rows: Vec<Vec<f64>>,
 }
 
 /// The 0.15 heads. A rule spelled with one answers to the deployed bar for its float64
@@ -565,6 +569,25 @@ pub fn f64_bar(
     var_names: &[String],
     ops: &Operators,
 ) -> Option<DeployedExact> {
+    f64_bar_sorted(lhs, rhs, var_names, &[], false, ops)
+}
+
+/// `f64_bar` over each variable's SORT, the contract judge's reading of it: `sorts[i]` is the
+/// slot sort of `var_names[i]` -- `?` (data) and `!` are probed over finite doubles only, `$`
+/// over nonzero finite ones, `_` (and a variable with no sort given) over every probe, the
+/// infinities and NaN included -- and with `defer_range`, a probe where the sides differ and an
+/// operation overflowed or underflowed is returned in `range_rows` instead of failing the bar
+/// (the range standard: there the true value is accepted, which only the caller can judge).
+/// `ceil(1/cosh(x)) -> 1` holds in f64 so: x = +-inf is no data, and past |x| = 710.48 `cosh`
+/// overflows and the rewrite gives the true value 1.
+pub fn f64_bar_sorted(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    sorts: &[char],
+    defer_range: bool,
+    ops: &Operators,
+) -> Option<DeployedExact> {
     if !holds_new_head(lhs, ops) && !holds_new_head(rhs, ops) {
         return None;
     }
@@ -581,6 +604,7 @@ pub fn f64_bar(
                 ok: false,
                 probes: 0,
                 first: None,
+                range_rows: Vec::new(),
             })
         };
     }
@@ -597,7 +621,15 @@ pub fn f64_bar(
             lhs_v.push(t.clone());
         }
     }
-    Some(deployed_exact_over(&lhs_v, rhs, &names, n_c, ops))
+    Some(deployed_exact_over(
+        &lhs_v,
+        rhs,
+        &names,
+        n_c,
+        sorts,
+        defer_range,
+        ops,
+    ))
 }
 
 /// THE DEPLOYED BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero
@@ -617,12 +649,15 @@ fn deployed_exact_over(
     rhs: &[String],
     var_names: &[String],
     n_finite: usize,
+    sorts: &[char],
+    defer_range: bool,
     ops: &Operators,
 ) -> DeployedExact {
     let refused = DeployedExact {
         ok: false,
         probes: 0,
         first: None,
+        range_rows: Vec::new(),
     };
     if lhs.iter().chain(rhs).any(|t| t == "<constant>") {
         return refused;
@@ -648,8 +683,18 @@ fn deployed_exact_over(
         }
     }
     let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let nonzero: Vec<f64> = finite.iter().copied().filter(|v| *v != 0.0).collect();
     let first_finite = var_names.len().saturating_sub(n_finite);
-    let probes_of = |v: usize| if v >= first_finite { &finite } else { &values };
+    let probes_of = |v: usize| {
+        if v >= first_finite {
+            return &finite;
+        }
+        match sorts.get(v) {
+            Some('?' | '!') => &finite,
+            Some('$') => &nonzero,
+            _ => &values,
+        }
+    };
     let width = var_names.len().max(1);
     let mut rows: Vec<Vec<f64>> = Vec::new();
     let total = used
@@ -694,17 +739,48 @@ fn deployed_exact_over(
         tr.eval_columns(&cols, &[], n),
     );
     let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits();
-    match (0..n).find(|&i| !same(yl[i], yr[i])) {
-        Some(i) => DeployedExact {
+    // The range standard's reading of a differing probe: did an operation of either side
+    // overflow or underflow there (`table::Expr::eval_f64`, the same kernels)?
+    let range_reader = defer_range
+        .then(|| {
+            let arity: std::collections::HashMap<String, u8> = lhs
+                .iter()
+                .chain(rhs)
+                .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+                .collect();
+            let l = crate::table::Expr::compile(lhs, var_names, &arity).ok()?;
+            let r = crate::table::Expr::compile(rhs, var_names, &arity).ok()?;
+            Some((l, r))
+        })
+        .flatten();
+    let out_of_range = |row: &[f64]| {
+        range_reader.as_ref().is_some_and(|(l, r)| {
+            let in_l = l.eval_f64(row).is_none_or(|(_, ok)| ok);
+            let in_r = r.eval_f64(row).is_none_or(|(_, ok)| ok);
+            !(in_l && in_r)
+        })
+    };
+    let mut range_rows: Vec<Vec<f64>> = Vec::new();
+    for i in 0..n {
+        if same(yl[i], yr[i]) {
+            continue;
+        }
+        if out_of_range(&rows[i]) {
+            range_rows.push(used.iter().map(|&v| rows[i][v]).collect());
+            continue;
+        }
+        return DeployedExact {
             ok: false,
             probes: n,
             first: Some(used.iter().map(|&v| rows[i][v]).collect()),
-        },
-        None => DeployedExact {
-            ok: true,
-            probes: n,
-            first: None,
-        },
+            range_rows,
+        };
+    }
+    DeployedExact {
+        ok: true,
+        probes: n,
+        first: None,
+        range_rows,
     }
 }
 
@@ -765,7 +841,7 @@ mod deployed_bar_tests {
             ("mod floor x0 1", "* 0 x0"),
         ] {
             assert!(
-                !deployed_exact_over(&s(l), &s(r), &v, 0, ops).ok,
+                !deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops).ok,
                 "{l} -> {r}"
             );
         }
@@ -777,7 +853,7 @@ mod deployed_bar_tests {
             ("min x0 float(\"inf\")", "x0"),
             ("erf neg x0", "neg erf x0"),
         ] {
-            let d = deployed_exact_over(&s(l), &s(r), &v, 0, ops);
+            let d = deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops);
             assert!(d.ok, "{l} -> {r} at {:?}", d.first);
             assert!(d.probes > 300);
         }

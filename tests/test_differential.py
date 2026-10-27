@@ -21,7 +21,8 @@ them fail, and the fix removes the mark.
 
 "Admits" is the judge's word for "this mode's file may hold the rule by its truth": `real`
 admits what holds in real, `f64` what holds in f64, and `permissive` what holds in permissive
-or in f64 (the specification's P3). Policies (evidence, ground composites) are not part of it.
+or in f64 (the specification's P3). Policies (evidence, ground composites) are not part of it:
+`simplipy.verify.licensed` adds them (the specification's 3.4).
 """
 import functools
 import os
@@ -32,7 +33,7 @@ import yaml
 from mpmath import mp
 
 from simplipy import SimpliPyEngine
-from simplipy.verify import MODE_TIERS, effective_tier, verify_rule
+from simplipy.verify import MODE_TIERS, effective_tier, licensed, verify_rule
 from simplipy.verify import _contract
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -109,9 +110,9 @@ SPEC_EXAMPLES = [
     case('/ x0 x0', '1', 'real', True), case('/ x0 x0', '1', 'f64', True),
     case('/ x0 x0', '1', 'permissive', True),
     case('exp log x0', 'x0', 'real', False), case('exp log x0', 'x0', 'f64', False),
-    case('exp log x0', 'x0', 'permissive', True, expected_failure('R1', 2)),
+    case('exp log x0', 'x0', 'permissive', True),
     case('- log x0 log x0', '0', 'real', False), case('- log x0 log x0', '0', 'f64', False),
-    case('- log x0 log x0', '0', 'permissive', True, expected_failure('R1', 2)),
+    case('- log x0 log x0', '0', 'permissive', True),
     case('atanh tanh x0', 'x0', 'real', True), case('atanh tanh x0', 'x0', 'f64', False),
     case('atanh tanh x0', 'x0', 'permissive', True),
     case('asin 1e-8', '1e-8', 'real', False), case('asin 1e-8', '1e-8', 'f64', True),
@@ -121,14 +122,14 @@ SPEC_EXAMPLES = [
     case('rootn pow x0 2 2', 'abs x0', 'permissive', True),
     case('rootn pow x0 2 2', 'x0', 'real', False), case('rootn pow x0 2 2', 'x0', 'f64', False),
     case('rootn pow x0 2 2', 'x0', 'permissive', False),
-    case('tan asin ceil x0', 'atanh ceil x0', 'real', False, expected_failure('X2', 2)),
+    case('tan asin ceil x0', 'atanh ceil x0', 'real', False),
     case('tan asin ceil x0', 'atanh ceil x0', 'f64', False),
     case('tan asin ceil x0', 'atanh ceil x0', 'permissive', True),
     case('ceil inv cosh x0', '1', 'real', True),
-    case('ceil inv cosh x0', '1', 'f64', True, expected_failure('N2', 2)),
+    case('ceil inv cosh x0', '1', 'f64', True),
     case('ceil inv cosh x0', '1', 'permissive', True),
     # the 5% grid bar: an extension on (-0.1, 0.1) is positive measure
-    case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'real', False, expected_failure('N1', 2)),
+    case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'real', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'permissive', True),
     # section 2: the sorts
@@ -136,9 +137,9 @@ SPEC_EXAMPLES = [
     case('- !0 !0', '0', 'real', True), case('- !0 !0', '0', 'f64', True),
     case('/ $0 $0', '1', 'real', True), case('/ $0 $0', '1', 'f64', True),
     case('- _0 _0', '0', 'real', False), case('- _0 _0', '0', 'f64', False),
-    case('- _0 _0', '0', 'permissive', True, expected_failure('R1', 2)),
+    case('- _0 _0', '0', 'permissive', True),
     # `_` at +inf: 0*tanh(inf) = 0 has a value, 0*inf has none
-    case('* 0 tanh _0', '* 0 _0', 'real', False, expected_failure('N3', 2)),
+    case('* 0 tanh _0', '* 0 _0', 'real', False),
     case('* 0 tanh _0', '* 0 _0', 'f64', False),
     # section 3.2: constants
     case('acos <constant>', '<constant>', 'real', True),
@@ -149,8 +150,7 @@ SPEC_EXAMPLES = [
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'real', False),
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'f64', False),
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'permissive', False),
-    case('* exp + x0 <constant> <constant>', '* <constant> exp x0', 'real', True,
-         expected_failure('X5', 2)),
+    case('* exp + x0 <constant> <constant>', '* <constant> exp x0', 'real', True),
     case('pow 0 <constant>', '<constant>', 'real', True),
     case('pow 0 <constant>', '<constant>', 'f64', True),
     case('pow -1 <constant>', '<constant>', 'real', True),
@@ -159,20 +159,20 @@ SPEC_EXAMPLES = [
     case('cos np.pi', '-1', 'real', True), case('cos np.pi', '-1', 'f64', True),
     case('sin np.pi', '0', 'real', True), case('sin np.pi', '0', 'f64', False),
     case('sin np.pi', '0', 'permissive', True),
-    case('log -1', '0', 'real', False, expected_failure('X4', 2)),
-    case('log -1', '0', 'f64', False, expected_failure('X4', 2)),
+    case('log -1', '0', 'real', False),
+    case('log -1', '0', 'f64', False),
     case('log -1', '0', 'permissive', True),
-    case('exp tan asin 1', 'float("inf")', 'real', False, expected_failure('X4', 2)),
-    case('exp tan asin 1', 'float("inf")', 'f64', True, expected_failure('X2', 2)),
+    case('exp tan asin 1', 'float("inf")', 'real', False),
+    case('exp tan asin 1', 'float("inf")', 'f64', True),
     case('exp tan asin 1', 'float("inf")', 'permissive', True),
     case('asin 1', 'acos 0', 'real', True), case('asin 1', 'acos 0', 'f64', True),
     # the limit rule (V4, V5, V6)
-    case('/ 1 0', 'float("inf")', 'real', False, expected_failure('N6', 2)),
+    case('/ 1 0', 'float("inf")', 'real', False),
     case('/ 1 0', 'float("inf")', 'f64', True),
     case('/ 1 0', 'float("inf")', 'permissive', True),
-    case('pow 0 -1', 'float("inf")', 'real', False, expected_failure('N6', 2)),
+    case('pow 0 -1', 'float("inf")', 'real', False),
     case('pow 0 -2', 'float("inf")', 'real', True),
-    case('pow 1 float("inf")', '1', 'real', False, expected_failure('N7', 2)),
+    case('pow 1 float("inf")', '1', 'real', False),
     case('pow 1 float("inf")', '1', 'f64', True),
 ]
 
@@ -182,19 +182,48 @@ def test_the_judge_gives_the_specifications_verdict(lhs, rhs, mode, expected) ->
     assert admits(lhs, rhs, mode) is expected, judged(lhs, rhs)
 
 
+#: Section 4: rules that hold and are refused by a named policy (`licensed` = holds and every
+#: policy), each with the policy the specification names.
+POLICY_EXAMPLES = [
+    ('asin 1', 'acos 0', 'f64', 'ground_composite'),
+    ('asin 1', 'acos 0', 'real', 'ground_composite'),
+    ('exp tan asin 1', 'float("inf")', 'f64', 'evidence'),
+    ('pow -1 <constant>', '<constant>', 'real', 'evidence'),
+    ('abs x0', 'rootn pow x0 2 2', 'real', 'ordering'),
+    ('exp * 2 _0', '* exp _0 exp _0', 'real', 'duplication'),
+    ('+ * x0 x1 * x0 x2', '* x0 + x1 x2', 'real', 'engine_owned'),
+    ('log -3', 'float("nan")', 'real', 'engine_owned'),
+    ('pow + x0 <constant> 2', '+ + pow x0 2 * <constant> x0 <constant>', 'real',
+     'constant_count'),
+]
+
+
+@pytest.mark.parametrize('lhs, rhs, mode, policy', POLICY_EXAMPLES)
+def test_a_named_policy_refuses_what_holds(lhs, rhs, mode, policy) -> None:
+    got = licensed(lhs.split(), rhs.split(), mode, bare(), detail=judged(lhs, rhs))
+    assert got['holds'] and not got['licensed'] and policy in got['refused_by'], got
+
+
+@pytest.mark.parametrize('lhs, rhs, mode', [
+    ('exp log x0', 'x0', 'permissive'), ('acos <constant>', '<constant>', 'real'),
+    ('exp + x0 <constant>', '* <constant> exp x0', 'real'), ('ceil inv cosh x0', '1', 'f64'),
+])
+def test_licensed_is_holds_and_every_policy(lhs, rhs, mode) -> None:
+    got = licensed(lhs.split(), rhs.split(), mode, bare(), detail=judged(lhs, rhs))
+    assert got == {'licensed': True, 'holds': True, 'tier': got['tier'], 'refused_by': []}, got
+
+
 # ------------------------------------------------------------------------------------------
 # Assertion 6: the judge decides every pair.
 # ------------------------------------------------------------------------------------------
-UNDECIDED = {'UNSUPPORTED-SHAPE', 'UNRESOLVED-COVERAGE', 'JUDGE-TIMEOUT'}
+UNDECIDED = {'UNSUPPORTED-SHAPE', 'UNRESOLVED-COVERAGE', 'UNDECIDED-MEASURE', 'JUDGE-TIMEOUT'}
 
 
 @pytest.mark.parametrize('lhs, rhs', [
-    pytest.param('pow rootn x0 <constant> <constant>', 'pow x0 <constant>',
-                 marks=expected_failure('X5', 2)),
-    pytest.param('* exp + x0 <constant> <constant>', '* <constant> exp x0',
-                 marks=expected_failure('X5', 2)),
-    pytest.param('+ <constant> * <constant> x0', '+ * <constant> x0 <constant>',
-                 marks=expected_failure('X5', 2)),
+    ('pow rootn x0 <constant> <constant>', 'pow x0 <constant>'),
+    ('* exp + x0 <constant> <constant>', '* <constant> exp x0'),
+    ('+ <constant> * <constant> x0', '+ * <constant> x0 <constant>'),
+    ('- <constant> <constant>', '0'), ('sin * x0 * 1e15 + 1 1e-20', 'sin * x0 1e15'),
     ('tan asin ceil x0', 'atanh ceil x0'), ('exp tan asin 1', 'float("inf")'),
     ('acos <constant>', '<constant>'), ('* 0 tanh _0', '* 0 _0'),
 ])
@@ -254,8 +283,7 @@ REAL_TABLE = [
 
 
 @pytest.mark.parametrize('expr, expected', [
-    pytest.param(e, v, marks=[expected_failure(d, 2)] if d else [], id=e)
-    for e, v, d in REAL_TABLE])
+    pytest.param(e, v, id=e) for e, v, _ in REAL_TABLE])
 def test_the_table_reads_real_values(expr, expected) -> None:
     assert real_value(expr) == expected
 
@@ -279,8 +307,7 @@ F64_TABLE = [
 
 
 @pytest.mark.parametrize('expr, expected', [
-    pytest.param(e, v, marks=[expected_failure('N8', 2)] if e == 'inv -0.0' else [], id=e)
-    for e, v in F64_TABLE])
+    pytest.param(e, v, id=e) for e, v in F64_TABLE])
 def test_f64_reads_the_evaluator(expr, expected) -> None:
     v = float(_contract.d_eval(_contract.parse(expr.split()), {}))
     assert v == expected and np.signbit(v) == np.signbit(expected)
@@ -303,12 +330,16 @@ def test_interval_enclosures_contain_the_table_values(expr, expected) -> None:
 # Assertion 1: a pre-filter rejects only what the judge rejects.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    pytest.param('tan asin ceil x0', 'atanh ceil x0', 'real', marks=expected_failure('X2', 2)),
+    ('tan asin ceil x0', 'atanh ceil x0', 'real'),
     pytest.param('tan asin ceil x0', 'atanh ceil x0', 'permissive',
                  marks=expected_failure('X2', 3)),
     pytest.param('pow 0 <constant>', '<constant>', 'real', marks=expected_failure('X6', 3)),
     pytest.param('pow 0 <constant>', '<constant>', 'f64', marks=expected_failure('X6', 3)),
     pytest.param('exp <constant>', '<constant>', 'f64', marks=expected_failure('X6', 3)),
+    # the mint's f64 bar still probes data at +-inf, and its domain gate still applies real's
+    # clause (b) in permissive
+    pytest.param('ceil inv cosh x0', '1', 'f64', marks=expected_failure('N2', 3)),
+    pytest.param('exp log x0', 'x0', 'permissive', marks=expected_failure('R1', 3)),
     ('rootn pow x0 2 2', 'x0', 'real'), ('exp log x0', 'x0', 'f64'),
 ])
 def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
@@ -378,7 +409,7 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
 @pytest.mark.parametrize('lhs, rhs, mode', [
     pytest.param('asin 1', 'acos 0', 'f64', marks=expected_failure('X3', 3)),
     pytest.param('asin 1', 'acos 0', 'real', marks=expected_failure('X3', 3)),
-    pytest.param('exp tan asin 1', 'float("inf")', 'real', marks=expected_failure('X4', 2)),
+    ('exp tan asin 1', 'float("inf")', 'real'),
     ('rootn pow x0 2 2', 'x0', 'real'),
 ])
 def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs, mode) -> None:

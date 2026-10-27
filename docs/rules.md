@@ -46,8 +46,8 @@ against an exact counting recurrence.
    seeds; a pick that fails yields to the next candidate.
 6. **Judge**: the length's picks go to the contract judge (`simplipy.verify`), each as the
    pattern the file will carry and as every entry the mode serves from it. A pick whose
-   judged tier the mode does not license (`f64`: core, f64; `real`: core, real;
-   `permissive`: core, f64, real), or that the mode does not serve, is excluded by class
+   judged tier the mode does not license (`f64`: core, f64; `real`: core, real, real-only;
+   `permissive`: core, f64, real, permissive), or that the mode does not serve, is excluded by class
    and only its source is scanned again. The scan is deterministic, so the result is the
    scan that consults the judge per candidate: a target another mode would keep never
    hides one this mode licenses. The loop settles within 8 rounds or fails the mine.

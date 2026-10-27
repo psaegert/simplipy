@@ -41,9 +41,13 @@ UNARY = [
 ]
 BINARY = ['+', '-', '*', '/', 'pow', 'rootn']
 
-# The two ratified nan-absorbing cells (v2 section 2: IEEE-definitional, kept):
-# (operator, index of the nan slot, value in the other slot, absorbed output).
+# The two ratified nan-absorbing cells (v2 section 2: IEEE-definitional, kept) of the deployed
+# float64 algebra: (operator, index of the nan slot, value in the other slot, absorbed output).
+# The contract's real values absorb nothing: undefined propagates through every operation
+# (the table's V6), so `pow(nan, 0)` and `pow(1, nan)` are undefined there and the obligation is
+# vacuous in that algebra.
 RATIFIED_CELLS = {('pow', 0, 0.0, 1.0), ('pow', 1, 1.0, 1.0)}
+ABSORBING = {'contract': set(), 'deployed': RATIFIED_CELLS}
 
 GRID = [-2.0, -0.5, 0.0, 0.5, 1.0, 2.0, float('inf'), float('-inf')]
 
@@ -96,7 +100,7 @@ def _absorbing_cells(point):
 @pytest.mark.parametrize('algebra,point', [('contract', _c_point), ('deployed', _d_point)])
 def test_nan_absorbing_slots_are_exactly_the_ratified_cells(algebra, point):
     cells = _absorbing_cells(point)
-    assert set(cells) == RATIFIED_CELLS, (
+    assert set(cells) == ABSORBING[algebra], (
         f'{algebra} algebra: nan-absorption differs from the ratified set -- '
         f'the section-5 composition proof no longer covers this vocabulary: {cells}'
     )
@@ -107,7 +111,7 @@ def test_absorbing_cells_are_constant_in_the_absorbing_slot(algebra, point):
     # The property the composition proof consumes: at the absorbing configuration the
     # operator is CONSTANT in the absorbing slot, so a nan flowing into it cannot
     # change the value an outer context sees.
-    for op, slot, other, absorbed in sorted(RATIFIED_CELLS):
+    for op, slot, other, absorbed in sorted(ABSORBING[algebra]):
         outs = set()
         for v in GRID + [float('nan')]:
             args = [v, other] if slot == 0 else [other, v]

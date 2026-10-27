@@ -69,14 +69,15 @@ def test_long_arrays_split_over_threads_give_the_same_bits() -> None:
 
 
 def test_the_judge_reads_the_kernels() -> None:
-    """The rule judge's deployed lane evaluates the realizations, so it reads the same bits."""
-    from simplipy.verify._contract import DEP_OPS
+    """The rule judge's deployed lane reads THE TABLE's f64 values, which are the engine's own
+    kernels: the same bits."""
+    from simplipy.verify import _contract as C
     x = unary_grid()[::97]
     for name in UNARY:
-        if name not in DEP_OPS:
+        if name not in C.ARITY:
             continue
-        with np.errstate(all='ignore'):
-            got = np.array([DEP_OPS[name](F(u)) for u in x])
+        tree = C.parse([name, '?0'])
+        got = np.array([C.d_eval(tree, {'?0': F(u)}) for u in x])
         assert bits_equal(got, core1(name, x)).all(), name
 
 

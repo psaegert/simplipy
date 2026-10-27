@@ -1,24 +1,31 @@
-"""Independent soundness verification for rule sets.
+"""Soundness verification for rule sets: the rule judge.
 
-This subpackage is a SECOND, independent soundness authority alongside the miner's own
-certification. Where the miner certifies each rule as it is discovered (via the compiled
-core), this package re-judges a *finished* rule set two ways:
+This subpackage owns the criterion a rule must meet (`holds` per mode) and what a mode's file
+may hold (`licensed`); the miner's own certification is a pre-filter that may only refuse what
+the judge refuses. Every value the judge compares is THE TABLE's, each mode's values defined
+once in the compiled core; the judge's own part is its procedure. It judges a rule set two
+ways:
 
 - :func:`verify_ruleset` (the GATE) judges every rule at its own symbolic trigger points
-  under an arbitrary-precision contract evaluator, classifying each into eight buckets
-  (CERTIFIED / TOLERATED / KILL / ENGINE-MISALIGN / NO-WITNESS / UNRESOLVED-COVERAGE /
-  UNSUPPORTED-SHAPE / JUDGE-TIMEOUT). Coverage is 100% of the rule set by construction.
+  in THE TABLE's values (the core's one definition of each mode's values), classifying each
+  into nine buckets (CERTIFIED / TOLERATED / KILL / ENGINE-MISALIGN / NO-WITNESS /
+  UNRESOLVED-COVERAGE / UNDECIDED-MEASURE / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT). Coverage is
+  100% of the rule set by construction.
+
+- :func:`licensed` is the criterion a mode's file holds: the rule holds in the mode, and no
+  named policy (evidence, constant count, ground composites, ordering, ...) refuses it.
 
 - :func:`monitor_ruleset` (the MONITOR) runs the *deployed* engine over an
   adversarial-plus-sampled corpus and re-judges every input->output rewrite under an
   independent high-precision evaluator, attributing any deployed-value violation to the
   responsible rule. It complements the gate: a corpus sweep rather than a per-rule scan.
 
-Both carry poison self-tests that must pass before they are trusted. Both are deliberately
-implemented independently of the compiled core so they cross-check it rather than echo it.
+Both carry poison self-tests that must pass before they are trusted. The monitor still
+evaluates with its own high-precision evaluator, independent of the core.
 """
 import json
 import warnings
+from typing import Any
 
 from . import _contract, _gate, _monitor
 
@@ -29,7 +36,7 @@ from . import _contract, _gate, _monitor
 #: cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) is exactly as
 #: unshippable as a KILL: the second authority never passed it.
 FATAL_BUCKETS = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
-                 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
+                 'UNDECIDED-MEASURE', 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
 
 
 def _load(rules: list | str) -> list:
@@ -48,20 +55,99 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
     return _contract.judge_rule(list(lhs), list(rhs), deployed_check=deployed_check)
 
 
-#: Which judged tiers each mode's rule set is allowed to contain. `permissive` carries both
-#: off-diagonal tiers because it is their union; no mode may carry `reject`.
+#: Which judged tiers each mode's rule set is allowed to contain: the tiers whose rules hold in
+#: the mode (`_contract._tier`). `real` holds what holds in real (`real-only` among it: a `$`
+#: slot real owes nothing at 0, where permissive's real-valued guarantee reaches); `permissive`
+#: what holds in permissive or in f64 (the specification's P3), its own extensions
+#: (`permissive`: `exp(log x) -> x`) among it; no mode may carry `reject`.
 MODE_TIERS: dict[str, frozenset] = {
     'f64': frozenset({'core', 'f64'}),
-    'real': frozenset({'core', 'real'}),
-    'permissive': frozenset({'core', 'f64', 'real'}),
+    'real': frozenset({'core', 'real', 'real-only'}),
+    'permissive': frozenset({'core', 'f64', 'real', 'permissive'}),
 }
 
 
 def effective_tier(detail: dict) -> str:
     """A judged rule's EFFECTIVE tier -- what ``MODE_TIERS`` licenses against. A verdict that
-    carries no tier reads ``reject`` (fail-closed): a rule the judge could not decide, such as
-    one with more than one ``<constant>`` on its left side, ships in no mode."""
+    carries no tier reads ``reject`` (fail-closed): a rule the judge could not decide ships in
+    no mode."""
     return detail.get('tier') or 'reject'
+
+
+#: The named policies of the specification's section 4 that :func:`licensed` applies: which
+#: true rules the project wants. Each is defined in one place and read from there.
+POLICIES = ('evidence', 'constant_count', 'ground_composite', 'cell_bound', 'ordering',
+            'specials', 'duplication', 'engine_owned', 'well_formed')
+
+#: The load's refusals (`Engine.load_refusal`) by the policy each applies. `pole-class-change`
+#: is a pre-filter of truth, not a policy, and licenses nothing either way.
+_LOAD_POLICY = {'multi-constant-lhs': 'constant_count', 'const-count-increase': 'constant_count',
+                'not-ordered-below': 'ordering', 'engine-owned-law': 'engine_owned',
+                'subsumed': 'engine_owned', 'catch-all-lhs': 'well_formed',
+                'unbound-rhs-wildcard': 'well_formed', 'unparseable-side': 'well_formed'}
+
+#: A mode's name as the engine's rule sets are named.
+_RULE_MODE = {'f64': 'default', 'real': 'real', 'permissive': 'permissive'}
+
+
+def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
+                    max_source: int | None = None) -> list[str]:
+    """The named policies (``POLICIES``) that refuse ``lhs -> rhs`` in ``mode``, each read
+    from its one place: evidence (4.1, the core's certified cells in the mode's values,
+    `_core.table_evidence`); the load's gates (4.2 constant count and the one-constant
+    stopgap, 4.5 ordering, 4.8 the engine's own laws, well-formedness: `load_refusal`); the
+    ground-composite predicate (4.3); the mine's cell (4.4, with ``max_source``); the
+    registry's special absorption and constant introduction (4.6, 4.2); the duplication
+    predicate (4.7); and the ground facts the engine's fold performs (4.8, the preemption
+    gate). ``engine`` is a :class:`~simplipy.SimpliPyEngine` holding the operators."""
+    from .. import _core  # type: ignore[attr-defined]
+    from ..mining import _in_cell, _preempted_by
+    lhs, rhs = list(lhs), list(rhs)
+    rule_mode = _RULE_MODE[mode]
+    out: list[str] = []
+    slots = sorted({'?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+                    for t in lhs + rhs if _contract.SLOT_RE.match(t) or t in ('x0', 'x1', 'x2')})
+    spelling = {s: f'x{i}' for i, s in enumerate(slots)}
+    if _core.table_evidence(_contract._spelled(lhs, spelling), dict(_contract.ARITY),
+                            mode == 'f64') is not True:
+        out.append('evidence')
+    load = engine._core.load_refusal(lhs, rhs, rule_mode=rule_mode)
+    if load in _LOAD_POLICY:
+        out.append(_LOAD_POLICY[load])
+    if _core.policy_ground_composite(rhs):
+        out.append('ground_composite')
+    if not _in_cell({'completion': [lhs, rhs]}, max_source):
+        out.append('cell_bound')
+    registry = engine._core.registry_mint_refusal(lhs, lhs, rhs, [])
+    if registry == 'special_absorption':
+        out.append('specials')
+    elif registry == 'const_introduction':
+        out.append('constant_count')
+    if _core.policy_duplicates(lhs, rhs):
+        out.append('duplication')
+    if _preempted_by(engine, lhs, rhs, mode):
+        out.append('engine_owned')
+    return [p for p in POLICIES if p in out]
+
+
+def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
+             max_source: int | None = None, detail: dict | None = None) -> dict:
+    """``licensed(L, R, mode)`` (the specification's 3.4): the rule holds in the mode -- its
+    judged tier is one ``MODE_TIERS`` gives the mode, so permissive also takes what holds in
+    f64 -- and no named policy refuses it (:func:`policy_refusals`). ``detail`` is the judge's
+    verdict on the rule when the caller has it. Returns ``{'licensed', 'holds', 'tier',
+    'refused_by'}``: ``asin(1) -> acos(0)`` holds in every mode and is refused by
+    ``ground_composite``; ``exp(tan(asin(1))) -> inf`` holds in f64 and is refused by
+    ``evidence``."""
+    if mode not in MODE_TIERS:
+        from ..engine import _coerce_mode
+        mode = _coerce_mode(mode).name
+    detail = detail if detail is not None else verify_rule(lhs, rhs)
+    tier = effective_tier(detail)
+    holds = tier in MODE_TIERS[mode]
+    refused = policy_refusals(lhs, rhs, mode, engine, max_source)
+    return {'licensed': holds and not refused, 'holds': holds, 'tier': tier,
+            'refused_by': refused}
 
 
 def verify_ruleset(rules: list | str, *, mode: str | None = None,
@@ -243,6 +329,6 @@ def selftest() -> bool:
     return _gate.selftest() and _contract.selftest(verbose=False)
 
 
-__all__ = ['FATAL_BUCKETS', 'MODE_TIERS', 'default_corpus',
-           'effective_tier', 'verify_rule',
+__all__ = ['FATAL_BUCKETS', 'MODE_TIERS', 'POLICIES', 'default_corpus',
+           'effective_tier', 'licensed', 'policy_refusals', 'verify_rule',
            'verify_ruleset', 'verify_triple', 'monitor_ruleset', 'selftest']

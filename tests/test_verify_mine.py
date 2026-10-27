@@ -278,7 +278,7 @@ def test_a_sidecar_records_the_acceptance_and_the_code(mine) -> None:
     side = json.load(open(mine / (FILES['real'] + '.provenance.json')))
     assert side['acceptance']['rescue'] is True
     assert side['acceptance']['near_miss_frac'] == 0.5
-    assert side['acceptance']['tiers'] == ['core', 'real']
+    assert side['acceptance']['tiers'] == ['core', 'real', 'real-only']
     assert len(side['acceptance']['judge_digest']) == 64
     assert set(side['code_digest']) == {'core', 'python'}
     f64 = json.load(open(mine / (FILES['f64'] + '.provenance.json')))

@@ -1090,6 +1090,22 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().ac_shadow_census(mode)))
     }
 
+    /// THE LOAD'S VERDICT on one rule read in `rule_mode` (`Engine::load_refusal`): the
+    /// refusing gate's name, or None when the load serves the rule.
+    #[pyo3(signature = (lhs, rhs, *, rule_mode))]
+    fn load_refusal(
+        &self,
+        py: Python<'_>,
+        lhs: Vec<String>,
+        rhs: Vec<String>,
+        rule_mode: &str,
+    ) -> PyResult<Option<String>> {
+        ensure_tokens_are_tokens(&lhs)?;
+        ensure_tokens_are_tokens(&rhs)?;
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner().load_refusal(&lhs, &rhs, mode)))
+    }
+
     /// The licence registry for one would-be rule, as a PROBE: the mint channels
     /// consult the registry through the miner's one acceptance (`judge_hint` for a hint),
     /// never through this entry. Returns the refusal
@@ -2057,6 +2073,112 @@ fn f64_bar(
         .map(|d| (d.ok, d.probes, d.first))
 }
 
+/// What `f64_bar_sorted` returns: `(agree, probes, first differing probe, range probes)`.
+type SortedBar = (bool, usize, Option<Vec<f64>>, Vec<Vec<f64>>);
+
+/// The f64 bar as the contract judge reads it (`battery::f64_bar_sorted`): each variable probed
+/// over its slot sort's values (`sorts[i]` one of `?!$_`), and the probes that differ where an
+/// operation overflowed or underflowed returned for the judge to read by the true value.
+#[pyfunction]
+fn f64_bar_sorted(
+    py: Python<'_>,
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    var_names: Vec<String>,
+    sorts: String,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<SortedBar> {
+    let ops = arity_table(arity);
+    let sorts: Vec<char> = sorts.chars().collect();
+    py.detach(|| crate::battery::f64_bar_sorted(&lhs, &rhs, &var_names, &sorts, true, &ops))
+        .map(|d| (d.ok, d.probes, d.first, d.range_rows))
+}
+
+/// A rule's slot or variable token: a wildcard (`_0`, `?0`, `!0`, `$0`) or a dummy (`x0`).
+fn rule_variable(t: &str) -> bool {
+    let rest = t
+        .strip_prefix(['_', '?', '!', '$', 'x'])
+        .unwrap_or_default();
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite`) on a rule's right side,
+/// its slots and dummies the variables.
+#[pyfunction]
+fn policy_ground_composite(rhs: Vec<String>) -> bool {
+    crate::engine::refusals::ground_composite(&rhs, rule_variable)
+}
+
+/// THE NO-DUPLICATION POLICY (`worker::violates_wildcard_multiplicity`): does the right side
+/// use a `_` slot more often than the left side?
+#[pyfunction]
+fn policy_duplicates(lhs: Vec<String>, rhs: Vec<String>) -> bool {
+    crate::worker::violates_wildcard_multiplicity(&lhs, &rhs)
+}
+
+/// THE JUDGE'S MEASURE (clause (b) of the criterion): the volume of the largest certified cell
+/// on which `source` (its `<constant>`s bound to `src_params`) is undefined and `target` (bound
+/// to `tgt_params`) has a value, read in THE TABLE's real values at every point of a cell
+/// (`interval::with_table_points`). `0.0`: no positive-measure extension; `None`: undecided
+/// (the horizon or the node budget ran out), which the judge reads as a refusal.
+#[pyfunction]
+fn table_extension_width(
+    py: Python<'_>,
+    source: Vec<String>,
+    src_params: Vec<f64>,
+    target: Vec<String>,
+    tgt_params: Vec<f64>,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<f64> {
+    let ops = arity_table(arity);
+    py.detach(|| {
+        crate::interval::with_table_points(|| {
+            crate::interval::domain_extension_p(&source, &src_params, &target, &tgt_params, &ops)
+        })
+    })
+}
+
+/// EVIDENCE (policy 4.1): is `tokens` finite on a set of positive measure of its variables AND
+/// its `<constant>`s (each constant its own dimension), in the mode's values -- float64's with
+/// `f64`, else the reals', every point a cell holds read by THE TABLE? `None`: undecided (no
+/// evidence, fail closed).
+#[pyfunction]
+fn table_evidence(
+    py: Python<'_>,
+    tokens: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+    f64: bool,
+) -> Option<bool> {
+    let ops = arity_table(arity);
+    // each `<constant>` a dimension of its own, past every variable dummy
+    let top = tokens
+        .iter()
+        .filter_map(|t| t.strip_prefix('x').and_then(|d| d.parse::<usize>().ok()))
+        .max()
+        .map_or(0, |m| m + 1);
+    let mut k = 0usize;
+    let spelled: Vec<String> = tokens
+        .iter()
+        .map(|t| {
+            if t == "<constant>" {
+                k += 1;
+                format!("x{}", top + k - 1)
+            } else {
+                t.clone()
+            }
+        })
+        .collect();
+    py.detach(|| {
+        let cells = || crate::interval::finite_cells(&spelled, &[], &ops, 1, f64);
+        let found = if f64 {
+            cells()
+        } else {
+            crate::interval::with_table_points(cells)
+        };
+        found.map(|fc| !fc.cells.is_empty())
+    })
+}
+
 /// An operator table from a name -> arity map (no realizations: the core's own kernels).
 fn arity_table(arity: std::collections::BTreeMap<String, u8>) -> crate::operators::Operators {
     let order: Vec<String> = arity.keys().cloned().collect();
@@ -2350,6 +2472,11 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
     m.add_class::<PyCandidateLibrary>()?;
     m.add_class::<PyTableExpr>()?;
+    m.add_function(wrap_pyfunction!(f64_bar_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(policy_ground_composite, m)?)?;
+    m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
+    m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
+    m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;
     m.add_function(wrap_pyfunction!(table_sort_atoms, m)?)?;

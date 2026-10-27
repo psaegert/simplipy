@@ -1,19 +1,27 @@
 # Verifying rulesets
 
-`simplipy.verify` is a **second, independent soundness authority** alongside
-the miner's own certification. Where the miner certifies each rule as it is
-discovered (via the compiled core), this package re-judges a *finished* rule
-set — deliberately implemented independently of the compiled core, so it
-cross-checks the engine rather than echoing it. It is a power-user surface:
-verdicts are environment-qualified (see
-[environment qualification](../method/environment-qualification.md)), and the
-judge refuses what it cannot evaluate rather than guessing.
+`simplipy.verify` is the **rule judge**: it decides whether a rule holds in a mode,
+and the miner's own certification is a pre-filter that may only refuse what the judge
+refuses. Every value it compares comes from one table per mode, defined once in the
+compiled core: in `real` a literal is the rational it spells and a pole takes its limit
+where every direction gives the same one (`pow(0, -2)` is `+inf`, `1/0` has no value), in
+`f64` an operation is the engine's own float64 kernel. The judge's own part is the
+procedure: the precision ladder, the fitted constants and the sample points. It is a
+power-user surface: verdicts are environment-qualified (see
+[environment qualification](../method/environment-qualification.md)), and the judge
+refuses what it cannot evaluate rather than guessing.
 
 ## The gate: `verify_ruleset`
 
-Judges every rule at its own symbolic trigger points under an
-arbitrary-precision contract evaluator, classifying each into eight buckets.
-Coverage is 100% of the rule set by construction.
+Judges every rule at its own symbolic trigger points, classifying each into nine
+buckets. Coverage is 100% of the rule set by construction.
+
+A rule holds in `real` when, wherever its left side has a value, its right side has the
+same value, and its right side gives a value where the left side has none only on a set
+of measure zero, decided by certified cells (`x0/x0 -> 1` holds; `exp(log(x0)) -> x0`
+does not). A rule without variables has one point and no tolerance; a `_` slot is
+checked at `+inf`, `-inf` and NaN; each `<constant>` is its own symbol, and nothing is
+owed at a constant where the left side has no finite value.
 
 ```python
 from simplipy.verify import verify_ruleset
@@ -35,19 +43,23 @@ The second rule is the classic trap this package exists to catch:
 function on a positive-measure set, so the judge kills it.
 
 A rule the judge cannot evaluate — `NO-WITNESS`, `UNSUPPORTED-SHAPE`,
-`JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode: the
-second authority never reached an answer, and "confirmed by two independent
-authorities" is the claim a shipped rule makes.
+`JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode, and one whose
+measure the cells cannot decide (`UNDECIDED-MEASURE`) is refused in `real`: an
+undecided check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
-Each rule also gets a **tier**, from two independent questions: is it true over
-ℝ, and does the deployed f64 evaluator reproduce it?
+Each rule also gets a **tier**, from three independent questions: does it hold over ℝ,
+does the deployed f64 evaluator reproduce it, and does it hold in `permissive`, whose
+criterion is agreement alone (a permissive rule may give a value where its input has
+none, over real-valued bindings)?
 
-| tier | true over ℝ | f64-realised | serves |
+| tier | holds over ℝ | f64-realised | serves |
 |---|---|---|---|
 | `core` | yes | yes | every mode |
 | `real` | yes | no | `real`, `permissive` |
+| `real-only` | yes, a `$` slot owing nothing at 0 | no | `real` |
 | `f64` | no | yes | `f64`, `permissive` |
+| `permissive` | by agreement alone (`exp(log(x0)) -> x0`) | no | `permissive` |
 | `reject` | no | no | nothing — recorded in the drop census |
 
 "f64-realised" means the deployed evaluator computes the rewrite, to within 8 ULP, at every
@@ -105,6 +117,18 @@ from simplipy.verify import verify_rule
 
 verify_rule(['*', 'x0', '1'], ['x0'])['verdict']
 # -> 'CERTIFIED'
+```
+
+What a mode's file may hold is `licensed`: the rule holds in the mode, and no named policy
+refuses it — evidence (the left side finite on a set of positive measure), the constant
+count, ground composites, the mine's cell, the serve ordering, special constants,
+duplication of a `_` slot, and what the engine does itself (`policy_refusals`):
+
+<!-- docs-example: skip: needs an engine; see tests/test_differential.py -->
+```python
+from simplipy.verify import licensed
+licensed(['asin', '1'], ['acos', '0'], 'real', engine)
+# -> {'licensed': False, 'holds': True, 'tier': 'core', 'refused_by': ['ground_composite']}
 ```
 
 ## The monitor: `monitor_ruleset`

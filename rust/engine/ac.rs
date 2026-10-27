@@ -1510,6 +1510,27 @@ impl Engine {
         })
     }
 
+    /// THE LOAD'S VERDICT on one rule read in `mode`, without installing it: the name of
+    /// the gate that refuses it -- the translate census's reasons (`multi-constant-lhs`,
+    /// `const-count-increase`, `catch-all-lhs`, `unbound-rhs-wildcard`, `not-ordered-below`,
+    /// `engine-owned-law`, `unparseable-side`), `subsumed` (both sides one canonical state),
+    /// `pole-class-change` (the registry's pre-filter) -- or `None` when the load serves it.
+    /// The load checks policies, not truth (the specification's 4.11); `licensed` reads its
+    /// policies here.
+    pub fn load_refusal(&self, lhs: &[String], rhs: &[String], mode: RuleMode) -> Option<String> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let toks = vec![(self.intern_seq(lhs, &ctx), self.intern_seq(rhs, &ctx))];
+        let view = self.view(&ctx);
+        let rules = self.translate_in(&toks, &view, mode, crate::ac::rules::RuleCanon::Mode(mode));
+        if rules.n_registry_dropped > 0 {
+            return Some("pole-class-change".to_string());
+        }
+        if let Some((reason, _)) = rules.drop_census.first() {
+            return Some(reason.to_string());
+        }
+        (rules.n_subsumed > 0).then(|| "subsumed".to_string())
+    }
+
     /// The rules `mode` would SERVE from `raw`, without installing them: the load path
     /// (`translate_rules`) on a call's overlay, in the explicit projection, `source`
     /// indexing `raw`. Orientation twins included, refused rules absent.

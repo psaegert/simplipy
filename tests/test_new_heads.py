@@ -255,7 +255,8 @@ def test_lattice_laws_are_the_judges():
     """The laws the bag applies unconditionally are true over the reals and float64 identities
     bit for bit, a zero's sign and a NaN included (the contract's `max` and `min` and the f64 bar
     agree with the bag's folds): `core`. The absorber and the absorption are refused only at a
-    NaN operand, which is why the bag takes them under the no-NaN licence alone."""
+    NaN operand, which is why the bag takes them under the no-NaN licence alone: they hold in
+    `permissive`, whose guarantee covers the real-valued bindings."""
     j = lambda lhs, rhs: _contract.judge_rule(lhs.split(), rhs.split())  # noqa: E731
     for lhs, rhs in (('max _0 max _1 _2', 'max max _0 _1 _2'), ('min _0 _1', 'min _1 _0'),
                      ('max _0 _0', '_0'), ('max float("-inf") _0', '_0'), ('max -0.0 0', '0'),
@@ -263,7 +264,7 @@ def test_lattice_laws_are_the_judges():
         assert j(lhs, rhs)['tier'] == 'core', (lhs, rhs)
     for lhs, rhs in (('max float("inf") _0', 'float("inf")'), ('max _0 min _0 _1', '_0')):
         v = j(lhs, rhs)
-        assert v['tier'] == 'reject' and any(np.isnan(x) for x in v['points'][0].values()), v
+        assert v['tier'] == 'permissive' and any(np.isnan(x) for x in v['points'][0].values()), v
 
 
 def test_rules_match_any_sub_bag(bare):
@@ -526,8 +527,10 @@ def test_besselj_is_judged_by_the_contract():
     v = j('besselj 1 neg _0', 'neg besselj 1 _0')
     assert v['verdict'] == 'CERTIFIED' and v['tier'] == 'core', v
     assert j('besselj -0.5 0', 'float("inf")')['tier'] == 'core'
-    # true over the reals, a few ulp apart in float64
-    assert j('besselj 0.5 _0', '* rootn / 2 * np.pi _0 2 / sin _0 1')['tier'] == 'real'
+    # equal for x > 0, both undefined for x < 0; at x = 0 J_1/2(0) = 0 while 2/(pi*0) has no
+    # value (1/0, the limit rule): the right side loses the left side's value there
+    v = j('besselj 0.5 _0', '* rootn / 2 * np.pi _0 2 / sin _0 1')
+    assert (v['verdict'], v['kinds'], v['points']) == ('KILL', ['SHRINK'], [{'_0': 0.0}]), v
     assert j('besselj 0.5 neg _0', 'besselj 0.5 _0')['verdict'] == 'KILL'
     assert j('besselj _0 0', '0')['verdict'] == 'KILL'          # J_0(0) = 1
     # a <constant> is witnessed by the contract

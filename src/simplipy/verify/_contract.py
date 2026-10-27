@@ -1,36 +1,34 @@
 # mypy: ignore-errors
 #!/usr/bin/env python
-"""Canonical mpmath judge for the simplification-soundness contract.
+"""The contract judge: `holds(L, R, mode)` for a rewrite rule, on THE TABLE.
 
-A single implementation of the contract semantics: every soundness instrument
-(the rule-completeness gate, a deployed-realization sweep, a manual review gate)
-derives from this module. The judge evaluates both sides of a candidate rule
-under an arbitrary-precision contract algebra and compares the results across a
-battery of symbolic points and a generic grid.
+A single implementation of the criterion (the specification's section 3): every soundness
+instrument (the rule-completeness gate, the mine's gates, verify-mine) reads it. Every value at a
+point is THE TABLE's (`rust/table.rs`, read through `_core.TableExpr`): real's exact or
+high-precision values with the limit rule at poles and infinite arguments (`1/0` and
+`pow(0, -1)` are undefined, `pow(0, -2)` is +inf, `log(0)` is -inf), and f64's evaluator values
+with the range standard. The judge keeps its procedure -- the precision ladder, the constant
+fitting, the sampled points -- and owns none of the values.
 
-Semantics implemented here:
-  - One zero: neg(0) = 0, 1/0 = +inf (c/0 = sign(c)*inf, derived from c*(1/0)),
-    0/0 undefined.
-  - Limit-completion: tanh(+-inf) = +-1, exp(-inf) = 0, log(0) = -inf,
-    atanh(+-1) = +-inf, 1/+-inf = 0; tan poles are UNDEFINED (two-sided);
-    pow(negative including -inf, non-integer) is UNDEFINED.
-  - The kill bar:
-      (a) both-sides-REAL disagreement -> KILL at any measure;
-      (b)/(c) disagreements involving nan/+-inf -> judged by MEASURE over data
-          (positive measure kills; null / Dirac-degenerate events are tolerated
-          and classified).
+The criterion, per mode:
+  - (a) agreement: at every binding the sorts quantify over where `L` has a value, `R` has an
+    agreeing one (real: equal; f64: within 8 units in the last place, or the true value at a
+    range event). A disagreement at any such point fails the rule, whatever its measure.
+  - (b) no invented function: the bindings where `L` is undefined and `R` has a value form a
+    set of measure zero. Measure is decided by certified cells of the interval layer, read in
+    the table's values (`_core.table_extension_width`), never by a fraction of a grid. A `_`
+    slot bound to +-inf or NaN is a point of its sort's domain: nothing is excused there.
+  - permissive: clause (a) alone, over the real-valued bindings (every slot any real number).
+  - constants are independent symbols; at constants where `L` is not finite nothing is owed.
+  - a ground rule has one point, and no tolerance: if `L` is undefined, `R` must be too.
 
 Precision honesty:
-  - Battery points are SYMBOLIC (mp.pi/2 etc.), rebuilt per dps rung; f64
-    renderings of transcendentals are NOT the contract's points.
-  - Trig outputs with |v| < 10^(-dps+10) snap to exact 0 (symbolic-cancellation
-    floor; battery/grid inputs are >= 1e-3 in magnitude so genuine tiny trig
-    values cannot occur); |v| > 10^(dps-10) is a pole -> undefined.
-  - Every non-eq point verdict is CONFIRMED at a second rung (dps 120); rung
-    disagreement -> Unresolved (the point is skipped, never convicted).
-  - mpmath wedge caps: |exponent| > 1e6 in pow, |arg| > 1e12 in trig ->
-    Unresolved.
+  - Battery points are exact table values (pi/2 is pi/2, rebuilt per rung); f64 renderings of
+    transcendentals are NOT the contract's points.
+  - Every non-eq point verdict is CONFIRMED at a second rung; rung disagreement ->
+    Unresolved (the point is skipped, never convicted).
 """
+import itertools
 import math
 import re
 from fractions import Fraction
@@ -118,84 +116,58 @@ class UnsupportedToken(ValueError):
     fail-closed and the rule is bucketed UNSUPPORTED-SHAPE."""
 
 
-# `1`, `-1`, `0.5`, `-1e-09`, `.5`  -- sign, digits, optional exponent. Nothing else.
-_NUM_RE = re.compile(r'^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
-# `(-10)`: the parenthesized-negative spelling. 26.98% of literal occurrences in the
-# shipped artifact carry it (3,981 of 6,803 rules) -- an acceptor without it refuses
-# the majority of the corpus it exists to gate.
-_PAREN_NEG_RE = re.compile(r'^\(-((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\)$')
-# `float("inf")` / `float('-inf')` / `float("nan")` -- the canonical special spellings.
-_FLOAT_CALL_RE = re.compile(r'^float\((["\'])([^"\']*)\1\)$')
-_SPECIALS = {'inf': math.inf, '+inf': math.inf, '-inf': -math.inf, 'nan': math.nan}
-_NAMED = {'np.pi': math.pi, 'np.e': math.e}
 #: the longest literal read: a fraction of two 4,300-digit components, signs and parentheses
 _MAX_LITERAL_CHARS = 2 * 4300 + 8
 
-
-def _exact(t):
-    """A decimal literal as the EXACT rational it spells -- `-0.1` is -1/10, not the
-    double 0.1000000000000000055511151231257827.
-
-    Literals used to enter the tree through `float()`, so the engine's exact `Rat`
-    arrived at an arbitrary-precision judge already wrong in the 17th digit, and `c_eval`
-    then did `mpf(that_double)` and preserved the error at every rung. It convicted
-    `inv(-10/t) -> -0.1*t` -- an exact identity -- as a clause-(a) REAL-CHANGE at measure
-    1.0. A mis-rendered literal is wrong by the same 5.5e-17 at EVERY rung, so the gap does
-    not decay and the judge reads it as analytic -- which, given that literal, is exactly
-    what it is. No tolerance ever hid this; only the right point does.
-    That is the same principle the module header already states for battery points: an f64
-    rendering is NOT the contract's point.
-
-    The DEPLOYED lane must keep seeing the double, because that is what deployment
-    computes -- `d_eval` converts back with `F()`, so its semantics are unchanged.
-
-    The spelling is bounded BEFORE the rational is built: a rule file is untrusted input, and
-    `Fraction('1e999999999')` would build a billion-digit integer. More than 4,300 digits
-    (CPython's integer-string limit) or a decimal exponent beyond 4,000 is refused.
-    """
-    t = t.strip()
-    mantissa, _, exponent = t.lower().partition('e')
-    digits = exponent.lstrip('+-').lstrip('0')
-    if sum(c.isdigit() for c in mantissa) > 4300 or len(digits) > 5 or int(digits or '0') > 4000:
-        raise UnsupportedToken(f'literal too large to read exactly: {t[:40]!r}...')
-    # built from the stripped exponent: `Fraction` itself reads a zero-padded one through int()
-    scale = Fraction(10) ** int(digits or '0')
-    return Fraction(mantissa) / scale if exponent.startswith('-') else Fraction(mantissa) * scale
+try:  # THE TABLE: each mode's values, defined once in the compiled core (`rust/table.rs`)
+    from simplipy import _core as _table  # type: ignore[attr-defined]
+    _TABLE_OK = hasattr(_table, 'TableExpr')
+except Exception:  # pragma: no cover  (missing/unbuilt extension)
+    _table, _TABLE_OK = None, False
 
 
 def literal_value(t):
-    """The accepted numeric grammar, evaluated without `eval`. Total: value or refusal."""
-    if len(t) > _MAX_LITERAL_CHARS:  # before any regex: they backtrack on long digit runs
+    """The exact value a literal token denotes, as THE TABLE reads it in real
+    (`_core.table_literal_real`): a decimal or `p/q` numeral as the exact `Fraction` it spells
+    (`-0.1` is -1/10, not the double 0.1000000000000000055511151231257827), `np.pi` and
+    `np.e` as their constants, the `float("...")` spellings as the infinities and NaN. Total:
+    a value or a refusal (`UnsupportedToken`), never an `eval`. A rule file is untrusted input,
+    so the spelling is bounded before anything is built: more than 4,300 digits or a decimal
+    exponent beyond 4,000 is refused."""
+    if len(t) > _MAX_LITERAL_CHARS:
         raise UnsupportedToken(f'literal too long to read: {t[:40]!r}...')
-    if t in _NAMED:
-        return _NAMED[t]
-    m = _FLOAT_CALL_RE.match(t)
-    if m:
-        inner = m.group(2).strip()
-        if inner in _SPECIALS:
-            return _SPECIALS[inner]
-        if _NUM_RE.match(inner):
-            return _exact(inner)
-        raise UnsupportedToken(f'float() of a non-numeric literal: {t!r}')
-    m = _PAREN_NEG_RE.match(t)
-    if m:
-        return -_exact(m.group(1))
-    if _NUM_RE.match(t):
-        return _exact(t)
-    if t.count('/') == 1:  # `p/q`: not in the shipped artifact, legal in a foreign one
-        p, q = t.split('/')
-        if _NUM_RE.match(p.strip()) and _NUM_RE.match(q.strip()):
-            den = _exact(q)
-            if den == 0:
-                raise UnsupportedToken(f'zero denominator: {t!r}')
-            return _exact(p) / den
-    raise UnsupportedToken(f'not an accepted literal: {t!r}')
+    spec = _table.table_literal_real(t)
+    if spec is None:
+        raise UnsupportedToken(f'not an accepted literal: {t!r}')
+    kind, a, b = spec
+    if kind == 'q':
+        return Fraction(int(a), int(b))
+    if kind == 'pi':
+        return math.pi
+    if kind == 'e':
+        return math.e
+    if kind == 'inf':
+        return math.inf if a == '+' else -math.inf
+    return math.nan
 
 
 # ---------------------------------------------------------------- parse
-def parse(tokens, cname='<C>', arity=None):
+def _constant_names(tokens, cname, number):
+    """The name of each `<constant>` of `tokens`, in order: `cname` for all of them, or with
+    `number` one symbol each (`<C_L>` gives `<C_L0>`, `<C_L1>`, ...: every constant is its own
+    symbol, specification 3.2)."""
+    names, k = [], 0
+    for t in tokens:
+        if t == '<constant>':
+            names.append(f'{cname[:-1]}{k}>' if number else cname)
+            k += 1
+    return names
+
+
+def parse(tokens, cname='<C>', arity=None, number=False):
     arity = ARITY if arity is None else arity
-    toks = [cname if t == '<constant>' else t for t in tokens]
+    consts = iter(_constant_names(tokens, cname, number))
+    toks = [next(consts) if t == '<constant>' else t for t in tokens]
     pos = 0
 
     def rec():
@@ -207,7 +179,7 @@ def parse(tokens, cname='<C>', arity=None):
             return ('slot', t)
         if t in ('x0', 'x1', 'x2'):
             return ('slot', '?' + t[1:])
-        return ('lit', literal_value(t))
+        return ('lit', literal_value(t), t)
 
     tree = rec()
     if pos != len(toks):
@@ -215,8 +187,9 @@ def parse(tokens, cname='<C>', arity=None):
     return tree
 
 
-def slots_of(tokens, cname='<C>'):
+def slots_of(tokens, cname='<C>', number=False):
     out = {}
+    consts = iter(_constant_names(tokens, cname, number))
     for t in tokens:
         m = SLOT_RE.match(t)
         if m:
@@ -224,7 +197,7 @@ def slots_of(tokens, cname='<C>'):
         elif t in ('x0', 'x1', 'x2'):
             out['?' + t[1:]] = '?'
         elif t == '<constant>':
-            out[cname] = 'c'
+            out[next(consts)] = 'c'
     return out
 
 
@@ -719,64 +692,197 @@ OPS = {
 }
 
 
-def c_eval(tree, env):
-    """evaluate under the contract semantics (env values: mpf/mp expressions)"""
+class TV:
+    """A value THE TABLE carries exactly -- a rational, a rational multiple of pi, e, an infinity
+    or undefined -- as its interchange spec `(kind, a, b)` (`table::val_spec`). The judge binds
+    the sorts' atoms and the constant battery as `TV`s, so a point the table decides is decided
+    (`asin(1)` is exactly pi/2, and `tan` there a pole). `float()` is its nearest double, `+v`
+    is `v`, and arithmetic is mpmath's on its reading at the current precision."""
+    __slots__ = ('spec',)
+
+    def __init__(self, spec):
+        self.spec = tuple(spec)
+
+    def mpf(self):
+        return _from_spec(self.spec)
+
+    def __float__(self):
+        kind, a, b = self.spec
+        if kind == 'q':
+            return float(Fraction(int(a), int(b)))
+        if kind == 'inf':
+            return math.inf if a == '+' else -math.inf
+        if kind == 'nan':
+            return math.nan
+        with mp.workdps(40):
+            return float(_from_spec(self.spec))
+
+    def __pos__(self):
+        return self
+
+    def __neg__(self):
+        return -self.mpf()
+
+    def __repr__(self):
+        return f'TV{self.spec}'
+
+    def __eq__(self, other):
+        return isinstance(other, TV) and self.spec == other.spec
+
+    def __hash__(self):
+        return hash(self.spec)
+
+    def _other(self, o):
+        return o.mpf() if isinstance(o, TV) else o
+
+    def __add__(self, o):
+        return self.mpf() + self._other(o)
+
+    def __radd__(self, o):
+        return self._other(o) + self.mpf()
+
+    def __sub__(self, o):
+        return self.mpf() - self._other(o)
+
+    def __rsub__(self, o):
+        return self._other(o) - self.mpf()
+
+    def __mul__(self, o):
+        return self.mpf() * self._other(o)
+
+    def __rmul__(self, o):
+        return self._other(o) * self.mpf()
+
+    def __truediv__(self, o):
+        return self.mpf() / self._other(o)
+
+    def __rtruediv__(self, o):
+        return self._other(o) / self.mpf()
+
+    def __lt__(self, o):
+        return self.mpf() < self._other(o)
+
+    def __gt__(self, o):
+        return self.mpf() > self._other(o)
+
+
+def tv_of_float(x):
+    """A double as the exact value it is (`Fraction(x)`), or its infinity / NaN."""
+    x = float(x)
+    if x != x:
+        return TV(('nan', '', ''))
+    if math.isinf(x):
+        return TV(('inf', '+' if x > 0 else '-', ''))
+    q = Fraction(x)
+    return TV(('q', str(q.numerator), str(q.denominator)))
+
+
+def _spec(v):
+    """A binding's interchange spec: a `TV` as it is, an mpf as its exact binary value, a
+    float, int or Fraction as the exact number it is."""
+    if isinstance(v, TV):
+        return v.spec
+    if isinstance(v, (Fraction, int)) and not isinstance(v, bool):
+        q = Fraction(v)
+        return ('q', str(q.numerator), str(q.denominator))
+    if not isinstance(v, type(mpf(0))):
+        return tv_of_float(v).spec
+    if misnan(v):
+        return ('nan', '', '')
+    if misinf(v):
+        return ('inf', '+' if v > 0 else '-', '')
+    sign, man, exp, _bc = v._mpf_
+    if man == 0:
+        return ('q', '0', '1')
+    return ('m', ('-' if sign else '') + format(int(man), 'x'), str(exp))
+
+
+def _from_spec(spec):
+    """A spec's value as an mpf at the current precision."""
+    kind, a, b = spec
+    if kind == 'q':
+        return mpf(int(a)) if b == '1' else mpf(int(a)) / mpf(int(b))
+    if kind == 'pi':
+        return mpf(int(a)) * mp.pi / mpf(int(b))
+    if kind == 'e':
+        return +mp.e
+    if kind == 'inf':
+        return PINF if a == '+' else NINF
+    if kind == 'nan':
+        return NAN
+    return mp.ldexp(mpf(int(a, 16)), int(b))
+
+
+def _tree_tokens(tree, names, extra):
+    """`tree` back as prefix tokens for the table: a slot is its name, a literal its spelling
+    (or, built without one, its exact value), and a literal holding an mpf a hidden name whose
+    value rides in `extra`."""
     op = tree[0]
     if op == 'slot':
-        return env[tree[1]]
+        names.setdefault(tree[1], None)
+        return [tree[1]]
     if op == 'lit':
+        if len(tree) > 2:
+            return [tree[2]]
         v = tree[1]
-        if v == math.pi:
-            return mp.pi
-        if v == math.e:
-            return mp.e
-        if isinstance(v, Fraction):
-            # rebuilt per rung, like the symbolic battery points: the exact rational is
-            # the contract's value, and its mpf reading follows whatever dps is current.
-            return mpf(v.numerator) / mpf(v.denominator)
-        return mpf(v)
-    # LITERAL PROVENANCE: a boundary literal WRITTEN in the rule is the exact boundary
-    # point. The honesty band exists for COMPUTED values that merely round into the
-    # precision band of the boundary; it cannot apply to a token the rule itself spells.
-    # atanh at a written +-1 limit-completes to +-inf; acosh at a written 1 is 0.
-    if op in ('atanh', 'acosh') and len(tree) == 2 and tree[1][0] == 'lit':
-        lv = tree[1][1]
-        if op == 'atanh' and lv == 1.0:
-            return PINF
-        if op == 'atanh' and lv == -1.0:
-            return NINF
-        if op == 'acosh' and lv == 1.0:
-            return mpf(0)
-    args = [c_eval(c, env) for c in tree[1:]]
-    v = OPS[op](*args)
-    if _NODE_SINK and misinf(v):
-        _NODE_SINK[-1][0] = True
+        if isinstance(v, float) and v == math.pi:
+            return ['np.pi']
+        if isinstance(v, float) and v == math.e:
+            return ['np.e']
+        if isinstance(v, (Fraction, int, float)) and not isinstance(v, bool):
+            if isinstance(v, float) and (v != v or math.isinf(v)):
+                return ['float("nan")' if v != v else
+                        ('float("inf")' if v > 0 else 'float("-inf")')]
+            q = Fraction(v)
+            return [f'{q.numerator}/{q.denominator}']
+        name = f'<lit{len(extra)}>'
+        extra[name] = v
+        names.setdefault(name, None)
+        return [name]
+    out = [op]
+    for child in tree[1:]:
+        out += _tree_tokens(child, names, extra)
+    return out
+
+
+_COMPILED: dict = {}
+
+
+def _compiled(tree):
+    """`tree` compiled against the table (`_core.TableExpr`), with its free names in order and
+    the values of its hidden literal names. Cached per tree."""
+    hit = _COMPILED.get(tree)
+    if hit is None:
+        names, extra = {}, {}
+        tokens = _tree_tokens(tree, names, extra)
+        expr = _table.TableExpr(tokens, list(names), dict(ARITY))
+        hit = (expr, tuple(names), extra)
+        if len(_COMPILED) > 50_000:
+            _COMPILED.clear()
+        _COMPILED[tree] = hit
+    return hit
+
+
+def c_eval(tree, env):
+    """Evaluate under the contract semantics: THE TABLE's real values (`_core.TableExpr`), at the
+    current precision. `env` binds each slot to a `TV`, an mpf or a number. Raises `Unresolved`
+    where the table cannot judge the point honestly at this precision; records a snap
+    (`SNAP_EVENTS`) and the intermediates' magnitudes (`_MAG_SINK`) for the ladder."""
+    expr, names, extra = _compiled(tree)
+    args = [_spec(extra[n] if n in extra else env[n]) for n in names]
+    spec, unresolved, snapped, inf_node, mag, small = expr.eval_real(args, mp.dps)
+    if snapped:
+        SNAP_EVENTS[0] += 1
     if _MAG_SINK:
-        # The size of the largest INTERMEDIATE, which is what decides how much precision
-        # a cancellation will eat -- AND of the smallest nonzero one, which decides the
-        # same thing from the other end (see `_required_dps`). Only finite values count:
-        # an inf tells us nothing about digits, and `misinf` above already records it.
-        try:
-            if not misinf(v):
-                a = abs(v)
-                if a > _MAG_SINK[-1][0]:
-                    _MAG_SINK[-1][0] = a
-                # ...but a SUM's output is not evidence of a small operand -- it may BE
-                # the cancellation residue, whose size is a fact about the precision and
-                # not about the expression. Sizing the next rung from it is circular: at
-                # (pi/2, -pi/2) the seam `(x^3 + x^2 y)/(x + y)` would set its own rung
-                # from its own ~1e-50 residue, and the precision roulette that rung exists
-                # to expose would confirm itself instead.
-                # (a remainder is a difference too: `mod`'s output can be the residue)
-                if (a != 0 and op not in ('+', '-', 'mod')
-                        and (_MAG_SINK[-1][1] == 0 or a < _MAG_SINK[-1][1])):
-                    _MAG_SINK[-1][1] = a
-        except Exception:
-            pass
-    return v
+        m, sm = _from_spec(mag), _from_spec(small)
+        if m > _MAG_SINK[-1][0]:
+            _MAG_SINK[-1][0] = m
+        if sm != 0 and (_MAG_SINK[-1][1] == 0 or sm < _MAG_SINK[-1][1]):
+            _MAG_SINK[-1][1] = sm
+    if unresolved:
+        raise Unresolved()
+    return _from_spec(spec)
 
-
-_NODE_SINK: list = []
 
 #: Filled by `c_eval` when a `_measured_dps` scope is open; see `_required_dps`.
 _MAG_SINK: list = []
@@ -826,151 +932,33 @@ def _demanded_dps(mag, small=None):
     return BASE_DPS + 2 * max(0, k)
 
 
-def lhs_singular(tree, env):
-    """True iff evaluating `tree` at env crosses an internal +-inf (a COMPUTED node,
-    not a written literal): the point lies on the expression's singular manifold.
-
-    The twin of ``_monitor._input_singular``; both instruments implement the same
-    9.8.3(a) boundary and must move together. Exceptions fail False -- toward strict
-    authority."""
-    flag = [False]
-    _NODE_SINK.append(flag)
-    try:
-        c_eval(tree, env)
-    except Exception:
-        return False
-    finally:
-        _NODE_SINK.pop()
-    return flag[0]
-
-
 # ---------------------------------------------------------------- deployed evaluator
-import simplipy.operators as _spo
-
-
-def _wrap_arr(f):
-    # the numpy ARRAY path is the deployed consumer path (the 0-d scalar path
-    # diverges at e.g. pow(-inf, 0.5): nan vs inf)
-    def g(*a):
-        r = f(*[np.array([x], dtype=F) for x in a])
-        return F(np.asarray(r).ravel()[0])
-    return g
-
-
-def _legacy_even_root(p):
-    # pre-0.12 pow1_2/pow1_4: x**p with an explicit nan branch for a -inf base
-    # (IEEE (-inf)**0.5 is +inf; the realization was contract-aligned real semantics)
-    def g(a):
-        with np.errstate(invalid='ignore'):
-            return F(np.where(np.isneginf(a), np.nan, np.asarray(a, dtype=F) ** F(p)))
-    return g
-
-
-def _legacy_odd_root(p):
-    # pre-0.12 pow1_3/pow1_5: the real-valued odd root, which carries the sign of its operand,
-    # the sign of zero included (IEEE-754 rootn, as `rootn` itself)
-    def g(a):
-        a = np.asarray(a, dtype=F)
-        with np.errstate(invalid='ignore'):
-            return F(np.copysign(np.abs(a) ** F(p), a))
-    return g
-
-
-DEP_OPS = {
-    '+': lambda a, b: a + b, '-': lambda a, b: a - b, '*': lambda a, b: a * b,
-    '/': lambda a, b: F(np.divide(F(a), F(b))),
-    'inv': lambda a: F(np.divide(F(1.0), F(a))),
-    'neg': lambda a: -a, 'abs': np.abs,
-    'div2': lambda a: a / F(2), 'div3': lambda a: a / F(3),
-    'div4': lambda a: a / F(4), 'div5': lambda a: a / F(5),
-    'mult2': lambda a: a * F(2), 'mult3': lambda a: a * F(3),
-    'mult4': lambda a: a * F(4), 'mult5': lambda a: a * F(5),
-    # The hyper-op realizations were deleted from simplipy.operators at 0.12 ("the
-    # hyper-operator vocabulary is deleted, once and for all"), which silently emptied
-    # these DEP_OPS slots via the getattr fallback below and let a planted gate poison
-    # evaporate into NO-WITNESS. Hand-coded here, transplanted from the pre-0.12
-    # module, so the gate keeps judging rules spelled with those names: 0.15 refuses
-    # generation-1 ARTIFACTS, but a generation-2 config may still declare the names.
-    'pow2': lambda a: F(a) ** F(2), 'pow3': lambda a: F(a) ** F(3),
-    'pow4': lambda a: F(a) ** F(4), 'pow5': lambda a: F(a) ** F(5),
-    'pow1_2': _legacy_even_root(0.5), 'pow1_4': _legacy_even_root(0.25),
-    'pow1_3': _legacy_odd_root(1 / 3), 'pow1_5': _legacy_odd_root(1 / 5),
-}
-for _n in ARITY:
-    _fn = getattr(_spo, _n, None)
-    if callable(_fn):
-        DEP_OPS[_n] = _wrap_arr(_fn)
-
-
 #: THE f64 STANDARD: f64 promises the evaluator's value wherever nothing overflows or
-#: underflows, and overflows are a special case. The constructors already work this way:
-#: `x1*x2/x2 -> x1`, `exp(x1)/exp(x1) -> 1` and `rootn(exp(800.5), 2) -> exp(1601/4)` give
-#: the TRUE value where an intermediate leaves the float range. So at a sample point where
-#: an operation of EITHER side overflows or underflows, a rewrite may give the evaluator's
-#: value or the true one: wherever the contract finds the two sides equal at such a point,
-#: the deployed lane reads it as agreement without comparing the floats, and it compares
-#: every other point exactly as before. A rewrite that gives neither value at a range event
+#: underflows. The constructors already work this way: `x1*x2/x2 -> x1`,
+#: `exp(x1)/exp(x1) -> 1` and `rootn(exp(800.5), 2) -> exp(1601/4)` give the TRUE value where an
+#: intermediate leaves the float range. So at a sample point where an operation of EITHER side
+#: overflows or underflows, a rewrite may give the evaluator's value or the true one: wherever
+#: the contract finds the two sides equal at such a point, the deployed lane reads it as
+#: agreement without comparing the floats. A rewrite that gives neither value at a range event
 #: (`exp(1000) -> 5`) is still refused, and one that reproduces the evaluator there
-#: (`exp(1000) -> inf`) is still realised.
-#:
-#: The two events are IEEE 754's. An operation OVERFLOWS when its operands are finite and
-#: its exact value is finite, but the float is +-inf (`exp(800)`, `1e200*1e200`). It
-#: UNDERFLOWS when its operands are finite and its exact value is nonzero, but the float is
-#: zero or subnormal (`exp(-800)`, `1e-200*1e-200`). Neither is a POLE -- an exact value
-#: that is itself infinite, IEEE's division by zero (`1/0`, `log(0)`, `atanh(1)`) -- nor an
-#: EXACT ZERO (`x - x`, `log(1)`): those are what the operator computes, not a range
-#: limit, so a point carrying one is compared as before. `atanh(tanh(20))` is therefore
-#: still compared: `tanh` saturates to exactly 1.0 without leaving the range, and
-#: `atanh(1.0)` is a pole. So is every point where the contract cannot decide.
-#:
-#: THE EVENT IS DEFINED ONCE, in the compiled core (`numeric::RangeKind`, read here through
-#: `_core.range_event`), and the miner's scan reads the same definition, so the judge and the
-#: scan cannot disagree about which operation left the range. It is read off each operation's
-#: operands and float result, per operator: where the exact value is infinite at finite
-#: operands (a pole), where it is zero (an exact zero), and which operators' tiny results are
-#: always exact (a sum of floats below the normal range is exactly representable). An
-#: operator outside the core's table has no events: its points stay compared.
-_TINY = float(np.finfo(F).tiny)   # the smallest normal double
-
-try:
-    from simplipy._core import range_event as _range_event  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover  (missing/unbuilt extension: no events, compared as before)
-    _range_event = None
-
-
-def out_of_range(op, args, value):
-    """Does one deployed operation overflow or underflow (see the f64 standard above)?
-    `args` are the operands and `value` the float the deployed evaluator returned. The
-    answer is the core's (`_core.range_event`); an event always leaves a value outside the
-    normal range, so any other value is answered without the call."""
-    if _range_event is None or not (np.isinf(value) or value == 0 or abs(value) < _TINY):
-        return False
-    return bool(_range_event(op, [float(a) for a in args], float(value)))
+#: (`exp(1000) -> inf`) is still realised. The events are IEEE 754's and defined once, in the
+#: core (`numeric::RangeKind`): an overflow (finite operands and finite exact value, float
+#: +-inf: `exp(800)`) or an underflow (nonzero exact value, float zero or subnormal:
+#: `exp(-800)`); neither a pole (`1/0`, `log(0)`, `atanh(1)`) nor an exact zero (`x - x`) is
+#: one, so `atanh(tanh(20))` is compared: `tanh` saturates to 1.0 inside the range.
 
 
 def d_eval(tree, env, in_range=None):
-    """evaluate under the deployed engine's operator algebra (numpy array path).
+    """Evaluate under the deployed engine's float64 algebra: THE TABLE's f64 values (the core's
+    own kernels, each literal the double nearest to it, a written `-0.0` keeping its sign).
 
-    With `in_range` (a one-element list), an operation that overflows or underflows
-    (`out_of_range`) sets `in_range[0] = False`."""
-    op = tree[0]
-    if op == 'slot':
-        return env[tree[1]]
-    if op == 'lit':
-        # deployment parses the token as a double; the exact rational is the CONTRACT's
-        # reading, never this lane's. Beyond float64's range the double is +-inf.
-        try:
-            return F(float(tree[1]))
-        except OverflowError:  # `tree[1]` is a Fraction: compare, never convert
-            return F(math.inf if tree[1] > 0 else -math.inf)
-    args = [d_eval(c, env, in_range) for c in tree[1:]]
-    # The ignore-everything float semantics this judge needs are SCOPED to the
-    # operator application, never set process-wide at import.
-    with np.errstate(all='ignore'):
-        value = F(DEP_OPS[op](*args))
-    if in_range is not None and out_of_range(op, args, value):
+    With `in_range` (a one-element list), an operation that overflows or underflows (the range
+    standard, `numeric::RangeKind`) sets `in_range[0] = False`."""
+    expr, names, extra = _compiled(tree)
+    v, ok = expr.eval_f64([float(extra[n] if n in extra else env[n]) for n in names])
+    if in_range is not None and not ok:
         in_range[0] = False
-    return value
+    return F(v)
 
 
 # ---------------------------------------------------------------- comparison
@@ -1000,21 +988,30 @@ GAP_RUNGS = (BASE_DPS, 120, 250)
 _WIT_RESID = mpf(10) ** (-(250 + 20))
 
 
-def compare_classes(cl, cr):
-    """The class half of a contract comparison -- everything nan/inf settles by itself.
+def _kind(c):
+    """A class tuple's kind as the table names it: 'nan', '+inf', '-inf' or 'fin'."""
+    if c[0] == 'inf':
+        return '+inf' if c[1] > 0 else '-inf'
+    return c[0]
 
-    -> 'eq' | 'EXT' | 'SHRINK' (nan vs defined: clause b) | 'INF-CHANGE' (clause c),
-    or None when BOTH sides are finite, where the gap ladder decides instead.
+
+def _num(c):
+    """A class tuple's float."""
+    if c[0] == 'nan':
+        return math.nan
+    if c[0] == 'inf':
+        return math.inf if c[1] > 0 else -math.inf
+    return float(c[1])
+
+
+def compare_classes(cl, cr):
+    """The class half of a contract comparison -- everything nan/inf settles by itself
+    (`_core.table_compare_classes`, THE TABLE's comparison).
+
+    -> 'eq' | 'EXT' (nan on the left: an extension) | 'SHRINK' (nan on the right: a loss) |
+    'INF-CHANGE', or None when BOTH sides are finite, where the gap ladder decides instead.
     """
-    if cl[0] == 'nan' and cr[0] == 'nan':
-        return 'eq'
-    if cl[0] == 'nan':
-        return 'EXT'
-    if cr[0] == 'nan':
-        return 'SHRINK'
-    if cl[0] == 'inf' or cr[0] == 'inf':
-        return 'eq' if cl == cr else 'INF-CHANGE'
-    return None
+    return _table.table_compare_classes(_kind(cl), _kind(cr))
 
 
 def gap_reading(cl, cr):
@@ -1111,7 +1108,7 @@ def saturation_verdict(tl, tr, env_mp):
             arg = c_eval(src[1], env_mp())
             if tgt[0] == 'lit':
                 lim = c_eval(tgt, env_mp())
-            elif tgt == ('slot', '<C_R>'):
+            elif tgt[0] == 'slot' and tgt[1].startswith('<C_R'):
                 # a FITTED witness is no written bound: `erf(30) -> c_t` has the real witness
                 # 1 - 2.6e-393, which no float64 fit can carry, so the fit reads 1.0 and this
                 # test convicted a rule true by construction
@@ -1131,141 +1128,52 @@ def saturation_verdict(tl, tr, env_mp):
     return None
 
 
-#: The deployed-realisation bound, in ULP. DERIVED, not chosen -- see
-#: `compare_deployed_realised`. Reproduce with the libm ULP measurement.
-REALISED_ULP = 8
+#: The deployed-realisation bound, in ULP (`table::REALISED_ULP`): a rewrite has two sides, each a
+#: composition of up to about four library calls of at most one ULP of error, which can oppose:
+#: 2 x 4 x 1 = 8.
+REALISED_ULP = int(_table.TABLE_REALISED_ULP) if _TABLE_OK else 8
 
 
 def _ulp_gap(a, b):
-    """ULP distance between two finite doubles of the same sign; inf across a sign
-    change, which is never a rounding difference. Both zeros canonicalize to +0.0
-    first: view(-0.0) is int64-min, so the raw
-    subtraction against a positive view wrapped and convicted 1-ULP agreements
-    like -0.0 vs 5e-324 as real changes (fail-closed, but wrong and noisy)."""
-    if a == 0.0:
-        a = 0.0
-    if b == 0.0:
-        b = 0.0
-    if a == b:
-        return 0
-    if (a < 0) != (b < 0):
-        return float('inf')
-    return int(abs(np.float64(a).view(np.int64) - np.float64(b).view(np.int64)))
-
-
-def _deployed_classes(cl, cr):
-    """The nan/inf half of a deployed comparison, shared by both bars below."""
-    if cl[0] == 'nan' and cr[0] == 'nan':
-        return 'eq'
-    if cl[0] == 'nan':
-        return 'EXT'
-    if cr[0] == 'nan':
-        return 'SHRINK'
-    if cl[0] == 'inf' or cr[0] == 'inf':
-        return 'eq' if cl == cr else 'INF-CHANGE'
-    return None
+    """ULP distance between two finite doubles of the same sign (the two zeros as one); inf
+    across a sign change (`_core.table_ulp_gap`)."""
+    g = _table.table_ulp_gap(float(a), float(b))
+    return float('inf') if g is None else g
 
 
 def compare_deployed_realised(cl, cr):
-    """The REALISATION comparison: does the deployed f64 engine compute this rewrite?
-
-    Answers `realised`, which decides the `f64` tier and so what ships in `rules.json`.
-    Bounded at `REALISED_ULP` ULP, with NO absolute floor.
-
-    WHY A BOUND, AND WHY THIS ONE. Three rejected answers first, because each names a
-    constraint on the fourth:
-
-    * `1e-9 * max(1.0, |a|, |b|)`, what this used to be: roughly 10^7 ULP, and for any
-      value below 1 a pure ABSOLUTE floor. It read `pow np.e sinh (-5) -> 0` as an f64
-      equality when the sides are 5.942307292381135e-33 and 0.0. Not a model of f64. It
-      was harmless only while every fatal verdict was DELETED; once the symbolic gate
-      began ROUTING on the tier it became an admission path into the default rule set,
-      and 8 acj-4-3 rules took it.
-    * Bit-exact: right in principle, wrong in practice. It convicts 390 acj-4-3 rules,
-      310 of them over a SINGLE ULP, and it makes those 310 depend on the build host's
-      libm -- so a pinned triple would not classify identically on another machine, which
-      byte-identity cannot survive.
-    * 4 ULP, the first proposal: rejected precisely because the number had to be
-      defensible. The observed rounding cluster runs 1..7 ULP, so a bar at 4 splits one
-      phenomenon down the middle.
-
-    THE DERIVATION. IEEE-754 mandates correct rounding only for + - * / and sqrt; every
-    transcendental is implementation-defined, and libm documents an error rather than
-    promising exactness. Measured on this host (glibc 2.43) against mpmath at dps 60 over
-    the judge's OWN grid (the libm ULP measurement): every function is correctly rounded
-    except `cos`, `cosh`, `sinh` and `tanh`, which reach 1 ULP. A rewrite has TWO sides,
-    each a composition of up to about four such calls, with independent errors that can
-    oppose: 2 x 4 x 1 = 8 ULP.
-
-    WHY 8 IS NOT TUNED. Over the 390 rules bit-exactness moves, the gap distribution is
-    4 at 0 ULP (class changes), 310 at 1 ULP, then 5/2/4/0/2/2 at 2..7 -- and then
-    NOTHING until 57. Every bound in [8, 56] gives the IDENTICAL partition, so the
-    classification does not depend on where in that range the bar sits. That
-    insensitivity is what makes this a derivation rather than a preference.
-
-    NOT used for ENGINE-MISALIGN -- see `compare_deployed_structural`. Answering both
-    questions with one comparison gave 396 ENGINE-MISALIGNs against a true 10.
-    """
-    c = _deployed_classes(cl, cr)
-    if c is not None:
-        return c
-    return 'eq' if _ulp_gap(cl[1], cr[1]) <= REALISED_ULP else 'REAL-CHANGE'
+    """The REALISATION comparison, THE TABLE's f64 agreement (`_core.table_f64_agree`, F6):
+    both undefined, the same infinity, or both finite and at most `REALISED_ULP` units in the
+    last place apart, the two zeros counting as one value. It decides `realised`, and so the
+    `f64` tier. Why 8: over the 390 acj-4-3 rules bit-exactness moves, the gap distribution is
+    4 at 0 ULP, 310 at 1, then 5/2/4/0/2/2 at 2..7 and nothing until 57, so every bound in
+    [8, 56] gives the same partition."""
+    return _table.table_f64_agree(_num(cl), _num(cr))
 
 
-def compare_deployed_structural(cl, cr, tol_rel=1e-9):
-    """The STRUCTURAL deployed comparison, for ENGINE-MISALIGN only.
-
-    ENGINE-MISALIGN means "the contract certifies but the deployed algebra structurally
-    DIVERGES" -- an infinity where a finite value belongs, a nan where a number belongs,
-    or a gap far outside rounding. A few ULP is none of those, and convicting it would
-    rename ~400 sound rules as misaligned (measured: 396 against a true 10). So this
-    keeps the band `compare` used to carry for f64, and realisation gets the ULP bar
-    above. Two questions, two comparisons.
-    """
-    c = _deployed_classes(cl, cr)
-    if c is not None:
-        return c
-    a, b = cl[1], cr[1]
-    return 'eq' if abs(a - b) <= tol_rel * max(1.0, abs(a), abs(b)) else 'REAL-CHANGE'
+def compare_deployed_structural(cl, cr):
+    """The STRUCTURAL deployed comparison, for ENGINE-MISALIGN only (`_core.table_f64_structural`):
+    has the deployed algebra DIVERGED -- an infinity where a finite value belongs, a nan where a
+    number belongs, or a gap beyond 1e-9 of the larger magnitude? A few ULP is no divergence."""
+    return _table.table_f64_structural(_num(cl), _num(cr))
 
 
 # ---------------------------------------------------------------- batteries
-def battery_reals():
-    """symbolic contract points, rebuilt at the CURRENT dps (per-rung builders)"""
-    return [mpf(0), mpf(1) / 2, -mpf(1) / 2, mpf(1), mpf(-1), mpf(2), mpf(-2),
-            mpf(3), mpf(-3), mpf(1) / 4, -mpf(1) / 4, mpf(3) / 2, -mpf(3) / 2,
-            mp.pi / 2, -mp.pi / 2, mp.pi, mp.pi / 4, mp.pi / 3, mp.pi / 6,
-            mp.e, mpf('-1.7')]
+#: THE TABLE's sort tags, as the judge names them: a real binding where clause (a) applies; a
+#: non-finite binding in the sort's domain, judged with no excuse; one its certificate puts on a
+#: set of measure zero, owed nothing.
+_TAGS = {'real': 'real', 'atom': 'atom', 'null': 'nullx'}
 
 
-def battery_for(sort):
-    """-> list of (builder() -> mp value, tag); tags: real | dirac-inf | nullx"""
-    reals = [((lambda v=i: battery_reals()[v]), 'real') for i in range(len(battery_reals()))]
-    if sort == '?':
-        return reals  # data is real; +-inf is outside the quantifier
-    if sort == '_':
-        # nan atom: `_` binds an ARBITRARY subtree, and
-        # a subtree can evaluate to nan on a positive-measure set of its own inputs
-        # (`log x0` on the whole negative half-line). nan is therefore IN `_`'s
-        # quantification domain -- a full citizen, not an extension point -- and the
-        # 'nan-dom' tag routes any non-eq event at this binding to the fatal clause
-        # `a-nan-domain` instead of the EXT/SHRINK tolerance, which exists for events
-        # arising on null sets of a REAL binding. The other sorts keep their
-        # batteries: they are certificate-scoped, and whether `!`/`$` owe nan the
-        # same treatment is a separate doctrine question.
-        return reals + [((lambda: PINF), 'dirac-inf'), ((lambda: NINF), 'dirac-inf'),
-                        ((lambda: NAN), 'nan-dom')]
-    if sort == '!':
-        return reals + [((lambda: PINF), 'nullx'), ((lambda: NINF), 'nullx')]
-    if sort == '$':
-        # the mult-certified sort: expressions certified FINITE AND NONZERO a.e.
-        # (`mult_certified` -- the licence behind f/f -> 1). The quantifier's bulk is
-        # nonzero reals; 0 and +-inf occur on null sets only, so events there are
-        # null-excused (same doctrine as `!`'s +-inf atoms).
-        nz = [(b, t) for b, t in reals if b() != 0]
-        return nz + [((lambda: mpf(0)), 'nullx'),
-                     ((lambda: PINF), 'nullx'), ((lambda: NINF), 'nullx')]
-    raise ValueError(sort)
+def battery_for(sort, permissive=False):
+    """-> list of (builder() -> TV, tag) over THE TABLE's quantifier of `sort`
+    (`_core.table_sort_atoms`): `?` binds real data only; `!` adds +-inf, owed nothing (its
+    certificate puts them on a null set); `$` drops 0 from the reals and adds 0 and +-inf, owed
+    nothing; `_` adds +-inf and undefined, judged with no excuse, since a subexpression can be
+    infinite or undefined on a whole interval. `permissive` keeps the real-valued bindings only
+    (its guarantee)."""
+    return [((lambda s=spec: TV(s)), _TAGS[tag])
+            for spec, tag in _table.table_sort_atoms(sort, permissive)]
 
 
 #: The battery slot-product cap: the size of the FULL two-slot product, derived from
@@ -1333,6 +1241,9 @@ def judge_cl_battery(saturation=True):
     if not saturation:
         return base
     return base + [(lambda c=c: mpf(c)) for c in SATURATION_CONSTS]
+#: The generic grid: more points of clause (a), past the battery's magnitudes, and the deployed
+#: lane's reach to where float64 parts from the reals. Never a measure (clause (b) is decided by
+#: certified cells).
 GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
                        np.array([-1e4, -1e3, -300., -100., -50., -30.,
                                  30., 50., 100., 300., 1e3, 1e4])]) + 0.0137421
@@ -1344,10 +1255,6 @@ GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
 # were double-weighted -- 174 entries for 167 distinct points, silently giving those seven
 # twice the say in `meas`. Order preserved; the point SET is unchanged.
 GRID = list(dict.fromkeys(GRID))
-
-MEASURE_KILL = 0.05  # fraction of the generic grid; a genuine positive-measure set
-                     # shows as many points; single-point flukes never reach this
-
 
 # ---------------------------------------------------------------- witness fitting
 GEN = [1.7, -1.3, 0.6, 2.3, -0.8]
@@ -1376,7 +1283,17 @@ _XS = np.concatenate([-_XS_TAIL[::-1], -np.logspace(12, -3, 120),
                       np.linspace(-3, 3, 81), np.logspace(-3, 12, 120), _XS_TAIL])
 
 
-def _fit_target_env(tl, tr, shared, cl_val=None):
+def _cl_env(cl_val, cl_name='<C_L>'):
+    """The left side's constants as a float environment: a dict of them as it is, a single value
+    as `cl_name`'s."""
+    if cl_val is None:
+        return {}
+    if isinstance(cl_val, dict):
+        return {n: F(v) for n, v in cl_val.items()}
+    return {cl_name: F(cl_val)}
+
+
+def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
     """The generic env at which a witness can be DETERMINED, with its residual scanned.
 
     Returns `(env0, L0, g, vals, ok)`, or None if no env determines anything.
@@ -1396,18 +1313,13 @@ def _fit_target_env(tl, tr, shared, cl_val=None):
     `judge_rule` asks THIS function rather than re-deriving "is the LHS defined" from
     finiteness alone (a saturated LHS is finite and determines nothing).
     """
+    cl_env = _cl_env(cl_val)
+
     def lhs_at(env):
-        e = dict(env)
-        if cl_val is not None:
-            e['<C_L>'] = F(cl_val)
-        return d_eval(tl, e)
+        return d_eval(tl, {**env, **cl_env})
 
     def rhs_at(env, c):
-        e = dict(env)
-        e['<C_R>'] = F(c)
-        if cl_val is not None:
-            e['<C_L>'] = F(cl_val)
-        return d_eval(tr, e)
+        return d_eval(tr, {**env, **cl_env, rname: F(c)})
 
     for k in (0, 1, 4):
         try:
@@ -1433,31 +1345,28 @@ def _fit_target_env(tl, tr, shared, cl_val=None):
     return None
 
 
-def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
+def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
     """fit the exists-witness for a RHS <constant> on generic reals (deployed algebra);
     validated on two further generic envs; None if no witness exists/found. With `env_out` (a
-    list), the generic env the witness was determined at is appended to it, for `mp_polish`."""
+    list), the generic env the witness was determined at is appended to it, for `mp_polish`.
+    `cl_val` binds the left side's constants (a dict by name, or one value for `<C_L>`), and
+    `rname` names the right side's constant."""
+    cl_env = _cl_env(cl_val)
+
     def lhs_at(env):
-        e = dict(env)
-        if cl_val is not None:
-            e['<C_L>'] = F(cl_val)
-        return d_eval(tl, e)
+        return d_eval(tl, {**env, **cl_env})
 
     def rhs_at(env, c):
-        e = dict(env)
-        e['<C_R>'] = F(c)
-        if cl_val is not None:
-            e['<C_L>'] = F(cl_val)
-        return d_eval(tr, e)
+        return d_eval(tr, {**env, **cl_env, rname: F(c)})
 
-    found = _fit_target_env(tl, tr, shared, cl_val)
+    found = _fit_target_env(tl, tr, shared, cl_val, rname)
     if found is None:
         return None
     env0, L0, g, vals, ok = found
     if env_out is not None:
         env_out.append(env0)
     best = None
-    if tr == ('slot', '<C_R>'):
+    if tr == ('slot', rname):
         # BARE-<C_R> SHORTCUT: the whole target IS the
         # constant, so the residual is g(c) = c - L0 exactly -- linear, monotone,
         # witness c_t = L0, nothing to search. 272 of the 343 constant-carrying
@@ -1496,7 +1405,7 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
         # the candidate still has to satisfy the same residual bound and the same
         # two-env validation as any other. (A lane that cannot
         # evaluate where the question is asked answers a different question.)
-        seeds = ([float(cl_val)] if cl_val is not None else [])
+        seeds = [float(v) for v in cl_env.values()]
         for c in seeds + [1., -1., 2., -2., 0.5, -0.5, math.e, -math.e,
                           math.pi, -math.pi]:
             v = g(c)
@@ -1552,7 +1461,175 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
     return float(best)
 
 
-def mp_polish(tl, tr, nvars, clb, c0, env0=None):
+def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
+    """The exists-witness for SEVERAL right-side constants (`rnames`), each its own symbol:
+    values d with `R(x; d) = L(x; c)` at the generic environments where the deployed left side
+    is finite, found by damped Gauss-Newton from a few seeds (the left side's own constants
+    first), snapped to a nearby simple value where that is no worse, and validated on two
+    further environments as `fit_witness` validates. `None` if no witness is found; with
+    `env_out`, the environments the fit used are appended to it, for `mp_polish_multi`."""
+    cl_env = _cl_env(cl_val)
+    envs, targets = [], []
+    for k in range(len(GEN)):
+        env = _gen_env(shared, k)
+        try:
+            v = d_eval(tl, {**env, **cl_env})
+        except Exception:
+            continue
+        if source_defined(v) and all(env != e for e in envs):
+            envs.append(env)
+            targets.append(float(v))
+    if not envs:
+        return None
+    m = len(rnames)
+    scale = 1.0 + max(abs(t) for t in targets)
+
+    def resid(d):
+        out = []
+        for env, t in zip(envs, targets):
+            try:
+                with np.errstate(all='ignore'):
+                    v = d_eval(tr, {**env, **cl_env, **{n: F(x) for n, x in zip(rnames, d)}})
+            except Exception:
+                return None
+            if not np.isfinite(v):
+                return None
+            out.append(float(v) - t)
+        return np.array(out)
+
+    lv = [float(v) for v in cl_env.values()]
+    seeds = [(lv + [1.0] * m)[:m], [1.0] * m, [0.5] * m, [-1.0] * m, [2.0] * m,
+             [float(i + 1) for i in range(m)], [0.0] * m]
+    best, best_n = None, None
+    for seed in seeds:
+        d = np.array(seed, dtype=float)
+        r = resid(d)
+        if r is None:
+            continue
+        lam = 1e-3
+        for _ in range(200):
+            n0 = float(np.linalg.norm(r))
+            if n0 <= 1e-13 * scale:
+                break
+            J = np.empty((len(r), m))
+            ok = True
+            for j in range(m):
+                h = 1e-7 * max(1.0, abs(d[j]))
+                dp = d.copy()
+                dp[j] += h
+                rp = resid(dp)
+                if rp is None:
+                    ok = False
+                    break
+                J[:, j] = (rp - r) / h
+            if not ok:
+                break
+            A = J.T @ J
+            g = J.T @ r
+            moved = False
+            for _ in range(12):
+                try:
+                    step = np.linalg.solve(A + lam * np.diag(np.diag(A) + 1e-12), -g)
+                except np.linalg.LinAlgError:
+                    lam *= 10
+                    continue
+                rn = resid(d + step)
+                if rn is not None and float(np.linalg.norm(rn)) < n0:
+                    d, r, lam, moved = d + step, rn, max(lam / 10, 1e-12), True
+                    break
+                lam *= 10
+            if not moved:
+                break
+        n = float(np.linalg.norm(r))
+        if best_n is None or n < best_n:
+            best, best_n = d, n
+        if n <= 1e-9 * scale:
+            break
+    if best is None or best_n > 1e-6 * scale or not np.all(np.isfinite(best)):
+        return None
+    d = best.copy()
+
+    def snapped(x):
+        """The simple value (an integer, a half, or one of the left side's own constants,
+        the answer for every respelling) within fit noise of `x`, or `x`."""
+        for c in (*lv, round(x), round(x * 2) / 2):
+            if abs(c - x) < max(1e-9 * max(abs(x), abs(c)), 1e-15):
+                return float(c)
+        return float(x)
+
+    # all coordinates together first (the fit's noise is shared between them), then each
+    for trial in [np.array([snapped(x) for x in d])] + [
+            np.where(np.arange(m) == j, snapped(d[j]), d) for j in range(m)]:
+        rt, rd = resid(trial), resid(d)
+        if rt is not None and rd is not None and \
+                float(np.linalg.norm(rt)) <= float(np.linalg.norm(rd)):
+            d = trial
+    for k in (2, 3):
+        env = _gen_env(shared, k)
+        try:
+            Lv = d_eval(tl, {**env, **cl_env})
+            Rv = d_eval(tr, {**env, **cl_env, **{n: F(x) for n, x in zip(rnames, d)}})
+        except Exception:
+            return None
+        if np.isfinite(Lv) != np.isfinite(Rv):
+            return None
+        if np.isfinite(Lv) and abs(Lv - Rv) > 1e-4 * max(1.0, abs(Lv)):
+            return None
+    if env_out is not None:
+        env_out.extend(envs)
+    return [float(x) for x in d]
+
+
+def mp_polish_multi(tl, tr, nvars, cl_builders, d0, envs):
+    """`mp_polish` for several right-side constants: Newton in the contract's values at the
+    fit's environments, at a precision past the ladder's deepest rung; the f64 fit where the
+    landscape defeats it. Returns `{name: mpf}`."""
+    names = list(d0)
+    old = mp.dps
+    _POLISH_DPS[0] = None
+    try:
+        mp.dps = 2 * GAP_RUNGS[-1] + 50
+
+        def env_at(env):
+            e = {n: mpf(float(v)) for n, v in env.items()}
+            e.update({n: b() for n, b in cl_builders.items()})
+            return e
+
+        try:
+            targets = [c_eval(tl, env_at(env)) for env in envs]
+        except Unresolved:
+            return {n: mpf(d0[n]) for n in names}
+        if any(misnan(t) or misinf(t) for t in targets):
+            return {n: mpf(d0[n]) for n in names}
+
+        def f(*d):
+            out = []
+            for env, t in zip(envs, targets):
+                e = env_at(env)
+                e.update(dict(zip(names, d)))
+                out.append(c_eval(tr, e) - t)
+            return out[:len(names)] if len(out) >= len(names) else out + [mpf(0)] * (len(names) - len(out))
+
+        try:
+            sol = mp.findroot(f, [mpf(d0[n]) for n in names], tol=mpf(10) ** (-(mp.dps - 30)),
+                              maxsteps=100)
+            sol = [sol] if len(names) == 1 else list(sol)
+            _POLISH_DPS[0] = mp.dps - 30
+            return dict(zip(names, (mpf(x) for x in sol)))
+        except (Unresolved, ZeroDivisionError, ValueError, TypeError):
+            return {n: mpf(d0[n]) for n in names}
+    finally:
+        mp.dps = old
+
+
+#: The precision (decimal digits) the last `mp_polish` / `mp_polish_multi` witness is good to,
+#: or None where the polish fell back to its seed (the f64 fit). A comparison at a rung finer
+#: than the witness measures the fit, not the functions: the judge reads such a point as
+#: Unresolved (skip, never convict).
+_POLISH_DPS = [None]
+
+
+def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
     """Refine an f64-fitted exists-witness to mp precision against the CONTRACT
     evaluator (the quantifier ranges over R; the f64 fit is only a starting point --
     left at f64 it manufactures 1e-17 'real changes' against exact transcendental
@@ -1567,6 +1644,12 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
     identity at x = 0. The fit already moved on to a point that pins the witness."""
     old = mp.dps
     gen = None if env0 is None else {n: float(v) for n, v in env0.items()}
+    _POLISH_DPS[0] = None
+
+    def done(v, ok):
+        _POLISH_DPS[0] = (mp.dps - 30) if ok else None
+        return v
+
     try:
         # THE WITNESS MUST OUT-RESOLVE THE LADDER. `<C_L>` is rebuilt exactly at each
         # rung while `<C_R>` is this fitted value merely re-rounded, so a witness good to
@@ -1579,12 +1662,14 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
             e = {}
             for i, n in enumerate(sorted(nvars)):
                 e[n] = mpf(GEN[i % len(GEN)] if gen is None else gen[n])
-            if clb is not None:
-                # the EXACT battery value (symbolic builder), NOT its f64 rendering: a
-                # witness polished against f64-pi differs from the judge's exact mp.pi by
-                # ~4e-17, producing false clause-(a) kills of the witness family. Rebuilt
-                # after the depth is settled, since a symbolic atom is only as good as
-                # the dps it was rendered at.
+            # the EXACT battery value (symbolic builder), NOT its f64 rendering: a
+            # witness polished against f64-pi differs from the judge's exact mp.pi by
+            # ~4e-17, producing false clause-(a) kills of the witness family. Rebuilt
+            # after the depth is settled, since a symbolic atom is only as good as
+            # the dps it was rendered at.
+            if isinstance(clb, dict):
+                e.update({n: b() for n, b in clb.items()})
+            elif clb is not None:
                 e['<C_L>'] = clb()
             return e
 
@@ -1616,14 +1701,22 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
                          2 * max(GAP_RUNGS[1], _required_dps(_mag, _small))) + 50)
         # `_WIT_RESID` was 10^-270 = "deeper than the deepest rung" when the deepest rung
         # was a fixed 250. It has to follow the ladder for the same reason the depth does.
+        # A TARGET THE TABLE CANNOT READ AT THIS DEPTH is read at a shallower one: the witness
+        # is then good to fewer digits, and `_POLISH_DPS` says so, so the rungs finer than it
+        # skip the point instead of convicting a frozen gap (`erf` reads to 8,192 bits, and
+        # `erf(1)^10000 -> c_t` asks for 3,122 digits).
+        while True:
+            env = build_env()
+            try:
+                target = c_eval(tl, env)
+                break
+            except Unresolved:
+                if mp.dps <= GAP_RUNGS[-1] + 50:
+                    return done(mpf(c0), False)
+                mp.dps = max(GAP_RUNGS[-1] + 50, mp.dps // 2)
         _wit_resid = mpf(10) ** (-(mp.dps - 30))
-        env = build_env()
-        try:
-            target = c_eval(tl, env)
-        except Unresolved:
-            return mpf(c0)
         if misnan(target) or misinf(target):
-            return mpf(c0)
+            return done(mpf(c0), False)
 
         _residue: list = []
 
@@ -1685,7 +1778,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
 
         def h(c):
             e = dict(env)
-            e['<C_R>'] = c
+            e[rname] = c
             v = c_eval(tr, e)
             if misnan(v) or misinf(v):
                 raise Unresolved()
@@ -1702,9 +1795,9 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
             # bare-<constant> RHS).
             try:
                 if accepts(h(mpf(0))):
-                    return mpf(0)
+                    return done(mpf(0), True)
             except Unresolved:
-                return mpf(0)
+                return done(mpf(0), True)
         try:
             a, b = mpf(c0) * (1 - mpf('1e-8')) - mpf('1e-12'), mpf(c0) * (1 + mpf('1e-8')) + mpf('1e-12')
             fa, fb = h(a), h(b)
@@ -1724,24 +1817,29 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None):
                     if abs(c) < mpf(10) ** (-(mp.dps - 25)):
                         try:
                             if accepts(h(mpf(0))):
-                                return mpf(0)   # snap near-zero polish results to exact 0
+                                return done(mpf(0), True)   # snap near-zero polish results to exact 0
                         except Unresolved:
                             pass
-                    return c
+                    return done(c, True)
             if best is not None and best_r is not None:
                 try:
                     if best_r < abs(h(mpf(c0))):
-                        return best        # short of target, but better than the seed
+                        return done(best, False)        # short of target, but better than the seed
                 except Unresolved:
-                    return best
+                    return done(best, False)
         except (Unresolved, ZeroDivisionError):
             pass
-        return mpf(c0)
+        return done(mpf(c0), False)
     finally:
         mp.dps = old
 
 
 # ---------------------------------------------------------------- the judge
+#: The left side's kind ('fin', 'nan', '+inf', '-inf') at the last point `_point_verdict`
+#: resolved: whether the left side is finite there decides what a constant owes (3.2).
+_LHS_KIND = [None]
+
+
 def _point_verdict(tl, tr, env_mp):
     """confirmed contract verdict at one point -> (verdict|None, snapped)
 
@@ -1797,11 +1895,13 @@ def _point_verdict(tl, tr, env_mp):
         finally:
             if track:
                 once.mag, once.small = _MAG_SINK.pop()
+        _LHS_KIND[0] = _kind(cl)
         v = compare_classes(cl, cr)
         return (v, None) if v is not None else (None, gap_reading(cl, cr))
 
     old = mp.dps
     snap0 = SNAP_EVENTS[0]
+    _LHS_KIND[0] = None
     try:
         once.mag = once.small = None
         r1 = once(BASE_DPS, track=True)
@@ -1825,7 +1925,11 @@ def _point_verdict(tl, tr, env_mp):
         rungs = (BASE_DPS, dps2, dps3)
         r_lo = lo_dps = hi_dps = None
         for i in range(len(rungs) - 1):
-            r = r1 if i == 0 else once(rungs[i])
+            # A climbed rung measures the intermediates afresh: the refusing rung stopped at
+            # the node it could not read, so it never saw the operands beyond it
+            # (`tanh(100)*cosh(100) - sinh(100)` stops at `tanh` at dps 50 and never meets
+            # the 10^43 the cancellation is scaled by).
+            r = r1 if i == 0 else once(rungs[i], track=True)
             if r is not None:
                 r_lo, lo_dps, hi_dps = r, rungs[i], rungs[i + 1]
                 break
@@ -1839,6 +1943,13 @@ def _point_verdict(tl, tr, env_mp):
         if cls1 is not None:
             # nan/inf: a CLASS is confirmed by agreement at a second rung -- there is no
             # gap to watch decay, so this half keeps the two/three-rung rule unchanged.
+            # PAST THE CEILING, a class is no reading either: where the large intermediates
+            # alone demand more digits than any rung carries, a sum of them reads an exact
+            # zero at every affordable rung, and `log` of it a manufactured -inf
+            # (`log(cosh(x) + sinh(x)) - x -> 0` at x = -1e4 cancels two numbers near
+            # 10^4342). Skip, never convict.
+            if _demanded_dps(getattr(once, 'mag', None), None) > MAX_DPS:
+                return saturation_verdict(tl, tr, env_mp), snapped1
             r2 = once(hi_dps)
             if r2 is None:
                 return None, snapped1
@@ -1955,110 +2066,204 @@ def _point_verdict(tl, tr, env_mp):
                           getattr(once, 'small', None)) > MAX_DPS
                 and tl[0] != 'lit' and tr[0] != 'lit'):
             return saturation_verdict(tl, tr, env_mp), snapped1
+        # ...BUT A WRITTEN SIDE DOES NOT MAKE A CANCELLATION READABLE. Where the LARGE
+        # intermediates alone demand more than the ceiling and both sides read inside the
+        # noise those intermediates leave at the rung, the computed side is that noise:
+        # `cosh(x)^2 - sinh(x)^2 -> 1` at x = 1e4 cancels two numbers near 10^8686, which
+        # no affordable rung resolves, and the written 1 beside it says nothing about the
+        # difference. A large value standing above the noise (`exp(exp(10)) -> 0`) is read.
+        big = abs(mag)
+        if (_demanded_dps(big, None) > MAX_DPS
+                and max(s_lo, s_hi) <= big * mpf(10) ** (-(lo_dps - 10))):
+            return saturation_verdict(tl, tr, env_mp), snapped1
         return 'REAL-CHANGE', snapped1
     finally:
         mp.dps = old
 
 
-#: The four cells of the soundness LATTICE. The two notions are INCOMPARABLE -- a rule
-#: can be true and unrealised (`atanh(tanh t) -> t`, exact on R, `inf` in f64) or
-#: realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by 1.7e-17) --
-#: so this is an axis, not a rung on the Mode ladder.
+#: The cells of the soundness LATTICE, one per combination of the three modes' criteria. The
+#: notions are INCOMPARABLE -- a rule can be true and unrealised (`atanh(tanh t) -> t`, exact on
+#: R, `inf` in f64) or realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by
+#: 1.7e-25) -- so this is an axis, not a rung on the Mode ladder.
 #:
-#:   core    true AND realised     served by every mode
-#:   real    true, NOT realised    exact arithmetic is the authority
-#:   f64     realised, NOT true    the deployed evaluator is the authority
-#:   reject  neither               dropped everywhere
-def _tier(verdict, realised):
-    if verdict in ('CERTIFIED', 'TOLERATED'):
-        # `real`, NOT `f64`. The contract accepting a rule means it is TRUE; `realised is
-        # False` means the deployed evaluator disagrees. "True, not realised" is the `real`
-        # row of the table above, and filing it as `f64` would put the rule in the one mode
-        # whose authority contradicts it and remove it from the mode that honours it.
-        # `core` requires realised to be TRUE, not merely "not False": `None` means the
-        # deployed lane never got an observation at all, and absent evidence cannot support
-        # a claim of f64 soundness (`sin(np.pi) -> 0` is exactly true while f64 computes
-        # 1.2246467991473532e-16, so serving it in f64 mode changes the answer).
-        # A TOLERATED rule that only fills f64's NaN holes at the contract's own null events
-        # arrives realised (`judge_rule`'s `fills_nan`): f64 takes the same reading as the
-        # constructors, which fill a NaN hole on a null set (`x1/x1` is `1`).
-        return 'core' if realised is True else 'real'
-    if verdict == 'ENGINE-MISALIGN':
-        return 'real'
-    if verdict == 'KILL':
-        return 'f64' if realised is True else 'reject'
-    return 'reject'
+#:   core        holds in real AND in f64            served by every mode
+#:   real        holds in real and permissive, not in f64
+#:   real-only   holds in real only (a `$` slot owed nothing at 0 in real, where permissive's
+#:               real-valued guarantee reaches it)
+#:   f64         holds in f64, not in real           f64 and permissive (P3)
+#:   permissive  holds in permissive only            (an extension: `exp(log x) -> x`)
+#:   reject      holds in no mode
+def _tier(verdict, realised, permissive=None):
+    """The tier of a judged rule: `verdict` is real's (CERTIFIED / TOLERATED / ENGINE-MISALIGN
+    hold), `realised` f64's (`True` only: `None` means the deployed lane never got an
+    observation, and absent evidence supports no claim -- `sin(np.pi) -> 0` is exactly true while
+    f64 computes 1.2246467991473532e-16), `permissive` permissive's (`None`: not judged, read as
+    real's)."""
+    if verdict not in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN', 'KILL', 'UNDECIDED-MEASURE'):
+        # NO-WITNESS, UNRESOLVED-COVERAGE, UNSUPPORTED-SHAPE, JUDGE-TIMEOUT: the judge reached
+        # no answer, and holds in no mode
+        return 'reject'
+    real = verdict in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN')
+    f64 = realised is True and verdict != 'ENGINE-MISALIGN'
+    perm = real if permissive is None else bool(permissive)
+    if real and f64:
+        return 'core'
+    if real:
+        return 'real' if perm else 'real-only'
+    if f64:
+        return 'f64'
+    return 'permissive' if perm else 'reject'
 
 
 def judge_rule(lhs, rhs, deployed_check=True):
-    """-> dict: verdict CERTIFIED | TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS, with
-    clause/class, points, measures (`_judge_contract`), and the tier the two axes give.
+    """-> dict: verdict CERTIFIED | TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS |
+    UNRESOLVED-COVERAGE | UNDECIDED-MEASURE | UNSUPPORTED-SHAPE, with clause/class, points, the
+    certified measure (`_judge_contract`), and the tier the three modes' criteria give
+    (`_tier`).
 
     A rule spelled with a 0.15 head (`NEW_HEADS`) is realised in float64 only where the core's
-    f64 bar agrees too (`_core.f64_bar`: bit for bit at the jumps, the signed zeros and the poles
-    float64 parts from the reals at, which the battery and the grid do not reach), so
+    f64 bar agrees too (`_core.f64_bar_sorted`: bit for bit at the jumps, the signed zeros and
+    the poles float64 parts from the reals at, which the battery and the grid do not reach), so
     `floor(x + 1) -> floor(x) + 1` is CERTIFIED and not realised (float64 breaks it at
-    x = -1e-17): tier `real`. The mint applies the same bar in f64, so the two agree."""
+    x = -1e-17): tier `real`. The bar probes each slot over its sort's values (a `?` slot over
+    finite doubles only: +-inf is no data), and a probe where an operation overflowed or
+    underflowed agrees where the rewrite gives the true value (the range standard), judged
+    here by the contract."""
     r = _judge_contract(lhs, rhs, deployed_check)
     if not deployed_check or 'tier' not in r or not NEW_HEADS & (set(lhs) | set(rhs)):
         return r
-    from simplipy._core import f64_bar  # type: ignore[attr-defined]
+    from simplipy._core import f64_bar_sorted  # type: ignore[attr-defined]
     slot = {}
     for t in list(lhs) + list(rhs):
         key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
         if SLOT_RE.match(key) and key not in slot:
             slot[key] = None
-    names = {key: f'x{i}' for i, key in enumerate(sorted(slot))}
+    keys = sorted(slot)
+    names = {key: f'x{i}' for i, key in enumerate(keys)}
     spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
                         for t in ts]
-    bar = f64_bar(spell(lhs), spell(rhs), list(names.values()), ARITY)
+    bar = f64_bar_sorted(spell(lhs), spell(rhs), list(names.values()),
+                         ''.join(k[0] for k in keys), ARITY)
     if bar is None:
         return r
-    ok, probes, first = bar
+    ok, probes, first, range_rows = bar
+    range_ok = True
+    if ok and range_rows:
+        # the range standard: the rewrite gives the true value where an operation overflowed
+        # or underflowed -- the contract's agreement there, at each such probe
+        tl = parse(lhs, '<C_L>', number=True)
+        tr = parse(rhs, '<C_R>', number=True)
+        lnames = _constant_names(lhs, '<C_L>', True)
+        for row in range_rows[:RANGE_ROWS_CAP]:
+            env = {k: mpf(v) for k, v in zip(keys + lnames, row)}
+            v, _ = _point_verdict(tl, tr, lambda env=env: {k: +x for k, x in env.items()})
+            # a probe the contract cannot resolve says nothing about the true value, and is
+            # skipped as the deployed lane skips an unresolved grid point (`cosh(1e17)` is
+            # beyond every rung); one it resolves to a disagreement fails the bar
+            if v is not None and v != 'eq':
+                range_ok, first = False, list(row)
+                break
+        if len(range_rows) > RANGE_ROWS_CAP:
+            range_ok = False          # more than the judge reads: undecided, fail closed
+    ok = ok and range_ok
     realised = r.get('realised') is not False and ok
-    return dict(r, realised=realised, tier=_tier(r['verdict'], realised),
-                f64_bar={'ok': ok, 'probes': probes,
-                         'first': None if first is None else dict(zip(names, first))})
+    return dict(r, realised=realised,
+                tier=_tier(r['verdict'], realised, r.get('permissive')),
+                f64_bar={'ok': ok, 'probes': probes, 'range_probes': len(range_rows),
+                         'first': None if first is None else dict(zip(keys, first))})
+
+
+#: The most range-event probes of the f64 bar the judge reads by the contract (each is a
+#: ladder evaluation); a bar with more is undecided, and fails closed.
+RANGE_ROWS_CAP = 256
+
+
+#: Each `<constant>` is its own symbol (3.2): with two or more on the left, the battery is the
+#: product of the generic constants plus each constant over the full battery with the others at
+#: distinct generic values (the full product of the full battery is out of reach).
+def _cl_combos(lnames, saturation):
+    """The left side's constant bindings the judge quantifies over: `[(builders, key)]`, the
+    builders by name (exact values, rebuilt per rung), the key their float tuple."""
+    if not lnames:
+        return [({}, ())]
+    single = judge_cl_battery(saturation=saturation)
+    if len(lnames) == 1:
+        return [({lnames[0]: b}, (float(b()),)) for b in single]
+    gen = [(lambda c=c: mpf(c)) for c in CONSTS]
+    out, seen = [], set()
+
+    def add(bs):
+        key = tuple(float(b()) for b in bs)
+        if key not in seen:
+            seen.add(key)
+            out.append((dict(zip(lnames, bs)), key))
+
+    for combo in itertools.product(gen, repeat=len(lnames)):
+        add(combo)
+    for i in range(len(lnames)):
+        for b in single:
+            bs = [gen[(j + 1) % len(gen)] for j in range(len(lnames))]
+            bs[i] = b
+            add(bs)
+    return out
+
+
+def _generic_key(lnames):
+    """The generic binding of the left side's constants (distinct values for distinct
+    constants), where the grid and the measure are read."""
+    if len(lnames) == 1:
+        return (float(CONSTS[0]),)
+    return tuple(float(CONSTS[(j + 1) % len(CONSTS)]) for j in range(len(lnames)))
+
+
+def _spelled(tokens, names):
+    """`tokens` with each slot spelled as the interval layer's dummy (`names`)."""
+    return [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t) for t in tokens]
+
+
+def _extension_width(lhs, lp, rhs, rp, names):
+    """Clause (b)'s measure: the volume of the largest certified cell where the left side is
+    undefined and the right side has a value, in the table's values (`None`: undecided)."""
+    return _table.table_extension_width(_spelled(lhs, names), [float(c) for c in lp],
+                                        _spelled(rhs, names), [float(c) for c in rp],
+                                        dict(ARITY))
 
 
 def _judge_contract(lhs, rhs, deployed_check=True):
-    """-> dict: verdict CERTIFIED | TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS,
-    with clause/class, points, measures. Implements the kill bar:
-      KILL   iff a REAL-CHANGE exists at any resolved point (clause a)
-             or the generic-grid disagreement measure exceeds MEASURE_KILL (b/c);
-      ENGINE-MISALIGN iff the contract certifies but the deployed algebra
-             structurally diverges at a non-gap battery point / on the grid;
-      TOLERATED else-if any null-event disagreement exists (documented class);
-      CERTIFIED otherwise."""
+    """-> dict: real's verdict, with clause/class, points and the certified measure, f64's
+    `realised` and permissive's `permissive`; `judge_rule` adds the tier.
+
+    real's verdict (the criterion of the specification's section 3):
+      KILL               a disagreement at a point where the left side has a value (clause (a):
+                         a real binding, a `_` slot's +-inf or NaN, any constant owed); any
+                         disagreement at a `_` slot's non-finite binding; or a certified cell
+                         of positive measure where the left side is undefined and the right
+                         side has a value (clause (b)); a ground rule's one point, no tolerance;
+      UNDECIDED-MEASURE  clause (b) could not be decided (the interval layer's horizon or budget
+                         ran out): refused, fail closed;
+      ENGINE-MISALIGN    the contract holds, the deployed algebra diverges structurally;
+      TOLERATED          the contract holds with extensions on a null set only;
+      CERTIFIED          the contract holds with no event at all.
+    permissive: clause (a) alone at the real-valued bindings (every slot any real number).
+    f64: the deployed lane (`realised`), each side's own fitted constant, the range standard."""
     try:
-        tl = parse(lhs, '<C_L>')
-        tr = parse(rhs, '<C_R>')
+        tl = parse(lhs, '<C_L>', number=True)
+        tr = parse(rhs, '<C_R>', number=True)
     except UnsupportedToken as ex:
         # a token outside the numeric grammar: refuse the SHAPE, do not evaluate it
         return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
-    sl = slots_of(lhs, '<C_L>')
-    sr = slots_of(rhs, '<C_R>')
+    sl = slots_of(lhs, '<C_L>', number=True)
+    sr = slots_of(rhs, '<C_R>', number=True)
     slots = dict(sl)
     slots.update({k: v for k, v in sr.items() if k not in slots})
     nvars = {n: s for n, s in slots.items() if not n.startswith('<C')}
-    has_cl, has_cr = '<C_L>' in slots, '<C_R>' in slots
-    if lhs.count('<constant>') > 1:
-        # The deployed matcher binds each <constant> leaf of a left side to a value of its
-        # own; this judge models one shared symbol (the diagonal only). Rather than judge the
-        # off-diagonal silently short, the rule is refused: no tier, so no mode ships it. The
-        # mint and the load refuse such rules as well (`ac::rules::MAX_LHS_CONSTANTS`).
-        return {'verdict': 'UNSUPPORTED-SHAPE',
-                'detail': 'more than one <constant> on the left side'}
+    lnames = _constant_names(lhs, '<C_L>', True)
+    rnames = _constant_names(rhs, '<C_R>', True)
+    has_cl, has_cr = bool(lnames), bool(rnames)
+    names = sorted(nvars)
+    spelling = {n: f'x{i}' for i, n in enumerate(names)}
+    ground = not nvars
 
-    # cl battery entries: (builder, f64key). builder() gives the EXACT value at the
-    # current dps (symbolic atoms rebuild per rung); f64key indexes the witness maps
-    # and feeds the f64 fitter / deployed check. TWO witness maps, one per algebra:
-    # the contract compares against the mp-polished witness, the deployed check against
-    # the raw f64 fit -- deployment fits its OWN constant, so judging the f64 algebra
-    # with the mp witness manufactures false ENGINE-MISALIGNs across f64 saturation
-    # cliffs (asin(tanh(exp(3))): f64 sees exactly pi/2, the contract pi/2 - 2.3e-9).
-    witness = {}
-    witness_f64 = {}
     # THE SATURATION PROBES ARE WITHHELD WHERE A WITNESS MUST BE RE-FITTED AT THEM.
     # Measured over the shipped rules.json: on the 71 rows whose constant appears only on
     # the SOURCE side, the probes move exactly 16 rows and every one moves cleanly from
@@ -2066,77 +2271,81 @@ def _judge_contract(lhs, rhs, deployed_check=True):
     # the 272 rows that also fit a TARGET constant they produce 88 clause-(a) KILLs, and
     # every one diagnosed is an artifact of the exists-witness machinery at magnitudes it
     # cannot resolve, not a false rule. So the probe is put where its answer can be read
-    # and withheld where it cannot; `saturation_probed` says which happened, because a
-    # withheld question that nobody records is the `skipped_cl` defect again.
+    # and withheld where it cannot; `saturation_probed` says which happened.
     saturation_probed = not has_cr
-    if has_cl:
-        cl_battery = [(b, float(b()))
-                      for b in judge_cl_battery(saturation=saturation_probed)]
-    else:
-        cl_battery = [(None, None)]
+    cl_battery = _cl_combos(lnames, saturation_probed)
     core = {float(c) for c in CONSTS}
-    skipped_cl = []
-    unwitnessed_cl = []
+    gkey = _generic_key(lnames) if has_cl else ()
+
+    # TWO witness maps, one per algebra: the contract compares against the mp-polished
+    # witness, the deployed check against the raw f64 fit -- deployment fits its OWN
+    # constant, so judging the f64 algebra with the mp witness manufactures false
+    # ENGINE-MISALIGNs across f64 saturation cliffs (asin(tanh(exp(3))): f64 sees exactly
+    # pi/2, the contract pi/2 - 2.3e-9).
+    witness, witness_f64, witness_dps = {}, {}, {}
+    skipped_cl, unwitnessed_cl = [], []
+
+    def fitted(key):
+        """The polished witness at `key`, re-rounded at the current rung -- Unresolved at a
+        rung finer than the witness itself (`_POLISH_DPS`)."""
+        if not has_cr:
+            return {}
+        limit = witness_dps.get(key)
+        if limit is not None and mp.dps > limit:
+            raise Unresolved()
+        return {n: +w for n, w in witness.get(key, {}).items()}
+
     if has_cr:
-        kept_cl = []
-        any_fit = False
-        for b, key in cl_battery:
+        kept = []
+        for builders, key in cl_battery:
+            cl_env = dict(zip(lnames, key))
             fit_env = []
-            w = fit_witness(tl, tr, set(nvars), key, fit_env)
-            if w is None:
-                # distinguish: LHS UNDEFINED at this cl for the generic envs -> the rows
-                # are tolerated degenerate extensions (the acos(pow(c,-inf)) class),
-                # skip WITH tally; LHS defined but unfittable -> a genuine exists-failure
-                # DEFINED here means DETERMINATE, not merely finite. A saturated LHS is
-                # finite and pins nothing (see `_fit_target_env`), and convicting a rule
-                # for failing to be witnessed at a point that cannot witness anything is
-                # the false-conviction shape this whole lane keeps producing.
-                lhs_defined = _fit_target_env(tl, tr, set(nvars), key) is not None
-                if lhs_defined:
-                    # the LHS HAS a value here and no c_t reproduces it: an
-                    # exists-FAILURE, which is a different fact from the degenerate skip
-                    # below. A core cl convicts immediately, as before. A NON-core cl
-                    # used to be appended to `skipped_cl` and forgotten -- and
-                    # `skipped_cl` is returned by every verdict yet read by nobody, so
-                    # the rule went on to be CERTIFIED on the strength of the constants
-                    # that happened to fit. Recorded apart, and made verdict-bearing.
-                    if key is None or key in core:
-                        return {'verdict': 'NO-WITNESS',
-                                'detail': f'cl={key} (LHS defined)'}
+            if len(rnames) == 1:
+                w = fit_witness(tl, tr, set(nvars), cl_env, fit_env, rnames[0])
+                ws = None if w is None else [w]
+            else:
+                ws = fit_witness_multi(tl, tr, set(nvars), cl_env, rnames, fit_env)
+            if ws is None:
+                # LHS UNDEFINED at this constant for the generic envs: nothing is owed there
+                # (3.2), a skip with a tally. LHS defined (DETERMINATE, not merely finite: a
+                # saturated LHS pins nothing, see `_fit_target_env`) and no witness: the
+                # rule fails at a constant it owes.
+                if len(rnames) == 1:
+                    defined = _fit_target_env(tl, tr, set(nvars), cl_env, rnames[0]) is not None
+                else:
+                    defined = any(source_defined(d_eval(tl, {**_gen_env(set(nvars), k),
+                                                             **_cl_env(cl_env)}))
+                                  for k in range(len(GEN)))
+                if defined:
+                    if all(c in core for c in key):
+                        return {'verdict': 'NO-WITNESS', 'detail': f'cl={key} (LHS defined)',
+                                'permissive': False}
                     unwitnessed_cl.append(key)
                     continue
-                # LHS UNDEFINED here: the rule is vacuous at this cl, a real skip
                 skipped_cl.append(key)
                 continue
-            any_fit = True
-            witness[key] = mp_polish(tl, tr, nvars, b, w, fit_env[0] if fit_env else None)
-            witness_f64[key] = w
-            kept_cl.append((b, key))
-        if has_cr and not any_fit:
-            return {'verdict': 'NO-WITNESS', 'detail': 'no cl with a finite LHS/witness'}
+            if len(rnames) == 1:
+                witness[key] = {rnames[0]: mp_polish(tl, tr, nvars, builders, ws[0],
+                                                     fit_env[0] if fit_env else None,
+                                                     rnames[0])}
+            else:
+                witness[key] = mp_polish_multi(tl, tr, nvars, builders,
+                                               dict(zip(rnames, ws)), fit_env)
+            witness_dps[key] = _POLISH_DPS[0]
+            witness_f64[key] = dict(zip(rnames, ws))
+            kept.append((builders, key))
+        if not kept:
+            return {'verdict': 'NO-WITNESS', 'detail': 'no cl with a finite LHS/witness',
+                    'permissive': False}
         if unwitnessed_cl:
-            # forall-c_s exists-c_t is falsified at a constant where the LHS is defined.
-            # Reported for ALL such constants rather than the first, because the set is
-            # the evidence: one is a corner, a spread is a false rule.
+            # forall-c exists-d is falsified at a constant where the LHS is defined. Reported
+            # for ALL such constants: one is a corner, a spread is a false rule.
             return {'verdict': 'NO-WITNESS', 'skipped_cl': skipped_cl,
-                    'detail': f'cl={sorted(unwitnessed_cl)} (LHS defined)'}
-        cl_battery = kept_cl if has_cl else [(None, None)]
+                    'detail': f'cl={sorted(unwitnessed_cl)} (LHS defined)',
+                    'permissive': False}
+        cl_battery = kept
 
-    a_kills, nan_kills, tolerated, dep_div = [], [], [], []
-    # The REALISATION axis. `dep_div` answers "the contract certifies but
-    # deployment diverges" and is therefore gated on the contract agreeing -- which
-    # means a KILLed rule's realisation was never recorded, and the SOUND/LOSSY tier
-    # split needs exactly that. `dep_bad`/`dep_seen` record the same comparison with no
-    # gate, so a verdict and a realisation can be reported independently.
-    dep_bad, dep_seen = [], [False]
-    # The deployed points the f64 standard reads as agreement without comparing the
-    # floats (an operation overflowed or underflowed, and the rewrite gives the true value),
-    # counted so the verdict records them.
-    dep_out_of_range = [0]
-    resolved_pts = 0
-    attempted_pts = 0
     # battery sweep (cap the slot-product deterministically)
-    names = sorted(nvars)
     combos = [{}]
     for n in names:
         nxt = []
@@ -2148,376 +2357,368 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         combos = nxt
         if len(combos) > BATTERY_CAP:
             # the cap is the FULL two-slot product, so every <=2-slot rule is judged
-            # exhaustively and a >=3-slot sample is drawn from the COMPLETE two-slot
-            # base. The literal 500 this replaces was 29 short of 23^2 = 529 while its
-            # comment claimed the opposite. Two consequences, not one: it dropped 29
-            # two-slot pairs outright, and -- because the cap applies once per slot as
-            # the product is built -- combos extending those 29 could never enter a
-            # 3-slot sample either. A systematic blind spot, not a smaller sample.
+            # exhaustively and a >=3-slot sample is drawn from the COMPLETE two-slot base
             rng = np.random.default_rng(11)
             combos = [combos[i]
                       for i in rng.choice(len(combos), BATTERY_CAP, replace=False)]
-    for clb, clkey in cl_battery:
-        cr = witness.get(clkey) if has_cr else None
-        crd = witness_f64.get(clkey) if has_cr else None
+
+    a_kills, atom_kills, ext_events, perm_kills = [], [], [], []
+    ext_keys = set()
+    # The REALISATION axis, recorded with no gate (`dep_bad`), and ENGINE-MISALIGN's
+    # structural divergence where the contract agrees (`dep_div`).
+    dep_bad, dep_div, dep_seen, dep_out_of_range = [], [], [False], [0]
+    resolved_pts = attempted_pts = 0
+
+    def deployed(tl_env, v, point, all_real, snapped, out):
+        """The f64 lane at one point: append `(kind, point)` to `out['bad']` / `out['div']`."""
+        if not deployed_check or snapped:
+            return
+        try:
+            in_range = [True]
+            with np.errstate(all='ignore'):
+                _dl, _dr = d_eval(tl, tl_env, in_range), d_eval(tr, tl_env, in_range)
+            out['seen'] = True
+            out['finite_f64'] = out['finite_f64'] or bool(np.isfinite(_dl))
+            if not in_range[0] and v == 'eq':
+                # THE f64 STANDARD: an operation of either side overflowed or underflowed,
+                # and the rewrite gives the true value -- an agreeing observation
+                out['oor'] += 1
+                return
+            _dcl, _dcr = cls_np(_dl), cls_np(_dr)
+            dv = compare_deployed_realised(_dcl, _dcr)
+            if dv != 'eq':
+                out['bad'].append((dv, point))
+            # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
+            # a few-ULP rounding is no divergence
+            if compare_deployed_structural(_dcl, _dcr) != 'eq' and v in (None, 'eq') \
+                    and all_real:
+                out['div'].append((dv, point))
+        except Exception:
+            pass
+
+    def lane():
+        return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
+                'resolved': 0, 'attempted': 0,
+                'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False}
+
+    def judge_point(acc, v, point, kind, real_valued):
+        """File one resolved comparison: `kind` is 'real' (every binding a real number) or
+        'atom' (a `_` slot at +-inf or NaN); `real_valued` says permissive's guarantee
+        reaches the point."""
+        if kind == 'real' and _LHS_KIND[0] is not None:
+            acc['known'] += 1
+            acc['finite'] = acc['finite'] or _LHS_KIND[0] == 'fin'
+        if v is None or v == 'eq':
+            return
+        if kind == 'atom':
+            acc['atom'].append((v, point))
+        elif v == 'EXT':
+            acc['ext'].append(point)
+        else:
+            acc['a'].append((v, point))
+        if real_valued and v != 'EXT':
+            acc['perm'].append((v, point))
+
+    def owed(acc):
+        """3.2: is anything owed at this constant? Where the left side is finite at no real
+        point the judge read, nothing is (a fitted constant never lands there: the f64 fit
+        may still have found one at the constant's float, `log(|cos(c)|)` at fl(pi/2), but the
+        exact pi/2 gives -inf); without constants, always. A constant where the left side was
+        read nowhere is owed: unread is not nowhere finite."""
+        return not has_cl or acc['finite'] or acc['known'] == 0
+
+    vacuous, owed_keys = [], set()
+
+    def merge(acc, key):
+        nonlocal resolved_pts, attempted_pts
+        resolved_pts += acc['resolved']
+        attempted_pts += acc['attempted']
+        # f64 owes at a constant by ITS values: where the deployed left side is finite
+        # somewhere (`pow(sin(c), inf)` at fl(pi/2) is pow(1.0, inf) = 1 in float64, though
+        # undefined at the exact pi/2), whatever real owes there
+        if not has_cl or acc['finite_f64']:
+            dep_bad.extend(acc['bad'])
+            dep_div.extend(acc['div'])
+        dep_seen[0] = dep_seen[0] or acc['seen']
+        dep_out_of_range[0] += acc['oor']
+        if not owed(acc):
+            # nothing owed here, which the resolved points decided: they count as coverage
+            skipped_cl.append(key)
+            vacuous.append(key)
+            return
+        owed_keys.add(key)
+        a_kills.extend(acc['a'])
+        atom_kills.extend(acc['atom'])
+        perm_kills.extend(acc['perm'])
+        if acc['ext']:
+            ext_events.extend(acc['ext'])
+            ext_keys.add(key)
+
+    for builders, key in cl_battery:
+        cr_mp = witness.get(key, {}) if has_cr else {}
+        cr_f64 = witness_f64.get(key, {}) if has_cr else {}
+        acc = lane()
         for combo in combos:
             tags = {n: t for n, (b, t) in combo.items()}
+            values = {n: b() for n, (b, t) in combo.items()}
+            finite = {n: math.isfinite(float(x)) for n, x in values.items()}
+            real_valued = all(finite.values())
+            skip_real = any(t == 'nullx' for t in tags.values())
 
-            def env_mp():
+            def env_mp(combo=combo, key=key, builders=builders):
                 e = {n: b() for n, (b, t) in combo.items()}
-                if clb is not None:
-                    e['<C_L>'] = clb()  # exact symbolic constant at the CURRENT dps
-                if cr is not None:
-                    e['<C_R>'] = +cr    # mpf witness, re-rounded to the current dps
+                e.update({n: b() for n, b in builders.items()})  # exact at the CURRENT dps
+                e.update(fitted(key))                             # re-rounded per rung
                 return e
 
+            if skip_real and not real_valued:
+                continue          # owed nothing in real, outside permissive's guarantee
             v, snapped = _point_verdict(tl, tr, env_mp)
-            attempted_pts += 1
+            point = {n: float(x) for n, x in values.items()}
+            point.update(dict(zip(lnames, key)))
+            point.update({n: float(w) for n, w in cr_mp.items()})
+            if skip_real:
+                # a `$` slot at 0: owed nothing in real (its certificate), a real-valued
+                # binding permissive's guarantee covers
+                if v not in (None, 'eq', 'EXT'):
+                    acc['perm'].append((v, point))
+                continue
+            kind = 'atom' if any(t == 'atom' for t in tags.values()) else 'real'
+            acc['attempted'] += 1
             if v is not None:
-                resolved_pts += 1
-            point = {n: float(b()) for n, (b, t) in combo.items()}
-            if clkey is not None:
-                point['<C_L>'] = clkey
-            if cr is not None:
-                point['<C_R>'] = float(cr)
-            if v not in (None, 'eq') and any(t == 'nan-dom' for t in tags.values()):
-                # At a nan binding of a `_` slot, every disagreement is a change
-                # of the function on a set the sort quantifies. EXT here is
-                # nan-ERASURE (`- _0 _0 -> 0` erasing `log x0 - log x0` on x0 < 0),
-                # SHRINK is nan-introduction. Fatal, not tolerated.
-                nan_kills.append((v, point))
-            elif v == 'REAL-CHANGE':
-                if all(t == 'real' for t in tags.values()):
-                    # SINGULAR-INPUT gate, the twin of the monitor's:
-                    # clause (a)'s authority is REAL points where mathematics answers.
-                    # A real INPUT BINDING can still land on the LHS's own singular
-                    # manifold (x1 = x3 zeroes a denominator); there the LHS value is a
-                    # convention-completion, spelling-dependent under ANY +-inf-valued
-                    # extension, and a bounded compressor above it renders the
-                    # disagreement real-vs-real. Clause (c) territory, like @ext.
-                    try:
-                        singular = lhs_singular(tl, env_mp())
-                    except Exception:
-                        singular = False
-                    if singular:
-                        tolerated.append(('REAL-CHANGE@singular', point, tags))
-                    else:
-                        a_kills.append(point)
-                else:
-                    # a real-VALUED disagreement at an extension-INPUT point (+-inf
-                    # binding) is convention-mediated (it arose through extended ops:
-                    # e.g. one-zero's inv(-inf)=0 vs the composition limit) -- clause (c)
-                    # territory, not clause (a): clause (a)'s authority is REAL points,
-                    # where mathematics answers.
-                    tolerated.append(('REAL-CHANGE@ext', point, tags))
-            elif v in ('EXT', 'SHRINK', 'INF-CHANGE'):
-                tolerated.append((v, point, tags))
-            all_real = all(t == 'real' for t in tags.values())
-            if deployed_check and not snapped:
-                try:
-                    ed = {n: F(float(b())) for n, (b, t) in combo.items()}
-                    if clkey is not None:
-                        ed['<C_L>'] = F(clkey)
-                    if crd is not None:
-                        ed['<C_R>'] = F(crd)   # the f64-fitted witness: each algebra
-                                               # is judged with its OWN constant
-                    in_range = [True]
-                    _dl, _dr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
-                    if not in_range[0] and v == 'eq':
-                        # THE f64 STANDARD (`out_of_range`): an operation of either side
-                        # overflowed or underflowed here, and the rewrite gives the true
-                        # value, which f64 accepts at a range event as the constructors
-                        # do. An agreeing observation, so neither deployed comparison is
-                        # asked.
-                        dep_seen[0] = True
-                        dep_out_of_range[0] += 1
-                        continue
-                    _dcl, _dcr = cls_np(_dl), cls_np(_dr)
-                    dv = compare_deployed_realised(_dcl, _dcr)
-                    dep_seen[0] = True
-                    if dv != 'eq':
-                        dep_bad.append((dv, point))
-                    # ENGINE-MISALIGN keeps its ORIGINAL gate AND its own STRUCTURAL
-                    # comparison: a divergence where the contract also disagrees is not
-                    # misalignment, one at an inf binding is convention-mediated, and a
-                    # few-ULP rounding is not a divergence at all.
-                    if compare_deployed_structural(_dcl, _dcr) != 'eq' \
-                            and v in (None, 'eq') and all_real:
-                        dep_div.append((dv, point))
-                except Exception:
-                    pass
+                acc['resolved'] += 1
+            if ground and not has_cl and v == 'EXT':
+                # a GROUND rule has one point, its whole domain: an extension there is no
+                # null event (no tolerance, 3.3)
+                acc['a'].append((v, point))
+            else:
+                judge_point(acc, v, point, kind, real_valued)
+            ed = {n: F(float(x)) for n, x in values.items()}
+            ed.update({n: F(c) for n, c in zip(lnames, key)})
+            ed.update({n: F(w) for n, w in cr_f64.items()})   # each algebra its OWN constant
+            deployed(ed, v, point, kind == 'real', snapped, acc)
+        merge(acc, key)
 
-    # measure scan: generic grid per slot, identity binding, contract semantics
-    meas = 0.0
+    # the GENERIC GRID: more points of clause (a) past the battery's magnitudes, and the
+    # deployed lane where float64 parts from the reals (tanh saturates at 19.06, exp overflows
+    # at 709.78 and underflows at -745.13); every slot real
+    grid_key = gkey if has_cl else ()
+    grid_ready = (not has_cl or any(k == grid_key for _, k in cl_battery)) and \
+        (not has_cr or grid_key in witness)
+    gbuilders = next((b for b, k in cl_battery if k == grid_key), {})
+    diag_ext = False
     old = mp.dps
-    mp.dps = 50
+    mp.dps = BASE_DPS
     try:
-        for cfg in (1.7, -1.3):
-            for n in names:
-                res = []
+        if names and grid_ready:
+            cr_mp = witness.get(grid_key, {}) if has_cr else {}
+            cr_f64 = witness_f64.get(grid_key, {}) if has_cr else {}
+            acc = lane()
+            lanes = [(cfg, n) for cfg in (1.7, -1.3) for n in names]
+            for cfg, n in lanes + ([(None, None)] if len(names) >= 2 else []):
                 for g in GRID:
-                    e = {m: mpf(cfg) for m in names}
-                    e[n] = mpf(float(g))
-                    if has_cl:
-                        e['<C_L>'] = mpf(CONSTS[0])  # measure scan: generic cl suffices
-                    if has_cr:
-                        wv = witness.get(float(CONSTS[0]) if has_cl else None)
-                        if wv is None:
-                            continue
-                        # the polished witness, re-rounded at each rung as the battery lane
-                        # does: frozen at this lane's dps 50, it left a fixed 1e-51 gap against
-                        # an exact `<C_L>` at every higher rung, which the decay test read as
-                        # analytic (`x + log(c) -> c_t + x` scored measure 1.0)
-                        e['<C_R>'] = wv
-                    # PRECISION-COUPLED. This lane took a SINGLE dps-50 reading,
-                    # while `_point_verdict` -- the battery's own comparison -- has always
-                    # confirmed each non-eq verdict at a second rung and returned
-                    # Unresolved on rung disagreement. The gap was measurable:
-                    # `log(cosh t + sinh t) -> t` scores 5/174 at dps 50, 3/174 at 120,
-                    # 2/174 at 400 and 0/174 at 9000, because mpmath loses ~0.87|t| digits
-                    # to catastrophic cancellation there. Every one of those points is a
-                    # TRUE identity, and the only positive measure this judge has ever
-                    # recorded on a shipped artifact was that noise -- four more negative
-                    # tail points and it would have convicted a true rule. Escalate, and
-                    # never convict on a reading a second rung will not repeat.
-                    snap0 = SNAP_EVENTS[0]
-                    cv, _snapped = _point_verdict(tl, tr,
-                                                  lambda e=e: {k: +v for k, v in e.items()})
-                    if cv is None:
+                    if n is None:
+                        # THE DIAGONAL: every slot bound to one value -- an instance family
+                        # the engine reaches (`(a - b)/(b - a)` with a = b = log(x))
+                        vals = {m: float(g) for m in names}
+                    else:
+                        vals = {m: cfg for m in names}
+                        vals[n] = float(g)
+
+                    def env_mp(vals=vals):
+                        e = {m: mpf(x) for m, x in vals.items()}
+                        e.update({k: b() for k, b in gbuilders.items()})
+                        e.update(fitted(grid_key))
+                        return e
+
+                    v, snapped = _point_verdict(tl, tr, env_mp)
+                    point = dict(vals)
+                    point.update(dict(zip(lnames, grid_key)))
+                    if n is None and v == 'EXT':
+                        diag_ext = True
+                    judge_point(acc, v, point, 'real', True)
+                    if v is None or n is None:
+                        # the deployed lane reads the per-slot grid where the contract
+                        # resolved: an unresolved point says nothing about the true value a
+                        # range event accepts (`ceil(1/cosh(1e4))` needs 4,353 digits)
                         continue
-                    res.append(cv)
-                    # DEPLOYED LANE. ENGINE-MISALIGN asks "does the shipped f64
-                    # engine realise what the contract certified?", and until now the only
-                    # place that question was ever put ran over the BATTERY, whose largest
-                    # magnitude is 3.0 -- below every point where f64 departs from the
-                    # extended reals (tanh saturates at 19.06, exp overflows at 709.78 and
-                    # underflows at -745.13, cosh/sinh overflow at 710.48). The verdict was
-                    # therefore unreachable in principle, not merely unfired. This grid
-                    # already reaches 1e4, so the same comparison the battery lane performs
-                    # is put at every grid point too. Of those departures, the f64 standard
-                    # (`out_of_range`) accepts the true value at an overflow or underflow,
-                    # as the battery lane does: what this lane still convicts is saturation
-                    # and rounding inside the range (`atanh(tanh(20))`).
-                    #
-                    # Guards mirror the battery lane exactly: only where the CONTRACT is
-                    # 'eq' (misalignment is contract-certifies-but-deployment-diverges, so
-                    # a contract disagreement is a different verdict), and never across a
-                    # symbolic snap, where f64 evaluates a genuinely different point and a
-                    # divergence would be a measurement artifact. `<C_R>` binds the RAW f64
-                    # fit, never the mp-polished witness: deployment fits its OWN constant.
-                    if not (deployed_check and SNAP_EVENTS[0] == snap0):
-                        continue
-                    ed = {m: F(cfg) for m in names}
-                    ed[n] = F(float(g))
-                    if has_cl:
-                        ed['<C_L>'] = F(CONSTS[0])
-                    if has_cr:
-                        wf = witness_f64.get(float(CONSTS[0]) if has_cl else None)
-                        if wf is None:
-                            continue
-                        ed['<C_R>'] = F(wf)
-                    try:
-                        in_range = [True]
-                        with np.errstate(all='ignore'):
-                            _gl, _gr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
-                            _gcl, _gcr = cls_np(_gl), cls_np(_gr)
-                            dv = compare_deployed_realised(_gcl, _gcr)
-                    except Exception:
-                        continue
-                    dep_seen[0] = True
-                    if not in_range[0] and cv == 'eq':
-                        dep_out_of_range[0] += 1   # the f64 standard, as above: agrees
-                        continue
-                    if dv != 'eq':
-                        dep_bad.append((dv, {'slot': n, 'grid': float(g)}))
-                    if cv == 'eq' and compare_deployed_structural(_gcl, _gcr) != 'eq':
-                        dep_div.append((dv, {'slot': n, 'grid': float(g)}))
-                if res:
-                    # DENOMINATOR IS THE GRID, not the resolved subset. Dropping
-                    # Unresolved points from the divisor made the bar a moving target:
-                    # two shipped rules already run at 154, and at a denominator of 19 a
-                    # SINGLE disagreeing point scores 0.0526 and kills -- precisely the
-                    # "single-point fluke" the MEASURE_KILL comment promises can never
-                    # reach the bar. An unresolved point is absence of evidence and
-                    # counts toward neither side.
-                    meas = max(meas, sum(1 for c in res if c != 'eq') / len(GRID))
-        # THE DIAGONAL lane (the opposite-polarity hole) -- every wildcard
-        # slot bound to ONE varying value. Independent-slot sampling makes
-        # {_i = _j} a null event, but for a REWRITE RULE the diagonal is an
-        # engine-reachable instance family: with _0 = _1 = log(x0) the collector
-        # refuses the nan-capable t - t -> 0, the pattern (a-b)/(b-a) still
-        # matches, and the engine rewrote a nan-EVERYWHERE expression to -1 while
-        # this scan read the event as null-tolerated EXT. An off-'eq' fraction on
-        # the diagonal is positive measure ON THAT FAMILY, judged by the same bar.
-        if len(names) >= 2:
-            res = []
-            for g in GRID:
-                e = {m: mpf(float(g)) for m in names}
-                if has_cl:
-                    e['<C_L>'] = mpf(CONSTS[0])
-                if has_cr:
-                    wv = witness.get(float(CONSTS[0]) if has_cl else None)
-                    if wv is None:
-                        continue
-                    e['<C_R>'] = wv   # re-rounded at each rung, as above
-                # PRECISION-COUPLED like every other lane.
-                # This took a single bare reading at rung 1 and fed the SAME `meas` that
-                # KILLs, so one dps-50 rounding on the diagonal could convict a rule that
-                # the per-slot lane -- two-rung -- would have cleared. The
-                # asymmetry was invisible because both lanes write into one accumulator.
-                v, _ = _point_verdict(tl, tr, lambda e=e: {k: +v for k, v in e.items()})
-                if v is not None:
-                    res.append(v)
-            if res:
-                meas = max(meas, sum(1 for c in res if c != 'eq') / len(GRID))
+                    ed = {m: F(x) for m, x in vals.items()}
+                    ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
+                    ed.update({k: F(w) for k, w in cr_f64.items()})
+                    deployed(ed, v, point, True, snapped, acc)
+            # the grid's points count toward nothing in coverage (that is the battery's)
+            acc['resolved'] = acc['attempted'] = 0
+            merge(acc, grid_key)
     finally:
         mp.dps = old
+
+    # CLAUSE (b): measure from certified cells, read in the table's values -- at the generic
+    # constants (always, for a rule with variables) and at every owed constant where an
+    # extension was seen; and on the diagonal family where one was seen there.
+    b_kill, undecided, width = None, [], 0.0
+    if not ground:
+        checks = []
+        if (not has_cr or grid_key in witness) and (not has_cl or grid_key in owed_keys):
+            checks.append(grid_key)
+        checks += sorted(k for k in ext_keys if k != grid_key and (not has_cr or k in witness))
+        for key in checks:
+            rp = [witness[key][n] for n in rnames] if has_cr else []
+            w = _extension_width(lhs, key, rhs, rp, spelling)
+            if w is None:
+                undecided.append(key)
+            elif w > 0:
+                width = max(width, w)
+                b_kill = b_kill or {'cl': list(key), 'width': w}
+        if diag_ext and b_kill is None and (not has_cr or grid_key in witness) \
+                and (not has_cl or grid_key in owed_keys):
+            rp = [witness[grid_key][n] for n in rnames] if has_cr else []
+            w = _extension_width(lhs, grid_key, rhs, rp, {n: 'x0' for n in names})
+            if w is None:
+                undecided.append(('diagonal',))
+            elif w > 0:
+                width = max(width, w)
+                b_kill = {'cl': list(grid_key), 'width': w, 'diagonal': True}
 
     # ONE f64 STANDARD: the constructors fill a NaN hole on a null set (`x1/x1` is `1` in
     # f64), so a TOLERATED rule whose every deployed disagreement is such a fill -- the left
     # side NaN where the right side has a value (`EXT`), at a point the contract itself
-    # tolerated as a null event -- is realised in f64 as well. A NaN hole on positive
-    # measure, or one the contract does not tolerate, is not. (A point where an operation
-    # overflowed or underflowed and the rewrite gives the true value never reaches
-    # `dep_bad`: the f64 standard accepts it, and `out_of_range` counts it.)
+    # tolerated as a null event -- is realised in f64 as well.
     _realised = (not dep_bad) if dep_seen[0] else None
-    tolerated_points = [p for _, p, _ in tolerated]
-    fills_nan = bool(dep_bad) and all(k == 'EXT' and p in tolerated_points for k, p in dep_bad)
+    fills_nan = bool(dep_bad) and all(k == 'EXT' and p in ext_events for k, p in dep_bad)
+    # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
+    # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
+    vacuous_rule = has_cl and bool(vacuous) and not owed_keys
+    covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
+    permissive = covered and not perm_kills
+    base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
+            'realised': _realised, 'out_of_range': dep_out_of_range[0],
+            'permissive': permissive, 'resolved_points': resolved_pts}
+    if perm_kills:
+        base['permissive_points'] = [p for _, p in perm_kills[:3]]
+    if dep_bad:
+        base['unrealised'] = dep_bad[:3]
+
+    def verdict(name, **extra):
+        out = dict(base, verdict=name, **extra)
+        out['tier'] = _tier(name, out['realised'], out['permissive'])
+        return out
 
     if a_kills:
-        return {'verdict': 'KILL', 'clause': 'a-real-change', 'points': a_kills[:3],
-                'measure': meas, 'skipped_cl': skipped_cl,
-                'realised': _realised, 'out_of_range': dep_out_of_range[0],
-                'tier': _tier('KILL', _realised)}
-    if nan_kills:
-        return {'verdict': 'KILL', 'clause': 'a-nan-domain',
-                'points': [p for _, p in nan_kills[:3]],
-                'kinds': sorted({k for k, _ in nan_kills}),
-                'measure': meas, 'skipped_cl': skipped_cl,
-                'realised': _realised, 'out_of_range': dep_out_of_range[0],
-                'tier': _tier('KILL', _realised)}
-    if meas > MEASURE_KILL:
-        return {'verdict': 'KILL', 'clause': 'bc-positive-measure', 'measure': meas,
-                'tolerated_events': len(tolerated), 'skipped_cl': skipped_cl,
-                'realised': _realised, 'out_of_range': dep_out_of_range[0],
-                'tier': _tier('KILL', _realised)}
-    if resolved_pts == 0 or resolved_pts / max(1, attempted_pts) < 0.25:
+        return verdict('KILL', clause='a-real-change', points=[p for _, p in a_kills[:3]],
+                       kinds=sorted({k for k, _ in a_kills}))
+    if atom_kills:
+        return verdict('KILL', clause='a-nonfinite-binding',
+                       points=[p for _, p in atom_kills[:3]],
+                       kinds=sorted({k for k, _ in atom_kills}))
+    if b_kill is not None:
+        return verdict('KILL', clause='b-positive-measure', cell=b_kill,
+                       tolerated_events=len(ext_events))
+    if not covered:
         # "skip, never convict" must not become "skip everything, acquit": a rule whose
         # battery is almost entirely Unresolved has no evidence either way (e.g. a
         # 1e15-argument trig rule certifying from one resolved point). The bar is a
         # FRACTION of attempted points: a ground rule with its single point resolved has
         # full coverage.
         return {'verdict': 'UNRESOLVED-COVERAGE', 'resolved_points': resolved_pts,
-                'attempted_points': attempted_pts, 'skipped_cl': skipped_cl}
-    for r in ({},):
-        pass
+                'attempted_points': attempted_pts, 'skipped_cl': skipped_cl,
+                'permissive': False}
+    if undecided:
+        # clause (b) could not be decided: fail closed (4.10), counted
+        return verdict('UNDECIDED-MEASURE', undecided=[list(k) for k in undecided[:3]])
     if dep_div:
-        # contract certifies; deployed diverges. Gap class (literal-zero division /
-        # zero-sign) never reaches here because cls_np uses quotient zeros; what
-        # remains is a genuine realization split.
-        return {'verdict': 'ENGINE-MISALIGN', 'points': [p for _, p in dep_div[:3]],
-                'kinds': sorted({k for k, _ in dep_div}), 'measure': meas,
-                'realised': _realised, 'out_of_range': dep_out_of_range[0],
-                'tier': _tier('ENGINE-MISALIGN', _realised)}
-    if tolerated:
-        kinds = sorted({v for v, _, _ in tolerated})
-        _realised = True if fills_nan else _realised
-        return {'verdict': 'TOLERATED', 'classes': kinds,
-                'saturation_probed': saturation_probed,
-                'realised': _realised, 'out_of_range': dep_out_of_range[0],
-                'tier': _tier('TOLERATED', _realised),
-                'events': [(v, p) for v, p, _ in tolerated[:3]], 'measure': meas,
-                'skipped_cl': skipped_cl, 'resolved_points': resolved_pts}
-    return {'verdict': 'CERTIFIED', 'measure': meas, 'skipped_cl': skipped_cl,
-            'saturation_probed': saturation_probed,
-            'realised': _realised, 'out_of_range': dep_out_of_range[0],
-            'tier': _tier('CERTIFIED', _realised),
-            'resolved_points': resolved_pts}
+        # contract certifies; deployed diverges: a genuine realisation split
+        return verdict('ENGINE-MISALIGN', points=[p for _, p in dep_div[:3]],
+                       kinds=sorted({k for k, _ in dep_div}))
+    if ext_events:
+        base['realised'] = True if fills_nan else _realised
+        return verdict('TOLERATED', classes=['EXT'], events=[('EXT', p) for p in ext_events[:3]])
+    if vacuous_rule:
+        return verdict('CERTIFIED', vacuous=True)
+    return verdict('CERTIFIED')
 
 
 # ---------------------------------------------------------------- self-test
 TOUCHSTONES = [
     # (lhs, rhs, expected verdict, why -- the mathematical reason)
-    ('+ ?0 pow sin ?0 float("inf")', '?0', 'KILL',
-     'powsin: real value x+1 changed at exact pi/2 (clause a, null measure irrelevant)'),
+    ('+ ?0 pow sin ?0 float("inf")', '?0', 'TOLERATED',
+     'powsin under the limit rule: pow(1, inf) is undefined (V5), so at x = pi/2 the left side '
+     'has no value and the right side extends it on a null set only; elsewhere |sin x| < 1 and '
+     'the power is 0'),
     ('rootn pow ?0 2 2', '?0', 'KILL',
-     'sqrt(x^2)->x: real values differ on x<0 (clause a + measure)'),
+     'sqrt(x^2)->x: real values differ on x<0 (clause a)'),
     ('atan tan asin _0', 'asin _0', 'TOLERATED',
-     'nan-caused zero-measure extension at +-1 is NOT the powsin class'),
+     'tan(pi/2) is undefined: an extension at _0 = +-1 only, a null set'),
     ('/ ?0 ?0', '1', 'TOLERATED',
      'x/x->1: undefined->defined at 0 only (clause b, null set)'),
-    ('neg inv neg !0', 'inv !0', 'TOLERATED',
-     'sign-flip family: inf-artifact at 0-events only (clause c, finite-null class)'),
-    ('* 0 !0', '0', 'TOLERATED',
-     'absorption: exact everywhere on reals; 0*inf indeterminate at nullx events only'),
-    ('inv sin np.pi', 'float("inf")', 'CERTIFIED',
-     'sin(pi) is exactly 0 (symbolic point + snap), 1/0 = +inf'),
+    ('neg inv neg !0', 'inv !0', 'CERTIFIED',
+     'one zero and 1/0 undefined (V4): both sides undefined at 0, equal elsewhere; the `!` '
+     'slot owes nothing at +-inf'),
+    ('* 0 !0', '0', 'CERTIFIED',
+     'absorption: exact at every real value; the `!` slot owes nothing at +-inf'),
+    ('inv sin np.pi', 'float("inf")', 'KILL',
+     'sin(pi) is exactly 0 and 1/0 is undefined (V4): a ground rule has no tolerance (3.3)'),
     ('pow inv rootn ?0 4 4', 'pow ?0 <constant>', 'KILL',
-     'even-root extension on the negative half-line (clause b, positive measure)'),
+     'even-root extension on the negative half-line (clause b, a certified cell)'),
     ('rootn pow float("-inf") ?0 2', 'pow float("inf") ?0', 'KILL',
      'pow(-inf, data): undefined a.e. (clause b, positive measure)'),
     ('rootn rootn atanh !0 2 2', 'rootn atanh !0 4', 'CERTIFIED',
      'rootn(-inf, 4) = nan = sqrt(sqrt(-inf)): both spellings agree with the contract'),
     ('/ 0 * 2 ?0', '0', 'TOLERATED',
-     '0/0 at x=0 is an undefined->defined null-set extension (the x/x->1 class); the '
-     'deployed zero-sign residue is a documented gap by design'),
+     '0/0 at x=0 is an undefined->defined null-set extension (the x/x->1 class)'),
     ('neg + (-1) _0', '- 1 _0', 'CERTIFIED',
-     'algebraic identity, exact everywhere incl the cancellation point (one zero)'),
-    ('pow sin <constant> float("inf")', '0', 'KILL',
-     'powsin in CONSTANT space: at c = pi/2 (symbolic atom) the value is 1, not 0 -- '
-     'clause (a); fitted constants reach pi/2'),
+     'algebraic identity, exact everywhere incl the cancellation point and +-inf (one zero)'),
+    ('pow sin <constant> float("inf")', '0', 'CERTIFIED',
+     'powsin in CONSTANT space under the limit rule: at c = pi/2 the left side is undefined '
+     '(pow(1, inf), V5) and owes nothing (3.2); everywhere else it is 0'),
     ('rootn pow _0 3 3', '_0', 'CERTIFIED',
      'cbrt(t^3) = t exactly on all of R incl negatives and +-inf (odd-root exactness)'),
     ('* 3 log rootn _0 3', 'log _0', 'CERTIFIED',
      '3*log(cbrt t) = log t for t>0; both undefined for t<0; -inf vs -inf equal at 0; '
      '3*inf = inf at +inf: no disagreement event anywhere -- exactly certified'),
     ('atanh tanh !0', '!0', 'ENGINE-MISALIGN',
-     'BOTH halves, and they are independent. CONTRACT half unchanged: exactly true on ALL '
-     'of R, and the dps-50 rounding of tanh(100) to 1 must still go Unresolved at the '
-     'boundary rather than fabricate +inf (boundary-honesty band) -- a CERTIFIED contract '
-     'lane is what lets the second half be reached at all. DEPLOYED half, new with F95: '
-     'f64 tanh attains exactly 1.0 from 19.061547465398498, so the shipped engine returns '
-     'inf where the rule says the argument. The rule is TRUE and NOT REALISED, which is '
-     'precisely what ENGINE-MISALIGN names. A regression to CERTIFIED here means the '
-     'deployed lane stopped reaching the grid; a KILL means the contract lane started '
-     'fabricating. The f64 standard leaves overflows and underflows out, and none occurs '
-     'here: tanh saturates INSIDE the range, and atanh(1.0) is a pole.'),
+     'BOTH halves, and they are independent. CONTRACT half: exactly true on ALL of R. '
+     'DEPLOYED half: f64 tanh attains exactly 1.0 from 19.061547465398498, so the shipped '
+     'engine returns inf where the rule says the argument. The rule is TRUE and NOT REALISED, '
+     'which is precisely what ENGINE-MISALIGN names. The f64 standard leaves overflows and '
+     'underflows out, and none occurs here: tanh saturates INSIDE the range.'),
     ('rootn exp ?0 2', 'exp / ?0 2', 'CERTIFIED',
-     'the f64 standard: f64 promises the evaluator\'s value wherever nothing overflows or '
-     'underflows. True on R, and f64 computes it at every point where exp stays in range; '
-     'past exp\'s overflow (709.78) and underflow (-745.13) the rule gives the true value, '
-     'as the constructors do for exp(x)/exp(x) = 1, so the deployed lane accepts those '
-     'grid points. ENGINE-MISALIGN here means their floats are being compared again.'),
+     'the f64 standard: true on R, and f64 computes it wherever exp stays in range; past '
+     'exp\'s overflow (709.78) and underflow (-745.13) the rule gives the true value, which '
+     'the deployed lane accepts'),
     # -- regression guards --
     ('+ ?0 sin exp -100', '?0', 'KILL',
-     'F99. The invariant this pins is unchanged and now holds at EVERY rung rather '
-     'than only at dps 50: the tolerance floor is tied to the snap threshold '
-     '(10**(-dps+10)), so a snap-absorbable value is always within tolerance and the '
-     'snap can never fabricate an equality the tolerance would refuse. What changed is '
-     'the VERDICT, because the rule is genuinely false and the old fixed 1e-25 floor '
-     'was hiding it: sin(e^-100) = 3.720076e-44, so at the battery point ?0 = 0 the LHS '
-     'is 3.7e-44 against an RHS of 0 -- a 100% relative disagreement in exact arithmetic '
-     'AND in f64, where 0.0 + sin(exp(-100)) == 0.0 is False. The snap absorbs it at '
-     'dps 50 (threshold 1e-40) and not at dps 120 (1e-110), so rungs 2 and 3 decide, '
-     'which is the escalation working as designed.'),
+     'sin(e^-100) = 3.720076e-44, so at ?0 = 0 the LHS is 3.7e-44 against an RHS of 0: a '
+     'fixed gap, which the decay test convicts'),
     ('rootn * - ?0 0.2 - ?0 0.8 2', 'rootn abs * - ?0 0.2 - ?0 0.8 2', 'KILL',
-     'undefined on (0.2, 0.8), measure 0.6: invisible to a coarse unit-spaced grid'),
-    ('+ ?0 * pow exp neg pow - <constant> 2 2 float("inf") ?0', '?0', 'KILL',
-     'violates exactly at c = 2: requires the constant battery to include even integers '
-     '(powsin-in-constant-space at an ordinary value)'),
+     'undefined on (0.2, 0.8), measure 0.6: a certified cell'),
+    ('+ ?0 * pow exp neg pow - <constant> 2 2 float("inf") ?0', '?0', 'CERTIFIED',
+     'at c = 2 the power is pow(1, inf), undefined (V5): the left side is undefined for every '
+     'x there and owes nothing (3.2); at every other c it is x'),
     ('pow abs ?0 <constant>', 'pow abs ?0 <constant>', 'CERTIFIED',
      'identity: the polisher must not de-snap the exact-zero witness into 1e-62 and '
      'fabricate a pow(0,0)-crossing phantom'),
-    ('sin * ?0 * 1e15 + 1 1e-20', 'sin * ?0 1e15', 'UNRESOLVED-COVERAGE',
-     'nearly every probe is beyond the trig wedge: no evidence either way must not '
-     'certify'),
-    ('- <constant> <constant>', '0', 'UNSUPPORTED-SHAPE',
-     'two LHS constants bind independently in the deployed matcher; the one-symbol '
-     'diagonal model must refuse, fail-closed'),
+    ('sin * ?0 * 1e15 + 1 1e-20', 'sin * ?0 1e15', 'KILL',
+     'the table reads sin(5e14 * (1 + 1e-20)) exactly: the sides differ by about 5e-6 at '
+     '?0 = 1/2, a decided point'),
+    ('- <constant> <constant>', '0', 'KILL',
+     'two constants are two symbols (3.2): at (2.5, -1.5) the left side is 4'),
+    ('* exp + ?0 <constant> <constant>', '* <constant> exp ?0', 'CERTIFIED',
+     'for all c1, c2: d = c2 * e^c1 (3.2, independent constants)'),
     ('- _0 _0', '0', 'KILL',
-     'nan-erasure at a `_` binding: `_` quantifies nan (S14, owner ruling '
-     '2026-08-22) -- `log x0 - log x0` is nan on the whole negative half-line and '
-     'this rewrite defines it'),
+     '`_` quantifies +-inf and undefined with no excuse: inf - inf and NaN - NaN have no '
+     'value, and 0 does'),
+    ('* 0 tanh _0', '* 0 _0', 'KILL',
+     'at _0 = +inf the left side is 0 * 1 = 0 and the right side 0 * inf is undefined (N3)'),
+    ('tan asin ceil ?0', 'atanh ceil ?0', 'KILL',
+     'for x in (0, 1], ceil x = 1 and tan(pi/2) is undefined while atanh(1) = +inf: an '
+     'extension on a certified cell of positive measure (3.1)'),
+    ('+ ?0 * 0 rootn - pow ?0 2 0.01 2', '?0', 'KILL',
+     'undefined on (-0.1, 0.1), where the right side has a value: a certified cell, however '
+     'small a fraction of any grid'),
+    ('log -1', '0', 'KILL',
+     'a ground rule has one point and no tolerance: the left side is undefined (3.3)'),
+    ('/ 1 0', 'float("inf")', 'KILL',
+     '1/0 is undefined (V4): +inf from the right, -inf from the left'),
     ('besselj 3 neg _0', 'besselj -3 _0', 'CERTIFIED',
      'J_3(-x) = -J_3(x) = J_-3(x) at every value: an integer order reads its parity and its '
      'reflection, in the contract and bit for bit in float64'),

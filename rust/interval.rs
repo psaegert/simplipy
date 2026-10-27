@@ -3027,6 +3027,9 @@ fn exact_integer_literal(t: &str, v: f64) -> bool {
 /// silently conflates the two under subdivision (`pow(<constant>, x)` would be evaluated only on
 /// the diagonal C == x). The domain gate therefore always passes the FITTED constants.
 pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f64]) -> Option<Vs> {
+    if TABLE_POINTS.with(|c| c.get()) {
+        return value_set_table_points(tokens, ops, doms, params);
+    }
     fn go(
         t: &[String],
         i: usize,
@@ -3061,6 +3064,131 @@ pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f6
     }
     let mut k = 0usize;
     go(tokens, 0, ops, doms, params, &mut k).map(|(v, _)| v)
+}
+
+thread_local! {
+    /// Set by `with_table_points`: the contract judge's reading of a cell.
+    static TABLE_POINTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with THE TABLE valuing every subexpression that is ONE POINT across a cell: a
+/// literal, a bound `<constant>`, an operation on such points, and a step head (`floor`,
+/// `ceil`) whose value is one integer on the cell. Elsewhere the interval arithmetic is the
+/// layer's own. This is the contract judge's measure (`table_extension_width`): a cell is
+/// certified in the table's values, so `tan(asin(ceil(x)))` is undefined on all of (0, 1] (the
+/// table's `tan(pi/2)`), where the layer's float enclosure of `asin(1)` reads a finite pole
+/// neighbourhood. Thread-local, and restored on return.
+pub fn with_table_points<T>(f: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TABLE_POINTS.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(TABLE_POINTS.with(|c| c.replace(true)));
+    f()
+}
+
+/// The value set of a table value that holds across a whole cell.
+fn vs_of_table(v: &crate::table::Val, ctx: &mut crate::table::Ctx) -> Option<Vs> {
+    let (undefined, infinite) = crate::table::class_of(v);
+    if undefined {
+        let mut r = Vs::empty();
+        r.nan = true;
+        return Some(r);
+    }
+    if let Some(up) = infinite {
+        return Some(Vs::constant(if up { INF } else { -INF }));
+    }
+    let (lo, hi, lo_open, hi_open) = crate::table::f64_enclosure(v, ctx)?;
+    Some(Vs::interval(lo, hi, lo_open, hi_open))
+}
+
+/// `value_set_p` under `with_table_points`.
+fn value_set_table_points(
+    tokens: &[String],
+    ops: &Operators,
+    doms: &[Vs],
+    params: &[f64],
+) -> Option<Vs> {
+    use crate::table::{Ctx, Val};
+    /// The working precision of a point reading: far past a double's, and cheap.
+    const POINT_DPS: i32 = 40;
+    fn ctx_of(c: &mut Option<Ctx>) -> Option<&mut Ctx> {
+        if c.is_none() {
+            *c = Some(Ctx::new(POINT_DPS)?);
+        }
+        c.as_mut()
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn go(
+        t: &[String],
+        i: usize,
+        ops: &Operators,
+        doms: &[Vs],
+        p: &[f64],
+        k: &mut usize,
+        ctx: &mut Option<Ctx>,
+    ) -> Option<(Vs, Option<Val>, usize)> {
+        let tok = t.get(i)?.as_str();
+        if var_index(tok).is_some() {
+            return Some((leaf_vs(tok, doms, p, k)?, None, i + 1));
+        }
+        if tok == "<constant>" {
+            let slot = *k;
+            let v = leaf_vs(tok, doms, p, k)?;
+            let point = p.get(slot).map(|c| crate::table::val_of_f64(*c));
+            return Some((v, point, i + 1));
+        }
+        if let Some(v) = leaf_vs(tok, doms, p, k) {
+            let point = crate::table::literal_val(tok, ctx_of(ctx)?);
+            return Some(match point {
+                Some(pt) => (vs_of_table(&pt, ctx_of(ctx)?).unwrap_or(v), Some(pt), i + 1),
+                None => (v, None, i + 1),
+            });
+        }
+        if !ops.is_operator(tok) {
+            return None;
+        }
+        let ar = ops.arity_of(tok)?;
+        let mut kids = Vec::with_capacity(ar as usize);
+        let mut j = i + 1;
+        for _ in 0..ar {
+            let (v, pt, next) = go(t, j, ops, doms, p, k, ctx)?;
+            kids.push((v, pt));
+            j = next;
+        }
+        if kids.iter().all(|(_, pt)| pt.is_some()) {
+            let args: Vec<Val> = kids.iter().filter_map(|(_, pt)| pt.clone()).collect();
+            let c = ctx_of(ctx)?;
+            if let Some(val) = crate::table::apply(tok, &args, c) {
+                if let Some(vs) = vs_of_table(&val, c) {
+                    return Some((vs, Some(val), j));
+                }
+            }
+        }
+        let v = match (ar, kids.as_slice()) {
+            (1, [(a, _)]) => apply_unary(tok, a)?,
+            (2, [(a, _), (b, _)]) => apply_binary(tok, a, b)?,
+            _ => return None,
+        };
+        // A step head that is one integer across the cell is that integer exactly -- unless its
+        // operand's bound is a float64 saturation (`tanh` attains 1.0 past 19.06, where the
+        // real value is below 1), which the real reading does not have.
+        if matches!(tok, "floor" | "ceil") && v.is_const() && v.lo.fract() == 0.0 {
+            let a = &kids[0].0;
+            if !a.sat_lo && !a.sat_hi {
+                return Some((v, Some(crate::table::val_of_f64(v.lo)), j));
+            }
+        }
+        Some((v, None, j))
+    }
+    if doms.is_empty() {
+        return None;
+    }
+    let mut k = 0usize;
+    let mut ctx = None;
+    go(tokens, 0, ops, doms, params, &mut k, &mut ctx).map(|(v, _, _)| v)
 }
 
 /// `value_set_p` with every variable AND every `<constant>` sharing the single interval `dom`.

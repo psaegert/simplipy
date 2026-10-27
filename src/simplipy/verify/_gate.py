@@ -31,6 +31,11 @@ JUDGE_TIMEOUT_S = 30   # per-rule budget. A gate that can HANG is not a gate: mp
                        # Timeout -> JUDGE-TIMEOUT bucket, held out fail-closed, never
                        # silently skipped.
 
+#: The buckets that are not sound to ship (`simplipy.verify.FATAL_BUCKETS`, which this module
+#: cannot import: the package imports it).
+_FATAL = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNDECIDED-MEASURE',
+          'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
+
 POISONS = [
     ('rootn pow ?0 2 2'.split(), '?0'.split(), 'KILL',
      'clause (a): sqrt(x^2)->x changes real values on x<0'),
@@ -44,12 +49,15 @@ POISONS = [
      'clause (a): x/x -> 0 is wrong on the whole nonzero line'),
 ]
 PHANTOMS = [
-    ('neg inv neg !0'.split(), 'inv !0'.split(), 'TOLERATED',
-     'clause (c): must NOT be killed'),
-    ('rootn exp _0 (-1)'.split(), 'exp neg _0'.split(), 'CERTIFIED',
-     'sound rootn identity (from the shipping artifact): must NOT be killed'),
-    ('/ $0 $0'.split(), '1'.split(), 'TOLERATED',
-     '$-sort licence f/f -> 1: nan events only at null-excused atoms (0, +-inf)'),
+    ('neg inv neg !0'.split(), 'inv !0'.split(), 'CERTIFIED',
+     'both sides undefined at 0 (1/0, V4), equal elsewhere: must NOT be killed'),
+    ('rootn exp ?0 (-1)'.split(), 'exp neg ?0'.split(), 'CERTIFIED',
+     'sound rootn identity over data: must NOT be killed (a `_` slot is owed -inf, where '
+     'the left side is 1/0)'),
+    ('/ $0 $0'.split(), '1'.split(), 'CERTIFIED',
+     '$-sort licence f/f -> 1: undefined only at the atoms the sort owes nothing (0, +-inf)'),
+    ('/ ?0 ?0'.split(), '1'.split(), 'TOLERATED',
+     'x/x -> 1: an extension at x = 0 only, a null set'),
 ]
 
 
@@ -100,8 +108,8 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
 
 def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_report):
     buckets = {'CERTIFIED': [], 'TOLERATED': [], 'KILL': [],
-               'ENGINE-MISALIGN': [], 'NO-WITNESS': [],
-               'UNRESOLVED-COVERAGE': [], 'UNSUPPORTED-SHAPE': [], 'JUDGE-TIMEOUT': []}
+               'ENGINE-MISALIGN': [], 'NO-WITNESS': [], 'UNRESOLVED-COVERAGE': [],
+               'UNDECIDED-MEASURE': [], 'UNSUPPORTED-SHAPE': [], 'JUDGE-TIMEOUT': []}
     detail = []
     for idx, (lhs, rhs) in enumerate(rules):
         if judge_timeout_s:
@@ -160,8 +168,7 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
     print('\n================ GATE RESULT ================')
     for k, v in buckets.items():
         print(f'  {k:16s} {len(v)}')
-    for k in ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
-              'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT'):
+    for k in _FATAL:
         for i in buckets[k]:
             d = detail[i]
             why = d.get('clause') or ','.join(d.get('kinds', [])) or d.get('detail', '')
@@ -180,6 +187,4 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         keep = [rules[i] for i in sorted(buckets['CERTIFIED'] + buckets['TOLERATED'])]
         json.dump(keep, open(build_path, 'w'))
         print(f'built {len(keep)} kept rules -> {build_path}')
-    return 0 if not (buckets['KILL'] or buckets['ENGINE-MISALIGN']
-                     or buckets['NO-WITNESS'] or buckets['UNRESOLVED-COVERAGE']
-                     or buckets['UNSUPPORTED-SHAPE'] or buckets['JUDGE-TIMEOUT']) else 1
+    return 0 if not any(buckets[k] for k in _FATAL) else 1

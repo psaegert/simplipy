@@ -2239,14 +2239,16 @@ class TestTheGateRoutesInsteadOfDeleting:
         """Relaxing the gate must not relax it for verdicts that carry no tier at all.
         NO-WITNESS, UNSUPPORTED-SHAPE, JUDGE-TIMEOUT and UNRESOLVED-COVERAGE mean the
         second authority never reached an answer, and "confirmed by two independent
-        authorities" is the claim a shipped rule makes."""
+        authorities" is the claim a shipped rule makes. (UNDECIDED-MEASURE is decided in f64
+        and permissive, which owe no measure of real's: it carries their tiers, as KILL does.)"""
         from simplipy.verify import FATAL_BUCKETS
         from simplipy.verify._contract import _tier
         for bucket in FATAL_BUCKETS:
-            if bucket in ('ENGINE-MISALIGN', 'KILL'):
+            if bucket in ('ENGINE-MISALIGN', 'KILL', 'UNDECIDED-MEASURE'):
                 continue
             for realised in (True, False, None):
-                assert _tier(bucket, realised) == 'reject', bucket
+                for permissive in (True, False, None):
+                    assert _tier(bucket, realised, permissive) == 'reject', bucket
 
 
 class TestCertifyRulesRoutesLikeTheMine:

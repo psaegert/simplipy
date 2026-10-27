@@ -48,6 +48,16 @@ pub enum Refusal {
     PoleClassChange,
 }
 
+/// THE GROUND-COMPOSITE POLICY (the specification's 4.3): a right side without a variable is a
+/// single leaf -- a number, `np.pi`, `np.e`, an infinity or `<constant>`. `asin(1) -> acos(0)`
+/// holds and is refused: a composite ground right side only obscures its input, and one with a
+/// constant can absorb almost anything (`cosh(asin(C)) -> log(C)`). The mint's candidate library
+/// drops such targets by it (`worker::CandidateLibrary::build`), and `simplipy.verify.licensed`
+/// applies it.
+pub fn ground_composite(target: &[String], is_variable: impl Fn(&str) -> bool) -> bool {
+    target.len() >= 2 && !target.iter().any(|t| is_variable(t))
+}
+
 /// Count of special-constant tokens (`np.pi` / `np.e`) in a token slice. The raw
 /// token count is only ever used together with the ENDPOINT count (spelling
 /// independence); see `mint_refusals`.

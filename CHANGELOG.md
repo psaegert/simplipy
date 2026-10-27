@@ -126,6 +126,10 @@ organised by who you are, then the highlights, then every change in detail.
 - The load refuses a rule with more than one `<constant>` on its left side (drop reason
   `multi-constant-lhs`) and warns, naming how many and the first; the miner no longer mints
   one. A file that carries such rules loads without them.
+- The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
+  a file mined before this version can fail `verify-mine` in `real` where a rule read `1/0` as
+  `+inf` or tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
+  `UNDECIDED-MEASURE`, and two new tiers, `permissive` and `real-only`.
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - `verify_triple(..., engine_config=)` checks the three rule sets it is given (the config
   contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which ships in
@@ -1229,14 +1233,56 @@ model predictions.
   give the same values, and `besselj` the same bits on a million points. LLVM's quotient
   rounds differently (its product is the same), so on macOS and Windows `besselj` differs
   from Linux at about 9% of points, by 4.5e-16 relative at the median and 1e-10 at most.
-- **A rule with more than one `<constant>` on its left side is refused, until the judge
-  decides such rules.** The matcher binds each `<constant>` of a left side to a value of its
-  own, but the judge reads a rule's constants as one shared value, so it refused these rules,
-  and the mine used to let them through anyway, unjudged, in every mode. One was false:
-  `pow(rootn(x, C1), C2) -> pow(x, C3)` at C1 = 3, C2 = 1 turns the real cube root, defined for
-  x < 0, into `pow(x, 1/3)`, which is not. The mine no longer mints such a rule,
-  `verify_ruleset` counts it as unjudgeable in every mode, and the load drops it from any rule
-  file with a warning.
+- **A rule with more than one `<constant>` on its left side is not mined or loaded yet.** The
+  matcher binds each `<constant>` of a left side to a value of its own, and the mine used to let
+  such rules through, unjudged, in every mode. One was false: `pow(rootn(x, C1), C2) -> pow(x,
+  C3)` at C1 = 3, C2 = 1 turns the real cube root, defined for x < 0, into `pow(x, 1/3)`, which
+  is not. The judge now reads each `<constant>` as its own symbol and decides such rules
+  (`exp(x0 + C1)*C2 -> C3*exp(x0)` holds, the rule above does not); until the mine reads the
+  same judgment, it mints no such rule, and the load drops one from any rule file with a
+  warning.
+- **The rule judge reads one table of values per mode.** Every value `simplipy.verify` compares
+  is the core's, defined once. In `real` a literal is the rational it spells, `asin(1)` is
+  exactly pi/2, and a pole or an infinite argument takes the limit where every direction gives
+  the same one: `pow(0, -2)` and `atanh(1)` are `+inf`, while `1/0`, `pow(0, -1)`, `tan(pi/2)`,
+  `pow(1, inf)` and `pow(inf, 0)` have no value (the judge read the first two as `+inf`, left
+  points reaching `tan(pi/2)` unresolved, and read the last two as `1`). In `f64` a literal is
+  its nearest double, `-0.0` keeping its sign, and an operation is the engine's own kernel with
+  its overflow and underflow events. `sin(5e14)` is decided (the judge stopped at 1e12), so
+  `sin(x0*1e15*(1 + 1e-20)) -> sin(x0*1e15)` is refused.
+- **One criterion, in every mode.** Wherever the left side has a value, the right side must
+  have the same value, at every point: a disagreement on a set of measure zero is no longer
+  tolerated (`pow(0, asinh(_0)) -> pow(0, _0)` is refused in `real`: at `_0 = -1` the left side
+  is `+inf` and `pow(0, -1)` has no value). The right side may give a value where the left side
+  has none only on a set of measure zero, decided by certified cells of the interval layer read
+  in the table's values, no longer by 5% of a sample grid (`x0 + 0*sqrt(x0^2 - 0.01) -> x0`,
+  undefined on (-0.1, 0.1), is refused). A rule without variables has one point and no
+  tolerance (`log(-1) -> 0` and `exp(tan(asin(1))) -> inf` are refused in `real`). A `_` slot is
+  checked at `+inf`, `-inf` and NaN with nothing excused (`0*tanh(_0) -> 0*_0` is refused: at
+  `+inf` the left side is 0), and a `!` or `$` slot owes nothing at the values its certificate
+  puts on a null set. Where the cells cannot decide (the horizon or the node budget runs out),
+  the verdict is `UNDECIDED-MEASURE`, refused in `real` and counted with the other fatal
+  buckets.
+- **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
+  has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
+  `permissive` (tier `permissive`), and so does every rule that holds in `f64`
+  (`asin(1e-8) -> 1e-8`). A rule that holds in `real` only because a `$` slot owes nothing at 0
+  is tier `real-only`.
+- **The f64 check of the 0.15 heads reads data as finite.** The judge probes a `?` slot over
+  finite doubles only, and where an operation overflows the rewrite may give the true value:
+  `ceil(1/cosh(x0)) -> 1` is `core` (it was `real`: the check tried `x0 = inf`).
+- **`simplipy.verify.licensed(lhs, rhs, mode, engine)`** is what a mode's file may hold: the
+  rule holds in the mode, and no named policy refuses it (`policy_refusals`, `POLICIES`):
+  evidence, the constant count, ground composites, the mine's cell, the serve ordering, special
+  constants, duplication of a `_` slot, and what the engine does itself. `asin(1) -> acos(0)`
+  holds in every mode and is refused as a ground composite; `exp(tan(asin(1))) -> inf` holds in
+  `f64` and has no evidence.
+- **What the new judgment moves.** On a reduced length-4 mine of this version, verify-mine
+  keeps every rule of the `f64` (392) and `permissive` (422) files and refuses 17 of
+  the 543 `real` rules, each for one of the reasons above: `1/exp(_0) -> exp(-_0)` (at
+  `_0 = -inf` the left side is `1/0`), `atan2(0, 1/_0) -> atan2(0, _0)`, `pow(0, f(_0)) ->
+  pow(0, _0)` for five odd functions f, and ground facts through `tan(pi/2)`
+  (`tanh(tan(asin(1))) -> 1`) or `pow(-1, inf)` (`pow(-1, log(0)) -> 1`).
 
 ### Removed
 
