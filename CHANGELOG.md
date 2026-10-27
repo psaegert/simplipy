@@ -1263,6 +1263,17 @@ model predictions.
   puts on a null set. Where the cells cannot decide (the horizon or the node budget runs out),
   the verdict is `UNDECIDED-MEASURE`, refused in `real` and counted with the other fatal
   buckets.
+- **Isolated infinities, guarding slots and coincident slots.** Where the left side is +-inf
+  only on a set of measure zero, the right side owes nothing there (rules with variables):
+  `abs(log(cos(x0))) -> log(1/cos(x0))` holds in `real`, though at pi/2 the right side meets 1/0.
+  These allowances, and the extension on a null set, hold only where a slot guards the null
+  set: a `?` slot binds a variable, `!` and `$` slots guard the values their certificates
+  exclude, and a `_` slot guards nothing -- bound to `floor(x0) + 1` it is 1 on all of [0, 1),
+  so `atan(tan(asin(_0))) -> asin(_0)` is refused (with `x0` it holds). Two `?` slots can bind
+  one variable, so every way they can coincide is judged as its own rule:
+  `(x0 - x1)/(x1 - x0) -> -1` is refused in `real` and `f64` (with x0 = x1 the left side has no
+  value anywhere). A measure the cells cannot decide refuses `real` and `f64`, which both owe
+  it, and not `permissive`, which does not.
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`

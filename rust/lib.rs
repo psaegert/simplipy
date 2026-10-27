@@ -2138,6 +2138,15 @@ fn table_extension_width(
     })
 }
 
+/// CLAUSE (c)'s MEASURE: is `{x : tokens(x) = +-inf}` certified null, for every value of its
+/// `<constant>`s (`interval::infinite_set_null`)? `false` where the certificate cannot tell
+/// (fail closed: the right side then owes the left side's infinities).
+#[pyfunction]
+fn table_infinite_null(tokens: Vec<String>, arity: std::collections::BTreeMap<String, u8>) -> bool {
+    let ops = arity_table(arity);
+    crate::interval::infinite_set_null(&tokens, &ops)
+}
+
 /// EVIDENCE (policy 4.1): is `tokens` finite on a set of positive measure of its variables AND
 /// its `<constant>`s (each constant its own dimension), in the mode's values -- float64's with
 /// `f64`, else the reals', every point a cell holds read by THE TABLE? `None`: undecided (no
@@ -2477,6 +2486,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
     m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(table_infinite_null, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;
     m.add_function(wrap_pyfunction!(table_sort_atoms, m)?)?;

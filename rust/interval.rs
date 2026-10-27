@@ -5822,9 +5822,10 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
 /// only ±inf (`Z(1/A) = {A = ±inf}`, the odd-negative-power distribution's
 /// reciprocal factors). Fail-closed like every certificate in this module; the
 /// zero-set sub-claims inherit `zero_set_null`'s `<constant>` refusal.
-// Test-only tokens interface (certified + poison batteries); in-crate consumers reach `isn`
-// through the zsn/nfn arms.
-#[cfg(test)]
+///
+/// The contract judge reads it for the criterion's clause (c): where a rule's left side is
+/// +-inf only on a set of measure zero, its right side owes nothing there
+/// (`abs(log(cos x)) -> log(1/cos x)` at pi/2; `table_infinite_null`).
 pub fn infinite_set_null(tokens: &[String], ops: &Operators) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return infinite_set_null(&d[0], ops);

@@ -258,7 +258,7 @@ class TestShippingArtifact:
     def test_artifact_rootn_and_dollar_rules_judgeable(self):
         _staged_or_skip(ACJ_RULES)
         rules = json.load(open(ACJ_RULES))
-        census = {'CERTIFIED': 0, 'TOLERATED': 0}
+        census = {'CERTIFIED': 0, 'TOLERATED': 0, 'KILL': 0}
         for lhs, rhs in rules:
             toks = list(lhs) + list(rhs)
             if 'rootn' not in toks and not any(t.startswith('$') for t in toks):
@@ -270,6 +270,9 @@ class TestShippingArtifact:
             # convicts is an alarm, not a tolerated outcome -- the old three-outcome
             # form would have waved it through.
             assert r['verdict'] in census, (lhs, rhs, r)
+            # a KILL is admitted only as what this f64 file may hold: false over the reals and
+            # bit-exact in float64 (below)
+            assert r['verdict'] != 'KILL' or r['tier'] == 'f64', (lhs, rhs, r)
             census[r['verdict']] += 1
         # measured census of the shipped artifact. An artifact
         # refresh re-pins this alongside the gate_acj REFS, with evidence. The 4330 ->
@@ -317,7 +320,11 @@ class TestShippingArtifact:
         # index at a zero radicand is 1/0, which has no value under the limit rule, where the
         # rewrite gives pow(0, -0.2) = +inf -- an extension at one point (`abs rootn _0 (-5)
         # -> pow abs _0 -0.2` at 0, the `acos`/`acosh` siblings at 1). Fully enumerated.
-        assert census == {'CERTIFIED': 3817, 'TOLERATED': 3}, census
+        # 3817/3 -> 3817/0/3 under the owner's guard ruling: that one point is a null set no
+        # `_` slot guards (bound to a subexpression that is 0 on an interval the extension
+        # has positive measure), so the three are KILLs -- `f64`-tier, since float64 reads
+        # both sides as +inf there, and so still this file's to hold.
+        assert census == {'CERTIFIED': 3817, 'TOLERATED': 0, 'KILL': 3}, census
         # The f64 file excuses NOTHING: the four excused rules of the one documented null-set
         # class (clause (b), undefined->defined on the null set {0} only) are TOLERATED
         # and not f64-realised, which is the `real` tier, so they live in rules_real.json
@@ -829,9 +836,12 @@ class TestCleanlinessIsPerMode:
         # while it snapped cos(pi/2)); real 56 (36 where the right side's 1/0 has no value at
         # the left side's pole, `abs(log(cos _0)) -> log(1/cos _0)` at pi/2; 14 where a `_`
         # slot at -inf meets 1/exp(-inf) = 1/0; 6 ground facts through pow(-1, inf) or
-        # tan(pi/2)); permissive 24 (the first family at its real-valued points).
+        # tan(pi/2)); permissive 24 (the first family at its real-valued points). Under the
+        # owner's rulings on isolated infinities and guards: real 77 (+22 extensions at a null
+        # set no `_` slot guards, `abs atan tan _0 -> abs asin sin _0` at pi/2; -1 now holding
+        # by clause (c), `neg log log ?0 -> log inv log ?0`), permissive 23 (-1, the same).
         assert {m: len(r['offenders']) for m, r in report['modes'].items()} == \
-            {'f64': 6, 'real': 56, 'permissive': 24}, report['modes']
+            {'f64': 6, 'real': 77, 'permissive': 23}, report['modes']
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest: a row where real's one zero and permissive's signed zero give
         # different values).
@@ -1557,14 +1567,17 @@ class TestNanIsInTheWidestSortsQuantifier:
         assert r['clause'] == 'a-nonfinite-binding', r
         assert r['kinds'] == ['EXT'], r
 
-    def test_nan_arising_at_a_real_binding_stays_clause_c(self) -> None:
-        """`atan tan asin _0 -> asin _0`: the nan lives on the singular manifold of a
-        REAL binding (|_0| near 1), a null set -- the touchstone's standing TOLERATED
-        verdict must survive the atom, because the interception keys on the nan ATOM
-        binding, never on nan appearing during evaluation."""
-        r = judge_rule('atan tan asin _0'.split(), 'asin _0'.split())
+    def test_nan_arising_at_a_real_binding_is_judged_by_its_guard(self) -> None:
+        """`atan tan asin ?0 -> asin ?0`: the nan lives on the singular manifold of a REAL
+        binding (?0 = +-1), a null set a `?` slot guards -- TOLERATED, because the interception
+        keys on the nan ATOM binding, never on nan appearing during evaluation. Spelled with a
+        `_` slot the same null set is unguarded (bound to floor(x) + 1 the slot is 1 on all of
+        [0, 1)): refused."""
+        r = judge_rule('atan tan asin ?0'.split(), 'asin ?0'.split())
         assert r['verdict'] == 'TOLERATED', r
         assert r['classes'] == ['EXT'], r
+        r = judge_rule('atan tan asin _0'.split(), 'asin _0'.split())
+        assert (r['verdict'], r['clause']) == ('KILL', 'b-unguarded'), r
 
     def test_strict_wildcard_identities_are_unmoved(self) -> None:
         """nan propagates through strict identities: both sides read nan at the atom,

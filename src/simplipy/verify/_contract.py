@@ -2104,7 +2104,9 @@ def _tier(verdict, realised, permissive=None):
         # no answer, and holds in no mode
         return 'reject'
     real = verdict in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN')
-    f64 = realised is True and verdict != 'ENGINE-MISALIGN'
+    # an undecided measure refuses real and f64, which both owe clause (b); permissive does not
+    # owe it (the owner's ruling, specification 4.10)
+    f64 = realised is True and verdict not in ('ENGINE-MISALIGN', 'UNDECIDED-MEASURE')
     perm = real if permissive is None else bool(permissive)
     if real and f64:
         return 'core'
@@ -2221,6 +2223,32 @@ def _spelled(tokens, names):
     return [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t) for t in tokens]
 
 
+def _set_partitions(items):
+    """Every partition of `items` into blocks, the order of `items` kept within a block."""
+    if not items:
+        yield []
+        return
+    first, rest = items[0], items[1:]
+    for part in _set_partitions(rest):
+        yield [[first]] + part
+        for i in range(len(part)):
+            yield part[:i] + [[first] + part[i]] + part[i + 1:]
+
+
+def _renamed(tokens, rename):
+    """`tokens` with each slot (a dummy `x<k>` read as `?<k>`) renamed by `rename`."""
+    out = []
+    for t in tokens:
+        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+        out.append(rename.get(key, t))
+    return out
+
+
+#: The most `?` slots whose coincidences the judge enumerates (Bell(4) = 15 partitions); a rule
+#: with more is undecided there and refused (fail closed).
+MAX_COINCIDENT_SLOTS = 4
+
+
 def _extension_width(lhs, lp, rhs, rp, names):
     """Clause (b)'s measure: the volume of the largest certified cell where the left side is
     undefined and the right side has a value, in the table's values (`None`: undecided)."""
@@ -2229,7 +2257,7 @@ def _extension_width(lhs, lp, rhs, rp, names):
                                         dict(ARITY))
 
 
-def _judge_contract(lhs, rhs, deployed_check=True):
+def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     """-> dict: real's verdict, with clause/class, points and the certified measure, f64's
     `realised` and permissive's `permissive`; `judge_rule` adds the tier.
 
@@ -2245,7 +2273,15 @@ def _judge_contract(lhs, rhs, deployed_check=True):
       TOLERATED          the contract holds with extensions on a null set only;
       CERTIFIED          the contract holds with no event at all.
     permissive: clause (a) alone at the real-valued bindings (every slot any real number).
-    f64: the deployed lane (`realised`), each side's own fitted constant, the range standard."""
+    f64: the deployed lane (`realised`), each side's own fitted constant, the range standard.
+
+    The measure-zero allowances -- an extension on a null set (clause (b)), and nothing owed
+    where the left side is +-inf on a null set (clause (c), rules with variables only) -- hold
+    only where a slot guards them (the owner's rulings, specification 3.1): a `?` slot, which
+    binds a variable, after every way the `?` slots can coincide is judged too (`coincide`);
+    `!` and `$` slots guard their certificates' null events, which they owe nothing at. An
+    event that depends on any other slot is a positive-measure event in some instance (a `_`
+    bound to a constant subexpression) and refuses the rule."""
     try:
         tl = parse(lhs, '<C_L>', number=True)
         tr = parse(rhs, '<C_R>', number=True)
@@ -2397,27 +2433,31 @@ def _judge_contract(lhs, rhs, deployed_check=True):
             pass
 
     def lane():
-        return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
+        return {'a': [], 'atom': [], 'ext': [], 'c': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False}
 
-    def judge_point(acc, v, point, kind, real_valued):
+    def judge_point(acc, v, point, kind, real_valued, where):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
         'atom' (a `_` slot at +-inf or NaN); `real_valued` says permissive's guarantee
-        reaches the point."""
-        if kind == 'real' and _LHS_KIND[0] is not None:
+        reaches the point; `where` is `(constant key, slot values)`, to move a slot from."""
+        lhs_kind = _LHS_KIND[0]
+        if kind == 'real' and lhs_kind is not None:
             acc['known'] += 1
-            acc['finite'] = acc['finite'] or _LHS_KIND[0] == 'fin'
+            acc['finite'] = acc['finite'] or lhs_kind == 'fin'
         if v is None or v == 'eq':
             return
         if kind == 'atom':
             acc['atom'].append((v, point))
         elif v == 'EXT':
-            acc['ext'].append(point)
+            acc['ext'].append((point, where))
+        elif not ground and lhs_kind in ('+inf', '-inf'):
+            # the left side is +-inf here: clause (c) decides, after the sweep
+            acc['c'].append((v, point, where, real_valued))
         else:
             acc['a'].append((v, point))
-        if real_valued and v != 'EXT':
-            acc['perm'].append((v, point))
+            if real_valued:
+                acc['perm'].append((v, point))
 
     def owed(acc):
         """3.2: is anything owed at this constant? Where the left side is finite at no real
@@ -2428,6 +2468,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         return not has_cl or acc['finite'] or acc['known'] == 0
 
     vacuous, owed_keys = [], set()
+    ext_where, c_events = [], []
 
     def merge(acc, key):
         nonlocal resolved_pts, attempted_pts
@@ -2451,8 +2492,10 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         atom_kills.extend(acc['atom'])
         perm_kills.extend(acc['perm'])
         if acc['ext']:
-            ext_events.extend(acc['ext'])
+            ext_events.extend(p for p, _ in acc['ext'])
+            ext_where.extend(acc['ext'])
             ext_keys.add(key)
+        c_events.extend(acc['c'])
 
     for builders, key in cl_battery:
         cr_mp = witness.get(key, {}) if has_cr else {}
@@ -2492,7 +2535,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                 # null event (no tolerance, 3.3)
                 acc['a'].append((v, point))
             else:
-                judge_point(acc, v, point, kind, real_valued)
+                judge_point(acc, v, point, kind, real_valued, (key, values))
             ed = {n: F(float(x)) for n, x in values.items()}
             ed.update({n: F(c) for n, c in zip(lnames, key)})
             ed.update({n: F(w) for n, w in cr_f64.items()})   # each algebra its OWN constant
@@ -2506,7 +2549,7 @@ def _judge_contract(lhs, rhs, deployed_check=True):
     grid_ready = (not has_cl or any(k == grid_key for _, k in cl_battery)) and \
         (not has_cr or grid_key in witness)
     gbuilders = next((b for b, k in cl_battery if k == grid_key), {})
-    diag_ext = False
+    grid_ext = False
     old = mp.dps
     mp.dps = BASE_DPS
     try:
@@ -2534,9 +2577,8 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                     v, snapped = _point_verdict(tl, tr, env_mp)
                     point = dict(vals)
                     point.update(dict(zip(lnames, grid_key)))
-                    if n is None and v == 'EXT':
-                        diag_ext = True
-                    judge_point(acc, v, point, 'real', True)
+                    judge_point(acc, v, point, 'real', True,
+                                (grid_key, {m: mpf(x) for m, x in vals.items()}))
                     if v is None or n is None:
                         # the deployed lane reads the per-slot grid where the contract
                         # resolved: an unresolved point says nothing about the true value a
@@ -2548,13 +2590,14 @@ def _judge_contract(lhs, rhs, deployed_check=True):
                     deployed(ed, v, point, True, snapped, acc)
             # the grid's points count toward nothing in coverage (that is the battery's)
             acc['resolved'] = acc['attempted'] = 0
+            grid_ext = bool(acc['ext'])
             merge(acc, grid_key)
     finally:
         mp.dps = old
 
     # CLAUSE (b): measure from certified cells, read in the table's values -- at the generic
     # constants (always, for a rule with variables) and at every owed constant where an
-    # extension was seen; and on the diagonal family where one was seen there.
+    # extension was seen. (Coincident `?` slots are judged as their own rules, below.)
     b_kill, undecided, width = None, [], 0.0
     if not ground:
         checks = []
@@ -2569,32 +2612,115 @@ def _judge_contract(lhs, rhs, deployed_check=True):
             elif w > 0:
                 width = max(width, w)
                 b_kill = b_kill or {'cl': list(key), 'width': w}
-        if diag_ext and b_kill is None and (not has_cr or grid_key in witness) \
-                and (not has_cl or grid_key in owed_keys):
-            rp = [witness[grid_key][n] for n in rnames] if has_cr else []
-            w = _extension_width(lhs, grid_key, rhs, rp, {n: 'x0' for n in names})
-            if w is None:
-                undecided.append(('diagonal',))
-            elif w > 0:
-                width = max(width, w)
-                b_kill = {'cl': list(grid_key), 'width': w, 'diagonal': True}
+            elif key == grid_key and grid_ext:
+                # NO CERTIFIED CELL IS NO PROOF OF MEASURE ZERO: an enclosure too loose to
+                # certify one (`(x - x)/(x - x)`, whose numerator encloses as [-w, w]) finds
+                # none, while the grid, which a null event's isolated point does not land
+                # on, reads the extension at its points. The check cannot decide: refused.
+                undecided.append(('cells-vs-grid',) + tuple(key))
+
+    # THE GUARD (the owner's ruling): a measure-zero allowance holds only where a slot guards
+    # it. An event (an extension, or an isolated infinity of the left side) that depends on a
+    # slot other than `?` -- it disappears when that slot moves to a generic value -- is an
+    # event on positive measure in the instance where the slot is bound to a subexpression
+    # constant at that value, and refuses the rule.
+    by_key = {k: b for b, k in cl_battery}
+    open_slots = [n for n in names if nvars[n] != '?']
+
+    def event_env(key, values):
+        def env():
+            e = {n: +x for n, x in values.items()}
+            e.update({n: b() for n, b in by_key.get(key, gbuilders).items()})
+            e.update(fitted(key))
+            return e
+        return env
+
+    def depends_on_open_slot(kind, key, values):
+        for n in open_slots:
+            for alt in (mpf(17) / 10, mpf(-13) / 10):
+                moved = dict(values)
+                moved[n] = alt
+                v2, _ = _point_verdict(tl, tr, event_env(key, moved))
+                if kind == 'b':
+                    persists = v2 == 'EXT'
+                else:
+                    persists = _LHS_KIND[0] in ('+inf', '-inf') and v2 not in (None, 'eq')
+                if not persists:
+                    return n
+        return None
+
+    b_unguarded, seen = [], set()
+    for point, (key, values) in ext_where:
+        sig = repr(sorted(point.items()))
+        if sig in seen or not open_slots:
+            continue
+        seen.add(sig)
+        slot = depends_on_open_slot('b', key, values)
+        if slot is not None:
+            b_unguarded.append(dict(point, unguarded=slot))
+    # CLAUSE (c): where the left side is +-inf only on a set of measure zero the right side
+    # owes nothing there -- certified by the infinite-set certificate, and guarded as above
+    c_tolerated, c_kills, c_perm, seen = [], [], [], set()
+    infinite_null = bool(c_events) and _table.table_infinite_null(
+        _spelled(lhs, spelling), dict(ARITY))
+    for v, point, (key, values), real_valued in c_events:
+        sig = repr(sorted(point.items()))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        slot = depends_on_open_slot('c', key, values) if open_slots else None
+        if infinite_null and slot is None:
+            c_tolerated.append((v, point))
+        else:
+            c_kills.append((v, dict(point, unguarded=slot) if slot else point))
+            if real_valued:
+                c_perm.append((v, point))
+
+    # COINCIDENT `?` SLOTS: two `?` slots bound to one variable are an instance the engine
+    # rewrites, on which a set that is null in the slots' joint space can have positive
+    # measure (`(?0 - ?1)/(?1 - ?0) -> -1` is undefined everywhere at ?0 = ?1). Every way the
+    # `?` slots can coincide is judged as its own rule; real and f64 owe it.
+    correlated, correlated_f64 = None, None
+    q_slots = [n for n in names if nvars[n] == '?']
+    if coincide and len(q_slots) >= 2:
+        if len(q_slots) > MAX_COINCIDENT_SLOTS:
+            undecided.append(('coincidences',))
+        else:
+            for blocks in _set_partitions(q_slots):
+                if all(len(b) == 1 for b in blocks):
+                    continue
+                rename = {n: b[0] for b in blocks for n in b}
+                sub_r = _judge_contract(_renamed(lhs, rename), _renamed(rhs, rename),
+                                        deployed_check, coincide=False)
+                held = sub_r.get('verdict') in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN')
+                if not held and correlated is None:
+                    correlated = {'coincide': [b for b in blocks if len(b) > 1],
+                                  'verdict': sub_r.get('verdict'),
+                                  'clause': sub_r.get('clause'),
+                                  'points': sub_r.get('points') or sub_r.get('cell')}
+                if sub_r.get('realised') is False and correlated_f64 is None:
+                    correlated_f64 = [b for b in blocks if len(b) > 1]
 
     # ONE f64 STANDARD: the constructors fill a NaN hole on a null set (`x1/x1` is `1` in
     # f64), so a TOLERATED rule whose every deployed disagreement is such a fill -- the left
     # side NaN where the right side has a value (`EXT`), at a point the contract itself
     # tolerated as a null event -- is realised in f64 as well.
     _realised = (not dep_bad) if dep_seen[0] else None
+    if correlated_f64 is not None:
+        _realised = False
     fills_nan = bool(dep_bad) and all(k == 'EXT' and p in ext_events for k, p in dep_bad)
     # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
     covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
-    permissive = covered and not perm_kills
+    permissive = covered and not perm_kills and not c_perm
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised': _realised, 'out_of_range': dep_out_of_range[0],
             'permissive': permissive, 'resolved_points': resolved_pts}
-    if perm_kills:
-        base['permissive_points'] = [p for _, p in perm_kills[:3]]
+    if perm_kills or c_perm:
+        base['permissive_points'] = [p for _, p in (perm_kills + c_perm)[:3]]
+    if correlated_f64 is not None:
+        base['unrealised_coincidence'] = correlated_f64
     if dep_bad:
         base['unrealised'] = dep_bad[:3]
 
@@ -2610,9 +2736,16 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         return verdict('KILL', clause='a-nonfinite-binding',
                        points=[p for _, p in atom_kills[:3]],
                        kinds=sorted({k for k, _ in atom_kills}))
+    if c_kills:
+        return verdict('KILL', clause='c-infinity', points=[p for _, p in c_kills[:3]],
+                       kinds=sorted({k for k, _ in c_kills}))
+    if b_unguarded:
+        return verdict('KILL', clause='b-unguarded', points=b_unguarded[:3], kinds=['EXT'])
     if b_kill is not None:
         return verdict('KILL', clause='b-positive-measure', cell=b_kill,
                        tolerated_events=len(ext_events))
+    if correlated is not None and correlated['verdict'] != 'UNDECIDED-MEASURE':
+        return verdict('KILL', clause='coincident-slots', coincidence=correlated)
     if not covered:
         # "skip, never convict" must not become "skip everything, acquit": a rule whose
         # battery is almost entirely Unresolved has no evidence either way (e.g. a
@@ -2622,6 +2755,8 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         return {'verdict': 'UNRESOLVED-COVERAGE', 'resolved_points': resolved_pts,
                 'attempted_points': attempted_pts, 'skipped_cl': skipped_cl,
                 'permissive': False}
+    if correlated is not None:
+        undecided.append(('coincidence', str(correlated['coincide'])))
     if undecided:
         # clause (b) could not be decided: fail closed (4.10), counted
         return verdict('UNDECIDED-MEASURE', undecided=[list(k) for k in undecided[:3]])
@@ -2629,9 +2764,11 @@ def _judge_contract(lhs, rhs, deployed_check=True):
         # contract certifies; deployed diverges: a genuine realisation split
         return verdict('ENGINE-MISALIGN', points=[p for _, p in dep_div[:3]],
                        kinds=sorted({k for k, _ in dep_div}))
-    if ext_events:
-        base['realised'] = True if fills_nan else _realised
-        return verdict('TOLERATED', classes=['EXT'], events=[('EXT', p) for p in ext_events[:3]])
+    if ext_events or c_tolerated:
+        base['realised'] = True if fills_nan and correlated_f64 is None else _realised
+        events = [('EXT', p) for p in ext_events[:3]] + [(k, p) for k, p in c_tolerated[:3]]
+        classes = (['EXT'] if ext_events else []) + (['INF'] if c_tolerated else [])
+        return verdict('TOLERATED', classes=classes, events=events)
     if vacuous_rule:
         return verdict('CERTIFIED', vacuous=True)
     return verdict('CERTIFIED')
@@ -2646,8 +2783,20 @@ TOUCHSTONES = [
      'the power is 0'),
     ('rootn pow ?0 2 2', '?0', 'KILL',
      'sqrt(x^2)->x: real values differ on x<0 (clause a)'),
-    ('atan tan asin _0', 'asin _0', 'TOLERATED',
-     'tan(pi/2) is undefined: an extension at _0 = +-1 only, a null set'),
+    ('atan tan asin _0', 'asin _0', 'KILL',
+     'tan(pi/2) is undefined at _0 = +-1, and a `_` slot guards no null set: bound to '
+     'floor(x) + 1 it is 1 on all of [0, 1), where the right side invents pi/2 (the guard)'),
+    ('atan tan asin ?0', 'asin ?0', 'TOLERATED',
+     'the same extension over data: a `?` slot binds a variable, so +-1 is a null set'),
+    ('abs log cos ?0', 'log inv cos ?0', 'TOLERATED',
+     'clause (c): the left side is +inf at pi/2 + k pi only, a null set, where the right side '
+     'meets 1/0 and owes nothing; they agree wherever the left side is finite'),
+    ('/ - ?0 ?1 - ?1 ?0', '-1', 'UNDECIDED-MEASURE',
+     'with ?0 = ?1 the left side is undefined everywhere and -1 is not: the coincidence is '
+     'an instance, judged as its own rule, whose cells cannot see through x - x (refused)'),
+    ('/ !0 !0', '1', 'KILL',
+     'a `!` slot guards only its infinities: bound to floor(x) it is 0 on [0, 1), where 0/0 '
+     'has no value and 1 does'),
     ('/ ?0 ?0', '1', 'TOLERATED',
      'x/x->1: undefined->defined at 0 only (clause b, null set)'),
     ('neg inv neg !0', 'inv !0', 'CERTIFIED',

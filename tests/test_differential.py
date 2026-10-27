@@ -132,6 +132,15 @@ SPEC_EXAMPLES = [
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'real', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'permissive', True),
+    # the owner's rulings: isolated infinities (c), the guard, coincident slots, undecided
+    case('abs log cos x0', 'log inv cos x0', 'real', True),
+    case('abs log cos _0', 'log inv cos _0', 'real', False),
+    case('atan tan asin _0', 'asin _0', 'real', False),
+    case('atan tan asin x0', 'asin x0', 'real', True),
+    case('/ - x0 x1 - x1 x0', '-1', 'real', False),
+    case('/ - x0 x1 - x1 x0', '-1', 'f64', False),
+    case('/ - x0 x1 - x1 x0', '-1', 'permissive', True),
+    case('/ !0 !0', '1', 'real', False),
     # section 2: the sorts
     case('- ?0 ?0', '0', 'real', True), case('- ?0 ?0', '0', 'f64', True),
     case('- !0 !0', '0', 'real', True), case('- !0 !0', '0', 'f64', True),
