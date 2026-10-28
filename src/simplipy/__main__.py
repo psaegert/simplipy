@@ -178,7 +178,13 @@ def main(argv: str = None) -> None:
             for name, gate in report['gates'].items():
                 print(f'{"ok  " if gate["ok"] else "FAIL"} {name}: {gate["count"]}'
                       + ('' if gate['ok'] else f'  e.g. {gate["examples"][:3]}'))
-            print(f'     overlaps the judge refuses: {len(report["overlaps_refused"])}; '
+            refused = report['overlaps_refused']
+            by_policy: dict = {}
+            for overlap in refused:
+                for policy in overlap.get('refused_by') or ['the judge']:
+                    by_policy[policy] = by_policy.get(policy, 0) + 1
+            print(f'     overlaps not licensed: {len(refused)} '
+                  f'({", ".join(f"{k} {v}" for k, v in sorted(by_policy.items())) or "none"}); '
                   f'beyond the cell: {report["overlaps_beyond_cell"]}')
             if args.report:
                 with open(args.report, 'w') as f:

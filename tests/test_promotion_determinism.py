@@ -74,22 +74,28 @@ def test_each_rule_ships_at_the_strongest_sort_the_judge_licenses(bare, mode):
 
 def test_each_rung_is_asked_of_the_judge(bare):
     """The rungs go through the judge the caller passes, at their sorts: a judge that refuses
-    everything leaves every rule at `?`, and the positive controls catch it first."""
+    everything leaves every rule at `?` (the positive controls ask the rule judge itself)."""
     asked = []
 
     def refusing(pairs):
         asked.extend((tuple(lhs), tuple(rhs)) for lhs, rhs in pairs)
         return ['reject'] * len(pairs)
 
-    with pytest.raises(RuntimeError, match='positive control'):
-        promote(RULES, bare, rule_mode='real', judge=refusing)
-    asked.clear()
-    kept, report = promote(RULES, bare, rule_mode='real', judge=refusing,
-                           run_positive_controls=False)
+    kept, report = promote(RULES, bare, rule_mode='real', judge=refusing)
     assert ('ceil', 'inv', 'cosh', '_0') in [lhs for lhs, _ in asked]
     assert ('ceil', 'inv', 'cosh', '!0') in [lhs for lhs, _ in asked]
     assert not report['promoted_any'] and not report['promoted_bang']
     assert all(not any(t[:1] in '_!$' for t in lhs) for lhs, _ in kept)
+
+
+def test_a_miscalibrated_rule_judge_stops_promotion(bare, monkeypatch):
+    """The positive controls ask the rule judge: one that holds `x + 1 -> x` raises."""
+    import simplipy.verify as verify
+    real = verify.verify_rule
+    monkeypatch.setattr(verify, 'verify_rule', lambda lhs, rhs, *a, **k: dict(
+        real(lhs, rhs, *a, **k), tier='core'))
+    with pytest.raises(RuntimeError, match='positive control'):
+        promote(RULES, bare, rule_mode='real')
 
 
 def test_a_rule_without_slots_passes_through_at_once(bare):

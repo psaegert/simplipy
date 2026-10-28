@@ -2113,7 +2113,7 @@ class TestTheFinalGate:
             return ['real' if tuple(p) == a else 'core' for p in pairs]
 
         kept, dropped = miner._final_gate('default', judge, {})
-        assert kept == [b] and dropped == [[list(a[0]), list(a[1]), 'real']]
+        assert kept == [b] and dropped == [[list(a[0]), list(a[1]), 'real', []]]
         assert miner._final_gate('real', judge, {}) == ([a, b], [])
 
     def test_a_served_entry_the_mode_does_not_license_drops_its_row(self) -> None:
@@ -2131,7 +2131,7 @@ class TestTheFinalGate:
 
         assert miner._final_gate('default', judge, {}) == ([a], [])
         kept, dropped = miner._final_gate('real', judge, {})
-        assert kept == [] and dropped == [[list(a[0]), list(a[1]), 'f64']]
+        assert kept == [] and dropped == [[list(a[0]), list(a[1]), 'f64', []]]
 
     def test_the_loop_judges_a_picks_file_spelling_too(self) -> None:
         """The judge loop asks the judge about the pattern the file will carry as well as

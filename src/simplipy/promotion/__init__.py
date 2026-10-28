@@ -53,9 +53,10 @@ MULT_SEEDS = ((('/', '$0', '$0'), ('1',)),
               (('*', 'inv', '$0', '$0'), ('1',)),
               (('/', '0', '$0'), ('0',)))
 
-#: The positive controls, asked of the judge before any rung: `x + 1 -> x` holds in no mode at
-#: the `_` sort, and `1 * x -> x` holds in every mode. A judge that answers either wrongly is
-#: miscalibrated, and promotion raises rather than promote by it.
+#: The positive controls, asked of the rule judge itself (`verify.verify_rule`) before any rung:
+#: `x + 1 -> x` holds in no mode at the `_` sort, and `1 * x -> x` holds in every mode. A judge
+#: that answers either wrongly is miscalibrated, and promotion raises rather than promote by it.
+#: (The rungs ask the caller's `judge`, which a test may replace.)
 CONTROLS = ((('+', '_0', '1'), ('_0',), False),
             (('*', '1', '_0'), ('_0',), True))
 
@@ -86,7 +87,11 @@ def _rungs(pairs, mode, engine, judge):
     return [out[p] for p in pairs]
 
 
-def _run_controls(mode, engine, judge):
+def _run_controls(mode, engine):
+    from ..verify import effective_tier, verify_rule
+
+    def judge(pairs):
+        return [effective_tier(verify_rule(list(lhs), list(rhs))) for lhs, rhs in pairs]
     got = _rungs([(l, r) for l, r, _ in CONTROLS], mode, engine, judge)
     for (lhs, rhs, want), verdict in zip(CONTROLS, got):
         if verdict['holds'] != want:
@@ -104,7 +109,8 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     sort is read as ``?``: the rule climbs the rungs from there).
     ``engine``: the ``SimpliPyEngine`` whose operators define the rules (the refund's probe
     engine and the named policies read it).
-    ``run_positive_controls``: ask the judge the controls (``CONTROLS``) first, raising on a miss.
+    ``run_positive_controls``: ask the rule judge the controls (``CONTROLS``) first, raising on
+    a miss.
     ``verbose`` reports each step; ``progress`` overrides the reporter (see
     :mod:`simplipy.progress`).
     ``rule_mode`` is the mode the rules serve in (``'f64'``, also ``'default'``, ``'real'``,
@@ -128,7 +134,7 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     rules = [(_respell(l, '?'), _respell(r, '?')) for l, r in rules]
     prog.stage("sort promotion starting", rules=len(rules))
     if run_positive_controls:
-        _run_controls(mode, engine, judge)
+        _run_controls(mode, engine)
 
     # A pure-literal ground rule (no slot, no `<constant>`) has no rung and takes no part in
     # the refund: it passes through, after the promoted set.

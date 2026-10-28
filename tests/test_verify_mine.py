@@ -108,10 +108,28 @@ def test_the_unlicensed_gate(tmp_path, mine) -> None:
         return ['real' if tuple(map(tuple, p)) == rule else 'core' for p in pairs]
 
     gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=judge), 'unlicensed')
-    assert not gate['ok'] and gate['examples'] == [[list(rule[0]), list(rule[1]), 'real']]
-    # the same file read as `real`, which licenses the tier
+    assert not gate['ok'] and gate['examples'] == [[list(rule[0]), list(rule[1]), 'real', []]]
+    # the same file read as `permissive`, which licenses the tier
+    path = _plant(tmp_path, mine, 'permissive', [rule])
+    assert _gate(verify_mine(path, 'permissive', _OPERATORS, judge=judge), 'unlicensed')['ok']
+    # in `real` the tier holds and a named policy refuses: the real canon cancels log(exp(x))
+    # itself, so the rule is the engine's own
     path = _plant(tmp_path, mine, 'real', [rule])
-    assert _gate(verify_mine(path, 'real', _OPERATORS, judge=judge), 'unlicensed')['ok']
+    gate = _gate(verify_mine(path, 'real', _OPERATORS, judge=judge), 'unlicensed')
+    assert gate['examples'] == [[list(rule[0]), list(rule[1]), 'real', ['engine_owned']]], gate
+
+
+def test_the_unlicensed_gate_reads_the_named_policies(tmp_path, mine) -> None:
+    """A rule that holds in every mode and a named policy refuses: `2*log(3) -> log(9)` has a
+    ground composite on its right (`verify.licensed`), so a file holding it fails the gate in
+    every mode."""
+    rule = (('*', '2', 'log', '3'), ('log', '9'))
+    for mode in ('f64', 'real', 'permissive'):
+        path = _plant(tmp_path, mine, mode, [rule])
+        gate = _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'unlicensed')
+        want = [list(rule[0]), list(rule[1]), 'core']
+        assert not gate['ok'] and gate['examples'][0][:3] == want, (mode, gate)
+        assert 'ground_composite' in gate['examples'][0][3], (mode, gate)
 
 
 def test_the_preempted_gate(tmp_path, mine) -> None:

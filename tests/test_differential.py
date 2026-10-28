@@ -450,8 +450,7 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
 # Assertion 3: a policy gives the same answer from every step that applies it.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    pytest.param('asin 1', 'acos 0', 'f64', marks=expected_failure('X3', '3b')),
-    pytest.param('asin 1', 'acos 0', 'real', marks=expected_failure('X3', '3b')),
+    ('asin 1', 'acos 0', 'f64'), ('asin 1', 'acos 0', 'real'),
     ('exp tan asin 1', 'float("inf")', 'real'),
     ('rootn pow x0 2 2', 'x0', 'real'),
 ])

@@ -151,6 +151,8 @@ organised by who you are, then the highlights, then every change in detail.
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
   keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
+- The sidecar's `gates.unlicensed` rows are `[lhs, rhs, tier, refused_by]` and each of its
+  `gates.overlaps_refused` carries `refused_by`, the named policies that refuse it.
 - The sidecar records `gates`, `per_length`, `acceptance` and `code_digest`; the `triple` record,
   `soundness.kill_switches` and `soundness.node_budget_env` are gone.
 - The mode-less entries of the compiled core are gone: every `_core` entry that reads a mode takes
@@ -1382,6 +1384,14 @@ model predictions.
   rewrite to float64's values: `tan(x0 + pi) -> tan(x0)` (float64's pi keeps them apart by
   more than 8 units in the last place) and `(-x0)^(-1/2) -> 1/(-x0)^(1/2)` (+inf against -inf
   at x0 = 0) among them; 7 are undecided. Its poison self-test catches all five poisons.
+- **The gates ask `licensed`.** The mine's completion step offers, its overlap gate demands,
+  and its final gate and `verify-mine` keep only what `verify.licensed` passes in the mode: the
+  judge's tier and the named policies, each read from its one place (evidence, the constant
+  count, ground composites, the mine's cell, the ordering, specials, duplication, what the
+  engine does itself, well-formedness), where they read the tier alone. `asin(1) -> acos(0)`
+  holds in every mode and is not demanded as a completion (a ground composite), nor is
+  `exp(tan(asin(1))) -> inf` (no evidence). A refused overlap and a dropped row carry the
+  policies that refuse them (`refused_by`) beside the judge's tier.
 - **What the new judgment moves.** On a reduced length-4 mine of this version, verify-mine
   keeps every rule of the `f64` (392) and `permissive` (422) files and refuses 17 of
   the 543 `real` rules, each for one of the reasons above: `1/exp(_0) -> exp(-_0)` (at

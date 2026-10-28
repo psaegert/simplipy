@@ -729,40 +729,62 @@ def _in_cell(overlap: dict, max_source: int | None) -> bool:
     return max_source is None or len(overlap['completion'][0]) <= max_source
 
 
+def _completion_pattern(overlap: dict) -> tuple:
+    """An overlap's completion as the rule a file would hold: its variables the slots `?<k>`."""
+    src, tgt = overlap['completion']
+    names = [t for t in dict.fromkeys(list(src) + list(tgt)) if re.fullmatch(r'x\d+', t)]
+    both, _ = remap_expression(list(src) + list(tgt), names, variable_prefix='?')
+    return tuple(both[:len(src)]), tuple(both[len(src):])
+
+
+def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
+              judged: dict | None = None, max_source: int | None = None) -> dict:
+    """``verify.licensed`` of each distinct pair in the file of ``rule_mode``: the judge's tier
+    holds in the mode and no named policy refuses it (evidence, the constant count, ground
+    composites, the cell, the ordering, the specials, duplication, what the engine does
+    itself, well-formedness), each policy read from its one place. ``judged`` memoises the
+    judge's tier by pair. -> ``{pair: {'licensed', 'holds', 'tier', 'refused_by'}}``."""
+    from .verify import licensed
+    judged = {} if judged is None else judged
+    distinct = list(dict.fromkeys(pairs))
+    new = [pair for pair in distinct if pair not in judged]
+    for pair, tier in zip(new, judge(new) if new else []):
+        judged[pair] = tier
+    mode = _file_mode(rule_mode)
+    return {pair: licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
+                           detail={'tier': judged[pair]})
+            for pair in distinct}
+
+
 def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
                   verdicts: Callable | None = None, max_source: int | None = None,
                   prog: Any = None) -> tuple[list, list, list]:
     """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) within the
-    mine's cell (``_in_cell``) is judged as the rule completion would add. -> ``(missing,
-    refused, beyond)``: the completions the judge licenses in the mode, which the file lacks
-    (expected empty), those it refuses, each with the judge's tier and, with ``verdicts``
-    (``judge_verdicts``), its verdict, and the overlaps whose completion lies beyond the cell,
-    unjudged."""
+    mine's cell (``_in_cell``) is asked about as the rule completion would add:
+    ``verify.licensed`` in the mode, the judge's tier and the named policies. -> ``(missing,
+    refused, beyond)``: the completions the mode licenses, which the file lacks (expected
+    empty), those it does not, each with the judge's tier, the policies that refuse it
+    (``refused_by``) and, with ``verdicts`` (``judge_verdicts``), the judge's verdict where the
+    tier does not hold, and the overlaps whose completion lies beyond the cell, unjudged."""
     started = time.monotonic()
     unjoined = _unjoined_overlaps(engine, rule_mode, rules)
     beyond = [o for o in unjoined if not _in_cell(o, max_source)]
     unjoined = [o for o in unjoined if _in_cell(o, max_source)]
-    pairs = []
-    for o in unjoined:
-        src, tgt = o['completion']
-        names = [t for t in dict.fromkeys(src + tgt) if re.fullmatch(r'x\d+', t)]
-        both, _ = remap_expression(list(src) + list(tgt), names, variable_prefix='?')
-        pairs.append((tuple(both[:len(src)]), tuple(both[len(src):])))
-    distinct = list(dict.fromkeys(pairs))
-    tier_of = dict(zip(distinct, judge(distinct))) if distinct else {}
+    pairs = [_completion_pattern(o) for o in unjoined]
+    licence = _licences(engine, rule_mode, pairs, judge, max_source=max_source)
     if prog is not None:
         prog.stage('overlap gate', unjoined=len(unjoined), beyond_the_cell=len(beyond),
-                   judged=len(distinct), seconds=round(time.monotonic() - started, 1))
-    allowed = _mode_tiers(rule_mode)
-    off = [pair for pair in distinct if tier_of[pair] not in allowed]
+                   judged=len(licence), seconds=round(time.monotonic() - started, 1))
+    off = [pair for pair, lic in licence.items() if not lic['holds']]
     verdict_of = dict(zip(off, verdicts(off))) if verdicts is not None and off else {}
     missing, refused = [], []
     for o, pair in zip(unjoined, pairs):
-        tier = tier_of[pair]
-        if tier in allowed:
-            missing.append({**o, 'tier': tier})
+        lic = licence[pair]
+        if lic['licensed']:
+            missing.append({**o, 'tier': lic['tier']})
         else:
-            refused.append({**o, 'tier': tier, 'verdict': verdict_of.get(pair)})
+            refused.append({**o, 'tier': lic['tier'], 'refused_by': lic['refused_by'],
+                            'verdict': verdict_of.get(pair)})
     return missing, refused, beyond
 
 
@@ -827,24 +849,26 @@ class RuleMiner:
         return {order[k] for k in bad}
 
     def _final_gate(self, rule_mode: str, judge: Callable, judged: dict) -> tuple[list, list]:
-        """THE FINAL PER-FILE GATE over the mode's installed set: every file
-        spelling AND every entry the mode serves from it is judged (``judged`` memoises by
-        pair), and a row with any unlicensed spelling is dropped. The file spelling is what
-        release verification reads; the served entries are what fires.
-        -> (kept rules, [[lhs, rhs, tier] per dropped row])."""
+        """THE FINAL PER-FILE GATE over the mode's installed set: every file spelling is asked
+        ``verify.licensed`` in the mode (the judge's tier and the named policies), every entry
+        the mode serves from it the judge's tier (``judged`` memoises tiers by pair), and a row
+        with any refused spelling is dropped. The file spelling is what release verification
+        reads; the served entries are what fires.
+        -> (kept rules, [[lhs, rhs, tier, refused_by] per dropped row])."""
         final = self._mode_rules(rule_mode)
         served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
-        todo = list(dict.fromkeys(final + [(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in served]))
-        new = [pair for pair in todo if pair not in judged]
-        for pair, tier in zip(new, judge(new) if new else []):
-            judged[pair] = tier
+        entries = [(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in served]
+        _licences(self.engine, rule_mode, entries, judge, judged)  # one batch for the tiers
+        licence = _licences(self.engine, rule_mode, final, judge, judged)
         allowed = _mode_tiers(rule_mode)
-        off = {i: judged[pair] for i, pair in enumerate(final) if judged[pair] not in allowed}
-        for lhs, rhs, i in served:
-            if judged[(tuple(lhs), tuple(rhs))] not in allowed:
-                off.setdefault(i, judged[(tuple(lhs), tuple(rhs))])
+        off = {i: (licence[pair]['tier'], licence[pair]['refused_by'])
+               for i, pair in enumerate(final) if not licence[pair]['licensed']}
+        for (lhs, rhs), (_, _, i) in zip(entries, served):
+            if judged[(lhs, rhs)] not in allowed:
+                off.setdefault(i, (judged[(lhs, rhs)], []))
         return ([rule for i, rule in enumerate(final) if i not in off],
-                [[list(final[i][0]), list(final[i][1]), tier] for i, tier in sorted(off.items())])
+                [[list(final[i][0]), list(final[i][1]), tier, refused_by]
+                 for i, (tier, refused_by) in sorted(off.items())])
 
     def _deshadow(self, rule_mode: str, rules: list) -> tuple[list, list]:
         """TWIN-SHADOW REMOVAL: drop every row the mode's load would mint
@@ -1460,11 +1484,19 @@ class RuleMiner:
                 _unjoined = _unjoined_overlaps(self.engine, rule_mode,
                                                self._mode_rules(rule_mode), prog=_cprog)
                 _within = [o for o in _unjoined if _in_cell(o, cell_source_length)]
-                for o in _within:
+                # only a completion the mode licenses is offered (the overlap gate's question):
+                # one the judge refuses or a named policy refuses is no rule to mine
+                _fresh = [o for o in _within
+                          if (tuple(o['completion'][0]), tuple(o['completion'][1])) not in _tried]
+                _licence = _licences(self.engine, rule_mode,
+                                     [_completion_pattern(o) for o in _fresh], _timed_judge,
+                                     judged, max_source=cell_source_length)
+                for o in _fresh:
                     pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
                     if pair not in _tried:
                         _tried.add(pair)
-                        _entries.append(pair)
+                        if _licence[_completion_pattern(o)]['licensed']:
+                            _entries.append(pair)
                 _cprog.stage(f'round {_round + 1}', rules=len(self._mode_rules(rule_mode)),
                              unjoined=len(_unjoined), within_the_cell=len(_within),
                              new_completions=len(_entries))
@@ -1571,7 +1603,7 @@ class RuleMiner:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
                       f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
                       f'{len(gate["overlaps"])} unjoined overlaps '
-                      f'({len(gate["overlaps_refused"])} more refused by the judge, '
+                      f'({len(gate["overlaps_refused"])} more not licensed, '
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '
                       f'{len(final)} rules')
             if out_path is not None:
@@ -2898,8 +2930,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       instance of the distributive law as the search applies it (``law_instance``). The sign
       orbit is not among them yet: a sign pull through an odd function
       (``neg sin _0 -> sin neg _0``) passes until the sign rule makes the orbit one canon;
-    - ``unlicensed``: every file spelling and every entry the mode serves from it carries
-      a judged tier the mode licenses (the mine's final gate, with ``judge``);
+    - ``unlicensed``: every file spelling is licensed in the mode (``verify.licensed``: the
+      judge's tier and the named policies) and every entry the mode serves from it carries a
+      judged tier the mode holds (the mine's final gate, with ``judge``);
     - ``preempted``: no ground rule whose left side the rule-less engine of the mode already
       takes to its right side's state: a ground fact the engine folds (``log (-3) ->
       float("nan")``) is not a rule;
@@ -2907,10 +2940,11 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       rule's left side to its right side or below (``_dead_rules``); a rule another rule
       shadows on its own instance ships and never decides an answer;
     - ``overlaps``: where two rules overlap and the paths do not join, the completion the
-      judge licenses is in the file (``_overlap_gate``), within the mine's cell (a completion
-      source no longer than the sidecar's ``max_source_pattern_length``); the completions the
-      judge refuses are listed under ``overlaps_refused`` with its tier and verdict, those
-      beyond the cell are counted under ``overlaps_beyond_cell``, and neither fails;
+      mode licenses is in the file (``_overlap_gate``), within the mine's cell (a completion
+      source no longer than the sidecar's ``max_source_pattern_length``); the completions it
+      does not license are listed under ``overlaps_refused`` with the judge's tier, the policies
+      that refuse it and the judge's verdict, those beyond the cell are counted under
+      ``overlaps_beyond_cell``, and neither fails;
     - ``translation``: the mode's load subsumes and drops nothing;
     - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
       prices each as this engine does;
