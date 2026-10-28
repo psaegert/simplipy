@@ -167,6 +167,10 @@ def test_stream_constant_draw_folds_to_one_literal_and_is_idempotent(engine):
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     strict = list(engine.simplify(STREAM_DRAW, mode=Mode.f64))
     # Phase 2c: the exact product fits the 1,100-bit cap, so the strict tier folds the subtree
-    # too (the cosine in float64, as f64 mode folds functions; the subtraction exactly) and agrees
-    # with the permissive float in value.
-    assert len(strict) == 1 and math.isclose(float(strict[0]), float(once[0]), rel_tol=4e-16), strict
+    # too (the cosine in float64, as f64 mode folds functions; the subtraction exactly). The two
+    # modes' floats differ: permissive writes each ground node's table value as a float, f64 folds
+    # in float64, and the cosine of a 9,121-radian argument amplifies the two roundings apart
+    # (the true value is 14.817389436549068...: f64 14.817389436549087, permissive
+    # 14.817389436549217).
+    assert len(strict) == 1 and float(strict[0]) == 14.817389436549087, strict
+    assert float(once[0]) == 14.817389436549217, once

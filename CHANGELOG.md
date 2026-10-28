@@ -1408,6 +1408,23 @@ model predictions.
   holds in every mode and is not demanded as a completion (a ground composite), nor is
   `exp(tan(asin(1))) -> inf` (no evidence). A refused overlap and a dropped row carry the
   policies that refuse them (`refused_by`) beside the judge's tier.
+- **The reduced length-4 mine, mined again** with the mint, promotion and gates above (seed 42,
+  4 threads): 429 `f64`, 495 `real` and 682 `permissive` rules (392, 543 and 422 before), in
+  4,104 s (2,983 before: `f64` 603 s, `real` 1,768, `permissive` 1,731, the length-4 scans of
+  `real` and `permissive` 1,506 and 1,345 s against 894 and 1,005). `verify-mine` holds every
+  gate of the `f64` file and every gate but the overlaps of the other two, which lack 2 and 4
+  completions their mode licenses: `floor(erf(cosh(x))) -> 0` (float64 rounds erf to 1 on
+  more than half the rows, and the mint takes only a near miss to the table), in `real`
+  `tan(atan2(x, 0)) -> nan` (the evidence policy reads the interval layer, which certifies
+  cells where `tan` meets its pole at the constant argument pi/2; the mint reads the rows in
+  the reals and finds no evidence), and in `permissive` three completions the mint refused
+  against the rule set of the round they were offered in and certifies against the final one.
+  Every other unjoined overlap is refused, by the judge or by a named policy (18, 20 and 323).
+  Of the rules with a variable the files lose, every `permissive` one (55) and 11 of 18 `real`
+  ones are served by the new files; the rest the judge no longer licenses in the mode
+  (`pow(0, asinh(_0)) -> pow(0, _0)` and four siblings, `atan2(0, ceil(_0)) -> atan2(0, _0)`
+  and its `floor` twin), and in `f64` three hold by the judge and fail the mint's agreement
+  to 8 units in the last place on its rows (`log(exp(atanh(_0))) -> atanh(_0)`).
 - **What the new judgment moves.** On a reduced length-4 mine of this version, verify-mine
   keeps every rule of the `f64` (392) and `permissive` (422) files and refuses 17 of
   the 543 `real` rules, each for one of the reasons above: `1/exp(_0) -> exp(-_0)` (at
