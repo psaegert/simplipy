@@ -493,8 +493,9 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
 def test_the_core_names_permissives_list() -> None:
     from simplipy import _core
     assert _core.permissive_simplifications() == [
-        'inverse pairs cancel', 'like terms cancel', 'constant collapse without evidence',
-        'literal to float', 'any slot matches', 'f64 rules served', 'holds by agreement']
+        'inverse pairs cancel', 'powers compose', 'like terms cancel',
+        'constant collapse without evidence', 'literal to float', 'any slot matches',
+        'float-resolution rules served', 'holds by agreement']
 
 
 INVERSE_PAIRS = [('exp', 'log'), ('sin', 'asin'), ('cos', 'acos'), ('tan', 'atan'),
@@ -511,17 +512,18 @@ def test_permissive_cancels_an_inverse_pair_in_both_orders(outer, inner) -> None
 
 @pytest.mark.parametrize('expr, want', [
     ('rootn pow x0 2 2', 'x0'), ('pow rootn x0 2 2', 'x0'), ('rootn pow x0 4 4', 'x0'),
-    ('pow pow x0 2 0.5', 'x0'), ('pow pow x0 6 0.5', 'pow x0 3')])
-def test_permissive_cancels_a_root_by_its_power(expr, want) -> None:
+    ('pow pow x0 2 0.5', 'x0'), ('pow pow x0 6 0.5', 'pow x0 3'),
+    ('pow pow x0 3 / 1 3', 'x0'), ('pow pow x0 2 0.25', 'rootn x0 2'),
+    ('rootn pow x0 2 4', 'rootn x0 2'), ('pow pow x0 2 1.5', 'pow x0 3')])
+def test_permissive_composes_powers_ignoring_the_sign(expr, want) -> None:
+    """`(x^a)^b` is `x^(a*b)` (the owner's ruling): `(x0^2)^(1/4)` is `x0^(1/2)`, though the
+    input is `abs(x0)^(1/2)`, defined where x0 < 0."""
     assert ' '.join(bare().simplify(expr.split(), mode='permissive')) == want
 
 
 @pytest.mark.parametrize('expr', [
     'abs x0', 'max x0 0', 'floor x0', 'min x0 x1', 'abs - x0 x1', 'max abs x0 x1',
-    'floor * 2 x0', 'ceil x0',
-    # a power of a power that keeps a root is no cancellation: (x0^2)^(1/4) is |x0|^(1/2),
-    # defined where x0 < 0, while x0^(1/2) is not
-    'pow pow x0 2 0.25', 'rootn pow x0 2 4'])
+    'floor * 2 x0', 'ceil x0'])
 def test_permissive_leaves_what_is_no_entry_as_real_does(expr) -> None:
     """`abs`, `max`, `floor` and `min` are no entry of the list: their shape is the point of
     the expression, and permissive gives real's answer."""

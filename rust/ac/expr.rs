@@ -1411,10 +1411,14 @@ pub struct Cx<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permissive {
     /// An operation cancels its own inverse, in both orders, ignoring domain and branch
-    /// ([`INVERSE_PAIRS`]; `sqrt`/`pow 2` and `rootn n`/`pow n` are a power of a power whose
-    /// exponents multiply to an integer): `asin(sin(x0))`, `exp(log(x0))`, `acosh(cosh(x0))` and
-    /// `sqrt(x0^2)` are `x0`.
+    /// ([`INVERSE_PAIRS`]; `sqrt`/`pow 2` and `rootn n`/`pow n` are powers, which compose,
+    /// [`Permissive::PowersCompose`]): `asin(sin(x0))`, `exp(log(x0))` and `acosh(cosh(x0))` are
+    /// `x0`.
     InversePairs,
+    /// Powers compose naively, ignoring the sign: `(x^a)^b` is `x^(a*b)`, so `sqrt(x0^2)` and
+    /// `(x0^3)^(1/3)` are `x0` and `(x0^2)^(1/4)` is `x0^(1/2)` (an even root of a power or a power
+    /// of a root alike).
+    PowersCompose,
     /// Like terms cancel without a definedness check: `log(x0) - log(x0)` is 0,
     /// `asin(x0)/asin(x0)` is 1, `0*log(x0)` is 0, and `inf/inf` is 1 (a literal infinity keeps
     /// its written reciprocal until the pass's fixpoint, so it can meet its partner).
@@ -1427,9 +1431,10 @@ pub enum Permissive {
     /// Every slot matches any subexpression, without its certificate: `$0/$0 -> 1` also matches
     /// `inf/inf` (the matcher's `wildcard_all`).
     AnySlot,
-    /// The rules that hold in `f64` are served, though off in the reals below float resolution
-    /// (the permissive rule set).
-    F64Rules,
+    /// The rules that agree with real's values up to float resolution (8 units in the last
+    /// place), except at isolated points, are served (the permissive rule set):
+    /// `asin(1e-8) -> 1e-8`, off by 1.667e-25.
+    FloatResolution,
     /// No simplification of permissive's own: a step that HOLDS in permissive by its criterion
     /// -- the input's value is kept wherever the input has one, with an isolated infinity owing
     /// nothing -- and which the sound modes refuse because it gives a value where the input has
@@ -1439,13 +1444,14 @@ pub enum Permissive {
 
 impl Permissive {
     /// The whole list, in the specification's order.
-    pub const ALL: [Permissive; 7] = [
+    pub const ALL: [Permissive; 8] = [
         Permissive::InversePairs,
+        Permissive::PowersCompose,
         Permissive::LikeTerms,
         Permissive::ConstantCollapse,
         Permissive::LiteralToFloat,
         Permissive::AnySlot,
-        Permissive::F64Rules,
+        Permissive::FloatResolution,
         Permissive::Agreement,
     ];
 
@@ -1459,18 +1465,19 @@ impl Permissive {
     pub fn name(self) -> &'static str {
         match self {
             Permissive::InversePairs => "inverse pairs cancel",
+            Permissive::PowersCompose => "powers compose",
             Permissive::LikeTerms => "like terms cancel",
             Permissive::ConstantCollapse => "constant collapse without evidence",
             Permissive::LiteralToFloat => "literal to float",
             Permissive::AnySlot => "any slot matches",
-            Permissive::F64Rules => "f64 rules served",
+            Permissive::FloatResolution => "float-resolution rules served",
             Permissive::Agreement => "holds by agreement",
         }
     }
 }
 
-/// The inverse pairs of [`Permissive::InversePairs`] that are functions (the powers are a power
-/// of a power, `pow_of_pow_cancels`).
+/// The inverse pairs of [`Permissive::InversePairs`] that are functions (the powers compose,
+/// [`Permissive::PowersCompose`]).
 pub const INVERSE_PAIRS: [(&str, &str); 7] = [
     ("exp", "log"),
     ("sin", "asin"),
@@ -1486,22 +1493,6 @@ pub fn cancels_its_inverse(outer: &str, inner: &str) -> bool {
     INVERSE_PAIRS
         .iter()
         .any(|&(f, g)| (outer == f && inner == g) || (outer == g && inner == f))
-}
-
-/// Is `(t^r)^s -> t^(r s)` a cancellation of a root by a power ([`Permissive::InversePairs`]):
-/// do the exponents multiply to an integer? `sqrt(t^2)` is `t`, `rootn(t^6, 3)` is `t^2` and
-/// `sqrt(t)^2` is `t`; `(t^2)^(1/4)`, which keeps a root, is no cancellation.
-pub fn pow_of_pow_cancels(r: &Rat, s: &Rat) -> bool {
-    r.checked_mul(s).is_some_and(|p| p.is_integer())
-}
-
-/// Does `(t^r)^s -> t^(r s)` keep the input's value wherever it has one, at every real-valued
-/// binding ([`Permissive::Agreement`])? Everywhere but under an even power: where `t < 0` an odd
-/// or fractional `t^r` is negative or undefined, so a fractional `s` leaves the input undefined
-/// as it leaves `t^(r s)`, and where `t` is infinite the binding is no real number (P2).
-/// `(t^2)^(1/4)` is `abs(t)^(1/2)`, defined where `t^(1/2)` is not: refused.
-pub fn pow_of_pow_agrees(r: &Rat) -> bool {
-    !r.is_even_integer()
 }
 
 impl<'a> Cx<'a> {
@@ -9575,9 +9566,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Some((inner_base, r)), Ex::Num(s)) = (as_rational_power(&base, cx), &exp) {
         {
             let r = &r;
-            let licence = if (cx.permits(Permissive::InversePairs) && pow_of_pow_cancels(r, s))
-                || (cx.permits(Permissive::Agreement) && pow_of_pow_agrees(r))
-            {
+            let licence = if cx.permits(Permissive::PowersCompose) {
                 true
             } else if r.is_integer() {
                 s.is_integer()
@@ -10868,9 +10857,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                             match &**ex {
                                 Ex::Num(k) => {
                                     n.checked_inv().and_then(|s| k.checked_mul(&s)).filter(|p| {
-                                        (cx.permits(Permissive::InversePairs) && p.is_integer())
-                                            || (cx.permits(Permissive::Agreement)
-                                                && pow_of_pow_agrees(k))
+                                        cx.permits(Permissive::PowersCompose)
                                             || cx.certainly_nonneg(inner)
                                             || if k.is_integer() {
                                                 k.is_odd_integer()
