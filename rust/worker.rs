@@ -1979,8 +1979,7 @@ impl CandidateLibrary {
             // Filter decision NOT via `vm == 0`: the scan mask truncates at 32 variables, so a
             // candidate whose only variables have index >= 32 would be misclassified as
             // var-free and wrongly dropped. The filter checks ALL var_names.
-            if crate::engine::refusals::ground_composite(c, |t| var_names.iter().any(|v| v == t))
-            {
+            if crate::engine::refusals::ground_composite(c, |t| var_names.iter().any(|v| v == t)) {
                 // The emit-guard mirror (see `build`'s doc). Beyond the waste, a var-free
                 // composite can be a UNIVERSAL ABSORBER: `log <constant>` ranges over
                 // every real AND nan, so under the rule semantics (for every source
