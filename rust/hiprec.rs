@@ -282,7 +282,10 @@ impl Drop for IsolationScope {
 }
 
 /// Is the disagreement at row `row` isolated: does it vanish where one variable moves off the
-/// point (by 2^-20 of its magnitude, at least 2^-20)? Each side read by the table there.
+/// point, on both sides (by 2^-20 of its magnitude, at least 2^-20)? Each side read by the table
+/// there. Both sides, so a disagreement at the edge of a band it holds on is no isolated one
+/// (`ceil(acosh(asin(x))) -> 1` differs at x = 1 and on (0.99961, 1]: above 1 the source has no
+/// value, below it the disagreement stays).
 #[allow(clippy::too_many_arguments)]
 fn isolated_row(
     source: &[String],
@@ -300,25 +303,27 @@ fn isolated_row(
     (0..var_names.len())
         .filter(|&v| source.contains(&var_names[v]) || candidate.contains(&var_names[v]))
         .any(|v| {
-            let mut moved = point.clone();
-            moved[v] += moved[v].abs().max(1.0) * (2.0f64).powi(-20);
-            let cols: Vec<Vec<f64>> = moved.iter().map(|&x| vec![x]).collect();
-            matches!(
-                table_row(
-                    source,
-                    src_params,
-                    candidate,
-                    cand_params,
-                    ops,
-                    var_names,
-                    &cols,
-                    0,
-                    rtol,
-                    atol,
-                    true,
-                ),
-                Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
-            )
+            [1.0, -1.0].iter().all(|dir| {
+                let mut moved = point.clone();
+                moved[v] += dir * moved[v].abs().max(1.0) * (2.0f64).powi(-20);
+                let cols: Vec<Vec<f64>> = moved.iter().map(|&x| vec![x]).collect();
+                matches!(
+                    table_row(
+                        source,
+                        src_params,
+                        candidate,
+                        cand_params,
+                        ops,
+                        var_names,
+                        &cols,
+                        0,
+                        rtol,
+                        atol,
+                        true,
+                    ),
+                    Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
+                )
+            })
         })
 }
 

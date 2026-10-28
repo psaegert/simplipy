@@ -449,6 +449,16 @@ def mint_picks(mode: str) -> tuple:
     return tuple(picks)
 
 
+@pytest.mark.parametrize('lhs, rhs, mode', [
+    # permissive excuses a disagreement that vanishes on both sides of its point; at x = 1,
+    # the edge of the band (0.99961, 1] it holds on, this one does not
+    ('ceil acosh asin x0', '1', 'permissive'), ('ceil acosh asin x0', 'max 1 x0', 'permissive'),
+    ('ceil abs sin x0', '1', 'permissive'),
+])
+def test_a_mint_acceptance_of_a_pair_is_a_judge_admission(lhs, rhs, mode) -> None:
+    assert not mint_accepts(lhs, rhs, mode) or admits(lhs, rhs, mode), judged(lhs, rhs)
+
+
 @pytest.mark.parametrize('mode', [
     'real', 'f64', 'permissive'])
 def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
