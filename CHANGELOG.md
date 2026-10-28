@@ -1308,6 +1308,9 @@ model predictions.
   `acosh(cosh(x0))`, `exp(log(x0))` and `cos(acos(x0))` are `x0`. Removed: an even power under
   a root that remains is no longer composed (`(x0^2)^(1/4)`, which is `abs(x0)^(1/2)`, was
   `x0^(1/2)`, undefined for x0 < 0). `abs`, `max`, `floor` and `min` are untouched.
+- **The judge reads every literal the engine writes.** A decimal whose exponent lies past
+  4,000 (`2.827881176741212e-244756`, which the engine keeps as written) is read exactly, up to
+  an exponent of 1,000,000; a rule holding it was refused as unsupported.
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`

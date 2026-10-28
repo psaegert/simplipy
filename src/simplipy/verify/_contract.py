@@ -133,7 +133,8 @@ def literal_value(t):
     `np.e` as their constants, the `float("...")` spellings as the infinities and NaN. Total:
     a value or a refusal (`UnsupportedToken`), never an `eval`. A rule file is untrusted input,
     so the spelling is bounded before anything is built: more than 4,300 digits or a decimal
-    exponent beyond 4,000 is refused."""
+    exponent beyond 1,000,000 is refused (every spelling the engine emits reads: it keeps a
+    written `2.827881176741212e-244756` as it is)."""
     if len(t) > _MAX_LITERAL_CHARS:
         raise UnsupportedToken(f'literal too long to read: {t[:40]!r}...')
     spec = _table.table_literal_real(t)
@@ -142,6 +143,9 @@ def literal_value(t):
     kind, a, b = spec
     if kind == 'q':
         return Fraction(int(a), int(b))
+    if kind == 'd':  # m * 10^k, an exponent past the exact readers' 4,000 (at most 1e6)
+        k = int(b)
+        return Fraction(int(a)) * (Fraction(10) ** k)
     if kind == 'pi':
         return math.pi
     if kind == 'e':
@@ -810,6 +814,8 @@ def _from_spec(spec):
         return PINF if a == '+' else NINF
     if kind == 'nan':
         return NAN
+    if kind == 'd':
+        return mpf(int(a)) * mpf(10) ** int(b)
     return mp.ldexp(mpf(int(a, 16)), int(b))
 
 

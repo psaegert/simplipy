@@ -77,8 +77,43 @@ pub enum Leaf {
     Exact(Exact),
     /// a numeral too large for the exact form: read at the working precision
     Big(BigInt, BigInt),
+    /// a decimal `m * 10^k` whose exponent lies past the exact readers' bound
+    /// (`rat::token_rational`): read at the working precision
+    Dec(BigInt, i32),
     /// Euler's number
     E,
+}
+
+/// The largest decimal exponent a literal may carry (`Leaf::Dec`): the engine keeps a written
+/// `2.827881176741212e-244756` as it is, so its reader must too, and a bound keeps an untrusted
+/// rule file from asking for `10^(10^9)`.
+const DEC_EXPONENT_MAX: i64 = 1_000_000;
+
+/// A decimal numeral as `(m, k)` with its value `m * 10^k`, at any exponent up to
+/// `DEC_EXPONENT_MAX` and at most `rat::READER_DIGITS` mantissa digits; `None` for anything else.
+fn big_decimal(t: &str) -> Option<(BigInt, i32)> {
+    if !crate::utils::is_decimal_numeral(t) {
+        return None;
+    }
+    let (mant, exp) = match t.find(['e', 'E']) {
+        Some(i) => (&t[..i], t[i + 1..].parse::<i64>().ok()?),
+        None => (t, 0),
+    };
+    let (negative, mant) = match mant.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, mant.strip_prefix('+').unwrap_or(mant)),
+    };
+    let (int_part, frac_part) = mant.split_once('.').unwrap_or((mant, ""));
+    let digits: String = int_part.chars().chain(frac_part.chars()).collect();
+    if digits.is_empty() || digits.len() > crate::ac::rat::READER_DIGITS {
+        return None;
+    }
+    let k = exp.checked_sub(frac_part.len() as i64)?;
+    if k.abs() > DEC_EXPONENT_MAX {
+        return None;
+    }
+    let m: BigInt = digits.parse().ok()?;
+    Some((if negative { -m } else { m }, i32::try_from(k).ok()?))
 }
 
 /// A literal as real reads it: `None` for a token that is no literal. The grammar is f64's
@@ -99,7 +134,10 @@ fn real_leaf(tok: &str) -> Option<Leaf> {
         Some(inner) => (true, inner),
         None => (false, t),
     };
-    let (p, q) = token_rational(body)?;
+    let Some((p, q)) = token_rational(body) else {
+        let (m, k) = big_decimal(body)?;
+        return Some(Leaf::Dec(if negate { -m } else { m }, k));
+    };
     let p = if negate { -p } else { p };
     let _exact = number_domain(false);
     Some(match Rat::from_big(p.clone(), q.clone()) {
@@ -120,6 +158,7 @@ pub fn literal_real(tok: &str) -> Option<(String, String, String)> {
         Leaf::Exact(Exact::NegInf) => ("inf".into(), "-".into(), String::new()),
         Leaf::Exact(Exact::Undef) => ("nan".into(), String::new(), String::new()),
         Leaf::Big(p, q) => ("q".into(), p.to_string(), q.to_string()),
+        Leaf::Dec(m, k) => ("d".into(), m.to_string(), k.to_string()),
         Leaf::E => ("e".into(), String::new(), String::new()),
     })
 }
@@ -245,6 +284,13 @@ impl Ctx {
         let g = self.p + 64;
         let (a, b) = (self.big_at(p, g), self.big_at(q, g));
         a.div(&b, self.p, RM)
+    }
+
+    /// `m * 10^k` at the working precision (`Leaf::Dec`).
+    fn decimal(&mut self, m: &BigInt, k: i32) -> BigFloat {
+        let g = self.p + 64;
+        let a = self.big_at(m, g);
+        a.mul(&ten_to(k, g), self.p, RM)
     }
 
     fn big_at(&mut self, n: &BigInt, g: usize) -> BigFloat {
@@ -1496,6 +1542,7 @@ impl Expr {
             Node::Lit(leaf, _) => Some(match leaf {
                 Leaf::Exact(e) => Val::Exact(e.clone()),
                 Leaf::Big(p, q) => approx(ctx.ratio(p, q)),
+                Leaf::Dec(m, k) => approx(ctx.decimal(m, *k)),
                 Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
             }),
             Node::Op(name, kids) => {
@@ -1564,6 +1611,7 @@ pub fn literal_val(tok: &str, ctx: &mut Ctx) -> Option<Val> {
     Some(match leaf {
         Leaf::Exact(e) => Val::Exact(e),
         Leaf::Big(p, q) => approx(ctx.ratio(&p, &q)),
+        Leaf::Dec(m, k) => approx(ctx.decimal(&m, k)),
         Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
     })
 }
@@ -1843,6 +1891,7 @@ pub fn leaf_spec(l: &Leaf) -> (String, String, String) {
         Leaf::Exact(Exact::NegInf) => ("inf".into(), "-".into(), String::new()),
         Leaf::Exact(Exact::Undef) => ("nan".into(), String::new(), String::new()),
         Leaf::Big(p, q) => ("q".into(), p.to_string(), q.to_string()),
+        Leaf::Dec(m, k) => ("d".into(), m.to_string(), k.to_string()),
         Leaf::E => ("e".into(), String::new(), String::new()),
     }
 }

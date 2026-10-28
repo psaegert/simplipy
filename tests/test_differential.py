@@ -60,7 +60,7 @@ DEFECTS = {
 }
 
 
-def expected_failure(defect: str, phase: int):
+def expected_failure(defect: str, phase: str):
     assert defect in DEFECTS, defect
     return pytest.mark.xfail(strict=True,
                              reason=f'{defect}: {DEFECTS[defect]} (fixed in phase {phase})')
@@ -363,14 +363,14 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
 @pytest.mark.parametrize('lhs, rhs, mode', [
     ('tan asin ceil x0', 'atanh ceil x0', 'real'),
     pytest.param('tan asin ceil x0', 'atanh ceil x0', 'permissive',
-                 marks=expected_failure('X2', 3)),
-    pytest.param('pow 0 <constant>', '<constant>', 'real', marks=expected_failure('X6', 3)),
-    pytest.param('pow 0 <constant>', '<constant>', 'f64', marks=expected_failure('X6', 3)),
-    pytest.param('exp <constant>', '<constant>', 'f64', marks=expected_failure('X6', 3)),
+                 marks=expected_failure('X2', '3b')),
+    pytest.param('pow 0 <constant>', '<constant>', 'real', marks=expected_failure('X6', '3b')),
+    pytest.param('pow 0 <constant>', '<constant>', 'f64', marks=expected_failure('X6', '3b')),
+    pytest.param('exp <constant>', '<constant>', 'f64', marks=expected_failure('X6', '3b')),
     # the mint's f64 bar still probes data at +-inf, and its domain gate still applies real's
     # clause (b) in permissive
-    pytest.param('ceil inv cosh x0', '1', 'f64', marks=expected_failure('N2', 3)),
-    pytest.param('exp log x0', 'x0', 'permissive', marks=expected_failure('R1', 3)),
+    pytest.param('ceil inv cosh x0', '1', 'f64', marks=expected_failure('N2', '3b')),
+    pytest.param('exp log x0', 'x0', 'permissive', marks=expected_failure('R1', '3b')),
     ('rootn pow x0 2 2', 'x0', 'real'), ('exp log x0', 'x0', 'f64'),
 ])
 def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
@@ -378,7 +378,7 @@ def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    pytest.param('ceil inv cosh ?0', '1', 'real', marks=expected_failure('X1', 3)),
+    pytest.param('ceil inv cosh ?0', '1', 'real', marks=expected_failure('X1', '3b')),
     ('- ?0 ?0', '0', 'real'), ('/ ?0 ?0', '1', 'real'),
 ])
 def test_a_promotion_bar_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
@@ -427,7 +427,7 @@ def mint_picks(mode: str) -> tuple:
 
 
 @pytest.mark.parametrize('mode', [
-    'real', pytest.param('f64', marks=expected_failure('N10', 3)), 'permissive'])
+    'real', pytest.param('f64', marks=expected_failure('N10', '3b')), 'permissive'])
 def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
     refused = [(s, t, judged(s, t)['verdict']) for s, t in mint_picks(mode)
                if not admits(s, t, mode)]
@@ -438,8 +438,8 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
 # Assertion 3: a policy gives the same answer from every step that applies it.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    pytest.param('asin 1', 'acos 0', 'f64', marks=expected_failure('X3', 3)),
-    pytest.param('asin 1', 'acos 0', 'real', marks=expected_failure('X3', 3)),
+    pytest.param('asin 1', 'acos 0', 'f64', marks=expected_failure('X3', '3b')),
+    pytest.param('asin 1', 'acos 0', 'real', marks=expected_failure('X3', '3b')),
     ('exp tan asin 1', 'float("inf")', 'real'),
     ('rootn pow x0 2 2', 'x0', 'real'),
 ])
@@ -456,8 +456,8 @@ def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs
 
 
 @pytest.mark.parametrize('expr, mode', [
-    pytest.param('exp <constant>', 'f64', marks=expected_failure('X6', 3)),
-    pytest.param('exp <constant>', 'real', marks=expected_failure('X6', 3)),
+    pytest.param('exp <constant>', 'f64', marks=expected_failure('X6', '3b')),
+    pytest.param('exp <constant>', 'real', marks=expected_failure('X6', '3b')),
     ('acos <constant>', 'f64'), ('log <constant>', 'real'),
 ])
 def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:
@@ -527,3 +527,35 @@ def test_permissive_leaves_what_is_no_entry_as_real_does(expr) -> None:
     the expression, and permissive gives real's answer."""
     e = bare()
     assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='real')
+
+
+# ------------------------------------------------------------------------------------------
+# The judge reads every literal spelling the engine emits.
+# ------------------------------------------------------------------------------------------
+EMITTED = ['inv neg 0', 'neg 0', 'inv 0', '/ 1 float("inf")', 'neg float("inf")',
+           'float("nan")', '/ 1 3', '+ 0.1 0.2', 'np.pi', 'np.e', 'exp 1', '* 1e300 1e300',
+           '/ 1 1e400', 'neg 1e-320', 'ceil -0.5', 'atan2 0 -1', 'pow 2 0.5', 'rootn -8 3',
+           '/ 12345678901234567 1000000000000000000000', '* -1 0.30000000000000004',
+           '* 2.827881176741212e-244756 x0', '+ x0 1.277294672630119e+53527']
+
+
+@pytest.mark.parametrize('expr', EMITTED)
+@pytest.mark.parametrize('mode', MODES)
+def test_the_judge_reads_every_literal_the_engine_emits(expr, mode) -> None:
+    """Every leaf of an engine answer that is no variable is a literal the judge reads -- a
+    decimal far past float64's range included (`2.827881176741212e-244756`, which the engine
+    keeps as written)."""
+    from simplipy import _core
+    out = bare().simplify(expr.split(), mode=mode)
+    for t in out:
+        if t in _contract.ARITY or t.startswith('x') or t == '<constant>':
+            continue
+        _contract.literal_value(t)
+        assert _core.table_literal_real(t) is not None, t
+
+
+def test_a_decimal_past_the_exact_readers_is_judged() -> None:
+    """The table reads `m * 10^k` at any exponent up to 1e6: a rule over it is judged, not
+    refused as unsupported."""
+    v = verify_rule('* 2.827881176741212e-244756 x0'.split(), '* x0 2.827881176741212e-244756'.split())
+    assert v['verdict'] == 'CERTIFIED', v
