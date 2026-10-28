@@ -620,11 +620,13 @@ class TestTheRealisationBound:
         bound is THE TABLE's f64 agreement (F6), defined once in the core
         (`_core.TABLE_REALISED_ULP`), and the judge's mirror is the same number.
 
-        A shipped rule whose worst gap is 7 ULP is `core`; the 1-ULP rounding of
-        `1/exp(x)` is too, and the 2377-ULP divergence is not. (The 6-ULP straddler of the
-        old probe set, `abs(sin(acos x)) -> cos(asin x)`, is `real` now for another reason:
-        at x = 1 the table reads cos(pi/2) as exactly 0, no longer snapping, so the f64
-        lane compares 0 against float64's cos(fl(pi/2)) = 6.1e-17.)"""
+        The 1-ULP rounding of `1/exp(x)` is `core`, and the 2377-ULP divergence is not. (The
+        6-ULP straddler of the old probe set, `abs(sin(acos x)) -> cos(asin x)`, is `real` now
+        for another reason: at x = 1 the table reads cos(pi/2) as exactly 0, no longer
+        snapping, so the f64 lane compares 0 against float64's cos(fl(pi/2)) = 6.1e-17. And
+        `pi - acos(x) -> acos(-x)`, whose worst gap on the judge's grid was 7 ULP, is `real`
+        since the f64 lane reads the mint's rows too: near x = -1 the subtraction cancels, 77
+        ULP at x = -0.99971.)"""
         from simplipy import _core
         from simplipy.verify import _contract as C
         assert C.REALISED_ULP == _core.TABLE_REALISED_ULP == 8
@@ -633,7 +635,7 @@ class TestTheRealisationBound:
             eight = float(np.nextafter(eight, np.inf))
         assert _core.table_f64_agree(1.0, eight) == 'eq'
         assert _core.table_f64_agree(1.0, float(np.nextafter(eight, np.inf))) == 'REAL-CHANGE'
-        probes = [(['-', 'np.pi', 'acos', '_0'], ['acos', 'neg', '_0'], 'core'),     # 7 ULP
+        probes = [(['-', 'np.pi', 'acos', '_0'], ['acos', 'neg', '_0'], 'real'),     # 77 ULP
                   (['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'], 'core'),           # 1 ULP
                   (['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'], 'real'),      # 2377 ULP
                   (['abs', 'sin', 'acos', '_0'], ['cos', 'asin', '_0'], 'real'),
@@ -840,8 +842,14 @@ class TestCleanlinessIsPerMode:
         # at a point a `_` slot does not guard; 4 `pow 0 atan _0 -> pow 0 _0` and kin at
         # `_0 = -inf`; `tanh sinh atanh _0 -> tanh tan asin _0` at `_0 = +-1`, unguarded -- and
         # -1, `exp * float("-inf") ?0 -> pow 0 ?0`, now an extension within the criterion).
+        # With the f64 lane reading the mint's rows too: f64 25 (+19, float64 losing the rule at
+        # the rows' small and near-1 magnitudes: `pi - acos(_0) -> acos(-_0)` cancels near -1,
+        # `exp(log(asin(_0))) -> asin(exp(log(_0)))` and kin, `pow(_0, log(4)) -> pow(4,
+        # log(_0))` and kin, `sinh(atanh(atan(_0))) -> tan(asin(atan(_0)))` and kin), and in
+        # every mode +2 false in the reals at the rows near 1, `sin(abs(atanh(_0))) ->
+        # abs(sin(atanh(_0)))` and its twin, where atanh passes pi and sin turns negative.
         assert {m: len(r['offenders']) for m, r in report['modes'].items()} == \
-            {'f64': 6, 'real': 77, 'permissive': 34}, report['modes']
+            {'f64': 25, 'real': 79, 'permissive': 36}, report['modes']
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest: a row where real's one zero and permissive's signed zero give
         # different values).

@@ -823,6 +823,82 @@ def _cl_env(cl_val, cl_name='<C_L>'):
     return {cl_name: F(cl_val)}
 
 
+# ---------------------------------------------------------------- the mint's rows
+def mine_rows(n_rows, n_vars, rng):
+    """THE MINE'S ROWS: the evaluation matrix its mint reads, `(n_rows, n_vars)`, drawn from
+    `rng`. One sampler, read by the mine (`RuleMiner._mining_sample_x`) and by the judge's
+    f64 lane (`judge_rows`), so a counterexample the mint finds on its rows is one the judge
+    reads too.
+
+    Heavy-tailed MIXTURE instead of the historical pure N(0, 5): a mined pattern's
+    wildcards bind arbitrary SUBTREE values at application time, so equivalence
+    certification must exercise magnitudes far outside a Gaussian's bulk (tanh/exp
+    saturation plateaus, huge/tiny magnitudes) and the exact algebraic corner points
+    (0, +-1, ...) where false identities like ``asin(cosh(_0)) -> nan`` are refuted.
+    Mixture per ELEMENT (so a row can pair a huge x0 with a corner-point x1):
+
+    - 40% N(0, 5) (the historical distribution; dense near typical values)
+    - 25% U(-50, 50)
+    - 25% signed log-uniform magnitudes 1e-4..1e3 (exposes saturation false-equalities)
+    - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
+
+    Under GENERIC-EQUIVALENCE semantics the corner points
+    refute wrong-VALUE identities (``asin(cosh(_0)) -> nan`` is false AT 0, where the
+    source is pi/2) while domain EXTENSION remains allowed: where the source is
+    NaN/inf the replacement may complete it (``div(_0, _0) -> 1``, the 0/0 limit).
+
+    The log-uniform tier's upper magnitude is 1e3, deliberately not wider: 1e3
+    still exercises every saturation (tanh/exp plateau by |x|~40) and f64 overflow
+    (exp overflows past |x|~710) that the tier is FOR, while a 1e6 design column
+    pushes the constant-fit conditioning to cond(A) ~ 1e6 and the fit cannot
+    recover an intercept to rtol at an exact-zero-crossing row -- silently
+    rejecting the entire ``C0*f(x)+C1`` affine family.
+    """
+    shape = (n_rows, n_vars)
+    choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
+    normal = rng.normal(0.0, 5.0, size=shape)
+    uniform = rng.uniform(-50.0, 50.0, size=shape)
+    magnitudes = 10.0 ** rng.uniform(-4.0, 3.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
+    specials = np.array([0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0,
+                         2.0, -2.0, np.e, -np.e, np.pi, -np.pi, 10.0, -10.0])
+    special = rng.choice(specials, size=shape)
+    return np.where(choice == 0, normal,
+                    np.where(choice == 1, uniform,
+                             np.where(choice == 2, magnitudes, special)))
+
+
+def mine_matrix(seed, n_rows, n_vars, confirm=True):
+    """The rows a mine of `seed` reads: its sample (`n_rows`) and, with `confirm`, its
+    confirmation rows (twice as many), drawn in the mine's order from `seed`."""
+    rng = np.random.default_rng(seed)
+    data = mine_rows(n_rows, n_vars, rng)
+    return np.vstack([data, mine_rows(2 * n_rows, n_vars, rng)]) if confirm else data
+
+
+#: The rows the judge's f64 lane reads (`judge_rows`): set by a mine to its own (`set_rows`),
+#: else the shipped artifacts' mine (seed 42, 1,024 rows over two variables, confirmed).
+DEFAULT_ROWS = (42, 1024, 2)
+_ROWS = [None]
+
+
+def set_rows(rows):
+    """Set the rows the judge's f64 lane reads (an `(n, k)` array, slot `k` reading column `k`),
+    or restore the default with None; returns the rows set before."""
+    before = _ROWS[0]
+    _ROWS[0] = None if rows is None else np.asarray(rows, dtype=float)
+    return before
+
+
+def judge_rows():
+    if _ROWS[0] is None:
+        _ROWS[0] = mine_matrix(*DEFAULT_ROWS)
+    return _ROWS[0]
+
+
+#: The rows of the mint's matrix the judge reads at a point, where the float64 sides disagree.
+ROWS_JUDGED = 8
+
+
 def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
     """The generic env at which a witness can be DETERMINED, with its residual scanned.
 
@@ -1412,6 +1488,161 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
         return done(mpf(c0), False)
     finally:
         mp.dps = old
+
+
+# ---------------------------------------------------------------- jump preimages
+#: The heads whose value jumps where an argument crosses a level: `floor` and `ceil` at the
+#: integers, `mod` by a literal divisor c at the multiples of c, `harmonic` at its poles (the
+#: negative integers), `atan2` where y crosses 0. A rule false only where an argument sits
+#: exactly at such a level (`ceil(sinh(x) + 1/2) - floor(sinh(x) + 1/2) -> 1` at
+#: sinh(x) = k - 1/2) is false at points no battery or grid holds: the preimage is
+#: transcendental, so no double is one and no reading near one decides the head.
+_JUMP_HEADS = frozenset({'floor', 'ceil', 'mod', 'harmonic', 'atan2'})
+#: The heads with a kink or a switch, `abs` at 0 and `max`/`min` where the arguments are equal.
+#: A jump head above one can touch its level there without crossing it (`ceil(abs(cos(x)))`
+#: reaches 0 only at cos(x) = 0), so a kink under a jump head is probed too.
+_KINK_HEADS = frozenset({'abs', 'max', 'min'})
+#: At most this many preimages per rule.
+MAX_PREIMAGES = 16
+#: The precision a preimage is solved at; a rung finer than `_PREIMAGE_DPS - 30` reads it as
+#: Unresolved (as a polished witness, `_POLISH_DPS`). Within the polish's precision, so a
+#: fitted constant on the probed side stays readable.
+_PREIMAGE_DPS = 2 * GAP_RUNGS[-1]
+
+
+def _has_slot(tree):
+    if tree[0] == 'slot':
+        return not tree[1].startswith('<C')
+    return tree[0] != 'lit' and any(_has_slot(c) for c in tree[1:])
+
+
+def _subtree_set(tree, out=None):
+    """Every subtree of `tree` (none for None)."""
+    out = set() if out is None else out
+    if tree is not None:
+        out.add(tree)
+        if tree[0] not in ('slot', 'lit'):
+            for c in tree[1:]:
+                _subtree_set(c, out)
+    return out
+
+
+def _ulps(x, k):
+    """The double `k` steps from `x`."""
+    for _ in range(abs(k)):
+        x = math.nextafter(x, math.inf if k > 0 else -math.inf)
+    return x
+
+
+def _jump_probes(tree, under_jump=False, out=None):
+    """The level sets of `tree`'s jumps, `(kind, chain, other)`: `chain` (a subtree holding a
+    slot) crosses a level of `kind` -- 'int' (the integers), 'neg' (the negative integers),
+    ('mult', c) (the multiples of the literal c), 'zero' -- or, for kind 'switch', crosses
+    `other`."""
+    out = [] if out is None else out
+    head = tree[0]
+    if head in ('slot', 'lit'):
+        return out
+    args = tree[1:]
+    if head in ('floor', 'ceil') and _has_slot(args[0]):
+        out.append(('int', args[0], None))
+    elif head == 'harmonic' and _has_slot(args[0]):
+        out.append(('neg', args[0], None))
+    elif head == 'mod' and _has_slot(args[0]) and args[1][0] == 'lit':
+        c = args[1][1]
+        if isinstance(c, (int, float, Fraction)) and not isinstance(c, bool) \
+                and math.isfinite(c) and c != 0:
+            out.append((('mult', Fraction(c)), args[0], None))
+    elif head == 'atan2' and _has_slot(args[0]):
+        out.append(('zero', args[0], None))
+    elif under_jump and head == 'abs' and _has_slot(args[0]):
+        out.append(('zero', args[0], None))
+    elif under_jump and head in ('max', 'min') and (_has_slot(args[0]) or _has_slot(args[1])):
+        out.append(('switch', args[0], args[1]))
+    for a in args:
+        _jump_probes(a, under_jump or head in _JUMP_HEADS, out)
+    return out
+
+
+def _levels(kind, u, w):
+    """The levels of `kind` strictly between the sampled values `u` and `w`: at most the two
+    nearest each end, and 0 where it lies between."""
+    lo, hi = min(u, w), max(u, w)
+    if not (math.isfinite(lo) and math.isfinite(hi)) or lo == hi:
+        return []
+    if kind in ('zero', 'switch'):
+        return [Fraction(0)] if lo < 0 < hi else []
+    step = kind[1] if isinstance(kind, tuple) else Fraction(1)
+    a, b = math.floor(lo / step) + 1, math.ceil(hi / step) - 1
+    ks = sorted({k for k in (a, a + 1, b - 1, b, 0) if a <= k <= b})
+    if kind == 'neg':
+        ks = [k for k in ks if k < 0]
+    # within the doubles' exact integers: past them the table reads a level at the working
+    # precision, and a reading that rounds onto an integer is no exact one
+    return [k * step for k in ks if abs(k * step) <= 2 ** 53]
+
+
+def _substituted(tree, chain, value):
+    """`tree` with every subtree equal to `chain` replaced by `value` (a tree)."""
+    if tree == chain:
+        return value
+    if tree[0] in ('slot', 'lit'):
+        return tree
+    return (tree[0],) + tuple(_substituted(c, chain, value) for c in tree[1:])
+
+
+def _illinois(f, lo, hi, rel):
+    """The Illinois method on the bracket `(lo, hi)` until it is `rel` wide (relative), or None
+    where `f` does not change sign across it."""
+    flo, fhi = f(lo), f(hi)
+    if not (flo * fhi < 0):
+        return None
+    side, x = 0, lo
+    for _ in range(300):
+        x = (lo * fhi - hi * flo) / (fhi - flo)
+        if not lo < x < hi:
+            x = (lo + hi) / 2
+        fx = f(x)
+        if fx == 0 or hi - lo <= rel * max(1, abs(x)):
+            break
+        if (fx < 0) == (flo < 0):
+            lo, flo = x, fx
+            if side == -1:
+                fhi /= 2
+            side = -1
+        else:
+            hi, fhi = x, fx
+            if side == 1:
+                flo /= 2
+            side = 1
+    return x
+
+
+def _solve_preimage(f, lo, hi):
+    """A root of the continuous `f` in the bracket `(lo, hi)` (mpf, f changing sign across it)
+    at the current precision, by the Illinois method (first at 30 digits, then refined);
+    `(x, d)` with `x - d` and `x + d` on the two sides of the root, or None where `f` does not
+    cross zero there (a jump of its own)."""
+    target = mp.dps
+    try:
+        mp.dps = 30
+        x = _illinois(f, lo, hi, mpf(10) ** -25)
+    finally:
+        mp.dps = target
+    if x is None:
+        return None
+    d0 = mpf(10) ** -20 * max(1, abs(x))
+    x = _illinois(f, x - d0, x + d0, mpf(2) ** (-mp.prec + 8))
+    if x is None:
+        return None
+    d = mpf(10) ** (-(mp.dps // 2)) * max(1, abs(x))
+    try:
+        fl, fh = f(x - d), f(x + d)
+    except Unresolved:
+        return None
+    if not (fl * fh < 0) or max(abs(fl), abs(fh)) > mpf(10) ** (-(mp.dps // 4)):
+        return None
+    return x, d
 
 
 # ---------------------------------------------------------------- the judge
@@ -2125,6 +2356,193 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             deployed(ed, v, point, kind == 'real', snapped, acc)
         merge(acc, key)
 
+    def mint_rows(acc, cr_f64):
+        """THE MINT'S ROWS (`judge_rows`), at the generic constants: the deployed sides at every
+        row the mine's mint reads, slot k reading column k (a slot past the columns the grid's
+        1.7). Where float64's sides disagree (F6), the row is judged as a grid point, in the
+        reals and in float64, the first `ROWS_JUDGED` of them; a `$` slot at 0 owes nothing."""
+        X = judge_rows()
+        cols = {}
+        for m in names:
+            k = int(m[1:]) if m[1:].isdigit() else X.shape[1]
+            cols[m] = X[:, k] if k < X.shape[1] else np.full(X.shape[0], 1.7)
+        keep = np.ones(X.shape[0], dtype=bool)
+        for m in names:
+            if nvars[m] == '$':
+                keep &= cols[m] != 0
+        env = {m: cols[m] for m in names}
+        env.update({k: np.full(X.shape[0], c) for k, c in zip(lnames, grid_key)})
+        env.update({k: np.full(X.shape[0], float(w)) for k, w in cr_f64.items()})
+        sides = []
+        for tree in (tl, tr):
+            expr, enames, extra = _compiled(tree)
+            try:
+                if not enames:
+                    sides.append(np.full(X.shape[0], expr.eval_f64([])[0]))
+                    continue
+                sides.append(np.array(expr.eval_f64_rows(
+                    [np.full(X.shape[0], float(extra[n])).tolist() if n in extra
+                     else np.asarray(env[n], dtype=float).tolist() for n in enames])[0]))
+            except (ValueError, KeyError):
+                return
+        dl, dr = sides
+        differ = keep & ~((dl == dr) | (np.isnan(dl) & np.isnan(dr)))
+        judged = 0
+        for r in np.flatnonzero(differ):
+            if judged >= ROWS_JUDGED:
+                break
+            if _table.table_f64_agree(float(dl[r]), float(dr[r])) == 'eq':
+                continue
+            judged += 1
+            vals = {m: float(cols[m][r]) for m in names}
+
+            def env_mp(vals=vals):
+                e = {m: tv_of_float(x) for m, x in vals.items()}
+                e.update({k: b() for k, b in gbuilders.items()})
+                e.update(fitted(grid_key))
+                return e
+
+            v, snapped = _point_verdict(tl, tr, env_mp)
+            point = dict(vals)
+            point.update(dict(zip(lnames, grid_key)))
+            judge_point(acc, v, point, 'real', True,
+                        (grid_key, {m: tv_of_float(x) for m, x in vals.items()}))
+            if v is not None:
+                ed = {m: F(x) for m, x in vals.items()}
+                ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
+                ed.update({k: F(w) for k, w in cr_f64.items()})
+                deployed(ed, v, point, True, snapped, acc)
+
+    def preimages(acc, lanes, cr_f64):
+        """THE JUMP PREIMAGES (`_jump_probes`), at the generic constants: along each lane, where
+        a jump head's argument crosses a level between two grid points, the preimage is solved
+        at `_PREIMAGE_DPS` and judged with every subtree equal to the solved argument replaced
+        by its exact value there (the level; for a switch, the other argument), so each head
+        over it reads its value at the level. A point where a side, so substituted, is not
+        continuous across the preimage (a jump the substitution does not decide) is skipped.
+        f64 reads the doubles nearest the preimage."""
+        probes = list(dict.fromkeys(_jump_probes(tl) + _jump_probes(tr)))
+        if not probes:
+            return
+        count = 0
+        xs = sorted(GRID)
+        old_dps = mp.dps
+        try:
+            for cfg, n in lanes:
+                for kind, chain, other in probes:
+                    if count >= MAX_PREIMAGES:
+                        return
+                    if ('slot', n) not in _subtree_set(chain) | _subtree_set(other):
+                        continue
+
+                    def ed_at(x, cfg=cfg, n=n):
+                        e = {m: F(cfg) for m in names}
+                        e[n] = F(x)
+                        e.update({k: F(c) for k, c in zip(lnames, grid_key)})
+                        e.update({k: F(w) for k, w in cr_f64.items()})
+                        return e
+
+                    def sampled(x, chain=chain, other=other):
+                        try:
+                            with np.errstate(all='ignore'):
+                                u = float(d_eval(chain, ed_at(x)))
+                                return u - float(d_eval(other, ed_at(x))) if other else u
+                        except Exception:
+                            return math.nan
+
+                    us = [sampled(x) for x in xs]
+                    tried = 0
+                    # nearest the origin first, where the battery's magnitudes are; a bounded
+                    # number of tries per lane and level set, judged or skipped
+                    for i in sorted(range(len(xs) - 1),
+                                    key=lambda i: min(abs(xs[i]), abs(xs[i + 1]))):
+                        for q in _levels(kind, us[i], us[i + 1]):
+                            if count >= MAX_PREIMAGES or tried >= MAX_PREIMAGES // 4:
+                                break
+                            tried += 1
+                            if judge_preimage(acc, cfg, n, kind, chain, other, q,
+                                              xs[i], xs[i + 1], ed_at):
+                                count += 1
+        finally:
+            mp.dps = old_dps
+
+    def judge_preimage(acc, cfg, n, kind, chain, other, q, a, b, ed_at):
+        mp.dps = _PREIMAGE_DPS
+        builders = {k: bb() for k, bb in gbuilders.items()}
+
+        def env_at(x):
+            e = {m: mpf(cfg) for m in names}
+            e[n] = x
+            e.update(builders)
+            e.update(fitted(grid_key))
+            return e
+
+        def f(x):
+            e = env_at(x)
+            u = c_eval(chain, e)
+            return u - (c_eval(other, e) if other else mpf(q))
+
+        try:
+            found = _solve_preimage(f, mpf(a), mpf(b))
+            if found is None:
+                return False
+            x, d = found
+            value = other_tree = None
+            if kind == 'switch':
+                value, other_tree = chain, other
+            else:
+                value, other_tree = ('lit', Fraction(q)), chain
+            sides = (_substituted(tl, other_tree, value), _substituted(tr, other_tree, value))
+            for side in sides:
+                r1, r2 = cls_mp(c_eval(side, env_at(x - d))), cls_mp(c_eval(side, env_at(x + d)))
+                if r1[0] != r2[0] or (r1[0] == 'inf' and r1[1] != r2[1]):
+                    return False
+                if r1[0] == 'fin' and abs(r1[1] - r2[1]) > \
+                        mpf(10) ** (-(mp.dps // 4)) * max(1, abs(r1[1])):
+                    return False
+        except (Unresolved, ZeroDivisionError, ValueError):
+            return False
+        finally:
+            mp.dps = BASE_DPS
+
+        def env_mp(x=x):
+            if mp.dps > _PREIMAGE_DPS - 30:
+                raise Unresolved()
+            e = {m: mpf(cfg) for m in names}
+            e[n] = +x
+            e.update({k: bb() for k, bb in gbuilders.items()})
+            e.update(fitted(grid_key))
+            return e
+
+        v, snapped = _point_verdict(sides[0], sides[1], env_mp)
+        point = {m: cfg for m in names}
+        point[n] = float(x)
+        point.update(dict(zip(lnames, grid_key)))
+        values = {m: mpf(cfg) for m in names}
+        values[n] = x
+        judge_point(acc, v, point, 'real', True, (grid_key, values, sides))
+        # f64: the doubles nearest the preimage, where float64 may land on the level itself
+        xf = float(x)
+        for dv in [xf] + [y for k in range(1, 9)
+                          for y in (_ulps(xf, k), _ulps(xf, -k))]:
+            ed = ed_at(dv)
+            try:
+                with np.errstate(all='ignore'):
+                    dl, dr = d_eval(tl, ed), d_eval(tr, ed)
+            except Exception:
+                continue
+            if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq':
+                continue
+            exact = dict(values)
+            exact[n] = mpf(dv)
+            v2, sn2 = _point_verdict(tl, tr, lambda exact=exact: {
+                **{m: +y for m, y in exact.items()},
+                **{k: bb() for k, bb in gbuilders.items()}, **fitted(grid_key)})
+            if v2 is not None:
+                deployed(ed, v2, dict(point, **{n: dv}), True, sn2, acc)
+                break
+        return True
+
     # the GENERIC GRID: more points of clause (a) past the battery's magnitudes, and the
     # deployed lane where float64 parts from the reals (tanh saturates at 19.06, exp overflows
     # at 709.78 and underflows at -745.13); every slot real
@@ -2171,9 +2589,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
                     ed.update({k: F(w) for k, w in cr_f64.items()})
                     deployed(ed, v, point, True, snapped, acc)
+            grid_ext = bool(acc['ext'])
+            preimages(acc, lanes, cr_f64)
+            mint_rows(acc, cr_f64)
             # the grid's points count toward nothing in coverage (that is the battery's)
             acc['resolved'] = acc['attempted'] = 0
-            grid_ext = bool(acc['ext'])
             merge(acc, grid_key)
     finally:
         mp.dps = old
@@ -2233,7 +2653,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return None
 
     b_unguarded, seen = [], set()
-    for point, (key, values) in ext_where:
+    for point, (key, values, *_) in ext_where:
         sig = repr(sorted(point.items()))
         if sig in seen or not open_slots:
             continue
@@ -2246,7 +2666,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     c_tolerated, c_kills, c_perm, seen = [], [], [], set()
     infinite_null = bool(c_events) and _table.table_infinite_null(
         _spelled(lhs, spelling), dict(ARITY))
-    for v, point, (key, values), real_valued in c_events:
+    for v, point, (key, values, *trees), real_valued in c_events:
         sig = repr(sorted(point.items()))
         if sig in seen:
             continue
@@ -2257,7 +2677,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         else:
             c_kills.append((v, dict(point, unguarded=slot) if slot else point))
             if real_valued:
-                c_perm.append((v, point, (key, values)))
+                c_perm.append((v, point, (key, values, *trees)))
 
     # COINCIDENT `?` SLOTS: two `?` slots bound to one variable are an instance the engine
     # rewrites, on which a set that is null in the slots' joint space can have positive
@@ -2302,7 +2722,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # real values round to doubles at most REALISED_ULP apart (F6), or where it is isolated: it
     # vanishes when a `?` slot moves off the point, and on no other slot's move (a `_` slot bound
     # to a constant subexpression would hold it on positive measure: unguarded).
-    def doubles(env):
+    def doubles(env, trees=None):
         """Both sides' values as the doubles nearest to them, read by the table at two
         precisions, or None where the table cannot read a side or the doubles differ between
         the two (a residue, not a value)."""
@@ -2312,7 +2732,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             for dps in (BASE_DPS, 120):
                 mp.dps = dps
                 e = env()
-                vals = [_table_reading(t, e, dps) for t in (tl, tr)]
+                vals = [_table_reading(t, e, dps) for t in (trees or (tl, tr))]
                 if any(v is None for v in vals):
                     return None
                 seen.append(tuple(_num(cls_mp(v)) for v in vals))
@@ -2322,8 +2742,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         same = all(a == b or (a != a and b != b) for a, b in ((l1, l2), (r1, r2)))
         return (l2, r2) if same else None
 
-    def float_close(env):
-        d = doubles(env)
+    def float_close(env, trees=None):
+        d = doubles(env, trees)
         if d is not None:
             return _table.table_f64_agree(*d) == 'eq'
         # Past the table's reach (a value beyond the doubles' range, `exp(sinh(-50))` at
@@ -2333,7 +2753,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             ed = {n: F(float(x.mpf() if hasattr(x, 'mpf') else x)) for n, x in env().items()}
             in_range = [True]
             with np.errstate(all='ignore'):
-                dl, dr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
+                sl, sr = trees or (tl, tr)
+                dl, dr = d_eval(sl, ed, in_range), d_eval(sr, ed, in_range)
         except Exception:
             return False
         return not in_range[0] and compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq'
@@ -2361,8 +2782,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return bool(depends) and all(nvars.get(n) == '?' for n in depends)
 
     def excused(event):
-        _, _, (key, values) = event
-        return float_close(event_env(key, values)) or isolated(key, values)
+        # a preimage's values are its substituted sides' (the heads at their level); whether
+        # it is isolated, the rule's own sides' on either side of it
+        _, _, (key, values, *trees) = event
+        return float_close(event_env(key, values), trees[0] if trees else None) or \
+            isolated(key, values)
 
     perm_left, seen_perm = [], set()
     for event in perm_kills + c_perm:

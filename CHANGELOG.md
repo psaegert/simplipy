@@ -1253,6 +1253,29 @@ model predictions.
   well, and the high-precision polish took that noise to about 1e-557 instead of 0, a nonzero
   right side where both sides are exactly 0. `(x0 - C)^2 -> x0^2 - C1*x0 + C2` and
   `(x0 + C)/C -> C1*x0 + C2`, refused on every machine before, hold in `real`.
+- **The rule judge reads a jump at its preimage.** `ceil(sinh(x0) + 1/2) - floor(sinh(x0) +
+  1/2) -> 1` is false in `real` only where sinh(x0) + 1/2 is an integer, at transcendental
+  points no double is and no reading near one decides, and the judge passed it. Along each
+  variable it now solves where an argument of `floor`, `ceil`, `mod` (by a literal), `harmonic`
+  or `atan2` crosses a level between two grid points (and where an `abs`, `max` or `min` under
+  one of them has its kink), to 500 digits, and judges the rule there with every copy of
+  that argument replaced by its exact level, so the heads read their values at the level;
+  `float64` reads the 17 doubles nearest the point. The rule above is refused in `real` and
+  `f64` and kept in `permissive` (the two sides agree on both sides of each such point);
+  identities through jumps (`mod(sinh(x0), 2) -> sinh(x0) - 2*floor(sinh(x0)/2)`) still hold.
+  A point where a side, so substituted, still jumps is skipped. At most 16 points a rule, about
+  0.1 s more on a rule with a jump head.
+- **The rule judge reads the rows the mine's mint reads.** Its `float64` lane read a grid
+  whose smallest magnitude is 0.0137, so `log(exp(atanh(_0))) -> atanh(_0)`, which float64 loses
+  for small arguments (`exp` rounds 1 + y), was admitted in `f64` while the mint refuted it on
+  its rows. The mine's sampler is now one function (`verify._contract.mine_rows`), the judge
+  reads the deployed sides at every row of the mine's sample and confirmation matrix (the
+  shipped mine's, seed 42, by default; a mine sets its own for its judge and gates, and
+  `verify-mine` draws them again from the sidecar's seed), and a row where float64's sides
+  disagree is judged as a grid point. Read so, the published `acj-4-3` triple holds 25 rules
+  false in `f64` (6 before: `pi - acos(_0) -> acos(-_0)` cancels near -1, 77 units in the last
+  place at -0.99971) and two more false in the reals in every mode, `sin(abs(atanh(_0))) ->
+  abs(sin(atanh(_0)))` and its twin, wrong where atanh passes pi near 1.
 - **The rule judge reads one table of values per mode.** Every value `simplipy.verify` compares
   is the core's, defined once. In `real` a literal is the rational it spells, `asin(1)` is
   exactly pi/2, and a pole or an infinite argument takes the limit where every direction gives

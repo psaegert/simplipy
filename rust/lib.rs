@@ -2399,6 +2399,35 @@ impl PyTableExpr {
             .eval_f64(&env)
             .ok_or_else(|| PyValueError::new_err("an operator the f64 kernels do not know"))
     }
+
+    /// `eval_f64` at many points: `cols[i]` holds the i-th name's value at each row. Returns
+    /// each row's value and whether every operation stayed in range there.
+    fn eval_f64_rows(
+        &self,
+        py: Python<'_>,
+        cols: Vec<Vec<f64>>,
+    ) -> PyResult<(Vec<f64>, Vec<bool>)> {
+        let n = cols.first().map_or(0, Vec::len);
+        if cols.len() != self.inner.names.len() || cols.iter().any(|c| c.len() != n) {
+            return Err(PyValueError::new_err(
+                "one column per name, all of one length",
+            ));
+        }
+        py.detach(|| {
+            let mut env = vec![0.0; cols.len()];
+            let (mut values, mut in_range) = (Vec::with_capacity(n), Vec::with_capacity(n));
+            for r in 0..n {
+                for (slot, col) in env.iter_mut().zip(&cols) {
+                    *slot = col[r];
+                }
+                let (v, ok) = self.inner.eval_f64(&env)?;
+                values.push(v);
+                in_range.push(ok);
+            }
+            Some((values, in_range))
+        })
+        .ok_or_else(|| PyValueError::new_err("an operator the f64 kernels do not know"))
+    }
 }
 
 /// THE TABLE's real reading of a literal token (`table::literal_real`): `(kind, a, b)` or `None`.

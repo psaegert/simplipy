@@ -63,11 +63,13 @@ def test_the_judge_reads_the_new_heads_on_both_axes():
                      ('mod _0 1', '- _0 floor _0'), ('atan2 neg _0 1', 'neg atan2 _0 1')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'core', (lhs, rhs, r)
-    # true over the reals, broken by float64 at x = -1e-17: the real tier, never f64's
+    # true over the reals, broken by float64 at x = -1e-17: the real tier, never f64's (the
+    # doubles next to a jump's preimage show the deployed lane the break: ENGINE-MISALIGN)
     for lhs, rhs in (('floor + _0 1', '+ floor _0 1'), ('mod + _0 1 1', 'mod _0 1'),
                      ('floor mod ?0 1', '0')):
         r = j(lhs.split(), rhs.split())
-        assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'real', (lhs, rhs, r)
+        assert r['verdict'] in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN') \
+            and r['tier'] == 'real', (lhs, rhs, r)
         assert r['f64_bar']['ok'] is False
     # false over the reals at a jump, and in float64: no tier
     for lhs, rhs in (('+ floor _0 1', 'ceil _0'), ('mod _0 1', '_0'), ('harmonic _0', 'log _0')):
@@ -395,13 +397,26 @@ def test_sort_promotion_reads_the_new_heads(bare, mode):
     assert shipped[('besselj', '0.5', 'neg', '?0')][0][3] == '?0', shipped
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "the judge's battery holds no jump preimage of a step head under a transcendental "
-    "argument (sinh(x) + 1/2 = k), where the two sides differ; promotion's own preimage "
-    "witness caught it at `?` before it asked the judge"))
 def test_the_judge_refuses_a_rule_false_at_a_jump_preimage():
+    # false in real only at sinh(x) + 1/2 = k, a transcendental point no battery or grid holds:
+    # the judge solves the preimage and reads the heads at their level; permissive (P4) keeps it,
+    # the two sides agreeing on both sides of each such point
     lhs, rhs = '- ceil + sinh ?0 0.5 floor + sinh ?0 0.5', '1'
-    assert _contract.judge_rule(lhs.split(), rhs.split())['tier'] in ('permissive', 'reject')
+    got = _contract.judge_rule(lhs.split(), rhs.split())
+    assert got['tier'] == 'permissive' and got['clause'] == 'a-real-change', got
+    assert got['realised'] is False, got
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    ('mod sinh ?0 2', '- sinh ?0 * 2 floor / sinh ?0 2'),
+    ('- floor sinh ?0 floor sinh ?0', '0'),
+    ('- max ?0 sinh ?0 min ?0 sinh ?0', 'abs - ?0 sinh ?0'),
+    ('ceil neg sinh ?0', 'neg floor sinh ?0'),
+])
+def test_an_identity_through_jumps_holds_at_their_preimages(lhs, rhs):
+    # every subtree equal to the solved argument takes its level, so both sides read the heads
+    # at the same point; a side another jump leaves discontinuous there is skipped, not judged
+    assert _contract.judge_rule(lhs.split(), rhs.split())['tier'] == 'core'
 
 
 def test_a_rule_without_slots_passes_promotion_through(bare):

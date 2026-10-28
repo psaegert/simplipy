@@ -93,6 +93,30 @@ def mine_rows() -> np.ndarray:
     return RuleMiner(bare())._mining_sample_x(512, 2, np.random.default_rng(0))
 
 
+@pytest.fixture(autouse=True, scope='module')
+def _the_judge_reads_the_mints_rows():
+    """The judge's f64 lane reads the rows the mint reads here (`_contract.set_rows`), as in a
+    mine: a counterexample the mint finds on them is one the judge reads too."""
+    before = _contract.set_rows(mine_rows())
+    judged.cache_clear()
+    yield
+    _contract.set_rows(before)
+    judged.cache_clear()
+
+
+@pytest.mark.parametrize('lhs, rhs', [('log exp atanh x0', 'atanh x0'),
+                                      ('log exp atanh _0', 'atanh _0')])
+def test_the_judge_reads_the_rows_the_mint_reads(lhs, rhs):
+    # float64 loses `log(exp(y)) = y` for small y (exp rounds 1 + y): the mint refutes it on its
+    # rows (|x| down to 1e-4) and the judge's grid, whose smallest |x| is 0.0137, never saw it
+    from simplipy.mining import RuleMiner
+    rows = RuleMiner(bare())._mining_sample_x(512, 2, np.random.default_rng(0))
+    assert np.array_equal(rows, _contract.mine_rows(512, 2, np.random.default_rng(0)))
+    assert not mint_accepts(lhs.replace('_0', 'x0'), rhs.replace('_0', 'x0'), 'f64')
+    assert not admits(lhs, rhs, 'f64'), judged(lhs, rhs)
+    assert admits(lhs, rhs, 'real'), judged(lhs, rhs)
+
+
 def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:
     """The mint's pair judgment on the mine's own rows, in the mode."""
     X = mine_rows()

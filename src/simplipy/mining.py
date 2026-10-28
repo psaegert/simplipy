@@ -351,7 +351,9 @@ def judge_tiers(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
     import multiprocessing
     size = -(-len(pairs) // processes)
     chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
-    with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
+    from .verify._contract import judge_rows, set_rows
+    with multiprocessing.get_context('spawn').Pool(
+            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
         parts = pool.map(functools.partial(_judge_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
     return [tier for part in parts for tier in part]
 
@@ -372,7 +374,9 @@ def judge_verdicts(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S
     import multiprocessing
     size = -(-len(pairs) // processes)
     chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
-    with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
+    from .verify._contract import judge_rows, set_rows
+    with multiprocessing.get_context('spawn').Pool(
+            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
         parts = pool.map(functools.partial(_verdict_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
     return [verdict for part in parts for verdict in part]
 
@@ -928,43 +932,10 @@ class RuleMiner:
         return [picks[i] for i in sorted(picks)], stats
 
     def _mining_sample_x(self, n_rows: int, n_vars: int, rng: np.random.Generator) -> np.ndarray:
-        """Sample the mine's numerical evaluation matrix X.
-
-        Heavy-tailed MIXTURE instead of the historical pure N(0, 5): a mined pattern's
-        wildcards bind arbitrary SUBTREE values at application time, so equivalence
-        certification must exercise magnitudes far outside a Gaussian's bulk (tanh/exp
-        saturation plateaus, huge/tiny magnitudes) and the exact algebraic corner points
-        (0, +-1, ...) where false identities like ``asin(cosh(_0)) -> nan`` are refuted.
-        Mixture per ELEMENT (so a row can pair a huge x0 with a corner-point x1):
-
-        - 40% N(0, 5) (the historical distribution; dense near typical values)
-        - 25% U(-50, 50)
-        - 25% signed log-uniform magnitudes 1e-4..1e3 (exposes saturation false-equalities)
-        - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
-
-        Under GENERIC-EQUIVALENCE semantics the corner points
-        refute wrong-VALUE identities (``asin(cosh(_0)) -> nan`` is false AT 0, where the
-        source is pi/2) while domain EXTENSION remains allowed: where the source is
-        NaN/inf the replacement may complete it (``div(_0, _0) -> 1``, the 0/0 limit).
-
-        The log-uniform tier's upper magnitude is 1e3, deliberately not wider: 1e3
-        still exercises every saturation (tanh/exp plateau by |x|~40) and f64 overflow
-        (exp overflows past |x|~710) that the tier is FOR, while a 1e6 design column
-        pushes the constant-fit conditioning to cond(A) ~ 1e6 and the fit cannot
-        recover an intercept to rtol at an exact-zero-crossing row -- silently
-        rejecting the entire ``C0*f(x)+C1`` affine family.
-        """
-        shape = (n_rows, n_vars)
-        choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
-        normal = rng.normal(0.0, 5.0, size=shape)
-        uniform = rng.uniform(-50.0, 50.0, size=shape)
-        magnitudes = 10.0 ** rng.uniform(-4.0, 3.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
-        specials = np.array([0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0,
-                             2.0, -2.0, np.e, -np.e, np.pi, -np.pi, 10.0, -10.0])
-        special = rng.choice(specials, size=shape)
-        return np.where(choice == 0, normal,
-                        np.where(choice == 1, uniform,
-                                 np.where(choice == 2, magnitudes, special)))
+        """Sample the mine's numerical evaluation matrix X: the one sampler the judge's f64
+        lane reads too (`verify._contract.mine_rows`, where the mixture is documented)."""
+        from .verify._contract import mine_rows
+        return mine_rows(n_rows, n_vars, rng)
 
     @staticmethod
     def _confirm_kwargs(X_confirm: np.ndarray | None, X_data: np.ndarray, min_informative: int,
@@ -2265,7 +2236,13 @@ class RuleMiner:
         # mining gate.
         if certified:
             from .verify import effective_tier, verify_ruleset
-            _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
+            from .verify._contract import set_rows
+            # the judge reads the rows this certification's mint read
+            previous_rows = set_rows(np.vstack([X_data, X_confirm]))
+            try:
+                _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
+            finally:
+                set_rows(previous_rows)
             # detail entries carry lhs/rhs as SPACE-JOINED strings
             _drop = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d['verdict']
                      for d in _rep['detail']
@@ -2837,6 +2814,12 @@ class RuleMiner:
             handler_installed = True
         from simplipy import _core as _core_module
         previous_budget = _core_module.set_interval_node_budget(interval_node_budget)
+        # THE JUDGE READS THE MINT'S ROWS: its f64 lane evaluates the rows this mine's mint
+        # reads (its sample and its confirmation rows), so the mint refutes nothing on them the
+        # judge does not; restored when the mine ends
+        from .verify._contract import set_rows
+        previous_rows = set_rows(np.vstack([X_data] + ([X_confirm] if X_confirm is not None
+                                                        else [])))
         try:
             if reset_rules:
                 # every mode's set starts empty: each file is mined from nothing
@@ -2919,6 +2902,7 @@ class RuleMiner:
                 self.engine._replace_rules(finals['default'])
         finally:
             _core_module.set_interval_node_budget(previous_budget)
+            set_rows(previous_rows)
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)
             _MINE_LOCK.release()
@@ -2964,7 +2948,31 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       each file its sidecar pins lies beside this one with the pinned sha256.
 
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
+
+    The judge reads the rows the mine's mint read, drawn again from the sidecar's seed and
+    shape (``verify._contract.mine_matrix``), as it did in the mine.
     """
+    from .verify._contract import mine_matrix, set_rows
+    sidecar_path = rules_path + '.provenance.json'
+    rows = None
+    if os.path.exists(sidecar_path):
+        with open(sidecar_path) as file:
+            recorded = json.load(file)
+        params, shape = recorded.get('params') or {}, recorded.get('X') or {}
+        if isinstance(params.get('seed'), int) and isinstance(shape.get('rows'), int) \
+                and isinstance(shape.get('cols'), int) and 'seeded' in str(shape.get('source')):
+            rows = mine_matrix(params['seed'], shape['rows'], shape['cols'],
+                               bool(params.get('confirm', True)))
+    previous_rows = set_rows(rows)
+    try:
+        return _verify_mine(rules_path, mode, operators, judge=judge,
+                            judge_processes=judge_processes)
+    finally:
+        set_rows(previous_rows)
+
+
+def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
+                 judge: Callable | None, judge_processes: int) -> dict:
     from .engine import SimpliPyEngine, _RULE_MODE, _coerce_mode
     mode = _coerce_mode(mode).name
     rule_mode = _RULE_MODE[_coerce_mode(mode)]
