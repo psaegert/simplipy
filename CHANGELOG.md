@@ -1442,9 +1442,12 @@ model predictions.
 - **A wide miss is read, not refused.** The mint read a near miss's failing rows by the table
   only where float64 failed on at most half of them and refused the rest unread, stricter than
   the judge: `floor(erf(cosh(x))) -> 0` fails float64 wherever erf rounds to 1 (|x| > 2.46, most
-  rows) and holds in the reals. Past the gate the table now reads four of the failing rows,
-  spread over them, and the mint refuses at the first confirmed disagreement; the gate bounds
-  the work, not the verdict.
+  rows) and holds in the reals. Past the gate the mint now asks whether float64 reads the source
+  as the reals do, on 16 of its rows (once per source instance): where it does not, the table
+  reads four of the failing rows, spread over them, and the mint refuses at the first confirmed
+  disagreement; where it does, the miss is the candidate's and is refused as before. The gate
+  bounds the work, not the verdict. A gross disagreement at the first reading of a row needs no
+  second rung.
 - **Evidence is one function.** The interval layer's certificate confirms a cell at points read
   in the mode's values (its centre and three drawn in it, by the table in the reals, by the
   f64 kernels in `f64`), and the mint reads the same function for a source as the judge's

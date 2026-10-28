@@ -221,12 +221,21 @@ fn table_row(
     let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
     let mut seen: Vec<(BigFloat, BigFloat, BigFloat, usize)> = Vec::new();
     for dps in [start, fine] {
-        let s = se.eval_real(&senv, dps)?.value?;
+        // the first readings serve the first rung where it is theirs
+        let s = if dps == BASE_DPS {
+            os.value.clone()?
+        } else {
+            se.eval_real(&senv, dps)?.value?
+        };
         let (s_undef, s_inf) = class_of(&s);
         if s_undef {
             return Some(RowVerdict::Extend);
         }
-        let c = ce.eval_real(&cenv, dps)?.value?;
+        let c = if dps == BASE_DPS {
+            oc.value.clone()?
+        } else {
+            ce.eval_real(&cenv, dps)?.value?
+        };
         let (c_undef, c_inf) = class_of(&c);
         if let Some(up) = s_inf {
             return Some(if !c_undef && c_inf == Some(up) {
@@ -244,6 +253,21 @@ fn table_row(
         let p = dps_to_prec(dps);
         let (sb, cb) = (ctx.value_bf(&s), ctx.value_bf(&c));
         let diff = sb.sub(&cb, p, RM).abs();
+        // A GROSS DISAGREEMENT needs no second rung: at the precision its intermediates demand the
+        // reading is honest (Unresolved otherwise), and a residual a millionth of the larger side
+        // does not collapse at a finer one. An agreement or a small residual is read again, where
+        // a true zero shows by collapsing.
+        if seen.is_empty() {
+            let scale = if matches!(sb.abs().cmp(&cb.abs()), Some(o) if o >= 0) {
+                sb.abs()
+            } else {
+                cb.abs()
+            };
+            let gross = BigFloat::from_f64(1e-6, p).mul(&scale, p, RM);
+            if !scale.is_zero() && matches!(diff.cmp(&gross), Some(o) if o > 0) {
+                return Some(RowVerdict::Fail);
+            }
+        }
         seen.push((sb, cb, diff, p));
     }
     let [(_, _, d1, _), (s2, c2, d2, p2)] = seen.as_slice() else {
@@ -332,6 +356,85 @@ fn isolated_row(
         })
 }
 
+/// The binding rows `source_faithful` reads, spread evenly over them.
+const FAITHFUL_ROWS: usize = 16;
+
+/// `source_faithful`'s answers by source instance and the rows it read (their values' bits).
+type FaithfulCache = rustc_hash::FxHashMap<(Vec<String>, Vec<u64>), bool>;
+
+thread_local! {
+    static FAITHFUL: std::cell::RefCell<FaithfulCache> =
+        std::cell::RefCell::new(FaithfulCache::default());
+}
+
+/// Does float64 read the source instance as the reals do, on an even spread of `FAITHFUL_ROWS`
+/// of its binding rows (its value within 1e-12 of the table's, relatively, its class the same)?
+/// A row the table cannot read counts as unfaithful. Once per source instance and row sample
+/// (`FAITHFUL`), as every candidate of the source asks it.
+fn source_faithful(
+    y_src: &[f64],
+    source: &[String],
+    src_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+) -> bool {
+    let binding: Vec<usize> = (0..y_src.len()).filter(|&r| !y_src[r].is_nan()).collect();
+    if binding.is_empty() {
+        return true;
+    }
+    let k = FAITHFUL_ROWS.min(binding.len());
+    let rows: Vec<usize> = (0..k).map(|i| binding[i * binding.len() / k]).collect();
+    let key = (
+        source.to_vec(),
+        src_params
+            .iter()
+            .map(|p| p.to_bits())
+            .chain(
+                rows.iter()
+                    .flat_map(|&r| x_cols.iter().map(move |c| c[r].to_bits())),
+            )
+            .collect::<Vec<u64>>(),
+    );
+    if let Some(hit) = FAITHFUL.with(|f| f.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let faithful = rows.iter().all(|&r| {
+        let Some((e, env)) = table_side(source, src_params, ops, var_names, x_cols, r) else {
+            return false;
+        };
+        let Some(v) = e.eval_real(&env, BASE_DPS).and_then(|o| o.value) else {
+            return false;
+        };
+        let y = y_src[r];
+        match crate::table::class_of(&v) {
+            (true, _) => y.is_nan(),
+            (_, Some(up)) => y == if up { f64::INFINITY } else { f64::NEG_INFINITY },
+            _ => {
+                let Some(mut ctx) = crate::table::Ctx::new(BASE_DPS) else {
+                    return false;
+                };
+                let p = dps_to_prec(BASE_DPS);
+                let t = ctx.value_bf(&v);
+                if !y.is_finite() {
+                    return false;
+                }
+                let diff = t.sub(&BigFloat::from_f64(y, p), p, RM).abs();
+                let tol = BigFloat::from_f64(1e-12, p).mul(&t.abs(), p, RM);
+                matches!(diff.cmp(&tol), Some(o) if o <= 0)
+            }
+        }
+    });
+    FAITHFUL.with(|f| {
+        let mut f = f.borrow_mut();
+        if f.len() > 200_000 {
+            f.clear();
+        }
+        f.insert(key, faithful);
+    });
+    faithful
+}
+
 /// The near-miss rescue: `y_src` / `y_cand` are the instance's f64 evaluations, `source`
 /// carries `src_params` for its `<constant>` slots (left-to-right, the tape order), the
 /// candidate carries `cand_params` (empty for the const-free arm; the f64-FITTED constants
@@ -389,12 +492,18 @@ pub fn rescue(
     if failing.is_empty() {
         return false; // nothing to rescue: keep the f64 verdict
     }
-    // THE GATE BOUNDS THE WORK, NOT THE VERDICT. Past it (a wide miss) the table reads an even
-    // spread of `WIDE_MISS_ROWS` failing rows, and the pair is refused at the first confirmed
-    // disagreement; with none confirmed it passes on, and the judge decides. A wide miss of
-    // float64 is no disagreement of the reals: `floor(erf(cosh(x))) -> 0` fails float64 wherever
-    // erf rounds to 1 (|x| > 2.46, most rows) and holds in the reals.
+    // THE GATE BOUNDS THE WORK, NOT THE VERDICT. A wide miss of float64 is no disagreement of
+    // the reals where float64 misreads the source: `floor(erf(cosh(x))) -> 0` fails float64
+    // wherever erf rounds to 1 (|x| > 2.46, most rows) and holds in the reals. So past the gate,
+    // where the source's float64 values are not its true ones on a sample of its rows
+    // (`source_faithful`, once per source instance), the table reads an even spread of
+    // `WIDE_MISS_ROWS` failing rows and the pair is refused at the first confirmed disagreement,
+    // passing on to the judge with none; where they are, the miss is the candidate's, and it is
+    // refused as before.
     let rows: Vec<usize> = if failing.len() > gate {
+        if source_faithful(y_src, source, src_params, ops, var_names, x_cols) {
+            return false;
+        }
         let k = WIDE_MISS_ROWS.min(failing.len());
         (0..k).map(|i| failing[i * failing.len() / k]).collect()
     } else {
