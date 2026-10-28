@@ -44,8 +44,7 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 
 use crate::ac::rat::{number_domain, token_rational, Rat};
 use crate::hiprec::{
-    besselj, cmp_gt, cmp_lt, dps_to_prec, is_pos, one, pow_finite_pos, small_int, special,
-    RM,
+    besselj, cmp_gt, cmp_lt, dps_to_prec, is_pos, one, pow_finite_pos, small_int, special, RM,
 };
 
 // ------------------------------------------------------------------------------- values
@@ -235,8 +234,11 @@ impl Ctx {
             let b = b.add(&self.zero(), self.p, RM);
             return if v < 0 { b.neg() } else { b };
         }
-        BigFloat::parse(&n.to_string(), Radix::Dec, self.p + 64, RM, &mut self.cc)
-            .add(&self.zero(), self.p, RM)
+        BigFloat::parse(&n.to_string(), Radix::Dec, self.p + 64, RM, &mut self.cc).add(
+            &self.zero(),
+            self.p,
+            RM,
+        )
     }
 
     fn ratio(&mut self, p: &BigInt, q: &BigInt) -> BigFloat {
@@ -754,7 +756,13 @@ fn rootn(a: &Val, n: &Val, ctx: &mut Ctx) -> Out {
             (Some(x), Some(kk)) => kk
                 .small_int()
                 .and_then(|kn| x.abs().checked_root(kn))
-                .and_then(|r| if sign(a) < 0 { r.checked_neg() } else { Some(r) }),
+                .and_then(|r| {
+                    if sign(a) < 0 {
+                        r.checked_neg()
+                    } else {
+                        Some(r)
+                    }
+                }),
             _ => None,
         };
         match exact {
@@ -860,7 +868,9 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                 Some(undef())
             } else if let Some(q) = pi_part(a) {
                 match name {
-                    "sin" => sin_pi(&q).map(Some).unwrap_or_else(|| trig_approx(name, a, ctx)),
+                    "sin" => sin_pi(&q)
+                        .map(Some)
+                        .unwrap_or_else(|| trig_approx(name, a, ctx)),
                     "cos" => {
                         let shifted = q.checked_add(&r(1, 2));
                         shifted
@@ -1213,8 +1223,20 @@ fn binary(name: &str, a: &Val, b: &Val, ctx: &mut Ctx) -> Option<Out> {
             } else {
                 let c = match (inf_sign(a), inf_sign(b)) {
                     (Some(x), Some(y)) => (x as i32) - (y as i32),
-                    (Some(x), None) => if x { 1 } else { -1 },
-                    (None, Some(y)) => if y { -1 } else { 1 },
+                    (Some(x), None) => {
+                        if x {
+                            1
+                        } else {
+                            -1
+                        }
+                    }
+                    (None, Some(y)) => {
+                        if y {
+                            -1
+                        } else {
+                            1
+                        }
+                    }
                     _ => compare(a, b, ctx),
                 };
                 let pick_a = if name == "max" { c >= 0 } else { c <= 0 };
@@ -1240,7 +1262,11 @@ fn modulo(a: &Val, b: &Val, ctx: &mut Ctx) -> Out {
         if is_zero(a) {
             return Some(zero());
         }
-        return Some(if (sign(a) > 0) == bpos { a.clone() } else { inf(bpos) });
+        return Some(if (sign(a) > 0) == bpos {
+            a.clone()
+        } else {
+            inf(bpos)
+        });
     }
     if let (Some(x), Some(y)) = (exact_rat(a), exact_rat(b)) {
         if let Some(m) = rat_mod(x, &y.abs()) {
@@ -1404,7 +1430,8 @@ impl Expr {
         } else if let Some(i) = names.iter().position(|n| *n == tok) {
             Node::Var(i)
         } else {
-            let leaf = real_leaf(&tok).ok_or_else(|| format!("not an accepted literal: {tok:?}"))?;
+            let leaf =
+                real_leaf(&tok).ok_or_else(|| format!("not an accepted literal: {tok:?}"))?;
             Node::Lit(leaf, tok)
         };
         nodes.push(node);
@@ -1848,7 +1875,11 @@ pub fn bf_spec(b: &BigFloat) -> (String, String, String) {
     }
     let exp = i64::from(e) - 64 * words.len() as i64;
     let hex = man.to_str_radix(16);
-    let hex = if b.is_negative() { format!("-{hex}") } else { hex };
+    let hex = if b.is_negative() {
+        format!("-{hex}")
+    } else {
+        hex
+    };
     ("m".into(), hex, exp.to_string())
 }
 
@@ -1859,13 +1890,14 @@ mod tests {
     fn arity() -> std::collections::HashMap<String, u8> {
         let mut m = std::collections::HashMap::new();
         for u in [
-            "neg", "abs", "inv", "exp", "log", "sin", "cos", "tan", "asin", "acos", "atan",
-            "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "floor", "ceil", "erf",
-            "harmonic",
+            "neg", "abs", "inv", "exp", "log", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
+            "cosh", "tanh", "asinh", "acosh", "atanh", "floor", "ceil", "erf", "harmonic",
         ] {
             m.insert(u.to_string(), 1);
         }
-        for b in ["+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj"] {
+        for b in [
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+        ] {
             m.insert(b.to_string(), 2);
         }
         m

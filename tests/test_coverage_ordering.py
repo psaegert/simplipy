@@ -112,13 +112,13 @@ class TestConstAbstractionFulfillment:
 
     def test_constant_collapse_rule_survives(self) -> None:
         """An instance of a `<constant>` slot is a constlike LEAF, never a compound
-        variable-free subtree: `pow 0 <constant> -> <constant>` collapses a 3-token
+        variable-free subtree: `pow -1 <constant> -> <constant>` collapses a 3-token
         constant expression to one leaf (a strict serve-ordering descent the engine does
-        not make itself: `0^C` is +inf on C < 0, and the engine's fold collapses no
-        subtree that provably reaches an infinity), so the probe's unreduced
-        `pow 0 <constant>` does NOT fulfill the promise and the rule is kept.
-        (`acos cos <constant>` was the witness until the engine's fold took it.)"""
-        rule = (("pow", "0", "<constant>"), ("<constant>",))
+        not make itself: `(-1)^C` is finite only at the integers, so it has no evidence),
+        so the probe's unreduced `pow -1 <constant>` does NOT fulfill the promise and the
+        rule is kept. (`acos cos <constant>` and then `pow 0 <constant>` were the witness
+        until the engine's collapse licence took them.)"""
+        rule = (("pow", "-1", "<constant>"), ("<constant>",))
         engine = SimpliPyEngine(operators=_PRUNE_OPS, rules=[rule])
         assert engine.prune_covered_rules(rule_mode='default') == 0
         assert engine.simplification_rules == [rule]

@@ -443,3 +443,22 @@ def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:
     the collapse."""
     folded = list(bare().simplify(expr.split(), mode=mode)) == ['<constant>']
     assert folded == mint_accepts(expr, '<constant>', mode)
+
+
+@pytest.mark.parametrize('expr, mode, folds', [
+    ('pow 0 <constant>', 'f64', True), ('pow 0 <constant>', 'real', True),
+    ('exp <constant>', 'f64', True), ('acos <constant>', 'real', True),
+    ('pow -1 <constant>', 'f64', False), ('pow -1 <constant>', 'real', False),
+    ('pow -1 <constant>', 'permissive', True), ('+ <constant> <constant>', 'real', True),
+])
+def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
+    """The engine collapses a constant expression to `<constant>` exactly where the collapse
+    holds (3.2: the witness is the expression's own value) and has evidence (4.1) in the mode's
+    values -- `pow(0, C)` collapses, `(-1)^C` (finite only at the integers) does not -- and in
+    permissive without evidence (4.9)."""
+    from simplipy import _core
+    folded = list(bare().simplify(expr.split(), mode=mode)) == ['<constant>']
+    holds = admits(expr, '<constant>', mode)
+    evidence = _core.table_evidence(expr.split(), dict(_contract.ARITY), mode == 'f64')
+    assert folded is folds
+    assert folded == (holds and (evidence is True or mode == 'permissive'))

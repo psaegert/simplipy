@@ -2159,33 +2159,7 @@ fn table_evidence(
     f64: bool,
 ) -> Option<bool> {
     let ops = arity_table(arity);
-    // each `<constant>` a dimension of its own, past every variable dummy
-    let top = tokens
-        .iter()
-        .filter_map(|t| t.strip_prefix('x').and_then(|d| d.parse::<usize>().ok()))
-        .max()
-        .map_or(0, |m| m + 1);
-    let mut k = 0usize;
-    let spelled: Vec<String> = tokens
-        .iter()
-        .map(|t| {
-            if t == "<constant>" {
-                k += 1;
-                format!("x{}", top + k - 1)
-            } else {
-                t.clone()
-            }
-        })
-        .collect();
-    py.detach(|| {
-        let cells = || crate::interval::finite_cells(&spelled, &[], &ops, 1, f64);
-        let found = if f64 {
-            cells()
-        } else {
-            crate::interval::with_table_points(cells)
-        };
-        found.map(|fc| !fc.cells.is_empty())
-    })
+    py.detach(|| crate::interval::evidence(&tokens, &ops, f64))
 }
 
 /// An operator table from a name -> arity map (no realizations: the core's own kernels).

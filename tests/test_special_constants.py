@@ -337,12 +337,12 @@ class TestConstAbsorptionLicence:
     def test_const_pow_special_collapses_where_finite(self, eng):
         # C^pi is finite for C >= 0 and NaN below: the fitted constant owes a value only
         # where the source is finite, so it collapses as C^2.5 does (pi a fixed positive
-        # real, as at pi^C). (-1)^C, finite only at the integers, and 0^C, infinite for
-        # C < 0, keep their form.
+        # real, as at pi^C), and so does 0^C (0 for C > 0, 1 at 0, nothing owed where it is
+        # +inf). (-1)^C, finite only at the integers, has no evidence and keeps its form.
         check(eng, ['pow', '<constant>', 'np.pi'], ['<constant>'])
         check(eng, ['pow', '<constant>', '2.5'], ['<constant>'])
         check(eng, ['pow', '(-1)', '<constant>'], ['pow', '-1', '<constant>'])
-        check(eng, ['pow', '0', '<constant>'], ['pow', '0', '<constant>'])
+        check(eng, ['pow', '0', '<constant>'], ['<constant>'])
 
     def test_const_inf_still_unabsorbed(self, eng):
         # Bare 'inf' is a reserved spelling; the canonical token

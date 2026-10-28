@@ -128,16 +128,16 @@ def test_a_constant_collapse_is_minted_where_the_judge_licenses_it(bare):
 
 
 def test_the_engine_collapses_what_the_mint_would(bare):
-    """The engine's fold reads the mint's constant-collapse criterion: a constant-only subtree
-    is a fitted `<constant>` wherever a cell of its constants certifies it finite, so `log(c)`,
-    `acos(c)` and `atan(atanh(c))` are `<constant>` in every mode, and the mine has nothing
-    to write for them. `(-1)^c` (finite only at the integers) and `0^c` (+inf on c < 0) are
-    not, outside permissive's recall."""
+    """The engine's fold reads the collapse licence: a constant-only subtree is a fitted
+    `<constant>` wherever a cell of its constants certifies it finite, so `log(c)`, `acos(c)`,
+    `atan(atanh(c))` and `0^c` (0 for c > 0, 1 at 0, owed nothing where it is +inf) are
+    `<constant>` in every mode, and the mine has nothing to write for them. `(-1)^c` (finite
+    only at the integers) is not, outside permissive's recall. (The mint reads the same licence
+    in a later step; until then it still refuses `0^c`.)"""
     for src in ('log <constant>', 'acos <constant>', 'atan atanh <constant>',
-                'exp log <constant>'):
+                'exp log <constant>', 'pow 0 <constant>'):
         for mode in ('f64', 'real', 'permissive'):
             assert bare.simplify(src.split(), mode=mode) == ['<constant>'], (src, mode)
-    for src, kept in (('pow (-1) <constant>', 'pow -1 <constant>'),
-                      ('pow 0 <constant>', 'pow 0 <constant>')):
-        for mode in ('f64', 'real'):
-            assert ' '.join(bare.simplify(src.split(), mode=mode)) == kept, (src, mode)
+    for mode in ('f64', 'real'):
+        assert ' '.join(bare.simplify('pow (-1) <constant>'.split(), mode=mode)) == \
+            'pow -1 <constant>', mode

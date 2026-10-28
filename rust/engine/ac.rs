@@ -884,6 +884,13 @@ impl Engine {
         };
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
+        let mode = if lossy {
+            RuleMode::Permissive
+        } else if real {
+            RuleMode::Real
+        } else {
+            RuleMode::Default
+        };
         // EXTENDED-REAL GROUND CLASSIFICATION (generalized from bag absorption):
         // exact arithmetic BY CERTIFICATION, never
         // by evaluation. A GROUND composite (no variables, no Const anywhere) whose
@@ -1076,26 +1083,34 @@ impl Engine {
         // qualify (Const-independence).
         if matches!(e, Ex::Add(_) | Ex::Mul(_)) && children.iter().any(|c| matches!(c, Ex::Const)) {
             let is_mul = matches!(e, Ex::Mul(_));
+            // THE COLLAPSE LICENCE decides it: the member and the constant together, `C + g`
+            // or `C * g`, collapse to a constant wherever the licence lets that sub-bag
+            // collapse (`interval::collapse_licence`), and the bag keeps its other members. A
+            // product absorbs only a member certainly nonzero: `C * 0` is the exact 0, which a
+            // fitted constant would erase (the reparametrization must be a bijection).
             let absorbable = |m: &Ex| -> bool {
                 if matches!(m, Ex::Const) || !is_ground(m, &view) {
                     return false;
                 }
-                let flat = to_prefix(m, &bare);
-                let strs = self.resolve_seq(&flat, ctx);
-                match crate::interval::value_set(
-                    &strs,
-                    &self.operators,
-                    &crate::interval::Vs::reals(),
-                ) {
-                    Some(vs) => {
-                        let fin = vs.cls() == crate::interval::Class::Finite && vs.fin_pm();
-                        // Mul additionally needs g != 0: a zero factor collapses the
-                        // product, which `C' ` cannot represent. Certify only strictly
-                        // signed bounds; a straddle (or a NaN endpoint) fails closed.
-                        fin && (!is_mul || vs.lo > 0.0 || vs.hi < 0.0)
+                if is_mul {
+                    let strs = self.resolve_seq(&to_prefix(m, &bare), ctx);
+                    let signed = crate::interval::value_set(
+                        &strs,
+                        &self.operators,
+                        &crate::interval::Vs::reals(),
+                    )
+                    .is_some_and(|vs| vs.has_fin && !vs.nan && (vs.lo > 0.0 || vs.hi < 0.0));
+                    if !signed {
+                        return false;
                     }
-                    None => false,
                 }
+                let pair = if is_mul {
+                    crate::ac::expr::mul(vec![Ex::Const, m.clone()], &bare)
+                } else {
+                    crate::ac::expr::add(vec![Ex::Const, m.clone()], &bare)
+                };
+                let strs = self.resolve_seq(&to_prefix(&pair, &bare), ctx);
+                crate::interval::collapse_licence(&strs, &self.operators, mode)
             };
             let absorbed: Vec<bool> = children.iter().map(|c| absorbable(c)).collect();
             if absorbed.iter().any(|&b| b) {
@@ -1117,14 +1132,12 @@ impl Engine {
             .all(|c| matches!(c, Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E))
             && children.iter().any(|c| matches!(c, Ex::Const));
         if const_or_fin {
-            if lossy {
-                return Some(Ex::Const);
-            }
-            // THE CONSTANT-COLLAPSE CRITERION the mint reads (`interval::constant_collapse`),
-            // in the mode's semantics: `log(C)` and `acos(C)` are fitted constants wherever
-            // they are finite. Memoized per call beside the ground classes (the key holds a
-            // `<constant>`, so it never meets a ground key, and a tag past every token id keeps
-            // it apart from the NaN-family verdict of the same node).
+            // THE COLLAPSE LICENCE (`interval::collapse_licence`, the specification's 3.2 with
+            // 4.1), in the mode's values: `log(C)`, `acos(C)` and `pow(0, C)` are fitted
+            // constants wherever they are finite; permissive collapses without evidence.
+            // Memoized per call beside the ground classes (the key holds a `<constant>`, so it
+            // never meets a ground key, and a tag past every token id keeps it apart from the
+            // NaN-family verdict of the same node).
             let flat = to_prefix(e, &bare);
             let mut key = flat.clone();
             key.push(crate::tokens::Tok(u32::MAX));
@@ -1133,7 +1146,7 @@ impl Engine {
                 Some(v) => v,
                 None => {
                     let strs = self.resolve_seq(&flat, ctx);
-                    let v = crate::interval::constant_collapse(&strs, &self.operators, !real)
+                    let v = crate::interval::collapse_licence(&strs, &self.operators, mode)
                         .then_some(Ex::Const);
                     class_memo.borrow_mut().insert(key, v.clone());
                     v

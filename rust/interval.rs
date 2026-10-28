@@ -6316,6 +6316,54 @@ pub fn defined_measure_p_at(
     Some(best)
 }
 
+/// EVIDENCE (the specification's 4.1), defined here once: is `tokens` finite on a set of positive
+/// measure of its variables AND its `<constant>`s, each constant a dimension of its own, in the
+/// mode's values -- float64's with `f64` (`finite_cells`' float64 reading), else the reals', every
+/// point a cell holds read by THE TABLE (`with_table_points`)? `None`: undecided (the horizon or
+/// the budget ran out), which every reader takes as no evidence. `atanh(floor(x0))` has evidence
+/// on [0, 1); `asin(cosh(x0))`, finite only at 0, has none, nor has `(-1)^C`.
+pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
+    let top = tokens
+        .iter()
+        .filter_map(|t| var_index(t))
+        .max()
+        .map_or(0, |m| m + 1);
+    let mut k = 0usize;
+    let spelled: Vec<String> = tokens
+        .iter()
+        .map(|t| {
+            if t == "<constant>" {
+                k += 1;
+                format!("x{}", top + k - 1)
+            } else {
+                t.clone()
+            }
+        })
+        .collect();
+    let cells = || finite_cells(&spelled, &[], ops, 1, f64);
+    let found = if f64 {
+        cells()
+    } else {
+        with_table_points(cells)
+    };
+    found.map(|fc| !fc.cells.is_empty())
+}
+
+/// THE COLLAPSE LICENCE (the specification's 3.2 with 4.1), the one function the engine's constant
+/// fold reads: may a variable-free, `<constant>`-bearing expression collapse to a free
+/// `<constant>`? `L(C) -> C` holds in every mode -- the witness is L's own value wherever L is
+/// finite, and nothing is owed where it is not -- so the licence is EVIDENCE, in the mode's
+/// values. `pow(0, C)` collapses (0 for C > 0, 1 at 0, owed nothing where it is +inf), `log(C)`
+/// and `acos(C)` collapse, `(-1)^C` (finite only at the integers) does not. `permissive`
+/// collapses without evidence, one of its own simplifications (4.9).
+pub fn collapse_licence(tokens: &[String], ops: &Operators, mode: crate::engine::RuleMode) -> bool {
+    match mode {
+        crate::engine::RuleMode::Permissive => true,
+        crate::engine::RuleMode::Default => evidence(tokens, ops, true) == Some(true),
+        crate::engine::RuleMode::Real => evidence(tokens, ops, false) == Some(true),
+    }
+}
+
 /// THE CONSTANT-COLLAPSE CRITERION, the one both the mint and the engine's fold read: may a
 /// variable-free, `<constant>`-bearing expression collapse to a free `<constant>`?
 ///

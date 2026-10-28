@@ -1274,6 +1274,13 @@ model predictions.
   `(x0 - x1)/(x1 - x0) -> -1` is refused in `real` and `f64` (with x0 = x1 the left side has no
   value anywhere). A measure the cells cannot decide refuses `real` and `f64`, which both owe
   it, and not `permissive`, which does not.
+- **One collapse licence.** The engine collapses a constant expression to a fitted constant
+  exactly where it has evidence in the mode's values: it is finite on a set of positive measure
+  of its constants, and nothing is owed where it is not finite (the witness is the expression's
+  own value). `pow(0, C)` now collapses to `C` in `f64` and `real` (0 for C > 0, 1 at 0);
+  `(-1)^C`, finite only at the integers, does not. A sum or product absorbs a ground member by
+  the same licence, a product only a member certainly nonzero (`C * 0` stays 0). `permissive`
+  collapses without evidence.
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`
