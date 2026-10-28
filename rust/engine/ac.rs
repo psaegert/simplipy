@@ -120,6 +120,10 @@ fn is_ground(e: &Ex, view: &TokenView) -> bool {
     }
 }
 
+/// One RULE STEP of a simplify call: the fired rule's instance, `(lhs, rhs)` as prefix tokens --
+/// see [`Engine::ac_simplify_fires`].
+pub type RuleStep = (Vec<String>, Vec<String>);
+
 /// One SERVED rule: `(lhs, rhs, artifact index)` -- see [`Engine::ac_served_rules`].
 pub type ServedRule = (Vec<String>, Vec<String>, usize);
 
@@ -1367,6 +1371,46 @@ impl Engine {
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
         };
         Some(self.resolve_seq(&toks, &ctx))
+    }
+
+    /// Simplify in `mode` and return the RULE STEPS taken beside the answer: each fire's rule
+    /// instance, its left side as matched and its right side as substituted, as prefix tokens,
+    /// in firing order (`ac::rules::FireLog`; the search's fires included). F8 holds each one
+    /// to the mode's criterion; the deployed monitor reads them.
+    pub fn ac_simplify_fires(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        form: AcForm,
+        explore_budget: usize,
+        mode: RuleMode,
+    ) -> Option<(Vec<String>, Vec<RuleStep>)> {
+        let log = crate::ac::rules::FireLog::open();
+        let (ctx, best) = self.ac_simplify_ex_fold_sup(
+            tokens,
+            max_passes,
+            mode,
+            explore_budget,
+            Cx::folds_for(mode),
+            None,
+        );
+        let steps = log.take();
+        drop(log);
+        let fires = {
+            let view = self.view(&ctx);
+            let bare = Cx::bare(&view);
+            let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+            steps
+                .iter()
+                .map(|(l, r)| {
+                    (
+                        self.resolve_seq(&to_prefix(l, &bare), &ctx),
+                        self.resolve_seq(&to_prefix(r, &bare), &ctx),
+                    )
+                })
+                .collect()
+        };
+        Some((self.project(ctx, best, form, mode)?, fires))
     }
 
     /// Simplify in `mode` with a SUPPRESSION SET of artifact rule rows (rows of `mode`'s

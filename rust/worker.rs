@@ -1012,7 +1012,7 @@ pub fn equivalent_no_const_check(
         n_rows,
         challenges,
         seed,
-        false,
+        crate::engine::RuleMode::Real,
         min_informative,
     )?
     else {
@@ -1792,9 +1792,10 @@ const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
 /// it, columns the source does not read uniform on the horizon -- from a stream fixed by `seed`,
 /// until the floor is met; the rows already there are kept. A draw whose value in the mode is
 /// not finite (real's and permissive's read by the table where float64 reads a rounded pole,
-/// `hiprec::table_classes`) is skipped, and a top-up that exhausts its draws fails closed: in
-/// the reals `tan(atan2(x, 0))` has no value off x = 0, though the interval layer, which reads
-/// the pole of `tan` at a varying argument as a null set, certifies cells of x > 0.
+/// `hiprec::table_classes`) is skipped, and a top-up that exhausts its draws fails closed. First
+/// of all the source must have evidence (`interval::evidence`, the function the judge's policy
+/// reads): in the reals `tan(atan2(x, 0))` has none, its value undefined off x = 0, though the
+/// enclosure certifies cells of x > 0 (their points refute them).
 #[allow(clippy::too_many_arguments)]
 fn evidence_rows(
     source: &[String],
@@ -1805,15 +1806,22 @@ fn evidence_rows(
     n_rows: usize,
     min_informative: usize,
     seed: u64,
-    f64: bool,
+    mode: crate::engine::RuleMode,
 ) -> Option<Vec<Vec<f64>>> {
-    // PROVEN nowhere finite on positive measure over ALL of its variables and constants (the
-    // value set over the reals encloses every instance): no instance can hold a witness. An
-    // unanalyzable set over the reals proves nothing (`rootn` with an expression index, `harmonic`
-    // across its poles); the instances, their constants bound, are searched as usual.
-    if crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
-        .is_some_and(|v| !v.fin_pm())
-    {
+    let f64 = matches!(mode, crate::engine::RuleMode::Default);
+    // EVIDENCE IS ONE FUNCTION (`interval::evidence`, which the judge's policy reads too): a
+    // source without it over its variables and constants, in the mode's values, holds no witness
+    // in any instance. A variable-free source of constants reads the collapse licence, the same
+    // function in the mode (`interval::collapse_licence`: permissive collapses a constant
+    // without evidence, its named simplification, 4.9).
+    let constants_only =
+        !source.iter().any(|t| var_names.contains(t)) && source.iter().any(|t| t == "<constant>");
+    let licensed = if constants_only {
+        crate::interval::collapse_licence(source, ops, mode)
+    } else {
+        crate::interval::evidence(source, ops, f64) == Some(true)
+    };
+    if !licensed {
         return None;
     }
     let mut evidence = vec![false; n_rows];
@@ -2086,9 +2094,10 @@ impl<'s> SourceCtx<'s> {
         n_rows: usize,
         challenges: usize,
         seed: u64,
-        f64_range: bool,
+        mode: crate::engine::RuleMode,
         min_informative: usize,
     ) -> Result<Option<Self>, String> {
+        let f64_range = matches!(mode, crate::engine::RuleMode::Default);
         let tape = Tape::compile(source, ops, var_names)?;
         let n_const = tape.n_params;
         let combos = sign_combos(n_const);
@@ -2126,7 +2135,7 @@ impl<'s> SourceCtx<'s> {
             n_rows,
             min_informative,
             seed,
-            f64_range,
+            mode,
         ) else {
             return Ok(None);
         };
@@ -2469,7 +2478,6 @@ pub fn find_rule_with_lib(
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Result<Option<Vec<String>>, String> {
     let lane: Lane = lane.into();
-    let rescue = lane.rescue();
     // GUARD FIRST (BEFORE the all-constant short-circuit).
     let max_cand_len = match max_target {
         Some(mt) => simplified_length.min(mt + 1),
@@ -2647,7 +2655,7 @@ pub fn find_rule_with_lib(
         lib.n_rows,
         challenges,
         seed,
-        !rescue,
+        lane.0,
         min_informative,
     )?
     else {
@@ -2826,7 +2834,6 @@ pub fn judge_pair(
     lane: impl Into<Lane>,
 ) -> Result<Option<&'static str>, String> {
     let lane: Lane = lane.into();
-    let rescue = lane.rescue();
     let Some(sc) = SourceCtx::new(
         ops,
         source,
@@ -2835,7 +2842,7 @@ pub fn judge_pair(
         n_rows,
         challenges,
         seed,
-        !rescue,
+        lane.0,
         min_informative,
     )?
     else {

@@ -299,9 +299,10 @@ class TestCertificateCompletenessTowers:
         # x8/(x8/(x8^2 - x8)) -> x8^2 - x8 a.e. (row-56772 shape). Blocked before by
         # nfn's fail-closure on binary pow inside the reciprocal factor's spelling. The answer
         # factors to x8*(x8 - 1): true over the reals, and float64's rounding near x8 = 1 keeps
-        # it more than 8 units in the last place from the input's value, so the monitor
-        # refuses it in f64 (and passes it in real)
-        out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split(), expect_judge='VIOLATION')
+        # it more than 8 units in the last place from the input's value -- which f64 does not
+        # promise for a whole answer (F8: the engine's own algebra exact in the reals), so the
+        # monitor passes it in f64 as in real
+        out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split())
         assert judge_pair('/ x8 / x8 - pow x8 2 x8'.split(), list(out), rng(), mode='real',
                           engine=eng)[0] == 'OK'
         assert out == eng.simplify('- pow x8 2 x8'.split()), f'tower kept: {out}'

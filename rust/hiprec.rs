@@ -39,20 +39,23 @@ pub use astro_float::BigFloat as ArbFloat;
 /// Working precision in bits (refutations are confirmed at `2*P`).
 const P: usize = 1024;
 pub(crate) const RM: RoundingMode = RoundingMode::ToEven;
-/// Escalate a candidate only when it fails f64 on at most this fraction of the instance's
-/// binding rows (the rows where the source is finite). This is the SINGLE near-miss gate:
-/// it selects candidates that are close to the source on the finite evidence, and because
-/// `failing <= FRAC * binding <= FRAC * n_rows`, it also bounds the high-precision work per
-/// instance to a fraction of the X -- no separate absolute row cap is needed (a fixed cap
-/// sized for the 1024-row mine X wrongly rejected true rules on the 2048-row confirm X).
-/// Wide misses (plateau falsities) fail by huge margins, exceed the gate, and never escalate.
-/// The escalation cost stays bounded: only near-miss instances escalate at all.
+/// Read every failing row of a candidate by the table only when it fails f64 on at most this
+/// fraction of the instance's binding rows (the rows where the source is finite). This is the
+/// SINGLE near-miss gate: because `failing <= FRAC * binding <= FRAC * n_rows`, it bounds the
+/// high-precision work per instance to a fraction of the X -- no separate absolute row cap is
+/// needed (a fixed cap sized for the 1024-row mine X wrongly rejected true rules on the
+/// 2048-row confirm X). A wide miss (more failing rows) has `WIDE_MISS_ROWS` of them read: the
+/// gate bounds the work, never the verdict, as a pre-filter refuses only what the judge does.
 ///
 /// The gate counts EVALUATION POINTS: every row where the source is defined (finite or
 /// infinite) is a point of the denominator, and a failing infinite row is a failing point
 /// like a finite one. A pair with no variable has ONE point however many rows repeat it;
 /// "at most half the points, rounded up" then escalates it, at the cost of one row.
 pub const NEAR_MISS_FRAC: f64 = 0.5;
+
+/// The failing rows the table reads of a wide miss (more failing points than `NEAR_MISS_FRAC`
+/// allows), spread evenly over them: the gate bounds the work, not the verdict (`rescue`).
+pub const WIDE_MISS_ROWS: usize = 4;
 
 /// Verdict of one row at one precision. `Extend` = source nonfinite (domain-extendable),
 /// exactly `allclose_extends`' semantics lifted to `p` bits.
@@ -282,10 +285,12 @@ impl Drop for IsolationScope {
 }
 
 /// Is the disagreement at row `row` isolated: does it vanish where one variable moves off the
-/// point, on both sides (by 2^-20 of its magnitude, at least 2^-20)? Each side read by the table
-/// there. Both sides, so a disagreement at the edge of a band it holds on is no isolated one
-/// (`ceil(acosh(asin(x))) -> 1` differs at x = 1 and on (0.99961, 1]: above 1 the source has no
-/// value, below it the disagreement stays).
+/// point, on both sides, by P4's move (`table::isolation_move`, the judge's permissive criterion
+/// reads the same step)? Each side read by the table there. Both sides, so a disagreement at the
+/// edge of a band it holds on is no isolated one (`ceil(acosh(asin(x))) -> 1` differs at x = 1
+/// and on (0.99961, 1]: above 1 the source has no value, below it the disagreement stays). The
+/// mint is a pre-filter: whether a disagreement is isolated is the judge's to decide (P4), and
+/// this check only keeps the mint from refusing one the judge excuses.
 #[allow(clippy::too_many_arguments)]
 fn isolated_row(
     source: &[String],
@@ -305,7 +310,7 @@ fn isolated_row(
         .any(|v| {
             [1.0, -1.0].iter().all(|dir| {
                 let mut moved = point.clone();
-                moved[v] += dir * moved[v].abs().max(1.0) * (2.0f64).powi(-20);
+                moved[v] = crate::table::isolation_move(moved[v], *dir);
                 let cols: Vec<Vec<f64>> = moved.iter().map(|&x| vec![x]).collect();
                 matches!(
                     table_row(
@@ -381,10 +386,21 @@ pub fn rescue(
         binding = binding.min(1);
     }
     let gate = (NEAR_MISS_FRAC * binding as f64).ceil() as usize;
-    if failing.is_empty() || failing.len() > gate {
-        return false; // not a near miss (or nothing to rescue): keep the f64 verdict
+    if failing.is_empty() {
+        return false; // nothing to rescue: keep the f64 verdict
     }
-    for &r in &failing {
+    // THE GATE BOUNDS THE WORK, NOT THE VERDICT. Past it (a wide miss) the table reads an even
+    // spread of `WIDE_MISS_ROWS` failing rows, and the pair is refused at the first confirmed
+    // disagreement; with none confirmed it passes on, and the judge decides. A wide miss of
+    // float64 is no disagreement of the reals: `floor(erf(cosh(x))) -> 0` fails float64 wherever
+    // erf rounds to 1 (|x| > 2.46, most rows) and holds in the reals.
+    let rows: Vec<usize> = if failing.len() > gate {
+        let k = WIDE_MISS_ROWS.min(failing.len());
+        (0..k).map(|i| failing[i * failing.len() / k]).collect()
+    } else {
+        failing
+    };
+    for &r in &rows {
         // a row the table cannot read says nothing about the true values and is skipped, as the
         // judge skips a point it cannot resolve: the mint refuses only what the judge refuses
         if let Some(RowVerdict::Fail) = table_row(

@@ -1153,7 +1153,8 @@ model predictions.
   with a variable of its own) the engine holding the file must reach the rule's right side or something
   cheaper; a rule another rule takes from its own instance, ending dearer, ships and never
   decides an answer. The mine lists such rules in the sidecar (`gates.dead`) and on its
-  final-gate line, and drops them (below); `verify-mine` fails on a file holding one. Under file-order matching the gate lists
+  final-gate line, and refuses them where it first considers them (below); `verify-mine` fails
+  on a file holding one. Under file-order matching the gate lists
   `sin(acos(tanh(_0))) -> 1/cosh(_0)` in the reduced mine's `real` and `permissive` files
   (the only rule it lists); it lists none now, and mined again the reduced mine writes the
   same three files.
@@ -1351,7 +1352,10 @@ model predictions.
   14170.787488305119). A nonzero value below the normal doubles stays as written
   (`exp(-800)` is no 0), as does a node the table cannot decide at its precision
   (`mod(sin(1), 1e300)`). Measured on 1,500 rows each, permissive's ms per row rises 3% (t81
-  3.37 to 3.48, predictions 14.4 to 14.8).
+  3.37 to 3.48, predictions 14.4 to 14.8). A ground subtree is valued whole and rounded once: no
+  literal lands as a float inside a ground node, so `14.81... - cos(c)`, `c` a product of ten
+  16-digit literals, is 14.81738943654907, the double nearest to its value 14.8173894365490680
+  (rounding the product first gave 14.817389436549217).
 - **`permissive` serves real's values up to float resolution.** A rule holds in `permissive`
   where it agrees with real's values up to 8 units in the last place, except at isolated
   points, and no longer merely where float64 evaluates it alike: `tanh(cosh(-10)) -> 1` holds
@@ -1407,15 +1411,22 @@ model predictions.
   killed at `?`, at x = +-inf, which is no data) and at `_` in `permissive`, which binds a slot
   to real values only. A rule without slots has no rung and passes through, its judgment the
   mine's. `promote(judge=)` takes the mine's judge.
-- **The monitor judges with the judge.** `monitor_ruleset` judges each rewrite of the deployed
-  engine as the judge judges the rule `input -> output`, in the engine's default mode (`f64`):
-  its own high-precision evaluator, which read the reals with IEEE's signed zeros, its folds
-  and its tolerances are gone, a tagged output is read through the engine, and a rewrite the
-  judge cannot decide (an undecided measure among them) is unscored. On the acj-4 engine with
-  no rules, 186 of a 223-row corpus are rewritten; 6 are refused in `f64`, which holds a
-  rewrite to float64's values: `tan(x0 + pi) -> tan(x0)` (float64's pi keeps them apart by
-  more than 8 units in the last place) and `(-x0)^(-1/2) -> 1/(-x0)^(1/2)` (+inf against -inf
-  at x0 = 0) among them; 7 are undecided. Its poison self-test catches all five poisons.
+- **The monitor judges with the judge, by what a whole answer promises.** `monitor_ruleset`
+  judges each rewrite of the deployed engine as the judge judges the rule `input -> output`, in
+  the engine's default mode (`f64`): its own high-precision evaluator, which read the reals with
+  IEEE's signed zeros, its folds and its tolerances are gone, a tagged output is read through
+  the engine, and a rewrite the judge cannot decide is unscored. A whole answer is held to
+  what `f64` promises for one: every rule step the engine took (each fire's rule instance,
+  `_core.Engine.ac_simplify_fires`) licensed in the mode, and the rewrite licensed as a whole
+  or, the engine's own algebra being exact, true in the reals with float64's disagreements what
+  rounding does, never a zero's sign or an infinity gained or lost. On the acj-4 engine with no
+  rules, 186 of a 223-row corpus are rewritten: 2 are refused, both the engine's own
+  (`1/(0 - x0^4) -> -1/x0^4` turns +inf into -inf at x0 = 0, the sign of a zero;
+  `(-x0)^(-1/2) -> 1/(-x0)^(1/2)` loses the value at 0), and 8 are undecided;
+  `tan(x0 + pi) -> tan(x0)`, exact, is no longer refused. With the acj-4 `f64` file, 189 are
+  rewritten and one more refused, through the step `sin(acos(_0)) -> cos(asin(_0))`, which
+  does not hold in `f64` (at 1, 0 against 6.1e-17). Its poison self-test catches all five
+  poisons.
 - **The mint refuses only what the judge refuses.** A pre-filter stricter than the judge leaves
   a licensed completion unmined, and the reduced length-4 mine's `real` and `permissive` files
   lacked 16 and 25. A row the table cannot read at any affordable precision is skipped, as the
@@ -1428,11 +1439,38 @@ model predictions.
   isolated point is excused at the special points, at the exceptional points and on a sampled
   row that a move of one variable clears (`ceil(|sin(x)|) -> 1` differs at x = k*pi alone),
   as permissive's judge excuses it.
-- **A rule the engine never fires is dropped.** The mine's liveness gate drops a rule the engine
-  holding the file never fires, listed under `gates.dead`, where it recorded it: in
-  `permissive`, whose inverse pairs cancel ignoring the branch, `abs(atanh(tanh(_0))) ->
-  acosh(cosh(_0))` meets `abs(x0)` before it can match. Dropping a rule that never fires
-  changes no answer.
+- **A wide miss is read, not refused.** The mint read a near miss's failing rows by the table
+  only where float64 failed on at most half of them and refused the rest unread, stricter than
+  the judge: `floor(erf(cosh(x))) -> 0` fails float64 wherever erf rounds to 1 (|x| > 2.46, most
+  rows) and holds in the reals. Past the gate the table now reads four of the failing rows,
+  spread over them, and the mint refuses at the first confirmed disagreement; the gate bounds
+  the work, not the verdict.
+- **Evidence is one function.** The interval layer's certificate confirms a cell at points read
+  in the mode's values (its centre and three drawn in it, by the table in the reals, by the
+  f64 kernels in `f64`), and the mint reads the same function for a source as the judge's
+  evidence policy does for a rule: the enclosure read `tan` of `atan2(x, 0)`, constant pi/2,
+  as a varying argument's pole and certified cells of x > 0, so the policy licensed
+  `tan(atan2(x, 0)) -> nan` where the mint found no evidence; both refuse it now in `real` and
+  `permissive`.
+- **P4's step is defined once.** Permissive's judge excuses a disagreement where a `?` slot's
+  move off the point by 2^-20 of its magnitude (at least 2^-20) clears it in each direction,
+  read from the core (`table::ISOLATION_STEP`); it moved by 1e-6 and took one direction. The
+  mint's pre-filter moves its rows by the same step.
+- **What the engine does itself is refused where the mine first considers it.** The per-length
+  judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
+  ground fact the engine folds) and a pick that does not fire on its own generic instances with
+  the length's picks installed beside the mode's rules (another rule, or the mode's own
+  simplification, takes the instance first: in `permissive`, whose inverse pairs cancel
+  ignoring the branch, `abs(atanh(tanh(_0))) -> acosh(cosh(_0))` meets `abs(x0)` before it can
+  match), and the scan goes on to the source's next candidate. The final gate checks both
+  (`gates.preempted`, `gates.dead`) and drops nothing.
+- **The overlap completion runs to its fixpoint.** Each round reads the set the overlap gate
+  reads, the final gate settled first, and offers the completions the mode licenses there; a
+  completion it did not license is asked again on the next round's set, and one the mint refused
+  is offered again once the set has moved (the mint's mark to beat is the set's answer). The
+  pass ends when a round offers or certifies nothing (a safety cap of 32 rounds; it was 3).
+  `1/atanh(ceil(x)) -> 0` and `sinh(acosh(1/x)) -> tan(acos(x))`, which the reduced mine's
+  `permissive` file lacked, are completed.
 - **The gates ask `licensed`.** The mine's completion step offers, its overlap gate demands,
   and its final gate and `verify-mine` keep only what `verify.licensed` passes in the mode: the
   judge's tier and the named policies, each read from its one place (evidence, the constant

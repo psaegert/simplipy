@@ -1737,3 +1737,34 @@ def test_the_multi_constant_fit_is_the_same_on_every_blas_kernel() -> None:
         outs.add(out)
     assert len(outs) == 1, outs
     assert '[0.0, 0.0]' in outs.pop()
+
+
+# ------------------------------------------------------------------------------------------
+# The monitor reads F8: each rule step in the mode, the engine's own algebra exact in the reals.
+# ------------------------------------------------------------------------------------------
+def test_the_monitor_holds_each_rule_step_to_the_mode() -> None:
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    eng = SimpliPyEngine(operators=ops, rules=[(('sin', 'acos', '?0'), ('cos', 'asin', '?0'))])
+    out, fires = eng._core.ac_simplify_fires(['sin', 'acos', 'x0'], rule_mode='default')
+    assert fires == [(['sin', 'acos', 'x0'], ['cos', 'asin', 'x0'])], fires
+    # true in the reals, and not in f64 (at 1: 0 against cos(fl(pi/2)) = 6.1e-17): the step
+    verdict, detail = judge_pair(['sin', 'acos', 'x0'], out, engine=eng)
+    assert verdict == 'VIOLATION' and 'the step' in detail, detail
+    assert judge_pair(['sin', 'acos', 'x0'], out, engine=eng, mode='real')[0] == 'OK'
+
+
+def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
+    # F8: no promise of 8 units in the last place for a whole answer, only the engine's algebra
+    # exact in the reals; a zero's sign is float64's own event and is held (F7)
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    eng = SimpliPyEngine(operators=ops, rules=[])
+    for src in ('/ x0 / x0 - pow x0 2 x0', 'tan + x0 np.pi'):
+        out = eng.simplify(src.split())
+        assert judge_pair(src.split(), out, engine=eng)[0] == 'OK', (src, out)
+    src = 'inv + 0 neg pow x0 4'.split()
+    verdict, detail = judge_pair(src, eng.simplify(src), engine=eng)
+    assert verdict == 'VIOLATION' and 'INF-CHANGE' in detail, detail

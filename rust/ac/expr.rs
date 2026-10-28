@@ -3212,8 +3212,8 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
         }
     };
     // The coefficient LANDS on its key here (permissive's ρ, [`land`]); a literal key is a
-    // product of literals, which `mul` keeps exact.
-    let c = if matches!(key, Ex::Num(_)) {
+    // product of literals, which `mul` keeps exact, and a ground key a ground term.
+    let c = if matches!(key, Ex::Num(_)) || in_ground([&key], cx) {
         c
     } else {
         land(c, cx)
@@ -3957,8 +3957,12 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         out.push(Ex::Const);
     } else if !acc.is_zero() {
         // The constant term LANDS beside other terms here (permissive's ρ, [`land`]); a sum
-        // of literals alone stays exact.
-        let acc = if out.is_empty() { acc } else { land(acc, cx) };
+        // of literals alone stays exact, and a sum of ground terms.
+        let acc = if out.is_empty() || in_ground(&out, cx) {
+            acc
+        } else {
+            land(acc, cx)
+        };
         out.push(Ex::Num(acc));
     } else if owes_zero && !out.is_empty() && !out.iter().any(|t| signed_zero_null(t, true, cx)) {
         // Every remaining term may be `-0` on a region: the zero term stays (`ceil(x1) + 0`), so
@@ -5300,8 +5304,8 @@ fn merge_e_powers(out: &mut Vec<Ex>, cx: &Cx) -> bool {
 /// its candidates through it, so a priced product is exactly the product built.
 fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     // The coefficient LANDS beside the other factors here (permissive's ρ, [`land`]); a
-    // product of literals alone stays exact.
-    if !out.is_empty() {
+    // product of literals alone stays exact, and a product of ground factors.
+    if !out.is_empty() && !in_ground(&out, cx) {
         coeff = land(coeff, cx);
     }
     // CANONICAL SIGN ORIENTATION for `Mul[-1, Add[S]]`:
@@ -9336,8 +9340,11 @@ pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
-    // [`land`]); a power of two literals folds exactly or stays as written.
-    let (base, exp) = if matches!(base, Ex::Num(_)) != matches!(exp, Ex::Num(_)) {
+    // [`land`]), where that one is not ground; a power of two literals folds exactly or stays
+    // as written.
+    let (base, exp) = if matches!(base, Ex::Num(_)) != matches!(exp, Ex::Num(_))
+        && !in_ground([&base, &exp], cx)
+    {
         (land_operand(base, cx), land_operand(exp, cx))
     } else {
         (base, exp)
@@ -9954,6 +9961,10 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
 /// the walk holds prints the codeword it is priced at. It moves a value to one of the two floats
 /// around it, less than an ulp, inside permissive's licence; it never creates an infinity or a
 /// zero (non-finite values refuse, and both floats around a nonzero value are nonzero).
+///
+/// NO LITERAL LANDS INSIDE A GROUND NODE ([`in_ground`]): a ground subtree is valued whole by the
+/// table and written as one float, rounded once (P3, the engine's ground fold), so
+/// `14.81 - cos(c)` with `c` a product of ten literals reads the cosine of the exact product.
 #[inline]
 pub fn land(r: Rat, cx: &Cx) -> Rat {
     if !cx.permits(Permissive::LiteralToFloat) {
@@ -9963,6 +9974,15 @@ pub fn land(r: Rat, cx: &Cx) -> Rat {
         Some(s) => s,
         None => r,
     }
+}
+
+/// Does a literal land among `others` inside a GROUND node: are they all ground (no variable,
+/// wildcard or `<constant>`)? Then it does not land ([`land`]). Asked in permissive only.
+fn in_ground<'a>(others: impl IntoIterator<Item = &'a Ex>, cx: &Cx) -> bool {
+    cx.permits(Permissive::LiteralToFloat)
+        && others
+            .into_iter()
+            .all(|e| !e.has_measure_space(cx.view) && !e.contains_wildcard(cx.view))
 }
 
 /// [`land`] on a literal operand; any other operand is returned as it is.
@@ -10552,8 +10572,8 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         let (b, e) = (it.next().expect("base"), it.next().expect("exponent"));
         return pow_spelled(b, e, cx);
     }
-    // A literal argument LANDS here (permissive's ρ, [`land`]).
-    let args: Vec<Ex> = if cx.permits(Permissive::LiteralToFloat) {
+    // A literal argument LANDS here (permissive's ρ, [`land`]), unless the call is ground.
+    let args: Vec<Ex> = if cx.permits(Permissive::LiteralToFloat) && !in_ground(&args, cx) {
         args.into_iter().map(|a| land_operand(a, cx)).collect()
     } else {
         args

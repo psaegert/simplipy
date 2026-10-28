@@ -196,8 +196,8 @@ def test_pi_and_e_are_numbers_of_a_lattice_bag(bare, mode):
     assert s('min x0 max np.pi 4') == s('min x0 4')
     # a rational that close to pi is decided by the enclosure
     assert s('max np.pi 3.1415926535897932') == 'np.pi'
-    # (permissive reads a literal at its float, 3.141592653589793, which is below pi)
-    assert s('min np.pi 3.1415926535897933') == ('np.pi' if mode == 'real' else '3.141592653589793')
+    # (permissive values a ground node exactly and rounds it once, P3: the minimum is pi)
+    assert s('min np.pi 3.1415926535897933') == 'np.pi'
     # the dual bag is absorbed through the same order: min(e, x0) <= e < pi
     assert s('max np.pi min np.e x0') == 'np.pi'
 
@@ -718,7 +718,9 @@ def test_a_ground_lattice_bag_folds_to_its_cheapest_equal_member(bare, mode):
     assert s('max cosh 1 1.5430806348152437') == 'cosh 1'
     assert s('max sin 1 0.5') == 'sin 1' and s('min sin 1 0.5') == '/ 1 2'
     assert s('min sin 1 tan 1') == 'sin 1'
-    assert s('max np.pi 3.1415926535897933') == 'np.pi'
+    # f64 reads the literal at its float, pi's; permissive values the bag exactly, the literal
+    # above pi, and writes its float once
+    assert s('max np.pi 3.1415926535897933') == ('np.pi' if mode == 'f64' else '3.141592653589793')
     # a NaN member makes the bag NaN
     assert s('max sin 1 log -1') == 'float("nan")'
 

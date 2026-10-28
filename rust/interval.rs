@@ -6451,14 +6451,49 @@ pub fn defined_measure_p_at(
 /// point a cell holds read by THE TABLE (`with_real_reading`)? `None`: undecided (the horizon or
 /// the budget ran out), which every reader takes as no evidence. `atanh(floor(x0))` has evidence
 /// on [0, 1); `asin(cosh(x0))`, finite only at 0, has none, nor has `(-1)^C`.
+///
+/// A certified cell is confirmed at points in the mode's values (`confirmed_cell`): the enclosure
+/// reads `tan` of a varying argument's pole as a null set, so it certifies cells of x > 0 for
+/// `tan(atan2(x, 0))`, which has no value in the reals off x = 0 (`atan2(x, 0)` is pi/2 there).
+/// The mint reads this function for its sources (`worker::evidence_rows`), the judge's policy for
+/// rules (`verify.policy_refusals`): one answer.
 pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
+    let spelled = constants_as_variables(tokens);
+    // the first certified cell, and only where its points refute it, a few more
+    for want in [1, EVIDENCE_CELLS] {
+        let fc = finite_cells(&spelled, &[], ops, want, f64)?;
+        if fc.cells.is_empty() {
+            return Some(false);
+        }
+        if fc
+            .cells
+            .iter()
+            .any(|cell| confirmed_cell(&spelled, &fc.vars, cell, ops, f64))
+        {
+            return Some(true);
+        }
+        if fc.cells.len() < want {
+            break;
+        }
+    }
+    Some(false)
+}
+
+/// The certified cells `evidence` confirms at points, at most.
+const EVIDENCE_CELLS: usize = 4;
+
+/// The points of a cell `confirmed_cell` reads, drawn in it.
+const CELL_POINTS: usize = 4;
+
+/// `tokens` with each `<constant>` a variable of its own (`x<top + k>`, past the last variable).
+fn constants_as_variables(tokens: &[String]) -> Vec<String> {
     let top = tokens
         .iter()
         .filter_map(|t| var_index(t))
         .max()
         .map_or(0, |m| m + 1);
     let mut k = 0usize;
-    let spelled: Vec<String> = tokens
+    tokens
         .iter()
         .map(|t| {
             if t == "<constant>" {
@@ -6468,8 +6503,81 @@ pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
                 t.clone()
             }
         })
+        .collect()
+}
+
+/// Is a certified cell finite at its points in the mode's values (THE TABLE: float64's kernels with
+/// `f64`, else the reals at the first rung that reads the point)? Points drawn in it (a fixed
+/// stream), every one the table reads finite, at least one read. Drawn, not placed: a cell is
+/// certified finite almost everywhere, and its centre may be the null set (`1/x` over
+/// [-64, 64] at 0).
+fn confirmed_cell(
+    tokens: &[String],
+    vars: &[String],
+    cell: &[(f64, f64)],
+    ops: &Operators,
+    f64: bool,
+) -> bool {
+    let names: Vec<String> = {
+        let mut v: Vec<String> = tokens
+            .iter()
+            .filter(|t| var_index(t).is_some())
+            .cloned()
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let arity: std::collections::HashMap<String, u8> = tokens
+        .iter()
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
         .collect();
-    finite_cells(&spelled, &[], ops, 1, f64).map(|fc| !fc.cells.is_empty())
+    let Ok(e) = crate::table::Expr::compile(tokens, &names, &arity) else {
+        return false;
+    };
+    let mut rng = crate::fit::Rng::new(0xE71D_E7CE);
+    let mut read = 0usize;
+    // a side the horizon leaves open is read near the closed one (a cell of `1/x` reaches -inf)
+    let span = |&(lo, hi): &(f64, f64)| match (lo.is_finite(), hi.is_finite()) {
+        (true, true) => (lo, hi),
+        (true, false) => (lo, lo + 4.0 * lo.abs().max(1.0)),
+        (false, true) => (hi - 4.0 * hi.abs().max(1.0), hi),
+        (false, false) => (-4.0, 4.0),
+    };
+    for _ in 0..CELL_POINTS {
+        let point: Vec<f64> = names
+            .iter()
+            .map(|n| {
+                match vars
+                    .iter()
+                    .position(|v| v == n)
+                    .and_then(|d| cell.get(d))
+                    .map(span)
+                {
+                    Some((lo, hi)) => lo + (hi - lo) * rng.next_f64(),
+                    None => 1.7,
+                }
+            })
+            .collect();
+        let finite = if f64 {
+            e.eval_f64(&point).map(|(v, _)| v.is_finite())
+        } else {
+            let env: Vec<_> = point.iter().map(|&x| crate::table::val_of_f64(x)).collect();
+            [50, 120, 400]
+                .iter()
+                .find_map(|&dps| e.eval_real(&env, dps).and_then(|o| o.value))
+                .map(|v| {
+                    let (undef, inf) = crate::table::class_of(&v);
+                    !undef && inf.is_none()
+                })
+        };
+        match finite {
+            Some(false) => return false,
+            Some(true) => read += 1,
+            None => {}
+        }
+    }
+    read > 0
 }
 
 /// THE COLLAPSE LICENCE (the specification's 3.2 with 4.1), the one function the engine's constant

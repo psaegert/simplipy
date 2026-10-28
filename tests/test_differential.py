@@ -628,3 +628,41 @@ def test_a_decimal_past_the_exact_readers_is_judged() -> None:
     refused as unsupported."""
     v = verify_rule('* 2.827881176741212e-244756 x0'.split(), '* x0 2.827881176741212e-244756'.split())
     assert v['verdict'] == 'CERTIFIED', v
+
+
+# ------------------------------------------------------------------------------------------
+# P4 in one place, the wide miss, one evidence.
+# ------------------------------------------------------------------------------------------
+def test_p4_is_the_judges_criterion_and_reads_both_sides() -> None:
+    """P4: permissive may differ from real at an isolated point, where the two sides agree on
+    both sides of it. The move off the point is defined once, in the core, and the judge's
+    permissive criterion reads it (the mint's pre-filter moves its rows by the same step)."""
+    from simplipy import _core
+    assert _contract.ISOLATION_STEP == _core.TABLE_ISOLATION_STEP == 2.0 ** -20
+    # differs at pi/2 + k*pi alone
+    assert admits('ceil abs cos x0', '1', 'permissive')
+    assert not admits('ceil abs cos x0', '1', 'real')
+    # differs at 1 and on (0.99961, 1]: below 1 the disagreement stays, so it is no isolated one
+    assert not admits('ceil acosh asin x0', '1', 'permissive')
+
+
+@pytest.mark.parametrize('mode', ['real', 'permissive'])
+def test_a_wide_miss_is_read_not_refused(mode) -> None:
+    # float64 rounds erf(cosh(x)) to 1 wherever |x| > 2.46, most of the mint's rows; the reals keep
+    # it below 1, and the mint reads a spread of the failing rows by the table
+    assert admits('floor erf cosh x0', '0', mode), judged('floor erf cosh x0', '0')
+    assert mint_accepts('floor erf cosh x0', '0', mode)
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_the_mint_and_the_policy_read_one_evidence(mode) -> None:
+    # off x = 0, tan(atan2(x, 0)) is tan(pi/2): no value in the reals, 1.633e16 in float64. The
+    # enclosure read the constant pi/2 as a varying argument's pole; the evidence function reads
+    # its certified cells at points, for the mint's sources and the judge's policy alike
+    from simplipy import _core
+    tokens = 'tan atan2 x0 0'.split()
+    assert _core.table_evidence(tokens, dict(_contract.ARITY), mode == 'f64') is (mode == 'f64')
+    got = licensed(tokens, ['float("nan")'], mode, bare(),
+                   detail=judged('tan atan2 x0 0', 'float("nan")'))
+    assert ('evidence' in got['refused_by']) is (mode != 'f64'), got
+    assert not mint_accepts('tan atan2 x0 0', 'float("nan")', mode)

@@ -663,6 +663,11 @@ def saturation_verdict(tl, tr, env_mp):
 #: 2 x 4 x 1 = 8.
 REALISED_ULP = int(_table.TABLE_REALISED_ULP) if _TABLE_OK else 8
 
+#: P4's move (`table::ISOLATION_STEP`): a disagreement is isolated where the two sides agree when a
+#: slot moves off the point by this fraction of its magnitude (at least this much), in each
+#: direction. Defined once, in the core; the mint's pre-filter moves its rows by it too.
+ISOLATION_STEP = float(_table.TABLE_ISOLATION_STEP) if _TABLE_OK else 2.0 ** -20
+
 
 def _ulp_gap(a, b):
     """ULP distance between two finite doubles of the same sign (the two zeros as one); inf
@@ -679,6 +684,18 @@ def compare_deployed_realised(cl, cr):
     4 at 0 ULP, 310 at 1, then 5/2/4/0/2/2 at 2..7 and nothing until 57, so every bound in
     [8, 56] gives the same partition."""
     return _table.table_f64_agree(_num(cl), _num(cr))
+
+
+def _f64_kind(dv, a, b):
+    """The kind of a float64 disagreement (`compare_deployed_realised`'s `dv` between the doubles
+    `a` and `b`), as F8 reads it: a class change as it is, else SIGN where a zero meets a nonzero
+    or the signs differ, else ROUNDING."""
+    if dv != 'REAL-CHANGE':
+        return dv
+    a, b = float(a), float(b)
+    if (a == 0) != (b == 0) or math.copysign(1.0, a) != math.copysign(1.0, b):
+        return 'SIGN'
+    return 'ROUNDING'
 
 
 def compare_deployed_structural(cl, cr):
@@ -2217,6 +2234,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # The REALISATION axis, recorded with no gate (`dep_bad`), and ENGINE-MISALIGN's
     # structural divergence where the contract agrees (`dep_div`).
     dep_bad, dep_div, dep_seen, dep_out_of_range = [], [], [False], [0]
+    dep_kinds = set()
     resolved_pts = attempted_pts = 0
 
     def deployed(tl_env, v, point, all_real, snapped, out):
@@ -2238,6 +2256,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             dv = compare_deployed_realised(_dcl, _dcr)
             if dv != 'eq':
                 out['bad'].append((dv, point))
+                out['kinds'].add(_f64_kind(dv, _dl, _dr))
+            elif _dl == 0 and _dr == 0 and math.copysign(1.0, _dl) != math.copysign(1.0, _dr):
+                out['kinds'].add('ZERO-SIGN')
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
             # a few-ULP rounding is no divergence
             if compare_deployed_structural(_dcl, _dcr) != 'eq' and v in (None, 'eq') \
@@ -2249,7 +2270,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     def lane():
         return {'a': [], 'atom': [], 'ext': [], 'c': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0,
-                'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False}
+                'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
+                'kinds': set()}
 
     def judge_point(acc, v, point, kind, real_valued, where):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
@@ -2294,6 +2316,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         if not has_cl or acc['finite_f64']:
             dep_bad.extend(acc['bad'])
             dep_div.extend(acc['div'])
+            dep_kinds.update(acc['kinds'])
         dep_seen[0] = dep_seen[0] or acc['seen']
         dep_out_of_range[0] += acc['oor']
         if not owed(acc):
@@ -2760,26 +2783,34 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return not in_range[0] and compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq'
 
     def disagrees(key, values):
+        """Do the two sides disagree at `values` by permissive's reading: not equal, and not
+        within float resolution of each other (an exact reading the rungs cannot settle, as
+        `tanh(sinh(atanh(x)))` against `tanh(tan(asin(x)))` just below 1, is read at float
+        resolution; a side the table cannot read there disagrees)."""
         env = event_env(key, values)
         v2, _ = _point_verdict(tl, tr, env)
         if v2 == 'eq':
             return False
-        return v2 is None or not float_close(env)
+        return not float_close(env)
 
     def isolated(key, values):
-        depends = []
+        """P4, the one place it is decided: the disagreement is isolated where a slot's move off
+        the point by `ISOLATION_STEP` makes the two sides agree in EACH direction, and only `?`
+        slots move it at all (a slot whose move in either direction removes it is one it
+        depends on; a `_` slot bound to a constant subexpression would hold it on positive
+        measure)."""
+        both, either = [], []
         for n, x in values.items():
             x = x.mpf() if hasattr(x, 'mpf') else mpf(x)
             if misnan(x) or misinf(x):
                 return False
-            for alt in (x * (1 + mpf(10) ** -6) + mpf(10) ** -9,
-                        x * (1 - mpf(10) ** -6) - mpf(10) ** -9):
-                moved = dict(values)
-                moved[n] = alt
-                if not disagrees(key, moved):
-                    depends.append(n)
-                    break
-        return bool(depends) and all(nvars.get(n) == '?' for n in depends)
+            step = mpf(ISOLATION_STEP) * max(1, abs(x))
+            agree = [not disagrees(key, dict(values, **{n: x + d})) for d in (step, -step)]
+            if any(agree):
+                either.append(n)
+            if all(agree):
+                both.append(n)
+        return bool(both) and all(nvars.get(n) == '?' for n in either)
 
     def excused(event):
         # a preimage's values are its substituted sides' (the heads at their level); whether
@@ -2807,6 +2838,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         base['unrealised_coincidence'] = correlated_f64
     if dep_bad:
         base['unrealised'] = dep_bad[:3]
+    if dep_kinds:
+        # what float64's disagreements are (F8): ROUNDING (finite, one sign), SIGN (a zero against
+        # a nonzero, or opposite signs), a class change (EXT, SHRINK, INF-CHANGE), and ZERO-SIGN
+        # (the two zeros, which F6 reads as one, of opposite signs: F7)
+        base['f64_kinds'] = sorted(dep_kinds)
 
     def verdict(name, **extra):
         out = dict(base, verdict=name, **extra)

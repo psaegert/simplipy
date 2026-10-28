@@ -676,6 +676,35 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
+    /// `ac_simplify_in_mode` with the RULE STEPS it took (`Engine::ac_simplify_fires`):
+    /// `(answer, [(lhs instance, rhs instance)])`, each fire's rule instance as prefix tokens,
+    /// in firing order. Contracts as `ac_simplify_in_mode`.
+    #[pyo3(signature = (tokens, max_passes=48, form="explicit", explore_budget=None, *, rule_mode))]
+    #[allow(clippy::type_complexity)]
+    fn ac_simplify_fires(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        max_passes: usize,
+        form: &str,
+        explore_budget: Option<usize>,
+        rule_mode: &str,
+    ) -> PyResult<(Vec<String>, Vec<(Vec<String>, Vec<String>)>)> {
+        let explore_budget = explore_budget_of(explore_budget);
+        let mode = parse_rule_mode(rule_mode)?;
+        if tokens.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let form = parse_ac_form(form)?;
+        py.detach(|| {
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
+                .ac_simplify_fires(&tokens, max_passes, form, explore_budget, mode)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })
+    }
+
     /// The search driven directly (a test surface): the deterministic chain runs to its
     /// fixpoint, then the search proposes expansion moves through the same certified
     /// machinery and accepts only endpoints STRICTLY below in the serve ordering
@@ -2506,6 +2535,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
     m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
     m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;
+    m.add("TABLE_ISOLATION_STEP", table::ISOLATION_STEP)?;
     m.add("MissingModeSet", m.py().get_type::<MissingModeSet>())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;

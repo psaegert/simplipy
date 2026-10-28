@@ -46,6 +46,17 @@ class Engine:
         *,
         rule_mode: str,
     ) -> list[str]: ...
+    #: `ac_simplify_in_mode` with the rule steps it took: (answer, [(lhs instance, rhs
+    #: instance)]), each fire's rule instance as prefix tokens, in firing order (F8's steps).
+    def ac_simplify_fires(
+        self,
+        tokens: list[str],
+        max_passes: int = ...,
+        form: Literal["tagged", "explicit"] = ...,
+        explore_budget: int | None = ...,
+        *,
+        rule_mode: str,
+    ) -> tuple[list[str], list[tuple[list[str], list[str]]]]: ...
     def ac_simplify_infix_in_mode(
         self,
         tokens: list[str],
@@ -356,6 +367,8 @@ class TableExpr:
         self, env: list[tuple[str, str, str]], dps: int
     ) -> tuple[str, str, str] | None: ...
     def eval_f64(self, env: list[float]) -> tuple[float, bool]: ...
+    #: `eval_f64` at many points (`cols[i]` the i-th name's value per row): values, in-range flags.
+    def eval_f64_rows(self, cols: list[list[float]]) -> tuple[list[float], list[bool]]: ...
 #: The table's real reading of a literal token: (kind, a, b), or None.
 def table_literal_real(token: str) -> tuple[str, str, str] | None: ...
 #: The table's f64 reading of a literal token: the nearest double, or None.
@@ -371,6 +384,8 @@ def table_f64_structural(a: float, b: float) -> str: ...
 #: The units in the last place between two doubles; None across a sign change.
 def table_ulp_gap(a: float, b: float) -> int | None: ...
 TABLE_REALISED_ULP: int
+#: P4's move (`table::ISOLATION_STEP`): the fraction of a slot's magnitude it moves off a point.
+TABLE_ISOLATION_STEP: float
 #: The f64 range event (`rust/numeric.rs`): did the operation `op` on `args` overflow or
 #: underflow to `value`? None for an operator outside the table. The one definition the
 #: miner's scan and `simplipy.verify` share.

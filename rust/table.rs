@@ -1908,6 +1908,19 @@ pub fn f64_structural(a: f64, b: f64) -> Cmp {
 /// four library calls of at most one unit of error, which can oppose: 2 x 4 x 1.
 pub const REALISED_ULP: u64 = 8;
 
+/// P4's MOVE, defined once: permissive may differ from real at an isolated point, where the two
+/// sides agree on both sides of it, read where a variable moves off the point by this fraction
+/// of its magnitude (at least this much) in each direction. The judge's permissive criterion
+/// reads it (`_contract`'s `isolated`), and the mint's pre-filter applies the same move
+/// (`hiprec::isolated_row`).
+pub const ISOLATION_STEP: f64 = 1.0 / 1_048_576.0;
+
+/// The point `x` moved by P4's step in the direction `dir` (+1 or -1): `x + dir * max(|x|, 1)
+/// * ISOLATION_STEP`.
+pub fn isolation_move(x: f64, dir: f64) -> f64 {
+    x + dir * x.abs().max(1.0) * ISOLATION_STEP
+}
+
 /// The units in the last place between two finite doubles of the same sign (the zeros as one);
 /// `u64::MAX` across a sign change.
 pub fn ulp_gap(a: f64, b: f64) -> u64 {

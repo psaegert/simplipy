@@ -14,9 +14,18 @@ points, the monitor judges what the rules do together on whole expressions.
 
 Verdict classes per rewrite: OK | VIOLATION | UNSCORED (a rewrite the judge cannot read, or
 reaches no decision on). A violation the rules-empty engine commits too is the engine's own
-(NATIVE-LINE), not the rule set's. An `f64` rewrite is held to float64's values (8 units in the
-last place), which the constructors' algebra does not always keep: `x/(x/(x^2 - x)) ->
-x*(x - 1)` is true in the reals and float64's rounding near x = 1 keeps the two apart.
+(NATIVE-LINE), not the rule set's.
+
+WHAT A WHOLE ANSWER IS HELD TO (F8). Every rule step the engine took (each fire's rule instance,
+`_core.ac_simplify_fires`) must be licensed in the mode by the judge, and the rewrite as a whole
+either licensed in the mode or, the engine's own algebra being exact in real arithmetic, true in
+the reals with float64's own events kept: its disagreements with the input what rounding does
+(a sign or a zero near a cancellation or a pole included) or a value where float64 reads the
+input as NaN, never a zero's sign (F7) or an infinity gained or lost (at an overflow or
+underflow the true value is accepted, the judge's range standard). `x/(x/(x^2 - x)) -> x*(x - 1)` is exact, though float64's rounding near
+x = 1 keeps the two apart: it is OK. Where a step holds in the mode and not in the reals (an
+f64-only rule), the engine's algebra around it cannot be read apart from the step, and a rewrite
+the mode does not license as a whole is UNSCORED.
 
 Self-test: :func:`selftest` poisons a copy of the rule set with known-unsound rules and fails
 loudly unless the monitor flags and attributes every one of them.
@@ -71,6 +80,26 @@ UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'JUDGE-TI
              'UNDECIDED-MEASURE')
 
 
+#: The judged tiers that hold in the reals (the engine's algebra is exact there, F8).
+_REAL_TIERS = frozenset({'core', 'real', 'real-only'})
+
+#: Float64's disagreements F8 lets the engine's exact algebra leave: rounding and what rounding
+#: does near a zero or a pole (a sign, a zero against a nonzero), and a value where float64 reads
+#: the input as NaN (the rewrite holds in the reals: the reals' value, or an extension on a null
+#: set, `x/x -> 1` at 0). Not a zero's sign (F7: `0 + (-0)` is +0) or an infinity gained or lost.
+_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT'})
+
+
+def _steps(inp, mode, engine):
+    """The rule steps the engine takes on `inp` in `mode`: each fire's rule instance, as the judge
+    reads a rule (`_as_rule`)."""
+    from ..engine import _RULE_MODE, _coerce_mode
+    rule_mode = _RULE_MODE[_coerce_mode(mode)]
+    _, fires = engine._core.ac_simplify_fires(list(inp), rule_mode=rule_mode)
+    return list(dict.fromkeys(tuple(map(tuple, _as_rule(lhs, rhs, engine)))
+                              for lhs, rhs in fires))
+
+
 def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     """Judge one rewrite ``inp -> out`` made in ``mode`` (``'f64'``, also ``'default'``,
     ``'real'``, ``'permissive'`` or a :class:`~simplipy.Mode` member; the default is the
@@ -81,7 +110,9 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     judge cannot read the rewrite or reaches no decision on it (an undecided measure among
     them; fail closed: the sweep counts it). ``engine`` reads a tagged
     side (`to_prefix`). ``rng`` is accepted for the callers that pass one; the judgment is
-    deterministic and draws nothing."""
+    deterministic and draws nothing. With ``engine``, the rewrite is held to F8 (above): its rule
+    steps are judged too, and a rewrite true in the reals whose float64 disagreements are
+    rounding alone is OK."""
     from . import MODE_TIERS, effective_tier
     name = _mode_name(mode)
     try:
@@ -90,10 +121,37 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     except Exception as error:       # an unreadable rewrite is reported, never passed
         return 'UNSCORED', f'{type(error).__name__}: {error}'
     verdict, tier = detail.get('verdict'), effective_tier(detail)
+    exact_steps = True
+    if engine is not None:
+        try:
+            steps = _steps(inp, name, engine)
+        except Exception as error:
+            return 'UNSCORED', f'steps: {type(error).__name__}: {error}'
+        for lhs, rhs in steps:
+            step = _contract.judge_rule(list(lhs), list(rhs))
+            step_tier = effective_tier(step)
+            if step_tier not in MODE_TIERS[name]:
+                if step.get('verdict') in UNDECIDED:
+                    return 'UNSCORED', f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)}: ' \
+                                       f'{step.get("verdict")}'
+                return 'VIOLATION', (f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)} is '
+                                     f'{step_tier}, not {name}\'s')
+            exact_steps = exact_steps and step_tier in _REAL_TIERS
     if tier in MODE_TIERS[name]:
         return 'OK', f'{verdict} ({tier})'
     if verdict in UNDECIDED:
         return 'UNSCORED', f'{verdict}: {str(detail.get("detail"))[:200]}'
+    if engine is not None and tier in _REAL_TIERS:
+        # F8: the rewrite holds in the reals; float64's own events must be kept
+        kinds = set(detail.get('f64_kinds') or ())
+        if detail.get('realised') is None:
+            return 'UNSCORED', f'F8: {verdict} ({tier}), float64 read at no point'
+        if not kinds or not kinds <= _F8_KINDS:
+            return 'VIOLATION', (f'F8: {verdict} ({tier}), float64 {sorted(kinds - _F8_KINDS)}: '
+                                 f'{str(detail.get("unrealised"))[:160]}')
+        if exact_steps:
+            return 'OK', f'F8: {verdict} ({tier}), float64 rounding alone'
+        return 'UNSCORED', f'F8: {verdict} ({tier}) through a step that holds in {name} alone'
     return 'VIOLATION', f'{verdict} ({tier}): {str(detail.get("detail"))[:200]}'
 
 

@@ -566,9 +566,9 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     return dead
 
 
-#: Rounds of overlap completion per mine: each round offers the completions of the overlaps the
-#: previous one left, and the pass stops early when a round certifies nothing.
-_COMPLETION_ROUNDS = 3
+#: A safety cap on the rounds of overlap completion: the pass runs to its fixpoint (a round that
+#: offers nothing new or certifies nothing), which the cell bounds; the cap only stops a defect.
+_COMPLETION_ROUNDS = 32
 
 
 def _term(tokens: Any, arity: dict, side: str) -> Any:
@@ -828,7 +828,15 @@ class RuleMiner:
         carry) or one of whose served entries (the rule as the mode loads it, orientation
         twins included) carries a judged tier the mode does not license, or that the mode's
         load does not serve at all. Verdicts are memoised by pair across rounds and lengths
-        (``judged``)."""
+        (``judged``).
+
+        WHAT THE ENGINE DOES ITSELF IS REFUSED HERE (4.8), where the mine first considers a
+        pick, by the tests the final gate checks: a ground pick the mode's rule-less engine
+        already takes to its right side (``_preempted_by``), and a pick that does not fire on
+        its own generic instances with the picks installed beside the mode's rules
+        (``_dead_rules``: another rule or the mode's own simplification takes the instance
+        first, `abs(tan(atan(x0)))` is `abs(x0)` in permissive before
+        `abs(tan(atan(_0))) -> acosh(cosh(_0))` can match). Nothing is dropped afterwards."""
         order = sorted(picks)
         patterns = []
         for idx in order:
@@ -850,6 +858,20 @@ class RuleMiner:
         bad = {k for k, pair in enumerate(patterns) if judged[pair] not in allowed}
         bad |= set(range(len(order))) - {k for _, _, k in served}
         bad |= {k for lhs, rhs, k in served if judged[(tuple(lhs), tuple(rhs))] not in allowed}
+        mode = _file_mode(rule_mode)
+        bad |= {k for k, (lhs, rhs) in enumerate(patterns)
+                if k not in bad and _preempted_by(self.engine, lhs, rhs, mode)}
+        live = [k for k in range(len(order)) if k not in bad]
+        if live:
+            current = self._mode_rules(rule_mode)
+            self._install(rule_mode, current + [patterns[k] for k in live
+                                                if patterns[k] not in set(current)])
+            try:
+                dead = {(tuple(d[0]), tuple(d[1]))
+                        for d in _dead_rules(self.engine, rule_mode, [patterns[k] for k in live])}
+            finally:
+                self._install(rule_mode, current)
+            bad |= {k for k in live if patterns[k] in dead}
         return {order[k] for k in bad}
 
     def _final_gate(self, rule_mode: str, judge: Callable, judged: dict) -> tuple[list, list]:
@@ -1432,13 +1454,16 @@ class RuleMiner:
             # hint arm, stage-2 confirmation and judge loop, nothing bespoke. It runs on the
             # promoted set, as the overlaps a stronger sort opens exist only there, and what it
             # certifies goes through the same prune and promotion. A certified completion can
-            # overlap again, so the pass repeats, at most `_COMPLETION_ROUNDS` times. Only
+            # overlap again, so the pass repeats TO ITS FIXPOINT: each round reads the set the
+            # overlap gate reads (the final gate settled first) and asks the gate's question,
+            # and a completion the mode did not license is asked again on the next round's set;
+            # the pass ends when a round offers nothing new or certifies nothing. Only
             # completions within the mine's cell are offered (`_in_cell`): a longer source lies
             # outside the universe the mine enumerates, and completing there breeds without
             # end: on the reduced length-4 f64 mine, offering every unjoined overlap took the file
             # from 543 rules to 1,022 in one round, and the next round offered 13,772.
             _completion: list = []
-            _tried: set = set()
+            _tried: dict = {}
             from .progress import Progress
             _cprog = Progress(verbose, prefix='  [complete] ')
 
@@ -1449,25 +1474,31 @@ class RuleMiner:
                 _cprog.write(f'judged {len(pairs)} pairs in {time.monotonic() - _t0:.1f}s')
                 return tiers
 
-            for _round in range(_COMPLETION_ROUNDS if not interrupted() else 0):
+            _round = -1
+            while not interrupted() and _round + 1 < _COMPLETION_ROUNDS:
+                _round += 1
                 _t_round = time.monotonic()
                 _entries = []
+                _final_gate()
                 _unjoined = _unjoined_overlaps(self.engine, rule_mode,
                                                self._mode_rules(rule_mode), prog=_cprog)
                 _within = [o for o in _unjoined if _in_cell(o, cell_source_length)]
                 # only a completion the mode licenses is offered (the overlap gate's question):
                 # one the judge refuses or a named policy refuses is no rule to mine
+                # a completion is offered again once the set it was mined against has moved:
+                # the mint reads the set's answer as the mark to beat
+                _set = hash(tuple(sorted(self._mode_rules(rule_mode))))
                 _fresh = [o for o in _within
-                          if (tuple(o['completion'][0]), tuple(o['completion'][1])) not in _tried]
+                          if _tried.get((tuple(o['completion'][0]),
+                                         tuple(o['completion'][1]))) != _set]
                 _licence = _licences(self.engine, rule_mode,
                                      [_completion_pattern(o) for o in _fresh], _timed_judge,
                                      judged, max_source=cell_source_length)
                 for o in _fresh:
                     pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
-                    if pair not in _tried:
-                        _tried.add(pair)
-                        if _licence[_completion_pattern(o)]['licensed']:
-                            _entries.append(pair)
+                    if _tried.get(pair) != _set and _licence[_completion_pattern(o)]['licensed']:
+                        _tried[pair] = _set
+                        _entries.append(pair)
                 _cprog.stage(f'round {_round + 1}', rules=len(self._mode_rules(rule_mode)),
                              unjoined=len(_unjoined), within_the_cell=len(_within),
                              new_completions=len(_entries))
@@ -1537,29 +1568,13 @@ class RuleMiner:
             # expected 0, since the mark contains the constructor.
             _final_gate()
             final = self._mode_rules(rule_mode)
-            _kept = []
-            for lhs, rhs in final:
-                if _preempted_by(self.engine, lhs, rhs, file_mode):
-                    gate['preempted'].append([list(lhs), list(rhs)])
-                else:
-                    _kept.append((lhs, rhs))
-            if gate['preempted']:
-                final = _kept
-                self._install(rule_mode, final)
-                _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
-            # The liveness gate on what ships: a rule the engine holding the file never fires
-            # (another rule, or the mode's own simplification, takes its instance first and ends
-            # dearer: in `permissive`, whose inverse pairs cancel ignoring the branch,
-            # `abs(atanh(tanh(_0))) -> acosh(cosh(_0))` meets `abs(x0)` before it can match)
-            # decides no answer, and is dropped, listed; `verify-mine` fails on a file that
-            # still holds one. Dropping a rule that never fires changes no answer, so no other
-            # rule's liveness moves with it.
+            # The preemption and liveness gates CHECK what ships and drop nothing (4.8): a pick
+            # that states what the engine does itself is refused where the mine first considers
+            # it (`_unlicensed`), so both are expected empty, and `verify-mine` fails on a file
+            # that holds one.
+            gate['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in final
+                                 if _preempted_by(self.engine, lhs, rhs, file_mode)]
             gate['dead'] = _dead_rules(self.engine, rule_mode, final)
-            if gate['dead']:
-                _gone = {(tuple(d[0]), tuple(d[1])) for d in gate['dead']}
-                final = [rule for rule in final if (tuple(rule[0]), tuple(rule[1])) not in _gone]
-                self._install(rule_mode, final)
-                _note_drops('liveness', lambda _identity: 'dead')
             # The overlap gate on what ships (expected no licensed completion missing): the
             # overlaps that do not join, the judge-licensed completions the file lacks and the
             # refused ones with the judge's reason, recorded, not dropped.
@@ -1582,7 +1597,7 @@ class RuleMiner:
                                             if e['verdict'] != 'already_covered']
             if verbose:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
-                      f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead (dropped), '
+                      f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
                       f'{len(gate["overlaps"])} unjoined overlaps '
                       f'({len(gate["overlaps_refused"])} more not licensed, '
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '
@@ -2818,8 +2833,8 @@ class RuleMiner:
         # reads (its sample and its confirmation rows), so the mint refutes nothing on them the
         # judge does not; restored when the mine ends
         from .verify._contract import set_rows
-        previous_rows = set_rows(np.vstack([X_data] + ([X_confirm] if X_confirm is not None
-                                                        else [])))
+        mint_rows = [X_data] if X_confirm is None else [X_data, X_confirm]
+        previous_rows = set_rows(np.vstack(mint_rows))
         try:
             if reset_rules:
                 # every mode's set starts empty: each file is mined from nothing

@@ -517,7 +517,10 @@ def test_the_final_gate_judges_before_every_prune_and_what_ships(tmp_path, monke
                       X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, prune='covered',
                       judge=lambda pairs: ['core'] * len(pairs))
     f64 = [kind for kind, mode, _ in events if mode == 'default']
-    assert f64 == ['gate', 'prune', 'gate', 'prune', 'gate'], events
+    # every prune right after a gate, the overlap completion's rounds each settled by one (the set
+    # the overlap gate reads), and the set that ships gated last
+    assert f64[-1] == 'gate' and f64.count('prune') == 2, events
+    assert all(f64[i - 1] == 'gate' for i, kind in enumerate(f64) if kind == 'prune'), events
     assert events[[e[1] for e in events].index('real') - 1][0] == 'gate'
 
 
@@ -666,3 +669,21 @@ def test_a_finished_file_is_reused_only_by_its_own_mine(tmp_path) -> None:
     # reused
     assert set(edited) == {'default'}, edited
     assert json.load(open(tmp_path / 'a' / 'mined.json')) == rules
+
+
+def test_what_the_engine_does_itself_is_refused_where_the_mine_first_considers_it() -> None:
+    """4.8: the per-length loop refuses a pick that does not fire on its own instance (the mode's
+    own simplification takes it first) and a ground pick the rule-less engine already takes to
+    its right side; the final gate checks both and drops nothing."""
+    from conftest import acj_config_path
+    ops = yaml.safe_load(open(acj_config_path()))['operators']
+    miner = RuleMiner(SimpliPyEngine(operators=ops, rules=[]))
+    core = lambda pairs: ['core'] * len(pairs)  # noqa: E731
+    picks = {0: (['abs', 'tan', 'atan', 'x0'], ['acosh', 'cosh', 'x0']),   # permissive cancels
+             2: (['log', '-3'], ['float("nan")'])}                         # the fold does it
+    assert miner._unlicensed(dict(picks), 'permissive', core, {}, ['x0']) == {0, 2}
+    # in real the inverse pair stays, so the rule fires on its instance
+    live = {1: (['sin', 'asin', 'x0'], ['x0'])}
+    assert miner._unlicensed(live, 'real', core, {}, ['x0']) == set()
+    # the mode's set is as it was: the picks were installed for the test and taken out again
+    assert miner._mode_rules('permissive') == [] and miner._mode_rules('real') == []

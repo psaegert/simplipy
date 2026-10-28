@@ -757,6 +757,49 @@ fn oriented_mu(next: &Ex, node_mu: u64, node: &Ex, p: &PassCtx) -> bool {
     }
 }
 
+thread_local! {
+    /// The rule steps of the calls inside a [`FireLog`] scope on this thread.
+    static FIRE_LOG: RefCell<Option<Vec<(Ex, Ex)>>> = const { RefCell::new(None) };
+}
+
+/// THE RULE STEPS OF A SIMPLIFY CALL: within the scope, every fire is recorded as its rule's
+/// instance, the left side as matched and the right side as substituted (before the
+/// constructors place it), in firing order -- what F8 holds each step to (the deployed monitor
+/// judges each one in the mode). Restores the enclosing log when dropped.
+pub struct FireLog(Option<Vec<(Ex, Ex)>>);
+
+impl FireLog {
+    pub fn open() -> Self {
+        FireLog(FIRE_LOG.with(|l| l.replace(Some(Vec::new()))))
+    }
+
+    /// The steps recorded so far in this scope (the log is emptied).
+    pub fn take(&self) -> Vec<(Ex, Ex)> {
+        FIRE_LOG.with(|l| {
+            l.borrow_mut()
+                .as_mut()
+                .map(std::mem::take)
+                .unwrap_or_default()
+        })
+    }
+}
+
+impl Drop for FireLog {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        FIRE_LOG.with(|l| *l.borrow_mut() = outer);
+    }
+}
+
+/// Record a fire's rule instance where a [`FireLog`] is open.
+fn log_fire(lhs: &Ex, rhs: &Ex, binds: &Binds, view: &TokenView) {
+    FIRE_LOG.with(|l| {
+        if let Some(steps) = l.borrow_mut().as_mut() {
+            steps.push((substitute(lhs, binds, view), substitute(rhs, binds, view)));
+        }
+    });
+}
+
 /// Diagnostic: with `SIMPLIPY_AC_TRACE=1` every rule fire is logged (rule index, subject).
 fn trace_fires() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -861,6 +904,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                             let next =
                                 add(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
                             if oriented_mu(&next, node_mu(), e, p) {
+                                log_fire(&rule.lhs, &rule.rhs, b, p.cx.view);
                                 out = Some(next);
                                 true
                             } else {
@@ -928,6 +972,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                         parts.push(replacement);
                         let next = mul(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
                         if oriented_mu(&next, node_mu(), e, p) {
+                            log_fire(&rule.lhs, &rule.rhs, b, p.cx.view);
                             out = Some(next);
                             true
                         } else {
@@ -965,6 +1010,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                             p.cx,
                         );
                         if oriented_mu(&next, node_mu(), e, p) {
+                            log_fire(&rule.lhs, &rule.rhs, b, p.cx.view);
                             out = Some(next);
                             true
                         } else {
@@ -980,6 +1026,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                 matches_each(e, &rule.lhs, &mut binds, p.mcx, &mut |b| {
                     let next = canon(substitute(&rule.rhs, b, p.cx.view), p.cx);
                     if oriented_mu(&next, node_mu(), e, p) {
+                        log_fire(&rule.lhs, &rule.rhs, b, p.cx.view);
                         out = Some(next);
                         true
                     } else {
