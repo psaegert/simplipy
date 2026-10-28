@@ -1299,6 +1299,15 @@ model predictions.
   evidence in `real` (it is undefined everywhere), and `rootn(-1, tanh(x0)) -> -1` is refused
   with a measured extension instead of an undecided measure (`tanh` stays inside (-1, 1), which
   holds no nonzero integer index).
+- **`permissive`'s own simplifications are one named list.** Inverse pairs cancel, like terms
+  cancel without a definedness check, constants collapse without evidence, a literal becomes its
+  float where that is cheaper, every slot matches any subexpression, and the rules that hold in
+  `f64` are served; every other step `permissive` takes holds by agreement, and
+  `_core.permissive_simplifications()` names the list. New: an operation cancels its own inverse
+  in both orders, ignoring domain and branch, so `asin(sin(x0))`, `atan(tan(x0))`,
+  `acosh(cosh(x0))`, `exp(log(x0))` and `cos(acos(x0))` are `x0`. Removed: an even power under
+  a root that remains is no longer composed (`(x0^2)^(1/4)`, which is `abs(x0)^(1/2)`, was
+  `x0^(1/2)`, undefined for x0 < 0). `abs`, `max`, `floor` and `min` are untouched.
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`

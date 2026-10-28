@@ -1401,6 +1401,117 @@ pub struct Cx<'a> {
     pub sentinels_expired: bool,
 }
 
+/// PERMISSIVE'S OWN SIMPLIFICATIONS (the specification's 4.9), the one list, named here and
+/// applied in `permissive` only. Permissive makes an expression prettier at the cost of some
+/// equivalence, the way one cancels by hand: naively, keeping the spirit of the expression. Every
+/// place the engine does something in `permissive` that the sound modes refuse names its entry
+/// (`Cx::permits`), and nothing else differs. `abs`, `max`, `floor`, `min` and `sign`-like
+/// constructions are no entry: their shape is the point of the expression, and permissive leaves
+/// them as the sound modes do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Permissive {
+    /// An operation cancels its own inverse, in both orders, ignoring domain and branch
+    /// ([`INVERSE_PAIRS`]; `sqrt`/`pow 2` and `rootn n`/`pow n` are a power of a power whose
+    /// exponents multiply to an integer): `asin(sin(x0))`, `exp(log(x0))`, `acosh(cosh(x0))` and
+    /// `sqrt(x0^2)` are `x0`.
+    InversePairs,
+    /// Like terms cancel without a definedness check: `log(x0) - log(x0)` is 0,
+    /// `asin(x0)/asin(x0)` is 1, `0*log(x0)` is 0, and `inf/inf` is 1 (a literal infinity keeps
+    /// its written reciprocal until the pass's fixpoint, so it can meet its partner).
+    LikeTerms,
+    /// A constant collapses without evidence: `(-1)^C` is `C` (`interval::collapse_licence`).
+    ConstantCollapse,
+    /// A literal becomes its float where the float is cheaper: the quotient of two 16-digit
+    /// decimals is `0.46867105279529636` (`land`, and the engine's ground fold).
+    LiteralToFloat,
+    /// Every slot matches any subexpression, without its certificate: `$0/$0 -> 1` also matches
+    /// `inf/inf` (the matcher's `wildcard_all`).
+    AnySlot,
+    /// The rules that hold in `f64` are served, though off in the reals below float resolution
+    /// (the permissive rule set).
+    F64Rules,
+    /// No simplification of permissive's own: a step that HOLDS in permissive by its criterion
+    /// -- the input's value is kept wherever the input has one, with an isolated infinity owing
+    /// nothing -- and which the sound modes refuse because it gives a value where the input has
+    /// none (`x0^(1/2) * x0^(1/2)` is `x0`) or because of a zero's sign or a pole's limit.
+    Agreement,
+}
+
+impl Permissive {
+    /// The whole list, in the specification's order.
+    pub const ALL: [Permissive; 7] = [
+        Permissive::InversePairs,
+        Permissive::LikeTerms,
+        Permissive::ConstantCollapse,
+        Permissive::LiteralToFloat,
+        Permissive::AnySlot,
+        Permissive::F64Rules,
+        Permissive::Agreement,
+    ];
+
+    /// Does the entry apply in `mode`? In `permissive` only: the one place that says so.
+    #[inline]
+    pub fn applies_in(self, mode: RuleMode) -> bool {
+        matches!(mode, RuleMode::Permissive)
+    }
+
+    /// The entry's name, as the documentation and the Python side spell it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Permissive::InversePairs => "inverse pairs cancel",
+            Permissive::LikeTerms => "like terms cancel",
+            Permissive::ConstantCollapse => "constant collapse without evidence",
+            Permissive::LiteralToFloat => "literal to float",
+            Permissive::AnySlot => "any slot matches",
+            Permissive::F64Rules => "f64 rules served",
+            Permissive::Agreement => "holds by agreement",
+        }
+    }
+}
+
+/// The inverse pairs of [`Permissive::InversePairs`] that are functions (the powers are a power
+/// of a power, `pow_of_pow_cancels`).
+pub const INVERSE_PAIRS: [(&str, &str); 7] = [
+    ("exp", "log"),
+    ("sin", "asin"),
+    ("cos", "acos"),
+    ("tan", "atan"),
+    ("sinh", "asinh"),
+    ("cosh", "acosh"),
+    ("tanh", "atanh"),
+];
+
+/// Does `outer(inner(t))` cancel to `t` by [`Permissive::InversePairs`], in either order?
+pub fn cancels_its_inverse(outer: &str, inner: &str) -> bool {
+    INVERSE_PAIRS
+        .iter()
+        .any(|&(f, g)| (outer == f && inner == g) || (outer == g && inner == f))
+}
+
+/// Is `(t^r)^s -> t^(r s)` a cancellation of a root by a power ([`Permissive::InversePairs`]):
+/// do the exponents multiply to an integer? `sqrt(t^2)` is `t`, `rootn(t^6, 3)` is `t^2` and
+/// `sqrt(t)^2` is `t`; `(t^2)^(1/4)`, which keeps a root, is no cancellation.
+pub fn pow_of_pow_cancels(r: &Rat, s: &Rat) -> bool {
+    r.checked_mul(s).is_some_and(|p| p.is_integer())
+}
+
+/// Does `(t^r)^s -> t^(r s)` keep the input's value wherever it has one, at every real-valued
+/// binding ([`Permissive::Agreement`])? Everywhere but under an even power: where `t < 0` an odd
+/// or fractional `t^r` is negative or undefined, so a fractional `s` leaves the input undefined
+/// as it leaves `t^(r s)`, and where `t` is infinite the binding is no real number (P2).
+/// `(t^2)^(1/4)` is `abs(t)^(1/2)`, defined where `t^(1/2)` is not: refused.
+pub fn pow_of_pow_agrees(r: &Rat) -> bool {
+    !r.is_even_integer()
+}
+
+impl<'a> Cx<'a> {
+    /// May this construction take the step [`Permissive`] names? In `permissive` only.
+    #[inline]
+    pub fn permits(&self, entry: Permissive) -> bool {
+        entry.applies_in(self.mode)
+    }
+}
+
 impl<'a> Cx<'a> {
     /// THE DERIVATION of `fold_f64` from a mode: `f64` folds a ground node to its float in the
     /// pass. `real` cannot (the result is not representable -- `tan(1)` is irrational and no
@@ -1410,18 +1521,10 @@ impl<'a> Cx<'a> {
         matches!(mode, RuleMode::Default)
     }
 
-    /// The RECALL reading of the mode: may a constructor gate pass uncertified? Only
-    /// `permissive`. Derived from `RuleMode::wildcard_all` rather than restated, so the
-    /// engine has ONE answer to "is this the permissive mode".
-    #[inline]
-    pub fn lossy(&self) -> bool {
-        self.mode.wildcard_all()
-    }
-
     /// The F64 reading: is this construction answerable only in what the deployed f64
     /// evaluator computes? True for `f64` alone. `real` reasons over the reals, where
     /// saturation does not exist, and `permissive` skips the gate anyway -- so a guard that
-    /// exists BECAUSE of f64 saturation must ask this and not `lossy()`.
+    /// exists BECAUSE of f64 saturation must ask this and not `permits`.
     #[inline]
     pub fn f64_semantics(&self) -> bool {
         matches!(self.mode, RuleMode::Default)
@@ -1492,7 +1595,7 @@ impl<'a> Cx<'a> {
     /// analytic identity, is refused. Fail-closed. (The sibling of the
     /// pow-distribution bug, with the fat set in the exponent.)
     fn sym_merge_licensed(&self, base: &Ex, y: &Ex) -> bool {
-        if self.lossy() || self.certainly_nonneg(base) {
+        if self.permits(Permissive::Agreement) || self.certainly_nonneg(base) {
             return true;
         }
         match self.cert_nce {
@@ -1557,7 +1660,7 @@ impl<'a> Cx<'a> {
     /// list of an addend). Also the value-preservation licence of the exploration
     /// moves (`ac::search::distribute_product`), which is why it is crate-visible.
     pub(crate) fn fin_licensed(&self, e: &Ex) -> bool {
-        self.lossy() || self.fin_certified(e)
+        self.permits(Permissive::LikeTerms) || self.fin_certified(e)
     }
 
     /// The certificate body of [`fin_licensed`] WITHOUT the lossy blanket: the answer the
@@ -1586,7 +1689,7 @@ impl<'a> Cx<'a> {
     /// still pass it (the null set `{0}` in c-space is what `forall c` quantifies over -- we
     /// stay conservative and leave `Const` to the certificate).
     fn finnz_licensed(&self, e: &Ex) -> bool {
-        if self.lossy() {
+        if self.permits(Permissive::LikeTerms) {
             return true;
         }
         match e {
@@ -1612,7 +1715,7 @@ impl<'a> Cx<'a> {
     /// variables are zero on a null hyperplane; everything else goes to the structural
     /// zero-set certificate, fail-closed.
     pub(crate) fn nz_ae_licensed(&self, e: &Ex) -> bool {
-        if self.lossy() {
+        if self.permits(Permissive::Agreement) {
             return true;
         }
         self.nz_ae_certified(e)
@@ -2022,6 +2125,9 @@ impl<'a> Cx<'a> {
     fn inverse_pair_collapse(&self, outer: Tok, inner: Tok, t: &Ex) -> Option<Ex> {
         let o = self.view.resolve_owned(outer);
         let i = self.view.resolve_owned(inner);
+        if self.permits(Permissive::InversePairs) && cancels_its_inverse(&o, &i) {
+            return Some(t.clone());
+        }
         match (o.as_str(), i.as_str()) {
             // TOTAL on the extended real line -- but NOT under the deployed f64 algebra
             // everywhere, so each carries the band where its rounding stays within the
@@ -4261,7 +4367,7 @@ fn holds_infinity(e: &Ex) -> bool {
 /// (`RegionScope`) each distinct `e` is decided once per context however often the products
 /// holding it are built.
 fn zero_set_null(e: &Ex, cx: &Cx) -> bool {
-    if cx.lossy() {
+    if cx.permits(Permissive::Agreement) {
         return true;
     }
     let key = flip_cx_key(cx);
@@ -5049,7 +5155,7 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
         let exact_integers = a.parity().is_some()
             && b.parity().is_some()
             && a.checked_add(b).is_some_and(|s| s.parity().is_some());
-        if cx.lossy() || exact_integers {
+        if cx.permits(Permissive::Agreement) || exact_integers {
             return true;
         }
         if cx.certainly_nonneg(base) {
@@ -5115,7 +5221,7 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
             }
         };
         let mixed = exps.iter().any(|r| r.is_negative()) && exps.iter().any(|r| !r.is_negative());
-        let pools: Vec<Vec<Rat>> = if mixed && sym_ok && (cx.lossy() || cx.finnz_licensed(&base)) {
+        let pools: Vec<Vec<Rat>> = if mixed && sym_ok && cx.finnz_licensed(&base) {
             vec![exps]
         } else {
             let (negs, poss): (Vec<Rat>, Vec<Rat>) =
@@ -6765,7 +6871,7 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
 /// (`sign_place`), the product table's lone inverse (`Class::table`) and the sum's like terms
 /// (`orient_term_classes`).
 fn zero_limit(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, bool)> {
-    if cx.lossy() {
+    if cx.permits(Permissive::Agreement) {
         return None;
     }
     let reads: Vec<ZeroRead> = factors.iter().map(|f| zero_read(f, class, cx)).collect();
@@ -8626,8 +8732,10 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
             // A negative power's pole pins the orientation where the base's zero set may hold a
             // region: there the inverse is infinite on the region, a value the answer keeps. Asked
             // last, of a base whose flip exists.
-            (cx.lossy() || !matches!(&**e, Ex::Num(r) if r.is_negative()) || zero_set_null(b, cx))
-                .then_some(flipped)
+            (cx.permits(Permissive::Agreement)
+                || !matches!(&**e, Ex::Num(r) if r.is_negative())
+                || zero_set_null(b, cx))
+            .then_some(flipped)
         }
         Ex::Fun(op, args)
             if args.len() == 2 && cx.view.tok_is(*op, "rootn") && odd_int_ge3(&args[1]) =>
@@ -9001,7 +9109,7 @@ fn gains_a_sign(members: &[Ex], settled: &Ex) -> bool {
 /// a sum) takes it as it comes; inside a function's argument or a power's base, where the parse
 /// moves or drops a product's sign, a bag that would gain a sign keeps its working spelling.
 fn joined_base_sign(inner: Ex, cx: &Cx) -> (Ex, bool) {
-    if !cx.lossy() {
+    if !cx.permits(Permissive::Agreement) {
         return (inner, false);
     }
     let Ex::Mul(mut v) = inner else {
@@ -9250,7 +9358,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // identities below, which hold for every finite real.
     // Permissive's sentinel licence comes first: until the phase-1 fixpoint `1/inf` stays
     // written, so `inf/inf` can still cancel as like terms (see the reciprocal arm below).
-    let sentinel = cx.lossy()
+    let sentinel = cx.permits(Permissive::LikeTerms)
         && !cx.sentinels_expired
         && matches!(base, Ex::PosInf | Ex::NegInf)
         && matches!(&exp, Ex::Num(q) if q.is_negative());
@@ -9351,7 +9459,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // the search derives is (`x1/-inf` is 0). And `+inf` under a positive exponent is `+inf`
     // (`inf^(1/2)` is `sqrt(inf)`), decided here, so a product holding it inverts to the zero of
     // its sign: `1/-(inf^(1/2))` is -0.
-    if !cx.lossy() || cx.sentinels_expired {
+    if !cx.permits(Permissive::LikeTerms) || cx.sentinels_expired {
         if let Ex::Num(e) = &exp {
             if matches!(base, Ex::PosInf) && e.signum() > 0 {
                 return Ex::PosInf;
@@ -9467,7 +9575,9 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Some((inner_base, r)), Ex::Num(s)) = (as_rational_power(&base, cx), &exp) {
         {
             let r = &r;
-            let licence = if cx.lossy() {
+            let licence = if (cx.permits(Permissive::InversePairs) && pow_of_pow_cancels(r, s))
+                || (cx.permits(Permissive::Agreement) && pow_of_pow_agrees(r))
+            {
                 true
             } else if r.is_integer() {
                 s.is_integer()
@@ -9857,7 +9967,7 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
 /// zero (non-finite values refuse, and both floats around a nonzero value are nonzero).
 #[inline]
 pub fn land(r: Rat, cx: &Cx) -> Rat {
-    if !cx.lossy() {
+    if !cx.permits(Permissive::LiteralToFloat) {
         return r;
     }
     match lossy_literal(&r) {
@@ -10454,7 +10564,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         return pow_spelled(b, e, cx);
     }
     // A literal argument LANDS here (permissive's ρ, [`land`]).
-    let args: Vec<Ex> = if cx.lossy() {
+    let args: Vec<Ex> = if cx.permits(Permissive::LiteralToFloat) {
         args.into_iter().map(|a| land_operand(a, cx)).collect()
     } else {
         args
@@ -10758,7 +10868,9 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                             match &**ex {
                                 Ex::Num(k) => {
                                     n.checked_inv().and_then(|s| k.checked_mul(&s)).filter(|p| {
-                                        cx.lossy()
+                                        (cx.permits(Permissive::InversePairs) && p.is_integer())
+                                            || (cx.permits(Permissive::Agreement)
+                                                && pow_of_pow_agrees(k))
                                             || cx.certainly_nonneg(inner)
                                             || if k.is_integer() {
                                                 k.is_odd_integer()

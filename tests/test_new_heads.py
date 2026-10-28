@@ -802,6 +802,8 @@ def test_real_orders_lattice_members_at_high_precision_and_f64_by_float64_bits(b
     # cosh(acosh(3)) is 3 over the reals and 3.0000000000000004 in float64, where the decimal
     # 3.0000000000000001 reads as 3.0: the two readings pick different members
     assert real('max cosh acosh 3 3.0000000000000001') == '3.0000000000000001'
-    for mode in ('f64', 'permissive'):
-        assert ' '.join(bare.simplify('max cosh acosh 3 3.0000000000000001'.split(), mode=mode)) == 'cosh acosh 3'
+    assert f64('max cosh acosh 3 3.0000000000000001') == 'cosh acosh 3'
+    # permissive cancels the inverse pair (4.9) and rounds the decimal to its float, 3
+    assert ' '.join(bare.simplify('max cosh acosh 3 3.0000000000000001'.split(),
+                                  mode='permissive')) == '3'
     assert f64('min cosh acosh 3 3.0000000000000001') == '3'

@@ -214,10 +214,12 @@ _OFFER_OPERATORS = {
     "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
     "tan": {"realization": "np.tan", "alias": [], "inverse": "atan", "arity": 1, "precedence": 3, "commutative": False},
     "atan": {"realization": "np.arctan", "alias": [], "inverse": "tan", "arity": 1, "precedence": 3, "commutative": False},
+    "abs": {"realization": "np.abs", "alias": [], "inverse": None, "arity": 1, "precedence": 3, "commutative": False},
 }
 # True on R, and beyond the length-2 horizon of the mine below, so permissive's own scan
-# never reaches it: only the offered real file can bring it.
-REAL_ONLY = (('tan', 'atan', '?0'), ('?0',))
+# never reaches it: only the offered real file can bring it. (`tan(atan(x)) -> x` was the
+# example until permissive cancelled inverse pairs itself; `abs` is no entry of its list.)
+REAL_ONLY = (('*', 'abs', '?0', 'abs', '?0'), ('*', '?0', '?0'))
 
 
 def _offer_mine(tmp_path, offer):
@@ -247,8 +249,8 @@ def test_the_permissive_mine_is_offered_the_finished_files(tmp_path):
         assert pin['count'] == len(json.load(open(tmp_path / name)))
     assert side['params']['offer_final_rules'] is True
     assert sum(offered['outcomes'].values()) == offered['count']
-    entry, = [e for e in offered['trail'] if e['source'] == ['tan', 'atan', 'x0']]
-    assert entry['verdict'] == 'certified' and entry['target'] == ['x0'], entry
+    entry, = [e for e in offered['trail'] if e['source'] == ['*', 'abs', 'x0', 'abs', 'x0']]
+    assert entry['verdict'] == 'certified' and entry['target'] == ['*', 'x0', 'x0'], entry
 
 
 def test_the_offer_can_be_declined(tmp_path):

@@ -202,6 +202,8 @@ POLICY_EXAMPLES = [
     ('exp * 2 _0', '* exp _0 exp _0', 'real', 'duplication'),
     ('+ * x0 x1 * x0 x2', '* x0 + x1 x2', 'real', 'engine_owned'),
     ('log -3', 'float("nan")', 'real', 'engine_owned'),
+    # permissive cancels an inverse pair itself (4.9), so the rule is the engine's
+    ('exp log x0', 'x0', 'permissive', 'engine_owned'),
     ('pow + x0 <constant> 2', '+ + pow x0 2 * <constant> x0 <constant>', 'real',
      'constant_count'),
 ]
@@ -214,7 +216,7 @@ def test_a_named_policy_refuses_what_holds(lhs, rhs, mode, policy) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('exp log x0', 'x0', 'permissive'), ('acos <constant>', '<constant>', 'real'),
+    ('exp + log x0 log x1', '* x0 x1', 'permissive'), ('acos <constant>', '<constant>', 'real'),
     ('exp + x0 <constant>', '* <constant> exp x0', 'real'), ('ceil inv cosh x0', '1', 'f64'),
 ])
 def test_licensed_is_holds_and_every_policy(lhs, rhs, mode) -> None:
@@ -482,3 +484,46 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     evidence = _core.table_evidence(expr.split(), dict(_contract.ARITY), mode == 'f64')
     assert folded is folds
     assert folded == (holds and (evidence is True or mode == 'permissive'))
+
+
+# ------------------------------------------------------------------------------------------
+# Permissive's own simplifications (4.9): the named list, defined once in the core, and
+# nothing else.
+# ------------------------------------------------------------------------------------------
+def test_the_core_names_permissives_list() -> None:
+    from simplipy import _core
+    assert _core.permissive_simplifications() == [
+        'inverse pairs cancel', 'like terms cancel', 'constant collapse without evidence',
+        'literal to float', 'any slot matches', 'f64 rules served', 'holds by agreement']
+
+
+INVERSE_PAIRS = [('exp', 'log'), ('sin', 'asin'), ('cos', 'acos'), ('tan', 'atan'),
+                 ('sinh', 'asinh'), ('cosh', 'acosh'), ('tanh', 'atanh')]
+
+
+@pytest.mark.parametrize('outer, inner', [
+    pytest.param(o, i, id=f'{o} {i}') for f, g in INVERSE_PAIRS for o, i in ((f, g), (g, f))])
+def test_permissive_cancels_an_inverse_pair_in_both_orders(outer, inner) -> None:
+    """Ignoring domain and branch: `asin(sin(x0))`, `exp(log(x0))` and `acosh(cosh(x0))` are
+    `x0` in permissive."""
+    assert list(bare().simplify([outer, inner, 'x0'], mode='permissive')) == ['x0']
+
+
+@pytest.mark.parametrize('expr, want', [
+    ('rootn pow x0 2 2', 'x0'), ('pow rootn x0 2 2', 'x0'), ('rootn pow x0 4 4', 'x0'),
+    ('pow pow x0 2 0.5', 'x0'), ('pow pow x0 6 0.5', 'pow x0 3')])
+def test_permissive_cancels_a_root_by_its_power(expr, want) -> None:
+    assert ' '.join(bare().simplify(expr.split(), mode='permissive')) == want
+
+
+@pytest.mark.parametrize('expr', [
+    'abs x0', 'max x0 0', 'floor x0', 'min x0 x1', 'abs - x0 x1', 'max abs x0 x1',
+    'floor * 2 x0', 'ceil x0',
+    # a power of a power that keeps a root is no cancellation: (x0^2)^(1/4) is |x0|^(1/2),
+    # defined where x0 < 0, while x0^(1/2) is not
+    'pow pow x0 2 0.25', 'rootn pow x0 2 4'])
+def test_permissive_leaves_what_is_no_entry_as_real_does(expr) -> None:
+    """`abs`, `max`, `floor` and `min` are no entry of the list: their shape is the point of
+    the expression, and permissive gives real's answer."""
+    e = bare()
+    assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='real')

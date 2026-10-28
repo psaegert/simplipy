@@ -2162,7 +2162,7 @@ impl RuleMode {
     /// The RECALL switch this mode runs under -- the `wildcard_all` every layer below
     /// the mode selection already speaks. Derived here and nowhere else.
     pub fn wildcard_all(self) -> bool {
-        matches!(self, RuleMode::Permissive)
+        crate::ac::expr::Permissive::AnySlot.applies_in(self)
     }
 
     /// The mode a bare `wildcard_all` flag names: `true` the permissive set, `false` the

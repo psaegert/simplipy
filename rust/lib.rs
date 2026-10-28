@@ -2144,6 +2144,17 @@ fn table_extension_width(
     })
 }
 
+/// PERMISSIVE'S OWN SIMPLIFICATIONS (the specification's 4.9), as the core names them
+/// (`ac::expr::Permissive`): every step `permissive` takes that the sound modes refuse is one of
+/// these.
+#[pyfunction]
+fn permissive_simplifications() -> Vec<&'static str> {
+    crate::ac::expr::Permissive::ALL
+        .iter()
+        .map(|p| p.name())
+        .collect()
+}
+
 /// CLAUSE (c)'s MEASURE: is `{x : tokens(x) = +-inf}` certified null, for every value of its
 /// `<constant>`s (`interval::infinite_set_null`)? `false` where the certificate cannot tell
 /// (fail closed: the right side then owes the left side's infinities).
@@ -2467,6 +2478,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
     m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_infinite_null, m)?)?;
+    m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;
     m.add_function(wrap_pyfunction!(table_sort_atoms, m)?)?;

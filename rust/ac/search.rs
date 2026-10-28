@@ -276,7 +276,7 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
             if let Some(cand) = distribute_product(v, cx) {
                 out.push(cand);
             }
-            if cx.lossy() {
+            if cx.permits(crate::ac::expr::Permissive::Agreement) {
                 out.extend(reciprocal_joins(v, cx));
             }
             for (si, s) in v.iter().enumerate() {
@@ -751,7 +751,7 @@ fn licensed(f: &Ex, cx: &Cx) -> bool {
 /// limit wherever the quotients' sum is nonzero at the pole, and where the quotients differ in
 /// sign there the unjoined sum was NaN.
 fn splits_a_pole(piece: &[Ex], meets: &[(&Ex, &Ex)], cx: &Cx) -> bool {
-    if cx.lossy() {
+    if cx.permits(crate::ac::expr::Permissive::Agreement) {
         return false;
     }
     let held: Vec<&Ex> = meets
@@ -1085,7 +1085,7 @@ fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
         if splits_a_pole(rest, &meets, cx) {
             return None;
         }
-    } else if !cx.lossy() {
+    } else if !cx.permits(crate::ac::expr::Permissive::Agreement) {
         let pieces: Vec<Ex> = rest
             .iter()
             .chain(adds.iter().copied().flatten())
@@ -1241,7 +1241,7 @@ mod tests {
                     distribute_product(&[inf.clone(), sum.clone()], cx),
                     None,
                     "{inf:?} * (x1 - 1/2) must not distribute (lossy = {})",
-                    cx.lossy()
+                    matches!(cx.mode, RuleMode::Permissive)
                 );
                 // An infinity inside a co-factor is the same piece.
                 let carrier = crate::ac::expr::mul(vec![inf.clone(), x2.clone()], cx);

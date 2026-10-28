@@ -6478,13 +6478,17 @@ pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
 /// finite, and nothing is owed where it is not -- so the licence is EVIDENCE, in the mode's
 /// values. `pow(0, C)` collapses (0 for C > 0, 1 at 0, owed nothing where it is +inf), `log(C)`
 /// and `acos(C)` collapse, `(-1)^C` (finite only at the integers) does not. `permissive`
-/// collapses without evidence, one of its own simplifications (4.9).
+/// collapses without evidence, one of its own simplifications
+/// (`ac::expr::Permissive::ConstantCollapse`).
 pub fn collapse_licence(tokens: &[String], ops: &Operators, mode: crate::engine::RuleMode) -> bool {
-    match mode {
-        crate::engine::RuleMode::Permissive => true,
-        crate::engine::RuleMode::Default => evidence(tokens, ops, true) == Some(true),
-        crate::engine::RuleMode::Real => evidence(tokens, ops, false) == Some(true),
+    if crate::ac::expr::Permissive::ConstantCollapse.applies_in(mode) {
+        return true;
     }
+    evidence(
+        tokens,
+        ops,
+        matches!(mode, crate::engine::RuleMode::Default),
+    ) == Some(true)
 }
 
 /// THE CONSTANT-COLLAPSE CRITERION, the one both the mint and the engine's fold read: may a

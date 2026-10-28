@@ -148,10 +148,12 @@ class TestGroundNanFolds:
 
     def test_an_index_whose_enclosure_holds_an_integer_stays(self, rules_free):
         # acos(cos 1) is exactly 1 and 2 + sin(pi) exactly 2: no proof that the index is no
-        # integer, so the root stays (in f64 too, where the evaluator's acos(cos 1) is not 1)
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        # integer, so the root stays (in f64 too, where the evaluator's acos(cos 1) is not 1);
+        # permissive cancels the inverse pair (4.9), and the root of index 1 is its radicand
+        for mode in (Mode.f64, Mode.real):
             assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=mode) == \
                 ['rootn', 'x1', 'acos', 'cos', '1']
+        assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=Mode.permissive) == ['x1']
         # in real the table reads sin(pi) = 0 exactly, so the index is the integer 2
         assert rules_free.simplify('rootn x1 + 2 sin np.pi'.split(), mode=Mode.real) == \
             ['rootn', 'x1', '2']
