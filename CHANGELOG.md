@@ -1309,6 +1309,14 @@ model predictions.
   `acosh(cosh(x0))`, `exp(log(x0))` and `cos(acos(x0))` are `x0`. Powers compose naively,
   ignoring the sign: `(x^a)^b` is `x^(a*b)`, so `(x0^3)^(1/3)` is `x0` and `(x0^2)^(1/4)` is
   `x0^(1/2)`. `abs`, `max`, `floor` and `min` are untouched.
+- **`permissive` writes the table's ground values as floats.** A ground node's value in
+  `permissive` is the table's, written as the double nearest to it: `floor(tanh(40))` is 0
+  (tanh(40) is below 1, though float64 rounds it to 1.0 and floors that to 1), and the root of
+  `exp(19.11787581094798)` is 14170.787488305128 (the decimal read exactly; float64 gives
+  14170.787488305119). A nonzero value below the normal doubles stays as written
+  (`exp(-800)` is no 0), as does a node the table cannot decide at its precision
+  (`mod(sin(1), 1e300)`). Measured on 1,500 rows each, permissive's ms per row rises 3% (t81
+  3.37 to 3.48, predictions 14.4 to 14.8).
 - **The judge reads every literal the engine writes.** A decimal whose exponent lies past
   4,000 (`2.827881176741212e-244756`, which the engine keeps as written) is read exactly, up to
   an exponent of 1,000,000; a rule holding it was refused as unsupported.

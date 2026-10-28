@@ -772,7 +772,10 @@ def test_a_ground_fold_returns_a_member_with_the_nodes_value(bare, mode):
     where a certified enclosure proves it."""
     s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
     assert s('mod sin 1 123456.78912345678') == 'sin 1'
-    assert s('mod sin 1 2') == 'sin 1' and s('mod sin 1 1e300') == 'sin 1'
+    assert s('mod sin 1 2') == 'sin 1'
+    # permissive reads the table, which cannot place sin(1) apart from the multiples of 1e300 at
+    # its working precision: it leaves the node as written (fail closed)
+    assert s('mod sin 1 1e300') == ('mod sin 1 1e300' if mode == 'permissive' else 'sin 1')
     assert s('abs sin 1') == 'sin 1' and s('abs neg sin 1') == 'sin 1'
     assert s('mod neg sin 1 -123456.78912345678') == 'sin -1'
     if mode != 'real':

@@ -1684,6 +1684,55 @@ pub fn f64_enclosure(v: &Val, ctx: &mut Ctx) -> Option<(f64, f64, bool, bool)> {
     })
 }
 
+/// The double nearest to a FINITE value (a value beyond the doubles' range reads as an
+/// infinity, which the caller refuses): exact for a rational with a certified rounding, else
+/// the working float's top 128 mantissa bits rounded once to 53. `None` for an infinity or an
+/// undefined value. Permissive writes its ground values so (P3).
+pub fn nearest_f64(v: &Val, ctx: &mut Ctx) -> Option<f64> {
+    let _exact = number_domain(false);
+    match v {
+        Val::Exact(Exact::PosInf | Exact::NegInf | Exact::Undef) => return None,
+        Val::Exact(Exact::Rat(r)) => {
+            if r.is_zero() {
+                return Some(0.0);
+            }
+            if let Some(y) = r.to_f64_nearest_certified() {
+                return Some(y);
+            }
+        }
+        _ => {}
+    }
+    let b = ctx.bf(v);
+    if b.is_nan() || b.is_inf() {
+        return None;
+    }
+    if b.is_zero() {
+        return Some(0.0);
+    }
+    let neg = b.is_negative();
+    let a = b.abs();
+    let (Some(words), Some(e)) = (a.mantissa_digits(), a.exponent()) else {
+        return None;
+    };
+    let n = words.len();
+    let top = u128::from(*words.last()?);
+    let next = if n >= 2 { u128::from(words[n - 2]) } else { 0 };
+    // value = 0.m * 2^e = m * 2^(e - 128), the u128 rounded to nearest once
+    let mut y = ((top << 64) | next) as f64;
+    let mut k = i64::from(e) - 128;
+    while k > 0 && y.is_finite() {
+        let step = k.min(512);
+        y *= 2f64.powi(step as i32);
+        k -= step;
+    }
+    while k < 0 && y > 0.0 {
+        let step = (-k).min(512);
+        y /= 2f64.powi(step as i32);
+        k += step;
+    }
+    Some(if neg { -y } else { y })
+}
+
 /// A positive finite BigFloat read to a double from its top mantissa word (within an ulp or
 /// two; `f64_enclosure` widens it).
 fn bf_to_f64(b: &BigFloat) -> f64 {

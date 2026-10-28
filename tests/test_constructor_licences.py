@@ -1053,8 +1053,11 @@ class TestCorpusTakesTheBestOfBoth:
         the `exp` a 9-digit literal first and left its root (66,912 milli-bits)."""
         from simplipy import Mode
         source = ['rootn', 'exp', '19.11787581094798', '2']
-        for mode in (Mode.f64, Mode.permissive):
-            assert bare.simplify(list(source), mode=mode) == ['14170.787488305119'], mode
+        assert bare.simplify(list(source), mode=Mode.f64) == ['14170.787488305119']
+        # permissive writes the table's value as a float: the root of e^19.11787581094798, the
+        # decimal read exactly, is 14170.7874883051273..., where float64's reading of the
+        # literal gives 14170.787488305119
+        assert bare.simplify(list(source), mode=Mode.permissive) == ['14170.787488305128']
         assert bare.complexity(['14170.787488305119'], mode=Mode.f64) == 58354
         assert bare.simplify(list(source), mode=Mode.real) == ['exp', '9.55893790547399']
         # the reading complexity prices keeps a ground constant as written in every mode

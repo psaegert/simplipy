@@ -521,6 +521,17 @@ def test_permissive_composes_powers_ignoring_the_sign(expr, want) -> None:
     assert ' '.join(bare().simplify(expr.split(), mode='permissive')) == want
 
 
+@pytest.mark.parametrize('expr, want', [
+    ('floor tanh 40', '0'), ('ceil exp -800', 'ceil exp -800'), ('tanh 20', '1'),
+    ('asin 1e-8', '1e-8'), ('mod sin 1 2', 'sin 1')])
+def test_permissive_writes_the_tables_ground_values_as_floats(expr, want) -> None:
+    """P3 as ruled: permissive's ground values are the table's, written as floats --
+    `floor(tanh(40))` is 0 (tanh(40) is below 1, though float64 rounds it to 1.0), `tanh(20)` is
+    the float 1.0 nearest to its value. A nonzero value below the normal doubles has no
+    faithful float and stays (`exp(-800)` is no 0)."""
+    assert ' '.join(bare().simplify(expr.split(), mode='permissive')) == want
+
+
 @pytest.mark.parametrize('expr', [
     'abs x0', 'max x0 0', 'floor x0', 'min x0 x1', 'abs - x0 x1', 'max abs x0 x1',
     'floor * 2 x0', 'ceil x0'])

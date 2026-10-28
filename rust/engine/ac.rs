@@ -123,6 +123,9 @@ fn is_ground(e: &Ex, view: &TokenView) -> bool {
 /// One SERVED rule: `(lhs, rhs, artifact index)` -- see [`Engine::ac_served_rules`].
 pub type ServedRule = (Vec<String>, Vec<String>, usize);
 
+/// The working precision of the table's reading of a ground node: past a double's, and cheap.
+const TABLE_GROUND_DPS: i32 = 50;
+
 impl Engine {
     /// The DEFAULT mode's translated rule set (`rules.json`), built once on first use and
     /// never during construction. See [`Engine::ac_rules_for`] for the per-mode selection
@@ -786,12 +789,9 @@ impl Engine {
     /// rational (in `real` only), a rational multiple of pi (`real` only), an infinity, or NaN
     /// where the table gives no value. `None` where the value is an approximation (a
     /// transcendental stays symbolic) or the point is Unresolved at the working precision.
-    fn table_ground_fold(&self, strs: &[String], exact: bool, bare: &Cx) -> Option<Ex> {
+    fn table_ground_fold(&self, v: &crate::table::Val, exact: bool, bare: &Cx) -> Option<Ex> {
         use crate::table::{Exact, Val};
-        /// The working precision of a ground reading: past a double's, and cheap.
-        const GROUND_DPS: i32 = 50;
-        let v = crate::table::ground_value(strs, &self.operators, GROUND_DPS)?;
-        match v {
+        match v.clone() {
             Val::Exact(Exact::Undef) => Some(Ex::NaN),
             Val::Exact(Exact::PosInf) => Some(Ex::PosInf),
             Val::Exact(Exact::NegInf) => Some(Ex::NegInf),
@@ -803,7 +803,70 @@ impl Engine {
         }
     }
 
-    /// THE GROUND FOLD (G, `f64` and `permissive`): a ground composite (no variable, no
+    /// THE TABLE'S READING of a ground node at a working precision past a double's, and cheap
+    /// (`table::ground_value`): `None` where a token is no table token or the point is
+    /// Unresolved there.
+    fn table_value(&self, strs: &[String]) -> Option<crate::table::Val> {
+        crate::table::ground_value(strs, &self.operators, TABLE_GROUND_DPS)
+    }
+
+    /// The double nearest to a table value (`table::nearest_f64`): finite and normal, or zero
+    /// for the value zero. A nonzero value below the normal doubles (`exp(-800)`, 3.7e-348,
+    /// whose nearest double is 0) has no faithful float and reads `None`, as a written
+    /// subnormal decimal stays symbolic.
+    fn table_f64(v: &crate::table::Val) -> Option<f64> {
+        let mut ctx = crate::table::Ctx::new(TABLE_GROUND_DPS)?;
+        let y = crate::table::nearest_f64(v, &mut ctx)?;
+        let zero =
+            matches!(v, crate::table::Val::Exact(crate::table::Exact::Rat(r)) if r.is_zero());
+        (y.is_finite() && (y.is_normal() || (y == 0.0 && zero))).then_some(y)
+    }
+
+    /// PERMISSIVE'S GROUND FOLD (P3): a ground node's value is THE TABLE's (`table_value`),
+    /// written as the shortest decimal of the double nearest to it, in the f64 number domain
+    /// (as `ground_fold` writes the evaluator's float): `floor(tanh(40))` is 0, where float64
+    /// rounds tanh(40) to 1.0 and floors it to 1.
+    fn table_float_fold(v: &crate::table::Val) -> Option<Ex> {
+        let y = Self::table_f64(v)?;
+        let _f64 = crate::ac::rat::number_domain(true);
+        crate::ac::rat::Rat::parse_decimal(&format!("{y:?}")).map(Ex::Num)
+    }
+
+    /// THE MEMBER FOLD in `permissive`: `member_fold` with each value THE TABLE's, as the double
+    /// nearest to it -- `mod(sin(1), 2)` is `sin(1)`, and `floor(tanh(40))` is no `tanh(40)`
+    /// (the table reads 0 against 1.0). `node` is the node's own reading.
+    fn member_fold_table(
+        &self,
+        e: &Ex,
+        node: Option<&crate::table::Val>,
+        ctx: &SimplifyCtx,
+        view: &TokenView,
+    ) -> Option<Ex> {
+        let members: Vec<&Ex> = match e {
+            Ex::Fun(_, v) | Ex::Add(v) | Ex::Mul(v) => v.iter().collect(),
+            Ex::Pow(b, x) => vec![&**b, &**x],
+            _ => return None,
+        };
+        let node = Self::table_f64(node?)?;
+        let bare = Cx::bare(view);
+        let value = |x: &Ex| {
+            let toks = to_prefix(x, &bare);
+            self.table_value(&self.resolve_seq(&toks, ctx))
+                .as_ref()
+                .and_then(Self::table_f64)
+        };
+        members
+            .into_iter()
+            .filter(|m| value(m).is_some_and(|v| v.to_bits() == node.to_bits()))
+            .min_by(|a, b| {
+                complexity(a, view)
+                    .cmp(&complexity(b, view))
+                    .then_with(|| crate::ac::expr::cmp_ex(a, b, view))
+            })
+            .cloned()
+    }
+
+    /// THE GROUND FOLD (G, `f64`): a ground composite (no variable, no
     /// `<constant>`) whose class is not decided above is evaluated by the deployed f64
     /// evaluator (`numeric::evaluate_constant_subtree`: libm kernels, every literal at the float
     /// nearest to it, `np.pi` and `np.e` as their floats, the bag in its printed order;
@@ -965,8 +1028,17 @@ impl Engine {
             // `tanh(inf)` 1, `acosh(1)` 0, `asin(1)` pi/2 -- and to NaN where it has none (`1/0`
             // and `pow(0, -1)`, the limit rule). `permissive`'s values are real's: its classes
             // (an infinity, NaN) are the table's, and a finite value is its float (below).
+            let reading = if real || lossy {
+                self.table_value(&strs)
+            } else {
+                None
+            };
             let from_table = if real || lossy {
-                Some(self.table_ground_fold(&strs, real, &bare))
+                Some(
+                    reading
+                        .as_ref()
+                        .and_then(|v| self.table_ground_fold(v, real, &bare)),
+                )
             } else {
                 None
             };
@@ -1000,10 +1072,21 @@ impl Engine {
                 },
             };
             // THE GROUND FOLD (G): a finite ground node folds to its float, in `f64` and in
-            // `permissive`.
+            // `permissive` -- permissive's value the table's (P3), written as a float.
             let signed = fold_f64 && !lossy;
             let verdict = match verdict {
-                None if lossy || fold_f64 => {
+                None if lossy => {
+                    let float = reading.as_ref().and_then(Self::table_float_fold);
+                    let member = self
+                        .member_fold_table(e, reading.as_ref(), ctx, &view)
+                        .filter(|m| float.is_none() || !is_literal(m, &view));
+                    [member, float].into_iter().flatten().min_by(|a, b| {
+                        complexity(a, &view)
+                            .cmp(&complexity(b, &view))
+                            .then_with(|| crate::ac::expr::cmp_ex(a, b, &view))
+                    })
+                }
+                None if fold_f64 => {
                     // The member of the node's value or its float, whichever is cheaper, the
                     // canonical order breaking an equal price: `mod(sin(1), 2)` is `sin(1)`. A
                     // member that is itself a literal is that float written another way, and
