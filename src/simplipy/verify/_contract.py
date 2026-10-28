@@ -991,13 +991,45 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
     return float(best)
 
 
+def _norm(v):
+    """The 2-norm of `v` with an exactly rounded sum: the same bits on every machine. A BLAS dot
+    product sums in the order of the kernel the CPU dispatches, so `np.linalg.norm`, `@` and
+    `np.linalg.solve` give different last bits on different runners, and a verdict that
+    reads them depends on the machine (the CI saw it as a Python-version split)."""
+    return math.sqrt(math.fsum(float(x) * float(x) for x in v))
+
+
+def _solve(A, b):
+    """`A x = b` for the fit's small dense system: Gaussian elimination with partial pivoting
+    in plain float arithmetic (the same bits on every machine); None where `A` is singular."""
+    n = len(b)
+    M = [[float(A[i][j]) for j in range(n)] + [float(b[i])] for i in range(n)]
+    for col in range(n):
+        piv = max(range(col, n), key=lambda i: abs(M[i][col]))
+        if not math.isfinite(M[piv][col]) or M[piv][col] == 0.0:
+            return None
+        M[col], M[piv] = M[piv], M[col]
+        for i in range(col + 1, n):
+            f = M[i][col] / M[col][col]
+            for j in range(col, n + 1):
+                M[i][j] -= f * M[col][j]
+    x = [0.0] * n
+    for i in reversed(range(n)):
+        x[i] = (M[i][n] - math.fsum(M[i][j] * x[j] for j in range(i + 1, n))) / M[i][i]
+    return np.array(x)
+
+
 def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
     """The exists-witness for SEVERAL right-side constants (`rnames`), each its own symbol:
     values d with `R(x; d) = L(x; c)` at the generic environments where the deployed left side
     is finite, found by damped Gauss-Newton from a few seeds (the left side's own constants
     first), snapped to a nearby simple value where that is no worse, and validated on two
     further environments as `fit_witness` validates. `None` if no witness is found; with
-    `env_out`, the environments the fit used are appended to it, for `mp_polish_multi`."""
+    `env_out`, the environments the fit used are appended to it, for `mp_polish_multi`.
+
+    The arithmetic is the same on every machine (`_norm`, `_solve`, exactly rounded sums for
+    the normal equations): a fit that reads a BLAS kernel's summation order lands a few ulps
+    apart on different CPUs, and a verdict must not depend on the machine."""
     cl_env = _cl_env(cl_val)
     envs, targets = [], []
     for k in range(len(GEN)):
@@ -1038,7 +1070,7 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
             continue
         lam = 1e-3
         for _ in range(200):
-            n0 = float(np.linalg.norm(r))
+            n0 = _norm(r)
             if n0 <= 1e-13 * scale:
                 break
             J = np.empty((len(r), m))
@@ -1054,23 +1086,23 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
                 J[:, j] = (rp - r) / h
             if not ok:
                 break
-            A = J.T @ J
-            g = J.T @ r
+            A = [[math.fsum(J[:, i] * J[:, j]) for j in range(m)] for i in range(m)]
+            g = [math.fsum(J[:, i] * r) for i in range(m)]
             moved = False
             for _ in range(12):
-                try:
-                    step = np.linalg.solve(A + lam * np.diag(np.diag(A) + 1e-12), -g)
-                except np.linalg.LinAlgError:
+                step = _solve([[A[i][j] + (lam * (A[i][i] + 1e-12) if i == j else 0.0)
+                                for j in range(m)] for i in range(m)], [-x for x in g])
+                if step is None:
                     lam *= 10
                     continue
                 rn = resid(d + step)
-                if rn is not None and float(np.linalg.norm(rn)) < n0:
+                if rn is not None and _norm(rn) < n0:
                     d, r, lam, moved = d + step, rn, max(lam / 10, 1e-12), True
                     break
                 lam *= 10
             if not moved:
                 break
-        n = float(np.linalg.norm(r))
+        n = _norm(r)
         if best_n is None or n < best_n:
             best, best_n = d, n
         if n <= 1e-9 * scale:
@@ -1087,12 +1119,14 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
                 return float(c)
         return float(x)
 
-    # all coordinates together first (the fit's noise is shared between them), then each
-    for trial in [np.array([snapped(x) for x in d])] + [
-            np.where(np.arange(m) == j, snapped(d[j]), d) for j in range(m)]:
+    # all coordinates together first (the fit's noise is shared between them), then each, every
+    # trial from the CURRENT fit: a coordinate trial built from the unsnapped fit undid the joint
+    # snap on a tie (`<C_L0> = 0` in `(x + c)^2 -> x^2 + c x + c`: the fit's -2.5e-17 came back)
+    for j in range(-1, m):
+        trial = np.array([snapped(x) for x in d]) if j < 0 else \
+            np.where(np.arange(m) == j, snapped(d[j]), d)
         rt, rd = resid(trial), resid(d)
-        if rt is not None and rd is not None and \
-                float(np.linalg.norm(rt)) <= float(np.linalg.norm(rd)):
+        if rt is not None and rd is not None and _norm(rt) <= _norm(rd):
             d = trial
     for k in (2, 3):
         env = _gen_env(shared, k)
@@ -1143,9 +1177,25 @@ def mp_polish_multi(tl, tr, nvars, cl_builders, d0, envs):
         try:
             sol = mp.findroot(f, [mpf(d0[n]) for n in names], tol=mpf(10) ** (-(mp.dps - 30)),
                               maxsteps=100)
-            sol = [sol] if len(names) == 1 else list(sol)
+            sol = [mpf(x) for x in ([sol] if len(names) == 1 else list(sol))]
+            # an exact-zero witness stays exact, as `mp_polish` keeps it, where zero fits as well
+            # at every environment: Newton's residue of ~1e-557 for a true 0 is a nonzero value
+            # where both sides are exactly zero (x = 0 in `(x + 0)^2 = x^2 + d0 x + d1`)
+            zeroed = [mpf(0) if abs(x) < mpf(10) ** (-(mp.dps - 25)) else x for x in sol]
+            if zeroed != sol:
+                tol = mpf(10) ** (-(mp.dps - 30))
+                try:
+                    res = []
+                    for env, t in zip(envs, targets):
+                        e = env_at(env)
+                        e.update(dict(zip(names, zeroed)))
+                        res.append(abs(c_eval(tr, e) - t) <= tol * max(1, abs(t)))
+                    if all(res):
+                        sol = zeroed
+                except Unresolved:
+                    pass
             _POLISH_DPS[0] = mp.dps - 30
-            return dict(zip(names, (mpf(x) for x in sol)))
+            return dict(zip(names, sol))
         except (Unresolved, ZeroDivisionError, ValueError, TypeError):
             return {n: mpf(d0[n]) for n in names}
     finally:

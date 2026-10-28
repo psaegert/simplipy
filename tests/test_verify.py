@@ -1683,3 +1683,49 @@ def test_the_legacy_odd_roots_judge_like_rootn() -> None:
             assert math.copysign(1.0, got) == math.copysign(1.0, want), (legacy, x, got, want)
         assert math.isnan(f64([legacy, '?0'], math.nan))
         assert math.copysign(1.0, f64([legacy, '?0'], -0.0)) == -1.0, legacy
+
+
+# ------------------------------------------------------------------------------------------
+# A verdict does not depend on the machine: the multi-constant witness fit reads no BLAS.
+# ------------------------------------------------------------------------------------------
+_MULTI_FIT = '''
+from simplipy.verify import _contract as C
+tl = C.parse('pow + ?0 <constant> 2'.split(), '<C_L>', number=True)
+tr = C.parse('+ + pow ?0 2 * <constant> ?0 <constant>'.split(), '<C_R>', number=True)
+for c in (0.0, -1.5, 3.0, 4.0, 10.0, -100.0, 1000.0):
+    print(repr(C.fit_witness_multi(tl, tr, {'?0'}, {'<C_L0>': c}, ['<C_R0>', '<C_R1>'])))
+'''
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    ('pow + ?0 <constant> 2', '+ + pow ?0 2 * <constant> ?0 <constant>'),
+    ('pow - ?0 <constant> 2', '+ - pow ?0 2 * <constant> ?0 <constant>'),
+    ('/ + ?0 <constant> <constant>', '+ * <constant> ?0 <constant>'),
+])
+def test_a_multi_constant_identity_is_certified(lhs, rhs) -> None:
+    # The fit at <C_L0> = 0 returned the noise -2.5e-17 for an exact 0 (a coordinate snap built
+    # from the unsnapped fit undid the joint snap on a tie), and the polish took it to ~1e-557:
+    # a nonzero right side at x = 0, where the left side is exactly 0, convicted the identity.
+    got = v.verify_rule(lhs.split(), rhs.split())
+    assert got['verdict'] == 'CERTIFIED' and v.effective_tier(got) == 'real', got
+
+
+def test_the_multi_constant_fit_is_the_same_on_every_blas_kernel() -> None:
+    # The CI's py3.12 and py3.13 jobs disagreed on `(x + c)^2 -> x^2 + c x + c` because the two
+    # runners dispatched different OpenBLAS kernels: `@`, `np.linalg.norm` and `np.linalg.solve`
+    # sum in the kernel's order, and the fit's last bits followed. Forcing the kernel reproduces
+    # it on one machine; the fit's own arithmetic (exactly rounded sums, a plain-float solve)
+    # gives the same bits under every kernel.
+    import platform
+    import subprocess
+    import sys
+    if platform.machine() not in ('x86_64', 'AMD64'):
+        pytest.skip('the forced OpenBLAS kernels are x86 kernels')
+    outs = set()
+    for core in ('Haswell', 'Sandybridge', 'Prescott'):
+        env = {**os.environ, 'OPENBLAS_CORETYPE': core}
+        out = subprocess.run([sys.executable, '-c', _MULTI_FIT], env=env, capture_output=True,
+                             text=True, check=True).stdout
+        outs.add(out)
+    assert len(outs) == 1, outs
+    assert '[0.0, 0.0]' in outs.pop()

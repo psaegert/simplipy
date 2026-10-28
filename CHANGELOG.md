@@ -1243,6 +1243,16 @@ model predictions.
   mode), and the mine and the load take them as they take any rule: the mint scans a source
   with several constants, its judge loop and gates keep what `verify.licensed` passes, and the
   load serves the rule.
+- **The judge's verdict on a rule with several fitted constants is the same on every machine.**
+  The fit of the right side's constants summed through BLAS (`@`, `np.linalg.norm`,
+  `np.linalg.solve`), whose order follows the kernel the CPU dispatches, so its last bits, and
+  with them a verdict, depended on the machine: `(x0 + C)^2 -> x0^2 + C1*x0 + C2` held on one CI
+  runner and was refused on another. The fit now sums exactly rounded and solves in plain float
+  arithmetic, and gives the same bits under every OpenBLAS kernel. Two defects let those bits
+  reach the verdict and are fixed: the fit kept its noise (-2.5e-17) where the exact 0 fits as
+  well, and the high-precision polish took that noise to about 1e-557 instead of 0, a nonzero
+  right side where both sides are exactly 0. `(x0 - C)^2 -> x0^2 - C1*x0 + C2` and
+  `(x0 + C)/C -> C1*x0 + C2`, refused on every machine before, hold in `real`.
 - **The rule judge reads one table of values per mode.** Every value `simplipy.verify` compares
   is the core's, defined once. In `real` a literal is the rational it spells, `asin(1)` is
   exactly pi/2, and a pole or an infinite argument takes the limit where every direction gives
