@@ -107,6 +107,19 @@ def test_each_mode_reads_evidence_in_its_own_semantics(bare):
             assert certified(src, tgt, mode) == (False, 'uncertified'), (src, mode)
 
 
+def test_the_evidence_decision_counts_the_rows_in_the_modes_values(bare):
+    """`tan(atan2(x0, 0))` has no value off x0 = 0 in the reals (tan at pi/2), where float64
+    gives 1.633e16; `real` and `permissive` read the source's rows by the table before they
+    count its evidence, so it has none there and certifies nothing (it took every target, each
+    refused by the judge). `f64` reads float64's 1.633e16, which no other target matches."""
+    X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(42))
+    for mode in MODES:
+        for tgt in ('0', 'x0', 'tan x0'):
+            assert bare._core.judge_pair(
+                'tan atan2 x0 0'.split(), tgt.split(), ['x0', 'x1'], X.flatten().tolist(), 512,
+                rtol=1e-11, atol=1e-12, rule_mode=mode) == (False, 'uncertified'), (mode, tgt)
+
+
 def test_a_constant_collapse_is_minted_where_the_judge_licenses_it(bare):
     """A collapse to `<constant>` owes a witness only where its source is finite (the judge's
     `source_defined`), so the mint asks for a positive-measure finite part and nothing more of

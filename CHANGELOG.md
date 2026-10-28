@@ -1354,7 +1354,8 @@ model predictions.
   `cosh(x)^2 - sinh(x)^2 -> 1` cancels 565 digits at x = 650 and is read there at 1,180, and a
   saturation read in the table's boundary band (`atanh(tanh(800))`) climbs until it resolves.
   A source row float64 reads off a rounded pole is the table's: `tan(asin(ceil(x)))` has no
-  value at ceil(x) = 1, where float64 gives 1.633e16. `f64` compares the rows of a pair
+  value at ceil(x) = 1, where float64 gives 1.633e16, and the source's evidence is counted in
+  those values, so `tan(atan2(x, 0))`, which has no value off x = 0, has none. `f64` compares the rows of a pair
   without constants by the judge's agreement, 8 units in the last place, where the mine's
   tolerance was wider, and its bar probes the mined variables over finite doubles, reading a
   probe where an operation leaves the range by the table: `ceil(1/cosh(x)) -> 1` passes.

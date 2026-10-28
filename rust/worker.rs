@@ -1787,8 +1787,11 @@ const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
 /// at one seed and missed at another. When the given rows fall short, the missing ones are
 /// DRAWN from the certified cells -- a cell chosen in proportion to its volume, a point uniform in
 /// it, columns the source does not read uniform on the horizon -- from a stream fixed by `seed`,
-/// until the floor is met; the rows already there are kept. A draw the evaluator does not find
-/// finite is skipped, and a top-up that exhausts its draws fails closed.
+/// until the floor is met; the rows already there are kept. A draw whose value in the mode is
+/// not finite (real's and permissive's read by the table where float64 reads a rounded pole,
+/// `hiprec::table_classes`) is skipped, and a top-up that exhausts its draws fails closed: in
+/// the reals `tan(atan2(x, 0))` has no value off x = 0, though the interval layer, which reads
+/// the pole of `tan` at a varying argument as a null set, certifies cells of x > 0.
 #[allow(clippy::too_many_arguments)]
 fn evidence_rows(
     source: &[String],
@@ -1869,9 +1872,13 @@ fn evidence_rows(
             }
         }
         let cols1: Vec<Vec<f64>> = row.iter().map(|&v| vec![v]).collect();
-        if y.iter()
-            .any(|(p, _)| tape.eval_columns(&cols1, p, 1)[0].is_finite())
-        {
+        if y.iter().any(|(p, _)| {
+            let mut v = tape.eval_columns(&cols1, p, 1);
+            if !f64 {
+                crate::hiprec::table_classes(&mut v, source, p, ops, var_names, &cols1);
+            }
+            v[0].is_finite()
+        }) {
             for (col, v) in extra.iter_mut().zip(&row) {
                 col.push(*v);
             }
@@ -2094,6 +2101,15 @@ impl<'s> SourceCtx<'s> {
             &mut rng,
             crate::battery::holds_new_head(source, ops),
         );
+        // Real's and permissive's rows read the table where float64 reads definedness off a
+        // rounded pole or an exact zero (`hiprec::table_classes`): `tan(asin(ceil(x)))` has no
+        // value at ceil(x) = 1, where float64 gives 1.633e16. Before the evidence decision, which
+        // counts the rows in the mode's values.
+        if !f64_range {
+            for (p, yi) in y.iter_mut() {
+                crate::hiprec::table_classes(yi, source, p, ops, var_names, cols);
+            }
+        }
         // THE EVIDENCE DECISION, and the rows it needs (`evidence_rows`). An uninformative
         // source certifies no candidate (the evidence gate is the source's, the same for every
         // candidate), so nothing below is built for it: no range events, value set or battery,
@@ -2115,9 +2131,20 @@ impl<'s> SourceCtx<'s> {
         let (cols, n_rows): (std::borrow::Cow<'s, [Vec<f64>]>, usize) = match extra {
             extra if n_extra > 0 => {
                 // rows evaluate independently, so the instances' values on the appended rows
-                // are appended to their values on the given ones
+                // are appended to their values on the given ones, read in the mode's values
                 for (p, yi) in y.iter_mut() {
-                    yi.extend(tape.eval_columns(&extra, p, n_extra));
+                    let mut appended = tape.eval_columns(&extra, p, n_extra);
+                    if !f64_range {
+                        crate::hiprec::table_classes(
+                            &mut appended,
+                            source,
+                            p,
+                            ops,
+                            var_names,
+                            &extra,
+                        );
+                    }
+                    yi.extend(appended);
                 }
                 let joined: Vec<Vec<f64>> = cols
                     .iter()
@@ -2128,14 +2155,6 @@ impl<'s> SourceCtx<'s> {
             }
             _ => (std::borrow::Cow::Borrowed(cols), n_rows),
         };
-        // Real's and permissive's rows read the table where float64 reads definedness off a
-        // rounded pole (`hiprec::table_classes`): `tan(asin(ceil(x)))` has no value at
-        // ceil(x) = 1, where float64 gives 1.633e16.
-        if !f64_range {
-            for (p, yi) in y.iter_mut() {
-                crate::hiprec::table_classes(yi, source, p, ops, var_names, &cols);
-            }
-        }
         let events = if f64_range {
             y.iter()
                 .map(|(p, _)| events_if_any(tape.eval_columns_events(&cols, p, n_rows)).1)
