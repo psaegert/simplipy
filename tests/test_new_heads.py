@@ -313,8 +313,9 @@ def test_f64_ground_folds_keep_float64s_zero_sign(bare):
     assert f64('* 0 sin -1') == '-0.0' and f64('* sinh -0.0 min 0 2') == '-0.0'
     assert f64('* ceil -0.0 neg 0') == '0' and f64('neg * atanh -0.0 neg 0') == '-0.0'
     assert f64('max x2 neg sin 0') == 'max -0.0 x2'
-    # real reads one zero, and a zero the search derives beside a variable keeps it
-    assert ' '.join(bare.simplify('neg sin 0'.split(), mode='real')) == 'sin 0'
+    # real reads one zero (the table's sin(0) = 0), and a zero the search derives beside a
+    # variable keeps it
+    assert ' '.join(bare.simplify('neg sin 0'.split(), mode='real')) == '0'
     assert f64('* x1 0') == '0'
 
 
@@ -346,7 +347,7 @@ def test_f64_ground_fold_is_the_evaluator_at_zero_and_small_inputs(bare):
 def test_f64_writes_the_negative_zero_and_reads_it(bare):
     """f64 follows float64: a -0 is written `-0.0` (Python's `-0` is the integer zero, +0), a
     ground fold writes its float exactly, and an inverse or `atan2` reads the sign. `real` and
-    `permissive` have one zero."""
+    `permissive` have one zero, where 1/0 has no value."""
     f64 = lambda t: bare.simplify(t.split(), mode='f64')  # noqa: E731
     for src, want in (('ceil -0.5', ['-0.0']), ('mod 3 -3', ['-0.0']),
                       ('inv mod 3 -3', ['float("-inf")']), ('inv ceil -0.5', ['float("-inf")']),
@@ -358,7 +359,7 @@ def test_f64_writes_the_negative_zero_and_reads_it(bare):
                       ('* -1 * -1 0', ['0'])):
         assert f64(src) == want, (src, f64(src))
     for mode in ('real', 'permissive'):
-        assert bare.simplify(['inv', '-0.0'], mode=mode) == ['float("inf")']
+        assert bare.simplify(['inv', '-0.0'], mode=mode) == ['float("nan")']
         assert bare.simplify(['ceil', '-0.5'], mode=mode) == ['0']
     # one sign bit on top of the zero
     assert bare.complexity(['-0.0'], mode='f64') == bare.complexity(['0'], mode='f64') + 1000
@@ -503,8 +504,10 @@ def test_besselj_of_literals_at_zero_folds_exactly(bare, mode):
     assert s('besselj -0.5 0') == 'float("inf")'
     assert s('besselj -1.5 0') == 'float("-inf")'
     assert s('besselj -2.5 0') == 'float("inf")'
-    # an infinite order: 0 at x >= 0, NaN below (scipy's cells)
-    assert s('besselj atanh 1 2') == '0' and s('besselj atanh 1 -2') == 'float("nan")'
+    # an infinite order: 0 at x >= 0, NaN below in float64 (scipy's cells); the reals' limit
+    # from inside the domain (the integer orders, where J_n(-2) = (-1)^n J_n(2)) is 0
+    assert s('besselj atanh 1 2') == '0'
+    assert s('besselj atanh 1 -2') == ('float("nan")' if mode == 'f64' else '0')
 
 
 def test_besselj_identities_hold_bit_for_bit_in_float64():
@@ -587,8 +590,9 @@ def test_real_folds_a_ground_value_a_certified_enclosure_decides(bare):
     assert s('erf float("-inf")') == '-1'
     # an infinite divisor (numpy's cells): the dividend where it is zero or has its sign
     assert s('mod -1 log 0') == '-1' and s('mod 0 log 0') == '0' and s('mod 1 float("inf")') == '1'
-    # fail closed: float64 and the reals disagree inside these enclosures (f64: 1 and 0)
-    assert s('floor tanh 40') == 'floor tanh 40' and s('ceil exp -800') == 'ceil exp -800'
+    # float64 and the reals disagree here (f64: 1 and 0): the table reads tanh(40) below 1, and
+    # exp(-800) too close to 0 for its precision to round, so that one stays (fail closed)
+    assert s('floor tanh 40') == '0' and s('ceil exp -800') == 'ceil exp -800'
     # f64 keeps its own ground fold, with float64's zero sign
     f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
     assert f64('floor tanh 40') == '1' and f64('mod 0 log 0') == '-0.0'

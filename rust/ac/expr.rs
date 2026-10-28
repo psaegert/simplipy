@@ -1437,12 +1437,20 @@ impl<'a> Cx<'a> {
     }
 
     /// The SIGNED-ZERO reading: does this construction answer in float64's signed zeros (IEEE
-    /// 754)? `f64` and `permissive` are evaluated in float64, where an exact zero carries the sign
-    /// of what formed it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign;
-    /// `real` reasons over the reals, whose one zero inverts to `+inf` whatever formed it.
+    /// 754)? `f64` is evaluated in float64, where an exact zero carries the sign of what formed
+    /// it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign. `real` and
+    /// `permissive`, whose values are real's, have one zero, and `1/0` has no value there.
     #[inline]
     pub fn ieee_zeros(&self) -> bool {
-        !matches!(self.mode, RuleMode::Real)
+        matches!(self.mode, RuleMode::Default)
+    }
+
+    /// Are this mode's values THE TABLE's real values, so that an operation on literals (a
+    /// rational, an infinity, NaN) is the table's exact value (`table_literal_fold`)? `real`,
+    /// and `permissive`, whose values are real's: `1/0` has no value there either.
+    #[inline]
+    pub fn table_values(&self) -> bool {
+        !matches!(self.mode, RuleMode::Default)
     }
 
     /// In f64 mode, a numeral leaf the evaluator reads as +-inf or (underflowing) as 0:
@@ -9235,6 +9243,22 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     } else {
         (base, exp)
     };
+    // In `real` and `permissive` a power of two literals is the table's exact value
+    // (`table_literal_fold`):
+    // `pow(0, -1)` is NaN (1/0, the limit rule), `pow(0, -2)` +inf, `pow(1, inf)`,
+    // `pow(inf, 0)` and `pow(nan, 0)` NaN -- before the one-zero arms and the `x^0` and `1^x`
+    // identities below, which hold for every finite real.
+    // Permissive's sentinel licence comes first: until the phase-1 fixpoint `1/inf` stays
+    // written, so `inf/inf` can still cancel as like terms (see the reciprocal arm below).
+    let sentinel = cx.lossy()
+        && !cx.sentinels_expired
+        && matches!(base, Ex::PosInf | Ex::NegInf)
+        && matches!(&exp, Ex::Num(q) if q.is_negative());
+    if cx.table_values() && !sentinel && table_literal(&base) && table_literal(&exp) {
+        if let Some(folded) = table_literal_fold("pow", &[base.clone(), exp.clone()]) {
+            return folded;
+        }
+    }
     if let Ex::Num(e) = &exp {
         if e.is_zero() {
             return Ex::Num(Rat::ONE);
@@ -10010,6 +10034,40 @@ fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
     Rat::from_big(if ceil { f + 1 } else { f }, BigInt::from(1))
 }
 
+/// REAL'S LITERAL ARITHMETIC IS THE TABLE'S: the value of the operation `op` at literal
+/// arguments (rationals, the infinities, NaN) as THE TABLE reads it in `real` (`table::apply`),
+/// where it is exact -- a rational, an infinity, or NaN where the limit rule gives no value:
+/// `pow(0, -1)` and `rootn(0, -3)` (1/0: the sides disagree), `pow(1, inf)`, `pow(inf, 0)` and
+/// `pow(nan, 0)` are NaN, `rootn(0, -2)` and `pow(0, -2)` +inf, `exp(-inf)` 0, `tanh(inf)` 1,
+/// `acosh(1)` 0. `None` for an approximation (a transcendental value stays symbolic) or an
+/// operator the table does not know.
+fn table_literal_fold(op: &str, args: &[Ex]) -> Option<Ex> {
+    use crate::table::{Exact, Val};
+    let vals: Option<Vec<Val>> = args
+        .iter()
+        .map(|a| match a {
+            Ex::Num(r) => Some(Val::Exact(Exact::Rat(r.clone()))),
+            Ex::PosInf => Some(Val::Exact(Exact::PosInf)),
+            Ex::NegInf => Some(Val::Exact(Exact::NegInf)),
+            Ex::NaN => Some(Val::Exact(Exact::Undef)),
+            _ => None,
+        })
+        .collect();
+    let mut ctx = crate::table::Ctx::new(50)?;
+    match crate::table::apply(op, &vals?, &mut ctx)? {
+        Val::Exact(Exact::Rat(r)) => Some(Ex::Num(r)),
+        Val::Exact(Exact::PosInf) => Some(Ex::PosInf),
+        Val::Exact(Exact::NegInf) => Some(Ex::NegInf),
+        Val::Exact(Exact::Undef) => Some(Ex::NaN),
+        _ => None,
+    }
+}
+
+/// Is `e` a literal the table reads exactly: a rational, an infinity or NaN?
+fn table_literal(e: &Ex) -> bool {
+    matches!(e, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::NaN)
+}
+
 /// The exact value with `real` of `floor`, `ceil` or `mod` at rational arguments (the real
 /// `mod`: `a - b floor(a/b)`, NaN at `b = 0`); `None` for any other head or a result that leaves
 /// `Rat`.
@@ -10450,6 +10508,14 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // deployed kernels instead.
     if !args.is_empty() && args.iter().all(|a| matches!(a, Ex::Num(_))) {
         if let Some(folded) = exact_step_fold(op, &args, matches!(cx.mode, RuleMode::Real), cx) {
+            return folded;
+        }
+    }
+    // In `real` and `permissive` an operation on literals is the table's exact value
+    // (`table_literal_fold`):
+    // `rootn(0, -3)` is NaN, `rootn(0, -2)` +inf, `exp(-inf)` 0, `tanh(inf)` 1, `acosh(1)` 0.
+    if cx.table_values() && !args.is_empty() && args.iter().all(table_literal) {
+        if let Some(folded) = table_literal_fold(&cx.view.resolve_owned(op), &args) {
             return folded;
         }
     }
@@ -11164,29 +11230,34 @@ mod tests {
             for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
-                let ieee = !matches!(mode, RuleMode::Real);
+                let ieee = matches!(mode, RuleMode::Default);
                 let inverse = |members: Vec<Ex>| -> Ex {
                     let raised = raised_members(members, &Rat::NEG_ONE, &cx)
                         .unwrap_or_else(|held| vec![pow(held, Ex::int(-1), &cx)]);
                     mul(raised, &cx)
                 };
-                // 1/(x0*0) is inf/x0 in the float64 modes (-inf wherever x0 < 0), +inf in real
+                // 1/(x0*0) is inf/x0 in f64 (-inf wherever x0 < 0); in real and permissive 1/0
+                // has no value (the limit rule: +inf from one side, -inf from the other)
                 let want = if ieee {
                     mul(vec![Ex::PosInf, pow(x(view), Ex::int(-1), &cx)], &cx)
                 } else {
-                    Ex::PosInf
+                    Ex::NaN
                 };
                 assert_eq!(inverse(vec![x(view), Ex::int(0)]), want, "{mode:?}");
-                // 1/(-1*0) = 1/-0 is -inf in the float64 modes
-                let want = if ieee { Ex::NegInf } else { Ex::PosInf };
+                // 1/(-1*0) = 1/-0 is -inf in f64
+                let want = if ieee { Ex::NegInf } else { Ex::NaN };
                 assert_eq!(inverse(vec![Ex::int(-1), Ex::int(0)]), want, "{mode:?}");
                 // a product held whole around its zero distributes the inverse too
                 let held = pow(Ex::Mul(vec![Ex::int(0), lg(&cx)]), Ex::int(-1), &cx);
                 if ieee {
                     let want = mul(vec![Ex::PosInf, pow(lg(&cx), Ex::int(-1), &cx)], &cx);
                     assert_eq!(held, want, "{mode:?}");
-                } else {
+                } else if matches!(mode, RuleMode::Real) {
                     assert!(matches!(held, Ex::Pow(..)), "{mode:?}: {held:?}");
+                } else {
+                    // permissive cancels `0*log(x0)` to 0 without a definedness check, and
+                    // then reads 1/0 as real does: no value
+                    assert_eq!(held, Ex::NaN, "{mode:?}");
                 }
             }
         });

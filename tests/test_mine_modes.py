@@ -23,9 +23,9 @@ def eng():
 
 def test_the_mark_is_the_serve_answer_of_the_mode(eng):
     mark = eng._core.mine_mark
-    # f64 folds the ground transcendental; real leaves it to a rule
+    # f64 folds the ground transcendental; real reads the exact value from the table
     assert mark(['cos', '0'], rule_mode='default') == ['1']
-    assert mark(['cos', '0'], rule_mode='real') == ['cos', '0']
+    assert mark(['cos', '0'], rule_mode='real') == ['1']
     # real's constructor collapses the inverse pair; f64's saturation guard keeps it
     assert mark(['atanh', 'tanh', 'x0'], rule_mode='real') == ['x0']
     assert mark(['atanh', 'tanh', 'x0'], rule_mode='default') == ['atanh', 'tanh', 'x0']
@@ -41,9 +41,9 @@ def test_sources_are_the_canonical_projections_of_the_mode(eng):
     assert eng._core.mine_sources(enumerated, rule_mode='default') == [
         ['+', 'cos', '0', 'sin', 'x0'], ['+', 'sin', 'x0', '1'], ['atanh', 'tanh', 'x0'],
         ['cos', '0']]
-    # real keeps `cos 0`, and `atanh tanh x0` is the atom x0
-    assert eng._core.mine_sources(enumerated, rule_mode='real') == [
-        ['+', 'cos', '0', 'sin', 'x0'], ['+', 'sin', 'x0', '1'], ['cos', '0']]
+    # real reads `cos 0` as the table's 1 (so the first two sources are one, and `cos 0` the
+    # atom 1), and `atanh tanh x0` is the atom x0
+    assert eng._core.mine_sources(enumerated, rule_mode='real') == [['+', 'sin', 'x0', '1']]
 
 
 @pytest.mark.parametrize('mode', MODES)

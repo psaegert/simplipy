@@ -196,11 +196,14 @@ class TestExactCollapsesMint:
         assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)
         # `sin(np.pi) -> 0` is exactly true and f64 computes 1.2246467991473532e-16: the judge
         # files it `real`, so the f64 mine, whose set the engine holds in its default slot,
-        # leaves it to the modes that license it; the real mine mints it.
+        # leaves it to the modes that license it. The real engine reads sin(pi) and cos(pi) from
+        # the table itself, so the real mine has nothing to mint for them; log(e), which the
+        # table holds only approximately, it mints.
         assert (('sin', 'np.pi'), ('0',)) not in rules, sorted(rules)
         real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
-        assert (('sin', 'np.pi'), ('0',)) in real, sorted(real)
-        assert (('cos', 'np.pi'), ('-1',)) in real, sorted(real)
+        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
+        assert mined.simplify(['cos', 'np.pi'], mode='real') == ['-1']
+        assert (('sin', 'np.pi'), ('0',)) not in real, sorted(real)
         assert (('log', 'np.e'), ('1',)) in real, sorted(real)
 
     def test_mined_engine_serves_the_collapse(self, mined):
@@ -215,8 +218,6 @@ class TestExactCollapsesMint:
         # says nothing about the mine at all.
         # Where the ROUTED artifact serves it is pinned in `TestGroundFoldLicence` against
         # the shipped triple.
-        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
-        assert (('sin', 'np.pi'), ('0',)) in real
         assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
         assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
         from simplipy.verify._contract import judge_rule

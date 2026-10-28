@@ -152,8 +152,9 @@ class TestGroundNanFolds:
         for mode in (Mode.f64, Mode.real, Mode.permissive):
             assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=mode) == \
                 ['rootn', 'x1', 'acos', 'cos', '1']
+        # in real the table reads sin(pi) = 0 exactly, so the index is the integer 2
         assert rules_free.simplify('rootn x1 + 2 sin np.pi'.split(), mode=Mode.real) == \
-            ['rootn', 'x1', '+', 'sin', 'np.pi', '2']
+            ['rootn', 'x1', '2']
 
 
 class TestSymbolicExponentMergeLicence:
@@ -476,12 +477,12 @@ class TestPowerOfExpIsExp:
         # `exp(0) -> 1` is a literal EVALUATION. It used to stay with the rules, because
         # the constructor was forbidden to evaluate anything transcendental; under
         # mode-aware folding the f64 constructor does it directly, and exactly -- exp(0)
-        # is 1 in f64 and in mathematics alike. `real` still leaves it to a rule, because
-        # `real` folds only exact RATIONAL arithmetic.
+        # is 1 in f64 and in mathematics alike. `real` reads it from the table, which holds
+        # the exact value.
         from simplipy import Mode
         bare._core.set_mode_rules('real', [])
         assert bare.simplify(['exp', '0'], mode=Mode.f64) == ['1']
-        assert bare.simplify(['exp', '0'], mode=Mode.real) == ['exp', '0']
+        assert bare.simplify(['exp', '0'], mode=Mode.real) == ['1']
         # `exp(1) -> e` is a different thing and unchanged: it chooses between two exact
         # SYMBOLS for one value, so it is not an evaluation at all and is unconditional.
         assert bare.simplify(['exp', '1'], mode=Mode.real) == ['np.e']
@@ -528,15 +529,15 @@ class TestPowerOfExpIsExp:
         # forbids at ZERO measure tolerance.  `Ex::Num` is finite by construction, so the
         # fold condition excludes it without needing a licence -- pinned here because a
         # future widening of the gate would silently reopen it.
-        # In `f64` the walk folds the ground `exp(-inf)` to the evaluator's 0 first, so no
-        # composition sees it there; `real` keeps the powers.
+        # The ground `exp(-inf)` is 0 first, so no composition sees it: the evaluator's 0 in
+        # `f64`, the table's limit in `real`.
         from simplipy import Mode
         bare = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
         bare._core.set_mode_rules('real', [])
         for tokens, f64 in ((['pow', 'exp', 'float("-inf")', 'x0'], ['pow', '0', 'x0']),
                             (['pow', 'exp', 'float("-inf")', '2'], ['0']),
                             (['rootn', 'exp', 'float("-inf")', '2'], ['0'])):
-            assert bare.simplify(list(tokens), mode=Mode.real) == tokens, tokens
+            assert bare.simplify(list(tokens), mode=Mode.real) == f64, tokens
             assert bare.simplify(list(tokens)) == f64, tokens
 
     def test_it_does_not_fire_without_an_e_base_or_without_exp(self, eng) -> None:
@@ -596,16 +597,14 @@ class TestEvenFunctionsAreSignBlind:
         assert bare.simplify(['cos', 'pow', 'neg', 'x0', '2']) == ['cos', 'pow', 'x0', '2']
 
     def test_the_POLE_TRILEMMA_trap_is_refused(self, bare) -> None:
-        # `inv` is odd on the reals minus the origin and NOT odd here: with one zero
-        # (contract §9.2) `neg(0) = 0`, so `inv(neg 0)` and `neg(inv 0)` genuinely
-        # disagree -- pinned as VALUES, because this is the reason `inv` has no parity.
-        # §9.8.4 proves no total semantics with +inf != -inf keeps both pole symmetry and
-        # absorption, and this contract keeps absorption -- in `real`. float64's signed zero is
-        # odd at the pole (`1/-0 = -inf`), so in `f64` the two spellings agree.
+        # `inv` is odd on the reals minus the origin. With one zero `neg(0) = 0`, and the limit
+        # rule gives `1/0` no value (+inf from one side, -inf from the other), so `inv(neg 0)` and
+        # `neg(inv 0)` agree in `real`: both have none. float64's signed zero is odd at the pole
+        # (`1/-0 = -inf`), so in `f64` the two spellings agree too.
         real = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[],
                               rules_real=[])
-        assert real.simplify(['inv', 'neg', '0'], mode=Mode.real) == ['float("inf")']
-        assert real.simplify(['neg', 'inv', '0'], mode=Mode.real) == ['float("-inf")']
+        assert real.simplify(['inv', 'neg', '0'], mode=Mode.real) == ['float("nan")']
+        assert real.simplify(['neg', 'inv', '0'], mode=Mode.real) == ['float("nan")']
         assert bare.simplify(['inv', 'neg', '0'], mode=Mode.f64) == ['float("-inf")']
         assert bare.simplify(['neg', 'inv', '0'], mode=Mode.f64) == ['float("-inf")']
         # `abs(1/(-x)) -> abs(1/x)` DOES hold and does fire -- not through a parity claim

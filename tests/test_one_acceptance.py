@@ -19,8 +19,8 @@ from conftest import acj_config_path
 
 VARS = ['x0', 'x1']
 SEED = 11
-# The channels are compared in `real`: its serve answer leaves the specials and `log 1`
-# standing (permissive absorbs and folds them), so every acceptance entry gets to speak.
+# The channels are compared in `real`: its serve answer leaves the specials standing
+# (permissive absorbs and folds them), so every acceptance entry gets to speak.
 MODE = 'real'
 
 
@@ -81,8 +81,9 @@ PAIRS = [
     # A constant-only source the engine collapses itself (`C^e` is finite for C >= 0) has
     # an atomic mark: nothing is below it.
     (('pow', '<constant>', 'exp', '1'), ('<constant>',), False, 'atomic_mark'),
-    # POLE: a.e. equal and below the mark, but the value at x0 = 0 changes (0 -> nan)
-    (('*', 'x0', 'log', '1'), ('log', '/', 'x0', 'x0'), False, 'pole_class_change'),
+    # `log(1)` is 0 in the table, so real's mark of `x0*log(1)` is the atomic 0 (the pole
+    # reason, a value at x0 = 0 changing from 0 to nan, is pinned in test_licence_registry)
+    (('*', 'x0', 'log', '1'), ('log', '/', 'x0', 'x0'), False, 'atomic_mark'),
 ]
 
 

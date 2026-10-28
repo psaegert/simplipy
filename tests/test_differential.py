@@ -287,7 +287,8 @@ REAL_TABLE = [
     ('pow float("inf") 0', 'nan', 'N7'), ('pow float("nan") 0', 'nan', 'N7'),
     ('pow 1 float("nan")', 'nan', 'N7'), ('pow 0 0', '1.0', None),
     ('pow -8 / 1 3', 'nan', None), ('rootn -8 3', '-2.0', None), ('neg 0', '0.0', None),
-    ('asin 2', 'nan', None), ('log -1', 'nan', None),
+    ('asin 2', 'nan', None), ('log -1', 'nan', None), ('acosh 1', '0.0', None),
+    ('sin np.pi', '0.0', None), ('cos np.pi', '-1.0', None),
 ]
 
 
@@ -298,8 +299,7 @@ def test_the_table_reads_real_values(expr, expected) -> None:
 
 
 @pytest.mark.parametrize('expr, expected', [
-    pytest.param(e, v, marks=[expected_failure(d, 3)] if d else [], id=e)
-    for e, v, d in REAL_TABLE])
+    pytest.param(e, v, id=e) for e, v, _ in REAL_TABLE])
 def test_the_real_fold_agrees_with_the_table(expr, expected) -> None:
     """A ground expression the real engine folds to a literal folds to the table's value (it may
     also leave it as written)."""

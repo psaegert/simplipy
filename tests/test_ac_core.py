@@ -816,16 +816,17 @@ class TestInfixCallSyntaxRoundTrip:
 
 
 class TestZeroPoles:
-    """Where an exact zero is inverted, `f64` and `permissive` keep the sign IEEE 754 gives it,
-    since their evaluator is float64: a product holding an exact zero is a zero of its other
-    members' sign, and its inverse distributes over them (`(0*f)^k = inf * f^k`, exact in IEEE
-    arithmetic for every `f`). `real` reads the one zero of the reals, whose pole is `+inf`.
-    Every spelling of one value gets one answer in each mode: `inv(0/tanh(-2))`,
-    `inv(0*tanh(-2))` and `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the
-    first and `+inf` for the others)."""
+    """Where an exact zero is inverted, `f64` keeps the sign IEEE 754 gives it, since its
+    evaluator is float64: a product holding an exact zero is a zero of its other members' sign,
+    and its inverse distributes over them (`(0*f)^k = inf * f^k`, exact in IEEE arithmetic for
+    every `f`). `real` and `permissive` read the one zero of the reals, where `1/0` has no value
+    (the limit rule: +inf from one side, -inf from the other), while `1/0^2` is +inf. Every
+    spelling of one value gets one answer in each mode: `inv(0/tanh(-2))`, `inv(0*tanh(-2))` and
+    `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the first and `+inf` for the
+    others)."""
 
-    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("-inf")'),
-                                           ('real', 'float("inf")')])
+    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("nan")'),
+                                           ('real', 'float("nan")')])
     def test_a_negative_zero_inverts_to_minus_inf(self, engine: SimpliPyEngine, mode, want) -> None:
         for tokens in (['inv', '/', '0', 'tanh', '-2'],
                        ['inv', '*', '0', 'tanh', '-2'],
@@ -833,45 +834,44 @@ class TestZeroPoles:
                        ['inv', 'neg', '-', 'x1', 'x1'],
                        engine.read_infix('pow(0/tanh(-2), -3)')):
             assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
-        # an even power of a zero is +0, whatever its sign
+        # an even power of a zero is +inf, whatever its sign: both sides agree
         assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -2)'), mode=mode) == \
             ['float("inf")']
 
-    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
-    def test_a_zero_takes_the_sign_of_its_co_members(self, engine: SimpliPyEngine, mode) -> None:
-        assert engine.simplify(['inv', '*', '0', 'x1'], mode=mode) == ['/', 'float("inf")', 'x1']
-        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode=mode) == \
+    def test_a_zero_takes_the_sign_of_its_co_members(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode='f64') == ['/', 'float("inf")', 'x1']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode='f64') == \
             ['/', 'float("inf")', 'x11']
-        # permissive keeps S in x/(0/S), as f64 does
-        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode=mode) == \
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode='f64') == \
             ['*', 'float("inf")', '*', 'x1', 'x2']
 
     def test_a_written_signed_zero_keeps_float64s_sign_in_f64(self, engine) -> None:
         # A written negation of a zero is f64's `-0.0`, which an odd function keeps, and a written
         # difference subtracts by adding the negation (`-0 - 0` is `-0`): float64 gives -inf for
-        # all three. real reads its one zero, permissive a value up to the sign of a zero.
+        # all three. real and permissive read the one zero, where 1/0 has no value.
         for mode in ('f64', 'permissive', 'real'):
             for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0'],
                            ['inv', '-', '-0.0', '0']):
-                want = 'float("-inf")' if mode == 'f64' else 'float("inf")'
+                want = 'float("-inf")' if mode == 'f64' else 'float("nan")'
                 assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
         # -0 + 0 is +0, and x - 0 is x bit for bit
         assert engine.simplify(['inv', '+', '-0.0', '0'], mode='f64') == ['float("inf")']
         assert engine.simplify(['-', 'x1', '0'], mode='f64') == ['x1']
 
-    def test_real_reads_one_zero(self, engine: SimpliPyEngine) -> None:
-        assert engine.simplify(['inv', '*', '0', 'x1'], mode='real') == ['float("inf")']
-        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode='real') == \
-            ['float("inf")']
-        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode='real') == \
-            ['*', 'float("inf")', 'x1']
+    @pytest.mark.parametrize('mode', ['real', 'permissive'])
+    def test_real_reads_one_zero(self, engine: SimpliPyEngine, mode) -> None:
+        # one zero, and 1/0 has no value (V4); permissive's values are real's
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode=mode) == ['float("nan")']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode=mode) == \
+            ['float("nan")']
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode=mode) == ['float("nan")']
 
     def test_fuzz_row_188677_family(self, engine: SimpliPyEngine) -> None:
         # x2 / ((0*x1/tanh(-2)) / inf): the inverse of a product holding a zero, which takes the
-        # sign of x1 and of tanh(-2): -inf*x2/x1 in f64, +inf*x2 (one zero) in real.
+        # sign of x1 and of tanh(-2): -inf*x2/x1 in f64; no value in real (1/0, one zero).
         import numpy as np
         tokens = ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']
-        assert engine.simplify(list(tokens), mode='real') == ['*', 'float("inf")', 'x2']
+        assert engine.simplify(list(tokens), mode='real') == ['float("nan")']
         out = engine.simplify(list(tokens))
         x = np.array([[1.5, 2.5], [-1.5, 2.5], [1.5, -2.5], [-1.5, -2.5]])
         f = engine.as_callable(out, ['x1', 'x2'])
@@ -966,9 +966,9 @@ class TestTranscendentalAtomEnclosures:
     certified rules then fold the zero first and absorption wins."""
 
     def test_zero_times_cofactor_is_the_positive_pole(self, engine: SimpliPyEngine) -> None:
-        # These rest on `sin(np.pi) -> 0`, which is exactly true and NOT f64-realised
-        # (f64 gives 1.2246467991473532e-16), so from 0.14.0 it is a `real`-tier rule.
-        # The pole is therefore reached in `real`, and the default mode keeps the
+        # These rest on `sin(np.pi) = 0`, which is exactly true and NOT f64-realised
+        # (f64 gives 1.2246467991473532e-16): real reads it from the table. The pole is
+        # therefore reached in `real`, where 1/0 has no value, and the default mode keeps the
         # expression -- the two soundnesses disagreeing, on one row.
         from conftest import require_triple
         require_triple()
@@ -976,22 +976,21 @@ class TestTranscendentalAtomEnclosures:
         for tokens in (['inv', '*', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'tan', 'np.pi', 'x1']):
-            assert engine.simplify(list(tokens), mode=Mode.real) == ['float("inf")'], tokens
+            assert engine.simplify(list(tokens), mode=Mode.real) == ['float("nan")'], tokens
             assert engine.simplify(list(tokens), mode=Mode.f64) != ['float("inf")'], tokens
 
     def test_fuzz_row_172346(self, engine: SimpliPyEngine) -> None:
         # inv( abs(sin(np.pi)) / inv(x4 - x1 + 2*x2) ): the reciprocal cofactor
         # canonicalizes with a rational -1, which turned the split pole visibly negative.
-        # `sin(np.pi) -> 0` is `real`-tier from 0.14.0 (exactly true, and f64 computes
-        # 1.2246467991473532e-16), so the pole is reached in the mode whose authority
-        # is mathematics.
+        # `sin(np.pi) = 0` is exactly true, and f64 computes 1.2246467991473532e-16, so the
+        # pole is reached in the mode whose authority is mathematics, where 1/0 has no value.
         from conftest import require_triple
         require_triple()
         from simplipy import Mode
         out = engine.simplify(['inv', '/', 'abs', 'sin', 'np.pi',
                                'inv', '-', '-', 'x4', 'x1', '*', 'x2', '-2'],
                               mode=Mode.real)
-        assert out == ['float("inf")'], out
+        assert out == ['float("nan")'], out
 
     def test_true_nonzero_atom_grounds_still_certify(self, engine: SimpliPyEngine) -> None:
         # The enclosure must not blanket-refuse: pi itself and shifted atoms are

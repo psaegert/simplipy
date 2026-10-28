@@ -244,13 +244,12 @@ class TestMode:
         assert engine.simplify(src) == out  # the default is SOUND
 
     def test_lossy_constant_over_zero_keeps_the_explicit_pole(self) -> None:
-        """The AC core folds inv(0) to +inf exactly BEFORE any widening can see the
-        quotient, so LOSSY also keeps the explicit pole spelling (the documented
-        training-path parity corner, revisited at the flash-ansr migration)."""
+        """The AC core reads inv(0) exactly BEFORE any widening can see the quotient: in
+        permissive, whose values are real's, 1/0 has no value, so `C/0` has none either."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         assert engine.simplify(engine.to_tagged(["/", "<constant>", "0"]), mode=Mode.permissive) \
-            == ["<mul>", 'float("inf")', "<constant>", "</mul>"]
+            == ['float("nan")']
 
     def test_finite_ae_fold_is_mode_independent(self) -> None:
         """A finite-a.e. subtree (`1/C`) folds in BOTH modes -- the pole is measure-zero."""

@@ -1281,6 +1281,17 @@ model predictions.
   `(-1)^C`, finite only at the integers, does not. A sum or product absorbs a ground member by
   the same licence, a product only a member certainly nonzero (`C * 0` stays 0). `permissive`
   collapses without evidence.
+- **`real` and `permissive` read ground values from the table.** An operation on literals,
+  and a ground expression, is the table's exact value where it has one: `exp(-inf)` is 0,
+  `tanh(inf)` 1, `acosh(1)` 0, `exp(0)` 1, `sin(pi)` 0, `pow(0, -2)` +inf. Where
+  the limit rule gives none, it is NaN: `1/0` and `pow(0, -1)` (+inf from one side, -inf from
+  the other), `pow(1, inf)`, `pow(inf, 0)`, `pow(nan, 0)`. `permissive`, whose values are
+  real's, reads one zero as `real` does: `1/(x1*0)` is NaN (it was `inf/x1`, float64's signed
+  zero), and a corpus row dividing by `x13 - x13` no longer prices above `real` there: on the
+  shipped corpus `permissive` is now at most as dear as `f64` and `real` on every row. `f64`
+  keeps float64's values (`1/(x1*0)` is `inf/x1`). The table's `max` and `min` of an exact and an
+  approximate value it cannot tell apart is approximate, never the exact member: `max(2,
+  cosh(acosh(2)))` stays as written in `real`.
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`

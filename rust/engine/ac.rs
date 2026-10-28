@@ -781,6 +781,28 @@ impl Engine {
         None
     }
 
+    /// THE TABLE'S GROUND FOLD (`real`, and `permissive`'s classes): a ground node's real value
+    /// as THE TABLE reads it (`table::ground_value`), as the literal that spells it exactly: a
+    /// rational (in `real` only), a rational multiple of pi (`real` only), an infinity, or NaN
+    /// where the table gives no value. `None` where the value is an approximation (a
+    /// transcendental stays symbolic) or the point is Unresolved at the working precision.
+    fn table_ground_fold(&self, strs: &[String], exact: bool, bare: &Cx) -> Option<Ex> {
+        use crate::table::{Exact, Val};
+        /// The working precision of a ground reading: past a double's, and cheap.
+        const GROUND_DPS: i32 = 50;
+        let v = crate::table::ground_value(strs, &self.operators, GROUND_DPS)?;
+        match v {
+            Val::Exact(Exact::Undef) => Some(Ex::NaN),
+            Val::Exact(Exact::PosInf) => Some(Ex::PosInf),
+            Val::Exact(Exact::NegInf) => Some(Ex::NegInf),
+            Val::Exact(Exact::Rat(r)) if exact => Some(Ex::Num(r)),
+            Val::Exact(Exact::Pi(q)) if exact => {
+                Some(crate::ac::expr::mul(vec![Ex::Num(q), Ex::Pi], bare))
+            }
+            _ => None,
+        }
+    }
+
     /// THE GROUND FOLD (G, `f64` and `permissive`): a ground composite (no variable, no
     /// `<constant>`) whose class is not decided above is evaluated by the deployed f64
     /// evaluator (`numeric::evaluate_constant_subtree`: libm kernels, every literal at the float
@@ -938,30 +960,43 @@ impl Engine {
             // arm reads the one thing the interval cannot see: the token. (Vs
             // point-support provenance is the RECORDED design direction if more
             // point-derived-enclosure consumers appear.)
-            let verdict = match self.h045_exact_pow_class(e, &bare, ctx) {
-                Some(decided) => decided,
-                None => match crate::interval::value_class(&strs, &self.operators) {
-                    // A Nan verdict on a composite
-                    // CONTAINING a bracket-poisoned pow exponent (a Num or literal
-                    // spelling whose exact integer the interval can only bracket) is
-                    // untrustworthy -- the pow-node arm above cannot help once the
-                    // poisoned node sits INSIDE the classified composite (the
-                    // interval walk re-brackets it internally and its continuum
-                    // convention asserts Nan for what is truly a parity-decided
-                    // finite/inf value; fuzz-extreme row 1756's div chain). REFUSE
-                    // the fold. Inf verdicts stay trusted: a poisoned pow can only
-                    // leak Nan (never a definite infinity) through the walk, so a
-                    // pure-inf class cannot have come from the bracket.
-                    Some(crate::interval::Class::Nan) => {
-                        if contains_bracket_poisoned_pow(e, &view) {
-                            None
-                        } else {
-                            Some(Ex::NaN)
+            // REAL'S VALUES ARE THE TABLE'S (`table::ground_value`): in `real` a ground node
+            // folds to its exact value wherever the table carries one -- `exp(-inf)` is 0,
+            // `tanh(inf)` 1, `acosh(1)` 0, `asin(1)` pi/2 -- and to NaN where it has none (`1/0`
+            // and `pow(0, -1)`, the limit rule). `permissive`'s values are real's: its classes
+            // (an infinity, NaN) are the table's, and a finite value is its float (below).
+            let from_table = if real || lossy {
+                Some(self.table_ground_fold(&strs, real, &bare))
+            } else {
+                None
+            };
+            let verdict = match from_table {
+                Some(v) => v,
+                None => match self.h045_exact_pow_class(e, &bare, ctx) {
+                    Some(decided) => decided,
+                    None => match crate::interval::value_class(&strs, &self.operators) {
+                        // A Nan verdict on a composite
+                        // CONTAINING a bracket-poisoned pow exponent (a Num or literal
+                        // spelling whose exact integer the interval can only bracket) is
+                        // untrustworthy -- the pow-node arm above cannot help once the
+                        // poisoned node sits INSIDE the classified composite (the
+                        // interval walk re-brackets it internally and its continuum
+                        // convention asserts Nan for what is truly a parity-decided
+                        // finite/inf value; fuzz-extreme row 1756's div chain). REFUSE
+                        // the fold. Inf verdicts stay trusted: a poisoned pow can only
+                        // leak Nan (never a definite infinity) through the walk, so a
+                        // pure-inf class cannot have come from the bracket.
+                        Some(crate::interval::Class::Nan) => {
+                            if contains_bracket_poisoned_pow(e, &view) {
+                                None
+                            } else {
+                                Some(Ex::NaN)
+                            }
                         }
-                    }
-                    Some(crate::interval::Class::PosInf) => Some(Ex::PosInf),
-                    Some(crate::interval::Class::NegInf) => Some(Ex::NegInf),
-                    _ => None,
+                        Some(crate::interval::Class::PosInf) => Some(Ex::PosInf),
+                        Some(crate::interval::Class::NegInf) => Some(Ex::NegInf),
+                        _ => None,
+                    },
                 },
             };
             // THE GROUND FOLD (G): a finite ground node folds to its float, in `f64` and in
@@ -984,7 +1019,8 @@ impl Engine {
                             .then_with(|| crate::ac::expr::cmp_ex(a, b, &view))
                     })
                 }
-                // THE EXACT GROUND FOLD (`real`): a value a certified enclosure decides.
+                // THE EXACT GROUND FOLD (`real`): where the table carries no exact value, a
+                // member a certified enclosure decides (`abs(sin 1) = sin 1`).
                 None if real => self.exact_ground_fold(e, ctx, &view),
                 // In `f64` an infinity takes the sign float64 gives it, which a signed zero
                 // decides (`1/ceil(-0.5)` is -inf, where the interval layer's one zero reads
@@ -4261,15 +4297,15 @@ mod tests {
             t(&["float(\"-inf\")"]),
             "(-inf)^3 must fold through the exact path, not ship the enclosure nan"
         );
-        // Zero bracket: refusal, never the a.e. nan -- in the mode where the
-        // exponent really is only an ENCLOSURE around 0. In `real` the constructor
-        // cannot evaluate `sin(sin(acos 1))`, so the interval layer's refusal stands and
-        // this is the case the test was written for.
+        // In `real` the table reads the exponent exactly (acos(1) = 0, sin(0) = 0) and
+        // undefined propagates (V6): `pow(nan, 0)` has no value, so the fold is NaN, never
+        // the a.e. class of an enclosure.
         let s3 = t(&["pow", "float(\"nan\")", "sin", "sin", "acos", "1"]);
         let out = e.ac_simplify(&s3, 48, RuleMode::Real).unwrap();
-        assert!(
-            out.len() > 1,
-            "nan-base pow over a ~0 enclosure must stay symbolic: {out:?}"
+        assert_eq!(
+            out,
+            t(&["float(\"nan\")"]),
+            "real reads pow(nan, 0) as undefined"
         );
         // In `f64` the exponent is not an enclosure at all: folding computes
         // acos(1) = 0, sin(0) = 0 exactly -- in f64 AND in mathematics -- and `b^0 = 1`

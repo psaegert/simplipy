@@ -214,16 +214,17 @@ class TestAbsentFilesAreANoOp:
             e._core.ac_served_rules_in_mode(rule_mode='default')
         # what is NOT: the answer, because the constructor is mode-aware. Pinned as a
         # bounded, explained divergence rather than asserted away. Row 380's `asinh(sinh(.))`
-        # collapses in both modes since an overflow cuts no band. Rows 20 and 283 invert a
-        # product holding `x - x`, which keeps its members' sign in f64 (IEEE's signed zero)
-        # and is real's one zero. Rows 74, 156 and 358 hold `exp(0)`, `cos(0)` and `sin(0)`,
-        # which f64 folds and real, with no rules loaded, does not. (The sums over `abs`,
-        # `asin`, `log` or a root that ten more rows invert, which the certificate could not
-        # show null, it now reads null on a slice, so f64 and real write them alike.)
+        # collapses in both modes since an overflow cuts no band. Twelve rows divide by a
+        # product holding `x - x`, which is a zero of its members' sign in f64 (IEEE's signed
+        # zero, `-inf*x14*(x17/x11 - 1)` on row 20) and real's one zero, where 1/0 has no value
+        # (NaN). Rows 74, 156 and 358 hold `exp(0)`, `cos(0)` and `sin(0)`, which f64 folds and
+        # real reads from the table alike. (The sums over `abs`, `asin`, `log` or a root that ten
+        # more rows invert, which the certificate could not show null, it now reads null on a
+        # slice, so f64 and real write them alike.)
         differ = [row for row in rows
                   if e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='real')
                   != e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='default')]
-        assert len(differ) == 5, len(differ)
+        assert len(differ) == 12, len(differ)
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
         bare._core.set_mode_rules('real', [])

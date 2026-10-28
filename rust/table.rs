@@ -472,6 +472,26 @@ fn compare(a: &Val, b: &Val, ctx: &mut Ctx) -> i32 {
     }
 }
 
+/// Are two finite values closer than the working precision can separate (32 bits of guard
+/// below it)? Every approximation carries an error there, so their order is no proof.
+fn indistinct(a: &Val, b: &Val, ctx: &mut Ctx) -> bool {
+    let (x, y) = (ctx.bf(a), ctx.bf(b));
+    if x.is_nan() || x.is_inf() || y.is_nan() || y.is_inf() {
+        return false;
+    }
+    let d = x.sub(&y, ctx.p, RM);
+    if d.is_zero() {
+        return true;
+    }
+    let scale = match (x.exponent(), y.exponent()) {
+        (Some(ex), Some(ey)) => i64::from(ex.max(ey)),
+        (Some(e), None) | (None, Some(e)) => i64::from(e),
+        (None, None) => return true,
+    };
+    d.exponent()
+        .is_none_or(|ed| scale - i64::from(ed) > ctx.p as i64 - 32)
+}
+
 /// `r` reduced modulo `m` into [0, m).
 fn rat_mod(r: &Rat, m: &Rat) -> Option<Rat> {
     let q = r.checked_mul(&m.checked_inv()?)?;
@@ -700,6 +720,16 @@ fn pow(a: &Val, b: &Val, ctx: &mut Ctx) -> Out {
     }
     let (x, y) = (ctx.bf(a), ctx.bf(b));
     if cmp_gt(&y.abs(), &crate::hiprec::bf(1e6, ctx.p)) && !y.is_int() {
+        return None;
+    }
+    // A power past the working float's exponent range (`2^(1e40)`) is finite and unreadable,
+    // never an infinity: Unresolved.
+    let bits = x
+        .exponent()
+        .map_or(0, |e| i64::from(e).unsigned_abs())
+        .max(1) as f64;
+    let y_mag = bf_to_f64(&y.abs());
+    if !y_mag.is_finite() || y_mag * bits > 1e9 {
         return None;
     }
     Some(approx(pow_finite_pos(&x, &y, ctx.p, &mut ctx.cc)))
@@ -1240,7 +1270,15 @@ fn binary(name: &str, a: &Val, b: &Val, ctx: &mut Ctx) -> Option<Out> {
                     _ => compare(a, b, ctx),
                 };
                 let pick_a = if name == "max" { c >= 0 } else { c <= 0 };
-                Some(if pick_a { a.clone() } else { b.clone() })
+                let picked = if pick_a { a } else { b };
+                // An exact member picked over an approximation the precision cannot tell
+                // apart from it is no proof of the exact value: the result is approximate.
+                let exact_pair = matches!((a, b), (Val::Exact(_), Val::Exact(_)));
+                if !exact_pair && matches!(picked, Val::Exact(_)) && indistinct(a, b, ctx) {
+                    Some(approx(ctx.bf(picked)))
+                } else {
+                    Some(picked.clone())
+                }
             }
         }
         "mod" => modulo(a, b, ctx),
@@ -1621,6 +1659,18 @@ fn bf_to_f64(b: &BigFloat) -> f64 {
         k += step;
     }
     y
+}
+
+/// THE TABLE's real value of a ground expression (no free name) at `dps` digits: `None` where
+/// it holds a token the table cannot read or the point is Unresolved at that precision. The
+/// engine's real ground fold reads it (`Engine::table_ground_fold`).
+pub fn ground_value(tokens: &[String], ops: &crate::operators::Operators, dps: i32) -> Option<Val> {
+    let arity: std::collections::HashMap<String, u8> = tokens
+        .iter()
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let e = Expr::compile(tokens, &[], &arity).ok()?;
+    e.eval_real(&[], dps)?.value
 }
 
 // -------------------------------------------------------------------------- comparison

@@ -200,12 +200,14 @@ class TestMuEraResolutionRespell:
         src = ['/', 'acos', '0', 'np.pi']
         assert bare.simplify(list(src)) == ['/', '1', '2']
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
-        # f64's mark is the walk's answer already (as permissive's is); real reads the source as
-        # written, and its resolution recovers the exact 0.5
+        # f64's mark is the walk's answer already (as permissive's is), and so is real's: the
+        # table reads acos(0) = pi/2 exactly. A quotient the table holds only approximately,
+        # log(4)/log(2), real reads as written, and its resolution recovers the exact 2.
         assert core.mine_mark(src, rule_mode='default') == ['/', '1', '2']
+        assert core.mine_mark(src, rule_mode='real') == ['/', '1', '2']
         lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256, rule_mode='real')
-        res = core.find_rule_lib(src, lib, 3, rule_mode='real')
-        assert res == ['0.5'], res
+        res = core.find_rule_lib(['/', 'log', '4', 'log', '2'], lib, 3, rule_mode='real')
+        assert res == ['2'], res
 
 
 class TestDeterminedSourceConstIntroduction:
