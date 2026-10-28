@@ -76,9 +76,9 @@ fn is_fin(x: &BigFloat) -> bool {
     !x.is_inf() && !x.is_nan()
 }
 
-/// The precision ladder of a table reading (decimal digits; `table_classes`, and `table_row`
-/// above its demanded precision): a value the first rung cannot read (in a boundary band,
-/// `atanh(tanh(800))`) resolves on a later one.
+/// The precision ladder of the source rows' table reading (decimal digits; `table_classes`): a
+/// value the first rung cannot read (in a boundary band, `atanh(tanh(800))`) resolves on a
+/// later one.
 const TABLE_ROW_DPS: [i32; 4] = [50, 120, 400, 1200];
 
 /// One side of a row, compiled for the table: its `<constant>` slots renamed `<k0>`, `<k1>`, ...
@@ -178,16 +178,16 @@ pub(crate) fn table_classes(
 /// THE TABLE'S ROW JUDGMENT of a near miss (real and permissive, and f64's true values under the
 /// range standard): both sides at the row read by the table (`table::Expr::eval_real`) at the
 /// precision their intermediates demand (`demanded_dps`, from a first reading at `BASE_DPS`:
-/// `cosh(650)^2 - sinh(650)^2` cancels 565 digits, so it is read at 1,180; a reading in a boundary
-/// band climbs `TABLE_ROW_DPS` to the first rung both sides read), and confirmed at a second,
-/// finer rung. The source undefined: extendable. An infinity: the candidate must be the
+/// `cosh(650)^2 - sinh(650)^2` cancels 565 digits, so it is read at 1,180), and confirmed at a
+/// second, finer rung. The source undefined: extendable. An infinity: the candidate must be the
 /// same one, or, at a row of a pair with variables (`with_vars`), owes nothing where it has no
 /// value (the judge's isolated infinity: the measure of the set is the judge's to decide; the
 /// pole of `tan(asin(x))` at x = 1 against `sinh(atanh(1)) = +inf`). Finite: the candidate finite
 /// and within `atol + rtol*|c|` at the finer rung, or a residual that collapses between the two
 /// (an exact zero at the working precision); anything else fails. `None` where a side does not
-/// compile for the table or a reading stays Unresolved up to `MAX_DPS` (`erf(sinh(-100))` is
-/// -1 + e^-(1.7e86)): the row says nothing about the true values.
+/// compile for the table or a reading is Unresolved at either rung (`erf(sinh(-100))` is
+/// -1 + e^-(1.7e86), `atanh(tanh(800))` 800 in a boundary band): the row says nothing about the
+/// true values, and the caller skips it, as the judge skips a point it cannot resolve.
 #[allow(clippy::too_many_arguments)]
 fn table_row(
     source: &[String],
@@ -214,15 +214,7 @@ fn table_row(
     let demanded = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc)
         .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc))
         .clamp(BASE_DPS, MAX_DPS);
-    // the first rung both sides read (a reading in a boundary band climbs the ladder)
-    let readable = |dps: i32| {
-        se.eval_real(&senv, dps).and_then(|o| o.value).is_some()
-            && ce.eval_real(&cenv, dps).and_then(|o| o.value).is_some()
-    };
-    let start = std::iter::once(demanded)
-        .chain(TABLE_ROW_DPS.iter().copied().filter(|&d| d > demanded))
-        .chain(std::iter::once(MAX_DPS))
-        .find(|&d| readable(d) || d >= MAX_DPS)?;
+    let start = demanded;
     let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
     let mut seen: Vec<(BigFloat, BigFloat, BigFloat, usize)> = Vec::new();
     for dps in [start, fine] {
