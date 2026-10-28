@@ -83,7 +83,7 @@ POLICIES = ('evidence', 'constant_count', 'ground_composite', 'cell_bound', 'ord
 
 #: The load's refusals (`Engine.load_refusal`) by the policy each applies. `pole-class-change`
 #: is a pre-filter of truth, not a policy, and licenses nothing either way.
-_LOAD_POLICY = {'multi-constant-lhs': 'constant_count', 'const-count-increase': 'constant_count',
+_LOAD_POLICY = {'const-count-increase': 'constant_count',
                 'not-ordered-below': 'ordering', 'engine-owned-law': 'engine_owned',
                 'subsumed': 'engine_owned', 'catch-all-lhs': 'well_formed',
                 'unbound-rhs-wildcard': 'well_formed', 'unparseable-side': 'well_formed'}
@@ -96,8 +96,8 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
                     max_source: int | None = None) -> list[str]:
     """The named policies (``POLICIES``) that refuse ``lhs -> rhs`` in ``mode``, each read
     from its one place: evidence (4.1, the core's certified cells in the mode's values,
-    `_core.table_evidence`); the load's gates (4.2 constant count and the one-constant
-    stopgap, 4.5 ordering, 4.8 the engine's own laws, well-formedness: `load_refusal`); the
+    `_core.table_evidence`); the load's gates (4.2 constant count, 4.5 ordering, 4.8 the
+    engine's own laws, well-formedness: `load_refusal`); the
     ground-composite predicate (4.3); the mine's cell (4.4, with ``max_source``); the
     registry's special absorption and constant introduction (4.6, 4.2); the duplication
     predicate (4.7); and the ground facts the engine's fold performs (4.8, the preemption

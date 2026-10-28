@@ -123,9 +123,6 @@ organised by who you are, then the highlights, then every change in detail.
 - The load refuses a rule that states the distributive law (a rule one factoring turns from its
   left side into its right; drop reason `engine-owned-law`). A file mined before 0.15 loses such
   rows in `real` and `permissive`.
-- The load refuses a rule with more than one `<constant>` on its left side (drop reason
-  `multi-constant-lhs`) and warns, naming how many and the first; the miner no longer mints
-  one. A file that carries such rules loads without them.
 - The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
   a file mined before this version can fail `verify-mine` in `real` where a rule read `1/0` as
   `+inf` or tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
@@ -1237,14 +1234,15 @@ model predictions.
   give the same values, and `besselj` the same bits on a million points. LLVM's quotient
   rounds differently (its product is the same), so on macOS and Windows `besselj` differs
   from Linux at about 9% of points, by 4.5e-16 relative at the median and 1e-10 at most.
-- **A rule with more than one `<constant>` on its left side is not mined or loaded yet.** The
-  matcher binds each `<constant>` of a left side to a value of its own, and the mine used to let
-  such rules through, unjudged, in every mode. One was false: `pow(rootn(x, C1), C2) -> pow(x,
-  C3)` at C1 = 3, C2 = 1 turns the real cube root, defined for x < 0, into `pow(x, 1/3)`, which
-  is not. The judge now reads each `<constant>` as its own symbol and decides such rules
-  (`exp(x0 + C1)*C2 -> C3*exp(x0)` holds, the rule above does not); until the mine reads the
-  same judgment, it mints no such rule, and the load drops one from any rule file with a
-  warning.
+- **A rule with more than one `<constant>` on its left side is judged.** The matcher binds
+  each `<constant>` of a left side to a value of its own, and the mine used to let such rules
+  through, unjudged, in every mode. One was false: `pow(rootn(x, C1), C2) -> pow(x, C3)` at
+  C1 = 3, C2 = 1 turns the real cube root, defined for x < 0, into `pow(x, 1/3)`, which is not.
+  The judge reads each `<constant>` as its own symbol and decides such rules
+  (`exp(x0 + C1)*C2 -> C3*exp(x0)` holds in `real` and `permissive`, the rule above in no
+  mode), and the mine and the load take them as they take any rule: the mint scans a source
+  with several constants, its judge loop and gates keep what `verify.licensed` passes, and the
+  load serves the rule.
 - **The rule judge reads one table of values per mode.** Every value `simplipy.verify` compares
   is the core's, defined once. In `real` a literal is the rational it spells, `asin(1)` is
   exactly pi/2, and a pole or an infinite argument takes the limit where every direction gives
@@ -1435,8 +1433,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   mine's parameters (`interval_node_budget`).
 - **`simplipy.verify.CONST_CHANNEL_DETAIL`** and the sidecar's `symbolic_gate.const_channel`.
   They named the exemption that let rules with more than one `<constant>` on the left side
-  ship unjudged; such rules are now refused like any rule the judge cannot decide (see In
-  detail).
+  ship unjudged; the judge decides such rules now (see In detail).
 - **`monitor_ruleset`'s `tolerated` and `f64_folds`.** The monitor judges with the rule judge,
   which tolerates nothing a mode does not license and reads an f64 fold as any other rewrite;
   a rewrite it cannot read or decide is counted under `unscored`.

@@ -263,7 +263,7 @@ impl Engine {
             AcRules::translate(&kept, view, canon, law)
         });
         r.n_registry_dropped = n_registry_dropped;
-        for s in r.src.iter_mut().chain(r.multi_constant_rows.iter_mut()) {
+        for s in r.src.iter_mut() {
             *s = kept_idx[*s];
         }
         r
@@ -444,31 +444,6 @@ impl Engine {
     /// Rules the licence registry's load consumer refused (see `ac_rules` above).
     pub fn ac_registry_dropped(&self) -> usize {
         self.ac_rules().n_registry_dropped
-    }
-
-    /// The rows of `mode`'s own set the load refused for carrying more than one `<constant>`
-    /// on the left (`ac::rules::MAX_LHS_CONSTANTS`), as `(lhs, rhs)` tokens in file order.
-    /// Empty for a mode with no set of its own: it serves the default set, whose rows the
-    /// default mode reports.
-    pub fn ac_multi_constant_rules(&self, mode: RuleMode) -> Vec<(Vec<String>, Vec<String>)> {
-        let set = match mode {
-            RuleMode::Default => Some(&self.rules),
-            RuleMode::Real => self.real_rules.as_ref(),
-            RuleMode::Permissive => self.permissive_rules.as_ref(),
-        };
-        let Some(set) = set else {
-            return Vec::new();
-        };
-        let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
-        let view = TokenView::new(&self.tokens, &overlay);
-        let words = |ts: &[crate::tokens::Tok]| -> Vec<String> {
-            ts.iter().map(|t| view.resolve_owned(*t)).collect()
-        };
-        self.ac_rules_for(mode)
-            .multi_constant_rows
-            .iter()
-            .map(|&i| (words(&set.raw[i].0), words(&set.raw[i].1)))
-            .collect()
     }
 
     /// The per-reason drop census -- every non-kept disposition of the loaded

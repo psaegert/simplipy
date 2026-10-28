@@ -1611,7 +1611,7 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
         """Each `<constant>` is its own symbol (the specification's 3.2), so a rule with two
         on its left side is decided like any other: `C1 + C2*x -> d1*x + d2` holds with
         d1 = C2, d2 = C1, and `pow(rootn(x, C1), C2) -> pow(x, C3)` fails at C1 = 3, C2 = 1
-        on x < 0. (The mine and the load still refuse such rules, `multi-constant-lhs`.)"""
+        on x < 0. (The mine and the load take such rules where `licensed` does.)"""
         from simplipy.verify import effective_tier, verify_rule, verify_ruleset
         true = [['+', '<constant>', '*', '<constant>', 'x0'],
                 ['+', '*', '<constant>', 'x0', '<constant>']]

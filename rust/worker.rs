@@ -2040,9 +2040,8 @@ struct Certified {
 /// the source's own seed), its evidence decision and rows, its reachability set and its
 /// special-point battery. The scan builds it once and judges every candidate against it;
 /// `judge_pair` builds it for one pair. Rows are the caller's X (`cols`), borrowed, unless the
-/// evidence decision appended rows to them (`evidence_rows`). Only a source that may mint has
-/// one -- an INFORMATIVE source with at most one `<constant>` -- and `new` returns `None` for
-/// the rest, before any of the per-source work below.
+/// evidence decision appended rows to them (`evidence_rows`). Only an INFORMATIVE source has
+/// one: `new` returns `None` for the rest, before any of the per-source work below.
 struct SourceCtx<'s> {
     source: &'s [String],
     tape: Tape,
@@ -2082,11 +2081,6 @@ impl<'s> SourceCtx<'s> {
     ) -> Result<Option<Self>, String> {
         let tape = Tape::compile(source, ops, var_names)?;
         let n_const = tape.n_params;
-        // A source is the left side of the rule it would mint, so one with more than one
-        // `<constant>` mints nothing (`ac::rules::MAX_LHS_CONSTANTS`).
-        if n_const > crate::ac::rules::MAX_LHS_CONSTANTS {
-            return Ok(None);
-        }
         let combos = sign_combos(n_const);
         let mut rng = Rng::new(seed);
         // Source instances shared across the whole candidate scan (see `source_instances`).
@@ -2823,7 +2817,7 @@ pub fn judge_pair(
         min_informative,
     )?
     else {
-        // uninformative, or more than one `<constant>`: no candidate certifies
+        // uninformative: no candidate certifies
         return Ok(Some("uncertified"));
     };
     // compiled on the rows the source is judged on (the evidence top-up included)
