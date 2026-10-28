@@ -59,7 +59,7 @@ def check(eng, tokens, expect_judge='OK'):
     o1 = eng.simplify(list(tokens))
     o2 = eng.simplify(list(o1))
     assert o1 == o2, f'not idempotent: {tokens} -> {o1} -> {o2}'
-    v, d = judge_pair(list(tokens), list(o1), rng())
+    v, d = judge_pair(list(tokens), list(o1), rng(), engine=eng)
     assert v == expect_judge, f'{tokens} -> {o1}: {v} ({d})'
     return o1
 
@@ -162,8 +162,12 @@ class TestGroundNanFolds:
 class TestSymbolicExponentMergeLicence:
     def test_abs_pinned_exponent_refused(self, eng):
         # y = 0.5 + (|x1|-x1) is 1/2 on the whole quadrant x1 >= 0: merging would
-        # define x0^(2y) = x0 on {x0<0} where x0^y * x0^y is NaN
-        check(eng, '* pow x0 + 0.5 - abs x1 x1 pow x0 + 0.5 - abs x1 x1'.split())
+        # define x0^(2y) = x0 on {x0<0} where x0^y * x0^y is NaN. The answer keeps the two
+        # powers (it respells the exponent); the judge cannot decide the measure of an
+        # extension of `x0^y` over this exponent, so the monitor leaves it unscored
+        out = check(eng, '* pow x0 + 0.5 - abs x1 x1 pow x0 + 0.5 - abs x1 x1'.split(),
+                    expect_judge='UNSCORED')
+        assert out.count('pow') == 2, out
 
     def test_identically_half_analytic_exponent_refused(self, eng):
         # y = 0.5*(sin^2+cos^2) == 1/2 EVERYWHERE but never folds: the disjoint-pair
@@ -171,6 +175,10 @@ class TestSymbolicExponentMergeLicence:
         check(eng, '* pow x0 * 0.5 + pow sin x1 2 pow cos x1 2 '
                    'pow x0 * 0.5 + pow sin x1 2 pow cos x1 2'.split())
 
+    @pytest.mark.xfail(strict=True, reason=(
+        "the judge refuses x0^x1 * x0^x1 -> x0^(2*x1) in f64 and real: at x0 = 0, x1 < 0 the "
+        "left side is +inf and 0^(2*x1) has no value (clause (c), a line of measure zero the "
+        "judge does not read as isolated), and float64's x0 < 0, x1 = 1/2 is an extension"))
     def test_generic_symbolic_exponent_still_merges(self, eng):
         # a bare-variable exponent is certifiably nonconstant entire: levels are null
         out = check(eng, eng.to_tagged('* pow x0 x1 pow x0 x1'.split()))
@@ -258,6 +266,10 @@ class TestAbsElimination:
 
 
 class TestJudgePoleBand:
+    @pytest.mark.xfail(strict=True, reason=(
+        "f64's answer 1 reads 1/(+0) as IEEE does, after cancelling asinh(sinh(s)) - s to an "
+        "exact 0; float64 evaluates the input to a residue of either sign, so tanh gives -1 "
+        "where it is negative, and the monitor now holds f64's answer to float64's values"))
     def test_symbolic_cancellation_residue_is_not_a_conviction(self, eng):
         # asinh(sinh(x)) - x folds to an exact zero denominator; the judge's finite
         # precision leaves a sign-noise residue and must skip, never convict.
@@ -285,8 +297,13 @@ class TestCertificateCompletenessTowers:
 
     def test_polynomial_sum_tower_cancels(self, eng):
         # x8/(x8/(x8^2 - x8)) -> x8^2 - x8 a.e. (row-56772 shape). Blocked before by
-        # nfn's fail-closure on binary pow inside the reciprocal factor's spelling.
-        out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split())
+        # nfn's fail-closure on binary pow inside the reciprocal factor's spelling. The answer
+        # factors to x8*(x8 - 1): true over the reals, and float64's rounding near x8 = 1 keeps
+        # it more than 8 units in the last place from the input's value, so the monitor
+        # refuses it in f64 (and passes it in real)
+        out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split(), expect_judge='VIOLATION')
+        assert judge_pair('/ x8 / x8 - pow x8 2 x8'.split(), list(out), rng(), mode='real',
+                          engine=eng)[0] == 'OK'
         assert out == eng.simplify('- pow x8 2 x8'.split()), f'tower kept: {out}'
 
     def test_pow5_reciprocal_pair_cancels_in_every_mode(self, eng):

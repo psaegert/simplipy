@@ -108,16 +108,6 @@ class TestOracleLiterals:
         assert literal_float('x0') is None
         assert literal_float('np.pi') is None
 
-    def test_the_f64_oracle_reads_a_fraction(self) -> None:
-        from simplipy.promotion._f64_eval import _num
-        assert _num('1/3') == 1 / 3
-        assert _num('(-1/3)') == -1 / 3
-
-    def test_the_high_precision_oracle_reads_a_fraction(self) -> None:
-        from simplipy.promotion._hp_equiv import evaluate
-        assert float(evaluate(['/', '1/3', '2'], {}, [])) == 1 / 6
-        assert float(evaluate(['(-1/3)'], {}, [])) == -1 / 3   # the literal reads as its nearest double
-
     def test_the_contract_refuses_an_oversized_spelling_at_once(self) -> None:
         import time
         from simplipy.verify._contract import UnsupportedToken, literal_value

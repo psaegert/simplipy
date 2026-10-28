@@ -385,18 +385,23 @@ def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    pytest.param('ceil inv cosh ?0', '1', 'real', marks=expected_failure('X1', '3b')),
+    ('ceil inv cosh ?0', '1', 'real'), ('ceil inv cosh ?0', '1', 'f64'),
     ('- ?0 ?0', '0', 'real'), ('/ ?0 ?0', '1', 'real'),
 ])
-def test_a_promotion_bar_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
-    """Promotion's `?` bar, on the rule's own sort."""
-    from simplipy.promotion import _f64_eval
-    from simplipy.promotion._ladder import atom_valuations, judge_r2prime
-    from simplipy.promotion._pointwise import wildcards
-    _f64_eval.configure(bare())
-    L, R = lhs.split(), rhs.split()
-    verdict, _ = judge_r2prime(tuple(L), tuple(R), atom_valuations(wildcards(L + R)))
-    assert verdict == 'PASS' or not admits(lhs, rhs, mode)
+def test_a_promotion_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
+    """Promotion keeps a rule the judge admits at its own sort (it may ship it at a stronger
+    one, or prune it where the engine derives it without the rule), and every sort it ships
+    is one the judge admits."""
+    from simplipy.promotion import promote
+    unsort = lambda ts: ['?' + t[1:] if t[:1] in '_!$' and t[1:].isdigit() else t  # noqa: E731
+                         for t in ts]
+    kept, _ = promote([(lhs.split(), rhs.split())], bare(), rule_mode=RULE_MODE[mode],
+                      run_positive_controls=False)
+    shipped = [(lhs_k, rhs_k) for lhs_k, rhs_k in kept if unsort(lhs_k) == lhs.split()]
+    derived = bare().simplify(lhs.replace('?0', 'x0').split(), mode=mode) == rhs.split()
+    assert shipped or derived or not admits(lhs, rhs, mode), kept
+    for lhs_k, rhs_k in shipped:
+        assert admits(' '.join(lhs_k), ' '.join(rhs_k), mode), (lhs_k, rhs_k)
 
 
 # ------------------------------------------------------------------------------------------

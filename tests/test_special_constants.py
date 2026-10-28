@@ -233,37 +233,25 @@ class TestExactCollapsesMint:
         from simplipy.promotion import promote
         bare = [(('cos', 'np.pi'), ('(-1)',)), (('sin', 'np.pi'), ('0',)),
                 (('tan', 'np.pi'), ('0',)), (('log', 'np.e'), ('1',))]
-        controls = [(('pow', 'np.e', '_0'), ('exp', '_0'))]
-        # A wildcard rule is JUDGED, never bypassed -- the other half of the property
-        # this test guards. `cos(x + pi) -> -cos(x)` is the sharp case: true over the
-        # reals (judge_rule certifies it at tier `real`), false in f64 wherever pi falls
-        # below the ulp of x, so `1e20 + pi == 1e20` and the rule returns cos(x) with the
-        # wrong SIGN. Promotion demotes it to `?0` on that witness and kills it at 1.2e77.
+        # A rule with slots is JUDGED, never bypassed -- the other half of the property
+        # this test guards: it climbs the rungs, each asking the judge. `cos(x + pi) ->
+        # -cos(x)` is true over the reals (tier `real`) and false in f64 wherever pi falls
+        # below the ulp of x (`1e20 + pi == 1e20`), so f64 licenses neither `_` nor `!`.
         judged_not_bypassed = (('cos', '+', '_0', 'np.pi'), ('neg', 'cos', '_0'))
-        # The bypass is ALL pure-literal ground rules (widened with fold
-        # unification: special-free exact collapses like `cos 0 -> 1`
-        # are now legitimate mined rows, and the ladder's wildcard universe would
-        # still eat them). `<constant>`-bearing ground rules keep flowing to the
-        # ladder's ground tier (judge_ground) -- sound ones ship, unsound ones die
-        # there, exactly as in the reference. The f64-respell family
-        # (`+ 1 exp (-1) -> 1.3678794411714423` respells the engine's exact
-        # `1.36787944117144233` to its f64 rounding) is therefore NO LONGER
-        # contained by promotion: promote() passes it through shape-blind, and
-        # containment lives where it is principled -- the mint-side strict-mu +
-        # skeleton + atomic-mark guards, and the SYMBOLIC GATE in _finalize
-        # (asserted below: the gate KILLs the row promotion now admits).
+        # The bypass is every rule without a slot: there is no sort to respell. Pure-literal
+        # ground rules and `<constant>`-bearing ones alike pass through; the mine's judge and
+        # final gate decide them. The f64-respell family (`+ 1 exp (-1) ->
+        # 1.3678794411714423` respells the engine's exact value to its f64 rounding) is not
+        # contained by promotion: the symbolic gate routes it (asserted below).
         cground_pass = (('/', '<constant>', 'float("inf")'), ('0',))
-        cground_kill = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
+        cground_other = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
         f64_respell = (('+', '1', 'exp', '(-1)'), ('1.3678794411714423',))
-        kept, report = promote(bare + controls + [judged_not_bypassed, cground_pass,
-                                                  cground_kill, f64_respell], eng, rule_mode='default')
+        kept, report = promote(bare + [judged_not_bypassed, cground_pass, cground_other,
+                                       f64_respell], eng, rule_mode='default')
         kept_set = {(tuple(lhs), tuple(rhs)) for lhs, rhs in kept}
-        for rule in bare + controls:
+        for rule in bare + [cground_pass, cground_other, f64_respell]:
             assert rule in kept_set, (rule, sorted(kept_set))
-        assert judged_not_bypassed not in kept_set, "a wildcard rule must be judged, not bypassed"
-        assert cground_pass in kept_set
-        assert cground_kill not in kept_set
-        assert f64_respell in kept_set  # shape-blind bypass: promotion no longer contains
+        assert not {(('cos', '+', s + '0', 'np.pi'), ('neg', 'cos', s + '0')) for s in '_!'} & kept_set
         assert report['stage_counts']['ground_passthrough'] == 5
         # The pipeline's answer to the respell CHANGED with the mode triple, and the
         # old claim -- "the symbolic gate refuses it" -- is retired. The bucket is still

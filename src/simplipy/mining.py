@@ -1393,19 +1393,20 @@ class RuleMiner:
                 raise ValueError(
                     "prune=True (the redundant-rule prune) died with the legacy kernel; "
                     "use prune='covered' (AC-judged behavioral coverage) or prune=False")
-            # Sort promotion: re-certify every rule (mined + proposed) at the stronger `_`/`!`
-            # sorts and ship it at the strongest sound one (see `simplipy.promotion`). Runs AFTER
+            # Sort promotion: ask the judge of every rule (mined + proposed) at the stronger
+            # `_`/`!` sorts and ship it at the strongest it licenses (see `simplipy.promotion`),
+            # with the mine's judge. Runs AFTER
             # the prune so promotion works on the already-reduced rule set (the promotion carries
             # its own subsumption/derivability refund for the instances a promoted rule newly
             # covers). Emits the deployment-strength ruleset directly.
             if promote_sorts and not interrupted():
                 from .promotion import promote
                 kept, promotion_report = promote(self._mode_rules(rule_mode), self.engine,
-                                                 verbose=verbose, rule_mode=rule_mode)
+                                                 verbose=verbose, rule_mode=rule_mode,
+                                                 judge=judge)
                 self._install(rule_mode, kept)
-                # The ladder's own per-rule verdict lists name the reason a pair
-                # left here (`killed_q` -- unsound at the `?` sort, `unsupported`, ...);
-                # a pair the refund pruned as derivable appears in none of them.
+                # Promotion drops a rule only in its derivability refund (its lists name the
+                # rules each rung promoted, which stay).
                 _promo_reason = {
                     _rule_identity(item[0], item[1], dummy_variables): bucket
                     for bucket, items in promotion_report.items()
@@ -1490,7 +1491,7 @@ class RuleMiner:
                 if promote_sorts and _added:
                     from .promotion import promote
                     kept, _report = promote(_added, self.engine, verbose=verbose,
-                                            rule_mode=rule_mode)
+                                            rule_mode=rule_mode, judge=judge)
                     # Promotion seeds the cancellation identities into a set that lacks them;
                     # the promoted set holds them already, so a batch's seeds are not its rows
                     # (seeded again, `- !0 !0 -> 0` and `* 0 !0 -> 0` twin-shadowed their own

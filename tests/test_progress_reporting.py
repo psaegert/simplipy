@@ -92,13 +92,11 @@ def test_promotion_is_silent_by_default(engine) -> None:
 def test_promotion_reports_every_stage_when_verbose(engine) -> None:
     (_, text) = _capture(
         lambda: promote(list(RULES), engine, run_positive_controls=False, verbose=True, rule_mode='default'))
-    # Each of the five stages announces itself, so a stall is attributable to one of them.
-    for stage in ("stage 1/5", "stage 2/5", "stage 3/5", "stage 4/5", "stage 5/5"):
+    # Each step announces itself (the two rungs and the refund between them), so a stall is
+    # attributable to one of them.
+    for stage in ("sort promotion starting", "rung _", "refund", "rung !",
+                  "sort promotion complete"):
         assert stage in text, f"{stage} never reported:\n{text}"
-    # The ladder's tiers are the long pole and are named individually.
-    for tier in ("tier _cf", "tier _cb", "tier ?cf", "tier ?cb", "tier ground"):
-        assert tier in text, f"{tier} never reported:\n{text}"
-    assert "sort promotion complete" in text
 
 
 def test_reporting_does_not_change_the_result(engine) -> None:

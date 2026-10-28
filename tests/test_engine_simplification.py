@@ -1031,26 +1031,18 @@ class TestMultSort:
         engine = self._engine(tmp_path)
         assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.permissive)) == ["1"]
 
-    def test_judge_bang_mult_bar(self, tmp_path) -> None:
-        # The promotion-side twin: the plain `!` bar demotes A/A -> 1 (0/0 = nan at the atom
-        # 0); the multiplicative bar promotes it on the finite-nonzero lattice. The judges
-        # REQUIRE the f64 oracle to be configured first (`configure(engine)`) -- calling them
-        # bare now raises instead of looping (the _literal_spans termination guard).
-        import pytest as _pytest
-        from simplipy.promotion._f64_eval import configure
-        from simplipy.promotion._ladder import judge_bang, judge_bang_mult
-        from simplipy.promotion._pointwise import prefold
-        from simplipy.promotion._f64_eval import ARITY
-        if not ARITY:  # order-independent: another test may have configured the module state
-            with _pytest.raises(RuntimeError, match='oracle not configured'):
-                prefold(['/', '1', '1'])
-        configure(self._engine(tmp_path))
-        v_bang, _ = judge_bang(('/', '!0', '!0'), ('1',))
-        assert v_bang != 'PROMOTE'
-        v_mult, _ = judge_bang_mult(('/', '$0', '$0'), ('1',))
-        assert v_mult == 'PROMOTE'
-        v_zero, _ = judge_bang_mult(('/', '0', '$0'), ('0',))
-        assert v_zero == 'PROMOTE'
+    def test_the_judge_reads_the_seeds_sorts(self, tmp_path) -> None:
+        # The promotion-side twin: promotion seeds the cancellation identities where the judge
+        # licenses them. At a `!` binding the subtree may be 0 on a set of positive measure,
+        # where 0/0 has no value, so `/ !0 !0 -> 1` holds in neither f64 nor real; at a `$`
+        # binding (finite and nonzero a.e.) `/ $0 $0 -> 1` and `/ 0 $0 -> 0` hold.
+        from simplipy.verify import MODE_TIERS, effective_tier, verify_rule
+
+        def holds(lhs, rhs, mode):
+            return effective_tier(verify_rule(lhs.split(), rhs.split())) in MODE_TIERS[mode]
+        for mode in ('f64', 'real'):
+            assert not holds('/ !0 !0', '1', mode)
+            assert holds('/ $0 $0', '1', mode) and holds('/ 0 $0', '0', mode)
 
 
 class TestB9MuGuarantee:

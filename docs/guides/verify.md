@@ -134,16 +134,20 @@ licensed(['asin', '1'], ['acos', '0'], 'real', engine)
 ## The monitor: `monitor_ruleset`
 
 The gate's complement: instead of a per-rule scan, `monitor_ruleset` runs the
-*deployed* engine over an adversarial-plus-sampled corpus and re-judges every
-input→output rewrite under an independent high-precision evaluator,
-attributing any deployed-value violation to the responsible rule. Both the
-gate and the monitor carry poison self-tests (`selftest`) that must pass
-before their verdicts are trusted.
+*deployed* engine over an adversarial-plus-sampled corpus and judges every
+input→output rewrite as the judge judges a rule, in the mode it was made in,
+attributing any violation to the rule set or, where the rules-empty engine
+makes it too, to the engine. It has no evaluator of its own: every value it
+compares is the core's. Both the gate and the monitor carry poison
+self-tests (`selftest`) that must pass before their verdicts are trusted.
 
 ## Promotion: `simplipy.promotion.promote`
 
-The sort-promotion certifier: it re-derives each pattern rule's binding sort
-(`_`/`?`/`!`/`$` — see [Creating rulesets](../rules.md)) from its own
-numeric evidence, promoting a rule to a wider sort only on a certified
-witness. Its internals are private; `promote(rules, engine)` is the entry
-point. Mining calls it for you (`find_rules(promote_sorts=True)`).
+The sort promotion: each mined rule, certified at the variable-leaf sort
+`?`, is respelled at the stronger sorts (`_`, then `!`; see
+[Creating rulesets](../rules.md)), and each respelling asks the judge:
+`licensed` in the rule's mode. A rule ships at the strongest sort the judge
+licenses, and at `?` where it licenses neither. Promotion has no evaluator or
+probe list of its own. Its internals are private; `promote(rules, engine,
+rule_mode=...)` is the entry point. Mining calls it for you
+(`find_rules(promote_sorts=True)`).

@@ -279,24 +279,7 @@ class TestLeftovers:
 
 
 class TestPythonReaders:
-    """The verification instruments read literals within the engine's limits."""
-
-    def test_the_monitor_folds_only_within_the_cap(self) -> None:
-        from simplipy.verify._monitor import ENGINE_CAP_BITS, _FoldRefused, _fold_budget
-        assert _fold_budget(Fraction(2) ** ENGINE_CAP_BITS - 1) == Fraction(2) ** ENGINE_CAP_BITS - 1
-        with pytest.raises(_FoldRefused):
-            _fold_budget(Fraction(2) ** ENGINE_CAP_BITS)
-
-    def test_the_monitor_refuses_oversized_spellings_at_once(self) -> None:
-        import time
-        from simplipy.verify._monitor import _rat_leaf
-        t0 = time.time()
-        assert _rat_leaf('1e999999999') is None
-        assert _rat_leaf('7' * 5000) is None
-        assert _rat_leaf('1/' + '3' * 5000) is None
-        assert time.time() - t0 < 1.0
-        assert _rat_leaf('+1/3') == Fraction(1, 3)
-        assert _rat_leaf('1e000040') == 10 ** 40
+    """The judge reads literals within the engine's limits."""
 
     def test_the_contract_reads_a_zero_padded_exponent(self) -> None:
         from simplipy.verify._contract import literal_value

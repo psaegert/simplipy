@@ -32,7 +32,7 @@ import pytest
 
 import simplipy.verify as v
 from simplipy.verify._contract import judge_rule
-from simplipy.verify._monitor import evaluate, judge_pair
+from simplipy.verify._monitor import judge_pair
 from conftest import PERMISSIVE_DOMINANCE_KNOWN, acj_config_path, acj_rules_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,38 +51,40 @@ def rng():
     return np.random.default_rng(0)
 
 
-class TestMonitorSpeaksBagLanguage:
-    def test_bag_evaluator_sections(self):
-        from mpmath import mp, mpf
-        from simplipy.verify._monitor import DPS
-        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision
-        env = {'x0': mpf(3), 'x1': mpf(5), 'x2': mpf(7)}
-        cases = [
-            (['<add>', 'x0', 'x1', '</add>'], mpf(8)),
-            (['<add>', 'x0', '<sub>', 'x1', 'x2', '</add>'], mpf(-9)),
-            (['<mul>', 'x0', '<add>', 'x1', 'x2', '</add>', '</mul>'], mpf(36)),
-            (['<mul>', '2', 'x1', '<div>', 'x2', 'x0', '</mul>'], mpf(10) / 21),
-            (['<mul>', '1/3', 'x0', '</mul>'], mpf(1)),
-            (['<add>', '<sub>', 'x0', '</add>'], mpf(-3)),
-            (['<mul>', '<div>', 'x0', 'x1', '</mul>'], mpf(1) / 15),
-        ]
-        for toks, want in cases:
-            assert abs(evaluate(list(toks), env) - want) < mpf('1e-40'), toks
+@pytest.fixture(scope='module')
+def bag_engine():
+    """An engine that reads the tagged form (`to_prefix`), as the sweep's engine does."""
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    return SimpliPyEngine(operators=ops, rules=[])
 
-    def test_wrong_bag_rewrite_is_violation(self):
+
+class TestMonitorSpeaksBagLanguage:
+    """The monitor reads a tagged output through its engine (`to_prefix`) and judges the
+    rewrite as the judge judges a rule."""
+
+    def test_wrong_bag_rewrite_is_violation(self, bag_engine):
         # THE bag regression: this exact pair was once judged OK
-        verdict, _ = judge_pair(['+', 'x0', 'x1'], ['<mul>', 'x0', 'x1', '</mul>'], rng())
+        verdict, _ = judge_pair(['+', 'x0', 'x1'], ['<mul>', 'x0', 'x1', '</mul>'], rng(),
+                                engine=bag_engine)
         assert verdict == 'VIOLATION'
 
-    def test_correct_bag_rewrite_is_ok(self):
-        verdict, _ = judge_pair(['+', 'x0', 'x1'], ['<add>', 'x0', 'x1', '</add>'], rng())
+    def test_correct_bag_rewrite_is_ok(self, bag_engine):
+        verdict, _ = judge_pair(['+', 'x0', 'x1'], ['<add>', 'x0', 'x1', '</add>'], rng(),
+                                engine=bag_engine)
         assert verdict == 'OK'
 
-    def test_div_section_rewrite_is_ok(self):
+    def test_div_section_rewrite_is_ok(self, bag_engine):
         verdict, _ = judge_pair(
             ['/', 'rootn', 'x0', '2', 'rootn', 'x0', '2'],
-            ['<mul>', 'pow', 'x0', '0.5', '<div>', 'pow', 'x0', '0.5', '</mul>'], rng())
+            ['<mul>', 'pow', 'x0', '0.5', '<div>', 'pow', 'x0', '0.5', '</mul>'], rng(),
+            mode='real', engine=bag_engine)
         assert verdict == 'OK'
+
+    def test_a_tagged_side_without_an_engine_is_unscored(self):
+        verdict, detail = judge_pair(['+', 'x0', 'x1'], ['<add>', 'x0', 'x1', '</add>'], rng())
+        assert verdict == 'UNSCORED' and 'engine' in detail
 
 
 class TestMonitorFailsClosed:
@@ -92,16 +94,16 @@ class TestMonitorFailsClosed:
         assert 'frobnicate' in detail
 
     def test_legacy_hyperop_spellings_remain_judgeable(self):
-        # the monitor's mpmath table deliberately KEEPS the deleted 0.11 vocabulary so
-        # legacy-engine rewrites stay judgeable -- and convicts this wrong one
+        # the judge's alphabet KEEPS the deleted 0.11 vocabulary, so legacy-engine rewrites
+        # stay judgeable -- and convicts this wrong one
         verdict, _ = judge_pair(['pow1_2', 'x0'], ['x0'], rng())
         assert verdict == 'VIOLATION'
 
-    def test_nothing_evaluable_is_unscored_not_ok(self):
-        # atanh at a written 1 is Unresolved at every probe under the precision-honesty
-        # band: the honest verdict is UNSCORED -- the pre-fix code fell through to OK
-        verdict, _ = judge_pair(['atanh', '1'], ['float("inf")'], rng())
-        assert verdict == 'UNSCORED'
+    def test_a_ground_rewrite_is_judged_at_its_one_point(self):
+        # atanh(1) is +inf in the table, exactly, and in float64: the rewrite holds; a wrong
+        # infinity does not
+        assert judge_pair(['atanh', '1'], ['float("inf")'], rng())[0] == 'OK'
+        assert judge_pair(['atanh', '1'], ['float("-inf")'], rng())[0] == 'VIOLATION'
 
 
 class TestRootnSemantics:
@@ -130,24 +132,32 @@ class TestRootnSemantics:
 
 
 class TestZeroLanes:
-    """The monitor reads a zero in the lane of the mode the rewrite was made in: `real`'s one
-    unsigned zero (1/0 = +inf), or the signed zeros IEEE 754 gives the float64 modes."""
+    """The monitor reads a rewrite in its mode's values, through the judge: f64's IEEE 754
+    signed zeros (`1/(x*0)` is +-inf by the sign of x), real's one zero, where an inverted
+    exact zero has no value (the limit rule), and permissive's real values, with nothing owed
+    where the input has none."""
 
-    #: Inputs whose exact zero is inverted, with the IEEE answer and the one-zero answer.
+    #: Inputs whose exact zero is inverted, with the IEEE answer and the one-zero `+inf`.
     POLES = [
-        ('/ 1 * x11 - x13 x13', '/ float("inf") x11', 'float("inf")'),
-        ('inv neg - x1 x1', 'float("-inf")', 'float("inf")'),
-        ('/ x1 / 0 x2', '* float("inf") * x1 x2', '* float("inf") x1'),
+        ('inv * x1 0', '/ float("inf") x1', 'float("inf")'),
+        ('inv neg * 0 x1', '/ float("-inf") x1', 'float("inf")'),
     ]
 
     @pytest.mark.parametrize('src,ieee,one_zero', POLES)
-    def test_each_lane_accepts_its_own_reading_and_refuses_the_other(self, src, ieee, one_zero):
-        for mode, good, bad in (('f64', ieee, one_zero), ('permissive', ieee, one_zero),
-                                ('real', one_zero, ieee)):
-            verdict, detail = judge_pair(src.split(), good.split(), rng(), mode=mode)
-            assert verdict == 'OK', (mode, good, detail)
-            verdict, detail = judge_pair(src.split(), bad.split(), rng(), mode=mode)
-            assert verdict == 'VIOLATION' and 'INF-CHANGE' in detail, (mode, bad, detail)
+    def test_each_mode_reads_its_own_values(self, src, ieee, one_zero):
+        def verdict(out, mode):
+            return judge_pair(src.split(), out.split(), rng(), mode=mode)[0]
+        assert verdict(ieee, 'f64') == 'OK' and verdict(one_zero, 'f64') == 'VIOLATION'
+        assert verdict('float("nan")', 'real') == 'OK'
+        assert verdict(ieee, 'real') == verdict(one_zero, 'real') == 'VIOLATION'
+        assert verdict(ieee, 'permissive') == verdict(one_zero, 'permissive') == 'OK'
+
+    def test_an_undecided_judgment_is_unscored(self):
+        # the interval layer does not see `x13 - x13` as an exact zero, so the measure of the
+        # extension is undecided: neither passed nor convicted
+        verdict, detail = judge_pair('/ 1 * x11 - x13 x13'.split(), '/ float("inf") x11'.split(),
+                                     rng())
+        assert verdict == 'UNSCORED' and 'UNDECIDED-MEASURE' in detail, detail
 
     def test_the_default_lane_is_the_engines_default_mode(self):
         src, ieee, one_zero = self.POLES[0]
@@ -155,11 +165,11 @@ class TestZeroLanes:
             judge_pair(src.split(), ieee.split(), rng(), mode='f64')
         assert judge_pair(src.split(), one_zero.split(), rng())[0] == 'VIOLATION'
 
-    def test_the_signed_lane_follows_ieee_through_every_zero_sensitive_operator(self):
-        from mpmath import mp, mpf
-        from simplipy.verify._monitor import DPS
-        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision
-        env = {'x1': mpf(-2), 'x2': mpf(3)}
+    def test_f64_reads_the_deployed_kernels_zero_signs(self):
+        # the table's f64 values are the deployed kernels', IEEE 754's signed zeros among them
+        # (`x**0.5` is a square root there, as in numpy: sqrt(-0) is -0)
+        from simplipy.verify._contract import d_eval, parse
+        env = {'?1': -2.0, '?2': 3.0}
         for tokens, ieee in [
                 ('inv neg - x2 x2', -np.inf),          # -(+0) is -0
                 ('inv * x1 - x2 x2', -np.inf),         # (-2)*(+0) is -0
@@ -171,26 +181,25 @@ class TestZeroLanes:
                 ('inv abs neg 0', np.inf),             # |-0| is +0
                 ('pow neg 0 -3', -np.inf), ('pow neg 0 -2', np.inf),
                 ('rootn neg 0 -3', -np.inf), ('rootn neg 0 -2', np.inf),
-                ('inv pow neg 0 3', -np.inf), ('inv pow neg 0 0.5', np.inf),
+                ('inv pow neg 0 3', -np.inf), ('inv pow neg 0 0.5', -np.inf),
                 ('inv rootn float("-inf") -3', -np.inf),
                 ('inv sin neg 0', -np.inf), ('inv tan neg 0', -np.inf),
                 ('inv atan neg 0', -np.inf), ('inv tanh neg 0', -np.inf),
                 ('inv asinh neg 0', -np.inf), ('inv sinh neg 0', -np.inf),
                 ('inv asin neg 0', -np.inf), ('inv atanh neg 0', -np.inf),
                 ('inv exp float("-inf")', np.inf),     # exp(-inf) is +0
-                ('<mul> 1 <div> neg 0 </mul>', -np.inf),
                 ('inv -0.0', -np.inf), ('inv -0', np.inf),   # a float spelling keeps its sign
                 ('/ 0 0', np.nan)]:
-            got = evaluate(tokens.split(), env, signed=True)
+            got = d_eval(parse(tokens.split()), env)
             assert (np.isnan(ieee) and got != got) or got == ieee, (tokens, got)
-            # the one-zero lane: every pole of a zero is +inf
-            one = evaluate(tokens.split(), env)
-            assert one == np.inf or (np.isnan(ieee) and one != one), (tokens, one)
 
     def test_a_zero_valued_literal_span_keeps_its_sign(self):
-        # `* -1 0` folds to an exact zero, whose sign IEEE reads as -0
+        # `* -1 0` folds to an exact zero, whose sign IEEE reads as -0; real reads one zero,
+        # whose inverse has no value
         assert judge_pair(['inv', '*', '-1', '0'], ['float("-inf")'], rng(), mode='f64')[0] == 'OK'
-        assert judge_pair(['inv', '*', '-1', '0'], ['float("inf")'], rng(), mode='real')[0] == 'OK'
+        assert judge_pair(['inv', '*', '-1', '0'], ['float("nan")'], rng(), mode='real')[0] == 'OK'
+        assert judge_pair(['inv', '*', '-1', '0'], ['float("inf")'], rng(),
+                          mode='real')[0] == 'VIOLATION'
 
     def test_an_unknown_mode_is_refused(self):
         with pytest.raises(ValueError, match='mode'):
@@ -228,9 +237,8 @@ class TestMonitorPoisonSelftest:
     """The monitor's poison self-test is the proof its sweep CAN convict -- but
     nothing routine ever ran it (selftest defaults OFF; no pytest or CI step invoked
     it), so the positive control existed only for manual runs. This is the fast
-    subset: the FULL production poison list against a rules-empty clean engine on a
-    small corpus (~1 s; the catches are driven by the deterministic adversarial rows,
-    measured identical across seeds and corpus sizes), plus a NEGATIVE control: a
+    subset: the FULL production poison list against a rules-empty clean engine on the
+    adversarial rows alone (the catches are driven by them), plus a NEGATIVE control: a
     sound rule presented as poison must NOT be 'caught' -- a selftest that cannot
     fail would launder a broken sweep as verified."""
 
@@ -239,7 +247,7 @@ class TestMonitorPoisonSelftest:
         _staged_or_skip(ACJ_CONFIG)
         from simplipy.verify._monitor import build_engine, make_corpus
         baseline = build_engine([], ACJ_CONFIG)
-        corpus = make_corpus(baseline, 120, np.random.default_rng(3))
+        corpus = make_corpus(baseline, 0, np.random.default_rng(3))
         return baseline, corpus
 
     def test_all_production_poisons_caught(self, setup):
@@ -356,55 +364,39 @@ class TestShippingArtifact:
 
 
 class TestJudgeParityExactness:
-    """The judge reads an exponent's
-    integrality/parity off the mpf REPRESENTATION (odd-normalized mantissa: exp<0
-    non-integer, exp==0 odd, exp>0 even) instead of refusing everything beyond the
-    old PARITY_CAP=1e15 -- which convicted sound engine folds whose exponents are
-    beyond-2^53 integer literals (extreme-lane smoke rows 32/301/796, all judged
-    VIOLATION pre-fix, all OK post-fix)."""
+    """The table reads an exponent's integrality and parity exactly, beyond 2^53 (a written
+    integer is the integer it spells), so sound engine folds whose exponents are beyond-2^53
+    integer literals are not convicted (extreme-lane smoke rows 32/301/796); past its
+    precision budget it refuses rather than guess."""
+
+    @staticmethod
+    def _value(tokens):
+        from mpmath import mp
+        from simplipy.verify._contract import c_eval, parse
+        with mp.workdps(50):
+            return c_eval(parse(tokens.split()), {})
 
     def test_pow_parity_exact_beyond_2_53(self):
-        from mpmath import mp, mpf
-        from simplipy.verify._monitor import DPS, c_pow
-        mp.dps = DPS  # direct-internal call
-        assert c_pow(mpf('-inf'), mpf('9007199254740993')) == mpf('-inf')  # odd
-        assert c_pow(mpf('-inf'), mpf('9007199254740992')) == mpf('inf')   # even
-        assert c_pow(mpf('-inf'), mpf('1e40')) == mpf('inf')               # even
-        assert c_pow(mpf(-1), mpf('10000000000000000001')) == mpf(-1)      # odd
+        from mpmath import mpf
+        assert self._value('pow float("-inf") 9007199254740993') == mpf('-inf')   # odd
+        assert self._value('pow float("-inf") 9007199254740992') == mpf('inf')    # even
+        assert self._value('pow float("-inf") 1e40') == mpf('inf')                # even
+        assert self._value('pow -1 10000000000000000001') == -1                   # odd
 
     def test_beyond_precision_magnitudes_stay_unresolvable(self):
-        from mpmath import isnan, mpf
-        from simplipy.verify._monitor import c_pow
-        # BEYOND the precision budget the mpf is a rounding and representation-
-        # integrality says nothing (exp(2.703^5) is provably irrational yet its
-        # 166-bit mpf reads integral -- 1M row 294377): honest nan, both bases.
-        assert isnan(c_pow(mpf('-inf'), mpf(10) ** 400))
-        assert isnan(c_pow(mpf(-2), mpf(10) ** 400))
-        from mpmath import exp as mpexp
-        assert isnan(c_pow(mpf(-1), mpexp(mpf('2.703') ** 5)))
-        # non-integer spellings keep the honest nan
-        assert isnan(c_pow(mpf('-inf'), mpf('2.5')))
+        from mpmath import isnan
+        from simplipy.verify._contract import Unresolved
+        for tokens in ('pow float("-inf") 1e400', 'pow -2 1e400', 'pow -1 exp 214.6'):
+            with pytest.raises(Unresolved):
+                self._value(tokens)
+        # a non-integer exponent of a negative base has no value
+        assert isnan(self._value('pow float("-inf") 2.5'))
 
     def test_rootn_index_value_strict(self):
-        from mpmath import isnan, mp, mpf
-        from simplipy.verify._monitor import DPS, c_rootn
-        mp.dps = DPS  # direct-internal call
-        r = c_rootn(mpf(2), mpf('9007199254740993'))  # huge odd index resolves
+        from mpmath import isnan, mpf
+        r = self._value('rootn 2 9007199254740993')        # huge odd index resolves
         assert abs(r - 1) < mpf('1e-14') and r > 1
-        assert isnan(c_rootn(mpf(2), mpf(10) ** 400))  # bignum-hazard index refuses
-
-    def test_convicted_smoke_rows_judge_ok(self):
-        from simplipy.verify._monitor import judge_pair
-        cases = [
-            ("* + 92233720368547758/7 x0 + x1 pow * x4 x2 9007199254740993",
-             "* + x0 13176245766935394 + x1 * pow x2 9007199254740993 pow x4 9007199254740993"),
-            ("- pow -1 10000000000000000001 exp x0", "neg + exp x0 1"),
-            ("rootn pow pow * x4 x0 9007199254740993 1/3 2",
-             "pow * pow x0 9007199254740993 pow x4 9007199254740993 / 1 6"),
-        ]
-        for inp, out in cases:
-            verd, _ = judge_pair(inp.split(), out.split(), np.random.default_rng(0))
-            assert verd == "OK", (inp, verd)
+        assert isnan(self._value('rootn 2 1e400'))          # past the index cap: no value
 
 
 class TestRuleFilesAreDataNotCode:

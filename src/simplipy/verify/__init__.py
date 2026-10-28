@@ -16,12 +16,12 @@ ways:
   named policy (evidence, constant count, ground composites, ordering, ...) refuses it.
 
 - :func:`monitor_ruleset` (the MONITOR) runs the *deployed* engine over an
-  adversarial-plus-sampled corpus and re-judges every input->output rewrite under an
-  independent high-precision evaluator, attributing any deployed-value violation to the
-  responsible rule. It complements the gate: a corpus sweep rather than a per-rule scan.
+  adversarial-plus-sampled corpus and judges every input->output rewrite as the judge judges
+  a rule, attributing any violation to the rule set or to the engine. It complements the
+  gate: what the rules do together on whole expressions rather than each rule alone.
 
-Both carry poison self-tests that must pass before they are trusted. The monitor still
-evaluates with its own high-precision evaluator, independent of the core.
+Both carry poison self-tests that must pass before they are trusted. Neither has an
+evaluator of its own: every value either compares is the core's.
 """
 import json
 import warnings
@@ -317,9 +317,11 @@ def monitor_ruleset(rules: list | str, engine_config: str, *, corpus_n: int = 60
     ``run_selftest``: run the poison self-test first (raises if a known-unsound rule is
     not caught and attributed).
 
-    Returns a dict with ``violations`` (artifact-attributed), ``native`` (pre-existing
-    engine behavior, present even with an empty rule set), ``tolerated`` (null-event
-    classes), ``changed`` and ``corpus`` counts.
+    Each rewrite is made in the engine's default mode (``f64``) and judged as the rule
+    judge judges a rule in that mode. Returns a dict with ``violations``
+    (artifact-attributed), ``native`` (pre-existing engine behavior, present even with an
+    empty rule set), ``unscored`` (rewrites the judge cannot read or decide), ``changed`` and
+    ``corpus`` counts.
     """
     return _monitor.monitor(_load(rules), engine_config, corpus_n=corpus_n, seed=seed,
                             run_selftest=run_selftest, judge_timeout_s=judge_timeout_s,

@@ -1362,6 +1362,26 @@ model predictions.
   `exp(log(x0^3)) -> x0^3` is minted there and refused in `real` (no value for x0 < 0), whose
   gate reads the reals. A collapse to `<constant>` reads the mode's collapse licence: `0^c` is
   minted in every mode, and `(-1)^c` in `permissive`.
+- **Sort promotion asks the judge.** Each mined rule is respelled at the `_` sort, then at
+  `!`, and each respelling is asked of the judge in the rule's mode (`verify.licensed`: the
+  judged tier at that sort and the named policies, a `_` slot never duplicated); the rule ships
+  at the strongest sort licensed, and at `?`, as mined, where neither is. Promotion's own bars
+  are gone with their evaluators (numpy and an exact one of its own), their probe lists (the
+  atoms, with +-inf for a `?` slot, and the step and power preimages), the ground tier and the
+  spike refusal; two positive controls (`x + 1 -> x` refused, `1*x -> x` licensed at `_`) are
+  asked of the judge first. `ceil(1/cosh(x)) -> 1` ships at `!` in `f64` and `real` (it was
+  killed at `?`, at x = +-inf, which is no data) and at `_` in `permissive`, which binds a slot
+  to real values only. A rule without slots has no rung and passes through, its judgment the
+  mine's. `promote(judge=)` takes the mine's judge.
+- **The monitor judges with the judge.** `monitor_ruleset` judges each rewrite of the deployed
+  engine as the judge judges the rule `input -> output`, in the engine's default mode (`f64`):
+  its own high-precision evaluator, which read the reals with IEEE's signed zeros, its folds
+  and its tolerances are gone, a tagged output is read through the engine, and a rewrite the
+  judge cannot decide (an undecided measure among them) is unscored. On the acj-4 engine with
+  no rules, 186 of a 223-row corpus are rewritten; 6 are refused in `f64`, which holds a
+  rewrite to float64's values: `tan(x0 + pi) -> tan(x0)` (float64's pi keeps them apart by
+  more than 8 units in the last place) and `(-x0)^(-1/2) -> 1/(-x0)^(1/2)` (+inf against -inf
+  at x0 = 0) among them; 7 are undecided. Its poison self-test catches all five poisons.
 - **What the new judgment moves.** On a reduced length-4 mine of this version, verify-mine
   keeps every rule of the `f64` (392) and `permissive` (422) files and refuses 17 of
   the 543 `real` rules, each for one of the reasons above: `1/exp(_0) -> exp(-_0)` (at
@@ -1407,6 +1427,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   They named the exemption that let rules with more than one `<constant>` on the left side
   ship unjudged; such rules are now refused like any rule the judge cannot decide (see In
   detail).
+- **`monitor_ruleset`'s `tolerated` and `f64_folds`.** The monitor judges with the rule judge,
+  which tolerates nothing a mode does not license and reads an f64 fold as any other rewrite;
+  a rewrite it cannot read or decide is counted under `unscored`.
 - **`utils.remove_pow1`**, a cleanup of the generation-1 `pow1`/`pow_1` operators that nothing
   called. Generation-2 configs that declare those names as operators still evaluate them.
 - **The `fast-assets` cargo feature**, which gated nothing. Builds that passed it drop the flag.
