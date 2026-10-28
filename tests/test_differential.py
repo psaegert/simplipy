@@ -644,6 +644,11 @@ def test_p4_is_the_judges_criterion_and_reads_both_sides() -> None:
     assert not admits('ceil abs cos x0', '1', 'real')
     # differs at 1 and on (0.99961, 1]: below 1 the disagreement stays, so it is no isolated one
     assert not admits('ceil acosh asin x0', '1', 'permissive')
+    # differs at 1 alone: below it both are 0, above it the left side has no value, which owes
+    # nothing in permissive (an extension is no disagreement)
+    assert admits('acos ceil acos x0', '0', 'permissive')
+    # differs at pi and on (pi, 2*pi): no isolated point
+    assert not admits('ceil erf sinh x0', 'ceil sin x0', 'permissive')
 
 
 @pytest.mark.parametrize('mode', ['real', 'permissive'])

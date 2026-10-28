@@ -2789,7 +2789,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         resolution; a side the table cannot read there disagrees)."""
         env = event_env(key, values)
         v2, _ = _point_verdict(tl, tr, env)
-        if v2 == 'eq':
+        if v2 in ('eq', 'EXT'):
+            # an extension is no disagreement of permissive's: nothing is owed where the left
+            # side has no value (`acos(ceil(acos(x))) -> 0` past x = 1)
             return False
         return not float_close(env)
 
