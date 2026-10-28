@@ -331,10 +331,24 @@ pub fn rows_consistent(
     var_names: &[String],
     rtol: f64,
     atol: f64,
+    f64_exact: bool,
 ) -> bool {
     use crate::hiprec::PointCmp as P;
     for r in 0..battery.n_rows {
-        let dv = dep_realised(y_src[r], y_cand[r], rtol, atol);
+        // f64's const-free pair agrees at float resolution, as the judge's deployed lane reads it
+        // (F6): a defined source point that disagrees refuses unless an operation left the range
+        // there and the contract agrees (the range standard, below)
+        let dv = if f64_exact {
+            if crate::table::f64_agree(y_src[r], y_cand[r]) == crate::table::Cmp::Eq {
+                P::Eq
+            } else if y_src[r].is_nan() || events.is_some_and(|e| e[r]) {
+                P::RealChange
+            } else {
+                return false;
+            }
+        } else {
+            dep_realised(y_src[r], y_cand[r], rtol, atol)
+        };
         if dv == P::Eq {
             continue;
         }
@@ -630,6 +644,91 @@ pub fn f64_bar_sorted(
         defer_range,
         ops,
     ))
+}
+
+/// The most range rows of the f64 bar the mint reads by the table (the judge's
+/// `RANGE_ROWS_CAP`); a bar with more is undecided, and fails closed.
+const MINT_RANGE_ROWS_CAP: usize = 256;
+
+/// THE MINT'S f64 BAR, the judge's reading of it (`verify._contract`'s deployed check): every
+/// mined variable is data, a `?` slot probed over finite doubles only, and at a probe where the
+/// sides differ and an operation overflowed or underflowed the rewrite may give the true value
+/// (the range standard), which the table decides (`range_row_true`). `true` where no 0.15 head
+/// asks the bar. `ceil(1/cosh(x)) -> 1` passes: x = +-inf is no data, and past |x| = 710.48
+/// `cosh` overflows and the true value is 1.
+pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &Operators) -> bool {
+    let sorts = vec!['?'; var_names.len()];
+    let Some(bar) = f64_bar_sorted(lhs, rhs, var_names, &sorts, true, ops) else {
+        return true;
+    };
+    bar.ok
+        && bar.range_rows.len() <= MINT_RANGE_ROWS_CAP
+        && bar
+            .range_rows
+            .iter()
+            .all(|row| range_row_true(lhs, rhs, var_names, row, ops))
+}
+
+/// Does the rewrite give the TRUE value at one range row of the f64 bar? Both sides read by the
+/// table at the row (the left side's `<constant>`s named and valued as `f64_bar_sorted` appends
+/// them): the same class, and finite values equal to the working precision. A row the table
+/// cannot read says nothing about the true value and passes, as the judge skips it.
+fn range_row_true(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    row: &[f64],
+    ops: &Operators,
+) -> bool {
+    use crate::table::{class_of, Ctx, Expr};
+    let mut names = var_names.to_vec();
+    let mut k = 0usize;
+    let lt: Vec<String> = lhs
+        .iter()
+        .map(|t| {
+            if t == "<constant>" {
+                let name = format!("<c{k}>");
+                names.push(name.clone());
+                k += 1;
+                name
+            } else {
+                t.clone()
+            }
+        })
+        .collect();
+    let arity: std::collections::HashMap<String, u8> = lt
+        .iter()
+        .chain(rhs)
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let (Ok(le), Ok(re)) = (
+        Expr::compile(&lt, &names, &arity),
+        Expr::compile(rhs, &names, &arity),
+    ) else {
+        return false;
+    };
+    let env: Vec<crate::table::Val> = row.iter().map(|v| crate::table::val_of_f64(*v)).collect();
+    const DPS: i32 = 50;
+    let (Some(l), Some(r)) = (
+        le.eval_real(&env, DPS).and_then(|o| o.value),
+        re.eval_real(&env, DPS).and_then(|o| o.value),
+    ) else {
+        return true;
+    };
+    let (lu, li) = class_of(&l);
+    let (ru, ri) = class_of(&r);
+    if lu || ru || li.is_some() || ri.is_some() {
+        return lu == ru && li == ri;
+    }
+    let Some(mut ctx) = Ctx::new(DPS) else {
+        return false;
+    };
+    let p = crate::hiprec::dps_to_prec(DPS);
+    let (a, b) = (ctx.value_bf(&l), ctx.value_bf(&r));
+    let d = a.sub(&b, p, crate::hiprec::RM).abs();
+    let scale = a.abs().max(&b.abs());
+    let tol = scale.mul(&crate::hiprec::pow10(-(DPS - 10), p), p, crate::hiprec::RM);
+    matches!(d.cmp(&tol), Some(o) if o <= 0)
 }
 
 /// THE DEPLOYED BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero

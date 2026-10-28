@@ -292,9 +292,9 @@ def test_the_f64_scan_reads_the_range_standard(eng):
 def test_the_f64_mine_reads_the_range_standard(tmp_path):
     """A tiny mine: f64 mints `rootn(exp(x), 2) -> exp(x/2)`, which differs from the
     evaluator only past exp's overflow and underflow. `atanh(tanh(x)) -> x` stays out, since
-    tanh saturates inside the range. `log(exp(x)) -> x` passes the scan, whose tolerance
-    is wider than its rounding, and the contract judge refuses it as `real`: its sides differ
-    by 34 ULP at the ordinary point 0.0137421."""
+    tanh saturates inside the range. `log(exp(x)) -> x` stays out too: the scan asks the judge's
+    agreement (8 units in the last place) and its sides differ by 34 at the ordinary point
+    0.0137421, so the judge never sees it."""
     ops = {
         "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
         "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
@@ -313,4 +313,4 @@ def test_the_f64_mine_reads_the_range_standard(tmp_path):
     assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and len(r[0]) == 3]
     assert not [r for r in f64 if r[0] == ('log', 'exp', '?0')]
     side = json.load(open(tmp_path / 'rules_f64.json.provenance.json'))
-    assert [['log', 'exp', 'x0'], ['x0']] in side['per_length']['3']['excluded']
+    assert [['log', 'exp', 'x0'], ['x0']] not in side['per_length']['3']['excluded']

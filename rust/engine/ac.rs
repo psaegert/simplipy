@@ -9,7 +9,7 @@
 //!   lives in the constructors, the `<constant>` value-set collapse below, and NOTHING
 //!   transcendental folds at serve -- those identities are mined, symbolically certified rules;
 //! * the `<constant>` collapse reads the constant-collapse criterion the mint reads
-//!   (`interval::constant_collapse`: a certified cell of the free constants on which the
+//!   (`interval::collapse_licence`: a certified cell of the free constants on which the
 //!   subtree is finite, and no infinity it provably reaches);
 //! * the loaded ruleset is TRANSLATED once, lazily, on first AC use -- construction cost is
 //!   untouched for consumers that never opt in.

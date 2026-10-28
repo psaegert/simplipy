@@ -1032,7 +1032,11 @@ class TestSpecialPointCertification:
         x_flat, n = dev_x1
         assert dev._core.find_rule(
             ['exp', 'log', 'pow', 'x0', '3'], 5, 3, [['pow', 'x0', '<constant>']],
-            ['x0'], x_flat, n, rule_mode='permissive') is None
+            ['x0'], x_flat, n, rule_mode='real') is None
+        # permissive owes no clause (b): the extension holds there, at the snapped witness
+        assert dev._core.find_rule(
+            ['exp', 'log', 'pow', 'x0', '3'], 5, 3, [['pow', 'x0', '<constant>']],
+            ['x0'], x_flat, n, rule_mode='permissive') == ['pow', 'x0', '3']
         assert dev._core.find_rule(
             ['exp', '/', 'log', 'x0', '3'], 5, 3, [['pow', 'x0', '<constant>']],
             ['x0'], x_flat, n, rule_mode='permissive') == ['pow', 'x0', '0.3333333333333333']
@@ -1772,9 +1776,10 @@ class TestProposalHintLengthAllowance:
         assert core.registry_mint_refusal(
             list(self.COS_SRC), endpoint, list(self.COS_TGT), ["x0"]) is None
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
+        # true on the reals (float64's cancellation near cos(2x) = -1 keeps it out of f64)
         assert core.judge_pair(
             list(self.COS_SRC), list(self.COS_TGT), ["x0"], X_data.flatten(order="C").tolist(),
-            X_data.shape[0], 16, 16, 7, 1e-9, 1e-12, 32, rule_mode="default") \
+            X_data.shape[0], 16, 16, 7, 1e-9, 1e-12, 32, rule_mode="real") \
             == (True, "accepted"), "the pair is numerically TRUE; it dies elsewhere"
         # the ONE gate it fails -- and it fails it in both directions of the ordering:
         # the engine's own endpoint sits strictly BELOW the proposed target, so the

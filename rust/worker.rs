@@ -864,6 +864,7 @@ fn battery_rows_ok(
         var_names,
         rtol,
         atol,
+        f64_range && cand_params.is_empty(),
     )
 }
 
@@ -1251,8 +1252,9 @@ fn candidate_matches(
     atol: f64,
     min_informative: usize,
     fit_seed: u64,
-    rescue: bool,
+    lane: Lane,
 ) -> Option<Option<Vec<f64>>> {
+    let rescue = lane.rescue();
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
@@ -1266,7 +1268,13 @@ fn candidate_matches(
         // The domain gate needs `c` to bind the candidate's `<constant>` leaves.
         // The source's range events on this instance (f64 only; see `f64_range_rescue`).
         let ev_src = src_events.get(inst).and_then(|e| e.as_deref());
-        let ok: Option<Option<Vec<f64>>> = if cand.n_const == 0 {
+        // NOTHING IS OWED WHERE THE SOURCE IS NOWHERE FINITE (3.2): an instance of the source's
+        // constants at which no row is finite (`pow(0, C)` at C < 0, +inf everywhere) binds
+        // nothing, as a vacuous instance.
+        let vacuous = !inst_params.is_empty() && !y.iter().any(|v| v.is_finite());
+        let ok: Option<Option<Vec<f64>>> = if vacuous {
+            Some(None)
+        } else if cand.n_const == 0 {
             // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
             // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
             //
@@ -1286,38 +1294,41 @@ fn candidate_matches(
             //   identities whose f64 evaluation loses precision -- atanh(tanh(x)) -> x,
             //   sin(np.pi) -> 0 -- certify; a value that only looks like zero does not.
             let y_cand: &[f64] = cand_rows.y.as_deref().unwrap();
-            let hit = allclose_extends(y, y_cand, rtol, 0.0)
-                || if rescue {
-                    crate::hiprec::rescue(
-                        y,
-                        y_cand,
-                        source,
-                        inst_params,
-                        &cand.tokens,
-                        &[],
-                        ops,
-                        var_names,
-                        cols,
-                        rtol,
-                        0.0,
-                    )
-                } else {
-                    f64_range_rescue(
-                        y,
-                        y_cand,
-                        ev_src,
-                        cand_rows.events.as_deref(),
-                        source,
-                        inst_params,
-                        &cand.tokens,
-                        &[],
-                        ops,
-                        var_names,
-                        cols,
-                        rtol,
-                        0.0,
-                    )
-                };
+            let hit = if rescue {
+                allclose_extends(y, y_cand, rtol, 0.0)
+            } else {
+                f64_agree_extends(y, y_cand)
+            } || if rescue {
+                crate::hiprec::rescue(
+                    y,
+                    y_cand,
+                    source,
+                    inst_params,
+                    &cand.tokens,
+                    &[],
+                    ops,
+                    var_names,
+                    cols,
+                    rtol,
+                    0.0,
+                )
+            } else {
+                f64_range_rescue(
+                    y,
+                    y_cand,
+                    ev_src,
+                    cand_rows.events.as_deref(),
+                    source,
+                    inst_params,
+                    &cand.tokens,
+                    &[],
+                    ops,
+                    var_names,
+                    cols,
+                    rtol,
+                    0.0,
+                )
+            };
             // A const-free candidate binds nothing, so even a vacuous match has a determined
             // (empty) witness and the gate applies exactly.
             if hit {
@@ -1466,7 +1477,16 @@ fn candidate_matches(
         // this: `allclose_extends` skips every NaN row regardless of measure.
         // A VACUOUS instance (`None`) determined no constants, so it pins no target function to
         // test -- and it contributes no evidence either, so `min_informative` still decides.
-        if let Some(cand_params) = &fitted {
+        // Permissive owes no clause (b): it may give a value where its input has none (its
+        // criterion is agreement alone), so no domain gate applies there. Real's gate reads the
+        // reals (`interval::with_reading`): the table's values at every point, no saturation.
+        // A collapse to a bare `<constant>` of a variable-free source is the collapse licence's
+        // (`certify_candidate`), whose evidence decides it: no domain gate.
+        let collapse = cand.tokens.len() == 1
+            && cand.tokens[0] == "<constant>"
+            && !source.iter().any(|t| var_names.contains(t));
+        let _reading = crate::interval::ReadingScope::open(rescue);
+        if let Some(cand_params) = fitted.as_ref().filter(|_| lane.owes_b() && !collapse) {
             // ONE horizon per gate decision, shared by the extension witness and BOTH deadness
             // measures. Computing them separately lets a source read "dead" off a smaller box
             // than the harm it exempts (its own constants can be smaller than the pair's), a
@@ -1661,6 +1681,48 @@ fn candidate_matches(
         }
     }
     Some(certified.into_iter().next().and_then(|(_, w)| w))
+}
+
+/// THE MODE A PAIR IS MINTED FOR, which the mint's numeric acceptance reads:
+/// - `f64` reads the deployed evaluator's values, agreeing at float resolution (F6, 8 units in
+///   the last place) under the range standard;
+/// - `real` and `permissive` pre-filter in f64 and re-judge a near miss by the table
+///   (`hiprec::rescue`); real owes clause (b) (the domain gate, read in the reals), permissive
+///   owes none (its criterion is agreement alone) and collapses a constant without evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lane(pub crate::engine::RuleMode);
+
+impl Lane {
+    /// Is a near miss re-judged by the table (every mode but f64)?
+    pub fn rescue(self) -> bool {
+        !matches!(self.0, crate::engine::RuleMode::Default)
+    }
+    /// Does the mode owe clause (b), so the domain gate applies (every mode but permissive)?
+    pub fn owes_b(self) -> bool {
+        !matches!(self.0, crate::engine::RuleMode::Permissive)
+    }
+}
+
+/// `true` reads as `real`'s lane and `false` as f64's (the per-call paths and tests).
+impl From<bool> for Lane {
+    fn from(rescue: bool) -> Self {
+        Lane(if rescue {
+            crate::engine::RuleMode::Real
+        } else {
+            crate::engine::RuleMode::Default
+        })
+    }
+}
+
+/// F6, the f64 agreement of a const-free pair on the rows: wherever the source has a value the
+/// candidate agrees to float resolution (`table::f64_agree`: both undefined, the same infinity,
+/// or at most 8 units in the last place apart, the two zeros as one); a row where the source is
+/// NaN is extendable (`allclose_extends`' reading of a NaN source row).
+fn f64_agree_extends(y_src: &[f64], y_cand: &[f64]) -> bool {
+    y_src
+        .iter()
+        .zip(y_cand)
+        .all(|(&s, &c)| s.is_nan() || crate::table::f64_agree(s, c) == crate::table::Cmp::Eq)
 }
 
 /// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every
@@ -2073,6 +2135,14 @@ impl<'s> SourceCtx<'s> {
             }
             _ => (std::borrow::Cow::Borrowed(cols), n_rows),
         };
+        // Real's and permissive's rows read the table where float64 reads definedness off a
+        // rounded pole (`hiprec::table_classes`): `tan(asin(ceil(x)))` has no value at
+        // ceil(x) = 1, where float64 gives 1.633e16.
+        if !f64_range {
+            for (p, yi) in y.iter_mut() {
+                crate::hiprec::table_classes(yi, source, p, ops, var_names, &cols);
+            }
+        }
         let events = if f64_range {
             y.iter()
                 .map(|(p, _)| events_if_any(tape.eval_columns_events(&cols, p, n_rows)).1)
@@ -2133,7 +2203,7 @@ fn certify_candidate(
     atol: f64,
     min_informative: usize,
     seed: u64,
-    rescue: bool,
+    lane: Lane,
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Option<Certified> {
     let source = sc.source;
@@ -2157,7 +2227,14 @@ fn certify_candidate(
     if sc.blind {
         return None;
     }
-    if let Some(sv) = &sc.reach {
+    // A collapse to a bare `<constant>` owes a witness only where the source is finite (3.2):
+    // it need not reach the source's infinities (`pow(0, C)` is +inf on C < 0), and the
+    // collapse licence below decides it.
+    let collapse = sc.n_const > 0
+        && cand.tokens.len() == 1
+        && cand.tokens[0] == "<constant>"
+        && !source.iter().any(|t| var_names.contains(t));
+    if let Some(sv) = sc.reach.as_ref().filter(|_| !collapse) {
         if let Some(cv) = &cand.reals_vs {
             if !crate::interval::reaches_all_of(cv, sv) {
                 return None; // cannot reach a component the source takes: FALSE, no sampling
@@ -2181,7 +2258,7 @@ fn certify_candidate(
         atol,
         min_informative,
         seed,
-        rescue,
+        lane,
     )?;
     // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
     // source's drawn constants and the fit's chosen constants are both in scope)
@@ -2235,7 +2312,7 @@ fn certify_candidate(
                     atol,
                     min_informative,
                     seed,
-                    rescue,
+                    lane,
                 )
                 .is_some()
             })
@@ -2296,17 +2373,17 @@ fn certify_candidate(
     // reachability") -- this is where that measure decision is made: `pow (-1)
     // <constant>` (nan a.e.) cannot become anything finite.
     //
-    // A COLLAPSE TO `<constant>` answers to THE CONSTANT-COLLAPSE CRITERION instead
-    // (`interval::constant_collapse`, the judge's `verify._contract.source_defined`): the
-    // target constant is fitted, and a source constant at which the source is NaN or
-    // infinite is never the fit, so the collapse owes a witness exactly where the source is
-    // finite. `atan atanh <constant>` (finite on |C| < 1, NaN beyond) and `acos <constant>`
-    // collapse; `pow (-1) <constant>`, finite only at the integers, does not. The engine's
-    // fold (`engine/ac.rs::ac_fold`) reads the same function, so what the mint would collapse
-    // the engine already does, and the mine never writes it.
+    // A COLLAPSE TO `<constant>` answers to THE COLLAPSE LICENCE instead
+    // (`interval::collapse_licence`, in the lane's mode): the target constant is fitted, and a
+    // source constant at which the source is NaN or infinite is never the fit, so the collapse
+    // owes a witness exactly where the source is finite, and it needs evidence (a cell of the
+    // constants on which the source is finite). `atan atanh <constant>`, `acos <constant>` and
+    // `pow 0 <constant>` collapse; `pow (-1) <constant>`, finite only at the integers, does
+    // not. The engine's fold (`engine/ac.rs::ac_fold`) reads the same function, so what the
+    // mint would collapse the engine already does, and the mine never writes it.
     let var_free = !source.iter().any(|t| var_names.contains(t));
     if var_free && sc.n_const > 0 && target.len() == 1 && target[0] == "<constant>" {
-        if !crate::interval::constant_collapse(source, ops, !rescue) {
+        if !crate::interval::collapse_licence(source, ops, lane.0) {
             return None;
         }
     } else if let Some(sv) = &sc.reach {
@@ -2371,11 +2448,13 @@ pub fn find_rule_with_lib(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    rescue: bool,
+    lane: impl Into<Lane>,
     accept: Option<AcceptFn<'_>>,
     confirm: Option<AcceptFn<'_>>,
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Result<Option<Vec<String>>, String> {
+    let lane: Lane = lane.into();
+    let rescue = lane.rescue();
     // GUARD FIRST (BEFORE the all-constant short-circuit).
     let max_cand_len = match max_target {
         Some(mt) => simplified_length.min(mt + 1),
@@ -2610,7 +2689,7 @@ pub fn find_rule_with_lib(
                 atol,
                 min_informative,
                 seed,
-                rescue,
+                lane,
                 accept_resolved,
             ) else {
                 continue;
@@ -2679,8 +2758,9 @@ pub fn find_rule(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    rescue: bool,
+    lane: impl Into<Lane>,
 ) -> Result<Option<Vec<String>>, String> {
+    let lane: Lane = lane.into();
     // Per-call path: no engine here to score mu, so the library is unscored and the legacy
     // token bound stands (`max_mu = None`). The MINE goes through the resident-library path.
     let mus = vec![None; candidates.len()];
@@ -2698,7 +2778,7 @@ pub fn find_rule(
         rtol,
         atol,
         min_informative,
-        rescue,
+        lane,
         None,
         None,
         None,
@@ -2728,8 +2808,10 @@ pub fn judge_pair(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    rescue: bool,
+    lane: impl Into<Lane>,
 ) -> Result<Option<&'static str>, String> {
+    let lane: Lane = lane.into();
+    let rescue = lane.rescue();
     let Some(sc) = SourceCtx::new(
         ops,
         source,
@@ -2757,7 +2839,7 @@ pub fn judge_pair(
         atol,
         min_informative,
         seed,
-        rescue,
+        lane,
         None,
     ) else {
         return Ok(Some("uncertified"));

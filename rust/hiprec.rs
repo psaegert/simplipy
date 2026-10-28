@@ -11,27 +11,14 @@
 //! candidate is re-evaluated AT the f64-fitted constants -- a P-bit accept is still a
 //! legitimate "constants EXIST" witness, so no new accept class is introduced.
 //!
-//! The rescue: when a candidate fails `allclose_extends` on only a small
-//! fraction of its binding rows (a NEAR MISS), re-evaluate BOTH sides on exactly those
-//! rows at `P` bits (astro-float, pure Rust) and re-judge with the same generic-equivalence
-//! semantics (source nonfinite -> extendable; candidate nonfinite where the source is
-//! finite -> reject; otherwise the same rtol/atol gate, in high precision). Every f64
-//! ACCEPT is unchanged -- escalation can only rescue rows the exact math supports.
-//!
-//! Saturation at working precision is sound: where even `P` bits cannot separate a value
-//! from its limit (e.g. tanh(x) == 1 at P bits for x > ~350), the source evaluates
-//! nonfinite (atanh(1) -> inf) and the row becomes extendable -- never a wrong verdict,
-//! only lost evidence. Plateau FALSITIES (e.g. `tanh(cosh(cosh(x))) -> 1`) are refuted by
-//! their near-corner rows, which fail f64 by huge margins and exceed the near-miss gate,
-//! so they are never escalated (and would be re-refuted at `P` bits if they were).
-//!
-//! Precision choice: P = 1024 bits (~308 decimal digits) decides every row the mine's
-//! X mixture (|x| <= 1e3, f64 inputs lifted exactly) can produce outside doubly-
-//! exponential separations, without an adaptive Ziv loop. Every precision has its own
-//! saturation cliff (e.g. tanh rounds to 1 at P bits for x > ~350, and JUST BELOW that
-//! cliff atanh(tanh(x)) recovers x with only the leftover mantissa bits), so a P-bit
-//! REFUTATION is confirmed at `2*P` bits before it counts: only an agreeing FAIL at both
-//! precisions refutes; a disagreement is UNDECIDED and never flips a verdict on its own.
+//! The rescue: when a candidate fails `allclose_extends` on only a small fraction of its
+//! binding rows (a NEAR MISS), both sides are read on exactly those rows by THE TABLE
+//! (`table::Expr::eval_real`, climbing a precision ladder past an Unresolved reading) and
+//! re-judged with the same generic-equivalence semantics: the source undefined -> extendable;
+//! an infinity the candidate must reproduce; finite values within the rtol/atol gate, or a
+//! residual that collapses as the precision grows. Every f64 ACCEPT is unchanged -- escalation
+//! can only rescue rows the table's values support (`tan(asin(1))` is undefined there, where
+//! float64 reads 1.6e16).
 //!
 //! Design lesson (kept from a removed exact-arithmetic cross-check, `certify_const_free`):
 //! a checker judging
@@ -51,13 +38,6 @@ pub use astro_float::BigFloat as ArbFloat;
 
 /// Working precision in bits (refutations are confirmed at `2*P`).
 const P: usize = 1024;
-/// BASE precision for the pole-vs-saturation escalation LADDER (`judge_row` climbs P_INF ->
-/// 4*P_INF -> 16*P_INF). `tanh(x)=1` at working precision needs ~2*|x|*log10(e) digits, so the
-/// mine X (|x| <= ~1e3) needs ~2900 bits, cleared at 4096; the SCALED family `atanh(tanh(k*x))`
-/// (k up to 5) needs up to ~5x that, cleared only higher up the ladder (a fixed 4096 dropped
-/// those true identities). A genuine pole/literal inf stays inf at every rung; only doubly-
-/// exponential saturations (`atanh(tanh(cosh(x)))`) never resolve and are treated as poles.
-const P_INF: usize = 4096;
 pub(crate) const RM: RoundingMode = RoundingMode::ToEven;
 /// Escalate a candidate only when it fails f64 on at most this fraction of the instance's
 /// binding rows (the rows where the source is finite). This is the SINGLE near-miss gate:
@@ -91,139 +71,114 @@ fn within(a: &BigFloat, b: &BigFloat, rtol: f64, atol: f64, p: usize) -> bool {
     matches!(diff.cmp(&tol), Some(ord) if ord <= 0)
 }
 
-/// Finite `s ~= c` within `atol + rtol*|c|` at `p` bits -- the f64 row predicate of
-/// `eval::allclose_extends`, lifted (the candidate is the reference). A `Fail` carries the
-/// residual `|s - c|` and both values, which `judge_row_confirmed` compares across precisions.
-fn cmp_finite(s: &BigFloat, c: &BigFloat, rtol: f64, atol: f64, p: usize) -> Judged {
-    if within(s, c, rtol, atol, p) {
-        return (RowVerdict::Pass, None);
-    }
-    let residual = Residual {
-        diff: s.sub(c, p, RM).abs(),
-        s: s.clone(),
-        c: c.clone(),
-    };
-    (RowVerdict::Fail, Some(residual))
-}
-
-/// A failed finite comparison: the residual `|s - c|` and the two values it came from.
-struct Residual {
-    diff: BigFloat,
-    s: BigFloat,
-    c: BigFloat,
-}
-
-/// A row verdict at one precision, with the residual of a failed finite comparison.
-type Judged = (RowVerdict, Option<Residual>);
-
 /// `BigFloat` has no `is_finite`; a value is finite when it is neither inf nor NaN.
 fn is_fin(x: &BigFloat) -> bool {
     !x.is_inf() && !x.is_nan()
 }
 
-/// Judge row `r` at `p` bits. `None` = unevaluable (unknown token): the caller keeps the
-/// verdict it already has.
-///
-/// The inf verdict is by ESCALATION, not a per-source flag: a source-inf row is
-/// re-evaluated at `P_INF` bits (matched to the mine X range, |x| <= ~1e3). A GENUINE infinity
-/// -- literal inf, or a pole (`1/0`, `0^-k`) -- is EXACT and stays inf at any precision, so the
-/// candidate must reproduce it (`pow(x, inf) -> 0` and `pow(0, cos x) -> 0` are false where the
-/// source is that pole/inf). A SATURATION inf -- `atanh(tanh(x)) = inf` only because `tanh(x)`
-/// rounds to 1 -- resolves to its finite true value at `P_INF` and is judged as a finite row,
-/// keeping the tanh-saturation rescue. NaN is always domain-extendable (`x/x -> 1`).
-#[allow(clippy::too_many_arguments)]
-fn judge_row(
-    source: &[String],
-    src_params: &[f64],
-    candidate: &[String],
-    cand_params: &[f64],
+/// The precision ladder of a table reading (decimal digits; `table_classes`, and `table_row`
+/// above its demanded precision): a value the first rung cannot read (in a boundary band,
+/// `atanh(tanh(800))`) resolves on a later one.
+const TABLE_ROW_DPS: [i32; 4] = [50, 120, 400, 1200];
+
+/// One side of a row, compiled for the table: its `<constant>` slots renamed `<k0>`, `<k1>`, ...
+/// after the variables, the environment the row's values and the slots' parameters, each double
+/// read exactly.
+fn table_side(
+    tokens: &[String],
+    params: &[f64],
     ops: &Operators,
     var_names: &[String],
     x_cols: &[Vec<f64>],
     row: usize,
-    f64_src: f64,
-    f64_cand: f64,
-    rtol: f64,
-    atol: f64,
-    p: usize,
-    cc: &mut Consts,
-) -> Option<Judged> {
-    // DEPLOYMENT-FAITHFUL: the extend/pole decision keys on the f64 value (numpy = the DEPLOYED
-    // evaluator), NOT the astro-float value. astro-float diverges from numpy on quirk domains --
-    // `(-inf)^non-integer` is NaN in astro-float (complex-undefined) but +inf in numpy -- and
-    // keying `Extend` on the astro-float NaN wrongly dropped numpy-DEFINED inf rows, which let
-    // FRAC > 0.5 accept deployment-false rules (`pow(-inf, sin x) -> pow(-inf, x)`). Keying on the
-    // f64 value makes soundness FRAC-independent: escalation can only REFINE a numpy-inf that is a
-    // saturation artifact, never reinterpret a numpy-defined value.
-    if f64_src.is_nan() {
-        return Some((RowVerdict::Extend, None)); // numpy-undefined -> domain-extendable (`x/x -> 1`)
-    }
-    if f64_src.is_infinite() {
-        // numpy sees inf. Climb the ladder: a SATURATION artifact resolves to a finite true value
-        // (`atanh(tanh(k*x)) = inf` only because `tanh` rounds to 1 -> the rule may FIX it to the
-        // finite form); a GENUINE pole (`1/0`, `0^-k`, literal inf) stays inf; a numpy-quirk inf
-        // (astro-float NaN where numpy defines inf) has no finite true value, so the DEPLOYMENT inf
-        // is authoritative and the candidate must reproduce it. Doubly-exponential saturations
-        // (`atanh(tanh(cosh x))`) never resolve and are treated as poles (rare, documented).
-        for &pp in &[P_INF, 4 * P_INF, 16 * P_INF] {
-            let s_hi = eval_prefix(source, ops, var_names, x_cols, src_params, row, pp, cc)?;
-            if is_fin(&s_hi) {
-                let c_hi =
-                    eval_prefix(candidate, ops, var_names, x_cols, cand_params, row, pp, cc)?;
-                return Some(if is_fin(&c_hi) {
-                    cmp_finite(&s_hi, &c_hi, rtol, atol, pp)
-                } else {
-                    (RowVerdict::Fail, None)
-                });
+) -> Option<(crate::table::Expr, Vec<crate::table::Val>)> {
+    let mut names: Vec<String> = var_names.to_vec();
+    let mut env: Vec<crate::table::Val> = var_names
+        .iter()
+        .enumerate()
+        .map(|(i, _)| crate::table::val_of_f64(x_cols.get(i).map_or(f64::NAN, |c| c[row])))
+        .collect();
+    let mut k = 0usize;
+    let toks: Vec<String> = tokens
+        .iter()
+        .map(|t| {
+            if t == "<constant>" {
+                let name = format!("<k{k}>");
+                names.push(name.clone());
+                env.push(crate::table::val_of_f64(
+                    params.get(k).copied().unwrap_or(f64::NAN),
+                ));
+                k += 1;
+                name
+            } else {
+                t.clone()
             }
-            if s_hi.is_nan() {
-                break; // astro-float undefined but numpy-inf: a numpy-quirk pole (handled below)
-            }
-            // s_hi still inf: a higher rung may yet resolve a deep saturation
-        }
-        // pole / numpy-quirk inf: the candidate must reproduce the DEPLOYMENT infinity (same sign)
-        return Some(if f64_cand == f64_src {
-            (RowVerdict::Pass, None)
-        } else {
-            (RowVerdict::Fail, None)
-        });
-    }
-    // numpy-finite source: high-precision comparison of the near-miss row
-    let s = eval_prefix(source, ops, var_names, x_cols, src_params, row, p, cc)?;
-    if !is_fin(&s) {
-        // astro-float diverges from a finite numpy value -> keep the fail
-        return Some((RowVerdict::Fail, None));
-    }
-    let c = eval_prefix(candidate, ops, var_names, x_cols, cand_params, row, p, cc)?;
-    if !is_fin(&c) {
-        return Some((RowVerdict::Fail, None)); // replacement non-finite where the source is finite
-    }
-    Some(cmp_finite(&s, &c, rtol, atol, p))
+        })
+        .collect();
+    let arity: std::collections::HashMap<String, u8> = toks
+        .iter()
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let expr = crate::table::Expr::compile(&toks, &names, &arity).ok()?;
+    Some((expr, env))
 }
 
-/// Judge row `r` with the precision-stability rule: a `P`-bit FAIL only counts once the
-/// row ALSO fails at `2*P` bits (each precision has its own saturation cliff; a
-/// disagreement is treated as non-refuting). `None` propagates (caller keeps its verdict).
-///
-/// WHAT ZERO MEANS at high precision. A true identity whose values are zero (`sin(pi) ->
-/// 0`, pi rendered at the working precision) leaves a residual of rounding residue, about
-/// `2^-P` at `P` bits and `2^-2P` at `2P` bits: no relative band admits it at either
-/// precision, yet it is exactly 0. A FALSE zero (`exp(sinh(-5)) -> 0`, value 5.9e-33)
-/// leaves the same residual at every precision. So a row that fails at both precisions
-/// passes iff its residual COLLAPSES as the precision doubles: it shrinks by at least
-/// `2^(P/2)`, the precision-stability discriminator the symbolic judge applies.
-///
-/// A REFUTATION NEEDS CONVERGED VALUES. A row whose source or candidate value itself moves
-/// between `P` and `2P` bits by more than the tolerance has not been evaluated yet: an inner
-/// saturation (`tanh(x)` is exactly -1 at `P` and at `2P` bits once |x| passes ~355 and ~710,
-/// so `sin(acos(tanh(x)))` reads `sin(pi)`'s residue, ~2^-P, against `sech(x)` ~ 1e-407 at
-/// x = -937) refutes a true identity at both precisions while its value halves its exponent.
-/// Such a row is judged again at `P_INF` and `2*P_INF` bits, the precision matched to the mine
-/// X range (|x| <= ~1e3), by the same rule; a row still unconverged there fails (fail closed).
-/// Only a finite source row climbs: an infinite one is decided by `judge_row`'s own ladder.
-/// A converged false row (`exp(sinh(-5)) -> 0`) is refuted at `2P` and pays nothing more.
+/// The magnitude past which a finite double may be a rounded pole (`tan(asin(1.0))` is
+/// 1.633e16 in float64, `tan(pi/2)` undefined in the reals), so that a row of the source there
+/// is read by the table (`table_classes`).
+pub(crate) const POLE_PROXIMITY: f64 = 1e15;
+
+/// THE SOURCE'S ROWS IN THE REALS where float64 reads definedness off a rounded pole or an exact
+/// zero: each finite value at least `POLE_PROXIMITY` in magnitude, and each infinity (`1/0` is
+/// +inf in float64 and has no value in the reals), is read by the table at its row and takes the
+/// table's class -- NaN where the table gives no value, the infinity it gives -- and keeps its
+/// double where the table reads it finite (an overflow) or cannot read it. A finite row climbs
+/// the ladder (`TABLE_ROW_DPS`); an infinite one is read at its first rung, where an exact pole
+/// resolves. Once per source instance.
+pub(crate) fn table_classes(
+    y: &mut [f64],
+    source: &[String],
+    src_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+) {
+    for (r, yr) in y.iter_mut().enumerate() {
+        let rungs = if yr.is_infinite() {
+            &TABLE_ROW_DPS[..1]
+        } else if yr.is_finite() && yr.abs() >= POLE_PROXIMITY {
+            &TABLE_ROW_DPS[..]
+        } else {
+            continue;
+        };
+        let Some((e, env)) = table_side(source, src_params, ops, var_names, x_cols, r) else {
+            return;
+        };
+        if let Some(v) = rungs
+            .iter()
+            .find_map(|&dps| e.eval_real(&env, dps).and_then(|o| o.value))
+        {
+            match crate::table::class_of(&v) {
+                (true, _) => *yr = f64::NAN,
+                (_, Some(up)) => *yr = if up { f64::INFINITY } else { f64::NEG_INFINITY },
+                _ => {}
+            }
+        }
+    }
+}
+
+/// THE TABLE'S ROW JUDGMENT of a near miss (real and permissive, and f64's true values under the
+/// range standard): both sides at the row read by the table (`table::Expr::eval_real`) at the
+/// precision their intermediates demand (`demanded_dps`, from a first reading at `BASE_DPS`:
+/// `cosh(650)^2 - sinh(650)^2` cancels 565 digits, so it is read at 1,180; a reading in a boundary
+/// band climbs `TABLE_ROW_DPS` to the first rung both sides read), and confirmed at a second,
+/// finer rung. The source undefined: extendable. An infinity: the candidate must be the
+/// same one. Finite: the candidate finite and within `atol + rtol*|c|` at the finer rung, or a
+/// residual that collapses between the two (an exact zero at the working precision); anything
+/// else fails, an Unresolved reading at either rung included (fail closed). `None` where a side
+/// does not compile for the table.
 #[allow(clippy::too_many_arguments)]
-fn judge_row_confirmed(
+fn table_row(
     source: &[String],
     src_params: &[f64],
     candidate: &[String],
@@ -232,65 +187,69 @@ fn judge_row_confirmed(
     var_names: &[String],
     x_cols: &[Vec<f64>],
     row: usize,
-    f64_src: f64,
-    f64_cand: f64,
     rtol: f64,
     atol: f64,
-    cc: &mut Consts,
 ) -> Option<RowVerdict> {
-    let pairs: &[usize] = if f64_src.is_finite() {
-        &[P, P_INF]
-    } else {
-        &[P]
+    use crate::table::{class_of, Ctx};
+    let (se, senv) = table_side(source, src_params, ops, var_names, x_cols, row)?;
+    let (ce, cenv) = table_side(candidate, cand_params, ops, var_names, x_cols, row)?;
+    let mut cc = Consts::new().ok()?;
+    let p0 = dps_to_prec(BASE_DPS);
+    let (os, oc) = (
+        se.eval_real(&senv, BASE_DPS)?,
+        ce.eval_real(&cenv, BASE_DPS)?,
+    );
+    let demanded = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc)
+        .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc))
+        .clamp(BASE_DPS, MAX_DPS);
+    // the first rung both sides read (a reading in a boundary band climbs the ladder)
+    let readable = |dps: i32| {
+        se.eval_real(&senv, dps).and_then(|o| o.value).is_some()
+            && ce.eval_real(&cenv, dps).and_then(|o| o.value).is_some()
     };
-    for &p in pairs {
-        let judge = |pp: usize, cc: &mut Consts| {
-            judge_row(
-                source,
-                src_params,
-                candidate,
-                cand_params,
-                ops,
-                var_names,
-                x_cols,
-                row,
-                f64_src,
-                f64_cand,
-                rtol,
-                atol,
-                pp,
-                cc,
-            )
-        };
-        let (v, r_p) = judge(p, cc)?;
-        if v != RowVerdict::Fail {
-            return Some(v);
+    let start = std::iter::once(demanded)
+        .chain(TABLE_ROW_DPS.iter().copied().filter(|&d| d > demanded))
+        .chain(std::iter::once(MAX_DPS))
+        .find(|&d| readable(d) || d >= MAX_DPS)?;
+    let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
+    let mut seen: Vec<(BigFloat, BigFloat, BigFloat, usize)> = Vec::new();
+    for dps in [start, fine] {
+        let s = se.eval_real(&senv, dps)?.value?;
+        let (s_undef, s_inf) = class_of(&s);
+        if s_undef {
+            return Some(RowVerdict::Extend);
         }
-        match judge(2 * p, cc) {
-            Some((RowVerdict::Fail, Some(r_2p))) => {
-                let Some(r_p) = r_p else {
-                    return Some(RowVerdict::Fail);
-                };
-                let bound = r_p.diff.mul(
-                    &BigFloat::from_f64(2f64.powi(-((p / 2) as i32)), 2 * p),
-                    2 * p,
-                    RM,
-                );
-                if matches!(r_2p.diff.cmp(&bound), Some(ord) if ord <= 0) {
-                    return Some(RowVerdict::Pass); // the residual collapsed: an exact zero
-                }
-                let converged = within(&r_p.s, &r_2p.s, rtol, atol, 2 * p)
-                    && within(&r_p.c, &r_2p.c, rtol, atol, 2 * p);
-                if converged {
-                    return Some(RowVerdict::Fail);
-                }
-                // unconverged: the next pair decides
-            }
-            Some((RowVerdict::Fail, None)) | None => return Some(RowVerdict::Fail),
-            Some((other, _)) => return Some(other), // P-bit cliff artifact: the higher precision decides
+        let c = ce.eval_real(&cenv, dps)?.value?;
+        let (c_undef, c_inf) = class_of(&c);
+        if let Some(up) = s_inf {
+            return Some(if !c_undef && c_inf == Some(up) {
+                RowVerdict::Pass
+            } else {
+                RowVerdict::Fail
+            });
         }
+        if c_undef || c_inf.is_some() {
+            return Some(RowVerdict::Fail);
+        }
+        let mut ctx = Ctx::new(dps)?;
+        let p = dps_to_prec(dps);
+        let (sb, cb) = (ctx.value_bf(&s), ctx.value_bf(&c));
+        let diff = sb.sub(&cb, p, RM).abs();
+        seen.push((sb, cb, diff, p));
     }
-    Some(RowVerdict::Fail)
+    let [(_, _, d1, _), (s2, c2, d2, p2)] = seen.as_slice() else {
+        return Some(RowVerdict::Fail);
+    };
+    if within(s2, c2, rtol, atol, *p2) {
+        return Some(RowVerdict::Pass);
+    }
+    // the residual collapsed between the rungs: an exact zero at the working precision
+    let bound = d1.mul(&pow10(-(fine - start) / 2, *p2), *p2, RM);
+    Some(if matches!(d2.cmp(&bound), Some(o) if o <= 0) {
+        RowVerdict::Pass
+    } else {
+        RowVerdict::Fail
+    })
 }
 
 /// The near-miss rescue: `y_src` / `y_cand` are the instance's f64 evaluations, `source`
@@ -349,12 +308,8 @@ pub fn rescue(
     if failing.is_empty() || failing.len() > gate {
         return false; // not a near miss (or nothing to rescue): keep the f64 verdict
     }
-    let mut cc = match Consts::new() {
-        Ok(cc) => cc,
-        Err(_) => return false,
-    };
     for &r in &failing {
-        match judge_row_confirmed(
+        match table_row(
             source,
             src_params,
             candidate,
@@ -363,11 +318,8 @@ pub fn rescue(
             var_names,
             x_cols,
             r,
-            y_src[r],
-            y_cand[r],
             rtol,
             atol,
-            &mut cc,
         ) {
             Some(RowVerdict::Pass) | Some(RowVerdict::Extend) => {}
             _ => return false, // confirmed fail, or unevaluable: keep the f64 verdict
@@ -403,13 +355,18 @@ pub fn range_rescue(
     rtol: f64,
     atol: f64,
 ) -> bool {
+    // A const-free pair (no fitted constant, no absolute band) agrees at float resolution
+    // (F6), as the judge's deployed lane reads it; a fitted constant keeps its band.
+    let exact = cand_params.is_empty() && atol == 0.0;
     let mut failing: Vec<usize> = Vec::new();
     for (r, &s) in y_src.iter().enumerate() {
         let c = y_cand[r];
         if s.is_nan() {
             continue; // undefined -> extendable
         }
-        let fails = if s.is_infinite() {
+        let fails = if exact {
+            crate::table::f64_agree(s, c) != crate::table::Cmp::Eq
+        } else if s.is_infinite() {
             c != s
         } else {
             !c.is_finite() || (s - c).abs() > atol + rtol * c.abs()
@@ -432,13 +389,9 @@ pub fn range_rescue(
     if failing.is_empty() {
         return false; // nothing failed: not this function's question
     }
-    let mut cc = match Consts::new() {
-        Ok(cc) => cc,
-        Err(_) => return false,
-    };
     failing.iter().all(|&r| {
         matches!(
-            judge_row_confirmed(
+            table_row(
                 source,
                 src_params,
                 candidate,
@@ -447,11 +400,8 @@ pub fn range_rescue(
                 var_names,
                 x_cols,
                 r,
-                y_src[r],
-                y_cand[r],
                 rtol,
                 atol,
-                &mut cc,
             ),
             Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
         )

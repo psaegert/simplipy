@@ -370,15 +370,14 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
     ('tan asin ceil x0', 'atanh ceil x0', 'real'),
-    pytest.param('tan asin ceil x0', 'atanh ceil x0', 'permissive',
-                 marks=expected_failure('X2', '3b')),
-    pytest.param('pow 0 <constant>', '<constant>', 'real', marks=expected_failure('X6', '3b')),
-    pytest.param('pow 0 <constant>', '<constant>', 'f64', marks=expected_failure('X6', '3b')),
-    pytest.param('exp <constant>', '<constant>', 'f64', marks=expected_failure('X6', '3b')),
-    # the mint's f64 bar still probes data at +-inf, and its domain gate still applies real's
-    # clause (b) in permissive
-    pytest.param('ceil inv cosh x0', '1', 'f64', marks=expected_failure('N2', '3b')),
-    pytest.param('exp log x0', 'x0', 'permissive', marks=expected_failure('R1', '3b')),
+    ('tan asin ceil x0', 'atanh ceil x0', 'permissive'),
+    ('pow 0 <constant>', '<constant>', 'real'),
+    ('pow 0 <constant>', '<constant>', 'f64'),
+    ('exp <constant>', '<constant>', 'f64'),
+    # the mint's f64 bar reads data as finite (no probe at +-inf), and permissive's mint owes no
+    # clause (b)
+    ('ceil inv cosh x0', '1', 'f64'),
+    ('exp log x0', 'x0', 'permissive'),
     ('rootn pow x0 2 2', 'x0', 'real'), ('exp log x0', 'x0', 'f64'),
 ])
 def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
@@ -435,7 +434,7 @@ def mint_picks(mode: str) -> tuple:
 
 
 @pytest.mark.parametrize('mode', [
-    'real', pytest.param('f64', marks=expected_failure('N10', '3b')), 'permissive'])
+    'real', 'f64', 'permissive'])
 def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
     refused = [(s, t, judged(s, t)['verdict']) for s, t in mint_picks(mode)
                if not admits(s, t, mode)]
@@ -464,8 +463,8 @@ def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs
 
 
 @pytest.mark.parametrize('expr, mode', [
-    pytest.param('exp <constant>', 'f64', marks=expected_failure('X6', '3b')),
-    pytest.param('exp <constant>', 'real', marks=expected_failure('X6', '3b')),
+    ('exp <constant>', 'f64'),
+    ('exp <constant>', 'real'),
     ('acos <constant>', 'f64'), ('log <constant>', 'real'),
 ])
 def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:

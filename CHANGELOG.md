@@ -707,8 +707,9 @@ model predictions.
   operation of either side overflows or underflows is judged at high precision, where the
   two sides' true values must agree, and every other row is compared as before. Both read
   one definition of the event, the core's (`simplipy._core.range_event`), so an f64 mine
-  mints `rootn(exp(x0), 2) -> exp(x0/2)`. `log(exp(x0)) -> x0` passes the numeric check,
-  whose tolerance is wider than the 34 ULP, and the judge refuses it.
+  mints `rootn(exp(x0), 2) -> exp(x0/2)`. The numeric check compares the other rows of a pair
+  without constants by the judge's agreement (8 units in the last place), so
+  `log(exp(x0)) -> x0`, 34 apart, does not pass it.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
@@ -1131,9 +1132,10 @@ model predictions.
   `atan(atanh(c)) -> c_t`, `acos(c) -> c_t` and `exp(log(c)) -> c_t` were never mined, three
   tokens or fewer though they are. A collapse to `<constant>` now asks the judge's question
   alone: the interval layer certifies a cell of constants on which the source is finite. A
-  literal target keeps the class guard, a source finite only at the integers (`(-1)^c`) has no
-  such cell, and one infinite on a band (`0^c`) is still out of a finite constant's reach. The
-  engine's own fold reads the same criterion (below), so these collapses are the engine's.
+  literal target keeps the class guard, and a source finite only at the integers (`(-1)^c`) has
+  no such cell (outside `permissive`, which collapses without evidence). `0^c`, +inf for c < 0,
+  collapses too: nothing is owed where the source is not finite. The engine's own fold reads the
+  same licence (below), so these collapses are the engine's.
 - **The most specific rule fires first.** At a node the engine fired the first rule of the
   node's head that matched, in file order, so a rule mined for a longer source never fired
   where a shorter rule that also matches stood before it. The `real` and `permissive` files
@@ -1344,6 +1346,22 @@ model predictions.
   constants, duplication of a `_` slot, and what the engine does itself. `asin(1) -> acos(0)`
   holds in every mode and is refused as a ground composite; `exp(tan(asin(1))) -> inf` holds in
   `f64` and has no evidence.
+- **The mint reads the judge's values and licences.** The mine's numeric acceptance kept
+  criteria of its own beside the judge's, so a rule could pass the mint and be refused at the
+  end, or never reach the judge though it holds. `real` and `permissive` re-judge a near miss
+  by the table, the values the judge reads, at the precision the row's intermediates demand and
+  confirmed at a finer one, in place of the mine's own 1,024- to 8,192-bit evaluator (above):
+  `cosh(x)^2 - sinh(x)^2 -> 1` cancels 565 digits at x = 650 and is read there at 1,180, and a
+  saturation read in the table's boundary band (`atanh(tanh(800))`) climbs until it resolves.
+  A source row float64 reads off a rounded pole is the table's: `tan(asin(ceil(x)))` has no
+  value at ceil(x) = 1, where float64 gives 1.633e16. `f64` compares the rows of a pair
+  without constants by the judge's agreement, 8 units in the last place, where the mine's
+  tolerance was wider, and its bar probes the mined variables over finite doubles, reading a
+  probe where an operation leaves the range by the table: `ceil(1/cosh(x)) -> 1` passes.
+  `permissive` owes no domain gate, since its criterion is agreement alone:
+  `exp(log(x0^3)) -> x0^3` is minted there and refused in `real` (no value for x0 < 0), whose
+  gate reads the reals. A collapse to `<constant>` reads the mode's collapse licence: `0^c` is
+  minted in every mode, and `(-1)^c` in `permissive`.
 - **What the new judgment moves.** On a reduced length-4 mine of this version, verify-mine
   keeps every rule of the `f64` (392) and `permissive` (422) files and refuses 17 of
   the 543 `real` rules, each for one of the reasons above: `1/exp(_0) -> exp(-_0)` (at

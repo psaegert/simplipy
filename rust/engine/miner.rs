@@ -41,9 +41,14 @@ pub struct MineSpec {
 }
 
 impl MineSpec {
-    /// Whether a near miss is re-judged at high precision: every mode but f64.
+    /// Whether a near miss is re-judged by the table: every mode but f64.
     pub fn rescue(&self) -> bool {
-        !matches!(self.mode, RuleMode::Default)
+        self.lane().rescue()
+    }
+
+    /// The mint's lane: the mode it mints for (`worker::Lane`).
+    pub fn lane(&self) -> crate::worker::Lane {
+        crate::worker::Lane(self.mode)
     }
 }
 
@@ -254,8 +259,7 @@ impl<'a> Acceptor<'a> {
         // `realised`. `floor(x + 1) -> floor(x) + 1` is true over the reals, so real and
         // permissive mint it, and float64 breaks it at x = -1e-17, so f64 refuses it here.
         if matches!(self.spec.mode, RuleMode::Default)
-            && crate::battery::f64_bar(self.src, t, self.vars, &self.eng.operators)
-                .is_some_and(|d| !d.ok)
+            && !crate::battery::f64_bar_mint(self.src, t, self.vars, &self.eng.operators)
         {
             return Err(MineRefusal::NotRealised);
         }
@@ -286,7 +290,7 @@ impl<'a> Acceptor<'a> {
             self.spec.rtol,
             self.spec.atol,
             c.min_informative,
-            self.spec.rescue(),
+            self.spec.lane(),
         );
         match verdict {
             Ok(None) => Ok(()),
@@ -355,7 +359,7 @@ impl<'a> Acceptor<'a> {
             spec.rtol,
             spec.atol,
             spec.min_informative,
-            spec.rescue(),
+            spec.lane(),
             Some(&license),
             Some(&confirm),
             Some(&accept_resolved),
@@ -471,7 +475,7 @@ impl Engine {
             spec.rtol,
             spec.atol,
             spec.min_informative,
-            spec.rescue(),
+            spec.lane(),
         )? {
             return Ok(Some(why));
         }
@@ -504,12 +508,12 @@ impl Engine {
             spec.rtol,
             spec.atol,
             spec.min_informative,
-            spec.rescue(),
+            spec.lane(),
         )?;
         // f64 holds only what float64 realises (`Acceptor::license`'s f64 bar)
         if why.is_none()
             && matches!(spec.mode, RuleMode::Default)
-            && crate::battery::f64_bar(src, tgt, var_names, &self.operators).is_some_and(|d| !d.ok)
+            && !crate::battery::f64_bar_mint(src, tgt, var_names, &self.operators)
         {
             return Ok(Some(MineRefusal::NotRealised.name()));
         }
@@ -593,12 +597,12 @@ impl Engine {
             rtol,
             atol,
             min_informative,
-            true,
+            crate::worker::Lane(RuleMode::Real),
         )
     }
 
-    /// [`Engine::find_rule`] with the numeric acceptance of a mode (`rescue`: high-precision
-    /// re-judging of near misses, every mode but f64; see `MineSpec::rescue`).
+    /// [`Engine::find_rule`] with the numeric acceptance of a mode (`lane`, `worker::Lane`: f64
+    /// at float resolution, real and permissive re-judging near misses by the table).
     #[allow(clippy::too_many_arguments)]
     pub fn find_rule_in(
         &self,
@@ -615,7 +619,7 @@ impl Engine {
         rtol: f64,
         atol: f64,
         min_informative: usize,
-        rescue: bool,
+        lane: crate::worker::Lane,
     ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule(
             &self.operators,
@@ -632,7 +636,7 @@ impl Engine {
             rtol,
             atol,
             min_informative,
-            rescue,
+            lane,
         )
     }
 

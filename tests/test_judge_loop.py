@@ -25,9 +25,10 @@ _OPERATORS = {
 
 SOURCE = ['*', 'exp', 'x0', 'exp', 'x0']
 
-# A source with two accepted candidates of DIFFERENT classes (equal on the reals, both
-# realised by f64 on the mining sample), in scan order.
-WITNESS = ['sinh', 'asinh', 'x0']
+# A source with two accepted candidates of DIFFERENT classes (equal on the reals), in scan
+# order, in `real` (f64 does not realise `tan(atan(x)) -> x`: 330 units in the last place on the
+# mining sample).
+WITNESS = ['tan', 'atan', 'tan', 'atan', 'x0']
 FIRST = ['x0']
 SECOND = ['tan', 'atan', 'x0']
 
@@ -44,7 +45,7 @@ def acj() -> SimpliPyEngine:
     return SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'], rules=[])
 
 
-def _scan(eng, mode='default'):
+def _scan(eng, mode='real'):
     """`mine(batch, indices, exclusions)` over a library of hand-picked candidates."""
     x = RuleMiner(eng)._mining_sample_x(512, 1, np.random.default_rng(7))
     lib = eng._core.build_candidate_library(
@@ -69,19 +70,19 @@ def test_the_premise_two_classes_in_scan_order_and_exclusion_by_class(acj) -> No
 def test_a_refused_pick_yields_to_the_next_licensed_candidate(acj) -> None:
     """NO SHADOWING: the judge files the cheapest pick under another mode, and the loop
     must return the next candidate the mode licenses -- not drop the source."""
-    refused = (('sinh', 'asinh', '?0'), ('?0',))
+    refused = (('tan', 'atan', 'tan', 'atan', '?0'), ('?0',))
 
     def judge_as(tier):
         return lambda pairs: [tier if tuple(map(tuple, p)) == refused else 'core' for p in pairs]
 
-    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
-                                               judge_as('real'), {}, ['x0'])
+    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'real',
+                                               judge_as('f64-only'), {}, ['x0'])
     assert found == [(WITNESS, SECOND)]
     assert stats['judge_rounds'] == 2
     assert stats['excluded'] == [[WITNESS, FIRST]]
-    # a tier f64 licenses: no exclusion, the first pick stands
-    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
-                                               judge_as('f64'), {}, ['x0'])
+    # a tier real licenses: no exclusion, the first pick stands
+    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'real',
+                                               judge_as('real'), {}, ['x0'])
     assert found == [(WITNESS, FIRST)] and stats['judge_rounds'] == 1
 
 
@@ -94,8 +95,8 @@ def test_the_judge_memo_is_consulted_before_the_judge(acj) -> None:
 
     judged: dict = {}
     miner = RuleMiner(acj)
-    miner._mine_length([WITNESS], _scan(acj), 'default', judge, judged, ['x0'])
-    miner._mine_length([WITNESS], _scan(acj), 'default', judge, judged, ['x0'])
+    miner._mine_length([WITNESS], _scan(acj), 'real', judge, judged, ['x0'])
+    miner._mine_length([WITNESS], _scan(acj), 'real', judge, judged, ['x0'])
     assert len(calls) == 1 and judged
 
 
@@ -118,9 +119,9 @@ def _offset_scan(eng, batch, offset, exclusions):
     x = RuleMiner(eng)._mining_sample_x(512, 1, np.random.default_rng(7))
     lib = eng._core.build_candidate_library(
         [FIRST, ['*', '1', 'x0'], ['sin', 'x0'], SECOND], ['x0'],
-        x.flatten(order='C').tolist(), x.shape[0], rule_mode='default')
+        x.flatten(order='C').tolist(), x.shape[0], rule_mode='real')
     return eng._core.mine_one_length(batch, lib, None, 16, 16, 7, 1e-9, 1e-12, None, True,
-                                     rule_mode='default', index_offset=offset,
+                                     rule_mode='real', index_offset=offset,
                                      exclusions=exclusions)
 
 
@@ -480,12 +481,12 @@ def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
     import simplipy.mining
     monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 2)
     other = ['tan', 'atan', 'sin', 'x0']
-    stubborn = ('sinh', 'asinh', '?0')
+    stubborn = ('tan', 'atan', 'tan', 'atan', '?0')
 
     def judge(pairs):
-        return ['real' if tuple(p[0]) == stubborn else 'core' for p in pairs]
+        return ['f64-only' if tuple(p[0]) == stubborn else 'core' for p in pairs]
 
-    found, stats = RuleMiner(acj)._mine_length([WITNESS, other], _scan(acj), 'default',
+    found, stats = RuleMiner(acj)._mine_length([WITNESS, other], _scan(acj), 'real',
                                                judge, {}, ['x0'])
     assert found == [(other, ['sin', 'x0'])], found
     assert stats['stubborn'] == [[WITNESS, [FIRST, SECOND]]], stats
@@ -526,13 +527,13 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
     out = str(tmp_path / 'mined.json')
 
-    # refuses the length-4 picks, `log exp log ?0 -> log ?0` and `log exp neg ?0 -> neg ?0`
-    # (the latter passes f64's special points where exp leaves the range, 750 and 1e17)
+    # refuses the length-4 pick, `log exp log ?0 -> log ?0` (f64 no longer realises
+    # `log exp neg ?0 -> neg ?0`, which is off by more than 8 units in the last place at small x)
     def judge(pairs):
         return ['real' if len(p[0]) >= 4 else 'core' for p in pairs]
 
-    with pytest.raises(RuntimeError, match=r"gave up on 2 source\(s\) of length 4.*"
-                                           r"'log', 'exp', 'log', 'x0'.*'log', 'exp', 'neg', 'x0'"):
+    with pytest.raises(RuntimeError, match=r"gave up on 1 source\(s\) of length 4.*"
+                                           r"'log', 'exp', 'log', 'x0'"):
         SimpliPyEngine(operators=ops, rules=[]).find_rules(
             max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
             X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,

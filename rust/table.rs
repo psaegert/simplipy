@@ -269,6 +269,11 @@ impl Ctx {
         small_int(0, self.p)
     }
 
+    /// A finite value as a float at the working precision (the miner's row comparison).
+    pub fn value_bf(&mut self, v: &Val) -> BigFloat {
+        self.bf(v)
+    }
+
     fn pi(&mut self) -> BigFloat {
         self.cc.pi(self.p, RM)
     }

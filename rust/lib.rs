@@ -1567,7 +1567,7 @@ impl PyEngine {
         // Universal floor: an EXPLICIT 0 would silently disable the evidence gate, and no
         // gate is switched off by a bare numeric argument.
         let mi = min_informative.unwrap_or(n_rows / 8).max(1);
-        let rescue = !matches!(parse_rule_mode(rule_mode)?, engine::RuleMode::Default);
+        let lane = crate::worker::Lane(parse_rule_mode(rule_mode)?);
         py.detach(|| {
             self.inner().find_rule_in(
                 &source,
@@ -1583,7 +1583,7 @@ impl PyEngine {
                 rtol,
                 atol,
                 mi,
-                rescue,
+                lane,
             )
         })
         .map_err(PyValueError::new_err)
