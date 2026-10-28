@@ -57,11 +57,13 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
 
 #: Which judged tiers each mode's rule set is allowed to contain: the tiers whose rules hold in
 #: the mode (`_contract._tier`). `real` holds what holds in real (`real-only` among it: a `$`
-#: slot real owes nothing at 0, where permissive's real-valued guarantee reaches); `permissive`
-#: what holds in permissive or in f64 (the specification's P3), its own extensions
-#: (`permissive`: `exp(log x) -> x`) among it; no mode may carry `reject`.
+#: slot real owes nothing at 0, where permissive's real-valued guarantee reaches); `f64` what
+#: holds in float64 (`f64-only` among it: float64's own value, off real's beyond float
+#: resolution); `permissive` what holds in permissive -- its own extensions (`permissive`:
+#: `exp(log x) -> x`) and the rules within float resolution of real's values (P3, `f64`) among
+#: it; no mode may carry `reject`.
 MODE_TIERS: dict[str, frozenset] = {
-    'f64': frozenset({'core', 'f64'}),
+    'f64': frozenset({'core', 'f64', 'f64-only'}),
     'real': frozenset({'core', 'real', 'real-only'}),
     'permissive': frozenset({'core', 'f64', 'real', 'permissive'}),
 }

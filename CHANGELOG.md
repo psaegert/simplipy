@@ -1317,6 +1317,16 @@ model predictions.
   (`exp(-800)` is no 0), as does a node the table cannot decide at its precision
   (`mod(sin(1), 1e300)`). Measured on 1,500 rows each, permissive's ms per row rises 3% (t81
   3.37 to 3.48, predictions 14.4 to 14.8).
+- **`permissive` serves real's values up to float resolution.** A rule holds in `permissive`
+  where it agrees with real's values up to 8 units in the last place, except at isolated
+  points, and no longer merely where float64 evaluates it alike: `tanh(cosh(-10)) -> 1` holds
+  (the true value, 1 - 2e-9566, is the double 1.0), and so does
+  `tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))` (it differs only at x0 = +-1). A disagreement
+  at a point is isolated where it vanishes when a `?` slot moves off the point; at a `_` slot it
+  is not (`pow(0, asinh(_0)) -> pow(0, _0)` holds in `f64` and not in `permissive`: at
+  `_0 = -1` the left side is +inf and `pow(0, -1)` has no value). Such rules carry the new
+  tier `f64-only`, which only the `f64` file may hold. Past the table's reach (a value beyond
+  the doubles' range, `exp(sinh(-50))`) the doubles are float64's under the range standard.
 - **The judge reads every literal the engine writes.** A decimal whose exponent lies past
   4,000 (`2.827881176741212e-244756`, which the engine keeps as written) is read exactly, up to
   an exponent of 1,000,000; a rule holding it was refused as unsupported.

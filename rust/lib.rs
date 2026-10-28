@@ -2403,6 +2403,33 @@ impl PyTableExpr {
         .map_err(PyValueError::new_err)
     }
 
+    /// The REAL value at `env` and `dps` in the float-resolution reading (a saturation inside
+    /// the boundary band reads as the working float's value there): a value to round to a
+    /// double (P3), never one to compare exactly. `None` where it has none at this precision.
+    fn eval_float_resolution(
+        &self,
+        py: Python<'_>,
+        env: Vec<TableSpec>,
+        dps: i32,
+    ) -> PyResult<Option<TableSpec>> {
+        py.detach(|| {
+            let mut ctx = table::Ctx::new(dps).ok_or("no constants context")?;
+            let mut vals = Vec::with_capacity(env.len());
+            for (k, a, b) in &env {
+                vals.push(
+                    table::val_from_spec(k, a, b, &mut ctx)
+                        .ok_or_else(|| format!("unreadable value spec ({k}, {a}, {b})"))?,
+                );
+            }
+            let out = self
+                .inner
+                .eval_float_resolution(&vals, dps)
+                .ok_or("no constants context")?;
+            Ok::<Option<TableSpec>, String>(out.value.as_ref().map(table::val_spec))
+        })
+        .map_err(PyValueError::new_err)
+    }
+
     /// The f64 value at `env` and whether every operation stayed in range (the range standard).
     fn eval_f64(&self, env: Vec<f64>) -> PyResult<(f64, bool)> {
         self.inner

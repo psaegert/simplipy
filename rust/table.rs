@@ -188,6 +188,12 @@ pub struct Ctx {
     pub max_mag: BigFloat,
     /// the smallest nonzero finite intermediate (sums and remainders excluded)
     pub min_mag: BigFloat,
+    /// THE FLOAT-RESOLUTION READING (P3): a bounded function inside its boundary band
+    /// (`tanh` within 1e-40 of +-1 at 50 digits) reads as the working float's value there,
+    /// whose nearest double is the limit's, where the exact reading is Unresolved (it cannot
+    /// tell the value from the limit). For a double's worth of digits only, never for an exact
+    /// comparison.
+    pub saturate: bool,
     cc: PooledConsts,
 }
 
@@ -254,6 +260,7 @@ impl Ctx {
             inf_node: false,
             max_mag: small_int(0, p),
             min_mag: small_int(0, p),
+            saturate: false,
             cc: PooledConsts::take()?,
         })
     }
@@ -1008,7 +1015,7 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                 let x = ctx.bf(a);
                 let v = x.atan(p, RM, &mut ctx.cc);
                 let half_pi = ctx.pi().div(&small_int(2, p), p, RM);
-                if in_band(&v.abs(), &half_pi, ctx) {
+                if in_band(&v.abs(), &half_pi, ctx) && !ctx.saturate {
                     None
                 } else {
                     Some(approx(v))
@@ -1035,7 +1042,7 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
             None => {
                 let x = ctx.bf(a);
                 let t = x.tanh(p, RM, &mut ctx.cc);
-                if in_band(&t.abs(), &one(p), ctx) {
+                if in_band(&t.abs(), &one(p), ctx) && !ctx.saturate {
                     None
                 } else {
                     Some(approx(t))
@@ -1106,10 +1113,16 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                 if cmp_gt(&x.abs(), &crate::hiprec::bf(1e5, p))
                     || special::erfc_below(&x.abs(), &ctx.floor, p, &mut ctx.cc)
                 {
-                    None
+                    // past the band erf is +-1 to every digit the reading carries
+                    ctx.saturate.then(|| {
+                        let l = one(p);
+                        approx(if x.is_negative() { l.neg() } else { l })
+                    })
                 } else {
                     match special::erf(&x, p, &mut ctx.cc) {
-                        Some(v) if !in_band(&v.abs(), &one(p), ctx) => Some(approx(v)),
+                        Some(v) if !in_band(&v.abs(), &one(p), ctx) || ctx.saturate => {
+                            Some(approx(v))
+                        }
                         _ => None,
                     }
                 }
@@ -1524,7 +1537,18 @@ impl Expr {
 
     /// The real value at `env` (one value per name), at `dps` decimal digits.
     pub fn eval_real(&self, env: &[Val], dps: i32) -> Option<RealOutcome> {
+        self.eval_real_reading(env, dps, false)
+    }
+
+    /// `eval_real` in the float-resolution reading (`Ctx::saturate`): a value to round to a
+    /// double, never one to compare exactly.
+    pub fn eval_float_resolution(&self, env: &[Val], dps: i32) -> Option<RealOutcome> {
+        self.eval_real_reading(env, dps, true)
+    }
+
+    fn eval_real_reading(&self, env: &[Val], dps: i32, saturate: bool) -> Option<RealOutcome> {
         let mut ctx = Ctx::new(dps)?;
+        ctx.saturate = saturate;
         let _exact = number_domain(false);
         let value = self.node_real(self.root, env, &mut ctx);
         Some(RealOutcome {
@@ -1762,12 +1786,31 @@ fn bf_to_f64(b: &BigFloat) -> f64 {
 /// it holds a token the table cannot read or the point is Unresolved at that precision. The
 /// engine's real ground fold reads it (`Engine::table_ground_fold`).
 pub fn ground_value(tokens: &[String], ops: &crate::operators::Operators, dps: i32) -> Option<Val> {
+    ground_reading(tokens, ops, dps, false)
+}
+
+/// `ground_value` in the float-resolution reading (`Ctx::saturate`): permissive's ground fold,
+/// which writes the double nearest to the value (P3).
+pub fn ground_value_float(
+    tokens: &[String],
+    ops: &crate::operators::Operators,
+    dps: i32,
+) -> Option<Val> {
+    ground_reading(tokens, ops, dps, true)
+}
+
+fn ground_reading(
+    tokens: &[String],
+    ops: &crate::operators::Operators,
+    dps: i32,
+    saturate: bool,
+) -> Option<Val> {
     let arity: std::collections::HashMap<String, u8> = tokens
         .iter()
         .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
         .collect();
     let e = Expr::compile(tokens, &[], &arity).ok()?;
-    e.eval_real(&[], dps)?.value
+    e.eval_real_reading(&[], dps, saturate)?.value
 }
 
 // -------------------------------------------------------------------------- comparison

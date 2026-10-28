@@ -183,6 +183,14 @@ SPEC_EXAMPLES = [
     case('pow 0 -2', 'float("inf")', 'real', True),
     case('pow 1 float("inf")', '1', 'real', False),
     case('pow 1 float("inf")', '1', 'f64', True),
+    # P3 as ruled: permissive serves real's values up to float resolution, except at isolated
+    # points -- a deep saturation (1 - 2e-9566 is the double 1.0), a disagreement at x = +-1
+    # only; not float64's own values at a point a `_` slot does not guard
+    case('tanh cosh (-10)', '1', 'permissive', True),
+    case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', True),
+    case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', False),
+    case('pow 0 asinh _0', 'pow 0 _0', 'f64', True),
+    case('pow 0 asinh _0', 'pow 0 _0', 'permissive', False),
 ]
 
 

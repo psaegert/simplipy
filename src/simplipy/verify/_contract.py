@@ -890,6 +890,17 @@ def c_eval(tree, env):
     return _from_spec(spec)
 
 
+def _table_reading(tree, env, dps):
+    """The table's value of `tree` at `env` and `dps` in its float-resolution reading
+    (`TableExpr.eval_float_resolution`: a saturation inside the boundary band reads as the
+    working float's value, `tanh(cosh(-10))` as 1 to fifty digits), the value P3 rounds to a
+    double; None where the table cannot read it at this precision."""
+    expr, names, extra = _compiled(tree)
+    args = [_spec(extra[n] if n in extra else env[n]) for n in names]
+    spec = expr.eval_float_resolution(args, dps)
+    return None if spec is None else _from_spec(spec)
+
+
 #: Filled by `c_eval` when a `_measured_dps` scope is open; see `_required_dps`.
 _MAG_SINK: list = []
 
@@ -2096,7 +2107,10 @@ def _point_verdict(tl, tr, env_mp):
 #:   real        holds in real and permissive, not in f64
 #:   real-only   holds in real only (a `$` slot owed nothing at 0 in real, where permissive's
 #:               real-valued guarantee reaches it)
-#:   f64         holds in f64, not in real           f64 and permissive (P3)
+#:   f64         holds in f64 and permissive, not in real   f64 and permissive (P3: real's
+#:               values up to float resolution, except at isolated points)
+#:   f64-only    holds in f64, not in real or permissive (float64's own value: `floor(tanh(x))`
+#:               at a saturation)
 #:   permissive  holds in permissive only            (an extension: `exp(log x) -> x`)
 #:   reject      holds in no mode
 def _tier(verdict, realised, permissive=None):
@@ -2119,7 +2133,7 @@ def _tier(verdict, realised, permissive=None):
     if real:
         return 'real' if perm else 'real-only'
     if f64:
-        return 'f64'
+        return 'f64' if perm else 'f64-only'
     return 'permissive' if perm else 'reject'
 
 
@@ -2463,7 +2477,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         else:
             acc['a'].append((v, point))
             if real_valued:
-                acc['perm'].append((v, point))
+                acc['perm'].append((v, point, where))
 
     def owed(acc):
         """3.2: is anything owed at this constant? Where the left side is finite at no real
@@ -2530,7 +2544,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 # a `$` slot at 0: owed nothing in real (its certificate), a real-valued
                 # binding permissive's guarantee covers
                 if v not in (None, 'eq', 'EXT'):
-                    acc['perm'].append((v, point))
+                    acc['perm'].append((v, point, (key, values)))
                 continue
             kind = 'atom' if any(t == 'atom' for t in tags.values()) else 'real'
             acc['attempted'] += 1
@@ -2680,7 +2694,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         else:
             c_kills.append((v, dict(point, unguarded=slot) if slot else point))
             if real_valued:
-                c_perm.append((v, point))
+                c_perm.append((v, point, (key, values)))
 
     # COINCIDENT `?` SLOTS: two `?` slots bound to one variable are an instance the engine
     # rewrites, on which a set that is null in the slots' joint space can have positive
@@ -2719,12 +2733,89 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
     covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
-    permissive = covered and not perm_kills and not c_perm
+
+    # P3 (the owner's ruling): permissive also serves the rules that agree with real's values up
+    # to float resolution, except at isolated points. A disagreement is excused where the two
+    # real values round to doubles at most REALISED_ULP apart (F6), or where it is isolated: it
+    # vanishes when a `?` slot moves off the point, and on no other slot's move (a `_` slot bound
+    # to a constant subexpression would hold it on positive measure: unguarded).
+    def doubles(env):
+        """Both sides' values as the doubles nearest to them, read by the table at two
+        precisions, or None where the table cannot read a side or the doubles differ between
+        the two (a residue, not a value)."""
+        old_dps = mp.dps
+        try:
+            seen = []
+            for dps in (BASE_DPS, 120):
+                mp.dps = dps
+                e = env()
+                vals = [_table_reading(t, e, dps) for t in (tl, tr)]
+                if any(v is None for v in vals):
+                    return None
+                seen.append(tuple(_num(cls_mp(v)) for v in vals))
+        finally:
+            mp.dps = old_dps
+        (l1, r1), (l2, r2) = seen
+        same = all(a == b or (a != a and b != b) for a, b in ((l1, l2), (r1, r2)))
+        return (l2, r2) if same else None
+
+    def float_close(env):
+        d = doubles(env)
+        if d is not None:
+            return _table.table_f64_agree(*d) == 'eq'
+        # Past the table's reach (a value beyond the doubles' range, `exp(sinh(-50))` at
+        # 10^(-1.1e21)): the range standard. Where an operation overflowed or underflowed,
+        # the double nearest to the true value is float64's, 0 or an infinity.
+        try:
+            ed = {n: F(float(x.mpf() if hasattr(x, 'mpf') else x)) for n, x in env().items()}
+            in_range = [True]
+            with np.errstate(all='ignore'):
+                dl, dr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
+        except Exception:
+            return False
+        return not in_range[0] and compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq'
+
+    def disagrees(key, values):
+        env = event_env(key, values)
+        v2, _ = _point_verdict(tl, tr, env)
+        if v2 == 'eq':
+            return False
+        return v2 is None or not float_close(env)
+
+    def isolated(key, values):
+        depends = []
+        for n, x in values.items():
+            x = x.mpf() if hasattr(x, 'mpf') else mpf(x)
+            if misnan(x) or misinf(x):
+                return False
+            for alt in (x * (1 + mpf(10) ** -6) + mpf(10) ** -9,
+                        x * (1 - mpf(10) ** -6) - mpf(10) ** -9):
+                moved = dict(values)
+                moved[n] = alt
+                if not disagrees(key, moved):
+                    depends.append(n)
+                    break
+        return bool(depends) and all(nvars.get(n) == '?' for n in depends)
+
+    def excused(event):
+        _, _, (key, values) = event
+        return float_close(event_env(key, values)) or isolated(key, values)
+
+    perm_left, seen_perm = [], set()
+    for event in perm_kills + c_perm:
+        sig = repr(sorted(event[1].items()))
+        if sig in seen_perm:
+            continue
+        seen_perm.add(sig)
+        if not excused(event):
+            perm_left.append(event)
+            break
+    permissive = covered and not perm_left
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised': _realised, 'out_of_range': dep_out_of_range[0],
             'permissive': permissive, 'resolved_points': resolved_pts}
-    if perm_kills or c_perm:
-        base['permissive_points'] = [p for _, p in (perm_kills + c_perm)[:3]]
+    if perm_left:
+        base['permissive_points'] = [p for _, p, _ in perm_left[:3]]
     if correlated_f64 is not None:
         base['unrealised_coincidence'] = correlated_f64
     if dep_bad:

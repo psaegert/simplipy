@@ -810,6 +810,12 @@ impl Engine {
         crate::table::ground_value(strs, &self.operators, TABLE_GROUND_DPS)
     }
 
+    /// The table's float-resolution reading of a ground node (`table::ground_value_float`), the
+    /// value permissive writes as a double: `tanh(cosh(-10))` reads within 1e-40 of 1.
+    fn table_value_float(&self, strs: &[String]) -> Option<crate::table::Val> {
+        crate::table::ground_value_float(strs, &self.operators, TABLE_GROUND_DPS)
+    }
+
     /// The double nearest to a table value (`table::nearest_f64`): finite and normal, or zero
     /// for the value zero. A nonzero value below the normal doubles (`exp(-800)`, 3.7e-348,
     /// whose nearest double is 0) has no faithful float and reads `None`, as a written
@@ -851,7 +857,7 @@ impl Engine {
         let bare = Cx::bare(view);
         let value = |x: &Ex| {
             let toks = to_prefix(x, &bare);
-            self.table_value(&self.resolve_seq(&toks, ctx))
+            self.table_value_float(&self.resolve_seq(&toks, ctx))
                 .as_ref()
                 .and_then(Self::table_f64)
         };
@@ -1028,8 +1034,10 @@ impl Engine {
             // `tanh(inf)` 1, `acosh(1)` 0, `asin(1)` pi/2 -- and to NaN where it has none (`1/0`
             // and `pow(0, -1)`, the limit rule). `permissive`'s values are real's: its classes
             // (an infinity, NaN) are the table's, and a finite value is its float (below).
-            let reading = if real || lossy {
+            let reading = if real {
                 self.table_value(&strs)
+            } else if lossy {
+                self.table_value_float(&strs)
             } else {
                 None
             };

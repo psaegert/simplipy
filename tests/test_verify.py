@@ -540,7 +540,8 @@ class TestTheRealisationAxis:
         # evidence cannot support a claim of f64 soundness.
         assert [_tier(v, r) for v in ('CERTIFIED', 'TOLERATED') for r in (True, False, None)] \
             == ['core', 'real', 'real', 'core', 'real', 'real']
-        assert (_tier('KILL', True), _tier('KILL', False)) == ('f64', 'reject')
+        # held in f64 and not judged in permissive (read as real's): float64's own value
+        assert (_tier('KILL', True), _tier('KILL', False)) == ('f64-only', 'reject')
         assert (_tier('ENGINE-MISALIGN', False), _tier('NO-WITNESS', None)) == ('real', 'reject')
         # permissive's criterion is the third axis: an extension holds there alone, and a rule
         # real holds only by a `$` slot's excused zero is real's alone
@@ -841,8 +842,14 @@ class TestCleanlinessIsPerMode:
         # owner's rulings on isolated infinities and guards: real 77 (+22 extensions at a null
         # set no `_` slot guards, `abs atan tan _0 -> abs asin sin _0` at pi/2; -1 now holding
         # by clause (c), `neg log log ?0 -> log inv log ?0`), permissive 23 (-1, the same).
+        # Under P3 as ruled (permissive serves real's values up to float resolution, except at
+        # isolated points, no longer float64's values): permissive 34 (+12 that hold in f64
+        # only -- 7 `neg log acos _0 -> log inv acos _0` and kin, an infinity of the left side
+        # at a point a `_` slot does not guard; 4 `pow 0 atan _0 -> pow 0 _0` and kin at
+        # `_0 = -inf`; `tanh sinh atanh _0 -> tanh tan asin _0` at `_0 = +-1`, unguarded -- and
+        # -1, `exp * float("-inf") ?0 -> pow 0 ?0`, now an extension within the criterion).
         assert {m: len(r['offenders']) for m, r in report['modes'].items()} == \
-            {'f64': 6, 'real': 77, 'permissive': 23}, report['modes']
+            {'f64': 6, 'real': 77, 'permissive': 34}, report['modes']
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest: a row where real's one zero and permissive's signed zero give
         # different values).
