@@ -1042,20 +1042,31 @@ class TestSpecialPointCertification:
             ['x0'], x_flat, n, rule_mode='permissive') == ['pow', 'x0', '0.3333333333333333']
 
     def test_contract_point_families_rejected(self, dev, dev_x1) -> None:
-        """Deployed-value consistency at the battery points:
+        """Deployed-value consistency at the battery points (f64):
         pow(sin x, inf) = 1 at x = pi/2 (f64 sin(pi/2) is EXACTLY 1.0);
         pow(cos c, inf) = 1 at the special source constant c = 0;
         atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in deployed f64
-        (a live (4,3) family). The flagship rescue identity atanh(tanh(x)) -> x
+        (a live (4,3) family), which f64 refuses and permissive, whose values are the reals'
+        (atanh(tanh(y)) is y), certifies: the battery checks float64's divergence in f64
+        only. The flagship rescue identity atanh(tanh(x)) -> x
         must keep certifying (the battery box never reaches its saturation zone)."""
         x_flat, n = dev_x1
+        # f64 refuses both at its battery points; permissive excuses a disagreement at an
+        # isolated point (P3), and the reals give pow(1, inf) no value
         assert dev._core.find_rule(
-            ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n, rule_mode='permissive') is None
+            ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n,
+            rule_mode='default') is None
         assert dev._core.find_rule(
             ['pow', 'cos', '<constant>', 'float("inf")'], 4, 1, [['0']],
-            ['x0'], x_flat, n, rule_mode='permissive') is None
+            ['x0'], x_flat, n, rule_mode='default') is None
         assert dev._core.find_rule(
-            ['atanh', 'tanh', 'tan', 'x0'], 4, 2, [['tan', 'x0']], ['x0'], x_flat, n, rule_mode='permissive') is None
+            ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n,
+            rule_mode='permissive') == ['0']
+        assert dev._core.find_rule(
+            ['atanh', 'tanh', 'tan', 'x0'], 4, 2, [['tan', 'x0']], ['x0'], x_flat, n, rule_mode='default') is None
+        assert dev._core.find_rule(
+            ['atanh', 'tanh', 'tan', 'x0'], 4, 2, [['tan', 'x0']], ['x0'], x_flat, n,
+            rule_mode='permissive') == ['tan', 'x0']
         assert dev._core.find_rule(
             ['atanh', 'tanh', 'x0'], 3, 1, [['x0']], ['x0'], x_flat, n, rule_mode='permissive') == ['x0']
 

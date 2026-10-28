@@ -1576,9 +1576,19 @@ class RuleMiner:
                 final = _kept
                 self._install(rule_mode, final)
                 _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
-            # The liveness gate on what ships (expected 0): a rule another rule shadows on its
-            # own instance is recorded, not dropped, so `verify-mine` fails on the file.
+            # The liveness gate on what ships: a rule the engine holding the file never fires
+            # (another rule, or the mode's own simplification, takes its instance first and ends
+            # dearer: in `permissive`, whose inverse pairs cancel ignoring the branch,
+            # `abs(atanh(tanh(_0))) -> acosh(cosh(_0))` meets `abs(x0)` before it can match)
+            # decides no answer, and is dropped, listed; `verify-mine` fails on a file that
+            # still holds one. Dropping a rule that never fires changes no answer, so no other
+            # rule's liveness moves with it.
             gate['dead'] = _dead_rules(self.engine, rule_mode, final)
+            if gate['dead']:
+                _gone = {(tuple(d[0]), tuple(d[1])) for d in gate['dead']}
+                final = [rule for rule in final if (tuple(rule[0]), tuple(rule[1])) not in _gone]
+                self._install(rule_mode, final)
+                _note_drops('liveness', lambda _identity: 'dead')
             # The overlap gate on what ships (expected no licensed completion missing): the
             # overlaps that do not join, the judge-licensed completions the file lacks and the
             # refused ones with the judge's reason, recorded, not dropped.
@@ -1601,7 +1611,7 @@ class RuleMiner:
                                             if e['verdict'] != 'already_covered']
             if verbose:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
-                      f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
+                      f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead (dropped), '
                       f'{len(gate["overlaps"])} unjoined overlaps '
                       f'({len(gate["overlaps_refused"])} more not licensed, '
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '

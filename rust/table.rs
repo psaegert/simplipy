@@ -1666,6 +1666,11 @@ pub fn class_of(v: &Val) -> (bool, Option<bool>) {
     (is_undef(v), inf_sign(v))
 }
 
+/// Is `v` exactly zero (the exact rational 0, `tan(pi)`), not a value computed as zero?
+pub fn is_exact_zero(v: &Val) -> bool {
+    matches!(v, Val::Exact(Exact::Rat(r)) if r.is_zero())
+}
+
 /// A float64 enclosure of a FINITE value: `(lo, hi, lo_open, hi_open)`, a point when the value
 /// is a double, otherwise doubles bracketing it (a value beyond the doubles' range is enclosed
 /// by the largest double and an open infinite end, a nonzero value below them by zero and the

@@ -1153,7 +1153,7 @@ model predictions.
   with a variable of its own) the engine holding the file must reach the rule's right side or something
   cheaper; a rule another rule takes from its own instance, ending dearer, ships and never
   decides an answer. The mine lists such rules in the sidecar (`gates.dead`) and on its
-  final-gate line, and `verify-mine` fails on them. Under file-order matching the gate lists
+  final-gate line, and drops them (below); `verify-mine` fails on a file holding one. Under file-order matching the gate lists
   `sin(acos(tanh(_0))) -> 1/cosh(_0)` in the reduced mine's `real` and `permissive` files
   (the only rule it lists); it lists none now, and mined again the reduced mine writes the
   same three files.
@@ -1383,6 +1383,23 @@ model predictions.
   rewrite to float64's values: `tan(x0 + pi) -> tan(x0)` (float64's pi keeps them apart by
   more than 8 units in the last place) and `(-x0)^(-1/2) -> 1/(-x0)^(1/2)` (+inf against -inf
   at x0 = 0) among them; 7 are undecided. Its poison self-test catches all five poisons.
+- **The mint refuses only what the judge refuses.** A pre-filter stricter than the judge leaves
+  a licensed completion unmined, and the reduced length-4 mine's `real` and `permissive` files
+  lacked 16 and 25. A row the table cannot read at any affordable precision is skipped, as the
+  judge skips it (`ceil(erf(sinh(x))) -> ceil(erf(x))`: erf(sinh(-100)) is -1 + e^-(1.7e86));
+  where the source is +-inf a candidate with no value owes nothing at a row of a rule with
+  variables (the judge's isolated infinity: `sinh(atanh(x)) -> tan(asin(x))`, +inf against
+  tan's pole at x = 1); a source value float64 gives off a rounded zero is the table's, as one
+  off a rounded pole is (`tan(acos(-1.0))` is -1.2e-16 in float64, tan(pi) is 0); the special
+  points check float64's divergence in `f64` only; and in `permissive` a disagreement at an
+  isolated point is excused at the special points, at the exceptional points and on a sampled
+  row that a move of one variable clears (`ceil(|sin(x)|) -> 1` differs at x = k*pi alone),
+  as permissive's judge excuses it.
+- **A rule the engine never fires is dropped.** The mine's liveness gate drops a rule the engine
+  holding the file never fires, listed under `gates.dead`, where it recorded it: in
+  `permissive`, whose inverse pairs cancel ignoring the branch, `abs(atanh(tanh(_0))) ->
+  acosh(cosh(_0))` meets `abs(x0)` before it can match. Dropping a rule that never fires
+  changes no answer.
 - **The gates ask `licensed`.** The mine's completion step offers, its overlap gate demands,
   and its final gate and `verify-mine` keep only what `verify.licensed` passes in the mode: the
   judge's tier and the named policies, each read from its one place (evidence, the constant

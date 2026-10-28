@@ -306,11 +306,16 @@ fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointC
 /// Row semantics at the special points. A row where
 /// the deployed f64 sides agree passes outright; a diverging row is judged by the contract
 /// point verdict (`hiprec::contract_point_verdict`: precision rungs plus snap semantics):
-///   - confirmed REAL-CHANGE -> REJECT (clause (a): kills at any measure, snap included);
+///   - confirmed REAL-CHANGE -> REJECT (clause (a): kills at any measure, snap included), but
+///     in permissive, which excuses a disagreement at an isolated point (P3) and leaves the
+///     judge to decide whether this one is (`ceil(sin(x)) -> |ceil(sin(x))|` differs only
+///     where sin(x) = -1);
 ///   - EXT / SHRINK / INF-CHANGE -> a tolerated event class, row passes;
-///   - contract eq or unresolved, NOT snapped -> REJECT (the deployed algebra structurally
-///     diverges where the contract does not object -- this also convicts the
-///     precision-roulette seam class);
+///   - contract eq or unresolved, NOT snapped -> in f64 (`mode`) REJECT (the deployed
+///     algebra structurally diverges where the contract does not object -- this also convicts
+///     the precision-roulette seam class); in real and permissive the row passes, as their
+///     values are the reals' (`ceil(erf(sinh(-3))) -> ceil(erf(-3))`: float64 rounds the first
+///     erf to -1, and both are 0);
 ///   - snapped (symbolic-cancellation / pole-proximity at the point) -> row passes (the f64
 ///     algebra evaluates a DIFFERENT point there; measurement error, not a value claim).
 ///
@@ -331,9 +336,12 @@ pub fn rows_consistent(
     var_names: &[String],
     rtol: f64,
     atol: f64,
-    f64_exact: bool,
+    mode: crate::engine::RuleMode,
 ) -> bool {
+    use crate::engine::RuleMode;
     use crate::hiprec::PointCmp as P;
+    let lane_f64 = matches!(mode, RuleMode::Default);
+    let f64_exact = lane_f64 && cand_params.is_empty();
     for r in 0..battery.n_rows {
         // f64's const-free pair agrees at float resolution, as the judge's deployed lane reads it
         // (F6): a defined source point that disagrees refuses unless an operation left the range
@@ -362,7 +370,7 @@ pub fn rows_consistent(
             &battery.atoms[r],
         );
         let reject = match v {
-            Some(P::RealChange) => true,
+            Some(P::RealChange) => !matches!(mode, RuleMode::Permissive),
             Some(P::Ext) | Some(P::Shrink) | Some(P::InfChange) => false,
             // The contract does not object, so the only thing left to convict is a
             // DIVERGENCE -- and that is the structural question, not the realisation one.
@@ -370,7 +378,7 @@ pub fn rows_consistent(
             // would reject sound rules for it.
             Some(P::Eq) if events.is_some_and(|e| e[r]) => false,
             Some(P::Eq) | None => {
-                !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
+                lane_f64 && !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
             }
         };
         if reject {

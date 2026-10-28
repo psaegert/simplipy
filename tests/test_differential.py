@@ -379,6 +379,17 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
     ('ceil inv cosh x0', '1', 'f64'),
     ('exp log x0', 'x0', 'permissive'),
     ('rootn pow x0 2 2', 'x0', 'real'), ('exp log x0', 'x0', 'f64'),
+    # rows the table cannot read are skipped, as the judge skips them (erf(sinh(-100)) is
+    # -1 + e^-(1.7e86)); the special points check float64's divergence in f64 only
+    ('ceil erf sinh x0', 'ceil erf x0', 'real'), ('floor erf sinh x0', 'floor erf x0', 'real'),
+    # the judge's isolated infinity: +inf against tan's pole at x0 = 1
+    ('sinh atanh x0', 'tan asin x0', 'real'),
+    # a value float64 gives off a rounded zero is read by the table: tan(acos(-1)) is 0
+    ('tan acos floor x0', 'inv atanh floor x0', 'real'),
+    # permissive excuses a disagreement at an isolated point (P3): the battery's points, the
+    # exceptional points and a sampled row on one
+    ('abs ceil sin x0', 'ceil sin x0', 'permissive'), ('ceil abs sin x0', '1', 'permissive'),
+    ('inv atanh ceil x0', '0', 'permissive'),
 ])
 def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
     assert mint_accepts(lhs, rhs, mode) or not admits(lhs, rhs, mode), judged(lhs, rhs)

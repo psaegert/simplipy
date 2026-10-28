@@ -128,13 +128,18 @@ fn table_side(
 /// is read by the table (`table_classes`).
 pub(crate) const POLE_PROXIMITY: f64 = 1e15;
 
-/// THE SOURCE'S ROWS IN THE REALS where float64 reads definedness off a rounded pole or an exact
-/// zero: each finite value at least `POLE_PROXIMITY` in magnitude, and each infinity (`1/0` is
-/// +inf in float64 and has no value in the reals), is read by the table at its row and takes the
-/// table's class -- NaN where the table gives no value, the infinity it gives -- and keeps its
-/// double where the table reads it finite (an overflow) or cannot read it. A finite row climbs
-/// the ladder (`TABLE_ROW_DPS`); an infinite one is read at its first rung, where an exact pole
-/// resolves. Once per source instance.
+/// Its mirror: a nonzero double at most this in magnitude may be a rounded zero
+/// (`tan(acos(-1.0))` is -1.22e-16 in float64, `tan(pi)` 0 in the reals).
+pub(crate) const ZERO_PROXIMITY: f64 = 1.0 / POLE_PROXIMITY;
+
+/// THE SOURCE'S ROWS IN THE REALS where float64 reads a class off a rounded constant: each finite
+/// value at least `POLE_PROXIMITY` in magnitude (a rounded pole), each nonzero value at most
+/// `ZERO_PROXIMITY` (a rounded zero) and each infinity (`1/0` is +inf in float64 and has no
+/// value in the reals) is read by the table at its row and takes the table's class -- NaN where
+/// the table gives no value, the infinity it gives, 0 where it is exactly zero -- and keeps its
+/// double where the table reads it finite (an overflow, a genuinely small value) or cannot read
+/// it. A finite row climbs the ladder (`TABLE_ROW_DPS`); an infinite one is read at its first
+/// rung, where an exact pole resolves. Once per source instance.
 pub(crate) fn table_classes(
     y: &mut [f64],
     source: &[String],
@@ -146,7 +151,9 @@ pub(crate) fn table_classes(
     for (r, yr) in y.iter_mut().enumerate() {
         let rungs = if yr.is_infinite() {
             &TABLE_ROW_DPS[..1]
-        } else if yr.is_finite() && yr.abs() >= POLE_PROXIMITY {
+        } else if yr.is_finite()
+            && (yr.abs() >= POLE_PROXIMITY || (*yr != 0.0 && yr.abs() <= ZERO_PROXIMITY))
+        {
             &TABLE_ROW_DPS[..]
         } else {
             continue;
@@ -161,6 +168,7 @@ pub(crate) fn table_classes(
             match crate::table::class_of(&v) {
                 (true, _) => *yr = f64::NAN,
                 (_, Some(up)) => *yr = if up { f64::INFINITY } else { f64::NEG_INFINITY },
+                _ if crate::table::is_exact_zero(&v) => *yr = 0.0,
                 _ => {}
             }
         }
@@ -173,10 +181,13 @@ pub(crate) fn table_classes(
 /// `cosh(650)^2 - sinh(650)^2` cancels 565 digits, so it is read at 1,180; a reading in a boundary
 /// band climbs `TABLE_ROW_DPS` to the first rung both sides read), and confirmed at a second,
 /// finer rung. The source undefined: extendable. An infinity: the candidate must be the
-/// same one. Finite: the candidate finite and within `atol + rtol*|c|` at the finer rung, or a
-/// residual that collapses between the two (an exact zero at the working precision); anything
-/// else fails, an Unresolved reading at either rung included (fail closed). `None` where a side
-/// does not compile for the table.
+/// same one, or, at a row of a pair with variables (`with_vars`), owes nothing where it has no
+/// value (the judge's isolated infinity: the measure of the set is the judge's to decide; the
+/// pole of `tan(asin(x))` at x = 1 against `sinh(atanh(1)) = +inf`). Finite: the candidate finite
+/// and within `atol + rtol*|c|` at the finer rung, or a residual that collapses between the two
+/// (an exact zero at the working precision); anything else fails. `None` where a side does not
+/// compile for the table or a reading stays Unresolved up to `MAX_DPS` (`erf(sinh(-100))` is
+/// -1 + e^-(1.7e86)): the row says nothing about the true values.
 #[allow(clippy::too_many_arguments)]
 fn table_row(
     source: &[String],
@@ -189,6 +200,7 @@ fn table_row(
     row: usize,
     rtol: f64,
     atol: f64,
+    with_vars: bool,
 ) -> Option<RowVerdict> {
     use crate::table::{class_of, Ctx};
     let (se, senv) = table_side(source, src_params, ops, var_names, x_cols, row)?;
@@ -224,6 +236,8 @@ fn table_row(
         if let Some(up) = s_inf {
             return Some(if !c_undef && c_inf == Some(up) {
                 RowVerdict::Pass
+            } else if c_undef && with_vars {
+                RowVerdict::Extend
             } else {
                 RowVerdict::Fail
             });
@@ -252,6 +266,70 @@ fn table_row(
     })
 }
 
+thread_local! {
+    /// Set for the extent of a permissive mint judgment (`IsolationScope`).
+    static ISOLATED_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// THE SCOPE OF A PERMISSIVE MINT JUDGMENT: permissive excuses a disagreement at an isolated point
+/// (P3), so within it `rescue` excuses a row the table confirms as a disagreement where moving the
+/// row off its point along one variable makes the disagreement vanish (`isolated_row`), as the
+/// judge's `isolated` does. Restores the enclosing setting when dropped.
+pub(crate) struct IsolationScope(bool);
+
+impl IsolationScope {
+    pub(crate) fn open(on: bool) -> Self {
+        IsolationScope(ISOLATED_OK.with(|c| c.replace(on)))
+    }
+}
+
+impl Drop for IsolationScope {
+    fn drop(&mut self) {
+        ISOLATED_OK.with(|c| c.set(self.0));
+    }
+}
+
+/// Is the disagreement at row `row` isolated: does it vanish where one variable moves off the
+/// point (by 2^-20 of its magnitude, at least 2^-20)? Each side read by the table there.
+#[allow(clippy::too_many_arguments)]
+fn isolated_row(
+    source: &[String],
+    src_params: &[f64],
+    candidate: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    row: usize,
+    rtol: f64,
+    atol: f64,
+) -> bool {
+    let point: Vec<f64> = x_cols.iter().map(|c| c[row]).collect();
+    (0..var_names.len())
+        .filter(|&v| source.contains(&var_names[v]) || candidate.contains(&var_names[v]))
+        .any(|v| {
+            let mut moved = point.clone();
+            moved[v] += moved[v].abs().max(1.0) * (2.0f64).powi(-20);
+            let cols: Vec<Vec<f64>> = moved.iter().map(|&x| vec![x]).collect();
+            matches!(
+                table_row(
+                    source,
+                    src_params,
+                    candidate,
+                    cand_params,
+                    ops,
+                    var_names,
+                    &cols,
+                    0,
+                    rtol,
+                    atol,
+                    true,
+                ),
+                Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
+            )
+        })
+}
+
 /// The near-miss rescue: `y_src` / `y_cand` are the instance's f64 evaluations, `source`
 /// carries `src_params` for its `<constant>` slots (left-to-right, the tape order), the
 /// candidate carries `cand_params` (empty for the const-free arm; the f64-FITTED constants
@@ -274,9 +352,10 @@ pub fn rescue(
     atol: f64,
 ) -> bool {
     // The binding POINTS: every row where the source is defined. A source-inf row the
-    // candidate does not already reproduce fails and is escalated: the P_INF re-judge inside
-    // `judge_row` decides pole (stays inf -> must-match -> Fail) vs saturation (resolves
-    // finite -> compare). It is a point of the denominator as much as of the numerator.
+    // candidate does not already reproduce fails and is escalated: the table's row reading
+    // (`table_row`) decides a pole (an infinity the candidate gives too, or a value it owes
+    // nothing at) from a saturation (finite: compared). It is a point of the denominator as
+    // much as of the numerator.
     let mut binding = 0usize;
     let mut failing: Vec<usize> = Vec::new();
     for (r, &s) in y_src.iter().enumerate() {
@@ -309,7 +388,9 @@ pub fn rescue(
         return false; // not a near miss (or nothing to rescue): keep the f64 verdict
     }
     for &r in &failing {
-        match table_row(
+        // a row the table cannot read says nothing about the true values and is skipped, as the
+        // judge skips a point it cannot resolve: the mint refuses only what the judge refuses
+        if let Some(RowVerdict::Fail) = table_row(
             source,
             src_params,
             candidate,
@@ -320,9 +401,26 @@ pub fn rescue(
             r,
             rtol,
             atol,
+            !one_point,
         ) {
-            Some(RowVerdict::Pass) | Some(RowVerdict::Extend) => {}
-            _ => return false, // confirmed fail, or unevaluable: keep the f64 verdict
+            // permissive excuses an isolated disagreement (`IsolationScope`)
+            let excused = !one_point
+                && ISOLATED_OK.with(|c| c.get())
+                && isolated_row(
+                    source,
+                    src_params,
+                    candidate,
+                    cand_params,
+                    ops,
+                    var_names,
+                    x_cols,
+                    r,
+                    rtol,
+                    atol,
+                );
+            if !excused {
+                return false; // a confirmed disagreement: keep the f64 verdict
+            }
         }
     }
     true
@@ -332,9 +430,8 @@ pub fn rescue(
 /// value wherever nothing overflows or underflows, and at a row where an operation of either
 /// side does (`src_events`, `cand_events`; `None` marks no row), a rewrite may give the true
 /// value instead. So every row that fails
-/// the f64 predicate of `eval::allclose_extends` must be such a row, and must pass when judged
-/// at `P` bits (`judge_row_confirmed`, the rescue's own row judgment: both sides' true values
-/// agree). A failing row with no event refuses, exactly as f64 always did; a row whose true
+/// the f64 predicate of `eval::allclose_extends` must be such a row, and must pass when read
+/// by the table (`table_row`, the rescue's own row judgment: both sides' true values agree). A failing row with no event refuses, exactly as f64 always did; a row whose true
 /// values disagree refuses too, so a rewrite gives the evaluator's value or the true one there
 /// and nothing else. No near-miss gate: a range event is the special case of the f64 promise,
 /// not a near miss, and the high-precision work stays on the failing event rows. `y_src`,
@@ -379,18 +476,20 @@ pub fn range_rescue(
         }
     }
     // A pair with no variable evaluates to the same value on every row: one point.
-    if !source
+    let with_vars = source
         .iter()
         .chain(candidate.iter())
-        .any(|t| var_names.contains(t))
-    {
+        .any(|t| var_names.contains(t));
+    if !with_vars {
         failing.truncate(1);
     }
     if failing.is_empty() {
         return false; // nothing failed: not this function's question
     }
+    // a row the table cannot read says nothing about the true value and is skipped, as the
+    // judge skips a range probe it cannot resolve
     failing.iter().all(|&r| {
-        matches!(
+        !matches!(
             table_row(
                 source,
                 src_params,
@@ -402,8 +501,9 @@ pub fn range_rescue(
                 r,
                 rtol,
                 atol,
+                with_vars,
             ),
-            Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
+            Some(RowVerdict::Fail)
         )
     })
 }

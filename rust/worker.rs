@@ -834,9 +834,10 @@ fn battery_rows_ok(
     var_names: &[String],
     rtol: f64,
     atol: f64,
-    f64_range: bool,
+    mode: crate::engine::RuleMode,
 ) -> bool {
     let Some(sb) = battery else { return true };
+    let f64_range = matches!(mode, crate::engine::RuleMode::Default);
     // f64's range standard (`numeric::RangeKind`): a special point where an operation of
     // either side overflows or underflows may carry the true value.
     let (y_s, y_c, events) = if f64_range {
@@ -864,7 +865,7 @@ fn battery_rows_ok(
         var_names,
         rtol,
         atol,
-        f64_range && cand_params.is_empty(),
+        mode,
     )
 }
 
@@ -939,7 +940,7 @@ fn equivalent_no_const(
             var_names,
             rtol,
             atol,
-            false,
+            crate::engine::RuleMode::Real,
         ) {
             return false;
         }
@@ -966,7 +967,7 @@ fn equivalent_no_const(
                 var_names,
                 rtol,
                 atol,
-                false,
+                crate::engine::RuleMode::Real,
             ) {
                 return false;
             }
@@ -1255,6 +1256,8 @@ fn candidate_matches(
     lane: Lane,
 ) -> Option<Option<Vec<f64>>> {
     let rescue = lane.rescue();
+    let _isolated =
+        crate::hiprec::IsolationScope::open(matches!(lane.0, crate::engine::RuleMode::Permissive));
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
@@ -1596,7 +1599,7 @@ fn candidate_matches(
             var_names,
             rtol,
             atol,
-            !rescue,
+            lane.0,
         ) {
             return None;
         }
@@ -1674,7 +1677,7 @@ fn candidate_matches(
                 var_names,
                 rtol,
                 atol,
-                !rescue,
+                lane.0,
             ) {
                 return None;
             }
@@ -3555,18 +3558,24 @@ mod tests {
             fr(&["pow", "cos", "<constant>", "float(\"inf\")"], &["0"]),
             None
         );
-        // 6. deployed-consistency at battery points: atanh(tanh(tan x)) diverges from tan x
-        //    by ~3e-7 at x = +-1.5 in f64 (a live (4,3) family) ...
-        assert_eq!(fr(&["atanh", "tanh", "tan", "x0"], &["tan", "x0"]), None);
+        // 6. deployed-consistency at battery points is f64's question: atanh(tanh(tan x))
+        //    diverges from tan x by ~3e-7 at x = +-1.5 in f64 (a live (4,3) family), and the
+        //    reals' values agree, so this real lane certifies it (the judge files it `real`) ...
+        assert_eq!(
+            fr(&["atanh", "tanh", "tan", "x0"], &["tan", "x0"]),
+            Some(s(&["tan", "x0"]))
+        );
         // ... while atanh(tanh(x)) -> x stays certified (the rescue's flagship identity).
         assert!(fr(&["atanh", "tanh", "x0"], &["x0"]).is_some());
     }
 
     /// The unresolvable-seam class: a removable
     /// singularity whose cancellation is spelled through DIFFERENT subexpressions cancels
-    /// exactly in f64 but leaves a precision-roulette residue at the precision rungs.
+    /// exactly in f64 but leaves a precision-roulette residue at the precision rungs. The
+    /// contract cannot decide the point, and in the reals' lane that is no refutation: the
+    /// rule completes a null set (the judge files it `real`); f64's divergence check is f64's.
     #[test]
-    fn seam_class_rejected_stable_null_completion_kept() {
+    fn seam_class_and_stable_null_completion_kept_in_the_reals() {
         let Some(e) = crate::test_engine() else {
             return;
         };
@@ -3585,7 +3594,7 @@ mod tests {
         let seam = s(&[
             "/", "+", "pow", "x0", "3", "*", "pow", "x0", "2", "x1", "+", "x0", "x1",
         ]);
-        assert!(!e
+        assert!(e
             .equivalent_no_const_check(
                 &seam,
                 &s(&["pow", "x0", "2"]),

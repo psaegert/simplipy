@@ -342,7 +342,9 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
 
 def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
     """A law of the reals float64 breaks at a jump is minted in real and permissive and refused
-    in f64; a rule false at a jump over the reals too is refused in every mode."""
+    in f64; a rule false at a jump over the reals too is refused in f64 and real, and minted in
+    permissive, which excuses a disagreement at isolated points (P3: `floor(x) + 1 -> ceil(x)`
+    differs at the integers alone)."""
     from simplipy.mining import RuleMiner
     X = RuleMiner(bare)._mining_sample_x(256, 2, np.random.default_rng(0))
 
@@ -354,7 +356,7 @@ def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
         assert not certified(src, tgt, 'default'), (src, tgt)
         assert certified(src, tgt, 'real') and certified(src, tgt, 'permissive'), (src, tgt)
     for mode in ('default', 'real', 'permissive'):
-        assert not certified('+ floor x0 1', 'ceil x0', mode)
+        assert certified('+ floor x0 1', 'ceil x0', mode) == (mode == 'permissive'), mode
         assert certified('floor floor x0', 'floor x0', mode)
 
 
