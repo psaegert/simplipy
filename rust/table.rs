@@ -1547,7 +1547,7 @@ impl Expr {
 /// THE TABLE's real value of one operation on exact or approximate arguments: `None` for an
 /// operator the table does not know, or a point it cannot judge honestly at `ctx`'s precision.
 /// The interval layer reads it where a subexpression is one point across a cell
-/// (`interval::with_table_points`).
+/// (`interval::with_real_reading`).
 pub fn apply(name: &str, args: &[Val], ctx: &mut Ctx) -> Option<Val> {
     let _exact = number_domain(false);
     match args {

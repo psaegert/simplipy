@@ -1848,6 +1848,9 @@ impl Engine {
         let view = self.view(&ctx);
 
         let f64 = matches!(mode, RuleMode::Default);
+        // The interval layer reads this mode's values for the whole call: float64's in `f64`,
+        // the reals' (the table's at every point) in `real` and `permissive`.
+        let _reading = crate::interval::ReadingScope::open(!f64);
         let cf = |e: &Ex| self.ac_cert(e, &ctx, false, f64);
         let cfz = |e: &Ex| self.ac_cert(e, &ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, &ctx, f64);

@@ -121,10 +121,11 @@ class TestRootnSemantics:
     def test_vacuous_index_rules_are_killed(self):
         # the artifact-defect class the repaired gate caught: a non-integer rootn index
         # is an invalid operation, so the LHS is NaN a.e. and the rewrite would invent a
-        # function. The interval layer cannot enclose an expression-position index, so the
-        # measure is undecided -- and an undecided check refuses (fail closed) in real
+        # function. The interval layer's real reading encloses the expression-position index:
+        # tanh stays inside (-1, 1), which holds no nonzero integer, so the left side is
+        # undefined everywhere and the extension is measured
         r = judge_rule(['rootn', '(-1)', 'tanh', '?0'], ['(-1)'])
-        assert r['verdict'] == 'UNDECIDED-MEASURE', r
+        assert r['verdict'] == 'KILL' and r['measure'] > 0, r
         assert r['tier'] not in v.MODE_TIERS['real']
 
 

@@ -1292,6 +1292,13 @@ model predictions.
   keeps float64's values (`1/(x1*0)` is `inf/x1`). The table's `max` and `min` of an exact and an
   approximate value it cannot tell apart is approximate, never the exact member: `max(2,
   cosh(acosh(2)))` stays as written in `real`.
+- **The interval layer reads each mode's values.** In `real` and `permissive` (and in the
+  judge's measure) every point is the table's value and no float64 saturation exists: `1/0` and
+  `tan(asin(1))` are undefined, `tanh(x)` stays below 1 past 19.06, `erf(x)` below 1 past 5.92
+  and `exp(x)` above 0 below -745.13; `f64` keeps float64's reading. So `acosh(tanh(x0))` has no
+  evidence in `real` (it is undefined everywhere), and `rootn(-1, tanh(x0)) -> -1` is refused
+  with a measured extension instead of an undecided measure (`tanh` stays inside (-1, 1), which
+  holds no nonzero integer index).
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`

@@ -323,16 +323,36 @@ def test_f64_reads_the_evaluator(expr, expected) -> None:
 
 
 @pytest.mark.parametrize('expr, expected', [
-    pytest.param('inv 0', 'nan', marks=expected_failure('N6', 3)),
-    pytest.param('pow 0 -1', 'nan', marks=expected_failure('N6', 3)),
-    ('pow 0 -2', '+inf'), ('log 0', '-inf'),
-    pytest.param('tan asin 1', 'nan', marks=expected_failure('N9', 3))])
+    ('inv 0', 'nan'), ('pow 0 -1', 'nan'), ('pow 0 -2', '+inf'), ('log 0', '-inf'),
+    ('tan asin 1', 'nan'), ('pow 1 float("inf")', 'nan'), ('pow float("nan") 0', 'nan'),
+    ('rootn 0 -3', 'nan'), ('tanh float("inf")', '1.0'), ('exp float("-inf")', '0.0')])
 def test_interval_enclosures_contain_the_table_values(expr, expected) -> None:
-    """The interval layer's value set of a ground expression contains the table's value."""
-    got = bare()._core.interval_value_set_box(expr.split(), [0.0], [0.0])
+    """The interval layer's real reading of a ground expression contains the table's value."""
+    got = bare()._core.interval_value_set_box(expr.split(), [0.0], [0.0], real=True)
     assert got is not None
     has_fin, pinf, ninf, nan, lo, hi = got
-    assert {'nan': nan, '+inf': pinf, '-inf': ninf}.get(expected, has_fin), got
+    if expected in ('nan', '+inf', '-inf'):
+        assert {'nan': nan, '+inf': pinf, '-inf': ninf}[expected], got
+    else:
+        assert has_fin and lo <= float(expected) <= hi, got
+
+
+@pytest.mark.parametrize('expr', ['acosh tanh x0', 'acosh erf x0'])
+def test_the_real_reading_has_no_float64_saturation(expr) -> None:
+    """Past 19.06 float64's tanh is exactly 1 (erf past 5.92), the reals' never is: so
+    `acosh(tanh(x0))` is finite (0) on a ray in float64's reading and undefined everywhere in
+    the reals', where it has no evidence."""
+    from simplipy import _core
+    assert _core.table_evidence(expr.split(), dict(_contract.ARITY), True) is True
+    assert _core.table_evidence(expr.split(), dict(_contract.ARITY), False) is False
+
+
+@pytest.mark.parametrize('rule', ['rootn -1 tanh x0'])
+def test_rootn_over_an_expression_index_is_read(rule) -> None:
+    """An index that reaches no nonzero integer makes the root undefined at every radicand: in
+    the reals `tanh(x0)` stays inside (-1, 1)."""
+    got = bare()._core.interval_value_set_box(rule.split(), [-50.0], [50.0], real=True)
+    assert got is not None and got[3] and not got[0], got
 
 
 # ------------------------------------------------------------------------------------------

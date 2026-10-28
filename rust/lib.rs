@@ -1460,12 +1460,16 @@ impl PyEngine {
     /// on the box must be inside the returned set. Over-approximation is what makes
     /// "no defined value anywhere on this box" conservative, hence a witness always TRUE, hence
     /// the gate unable to reject a sound rule. If this ever under-reports, that proof is void.
+    /// `real` reads the reals, every point by THE TABLE (`interval::with_real_reading`), where
+    /// `inv(0)` is undefined; otherwise float64, where it is +inf.
+    #[pyo3(signature = (tokens, los, his, real = false))]
     fn interval_value_set_box(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         los: Vec<f64>,
         his: Vec<f64>,
+        real: bool,
     ) -> PyResult<Option<ValueSetBox>> {
         ensure_tokens_are_tokens(&tokens)?;
         if los.len() != his.len() || los.is_empty() {
@@ -1477,8 +1481,10 @@ impl PyEngine {
             .map(|(lo, hi)| crate::interval::Vs::interval(*lo, *hi, false, false))
             .collect();
         Ok(py.detach(|| {
-            crate::interval::value_set_p(&tokens, self.inner().operators_ref(), &doms, &[])
-                .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi))
+            crate::interval::with_reading(real, || {
+                crate::interval::value_set_p(&tokens, self.inner().operators_ref(), &doms, &[])
+            })
+            .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi))
         }))
     }
 
@@ -2119,7 +2125,7 @@ fn policy_duplicates(lhs: Vec<String>, rhs: Vec<String>) -> bool {
 /// THE JUDGE'S MEASURE (clause (b) of the criterion): the volume of the largest certified cell
 /// on which `source` (its `<constant>`s bound to `src_params`) is undefined and `target` (bound
 /// to `tgt_params`) has a value, read in THE TABLE's real values at every point of a cell
-/// (`interval::with_table_points`). `0.0`: no positive-measure extension; `None`: undecided
+/// (`interval::with_real_reading`). `0.0`: no positive-measure extension; `None`: undecided
 /// (the horizon or the node budget ran out), which the judge reads as a refusal.
 #[pyfunction]
 fn table_extension_width(
@@ -2132,7 +2138,7 @@ fn table_extension_width(
 ) -> Option<f64> {
     let ops = arity_table(arity);
     py.detach(|| {
-        crate::interval::with_table_points(|| {
+        crate::interval::with_real_reading(|| {
             crate::interval::domain_extension_p(&source, &src_params, &target, &tgt_params, &ops)
         })
     })

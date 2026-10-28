@@ -267,6 +267,30 @@ impl Vs {
         }
     }
 
+    /// Mark `v` as REACHED, its bound closed, with no claim on the measure where (the value of
+    /// an odd function's limit at an infinite operand, in the real reading): `merge_pt`, and a
+    /// bound already at `v` closed.
+    fn include_pt(&mut self, v: f64) {
+        self.merge_pt(v);
+        if self.lo == v {
+            self.lo_open = false;
+        }
+        if self.hi == v {
+            self.hi_open = false;
+        }
+    }
+
+    /// The limits `+-l` of an increasing function bounded by them (`tanh`, `erf`), reached at
+    /// the operand's infinities only (the real reading).
+    fn include_limits(&mut self, v: &Vs, l: f64) {
+        if v.pinf {
+            self.include_pt(l);
+        }
+        if v.ninf {
+            self.include_pt(-l);
+        }
+    }
+
     /// Is `t` attained on a POSITIVE-MEASURE x-set? True only where PROVEN (`attain_pt`
     /// provenance survived to this bound); `false` means "not proven", never "proven not".
     fn attains_pm(&self, t: f64) -> bool {
@@ -798,8 +822,13 @@ fn u_exp(v: &Vs) -> Vs {
         r.pinf = true;
     }
     // f64 UNDERFLOWS to exactly +0 below EXP_UNDERFLOW (and at -inf). The clamp above
-    // restored the mathematical OPEN floor; the evaluator attains it, so close it.
-    if v.reaches_down_to(EXP_UNDERFLOW) {
+    // restored the mathematical OPEN floor; the evaluator attains it, so close it. The reals
+    // attain it only at -inf.
+    if real_reading() {
+        if v.ninf {
+            r.include_pt(0.0);
+        }
+    } else if v.reaches_down_to(EXP_UNDERFLOW) {
         r.attain_pt(0.0);
     }
     r
@@ -844,12 +873,17 @@ fn u_tanh(v: &Vs) -> Vs {
         r.sat_hi = false;
     }
     // f64 ATTAINS +-1 past +-TANH_SAT (and at +-inf). `merge_pt` cannot express that --
-    // hi is already 1.0 and open -- so the attainment must close the bound explicitly.
-    if v.reaches_up_to(TANH_SAT) {
-        r.attain_pt(1.0);
-    }
-    if v.reaches_down_to(-TANH_SAT) {
-        r.attain_pt(-1.0);
+    // hi is already 1.0 and open -- so the attainment must close the bound explicitly. The
+    // reals attain +-1 only at +-inf.
+    if real_reading() {
+        r.include_limits(v, 1.0);
+    } else {
+        if v.reaches_up_to(TANH_SAT) {
+            r.attain_pt(1.0);
+        }
+        if v.reaches_down_to(-TANH_SAT) {
+            r.attain_pt(-1.0);
+        }
     }
     r
 }
@@ -1336,11 +1370,15 @@ fn u_erf(v: &Vs) -> Vs {
         r.hi_open = true;
         r.sat_hi = false;
     }
-    if v.reaches_up_to(ERF_SAT) {
-        r.attain_pt(1.0);
-    }
-    if v.reaches_down_to(-ERF_SAT) {
-        r.attain_pt(-1.0);
+    if real_reading() {
+        r.include_limits(v, 1.0);
+    } else {
+        if v.reaches_up_to(ERF_SAT) {
+            r.attain_pt(1.0);
+        }
+        if v.reaches_down_to(-ERF_SAT) {
+            r.attain_pt(-1.0);
+        }
     }
     r
 }
@@ -1714,6 +1752,9 @@ fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
 }
 
 fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
+    if let Some(r) = table_at_points(op, &[v]) {
+        return Some(r);
+    }
     Some(match op {
         "floor" => u_step(v, f64::floor),
         "ceil" => u_step(v, f64::ceil),
@@ -2470,6 +2511,9 @@ pub(crate) fn quotient_floor(a: &Vs, b: &Vs) -> Option<f64> {
 }
 
 fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
+    if let Some(r) = table_at_points(op, &[a, b]) {
+        return Some(r);
+    }
     Some(match op {
         "max" => b_lattice(a, b, true),
         "min" => b_lattice(a, b, false),
@@ -3027,7 +3071,7 @@ fn exact_integer_literal(t: &str, v: f64) -> bool {
 /// silently conflates the two under subdivision (`pow(<constant>, x)` would be evaluated only on
 /// the diagonal C == x). The domain gate therefore always passes the FITTED constants.
 pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f64]) -> Option<Vs> {
-    if TABLE_POINTS.with(|c| c.get()) {
+    if real_reading() {
         return value_set_table_points(tokens, ops, doms, params);
     }
     fn go(
@@ -3067,26 +3111,91 @@ pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f6
 }
 
 thread_local! {
-    /// Set by `with_table_points`: the contract judge's reading of a cell.
-    static TABLE_POINTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set by `with_reading`: is the layer reading THE REALS (`with_real_reading`)?
+    static REAL_READING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Run `f` with THE TABLE valuing every subexpression that is ONE POINT across a cell: a
-/// literal, a bound `<constant>`, an operation on such points, and a step head (`floor`,
-/// `ceil`) whose value is one integer on the cell. Elsewhere the interval arithmetic is the
-/// layer's own. This is the contract judge's measure (`table_extension_width`): a cell is
-/// certified in the table's values, so `tan(asin(ceil(x)))` is undefined on all of (0, 1] (the
-/// table's `tan(pi/2)`), where the layer's float enclosure of `asin(1)` reads a finite pole
-/// neighbourhood. Thread-local, and restored on return.
-pub fn with_table_points<T>(f: impl FnOnce() -> T) -> T {
+/// Is the layer reading the reals on this thread (`with_real_reading`)? Otherwise it reads
+/// float64, the deployed evaluator's saturations included.
+pub fn real_reading() -> bool {
+    REAL_READING.with(|c| c.get())
+}
+
+/// Run `f` in the reading `real` names (`with_real_reading`, or float64's); restored on return.
+pub fn with_reading<T>(real: bool, f: impl FnOnce() -> T) -> T {
     struct Restore(bool);
     impl Drop for Restore {
         fn drop(&mut self) {
-            TABLE_POINTS.with(|c| c.set(self.0));
+            REAL_READING.with(|c| c.set(self.0));
         }
     }
-    let _restore = Restore(TABLE_POINTS.with(|c| c.replace(true)));
+    let _restore = Restore(REAL_READING.with(|c| c.replace(real)));
     f()
+}
+
+/// A scope of [`with_reading`] for a whole call (the engine's run in one mode): the reading
+/// `real` names until the guard drops.
+pub struct ReadingScope(bool);
+
+impl ReadingScope {
+    pub fn open(real: bool) -> Self {
+        ReadingScope(REAL_READING.with(|c| c.replace(real)))
+    }
+}
+
+impl Drop for ReadingScope {
+    fn drop(&mut self) {
+        REAL_READING.with(|c| c.set(self.0));
+    }
+}
+
+/// Run `f` in THE REAL READING: the values of `real` (and `permissive`, whose values are
+/// real's), taken from THE TABLE wherever the layer meets a point. A literal, a bound
+/// `<constant>`, an operation on such points, and a step head (`floor`, `ceil`) whose value is
+/// one integer on the cell are the table's values; so is any operation whose operands are exact
+/// points (`table_at_points`): `1/0` and `pow(0, -1)` are undefined, `pow(0, -2)` is +inf,
+/// `pow(1, inf)` and `pow(nan, 0)` are undefined. Elsewhere the interval arithmetic is the
+/// layer's own, without float64's saturations: `tanh` stays below 1 and `exp` above 0 at every
+/// finite argument (`tanh(x) = 1` past 19.06 is float64's, not the reals'). This is the contract
+/// judge's measure (`table_extension_width`): a cell is certified in the table's values, so
+/// `tan(asin(ceil(x)))` is undefined on all of (0, 1] (the table's `tan(pi/2)`), where the
+/// layer's float enclosure of `asin(1)` reads a finite pole neighbourhood. Thread-local, and
+/// restored on return.
+pub fn with_real_reading<T>(f: impl FnOnce() -> T) -> T {
+    with_reading(true, f)
+}
+
+/// The working precision of the real reading's point values: far past a double's, and cheap.
+const POINT_DPS: i32 = 40;
+
+/// An exact point of the layer as THE TABLE's value: a finite part that is one double (the layer
+/// keeps a point only where the value is exact), an infinity alone, or undefined alone.
+fn singleton_val(v: &Vs) -> Option<crate::table::Val> {
+    match (v.has_fin, v.pinf, v.ninf, v.nan) {
+        (true, false, false, false) if v.lo == v.hi && !v.lo_open && !v.hi_open => {
+            Some(crate::table::val_of_f64(v.lo))
+        }
+        (false, true, false, false) => Some(crate::table::val_of_f64(INF)),
+        (false, false, true, false) => Some(crate::table::val_of_f64(-INF)),
+        (false, false, false, true) => Some(crate::table::val_of_f64(f64::NAN)),
+        _ => None,
+    }
+}
+
+/// THE TABLE'S BOUNDARY ENTRIES in the real reading: the value of `op` where every operand is an
+/// exact point (`singleton_val`) -- `inv(0)` undefined, `pow(0, -2)` +inf, `tanh(inf)` 1. `None`
+/// outside the real reading, at a non-point operand, or where the table cannot read the point.
+fn table_at_points(op: &str, args: &[&Vs]) -> Option<Vs> {
+    if !real_reading() {
+        return None;
+    }
+    let vals: Vec<crate::table::Val> = args
+        .iter()
+        .map(|v| singleton_val(v))
+        .collect::<Option<_>>()?;
+    let mut ctx = crate::table::Ctx::new(POINT_DPS)?;
+    let val = crate::table::apply(op, &vals, &mut ctx)?;
+    vs_of_table(&val, &mut ctx)
 }
 
 /// The value set of a table value that holds across a whole cell.
@@ -3104,7 +3213,7 @@ fn vs_of_table(v: &crate::table::Val, ctx: &mut crate::table::Ctx) -> Option<Vs>
     Some(Vs::interval(lo, hi, lo_open, hi_open))
 }
 
-/// `value_set_p` under `with_table_points`.
+/// `value_set_p` in the real reading (`with_real_reading`).
 fn value_set_table_points(
     tokens: &[String],
     ops: &Operators,
@@ -3112,8 +3221,6 @@ fn value_set_table_points(
     params: &[f64],
 ) -> Option<Vs> {
     use crate::table::{Ctx, Val};
-    /// The working precision of a point reading: far past a double's, and cheap.
-    const POINT_DPS: i32 = 40;
     fn ctx_of(c: &mut Option<Ctx>) -> Option<&mut Ctx> {
         if c.is_none() {
             *c = Some(Ctx::new(POINT_DPS)?);
@@ -3559,6 +3666,10 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 /// on whole tails (`on_float64_tails`): `1/(tanh(x1) - 1)` is `+inf` wherever x1 >= 19.06.
 /// `real` and `permissive` read it over the reals.
 pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    with_reading(!f64, || finite_ae_in_reading(tokens, ops, f64))
+}
+
+fn finite_ae_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return finite_ae(&d[0], ops, f64);
     }
@@ -3949,6 +4060,10 @@ const CERT_RECURSION_MAX: u32 = 32;
 /// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed. `f64` reads
 /// the expression in float64 (`on_float64_tails`), `real` and `permissive` over the reals.
 pub fn zero_set_null(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    with_reading(!f64, || zero_set_null_in_reading(tokens, ops, f64))
+}
+
+fn zero_set_null_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return zero_set_null(&d[0], ops, f64);
     }
@@ -3978,6 +4093,12 @@ pub fn zero_set_null(tokens: &[String], ops: &Operators, f64: bool) -> bool {
 /// where `tanh` and `atan` are constant on whole tails (`on_float64_tails`); `real` and
 /// `permissive` read it over the reals.
 pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    with_reading(!f64, || {
+        zero_set_null_generic_const_in_reading(tokens, ops, f64)
+    })
+}
+
+fn zero_set_null_generic_const_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return zero_set_null_generic_const(&d[0], ops, f64);
     }
@@ -6002,6 +6123,10 @@ fn isn_e(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
 /// exact soundness domain of `A/A -> 1`. Refuses `<constant>`-bearing
 /// trees via `zero_set_null`.
 pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    with_reading(!f64, || finite_nonzero_ae_in_reading(tokens, ops, f64))
+}
+
+fn finite_nonzero_ae_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     zero_set_null(tokens, ops, f64) && finite_ae(tokens, ops, f64)
 }
 
@@ -6022,6 +6147,10 @@ pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool 
 /// evaluator, whose `tanh` saturates after the deployed one's: where it reads an integer, so does
 /// the deployed one). `real` and `permissive` read y over the reals.
 pub fn nonconstant_entire(t: &[String], ops: &Operators, f64: bool) -> bool {
+    with_reading(!f64, || nonconstant_entire_in_reading(t, ops, f64))
+}
+
+fn nonconstant_entire_in_reading(t: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[t], ops) {
         return nonconstant_entire(&d[0], ops, f64);
     }
@@ -6319,7 +6448,7 @@ pub fn defined_measure_p_at(
 /// EVIDENCE (the specification's 4.1), defined here once: is `tokens` finite on a set of positive
 /// measure of its variables AND its `<constant>`s, each constant a dimension of its own, in the
 /// mode's values -- float64's with `f64` (`finite_cells`' float64 reading), else the reals', every
-/// point a cell holds read by THE TABLE (`with_table_points`)? `None`: undecided (the horizon or
+/// point a cell holds read by THE TABLE (`with_real_reading`)? `None`: undecided (the horizon or
 /// the budget ran out), which every reader takes as no evidence. `atanh(floor(x0))` has evidence
 /// on [0, 1); `asin(cosh(x0))`, finite only at 0, has none, nor has `(-1)^C`.
 pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
@@ -6340,13 +6469,7 @@ pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
             }
         })
         .collect();
-    let cells = || finite_cells(&spelled, &[], ops, 1, f64);
-    let found = if f64 {
-        cells()
-    } else {
-        with_table_points(cells)
-    };
-    found.map(|fc| !fc.cells.is_empty())
+    finite_cells(&spelled, &[], ops, 1, f64).map(|fc| !fc.cells.is_empty())
 }
 
 /// THE COLLAPSE LICENCE (the specification's 3.2 with 4.1), the one function the engine's constant
@@ -6463,6 +6586,18 @@ pub struct FiniteCells {
 /// unanalyzable cell was met before any witness; `Some` with no cells when the search completed
 /// without one. Only a witness certifies; the caller reads both other outcomes as "no evidence".
 pub fn finite_cells(
+    expr: &[String],
+    params: &[f64],
+    ops: &Operators,
+    want: usize,
+    f64: bool,
+) -> Option<FiniteCells> {
+    with_reading(!f64, || {
+        finite_cells_in_reading(expr, params, ops, want, f64)
+    })
+}
+
+fn finite_cells_in_reading(
     expr: &[String],
     params: &[f64],
     ops: &Operators,

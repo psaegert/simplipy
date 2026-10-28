@@ -189,7 +189,7 @@ class Engine:
     #: Rewrite steps the step cap refused, process-wide (expected 0).
     def step_cap_binds(self) -> int: ...
     def interval_value_set_box(
-        self, tokens: list[str], los: list[float], his: list[float]
+        self, tokens: list[str], los: list[float], his: list[float], real: bool = False
     ) -> tuple[bool, bool, bool, bool, float, float] | None: ...
     def interval_domain_extension(
         self, source: list[str], target: list[str]
