@@ -1630,7 +1630,8 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   same bits. `max(a, b, c)` reads as one bag of three members (and `min` alike).
   `assets/engines/acj2-4/config.yaml` declares acj-4's operators plus the nine, every
   realization in `simplipy.operators`, with no rule sets yet: an engine loaded from it
-  simplifies with the constructors alone. The mine kits are `acj2-4/mine.yaml` and
+  simplifies with the constructors alone. The mine kits are `acj2-4/mine.yaml`,
+  `acj2-4-llm/` (the complete 4->4 mine with acj-5-4-llm's 194 LLM proposals) and
   `acj2-5-4-llm/`.
 - **The nine heads in every layer.**
   - *Folds.* `floor`, `ceil` and `mod` of literals fold exactly in `real` (`mod(a, 0)` is NaN)

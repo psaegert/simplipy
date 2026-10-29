@@ -7,10 +7,6 @@
 #
 # NO SECOND NUMBER: the target cap is 4 and so is the source bound, so the cap refuses nothing.
 #
-# The new heads have no contract kernel yet, so a rule spelled with one is judged in the
-# deployed float64 lane alone: it can enter rules.json and rules_permissive.json, never
-# rules_real.json.
-#
 # Universe at u=21 unary, b=11 binary, a=29 leaves (27 terms + two dummies), by the miner's
 # recurrence: T(1)=29  T(2)=609  T(3)=22,040  T(4)=851,382 (2.1x acj-4's length-4 tier, and
 # the target library grows alike). Measure the rate off the length-3 tier before promising

@@ -7,10 +7,6 @@
 #
 # The second number is the target cap: 4 < 5, so the cap binds.
 #
-# The new heads have no contract kernel yet, so a rule spelled with one is judged in the
-# deployed float64 lane alone: it can enter rules.json and rules_permissive.json, never
-# rules_real.json.
-#
 # Universe at u=21 unary, b=11 binary, a=30 leaves (27 terms + three dummies), by the miner's
 # recurrence: T(1)=30  T(2)=630  T(3)=23,130  T(4)=901,530  T(5)=38,563,830 (acj-5-4: T(5) =
 # 13,813,230, so 2.8x at the dominant tier, against a target library 2.1x larger). Measure the
