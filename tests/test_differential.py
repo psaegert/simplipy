@@ -651,6 +651,23 @@ def test_p4_is_the_judges_criterion_and_reads_both_sides() -> None:
     assert not admits('ceil erf sinh x0', 'ceil sin x0', 'permissive')
 
 
+def test_the_saturation_rule_reads_a_battery_atom() -> None:
+    # erf(cosh(cosh(2))) is inside erf's boundary band at every rung, so the point goes to the
+    # saturation rule, whose written bound is the slot's battery atom 2 (a `TV`): it read it as an
+    # mpf and raised; it is false (erf never reaches 2, and at 0 the left side is erf(cosh(1)))
+    got = verify_rule('erf cosh cosh ?1'.split(), ['?1'])
+    assert effective_tier(got) == 'reject', got
+
+
+@pytest.mark.parametrize('pair', [('erf cosh cosh x0', 'log x0'), ('erf cosh cosh x1', '0'),
+                                  ('erf pow x0 x1', 'cos erf x1')])
+def test_an_unreadable_wide_miss_is_refused(pair) -> None:
+    # float64 reads erf(cosh(cosh(x))) as 1.0 wherever x is not small, and the table cannot read
+    # those rows either (erf's boundary band at every rung): the mint passes a wide miss on only
+    # where it read some failing rows and none disagreed
+    assert not mint_accepts(*pair, 'permissive')
+
+
 @pytest.mark.parametrize('mode', ['real', 'permissive'])
 def test_a_wide_miss_is_read_not_refused(mode) -> None:
     # float64 rounds erf(cosh(x)) to 1 wherever |x| > 2.46, most of the mint's rows; the reals keep

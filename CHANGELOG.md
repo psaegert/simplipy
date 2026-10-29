@@ -1444,10 +1444,16 @@ model predictions.
   the judge: `floor(erf(cosh(x))) -> 0` fails float64 wherever erf rounds to 1 (|x| > 2.46, most
   rows) and holds in the reals. Past the gate the mint now asks whether float64 reads the source
   as the reals do, on 16 of its rows (once per source instance): where it does not, the table
-  reads four of the failing rows, spread over them, and the mint refuses at the first confirmed
-  disagreement; where it does, the miss is the candidate's and is refused as before. The gate
-  bounds the work, not the verdict. A gross disagreement at the first reading of a row needs no
-  second rung.
+  reads the failing rows, a spread of 16 first, until it has read four, the mint refuses at the
+  first confirmed disagreement, and the pick passes on to the judge only where some row was read
+  (`erf(cosh(cosh(x)))` is inside erf's boundary band at every rung for most x, and an unread
+  miss is no agreement); where it does, the miss is the candidate's and is refused as before.
+  The gate bounds the work, not the verdict. A gross disagreement at the first reading of a row
+  needs no second rung.
+- **The saturation rule reads a battery atom.** Where every rung refuses a point, the judge asks
+  whether a bounded function is claimed to reach its bound; a slot's bound value from the
+  battery is an exact atom, which the rule read as a float and raised (`erf(cosh(cosh(_0))) ->
+  _0` at 2). It reads the atom's value.
 - **Evidence is one function.** The interval layer's certificate confirms a cell at points read
   in the mode's values (its centre and three drawn in it, by the table in the reals, by the
   f64 kernels in `f64`), and the mint reads the same function for a source as the judge's
@@ -1457,8 +1463,11 @@ model predictions.
   `permissive`.
 - **P4's step is defined once.** Permissive's judge excuses a disagreement where a `?` slot's
   move off the point by 2^-20 of its magnitude (at least 2^-20) clears it in each direction,
-  read from the core (`table::ISOLATION_STEP`); it moved by 1e-6 and took one direction. The
-  mint's pre-filter moves its rows by the same step.
+  read from the core (`table::ISOLATION_STEP`); it moved by 1e-6 and took one direction. Off
+  the point, an extension is no disagreement and a value the rungs cannot settle is read at
+  float resolution: `acos(ceil(acos(x))) -> 0` differs at 1 alone and holds, while
+  `ceil(erf(sinh(x))) -> ceil(sin(x))` (on (pi, 2*pi) too) and `ceil(acosh(asin(x))) -> 1` (on
+  (0.99961, 1] too) do not. The mint's pre-filter moves its rows by the same step.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with

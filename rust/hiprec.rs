@@ -57,6 +57,11 @@ pub const NEAR_MISS_FRAC: f64 = 0.5;
 /// allows), spread evenly over them: the gate bounds the work, not the verdict (`rescue`).
 pub const WIDE_MISS_ROWS: usize = 4;
 
+/// The failing rows of a wide miss the table tries first, spread evenly over them, before the
+/// rest in order, to read `WIDE_MISS_ROWS` of them (a row inside a boundary band at every rung
+/// is unreadable).
+pub const WIDE_MISS_TRIES: usize = 16;
+
 /// Verdict of one row at one precision. `Extend` = source nonfinite (domain-extendable),
 /// exactly `allclose_extends`' semantics lifted to `p` bits.
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -500,19 +505,31 @@ pub fn rescue(
     // `WIDE_MISS_ROWS` failing rows and the pair is refused at the first confirmed disagreement,
     // passing on to the judge with none; where they are, the miss is the candidate's, and it is
     // refused as before.
-    let rows: Vec<usize> = if failing.len() > gate {
+    let wide = failing.len() > gate;
+    let rows: Vec<usize> = if wide {
         if source_faithful(y_src, source, src_params, ops, var_names, x_cols) {
             return false;
         }
-        let k = WIDE_MISS_ROWS.min(failing.len());
-        (0..k).map(|i| failing[i * failing.len() / k]).collect()
+        // a spread first, then the rest in order: every failing row is tried before an
+        // unreadable miss is refused
+        let k = WIDE_MISS_TRIES.min(failing.len());
+        let spread: Vec<usize> = (0..k).map(|i| failing[i * failing.len() / k]).collect();
+        let rest = failing.iter().filter(|r| !spread.contains(*r)).copied();
+        spread.iter().copied().chain(rest).collect()
     } else {
         failing
     };
+    // a wide miss reads its spread until `WIDE_MISS_ROWS` rows are read, and passes on only
+    // where some were: an unreadable spread (`erf(cosh(cosh(x)))` at large x, inside erf's
+    // boundary band at every rung) is no evidence that the candidate agrees
+    let mut read = 0usize;
     for &r in &rows {
+        if wide && read >= WIDE_MISS_ROWS {
+            break;
+        }
         // a row the table cannot read says nothing about the true values and is skipped, as the
         // judge skips a point it cannot resolve: the mint refuses only what the judge refuses
-        if let Some(RowVerdict::Fail) = table_row(
+        match table_row(
             source,
             src_params,
             candidate,
@@ -525,27 +542,32 @@ pub fn rescue(
             atol,
             !one_point,
         ) {
-            // permissive excuses an isolated disagreement (`IsolationScope`)
-            let excused = !one_point
-                && ISOLATED_OK.with(|c| c.get())
-                && isolated_row(
-                    source,
-                    src_params,
-                    candidate,
-                    cand_params,
-                    ops,
-                    var_names,
-                    x_cols,
-                    r,
-                    rtol,
-                    atol,
-                );
-            if !excused {
-                return false; // a confirmed disagreement: keep the f64 verdict
+            Some(RowVerdict::Fail) => {
+                // permissive excuses an isolated disagreement (`IsolationScope`)
+                let excused = !one_point
+                    && ISOLATED_OK.with(|c| c.get())
+                    && isolated_row(
+                        source,
+                        src_params,
+                        candidate,
+                        cand_params,
+                        ops,
+                        var_names,
+                        x_cols,
+                        r,
+                        rtol,
+                        atol,
+                    );
+                if !excused {
+                    return false; // a confirmed disagreement: keep the f64 verdict
+                }
+                read += 1;
             }
+            Some(_) => read += 1,
+            None => {}
         }
     }
-    true
+    !wide || read > 0
 }
 
 /// THE f64 RANGE STANDARD on one instance (`numeric::RangeKind`): f64 promises the evaluator's

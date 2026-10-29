@@ -645,6 +645,8 @@ def saturation_verdict(tl, tr, env_mp):
                 continue
             elif tgt[0] == 'slot':
                 lim = env_mp()[tgt[1]]
+                # a battery atom is a `TV`: its value at the working precision
+                lim = lim.mpf() if hasattr(lim, 'mpf') else lim
             else:
                 continue                     # computed: provenance is not a written bound
         except (Unresolved, KeyError):
@@ -2420,7 +2422,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             vals = {m: float(cols[m][r]) for m in names}
 
             def env_mp(vals=vals):
-                e = {m: tv_of_float(x) for m, x in vals.items()}
+                # each double read exactly, as the grid reads its points (an mpf, which the
+                # saturation rule reads too)
+                e = {m: mpf(x) for m, x in vals.items()}
                 e.update({k: b() for k, b in gbuilders.items()})
                 e.update(fitted(grid_key))
                 return e
@@ -2429,7 +2433,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             point = dict(vals)
             point.update(dict(zip(lnames, grid_key)))
             judge_point(acc, v, point, 'real', True,
-                        (grid_key, {m: tv_of_float(x) for m, x in vals.items()}))
+                        (grid_key, {m: mpf(x) for m, x in vals.items()}))
             if v is not None:
                 ed = {m: F(x) for m, x in vals.items()}
                 ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
