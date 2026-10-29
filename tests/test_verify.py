@@ -848,8 +848,11 @@ class TestCleanlinessIsPerMode:
         # log(_0))` and kin, `sinh(atanh(atan(_0))) -> tan(asin(atan(_0)))` and kin), and in
         # every mode +2 false in the reals at the rows near 1, `sin(abs(atanh(_0))) ->
         # abs(sin(atanh(_0)))` and its twin, where atanh passes pi and sin turns negative.
+        # the offenders by mode, shown on a failure (captured output is printed in full)
+        for m, r in report['modes'].items():
+            print(m, sorted((o['idx'], o['lhs'], o['rhs'], o['verdict']) for o in r['offenders']))
         assert {m: len(r['offenders']) for m, r in report['modes'].items()} == \
-            {'f64': 25, 'real': 79, 'permissive': 36}, report['modes']
+            {'f64': 25, 'real': 79, 'permissive': 36}
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest: a row where real's one zero and permissive's signed zero give
         # different values).
