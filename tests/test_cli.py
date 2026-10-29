@@ -86,7 +86,7 @@ class TestCLI:
             "proposals": str(proposals_file),
             # MINT-level pin; the smoke vocabulary also carries hyper-operators,
             # whose Python realizations left simplipy.operators in 0.12, so the
-            # promotion oracle (default-on since 2026-08-01) cannot realize them.
+            # promotion oracle (default-on) cannot realize them.
             "promote_sorts": False,
         }))
         out = tmp_path / "out" / "mined.json"
@@ -135,6 +135,35 @@ class TestCLI:
         assert params["prune"] == "covered"
         assert params["relaxed_kruskal"] is False
         assert params["confirm"] is False
+
+    def test_find_rules_modes_mines_only_the_listed_files(self, tmp_path) -> None:
+        """`--modes real` mines the real file alone, beside the f64 file already there, and
+        leaves the f64 and permissive files as they are; the real file is the one the full mine
+        wrote. An unknown mode name is refused before any mining."""
+        import os
+        (tmp_path / "rules.json").write_text("[]")
+        engine_cfg = tmp_path / "engine.yaml"
+        engine_cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
+        mine_cfg = tmp_path / "find_rules.yaml"
+        mine_cfg.write_text(yaml.safe_dump({
+            "max_source_pattern_length": 3, "max_target_pattern_length": 3,
+            "dummy_variables": 1, "extra_internal_terms": ["0", "1"], "n_samples": 256,
+            "constants_fit_retries": 4, "seed": 7, "promote_sorts": False}))
+        out = tmp_path / "mined.json"
+        files = [out, tmp_path / "mined_real.json", tmp_path / "mined_permissive.json"]
+        main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
+              "--reset-rules"])
+        full = [f.read_bytes() for f in files]
+        stamps = {f: os.stat(f).st_mtime_ns for f in (files[0], files[2])}
+        files[1].unlink()
+        (tmp_path / "mined_real.json.provenance.json").unlink()
+        main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
+              "--reset-rules", "--modes", "real"])
+        assert [f.read_bytes() for f in files] == full
+        assert {f: os.stat(f).st_mtime_ns for f in (files[0], files[2])} == stamps
+        with pytest.raises(ValueError, match="modes must name"):
+            main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
+                  "--modes", "f32"])
 
     def test_find_rules_unknown_config_key_rejected(self, tmp_path, capsys) -> None:
         """FAIL-CLOSED: an unknown find-rules config key is an error naming the key,

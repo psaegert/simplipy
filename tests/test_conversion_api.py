@@ -1,11 +1,10 @@
-"""The conversion API's SURFACE: three forms, three entries, fixed return types
-(the research harness; the original brief was CONVERSION_API_DESIGN.md).
+"""The conversion API's SURFACE: three forms, three entries, fixed return types.
 
-D1 changed on 2026-08-18: the entries no longer route through the canonical AC state.
+The entries do not route through the canonical AC state.
 They are PURE, syntactic re-notations -- `tests/test_pure_conversions.py` owns that
 contract and its property tests. What stays here is the surface: input detection by
-type (D2), the target form fixing the return type (D3), `read_infix` keeping its
-tolerant contract (D4), composition with `simplify` (D5), and the error taxonomy (D6).
+type, the target form fixing the return type, `read_infix` keeping its
+tolerant contract, composition with `simplify`, and the error taxonomy.
 """
 import numpy as np
 import pytest
@@ -67,7 +66,7 @@ class TestNineDirections:
 
 
 class TestInputContainers:
-    """D2/D3: tuple and 1-D ndarray token inputs are read; the RETURN type is
+    """Tuple and 1-D ndarray token inputs are read; the RETURN type is
     fixed by the target form, never mirrored from the input container."""
 
     def test_tuple_input(self, engine: SimpliPyEngine) -> None:
@@ -83,7 +82,7 @@ class TestInputContainers:
 
 
 class TestRoundTrips:
-    """D5: a conversion never moves the CANONICAL STATE. The per-direction spelling
+    """A conversion never moves the CANONICAL STATE. The per-direction spelling
     relations live in tests/test_pure_conversions.py."""
 
     @pytest.mark.parametrize("expr", BATTERY)
@@ -131,16 +130,16 @@ class TestRoundTrips:
         assert engine.to_infix(engine.simplify(expr)) == engine.simplify(expr)
 
     def test_spelling_IS_preserved(self, engine: SimpliPyEngine) -> None:
-        # The 2026-08-18 split: a conversion is notation, so nothing collects.
+        # A conversion is notation, so nothing collects.
         assert engine.to_prefix(['+', 'x0', 'x0']) == ['+', 'x0', 'x0']
         assert engine.simplify(['+', 'x0', 'x0']) == ['*', '2', 'x0']
-        # D4: read_infix keeps its own (tolerant) contract.
+        # `read_infix` keeps its own (tolerant) contract.
         assert engine.read_infix('x0 + x0') == ['+', 'x0', 'x0']
 
 
 class TestUnchangedSurface:
-    """D7 is RETIRED: the tagged leak is gone by construction (owner ruling
-    2026-08-18), because `simplify` answers in the dialect it was handed."""
+    """The tagged leak is gone by construction, because `simplify` answers in the
+    dialect it was handed."""
 
     def test_simplify_token_default_is_the_input_dialect(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['*', '2', 'atan', 'x0']) == ['*', '2', 'atan', 'x0']
@@ -171,7 +170,7 @@ class TestUnchangedSurface:
 
 
 class TestErrors:
-    """D6: ValueError on malformed input in any form, TypeError on wrong type."""
+    """ValueError on malformed input in any form, TypeError on wrong type."""
 
     @pytest.mark.parametrize("bad", [
         pytest.param('2*+', id='malformed-infix'),
@@ -197,3 +196,44 @@ class TestErrors:
     def test_2d_ndarray_raises_value_error(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError):
             engine.to_infix(np.array([PREFIX, PREFIX]))
+
+
+class TestOneReading:
+    """Every entry that takes an expression reads it the same way (`_read_input`)."""
+
+    @pytest.mark.parametrize("entry", ['simplify', 'complexity', 'to_prefix', 'to_infix'])
+    @pytest.mark.parametrize("bad", [
+        pytest.param(np.array([['x1']]), id='2d-ndarray'),
+        pytest.param(np.array([1.0, 2.0]), id='float-ndarray'),
+    ])
+    def test_a_bad_ndarray_is_a_clean_value_error(self, engine: SimpliPyEngine, entry, bad) -> None:
+        with pytest.raises(ValueError, match='numpy array'):
+            getattr(engine, entry)(bad)
+
+    @pytest.mark.parametrize("entry", ['simplify', 'complexity', 'to_prefix'])
+    def test_a_wrong_type_is_the_same_type_error(self, engine: SimpliPyEngine, entry) -> None:
+        with pytest.raises(TypeError, match='expected an infix str or a token sequence'):
+            getattr(engine, entry)(42)
+
+    @pytest.mark.parametrize("entry", ['simplify', 'complexity', 'to_prefix', 'to_infix', 'to_tagged'])
+    @pytest.mark.parametrize("bad", [
+        pytest.param(['+', 'x1', True], id='bool'),
+        pytest.param(['+', 'x1', None], id='None'),
+        pytest.param(['+', 'x1', np.bool_(False)], id='numpy-bool'),
+        pytest.param(np.array(['+', 'x1', None], dtype=object), id='object-ndarray'),
+        pytest.param(('+', 'x1', object()), id='object'),
+    ])
+    def test_a_token_that_is_no_str_or_number_is_refused(self, engine: SimpliPyEngine, entry, bad) -> None:
+        # `str(True)` and `str(None)` read as the symbols 'True' and 'None'
+        with pytest.raises(ValueError, match='a token must be a str or a number'):
+            getattr(engine, entry)(bad)
+
+    def test_a_number_token_reads_as_its_str(self, engine: SimpliPyEngine) -> None:
+        assert engine.to_prefix(['+', 'x1', 2]) == ['+', 'x1', '2']
+        assert engine.to_prefix(['*', np.float64(0.5), 'x1']) == ['*', '0.5', 'x1']
+
+    def test_simplify_reads_realization_notation_like_to_prefix(self, engine: SimpliPyEngine) -> None:
+        realized = ['simplipy.operators.neg', 'x1']
+        assert engine.to_prefix(realized) == ['neg', 'x1']
+        assert engine.simplify(realized) == engine.simplify(['neg', 'x1'])
+        assert engine.complexity(realized) == engine.complexity(['neg', 'x1'])

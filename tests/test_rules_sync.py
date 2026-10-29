@@ -1,4 +1,4 @@
-"""C1.9: the rule recipe is refused at pickle time when it is ambiguous.
+"""The rule recipe is refused at pickle time when it is ambiguous.
 
 The engine keeps rules twice: ``simplification_rules`` (the Python recipe) and the
 compiled core (what ``simplify`` executes). The documented contract is
@@ -39,14 +39,14 @@ def test_list_mutated_without_compile_refuses_to_pickle(engine: SimpliPyEngine) 
 
 
 def test_core_rules_set_directly_refuses_to_pickle(engine: SimpliPyEngine) -> None:
-    engine._core.set_rules([])
+    engine._core.set_mode_rules('default', [])
     with pytest.raises(ValueError, match='compile_rules'):
         pickle.dumps(engine)
 
 
 def test_deepcopy_takes_the_same_gate(engine: SimpliPyEngine) -> None:
     # deepcopy rides __getstate__: a diverged engine is exactly as ambiguous there.
-    engine._core.set_rules([])
+    engine._core.set_mode_rules('default', [])
     with pytest.raises(ValueError, match='compile_rules'):
         copy.deepcopy(engine)
 

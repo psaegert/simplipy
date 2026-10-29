@@ -1,5 +1,4 @@
-"""A rules-less engine says so (ruling 2026-08-18, evening batch 2 item 2):
-"Warning on engine without rules" -- broadened from the missing-FILE case to the
+"""A rules-less engine says so: a warning on an engine without rules -- broadened from the missing-FILE case to the
 resulting STATE, and explicitly NON-FATAL.
 
 The failure this catches is silent success. A config that names a ruleset it
@@ -105,10 +104,9 @@ class TestTheWarningIsNonFatal:
 
 class TestTheWarningStaysQuietWhenItShould:
     def test_a_real_ruleset_does_not_warn(self) -> None:
-        """The rules-less warning must stay silent for a real ruleset, and so must
-        every other warning but one: the measure-fingerprint mismatch the float cap
-        causes until the served cell is re-mined, pinned by both digests in
-        `test_mu_prime.TestFingerprintAndArtifactLoad`. Anything else is a defect.
+        """The rules-less warning must stay silent for a real ruleset, and so must every
+        other warning: the cell's sidecar records no probe that moved
+        (`test_mu_prime.TestFingerprintAndArtifactLoad`). Any warning is a defect.
         """
         require_or_skip(acj_config_path(), 'the acj-4 asset is not staged')
         with warnings.catch_warnings(record=True) as caught:
@@ -117,10 +115,7 @@ class TestTheWarningStaysQuietWhenItShould:
         assert len(engine.simplification_rules) > 0
         assert not [w for w in caught if 'NO simplification rules' in str(w.message)], \
             'a real ruleset must never raise the rules-less warning'
-        unexpected = [str(w.message) for w in caught
-                      if not ('measure fingerprint mismatch' in str(w.message)
-                              and '32302640b359a348' in str(w.message)
-                              and '9a89036bd9cd33f3' in str(w.message))]
+        unexpected = [str(w.message) for w in caught]
         assert unexpected == [], f'unexpected warnings on a real ruleset: {unexpected}'
 
     def test_explicit_bare_construction_stays_silent(self, operators: dict) -> None:

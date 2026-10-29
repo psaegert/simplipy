@@ -1,4 +1,4 @@
-"""`parse` is RENAMED to `read_infix` (ruling 2026-08-18, evening batch 2 item 3).
+"""`parse` is RENAMED to `read_infix`.
 
 The name had to state the contract, because the contract is a CAPABILITY the rest
 of the 0.14 surface deliberately refuses: `read_infix` is a vocabulary-TOLERANT,
@@ -49,6 +49,35 @@ class TestTheContractTheNameStates:
             with pytest.raises(ValueError):
                 convert('sqrt(x0)')
 
+    def test_the_strict_entries_name_the_unknown_function(
+            self, engine: SimpliPyEngine) -> None:
+        """The refusal names the call it cannot read, in every strict entry that reads
+        infix -- not a generic "malformed prefix expression" about text that is infix."""
+        for entry in (engine.simplify, engine.complexity, engine.to_prefix, engine.to_tagged,
+                      engine.to_infix, engine.evaluate_constants):
+            with pytest.raises(ValueError, match=r"unknown function 'sqrt' in 'sqrt\(x1\^2\)'"):
+                entry('sqrt(x1^2)')
+        with pytest.raises(ValueError, match=r"unknown functions 'foo', 'x1' in"):
+            engine.simplify('foo(x2) + x1(x3) + foo(1)')
+        with pytest.raises(ValueError, match=r"unknown function 'sqrt' in"):
+            engine.mask('sqrt(x1) + 2')
+        # declared names, aliases and plain products are not calls of unknown functions:
+        # the strict reading of such text is the tolerant one
+        text = 'sin(x1) + pow(x1, 2) + 2(x1 + 1) + (x1)(x2)'
+        assert engine._core.parse(text, strict=True) == engine.read_infix(text)
+        # the tolerant reader keeps the call as written
+        assert engine._core.parse('sqrt(x1)', strict=False) == ['sqrt', 'x1']
+
+    def test_legacy_spellings_are_read_where_they_are_called(
+            self, engine: SimpliPyEngine) -> None:
+        """`pow_1(a)` and `pow1(a)` are the legacy reciprocal and identity; a bare `pow_1` is a
+        symbol, as `pow_2` is (it read as `* x0 inv`, an operator with no operand)."""
+        assert engine.read_infix('pow_1(x0)') == ['inv', 'x0']
+        assert engine.read_infix('x1*pow1(x0)') == ['*', 'x1', 'x0']
+        assert engine.read_infix('x0*pow_1') == ['*', 'x0', 'pow_1']
+        assert engine.read_infix('x0*pow_2') == ['*', 'x0', 'pow_2']
+        assert engine.simplify('x0*pow_1') == engine.simplify('x0*pow_2').replace('pow_2', 'pow_1')
+
     def test_preserves_spelling_does_not_canonicalise(
             self, engine: SimpliPyEngine) -> None:
         """The contrast the docstring is required to state, verbatim.
@@ -71,7 +100,7 @@ class TestTheContractTheNameStates:
 
 
 class TestImplicitMultiplication:
-    """Infix reads implicit products (owner ruling 2026-10-05); token lists, which are expected
+    """Infix reads implicit products; token lists, which are expected
     well formed, do not. The inserted `*` is an ordinary `*`, with its precedence."""
 
     @pytest.mark.parametrize("implicit, explicit", [
@@ -112,7 +141,7 @@ class TestImplicitMultiplication:
 
 
 class TestWhitespace:
-    """Whitespace separates tokens (owner ruling 2026-10-05). A declared one-argument function
+    """Whitespace separates tokens. A declared one-argument function
     without parentheses applies to the operand after it, taking powers and signs but not
     products, quotients or sums; `* *` and a spaced exponent part still join; any other two
     operands with only whitespace between them are a user error."""
@@ -189,3 +218,61 @@ class TestWhitespace:
         for read in (engine.read_infix, engine.infix_to_prefix, engine.simplify):
             with pytest.raises(ValueError, match="separated only by whitespace"):
                 read(text)
+
+
+class TestCallArgumentCounts:
+    """A call gives its operator exactly its arity in arguments. `max` and `min` take any
+    number of at least two, nested to the right, because sympy prints them n-ary
+    (`Max(x0, x1, x2)`); every other count is refused by name, never read into a malformed
+    prefix list."""
+
+    @pytest.fixture(scope="class")
+    def minmax_engine(self) -> SimpliPyEngine:
+        import warnings
+
+        from simplipy.io import load_config
+        ops = dict(load_config(acj_config_path())['operators'])
+        for name in ('max', 'min'):
+            ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [name.capitalize()],
+                         'arity': 2, 'commutative': False}
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # the engine has no rules, and says so
+            return SimpliPyEngine(operators=ops, rules=[])
+
+    def test_max_and_min_nest_to_the_right(self, minmax_engine: SimpliPyEngine) -> None:
+        e = minmax_engine
+        assert e.read_infix('Max(x0, x1, x2)') == ['max', 'x0', 'max', 'x1', 'x2']
+        assert e.read_infix('Max(Min(x0, x1), Min(Max(x0, x1), x2))') == \
+            ['max', 'min', 'x0', 'x1', 'min', 'max', 'x0', 'x1', 'x2']
+        assert e.read_infix('min(x0, 2, -x1, x2)') == ['min', 'x0', 'min', '2', 'min', 'neg', 'x1', 'x2']
+        assert e.to_prefix('Max(x0, x1, x2)') == e.to_prefix('max(x0, max(x1, x2))')
+
+    def test_a_right_nested_chain_prints_as_one_call(self, minmax_engine: SimpliPyEngine) -> None:
+        """The engine reads every nesting of `max` as one bag, and the printer writes the
+        right-nested chain it answers with as one call, which reads back to the same tokens."""
+        e = minmax_engine
+        assert e.simplify('Max(x2, Max(x0, x1))') == 'max(x0, x1, x2)'
+        assert e.prefix_to_infix(['max', 'x0', 'max', 'x1', 'x2']) == 'max(x0, x1, x2)'
+        assert e.read_infix('max(x0, x1, x2)') == ['max', 'x0', 'max', 'x1', 'x2']
+        # a left nesting is no chain to the reader, so it keeps its call
+        assert e.prefix_to_infix(['max', 'max', 'x0', 'x1', 'x2']) == 'max(max(x0, x1), x2)'
+        # a realization is a binary function
+        assert e.prefix_to_infix(['max', 'x0', 'max', 'x1', 'x2'], realization=True) == \
+            'simplipy.operators.max(x0, simplipy.operators.max(x1, x2))'
+
+    @pytest.mark.parametrize('text, message', [
+        ('sin(x0, x1)', 'sin takes 1 argument, got 2'),
+        ('pow(x0)', 'pow takes 2 arguments, got 1'),
+        ('pow(x0, x1, x2)', 'pow takes 2 arguments, got 3'),
+        ('max(x0)', 'max takes 2 arguments, got 1'),
+        ('(x0, x1)', "a comma outside a call's argument list"),
+        ('x0 + (x1, x2)', "a comma outside a call's argument list"),
+    ])
+    def test_every_other_count_is_refused(self, minmax_engine: SimpliPyEngine, text: str, message: str) -> None:
+        import re
+        for read in (minmax_engine.read_infix, minmax_engine.infix_to_prefix, minmax_engine.simplify):
+            with pytest.raises(ValueError, match=re.escape(message)):
+                read(text)
+
+    def test_an_undeclared_call_still_reads_tolerantly(self, engine: SimpliPyEngine) -> None:
+        assert engine.read_infix('foo(x0, x1)') == ['foo', 'x0', 'x1']

@@ -1,0 +1,35 @@
+# Artifact kit acj2-5-4-llm: the complete AC-judged 5->4 mine over the 0.15 vocabulary (acj-4's
+# operators plus floor, ceil, max, min, mod, erf, harmonic, atan2 and besselj, each priced at
+# the transcendental tier), LLM channel on, as acj-5-4-llm. Reproduce with ONE command:
+#   simplipy find-rules -e config.yaml -c mine.yaml -o rules.json -v --reset-rules
+# It writes rules.json (f64), rules_real.json and rules_permissive.json, each with its
+# provenance sidecar.
+#
+# The second number is the target cap: 4 < 5, so the cap binds.
+#
+# Universe at u=21 unary, b=11 binary, a=30 leaves (27 terms + three dummies), by the miner's
+# recurrence: T(1)=30  T(2)=630  T(3)=23,130  T(4)=901,530  T(5)=38,563,830 (acj-5-4: T(5) =
+# 13,813,230, so 2.8x at the dominant tier, against a target library 2.1x larger). Measure the
+# rate off the length-4 tier before promising an ETA.
+#
+# Alphabet unchanged from acj-5-4-llm (flash-ansr vocabulary literals -10..10, e, pi).
+extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(-5)', '(-4)', '(-3)', '(-2)', '(-1)', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+                       'np.e', 'np.pi',
+                       'float("inf")', 'float("-inf")', 'float("nan")']
+dummy_variables: 3  # ceil(max_source_pattern_length/2)
+max_source_pattern_length: 5
+max_target_pattern_length: 4
+n_samples: 1024
+constants_fit_challenges: 16
+constants_fit_retries: 16
+rtol: 1.0e-11  # carried from acj-4-3 (2026-08-01 grid measurement)
+atol: 1.0e-12
+min_informative: null
+seed: 42
+confirm: true
+relaxed_kruskal: true
+prune: covered
+promote_sorts: true
+# LLM channel: the acj-5-4-llm batch (194 proposals, sha256
+# b97573c2813d0bb535364ef32817c71549fe40e76a794c37b0403c09827bf359), placed beside this file.
+proposals: llm_proposals.json

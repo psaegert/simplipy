@@ -20,11 +20,13 @@
 //! fraction or decimal token. String-level round-trip
 //! `to_prefix . from_prefix . to_prefix == to_prefix` holds by construction.
 
-use std::sync::OnceLock;
-
 use crate::tokens::{Tok, TokenView};
 
-use super::expr::{add, canon, fun, mul, mul_undecided, pow, raised_members, Cx, Ex, FlipScope};
+use super::expr::{
+    add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pow,
+    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, GroundParse,
+    NEG_ZERO,
+};
 use super::rat::Rat;
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -34,10 +36,16 @@ use num_traits::{One, Zero};
 /// the shipped engine treats malformed expressions.
 pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     // Literals parse in the context's number domain: in the f64 domain a literal that is not
-    // admissible (subnormal, beyond float64's range) stays a leaf as written (design 2c).
+    // admissible (subnormal, beyond float64's range) stays a leaf as written.
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // One scope for the whole parse: a product met again is decided once (`FlipScope`).
     let _memo = FlipScope::open();
+    // A ground expression: every token an operator or a value the evaluator reads.
+    let view = cx.view;
+    let ground = tokens.iter().all(|&t| {
+        view.arity(t).is_some() || view.with_str(t, |s| crate::numeric::leaf_value(s).is_some())
+    });
+    let _ground = GroundParse::open(ground);
     let (e, next) = parse_one(tokens, 0, cx)?;
     if next != tokens.len() {
         return None;
@@ -56,6 +64,10 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     if product_head(&s, view.arity(t)) {
         let mut members = Vec::new();
         let at = parse_members(tokens, idx, cx, &mut members)?;
+        // A written product of numbers that is zero takes float64's sign in `f64` (`-1*0`).
+        if let Some(zero) = signed_zero_product(&members, cx) {
+            return Some((zero, at));
+        }
         return Some((mul(members, cx), at));
     }
     if let Some((members, at)) = product_power(tokens, idx, cx) {
@@ -86,11 +98,7 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
             }
             let (p, next) = parse_one(tokens, at, cx)?;
             // The inverse section applies the bag's group inverse to each of its members.
-            let p = if inverted {
-                mul(vec![Ex::Num(Rat::NEG_ONE), p], cx)
-            } else {
-                p
-            };
+            let p = if inverted { negated(p, cx) } else { p };
             parts.push(p);
             at = next;
         }
@@ -101,7 +109,36 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
         }
         return Some((add(parts, cx), at));
     }
-    if s == "</add>" || s == "</mul>" || s == "<sub>" || s == "<div>" {
+    // The LATTICE bags `<max> ... </max>` / `<min> ... </min>` (`expr::lattice`), read where the
+    // config declares the head as a binary operator: two members or more and the closer, no
+    // section.
+    if let Some(head) = lattice_opener(&s) {
+        let op = view.intern(head);
+        if view.arity(op) != Some(2) {
+            return None;
+        }
+        let closer = if head == "max" { "</max>" } else { "</min>" };
+        let mut members = Vec::new();
+        let mut at = idx + 1;
+        loop {
+            let nt = *tokens.get(at)?;
+            if view.tok_is(nt, closer) {
+                at += 1;
+                break;
+            }
+            let (m, next) = parse_one(tokens, at, cx)?;
+            members.push(m);
+            at = next;
+        }
+        if members.len() < 2 {
+            return None;
+        }
+        return Some((fun(op, members, cx), at));
+    }
+    if matches!(
+        s.as_str(),
+        "</add>" | "</mul>" | "<sub>" | "<div>" | "</max>" | "</min>"
+    ) {
         return None; // a closer or section marker with no enclosing bag
     }
     // The general signed root `rootn x n` (IEEE 754's rootn): binary, config-independent
@@ -111,8 +148,36 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
         let (index, at) = parse_one(tokens, at, cx)?;
         return Some((fun(t, vec![base, index], cx), at));
     }
+    // `atan2` READS THE SIGN OF A ZERO in its first argument (`atan2(-0, -1) = -pi`) and is odd
+    // in it bit for bit in float64: a negative coefficient of that argument leaves the call
+    // (`atan2(-S, x) = -atan2(S, x)`) before a product decides its members, so a sum that
+    // vanishes on a region keeps the orientation it was written in, as under an inverse
+    // (`inverts_a_signed_zero`). Not in `real`, whose one zero gives `atan2(0, -1) = pi`.
+    if s == "atan2" && view.arity(t) == Some(2) && cx.ieee_zeros() {
+        let mut ym = Vec::new();
+        let at = parse_members(tokens, idx + 1, cx, &mut ym)?;
+        let mut xm = Vec::new();
+        let at = parse_members(tokens, at, cx, &mut xm)?;
+        return Some((atan2_of(t, ym, xm, cx), at));
+    }
     let arity = view.arity(t);
     match arity {
+        // In `f64` a spelling of zero that float64 reads as -0 (`-0.0`, not the integer `-0`) is
+        // the written negative zero, a leaf (`NEG_ZERO`): a number has one zero, and float64
+        // reads the sign wherever a zero is inverted. (A nonzero literal that underflows to -0
+        // stays the leaf it is written as.)
+        None if cx.f64_semantics()
+            && crate::utils::looks_numeric(&s)
+            && crate::numeric::leaf_value(&s).is_some_and(|v| v == 0.0 && v.is_sign_negative())
+            && Rat::parse_decimal(&s).is_some_and(|r| r.is_zero()) =>
+        {
+            let leaf = if s == NEG_ZERO {
+                t
+            } else {
+                view.intern(NEG_ZERO)
+            };
+            Some((Ex::Leaf(leaf), idx + 1))
+        }
         None => Some((parse_leaf_token(t, &s, view), idx + 1)),
         Some(n) => {
             let mut args = Vec::with_capacity(n as usize);
@@ -124,6 +189,15 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
             }
             Some((desugar(&s, t, args, cx), at))
         }
+    }
+}
+
+/// The lattice head a tagged lattice bag opens (`<max>` opens `max`), if `s` opens one.
+fn lattice_opener(s: &str) -> Option<&'static str> {
+    match s {
+        "<max>" => Some("max"),
+        "<min>" => Some("min"),
+        _ => None,
     }
 }
 
@@ -173,9 +247,11 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             let at = parse_members(tokens, idx + 1, cx, &mut num)?;
             let (mut den, at) = divisor_members(tokens, at, cx)?;
             // A literal over a literal is the spelling of one number (`/ p q`), and stays one
-            // member of the coefficient's partition.
+            // member of the coefficient's partition -- but for a zero over a literal in the
+            // float64 modes, which is the signed zero of the divisor's sign (`0/(-2)` is -0), so
+            // its members stay apart for an inverse to read (`zero_over_literal`).
             match (num.as_slice(), den.as_slice()) {
-                ([Ex::Num(_)], [Ex::Num(_)]) => {
+                ([Ex::Num(n)], [Ex::Num(_)]) if !zero_over_literal(n, cx) => {
                     out.push(desugar("/", t, vec![num.remove(0), den.remove(0)], cx))
                 }
                 _ => {
@@ -215,9 +291,12 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                 };
             }
             // A literal over a literal is the tagged spelling of one number, as `/ p q` is the
-            // explicit one, and stays one member of the coefficient's partition.
+            // explicit one, and stays one member of the coefficient's partition (but a zero
+            // over a literal in the float64 modes, `zero_over_literal`).
             match (num.as_slice(), den.as_slice()) {
-                ([Ex::Num(_)], [d]) if matches!(d.as_slice(), [Ex::Num(_)]) => {
+                ([Ex::Num(n)], [d])
+                    if matches!(d.as_slice(), [Ex::Num(_)]) && !zero_over_literal(n, cx) =>
+                {
                     let q = den.remove(0).remove(0);
                     out.push(mul(
                         vec![num.remove(0), pow(q, Ex::Num(Rat::NEG_ONE), cx)],
@@ -238,16 +317,23 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
     }
 }
 
-/// The members of a divisor spelled at `idx`: those of a product spelling, else the one member.
+/// Is the numerator `n` of a literal fraction a zero the float64 modes read as a signed zero
+/// (`Cx::ieee_zeros`)? `0/q` is then +0 or -0 by the sign of `q`, which no exact number holds, so
+/// the fraction stays its members, the zero and the divisor's inverse: an inverse that reaches
+/// them keeps the sign (`1/(0/(-2))` is -inf), and their product is the zero as before.
+fn zero_over_literal(n: &Rat, cx: &Cx) -> bool {
+    n.is_zero() && cx.ieee_zeros()
+}
+
+/// The members of a divisor spelled at `idx`, as `parse_members` reads every spelling: a
+/// product's members, those of a negative integer power of a product (`product_power`), else the
+/// one member. A divisor that is a power of a product so gives its raised members, as inside a
+/// product spelled around it, and an inverse meets them apart: an exact zero among them keeps
+/// the sign they give it.
 fn divisor_members(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)> {
-    let t = *tokens.get(idx)?;
-    if product_head(&cx.view.resolve_owned(t), cx.view.arity(t)) {
-        let mut members = Vec::new();
-        let at = parse_members(tokens, idx, cx, &mut members)?;
-        return Some((members, at));
-    }
-    let (e, at) = parse_one(tokens, idx, cx)?;
-    Some((vec![e], at))
+    let mut members = Vec::new();
+    let at = parse_members(tokens, idx, cx, &mut members)?;
+    Some((members, at))
 }
 
 /// `inv P` or `pow P k` (`k` a negative integer literal) over a product spelling `P`: its
@@ -276,7 +362,7 @@ fn product_power(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)
             let k = k.clone();
             Some((powered_members(members, &k, cx), at))
         }
-        _ => Some((vec![pow(mul(members, cx), e, cx)], at)),
+        _ => Some((vec![pow_spelled(mul(members, cx), e, cx)], at)),
     }
 }
 
@@ -290,16 +376,20 @@ fn product_power(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)
 /// negation, built as `neg S` always is.
 fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
     // A unit negation of one member (`neg S`) is that member's negation, one member: the
-    // printer spells a sum of negative terms so.
+    // printer spells a sum of negative terms so. Not where the member keeps the sign of a zero
+    // the power inverts (`inverts_a_signed_zero`): there each member is raised.
     if let [Ex::Num(r), f] | [f, Ex::Num(r)] = members.as_slice() {
-        if *r == Rat::NEG_ONE && !matches!(f, Ex::Num(_)) {
-            return vec![pow(mul(members, cx), Ex::Num(k.clone()), cx)];
+        if *r == Rat::NEG_ONE
+            && !matches!(f, Ex::Num(_))
+            && !(k.is_odd_integer() && inverts_a_signed_zero(&members, cx))
+        {
+            return vec![pow_member(mul(members, cx), Ex::Num(k.clone()), cx)];
         }
     }
     if members.len() < 2 {
         return members
             .into_iter()
-            .map(|f| pow(f, Ex::Num(k.clone()), cx))
+            .map(|f| pow_member(f, Ex::Num(k.clone()), cx))
             .collect();
     }
     match raised_members(members, k, cx) {
@@ -308,10 +398,13 @@ fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
             // Held as `(prod f^|k|)^-1`, the form `pow` keeps a refused power in, its product
             // still undecided.
             let m = Ex::Num(k.checked_neg().expect("a negative integer negates"));
-            let parts = v.into_iter().map(|f| pow(f, m.clone(), cx)).collect();
-            vec![pow(mul_undecided(parts, cx), Ex::int(-1), cx)]
+            let parts = v
+                .into_iter()
+                .map(|f| pow_member(f, m.clone(), cx))
+                .collect();
+            vec![pow_member(mul_undecided(parts, cx), Ex::int(-1), cx)]
         }
-        Err(held) => vec![pow(held, Ex::Num(k.clone()), cx)],
+        Err(held) => vec![pow_member(held, Ex::Num(k.clone()), cx)],
     }
 }
 
@@ -338,7 +431,7 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         return Ex::Num(r);
     }
     // Parenthesized literal forms: "(-1)", "(-0.5)", "(-1/3)" -- the wrapping composes
-    // with BOTH numeric grammars (hardening H-012, 2026-08-03: this branch knew only
+    // with BOTH numeric grammars (this branch once knew only
     // decimals, so "(-1/3)" silently became an OPAQUE leaf -- it even sorted as a
     // SYMBOL while "(-1)" and bare "1/3" were numbers).
     if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
@@ -349,7 +442,7 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
             return Ex::Num(r);
         }
     }
-    // H-048 (2026-08-05): a SIGNED numeric spelling never becomes a leaf -- the sign
+    // A SIGNED numeric spelling never becomes a leaf -- the sign
     // is STRUCTURE. Beyond-i128 spellings ("-1e309") fall through every exact parse
     // above and used to keep the sign inside the opaque leaf token, while the same
     // value built structurally kept a POSITIVE leaf under a subtracted section: two
@@ -381,6 +474,18 @@ fn fraction_literal(s: &str) -> Option<Rat> {
     Rat::from_big(p, q)
 }
 
+/// The subtrahend `b` of a written difference, negated: float64 subtracts by adding the
+/// negation (`a - b` is `a + (-b)` bit for bit), so in `f64` a written zero subtrahend is the zero
+/// of the other sign (`signed_zero_product`): `-0.0 - 0` is `-0.0`, and `1/(0*(-2) - 0)` is
+/// `-inf`.
+fn negated(b: Ex, cx: &Cx) -> Ex {
+    let members = vec![Ex::int(-1), b];
+    match signed_zero_product(&members, cx) {
+        Some(zero) => zero,
+        None => mul(members, cx),
+    }
+}
+
 /// Desugar one LEGACY operator application into the core (input-side compatibility only --
 /// the vocabulary itself is deleted): `mult{k} x = k * x`, `div{k} x = (1/k) * x`,
 /// `pow{k} x = x^k`, `pow1_2/pow1_4 x = x^(1/2 | 1/4)` (even roots agree with rational
@@ -394,8 +499,7 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
         ("-", 2) => {
             let b = args.pop().unwrap();
             let a = args.pop().unwrap();
-            let neg_b = mul(vec![Ex::int(-1), b], cx);
-            add(vec![a, neg_b], cx)
+            add(vec![a, negated(b, cx)], cx)
         }
         ("/", 2) => {
             let b = args.pop().unwrap();
@@ -408,7 +512,7 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
         ("pow", 2) => {
             let e = args.pop().unwrap();
             let b = args.pop().unwrap();
-            pow(b, e, cx)
+            pow_spelled(b, e, cx)
         }
         ("pow1_3", 1) | ("pow1_5", 1) => {
             let k = if name == "pow1_3" { 3 } else { 5 };
@@ -449,6 +553,28 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
             fun(op, args, cx)
         }
     }
+}
+
+thread_local! {
+    /// Set while [`to_prefix_literal_tokens`] prints: every literal one token (`emit_num`).
+    static LITERAL_TOKENS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`to_prefix`] with every literal ONE token denoting its exact value (an integer, a decimal or
+/// `p/q`): the spelling an evaluator reads each literal from at its nearest float, correctly
+/// rounded, where the structural `/ p q` divides two separately rounded components. The
+/// ground fold evaluates this spelling, so a literal argument folds as the float nearest to it
+/// (`sin(2e29/426738538271436458205631863649)`).
+pub fn to_prefix_literal_tokens(e: &Ex, cx: &Cx) -> Vec<Tok> {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            LITERAL_TOKENS.with(|f| f.set(false));
+        }
+    }
+    LITERAL_TOKENS.with(|f| f.set(true));
+    let _reset = Reset;
+    to_prefix(e, cx)
 }
 
 /// Serialize a canonical AC expression back to prefix tokens in the old token language --
@@ -494,8 +620,7 @@ fn add_sign_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
     (pos, neg)
 }
 
-/// DIVISOR-SIDE COEFFICIENT SPELLING (owner-ratified 2026-08-01;
-/// design/UNIFIED_SIMPLICITY_MEASURE.md §8) -- user-facing aesthetics, EMISSION ONLY.
+/// DIVISOR-SIDE COEFFICIENT SPELLING -- user-facing aesthetics, EMISSION ONLY.
 /// Every f64-born literal is a dyadic rational with a finite decimal spelling, but its
 /// exact reciprocal generally is not: canon of `x0 / 0.3333333333333333` holds the exact
 /// coefficient 10^16/3333333333333333, whose only exact one-token spelling is that
@@ -525,7 +650,7 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
         return None;
     }
     // A NEGATIVE coefficient never moves divisor-side: a signed literal inside a
-    // den/`<div>` group re-parses the sign INTO the divisor bag, where the H-020
+    // den/`<div>` group re-parses the sign INTO the divisor bag, where the Const
     // sign-fold clause may absorb it into a Const-bearing sum -- a different (family-
     // equal) state than the outer-coefficient parking the chain holds (caught by the
     // state-stability battery: `-1/3 * .. * inv(x17 + C)` spelled `-3` in the den,
@@ -554,26 +679,10 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     }
 }
 
-/// The value whose spelling the token printer writes for the coefficient `r` of the product
-/// `bag`: its reciprocal where [`mul_div_split`] moves it behind the divide, else `r` itself.
-pub(crate) fn printed_coefficient(r: &Rat, bag: &[Ex]) -> Rat {
-    if is_partition_bag(bag) || r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
-        return r.clone();
-    }
-    let mag = if r.is_negative() {
-        r.checked_neg()
-    } else {
-        Some(r.clone())
-    };
-    mag.and_then(|m| divisor_side(&m))
-        .filter(|_| has_plain_mul_factor(bag))
-        .unwrap_or_else(|| r.clone())
-}
-
-/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), for the INFIX text only
+/// The INTEGER-OVER-DECIMAL spelling of a fraction, for the INFIX text only
 /// (see [`to_infix_pretty`]): `Some((n, d))` with `r == n / d`, `n` an integer and `d` a
 /// non-integer whose argmin spelling is ONE exact decimal token, when the pair spells strictly
-/// shorter than `p` and `q`. The token printers keep `p/q` (owner 2026-10-05, plan v2 phase 1):
+/// shorter than `p` and `q`. The token printers keep `p/q`:
 /// the engine and its callers read tokens back, so a spelling chosen for a reader stays out of
 /// them.
 ///
@@ -609,11 +718,12 @@ fn ratio_spelling(r: &Rat) -> Option<(Rat, Rat)> {
         return None;
     }
     let ds = d.exact_decimal()?;
-    let shorter = n.to_string().len() + ds.len() < p.to_string().len() + q.to_string().len();
+    let n = Rat::from_big(n, BigInt::one())?;
+    let shorter = n.numer_token().len() + ds.len() < r.numer_token().len() + r.denom_token().len();
     if !shorter {
         return None;
     }
-    Some((Rat::from_big(n, BigInt::one())?, d))
+    Some((n, d))
 }
 
 /// Divisor-side needs a PLAIN numerator factor to remain: a factor that is neither the
@@ -635,7 +745,7 @@ fn has_plain_mul_factor(v: &[Ex]) -> bool {
 /// negated exponent is 1) to the denominator. A non-integer rational coefficient contributes
 /// its numerator and denominator to the respective sides -- unless the divisor-side rule
 /// (`divisor_side`) spells the whole coefficient as ONE reciprocal token in the denominator.
-/// F73: does this bag carry an i128-overflow PARTITION -- its exact rational content
+/// Does this bag carry an i128-overflow PARTITION -- its exact rational content
 /// split across two or more `Num` members because folding them would overflow? The
 /// atoms of a partition are load-bearing: any gathering (p/q splits into shared
 /// num/den chains, divisor-side respells, section pooling) destroys the boundaries
@@ -660,12 +770,12 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
     let partition = is_partition_bag(v);
     for f in v {
         match f {
-            // F73: partition atoms stay whole members -- `emit_num` prints each as one
+            // Partition atoms stay whole members -- `emit_num` prints each as one
             // token or a LOCAL `/ p q`, either of which re-folds to exactly this atom
             // before the bag pools.
             Ex::Num(r) if partition => num.push(Ex::Num(r.clone())),
             Ex::Num(r) => {
-                // H-020 amendment: the SIGN never enters the den group (a signed den
+                // The SIGN never enters the den group (a signed den
                 // literal re-parses the sign into the divisor bag, where the sign-fold
                 // clause may absorb it into a Const-bearing sum -- a different parking
                 // than the chain state's outer coefficient). The divisor-side rule is
@@ -697,7 +807,7 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                     }
                     den.push(Ex::Num(inv));
                 } else if r.small_parts().is_none() {
-                    // A fraction beyond 128 bits (design 2c) stays ONE member, printed as a
+                    // A fraction beyond 128 bits stays ONE member, printed as a
                     // local `/ p q` that re-folds to it: split across the product, the
                     // evaluator multiplied a 300-digit numerator in before dividing and
                     // overflowed to inf.
@@ -775,14 +885,26 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
         Ex::NaN => out.push(view.intern("float(\"nan\")")),
         Ex::Const => out.push(view.intern("<constant>")),
         Ex::Leaf(t) => out.push(*t),
+        // A lattice bag is the binary chain of its members in the canonical order, nested to
+        // the right (`max a max b c`), as a sum's positive part is.
+        Ex::Fun(f, args) if args.len() > 2 && lattice_head(*f, view) => {
+            emit_chain(*f, args, cx, out);
+        }
         Ex::Fun(f, args) => {
             // `rootn` emits NATIVELY (the pow1_k spellings are
             // deleted from the vocabulary). The interval certificates and every evaluator
             // treat `rootn` as an engine built-in, so the serialization stays readable
             // under any pairing without legacy resugar.
             out.push(*f);
+            // `atan2` reads its arguments' zero signs (`atan2_of`): a negated sum is written as
+            // the negation it is, never as the flipped sum, whose zero has the other sign.
+            let reads_signs = args.len() == 2 && cx.ieee_zeros() && view.tok_is(*f, "atan2");
             for a in args {
-                emit(a, cx, out);
+                if reads_signs {
+                    emit_bin_structural(a, cx, out);
+                } else {
+                    emit(a, cx, out);
+                }
             }
         }
         Ex::Pow(b, ex) => match &**ex {
@@ -926,8 +1048,12 @@ fn emit_bin_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 /// and `0.625`, the spelling mu prices HIGHER.
 fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
+    if LITERAL_TOKENS.with(std::cell::Cell::get) {
+        out.push(view.intern(&num_token(r)));
+        return;
+    }
     if r.is_integer() {
-        out.push(view.intern(&r.numer_string()));
+        out.push(view.intern(&r.numer_token()));
         return;
     }
     if crate::ac::expr::decimal_spelling_wins(r) {
@@ -946,8 +1072,8 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let slash = view.intern("/");
     if view.arity(slash).is_some() {
         out.push(slash);
-        out.push(view.intern(&r.numer_string()));
-        out.push(view.intern(&r.denom_string()));
+        out.push(view.intern(&r.numer_token()));
+        out.push(view.intern(&r.denom_token()));
     } else {
         out.push(view.intern(&num_token(r)));
     }
@@ -957,9 +1083,11 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 /// delimited (`<add> ... </add>`, `<mul> ... </mul>`) and carry their group inverse as a
 /// SECTION: terms after `<sub>` are subtracted, factors after `<div>` divide --
 /// `(2*x1)/(x2*x3)` is `<mul> 2 x1 <div> x2 x3 </mul>`. `pow` and the unary functions stay
-/// plain prefix (fixed arity needs no delimiters). `neg`/`inv` exist ONLY as the standalone
-/// unary spellings (function arguments, lone terms: `tan neg x0`, `inv x0`); inside bags the
-/// sections own all inverses, so bags contain no negative literals and no inverse operators.
+/// plain prefix (fixed arity needs no delimiters). `neg` exists ONLY as the standalone unary
+/// spelling (function arguments, lone terms: `tan neg x0`); a lone reciprocal or negative power
+/// is a quotient like any other, bagged with the unit (`<mul> 1 <div> x0 </mul>`, `<mul> 1 <div>
+/// pow x0 3 </mul>`, as `to_tagged` writes `inv x0` and `inv pow x0 3`); inside bags the sections
+/// own all inverses, so bags contain no negative literals and no inverse operators.
 /// Integers spell bare (`7`), every fraction as a bag (`<mul> 1 <div> 3 </mul>`), and decimals as
 /// one token (`0.15915494309189535`) except small ones, which spell as a bag too (`0.2` is
 /// `<mul> 1 <div> 5 </mul>`).
@@ -978,19 +1106,34 @@ pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
     let mut out = Vec::new();
     emit_tagged(e, cx, &mut out);
     // A spelling without a bag reads back as explicit notation, so a tagged answer either
-    // carries a bag or is the spelling the explicit printer gives the same state (`pow x1 -2`
-    // would come back as `inv pow x1 2`). A negated divisor keeps its bag instead
-    // (`<mul> -1 <div> x1 </mul>`, not `neg inv x1`, which comes back as `/ -1 x1`).
-    let bags = [cx.view.intern("<add>"), cx.view.intern("<mul>")];
-    let bagged = |o: &[Tok]| o.iter().any(|t| bags.contains(t));
-    if !bagged(&out) {
-        out.clear();
-        emit_tagged_at(e, cx, &mut out, true);
-        if !bagged(&out) {
-            return to_prefix(e, cx);
-        }
+    // carries a bag or is the spelling the explicit printer gives the same state (`exp 1.5`).
+    let bags = [
+        cx.view.intern("<add>"),
+        cx.view.intern("<mul>"),
+        cx.view.intern("<max>"),
+        cx.view.intern("<min>"),
+    ];
+    if !out.iter().any(|t| bags.contains(t)) {
+        return to_prefix(e, cx);
     }
     out
+}
+
+/// The `<div>` member of a quotient factor: `Pow(b, q)` with a negative rational `q` divides by
+/// `b` (`q = -1`) or by `Pow(b, -q)`. A literal-zero base never joins a divisor section: the zero
+/// would collapse the product it re-parses into, so its power keeps its exponent.
+fn divisor_member(b: &Ex, ex: &Ex) -> Option<Ex> {
+    match ex {
+        Ex::Num(q) if q.is_negative() && !matches!(b, Ex::Num(z) if z.is_zero()) => {
+            let flipped = q.checked_neg()?;
+            Some(if flipped.is_one() {
+                b.clone()
+            } else {
+                Ex::Pow(Box::new(b.clone()), Box::new(Ex::Num(flipped)))
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Tagged emission of a rational: integers bare, every NON-integer as the structural
@@ -1014,22 +1157,16 @@ fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
         return;
     }
     // `Rat` normalizes the sign onto the numerator (`den > 0`), so the sign rides `p` and
-    // the `<div>` member stays positive -- the H-020 invariant that a signed literal never
+    // the `<div>` member stays positive -- the invariant that a signed literal never
     // enters a divisor group.
     out.push(view.intern("<mul>"));
-    out.push(view.intern(&r.numer_string()));
+    out.push(view.intern(&r.numer_token()));
     out.push(view.intern("<div>"));
-    out.push(view.intern(&r.denom_string()));
+    out.push(view.intern(&r.denom_token()));
     out.push(view.intern("</mul>"));
 }
 
 fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
-    emit_tagged_at(e, cx, out, false);
-}
-
-/// `top`: `e` is the whole answer and its spelling holds no other bag, so a bag here decides the
-/// notation a second call reads (`to_prefix_tagged`).
-fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
     let view = cx.view;
     match e {
         Ex::Num(r) => emit_rational_tagged(r, cx, out),
@@ -1040,19 +1177,44 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
         Ex::NaN => out.push(view.intern("float(\"nan\")")),
         Ex::Const => out.push(view.intern("<constant>")),
         Ex::Leaf(t) => out.push(*t),
-        Ex::Fun(f, args) => {
-            out.push(*f);
+        // A lattice bag is delimited, as a sum and a product are: `<max> a b c </max>`.
+        Ex::Fun(f, args) if lattice_head(*f, view) => {
+            let max = view.tok_is(*f, "max");
+            out.push(view.intern(if max { "<max>" } else { "<min>" }));
             for a in args {
                 emit_tagged(a, cx, out);
             }
+            out.push(view.intern(if max { "</max>" } else { "</min>" }));
+        }
+        Ex::Fun(f, args) => {
+            out.push(*f);
+            let reads_signs = args.len() == 2 && cx.ieee_zeros() && view.tok_is(*f, "atan2");
+            for a in args {
+                if reads_signs {
+                    emit_structural(a, cx, out);
+                } else {
+                    emit_tagged(a, cx, out);
+                }
+            }
         }
         Ex::Pow(b, ex) => {
-            // The standalone reciprocal: `inv x` (2 tokens) beats `pow x -1` (3). Deeper
-            // negative exponents keep the literal (`pow x -3` beats `inv pow x 3`).
-            // Base and exponent use the STRUCTURAL emission: a licence-refused
-            // `Pow(Mul[-1, A], n)` survives canon (see `ac::expr::pow`), and the flip
-            // display of its base does not round-trip (see `emit_structural`).
+            // A negative power is a quotient, and the tagged form spells every quotient as a
+            // bag: the unit beside the member a product's `<div>` section holds (a one-member
+            // bag does not exist), `<mul> 1 <div> x </mul>` and `<mul> 1 <div> pow x 3 </mul>`,
+            // as `to_tagged` writes the explicit `inv x` and `inv pow x 3`. Base, exponent and
+            // member use the STRUCTURAL emission: a licence-refused `Pow(Mul[-1, A], n)`
+            // survives canon (see `ac::expr::pow`), and the flip display of its base does not
+            // round-trip (see `emit_structural`).
+            if let Some(member) = divisor_member(b, ex) {
+                out.push(view.intern("<mul>"));
+                emit_tagged(&Ex::Num(Rat::ONE), cx, out);
+                out.push(view.intern("<div>"));
+                emit_structural(&member, cx, out);
+                out.push(view.intern("</mul>"));
+                return;
+            }
             if matches!(&**ex, Ex::Num(r) if *r == Rat::NEG_ONE) {
+                // The `inv 0` pole (see `divisor_member`).
                 out.push(view.intern("inv"));
                 emit_structural(b, cx, out);
                 return;
@@ -1100,14 +1262,11 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                                 return;
                             }
                         }
-                        // As a whole answer with no other bag a divisor keeps the bag, as under
-                        // any other coefficient (`<mul> -1 <div> x1 </mul>`, like `<mul> -2
-                        // <div> x1 </mul>`): the bare `neg inv x1` reads back as explicit
-                        // notation, `/ -1 x1`. Where a bag settles the notation, `neg` is shorter.
-                        let divisor = matches!(&v[1], Ex::Pow(b, ex)
-                            if matches!(&**ex, Ex::Num(q) if q.is_negative())
-                                && !matches!(&**b, Ex::Num(z) if z.is_zero()));
-                        if !(top && divisor) {
+                        // A negated quotient keeps its bag, as under any other coefficient
+                        // (`<mul> -1 <div> x1 </mul>`, like `<mul> -2 <div> x1 </mul>`).
+                        let quotient = matches!(&v[1], Ex::Pow(b, ex)
+                            if divisor_member(b, ex).is_some());
+                        if !quotient {
                             out.push(view.intern("neg"));
                             emit_tagged(&v[1], cx, out);
                             return;
@@ -1125,18 +1284,18 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
             let mut den: Vec<Ex> = Vec::new();
             let mut num: Vec<&Ex> = Vec::new();
             let mut coeff_num: Option<Ex> = None; // the fraction's numerator, when split
-            let mut neg_one = false; // H-020: the sign never enters `<div>` -- split it out
-            let mut unit_coeff_split = false; // F80: a p=1 coefficient split happened
+            let mut neg_one = false; // The sign never enters `<div>` -- split it out
+            let mut unit_coeff_split = false; // A p=1 coefficient split happened
             let partition = is_partition_bag(v);
             for f in v {
                 match f {
-                    // F73: partition atoms render verbatim (`emit_rational_tagged`: one
+                    // Partition atoms render verbatim (`emit_rational_tagged`: one
                     // token beyond the vocabulary bound, the nested structural fraction
                     // inside it -- both re-fold locally to the atom before the bag
                     // pools). The split and divisor-side arms below would pool their
                     // pieces into the shared `<div>` section, where member-kind flips
                     // across the round-trip reordered the section (the 30 residual
-                    // P1 rows of the post-F72 census).
+                    // fuzz rows).
                     Ex::Num(_) if partition => num.push(f),
                     Ex::Num(r) => {
                         let mag = if r.is_negative() {
@@ -1151,13 +1310,13 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                         // no atomic fraction or decimal token at all -- see
                         // `emit_rational_tagged`. A magnitude-1 numerator is the bare sign
                         // and is omitted; the sign itself is split out below.
-                        // F80 (owner-ruled spelling law, 2026-08-10): the split fires
+                        // Spelling law: the split fires
                         // UNCONDITIONALLY for in-bound fractions -- previously it demanded
                         // a plain factor (`has_plain_mul_factor`), and the div-only case
                         // fell through to the leaf renderer, whose structural spelling is
                         // a mul bag: the same-type nesting the census measured at 8,918
                         // events/1M. The grammar's >=1-numerator-member floor is kept by
-                        // the post-loop `1` (below); partition bags stay verbatim (F73).
+                        // the post-loop `1` (below); partition bags stay verbatim.
                         // Outside the bound the ratified divisor side comes first (below); a
                         // coefficient it does not move splits too when its one token would be a
                         // fraction (the tagged form writes none), and stays one token when it is
@@ -1191,7 +1350,7 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                                 }
                             }
                             None => {
-                                // H-059: §8 DIVISOR-SIDE, restored for the OUT-OF-BOUND
+                                // §8 DIVISOR-SIDE, restored for the OUT-OF-BOUND
                                 // case. The split above is what replaced `divisor_side`
                                 // in the tagged form, and its whole point is that the
                                 // dialect "carries no atomic fraction or decimal token
@@ -1205,7 +1364,7 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                                 // atom must be emitted regardless, the ratified rule
                                 // applies again: spell the coefficient on whichever side
                                 // has the shorter exact token. In-bound behaviour is
-                                // untouched. H-020 holds -- the sign never enters
+                                // untouched. The sign never enters
                                 // `<div>`; it splits out as a `-1` bag literal.
                                 match inv {
                                     Some(inv) => {
@@ -1217,23 +1376,14 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                             }
                         }
                     }
-                    Ex::Pow(b, ex) => match &**ex {
-                        Ex::Num(r)
-                            if r.is_negative() && !matches!(&**b, Ex::Num(z) if z.is_zero()) =>
-                        {
-                            let flipped = r.checked_neg().unwrap();
-                            if flipped.is_one() {
-                                den.push((**b).clone());
-                            } else {
-                                den.push(Ex::Pow(b.clone(), Box::new(Ex::Num(flipped))));
-                            }
-                        }
-                        _ => num.push(f),
+                    Ex::Pow(b, ex) => match divisor_member(b, ex) {
+                        Some(member) => den.push(member),
+                        None => num.push(f),
                     },
                     _ => num.push(f),
                 }
             }
-            // F80: when the COEFFICIENT SPLIT emptied the numerator side (unit
+            // When the COEFFICIENT SPLIT emptied the numerator side (unit
             // fraction, no plain factor, no sign to carry -- `(1/3)/x0`), the `1`
             // is the numerator member the owner-ratified table pins:
             // `<mul> 1 <div> 3 x0 </mul>`. With a sign, the split-out `-1` below
@@ -1241,7 +1391,7 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
             // Coefficient-FREE den-only bags keep their established empty-numerator
             // spelling (`inv(acos(x0)*atan(x1))` -> `<mul> <div> acos x0 atan x1
             // </mul>`, pinned by TestLossyReciprocalRejoinProjection) -- that
-            // dialect predates F80 and the ruling did not touch it.
+            // dialect is older than the spelling law and keeps its shape.
             if unit_coeff_split && !neg_one && coeff_num.is_none() && num.is_empty() {
                 coeff_num = Some(Ex::Num(Rat::ONE));
             }
@@ -1300,10 +1450,12 @@ fn emit_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 /// than a separate heuristic: `1/2`, `1/4`, `5/8` keep the fraction (a power-of-two
 /// denominator always spells shorter as a fraction), while `1/5 -> 0.2`, `6/5 -> 1.2` and
 /// every power of ten take the decimal. The previous rule -- "exact decimal whenever one
-/// exists" -- printed `0.5` and `0.625`, i.e. the spelling mu prices HIGHER.
+/// exists" -- printed `0.5` and `0.625`, i.e. the spelling mu prices HIGHER. An integer or a
+/// decimal is spelled by [`Rat::exact_decimal`] (`1e300`, `1e-300`); a fraction's components
+/// keep their digits, the only `p/q` the numeral grammar reads.
 fn num_token(r: &Rat) -> String {
     if r.is_integer() {
-        return r.numer_string();
+        return r.numer_token();
     }
     if crate::ac::expr::decimal_spelling_wins(r) {
         if let Some(s) = r.exact_decimal() {
@@ -1314,15 +1466,9 @@ fn num_token(r: &Rat) -> String {
 }
 
 /// Largest |numerator| and denominator of a DECIMAL the TAGGED form spells structurally
-/// (`0.2` is `<mul> 1 <div> 5 </mul>`); a decimal beyond it stays one token. Overridable.
+/// (`0.2` is `<mul> 1 <div> 5 </mul>`); a decimal beyond it stays one token.
 fn tagged_fraction_bound() -> i128 {
-    static BOUND: OnceLock<i128> = OnceLock::new();
-    *BOUND.get_or_init(|| {
-        std::env::var("SIMPLIPY_TAGGED_FRACTION_MAX")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(10)
-    })
+    10
 }
 
 /// Does `r` spell structurally in the tagged form? Every non-integer whose one token would be a
@@ -1351,7 +1497,7 @@ fn within_tagged_bound(r: &Rat) -> bool {
 /// carry built-in precedences under any config, and the bare constant names `pi`/`e`/
 /// `inf`/`nan` are reserved spellings the parser reads back as the constants.
 ///
-/// THE READER'S SPELLING LIVES HERE AND ONLY HERE (owner 2026-10-02, kept in plan v2). The
+/// THE READER'S SPELLING LIVES HERE AND ONLY HERE. The
 /// infix text is written for a person, so it alone writes a value with no finite decimal as
 /// an integer over a decimal (`ratio_spelling`). The explicit prefix form ([`to_prefix`]) is
 /// the engine's own dialect: the interval certificates, the folds, the served rules and the
@@ -1365,14 +1511,68 @@ pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
     render(e, cx, 0)
 }
 
-/// A rational in the infix text. The text is re-read operator by operator, so the
-/// integer-over-decimal spelling (`ratio_spelling`) is safe here as `n/d`; the one-TOKEN
-/// `num_token` keeps `p/q`, the only fraction the leaf parser reads as one literal.
+/// A rational in the infix text. The text is re-read operator by operator, so a fraction is
+/// safe here as a division of two numbers: the integer-over-decimal spelling (`ratio_spelling`)
+/// as `n/d`, any other as `p/q` with each integer spelled like every decimal (`1e200/3`). The
+/// one-TOKEN `num_token` keeps the digits of `p/q`, the only fraction the leaf parser reads as
+/// one literal.
 fn infix_num(r: &Rat) -> String {
-    match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
-        Some((n, ds)) => format!("{}/{}", n.numer_string(), ds),
-        None => num_token(r),
+    let sign = if r.is_negative() { "-" } else { "" };
+    match infix_number_parts(&r.abs(), NumberPlace::Alone) {
+        (Some(n), None) => format!("{sign}{n}"),
+        (n, Some(d)) => format!("{sign}{}/{d}", n.as_deref().unwrap_or("1")),
+        (None, None) => unreachable!("a number writes a numeral"),
     }
+}
+
+/// Where the infix text writes a number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NumberPlace {
+    /// On its own: a term of a sum, an argument, a base.
+    Alone,
+    /// The coefficient of a product. `plain`: the product has a plain factor (one that is no
+    /// number and no reciprocal), beside which a reciprocal that spells shorter is written as
+    /// the divisor (`x1/4.2`).
+    Coefficient { plain: bool },
+    /// An exponent: one numeral, as [`num_token`] writes it.
+    Exponent,
+}
+
+/// How the infix text writes a POSITIVE exact number: the numerals of its numerator and of its
+/// denominator, the numerator `None` for a 1 the text leaves out (a product writes no `1*`, and
+/// on its own the number is `1/q`). It is the one spelling rule of the text, so `prettify`
+/// writes an exact number as `simplify` does:
+///
+/// * an integer, or the decimal where its codeword is the cheaper (`decimal_spelling_wins`:
+///   `0.3`, `0.05`, `1.2`; `1/2` and `22/7` stay fractions);
+/// * else, as the coefficient beside a plain factor, the reciprocal where it spells shorter
+///   (`divisor_side`: `x1/4.2` for `5/21`, `x1/12`); a fraction beyond 128 bits stays one numeral
+///   of a product;
+/// * else, outside an exponent, an integer over a decimal where that is shorter
+///   (`ratio_spelling`: `1/6.283185307179586`);
+/// * else `p/q`.
+pub(crate) fn infix_number_parts(r: &Rat, place: NumberPlace) -> (Option<String>, Option<String>) {
+    if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
+        return (Some(num_token(r)), None);
+    }
+    if let NumberPlace::Coefficient { plain } = place {
+        if let Some(inv) = divisor_side(r).filter(|_| plain) {
+            return (None, Some(num_token(&inv)));
+        }
+        if r.small_parts().is_none() {
+            // beyond 128 bits: one numeral, never split across the product (see `mul_div_split`)
+            return (Some(num_token(r)), None);
+        }
+    }
+    if place != NumberPlace::Exponent {
+        if let Some((n, ds)) = ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
+            return ((!n.is_one()).then(|| n.numer_token()), Some(ds));
+        }
+    }
+    (
+        (!r.numer().is_one()).then(|| r.numer_token()),
+        Some(r.denom_token()),
+    )
 }
 
 /// Precedence levels: 1 = additive, 2 = multiplicative, 3 = power, 4 = atom.
@@ -1444,7 +1644,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             (format!("{base}^{expo}"), 3)
         }
         Ex::Add(v) => {
-            // Display rules (owner ruling 2026-08-08), DISPLAY-ONLY -- the bag order is
+            // Display rules, DISPLAY-ONLY -- the bag order is
             // the canonical one and stays untouched (tagged/explicit emit it verbatim),
             // and the infix parse is permutation-invariant, so round-trip is unaffected:
             //  1. POSITIVE terms print first, then negative ones, relative order
@@ -1491,11 +1691,11 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             let partition = is_partition_bag(v);
             for f in v {
                 match f {
-                    // F73: partition atoms render as self-contained factors, PARENTHESIZED
+                    // Partition atoms render as self-contained factors, PARENTHESIZED
                     // when fractional -- `(a/3)*(a/3)` re-parses each atom locally, while
                     // the bare chain `a/3*a/3` re-associates textually into a flat pool
                     // that re-cuts. The display sign still hoists to the front: sign
-                    // hosting is value-determined since F72, so the re-parse re-hosts it
+                    // hosting is value-determined, so the re-parse re-hosts it
                     // identically.
                     Ex::Num(r) if partition => {
                         let mut r = r.clone();
@@ -1512,46 +1712,19 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                             neg = !neg;
                             r = r.checked_neg().unwrap();
                         }
-                        if !r.is_integer() && !crate::ac::expr::decimal_spelling_wins(&r) {
-                            // Divisor-side spelling (see `divisor_side`): the firing
-                            // reciprocal is an integer or exact decimal -- an atom, safe
-                            // unparenthesized in the denominator join.
-                            //
-                            // The old `&& r.exact_decimal().is_none()` gate was the same
-                            // staleness as in `divisor_side` itself: it sent every value
-                            // with a decimal straight to the numerator on the assumption it
-                            // printed as a decimal atom. Under argmin spelling `1/2` prints
-                            // `1/2`, so that path emitted `1/2 * x0` beside `x0 / 3` -- two
-                            // shapes for one thing. Every non-integer now takes the same
-                            // route, matching the explicit dialect.
-                            match divisor_side(&r).filter(|_| has_plain_mul_factor(v)) {
-                                Some(inv) => den_parts.insert(0, num_token(&inv)),
-                                // beyond 128 bits: one numeral, never split across the
-                                // product (see `mul_div_split`)
-                                None if r.small_parts().is_none() => {
-                                    num_parts.insert(0, num_token(&r))
-                                }
-                                None => match ratio_spelling(&r)
-                                    .and_then(|(n, d)| Some((n, d.exact_decimal()?)))
-                                {
-                                    // Integer over decimal: the decimal is one atom in the
-                                    // denominator join, like a divisor-side reciprocal.
-                                    Some((n, ds)) => {
-                                        if !n.is_one() {
-                                            num_parts.insert(0, n.numer_string());
-                                        }
-                                        den_parts.insert(0, ds);
-                                    }
-                                    None => {
-                                        if !r.numer().is_one() {
-                                            num_parts.insert(0, r.numer_string());
-                                        }
-                                        den_parts.insert(0, r.denom_string());
-                                    }
-                                },
-                            }
-                        } else if !r.is_one() {
-                            num_parts.insert(0, num_token(&r));
+                        // Every non-integer whose fraction is the cheaper codeword takes the
+                        // same route, matching the explicit dialect: a divisor-side reciprocal
+                        // (an integer or exact decimal) or the decimal of an integer over a
+                        // decimal is one atom, safe unparenthesized in the denominator join.
+                        let place = NumberPlace::Coefficient {
+                            plain: has_plain_mul_factor(v),
+                        };
+                        let (n, d) = infix_number_parts(&r, place);
+                        if let Some(n) = n.filter(|_| !r.is_one()) {
+                            num_parts.insert(0, n);
+                        }
+                        if let Some(d) = d {
+                            den_parts.insert(0, d);
                         }
                     }
                     Ex::Pow(b, ex) => match &**ex {
@@ -1582,7 +1755,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             let s = if den_parts.is_empty() {
                 num_s
             } else {
-                // ONE SLASH PER DIVISOR MEMBER (hardening H-013, 2026-08-03):
+                // ONE SLASH PER DIVISOR MEMBER:
                 // `a/(b*c)` re-parses as a NESTED product in divisor position, which
                 // only the licence-gated odd-negative-power distribution could
                 // re-flatten -- when a factor's zero-set licence refuses (`cos` has
@@ -1645,11 +1818,11 @@ fn holds_inf_reciprocal(e: &Ex) -> bool {
     }
 }
 
-/// Display-only odd-literal sign hoist (owner ruling 2026-08-08): inside a printed sum,
+/// Display-only odd-literal sign hoist: inside a printed sum,
 /// a term whose magnitude is an odd function of a NEGATIVE literal moves that sign out to
 /// the joiner (`- sin(-2)` becomes `+ sin(2)`), so no printed sum ever carries a double
-/// negation. Literal arguments only: a non-literal argument's sign is structure, not a
-/// spelling choice.
+/// negation. Literal arguments only: the canonical form keeps a constant's sign on its literal
+/// (`x1 + sin(-2)`, the sign key) and places every other argument's sign itself.
 fn odd_literal_hoist(neg: bool, mag: Ex, cx: &Cx) -> (bool, Ex) {
     if let Ex::Fun(f, args) = &mag {
         if args.len() == 1 && cx.is_odd_fun(*f) {
@@ -1766,7 +1939,7 @@ mod tests {
 
     /// Build the legacy-vocabulary operator universe from the IN-REPO fixture so desugaring
     /// sees the true arities (mult4, pow1_3, ...). The fixture ships with the repo (audit
-    /// Tier-1 #3: no test depends on the dev_7-3 HF asset), so this never skips.
+    /// No test depends on the dev_7-3 HF asset), so this never skips.
     fn full_ops() -> Option<(Vec<String>, Operators)> {
         let cfg = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1824,8 +1997,8 @@ mod tests {
             assert_eq!(roundtrip(view, &["mult4", "x0"]), ["*", "4", "x0"]);
             // div5 x -> * 0.2 x: in the EXPLICIT dialect the coefficient takes its argmin
             // spelling, and for a 5-carrying denominator the decimal code wins (2585
-            // milli-bits against the fraction's 3585) -- §10.10(1), owner-ratified
-            // 2026-08-07. A 2^a denominator goes the other way (`1/2` stays `/ 1 2`).
+            // milli-bits against the fraction's 3585).
+            // A 2^a denominator goes the other way (`1/2` stays `/ 1 2`).
             assert_eq!(roundtrip(view, &["div5", "x0"]), ["*", "0.2", "x0"]);
             // pow3 x -> pow x 3
             assert_eq!(roundtrip(view, &["pow3", "x0"]), ["pow", "x0", "3"]);
@@ -1868,7 +2041,7 @@ mod tests {
             let a = roundtrip(view, &["*", "x1", "x0"]);
             let b = roundtrip(view, &["*", "x0", "x1"]);
             assert_eq!(a, b);
-            // ADJACENCY: + x3 (+ x8 (div5 x3)) -- the campaign's proof case. The two x3 spellings
+            // ADJACENCY: + x3 (+ x8 (div5 x3)) -- the proof case. The two x3 spellings
             // meet in one bag and collect: x3 + x3/5 = (6/5) x3.
             // Stripped term order: the 1.2*x3 term (key x3) sorts before x8.
             // The 6/5 coefficient spells as the decimal in the EXPLICIT dialect (argmin;
@@ -1942,8 +2115,7 @@ mod tests {
                 roundtrip(view, &["*", "(-1)", "*", "np.pi", "x0"]),
                 ["neg", "*", "np.pi", "x0"]
             );
-            // -1/3: divisor-side spelling (2026-08-01, design §8) is AMENDED by H-020
-            // (2026-08-04): a sign never rides a DEN literal. A signed literal inside a
+            // -1/3: a sign never rides a DEN literal (divisor-side spelling). A signed literal inside a
             // divisor group re-parses the sign into the divisor BAG, where the sign-fold
             // clause may absorb it into a Const-bearing sum -- a different (family-equal)
             // state than the outer-coefficient parking the chain holds. The reciprocal
@@ -1992,11 +2164,11 @@ mod tests {
         });
     }
 
-    /// F73: a PARTITION's atoms survive every dialect's round-trip.
+    /// A PARTITION's atoms survive every dialect's round-trip.
     /// The gathering emitters pooled the atoms into shared num/den chains, and the
     /// re-parse re-CUT them (`* a/3 a/3` -> `/ (a*a) (3*3)` -> `{a, a, 1/9}` -- one
     /// value, a different partition per dialect; 884 of the extreme lane's 900
-    /// post-F72 hard rows). Partition members now render self-contained.
+    /// hard rows). Partition members now render self-contained.
     ///
     /// Phase 2c: partitions no longer come from i128 overflow but from a product the f64
     /// domain refuses (`10^400/9` is beyond DBL_MAX), so the probe pair is `10^200/3`.
@@ -2005,7 +2177,6 @@ mod tests {
         with_view(|view| {
             let cx = Cx::bare(view);
             let a = format!("1{}", "0".repeat(200));
-            let a3 = format!("{a}/3");
             let atom = |sign: i32| {
                 let p: num_bigint::BigInt = a.parse().unwrap();
                 Ex::Num(Rat::from_big(if sign < 0 { -p } else { p }, 3.into()).unwrap())
@@ -2036,13 +2207,13 @@ mod tests {
             let spelled: Vec<String> = strs(view, &explicit);
             assert_eq!(
                 spelled,
-                vec!["*", "/", a.as_str(), "3", "/", a.as_str(), "3"],
+                vec!["*", "/", "1e200", "3", "/", "1e200", "3"],
                 "explicit gathering resurfaced"
             );
 
             // INFIX: atoms render parenthesized so the textual chain cannot re-associate.
             let infix = to_infix_pretty(&state, &cx);
-            assert_eq!(infix, format!("({a3})*({a3})"));
+            assert_eq!(infix, "(1e200/3)*(1e200/3)");
 
             // The SIGNED partition keeps the sign in an atom (tagged/explicit) or
             // hoisted (infix) -- and still round-trips member-exact.

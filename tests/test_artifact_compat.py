@@ -1,4 +1,4 @@
-"""The artifact-generation allowlist (owner ruling 2026-08-03): generation-1 artifacts
+"""The artifact-generation allowlist: generation-1 artifacts
 (the retired hyper-operator vocabulary: 2-1/3-2/4-3, dev_7-*) load only on
 simplipy <= 0.11, and this package refuses them at every ARTIFACT-LOADING path with
 the actionable pin in the message. Generation-2 artifacts (acj-*) load exactly as
@@ -62,8 +62,8 @@ class TestConfigGate:
         config = load_config(ACJ_CONFIG)
         config.pop('engine_generation', None)
         config['operators']['mult3'] = {
-            # R3: a realization is compiled into generated source, so the shape is
-            # validated at load -- a dotted name, not an inline lambda (audit B14).
+            # A realization is compiled into generated source, so the shape is
+            # validated at load -- a dotted name, not an inline lambda.
             'realization': 'np.tan', 'alias': [], 'inverse': None,
             'arity': 1, 'precedence': None, 'commutative': False}
         config.pop('rules', None)
@@ -142,7 +142,7 @@ class TestDeliberateBoundaries:
 
 
 class TestD12CleanCut:
-    """D12's clean-cut rulings, owner-ratified 2026-08-16: `pow1`/`pow_1` join
+    """The clean-cut rulings: `pow1`/`pow_1` join
     RETIRED_OPERATOR_TOKENS (a config declaring them was accepted while the parser
     unconditionally rewrote their tokens away -- one engine, two answers for one
     expression); the `inverse` spec key is no longer REQUIRED (nothing reads it --
@@ -166,7 +166,7 @@ class TestD12CleanCut:
         ops = {'+': {'realization': '+', 'alias': [], 'arity': 2,
                      'precedence': 1, 'commutative': True}}
         eng = SimpliPyEngine(operators=ops)  # no 'inverse' anywhere: must load
-        assert eng.simplify(['+', 'x0', '0']) is not None
+        assert eng.simplify(['+', 'x0', '0']) == ['x0']
 
     def test_shipped_configs_carry_no_inverse_key(self):
         import os
@@ -183,3 +183,81 @@ class TestD12CleanCut:
             cfg = yaml.safe_load(open(path))
             for name, spec in cfg['operators'].items():
                 assert 'inverse' not in spec, f'{cell}:{name} still carries inverse:'
+
+
+class TestRequiresSimplipy:
+    """`requires_simplipy`: a PEP 440 specifier in the config naming the simplipy
+    versions whose canonical forms the rules were mined under, checked at load."""
+
+    OPS = {'+': {'realization': '+', 'alias': [], 'arity': 2,
+                 'precedence': 1, 'commutative': True}}
+
+    def _write(self, tmp_path, **keys):
+        cfg = tmp_path / 'config.yaml'
+        cfg.write_text(yaml.safe_dump({'operators': self.OPS, 'engine_generation': 2, **keys}))
+        return str(cfg)
+
+    def _load(self, tmp_path, **keys):
+        path = self._write(tmp_path, **keys)
+        with pytest.warns(UserWarning, match='NO simplification rules'):
+            return SimpliPyEngine.from_config(path)
+
+    def test_the_derived_specifier_is_the_minor_series(self):
+        from simplipy.compat import requires_simplipy_specifier
+        assert requires_simplipy_specifier('0.15.0.dev2') == '>=0.15,<0.16'
+        assert requires_simplipy_specifier('0.15.3') == '>=0.15,<0.16'
+        assert requires_simplipy_specifier('1.9') == '>=1.9,<1.10'
+        assert requires_simplipy_specifier('2') == '>=2.0,<2.1'
+
+    def test_the_running_version_serves_its_own_specifier(self, tmp_path):
+        from simplipy.compat import requires_simplipy_specifier
+        engine = self._load(tmp_path, requires_simplipy=requires_simplipy_specifier())
+        assert engine.simplify(['+', 'x0', 'x0']) == ['*', '2', 'x0']
+
+    def test_an_absent_key_is_a_legacy_config_and_loads(self, tmp_path):
+        engine = self._load(tmp_path)
+        assert engine.simplify(['+', 'x0', 'x0']) == ['*', '2', 'x0']
+
+    def test_an_excluded_version_refuses_with_the_pin(self, tmp_path):
+        path = self._write(tmp_path, requires_simplipy='>=99.0,<99.1')
+        with pytest.raises(IncompatibleArtifactError,
+                           match=r'requires simplipy >=99\.0,<99\.1.*pip install "simplipy>=99\.0,<99\.1"'):
+            SimpliPyEngine.from_config(path)
+
+    @pytest.mark.parametrize('declared', ['0.15', '>=0.15,<', 15, ['>=0.15'], '', '  '])
+    def test_a_malformed_specifier_refuses(self, tmp_path, declared):
+        path = self._write(tmp_path, requires_simplipy=declared)
+        with pytest.raises(IncompatibleArtifactError, match='malformed requires_simplipy'):
+            SimpliPyEngine.from_config(path)
+
+    @pytest.mark.parametrize('running, served', [
+        ('0.15.0.dev2', True), ('0.15.0rc1', True), ('0.15.4', True),
+        ('0.14.7', False), ('0.16.0.dev1', False), ('0.16.0', False)])
+    def test_a_prerelease_is_judged_as_the_release_it_precedes(self, monkeypatch, running, served):
+        from simplipy import compat
+        monkeypatch.setattr(compat, '_package_version', lambda: running)
+        config = {'operators': self.OPS, 'engine_generation': 2,
+                  'requires_simplipy': '>=0.15,<0.16'}
+        if served:
+            compat.check_config(config, source='cfg')
+        else:
+            with pytest.raises(IncompatibleArtifactError, match='requires simplipy'):
+                compat.check_config(config, source='cfg')
+
+    @pytest.mark.parametrize('running, declared, served', [
+        ('0.15.0.dev2', '==0.15.0.dev2', True), ('0.15.0.dev2', '==0.15.0.dev1', False),
+        ('0.15.0', '==0.15.0.dev2', False), ('0.15.0.dev2', '==0.15.0', True),
+        ('0.15.0.dev2', '==0.15.*', True), ('0.15.0.dev2', '>=0.15.0.dev2,<0.16', True),
+        ('0.15.0.dev2', '===0.15.0.dev2', True)])
+    def test_an_exact_pin_of_a_prerelease_names_that_prerelease(self, monkeypatch, running,
+                                                                declared, served):
+        """`==0.15.0.dev2` is the pre-release itself; a range still judges a pre-release
+        as the release it precedes."""
+        from simplipy import compat
+        monkeypatch.setattr(compat, '_package_version', lambda: running)
+        config = {'operators': self.OPS, 'engine_generation': 2, 'requires_simplipy': declared}
+        if served:
+            compat.check_config(config, source='cfg')
+        else:
+            with pytest.raises(IncompatibleArtifactError, match='requires simplipy'):
+                compat.check_config(config, source='cfg')

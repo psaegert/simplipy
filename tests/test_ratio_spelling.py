@@ -1,4 +1,4 @@
-"""Integer-over-decimal spelling of a fraction (owner 2026-10-02) -- in the INFIX text only.
+"""Integer-over-decimal spelling of a fraction -- in the INFIX text only.
 
 Every literal is its exact rational value, so ``3.141592653589793`` is 3141592653589793/10^15
 and ``1/(2*3.141592653589793)`` folds to 500000000000000/3141592653589793. That value has no
@@ -9,7 +9,7 @@ integer. Taking the factors 2 and 5 out of the numerator always leaves a termina
 decimal in the denominator; the infix text uses that spelling wherever it is strictly
 shorter.
 
-The token answers keep ``p/q`` (test_spelling_invariance.py; plan v2 phase 1): tokens are
+The token answers keep ``p/q`` (test_spelling_invariance.py): tokens are
 what the engine and its callers read back, and a spelling chosen for a reader must not move
 what they decide.
 
@@ -84,9 +84,9 @@ class TestStandaloneValue:
 
 class TestInsideExpressions:
     def test_under_a_root(self, eng):
-        # Feynman I.6.2b: exp(-((theta - theta1)/sigma)^2 / 2) / (sigma * sqrt(2 pi))
-        out = infix(eng, f'exp(-((x2 - x3)/x1)^2/2)/(x1*rootn(2*{PI}, 2))')
-        assert out == 'exp(-(x2 - x3)^2/2/x1^2)*rootn(1/6.283185307179586, 2)/x1'
+        # (a root of a constant alone folds to its float, `1/sqrt(2 pi)` to 0.3989422804014327)
+        out = infix(eng, f'rootn(x1/(2*{PI}), 2)')
+        assert out == 'rootn(x1/6.283185307179586, 2)'
 
     def test_a_coefficient_with_a_numerator(self, eng):
         # Feynman 58: (3/5) * q^2 / (4 pi eps r) -- the coefficient 3/(20 pi) has an odd numerator,
@@ -95,9 +95,9 @@ class TestInsideExpressions:
         assert out == '3*x1^2/62.83185307179586/x2/x3'
 
     def test_a_token_answer_converts_to_the_readers_spelling(self, eng):
-        out = tokens(eng, f'x1*rootn(1/(2*{PI}), 2)')
-        assert out == ['*', 'x1', 'rootn', '/', '500000000000000', '3141592653589793', '2']
-        assert eng.simplify(eng.to_infix(out)) == 'x1*rootn(1/6.283185307179586, 2)'
+        out = tokens(eng, f'x1 + 1/(2*{PI})')
+        assert out == ['+', 'x1', '/', '500000000000000', '3141592653589793']
+        assert eng.simplify(eng.to_infix(out)) == 'x1 + 1/6.283185307179586'
 
     def test_the_measure_does_not_see_the_spelling(self, eng):
         a = eng.complexity(['/', '1', '*', '2', PI])

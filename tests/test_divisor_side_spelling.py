@@ -1,5 +1,4 @@
-"""Divisor-side coefficient spelling (owner-ratified 2026-08-01; design/
-UNIFIED_SIMPLICITY_MEASURE.md §8) -- a user-facing aesthetics mechanism, EMISSION ONLY.
+"""Divisor-side coefficient spelling -- a user-facing aesthetics mechanism, EMISSION ONLY.
 
 Every f64-born literal is a dyadic rational with a finite decimal spelling, but its
 exact reciprocal generally is not: canon of ``x0 / 0.3333333333333333`` takes the exact
@@ -72,7 +71,7 @@ class TestDivisorSideSpelling:
 
     def test_tie_stays_coefficient_side(self, eng):
         # len("22/7") == len("7/22"): no move to the divisor side; the tagged form writes no
-        # one-token fraction (owner 2026-10-10), so the coefficient splits into the bag.
+        # one-token fraction, so the coefficient splits into the bag.
         check(eng, ['*', '22/7', 'x0'], ['<mul>', '22', 'x0', '<div>', '7', '</mul>'])
 
     def test_longer_reciprocal_decimal_stays(self, eng):
@@ -81,7 +80,7 @@ class TestDivisorSideSpelling:
         check(eng, ['*', '1024/3', 'x0'], ['<mul>', '1024', 'x0', '<div>', '3', '</mul>'])
 
     def test_exact_decimal_never_moves(self, eng):
-        # RENAMED IN SPIRIT 2026-08-07 (owner-ratified argmin, §10.10(1); audit F31/F33):
+        # RENAMED IN SPIRIT (the argmin spelling):
         # "exact decimal" is no longer the operative category. `1/2` spells as the
         # FRACTION under argmin (2585 milli-bits against the decimal's 3585), so it is
         # not an atomic-decimal coefficient at all and takes the divisor side like any
@@ -91,7 +90,7 @@ class TestDivisorSideSpelling:
         check(eng, ['*', '0.5', 'x0'], ['<mul>', 'x0', '<div>', '2', '</mul>'])
 
     def test_negative_coefficient_sign_splits_out(self, eng):
-        # H-020 amendment (2026-08-04): the sign never enters `<div>` -- a signed den
+        # The sign never enters `<div>` -- a signed den
         # literal re-parses the sign into the divisor bag, where the sign-fold clause
         # may absorb it into a Const-bearing sum (a different parking than the state's
         # outer coefficient). The pure sign splits out as a `-1` bag literal; the den
@@ -100,20 +99,20 @@ class TestDivisorSideSpelling:
               ['<mul>', '-1', 'x0', '<div>', '0.3333333333333333', '</mul>'])
 
     def test_coefficient_split_fires_without_plain_factor(self, eng):
-        # F80 (owner-ruled spelling law, 2026-08-10): the split is UNCONDITIONAL for
+        # The spelling law: the split is UNCONDITIONAL for
         # in-bound fractions. (1/3)/x0 -- coefficient + inverse factor, no plain
         # numerator member -- dissolves into the bag: q joins <div>, and the unit
         # numerator's `1` is KEPT as the numerator member the ratified table pins
-        # (the pre-F80 emitter demanded a plain factor here and rendered the
+        # (an older emitter demanded a plain factor here and rendered the
         # coefficient as a NESTED structural fraction, the census's 8,918-event
         # family at 1M).
         check(eng, ['/', '1/3', 'x0'],
               ['<mul>', '1', '<div>', '3', 'x0', '</mul>'])
-        # The sign rides the numerator (H-020: <div> members stay positive).
+        # The sign rides the numerator (<div> members stay positive).
         check(eng, ['/', '(-2/3)', 'x0'],
               ['<mul>', '-2', '<div>', '3', 'x0', '</mul>'])
         # Coefficient-FREE den-only bags keep the established empty-numerator
-        # spelling -- the F80 ruling did not touch them (see
+        # spelling -- the spelling law does not touch them (see
         # TestLossyReciprocalRejoinProjection::test_certified_pair_stays_distributed).
 
     def test_joins_existing_divisor_section(self, eng):

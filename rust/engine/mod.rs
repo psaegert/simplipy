@@ -10,6 +10,7 @@
 mod ac;
 mod memo;
 mod miner;
+mod prettify;
 pub mod refusals;
 pub mod stats;
 
@@ -26,6 +27,8 @@ use memo::{BangCache, SimplifyCtx};
 
 pub use ac::AcForm;
 pub use ac::RuleMode;
+pub use miner::{ConfirmSet, MineRefusal, MineSpec, MinedRule};
+pub use prettify::{Pretty, PrettyForm, PrettyOptions};
 
 /// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
 #[cfg(test)]
@@ -83,17 +86,19 @@ pub struct Engine {
     /// Memo for the `!`-sort match-time certificate (`interval::finite_ae` by subtree tokens).
     /// Per-ENGINE, not global: certificates depend on this engine's operator semantics, and
     /// tests build many engines with different op sets in one process. Generational (see
-    /// `BangCache`): bounded memory, never stops memoizing.
-    bang_cache: std::sync::Mutex<BangCache>,
+    /// `BangCache`): bounded memory, never stops memoizing. One per reading, indexed by
+    /// `ac_cert`'s `f64`: 0 over the reals (`real`, `permissive`), 1 in float64 (`f64`), whose
+    /// `tanh` and `atan` are constant on whole tails.
+    bang_cache: [std::sync::Mutex<BangCache>; 2],
     /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
-    mult_cache: std::sync::Mutex<BangCache>,
+    mult_cache: [std::sync::Mutex<BangCache>; 2],
     /// The DEFAULT mode's translated ruleset, built lazily on first `ac_simplify` (see
     /// `engine/ac.rs`) so consumers that never opt in pay nothing at construction.
     ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
     /// THE `real` MODE'S OWN COMPLETE RULE SET (`rules_real.json`), interned exactly like
-    /// `rules` -- NOT a supplement to it. Owner ruling, 2026-08-19: "one distinct rule set
-    /// for each mode", and "for provenance, the triple should be pinned; we will only ever
-    /// mine and distribute triples". So this file carries the core rules AND the real-only
+    /// `rules` -- NOT a supplement to it: one distinct rule set
+    /// for each mode, and the triple is pinned for provenance (only triples are
+    /// mined and distributed). So this file carries the core rules AND the real-only
     /// rules, complete, and the engine never computes a union to decide what `real` serves.
     ///
     /// `None` -- the state of every engine not handed one -- means the mode names NO SET
@@ -144,8 +149,21 @@ impl Engine {
     /// Build from in-memory config/rules text: direct `SimpliPyEngine(operators=..., rules=...)`
     /// construction serializes its in-memory state and attaches a core through here -- with no
     /// pure-Python fallback, every construction path must reach a compiled core without touching
-    /// the filesystem.
+    /// the filesystem. The default set is read in its own mode's canon.
     pub fn from_strs(cfg_text: &str, rules_text: &str) -> Result<Self, Box<dyn Error>> {
+        Self::from_strs_read_in(
+            cfg_text,
+            rules_text,
+            crate::ac::rules::RuleCanon::Mode(RuleMode::Default),
+        )
+    }
+
+    /// [`Engine::from_strs`] with the canon the default set was certified in.
+    pub fn from_strs_read_in(
+        cfg_text: &str,
+        rules_text: &str,
+        canon: crate::ac::rules::RuleCanon,
+    ) -> Result<Self, Box<dyn Error>> {
         let cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
 
         // rules.json: a JSON list of [lhs_tokens, rhs_tokens] pairs; serde_json maps each
@@ -208,14 +226,14 @@ impl Engine {
         // The per-Engine token table (operators + aliases + vocab), then compile interns
         // every rule token into it.
         let mut tokens = TokenTable::build(&order, &operators);
-        let compiled = CompiledRules::compile(raw, &mut tokens, &operators);
+        let compiled = CompiledRules::compile(raw, canon, &mut tokens, &operators);
 
         Ok(Self {
             operators,
             rules: compiled,
             tokens,
-            bang_cache: std::sync::Mutex::new(BangCache::new()),
-            mult_cache: std::sync::Mutex::new(BangCache::new()),
+            bang_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
+            mult_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
             ac_rules_cell: std::sync::OnceLock::new(),
             // NO per-mode sets at construction: `from_strs` builds exactly today's engine
             // from exactly today's `rules.json`, and the other two files -- when a config
@@ -245,8 +263,8 @@ impl Engine {
         toks.iter().map(|&t| view.resolve_owned(t)).collect()
     }
 
-    /// Crate-internal accessor for the operator tables (used by `crate::eval` tests/benches).
-    #[allow(dead_code)] // test/bench-only today
+    /// Crate-internal accessor for the operator tables (the interval probes in `lib.rs`, and
+    /// tests).
     pub(crate) fn operators_ref(&self) -> &Operators {
         &self.operators
     }
@@ -307,7 +325,7 @@ impl Engine {
     /// shunting-yard. Degenerate inputs give degenerate lists (matching Python); `Err` only
     /// for two operands separated by whitespace alone (`x0 x1`).
     pub fn infix_to_prefix(&self, infix_expression: &str) -> Result<Vec<String>, String> {
-        crate::convert::infix_to_prefix(infix_expression, &self.operators)
+        crate::convert::infix_to_prefix(infix_expression, &self.operators, false)
     }
 
     /// `convert_expression`: normalize into the engine's internal form. `Err` mirrors a Python
@@ -323,14 +341,22 @@ impl Engine {
     }
 
     /// `parse`: infix string -> standardized prefix expression
-    /// (infix_to_prefix -> convert_expression -> numbers_to_constant -> remove_pow1).
+    /// (infix_to_prefix with the legacy call spellings -> convert_expression -> numbers_to_constant).
+    /// `strict` refuses a call of a name no operator declares.
     pub fn parse(
         &self,
         infix_expression: &str,
         convert: bool,
         mask_numbers: bool,
+        strict: bool,
     ) -> Result<Vec<String>, String> {
-        crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers)
+        crate::convert::parse(
+            infix_expression,
+            &self.operators,
+            convert,
+            mask_numbers,
+            strict,
+        )
     }
 
     /// `operators_to_realizations`: map each operator NAME to its

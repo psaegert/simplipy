@@ -1,6 +1,6 @@
 //! Exact rational arithmetic for the AC core.
 //!
-//! Contract D1: "number literals denote their exact rational values" -- so the core's numeric
+//! The contract: "number literals denote their exact rational values" -- so the core's numeric
 //! type is an exact rational, not an f64. Coefficient and exponent arithmetic thereby becomes
 //! COMPUTATION that cannot be wrong (replacing the mined-and-sampled coefficient rule family).
 //!
@@ -53,7 +53,7 @@ impl Drop for DomainGuard {
 /// Enter a number domain on this thread until the returned guard drops.
 ///
 /// In the f64 domain (`true`) a number is ADMISSIBLE when it is zero or its numerator and its
-/// denominator are both at most 2^1022 in magnitude (design 2c; reviews H1, H2 and #65's M1).
+/// denominator are both at most 2^1022 in magnitude.
 /// Such a number is normal and so is its reciprocal, so every printed spelling -- one token,
 /// `/ p q`, a divisor-side reciprocal -- reads back within one rounding as the same number,
 /// where a subnormal reads far from its exact value (`5e-324` is 4.94e-324) and a number beyond
@@ -131,6 +131,38 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
 /// `x` as a small-form component (`i128`, never `i128::MIN`).
 fn small_of(x: &BigInt) -> Option<i128> {
     x.to_i128().filter(|&v| v != i128::MIN)
+}
+
+/// [`Rat::partition_with`] over members of any kind, sorted by the total order `cmp`: a like
+/// term's coefficients, each of which can be a refused product, fold by the same rule.
+pub(crate) fn partition_by<T>(
+    mut members: Vec<T>,
+    cmp: impl Fn(&T, &T) -> Ordering,
+    fold: impl Fn(&T, &T) -> Option<T>,
+    neutral: impl Fn(&T) -> bool,
+) -> Vec<T> {
+    members.sort_unstable_by(&cmp);
+    let mut queue: std::collections::VecDeque<T> = members.into();
+    let mut kept: Vec<T> = Vec::new();
+    while let Some(m) = queue.pop_front() {
+        match kept
+            .iter()
+            .enumerate()
+            .find_map(|(i, k)| fold(k, &m).map(|x| (i, x)))
+        {
+            Some((i, x)) => {
+                kept.remove(i);
+                if !neutral(&x) {
+                    queue.push_front(x);
+                }
+            }
+            None => {
+                let at = kept.partition_point(|k| cmp(k, &m) == Ordering::Less);
+                kept.insert(at, m);
+            }
+        }
+    }
+    kept
 }
 
 /// Exact 128x128 -> 256-bit unsigned multiplication by the schoolbook double-word method:
@@ -322,7 +354,7 @@ impl Rat {
 
     /// The parity of an integer: `Some(true)` odd, `Some(false)` even. `None` for a non-integer
     /// and, in the f64 domain, for an integer beyond 2^53: the float64 evaluator reads such an
-    /// integer as an even float, so its parity is not known there (design 2c, review H3) and
+    /// integer as an even float, so its parity is not known there and
     /// every parity-dependent rewrite refuses. The exact domain has the exact parity.
     pub fn parity(&self) -> Option<bool> {
         match &self.0 {
@@ -420,32 +452,11 @@ impl Rat {
     /// the kept members and every fold removes one, so the cost is quadratic in the bag, and
     /// a refusal that the magnitudes decide costs no big-integer arithmetic (`log2_window`).
     pub fn partition_with(
-        mut members: Vec<Rat>,
+        members: Vec<Rat>,
         fold: impl Fn(&Rat, &Rat) -> Option<Rat>,
         neutral: impl Fn(&Rat) -> bool,
     ) -> Vec<Rat> {
-        members.sort_unstable_by(|a, b| a.cmp_exact(b));
-        let mut queue: std::collections::VecDeque<Rat> = members.into();
-        let mut kept: Vec<Rat> = Vec::new();
-        while let Some(m) = queue.pop_front() {
-            match kept
-                .iter()
-                .enumerate()
-                .find_map(|(i, k)| fold(k, &m).map(|x| (i, x)))
-            {
-                Some((i, x)) => {
-                    kept.remove(i);
-                    if !neutral(&x) {
-                        queue.push_front(x);
-                    }
-                }
-                None => {
-                    let at = kept.partition_point(|k| k.cmp_exact(&m) == Ordering::Less);
-                    kept.insert(at, m);
-                }
-            }
-        }
-        kept
+        partition_by(members, Rat::cmp_exact, fold, neutral)
     }
 
     pub fn checked_add(&self, o: &Rat) -> Option<Rat> {
@@ -746,6 +757,35 @@ impl Rat {
         }
     }
 
+    /// The EXACT value of a finite float64 (every one is a dyadic fraction within the cap);
+    /// `None` for a non-finite one, or one the thread's number domain does not admit (a
+    /// subnormal in the f64 domain).
+    pub fn from_f64_exact(x: f64) -> Option<Rat> {
+        if !x.is_finite() {
+            return None;
+        }
+        if x == 0.0 {
+            return Some(Rat::ZERO);
+        }
+        let bits = x.to_bits();
+        let biased = ((bits >> 52) & 0x7ff) as i64;
+        let fraction = bits & ((1u64 << 52) - 1);
+        let (mantissa, exponent) = if biased == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1u64 << 52), biased - 1075)
+        };
+        let mut p = BigInt::from(mantissa);
+        if x < 0.0 {
+            p = -p;
+        }
+        if exponent >= 0 {
+            Rat::from_big(p << exponent as usize, BigInt::from(1))
+        } else {
+            Rat::from_big(p, BigInt::from(1) << (-exponent) as usize)
+        }
+    }
+
     /// The f64 NEAREST to this value. `to_f64` rounds each component to f64 before the
     /// division, which is off by an ulp or two once either leaves 53 bits (the permissive
     /// literal fold's inputs routinely do: `2e29 / 426738538271436458205631863649`); here
@@ -796,47 +836,62 @@ impl Rat {
         (y, false)
     }
 
-    /// The shortest exact decimal string, if one exists (`q == 2^a * 5^b`): `1/2 -> "0.5"`,
-    /// `-7/4 -> "-1.75"`, `3 -> "3"`. `None` for e.g. `1/3` (the serializer then spells the
-    /// division structurally). Exactness is by construction: multiply p by 2s and 5s until the
-    /// denominator is a power of ten, then place the decimal point.
+    /// The value as `±mantissa × 10^exp` if it has a finite decimal expansion (`q == 2^a * 5^b`,
+    /// every integer included), `None` for e.g. `1/3`. See [`DecimalParts`].
+    pub fn decimal_parts(&self) -> Option<DecimalParts> {
+        if let Some((p, q)) = self.small_parts() {
+            if let Ok(parts) = decimal_parts_small(p, q) {
+                return parts;
+            }
+        }
+        let (p, q) = self.big_parts();
+        decimal_parts_big(&p, &q)
+    }
+
+    /// The exact decimal string, if one exists ([`DecimalParts::spelling`]): `1/2 -> "0.5"`,
+    /// `-7/4 -> "-1.75"`, `3 -> "3"`, `10^-300 -> "1e-300"`. `None` for e.g. `1/3` (the
+    /// serializer then spells the division structurally).
     pub fn exact_decimal(&self) -> Option<String> {
-        let Some((p, q)) = self.small_parts() else {
-            let (p, q) = self.big_parts();
-            return big_exact_decimal(&p, &q);
-        };
-        if q == 1 {
-            return Some(p.to_string());
-        }
-        let (mut a, mut b) = (0u32, 0u32);
-        let mut rest = q;
-        while rest % 2 == 0 {
-            rest /= 2;
-            a += 1;
-        }
-        while rest % 5 == 0 {
-            rest /= 5;
-            b += 1;
-        }
-        if rest != 1 {
+        Some(self.decimal_parts()?.spelling())
+    }
+
+    /// The numerator as a standalone integer token, spelled like every decimal (`1e300`).
+    pub fn numer_token(&self) -> String {
+        self.numer()
+            .exact_decimal()
+            .expect("an integer has a decimal expansion")
+    }
+
+    /// The denominator as a standalone integer token, spelled like every decimal.
+    pub fn denom_token(&self) -> String {
+        self.denom()
+            .exact_decimal()
+            .expect("an integer has a decimal expansion")
+    }
+
+    /// The two floats BRACKETING this value: the nearest one, and the float on the value's other
+    /// side of it, or `None` when the value is that float exactly. `None` for a value whose
+    /// nearest float is not finite. Decided by exact comparison with the nearest float.
+    pub fn float_bracket(&self) -> Option<(f64, Option<f64>)> {
+        let y = self.to_f64_nearest();
+        if !y.is_finite() {
             return None;
         }
-        // Scale numerator so denominator becomes 10^k with k = max(a, b).
-        let k = a.max(b);
-        let scaled = (|| {
-            let mut scaled = p.checked_abs()?;
-            for _ in 0..(k - a) {
-                scaled = scaled.checked_mul(2)?;
-            }
-            for _ in 0..(k - b) {
-                scaled = scaled.checked_mul(5)?;
-            }
-            Some(scaled)
-        })();
-        let Some(scaled) = scaled else {
-            return big_exact_decimal(&BigInt::from(p), &BigInt::from(q));
+        let _exact = number_domain(false);
+        let (m, e) = f64_parts(y);
+        let two = BigInt::from(2u8);
+        let (num, den) = if e >= 0 {
+            (BigInt::from(m) * two.pow(e as u32), BigInt::from(1u8))
+        } else {
+            (BigInt::from(m), two.pow(e.unsigned_abs()))
         };
-        Some(place_point(p < 0, scaled.to_string(), k as usize))
+        let exact = Rat::from_big(num, den)?;
+        let other = match self.cmp_exact(&exact) {
+            Ordering::Greater => Some(next_up(y)),
+            Ordering::Less => Some(next_down(y)),
+            Ordering::Equal => None,
+        };
+        Some((y, other.filter(|o| o.is_finite())))
     }
 
     /// The shortest decimal that reads as `y` (Rust's `{:?}` for f64 is the shortest string
@@ -854,7 +909,7 @@ impl Rat {
     /// `"1e-3" -> 1/1000`, `"1." -> 1`. This is a DECIMAL parse, not a float parse -- `"0.2"`
     /// means one fifth, exactly, even though the f64 nearest to it does not.
     pub fn parse_decimal(s: &str) -> Option<Rat> {
-        // Only the numeral grammar (B2): the parse below used to accept `-+5` as -5.
+        // Only the numeral grammar: the parse below used to accept `-+5` as -5.
         if !crate::utils::is_decimal_numeral(s) {
             return None;
         }
@@ -973,34 +1028,150 @@ fn parse_decimal_big(negative: bool, int_part: &str, frac_part: &str, shift: i64
     }
 }
 
-/// `digits` (an unsigned integer string) divided by 10^k, as a positional decimal.
-fn place_point(negative: bool, digits: String, k: usize) -> String {
-    let (int_part, frac_part) = if digits.len() > k {
-        (
-            digits[..digits.len() - k].to_string(),
-            digits[digits.len() - k..].to_string(),
-        )
-    } else {
-        ("0".to_string(), format!("{:0>width$}", digits, width = k))
-    };
-    // A normalized fraction with q != 1 has a nonzero fractional part, and 10^k is the
-    // MINIMAL power (k = max(a,b)), so the last digit is nonzero: no trailing-zero trim.
-    let sign = if negative { "-" } else { "" };
-    if k == 0 {
-        format!("{sign}{int_part}")
-    } else {
-        format!("{sign}{int_part}.{frac_part}")
+/// The mantissa of a [`DecimalParts`]: in 128 bits where it fits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Mantissa {
+    Small(u128),
+    Big(BigUint),
+}
+
+impl Mantissa {
+    /// The mantissa's decimal digits.
+    pub fn digits(&self) -> String {
+        match self {
+            Mantissa::Small(m) => m.to_string(),
+            Mantissa::Big(m) => m.to_string(),
+        }
     }
 }
 
-/// `exact_decimal` for big components.
-fn big_exact_decimal(p: &BigInt, q: &BigInt) -> Option<String> {
-    if q.is_one() {
-        return Some(p.to_string());
+/// THE DECIMAL DECOMPOSITION of a value with a finite decimal expansion (`q = 2^a * 5^b`, every
+/// integer included): `±mantissa × 10^exp`, the mantissa free of the factor ten (zero is
+/// `0 × 10^0`). For a reduced non-integer `exp = -max(a, b)`; for an integer `exp` counts its
+/// trailing zeros. It is the one decomposition both sides of a literal read: the measure prices
+/// the pair as the decimal codeword (`expr::decimal_code`) and the printer spells it
+/// ([`DecimalParts::spelling`]), so a decimal literal prints the codeword it is priced by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecimalParts {
+    pub negative: bool,
+    pub mantissa: Mantissa,
+    pub exp: i64,
+}
+
+impl DecimalParts {
+    /// The spelling of the value: positional (`0.00012`, `1200`, `-7.5`), or scientific
+    /// (`1.2e-21`, `1e300`) where [`scientific_wins`] says so. Exact either way, and read back
+    /// exactly by [`Rat::parse_decimal`].
+    pub fn spelling(&self) -> String {
+        let digits = self.mantissa.digits();
+        let len = digits.len() as i64;
+        // the decimal exponent of the leading digit: the value is `d.ddd × 10^lead`
+        let lead = self.exp + len - 1;
+        let sign = usize::from(self.negative);
+        let positional_len = sign as i64
+            + if self.exp >= 0 {
+                len + self.exp
+            } else if len > -self.exp {
+                len + 1
+            } else {
+                2 - self.exp
+            };
+        let scientific_len =
+            sign as i64 + len + i64::from(len > 1) + 1 + lead.to_string().len() as i64;
+        let sign = if self.negative { "-" } else { "" };
+        if scientific_wins(lead, positional_len, scientific_len) {
+            let (head, tail) = digits.split_at(1);
+            let point = if tail.is_empty() { "" } else { "." };
+            return format!("{sign}{head}{point}{tail}e{lead}");
+        }
+        if self.exp >= 0 {
+            return format!("{sign}{digits}{}", "0".repeat(self.exp as usize));
+        }
+        let k = (-self.exp) as usize;
+        if digits.len() > k {
+            let (int_part, frac_part) = digits.split_at(digits.len() - k);
+            format!("{sign}{int_part}.{frac_part}")
+        } else {
+            format!("{sign}0.{digits:0>k$}")
+        }
     }
+}
+
+/// THE NOTATION RULE: whether a decimal prints `<mantissa>e<exponent>` rather than positionally,
+/// from the decimal exponent of its leading digit (`lead`) and the two spellings' lengths.
+/// Python's float `repr` convention extended to exact values -- scientific where `lead < -4` or
+/// `lead >= 16` -- and only where that is strictly shorter, so an exact integer with few trailing
+/// zeros keeps its digits (`12345678901234567890`) and every number between `0.0001` and `10^16`
+/// is positional.
+fn scientific_wins(lead: i64, positional_len: i64, scientific_len: i64) -> bool {
+    !(-4..16).contains(&lead) && scientific_len < positional_len
+}
+
+/// [`Rat::decimal_parts`] in 128 bits: `Err` where the scaled mantissa leaves `u128`.
+fn decimal_parts_small(p: i128, q: i128) -> Result<Option<DecimalParts>, ()> {
+    let negative = p < 0;
+    let mut m = p.unsigned_abs();
+    if q == 1 {
+        let mut exp = 0i64;
+        while m != 0 && m % 10 == 0 {
+            m /= 10;
+            exp += 1;
+        }
+        return Ok(Some(DecimalParts {
+            negative,
+            mantissa: Mantissa::Small(m),
+            exp,
+        }));
+    }
+    let (mut a, mut b) = (0u32, 0u32);
+    let mut rest = q;
+    while rest % 2 == 0 {
+        rest /= 2;
+        a += 1;
+    }
+    while rest % 5 == 0 {
+        rest /= 5;
+        b += 1;
+    }
+    if rest != 1 {
+        return Ok(None);
+    }
+    // Scale the numerator so the denominator becomes 10^k, k = max(a, b): for a reduced fraction
+    // the result has no factor ten.
+    let k = a.max(b);
+    for _ in 0..(k - a) {
+        m = m.checked_mul(2).ok_or(())?;
+    }
+    for _ in 0..(k - b) {
+        m = m.checked_mul(5).ok_or(())?;
+    }
+    Ok(Some(DecimalParts {
+        negative,
+        mantissa: Mantissa::Small(m),
+        exp: -i64::from(k),
+    }))
+}
+
+/// [`Rat::decimal_parts`] for big components.
+fn decimal_parts_big(p: &BigInt, q: &BigInt) -> Option<DecimalParts> {
+    let negative = p.is_negative();
+    let mut m = p.magnitude().clone();
+    let (ten, five) = (BigUint::from(10u32), BigUint::from(5u32));
+    if q.is_one() {
+        let mut exp = 0i64;
+        while !m.is_zero() && (&m % &ten).is_zero() {
+            m /= &ten;
+            exp += 1;
+        }
+        return Some(DecimalParts {
+            negative,
+            mantissa: Mantissa::Big(m),
+            exp,
+        });
+    }
+    let q = q.magnitude();
     let a = q.trailing_zeros().unwrap_or(0);
-    let mut rest: BigInt = q >> a;
-    let five = BigInt::from(5);
+    let mut rest = q >> a;
     let mut b = 0u64;
     while (&rest % &five).is_zero() {
         rest /= &five;
@@ -1010,10 +1181,13 @@ fn big_exact_decimal(p: &BigInt, q: &BigInt) -> Option<String> {
         return None;
     }
     let k = a.max(b);
-    let scaled = p.abs()
-        * num_traits::pow(BigInt::from(2), (k - a) as usize)
-        * num_traits::pow(five, (k - b) as usize);
-    Some(place_point(p.is_negative(), scaled.to_string(), k as usize))
+    m <<= k - a;
+    m *= num_traits::pow(five, (k - b) as usize);
+    Some(DecimalParts {
+        negative,
+        mantissa: Mantissa::Big(m),
+        exp: -(k as i64),
+    })
 }
 
 /// The digit limit of the exact token readers, CPython's integer-string limit: a longer
@@ -1461,7 +1635,7 @@ mod tests {
         assert_eq!(hi.cmp_exact(&lo), Ordering::Greater);
     }
 
-    /// COST measurement (owner request): the fast path is byte-identical to the historical
+    /// COST measurement: the fast path is byte-identical to the historical
     /// exact path; the wide path replaces an f64 fallback with the 256-bit multiply.
     /// Prints ns/op for all three under --nocapture.
     #[test]
@@ -1654,6 +1828,37 @@ mod tests {
         assert_eq!(Rat::parse_decimal(""), None);
     }
 
+    /// The notation rule: positional between `0.0001` and `10^16`, scientific outside it where that
+    /// is strictly shorter; every spelling reads back as the value it spells.
+    #[test]
+    fn decimals_spell_scientific_only_outside_the_ordinary_range_and_shorter() {
+        let _domain = number_domain(false);
+        for (s, want) in [
+            ("1e-300", "1e-300"),
+            ("5e-324", "5e-324"),
+            ("0.00001", "1e-5"),
+            ("0.0001", "0.0001"),
+            ("0.00012", "0.00012"),
+            ("-0.000012", "-1.2e-5"),
+            ("8.319306875315364e-35", "8.319306875315364e-35"),
+            ("3.14", "3.14"),
+            ("1000", "1000"),
+            ("1e15", "1000000000000000"),
+            ("1e16", "1e16"),
+            ("1.5e16", "1.5e16"),
+            ("-2e308", "-2e308"),
+            ("12345678901234567890", "12345678901234567890"),
+            ("12345678901234567.25", "12345678901234567.25"),
+            ("6.02214076e23", "6.02214076e23"),
+            ("0", "0"),
+        ] {
+            let r = Rat::parse_decimal(s).unwrap();
+            let spelled = r.exact_decimal().unwrap();
+            assert_eq!(spelled, want, "{s}");
+            assert_eq!(Rat::parse_decimal(&spelled), Some(r), "{s}");
+        }
+    }
+
     #[test]
     fn exact_compare() {
         let a = Rat::new(1, 3).unwrap();
@@ -1796,9 +2001,12 @@ mod tests {
     fn big_decimals_print_and_parse_exactly() {
         let _domain = number_domain(false); // the exact domain: every number within the cap
         let r = big("1", "100000000000000000000000000000000000000000"); // 1e-41
-        let s = r.exact_decimal().unwrap();
-        assert_eq!(s, format!("0.{}1", "0".repeat(40)));
-        assert_eq!(parse_decimal_big(false, "0", &s[2..], -41), Some(r.clone()));
+        assert_eq!(r.exact_decimal().as_deref(), Some("1e-41"));
+        let positional = format!("{}1", "0".repeat(40));
+        assert_eq!(
+            parse_decimal_big(false, "0", &positional, -41),
+            Some(r.clone())
+        );
         assert_eq!(parse_decimal_big(false, "1", "", -41), Some(r.clone()));
         assert_eq!(big("-7", "1").exact_decimal().as_deref(), Some("-7"));
         assert_eq!(
@@ -1806,7 +2014,8 @@ mod tests {
             None
         );
         let e40 = parse_decimal_big(false, "1", "", 40).unwrap();
-        assert_eq!(e40.exact_decimal().unwrap(), format!("1{}", "0".repeat(40)));
+        assert_eq!(e40.exact_decimal().as_deref(), Some("1e40"));
+        assert_eq!(e40.numer_token(), "1e40");
         assert_eq!(parse_decimal_big(true, "25", "", -41).unwrap().signum(), -1);
         // size bounds: refused before building, at once
         let t0 = std::time::Instant::now();

@@ -1,144 +1,211 @@
 # mypy: ignore-errors
-"""Post-mine sort promotion.
+"""Post-mine sort promotion: each rung asks the judge.
 
-The miner emits every rule at the conservative ``?`` (variable-leaf) sort. This pass
-re-certifies each rule at the stronger sorts and ships it at the strongest SOUND one.
-The SHIPPED artifact speaks the four-sort language ``?`` < ``$`` < ``!`` < ``_``
-(binding-set nesting; see docs/rules.md): mined rules descend the ``_`` -> ``!`` -> ``?``
-ladder, and the ``$`` sort ships through the SEEDED multiplicative-cancellation
-identities (``$0/$0 -> 1`` and twins), certified at the finite-nonzero bar -- the
-unminable cancellation family, entered explicitly rather than reached by demotion:
+The miner emits every rule at the conservative ``?`` (variable-leaf) sort. This pass respells
+each rule at the stronger sorts and ships it at the strongest one the judge licenses in the
+rule's mode. The shipped files speak the four-sort language ``?`` < ``$`` < ``!`` < ``_``
+(binding-set nesting; see docs/rules.md):
 
-  ``_``  arbitrary-subtree (pointwise Dirac bar over the atom lattice, both directions),
-  ``!``  certified-finite subtree (the finite-only bar, enforced by a match-time
-         defined-and-finite-a.e. certificate),
-  ``$``  certified-finite-AND-nonzero subtree (seeded identities only; match-time
-         ``finite_nonzero_ae`` certificate -- the multiplicative group's regular domain),
-  ``?``  variable-leaf (the fallback: what the mine already certified).
+  ``_``  any subtree;
+  ``!``  a subtree certified finite almost everywhere (a match-time certificate);
+  ``$``  a subtree certified finite and nonzero almost everywhere (the seeded cancellation
+         identities only);
+  ``?``  a variable leaf: what the mine certified.
 
-Five stages, matching the reference pipeline exactly:
-  1. pointwise ``_``-bar on const-free wildcard rules,
-  2. const-bearing witness-map ``_``-bar,
-  3. exact-arbiter overturn of finite-draw demotions (f64 saturation is not authoritative),
-  4. apply ``?``->``_`` for the promoted set and refund the now-derivable instances,
-  5. the ``_``->``!``->``?`` descent ladder on the enriched atom lattice, with the
-     moving-spike structural refusal, plus the ``$``-seeded cancellation identities
-     (``judge_bang_mult``, the finite-nonzero atom lattice).
+A RUNG is the rule with every slot respelled at one sort, and it asks the judge:
+:func:`simplipy.verify.licensed` in the mode, which reads the judged tier at that sort (the
+sorts' quantifiers are the judge's) and the named policies (a ``_`` slot may not be
+duplicated). Promotion has no evaluator or probe list of its own.
 
-Promotion is fail-safe: a rule that cannot be certified at a stronger sort ships at ``?`` and
-loses only composite-subtree recall, never soundness.
+Three steps:
+
+  1. the ``_`` rung of every rule with slots;
+  2. the derivability refund (:mod:`._refund`): the rules the ``_``-promoted set derives are
+     pruned;
+  3. the ``!`` rung of every rule still at ``?``. A rule licensed at neither ships at ``?``, as
+     mined: the mine's judgment and its final gate decide it there.
+
+Then the seeded cancellation identities, which no carrier can mine (``- !0 !0 -> 0`` and its
+twins, whose sources are cancelled at enumeration; ``* 0 !0 -> 0``, whose carrier the canon
+orders literal-last; ``/ $0 $0 -> 1`` and its twins, ``/ 0 $0 -> 0``), join the set where the
+judge licenses them and the set lacks them. A rule without slots has no rung and passes through.
+
+Promotion is deterministic, as the judge is, and fail-safe: a rule the judge does not license
+at a stronger sort keeps the sort it was certified at.
 """
-import numpy as np
+import time
 
-from . import _f64_eval, _pointwise, _const_bearing, _overturn, _refund, _ladder
+from . import _refund
 
-# The declared surface: the entry point alone -- the stages are private.
+# The declared surface: the entry point alone -- the steps are private.
 __all__ = ['promote']
 
+#: The additive cancellation seeds and the zero product: three spellings of one identity, AC
+#: equal and textually distinct, deduplicated by their internal form (`_ac_key`).
+ADD_SEEDS = ((('-', '!0', '!0'), ('0',)),
+             (('+', '!0', 'neg', '!0'), ('0',)),
+             (('+', 'neg', '!0', '!0'), ('0',)),
+             (('*', '0', '!0'), ('0',)))
 
-def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None):
-    """Assign each ``?``-sorted mined rule its strongest sound sort; prune derivable rules.
+#: The multiplicative twins, at the finite-nonzero sort.
+MULT_SEEDS = ((('/', '$0', '$0'), ('1',)),
+              (('*', '$0', 'inv', '$0'), ('1',)),
+              (('*', 'inv', '$0', '$0'), ('1',)),
+              (('/', '0', '$0'), ('0',)))
 
-    ``rules``: iterable of (lhs, rhs) prefix-token sequences, all ``?``-sorted.
-    ``engine``: the ``SimpliPyEngine`` whose operator realizations define the semantics.
-    ``verbose`` reports each stage and heartbeats inside it; ``progress`` overrides the
-    reporter (see :mod:`simplipy.progress`). Promotion is the longest single-threaded stage
-    of a mine and scales worse than linearly in the rule count, so it reports by default
-    whenever the mine is verbose.
-    Returns ``(kept_rules, report)`` where ``kept_rules`` is a list of ``[lhs, rhs]`` lists.
+#: The positive controls, asked of the rule judge itself (`verify.verify_rule`) before any rung:
+#: `x + 1 -> x` holds in no mode at the `_` sort, and `1 * x -> x` holds in every mode. A judge
+#: that answers either wrongly is miscalibrated, and promotion raises rather than promote by it.
+#: (The rungs ask the caller's `judge`, which a test may replace.)
+CONTROLS = ((('+', '_0', '1'), ('_0',), False),
+            (('*', '1', '_0'), ('_0',), True))
+
+
+def _is_slot(t):
+    return t[:1] in ('?', '_', '!', '$') and t[1:].isdigit()
+
+
+def _has_slots(rule):
+    return any(_is_slot(t) for side in rule for t in side)
+
+
+def _respell(tokens, sort):
+    """Every slot of `tokens` at `sort`."""
+    return tuple(sort + t[1:] if _is_slot(t) else t for t in tokens)
+
+
+def _rungs(pairs, mode, engine, judge):
+    """The licence of each pair in `mode` (:func:`simplipy.verify.licensed`), its tier from
+    `judge` (one batch over the distinct pairs)."""
+    from ..verify import licensed
+    distinct = list(dict.fromkeys(pairs))
+    if not distinct:
+        return []
+    tiers = judge([(list(l), list(r)) for l, r in distinct])
+    out = {p: licensed(list(p[0]), list(p[1]), mode, engine, detail={'tier': tier})
+           for p, tier in zip(distinct, tiers)}
+    return [out[p] for p in pairs]
+
+
+def _run_controls(mode, engine):
+    from ..verify import effective_tier, verify_rule
+
+    def judge(pairs):
+        return [effective_tier(verify_rule(list(lhs), list(rhs))) for lhs, rhs in pairs]
+    got = _rungs([(l, r) for l, r, _ in CONTROLS], mode, engine, judge)
+    for (lhs, rhs, want), verdict in zip(CONTROLS, got):
+        if verdict['holds'] != want:
+            raise RuntimeError(
+                f'positive control failed in {mode}: {" ".join(lhs)} -> {" ".join(rhs)} '
+                f'judged {verdict["tier"]}, which {"does not hold" if want else "holds"}')
+
+
+def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None,
+            rule_mode, judge=None):
+    """Assign each ``?``-sorted mined rule the strongest sort the judge licenses; prune the
+    rules the ``_``-promoted set derives.
+
+    ``rules``: iterable of (lhs, rhs) prefix-token sequences, ``?``-sorted (a slot of another
+    sort is read as ``?``: the rule climbs the rungs from there).
+    ``engine``: the ``SimpliPyEngine`` whose operators define the rules (the refund's probe
+    engine and the named policies read it).
+    ``run_positive_controls``: ask the rule judge the controls (``CONTROLS``) first, raising on
+    a miss.
+    ``verbose`` reports each step; ``progress`` overrides the reporter (see
+    :mod:`simplipy.progress`).
+    ``rule_mode`` is the mode the rules serve in (``'f64'``, also ``'default'``, ``'real'``,
+    ``'permissive'`` or a :class:`~simplipy.Mode` member): each rung is licensed in it, and the
+    derivability refund asks that mode's engine.
+    ``judge``: the judged tier of each pair of a batch, as the mine's judge gives it
+    (:func:`simplipy.mining.judge_tiers` when None).
+    Returns ``(kept_rules, report)`` where ``kept_rules`` is a list of ``[lhs, rhs]`` lists and
+    ``report`` lists the rules each rung promoted (``promoted_any``, ``promoted_bang``, the
+    seeds among the latter with the reason ``seed`` or ``seed-mult``) with ``stage_counts``.
     """
+    from ..engine import _coerce_rule_mode
+    from ..mining import judge_tiers
     from ..progress import Progress
+    rule_mode = _coerce_rule_mode(rule_mode)
+    mode = 'f64' if rule_mode == 'default' else rule_mode
+    judge = judge if judge is not None else judge_tiers
     prog = progress if progress is not None else Progress(verbose, prefix="  [promote] ")
-    _f64_eval.configure(engine)
-    rules = [(tuple(l), tuple(r)) for l, r in rules]
+    # Every slot starts at `?`, the sort the mine certified: a rule offered at a stronger sort
+    # climbs the same rungs, and one licensed at neither ships at `?`.
+    rules = [(_respell(l, '?'), _respell(r, '?')) for l, r in rules]
     prog.stage("sort promotion starting", rules=len(rules))
+    if run_positive_controls:
+        _run_controls(mode, engine)
 
-    # SPECIAL-BEARING pure-literal ground rules (no wildcards, no `<constant>`, an
-    # `np.pi`/`np.e` in the LHS) BYPASS promotion: the sorts classify WILDCARD
-    # instantiation domains and the ladder's ground tier judges exactly the
-    # one-`<constant>`-slot skeleton family -- a zero-slot literal rule like
-    # `cos np.pi -> (-1)` has NO axis for any of the judges to quantify over (one
-    # instantiation: itself, certified at mint + stage-2 confirmation + the hiprec
-    # arbiter, which reads specials as their transcendental values). `judge_ground`
-    # scored them UNSUPPORTED -- a scoping refusal, not a verdict -- and they silently
-    # vanished (measured 2026-08-01: the owner-ruled exact collapses `cos np.pi -> (-1)`,
-    # `sin np.pi -> 0`, `tan np.pi -> 0`, `log np.e -> 1` minted, confirmed, survived
-    # the covered-prune, then dropped here). They pass through unchanged, appended after
-    # the ladder's kept set.
-    #
-    # WIDENED to ALL pure-literal ground rules (fold unification, 2026-08-02): with
-    # the engine's transcendental fold deleted, legitimate SPECIAL-FREE exact hits
-    # (`cos 0 -> 1`, `exp 0 -> 1`, `log 1 -> 0`) now arrive as mined ground rules and
-    # must pass through like their special-bearing siblings -- same argument: zero
-    # wildcard slots, so no judge here has an axis to quantify over; certification is
-    # the mint + stage-2 confirmation + the SYMBOLIC GATE (precision-stability, which
-    # kills any respell or near-identity however small). The original special-only
-    # scoping existed to contain the f64-respell family, which is now refused at the
-    # mint three ways (strict-mu resolved criterion, the skeleton guard, the symbolic
-    # gate), so the containment role is retired. `<constant>`-bearing ground rules
-    # keep flowing to the ladder's ground tier (judge_ground), exactly as in the
-    # reference.
-    def _pure_literal_ground(l, r):
-        return (not _pointwise.wildcards(list(l))
-                and '<constant>' not in (list(l) + list(r)))
+    # A pure-literal ground rule (no slot, no `<constant>`) has no rung and takes no part in
+    # the refund: it passes through, after the promoted set.
+    def _pure_literal_ground(rule):
+        return not _has_slots(rule) and '<constant>' not in rule[0] + rule[1]
 
-    ground = [(l, r) for l, r in rules if _pure_literal_ground(l, r)]
-    rules = [(l, r) for l, r in rules if not _pure_literal_ground(l, r)]
-    prog.stage("split", ground_passthrough=len(ground), to_judge=len(rules))
+    ground = [p for p in rules if _pure_literal_ground(p)]
+    rules = [p for p in rules if not _pure_literal_ground(p)]
+    report = {'promoted_any': [], 'promoted_bang': []}
 
-    # STAGE 1 -- pointwise `_`-bar on const-free wildcard rules.
-    rng1 = np.random.default_rng(_pointwise.SEED)
-    scoped_cf = [(l, r) for l, r in rules
-                 if _pointwise.wildcards(l) and _pointwise.is_const_free(list(l) + list(r))]
-    pw = {'PROMOTE': [], 'DEMOTE': [], 'UNDECIDED': [], 'EVAL-ERR': []}
-    for lhs, rhs in prog.track(scoped_cf, "stage 1/5 pointwise const-free bar"):
-        ws = _pointwise.wildcards(list(lhs) + list(rhs))
-        v, info = _pointwise.judge(list(lhs), list(rhs), _pointwise.valuations_for(ws, rng1))
-        pw[v].append((lhs, rhs, info))
+    # 1. the `_` rung
+    started = time.monotonic()
+    slotted = [p for p in rules if _has_slots(p)]
+    verdicts = _rungs([(_respell(l, '_'), _respell(r, '_')) for l, r in slotted], mode, engine,
+                      judge)
+    promote_set = set()
+    for (l, r), v in zip(slotted, verdicts):
+        if v['licensed']:
+            promote_set.add((l, r))
+            report['promoted_any'].append((l, r, 'rung', v['tier']))
+    prog.stage("rung _", rules=len(slotted), licensed=len(promote_set),
+               seconds=round(time.monotonic() - started, 1))
 
-    # STAGE 2 -- const-bearing witness-map bar.
-    rng2 = np.random.default_rng(_const_bearing.SEED)
-    scoped_cb = [(l, r) for l, r in rules
-                 if _pointwise.wildcards(list(l)) and '<constant>' in (list(l) + list(r))]
-    cb = {'PROMOTE': [], 'DEMOTE': [], 'NO-WITNESS': [], 'EVAL-ERR': []}
-    for lhs, rhs in prog.track(scoped_cb, "stage 2/5 const-bearing witness bar"):
-        v, info = _const_bearing.certify_rule(lhs, rhs, rng2)
-        cb[v].append((lhs, rhs, info))
+    # 2. the derivability refund over the `_`-promoted set
+    sorted_rules = _refund.refund(rules, engine._operators_config, promote_set, progress=prog,
+                                  rule_mode=rule_mode)
+    prog.stage("refund", kept=len(sorted_rules))
 
-    # STAGE 3 -- exact-arbiter overturn of finite-draw demotions. A kill at an ATOM valuation
-    # is exact special-value algebra; a kill at a FINITE draw is f64 evidence that may be pure
-    # saturation (atanh(tanh(37)) since tanh(37) == 1.0), so it is re-judged at high precision.
-    rng3 = np.random.default_rng(_overturn.SEED)
-    finite_kills = [(l, r, info) for l, r, info in pw['DEMOTE']
-                    if not all(v in _pointwise.ATOMS for v in info[0].values())]
-    overturned = []
-    for lhs, rhs, info in prog.track(finite_kills, "stage 3/5 exact-arbiter overturn"):
-        ws = _pointwise.wildcards(list(lhs) + list(rhs))
-        v, _kill = _overturn.judge_exact(list(lhs), list(rhs), _pointwise.valuations_for(ws, rng3))
-        if v == 'PROMOTE':
-            overturned.append((lhs, rhs, info))
-    ot_keys = {(tuple(l), tuple(r)) for l, r, _ in overturned}
-    pw['DEMOTE'] = [x for x in pw['DEMOTE'] if (tuple(x[0]), tuple(x[1])) not in ot_keys]
-    pw['PROMOTE'] = pw['PROMOTE'] + [(l, r, 'overturned-by-exact-arbiter') for l, r, _ in overturned]
+    # 3. the `!` rung of every rule still at `?`
+    started = time.monotonic()
+    at_q = [p for p in sorted_rules if any(t[:1] == '?' and _is_slot(t) for t in p[0] + p[1])]
+    bang = {p: (_respell(p[0], '!'), _respell(p[1], '!')) for p in at_q}
+    verdicts = dict(zip(at_q, _rungs([bang[p] for p in at_q], mode, engine, judge)))
+    kept = []
+    for p in sorted_rules:
+        v = verdicts.get(p)
+        if v is not None and v['licensed']:
+            kept.append(bang[p])
+            report['promoted_bang'].append((p[0], p[1], 'rung', v['tier']))
+        else:
+            kept.append(p)
+    prog.stage("rung !", rules=len(at_q),
+               licensed=sum(1 for v in verdicts.values() if v['licensed']),
+               seconds=round(time.monotonic() - started, 1))
 
-    # STAGE 4 -- apply ?->_ for the promoted set, then refund the derivable instances.
-    promote_set = {(tuple(l), tuple(r)) for l, r, *_ in pw['PROMOTE']} \
-        | {(tuple(l), tuple(r)) for l, r, *_ in cb['PROMOTE']}
-    prog.stage("stage 4/5 derivability refund", candidates=len(rules), promoted=len(promote_set))
-    sorted_rules = _refund.refund(rules, engine._operators_config, promote_set, progress=prog)
-    prog.stage("stage 4/5 derivability refund: done", kept=len(sorted_rules))
+    # The seeded cancellation identities. THE RE-SEED GUARD IS KEYED ON THE INTERNAL FORM,
+    # not the spelling: each family seeds three AC-equal spellings of one identity, and a
+    # spelling key would land every twin as a duplicate row of the one before it. Batched
+    # through the core in one call; a side the AC parser refuses keeps its spelling as the key.
+    def _ac_key(sides):
+        keys = engine._core.ac_canonical_keys([list(s) for s in sides], rule_mode=rule_mode)
+        return [(True, tuple(k)) if k is not None else (False, tuple(s))
+                for k, s in zip(keys, sides)]
 
-    # STAGE 5 -- the _->!->? ladder on the enriched lattice + moving-spike refusal.
-    kept, report = _ladder.promote_rules(sorted_rules, engine,
-                                         run_positive_controls=run_positive_controls,
-                                         progress=prog)
-    kept = list(kept) + [[list(l), list(r)] for l, r in ground]
-    report = dict(report)
-    prog.stage("sort promotion complete", final=len(kept), elapsed=prog.total_elapsed())
+    seen = set(_ac_key([l for l, _ in kept]))
+    seeded = 0
+    for seeds, reason in ((ADD_SEEDS, 'seed'), (MULT_SEEDS, 'seed-mult')):
+        todo = [(s, k) for s, k in zip(seeds, _ac_key([l for l, _ in seeds])) if k not in seen]
+        for (s, k), v in zip(todo, _rungs([s for s, _ in todo], mode, engine, judge)):
+            if v['licensed'] and k not in seen:
+                kept.append(s)
+                report['promoted_bang'].append((s[0], s[1], reason, v['tier']))
+                seen.add(k)
+                seeded += 1
+
+    kept = [[list(l), list(r)] for l, r in kept + ground]
     report['stage_counts'] = {
-        'pointwise_promote': len(pw['PROMOTE']), 'pointwise_demote': len(pw['DEMOTE']),
-        'cb_promote': len(cb['PROMOTE']), 'overturned': len(overturned),
-        'ground_passthrough': len(ground),
+        'rules': len(rules) + len(ground), 'ground_passthrough': len(ground),
+        'promoted_any': len(report['promoted_any']),
+        'promoted_bang': len(report['promoted_bang']) - seeded, 'seeded': seeded,
         'after_refund': len(sorted_rules), 'final': len(kept),
     }
+    prog.stage("sort promotion complete", final=len(kept), elapsed=prog.total_elapsed())
     return kept, report

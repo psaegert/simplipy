@@ -55,7 +55,7 @@ dialect-dependent key is the failure this module exists to prevent.
 ONE MASKING PATH
 ----------------
 :func:`to_skeleton` is not a third masking implementation. It IS
-:func:`to_expression` followed by the ratified front door
+:func:`to_expression` followed by the masking front door
 ``engine.mask(..., policy='all')`` -- the same mechanism, the same role walk, the
 same one-``<constant>``-per-degree-of-freedom collect stage (``2*x0/3`` is ONE
 free value, not two). Two consequences worth knowing:
@@ -80,10 +80,7 @@ from typing import cast
 
 import numpy as np
 
-# The tag delimiters, from the ONE place they are defined (the engine names the
-# dialect with this set in its own diagnostics); a second copy of a doctrine
-# constant is a second thing to keep in sync.
-from .engine import SimpliPyEngine, _TAGGED_DIALECT_TOKENS
+from .engine import SimpliPyEngine
 
 __all__ = ["normalize_variable_token", "to_expression", "to_skeleton"]
 
@@ -128,7 +125,7 @@ def to_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray | N
     expression : str, list[str], tuple[str, ...], 1-D ndarray or None
         An infix ``str``, an explicit binary-prefix token sequence, or a tagged
         token sequence; the form is detected the way the conversion API detects
-        it (design D2: type first, then a liberal read of the tokens). ``None``
+        it (type first, then a liberal read of the tokens). ``None``
         maps to ``None``.
     engine : SimpliPyEngine
         Supplies the canonical state. Required: there is no engine-free path.
@@ -145,13 +142,13 @@ def to_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray | N
     ------
     ValueError
         On a malformed expression, undeclared vocabulary, or a reserved numeric
-        spelling (``inf``, ``1_000``) -- the core's own token grammar (H-007).
+        spelling (``inf``, ``1_000``) -- the core's own token grammar.
     TypeError
         On a non-str/list/tuple/1-D-ndarray expression.
     """
     if expression is None:
         return None
-    dialect = _input_dialect(expression)
+    dialect, _ = engine._read_input(expression)
     return _render(_canonical_expression(expression, engine), dialect, engine)
 
 
@@ -159,7 +156,7 @@ def to_skeleton(expression: str | list[str] | tuple[str, ...] | np.ndarray | Non
                 engine: SimpliPyEngine) -> str | list[str] | None:
     """The SKELETON form: the canonical expression with EVERY numeric masked.
 
-    Equivalent, exactly, to :func:`to_expression` followed by the ratified front
+    Equivalent, exactly, to :func:`to_expression` followed by the masking front
     door ``engine.mask(..., policy='all')`` -- it is not a third masking path.
     "Every numeric" means every one: coefficients, addends, function arguments,
     the special constants ``np.pi``/``np.e``, and ``pow`` EXPONENTS and ``rootn``
@@ -180,35 +177,11 @@ def to_skeleton(expression: str | list[str] | tuple[str, ...] | np.ndarray | Non
     """
     if expression is None:
         return None
-    dialect = _input_dialect(expression)
+    dialect, _ = engine._read_input(expression)
     canonical = _canonical_expression(expression, engine)
     # Nothing to mask, and the role walk refuses an empty sequence outright.
     masked = cast("list[str]", engine.mask(canonical, "all")) if canonical else canonical
     return _render(masked, dialect, engine)
-
-
-def _input_dialect(expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:
-    """Which external form ``expression`` is written in -- the conversion API's
-    own detection (design D2): a ``str`` is INFIX; a token sequence is TAGGED when
-    it carries a bag delimiter or an inverse-section marker, and the explicit
-    binary PREFIX otherwise.
-
-    ``neg``/``inv`` are legal in BOTH token dialects and carry no delimiter, so a
-    sequence spelled only with them reads as explicit. That is a call about the
-    OUTPUT SPELLING only: the content is decided in the canonical state, so it is
-    the same skeleton either way.
-    """
-    if isinstance(expression, str):
-        return "infix"
-    if isinstance(expression, np.ndarray):
-        tokens = [str(t) for t in expression.ravel().tolist()]
-    elif isinstance(expression, (list, tuple)):
-        tokens = [str(t) for t in expression]
-    else:
-        raise TypeError(
-            f"expected an infix str or a token sequence (list, tuple or 1-D "
-            f"ndarray), not {type(expression).__name__}")
-    return "tagged" if _TAGGED_DIALECT_TOKENS.intersection(tokens) else "explicit"
 
 
 def _canonical_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray,
@@ -216,7 +189,7 @@ def _canonical_expression(expression: str | list[str] | tuple[str, ...] | np.nda
     """The ONE internal representation both forms are computed on: the canonical
     explicit binary prefix, with variables and the constant placeholder
     canonicalised."""
-    # to_prefix is a pure NOTATION conversion since the split (2026-08-18), so the
+    # to_prefix is a pure NOTATION conversion since the split, so the
     # CANONICALISATION has to be asked for explicitly -- `simplify` is what folds,
     # collects and sorts. Converting first and simplifying second is the exact
     # composition: it reaches the same canonical state from all three dialects,

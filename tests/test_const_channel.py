@@ -18,10 +18,9 @@ now holds at every layer:
   family, `* sin (-1) _0`) lands on the mark's own state and dies there, while a
   genuine SPECIAL-FREE restructuring mints as a zero-mask SERVING rule -- recovered
   content the old channel minted abstractly and translation then discarded.
-  Since the stage-1 special-constant policy (owner-ratified 2026-07-31/08-01,
-  design/UNIFIED_SIMPLICITY_MEASURE.md §5) the resolution channel additionally refuses
+  Under the special-constant policy the resolution channel additionally refuses
   every SPECIAL-BEARING source: `exp(pi*x) -> pow(23.14069263277927, x)` -- once this
-  file's flagship recovery -- is now the flagship REFUSAL (the owner prefers the exact
+  file's flagship recovery -- is now the flagship REFUSAL (the exact
   symbolic form; the literal is its ~52-bit rounding).
 * TRANSLATE -- the load gate is the count form on the canonical sides, subsuming the
   boolean gate and additionally refusing Const-bearing count-increasing shapes
@@ -36,11 +35,11 @@ import os
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 MUL = {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True}
 ADD = {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True}
@@ -61,7 +60,7 @@ def _mine(tmp_path, ops, extra, max_src=4, max_tgt=3, proposals=None):
     cfg.write_text(yaml.safe_dump({'operators': ops, 'rules': 'rules.json'}))
     engine = SimpliPyEngine.from_config(str(cfg))
     out = str(tmp_path / 'mined.json')
-    # promote_sorts EXPLICITLY off (defaults ON since 2026-08-01): these tests pin
+    # promote_sorts EXPLICITLY off (defaults ON): these tests pin
     # MINT-level invariants, and promotion both reshapes sorts and adds the ladder's
     # seeded identities, which would shadow the mint-level assertions.
     engine.find_rules(max_source_pattern_length=max_src, max_target_pattern_length=max_tgt,
@@ -77,7 +76,7 @@ class TestMintCountInvariant:
         """`* sin (-1) _0 -> * <constant> _0`-class never mints -- under mu (stage 2)
         for the STRONGEST reason yet: `<constant>` is the priciest atom (128), so a
         Const-introducing target ASCENDS from any cheap symbolic mark. And since the
-        generalized Const-shift absorption arm (P3', 2026-08-02) the value-set
+        generalized Const-shift absorption arm the value-set
         absorption family is ENGINE-NATIVE too: `C * sin(-1)` folds to `<constant>`
         at serve (special-free ground member, interval-certified finite nonzero), so
         the source reaches an atomic mark and the previously-mined absorption pair
@@ -90,9 +89,8 @@ class TestMintCountInvariant:
         assert engine.simplify(['*', 'sin', '(-1)', '<constant>']) == ['<constant>']
 
     def test_restructure_family_refused_for_special_sources(self, tmp_path) -> None:
-        """POLICY REVERSAL (owner-ratified 2026-07-31, stage-1 resolution licence;
-        design/UNIFIED_SIMPLICITY_MEASURE.md T2/P-B2). This test USED to pin
-        `exp(pi*x) -> pow(23.14069263277927, x)` as recovered mint content -- the F3
+        """POLICY REVERSAL (the resolution licence). This test USED to pin
+        `exp(pi*x) -> pow(23.14069263277927, x)` as recovered mint content -- the literal
         resolution channel's flagship. The special-constant policy inverts the
         preference: `exp(pi*x)` IS the preferred form (pi is one exact symbol; the
         literal is its ~52-bit rounding), so literal resolution refuses every
@@ -107,32 +105,23 @@ class TestMintCountInvariant:
                 assert not any('.' in t for t in rhs), (lhs, rhs)
         # the invariant holds across the whole mined set
         assert all(_n_const(rhs) <= _n_const(lhs) for lhs, rhs in rules)
-        # and the state SERVES as itself: the owner-preferred symbolic form
+        # and the state SERVES as itself: the preferred symbolic form
         assert engine.simplify(['exp', '*', 'np.pi', 'x0']) == \
             ['exp', '*', 'np.pi', 'x0']
 
-    def test_const_preserving_family_still_mints(self, tmp_path) -> None:
-        """Anti-vacuity: the servable SPECIAL-FREE Const algebra must keep minting --
-        `(e^C1)^C2 = e^(C1*C2)` collapses to one fitted constant. The special-bearing
-        twin `pow exp <constant> np.pi -> <constant>` is REFUSED by the mint-side
-        Const-absorption licence: the canon respells the source to `pow <constant>
-        np.pi` (exp(C) -> C), where pi sits in a NON-absorbable pow position -- the
-        2026-08-08 amendment (contract 10.11) absorbs specials only at the bijective
-        bag sites, so the pow-position refusal stands."""
-        engine, out = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
-                            ['np.pi', '<constant>'])
+    def test_const_preserving_family_is_the_engines(self, tmp_path) -> None:
+        """The servable Const algebra collapses in the engine, so the mine has nothing to
+        write: `(e^C1)^C2 = e^(C1*C2)` is one fitted constant, and so is its special-bearing
+        twin, which the canon respells to `pow(C, pi)` (exp(C) -> C): finite for C >= 0, it
+        collapses by the constant-collapse criterion the mint reads, as `C^2.5` does -- pi is
+        a fixed positive real there like a literal, as at `pi^C`."""
+        engine, _ = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
+                          ['np.pi', '<constant>'])
         rules = [(list(lhs), list(rhs)) for lhs, rhs in engine.simplification_rules]
-        assert (['pow', 'exp', '<constant>', '<constant>'], ['<constant>']) in rules
-        assert (['pow', 'exp', '<constant>', 'np.pi'], ['<constant>']) not in rules
-        # The B7/D36 jurisdiction carve-out, pinned where it bites: the symbolic gate
-        # drops every fatal bucket, and a multi-<constant> LHS is the ONE exempted
-        # shape (the judge's own non-jurisdiction sentinel; this family's soundness
-        # authority is the Const-channel chain). The exemption must be VISIBLE in the
-        # sidecar, not silent -- and must not widen: nothing else may ride it.
-        gate = json.load(open(out + '.provenance.json'))['symbolic_gate']
-        assert [['pow', 'exp', '<constant>', '<constant>'], ['<constant>']] \
-            in gate['const_channel']
-        assert gate['unsupported_shape'] == []
+        for source in (['pow', 'exp', '<constant>', '<constant>'],
+                       ['pow', 'exp', '<constant>', 'np.pi']):
+            assert (source, ['<constant>']) not in rules
+            assert engine.simplify(source) == ['<constant>']
 
 
 class TestTranslationCountGate:
@@ -145,21 +134,68 @@ class TestTranslationCountGate:
         rule = (('pow', '+', '?0', '<constant>', '2'),
                 ('+', '<constant>', '*', '<constant>', '?0'))
         engine = SimpliPyEngine(operators=self._OPS, rules=[rule])
-        kept, subsumed, dropped, twins = engine._core.ac_rules_info()
+        kept, subsumed, dropped, twins = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert (kept, subsumed, dropped, twins) == (0, 0, 1, 0)
 
     def test_count_preserving_rule_loads(self) -> None:
         """Control: the servable Const algebra (1 -> 1) passes the count gate."""
         rule = (('pow', 'exp', '<constant>', 'np.pi'), ('<constant>',))
         engine = SimpliPyEngine(operators=self._OPS, rules=[rule])
-        kept, subsumed, dropped, twins = engine._core.ac_rules_info()
+        kept, subsumed, dropped, twins = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert (kept, subsumed, dropped, twins) == (1, 0, 0, 0)
+
+
+class TestSeveralConstantsOnTheLeft:
+    """A rule may hold several `<constant>`s on its left side: the matcher binds each to a value
+    of its own and the judge reads each as its own symbol, so the mint scans such a source,
+    the judge (the mine's judge loop, `licensed` at its gates) decides the rule, and the load
+    serves it. `pow(rootn(x, C1), C2) -> pow(x, C3)` is false (at C1 = 3, C2 = 1 its left side
+    is the real cube root, defined for x < 0, where no `pow(x, C3)` is) and licensed in no
+    mode; `C1*exp(x + C2) -> C3*exp(x)` holds in real and permissive."""
+    ROOT_RULE = (('pow', 'rootn', '?0', '<constant>', '<constant>'), ('pow', '?0', '<constant>'))
+    EXP_RULE = (('*', '<constant>', 'exp', '+', '?0', '<constant>'),
+                ('*', '<constant>', 'exp', '?0'))
+
+    @pytest.fixture(scope='class')
+    def ops(self) -> dict:
+        import yaml
+        return yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                                'config.yaml')))['operators']
+
+    def test_the_load_serves_it(self, ops, recwarn) -> None:
+        engine = SimpliPyEngine(operators=ops, rules=[self.EXP_RULE, self.ROOT_RULE])
+        assert not [w for w in recwarn if 'on the left side' in str(w.message)]
+        assert engine._core.ac_rules_drop_census(rule_mode='default') == {}
+        assert engine.simplify('* <constant> exp + x0 <constant>'.split(), mode='f64') == \
+            ['*', '<constant>', 'exp', 'x0']
+
+    @pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+    def test_licensed_decides_it(self, ops, mode) -> None:
+        from simplipy.verify import licensed
+        bare = SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+        root = licensed(list(self.ROOT_RULE[0]), list(self.ROOT_RULE[1]), mode, bare)
+        assert not root['licensed'] and not root['holds'], root
+        exp = licensed(list(self.EXP_RULE[0]), list(self.EXP_RULE[1]), mode, bare)
+        assert exp['holds'] == (mode != 'f64'), exp
+
+    @pytest.mark.parametrize('rule_mode', ['default', 'real', 'permissive'])
+    def test_the_mint_scans_it(self, ops, rule_mode) -> None:
+        """A source with two constants has a source context: the mint's scan certifies
+        `C1 + C2*x -> C3*x + C4` (the judge loop and the gates then read `licensed`)."""
+        import numpy as np
+        from simplipy.mining import RuleMiner
+        bare = SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+        X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
+        assert bare._core.judge_pair(
+            ['+', '<constant>', '*', '<constant>', 'x0'], ['+', '*', '<constant>', 'x0', '<constant>'],
+            ['x0', 'x1'], X.flatten().tolist(), X.shape[0], rtol=1e-11, atol=1e-12,
+            rule_mode=rule_mode) == (True, 'accepted')
 
 
 class TestProposalChannel:
     def test_const_introducing_hint_refused_end_to_end(self, tmp_path) -> None:
         """A proposal arriving with the masking-era hint spelling is now refused on
-        EVERY channel (stage 2, the T2 theorem): the hint itself dies at the count
+        EVERY channel: the hint itself dies at the count
         gate, and the library scan's resolved literal `pow(23.14..., x0)` is a ~117-
         unit materialization of the 32-unit `exp(pi*x0)` -- an ascent the strict mu
         gate rejects. Pre-mu, the proposal channel still resolved it (the stage-1
@@ -187,8 +223,7 @@ class TestEndToEndInvariant:
         """The serve-side statement of the invariant, on the shipped pairing and the
         tracked 400-row corpus plus a Const-bearing battery, in both dialects."""
         engine = SimpliPyEngine.from_config(CONFIG)
-        with open(CORPUS) as fh:
-            corpus = json.load(fh)
+        corpus = default_corpus()
         extra = [['acos', 'cos', '<constant>'],
                  ['*', '<constant>', '<constant>'],
                  ['+', 'x0', '*', '<constant>', 'x1'],

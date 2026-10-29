@@ -1,4 +1,4 @@
-"""PER-MODE LAZY RULE LOADING (task #88) -- lean is opted into, never inherited.
+"""PER-MODE LAZY RULE LOADING -- lean is opted into, never inherited.
 
 The knob: ``modes=`` on ``load``/``from_config``/``__init__`` names the mode rule
 sets built EAGERLY. The default ``'all'`` is byte-identical to the historical
@@ -16,16 +16,20 @@ byte-identical ``simplify`` outputs per mode, because all three paths install th
 same file into the same core through the same ``set_mode_rules`` entry.
 """
 import io
+import json
+import logging
 import os
 import pickle
 import threading
+import time
 import warnings
-from contextlib import redirect_stdout
+from contextlib import contextmanager
 
 import pytest
 import yaml
 
-from conftest import acj_config_path, require_or_skip
+import simplipy
+from conftest import acj_config_path, acj_real_rules_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
 from test_mode_rulesets import (
     P_ALL, P_CORPUS, P_DEFAULT, P_REAL, instantiate, write_artifact)
@@ -40,6 +44,18 @@ def _lazy_triple(tmp_path) -> str:
         rules=[P_ALL, P_DEFAULT],
         real=[P_ALL, P_REAL],
         corpus=[P_ALL, P_REAL, P_CORPUS])
+
+
+@contextmanager
+def _announcements(buf: io.StringIO):
+    """Capture the `simplipy` logger's records (the first-use announcement) into `buf`."""
+    handler = logging.StreamHandler(buf)
+    logger = logging.getLogger('simplipy')
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
 
 
 def _quiet_from_config(*args, **kwargs) -> SimpliPyEngine:
@@ -96,7 +112,7 @@ class TestLazyMachinery:
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64',))
         lhs, rhs = instantiate(P_CORPUS)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             first = e.simplify(lhs, mode='permissive')
         assert first == rhs
         assert buf.getvalue().count('simplipy:') == 1
@@ -104,14 +120,14 @@ class TestLazyMachinery:
         # The set is now materialized -- and the second use is silent.
         assert len(e.permissive_simplification_rules) == 3
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert e.simplify(lhs, mode='permissive') == rhs
         assert buf.getvalue() == ''
 
     def test_complexity_triggers_the_build_too(self, tmp_path):
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64',))
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             e.complexity(['sin', 'x0'], mode='real')
         assert buf.getvalue().count('simplipy:') == 1
         assert e.real_simplification_rules is not None
@@ -119,7 +135,7 @@ class TestLazyMachinery:
     def test_modes_all_never_logs_at_call_time(self, tmp_path):
         e = _quiet_from_config(_lazy_triple(tmp_path))
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             for mode in (Mode.f64, Mode.real, Mode.permissive):
                 e.simplify(['sin', 'x0'], mode=mode)
         assert buf.getvalue() == ''
@@ -131,8 +147,8 @@ class TestLazyMachinery:
         core_before = e._core
         e.simplify(['sin', 'x0'], mode='real')
         assert e._core is core_before
-        assert e._core.mode_rules_len('permissive') == 3
-        assert e._core.mode_rules_len('real') == 2
+        assert e._core.mode_rules_len(rule_mode='permissive') == 3
+        assert e._core.mode_rules_len(rule_mode='real') == 2
 
     def test_unload_then_reload_round_trips(self, tmp_path):
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64',))
@@ -141,10 +157,10 @@ class TestLazyMachinery:
         e.unload_mode('real')
         # File-backed: the parsed list is dropped with the core structures...
         assert e.real_simplification_rules is None
-        assert e._core.mode_rules_len('real') is None
+        assert e._core.mode_rules_len(rule_mode='real') is None
         # ...and the next use rebuilds from the recorded file, announced again.
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             again = e.simplify(lhs, mode='real')
         assert again == first == rhs
         assert buf.getvalue().count('simplipy:') == 1
@@ -169,9 +185,9 @@ class TestLazyMachinery:
         assert e.simplify(lhs, mode='real') == rhs
         e.unload_mode('real')
         assert e.real_simplification_rules is not None  # the sole recipe stays
-        assert e._core.mode_rules_len('real') is None  # the built structures went
+        assert e._core.mode_rules_len(rule_mode='real') is None  # the built structures went
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert e.simplify(lhs, mode='real') == rhs  # rebuilt from the list
         assert 'in-memory recipe' in buf.getvalue()
 
@@ -182,10 +198,10 @@ class TestLazyMachinery:
         e = SimpliPyEngine(operators=config['operators'], rules=[list(P_ALL)],
                            rules_real=[list(P_REAL)], modes=('f64',))
         assert e.real_simplification_rules is not None
-        assert e._core.mode_rules_len('real') is None
+        assert e._core.mode_rules_len(rule_mode='real') is None
         lhs, rhs = instantiate(P_REAL)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert e.simplify(lhs, mode='real') == rhs
         assert buf.getvalue().count('simplipy:') == 1
 
@@ -234,7 +250,7 @@ class TestLazyMachinery:
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64', 'permissive'))
         e.compile_rules()
         assert e.real_simplification_rules is None  # still deferred
-        assert e._core.mode_rules_len('permissive') == 3  # still loaded
+        assert e._core.mode_rules_len(rule_mode='permissive') == 3  # still loaded
         lhs, rhs = instantiate(P_REAL)
         assert e.simplify(lhs, mode='real') == rhs  # and still lazily loadable
 
@@ -244,7 +260,7 @@ class TestLazyMachinery:
         assert back.real_simplification_rules is None  # deferred travelled deferred
         lhs, rhs = instantiate(P_REAL)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert back.simplify(lhs, mode='real') == rhs  # loads from the recorded file
         assert buf.getvalue().count('simplipy:') == 1
         # A pickle taken AFTER the load carries the materialized set eagerly.
@@ -260,7 +276,7 @@ class TestLazyMachinery:
             results.append(tuple(e.simplify(lhs, mode='permissive')))
 
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             threads = [threading.Thread(target=call) for _ in range(4)]
             for t in threads:
                 t.start()
@@ -286,13 +302,114 @@ class TestLazyMachinery:
         try:
             lhs, rhs = instantiate(P_REAL)
             buf = io.StringIO()
-            with redirect_stdout(buf):
+            with _announcements(buf):
                 assert e.simplify(lhs, mode='real') == rhs
             assert buf.getvalue().count('simplipy:') == 1
         finally:
             stop.set()
             for t in readers:
                 t.join()
+
+
+class TestConcurrentCoreAccess:
+    """Calls racing a push or a retraction on other threads."""
+
+    def test_real_is_never_served_the_default_set_while_it_is_unloaded(self):
+        """`real` FAILS CLOSED inside the core call: an `unload_mode('real')` racing the
+        call can neither get the default set served under `mode='real'` nor make the call
+        refuse a set the engine names (it rebuilds it). The default set holds one rule the
+        real set lacks, so a default-set answer is visible. Measured before the fix on 30 s
+        of this traffic: 8 default-set answers and 609,709 spurious refusals."""
+        config = yaml.safe_load(open(acj_config_path()))
+        e = SimpliPyEngine(operators=config['operators'],
+                           rules=[(('sin', 'x0'), ('x0',))], rules_real=[])
+        assert e.simplify(['sin', 'x0']) == ['x0']
+        assert e.simplify(['sin', 'x0'], mode='real') == ['sin', 'x0']
+        stop = threading.Event()
+        seen = {'own set': 0, 'default set': 0, 'refused': 0}
+        lock = threading.Lock()
+
+        def reader() -> None:
+            while not stop.is_set():
+                try:
+                    out = e.simplify(['sin', 'x0'], mode='real')
+                    key = 'own set' if out == ['sin', 'x0'] else 'default set'
+                except ValueError:
+                    key = 'refused'
+                with lock:
+                    seen[key] += 1
+
+        def unloader() -> None:
+            while not stop.is_set():
+                e.unload_mode('real')
+
+        threads = [threading.Thread(target=reader) for _ in range(2)]
+        threads.append(threading.Thread(target=unloader))
+        with _announcements(io.StringIO()):
+            for t in threads:
+                t.start()
+            stop.wait(3.0)
+            stop.set()
+            for t in threads:
+                t.join()
+        assert seen['default set'] == 0 and seen['refused'] == 0, seen
+        assert seen['own set'] > 0
+
+    def test_a_waiting_push_does_not_stall_the_interpreter(self):
+        """Every read guard is taken with the GIL released: a call queued behind a waiting
+        push (std's RwLock prefers writers) waits without holding the GIL, so pure-Python
+        threads keep running. Measured before the fix: the interpreter froze for the long
+        reader's whole remaining time (14.9 s on the review's probe)."""
+        cfg = acj_config_path()
+        require_or_skip(acj_real_rules_path(), 'the acj-4 real set is not staged')
+        config = yaml.safe_load(open(cfg))
+        real = [tuple(map(tuple, r)) for r in json.load(open(acj_real_rules_path()))[:500]]
+        e = SimpliPyEngine(operators=config['operators'],
+                           rules=[tuple(map(tuple, r)) for r in json.load(open(acj_rules_path()))[:500]],
+                           rules_real=real)
+        rows = [r for r in json.load(open(os.path.join(
+            os.path.dirname(simplipy.__file__), 'verify', 'data', 'raw_skeletons_nv.json')))]
+        start = time.perf_counter()
+        e._core.ac_canonical_keys(rows, rule_mode='permissive')
+        per_batch = time.perf_counter() - start
+        # A long in-flight reader: about 1.5 s of work, whatever this machine's speed.
+        batch = rows * max(1, int(1.5 / max(per_batch, 1e-6)))
+        gaps: list[float] = []
+        stop = threading.Event()
+
+        def ticker() -> None:
+            last = time.perf_counter()
+            while not stop.is_set():
+                time.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+
+        tick = threading.Thread(target=ticker)
+        tick.start()
+        try:
+            for call in (lambda: e._core.mode_rules_len(rule_mode='real'),
+                         lambda: e.simplify(['sin', 'x0']),
+                         lambda: e._core.interval_finite_ae(['x0'])):
+                reader = threading.Thread(target=lambda: e._core.ac_canonical_keys(
+                    batch, rule_mode='permissive'))
+                pusher = threading.Thread(target=lambda: e._core.set_mode_rules(
+                    'real', [(list(lhs), list(rhs)) for lhs, rhs in real]))
+                reader.start()
+                time.sleep(0.2)
+                pusher.start()
+                time.sleep(0.2)
+                gaps.clear()
+                waited = time.perf_counter()
+                call()  # queued behind the waiting push until the reader returns
+                waited = time.perf_counter() - waited
+                stall = max(gaps, default=0.0)
+                reader.join()
+                pusher.join()
+                assert stall < 0.5, f'the interpreter stalled {stall:.2f} s (call waited {waited:.2f} s)'
+        finally:
+            stop.set()
+            tick.join()
 
 
 # ---------------------------------------------------------------------------
@@ -359,11 +476,11 @@ class TestTheIdentity:
         buf = io.StringIO()
         for expression in _BATTERY:
             expected = eager.simplify(expression, mode=mode)
-            with redirect_stdout(buf):
+            with _announcements(buf):
                 assert lean.simplify(expression, mode=mode) == expected
             # ...in the infix rendering too (the other output path).
             infix = eager.to_infix(expression)
-            with redirect_stdout(buf):
+            with _announcements(buf):
                 assert lean.simplify(infix, mode=mode) == eager.simplify(
                     infix, mode=mode)
         # However many probes ran, the mode's set was built at most ONCE.
@@ -375,7 +492,7 @@ class TestTheIdentity:
         cycled = _quiet_from_config(cfg, modes=('f64',))
         for mode in (Mode.real, Mode.permissive):
             expected = [eager.simplify(x, mode=mode) for x in _BATTERY]
-            with redirect_stdout(io.StringIO()):
+            with _announcements(io.StringIO()):
                 first = [cycled.simplify(x, mode=mode) for x in _BATTERY]
                 cycled.unload_mode(mode)
                 again = [cycled.simplify(x, mode=mode) for x in _BATTERY]
@@ -386,9 +503,30 @@ class TestTheIdentity:
         """Beyond outputs: once built, the lean engine's per-mode serve counts equal
         the eager engine's -- the same files landed in both cores."""
         eager, lean, _ = identity_engines
-        with redirect_stdout(io.StringIO()):
+        with _announcements(io.StringIO()):
             for mode in (Mode.real, Mode.permissive):
                 lean.simplify(['sin', 'x0'], mode=mode)
         for rule_mode in ('default', 'real', 'permissive'):
-            assert (lean._core.mode_rules_len(rule_mode)
-                    == eager._core.mode_rules_len(rule_mode))
+            assert (lean._core.mode_rules_len(rule_mode=rule_mode)
+                    == eager._core.mode_rules_len(rule_mode=rule_mode))
+
+
+class TestTheDefaultAndItsMeasuredFootprint:
+    """``modes='all'`` stays the default of every loading entry, and every memory figure
+    the loading docstrings publish names the artifact it was measured on: the figures
+    belong to that artifact and are re-measured when the default artifact changes."""
+
+    @pytest.mark.parametrize('entry', ['__init__', 'from_config', 'load'])
+    def test_all_is_the_default(self, entry):
+        import inspect
+        assert inspect.signature(getattr(SimpliPyEngine, entry)).parameters['modes'].default == 'all'
+
+    @pytest.mark.parametrize('owner', ['class', 'from_config', 'load', 'unload_mode'])
+    def test_every_memory_figure_names_its_artifact(self, owner):
+        import re
+        doc = SimpliPyEngine.__doc__ if owner == 'class' else getattr(SimpliPyEngine, owner).__doc__
+        figure = re.compile(r'\d\s*[GM]B\b|\bRSS\b')
+        paragraphs = [p for p in re.split(r'\n\s*\n', doc) if figure.search(p)]
+        assert paragraphs, f'{owner} states no memory figure'
+        for p in paragraphs:
+            assert 'acj-5-4-llm' in p, p

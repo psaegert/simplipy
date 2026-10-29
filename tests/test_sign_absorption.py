@@ -4,8 +4,7 @@ A sign lives in the numeric coefficient literal whenever one is emitted; additiv
 signs are STRUCTURE (the tagged ``<sub>`` section, the explicit binary minus); ``neg``
 spells only the PURE sign, where no literal exists to carry it.
 
-PREMISE RESTATED 2026-08-07 (owner-ratified argmin spelling, contract §10.10(1); audit
-F31/F33). The doctrine is unchanged, but the clause "whenever one is emitted" now bites
+PREMISE RESTATED (the argmin spelling). The doctrine is unchanged, but the clause "whenever one is emitted" now bites
 much more often: a coefficient is spelled as ONE literal only when that is its argmin
 spelling, and for a ``2^a`` denominator it is not (``1/2`` spells ``/ 1 2``, not ``0.5``).
 So ``-1/2 * x0`` has NO coefficient literal to carry the sign and correctly falls to the
@@ -69,8 +68,8 @@ class TestExplicitSignDoctrine:
 
     def test_pure_sign_keeps_neg(self) -> None:
         """No literal to carry the sign: `neg` stays -- the lone variable and the
-        symbolic product. The -1/3 coefficient's divisor-side spelling (2026-08-01,
-        design §8) is AMENDED by H-020 (2026-08-04): the sign never rides a den
+        symbolic product. The -1/3 coefficient's divisor-side spelling
+        is AMENDED: the sign never rides a den
         literal (it would re-parse into the divisor bag, where the sign-fold clause
         may absorb it into a Const-bearing sum -- a different parking than the outer
         coefficient), so the pure sign returns to the numerator side as `neg` while
@@ -137,8 +136,8 @@ class TestMaskedSkeletonInheritsSigns:
         engine = _engine()
         # The additive sign is STRUCTURE while the literal is exact -- but once the
         # addend is a FREE constant the sign is part of what gets fitted, so the collect
-        # stage normalizes `x0 - c` to `x0 + c` (owner ruling 2026-08-07: "I'd prefer
-        # addition by a constant instead of subtraction"). A negative fitted value is a
+        # stage normalizes `x0 - c` to `x0 + c` (addition by a constant
+        # rather than subtraction). A negative fitted value is a
         # RENDERING question at substitution time, not a skeleton one.
         explicit = engine.simplify(["-", "x0", "0.5"])
         assert masking.mask(explicit, engine, masking.mask_fittable) == \

@@ -1,15 +1,13 @@
 """`simplipy.utils.numbers_to_constant` is REMOVED in 0.14.0.
 
-Owner ruling 2026-08-18, verbatim: "I'd like to have the removal in 0.14.0
-already and the downstream packages to adapt." The 0.13.0 CHANGELOG and
+The removal ships in 0.14.0, and the downstream packages adapt. The 0.13.0 CHANGELOG and
 `docs/compatibility.md` already stated the removal version; this suite lands it
 and pins the boundary of WHAT GOES against WHAT STAYS, because two nearby names
 are easy to remove by association and neither may move:
 
-* `explicit_constant_placeholders(..., convert_numbers_to_constant=)` -- a
-  DIFFERENT surface (a keyword on a mechanical code-generation helper), still
-  required-keyword in this release and passed explicitly by every shipped
-  downstream call site. It stays.
+* `explicit_constant_placeholders` -- a DIFFERENT surface (a mechanical
+  code-generation helper that renames placeholder slots). It stays; its
+  `convert_numbers_to_constant=` keyword is removed in 0.15.
 * `rust/utils.rs::numbers_to_constant` -- the INTERNAL Rust port behind
   `read_infix(..., mask_numbers=True)`. Not public, not reachable by name from
   Python, and the reader's documented behaviour. It stays.
@@ -22,10 +20,10 @@ migration reads them here rather than discovering them in production:
 1. RESERVED SPELLINGS. The helper classified by a bare `float()` probe, so
    `inf`/`nan` (any case or sign) and underscore groupings (`1_000`) were minted
    into `<constant>` -- a finite-by-doctrine placeholder standing for a
-   non-finite literal. The masking module refuses them at the boundary (H-007).
+   non-finite literal. The masking module refuses them at the boundary.
    Laundering becomes a loud `ValueError`.
 2. `np.pi`/`np.e`. `float('np.pi')` raises, so the helper left the special
-   constants ALONE. They are masking SITES (owner ruling 2026-07-31), so
+   constants ALONE. They are masking SITES, so
    `mask_all` masks them.
 3. The exact-fraction literal `1/3`. `float('1/3')` raises, so the helper left
    it alone; `is_numeric_string` accepts it and `mask_all` masks it.
@@ -76,21 +74,13 @@ class TestTheStandaloneHelperIsGone:
 
 
 class TestWhatDeliberatelyStays:
-    def test_the_placeholder_keyword_is_untouched(self) -> None:
-        """A different surface with a shipped downstream on it: the keyword is
-        required, both values keep working, and `False` stays the meaning every
-        migrated call site passes."""
-        expr, constants = utils.explicit_constant_placeholders(
-            ['+', '<constant>', '2.5'], convert_numbers_to_constant=False)
+    def test_the_placeholder_helper_renames_slots_only(self) -> None:
+        """A different surface: the helper stays and renames placeholder slots, and
+        never numerals, whatever their spelling."""
+        expr, constants = utils.explicit_constant_placeholders(['+', '<constant>', '2.5'])
         assert (expr, constants) == (['+', 'C_0', '2.5'], ['C_0'])
-
-        with pytest.warns(DeprecationWarning):
-            expr, constants = utils.explicit_constant_placeholders(
-                ['+', '<constant>', '25'], convert_numbers_to_constant=True)
-        assert (expr, constants) == (['+', 'C_0', 'C_1'], ['C_0', 'C_1'])
-
-        with pytest.raises(TypeError):
-            utils.explicit_constant_placeholders(['+', '<constant>', '2.5'])  # type: ignore[call-arg]
+        expr, constants = utils.explicit_constant_placeholders(['+', '<constant>', '25'])
+        assert (expr, constants) == (['+', 'C_0', '25'], ['C_0'])
 
     def test_the_reader_still_masks_numbers(self, engine: SimpliPyEngine) -> None:
         """`read_infix(..., mask_numbers=True)` runs the INTERNAL Rust port. The
@@ -115,7 +105,7 @@ class TestTheReplacementIsNotADropIn:
     def test_reserved_spellings_raise_instead_of_being_laundered(
             self, engine: SimpliPyEngine, reserved: str) -> None:
         """The helper minted a finite `<constant>` for these. The masking module
-        refuses the token (H-007) -- the laundering becomes loud."""
+        refuses the token -- the laundering becomes loud."""
         with pytest.raises(ValueError, match='reserved numeric spelling'):
             masking.mask(['+', 'x0', reserved], engine, masking.mask_all, collect=False)
 

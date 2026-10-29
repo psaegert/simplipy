@@ -5,8 +5,10 @@ A negative odd power's pole is two-signed (its sides disagree), so the sign of i
 keeps: the inverse's orientation is the product's choice in every mode, as every other sign carrier's is
 (`sign_trade_flip`, `sign_place` in rust/ac/expr.rs). The class of a sum is decided as a whole: a factor belongs to
 it by its parity in the sum (`zero_read`), the sites over one sum flip together, and where the product is even in
-the sum its pole is one-signed and its value there is the limit, which the answer keeps; where that value is not
-read, the class keeps the input's orientation (`class_pinned`). Like terms are like up to sign, so `x + f - f`
+the sum its pole is one-signed and its value there is the limit, which the answer keeps; where a member is defined
+on one side of the zero only (a log, an even root, a fractional or symbolic power), the class is written in the
+orientation positive on that side and the value there is that side's limit (`zero_limit`); where the value is not
+read, the class takes its cheapest orientation. Like terms are like up to sign, so `x + f - f`
 cancels whichever orientation each `f` arrived in. A lossy context (permissive) keeps no value at a pole.
 """
 import math
@@ -133,16 +135,19 @@ def test_the_up_to_sign_retry_keeps_a_class_whole(eng, src):
         assert f_ans(3.0, 1.5) == math.inf, ' '.join(ans)
 
 
-# The source's value at x1 = 3 is its limit there (one-sided where the source is defined on one side only); the
-# answer keeps it.
-#   * A sum that holds the class is no regular factor at its zero: the class's own sum under a square root, or
-#     `S - S^3`, vanishes there, so the class keeps the input's orientation, and so does every site holding it.
+# The answer's value at x1 = 3 is the source's limit there (one-sided where the source is defined on one side only).
+# The source's own value there need not be: `-(3 - x1)` is -0 at its zero but positive beside it, so
+# `1/(cbrt(-2 (x1 - 3)) * -(3 - x1))` is +inf at x1 = 3 where its limit is -inf.
+#   * A member defined on one side of the zero (the class's own sum under a square root) fixes the side: the class is
+#     written in the orientation positive there, so the value at the zero is that side's limit.
 #   * A class is a zero set: `tanh(2 (3 - x1))` is built over `6 - 2 x1`, a multiple of `x1 - 3`, and `2 x1 - 6`
 #     beside `x1 - 3` is one class with it.
+#   * An odd root reads like an odd function, also over a factor of unknown sign: `1/(cbrt(x2 (x1 - 3)) (3 - x1))`
+#     is `-1/(cbrt(x2 (x1 - 3)) (x1 - 3))`, -inf at x1 = 3 like its limit.
 CLASS_AT_ITS_ZERO = ['inv * pow - 3 x1 / 1 2 sin - 3 x1', 'inv * rootn - 3 x1 2 tanh - 3 x1',
-                     'inv * - - x1 3 pow - x1 3 3 * -1 - x1 3', 'inv * tanh * 2 - 3 x1 * -1 - 3 x1',
+                     'inv * tanh * 2 - 3 x1 * -1 - 3 x1',
                      'inv * rootn * - x1 3 -2 3 * -1 - 3 x1', 'inv * * -1 - x1 3 - * 2 x1 6',
-                     'inv * - - x1 3 pow - x1 3 3 - * x2 x1 * 3 x2']
+                     'inv * - - x1 3 pow - x1 3 3 - * x2 x1 * 3 x2', 'inv * rootn * x2 - x1 3 3 - 3 x1']
 
 
 @pytest.mark.parametrize('mode', ('f64', 'real'))
@@ -153,19 +158,99 @@ def test_the_value_at_the_zero_of_a_class_is_kept(eng, mode, src):
     f_src = eng.as_callable(t, ['x1', 'x2'])
     f_ans = eng.as_callable(ans, ['x1', 'x2'])
     with np.errstate(all='ignore'):
-        at = f_src(3.0, 1.5)
-        assert math.isinf(at)
-        assert f_ans(3.0, 1.5) == at, ' '.join(ans)
+        beside = [v for v in (f_src(3.0 - 1e-9, 1.5), f_src(3.0 + 1e-9, 1.5)) if not math.isnan(v)]
+        assert beside and all(abs(v) > 1e6 for v in beside)
+        assert len({math.copysign(1.0, v) for v in beside}) == 1  # one-sided, or two sides that agree
+        limit = math.copysign(math.inf, beside[0])
+        assert f_ans(3.0, 1.5) == limit, ' '.join(ans)
 
 
-@pytest.mark.xfail(reason='the evaluator reads rootn(-0, 3) as +0 (IEEE rootn gives -0), so a nested product that '
-                          'moves -0 under the odd root flips the infinity; pre-existing in ae54819', strict=False)
+# A member defined on one side of the class's zero (a log, a symbolic power, or a sum such members dominate there)
+# fixes the class's orientation: positive on that side, so every spelling of the function gets one answer and its
+# value at x1 = 3 is that side's limit.
+ONE_SIDED = [(['/ log - x1 3 - 3 x1', 'neg / log - x1 3 - x1 3', '/ * log - x1 3 - 3 x1 pow - x1 3 2'], 1.0),
+             (['/ pow - 3 x1 x2 - x1 3', 'neg / pow - 3 x1 x2 - 3 x1'], -1.0),
+             (['/ pow - x1 3 x2 - 3 x1', 'neg / pow - x1 3 x2 - x1 3'], 1.0),
+             # a sum whose one-sided terms are infinite at the zero and the rest finite reads as them
+             (['/ + log - x1 3 x2 - 3 x1', 'neg / + log - x1 3 x2 - x1 3'], 1.0),
+             (['/ + pow - 3 x1 / -1 2 * x2 - x1 3 - x1 3', 'neg / + pow - 3 x1 / -1 2 * x2 - x1 3 - 3 x1'], -1.0),
+             (['/ * * x2 rootn - 3 x1 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7',
+               'neg / * * x2 rootn - x1 3 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7'], None)]
+
+
 @pytest.mark.parametrize('mode', ('f64', 'real'))
-def test_a_nested_product_keeps_the_sign_of_zero_under_an_odd_root(eng, mode):
-    src = 'inv * rootn * - 3 x1 x2 3 sinh * x2 - 3 x1'.split()
-    ans = list(eng.simplify(list(src), mode=mode))
+@pytest.mark.parametrize('spellings,side', ONE_SIDED)
+def test_a_one_sided_member_fixes_the_orientation(eng, mode, spellings, side):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert len(answers) == 1, answers
+    if side is None:
+        return
+    t, ans = spellings[0].split(), answers.pop().split()
+    f_src = eng.as_callable(t, ['x1', 'x2'])
+    f_ans = eng.as_callable(ans, ['x1', 'x2'])
     with np.errstate(all='ignore'):
-        assert eng.as_callable(ans, ['x1', 'x2'])(3.0, 1.5) == eng.as_callable(src, ['x1', 'x2'])(3.0, 1.5)
+        beside = f_src(3.0 + side * 1e-9, -0.5)
+        assert abs(beside) > 1e6 and math.isnan(f_src(3.0 - side * 1e-9, -0.5))
+        assert f_ans(3.0, -0.5) == math.copysign(math.inf, beside), ' '.join(ans)
+
+
+# A sum that holds the class's sum as an exact polynomial factor is a member of the class (`9 - x1^2` is
+# `-(x1 - 3)(x1 + 3)`, `x1 - 3 - (x1 - 3)^3` is `(x1 - 3)(1 - (x1 - 3)^2)`): odd or even in it by the multiplicity of
+# the factor, with the sign its cofactor has at the zero. Each product below is even in `x1 - 3`, so its pole at
+# x1 = 3 is one-signed: every spelling is one answer, with the limit there, with the search on and off.
+POLYNOMIAL_MULTIPLES = [(['1/((9 - x1^2)*(x1 - 3))', '1/((x1^2 - 9)*(3 - x1))', '-1/((x1^2 - 9)*(x1 - 3))'], -1.0),
+                        (['1/((9 - x1^2)*(3 - x1))', '1/((x1^2 - 9)*(x1 - 3))'], 1.0),
+                        (['1/((x1^3 - 27)*(3 - x1))', '-1/((x1^3 - 27)*(x1 - 3))'], -1.0),
+                        (['1/((2*x1 - 6)*(x1^2 - 9))', '1/((6 - 2*x1)*(9 - x1^2))'], 1.0),
+                        (['1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))', '1/(((x1 - 3)^3 - (x1 - 3))*(x1 - 3))',
+                          '-1/((x1 - 3 - (x1 - 3)^3)*(x1 - 3))'], -1.0)]
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('spellings,side', POLYNOMIAL_MULTIPLES)
+def test_a_polynomial_multiple_of_a_class_is_a_member(eng, mode, effort, spellings, side):
+    answers = {' '.join(eng.simplify(eng.to_prefix(s), mode=mode, effort=effort)) for s in spellings}
+    assert len(answers) == 1, answers
+    ans = answers.pop().split()
+    f_src = eng.as_callable(eng.to_prefix(spellings[0]), ['x1'])
+    f_ans = eng.as_callable(ans, ['x1'])
+    with np.errstate(all='ignore'):
+        for h in (1e-7, -1e-7):
+            assert abs(f_src(3.0 + h)) > 1e6 and math.copysign(1.0, f_src(3.0 + h)) == side
+        assert f_ans(3.0) == math.copysign(math.inf, side), ' '.join(ans)
+
+
+# A class whose cofactor's sign at the zero is not a constant (`x2^2 - x3^2` is `(x2 - x3)(x2 + x3)`, and `x2 + x3` is
+# `2 x2` at `x2 = x3`) is not read there, so its product keeps no value there and takes its cheapest orientation: one
+# answer for every spelling of the function, whose value at x2 = x3 need not be the limit (a registered residual).
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+def test_an_unread_class_takes_its_cheapest_orientation(eng, mode):
+    spellings = ['1/((x2^2 - x3^2)*(x2 - x3))', '1/((x3^2 - x2^2)*(x3 - x2))', '-1/((x3^2 - x2^2)*(x2 - x3))']
+    answers = {' '.join(eng.simplify(eng.to_prefix(s), mode=mode)) for s in spellings}
+    assert len(answers) == 1, answers
+
+
+# An odd root keeps the sign of zero, as IEEE-754 `rootn` and every odd function do, so a canonical form that moves a
+# negation under the root (`rootn(-x2*(x1 - 3), 3)` for `rootn((3 - x1)*x2, 3)`) keeps the infinity at the class's
+# zero beside an odd function of the class, a polynomial factor holding it, or a shared-factor multiple of it.
+SIGN_OF_ZERO_UNDER_AN_ODD_ROOT = ['inv * rootn * - 3 x1 x2 3 sinh * x2 - 3 x1',      # 1/(cbrt((3-x1)*x2)*sinh(x2*(3-x1)))
+                                  'inv * rootn * x2 - 3 x1 3 - 9 pow x1 2',          # 1/(cbrt(x2*(3-x1))*(9-x1^2))
+                                  'inv * rootn * - 3 x1 x2 3 - * 3 x2 * x1 x2']      # 1/(cbrt((3-x1)*x2)*(3*x2-x1*x2))
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src', SIGN_OF_ZERO_UNDER_AN_ODD_ROOT)
+def test_a_nested_product_keeps_the_sign_of_zero_under_an_odd_root(eng, mode, src):
+    t = src.split()
+    ans = list(eng.simplify(list(t), mode=mode))
+    f_src = eng.as_callable(t, ['x1', 'x2'])
+    f_ans = eng.as_callable(ans, ['x1', 'x2'])
+    with np.errstate(all='ignore'):
+        for x2 in (0.7, 1.5):
+            assert f_src(3.0, x2) == math.inf  # the limit from both sides
+            assert f_ans(3.0, x2) == math.inf, ' '.join(ans)
+            assert f_ans(np.array([3.0]), np.array([x2]))[0] == math.inf, ' '.join(ans)
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -175,6 +260,15 @@ def test_an_odd_function_of_a_negation_reads_as_the_negated_term(eng, mode, fn):
     src = f'* - {fn} x1 x1 + x1 {fn} neg x1'.split()
     want = list(eng.simplify(f'neg pow - x1 {fn} x1 2'.split(), mode=mode))
     assert list(eng.simplify(src, mode=mode)) == want
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('fn', ['sin', 'atan'])
+def test_an_odd_function_of_a_negation_reads_back_as_itself(eng, mode, fn):
+    # Apart from the reading above, so the open sign-placement question masks no fixed point.
+    for src in (f'* - {fn} x1 x1 + x1 {fn} neg x1', f'neg pow - x1 {fn} x1 2'):
+        ans = list(eng.simplify(src.split(), mode=mode))
+        assert list(eng.simplify(ans, mode=mode)) == ans, src
 
 
 # A second read of an answer gives the answer back. A negated sum the sign folds into (one holding an infinity) is
@@ -189,3 +283,30 @@ SECOND_READ = ['* / x8 - x8 + x8 - - x13 x16 x8 - * x8 - - log + - x16 x14 x14 *
 def test_an_answer_reads_back_as_itself(eng, mode, src):
     ans = list(eng.simplify(src.split(), mode=mode))
     assert list(eng.simplify(ans, mode=mode)) == ans
+
+
+# The search's distributive law keeps a one-signed pole joined where splitting it would leave two
+# addends infinite at the pole with signs that differ: `(1 + x3 - x1 + 5/3 exp(x2))/abs(x3)`
+# split as `5/3 exp(x2) abs(1/x3) + (x3 + 1 - x1) abs(1/x3)` is NaN at `x3 = 0` on the whole slab
+# `1 < x1 < 1 + 5/3 exp(x2)`, where the product is `+inf`. A lossy mode keeps no value at a pole.
+POLE_DISTRIBUTIONS = ['(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/abs(x3)',
+                      '(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/x3^2']
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('src', POLE_DISTRIBUTIONS)
+def test_the_search_keeps_a_one_signed_pole_joined(eng, mode, src):
+    t = eng.to_prefix(src)
+    ans = simp(eng, src, mode)
+    f_src = eng.as_callable(t, ['x1', 'x2', 'x3'])
+    f_ans = eng.as_callable(ans, ['x1', 'x2', 'x3'])
+    with np.errstate(all='ignore'):
+        for x1 in (0.5, 1.5, 2.5):  # 1 + x3 - x1 + 5/3 exp(x2) > 0 at x2 = x3 = 0
+            assert f_src(x1, 0.0, 0.0) == math.inf
+            assert f_ans(x1, 0.0, 0.0) == math.inf, ' '.join(ans)
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_the_search_still_splits_a_pole_one_addend_cancels(eng, mode):
+    # `x2*x2^-1` is 1: one addend keeps the pole, and the sum takes the product's value there.
+    assert simp(eng, '(x1 + x2 + x3)/x2', mode) == simp(eng, '(x1 + x3)/x2 + 1', mode)

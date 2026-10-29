@@ -58,7 +58,7 @@ class TestRoleClassification:
             masking.literal_sites(["pow", "x0"], engine)  # arity underflow
 
     def test_wrong_engine_object_fails_loudly(self, engine: SimpliPyEngine) -> None:
-        # A silent operator-table default (the E1 "DEP_OPS silently emptied" shape) let
+        # A silent operator-table default (the "DEP_OPS silently emptied" shape) let
         # a wrong `engine` walk with NO function arities: on tagged input the function
         # argument's literal took the enclosing BAG's role (sin(3)+x0 reported the 3 as
         # ADDEND, silently mis-masked), on explicit input the walk blamed the INPUT
@@ -76,7 +76,7 @@ class TestRoleClassification:
 class TestPolicies:
     def test_keep_structure_never_touches_indices_or_exponents(
             self, engine: SimpliPyEngine) -> None:
-        # The D2c regression: coefficient masked, rootn index AND exponent kept.
+        # The regression: coefficient masked, rootn index AND exponent kept.
         out = engine.simplify(engine.to_tagged(["*", "2", "rootn", "pow", "x0", "5", "3"]))
         masked = masking.mask(out, engine, masking.mask_fittable)
         assert masked == ["<mul>", "<constant>", "rootn", "pow", "x0", "5", "3", "</mul>"]
@@ -107,18 +107,18 @@ class TestPolicies:
 
 
 class TestMaskOnce:
-    """Masking DESTROYS information, so chaining it has consequences (owner 2026-08-07:
-    "we should perhaps document this with a few examples"). `mask` takes an EXPRESSION,
+    """Masking DESTROYS information, so chaining it has consequences (documented here with a few
+    examples). `mask` takes an EXPRESSION,
     never a skeleton. flash-ansr masks exactly once, so this is a documented property
     rather than a defect -- but it is pinned so the property cannot drift silently."""
 
     def test_a_second_pass_invents_a_degree_of_freedom(self, engine: SimpliPyEngine) -> None:
-        # The `<sub>` section is STRUCTURE. Collect moves the negation inside `atan` (an
-        # odd function), where it becomes an explicit `-1` coefficient -- structure
-        # wearing a literal's clothes. A second pass abstracts it into a free constant
-        # the original never had. Measured at ~0.15% of skeletons over 20k corpus rows.
-        expr = ["<add>", "<sub>", "atan", "<mul>", "pow", "x4", "3", "pow", "abs", "x4", "3",
-                "</mul>", "sin", "<mul>", "0", "log", "x4", "</mul>", "</add>"]
+        # The `neg` is STRUCTURE. Collect re-builds the product, where the negation becomes an
+        # explicit `-1` coefficient -- structure wearing a literal's clothes. A second pass
+        # abstracts it into a free constant the original never had. (srbf ground truth 957;
+        # 59 of srbf's 6,531 ground truths invent one so.)
+        expr = ["neg", "<mul>", "x1", "cos", "<add>", "rootn", "x1", "2", "<sub>", "7.68787",
+                "</add>", "</mul>"]
         once = masking.mask(expr, engine, masking.mask_fittable)
         twice = masking.mask(once, engine, masking.mask_fittable)
         assert expr.count("<constant>") == 0
@@ -136,7 +136,7 @@ class TestMaskOnce:
 
 
 class TestSpecialConstantsAreSites:
-    """Owner ruling 2026-07-31: `mask all should mask all, even pi or e or other
+    """`mask all should mask all, even pi or e or other
     specials.` Special constants (np.pi, np.e) are literal SITES like any numeric
     token -- the POLICY decides their fate, so a future pi-vocabulary pipeline keeps
     them with a one-line policy instead of a mechanism change. Poles and nan are NOT
@@ -182,7 +182,7 @@ class TestSpecialConstantsAreSites:
                        ("np.e", masking.Role.EXPONENT)]
 
     def test_symbolic_constant_folds_into_the_free_constant(self, engine: SimpliPyEngine) -> None:
-        """Owner ruling 2026-08-07: `2*pi` masks to ONE `<constant>`, never
+        """`2*pi` masks to ONE `<constant>`, never
         `<constant> * pi`.
 
         A free constant ABSORBS a symbolic one: `c * pi` is an arbitrary float, exactly
@@ -208,10 +208,10 @@ class TestSpecialConstantsAreSites:
 
     def test_keep_specials_is_one_policy_line(self, engine: SimpliPyEngine) -> None:
         # MECHANISM test, NOT a recommended policy. The policy sees the value string, so
-        # keeping specials needs no toolkit change -- but owner ruling 2026-08-07: keeping
+        # keeping specials needs no toolkit change -- but keeping
         # a symbolic constant beside a MASKED coefficient is pointless, because
         # `<constant> * np.pi` just fits an arbitrary float and an arbitrary float times
-        # pi is an arbitrary float. Contract 10.11 (2026-08-08) promoted that ruling into
+        # pi is an arbitrary float. Contract 10.11 promoted that ruling into
         # the CANON: the engine itself absorbs a special beside a fitted mask (Mul-scale
         # bijection), so a policy-kept special adjacent to a `<constant>` no longer
         # survives canonicalization -- keeping a special is meaningful only where no
@@ -236,7 +236,7 @@ class TestSpecialConstantsAreSites:
 
 class TestEngineMaskFrontDoor:
     """``engine.mask(expr, policy='all')`` -- the owner-approved front door over
-    this module (design D8): pure delegation, str->str / list->list symmetry,
+    this module: pure delegation, str->str / list->list symmetry,
     the three shipped policies by name or any callable policy."""
 
     def test_list_in_list_out_delegates_byte_identically(self, engine: SimpliPyEngine) -> None:
@@ -291,6 +291,42 @@ class TestEngineMaskFrontDoor:
             engine.mask(['*', '2', 'x0'], policy=42)
 
     def test_wrong_expression_type_raises(self, engine: SimpliPyEngine) -> None:
-        # The front door reads an infix str or a token LIST -- nothing else (D8).
+        # The front door reads an infix str or a token LIST -- nothing else.
         with pytest.raises(TypeError):
             engine.mask(('*', '2', 'x0'))
+
+
+class TestBesseljOrder:
+    """besselj's order is STRUCTURE, like a ``pow`` exponent: a non-integer order makes
+    ``J_nu(x)`` NaN for every ``x < 0`` and an integer order's parity is the function's, so
+    the order controls the domain. It gets its own role, ``ORDER``, which types its whole
+    subtree, and the fittable kind keeps it."""
+
+    @pytest.fixture(scope="class")
+    def bessel_engine(self) -> SimpliPyEngine:
+        import warnings
+
+        from simplipy.io import load_config
+        ops = dict(load_config(acj_config_path())['operators'])
+        ops['besselj'] = {'realization': 'scipy.special.jv', 'alias': [], 'arity': 2, 'commutative': False}
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # the engine has no rules, and says so
+            return SimpliPyEngine(operators=ops, rules=[])
+
+    def test_the_order_has_its_own_role(self, bessel_engine: SimpliPyEngine) -> None:
+        def sites(tokens: list[str]) -> list[tuple[str, masking.Role]]:
+            return [(v, r) for _, v, r in masking.literal_sites(tokens, bessel_engine)]
+        assert sites(["besselj", "2", "x0"]) == [("2", masking.Role.ORDER)]
+        assert sites(["besselj", "/", "1", "2", "*", "3", "x0"]) == [
+            ("1", masking.Role.ORDER), ("2", masking.Role.ORDER), ("3", masking.Role.COEFFICIENT)]
+        assert sites(["besselj", "<mul>", "1", "<div>", "2", "</mul>", "x0"]) == [
+            ("1", masking.Role.ORDER), ("2", masking.Role.ORDER)]
+        assert sites(["besselj", "x1", "2"]) == [("2", masking.Role.VALUE)]
+
+    def test_fittable_keeps_the_order_and_all_masks_it(self, bessel_engine: SimpliPyEngine) -> None:
+        tokens = ["besselj", "2", "*", "3", "x0"]
+        assert masking.mask(tokens, bessel_engine, masking.mask_fittable, collect=False) == [
+            "besselj", "2", "*", "<constant>", "x0"]
+        assert masking.mask(tokens, bessel_engine, masking.mask_all, collect=False) == [
+            "besselj", "<constant>", "*", "<constant>", "x0"]
+        assert masking.mask_fittable("2", masking.Role.ORDER) is None

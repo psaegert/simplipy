@@ -1,7 +1,8 @@
-//! Pure string/number helpers mirroring `simplipy/utils.py`: is_numeric_string,
-//! numbers_to_constant, remove_pow1, factorize_to_at_most.
+//! Pure string/number helpers: the numeral grammar (`is_numeric_string`, which
+//! `simplipy.utils` calls), the parser's `numbers_to_constant` step (its Python namesake is
+//! gone), and `factorize_to_at_most`.
 
-/// THE NUMERAL GRAMMAR (B2, 2026-10-05), the one definition every reader shares (Python
+/// THE NUMERAL GRAMMAR, the one definition every reader shares (Python
 /// mirror: `simplipy.utils.is_numeric_string`). A numeral is
 ///   - a decimal `[+-]? (D+ (. D*)? | . D+) ([eE] [+-]? D+)?`, or
 ///   - an exact fraction `[+-]? D+ / D+` with a nonzero denominator,
@@ -69,7 +70,7 @@ pub(crate) fn looks_numeric(t: &str) -> bool {
         .starts_with(|c: char| c.is_ascii_digit() || c == '.')
 }
 
-/// H-007: a spelling that a STANDARD numeric reader interprets but the engine's symbolic
+/// A spelling that a STANDARD numeric reader interprets but the engine's symbolic
 /// core does not. Such a token has two contradictory readings -- the AC canon would treat
 /// it as a free symbol and apply symbol algebra (`inf - inf -> 0`) while Python `float()`,
 /// Rust `f64::from_str`, and the engine's own `leaf_value` read it as a value
@@ -84,7 +85,7 @@ pub(crate) fn looks_numeric(t: &str) -> bool {
 ///   3. base-prefixed integer literals: `0x10`/`0o17`/`0b101` any case, optional sign,
 ///      optional underscore grouping (Python source syntax: a realized-infix `eval` would
 ///      read 16 where the engine sees a symbol);
-///   4. malformed numerals (B2, 2026-10-05): a token that starts like a number
+///   4. malformed numerals: a token that starts like a number
 ///      (`looks_numeric`) but is not a numeral of the grammar (`is_numeric_string`) --
 ///      `1/0`, `1/6.28`, `0.5/3`, `--5`, `-+5`, `1e5.5`, `1/-3`, `2x`. The realized infix
 ///      reads most of them as values (`--5` is 5, `1/6.28` a quotient) or raises (`1/0`);
@@ -153,7 +154,7 @@ pub fn reserved_numeric_spelling(t: &str) -> bool {
     false
 }
 
-/// Port of `numbers_to_constant`: replace every token for which Python's
+/// `parse`'s `mask_numbers` step: replace every token for which Python's
 /// `float(token)` SUCCEEDS with `<constant>`. NOTE this uses `float()` (try/except), NOT
 /// `is_numeric_string` -- so it is a DIFFERENT predicate from [`mask_elementary_literals`]
 /// (e.g. `float('1e3')` succeeds, `float('inf')`/`float('nan')` succeed). `parse` calls this when
@@ -172,24 +173,6 @@ pub fn numbers_to_constant(prefix_expression: &[String]) -> Vec<String> {
             }
         })
         .collect()
-}
-
-/// Port of `remove_pow1`: drop every `pow1` token (raising-to-1 identity)
-/// and rewrite `pow_1` (raising-to-(-1)) as `inv`; all other tokens pass through. The final cleanup
-/// step of `parse`.
-pub fn remove_pow1(prefix_expression: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(prefix_expression.len());
-    for token in prefix_expression {
-        if token == "pow1" {
-            continue;
-        }
-        if token == "pow_1" {
-            out.push("inv".to_string());
-            continue;
-        }
-        out.push(token.clone());
-    }
-    out
 }
 
 /// Port of `utils.factorize_to_at_most`. Decomposes `p` into factors
@@ -293,7 +276,7 @@ mod tests {
         for t in ["0x10", "0X10", "0o17", "0b101", "+0x10", "-0x10", "0x_10"] {
             assert!(reserved_numeric_spelling(t), "{t}");
         }
-        // Family 4 (B2): tokens that start like a number but are not numerals.
+        // Family 4: tokens that start like a number but are not numerals.
         for t in [
             "1/0", "0/0", "1/6.28", "0.5/3", "1e2/3", "1/3e2", "--5", "-+5", "+-5", "1e5.5",
             "1e-5e", "5e", "1/-3", "2x", "0x", ".", "1.2.3", "(1/0)", "(--5)",

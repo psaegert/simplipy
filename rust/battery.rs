@@ -82,8 +82,8 @@ pub const BATTERY: [ProbeAtom; 21] = [
 /// witnesses plus the special rationals and the symbolic transcendental atoms. A fitted or
 /// pattern-bound source constant reaches every one of these in deployment.
 ///
-/// SPAN MIRRORS THE JUDGE (audit U8, 2026-08-22). This battery reached |c| <= 5 while
-/// the gate's constant quantifier reaches |c| = 1e4 generically (`WIDE_CONSTS`, F107)
+/// SPAN MIRRORS THE JUDGE. This battery reached |c| <= 5 while
+/// the gate's constant quantifier reaches |c| = 1e4 generically (`WIDE_CONSTS`)
 /// and probes the f64 attainment magnitudes out to 1e17 (`SATURATION_CONSTS`) -- so
 /// the miner minted rows the gate then convicted, and every such row was judged,
 /// confirmed and routed before dying. The span below is the judge's own: the 18 core
@@ -109,7 +109,7 @@ pub const SPECIAL_CONSTS: [f64; 48] = [
     -std::f64::consts::FRAC_PI_2,
     std::f64::consts::PI,
     std::f64::consts::E,
-    // WIDE_CONSTS: the generic magnitude span, decade-spaced, both signs (F107)
+    // WIDE_CONSTS: the generic magnitude span, decade-spaced, both signs
     10.0,
     -10.0,
     30.0,
@@ -250,7 +250,7 @@ fn dep_realised(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp
         return cl;
     }
     // The pre-screen's bar is the fit band PLUS ULP headroom, additively -- and that
-    // shape is deliberate, not sloppy (audit U8, resolved 2026-08-22 by measurement).
+    // shape is deliberate, not sloppy (resolved by measurement).
     // A strict bit-distance OR-form was tried and refused true rules at the band
     // EDGE: `adopt_snapped_witness` legitimately places a witness up to the band
     // boundary, and the boundary case then measured the SNAP displacement (124,875
@@ -273,7 +273,7 @@ fn dep_realised(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp
 
 /// The ulp SPACING at |x|, finite for every finite input: at `f64::MAX` the next
 /// representable is inf, so the spacing is taken to the lower neighbour instead --
-/// an infinite tolerance is not a bar (audit U8).
+/// an infinite tolerance is not a bar.
 fn ulp_at(x: f64) -> f64 {
     let a = x.abs();
     if !a.is_finite() {
@@ -306,17 +306,27 @@ fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointC
 /// Row semantics at the special points. A row where
 /// the deployed f64 sides agree passes outright; a diverging row is judged by the contract
 /// point verdict (`hiprec::contract_point_verdict`: precision rungs plus snap semantics):
-///   - confirmed REAL-CHANGE -> REJECT (clause (a): kills at any measure, snap included);
+///   - confirmed REAL-CHANGE -> REJECT (clause (a): kills at any measure, snap included), but
+///     in permissive, which excuses a disagreement at an isolated point (P3) and leaves the
+///     judge to decide whether this one is (`ceil(sin(x)) -> |ceil(sin(x))|` differs only
+///     where sin(x) = -1);
 ///   - EXT / SHRINK / INF-CHANGE -> a tolerated event class, row passes;
-///   - contract eq or unresolved, NOT snapped -> REJECT (the deployed algebra structurally
-///     diverges where the contract does not object -- this also convicts the
-///     precision-roulette seam class);
+///   - contract eq or unresolved, NOT snapped -> in f64 (`mode`) REJECT (the deployed
+///     algebra structurally diverges where the contract does not object -- this also convicts
+///     the precision-roulette seam class); in real and permissive the row passes, as their
+///     values are the reals' (`ceil(erf(sinh(-3))) -> ceil(erf(-3))`: float64 rounds the first
+///     erf to -1, and both are 0);
 ///   - snapped (symbolic-cancellation / pole-proximity at the point) -> row passes (the f64
 ///     algebra evaluates a DIFFERENT point there; measurement error, not a value claim).
+///
+/// `events` (f64 only) marks the rows where an operation of either side overflowed or
+/// underflowed (`numeric::RangeKind`): there f64 accepts the true value, so a row the contract
+/// finds equal passes however the deployed sides diverge, as in the contract judge's battery.
 #[allow(clippy::too_many_arguments)]
 pub fn rows_consistent(
     y_src: &[f64],
     y_cand: &[f64],
+    events: Option<&[bool]>,
     battery: &SpecialBattery,
     source: &[String],
     src_params: &[f64],
@@ -326,10 +336,27 @@ pub fn rows_consistent(
     var_names: &[String],
     rtol: f64,
     atol: f64,
+    mode: crate::engine::RuleMode,
 ) -> bool {
+    use crate::engine::RuleMode;
     use crate::hiprec::PointCmp as P;
+    let lane_f64 = matches!(mode, RuleMode::Default);
+    let f64_exact = lane_f64 && cand_params.is_empty();
     for r in 0..battery.n_rows {
-        let dv = dep_realised(y_src[r], y_cand[r], rtol, atol);
+        // f64's const-free pair agrees at float resolution, as the judge's deployed lane reads it
+        // (F6): a defined source point that disagrees refuses unless an operation left the range
+        // there and the contract agrees (the range standard, below)
+        let dv = if f64_exact {
+            if crate::table::f64_agree(y_src[r], y_cand[r]) == crate::table::Cmp::Eq {
+                P::Eq
+            } else if y_src[r].is_nan() || events.is_some_and(|e| e[r]) {
+                P::RealChange
+            } else {
+                return false;
+            }
+        } else {
+            dep_realised(y_src[r], y_cand[r], rtol, atol)
+        };
         if dv == P::Eq {
             continue;
         }
@@ -343,14 +370,15 @@ pub fn rows_consistent(
             &battery.atoms[r],
         );
         let reject = match v {
-            Some(P::RealChange) => true,
+            Some(P::RealChange) => !matches!(mode, RuleMode::Permissive),
             Some(P::Ext) | Some(P::Shrink) | Some(P::InfChange) => false,
             // The contract does not object, so the only thing left to convict is a
             // DIVERGENCE -- and that is the structural question, not the realisation one.
             // A few ULP between two spellings is rounding; asking the realisation bar here
             // would reject sound rules for it.
+            Some(P::Eq) if events.is_some_and(|e| e[r]) => false,
             Some(P::Eq) | None => {
-                !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
+                lane_f64 && !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
             }
         };
         if reject {
@@ -469,5 +497,507 @@ mod tests {
         assert_eq!(snap_candidates(&[std::f64::consts::FRAC_PI_2]), None);
         // already canonical: no change to report
         assert_eq!(snap_candidates(&[3.0]), None);
+    }
+}
+
+// ===== THE DEPLOYED BAR ========================================================================
+
+/// The probe values of the deployed bar beyond `BATTERY`, the infinities and NaN: where the
+/// step heads jump and the special functions meet a cell (a signed zero, the float neighbours of
+/// the integers, tiny and huge magnitudes, the negative integers of `harmonic`'s poles, erf's
+/// saturation), so that a law of the reals float64 breaks there is seen
+/// (`floor(x + 1) = floor(x) + 1` at x = -1e-17, `ceil(x) = floor(x) + 1` at every integer).
+pub const DEPLOYED_EXTRA: [f64; 33] = [
+    -0.0,
+    1e-17,
+    -1e-17,
+    5e-324,
+    -5e-324,
+    1e-300,
+    -1e-300,
+    0.9999999999999999,
+    1.0000000000000002,
+    -0.9999999999999999,
+    -1.0000000000000002,
+    1.9999999999999998,
+    2.0000000000000004,
+    -1.9999999999999998,
+    -2.0000000000000004,
+    2.9999999999999996,
+    3.0000000000000004,
+    -2.9999999999999996,
+    -3.0000000000000004,
+    4.0,
+    -4.0,
+    2.5,
+    -2.5,
+    6.0,
+    -6.0,
+    7.0,
+    -7.0,
+    1e17,
+    -1e17,
+    1e300,
+    -1e300,
+    0.1,
+    -0.1,
+];
+
+/// Rows of the product past this many are thinned to an even stride (four or more variables).
+const DEPLOYED_MAX_ROWS: usize = 250_000;
+
+/// What the deployed bar found: the verdict, the number of probes, and the first probe
+/// where the sides differ.
+pub struct DeployedExact {
+    pub ok: bool,
+    pub probes: usize,
+    pub first: Option<Vec<f64>>,
+    /// With `defer_range` (`f64_bar_sorted`): the probes where the sides differ and an
+    /// operation of either side overflowed or underflowed, left to the caller, which accepts
+    /// one where the rewrite gives the true value (the range standard). Empty otherwise.
+    pub range_rows: Vec<Vec<f64>>,
+}
+
+/// The 0.15 heads. A rule spelled with one answers to the deployed bar for its float64
+/// realisation (`f64_bar`): a step head's jump (`floor(x + 1) = floor(x) + 1` fails at
+/// x = -1e-17), a zero's sign that `atan2` reads, a pole of `harmonic` -- float64 parts from
+/// the reals there, at points the contract's battery does not reach.
+pub const NEW_HEADS: [&str; 9] = [
+    "floor", "ceil", "erf", "harmonic", "max", "min", "mod", "atan2", "besselj",
+];
+
+/// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
+/// constant cannot be judged bit for bit beside them.
+const JUMP_HEADS: [&str; 3] = ["floor", "ceil", "mod"];
+
+/// Does `tokens` hold a 0.15 head (as an operator of `ops`)?
+pub fn holds_new_head(tokens: &[String], ops: &Operators) -> bool {
+    tokens
+        .iter()
+        .any(|t| ops.arity_of(t).is_some() && NEW_HEADS.contains(&t.as_str()))
+}
+
+/// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary
+/// realisation axis decides (no 0.15 head; a bare `<constant>` target, whose witness is the
+/// source's own value; a fitted target constant beside heads without jumps), else the deployed
+/// bar's verdict (`deployed_exact_over`), each source `<constant>` probed as a variable over the
+/// finite probes (a fitted constant is a finite float). A fitted target constant beside a jump
+/// head cannot be judged bit for bit, so it is refused. The contract judge ANDs this into a
+/// rule's `realised` (`_core.f64_bar`) and the f64 mint applies it to every pick, so the two
+/// cannot disagree.
+pub fn f64_bar(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> Option<DeployedExact> {
+    f64_bar_sorted(lhs, rhs, var_names, &[], false, ops)
+}
+
+/// `f64_bar` over each variable's SORT, the contract judge's reading of it: `sorts[i]` is the
+/// slot sort of `var_names[i]` -- `?` (data) and `!` are probed over finite doubles only, `$`
+/// over nonzero finite ones, `_` (and a variable with no sort given) over every probe, the
+/// infinities and NaN included -- and with `defer_range`, a probe where the sides differ and an
+/// operation overflowed or underflowed is returned in `range_rows` instead of failing the bar
+/// (the range standard: there the true value is accepted, which only the caller can judge).
+/// `ceil(1/cosh(x)) -> 1` holds in f64 so: x = +-inf is no data, and past |x| = 710.48 `cosh`
+/// overflows and the rewrite gives the true value 1.
+pub fn f64_bar_sorted(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    sorts: &[char],
+    defer_range: bool,
+    ops: &Operators,
+) -> Option<DeployedExact> {
+    if !holds_new_head(lhs, ops) && !holds_new_head(rhs, ops) {
+        return None;
+    }
+    let is_c = |t: &String| t == "<constant>";
+    if rhs.iter().any(is_c) {
+        let jumps = lhs
+            .iter()
+            .chain(rhs)
+            .any(|t| ops.arity_of(t).is_some() && JUMP_HEADS.contains(&t.as_str()));
+        return if rhs.len() == 1 || !jumps {
+            None
+        } else {
+            Some(DeployedExact {
+                ok: false,
+                probes: 0,
+                first: None,
+                range_rows: Vec::new(),
+            })
+        };
+    }
+    let mut names = var_names.to_vec();
+    let mut lhs_v = Vec::with_capacity(lhs.len());
+    let mut n_c = 0usize;
+    for t in lhs {
+        if is_c(t) {
+            let name = format!("<c{n_c}>");
+            names.push(name.clone());
+            lhs_v.push(name);
+            n_c += 1;
+        } else {
+            lhs_v.push(t.clone());
+        }
+    }
+    Some(deployed_exact_over(
+        &lhs_v,
+        rhs,
+        &names,
+        n_c,
+        sorts,
+        defer_range,
+        ops,
+    ))
+}
+
+/// The most range rows of the f64 bar the mint reads by the table (the judge's
+/// `RANGE_ROWS_CAP`); a bar with more is undecided, and fails closed.
+const MINT_RANGE_ROWS_CAP: usize = 256;
+
+/// THE MINT'S f64 BAR, the judge's reading of it (`verify._contract`'s deployed check): every
+/// mined variable is data, a `?` slot probed over finite doubles only, and at a probe where the
+/// sides differ and an operation overflowed or underflowed the rewrite may give the true value
+/// (the range standard), which the table decides (`range_row_true`). `true` where no 0.15 head
+/// asks the bar. `ceil(1/cosh(x)) -> 1` passes: x = +-inf is no data, and past |x| = 710.48
+/// `cosh` overflows and the true value is 1.
+pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &Operators) -> bool {
+    let sorts = vec!['?'; var_names.len()];
+    let Some(bar) = f64_bar_sorted(lhs, rhs, var_names, &sorts, true, ops) else {
+        return true;
+    };
+    bar.ok
+        && bar.range_rows.len() <= MINT_RANGE_ROWS_CAP
+        && bar
+            .range_rows
+            .iter()
+            .all(|row| range_row_true(lhs, rhs, var_names, row, ops))
+}
+
+/// Does the rewrite give the TRUE value at one range row of the f64 bar? Both sides read by the
+/// table at the row (the left side's `<constant>`s named and valued as `f64_bar_sorted` appends
+/// them): the same class, and finite values equal to the working precision. A row the table
+/// cannot read says nothing about the true value and passes, as the judge skips it.
+fn range_row_true(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    row: &[f64],
+    ops: &Operators,
+) -> bool {
+    use crate::table::{class_of, Ctx, Expr};
+    let mut names = var_names.to_vec();
+    let mut k = 0usize;
+    let lt: Vec<String> = lhs
+        .iter()
+        .map(|t| {
+            if t == "<constant>" {
+                let name = format!("<c{k}>");
+                names.push(name.clone());
+                k += 1;
+                name
+            } else {
+                t.clone()
+            }
+        })
+        .collect();
+    let arity: std::collections::HashMap<String, u8> = lt
+        .iter()
+        .chain(rhs)
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let (Ok(le), Ok(re)) = (
+        Expr::compile(&lt, &names, &arity),
+        Expr::compile(rhs, &names, &arity),
+    ) else {
+        return false;
+    };
+    let env: Vec<crate::table::Val> = row.iter().map(|v| crate::table::val_of_f64(*v)).collect();
+    const DPS: i32 = 50;
+    let (Some(l), Some(r)) = (
+        le.eval_real(&env, DPS).and_then(|o| o.value),
+        re.eval_real(&env, DPS).and_then(|o| o.value),
+    ) else {
+        return true;
+    };
+    let (lu, li) = class_of(&l);
+    let (ru, ri) = class_of(&r);
+    if lu || ru || li.is_some() || ri.is_some() {
+        return lu == ru && li == ri;
+    }
+    let Some(mut ctx) = Ctx::new(DPS) else {
+        return false;
+    };
+    let p = crate::hiprec::dps_to_prec(DPS);
+    let (a, b) = (ctx.value_bf(&l), ctx.value_bf(&r));
+    let d = a.sub(&b, p, crate::hiprec::RM).abs();
+    let scale = a.abs().max(&b.abs());
+    let tol = scale.mul(&crate::hiprec::pow10(-(DPS - 10), p), p, crate::hiprec::RM);
+    matches!(d.cmp(&tol), Some(o) if o <= 0)
+}
+
+/// THE DEPLOYED BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero
+/// included, since an inverse or `atan2` reads it; NaN equal to NaN), with the engine's own
+/// kernels, at every probe? The probes are, per
+/// variable of `var_names` either side uses, the `BATTERY` points, +-inf, NaN and
+/// `DEPLOYED_EXTRA` (their full product); a generic grid per variable with the others at
+/// 1.7 and -1.3; and the diagonal of that grid. No probe is excused: no tolerance, no range
+/// event, no extension of a NaN. The last `n_finite` names of `var_names` are fitted constants,
+/// probed over the finite values only.
+///
+/// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into a rule's
+/// `realised` and the f64 mint applies to every pick, so the judge licenses exactly what the
+/// mint accepts. A side holding a `<constant>`, or one that does not compile, fails.
+fn deployed_exact_over(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    n_finite: usize,
+    sorts: &[char],
+    defer_range: bool,
+    ops: &Operators,
+) -> DeployedExact {
+    let refused = DeployedExact {
+        ok: false,
+        probes: 0,
+        first: None,
+        range_rows: Vec::new(),
+    };
+    if lhs.iter().chain(rhs).any(|t| t == "<constant>") {
+        return refused;
+    }
+    let (Ok(tl), Ok(tr)) = (
+        crate::eval::Tape::compile(lhs, ops, var_names),
+        crate::eval::Tape::compile(rhs, ops, var_names),
+    ) else {
+        return refused;
+    };
+    let used: Vec<usize> = (0..var_names.len())
+        .filter(|&i| lhs.iter().chain(rhs).any(|t| *t == var_names[i]))
+        .collect();
+    let mut values: Vec<f64> = Vec::new();
+    for v in BATTERY
+        .iter()
+        .map(|a| a.value())
+        .chain([f64::INFINITY, f64::NEG_INFINITY, f64::NAN])
+        .chain(DEPLOYED_EXTRA)
+    {
+        if !values.iter().any(|w| w.to_bits() == v.to_bits()) {
+            values.push(v);
+        }
+    }
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let nonzero: Vec<f64> = finite.iter().copied().filter(|v| *v != 0.0).collect();
+    let first_finite = var_names.len().saturating_sub(n_finite);
+    let probes_of = |v: usize| {
+        if v >= first_finite {
+            return &finite;
+        }
+        match sorts.get(v) {
+            Some('?' | '!') => &finite,
+            Some('$') => &nonzero,
+            _ => &values,
+        }
+    };
+    let width = var_names.len().max(1);
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    let total = used
+        .iter()
+        .fold(1usize, |acc, &v| acc.saturating_mul(probes_of(v).len()));
+    let stride = total.div_ceil(DEPLOYED_MAX_ROWS).max(1);
+    for pick in (0..total).step_by(stride) {
+        let mut row = vec![1.7f64; width];
+        let mut rem = pick;
+        for &v in &used {
+            let vals = probes_of(v);
+            row[v] = vals[rem % vals.len()];
+            rem /= vals.len();
+        }
+        rows.push(row);
+    }
+    let grid = generic_grid();
+    for cfg in [1.7f64, -1.3] {
+        for &v in &used {
+            for &g in &grid {
+                let mut row = vec![cfg; width];
+                row[v] = g;
+                rows.push(row);
+            }
+        }
+    }
+    if used.len() >= 2 {
+        for &g in &grid {
+            let mut row = vec![1.7f64; width];
+            for &v in &used {
+                row[v] = g;
+            }
+            rows.push(row);
+        }
+    }
+    let n = rows.len();
+    let cols: Vec<Vec<f64>> = (0..width)
+        .map(|c| rows.iter().map(|r| r[c]).collect())
+        .collect();
+    let (yl, yr) = (
+        tl.eval_columns(&cols, &[], n),
+        tr.eval_columns(&cols, &[], n),
+    );
+    let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits();
+    // The range standard's reading of a differing probe: did an operation of either side
+    // overflow or underflow there (`table::Expr::eval_f64`, the same kernels)?
+    let range_reader = defer_range
+        .then(|| {
+            let arity: std::collections::HashMap<String, u8> = lhs
+                .iter()
+                .chain(rhs)
+                .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+                .collect();
+            let l = crate::table::Expr::compile(lhs, var_names, &arity).ok()?;
+            let r = crate::table::Expr::compile(rhs, var_names, &arity).ok()?;
+            Some((l, r))
+        })
+        .flatten();
+    let out_of_range = |row: &[f64]| {
+        range_reader.as_ref().is_some_and(|(l, r)| {
+            let in_l = l.eval_f64(row).is_none_or(|(_, ok)| ok);
+            let in_r = r.eval_f64(row).is_none_or(|(_, ok)| ok);
+            !(in_l && in_r)
+        })
+    };
+    let mut range_rows: Vec<Vec<f64>> = Vec::new();
+    for i in 0..n {
+        if same(yl[i], yr[i]) {
+            continue;
+        }
+        if out_of_range(&rows[i]) {
+            range_rows.push(used.iter().map(|&v| rows[i][v]).collect());
+            continue;
+        }
+        return DeployedExact {
+            ok: false,
+            probes: n,
+            first: Some(used.iter().map(|&v| rows[i][v]).collect()),
+            range_rows,
+        };
+    }
+    DeployedExact {
+        ok: true,
+        probes: n,
+        first: None,
+        range_rows,
+    }
+}
+
+/// The generic grid of the deployed bar: every 0.05 in [-25, 25] and a magnitude tail,
+/// shifted off the integers. Dense enough to land between a saturation and the next integer,
+/// where a step head and a saturating one part (`erf(floor(x))` is below 1 on [5.9216, 6) while
+/// `erf(x)` is 1 there; `tanh` likewise on [19.06, 20)).
+fn generic_grid() -> Vec<f64> {
+    let mut g: Vec<f64> = Vec::new();
+    g.extend((0..=1000).map(|i| -25.0 + 0.05 * i as f64));
+    g.extend([
+        -1e4, -1e3, -300.0, -100.0, -50.0, -30.0, 30.0, 50.0, 100.0, 300.0, 1e3, 1e4,
+    ]);
+    let mut out: Vec<f64> = Vec::new();
+    for v in g.into_iter().map(|v| v + 0.0137421) {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod deployed_bar_tests {
+    use super::*;
+
+    fn s(t: &str) -> Vec<String> {
+        t.split(' ').map(String::from).collect()
+    }
+
+    /// The bar refuses the laws of the reals that float64 breaks at a jump or a pole, and passes
+    /// the float64 identities.
+    #[test]
+    fn deployed_exact_sees_the_jumps() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        for (l, r) in [
+            ("+ floor x0 1", "ceil x0"),
+            ("floor + x0 1", "+ floor x0 1"),
+            ("mod + x0 1 1", "mod x0 1"),
+            ("floor mod x0 1", "0"),
+            ("mod x0 x0", "0"),
+            ("harmonic x0", "- harmonic + x0 1 inv + x0 1"),
+            ("besselj 0.5 x0", "besselj 0.5 abs x0"),
+            ("* floor x0 0", "0"),
+            ("max x0 x1", "* 0.5 + + x0 x1 abs - x0 x1"),
+            ("floor <constant>", "<constant>"),
+            // a saturation and the next integer part the step head from the smooth one
+            ("acosh erf floor x0", "acosh erf x0"),
+            ("acosh tanh floor x0", "acosh tanh x0"),
+            // a zero's sign is a value an inverse reads: ceil(asinh(-1)) is -0
+            ("ceil asinh -1", "0"),
+            ("mod floor x0 1", "* 0 x0"),
+        ] {
+            assert!(
+                !deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops).ok,
+                "{l} -> {r}"
+            );
+        }
+        for (l, r) in [
+            ("floor floor x0", "floor x0"),
+            ("ceil neg x0", "neg floor x0"),
+            ("max x0 x0", "x0"),
+            ("max x0 x1", "max x1 x0"),
+            ("min x0 float(\"inf\")", "x0"),
+            ("erf neg x0", "neg erf x0"),
+        ] {
+            let d = deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops);
+            assert!(d.ok, "{l} -> {r} at {:?}", d.first);
+            assert!(d.probes > 300);
+        }
+    }
+
+    /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a
+    /// finite variable; the ordinary axis for a bare constant target or a fitted target constant
+    /// beside smooth heads; refused for a fitted target constant beside a jump head.
+    #[test]
+    fn f64_bar_reads_constants() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        let bar = |l: &str, r: &str| f64_bar(&s(l), &s(r), &v, ops).map(|d| d.ok);
+        assert_eq!(bar("sin x0", "sin x0"), None);
+        assert_eq!(bar("floor + x0 1", "+ floor x0 1"), Some(false));
+        assert_eq!(bar("floor floor x0", "floor x0"), Some(true));
+        // a source constant alone is a variable over the finite probes
+        assert_eq!(
+            bar("max <constant> float(\"nan\")", "float(\"nan\")"),
+            Some(true)
+        );
+        assert_eq!(bar("floor + <constant> 1", "+ floor x0 1"), Some(false));
+        // a fitted target constant beside a jump head is refused
+        assert_eq!(
+            bar("floor floor <constant>", "floor <constant>"),
+            Some(false)
+        );
+        assert_eq!(bar("floor <constant>", "<constant>"), None);
+        assert_eq!(bar("erf * x0 <constant>", "erf * <constant> x0"), None);
+        assert_eq!(
+            bar("floor * x0 <constant>", "floor * <constant> x0"),
+            Some(false)
+        );
     }
 }

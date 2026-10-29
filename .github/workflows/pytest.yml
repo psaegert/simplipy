@@ -8,12 +8,11 @@ name: pytest
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    # A hung job runs to GitHub's 6h default. On 2026-08-19 three runs hung on
-    # "Run tests" for 2h+ each (3 jobs apiece) while the suite passed locally in
-    # 107s against the same commit -- an environment stall, not a code deadlock.
-    # 20 minutes is ~11x the observed runtime: generous for a slow runner, cheap
-    # for a hang.
-    timeout-minutes: 20
+    # A hung job runs to GitHub's 6h default, so the job carries its own bound. The
+    # suite takes about 13 minutes on a development host (the shipped-triple sweep of
+    # the permissive-dominance gate alone about 5); 60 minutes leaves room for a slower
+    # runner and still bounds a hang.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -70,8 +69,8 @@ jobs:
           print("staged legacy 4-3 ->", os.path.join(cache, info["directory"]))
           PY
 
-      # The engine suites load the SERVED acj-4 asset from the cache, exactly like a
-      # user install (the tree carries no artifact copy).
+      # The engine suites load the acj-4 cell the tree carries under assets/engines/, and
+      # the staged cache copy where the tree has none (tests/conftest.py, acj_asset_dir).
       - name: Stage the acj-4 and acj-4-3 engine assets (the asset-gated suites load them)
         run: |
           python - <<'PY'
@@ -86,14 +85,65 @@ jobs:
               print("staged", name, "->", os.path.join(cache, info["directory"]))
           PY
 
-      # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4 engine and the
-      # staged legacy refusal input above) must FAIL loudly if the assets vanish, never
-      # silently skip. The triple-gated tests key on SIMPLIPY_TEST_REQUIRE_TRIPLE
-      # instead (set it in the job that validates a triple-shipping build): the cell
-      # ships its f64 third alone while the real/corpus sets are re-mined, and those
-      # tests self-activate the moment the two files land beside it.
+      # REQUIRE_ASSETS: the asset-gated python tests (the acj-4 triple and the staged
+      # legacy refusal input above) must FAIL loudly if an asset vanishes, never
+      # silently skip.
       - name: Run tests
         run: pytest tests
+        env:
+          SIMPLIPY_TEST_REQUIRE_ASSETS: "1"
+
+  # THE RELEASE GATES ON THE BUILT WHEEL. The job above tests an editable install, which
+  # reads the package from src/ and so cannot see a file the wheel leaves out. This job
+  # builds the wheel, installs it into a fresh venv, and runs the release-gate suites
+  # from a directory holding only tests/ and assets/ (no src/), so the package under test
+  # is the wheel's. A packaging regression -- such as the gate's corpus missing from the
+  # wheel -- fails here.
+  wheel-gates:
+    name: Release gates on the built wheel
+    runs-on: ubuntu-latest
+    # A release build of the core plus the gate suites; the shipped-triple sweep alone
+    # takes about 5 minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip wheel --no-deps -w dist .
+          python -m zipfile -l dist/simplipy-*.whl | grep simplipy/verify/data/raw_skeletons_nv.json
+      - name: Install the wheel into a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/wheelenv"
+          "$RUNNER_TEMP/wheelenv/bin/pip" install dist/simplipy-*.whl pytest
+      - name: Stage the legacy 4-3 asset (the generation-gate refusal tests read it)
+        run: |
+          "$RUNNER_TEMP/wheelenv/bin/python" - <<'PY'
+          import json, os
+          from huggingface_hub import hf_hub_download
+          manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
+          info = manifest["4-3"]
+          cache = os.path.expanduser("~/.cache/simplipy")
+          for f in info["files"]:
+              hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
+          PY
+      - name: Run the release-gate suites outside the source tree
+        run: |
+          OUTSIDE="$RUNNER_TEMP/outside"
+          mkdir -p "$OUTSIDE"
+          cp -r tests assets "$OUTSIDE/"
+          cd "$OUTSIDE"
+          "$RUNNER_TEMP/wheelenv/bin/python" -c "import simplipy, sys; print(simplipy.__file__); sys.exit('wheelenv' not in simplipy.__file__)"
+          "$RUNNER_TEMP/wheelenv/bin/python" -m pytest -p no:cacheprovider \
+            tests/test_verify.py tests/test_artifact_compat.py tests/test_mode_rulesets.py \
+            tests/test_rules_less_warning.py
         env:
           SIMPLIPY_TEST_REQUIRE_ASSETS: "1"
 

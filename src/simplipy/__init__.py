@@ -9,7 +9,7 @@ resolving engine rulesets and test data.
 import warnings as _warnings
 from typing import Any as _Any
 
-from .engine import DEFAULT_EFFORT, DEFAULT_ENGINE, DEFAULT_ENGINE_REVISION, DEFAULT_WORK, SimpliPyEngine, Mode
+from .engine import DEFAULT_EFFORT, DEFAULT_ENGINE, DEFAULT_ENGINE_REVISION, SimpliPyEngine, Mode
 from . import engine
 from . import operators
 from . import utils
@@ -32,12 +32,12 @@ try:
 except _PackageNotFoundError:  # running from a source checkout without an installed dist
     __version__ = "0.0.0+unknown"
 
-# The declared public surface (D11 column, owner-ratified 2026-08-16; see the
-# compatibility policy). Submodule names are deliberately NOT declared (DP-A):
+# The declared public surface (see the
+# compatibility policy). Submodule names are deliberately NOT declared:
 # they stay importable and documented, but `from simplipy import *` no longer
 # injects modules into the caller's namespace (simplipy.io shadowed stdlib io).
 __all__ = [
-    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'DEFAULT_WORK', 'Mode', 'SimpliPyEngine', '__version__',
+    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
     'normalize_variable_token', 'to_expression', 'to_skeleton',

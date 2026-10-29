@@ -1,6 +1,6 @@
 """Acceptance tests for the normalization rename + all-forms intake.
 
-Owner ruling 2026-08-18: `normalize_skeleton` -> `to_skeleton`,
+Renamed: `normalize_skeleton` -> `to_skeleton`,
 `normalize_expression` -> `to_expression`. The name must state the OUTPUT form,
 matching the engine's `to_infix`/`to_prefix`/`to_tagged`; the old names hid a
 load-bearing behaviour (a skeleton masks EVERY numeric literal, `pow` exponents
@@ -11,7 +11,7 @@ Follow-up ruling, same day: both take all three external forms (infix `str`,
 explicit binary prefix, tagged) and RETURN THE CALLER'S DIALECT -- masking names
 an abstraction level, not an output dialect, so it must not silently re-spell.
 
-And the correction that decides the mechanism (audit the research harness):
+And the correction that decides the mechanism:
 skeleton-ness is NOT a free axis over dialect. Positional masking of the caller's
 own spelling gives a DIFFERENT NUMBER of `<constant>` slots depending on which
 dialect the same expression arrived in, in both directions --
@@ -29,18 +29,17 @@ silently fails to match explicit-era keys. So the CONTENT must be
 dialect-invariant: every input is canonicalised into the ONE internal AC state,
 masked there, and only then rendered back into the caller's dialect.
 """
-import json
 import os
 
 import numpy as np
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.normalization import to_expression, to_skeleton
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 
 @pytest.fixture(scope="module")
@@ -71,7 +70,7 @@ BATTERY = DIVERGENT_SHAPES + [
 
 class TestAllThreeInputForms:
     """Three forms in; the SAME dialect out (str->str, prefix->prefix,
-    tagged->tagged). Detection is the conversion API's (design D2): type first,
+    tagged->tagged). Detection is the conversion API's: type first,
     then a liberal read of the token sequence."""
 
     @pytest.mark.parametrize("fn", [to_skeleton, to_expression])
@@ -170,11 +169,25 @@ class TestDialectInvariance:
         b = engine.simplify(engine.to_prefix(to_skeleton(right, engine)))
         assert list(a) == list(b), f'{left} -> {a} vs {right} -> {b}'
 
+    #: No corpus row (of the first 120) has skeletons that differ by dialect. The last one held a
+    #: negated sum beside a masked number, `-(A + B)/(4*x17)`, whose sum holds `<constant>`s of
+    #: its own (the masked exponent and root index): a bare `<constant>` absorbs every constant
+    #: factor of its product, a class's orientation sign -1 included, so both dialects give
+    #: `<constant> * (A + B)/x17`.
+    KNOWN_DIALECT_DEPENDENT: list = []
+
+    @pytest.mark.parametrize('route', ['-(x1 + x2^c)/c', 'c*-(x1 + x2^c)', 'c*(-x1 - x2^c)'])
+    def test_a_constant_absorbs_the_orientation_sign_of_a_sum(
+            self, engine: SimpliPyEngine, route: str) -> None:
+        """A sum holding a `<constant>` beside a bare `<constant>` takes the orientation with
+        the fewer signs, whatever route built the product: the constant absorbs the sign."""
+        tokens = engine.to_prefix(route.replace('c', '<constant>'))
+        assert engine.simplify(tokens) == engine.to_prefix('<constant>*(x1 + x2^<constant>)')
+        assert to_skeleton(tokens, engine) == to_skeleton(
+            engine.to_prefix('<constant>*(x1 + x2^<constant>)'), engine)
+
     def test_the_corpus_agrees_across_dialects(self, engine: SimpliPyEngine) -> None:
-        if not os.path.exists(CORPUS):
-            pytest.skip('corpus not present')
-        with open(CORPUS) as fh:
-            corpus = json.load(fh)
+        corpus = default_corpus()
         disagreeing = []
         for tokens in corpus[:120]:
             prefix, tagged = engine.to_prefix(tokens), engine.to_tagged(tokens)
@@ -185,7 +198,8 @@ class TestDialectInvariance:
             from_tagged = engine.simplify(engine.to_prefix(to_skeleton(tagged, engine)))
             if list(from_tagged) != to_skeleton(prefix, engine):
                 disagreeing.append(tokens)
-        assert not disagreeing, f'{len(disagreeing)} rows still dialect-dependent'
+        assert [list(t) for t in disagreeing] == self.KNOWN_DIALECT_DEPENDENT, \
+            f'{len(disagreeing)} rows dialect-dependent: {disagreeing}'
 
 
 class TestSkeletonMasksEveryNumeric:

@@ -1,4 +1,4 @@
-"""Stage-1 special-constant policy wall (owner-ratified 2026-07-31 / 2026-08-01).
+"""Stage-1 special-constant policy wall.
 
 A special constant (``np.pi``, ``np.e``) denotes the SYMBOL -- pi itself, e itself --
 not its f64 image: one vocabulary token with zero degrees of freedom. Folding
@@ -16,11 +16,11 @@ the unified measure and gets DELETED when the measure ships):
    fold's (whose ``sin(np.pi) = 1.2246e-16`` wart this licence retires). Ground
    compounds with +-inf/nan literals never folded to begin with (the evaluator is
    finite-only), so absorption behavior is untouched.
-2. CONST-ABSORPTION LICENCE (as AMENDED by contract 10.11, owner 2026-08-08): a
+2. CONST-ABSORPTION LICENCE (as AMENDED by contract 10.11): a
    special absorbs into an EXISTING ``<constant>`` through the bijective bag sites
    exactly like every other finite ground -- ``C*pi -> C``, ``C+e -> C`` (the same
-   ``C + g -> C'`` reparametrization P3' ships for ``cosh(1)``). The 2026-08-01
-   blanket refusal ("for the post-fit rationalizer") is superseded. What STAYS
+   ``C + g -> C'`` reparametrization the const-shift absorption ships for ``cosh(1)``). A
+   blanket refusal ("for the post-fit rationalizer") would be wrong. What STAYS
    refused: a special may never vanish into an INTRODUCED ``<constant>`` (bare
    ``pi -> C`` and ``pi*x0 -> C*x0`` -- determined-source licence at mint,
    Const-count invariant at load), and non-bag positions never absorb a special
@@ -55,8 +55,8 @@ def check(eng, tokens, expected):
     """simplify, assert the exact canonical output and its idempotence.
 
     The expectations are the canonical TAGGED form, which `simplify` alone no longer
-    returns for explicit input (it answers in the dialect it was handed, owner ruling
-    2026-08-18): convert first, then simplify -- the exact migration for the retired
+    returns for explicit input (it answers in the dialect it was handed):
+    convert first, then simplify -- the exact migration for the retired
     `form='tagged'`."""
     out = eng.simplify(eng.to_tagged(list(tokens)))
     assert list(out) == list(expected), f'{tokens} -> {out}, expected {expected}'
@@ -70,7 +70,7 @@ class TestGroundFoldLicence:
 
     def test_rational_times_special_stays(self, eng):
         # The ratified table rows "integer x special" and "rational x special": the
-        # coefficient PRESERVES the symbol (T1 of the design doc).
+        # coefficient PRESERVES the symbol.
         check(eng, ['*', '2', 'np.pi'], ['<mul>', '2', 'np.pi', '</mul>'])
         # The 1/2 coefficient takes its argmin spelling (the `<div>` side); what this
         # row guards is that the SYMBOL survives -- np.e is never folded to a float.
@@ -79,9 +79,9 @@ class TestGroundFoldLicence:
     def test_function_of_special_stays(self, eng):
         # `f(special)` collapses ONLY to exact values, and those ship as MINED certified
         # rules -- the f64 fold may not approximate. This retires the documented
-        # `sin(np.pi) -> 1.2246e-16` wart as a POLICY consequence (P-B3).
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        # `sin(np.pi) -> 1.2246e-16` wart as a POLICY consequence.
+        from conftest import require_triple
+        require_triple()
         check(eng, ['cos', 'np.e'], ['cos', 'np.e'])
         check(eng, ['exp', 'np.pi'], ['exp', 'np.pi'])
         # `sin(np.pi) -> 0` is exactly true and NOT f64-realised: f64 computes
@@ -105,7 +105,7 @@ class TestGroundFoldLicence:
         check(eng, ['*', 'np.pi', 'np.e'], ['<mul>', 'np.pi', 'np.e', '</mul>'])
         check(eng, ['+', 'np.pi', 'np.e'], ['<add>', 'np.pi', 'np.e', '</add>'])
         check(eng, ['pow', 'np.e', 'np.pi'], ['exp', 'np.pi'])
-        # The T2 headline itself: exp(pi*x) survives as the canonical symbolic form.
+        # The headline itself: exp(pi*x) survives as the canonical symbolic form.
         check(eng, ['pow', 'np.e', '*', 'np.pi', 'x0'],
               ['exp', '<mul>', 'np.pi', 'x0', '</mul>'])
 
@@ -113,7 +113,7 @@ class TestGroundFoldLicence:
         # The refusal is bottom-up: the inner product no longer materializes, so the
         # outer function never sees a foldable literal (cos(2*pi) = 1 belongs to the
         # miner as a certified exact rule, not to the f64 fold).
-        # REFRESH 2026-08-01: cos(2*pi) = 1 now serves AS the certified mined rule
+        # cos(2*pi) = 1 serves AS the certified mined rule
         # (never the f64 fold) -- the refusal below it is unchanged: the inner product
         # still refuses to materialize, which is exactly why the RULE is needed.
         check(eng, ['cos', '*', '2', 'np.pi'], ['1'])
@@ -132,7 +132,7 @@ class TestGroundFoldLicence:
         check(eng, ['sin', 'neg', '1'], ['sin', '-1'])
 
     def test_inf_nan_rows(self, eng):
-        # H-007 (2026-08-04) supersedes the old pin: bare 'inf'/'nan' are RESERVED
+        # Bare 'inf'/'nan' are RESERVED
         # spellings, refused at the boundary (they were opaque symbols here while the
         # numeric layer read them as values -- the contradiction the boundary kills).
         import pytest
@@ -149,19 +149,16 @@ class TestGroundFoldLicence:
 
 
 class TestExactCollapsesMint:
-    """Owner ruling 2026-08-01: `cos(pi)` SHOULD simplify to -1 -- the bare ground exact
+    """`cos(pi)` SHOULD simplify to -1 -- the bare ground exact
     collapses mint as certified rules (the policy's `f(special) -> exact value` row).
 
     Root cause of the earlier refusal (this test was red): the mint itself worked, but
-    stage-2 confirmation re-runs `find_rule` with the target as the only candidate, and
-    the var-free short-circuit's `Class::Finite -> <constant>` arm HIJACKED the answer
-    for special-bearing sources -- returning `<constant>` instead of testing `(-1)`,
-    which the result-must-equal-target guard rightly scored as unconfirmed. The arm is
-    now gated on special-free sources (the same absorption the Const licence forbids,
-    refused at the channel), so confirmation falls through to the scan and honestly
-    verifies the asked target. Inexact values still cannot mint: their correctly-rounded
-    literals are not in the candidate alphabet, resolution refuses special-bearing
-    sources, and the hiprec point layer refutes near-misses."""
+    stage-2 confirmation re-ran `find_rule`, whose var-free short-circuit answered its
+    own question (`<constant>`) instead of testing `(-1)`. Confirmation is now the pair
+    judgment (`judge_pair`) inside the scan: no short-circuit, the asked target is what
+    is judged. Inexact values still cannot mint: a correctly-rounded literal is far
+    costlier than the symbolic mark, so strict descent refuses it, and the hiprec point
+    layer refutes near-misses."""
 
     @pytest.fixture(scope='class')
     def mined(self, tmp_path_factory):
@@ -192,27 +189,37 @@ class TestExactCollapsesMint:
 
     def test_bare_exact_collapses_mint(self, mined):
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
-        assert (('sin', 'np.pi'), ('0',)) in rules, sorted(rules)
-        assert (('log', 'np.e'), ('1',)) in rules, sorted(rules)
+        # In f64 the walk folds a ground node to the float the evaluator computes, here exactly
+        # -1 and 1, so the f64 mine has nothing to mint for them; the real mine mints them.
+        assert list(mined.simplify(['cos', 'np.pi'])) == ['-1']
+        assert list(mined.simplify(['log', 'np.e'])) == ['1']
+        assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)
+        # `sin(np.pi) -> 0` is exactly true and f64 computes 1.2246467991473532e-16: the judge
+        # files it `real`, so the f64 mine, whose set the engine holds in its default slot,
+        # leaves it to the modes that license it. The real engine reads sin(pi) and cos(pi) from
+        # the table itself, so the real mine has nothing to mint for them; log(e), which the
+        # table holds only approximately, it mints.
+        assert (('sin', 'np.pi'), ('0',)) not in rules, sorted(rules)
+        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
+        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
+        assert mined.simplify(['cos', 'np.pi'], mode='real') == ['-1']
+        assert (('sin', 'np.pi'), ('0',)) not in real, sorted(real)
+        assert (('log', 'np.e'), ('1',)) in real, sorted(real)
 
     def test_mined_engine_serves_the_collapse(self, mined):
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
         assert mined.simplify(['cos', 'np.pi']) == ['-1']
         assert mined.simplify(['log', 'np.e']) == ['1']
-        # `sin(np.pi)` is the one of the three f64 does not realise, so it does not serve
-        # the default mode. Its presence in the MINE's output is what this test can speak
-        # to, and it is asserted from the mined rule set itself -- an earlier version
+        # `sin(np.pi)` is the one of the three f64 does not realise (f64 computes
+        # 1.2246467991473532e-16), so the f64 mine leaves it out and the real mine mints
+        # it: the mined engine serves the collapse in `real` and keeps f64's own value in
+        # the default mode. Asserted from the mined sets themselves -- an earlier version
         # installed the rule into `real` and then asserted that same rule fires, which
         # says nothing about the mine at all.
-        # This fixture is a freshly-mined engine with ONE rule set (no triple), so the
-        # rule is in its default set and fires here. That is what "the mined engine serves
-        # the collapse" can mean for it. Where the rule LANDS -- `real`, not f64, because
-        # f64 computes 1.2246467991473532e-16 -- is a property of the ROUTED artifact and
-        # is pinned in `TestGroundFoldLicence` against the shipped triple.
-        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('sin', 'np.pi'), ('0',)) in rules
-        assert mined.simplify(['sin', 'np.pi']) == ['0']
+        # Where the ROUTED artifact serves it is pinned in `TestGroundFoldLicence` against
+        # the shipped triple.
+        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
+        assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
         from simplipy.verify._contract import judge_rule
         assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'real'
 
@@ -220,43 +227,31 @@ class TestExactCollapsesMint:
         # The promotion sorts classify WILDCARD instantiation domains; a ground rule has
         # no wildcard to carry a sort (one instantiation: itself, certified at mint +
         # stage-2 confirmation). The reference ladder's universe is wildcard rules, and
-        # feeding it ground rules silently discarded them (measured 2026-08-01: the
-        # owner-ruled exact collapses minted, confirmed, survived the covered-prune,
+        # feeding it ground rules silently discarded them (measured: the
+        # exact collapses minted, confirmed, survived the covered-prune,
         # then vanished at promote_sorts). Ground rules must pass through unchanged.
         from simplipy.promotion import promote
         bare = [(('cos', 'np.pi'), ('(-1)',)), (('sin', 'np.pi'), ('0',)),
                 (('tan', 'np.pi'), ('0',)), (('log', 'np.e'), ('1',))]
-        controls = [(('pow', 'np.e', '_0'), ('exp', '_0'))]
-        # A wildcard rule is JUDGED, never bypassed -- the other half of the property
-        # this test guards. `cos(x + pi) -> -cos(x)` is the sharp case: true over the
-        # reals (judge_rule certifies it at tier `real`), false in f64 wherever pi falls
-        # below the ulp of x, so `1e20 + pi == 1e20` and the rule returns cos(x) with the
-        # wrong SIGN. Promotion demotes it to `?0` on that witness and kills it at 1.2e77.
+        # A rule with slots is JUDGED, never bypassed -- the other half of the property
+        # this test guards: it climbs the rungs, each asking the judge. `cos(x + pi) ->
+        # -cos(x)` is true over the reals (tier `real`) and false in f64 wherever pi falls
+        # below the ulp of x (`1e20 + pi == 1e20`), so f64 licenses neither `_` nor `!`.
         judged_not_bypassed = (('cos', '+', '_0', 'np.pi'), ('neg', 'cos', '_0'))
-        # The bypass is ALL pure-literal ground rules (widened with fold
-        # unification, 2026-08-02: special-free exact collapses like `cos 0 -> 1`
-        # are now legitimate mined rows, and the ladder's wildcard universe would
-        # still eat them). `<constant>`-bearing ground rules keep flowing to the
-        # ladder's ground tier (judge_ground) -- sound ones ship, unsound ones die
-        # there, exactly as in the reference. The f64-respell family
-        # (`+ 1 exp (-1) -> 1.3678794411714423` respells the engine's exact
-        # `1.36787944117144233` to its f64 rounding) is therefore NO LONGER
-        # contained by promotion: promote() passes it through shape-blind, and
-        # containment lives where it is principled -- the mint-side strict-mu +
-        # skeleton + atomic-mark guards, and the SYMBOLIC GATE in _finalize
-        # (asserted below: the gate KILLs the row promotion now admits).
+        # The bypass is every rule without a slot: there is no sort to respell. Pure-literal
+        # ground rules and `<constant>`-bearing ones alike pass through; the mine's judge and
+        # final gate decide them. The f64-respell family (`+ 1 exp (-1) ->
+        # 1.3678794411714423` respells the engine's exact value to its f64 rounding) is not
+        # contained by promotion: the symbolic gate routes it (asserted below).
         cground_pass = (('/', '<constant>', 'float("inf")'), ('0',))
-        cground_kill = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
+        cground_other = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
         f64_respell = (('+', '1', 'exp', '(-1)'), ('1.3678794411714423',))
-        kept, report = promote(bare + controls + [judged_not_bypassed, cground_pass,
-                                                  cground_kill, f64_respell], eng)
+        kept, report = promote(bare + [judged_not_bypassed, cground_pass, cground_other,
+                                       f64_respell], eng, rule_mode='default')
         kept_set = {(tuple(lhs), tuple(rhs)) for lhs, rhs in kept}
-        for rule in bare + controls:
+        for rule in bare + [cground_pass, cground_other, f64_respell]:
             assert rule in kept_set, (rule, sorted(kept_set))
-        assert judged_not_bypassed not in kept_set, "a wildcard rule must be judged, not bypassed"
-        assert cground_pass in kept_set
-        assert cground_kill not in kept_set
-        assert f64_respell in kept_set  # shape-blind bypass: promotion no longer contains
+        assert not {(('cos', '+', s + '0', 'np.pi'), ('neg', 'cos', s + '0')) for s in '_!'} & kept_set
         assert report['stage_counts']['ground_passthrough'] == 5
         # The pipeline's answer to the respell CHANGED with the mode triple, and the
         # old claim -- "the symbolic gate refuses it" -- is retired. The bucket is still
@@ -290,8 +285,9 @@ class TestExactCollapsesMint:
 
 
 class TestConstAbsorptionLicence:
-    """Contract 10.11 (owner 2026-08-08): specials absorb into an EXISTING mask at
-    the bijective bag sites; introduced masks and non-bag positions still refuse."""
+    """Specials absorb into an EXISTING mask at the bijective bag sites; elsewhere a
+    special is a fixed real like a literal (the constant-collapse criterion), and an
+    introduced mask still refuses."""
 
     def test_const_times_special_absorbs(self, eng):
         # C*pi -> C: the Mul-scale bijection (c' = c*pi), same family as C*cosh(1).
@@ -314,17 +310,11 @@ class TestConstAbsorptionLicence:
             == ['<mul>', 'np.pi', 'x0', '</mul>']
 
     def test_special_base_pow_const(self, eng):
-        # pi^C keeps its structure: pow is not an absorption site -- the family's
-        # value set is (0, inf), not "anything", so the mask may not claim it.
-        out = eng.simplify(['pow', 'np.pi', '<constant>'])
-        assert out != ['<constant>'], 'pi^C absorbed the special'
-        assert 'np.pi' in out and '<constant>' in out
-        assert eng.simplify(list(out)) == out
-        # e^C is DIFFERENT by design: pow(e, t) == exp(t) is an EXACT identity that
-        # eliminates the special losslessly BEFORE any mask meets it, and the resulting
-        # `exp <constant>` collapses under the pre-existing special-free value-set
-        # absorption (same family as `sin <constant> -> <constant>`). The licence
-        # protects specials from ROUNDING and ABSORPTION, not from exact identities.
+        # pi^C absorbs to C as 2^C, e^C and exp(C) do: a special constant is a fixed
+        # positive real like a literal, so every positive base gives the same family of
+        # values, (0, inf), which the fitted constant represents.
+        check(eng, ['pow', 'np.pi', '<constant>'], ['<constant>'])
+        check(eng, ['pow', '2', '<constant>'], ['<constant>'])
         check(eng, ['pow', 'np.e', '<constant>'], ['<constant>'])
         check(eng, ['exp', '<constant>'], ['<constant>'])
 
@@ -333,12 +323,18 @@ class TestConstAbsorptionLicence:
         check(eng, ['*', '<constant>', '2.5'], ['<constant>'])
         check(eng, ['abs', '<constant>'], ['<constant>'])
 
-    def test_const_pow_special_still_refused(self, eng):
-        # C^pi was already refused (mixed value class); the licence must not regress it.
-        check(eng, ['pow', '<constant>', 'np.pi'], ['pow', '<constant>', 'np.pi'])
+    def test_const_pow_special_collapses_where_finite(self, eng):
+        # C^pi is finite for C >= 0 and NaN below: the fitted constant owes a value only
+        # where the source is finite, so it collapses as C^2.5 does (pi a fixed positive
+        # real, as at pi^C), and so does 0^C (0 for C > 0, 1 at 0, nothing owed where it is
+        # +inf). (-1)^C, finite only at the integers, has no evidence and keeps its form.
+        check(eng, ['pow', '<constant>', 'np.pi'], ['<constant>'])
+        check(eng, ['pow', '<constant>', '2.5'], ['<constant>'])
+        check(eng, ['pow', '(-1)', '<constant>'], ['pow', '-1', '<constant>'])
+        check(eng, ['pow', '0', '<constant>'], ['<constant>'])
 
     def test_const_inf_still_unabsorbed(self, eng):
-        # H-007 (2026-08-04): bare 'inf' is a reserved spelling; the canonical token
+        # Bare 'inf' is a reserved spelling; the canonical token
         # carries the licence point -- Const never absorbs a non-Finite class factor.
         check(eng, ['*', '<constant>', 'float("inf")'],
               ['<mul>', 'float("inf")', '<constant>', '</mul>'])

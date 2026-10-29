@@ -12,14 +12,16 @@ equality assertion -- the printed claims are the strongest ones the docs make, s
 they are exactly what must not drift.
 """
 import ast
+import io
 import os
 import re
+import tokenize
 
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILES = ['README.md', 'docs/index.md', 'docs/rules.md',
-         'docs/getting-started.md', 'docs/guides/simplify.md',
+         'docs/getting-started.md', 'docs/guides/simplify.md', 'docs/guides/prettify.md',
          'docs/guides/artifacts.md', 'docs/guides/masking.md',
          'docs/guides/trust.md', 'docs/guides/verify.md']
 
@@ -30,56 +32,73 @@ _OUT = re.compile(r'^#\s*(?:->|>)\s*(?P<lit>.+?)\s*$')
 
 
 def _literal(text: str):
+    """A claim's literal: the comment after `->`, up to an optional note separated from
+    it by two or more spaces (`# -> ['x0']   (the explicit form)`)."""
+    text = re.split(r'\s{2,}', text.strip(), maxsplit=1)[0]
     try:
         return True, ast.literal_eval(text)
     except (ValueError, SyntaxError):
         return False, None
 
 
-def _instrument(body: str) -> str:
-    """Rewrite every top-level expression STATEMENT whose next line is a literal
-    output-comment into an assert.
+def _instrument(body: str) -> tuple[str, list[str]]:
+    """Rewrite every top-level expression STATEMENT that carries an output claim into an
+    assert, and return the rewritten block with the claims that could not be asserted.
 
-    Instrumenting PHYSICAL LINES missed every multi-line call, and a wrong claim was
-    sitting in that hole: `docs/guides/masking.md` promised a tagged result from a
-    two-line `masking.mask(...)` call that has returned explicit prefix since `simplify`
-    became dialect-preserving. Parsing the block once and using each statement's
-    `end_lineno` closes it -- a call spanning four lines is instrumented exactly as a
-    one-liner is.
+    A claim is a comment `# -> <python-literal>` (or the README's `# > <literal>`), either
+    at the end of the statement's last line or alone on the line after it. A claim that
+    follows no expression statement, or whose text is not a literal, is returned as a
+    problem: a printed claim the test cannot check is a claim nobody checks.
+
+    Parsing the block once and using each statement's `end_lineno` instruments a call
+    spanning several lines exactly as a one-liner.
     """
     lines = body.split('\n')
     try:
         tree = ast.parse(body)
-    except SyntaxError:
-        return body
-    # statement START line (1-indexed) -> its END line, so a multi-line call is replaced
-    # as one unit. Keying on the END emitted the first line twice -- once bare, leaving an
-    # unclosed paren, and once inside the assert.
-    spans = {}
-    for node in tree.body:
-        if isinstance(node, ast.Expr) and node.end_lineno is not None:
-            spans[node.lineno] = node.end_lineno
+        comments = [tok for tok in tokenize.generate_tokens(io.StringIO(body).readline)
+                    if tok.type == tokenize.COMMENT]
+    except (SyntaxError, tokenize.TokenError):
+        return body, []  # the exec reports the block itself
+    # each expression statement, by the line it ENDS on: (start line, end line)
+    ends = {node.end_lineno: node.lineno for node in tree.body
+            if isinstance(node, ast.Expr) and node.end_lineno is not None}
+
+    # where each line's comment starts: stripped from an instrumented statement
+    comment_col = {tok.start[0]: tok.start[1] for tok in comments}
+
+    problems: list[str] = []
+    claims: dict = {}  # start line -> (end line, expected, the claim is inline)
+    for tok in comments:
+        m = _OUT.match(tok.string)
+        if not m:
+            continue
+        line, col = tok.start
+        inline = bool(lines[line - 1][:col].strip())
+        end = line if inline else line - 1
+        ok, expected = _literal(m.group('lit'))
+        if end not in ends:
+            problems.append(f'line {line}: claim {tok.string!r} follows no expression')
+        elif not ok:
+            problems.append(f'line {line}: claim {tok.string!r} is not a python literal')
+        else:
+            claims[ends[end]] = (end, expected, inline)
 
     out: list = []
     i = 0
     while i < len(lines):
-        end = spans.get(i + 1)
-        nxt = lines[end].strip() if end is not None and end < len(lines) else ''
-        m = _OUT.match(nxt)
-        ok, expected = _literal(m.group('lit')) if m else (False, None)
-        if ok and end is not None:
-            start = i + 1
-            code = '\n'.join(lines[start - 1:end])
-            code = code.split('#', 1)[0].rstrip()
+        if i + 1 in claims:
+            end, expected, inline = claims[i + 1]
+            code = '\n'.join(lines[n - 1][:comment_col.get(n)] for n in range(i + 1, end + 1)).rstrip()
             label = ' '.join(code.split())
             out.append(f'__doc_out = ({code})')
             out.append(f'assert __doc_out == {expected!r}, '
                        f'{f"doc example drifted: {label} -> "!r} + repr(__doc_out)')
-            i = end + 1
+            i = end if inline else end + 1
             continue
         out.append(lines[i])
         i += 1
-    return '\n'.join(out)
+    return '\n'.join(out), problems
 
 
 @pytest.mark.parametrize('relpath', FILES)
@@ -94,7 +113,8 @@ def test_doc_examples_execute_and_their_outputs_hold(relpath, tmp_path, monkeypa
         if m.group('directive'):
             assert m.group('reason').strip(), f'{relpath}: skip directive without a reason'
             continue
-        code = _instrument(m.group('body'))
+        code, problems = _instrument(m.group('body'))
+        assert not problems, f'{relpath} block {ran}: ' + '; '.join(problems)
         try:
             exec(compile(code, f'{relpath}[block {ran}]', 'exec'), namespace)
         except Exception as ex:

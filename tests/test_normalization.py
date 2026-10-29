@@ -60,12 +60,12 @@ def test_the_expression_form_carries_exact_values(engine):
 
 
 def test_reserved_spellings_are_refused_not_masked(engine):
-    """H-046 (D2', 2026-08-05) closed the older defect that a bare `float()`
-    probe masked the RESERVED spellings -- `inf`, `NAN`, `1_000` -- into a
+    """A bare `float()`
+    probe once masked the RESERVED spellings -- `inf`, `NAN`, `1_000` -- into a
     `<constant>` that is finite by doctrine, so a skeleton carrying `inf` compared
     equal to a finite-constant skeleton (fake coverage in holdout matching and
     recovery scoring). Canonicalising through the core closes it harder: the token
-    grammar refuses those spellings at the boundary (H-007), so they can neither
+    grammar refuses those spellings at the boundary, so they can neither
     become a `<constant>` nor pass through into a key."""
     for reserved in (["+", "x0", "inf"], ["-", "NAN", "v1"], ["*", "-Infinity", "x0"],
                      ["*", "1_000", "x0"]):

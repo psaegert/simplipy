@@ -18,7 +18,7 @@ _OPERATORS = {
     "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
-    # Added 2026-08-07 for the probe below: the vocabulary a CROSS-FUNCTION identity needs
+    # For the probe below: the vocabulary a CROSS-FUNCTION identity needs
     # (`inv` was already here).
     "cosh": {"realization": "np.cosh", "alias": [], "inverse": "acosh", "arity": 1, "precedence": 3, "commutative": False},
     "asinh": {"realization": "np.arcsinh", "alias": [], "inverse": "sinh", "arity": 1, "precedence": 3, "commutative": False},
@@ -30,7 +30,7 @@ _OPERATORS = {
 # controls below), so a firing after the round trip proves the rebuilt core LOADED
 # the rules rather than merely carrying the list.
 # A CROSS-FUNCTION identity, deliberately: `1/cosh(asinh t) = cos(atan t)`.
-# This slot held `log exp ?0 -> ?0` until 2026-08-07, when the inverse-pair table
+# This slot held `log exp ?0 -> ?0` until the inverse-pair table
 # made that CONSTRUCTOR-NATIVE and the negative control below stopped being a
 # fixpoint -- the test would have started passing vacuously. An identity BETWEEN
 # different functions is not a collapse any constructor table can absorb.

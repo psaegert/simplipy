@@ -6,6 +6,12 @@ from simplipy.utils import violates_wildcard_multiplicity
 from conftest import acj_config_path
 
 
+@pytest.fixture(scope='module')
+def eng() -> SimpliPyEngine:
+    """The shipped acj-4 engine, built once for the classes that only read it."""
+    return SimpliPyEngine.from_config(acj_config_path())
+
+
 # Minimal operator set for pruning tests
 _MINIMAL_OPERATORS = {
     "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
@@ -28,7 +34,7 @@ class TestPruneCoveredRules:
         covered = (("sin", "sin", "sin", "?0"), ("sin", "?0"))
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[base, covered])
 
-        n_pruned = engine.prune_covered_rules()
+        n_pruned = engine.prune_covered_rules(rule_mode='default')
 
         assert n_pruned == 1
         assert engine.simplification_rules == [base]
@@ -39,10 +45,10 @@ class TestPruneCoveredRules:
         """Leaf-only probing would wrongly remove a `_`-rule whose cover is `?`-sorted.
 
         The `?`-rule rewrites the wide rule's leaf-instantiated LHS variant, but
-        cannot bind the composite `sin(x{i})` probe, so the wide rule is kept.
+        cannot bind the composite `1/(x{i} + x{k})` probe, so the wide rule is kept.
         (The rules are variable-preserving: a ground-collapsing pair would ride
         the engine's arithmetic -- the original `sin(...) -> 0` fixture leaned on
-        the transcendental fold that fold unification removed, 2026-08-02, and a
+        the transcendental fold that fold unification removed, and a
         `neg` head is soundly STRIPPED by load canonicalization (`neg(A) -> 0`
         normalizes to `A -> 0`), which makes the wide rule genuinely wider than
         its cover and the prune of the cover correct.)
@@ -58,7 +64,7 @@ class TestPruneCoveredRules:
         # ... but the composite variant does not
         assert probe.simplify(["sin", "+", "sin", "x0", "1"]) != ["sin", "sin", "x0"]
 
-        n_pruned = engine.prune_covered_rules()
+        n_pruned = engine.prune_covered_rules(rule_mode='default')
 
         assert n_pruned == 0
         assert engine.simplification_rules == [leaf_cover, wide]
@@ -79,7 +85,7 @@ class TestPruneCoveredRules:
         no_rules = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         assert no_rules.simplify(["/", "<constant>", 'float("-inf")']) == ["0"]
 
-        n_pruned = engine.prune_covered_rules()
+        n_pruned = engine.prune_covered_rules(rule_mode='default')
 
         assert n_pruned == 1
         assert engine.simplification_rules == []
@@ -92,10 +98,10 @@ class TestPruneCoveredRules:
             (("sin", "sin", "sin", "sin", "?0"), ("?0",)),     # covered
         ]
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
-        n_first = engine.prune_covered_rules()
+        n_first = engine.prune_covered_rules(rule_mode='default')
         rules_after_first = list(engine.simplification_rules)
 
-        n_second = engine.prune_covered_rules()
+        n_second = engine.prune_covered_rules(rule_mode='default')
 
         assert n_first == 2
         assert n_second == 0
@@ -125,7 +131,7 @@ class TestPruneCoveredRules:
             "    (('/', '<constant>', 'float(\"-inf\")'), ('0',)),\n"
             "]\n"
             "engine = SimpliPyEngine(operators=ops, rules=rules)\n"
-            "engine.prune_covered_rules()\n"
+            "engine.prune_covered_rules(rule_mode='default')\n"
             "print(json.dumps(engine.simplification_rules))\n"
         )
         outputs = []
@@ -238,13 +244,12 @@ class TestMode:
         assert engine.simplify(src) == out  # the default is SOUND
 
     def test_lossy_constant_over_zero_keeps_the_explicit_pole(self) -> None:
-        """The AC core folds inv(0) to +inf exactly BEFORE any widening can see the
-        quotient, so LOSSY also keeps the explicit pole spelling (the documented
-        training-path parity corner, revisited at the flash-ansr migration)."""
+        """The AC core reads inv(0) exactly BEFORE any widening can see the quotient: in
+        permissive, whose values are real's, 1/0 has no value, so `C/0` has none either."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         assert engine.simplify(engine.to_tagged(["/", "<constant>", "0"]), mode=Mode.permissive) \
-            == ["<mul>", 'float("inf")', "<constant>", "</mul>"]
+            == ['float("nan")']
 
     def test_finite_ae_fold_is_mode_independent(self) -> None:
         """A finite-a.e. subtree (`1/C`) folds in BOTH modes -- the pole is measure-zero."""
@@ -258,8 +263,8 @@ class TestMode:
         stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
         applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
         three edges behave consistently under `Mode.permissive`."""
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         from simplipy import Mode
         engine = SimpliPyEngine.from_config(
             acj_config_path())
@@ -406,7 +411,7 @@ _FIND_RULES_OPERATORS = {
 #     abs abs ?0 -> abs ?0     and     abs neg ?0 -> abs ?0
 # in well under a second, so the property tests quantify over a NON-EMPTY rule set.
 # The vocabulary the minting helper below uses. `abs` alone used to mint (parity and
-# abs-idempotence rules); as of the 2026-08-07 parity arm the constructors own that whole
+# abs-idempotence rules); with the parity arm the constructors own that whole
 # family and an abs-only mine yields ZERO rules -- the anti-vacuity tripwire caught it.
 # `exp`/`log` are added because a transcendental inverse pair is something no constructor
 # evaluates, so this mine keeps minting no matter how far the canon grows.
@@ -446,7 +451,7 @@ class TestFindRules:
             X=128,
             constants_fit_challenges=2,
             constants_fit_retries=1,
-            # MINT-level pin (promote_sorts defaults ON since 2026-08-01): promotion
+            # MINT-level pin (promote_sorts defaults ON): promotion
             # adds the ladder's seeded identities and reshapes sorts; the default-on
             # path is pinned separately by test_default_mine_ships_promoted_seeds.
             promote_sorts=False,
@@ -472,9 +477,11 @@ class TestFindRules:
         compiled core, so mining (and everything else) is always available."""
         engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
         assert engine._core is not None
+        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'explicit', 0, rule_mode='default') == \
+            ['*', '2', 'x0']
 
     def test_default_mine_ships_promoted_seeds(self, tmp_path) -> None:
-        """promote_sorts defaults ON (owner ruling 2026-08-01: features do not ship
+        """promote_sorts defaults ON (features do not ship
         disabled): a DEFAULT mine emits the deployment-strength artifact. Over pure
         arithmetic the mine itself mints nothing (identities are engine-native, see
         the mint-level twin below), so the default artifact is exactly the ladder's
@@ -502,7 +509,7 @@ class TestFindRules:
         # change and nothing more: `ac_rules_info()` is (4, 0, 0, 0) for the eight-row
         # set AND for this one -- the loader's `translate` already collapsed them to
         # four served patterns. Measured across the 400-row corpus in SOUND and LOSSY:
-        # 0 rows move. Owner-ratified 2026-08-19.
+        # 0 rows move.
         seeds = {(('-', '!0', '!0'), ('0',)),
                  (('*', '0', '!0'), ('0',)),
                  (('/', '$0', '$0'), ('1',)),
@@ -572,8 +579,7 @@ class TestFindRules:
         On pure arithmetic this reduced to `0 <= 0`; the prune never touched a
         single actual rule. On the abs vocabulary the mine mints both abs rules
         and the prune exercises its coverage judgment for real. Coverage is
-        judged in the serve-time reduction ordering (state-coverage, the F5
-        ruling): `abs neg ?0 -> abs ?0` is a strict descent there (a complexity
+        judged in the serve-time reduction ordering (state coverage): `abs neg ?0 -> abs ?0` is a strict descent there (a complexity
         TIE -- signs are free -- broken by the canonical order), and nothing
         else performs the rewrite, so the prune keeps BOTH rules. The old
         complexity-score judge read the tie as covered and dropped it, losing
@@ -741,7 +747,7 @@ class TestConstantFolding:
 
     def test_simplify_infix_numeric_constants(self) -> None:
         """End-to-end: infix '1.23 + 4.56' folds to one literal; the DOWNSTREAM masking
-        toolkit (masking is policy, not engine behavior -- owner ruling A2) abstracts it."""
+        toolkit (masking is policy, not engine behavior) abstracts it."""
         from simplipy import masking
         engine = self._engine()
         folded = engine.simplify("1.23 + 4.56")
@@ -842,7 +848,7 @@ class TestResolveConstantRules:
 class TestBangSort:
     """The `!` third sort: `!N` binds a variable leaf freely, or a
     SUBTREE only when the interval engine certifies it defined-and-finite a.e. (`finite_ae`).
-    This is what recovers the E3 family (`exp(x) - exp(x) -> 0`) without resurrecting the
+    This is what recovers the self-cancellation family (`exp(x) - exp(x) -> 0`) without resurrecting the
     unsound `_`-subtree binding (`log(x) - log(x)` is nan on half the line and must not fire).
     """
 
@@ -872,7 +878,7 @@ class TestBangSort:
         # variable leaf: always binds (a leaf is trivially finite a.e.)
         assert '<constant>' in engine.simplify(["-", "x0", "x0"]) or \
                list(engine.simplify(["-", "x0", "x0"])) == ["0"]
-        # exp/sinh: certified finite a.e. -> the rule fires (E3 recovered)
+        # exp/sinh: certified finite a.e. -> the rule fires (family recovered)
         for f in ("exp", "sinh"):
             out = list(engine.simplify(["-", f, "x0", f, "x0"]))
             assert out in (["0"], ["<constant>"]), (f, out)
@@ -898,18 +904,14 @@ class TestBangSort:
 
 
 class TestB2TailArm:
-    """B2 (ruling D9): `finite_ae`'s subdivision arm proved finiteness over
+    """`finite_ae`'s subdivision arm proved finiteness over
     `[-R, R]^n` only (R >= 64) and nothing looked outside, so a nan onset past the
     horizon was invisible: `- !0 !0 -> 0` cancelled `log(1-0.001*x1) - log(1-0.001*x1)`
     -- nan for EVERY x1 > 1000 -- and `A/A -> 1` collapsed the asin twin. The tail arm
-    conjoins slab evaluations over `{|x_i| > R}` onto the subdivision path (predicate
-    T3: bounded or pole-free), and these pins state the acceptance through the public
+    conjoins slab evaluations over `{|x_i| > R}` onto the subdivision path (predicate:
+    bounded or pole-free), and these pins state the acceptance through the public
     API. Scope honesty: the arm removes the HORIZON class only -- dependency-loss
-    unsoundness remains, and the D9 wording obligation forbids "finite_ae is sound"."""
-
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
+    unsoundness remains, and nothing may claim "finite_ae is sound"."""
 
     def test_tail_nan_no_longer_cancels(self, eng) -> None:
         assert eng.simplify('log(1 - 0.001*x1) - log(1 - 0.001*x1)') != '0'
@@ -919,31 +921,27 @@ class TestB2TailArm:
         # onset 1/0.0157 = 63.69 sits INSIDE the box: was refused before, stays refused
         ctl = 'log(1 - 0.0157*x1) - log(1 - 0.0157*x1)'
         assert eng.simplify(ctl) == ctl
-        # pole-free unbounded growth is T3's whole point: the flagship binder still fires
+        # pole-free unbounded growth is the slab predicate's whole point: the flagship binder still fires
         assert eng.simplify('exp(x0) - exp(x0)') == '0'
 
 
 class TestB5B19OddSignFusion:
-    """B5+B19: one owner for the odd-function literal sign, on every route. Before
+    """One owner for the odd-function literal sign, on every route. Before
     the hoist, the Add-collector's rebuild fused `-5*sin(2)` to `5*sin(-2)` while
     `mul()`'s direct assembly did not -- two fixpoints for one value, distinguished
     only by construction history -- and the collector could not split the sign back
     out, so `sin(-2) + sin(2)` needed a render/re-parse cycle to cancel. Both routes
-    now price one sign-trade orbit (I4's direction: the literal owns the sign), and
+    now price one sign-trade orbit (the ruled direction: the literal owns the sign), and
     the split half lifts the literal sign into the coefficient so the pair cancels
     at collection. Artifact effect, measured: 400-corpus row-identical; 30 shipped
     rules subsume at translation (0 dropped), twins 10 -> 8 -- the dated interim
     pins live in gate_acj.py and ac_translation_stats until the G2 republish."""
 
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
-
     def test_routes_agree_on_the_ratified_spelling(self, eng) -> None:
         via_mul = list(eng.simplify(eng.to_tagged(['*', '-5', 'sin', '2'])))
         via_add = list(eng.simplify(eng.to_tagged(['+', '0', '*', '-5', 'sin', '2'])))
         assert via_mul == via_add == ['<mul>', '5', 'sin', '-2', '</mul>']
-        # I4's other example: the -1 case dissolves the product node entirely.
+        # The other example: the -1 case dissolves the product node entirely.
         assert list(eng.simplify(['*', '-1', 'sin', '2'])) == ['sin', '-2']
 
     def test_odd_literal_pair_cancels_in_one_pass(self, eng) -> None:
@@ -1033,32 +1031,22 @@ class TestMultSort:
         engine = self._engine(tmp_path)
         assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.permissive)) == ["1"]
 
-    def test_judge_bang_mult_bar(self, tmp_path) -> None:
-        # The promotion-side twin: the plain `!` bar demotes A/A -> 1 (0/0 = nan at the atom
-        # 0); the multiplicative bar promotes it on the finite-nonzero lattice. The judges
-        # REQUIRE the f64 oracle to be configured first (`configure(engine)`) -- calling them
-        # bare now raises instead of looping (the _literal_spans termination guard).
-        import numpy as np
-        import pytest as _pytest
-        from simplipy.promotion._f64_eval import configure
-        from simplipy.promotion._ladder import judge_bang, judge_bang_mult
-        from simplipy.promotion._pointwise import prefold
-        rng = np.random.default_rng(0)
-        from simplipy.promotion._f64_eval import ARITY
-        if not ARITY:  # order-independent: another test may have configured the module state
-            with _pytest.raises(RuntimeError, match='oracle not configured'):
-                prefold(['/', '1', '1'])
-        configure(self._engine(tmp_path))
-        v_bang, _ = judge_bang(('/', '!0', '!0'), ('1',), rng)
-        assert v_bang != 'PROMOTE'
-        v_mult, _ = judge_bang_mult(('/', '$0', '$0'), ('1',), rng)
-        assert v_mult == 'PROMOTE'
-        v_zero, _ = judge_bang_mult(('/', '0', '$0'), ('0',), rng)
-        assert v_zero == 'PROMOTE'
+    def test_the_judge_reads_the_seeds_sorts(self, tmp_path) -> None:
+        # The promotion-side twin: promotion seeds the cancellation identities where the judge
+        # licenses them. At a `!` binding the subtree may be 0 on a set of positive measure,
+        # where 0/0 has no value, so `/ !0 !0 -> 1` holds in neither f64 nor real; at a `$`
+        # binding (finite and nonzero a.e.) `/ $0 $0 -> 1` and `/ 0 $0 -> 0` hold.
+        from simplipy.verify import MODE_TIERS, effective_tier, verify_rule
+
+        def holds(lhs, rhs, mode):
+            return effective_tier(verify_rule(lhs.split(), rhs.split())) in MODE_TIERS[mode]
+        for mode in ('f64', 'real'):
+            assert not holds('/ !0 !0', '1', mode)
+            assert holds('/ $0 $0', '1', mode) and holds('/ 0 $0', '0', mode)
 
 
 class TestB9MuGuarantee:
-    """B9: the only length-shaped claim docs/index.md makes is the mu-guarantee --
+    """The only length-shaped claim docs/index.md makes is the mu-guarantee --
     `complexity(simplify(e)) <= complexity(e)`, sound, idempotent -- because the
     token-count claims it replaced were FALSE: outputs can be longer in explicit
     tokens (a mu-cheaper literal can take more tokens to spell) and the tagged
@@ -1067,14 +1055,9 @@ class TestB9MuGuarantee:
     check that the replaced claim really was false (some output IS token-longer)."""
 
     def test_mu_non_increase_and_idempotence_hold_400_of_400(self):
-        import json
-        import os
-        corpus_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   'benchmarks', 'corpus', 'raw_skeletons_nv.json')
-        if not os.path.exists(corpus_path):
-            pytest.skip('reference corpus not present')
+        from simplipy.verify import default_corpus
         eng = SimpliPyEngine.from_config(acj_config_path())
-        corpus = json.load(open(corpus_path))
+        corpus = default_corpus()
         assert len(corpus) == 400
         token_longer = 0
         for expr in corpus:
@@ -1091,17 +1074,13 @@ class TestB9MuGuarantee:
 
 
 class TestApi1ModeParameter:
-    """api-1 + fmux-mode-1: the `mode` parameter accepted things it must refuse and
+    """The `mode` parameter accepted things it must refuse and
     then silently selected DIFFERENT semantics. `simplify(expr, Mode.permissive)` bound
     the Mode POSITIONALLY to the pass budget and ran SOUND; `mode=3` and
     `mode=np.float64(3.0)` silently selected LOSSY -- a caller whose mode came out
     of a JSON config got the mode that trades soundness for recall. max_passes /
     mode / form are keyword-only now, and mode accepts only Mode members and their
     documented string names."""
-
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
 
     def test_positional_arguments_are_refused(self, eng) -> None:
         from simplipy import Mode
@@ -1118,14 +1097,14 @@ class TestApi1ModeParameter:
 
     def test_mode_members_and_names_still_work(self, eng) -> None:
         from simplipy import Mode
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.permissive)) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='permissive')) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.f64)) \
-            == ['exp', 'log', '<constant>']
+        unproven = ['pow', '(-1)', '<constant>']  # finite only at integer constants
+        assert list(eng.simplify(unproven, mode=Mode.permissive)) == ['<constant>']
+        assert list(eng.simplify(unproven, mode='permissive')) == ['<constant>']
+        assert list(eng.simplify(unproven, mode=Mode.f64)) == ['pow', '-1', '<constant>']
 
 
 class TestConc12CopyOnWrite:
-    """conc-1/conc-2: `compile_rules` pushed into the SAME core object, so a
+    """`compile_rules` pushed into the SAME core object, so a
     concurrent reader mid-`simplify` raced a half-updated ruleset; and the shim
     mutators rewrote `simplification_rules` BEFORE the push, so a failed push left
     the wrapper and the core silently diverged. `compile_rules` is copy-on-write
@@ -1140,8 +1119,8 @@ class TestConc12CopyOnWrite:
         engine.compile_rules()
         assert engine._core is not old_core, 'compile_rules must swap, not mutate in place'
         # a reader that captured the old core keeps a consistent (old) view
-        assert old_core.ac_rules_info()[0] == 0
-        assert engine._core.ac_rules_info()[0] == 1
+        assert old_core.ac_rules_info_in_mode(rule_mode='default')[0] == 0
+        assert engine._core.ac_rules_info_in_mode(rule_mode='default')[0] == 1
 
     def test_failed_mutator_push_leaves_rules_unchanged(self, monkeypatch) -> None:
         engine = SimpliPyEngine(
@@ -1155,7 +1134,7 @@ class TestConc12CopyOnWrite:
             raise RuntimeError('injected core-build failure')
         monkeypatch.setattr(SimpliPyEngine, '_build_core', staticmethod(boom))
         with pytest.raises(RuntimeError, match='injected'):
-            engine.prune_covered_rules()
+            engine.prune_covered_rules(rule_mode='default')
         assert engine.simplification_rules == before, \
             'a failed push must leave the wrapper list unchanged (loud, not diverged)'
         assert engine._core is core_before

@@ -3,7 +3,7 @@ from pathlib import Path
 # This assumes your asset management code is saved in 'asset_manager.py'
 import simplipy as sp
 import pytest
-import huggingface_hub as hf_hub  # the lazy-import patch target (D30)
+import huggingface_hub as hf_hub  # the lazy-import patch target
 
 # --- Test Constants ---
 # These tests use real, known assets from the psaegert/simplipy-assets-test manifest.
@@ -234,12 +234,12 @@ def test_install_different_asset_types(tmp_path: Path):
 
 
 class TestR6ArtifactIdentity:
-    """R6 (G2's identity half): the manifest carries `revision` + per-file `sha256`,
-    and both are ENFORCED -- the audit watched the shared cache change mid-pytest-run
+    """Artifact identity: the manifest carries `revision` + per-file `sha256`,
+    and both are ENFORCED -- the shared cache once changed mid-pytest-run
     and an artifact republished under the same name mid-audit; that is the one defect
     class that changes behaviour with no commit. Corrupting a byte of a cached file
     must make resolution RAISE, never silently serve; entries without digests
-    (pre-R6 manifests) stay permissive."""
+    (older manifests) stay permissive."""
 
     def _stage(self, tmp_path, with_digests=True):
         import hashlib
@@ -296,8 +296,7 @@ class TestR6ArtifactIdentity:
 
 
 class TestRmtreeBoundary:
-    """missed-004 + missed-006 + threatmodel-4 (+ dep-4-hf-exception-miss): one
-    boundary, every rmtree/join site. The manifest's `directory` reached rmtree
+    """One boundary, every rmtree/join site. The manifest's `directory` reached rmtree
     unvalidated -- and no `..` is needed: Path(cache) / '/etc/x' IS Path('/etc/x'),
     which defeats any fix that only rejects traversal segments. Separately,
     `uninstall_asset` returned True having deleted nothing whenever
@@ -333,7 +332,7 @@ class TestRmtreeBoundary:
 
 
 class TestC51OfflineResolution:
-    """C51: named-asset load ALWAYS round-tripped to the Hub -- a user on a plane
+    """Named-asset load ALWAYS round-tripped to the Hub -- a user on a plane
     with the asset FULLY INSTALLED got 23.5 s of retries and a raw
     `LocalEntryNotFoundError` naming no file. The manifest fetch now falls back to
     the last CACHED manifest copy when the network fails, so an installed asset
@@ -359,6 +358,48 @@ class TestC51OfflineResolution:
         monkeypatch.setattr(hf_hub, 'hf_hub_download', fake_download)
         p = am.get_path('toy', local_dir=tmp_path / 'cache')
         assert p.endswith('config.yaml')
+
+    def test_install_reports_every_download_failure_class(self, tmp_path, monkeypatch):
+        """Not only HfHubHTTPError: an offline or connection error is the same documented
+        False, and the partial download is cleaned up."""
+        from simplipy import asset_manager as am
+        manifest = {'toy': {'type': 'engine', 'repo_id': 'x/y', 'directory': 'engines/toy',
+                            'files': ['config.yaml', 'rules.json'], 'entrypoint': 'config.yaml'}}
+        calls = []
+
+        def half_then_dead(repo_id, filename, repo_type, local_dir, **kw):
+            calls.append(filename)
+            if len(calls) > 1:
+                raise OSError('network is unreachable')
+            out = Path(local_dir) / filename
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text('operators: {}\n')
+            return str(out)
+
+        monkeypatch.setattr(am, 'fetch_manifest', lambda **kw: manifest)
+        monkeypatch.setattr(hf_hub, 'hf_hub_download', half_then_dead)
+        assert am.install_asset('toy', local_dir=tmp_path) is False
+        assert not (tmp_path / 'engines' / 'toy').exists(), 'the partial download must be cleaned up'
+
+    def test_an_installed_asset_never_reaches_the_hub(self, tmp_path, monkeypatch):
+        """An installed asset resolves from the local cache alone -- the manifest copy it
+        was installed with -- so a load makes no network request at all."""
+        import json as _json
+        from simplipy import asset_manager as am
+        d = tmp_path / 'cache' / 'engines' / 'toy'
+        d.mkdir(parents=True)
+        (d / 'config.yaml').write_text('operators: {}\n')
+        manifest = {'toy': {'type': 'engine', 'repo_id': 'x/y', 'directory': 'engines/toy',
+                            'files': ['config.yaml'], 'entrypoint': 'config.yaml'}}
+        cached = tmp_path / 'cached_manifest.json'
+        cached.write_text(_json.dumps(manifest))
+
+        def local_only(repo_id, filename, repo_type, **kw):
+            assert kw.get('local_files_only'), 'an installed asset must not reach the hub'
+            return str(cached)
+
+        monkeypatch.setattr(hf_hub, 'hf_hub_download', local_only)
+        assert am.get_path('toy', local_dir=tmp_path / 'cache').endswith('config.yaml')
 
     def test_cold_cache_offline_stays_loud(self, tmp_path, monkeypatch):
         from simplipy import asset_manager as am

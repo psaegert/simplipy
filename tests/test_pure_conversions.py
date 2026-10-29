@@ -1,4 +1,4 @@
-"""PURE CONVERSIONS: notation only, never content (the research harness).
+"""PURE CONVERSIONS: notation only, never content.
 
 `to_infix` / `to_prefix` / `to_tagged` are SYNTACTIC token-level regroupings: no AC
 state, no canonical constructors, no rule application, no literal re-spelling, no
@@ -7,21 +7,17 @@ returns the form it was handed.
 
 Every direction, every 2-cycle and every 3-cycle is asserted at the exact relation the
 design table claims, over the 400 raw (unsimplified) rows of
-`benchmarks/corpus/raw_skeletons_nv.json`. Where a relation is "up to X" the test
+`simplipy.verify.default_corpus()`. Where a relation is "up to X" the test
 re-normalises through the stated map and asserts equality -- no case is skipped.
 """
-import json
-import os
 
 import numpy as np
 import pytest
 
-from conftest import acj_config_path, require_or_skip
+from conftest import acj_config_path
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.io import load_config
-
-CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
-                      'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 
 @pytest.fixture(scope="module")
@@ -37,8 +33,7 @@ def ruleless() -> SimpliPyEngine:
 
 @pytest.fixture(scope="module")
 def rows() -> list[list[str]]:
-    require_or_skip(CORPUS, 'the raw skeleton corpus is not in this checkout')
-    return [list(r) for r in json.load(open(CORPUS))]
+    return [list(r) for r in default_corpus()]
 
 
 @pytest.fixture(scope="module")
@@ -234,9 +229,16 @@ class TestAssociationAndSections:
         assert engine.to_prefix(['<mul>', 'x0', '<div>', '<mul>', 'x1', 'x2', '</mul>', '</mul>']) \
             == ['/', 'x0', '*', 'x1', 'x2']
 
-    def test_lone_group_inverse_keeps_its_unary_spelling(self, engine) -> None:
+    def test_a_lone_negation_is_unary_and_a_lone_reciprocal_is_bagged(self, engine) -> None:
+        # A tagged sequence declares its dialect by its bags, so every quotient carries one: a
+        # reciprocal has no one-member bag and is bagged with the unit.
         assert engine.to_tagged(['neg', 'x0']) == ['neg', 'x0']
-        assert engine.to_tagged(['inv', 'x0']) == ['inv', 'x0']
+        assert engine.to_tagged(['inv', 'x0']) == ['<mul>', '1', '<div>', 'x0', '</mul>']
+        assert engine.to_tagged(['neg', 'inv', 'x1']) == ['neg', '<mul>', '1', '<div>', 'x1', '</mul>']
+
+    def test_a_fraction_token_is_bagged_as_its_quotient(self, engine) -> None:
+        assert engine.to_tagged(['exp', '1/2']) == ['exp', '<mul>', '1', '<div>', '2', '</mul>']
+        assert engine.to_tagged(['exp', '-7/4']) == ['exp', '<mul>', '-7', '<div>', '4', '</mul>']
 
     def test_empty_positive_part_expands_to_the_unary_inverse(self, engine) -> None:
         assert engine.to_prefix(['<add>', '<sub>', 'a', 'b', '</add>']) == ['-', 'neg', 'a', 'b']
@@ -248,7 +250,7 @@ class TestAssociationAndSections:
 
 # -------------------------------------------------- simplify: dialect-preserving
 class TestSimplifyPreservesTheDialect:
-    """Owner ruling: `simplify` only simplifies, and returns the form it was given."""
+    """`simplify` only simplifies, and returns the form it was given."""
 
     def test_prefix_in_prefix_out(self, engine) -> None:
         out = engine.simplify(['*', '2', 'atan', 'x0'])
@@ -263,6 +265,18 @@ class TestSimplifyPreservesTheDialect:
         out = engine.simplify(['<mul>', '2', 'atan', 'x0', '</mul>'])
         assert out == ['<mul>', '2', 'atan', 'x0', '</mul>']
 
+    @pytest.mark.parametrize('mode', ['real', 'f64', 'permissive'])
+    def test_a_tagged_answer_spells_a_quotient_as_to_tagged_does(self, engine, mode) -> None:
+        # One tagged spelling per value: a reciprocal or a negative power in a tagged answer is
+        # the bag `to_tagged` writes for its explicit spelling, wherever it stands.
+        for prefix in (['inv', 'x0'], ['sin', 'inv', 'x0'], ['+', 'x1', 'inv', 'x0'],
+                       ['exp', 'inv', 'sin', 'x0'], ['/', '-1', 'x0'], ['exp', '/', '-1', 'x0'],
+                       ['pow', 'x0', '-3'], ['+', 'x1', 'pow', 'x0', '-2'],
+                       ['exp', 'neg', 'pow', 'x0', '-2']):
+            explicit = engine.simplify(prefix, mode=mode)
+            tagged = engine.to_tagged(explicit)
+            assert engine.simplify(tagged, mode=mode) == tagged, (prefix, explicit, tagged)
+
     def test_str_in_str_out(self, engine) -> None:
         assert isinstance(engine.simplify('2*atan(x0)'), str)
 
@@ -274,13 +288,17 @@ class TestSimplifyPreservesTheDialect:
         assert engine.simplify(['+', 'x0', 'x0']) == ['*', '2', 'x0']
         assert engine.simplify(['<add>', 'x0', 'x0', '</add>']) == ['<mul>', '2', 'x0', '</mul>']
 
-    def test_convert_then_simplify_is_the_exact_recipe(self, engine, rows) -> None:
-        """The migration for `form=`: convert first, THEN simplify."""
+    def test_convert_then_simplify_reaches_one_canonical_state(self, engine, rows) -> None:
+        """Convert first, THEN simplify: whatever notation the input is converted to, the
+        answer is one canonical state -- read back as the explicit prefix, it simplifies to
+        the explicit answer (measured: 120 of 120 rows). The answers themselves are spelled
+        in their own notation, so they are not compared token for token."""
         for r in rows[:120]:
             r = list(r)
-            assert engine.simplify(engine.to_tagged(r)) == engine.simplify(engine.to_tagged(r))
-            assert engine.simplify(engine.to_infix(r)) == engine.simplify(engine.to_infix(r))
-            assert engine.simplify(engine.to_prefix(r)) == engine.simplify(engine.to_prefix(r))
+            reference = engine.simplify(engine.to_prefix(r))
+            for convert in (engine.to_tagged, engine.to_infix):
+                answer = engine.simplify(convert(r))
+                assert engine.simplify(engine.to_prefix(answer)) == reference, (r, convert.__name__)
 
 
 # ------------------------------------------------------------------- errors

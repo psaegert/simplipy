@@ -1,18 +1,13 @@
-"""The MINE half of the package (C23a, D27).
+"""Rule mining: discovering, certifying and checking an engine's rule files.
 
-``RuleMiner`` holds the 13 mining/certification methods that lived on
-``SimpliPyEngine`` until 0.13.0. It is an ordinary object over an engine:
-``RuleMiner(engine).find_rules(...)``. Every access to engine state is
-EXPLICIT (``self.engine._core``, ``self.engine.simplification_rules``, ...) —
-the miner owns no state of its own beyond the engine reference (C23a step 2,
-the explicit-engine-access rewrite; step 1 was the verbatim facade move).
-``SimpliPyEngine.find_rules`` / ``certify_rules`` remain as thin delegators,
-so the public API does not move. The single-flight ``_MINE_LOCK`` and the
-mine-only module helpers live HERE; ``engine.py`` re-exports them so the lock
-stays ONE object across both modules (D28).
+:class:`RuleMiner` holds the mining and certification methods. It is an ordinary
+object over an engine, ``RuleMiner(engine).find_rules(...)``, and owns no state of its
+own beyond the engine reference; ``SimpliPyEngine.find_rules`` and ``certify_rules``
+are thin delegators to it. One mine runs per process: a module-level lock serializes
+every mine and certify entry point, however many miners exist.
 
-Equality gate (D29): full-mine byte-identity on ``rules.json``, machine-pinned
-— applied to step 1 and step 2 separately.
+:func:`verify_mine` checks a mined file against the re-mine gates in its own mode, and
+:func:`cross_mode_complexity` prices answers of different modes on one shared scale.
 """
 
 import hashlib
@@ -20,54 +15,44 @@ import os
 import re
 import signal
 import threading
+import time
 from typing import Callable, TYPE_CHECKING
 from typing import Any
 from copy import deepcopy
 
 import numpy as np
+import copy
+import functools
 import json
 
 from simplipy.utils import (
     is_numeric_string,
     deduplicate_rules,
+    dedup_target_wins,
     _dedup_keyed_rules,
     enumerate_expressions, count_expressions,
-    remap_expression,
-    violates_wildcard_multiplicity)
+    remap_expression)
 
 if TYPE_CHECKING:
     from .engine import SimpliPyEngine
 
-# D11 column R30 (owner-ratified 2026-08-16): the miner is this module's
+# The miner is this module's
 # power-user surface; the module helpers (_MINE_LOCK, ...) are private.
-__all__ = ['RuleMiner']
+__all__ = ['RuleMiner', 'verify_mine', 'cross_mode_complexity']
 
 
-# THE ARTIFACT-AFFECTING SWITCH REGISTRY (H-042, doctrine-propagation sweep D4).
-# Every environment switch that can change a MINED ARTIFACT or a CERTIFICATION VERDICT,
-# in ONE place: the mine's provenance writer records every SET entry verbatim
-# (`soundness.env_overrides`), so a switch added here is recorded automatically.
-# Adding an artifact-affecting switch ANYWHERE (a rust OnceLock or a python read)
-# without listing it here violates the kill-switch recording doctrine: a mine run
-# under a non-default instrument must say so in its own sidecar. Pure observability
-# switches (the *_TRACE family, SIMPLIPY_MINE_PROGRESS_INTERVAL) do NOT belong here.
-# Caveat: the rust side reads its switches ONCE per process (OnceLock at first use),
-# so the record is faithful unless the caller mutates os.environ between first engine
-# use and the mine -- do not do that.
-ARTIFACT_ENV_SWITCHES = (
-    'SIMPLIPY_IVL_GATE',          # interval domain gate layer (recorded as bool too)
-    'SIMPLIPY_IVL_CLASS',         # interval value-class layer (bool too)
-    'SIMPLIPY_IVL_REACH',         # interval reachability layer (bool too)
-    'SIMPLIPY_SPECIAL_BATTERY',   # special-point battery layer (bool too)
-    'SIMPLIPY_IVL_NODE_BUDGET',   # interval node-budget override (raw too)
-    'SIMPLIPY_AC_ABSORB_FIRST',   # bag-match attempt order (serve outputs + mined rules)
-    'SIMPLIPY_MU_SYM',            # mu symbol unit (the reduction ordering itself)
-    'SIMPLIPY_MU_FREE',           # mu <constant> cost (the ordering)
-    'SIMPLIPY_ZERO_SIGN',         # miner sign-combo grid (reference/repro)
-    'SIMPLIPY_POLE_GRID',         # miner magnitude-grid ablation
-    'SIMPLIPY_HIPREC_FRAC',       # hiprec near-miss escalation gate (calibration)
-    'SIMPLIPY_TAGGED_FRACTION_MAX',  # tagged structural-fraction bound: changes MINED output
-)
+# THE ARTIFACT-AFFECTING SWITCH REGISTRY: every environment variable that can change a
+# mined artifact, a certification verdict or a served answer. The core declares the list
+# (`rust/env_switches.rs`, the constants its read sites use), so it cannot drift from what
+# is read. The mine's provenance writer records every SET entry verbatim
+# (`soundness.env_overrides`). The core reads its switches ONCE per process (at first
+# use), so the record is faithful unless the caller mutates os.environ between first
+# engine use and the mine.
+try:
+    from simplipy._core import ARTIFACT_ENV_SWITCHES as _CORE_ENV_SWITCHES  # type: ignore[attr-defined]
+except ImportError:  # no extension: engine construction raises with the reason anyway
+    _CORE_ENV_SWITCHES = []
+ARTIFACT_ENV_SWITCHES: tuple[str, ...] = tuple(_CORE_ENV_SWITCHES)
 
 _CONSTLIKE_LEAVES = {'<constant>', 'np.e', 'np.pi',
                      'float("inf")', 'float("-inf")', 'float("nan")'}
@@ -96,11 +81,56 @@ def _rule_identity(lhs: Any, rhs: Any,
             tuple(_SLOT_SIGIL.sub(r'@\1', token) for token in target))
 
 
+def _slots_to_variables(tokens: Any, dummy_variables: list[str]) -> tuple[str, ...]:
+    """A rule side in the proposal channel's vocabulary: each slot (`?0`, `_1`, `!0`, `$2`)
+    becomes the dummy variable of its index, the sort erased, as the channel certifies
+    concrete variables and the promotion re-derives the sort. A slot beyond the dummy
+    variables stays as it is, and the channel refuses it by its vocabulary."""
+    out = []
+    for token in tokens:
+        match = _SLOT_SIGIL.match(str(token))
+        index = int(match.group(1)) if match else None
+        out.append(dummy_variables[index] if index is not None and index < len(dummy_variables)
+                   else str(token))
+    return tuple(out)
+
+
+def _rules_sha256(rules: Any) -> str:
+    """The sha256 of a rule file as a mine writes it (`json.dump(..., indent=4)`), so a pin
+    taken from the rules in memory is the pin of the file's bytes."""
+    text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules], indent=4)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _finished_cell(path: str, key: str) -> list | None:
+    """The rules of a cell this mine already finished, or ``None``: the file and its sidecar
+    exist, the sidecar records a final, uninterrupted mine whose resume key is ``key`` (the
+    checkpoint's fingerprint: parameters, mode, code, operators, data, numeric environment,
+    universe, starting and other sets), and the file holds the bytes it recorded."""
+    sidecar = path + '.provenance.json'
+    if not (os.path.exists(path) and os.path.exists(sidecar)):
+        return None
+    try:
+        with open(sidecar) as file:
+            side = json.load(file)
+        with open(path, 'rb') as file:
+            raw = file.read()
+    except (OSError, ValueError):
+        return None
+    progress = side.get('progress') or {}
+    resume = side.get('resume') or {}
+    if (progress.get('final') is not True or progress.get('interrupted')
+            or resume.get('key') != key
+            or resume.get('rules_sha256') != hashlib.sha256(raw).hexdigest()):
+        return None
+    return [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.loads(raw)]
+
+
 def _reconcile_proposal_census(
         outcomes: dict, trail: list, watch: dict, drops: dict,
         rules: Any, dummy_variables: list[str]) -> None:
     """Rewrite the proposal census so it describes the ARTIFACT, not the moment of
-    certification (F94, 2026-08-18).
+    certification.
 
     :meth:`RuleMiner._certify_proposals` records its verdicts BEFORE the symbolic gate,
     the covered-prune and the sort promotion have run, and every one of those stages may
@@ -124,7 +154,7 @@ def _reconcile_proposal_census(
             raise RuntimeError(
                 f"certified proposal {entry['source']} -> {entry['target']} is absent from "
                 f"the mined ruleset and no stage recorded dropping it -- the provenance "
-                f"sidecar cannot account for one of its own certified pairs (F94)")
+                f"sidecar cannot account for one of its own certified pairs")
         stage, reason = record
         trail[index].update(verdict='certified_then_dropped',
                             dropped_at=stage, drop_reason=reason)
@@ -136,8 +166,8 @@ def _tokens_in_vocabulary(tokens: Any, vocabulary: set) -> bool:
     """Vocabulary test for proposal/hint token sequences: numeric and constant-like
     literals are valid leaves everywhere (the generation-2 spellings carry their
     numbers as literal TOKENS -- `pow x0 2` where the retired ring spelled
-    `pow2 x0` -- so a bare vocabulary-set test silently skipped every such
-    proposal; audit Tier-1 #3)."""
+    `pow2 x0` -- so a bare vocabulary-set test would silently skip every such
+    proposal)."""
     return all(t in vocabulary or t in _CONSTLIKE_LEAVES or is_numeric_string(t)
                for t in tokens)
 
@@ -195,16 +225,247 @@ def _load_proposals(
     return entries, record
 
 
-#: Which modes a judged tier licenses a rule to serve in. `permissive` is DERIVED (a rule
-#: serves there iff it serves in either), never listed: the ledger's invariant
-#: `rules_permissive == rules_f64 UNION rules_real` then holds by construction rather than by
-#: assertion, and a fourth entry here could silently break it.
-_TIER_MODES: dict[str, frozenset] = {
-    'core': frozenset({'f64', 'real'}),
-    'real': frozenset({'real'}),
-    'f64': frozenset({'f64'}),
-    'reject': frozenset(),
-}
+#: ONE MINE PER FILE: each file is mined in its own mode -- the mode's serve answer is the
+#: mark, its canon reads the sources, its numerics accept -- in this order, so the
+#: permissive mine reads the finished f64 set as serving does. (rule mode, file key)
+_MINE_MODES = (('default', 'f64'), ('real', 'real'), ('permissive', 'permissive'))
+
+#: The mode `certify_rules` judges a proposal in: the union of the three files' acceptance.
+_CERTIFY_RULE_MODE = 'permissive'
+
+#: The engine attribute holding each rule mode's own set.
+_RULES_ATTR = {'default': 'simplification_rules', 'real': 'real_simplification_rules',
+               'permissive': 'permissive_simplification_rules'}
+
+#: The judge loop gives up on ONE SOURCE -- loudly -- when the judge has refused its pick this
+#: many times. Each refusal strictly grows a finite exclusion set, so the loop terminates; a
+#: cap that binds says the scan and the judge disagree about that source, and that must be
+#: seen, not papered over. The cap is per source, so one stubborn source neither costs the
+#: others their rounds nor hides behind them.
+_JUDGE_ROUNDS_MAX = 8
+
+#: Batches below this size are judged in-process: spawning workers costs more than it saves.
+_JUDGE_POOL_MIN = 64
+
+
+#: The mine's judge watchdog (`find_rules`' `judge_warn_s`/`judge_fail_s`): a judgment past
+#: the first is logged, one past the second fails the mine.
+JUDGE_WARN_S = 60.0
+JUDGE_FAIL_S = 600.0
+
+
+class _JudgmentOverrun(BaseException):
+    """Raised in the judging thread by the watchdog (`_watched_judgments`). A BaseException,
+    so the sweep's per-rule ``except Exception`` cannot file it as a verdict."""
+
+
+def _raise_in_thread(ident: int, exc: Any) -> None:
+    """Raise ``exc`` in the thread ``ident`` at its next bytecode (``None`` withdraws one not
+    yet raised): CPython's ``PyThreadState_SetAsyncExc``, which reaches any thread, the main
+    one included, without a signal handler."""
+    import ctypes
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(ident), ctypes.py_object(exc) if exc is not None else ctypes.c_void_p())
+
+
+def _watched_judgments(pairs: list, warn_s: float = JUDGE_WARN_S,
+                       fail_s: float = JUDGE_FAIL_S) -> list[dict]:
+    """The contract judge's verdict record of each ``(lhs, rhs)`` pair, in order, judged one at
+    a time with NO wall-clock timeout: a timeout would file a verdict the machine's load
+    decided, and the mine memoises verdicts into its checkpoint. A WATCHDOG instead logs a
+    judgment still running after ``warn_s`` seconds and fails the mine (``RuntimeError``,
+    naming the rule) when one runs past ``fail_s``, by interrupting the judgment in the
+    thread that runs it, whichever thread that is."""
+    import contextlib
+    import io
+    import logging
+    from .verify import verify_ruleset
+    log = logging.getLogger(__name__)
+    judging = threading.get_ident()
+    out: list[dict] = []
+    for idx, (lhs, rhs) in enumerate(pairs):
+        rule = f"{' '.join(lhs)} -> {' '.join(rhs)}"
+        # `done` and `fired` change only under `lock`, so the watchdog interrupts a judgment
+        # that is still running and never the code after it.
+        lock = threading.Lock()
+        done = threading.Event()
+        fired = threading.Event()
+
+        def _watch(rule: str = rule, lock: Any = lock, done: threading.Event = done,
+                   fired: threading.Event = fired) -> None:
+            if done.wait(warn_s):
+                return
+            log.warning('simplipy mine: the judgment of %s is still running after %g s',
+                        rule, warn_s)
+            if done.wait(max(fail_s - warn_s, 0.0)):
+                return
+            with lock:
+                if not done.is_set():
+                    fired.set()
+                    _raise_in_thread(judging, _JudgmentOverrun)
+
+        watchdog = threading.Thread(target=_watch, daemon=True)
+        started = time.monotonic()
+        try:
+            watchdog.start()
+            try:
+                # The sweep prints its CLI report; the mine's record is the sidecar.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    report = verify_ruleset([[list(lhs), list(rhs)]], judge_timeout_s=0)
+            finally:
+                with lock:
+                    done.set()
+                watchdog.join()
+            if fired.is_set():
+                # Withdraw the watchdog's exception if it is still pending (it may arrive
+                # right here instead, and the handler below takes either).
+                _raise_in_thread(judging, None)
+                raise _JudgmentOverrun
+        except _JudgmentOverrun:
+            raise RuntimeError(
+                f'the judgment of {rule} ran past {fail_s:g} s (judge_fail_s); the mine '
+                f'fails rather than file a verdict the clock decided') from None
+        elapsed = time.monotonic() - started
+        if elapsed > warn_s:
+            log.warning('simplipy mine: the judgment of %s took %.1f s', rule, elapsed)
+        out.append(dict(report['detail'][0], idx=idx))
+    return out
+
+
+def _judge_chunk(pairs: list, warn_s: float = JUDGE_WARN_S,
+                 fail_s: float = JUDGE_FAIL_S) -> list[str]:
+    from .verify import effective_tier
+    return [effective_tier(d) for d in _watched_judgments(pairs, warn_s, fail_s)]
+
+
+def judge_tiers(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
+                fail_s: float = JUDGE_FAIL_S) -> list[str]:
+    """THE JUDGE of the mine's per-length loop: the contract judge's effective tier of each
+    ``(lhs, rhs)`` pair, in order, under the mine's watchdog (``warn_s``, ``fail_s``; see
+    :func:`_watched_judgments`). Rules are judged independently, so a pool of
+    ``processes`` workers (spawned: the parent holds the core's threads) gives the same
+    answers as one; a small batch is judged in-process."""
+    pairs = [(list(lhs), list(rhs)) for lhs, rhs in pairs]
+    if processes <= 1 or len(pairs) < _JUDGE_POOL_MIN:
+        return _judge_chunk(pairs, warn_s, fail_s) if pairs else []
+    import multiprocessing
+    size = -(-len(pairs) // processes)
+    chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
+    from .verify._contract import judge_rows, set_rows
+    with multiprocessing.get_context('spawn').Pool(
+            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
+        parts = pool.map(functools.partial(_judge_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
+    return [tier for part in parts for tier in part]
+
+
+def _verdict_chunk(pairs: list, warn_s: float = JUDGE_WARN_S,
+                   fail_s: float = JUDGE_FAIL_S) -> list[str | None]:
+    return [d.get('verdict') for d in _watched_judgments(pairs, warn_s, fail_s)]
+
+
+def judge_verdicts(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
+                   fail_s: float = JUDGE_FAIL_S) -> list[str | None]:
+    """The contract judge's verdict name of each ``(lhs, rhs)`` pair, in order (``CERTIFIED``,
+    ``KILL``, ``NO-WITNESS``, ...): the reason beside :func:`judge_tiers`' tier, judged the
+    same way."""
+    pairs = [(list(lhs), list(rhs)) for lhs, rhs in pairs]
+    if processes <= 1 or len(pairs) < _JUDGE_POOL_MIN:
+        return _verdict_chunk(pairs, warn_s, fail_s) if pairs else []
+    import multiprocessing
+    size = -(-len(pairs) // processes)
+    chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
+    from .verify._contract import judge_rows, set_rows
+    with multiprocessing.get_context('spawn').Pool(
+            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
+        parts = pool.map(functools.partial(_verdict_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
+    return [verdict for part in parts for verdict in part]
+
+
+def _file_mode(rule_mode: str) -> str:
+    return dict(_MINE_MODES)[rule_mode]
+
+
+def _mine_modes(modes: Any) -> set:
+    """The rule modes a mine runs, from ``find_rules(modes=...)``: file mode names (``f64``,
+    also ``default``, ``real``, ``permissive``), all three when ``None``."""
+    if modes is None:
+        return {rule_mode for rule_mode, _ in _MINE_MODES}
+    names = [modes] if isinstance(modes, str) else list(modes)
+    by_name = {file_mode: rule_mode for rule_mode, file_mode in _MINE_MODES}
+    by_name['default'] = 'default'
+    unknown = [name for name in names if name not in by_name]
+    if unknown or not names:
+        raise ValueError(f'modes must name f64, real or permissive, got {modes!r}')
+    return {by_name[name] for name in names}
+
+
+def _mode_tiers(rule_mode: str) -> frozenset:
+    """The judged tiers a rule mode's file may hold (`verify.MODE_TIERS`, the one table)."""
+    from .verify import MODE_TIERS
+    return MODE_TIERS[_file_mode(rule_mode)]
+
+
+def _twin_shadow_owners(census: list) -> set[int]:
+    """The rows TWIN-SHADOW REMOVAL drops, read off a shadow census: the owner of each
+    ``(victim, owner, False, 'twin-shadow')`` entry whose victim stays -- the victim's own
+    orientation twin carries the owner's canonical rewrite, so with the owner gone it mints
+    in its place and the served set is unchanged. Lowest rows first, so of a mutual pair
+    the earlier row stays."""
+    gone: set[int] = set()
+    for victim, owner, owner_was_twin, kind in sorted(census):
+        if kind == 'twin-shadow' and not owner_was_twin and victim != owner and victim not in gone:
+            gone.add(owner)
+    return gone
+
+
+#: `SIMPLIPY_*` variables that change no artifact: the diagnostics (`*_TRACE`), the
+#: test-asset switch, the build stamp, the progress cadence and the trusted-module list.
+_INERT_ENV = ('SIMPLIPY_TEST_REQUIRE_ASSETS', 'SIMPLIPY_BUILD', 'SIMPLIPY_MINE_PROGRESS_INTERVAL',
+              'SIMPLIPY_TRUSTED_MODULES')
+
+
+def env_overrides(environ: Any = None) -> dict[str, str]:
+    """Every ``SIMPLIPY_*`` variable set in ``environ`` (default: this process) that is not
+    inert: the declared switches (:data:`ARTIFACT_ENV_SWITCHES`, empty since 0.15) and any
+    other, so a switch a later build reads, or a stale one, is recorded rather than assumed
+    harmless. A mine records it in its sidecar; ``simplipy verify-mine`` requires it empty."""
+    environ = os.environ if environ is None else environ
+    return {key: value for key, value in sorted(environ.items())
+            if key.startswith('SIMPLIPY_') and not key.endswith('_TRACE')
+            and key not in _INERT_ENV}
+
+
+def code_digest() -> dict[str, str]:
+    """The code a mine runs: the sha256 of the compiled core and of the package's Python
+    sources. A checkpoint resumes only under the digest it was written with."""
+    import simplipy
+    from simplipy import _core
+    root = os.path.dirname(os.path.abspath(simplipy.__file__))
+    python = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(filenames):
+            if name.endswith('.py'):
+                path = os.path.join(dirpath, name)
+                python.update(os.path.relpath(path, root).encode())
+                with open(path, 'rb') as file:
+                    python.update(file.read())
+    with open(_core.__file__, 'rb') as file:
+        core = hashlib.sha256(file.read()).hexdigest()
+    return {'core': core, 'python': python.hexdigest()}
+
+
+def _near_miss_frac() -> float:
+    """The high-precision re-judgement's near-miss gate, as the core declares it."""
+    from simplipy import _core
+    return float(_core.NEAR_MISS_FRAC)
+
+
+def _judge_digest() -> str:
+    """The sha256 of the contract judge's source (`verify/_contract.py`)."""
+    from .verify import _contract
+    with open(_contract.__file__, 'rb') as file:
+        return hashlib.sha256(file.read()).hexdigest()
 
 
 #: Slot sigils. A pattern carrying one matches many instances, and the constructor may
@@ -234,7 +495,10 @@ def _is_ground(tokens: Any) -> bool:
 
 
 def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
-    """Does `mode`'s CONSTRUCTOR already reach this rule's endpoint without the rule?
+    """THE PREEMPTION GATE: does `mode`'s CONSTRUCTOR already reach this rule's endpoint
+    without the rule? `_finalize` drops such a rule from the mode's file and lists it in the
+    sidecar (``gates.preempted``); the expected count is 0, because the miner's mark is the
+    mode's serve answer, which contains the constructor.
 
     Asked with the engine's own simplifier in that mode, against a RULE-LESS twin, so the
     answer is "the constructor does this" and never "some other rule does this" -- the
@@ -271,279 +535,486 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
         # serves no rules", which is exactly the constructor-only engine we want.
         bare._core.set_mode_rules('real', [])
         engine._ruleless_twin = bare
-    try:
-        return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
-    except Exception:
-        return False
+    # No error is read as "not preempted": a ground rule side the engine cannot read is a
+    # defect of the rule set, and the gate reports it by raising instead of keeping the rule.
+    return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
 
 
-def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]:
-    """Judge the rules AS THEY WILL BE WRITTEN and route each into the triple.
+def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
+    """THE LIVENESS GATE: the rows of ``rules`` that the engine holding them does not serve.
 
-    -> ({'f64': [...], 'real': [...], 'permissive': [...]}, rejected, tiers)
-
-    Judged HERE and not reused from the symbolic gate, even though that is a second full
-    pass: the gate runs before the covered-prune and the sort promotion, both of which
-    change which rules exist AND how they are spelled, so its verdicts describe a rule set
-    that is not the one being written. What is routed must be what is served -- and what
-    is served to USERS is what the FILES say, so the judged spelling is the FILE spelling.
-
-    THE FILE SPELLING, NOT THE SERVED CANON (task #83). The writer downstream of this
-    router (`find_rules`' triple dump) serializes ``engine.simplification_rules`` pairs
-    verbatim -- the very list routed below -- so judging exactly those pairs makes the
-    judged spelling and the written spelling coincide by construction, and the router
-    agrees with release verification (`verify_ruleset` over the written files) by the
-    same construction. The served-canon spellings (`ac_served_rules`) are load-minted
-    RESPELLINGS -- the load canon folds ground subterms and respells literals as exact
-    rationals -- and judging those licensed 13 constant-fold rules for f64
-    (``+ tanh log 9 _0 -> + inv 1.025 _0`` serves as ``+ _0 / 40 41``, which judges
-    f64-realised) while the file-level gate and the DEPLOYED f64 behaviour (measured at
-    1-6 ulp drift) both say `real`. The served twins' own soundness remains the symbolic
-    gate's jurisdiction: it judges `ac_served_rules` upstream and drops any rule a
-    condemned twin convicts, fail-closed.
-
-    What the served set still decides here is EXISTENCE: a source rule that translation
-    drops mints no served entry, cannot fire at all, and is licensed nowhere -- never
-    infer a licence for something the matcher never saw.
+    A shipped rule is live when, on every generic instance of its left side (each slot a
+    fresh variable, each wide slot also a composite: the covered-rule prune's variants without
+    its non-finite tier, ``engine._coverage_variants``), the mode's serve answer reaches its
+    right side's
+    instance or something below it (``engine._reaches_promise``). A rule that misses is dead
+    or shadowed: another rule takes its instance first and ends dearer, so the row ships and
+    never decides an answer. Expected empty.
+    -> ``[lhs, rhs, instance, answer]`` per dead row (the first instance it misses on).
     """
-    from .verify import CONST_CHANNEL_DETAIL, verify_ruleset
+    from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants, _reaches_promise
+    core = engine._core
+    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    dead: list = []
+    for lhs, rhs in rules:
+        for variant_lhs, variant_rhs in _coverage_variants(tuple(lhs), tuple(rhs), rule_mode,
+                                                           non_finite=False):
+            if not _reaches_promise(core, rule_mode, variant_lhs, variant_rhs, arity):
+                dead.append([list(lhs), list(rhs), variant_lhs,
+                             list(core.mine_mark(variant_lhs, rule_mode=rule_mode))])
+                break
+    return dead
 
-    source = engine.simplification_rules
-    report = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs in source])
-    detail = report['detail'] if isinstance(report, dict) else report
-    served_srcs = {src for _, _, src in engine._core.ac_served_rules()}
 
-    allowed: dict[int, frozenset] = {}
-    tiers: dict[int, set] = {}
-    for d in detail:
-        src = d['idx']
-        if src not in served_srcs:
-            # No served entry: the rule cannot fire, so it is licensed nowhere. Kept out
-            # of `allowed` entirely -- the routing loop's default is the empty set.
+#: A safety cap on the rounds of overlap completion: the pass runs to its fixpoint (a round that
+#: offers nothing new or certifies nothing), which the cell bounds; the cap only stops a defect.
+_COMPLETION_ROUNDS = 32
+
+
+def _term(tokens: Any, arity: dict, side: str) -> Any:
+    """A rule side as a term: ``(token, *children)`` for an operator or a leaf, and
+    ``('#var', side, slot)`` for a slot, ``side`` keeping two rules' slots apart."""
+    def go(i: int) -> tuple[Any, int]:
+        token = str(tokens[i])
+        if _SLOT_SIGIL.match(token):
+            return ('#var', side, token), i + 1
+        children, j = [], i + 1
+        for _ in range(arity.get(token, 0)):
+            child, j = go(j)
+            children.append(child)
+        return (token, *children), j
+    return go(0)[0]
+
+
+def _resolve(term: Any, subst: dict) -> Any:
+    """``term`` under the substitution, every bound variable replaced throughout."""
+    while term[0] == '#var' and term in subst:
+        term = subst[term]
+    if term[0] == '#var':
+        return term
+    return (term[0], *(_resolve(child, subst) for child in term[1:]))
+
+
+def _unify(a: Any, b: Any, subst: dict) -> dict | None:
+    """Syntactic unification (occurs check included) of two terms under ``subst``."""
+    while a[0] == '#var' and a in subst:
+        a = subst[a]
+    while b[0] == '#var' and b in subst:
+        b = subst[b]
+    if a == b:
+        return subst
+    if b[0] == '#var' and a[0] != '#var':
+        a, b = b, a
+    if a[0] == '#var':
+        if a in _term_variables(_resolve(b, subst)):
+            return None
+        return {**subst, a: b}
+    if a[0] != b[0] or len(a) != len(b):
+        return None
+    for x, y in zip(a[1:], b[1:]):
+        found = _unify(x, y, subst)
+        if found is None:
+            return None
+        subst = found
+    return subst
+
+
+def _term_variables(term: Any) -> list:
+    if term[0] == '#var':
+        return [term]
+    return [v for child in term[1:] for v in _term_variables(child)]
+
+
+def _subterms(term: Any, path: tuple = ()) -> list:
+    """Every (path, subterm) of ``term`` that is not a variable, the root first."""
+    if term[0] == '#var':
+        return []
+    out = [(path, term)]
+    for k, child in enumerate(term[1:]):
+        out += _subterms(child, path + (k,))
+    return out
+
+
+def _tokens(term: Any, names: dict) -> list[str]:
+    """A term in prefix tokens, each variable spelled by ``names`` (filled in order of first
+    appearance as ``x0``, ``x1``, ...)."""
+    if term[0] == '#var':
+        if term not in names:
+            names[term] = f'x{len(names)}'
+        return [names[term]]
+    return [term[0]] + [t for child in term[1:] for t in _tokens(child, names)]
+
+
+def _critical_instances(rules: Any, arity: dict) -> list[tuple[int, list[str], list[str]]]:
+    """The instances on which two rules OVERLAP, as ``(row, instance, rhs_instance)``: the left
+    side of row ``i`` under the most general unifier of one of its non-variable subterms with
+    another rule's left side (the critical pairs of completion), the root included where the
+    two rows differ. A `?` slot binds a variable leaf only, so a unifier binding one to a
+    composite is no instance. Unification is syntactic, on the written prefix form; an
+    overlap only the AC matcher sees (inside a sum or product bag) is not found here."""
+    terms = [(_term(lhs, arity, 'a'), _term(rhs, arity, 'a')) for lhs, rhs in rules]
+    others = [_term(lhs, arity, 'b') for lhs, _ in rules]
+    by_head: dict = {}
+    for j, term in enumerate(others):
+        by_head.setdefault(term[0], []).append(j)
+    out, seen = [], set()
+    for i, (lhs, rhs) in enumerate(terms):
+        for path, sub in _subterms(lhs):
+            for j in by_head.get(sub[0], []):
+                if j == i and not path:
+                    continue
+                subst = _unify(sub, others[j], {})
+                if subst is None:
+                    continue
+                if any(v[2].startswith('?') and _resolve(v, subst)[0] != '#var'
+                       for v in set(_term_variables(lhs)) | set(_term_variables(others[j]))):
+                    continue
+                names: dict = {}
+                instance = _tokens(_resolve(lhs, subst), names)
+                rhs_instance = _tokens(_resolve(rhs, subst), names)
+                key = (i, tuple(instance))
+                if key not in seen:
+                    seen.add(key)
+                    out.append((i, instance, rhs_instance))
+    return out
+
+
+def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any, prog: Any = None) -> list[dict]:
+    """THE OVERLAPS THAT DO NOT JOIN: where two rules overlap at an instance of row ``i``'s left
+    side (a critical instance, ``_critical_instances``, or the row's own generic instance,
+    each slot a variable), the engine's answer on the instance with the row
+    suppressed (the other path, ``A``) is taken by the engine holding the file to a state other
+    than its answer on the row's right side (``B``). Each is listed with the rule completion
+    would add between the two, the dearer state to the cheaper one in the serve ordering:
+    ``{rule, instance, other_path, rhs_path, completion}``, once per completion. An instance
+    no other path moves (``A`` is the rule-less answer) is no overlap. ``prog`` (a
+    :class:`~simplipy.progress.Progress`) reports the instances as they are read."""
+    from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants
+    core = engine._core
+    rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    every_row = list(range(len(rules)))
+    instances = _critical_instances(rules, arity)
+    for i, (lhs, rhs) in enumerate(rules):
+        instances += [(i, list(vl), list(vr)) for vl, vr in _coverage_variants(
+            lhs, rhs, rule_mode, non_finite=False, composite=False)]
+    out, seen, done = [], set(), set()
+    for i, instance, rhs_instance in (instances if prog is None
+                                      else prog.track(instances, 'overlap instances')):
+        if (i, tuple(instance)) in seen:
             continue
-        # D36: the multi-`<constant>` family's soundness authority is the Const-channel
-        # chain, not the contract, so the judge's non-jurisdiction sentinel is not a
-        # verdict about the rule. Treated as `core`, which is exactly where those rules
-        # serve today -- the carve-out stays visible in the sidecar, never silent.
-        tier = 'core' if d.get('detail') == CONST_CHANNEL_DETAIL else (d.get('tier') or 'reject')
-        tiers.setdefault(src, set()).add(tier)
-        allowed[src] = allowed.get(src, _TIER_MODES['core']) & _TIER_MODES.get(tier, frozenset())
-
-    triple: dict[str, list] = {'f64': [], 'real': [], 'permissive': []}
-    rejected: list = []
-    preempted: dict[str, int] = {'f64': 0, 'real': 0, 'permissive': 0}
-    for i, (lhs, rhs) in enumerate(engine.simplification_rules):
-        # A rule with no served entry cannot fire at all, so it is licensed nowhere. This
-        # is the load-minted-twins lesson in the other direction: never infer a licence
-        # for something the matcher never saw.
-        modes = allowed.get(i, frozenset())
-        pair = [list(lhs), list(rhs)]
-        if not modes:
-            rejected.append(pair)
+        seen.add((i, tuple(instance)))
+        other = core.ac_simplify_suppressed(list(instance), 48, 'explicit', None, [i],
+                                            rule_mode=rule_mode)
+        bare = core.ac_simplify_suppressed(list(instance), 48, 'explicit', None, every_row,
+                                           rule_mode=rule_mode)
+        if other == bare:
             continue
-        for m in ('f64', 'real', 'permissive'):
-            if m != 'permissive' and m not in modes:
-                continue
-            # PER-MODE PRUNE. A mode's file carries only what that mode can actually
-            # serve. Folding is mode-dependent, so a rule can be load-bearing in `real`
-            # and pure dead weight in `f64`, where the constructor reaches the same
-            # endpoint without it -- `asin 1e-08 -> 1e-08` is the whole 18-rule
-            # `f(+-10^-k)` family. Shipping it anyway would put rules in a file that can
-            # never fire from it, which is exactly the computed-rather-than-stated shape
-            # the load-minted twins already punished once.
-            if _preempted_by(engine, lhs, rhs, m):
-                preempted[m] += 1
-                continue
-            triple[m].append(pair)
-
-    _assert_triple_invariants(triple, rejected, engine.simplification_rules, allowed,
-                              preempted)
-    if verbose:
-        print(f'Triple: f64={len(triple["f64"])} real={len(triple["real"])} '
-              f'permissive={len(triple["permissive"])} rejected={len(rejected)}')
-    return triple, rejected, {'tiers': {i: sorted(t) for i, t in tiers.items()},
-                              'preempted': preempted}
+        a = list(core.mine_mark(list(other), rule_mode=rule_mode))
+        b = list(core.mine_mark(list(rhs_instance), rule_mode=rule_mode))
+        if a == b:
+            continue
+        completion = ((a, b) if core.ac_ordered_below_in(b, a, rule_mode=rule_mode)
+                      else (b, a))
+        if (tuple(completion[0]), tuple(completion[1])) in done:
+            continue  # one completion joins every overlap it is listed for
+        done.add((tuple(completion[0]), tuple(completion[1])))
+        out.append({'rule': [list(rules[i][0]), list(rules[i][1])], 'instance': list(instance),
+                    'other_path': a, 'rhs_path': b,
+                    'completion': [list(completion[0]), list(completion[1])]})
+    return out
 
 
-def _assert_triple_invariants(triple: dict, rejected: list, mined: list,
-                              allowed: dict, preempted: dict | None = None) -> None:
-    """The ledger's four relationship invariants, checked before anything is written.
+def _in_cell(overlap: dict, max_source: int | None) -> bool:
+    """Is the overlap's completion a rule of the mine's cell: its source no longer than the
+    mine's sources (``max_source``, None for no bound)? A longer source lies outside the
+    universe the mine enumerates, and completing there breeds without end: each completion
+    overlaps the rules again at a longer instance."""
+    return max_source is None or len(overlap['completion'][0]) <= max_source
 
-    They are a statement about the RELATIONSHIP between the three files, which is a
-    stronger provenance guarantee than three independently pinned counts: a routing bug
-    that moved a rule between sets leaves every individual count plausible and breaks one
-    of these. Fail LOUDLY -- a partial triple is not shippable.
 
-    Each check is written so it CAN fail. An invariant that restates its own construction
-    proves nothing, and two of these did on the first pass.
-    """
-    def keys(rs: Any) -> set:
-        return {(tuple(lhs), tuple(rhs)) for lhs, rhs in rs}
+def _completion_pattern(overlap: dict) -> tuple:
+    """An overlap's completion as the rule a file would hold: its variables the slots `?<k>`."""
+    src, tgt = overlap['completion']
+    names = [t for t in dict.fromkeys(list(src) + list(tgt)) if re.fullmatch(r'x\d+', t)]
+    both, _ = remap_expression(list(src) + list(tgt), names, variable_prefix='?')
+    return tuple(both[:len(src)]), tuple(both[len(src):])
 
-    f64, real, permissive = keys(triple['f64']), keys(triple['real']), keys(triple['permissive'])
-    rej = keys(rejected)
-    mined_keys = keys(mined)
-    # INVARIANT 1 and INVARIANT 2 are RETIRED, and this is why. They compared three rule
-    # sets as if they lived in ONE canonical world. Once folding is mode-dependent they do
-    # not: `acos 1 -> 0` is absent from the permissive set purely because permissive's own
-    # constructor performs it, and permissive performs all 15 such rules -- measured 15/15.
-    # Set overlap was therefore measuring SPELLING, not capability, and the property it
-    # stood proxy for ("permissive can do everything the other two can") is behavioural.
-    # It is checked as behaviour, by `assert_permissive_dominates`, on the walk sweep the
-    # invariance gate already runs. Owner ruling 2026-08-20.
-    #
-    # What every set here must still satisfy: a rule may only appear where its tier
-    # licenses it, MINUS what that mode's constructor already performs.
-    # UNCONDITIONAL. This was gated on `preempted is not None`, which is only supplied by
-    # the production path, so every direct call skipped the one invariant that replaced
-    # the two retired ones. The check needs `allowed`, which is always passed.
-    if True:
-        for m, ks in (('f64', f64), ('real', real)):
-            licensed = {(tuple(lhs), tuple(rhs)) for i, (lhs, rhs) in enumerate(mined)
-                        if m in allowed.get(i, frozenset())}
-            if not ks <= licensed:
-                raise AssertionError(
-                    f'triple invariant broken: {len(ks - licensed)} rules in rules_{m} '
-                    f'are not licensed for that mode')
-    if permissive & rej:
-        raise AssertionError(
-            f'triple invariant 3 broken: {len(permissive & rej)} rules are BOTH served and '
-            f'rejected')
-    if (permissive | rej) - mined_keys:
-        raise AssertionError(
-            f'triple invariant 3 broken: {len((permissive | rej) - mined_keys)} rules are '
-            f'served or rejected but were never mined')
-    for i, (lhs, rhs) in enumerate(mined):
-        k = (tuple(lhs), tuple(rhs))
-        want = allowed.get(i, frozenset())
-        got = frozenset({m for m, ks in (('f64', f64), ('real', real)) if k in ks})
-        # SUBSET, not equality: the per-mode prune legitimately removes a rule from a
-        # file whose tier licenses it, when that mode's constructor already reaches the
-        # endpoint. What must never happen is the other direction -- a rule in a file its
-        # tier does NOT license.
-        if not got <= want:
-            raise AssertionError(
-                f'triple invariant 4 broken: {" ".join(lhs)} -> {" ".join(rhs)} is in '
-                f'{sorted(got)} but its tier licenses only {sorted(want) or "none"}')
+
+def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
+              judged: dict | None = None, max_source: int | None = None) -> dict:
+    """``verify.licensed`` of each distinct pair in the file of ``rule_mode``: the judge's tier
+    holds in the mode and no named policy refuses it (evidence, the constant count, ground
+    composites, the cell, the ordering, the specials, duplication, what the engine does
+    itself, well-formedness), each policy read from its one place. ``judged`` memoises the
+    judge's tier by pair. -> ``{pair: {'licensed', 'holds', 'tier', 'refused_by'}}``."""
+    from .verify import licensed
+    judged = {} if judged is None else judged
+    distinct = list(dict.fromkeys(pairs))
+    new = [pair for pair in distinct if pair not in judged]
+    for pair, tier in zip(new, judge(new) if new else []):
+        judged[pair] = tier
+    mode = _file_mode(rule_mode)
+    return {pair: licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
+                           detail={'tier': judged[pair]})
+            for pair in distinct}
+
+
+def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
+                  verdicts: Callable | None = None, max_source: int | None = None,
+                  prog: Any = None) -> tuple[list, list, list]:
+    """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) within the
+    mine's cell (``_in_cell``) is asked about as the rule completion would add:
+    ``verify.licensed`` in the mode, the judge's tier and the named policies. -> ``(missing,
+    refused, beyond)``: the completions the mode licenses, which the file lacks (expected
+    empty), those it does not, each with the judge's tier, the policies that refuse it
+    (``refused_by``) and, with ``verdicts`` (``judge_verdicts``), the judge's verdict where the
+    tier does not hold, and the overlaps whose completion lies beyond the cell, unjudged."""
+    started = time.monotonic()
+    unjoined = _unjoined_overlaps(engine, rule_mode, rules)
+    beyond = [o for o in unjoined if not _in_cell(o, max_source)]
+    unjoined = [o for o in unjoined if _in_cell(o, max_source)]
+    pairs = [_completion_pattern(o) for o in unjoined]
+    licence = _licences(engine, rule_mode, pairs, judge, max_source=max_source)
+    if prog is not None:
+        prog.stage('overlap gate', unjoined=len(unjoined), beyond_the_cell=len(beyond),
+                   judged=len(licence), seconds=round(time.monotonic() - started, 1))
+    off = [pair for pair, lic in licence.items() if not lic['holds']]
+    verdict_of = dict(zip(off, verdicts(off))) if verdicts is not None and off else {}
+    missing, refused = [], []
+    for o, pair in zip(unjoined, pairs):
+        lic = licence[pair]
+        if lic['licensed']:
+            missing.append({**o, 'tier': lic['tier']})
+        else:
+            refused.append({**o, 'tier': lic['tier'], 'refused_by': lic['refused_by'],
+                            'verdict': verdict_of.get(pair)})
+    return missing, refused, beyond
 
 
 class RuleMiner:
-    """The dedicated miner (C23a step 2): 13 methods, engine access explicit.
+    """The rule miner of one engine: :meth:`find_rules` and :meth:`certify_rules`.
 
-    Stateless beyond the engine reference: mining reads ``engine._core`` /
-    ``engine.operator_arity``, swaps rule sets only through the engine's
-    copy-on-write ``_replace_rules``, and calls back into the engine's own
-    ``prune_covered_rules`` / ``is_valid`` / fingerprint methods. One miner
-    per process (D28): the module-level ``_MINE_LOCK`` single-flights every
-    mine/certify entry point regardless of how many miners are constructed.
+    Stateless beyond the engine reference: mining reads the engine's compiled core and
+    operator table, swaps rule sets only through the engine's copy-on-write rule
+    replacement, and calls back into the engine's own ``prune_covered_rules``,
+    ``is_valid`` and fingerprint methods. One mine runs per process: a module-level
+    lock serializes every mine and certify entry point, however many miners are
+    constructed.
     """
 
     def __init__(self, engine: 'SimpliPyEngine') -> None:
         self.engine = engine
 
+    def _mode_rules(self, rule_mode: str) -> list:
+        """The rules the engine holds for ``rule_mode`` (its own set)."""
+        return [(tuple(lhs), tuple(rhs)) for lhs, rhs in
+                (getattr(self.engine, _RULES_ATTR[rule_mode]) or [])]
+
+    def _install(self, rule_mode: str, rules: list) -> None:
+        """Install ``rules`` as ``rule_mode``'s own set, keeping the other modes' sets. The
+        mine reads and judges the set in ``rule_mode``'s canon, so it is read in that one."""
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+        self.engine._rule_canons.pop(rule_mode, None)
+        if rule_mode == 'default':
+            self.engine._replace_rules(rules)
+        else:
+            setattr(self.engine, _RULES_ATTR[rule_mode], rules)
+            self.engine._replace_rules(self.engine.simplification_rules)
+
+    def _unlicensed(self, picks: dict, rule_mode: str, judge: Callable, judged: dict,
+                    dummy_variables: list[str]) -> set:
+        """The picks the mode may not ship: a pick whose pattern (the spelling the file will
+        carry) or one of whose served entries (the rule as the mode loads it, orientation
+        twins included) carries a judged tier the mode does not license, or that the mode's
+        load does not serve at all. Verdicts are memoised by pair across rounds and lengths
+        (``judged``).
+
+        WHAT THE ENGINE DOES ITSELF IS REFUSED HERE (4.8), where the mine first considers a
+        pick, by the tests the final gate checks: a ground pick the mode's rule-less engine
+        already takes to its right side (``_preempted_by``), and a pick that does not fire on
+        its own generic instances with the picks installed beside the mode's rules
+        (``_dead_rules``: another rule or the mode's own simplification takes the instance
+        first, `abs(tan(atan(x0)))` is `abs(x0)` in permissive before
+        `abs(tan(atan(_0))) -> acosh(cosh(_0))` can match). Nothing is dropped afterwards."""
+        order = sorted(picks)
+        patterns = []
+        for idx in order:
+            src, tgt = picks[idx]
+            p_src, mapping = remap_expression(list(src), dummy_variables=dummy_variables,
+                                              variable_prefix='?')
+            p_tgt, _ = remap_expression(list(tgt), dummy_variables, mapping, variable_prefix='?')
+            patterns.append((tuple(p_src), tuple(p_tgt)))
+        served = self.engine._core.ac_translate_preview(
+            [(list(lhs), list(rhs)) for lhs, rhs in patterns], rule_mode=rule_mode)
+        todo = list(dict.fromkeys(
+            [pair for pair in patterns if pair not in judged]
+            + [(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in served
+               if (tuple(lhs), tuple(rhs)) not in judged]))
+        if todo:
+            for pair, tier in zip(todo, judge(todo)):
+                judged[pair] = tier
+        allowed = _mode_tiers(rule_mode)
+        bad = {k for k, pair in enumerate(patterns) if judged[pair] not in allowed}
+        bad |= set(range(len(order))) - {k for _, _, k in served}
+        bad |= {k for lhs, rhs, k in served if judged[(tuple(lhs), tuple(rhs))] not in allowed}
+        mode = _file_mode(rule_mode)
+        bad |= {k for k, (lhs, rhs) in enumerate(patterns)
+                if k not in bad and _preempted_by(self.engine, lhs, rhs, mode)}
+        live = [k for k in range(len(order)) if k not in bad]
+        if live:
+            current = self._mode_rules(rule_mode)
+            self._install(rule_mode, current + [patterns[k] for k in live
+                                                if patterns[k] not in set(current)])
+            try:
+                dead = {(tuple(d[0]), tuple(d[1]))
+                        for d in _dead_rules(self.engine, rule_mode, [patterns[k] for k in live])}
+            finally:
+                self._install(rule_mode, current)
+            bad |= {k for k in live if patterns[k] in dead}
+        return {order[k] for k in bad}
+
+    def _final_gate(self, rule_mode: str, judge: Callable, judged: dict) -> tuple[list, list]:
+        """THE FINAL PER-FILE GATE over the mode's installed set: every file spelling is asked
+        ``verify.licensed`` in the mode (the judge's tier and the named policies), every entry
+        the mode serves from it the judge's tier (``judged`` memoises tiers by pair), and a row
+        with any refused spelling is dropped. The file spelling is what release verification
+        reads; the served entries are what fires.
+        -> (kept rules, [[lhs, rhs, tier, refused_by] per dropped row])."""
+        final = self._mode_rules(rule_mode)
+        served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
+        entries = [(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in served]
+        _licences(self.engine, rule_mode, entries, judge, judged)  # one batch for the tiers
+        licence = _licences(self.engine, rule_mode, final, judge, judged)
+        allowed = _mode_tiers(rule_mode)
+        off = {i: (licence[pair]['tier'], licence[pair]['refused_by'])
+               for i, pair in enumerate(final) if not licence[pair]['licensed']}
+        for (lhs, rhs), (_, _, i) in zip(entries, served):
+            if judged[(lhs, rhs)] not in allowed:
+                off.setdefault(i, (judged[(lhs, rhs)], []))
+        return ([rule for i, rule in enumerate(final) if i not in off],
+                [[list(final[i][0]), list(final[i][1]), tier, refused_by]
+                 for i, (tier, refused_by) in sorted(off.items())])
+
+    def _deshadow(self, rule_mode: str, rules: list) -> tuple[list, list]:
+        """TWIN-SHADOW REMOVAL: drop every row the mode's load would mint
+        anyway. A census entry ``(victim, owner, False, 'twin-shadow')`` says the victim's
+        orientation twin was skipped because the owner's own row carries the identical
+        canonical rewrite -- so with the owner removed the twin mints in its place and the
+        served set is unchanged. The owner is dropped while its victim stays (lowest rows
+        first, so of a mutual pair the earlier row is kept), and the census is re-read
+        until no such entry remains. -> (kept rules, dropped rules)."""
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+        dropped: list = []
+        while True:
+            self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs))
+                                                         for lhs, rhs in rules])
+            gone = _twin_shadow_owners(self.engine._core.ac_shadow_census(rule_mode=rule_mode))
+            if not gone:
+                return rules, dropped
+            dropped += [rules[i] for i in sorted(gone)]
+            rules = [rule for i, rule in enumerate(rules) if i not in gone]
+
+    def _mine_length(self, sources: list, mine: Callable, rule_mode: str, judge: Callable,
+                     judged: dict, dummy_variables: list[str]) -> tuple[list, dict]:
+        """THE PER-LENGTH JUDGE LOOP: mine the length, judge the picks, and
+        re-scan exactly the sources whose pick the mode does not license, with that pick
+        excluded, until every pick is licensed. The scan is deterministic and exclusions only
+        remove refused targets, so the fixed point is the scan that consults the judge per
+        candidate: another tier's pick can never shadow a licensed alternative.
+
+        ``mine(sources, indices, exclusions)`` runs `mine_one_length` with the global source
+        indices (which seed the sources and key the exclusions).
+
+        A source whose pick the judge refuses ``_JUDGE_ROUNDS_MAX`` times is given up on --
+        it is not re-scanned again -- and listed in ``stats['stubborn']`` with the targets it
+        excluded; the loop runs on for the others. The caller fails the mine on it."""
+        picks = {idx: (list(src), list(tgt)) for idx, src, tgt in mine(sources, None, None)}
+        exclusions: dict[int, list] = {}
+        refusals: dict[int, int] = {}
+        stubborn: list[int] = []
+        rounds = 0
+        while True:
+            rounds += 1
+            bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables)
+            again: list[int] = []
+            for idx in sorted(bad):
+                exclusions.setdefault(idx, []).append(picks.pop(idx)[1])
+                refusals[idx] = refusals.get(idx, 0) + 1
+                (stubborn if refusals[idx] >= _JUDGE_ROUNDS_MAX else again).append(idx)
+            if not again:
+                break
+            for idx, src, tgt in mine([sources[i] for i in again], again, exclusions):
+                picks[idx] = (list(src), list(tgt))
+        stats = {'judge_rounds': rounds,
+                 'excluded': sorted([list(sources[i]), tgt] for i, ts in exclusions.items()
+                                    for tgt in ts),
+                 'licensed': len(picks),
+                 'stubborn': [[list(sources[i]), exclusions[i]] for i in sorted(stubborn)]}
+        return [picks[i] for i in sorted(picks)], stats
+
     def _mining_sample_x(self, n_rows: int, n_vars: int, rng: np.random.Generator) -> np.ndarray:
-        """Sample the mine's numerical evaluation matrix X.
+        """Sample the mine's numerical evaluation matrix X: the one sampler the judge's f64
+        lane reads too (`verify._contract.mine_rows`, where the mixture is documented)."""
+        from .verify._contract import mine_rows
+        return mine_rows(n_rows, n_vars, rng)
 
-        Heavy-tailed MIXTURE instead of the historical pure N(0, 5): a mined pattern's
-        wildcards bind arbitrary SUBTREE values at application time, so equivalence
-        certification must exercise magnitudes far outside a Gaussian's bulk (tanh/exp
-        saturation plateaus, huge/tiny magnitudes) and the exact algebraic corner points
-        (0, +-1, ...) where false identities like ``asin(cosh(_0)) -> nan`` are refuted.
-        Mixture per ELEMENT (so a row can pair a huge x0 with a corner-point x1):
+    @staticmethod
+    def _confirm_kwargs(X_confirm: np.ndarray | None, X_data: np.ndarray, min_informative: int,
+                        seed: int) -> dict[str, Any]:
+        """Stage 2's arguments for the core's scan entries: the independent, wider X every
+        numeric pick is re-certified on before it may mint, with the evidence floor scaled
+        to its row count. Empty when the mine runs with ``confirm=False``.
 
-        - 40% N(0, 5) (the historical distribution; dense near typical values)
-        - 25% U(-50, 50)
-        - 25% signed log-uniform magnitudes 1e-4..1e3 (exposes saturation false-equalities)
-        - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
-
-        Under GENERIC-EQUIVALENCE semantics the corner points
-        refute wrong-VALUE identities (``asin(cosh(_0)) -> nan`` is false AT 0, where the
-        source is pi/2) while domain EXTENSION remains allowed: where the source is
-        NaN/inf the replacement may complete it (``div(_0, _0) -> 1``, the 0/0 limit).
-
-        The log-uniform tier's upper magnitude is 1e3, deliberately not wider: 1e3
-        still exercises every saturation (tanh/exp plateau by |x|~40) and f64 overflow
-        (exp overflows past |x|~710) that the tier is FOR, while a 1e6 design column
-        pushes the constant-fit conditioning to cond(A) ~ 1e6 and the fit cannot
-        recover an intercept to rtol at an exact-zero-crossing row -- silently
-        rejecting the entire ``C0*f(x)+C1`` affine family.
+        Confirmation runs INSIDE the scan (``Acceptor::confirm``): an unconfirmed pick yields
+        to the next candidate. Its seed is order-free -- the core adds a hash of both sides
+        of the pair to ``seed`` -- so a pair's verdict never depends on what else was judged.
         """
-        shape = (n_rows, n_vars)
-        choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
-        normal = rng.normal(0.0, 5.0, size=shape)
-        uniform = rng.uniform(-50.0, 50.0, size=shape)
-        magnitudes = 10.0 ** rng.uniform(-4.0, 3.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
-        specials = np.array([0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0,
-                             2.0, -2.0, np.e, -np.e, np.pi, -np.pi, 10.0, -10.0])
-        special = rng.choice(specials, size=shape)
-        return np.where(choice == 0, normal,
-                        np.where(choice == 1, uniform,
-                                 np.where(choice == 2, magnitudes, special)))
+        if X_confirm is None:
+            return {}
+        return {'confirm_x': X_confirm.flatten(order='C').tolist(),
+                'confirm_rows': X_confirm.shape[0],
+                'confirm_min_informative': max(1, round(min_informative * X_confirm.shape[0]
+                                                        / X_data.shape[0])),
+                'confirm_seed': seed}
 
-    def _confirm_mined_rules(
-            self,
-            found: list,
-            dummy_variables: list[str],
-            X_confirm: np.ndarray,
-            constants_fit_challenges: int,
-            constants_fit_retries: int,
-            rtol: float,
-            atol: float,
-            min_informative: int,
-            seed: int) -> list:
-        """STAGE-2 CONFIRMATION: re-verify each mined (source -> target)
-        pair on an INDEPENDENT, wider X before it may enter the rule set.
+    def _certify_one(self, source: tuple[str, ...], hint: Any, library: Any, vocabulary: set,
+                     max_target_pattern_length: int | None, fit: dict[str, Any], seed: int,
+                     confirm: dict[str, Any],
+                     rule_mode: str,
+                     excluded: Any = ()) -> tuple[list[str] | None, str | None, str | None]:
+        """THE certification chain for one proposed source, shared by :meth:`certify_rules`
+        and the proposal channel of :meth:`find_rules`.
 
-        Same checker, fresh data, fresh constant draws and seeds: this kills data-luck
-        accepts (agreement within tolerance only on the mine X, saturation plateaus,
-        lucky constant draws) without a second implementation to keep in sync. The
-        caller scales ``min_informative`` to the confirm matrix's row count.
+        First the library scan, with the engine's own result as the mark to beat; only when
+        it finds nothing, the hint, judged by the SAME acceptance (``judge_hint``: the
+        licences against the mark, the pair judgment on the mine's X, then stage 2). Both
+        run stage-2 confirmation inside (``confirm``). Returns ``(target, certificate,
+        refusal)``: certificate ``'minimal'`` (scan) or ``'verified'`` (hint); with no
+        target, ``refusal`` names why the hint was refused (None without a hint).
 
-        ORDER-INDEPENDENT confirm seed: the seed is a pure function of (confirm seed,
-        THIS rule's tokens), never of the rule's POSITION in ``found`` -- position-derived
-        seeds reroll every later rule whenever an earlier rule appears or disappears,
-        flipping the fit-flaky ones and drowning A/B rule-set diffs in noise. Same rule ->
-        same seed, no matter what else was mined; the same policy as the candidate fit
-        seed (``worker.rs``).
+        NO TOKEN-LENGTH BAR on a hint: a proposed rule need not shorten the token count.
+        Descent is decided by the serve ordering; the predicate G7 and the serve-time
+        `oriented` check apply.
+
+        ``excluded``: the targets the judge loop refused for this source; both arms skip
+        their class (a hint of an excluded class is refused as ``'excluded'``).
         """
-        assert self.engine._core is not None
-        n_rows = X_confirm.shape[0]
-        x_flat = X_confirm.flatten(order='C').tolist()
-        confirmed = []
-        for source, target in found:
-            # blake2b, not hash(): PYTHONHASHSEED randomises str hashing per process, which
-            # would make the confirm stage irreproducible across runs.
-            key = f'{" ".join(source)}->{" ".join(target)}'.encode()
-            rule_seed = seed + int.from_bytes(hashlib.blake2b(key, digest_size=7).digest(), 'little')
-            # THE BOUND MUST ADMIT THE PAIR IT IS ASKED ABOUT (2026-08-18). `find_rule`'s
-            # second argument is the MINE's candidate-length bound: the scan runs
-            # `1..min(simplified_length, max_target + 1)` (rust/worker.rs), so `len(source)`
-            # silently skips every candidate as long as the source -- and the candidate
-            # list here holds exactly ONE entry, the target being re-verified. That made
-            # "not confirmed" indistinguishable from "never looked at": a proposal hint
-            # the serve ordering accepts came back refused for a reason with no numerics
-            # in it. `max(...)` never LOWERS the old bound -- for a strictly shorter target
-            # `len(target) + 1 <= len(source)`, so every pair that confirms today keeps its
-            # verdict, mined pairs included (the mine's own bound, untouched, makes every
-            # mined target strictly shorter than its source).
-            scan_len = max(len(source), len(target) + 1)
-            result = self.engine._core.find_rule(
-                list(source), scan_len, None, [list(target)], list(dummy_variables),
-                x_flat, n_rows, constants_fit_challenges, constants_fit_retries,
-                rule_seed, rtol, atol, min_informative)
-            # The result must be THE TARGET WE ASKED ABOUT, not merely "something".
-            # `find_rule` does not always answer the question it was asked: its all-constant
-            # short-circuit classifies a variable-free `<constant>`-bearing source and returns
-            # that CLASS LITERAL without ever reading the candidate list. Testing only
-            # `result is not None` therefore made stage-2 confirmation VACUOUS for every such
-            # source -- measured: `exp <constant> -> 0`, `exp <constant> -> float("nan")` and
-            # `+ <constant> 1 -> float("-inf")` all "confirmed", while the control
-            # `+ x0 x0 -> 0` (which does not hit the short-circuit) correctly failed. Since the
-            # candidate list here holds exactly one entry, any other answer is the short-circuit
-            # speaking, and the honest verdict is "not confirmed".
-            if result is not None and list(result) == list(target):
-                confirmed.append((source, target))
-        return confirmed
+        exclusions = [list(t) for t in excluded]
+        core = self.engine._core
+        assert core is not None
+        target = core.find_rule_lib(list(source), library, max_target_pattern_length, seed=seed,
+                                    rule_mode=rule_mode, exclusions=exclusions, **fit, **confirm)
+        if target is not None:
+            return list(target), 'minimal', None
+        if hint is None:
+            return None, None, None
+        hint = [str(t) for t in hint]
+        if not _tokens_in_vocabulary(hint, vocabulary) or not self.engine.is_valid(hint):
+            return None, None, 'vocabulary'
+        ok, why = core.judge_hint(list(source), hint, library, seed=seed,
+                                  rule_mode=rule_mode, exclusions=exclusions, **fit, **confirm)
+        return (hint, 'verified', None) if ok else (None, None, why)
 
     def _mine_tier_with_progress(self, length: int, n_sources: int, mine_call: Callable, verbose: bool) -> Any:
         """Run one length tier's ``mine_one_length`` (a single blocking, rayon-parallel call) while a
@@ -638,13 +1109,28 @@ class RuleMiner:
             leaf_nodes: list[str] | None = None,
             promote_sorts: bool = True,
             symbolic_gate: bool = True,
-            snapshot_at: dict[int, str] | None = None) -> None:
-        """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
+            snapshot_at: dict[int, str] | None = None,
+            rule_mode: str = 'default',
+            initial_rules: list | None = None,
+            finals: dict[str, list] | None = None,
+            judge: Callable | None = None,
+            judge_warn_s: float = JUDGE_WARN_S,
+            judge_fail_s: float = JUDGE_FAIL_S,
+            cells: dict[tuple[str, str | None], list] | None = None,
+            offer_final_rules: bool = False,
+            judge_processes: int = 4) -> None:
+        """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
+        ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
+        throughout (marks, sources, library, acceptance, the rules installed so far). The
+        file's rules are written and recorded in ``finals[rule_mode]``, and every cell it
+        finishes (a ladder snapshot or the file) in ``cells[(rule_mode, cell path)]``. With
+        ``offer_final_rules``, the permissive mine is offered the f64 and real cell of the
+        same path through its proposal lane (see :meth:`find_rules`).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
         far and searched for an equivalent shorter candidate; the growing rule set is
-        pushed into the core between lengths (``set_rules``), which the Python pool cannot
+        pushed into the core between lengths (``set_mode_rules``), which the Python pool cannot
         do (the core is immutable from forked workers, so it would mine nothing).
         Parallelism is rayon over all cores; cap it with ``RAYON_NUM_THREADS``.
 
@@ -660,8 +1146,10 @@ class RuleMiner:
         so that every cell -- snapshotted or final -- goes through the identical block.
         """
         assert self.engine._core is not None
+        if judge is None:
+            judge = functools.partial(judge_tiers, warn_s=judge_warn_s, fail_s=judge_fail_s)
 
-        # THE TARGET BOUND IS mu, NOT TOKENS (owner ruling, re-mine 2026-08-20).
+        # THE TARGET BOUND IS mu, NOT TOKENS.
         # `max_target_pattern_length=None` now admits EVERY enumerated expression to the
         # candidate library and lets the scan stop at the first mu tier that cannot descend
         # below the source's mark -- the same predicate acceptance already applied, so the
@@ -686,14 +1174,20 @@ class RuleMiner:
             for expression in sorted(expressions_of_length[length])
         ]
         library = self.engine._core.build_candidate_library(
-            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0])
+            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
+            rule_mode=rule_mode)
+        file_mode = dict(_MINE_MODES)[rule_mode]
+        out_file = None if output_file is None else _triple_paths(output_file)[file_mode]
+        if verbose:
+            print(f'=== mining the {file_mode} file (rule mode {rule_mode})')
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates'
                   f' ({library.n_filtered:,} var-free filtered)')
 
-        # Existing rules (empty after reset_rules=True) join the Kruskal pruning and the
-        # final deduplicated set, like the pure-Python path.
-        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
+        # The mode's own existing rules (empty after reset_rules=True) join the Kruskal pruning
+        # and the final deduplicated set; another mode's set never seeds this one.
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in (
+            initial_rules if initial_rules is not None else self._mode_rules(rule_mode))]
 
         # --- The post-pass: what turns a raw mined rule set into a CELL ARTIFACT ---
         # A closure, because the ladder runs it MORE THAN ONCE. A (7,4) climb passes through
@@ -701,54 +1195,94 @@ class RuleMiner:
         # in its own right (see `snapshot_at`). Running the IDENTICAL block for every cell is
         # what makes a snapshot equal to a one-shot mine of that cell; a second copy of these
         # stages would be free to drift from this one.
-        def _finalize(mined: list, out_path: str | None, prov: dict | None) -> list:
-            self.engine._replace_rules(list(mined))
-            # --- F94 census reconciliation state -------------------------------------
+        def _finalize(mined: list, out_path: str | None, prov: dict | None,
+                      cell_source_length: int = max_source_pattern_length) -> list:
+            self._install(rule_mode, list(mined))
+            # --- Census reconciliation state -------------------------------------
             # The proposal census is written at CERTIFICATION time, upstream of four
             # stages that may each still drop a certified pair (symbolic gate, both
             # covered-prunes, sort promotion). `_watch` follows every certified pair
             # through them and `_drops` records WHICH stage took it and WHY, so the
             # sidecar can carry a terminal outcome instead of a stale claim.
-            _outcomes: dict = {}
-            _trail: list = []
-            _watch: dict = {}
+            # One LANE per batch the proposal channel certifies -- the proposals, then the
+            # files offered to the permissive mine -- as (outcomes, trail, watch).
+            _lanes: list[tuple[dict, list, dict]] = []
             _drops: dict = {}
+            _offered_trail: list | None = None
 
             def _note_drops(stage: str, reason_of: Callable[[Any], str]) -> None:
                 """Attribute every watched pair that left the ruleset during `stage`."""
-                if not _watch:
+                watched = {identity for _, _, watch in _lanes for identity in watch}
+                if not watched:
                     return
                 alive = {_rule_identity(lhs, rhs, dummy_variables)
-                         for lhs, rhs in self.engine.simplification_rules}
-                for identity in _watch:
+                         for lhs, rhs in self._mode_rules(rule_mode)}
+                for identity in watched:
                     if identity not in _drops and identity not in alive:
                         _drops[identity] = (stage, reason_of(identity))
+
+            def _lane(entries: list, lane_judge: Callable | None = None,
+                      prog: Any = None) -> tuple[dict, list, dict]:
+                """Certify one batch through the proposal channel and merge it."""
+                outcomes, trail, judge_loop = self._certify_proposals(
+                    entries, library,
+                    leaf_nodes if leaf_nodes is not None else list(dummy_variables),
+                    dummy_variables, X_data, X_confirm, max_target_pattern_length,
+                    constants_fit_challenges, constants_fit_retries, rtol, atol,
+                    min_informative, mine_seed, confirm_seed, verbose, rule_mode,
+                    lane_judge or judge, judged, prog=prog)
+                # Arm the census watch on the pairs the census currently calls certified.
+                # `deduplicate_rules` has already folded the batch in, so a pair missing
+                # from the ruleset ALREADY lost the merge -- attributed here, not left to
+                # the fail-closed hole check at the end.
+                _lanes.append((outcomes, trail, {
+                    _rule_identity(e['source'], e['target'], dummy_variables): i
+                    for i, e in enumerate(trail) if e['verdict'] == 'certified'}))
+                _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
+                return outcomes, trail, judge_loop
             # Proposal channel: certify externally proposed rules against the just-mined
             # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
             # the rule state the proposals were aimed at, and a clean abort must stay cheap.
             # An explicitly-given EMPTY batch still runs (and records all-zero outcome
             # counts): the sidecar must show the channel ran, not silently omit it.
             if proposal_entries is not None and not interrupted():
-                outcomes, trail = self._certify_proposals(
-                    proposal_entries, library,
-                    leaf_nodes if leaf_nodes is not None else list(dummy_variables),
-                    dummy_variables, X_data, X_confirm, max_target_pattern_length,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    min_informative, mine_seed, confirm_seed, verbose)
+                outcomes, trail, judge_loop = _lane(proposal_entries)
                 if prov is not None and 'proposals' in prov:
                     prov['proposals']['outcomes'] = outcomes
+                    prov['proposals']['judge_loop'] = judge_loop
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
                     # tally cannot be audited (it never says which candidate died at which gate).
                     prov['proposals']['trail'] = trail
-                # Arm the F94 watch on the pairs the census currently calls certified.
-                # `deduplicate_rules` has already folded the batch in, so a pair missing
-                # from the ruleset ALREADY lost the merge -- attributed here, not left to
-                # the fail-closed hole check at the end.
-                _outcomes, _trail = outcomes, trail
-                _watch = {_rule_identity(e['source'], e['target'], dummy_variables): i
-                          for i, e in enumerate(_trail) if e['verdict'] == 'certified'}
-                _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
-            # SYMBOLIC GATE (the third authority; owner-approved 2026-08-02): every
+            # THE OFFERED FILES (`offer_final_rules`): permissive promises less than f64 and
+            # real, so every rule of theirs holds in permissive too, and permissive's answer
+            # must never cost more than theirs. A per-mode mine finds only what its own scan
+            # reaches, so the permissive mine -- the last of the three -- is offered the
+            # finished f64 and real cell of the same path through the same channel: each rule
+            # is certified by permissive's own acceptance (a source the engine already takes
+            # at least as low reads `already_covered`) and enters as any proposal does. The
+            # sidecar pins each file by its sha256.
+            if offer_final_rules and rule_mode == 'permissive' and not interrupted():
+                files: dict = {}
+                entries: list = []
+                for file_key, other in (('f64', 'default'), ('real', 'real')):
+                    if cells is None or (other, out_path) not in cells:
+                        raise RuntimeError(
+                            f'the permissive cell {out_path!r} has no finished {file_key} '
+                            f'cell to be offered')
+                    other_rules = cells[(other, out_path)]
+                    files[file_key] = {
+                        'file': (None if out_path is None
+                                 else os.path.basename(_triple_paths(out_path)[file_key])),
+                        'sha256': _rules_sha256(other_rules), 'count': len(other_rules)}
+                    entries += [(_slots_to_variables(lhs, dummy_variables),
+                                 _slots_to_variables(rhs, dummy_variables))
+                                for lhs, rhs in other_rules]
+                entries = list(dict.fromkeys(entries))  # file order, f64 first
+                outcomes, _offered_trail, judge_loop = _lane(entries)
+                if prov is not None:
+                    prov['offered'] = {'files': files, 'count': len(entries),
+                                       'outcomes': outcomes, 'judge_loop': judge_loop}
+            # SYMBOLIC GATE (the third authority): every
             # confirmed rule is re-judged by the independent symbolic verifier
             # (`simplipy.verify`) at exact symbolic trigger points with the
             # precision-stability discriminator -- a residual that COLLAPSES as
@@ -760,8 +1294,8 @@ class RuleMiner:
             # family lives below any usable tolerance. KILLs are dropped here,
             # BEFORE the prune and promotion see the set; TOLERATED (null-set
             # extension doctrine, matching the engine's own licences) passes.
-            if symbolic_gate and not interrupted() and self.engine.simplification_rules:
-                from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS, verify_ruleset
+            if symbolic_gate and not interrupted() and self._mode_rules(rule_mode):
+                from .verify import FATAL_BUCKETS
                 # JUDGE WHAT SERVES, NOT WHAT THE ARTIFACT SAYS. The gate used to judge
                 # `simplification_rules` -- the artifact -- but translation is not the
                 # identity on it: rules drop, and ORIENTATION TWINS are MINTED at load
@@ -772,20 +1306,20 @@ class RuleMiner:
                 # later engine mints a different closure, which is exactly what an artifact
                 # cannot promise. Judging the served set also judges the DEPLOYED spelling
                 # (the canonical projection) rather than the mine's.
-                _served = self.engine._core.ac_served_rules()
-                _rep = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs, _ in _served])
-                _detail = _rep['detail'] if isinstance(_rep, dict) else _rep
-                # EVERY fatal bucket drops, not only KILL (audit B7): a rule the judge
+                _served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
+                # Under the mine's watchdog, with no wall-clock timeout (`_watched_judgments`).
+                _detail = _watched_judgments([(lhs, rhs) for lhs, rhs, _ in _served],
+                                             judge_warn_s, judge_fail_s)
+                _buckets: dict = {b: [] for b in ('CERTIFIED', 'TOLERATED', *FATAL_BUCKETS)}
+                for d in _detail:
+                    _buckets.setdefault(d['verdict'], []).append(d['idx'])
+                # EVERY fatal bucket drops, not only KILL: a rule the judge
                 # cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) or
                 # cannot reconcile (ENGINE-MISALIGN / UNRESOLVED-COVERAGE) never passed
                 # the second authority, and "confirmed by two independent authorities"
                 # is the claim a shipped rule makes. Fail closed: a vocabulary the
                 # contract cannot judge yields no rules, visibly, rather than rules
-                # with an unearned certificate. ONE exemption (D36): the judge's own
-                # non-jurisdiction sentinel for the multi-<constant> family, whose
-                # soundness authority is the Const-channel chain (fitting + count gate
-                # + licence registry) -- exempted rules ship and are recorded under
-                # their own sidecar key, so the carve-out is visible, never silent.
+                # with an unearned certificate.
                 # A verdict is attributed through the served entry's PROVENANCE, not
                 # through its spelling: the served side is canonical and the artifact side
                 # is the mine's, so `d['lhs'].split()` no longer names a droppable row
@@ -794,30 +1328,20 @@ class RuleMiner:
                 # one drops the rule that mints it -- fail-closed, and the only action that
                 # removes a twin from a later load.
                 _fatal: dict = {b: set() for b in FATAL_BUCKETS}
-                _const_channel: set = set()
                 _routed: dict = {}
                 for d in _detail:
                     if d.get('verdict') not in _fatal:
                         continue
-                    _src_lhs, _src_rhs = self.engine.simplification_rules[
+                    _src_lhs, _src_rhs = self._mode_rules(rule_mode)[
                         _served[d['idx']][2]]
                     _pair = (tuple(_src_lhs), tuple(_src_rhs))
                     _tier_of = d.get('tier') or 'reject'
-                    if d.get('detail') == CONST_CHANNEL_DETAIL:
-                        _const_channel.add(_pair)
-                    elif _tier_of != 'reject':
-                        # THE TIER HAS SOMEWHERE TO PUT IT, so the gate must not delete
-                        # it. Every fatal bucket used to drop, which was right when
-                        # `rules.json` was the only destination: a rule the contract
-                        # convicts had no home. Under the triple two of those buckets
-                        # DO have one -- ENGINE-MISALIGN is `real` (true, the deployed
-                        # engine diverges) and an f64-realised KILL is `f64` (false,
-                        # bit-exact in the deployed algebra) -- and deleting them here
-                        # would leave `_route_triple` nothing to route, making
-                        # rules_real.json and rules.json identical and silently voiding
-                        # the whole split. This is the hazard the roadmap flagged as
-                        # "arming the deployed check without the tier makes the next
-                        # mine DELETE sound rules"; it is closed HERE, not downstream.
+                    if _tier_of in _mode_tiers(rule_mode):
+                        # THE MODE LICENSES THE TIER, so the gate must not delete it:
+                        # a fatal bucket is fatal only where its tier is not licensed --
+                        # ENGINE-MISALIGN is `real` (true, the deployed engine diverges),
+                        # an f64-realised KILL is `f64` (false, bit-exact in the deployed
+                        # algebra) -- and this file keeps what its own mode licenses.
                         # Fail-closed is UNCHANGED for everything else: NO-WITNESS,
                         # UNSUPPORTED-SHAPE, JUDGE-TIMEOUT and UNRESOLVED-COVERAGE carry
                         # no tier at all, so they read `reject` and still drop.
@@ -826,10 +1350,10 @@ class RuleMiner:
                         _fatal[d['verdict']].add(_pair)
                 _drop = set().union(*_fatal.values())
                 if _drop:
-                    self.engine._replace_rules([
-                        (lhs, rhs) for lhs, rhs in self.engine.simplification_rules
+                    self._install(rule_mode, [
+                        (lhs, rhs) for lhs, rhs in self._mode_rules(rule_mode)
                         if (tuple(lhs), tuple(rhs)) not in _drop])
-                    # F94: the gate's own bucket IS the drop reason -- a certified
+                    # The gate's own bucket IS the drop reason -- a certified
                     # proposal killed here reads `certified_then_dropped(symbolic_gate,
                     # KILL)` in the sidecar rather than staying `certified`.
                     _gate_reason = {_rule_identity(bl, br, dummy_variables): bucket
@@ -841,28 +1365,43 @@ class RuleMiner:
                           f'{len(_drop) - len(_fatal["KILL"])} unjudgeable, '
                           f'{sum(len(v) for v in _routed.values())} routed to a mode tier '
                           f'({", ".join(f"{k}={len(v)}" for k, v in sorted(_routed.items())) or "none"}), '
-                          f'{len(self.engine.simplification_rules)} remain')
+                          f'{len(self._mode_rules(rule_mode))} remain')
                 if prov is not None:
-                    # The full census travels with the artifact (B7): every fatal
+                    # The full census travels with the artifact: every fatal
                     # bucket has its own key, PRESENT EVEN WHEN EMPTY -- the sidecar
                     # must show what the gate saw, not only what it dropped.
                     prov['symbolic_gate'] = {
                         **{('killed' if b == 'KILL' else b.lower().replace('-', '_')):
                            sorted([list(bl), list(br)] for bl, br in _fatal[b])
                            for b in FATAL_BUCKETS},
-                        'const_channel': sorted(
-                            [list(cl), list(cr)] for cl, cr in _const_channel),
                         # Convicted by the contract but KEPT, because a mode tier owns
                         # them. Recorded so the carve-out is visible in the sidecar
                         # rather than looking like the gate simply missed them.
                         'routed_to_tier': {k: sorted([list(bl), list(br)] for bl, br in v)
                                            for k, v in sorted(_routed.items())},
-                        'census': ({b: len(ids) for b, ids in _rep['buckets'].items()}
-                                   if isinstance(_rep, dict) else None),
-                        'kept': len(self.engine.simplification_rules)}
+                        'census': {b: len(ids) for b, ids in _buckets.items()},
+                        'kept': len(self._mode_rules(rule_mode))}
+            # THE FILE IS WHAT THIS MODE LICENSES (miner.md 2.11): the final gate judges the
+            # file's own spellings AND the entries the mode serves from them, with the loop's
+            # judge and memo, and drops what the mode does not license, counted. It judges
+            # BEFORE EACH PRUNE, so a prune only ever leans on licensed rules (a rule pruned as
+            # covered by one the gate then dropped would be lost), and once more at the end,
+            # on what ships: the post-pass (promotion) respells and re-sorts, so the per-length
+            # verdicts describe an earlier set.
+            gate: dict = {'unlicensed': [], 'preempted': []}
+
+            def _final_gate() -> None:
+                if not (symbolic_gate and self._mode_rules(rule_mode) and not interrupted()):
+                    return
+                kept, off = self._final_gate(rule_mode, judge, judged)
+                if off:
+                    gate['unlicensed'] += off
+                    self._install(rule_mode, kept)
+                    _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
             if prune == 'covered':
-                self.engine.prune_covered_rules(verbose=verbose)
-                # F94: the prune removes only rules the REMAINING set already reaches,
+                _final_gate()
+                self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                # The prune removes only rules the REMAINING set already reaches,
                 # so a certified proposal dropped here is still served compositionally
                 # -- a harmless drop, but one the census must still name.
                 _note_drops('prune_covered',
@@ -871,19 +1410,20 @@ class RuleMiner:
                 raise ValueError(
                     "prune=True (the redundant-rule prune) died with the legacy kernel; "
                     "use prune='covered' (AC-judged behavioral coverage) or prune=False")
-            # Sort promotion: re-certify every rule (mined + proposed) at the stronger `_`/`!`
-            # sorts and ship it at the strongest sound one (see `simplipy.promotion`). Runs AFTER
+            # Sort promotion: ask the judge of every rule (mined + proposed) at the stronger
+            # `_`/`!` sorts and ship it at the strongest it licenses (see `simplipy.promotion`),
+            # with the mine's judge. Runs AFTER
             # the prune so promotion works on the already-reduced rule set (the promotion carries
             # its own subsumption/derivability refund for the instances a promoted rule newly
             # covers). Emits the deployment-strength ruleset directly.
             if promote_sorts and not interrupted():
                 from .promotion import promote
-                kept, promotion_report = promote(self.engine.simplification_rules, self.engine,
-                                                 verbose=verbose)
-                self.engine._replace_rules(kept)
-                # F94: the ladder's own per-rule verdict lists name the reason a pair
-                # left here (`killed_q` -- unsound at the `?` sort, `unsupported`, ...);
-                # a pair the refund pruned as derivable appears in none of them.
+                kept, promotion_report = promote(self._mode_rules(rule_mode), self.engine,
+                                                 verbose=verbose, rule_mode=rule_mode,
+                                                 judge=judge)
+                self._install(rule_mode, kept)
+                # Promotion drops a rule only in its derivability refund (its lists name the
+                # rules each rung promoted, which stay).
                 _promo_reason = {
                     _rule_identity(item[0], item[1], dummy_variables): bucket
                     for bucket, items in promotion_report.items()
@@ -895,7 +1435,7 @@ class RuleMiner:
                     print(f'Sort promotion: {promotion_report.get("stage_counts")}')
                 if prov is not None:
                     prov['sort_promotion'] = promotion_report.get('stage_counts')
-                # POST-PROMOTION covered-prune (fold unification, 2026-08-02): the
+                # POST-PROMOTION covered-prune (fold unification): the
                 # ladder's seeded identities (`* 0 !0 -> 0`, the multiplicative
                 # twins) and the promoted sorts only exist AFTER promotion, so the
                 # pre-promotion prune cannot see that thousands of pure-literal
@@ -904,10 +1444,110 @@ class RuleMiner:
                 # redundant instances; genuinely novel ground rules (`cos 0 -> 1`)
                 # have no wildcard cover and survive.
                 if prune == 'covered':
-                    self.engine.prune_covered_rules(verbose=verbose)
+                    _final_gate()
+                    self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                     _note_drops('prune_covered_post_promotion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
-            # SOUNDNESS PROVENANCE, second half (audit Tier-1 #4): the interval layer's
+            # OVERLAP COMPLETION: where two rules overlap at an instance and the two paths end
+            # in different states (`_unjoined_overlaps`), the rule between them, the dearer
+            # state to the cheaper, goes through the proposal channel: the mine's own scan,
+            # hint arm, stage-2 confirmation and judge loop, nothing bespoke. It runs on the
+            # promoted set, as the overlaps a stronger sort opens exist only there, and what it
+            # certifies goes through the same prune and promotion. A certified completion can
+            # overlap again, so the pass repeats TO ITS FIXPOINT: each round reads the set the
+            # overlap gate reads (the final gate settled first) and asks the gate's question,
+            # and a completion the mode did not license is asked again on the next round's set;
+            # the pass ends when a round offers nothing new or certifies nothing. Only
+            # completions within the mine's cell are offered (`_in_cell`): a longer source lies
+            # outside the universe the mine enumerates, and completing there breeds without
+            # end: on the reduced length-4 f64 mine, offering every unjoined overlap took the file
+            # from 543 rules to 1,022 in one round, and the next round offered 13,772.
+            _completion: list = []
+            _tried: dict = {}
+            from .progress import Progress
+            _cprog = Progress(verbose, prefix='  [complete] ')
+
+            def _timed_judge(pairs: list) -> list:
+                _t0 = time.monotonic()
+                _cprog.write(f'judging {len(pairs)} pairs')
+                tiers = judge(pairs)
+                _cprog.write(f'judged {len(pairs)} pairs in {time.monotonic() - _t0:.1f}s')
+                return tiers
+
+            _round = -1
+            while not interrupted() and _round + 1 < _COMPLETION_ROUNDS:
+                _round += 1
+                _t_round = time.monotonic()
+                _entries = []
+                _final_gate()
+                _unjoined = _unjoined_overlaps(self.engine, rule_mode,
+                                               self._mode_rules(rule_mode), prog=_cprog)
+                _within = [o for o in _unjoined if _in_cell(o, cell_source_length)]
+                # only a completion the mode licenses is offered (the overlap gate's question):
+                # one the judge refuses or a named policy refuses is no rule to mine
+                # a completion is offered again once the set it was mined against has moved:
+                # the mint reads the set's answer as the mark to beat
+                _set = hash(tuple(sorted(self._mode_rules(rule_mode))))
+                _fresh = [o for o in _within
+                          if _tried.get((tuple(o['completion'][0]),
+                                         tuple(o['completion'][1]))) != _set]
+                _licence = _licences(self.engine, rule_mode,
+                                     [_completion_pattern(o) for o in _fresh], _timed_judge,
+                                     judged, max_source=cell_source_length)
+                for o in _fresh:
+                    pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
+                    if _tried.get(pair) != _set and _licence[_completion_pattern(o)]['licensed']:
+                        _tried[pair] = _set
+                        _entries.append(pair)
+                _cprog.stage(f'round {_round + 1}', rules=len(self._mode_rules(rule_mode)),
+                             unjoined=len(_unjoined), within_the_cell=len(_within),
+                             new_completions=len(_entries))
+                if not _entries:
+                    break
+                _before = set(self._mode_rules(rule_mode))
+                outcomes, _, judge_loop = _lane(_entries, _timed_judge, _cprog)
+                _completion.append({'offered': len(_entries), 'outcomes': dict(outcomes),
+                                    'judge_rounds': judge_loop['judge_rounds'],
+                                    'seconds': round(time.monotonic() - _t_round, 1)})
+                _cprog.stage(f'round {_round + 1} certified', **dict(outcomes),
+                             seconds=round(time.monotonic() - _t_round, 1))
+                if not outcomes['certified']:
+                    break
+                if prune == 'covered':
+                    _final_gate()
+                    self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                    _note_drops('prune_covered_completion',
+                                lambda _identity: 'behaviourally-covered-by-remaining-rules')
+                # Promotion takes `?`-sorted rules: the set is promoted already, so the
+                # completions alone are (promoting a promoted rule again dropped `max(1,
+                # cos(!0)) -> 1` and 37 more rows of the reduced length-4 real file).
+                _added = [r for r in self._mode_rules(rule_mode) if r not in _before]
+                if promote_sorts and _added:
+                    from .promotion import promote
+                    kept, _report = promote(_added, self.engine, verbose=verbose,
+                                            rule_mode=rule_mode, judge=judge)
+                    # Promotion seeds the cancellation identities into a set that lacks them;
+                    # the promoted set holds them already, so a batch's seeds are not its rows
+                    # (seeded again, `- !0 !0 -> 0` and `* 0 !0 -> 0` twin-shadowed their own
+                    # rows in the reduced length-4 permissive file).
+                    _seeded = {(tuple(entry[0]), tuple(entry[1]))
+                               for entry in _report['promoted_bang']
+                               if str(entry[2]).startswith('seed')}
+                    _added_set = set(_added)
+                    self._install(rule_mode, [r for r in self._mode_rules(rule_mode)
+                                              if r not in _added_set]
+                                  + [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept
+                                     if (tuple(lhs), tuple(rhs)) not in _seeded])
+                    _note_drops('sort_promotion_completion',
+                                lambda _identity: 'derivable-refund')
+                    if prune == 'covered':
+                        _final_gate()
+                        self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                        _note_drops('prune_covered_completion',
+                                    lambda _identity: 'behaviourally-covered-by-remaining-rules')
+            if prov is not None:
+                prov['completion'] = _completion
+            # SOUNDNESS PROVENANCE, second half: the interval layer's
             # three fail-closed miss counters, read AFTER the mine as deltas over this
             # mine's baseline -- the exposure ("how often could the gate not decide?")
             # is a recorded number, never assumed zero. The counters mark UNDECIDED
@@ -918,79 +1558,108 @@ class RuleMiner:
                     'node_budget': self.engine._core.interval_node_budget_misses() - _ivl_baseline[1],
                     'unanalyzable': self.engine._core.interval_unanalyzable_misses() - _ivl_baseline[2],
                 }
-            # F94: the census must describe the ARTIFACT, not the moment of
+            # The census must describe the ARTIFACT, not the moment of
             # certification. Runs before ANY of it is written (artifact and sidecar
             # alike) and fails closed on a certified pair that is neither present nor
             # attributable -- a census that can advertise an absent rule is exactly the
             # defect this reconciliation exists to make impossible.
-            if _watch:
-                _reconcile_proposal_census(
-                    _outcomes, _trail, _watch, _drops,
-                    self.engine.simplification_rules, dummy_variables)
+            # The final gate on what ships (see `_final_gate` above), then the preemption
+            # gate: a ground rule the mode's constructor already performs cannot fire;
+            # expected 0, since the mark contains the constructor.
+            _final_gate()
+            final = self._mode_rules(rule_mode)
+            # The preemption and liveness gates CHECK what ships and drop nothing (4.8): a pick
+            # that states what the engine does itself is refused where the mine first considers
+            # it (`_unlicensed`), so both are expected empty, and `verify-mine` fails on a file
+            # that holds one.
+            gate['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in final
+                                 if _preempted_by(self.engine, lhs, rhs, file_mode)]
+            gate['dead'] = _dead_rules(self.engine, rule_mode, final)
+            # The overlap gate on what ships (expected no licensed completion missing): the
+            # overlaps that do not join, the judge-licensed completions the file lacks and the
+            # refused ones with the judge's reason, recorded, not dropped.
+            from .progress import Progress
+            gate['overlaps'], gate['overlaps_refused'], _beyond = _overlap_gate(
+                self.engine, rule_mode, final, judge,
+                functools.partial(judge_verdicts, processes=judge_processes,
+                                  warn_s=judge_warn_s, fail_s=judge_fail_s),
+                max_source=cell_source_length,
+                prog=Progress(verbose, prefix='  [gate] '))
+            gate['overlaps_beyond_cell'] = len(_beyond)
+            for lane_outcomes, lane_trail, lane_watch in _lanes:
+                if lane_watch:
+                    _reconcile_proposal_census(
+                        lane_outcomes, lane_trail, lane_watch, _drops, final, dummy_variables)
+            if prov is not None and _offered_trail is not None:
+                # Every offered rule that did not read `already_covered` (those are the rest
+                # of the pinned files): what entered, what was refused and where.
+                prov['offered']['trail'] = [e for e in _offered_trail
+                                            if e['verdict'] != 'already_covered']
+            if verbose:
+                print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
+                      f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
+                      f'{len(gate["overlaps"])} unjoined overlaps '
+                      f'({len(gate["overlaps_refused"])} more not licensed, '
+                      f'{gate["overlaps_beyond_cell"]} beyond the cell), '
+                      f'{len(final)} rules')
             if out_path is not None:
-                # THE ARTIFACT IS A TRIPLE (owner ruling 2026-08-19): a mine run is valid
-                # only if all three sets fall out of it, so they are routed and their
-                # invariants checked BEFORE a byte is written. The f64 file takes the
-                # name the caller passed; the convention from 0.14.0 on is
-                # `rules_f64.json` (owner ruling 2026-08-24), and `_triple_paths` strips
-                # the `_f64` marker before naming the siblings. Configs name their rule
-                # files explicitly, so artifacts published as `rules.json` load unchanged.
-                _triple, _rejected, _route_meta = _route_triple(self.engine, verbose=verbose)
-                _paths = _triple_paths(out_path)
-                for _mode, _path in _paths.items():
-                    with open(_path, 'w') as file:
-                        json.dump(_triple[_mode], file, indent=4)
+                _path = _triple_paths(out_path)[file_mode]
+                with open(_path, 'w') as file:
+                    json.dump([[list(lhs), list(rhs)] for lhs, rhs in final], file, indent=4)
                 if prov is not None:
-                    # The REJECTS are recorded, never silently absent (owner ruling): a
-                    # rule the mine found and then licensed nowhere is evidence, and the
-                    # drop census is where it lives.
-                    prov['triple'] = {
-                        'counts': {m: len(rs) for m, rs in _triple.items()},
-                        'rejected': sorted(_rejected),
-                        # How many rules each file OMITS because that mode's own
-                        # constructor already performs them. Without this the sidecar
-                        # cannot explain why the files are smaller than the gate's kept
-                        # count, and "smaller than expected" is indistinguishable from
-                        # "something was lost".
-                        'preempted': _route_meta['preempted'],
-                        'files': {_mode: os.path.basename(_path)
-                                  for _mode, _path in _paths.items()}}
-                # The sidecar covers the TRIPLE, not one third of it (owner ruling:
-                # "the provenance sidecar covers the triple, the manifest entry lists
-                # three files as ONE artifact"), so its totals describe everything the
-                # mine serves. The per-mode split lives in `prov['triple']['counts']`.
+                    prov['mode'] = file_mode
+                    # How this file's mine accepted a pick: its tolerances, whether a near
+                    # miss is re-judged at high precision (every mode but f64) and the gate
+                    # that admits it, the judged tiers the file may hold, and the judge.
+                    _rescue = rule_mode != 'default'
+                    prov['acceptance'] = {
+                        'rtol': (prov.get('params') or {}).get('rtol'),
+                        'atol': (prov.get('params') or {}).get('atol'),
+                        'rescue': _rescue,
+                        'near_miss_frac': _near_miss_frac() if _rescue else None,
+                        'tiers': sorted(_mode_tiers(rule_mode)),
+                        'judge_digest': _judge_digest(),
+                    }
+                    prov['gates'] = {'unlicensed': gate['unlicensed'],
+                                     'preempted': gate['preempted'],
+                                     'dead': gate['dead'],
+                                     'overlaps': gate['overlaps'],
+                                     'overlaps_refused': gate['overlaps_refused'],
+                                     'overlaps_beyond_cell': gate['overlaps_beyond_cell'],
+                                     'file': os.path.basename(_path)}
+                    # A rerun of this mine reuses the file as it is (`_finished_cell`).
+                    prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
                 # An interrupted mine still writes what it has, but it is NOT final: the
                 # lengths after the interrupt were never mined and the proposal channel,
-                # the symbolic gate and sort promotion above were skipped. The sidecar must
-                # say so (it used to say `final: True` for exactly this partial triple).
+                # the gates and sort promotion above were skipped. The sidecar says so.
                 _complete = not interrupted()
-                self._write_provenance(out_path, prov, _triple['permissive'], final=_complete,
-                                       interrupted=not _complete)
-            return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
+                self._write_provenance(
+                    _path,
+                    None if prov is None else dict(
+                        prov, measure=self.engine._measure_fingerprint(file_mode)),
+                    final, final=_complete, interrupted=not _complete)
+                if _complete and out_path == output_file and os.path.exists(_path + '.checkpoint.json'):
+                    os.remove(_path + '.checkpoint.json')
+            # The run's own cell (never a snapshot), written to disk or not: the next mode
+            # mines beside it and the engine ends holding it.
+            if finals is not None and out_path == output_file:
+                finals[rule_mode] = [(tuple(lhs), tuple(rhs)) for lhs, rhs in final]
+            if cells is not None:
+                cells[(rule_mode, out_path)] = [(tuple(lhs), tuple(rhs)) for lhs, rhs in final]
+            return [(tuple(lhs), tuple(rhs)) for lhs, rhs in final]
 
         snapshot_at = dict(snapshot_at or {})
 
-        # SOUNDNESS PROVENANCE, first half (audit Tier-1 #4): the four default-ON
-        # soundness kill-switches (ablation/repro escape hatches; `<var>=0` disables a
-        # LAYER) ship recorded in the artifact -- a mine run with a layer off must say
-        # so -- plus the node-budget override if any. Recorded up front so interrupted
-        # mines carry it; the switch semantics mirror the rust side exactly
-        # (on unless the variable is literally "0").
+        # SOUNDNESS PROVENANCE, first half: every set switch (`env_overrides`; the node
+        # budget is a parameter). Recorded up front so interrupted mines carry it.
         _ivl_baseline = (self.engine._core.interval_horizon_misses(),
                          self.engine._core.interval_node_budget_misses(),
                          self.engine._core.interval_unanalyzable_misses())
         if provenance is not None:
             provenance['soundness'] = {
-                'kill_switches': {
-                    var: os.environ.get(var) != '0'
-                    for var in ('SIMPLIPY_IVL_GATE', 'SIMPLIPY_IVL_CLASS',
-                                'SIMPLIPY_IVL_REACH', 'SIMPLIPY_SPECIAL_BATTERY')},
-                'node_budget_env': os.environ.get('SIMPLIPY_IVL_NODE_BUDGET'),
-                # EVERY set entry of the artifact-affecting switch registry, raw (H-042):
-                # a default run records {}, any override is visible verbatim.
-                'env_overrides': {
-                    var: os.environ[var]
-                    for var in ARTIFACT_ENV_SWITCHES if var in os.environ},
+                # EVERY set non-inert SIMPLIPY_* variable, raw: a default run
+                # records {}, any override is visible verbatim.
+                'env_overrides': env_overrides(),
                 'interval_undecided': None,  # filled at finalize (deltas over this mine)
                 'ac_classes': None,  # filled per length as the climb proceeds
             }
@@ -1002,11 +1671,109 @@ class RuleMiner:
 
         # Sources: lengths up to max_source_pattern_length only (`construct_expressions`
         # over-produces a tail of longer expressions beyond the documented contract).
+        # RESUME FROM DISK FIRST: a checkpoint of THIS mine (same parameters, same mode)
+        # restores the licensed rules, the per-length record and the judge's memo, and the
+        # climb continues after the last completed length.
+        per_length: dict[int, dict] = {}
+        judged: dict = {}
+        # Everything the length loop's state is a function of: the parameters, the mode, the
+        # code, the operator table, the evaluation data (its content, explicit or seeded),
+        # the numeric environment that evaluates it, the universe and the starting sets.
+        _environment = {k: v for k, v in ((provenance or {}).get('environment') or {}).items()
+                        if k != 'platform'}
+        checkpoint_fp = hashlib.sha256(json.dumps(
+            {'params': (provenance or {}).get('params'), 'rule_mode': rule_mode,
+             'code': code_digest(),
+             'operators': self.engine._operators_config,
+             'X': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest(),
+             'X_confirm': (None if X_confirm is None else hashlib.sha256(
+                 np.ascontiguousarray(X_confirm).tobytes()).hexdigest()),
+             'environment': _environment,
+             'env_overrides': env_overrides(),
+             'universe': {str(k): len(v) for k, v in sorted(expressions_of_length.items())},
+             'initial': [[list(lhs), list(rhs)] for lhs, rhs in rules],
+             'other_sets': [getattr(self.engine, _RULES_ATTR[m]) for m, _ in _MINE_MODES
+                            if m != rule_mode]},
+            sort_keys=True, default=str).encode()).hexdigest()
+        # RESUME FROM DISK FIRST, A FINISHED MODE: a file this mine already finished -- its
+        # sidecar records this mine's key and the file's sha256 -- is taken as it is, with
+        # every ladder cell the climb wrote, and nothing is mined again. So a crash in a
+        # later mode costs only that mode; another mine, or an edited file, mines anew.
+        if out_file is not None:
+            cell_files: dict[str | None, str] = {output_file: out_file}
+            cell_files.update({snapshot_at[length]: _triple_paths(snapshot_at[length])[file_mode]
+                               for length in snapshot_at if length < max_source_pattern_length})
+            done: dict[str | None, list] = {}
+            for cell, path in cell_files.items():
+                found = _finished_cell(path, checkpoint_fp)
+                if found is None:
+                    break
+                done[cell] = found
+            else:
+                self._install(rule_mode, done[output_file])
+                if finals is not None:
+                    finals[rule_mode] = done[output_file]
+                if cells is not None:
+                    for cell, found_rules in done.items():
+                        cells[(rule_mode, cell)] = found_rules
+                if verbose:
+                    print(f'=== the {file_mode} file is finished: reusing {out_file}')
+                return
+        resumed_at = 0
+        if out_file is not None and os.path.exists(out_file + '.checkpoint.json'):
+            with open(out_file + '.checkpoint.json') as file:
+                ckpt = json.load(file)
+            if ckpt.get('fingerprint') != checkpoint_fp:
+                # A checkpoint of ANOTHER mine -- other parameters, mode, operators, data,
+                # numeric environment, universe, starting sets, or code (the compiled core or
+                # the package's sources) -- is never resumed and never silently overwritten.
+                raise RuntimeError(
+                    f"'{out_file}.checkpoint.json' was written by a different mine (its "
+                    f"parameters, mode, operators, data, numeric environment, universe, "
+                    f"starting rules or code differ); remove it to mine from the start")
+            else:
+                resumed_at = ckpt['completed_length']
+                rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in ckpt['rules']]
+                per_length = {int(k): v for k, v in ckpt['per_length'].items()}
+                ac_classes_per_length.update({k: {'enumerated': v['enumerated'],
+                                                  'classes': v['classes']}
+                                              for k, v in per_length.items()})
+                judged = {(tuple(lhs), tuple(rhs)): tier for lhs, rhs, tier in ckpt['judged']}
+                if provenance is not None:
+                    # The mine began where and when the checkpoint says (its `created` and
+                    # `host`); this run is recorded as a resume of it, not as its origin.
+                    import platform
+                    provenance.update(ckpt['provenance'])
+                    provenance['resumed'] = list(provenance.get('resumed') or []) + [
+                        {'host': platform.node(), 'at': time.strftime('%Y-%m-%d %H:%M:%S %z'),
+                         'after_length': resumed_at}]
+                if verbose:
+                    print(f'=== resuming the {file_mode} mine after length {resumed_at}')
+
+        def _checkpoint(completed_length: int, completed_rules: list) -> None:
+            """THE RESUME POINT, never under the final filename: the rules file and its sidecar
+            are written once, by `_finalize`, and a crash leaves only this. The judge's memo
+            is written whole, so a resume re-judges nothing."""
+            if out_file is None:
+                return
+            with open(out_file + '.checkpoint.json', 'w') as file:
+                json.dump({'fingerprint': checkpoint_fp, 'completed_length': completed_length,
+                           'rules': [[list(lhs), list(rhs)] for lhs, rhs in completed_rules],
+                           'per_length': {str(k): v for k, v in per_length.items()},
+                           'judged': [[list(lhs), list(rhs), tier]
+                                      for (lhs, rhs), tier in judged.items()],
+                           'provenance': provenance},
+                          file, default=str)
+
+        completed = resumed_at
         for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
             if interrupted():
                 break
-            self.engine._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
-            # CERTIFY THE CANONICAL REPRESENTATIVE ONLY (owner ruling, re-mine 2026-08-20).
+            if length <= resumed_at:
+                continue
+            # The mark is this mode's serve answer under ITS rules so far.
+            self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs)) for lhs, rhs in rules])
+            # CERTIFY THE CANONICAL REPRESENTATIVE ONLY.
             #
             # Certification runs in f64 on whichever spelling was enumerated, and AC says all
             # regroupings of `a*b*c` are ONE expression while f64 says they are not --
@@ -1021,19 +1788,10 @@ class RuleMiner:
             # builds the same internal pattern from them, so a skipped spelling is served by
             # the representative's rule rather than going unserved. An unparseable source has
             # no class and is mined on its own.
+            # The mode's CANONICAL PROJECTION of each class is its source (one per class,
+            # atomic ones dropped): what is certified is what is written.
             _raw_sources = [list(expression) for expression in sorted(expressions_of_length[length])]
-            _keys = self.engine._core.ac_canonical_keys(_raw_sources)
-            _seen: set[tuple[str, ...]] = set()
-            sources = []
-            for _src, _key in zip(_raw_sources, _keys):
-                if _key is None:
-                    sources.append(_src)
-                    continue
-                _k = tuple(_key)
-                if _k in _seen:
-                    continue
-                _seen.add(_k)
-                sources.append(_src)
+            sources = self.engine._core.mine_sources(_raw_sources, rule_mode=rule_mode)
             n_ac_classed = len(_raw_sources) - len(sources)
             if verbose and n_ac_classed:
                 print(f'Length {length}: {len(_raw_sources):,} sources -> {len(sources):,} AC classes '
@@ -1042,42 +1800,65 @@ class RuleMiner:
                                              'classes': len(sources)}
             if provenance is not None:
                 provenance['ac_classes'] = {str(k): v for k, v in ac_classes_per_length.items()}
-            del _raw_sources, _keys, _seen
+            del _raw_sources
             n_sources = len(sources)
-            # Release this length's source UNIVERSE as soon as it has been linearised: at the
-            # top lengths that set of tuples is the largest object in the process (length 5
-            # alone is ~7e6 expressions) and nothing reads it again -- the candidate library
-            # was built up front, above, and holds its own copy on the Rust side.
+            # Release this length's source UNIVERSE as soon as it has been linearised (the
+            # caller passes each mode its own view of the universe).
             del expressions_of_length[length]
             # Per-length seed block: lengths are spaced by 2^40 (far above any per-length
             # source count) so the per-source streams (seed + index) never collide.
-            found = self._mine_tier_with_progress(
-                length, len(sources),
-                lambda: self.engine._core.mine_one_length(
-                    sources, library, max_target_pattern_length,
+            # Stage 2 runs inside the scan: an unconfirmed pick yields to the next candidate.
+            confirm_kwargs = self._confirm_kwargs(X_confirm, X_data, min_informative,
+                                                  confirm_seed + (length << 40))
+
+            def mine(batch: list, indices: Any, exclusions: Any, _length: int = length) -> list:
+                return self.engine._core.mine_one_length(
+                    batch, library, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries,
-                    mine_seed + (length << 40), rtol, atol, min_informative,
-                    relaxed_kruskal),
+                    mine_seed + (_length << 40), rtol, atol, min_informative,
+                    relaxed_kruskal, rule_mode=rule_mode, indices=indices,
+                    exclusions=exclusions, **confirm_kwargs)
+
+            _t0 = time.monotonic()
+            found, _loop = self._mine_tier_with_progress(
+                length, len(sources),
+                lambda: self._mine_length(sources, mine, rule_mode, judge, judged,
+                                          dummy_variables),
                 verbose)
-            if found and X_confirm is not None:
-                n_mined = len(found)
-                found = self._confirm_mined_rules(
-                    found, dummy_variables, X_confirm,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0])),
-                    confirm_seed + (length << 40))
-                if verbose and len(found) < n_mined:
-                    print(f'Length {length}: stage-2 confirmation rejected {n_mined - len(found):,} of {n_mined:,} mined rules')
+            if _loop['stubborn']:
+                # Every verdict this length reached is kept for the resume; the length itself
+                # is not complete, so the checkpoint stays at the last one that is.
+                _checkpoint(completed, rules)
+                raise RuntimeError(
+                    f'the judge loop gave up on {len(_loop["stubborn"])} source(s) of length '
+                    f'{length} in mode {rule_mode}, each refused {_JUDGE_ROUNDS_MAX} times '
+                    f'(source, excluded targets): {_loop["stubborn"]}; every other verdict is '
+                    f'checkpointed')
+            # GATED BEFORE INSTALLED (miner.md 2.7): only licensed picks join the set the next
+            # length's marks are computed against, so a rule the judge refuses never prunes a
+            # longer source.
+            _shadowed: list = []
             if found:
                 rules = deduplicate_rules(
                     rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
-                    dummy_variables, verbose=verbose, engine=self.engine)
+                    dummy_variables, verbose=verbose, engine=self.engine, rule_mode=rule_mode)
+                rules, _shadowed = self._deshadow(rule_mode, rules)
+            per_length[length] = {**ac_classes_per_length[length], 'picks': len(found),
+                                  'judge_rounds': _loop['judge_rounds'],
+                                  'excluded': _loop['excluded'],
+                                  'twin_shadowed': [[list(lhs), list(rhs)]
+                                                    for lhs, rhs in _shadowed],
+                                  'total': len(rules),
+                                  'wall_s': round(time.monotonic() - _t0, 3)}
+            if provenance is not None:
+                provenance['per_length'] = {str(k): v for k, v in per_length.items()}
             if verbose:
-                print(f'Length {length}: {n_sources:,} sources, {len(found):,} new rules, {len(rules):,} total')
-            if output_file is not None:
-                with open(output_file, 'w') as file:
-                    json.dump(rules, file, indent=4)
-                self._write_provenance(output_file, provenance, rules, completed_length=length)
+                print(f'Length {length}: {n_sources:,} sources, {len(found):,} new rules '
+                      f'({_loop["judge_rounds"]} judge rounds, {len(_loop["excluded"])} excluded, '
+                      f'{len(_shadowed)} twin-shadowed), {len(rules):,} total')
+            self._write_provenance(None, provenance, rules, completed_length=length)
+            completed = length
+            _checkpoint(completed, rules)
             # LADDER SNAPSHOT: finishing this length also finishes the shorter cell
             # (length, max_target_pattern_length) of the same ladder. Emit it as a completed
             # artifact, then restore the RAW state and keep climbing -- the taller cell must
@@ -1088,9 +1869,10 @@ class RuleMiner:
                     print(f'--- ladder snapshot: cell ({length},{max_target_pattern_length})'
                           f' -> {snapshot_at[length]}')
                 _finalize(list(rules), snapshot_at[length],
-                          self._snapshot_provenance(provenance, length, max_source_pattern_length))
+                          self._snapshot_provenance(provenance, length, max_source_pattern_length),
+                          cell_source_length=length)
                 # `_finalize` prunes/promotes the engine's own rule state; put the raw mine back.
-                self.engine._replace_rules(rules)
+                self._install(rule_mode, rules)
 
         _finalize(rules, output_file, provenance)
 
@@ -1125,7 +1907,7 @@ class RuleMiner:
         return prov
 
     @staticmethod
-    def _write_provenance(output_file: str, provenance: dict | None, rules: list,
+    def _write_provenance(output_file: str | None, provenance: dict | None, rules: list,
                           completed_length: int | None = None, final: bool = False,
                           interrupted: bool = False) -> None:
         """Write/refresh the mined artifact's PROVENANCE sidecar (`<output>.provenance.json`).
@@ -1135,7 +1917,8 @@ class RuleMiner:
         :meth:`find_rules`) plus rolling progress and the final rule census. A mine is
         reproducible from the sidecar alone unless X was passed as an explicit array
         (recorded by content hash in that case). An interrupted mine's sidecar carries
-        ``final: False`` and ``interrupted: True``.
+        ``final: False`` and ``interrupted: True``. ``output_file=None`` records the progress
+        in ``provenance`` without writing (the climb's checkpoint carries it).
         """
         if provenance is None:
             return
@@ -1154,6 +1937,8 @@ class RuleMiner:
         }
         if interrupted:
             provenance['progress']['interrupted'] = True
+        if output_file is None:
+            return
         with open(output_file + '.provenance.json', 'w') as file:
             json.dump(provenance, file, indent=2)
 
@@ -1207,7 +1992,11 @@ class RuleMiner:
             confirm: bool,
             relaxed_kruskal: bool,
             prune: bool | str,
-            reset_rules: bool) -> dict:
+            reset_rules: bool,
+            interval_node_budget: int | None,
+            judge_warn_s: float = JUDGE_WARN_S,
+            judge_fail_s: float = JUDGE_FAIL_S,
+            offer_final_rules: bool = True) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
         be reproducible from its sidecar alone. Everything that determines the mine is
         recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
@@ -1218,6 +2007,7 @@ class RuleMiner:
         import platform
         import time as _time
         from simplipy import __version__ as _simplipy_version
+        from simplipy.compat import requires_simplipy_specifier
         try:
             from simplipy import _core as _core_mod
             _core_build = getattr(_core_mod, '__build__', None)
@@ -1231,11 +2021,11 @@ class RuleMiner:
                       'source': 'explicit_array (NOT reproducible from `seed`)',
                       'sha256': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest()}
 
-        # R5 + C23c-prov (the G2 gate): the numeric stack that minted the artifact is
-        # part of its identity. scipy's PRESENCE alone changes mined output (audit N3:
-        # a promotion reads PROMOTE with scipy, NO-WITNESS without -- now a hard error,
-        # C23c-loud, but the VERSION still matters); the host libm decides real rules
-        # (audit L9: >= 5 shipped rules exist only because glibc 2.43 is 1 ulp wrong,
+        # The numeric stack that minted the artifact is
+        # part of its identity. scipy's PRESENCE alone changes mined output
+        # (a promotion reads PROMOTE with scipy, NO-WITNESS without -- now
+        # a hard error, but the VERSION still matters); the host libm decides real rules
+        # (>= 5 shipped rules exist only because glibc 2.43 is 1 ulp wrong,
         # and libm resolves at runtime, so no wheel pin can carry this). The
         # "reproducible from the sidecar alone" claim holds AT THE RECORDED
         # ENVIRONMENT; this block is what makes that qualification checkable.
@@ -1259,7 +2049,12 @@ class RuleMiner:
             'created': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
             'host': platform.node(),
             'simplipy_version': _simplipy_version,
+            # The versions that serve these rules (simplipy.compat): the published
+            # config carries this value as its `requires_simplipy` key.
+            'requires_simplipy': requires_simplipy_specifier(_simplipy_version),
             'core_build': _core_build,
+            # The code that minted the file: the compiled core's and the package's digests.
+            'code_digest': code_digest(),
             'environment': environment,
             'measure': self.engine._measure_fingerprint(),
             'params': {
@@ -1274,6 +2069,9 @@ class RuleMiner:
                 'confirm': confirm,
                 'relaxed_kruskal': relaxed_kruskal,
                 'prune': prune, 'reset_rules': reset_rules,
+                'interval_node_budget': interval_node_budget,
+                'judge_warn_s': judge_warn_s, 'judge_fail_s': judge_fail_s,
+                'offer_final_rules': offer_final_rules,
             },
             'X': x_spec,
             'universe': {
@@ -1334,14 +2132,14 @@ class RuleMiner:
         the specific (source, target) pair is verified instead (against the same
         ordering mark) -- sound, but without a minimality certificate. A source the
         engine already reduces is still SEARCHED: coverage is decided by the search,
-        never by the reduction alone (a canon respell used to read as "covered" and
-        silently discarded certifiable proposals, finding F2).
+        never by the reduction alone (otherwise a canon respell would read as "covered" and
+        silently discard a certifiable proposal).
 
         Intended for LLM- or human-proposed identities: proposals only ever ADD source
         expressions, and every accepted pair passes the same symbolic gate the mine
         runs (:func:`~simplipy.verify.verify_ruleset` with the precision-stability
-        discriminator; KILLs dropped, audit B3) -- so certified output is exactly as
-        sound as mined rules.
+        discriminator; KILLs dropped) -- so certified output is held to exactly the bar
+        mined rules are.
 
         Parameters mirror :meth:`find_rules`. The engine is not modified; returns a list
         of ``(source, target, certificate)`` tuples with certificate ``'minimal'`` or
@@ -1349,18 +2147,19 @@ class RuleMiner:
 
             pairs = engine.certify_rules(proposals, hints)
             engine.simplification_rules = deduplicate_rules(
-                engine.simplification_rules + [(s, t) for s, t, _ in pairs], dummies)
+                engine.simplification_rules + [(s, t) for s, t, _ in pairs], dummies,
+                engine=engine, rule_mode='f64')
             engine.compile_rules()
         """
         sources = [tuple(str(t) for t in s) for s in sources]
         hint_list: list = list(targets) if targets is not None else [None] * len(sources)
         if len(hint_list) != len(sources):
             raise ValueError('targets must parallel sources')
-        # D28: one-miner-per-process is DOCTRINE, and this entry was found unguarded --
+        # One-miner-per-process is DOCTRINE, and this entry was found unguarded --
         # it runs the same certification machinery and mutates the same process-global
         # interval soundness counters the provenance sidecar records. Same lock, same
         # single-flight semantics, acquired after the cheap validation above (the
-        # H-002/H-009 leak discipline) and released in the finally below.
+        # leak discipline) and released in the finally below.
         if not _MINE_LOCK.acquire(blocking=False):
             raise RuntimeError(
                 "another find_rules mine is active in this process; certification is "
@@ -1409,107 +2208,60 @@ class RuleMiner:
                       for expression in sorted(expressions[length])]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(),
-            X_data.shape[0])
+            X_data.shape[0], rule_mode=_CERTIFY_RULE_MODE)
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates '
                   f'({library.n_filtered:,} var-free filtered)')
 
         vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
         certified: list = []
-        confirm_min = max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
+        fit = dict(challenges=constants_fit_challenges, retries=constants_fit_retries,
+                   rtol=rtol, atol=atol, min_informative=min_informative)
         for index, (source, hint) in enumerate(zip(sources, hint_list)):
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
                 continue
-            # The engine's own result is the MARK TO BEAT, never a reason to skip
-            # (finding F2): a source canon merely RESPELLS shorter used to read as
+            # The engine's own result is the MARK TO BEAT, never a reason to skip:
+            # a source canon merely RESPELLS shorter used to read as
             # "already covered" and was never searched, losing e.g.
             # exp(t)*exp(t) -> exp(t+t) forever (the respelled form speaks tokens
-            # outside the mining alphabet, so no later tier picks it up). The
-            # serve-time ordering acceptance rides the candidate scan via `mark`.
-            _, _, ac_out = self.engine._core.ac_judge(list(source), 48)
-            target = self.engine._core.find_rule_lib(
-                list(source), len(source), max_target_pattern_length, library,
-                challenges=constants_fit_challenges, retries=constants_fit_retries,
-                seed=mine_seed + (len(source) << 40) + index, rtol=rtol, atol=atol,
-                min_informative=min_informative, mark=ac_out)
-            certificate = 'minimal'
-            if target is None and hint is not None:
-                hint = [str(t) for t in hint]
-                # NO TOKEN-LENGTH BAR on a proposal hint (owner ruling 2026-08-18:
-                # "Only 'remove' the length gate for the LLM proposed rules"). The
-                # retired conjunct was `len(hint) < len(source)` -- a RAW TOKEN COUNT,
-                # which is not the engine's ordering and disagrees with it:
-                # `1 - cos(2*x0) -> 2*sin(x0)^2` is 6 tokens against 6 while the target
-                # sits strictly BELOW the engine's endpoint (the `-` spelling costs two
-                # extra canonical nodes). Descent is decided below by the ordering, the
-                # same predicate G7 and the serve-time `oriented` check apply. The MINE's
-                # candidate-length bound is a separate thing and stays: a proposal skips
-                # the search entirely, so this costs no mining time, while an unbounded
-                # target length in the SEARCH is what would make e.g. a 5-5 mine
-                # unaffordable.
-                if (_tokens_in_vocabulary(hint, vocabulary)
-                        and self.engine.is_valid(list(hint))
-                        and not violates_wildcard_multiplicity(list(source), list(hint))
-                        # the Const-count invariant (one invariant, every layer: the
-                        # scan's mint gate, the translate-time count gate, and this hint
-                        # arm): a hint may never INCREASE the number of `<constant>`
-                        # placeholders -- abstraction is masking's job downstream. A
-                        # count-increasing hint is dead on arrival at translation; the
-                        # library scan may still find (and literal-resolve) a target.
-                        and hint.count('<constant>') <= list(source).count('<constant>')
-                        # the hint too must sit strictly below the engine's own
-                        # result, or the minted rule is dead on arrival (the serving
-                        # pass would refuse it; translation would drop it)
-                        and self.engine._core.ac_ordered_below(list(hint), ac_out)
-                        # THE LICENCE REGISTRY (C1.20, 2026-08-08): a hint that passes
-                        # every bar above is still a MINT, and every mint channel
-                        # consults the registry -- an a.e.-equal pole mirror or a
-                        # special-eating Const hint passes vocabulary, ordering AND
-                        # the numeric confirmation (measure-zero differences are
-                        # invisible to sampling), and was refused nowhere on this
-                        # path before the registry.
-                        and self.engine._core.registry_mint_refusal(
-                            list(source), ac_out, list(hint), dummy_variables) is None
-                        and self._confirm_mined_rules(
-                            [(source, tuple(hint))], dummy_variables, X_data,
-                            constants_fit_challenges, constants_fit_retries, rtol, atol,
-                            min_informative, mine_seed + (len(source) << 40) + index)):
-                    target = hint
-                    certificate = 'verified'
+            # outside the mining alphabet, so no later tier picks it up).
+            target, certificate, _ = self._certify_one(
+                source, hint, library, vocabulary, max_target_pattern_length, fit,
+                mine_seed + (len(source) << 40) + index,
+                self._confirm_kwargs(X_confirm, X_data, min_informative,
+                                     confirm_seed + (len(source) << 40) + index),
+                _CERTIFY_RULE_MODE)
             if target is None:
                 continue
-            if self._confirm_mined_rules(
-                    [(source, tuple(target))], dummy_variables, X_confirm,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    confirm_min, confirm_seed + (len(source) << 40) + index):
-                certified.append((source, tuple(target), certificate))
-                if verbose:
-                    print(f'certified ({certificate}): {list(source)} -> {list(target)}')
-        # SYMBOLIC GATE, matching the mining path (`_finalize`; audit B3, fatal set B7).
+            certified.append((source, tuple(target), certificate))
+            if verbose:
+                print(f'certified ({certificate}): {list(source)} -> {list(target)}')
+        # SYMBOLIC GATE, matching the mining path (`_finalize`).
         # Every numeric acceptance above is tolerance-bounded, and the impostor family
         # lives BELOW any usable tolerance: `tanh(exp(e)) -> 1` is false by a stable
         # 1.37e-13 and came back certified 'verified' before this gate existed -- while
         # the same pair, arriving through `find_rules(proposals=...)`, was killed. The
         # parity sentence above ("exactly as sound as mined rules") is earned here, not
         # assumed: every accepted pair is re-judged by the independent symbolic
-        # verifier. What "refused" MEANS changed with the triple, and it has to change
-        # here in lockstep with `_finalize` or the parity claim is false: a pair whose
-        # tier owns it -- ENGINE-MISALIGN is `real`, an f64-realised KILL is `f64` --
-        # is KEPT for routing, exactly as a mined pair is, and only a `reject` is
-        # dropped. Fail-closed is untouched for the verdicts that carry no tier at all
-        # (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT / UNRESOLVED-COVERAGE): they
-        # read `reject` and still drop, because an unjudged certificate is an unearned
-        # one. TOLERATED passes, exactly as at the mining gate.
+        # verifier, and kept iff its tier is one the certifying mode licenses
+        # (`MODE_TIERS`, the table every file's gate reads). Fail-closed is untouched for
+        # the verdicts that carry no tier at all (NO-WITNESS / UNSUPPORTED-SHAPE /
+        # JUDGE-TIMEOUT / UNRESOLVED-COVERAGE): they read `reject` and drop, because an
+        # unjudged certificate is an unearned one. TOLERATED passes, exactly as at the
+        # mining gate.
         if certified:
-            from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS, verify_ruleset
-            _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
-            _detail = _rep['detail'] if isinstance(_rep, dict) else _rep
-            # detail entries carry lhs/rhs as SPACE-JOINED strings; the Const-channel
-            # sentinel is exempt exactly as at the mining gate (D36).
+            from .verify import effective_tier, verify_ruleset
+            from .verify._contract import set_rows
+            # the judge reads the rows this certification's mint read
+            previous_rows = set_rows(np.vstack([X_data, X_confirm]))
+            try:
+                _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
+            finally:
+                set_rows(previous_rows)
+            # detail entries carry lhs/rhs as SPACE-JOINED strings
             _drop = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d['verdict']
-                     for d in _detail if d.get('verdict') in FATAL_BUCKETS
-                     and d.get('detail') != CONST_CHANNEL_DETAIL
-                     and (d.get('tier') or 'reject') == 'reject'}
+                     for d in _rep['detail']
+                     if effective_tier(d) not in _mode_tiers(_CERTIFY_RULE_MODE)}
             if _drop:
                 if verbose:
                     for s, t, _c in certified:
@@ -1536,9 +2288,14 @@ class RuleMiner:
             min_informative: int,
             mine_seed: int,
             confirm_seed: int,
-            verbose: bool) -> tuple[dict[str, int], list[dict[str, Any]]]:
+            verbose: bool,
+            rule_mode: str,
+            judge: Callable,
+            judged: dict,
+            prog: Any = None) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, Any]]:
         """The proposal channel of :meth:`find_rules`: certify externally proposed rules
-        against the just-mined rule state and merge the survivors.
+        against the just-mined rule state and merge the survivors. ``prog`` (a
+        :class:`~simplipy.progress.Progress`) reports the certification as it runs.
 
         PLUMBING ONLY -- no new certification semantics. Each proposal runs the exact
         chain of :meth:`certify_rules` (vocabulary/validity check; shortest-first scan
@@ -1558,18 +2315,25 @@ class RuleMiner:
         certification of untouched proposals.
 
         The certified pairs then join the ruleset through the same
-        :func:`~simplipy.utils.deduplicate_rules` path as mined rules (shortest target
-        per canonical source). Mutates the engine in place (rules, compiled state, core
-        rules) and returns ``(counts, trail)``.
+        :func:`~simplipy.utils.deduplicate_rules` path as mined rules (per canonical
+        source, the target lowest in the mode's serve ordering). Mutates the engine in place (rules, compiled state, core
+        rules) and returns ``(counts, trail, judge_loop)``.
+
+        THE JUDGE LOOP, AS ONE EXTRA LENGTH: the certified targets go to the
+        mine's judge exactly as a length's picks do; a target the mode does not license is
+        excluded and its proposal certified again without it, so the hint or a scan
+        alternative of another class can still certify. A proposal left without a licensed
+        target reads ``rejected`` at stage ``judge``. ``judge_loop`` records the rounds and
+        the exclusions.
 
         ``counts`` is the per-outcome tally for the provenance sidecar: ``certified`` /
         ``already_covered`` / ``rejected`` / ``duplicate`` (certified, but canonically
-        identical to an earlier certified proposal and not shorter) /
+        identical to an earlier certified proposal and not lower in the serve ordering) /
         ``certified_then_dropped``. The last one is filled in LATER, by
         :func:`_reconcile_proposal_census`: certification runs upstream of the symbolic
         gate, the covered-prunes and the sort promotion, so the tally this method returns
         is provisional and the reconciliation moves every certified pair the artifact
-        does not contain out of ``certified`` (F94). The key is present even when zero.
+        does not contain out of ``certified``. The key is present even when zero.
 
         ``trail`` is the PER-PROPOSAL verdict record, one entry per input proposal in file
         order: ``{source, target, verdict, stage, certificate}``. A tally alone cannot be
@@ -1593,8 +2357,9 @@ class RuleMiner:
         counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0,
                   'certified_then_dropped': 0}
         vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
-        confirm_min = (max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
-                       if X_confirm is not None else None)
+        fit = dict(challenges=constants_fit_challenges, retries=constants_fit_retries,
+                   rtol=rtol, atol=atol, min_informative=min_informative)
+        confirm = self._confirm_kwargs(X_confirm, X_data, min_informative, confirm_seed)
         certified_pairs: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
         trail: list[dict[str, Any]] = []
         # Index into `trail` for each certified pair, so the post-fold duplicate accounting
@@ -1608,108 +2373,121 @@ class RuleMiner:
                           'verdict': verdict, 'stage': stage, 'certificate': certificate})
             return len(trail) - 1
 
-        for source, hint in proposal_entries:
+        pending: dict[int, dict[str, Any]] = {}
+        indexed = list(enumerate(proposal_entries))
+        if prog is not None:
+            indexed = prog.track(indexed, 'certify')
+        for index, (source, hint) in indexed:
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
+                continue
+            # The engine's own result is the MARK TO BEAT, never a reason to skip:
+            # the serve-time ordering acceptance rides the candidate
+            # scan, so 'already_covered' below is a SEARCH-VERIFIED
+            # verdict ("the engine reduces it and nothing expressible beats its
+            # result"), not a guess from a spelling shrink.
+            # "The engine already reduces it" is asked of the mode the file serves: its
+            # serve answer (the mine's mark) is an atom, or a different state from that
+            # mode's own reading of the source (the serve walk only descends). A respell
+            # is the same state: if the search also comes back empty-handed, the honest
+            # verdict below is 'rejected', never a coverage claim nothing backs.
+            mark = self.engine._core.mine_mark(list(source), rule_mode=rule_mode)
+            reading = self.engine._core.mine_sources([list(source)], rule_mode=rule_mode)
+            engine_reduces = len(mark) == 1 or not reading or reading[0] != list(mark)
+            # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
+            # randomises str hashing per process).
+            offset = int.from_bytes(
+                hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
+            pending[index] = {'reduces': engine_reduces, 'seed': mine_seed + offset,
+                              'result': self._certify_one(
+                                  source, hint, library, vocabulary, max_target_pattern_length,
+                                  fit, mine_seed + offset, confirm, rule_mode)}
+
+        excluded: dict[int, list] = {}
+        stubborn: list[int] = []
+        rounds = 0
+        while True:
+            rounds += 1
+            picks = {i: (list(proposal_entries[i][0]), list(p['result'][0]))
+                     for i, p in pending.items() if p['result'][0] is not None}
+            bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables) if picks else set()
+            again: list[int] = []
+            for i in sorted(bad):
+                excluded.setdefault(i, []).append(list(pending[i]['result'][0]))
+                # the cap is per proposal, as per source in the length loop
+                (stubborn if len(excluded[i]) >= _JUDGE_ROUNDS_MAX else again).append(i)
+            if stubborn:
+                raise RuntimeError(
+                    f'the proposals\' judge loop gave up on {len(stubborn)} proposal(s) in mode '
+                    f'{rule_mode}, each refused {_JUDGE_ROUNDS_MAX} times (source, excluded '
+                    f'targets): {[[list(proposal_entries[i][0]), excluded[i]] for i in stubborn]}')
+            if not again:
+                break
+            for i in again:
+                source, hint = proposal_entries[i]
+                pending[i]['result'] = self._certify_one(
+                    source, hint, library, vocabulary, max_target_pattern_length, fit,
+                    pending[i]['seed'], confirm, rule_mode, excluded=excluded[i])
+
+        for index, (source, hint) in enumerate(proposal_entries):
+            if index not in pending:
                 counts['rejected'] += 1
                 record(source, None, 'rejected', 'vocabulary')
                 continue
-            # The engine's own result is the MARK TO BEAT, never a reason to skip
-            # (finding F2): the serve-time ordering acceptance rides the candidate
-            # scan via `mark`, so 'already_covered' below is a SEARCH-VERIFIED
-            # verdict ("the engine reduces it and nothing expressible beats its
-            # result"), not a guess from a spelling shrink.
-            _, _, ac_out = self.engine._core.ac_judge(list(source), 48)
-            # "The engine already reduces it" is judged in the serve ordering (ONE
-            # coverage ordering, everywhere): the walk strictly descends, or the
-            # result is atomic (nothing mintable sits strictly below a single-token
-            # state -- canon-owned collapses like `+ x0 0` land here). A respell --
-            # same state, shorter spelling -- is neither: if the search also comes
-            # back empty-handed, the honest verdict below is 'rejected', never a
-            # coverage claim nothing backs.
-            engine_reduces = (len(ac_out) == 1
-                              or self.engine._core.ac_ordered_below(ac_out, list(source)))
-            simplified_length = len(source)
-            # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
-            # randomises str hashing per process; same policy as _confirm_mined_rules).
-            offset = int.from_bytes(
-                hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
-            target = self.engine._core.find_rule_lib(
-                list(source), simplified_length, max_target_pattern_length, library,
-                challenges=constants_fit_challenges, retries=constants_fit_retries,
-                seed=mine_seed + offset, rtol=rtol, atol=atol,
-                min_informative=min_informative, mark=ac_out)
-            certificate = 'minimal'
-            if target is None and hint is not None:
-                hint_tokens = [str(token) for token in hint]
-                # NO TOKEN-LENGTH BAR (same ruling, same reasoning as certify_rules'
-                # hint arm above -- one certification chain, both entries).
-                if (_tokens_in_vocabulary(hint_tokens, vocabulary)
-                        and self.engine.is_valid(list(hint_tokens))
-                        and not violates_wildcard_multiplicity(list(source), list(hint_tokens))
-                        # the Const-count invariant (same gate as certify_rules' hint
-                        # arm): a count-increasing hint is dead on arrival at translation
-                        and hint_tokens.count('<constant>') <= list(source).count('<constant>')
-                        # the hint too must sit strictly below the engine's own
-                        # result, or the minted rule is dead on arrival
-                        and self.engine._core.ac_ordered_below(list(hint_tokens), ac_out)
-                        # THE LICENCE REGISTRY (C1.20, 2026-08-08): same gate as the
-                        # certify_rules hint arm -- every mint channel consults it.
-                        and self.engine._core.registry_mint_refusal(
-                            list(source), ac_out, list(hint_tokens), dummy_variables) is None
-                        and self._confirm_mined_rules(
-                            [(source, tuple(hint_tokens))], dummy_variables, X_data,
-                            constants_fit_challenges, constants_fit_retries, rtol, atol,
-                            min_informative, mine_seed)):
-                    target = hint_tokens
-                    certificate = 'verified'
+            target, certificate, refusal = pending[index]['result']
             if target is None:
-                if engine_reduces:
+                if index in excluded:
+                    counts['rejected'] += 1
+                    record(source, None, 'rejected', 'judge')
+                elif refusal == 'unconfirmed':
+                    counts['rejected'] += 1
+                    record(source, hint, 'rejected', 'confirm')
+                elif pending[index]['reduces']:
                     counts['already_covered'] += 1
                     record(source, None, 'already_covered', 'covered')
                 else:
                     counts['rejected'] += 1
                     record(source, None, 'rejected', 'search')
                 continue
-            if X_confirm is not None and not self._confirm_mined_rules(
-                    [(source, tuple(target))], dummy_variables, X_confirm,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    int(confirm_min if confirm_min is not None else max(1, X_confirm.shape[0] // 8)),
-                    confirm_seed):
-                counts['rejected'] += 1
-                record(source, target, 'rejected', 'confirm', certificate)
-                continue
             certified_trail_idx.append(record(source, target, 'certified', 'accepted', certificate))
             certified_pairs.append((tuple(source), tuple(target)))
             if verbose:
                 print(f'Proposal certified ({certificate}): {list(source)} -> {list(target)}')
+        judge_loop = {'judge_rounds': rounds,
+                      'excluded': [[list(proposal_entries[i][0]), target]
+                                   for i, targets in sorted(excluded.items()) for target in targets]}
 
         # Per-proposal accounting that mirrors the deduplicate_rules fold EXACTLY (keep
-        # first canonical source unless a strictly shorter target arrives): a certified
-        # pair that would not change the merged set is a 'duplicate', not a 'certified'.
-        before = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
-        seen: dict[tuple, int] = {}
-        for key, (_, canon_target) in _dedup_keyed_rules(before, dummy_variables, self.engine):
-            if key not in seen or len(canon_target) < seen[key]:
-                seen[key] = len(canon_target)
+        # first canonical source unless a target strictly below it in the mode's ordering
+        # arrives): a certified pair that would not change the merged set is a
+        # 'duplicate', not a 'certified'.
+        before = self._mode_rules(rule_mode)
+        seen: dict[tuple, Any] = {}
+        for key, (_, canon_target) in _dedup_keyed_rules(before, dummy_variables, self.engine,
+                                                         rule_mode=rule_mode):
+            if key not in seen or dedup_target_wins(self.engine, canon_target, seen[key],
+                                                    rule_mode):
+                seen[key] = canon_target
         for idx, (key, (_, canon_target)) in zip(
                 certified_trail_idx,
-                _dedup_keyed_rules(certified_pairs, dummy_variables, self.engine)):
-            if key in seen and len(canon_target) >= seen[key]:
+                _dedup_keyed_rules(certified_pairs, dummy_variables, self.engine,
+                                   rule_mode=rule_mode)):
+            if key in seen and not dedup_target_wins(self.engine, canon_target, seen[key],
+                                                     rule_mode):
                 counts['duplicate'] += 1
                 trail[idx].update(verdict='duplicate', stage='merge')
             else:
                 counts['certified'] += 1
-                seen[key] = len(canon_target)
+                seen[key] = canon_target
         if certified_pairs:
-            # The SAME merge path as mined rules: shortest target per canonical source.
-            self.engine._replace_rules(deduplicate_rules(
+            # The SAME merge path as mined rules: per canonical source, the lowest target.
+            self._install(rule_mode, deduplicate_rules(
                 before + certified_pairs, dummy_variables, verbose=verbose,
-                engine=self.engine))
+                engine=self.engine, rule_mode=rule_mode))
         if verbose:
             print(f"Proposals: {len(proposal_entries)} processed -> "
                   f"{counts['certified']} certified, {counts['already_covered']} already covered, "
                   f"{counts['rejected']} rejected, {counts['duplicate']} duplicate")
-        return counts, trail
+        return counts, trail, judge_loop
 
     def find_rules(
             self,
@@ -1721,7 +2499,6 @@ class RuleMiner:
             constants_fit_challenges: int = 16,
             constants_fit_retries: int = 16,
             output_file: str | None = None,
-            save_every: int = 100,
             reset_rules: bool = True,
             prune: bool | str = False,
             verbose: bool = False,
@@ -1734,11 +2511,19 @@ class RuleMiner:
             proposals: str | list | dict | None = None,
             promote_sorts: bool = True,
             symbolic_gate: bool = True,
-            snapshot_at: dict[int, str] | None = None) -> None:
+            snapshot_at: dict[int, str] | None = None,
+            judge: Callable | None = None,
+            judge_processes: int = 4,
+            interval_node_budget: int | None = None,
+            judge_warn_s: float = JUDGE_WARN_S,
+            judge_fail_s: float = JUDGE_FAIL_S,
+            offer_final_rules: bool = True,
+            modes: Any = None) -> None:
         """Systematically discovers new simplification rules.
 
-        This powerful method automates the discovery of simplification rules.
-        It operates in two phases:
+        This method automates the discovery of simplification rules, one file per mode
+        (``rules_f64.json``, ``rules_real.json``, ``rules_permissive.json``), each mined in
+        its own mode. It operates in two phases:
         1.  **Generation**: It combinatorially generates all possible valid
             expressions up to `max_source_pattern_length`.
         2.  **Verification**: It tests each generated expression for equivalence
@@ -1768,9 +2553,9 @@ class RuleMiner:
         constants_fit_retries : int, optional
             Number of retries for the curve fitting process.
         output_file : str or None, optional
-            If provided, saves the discovered rules to this JSON file.
-        save_every : int, optional
-            How often to save the rules to the output file.
+            If provided, saves the discovered rules to this JSON file. A mine writes
+            ``<output_file>.checkpoint.json`` after every completed length and the rule
+            files once, when each mode's mine ends.
         reset_rules : bool, optional
             If True, clears existing rules before starting.
         prune : bool or str, optional
@@ -1841,9 +2626,9 @@ class RuleMiner:
             / ``duplicate``). Config key ``proposals:`` in the find-rules YAML.
         promote_sorts : bool, optional
             Run the sort-promotion ladder after the prune, re-certifying every rule at the
-            stronger ``_``/``!``/``$`` sorts and shipping it at the strongest sound one.
-            ON by default (owner ruling 2026-08-01: features do not ship disabled) -- a
-            default mine emits the deployment-strength ruleset. Pass ``False`` for a raw,
+            stronger ``_``/``!``/``$`` sorts and shipping it at the strongest one it
+            certifies. On by default, so a default mine emits the ruleset that is
+            deployed. Pass ``False`` for a raw,
             entirely ``?``-sorted mine (promotion is fail-safe, so ``False`` costs only
             composite-subtree recall, never soundness).
         snapshot_at : dict[int, str] or None, optional
@@ -1860,6 +2645,39 @@ class RuleMiner:
             and ``(7, 4)`` for the price of the tallest -- worth roughly two exhaustions of
             lengths <= 5 (days of wall-clock). A snapshot at or above
             ``max_source_pattern_length`` is refused: that cell is the run's own output.
+        judge : callable or None, optional
+            The judge of the per-length loop: ``judge(pairs) -> tiers``, the effective
+            judged tier of each served ``(lhs, rhs)`` pattern. A pick whose tier the file's
+            mode does not license is excluded and its source re-scanned. ``None`` uses
+            :func:`judge_tiers` (the contract judge) with ``judge_processes`` workers.
+        judge_processes : int, optional
+            Worker processes of the default judge. Verdicts do not depend on it.
+        interval_node_budget : int or None, optional
+            The interval layer's subdivision node budget for this mine (``None``: the
+            default, 400,000). An exhausted search is undecided and refuses its candidate;
+            raise it when the sidecar's ``interval_undecided`` counters flag systematic
+            exhaustion. Set for the mine only, and recorded in the sidecar's parameters.
+        judge_warn_s, judge_fail_s : float, optional
+            The judge's watchdog. A mine judges with no wall-clock timeout, so no verdict
+            depends on the machine's load; a judgment still running after ``judge_warn_s``
+            seconds (default 60) is logged, and one past ``judge_fail_s`` (default 600) fails
+            the mine with the rule's name. Recorded in the sidecar's parameters.
+        offer_final_rules : bool, optional
+            Offer the permissive mine the finished f64 and real files (default True).
+            Permissive promises less than either mode, so each of their rules holds there
+            too, and its answer must never cost more than theirs. The permissive file is
+            mined last, and every rule of the other two files runs through its proposal
+            lane: certified by permissive's own acceptance, it enters only where
+            permissive's answer is not already as low. The permissive sidecar pins both
+            files (``offered``: name, sha256, count) beside the lane's outcomes. Config key
+            ``offer_final_rules``; recorded in the sidecar's parameters.
+        modes : list[str] or None, optional
+            The modes to mine (``'f64'``, ``'real'``, ``'permissive'``; ``None``, the default,
+            mines all three). The other modes' files are left as they are. A listed mode that
+            mines beside another reads that one's file at the output path: ``real`` and
+            ``permissive`` mine with the ``f64`` file in the default slot, and ``permissive`` is
+            offered the ``f64`` and ``real`` files (``offer_final_rules``), which must then
+            exist. Each mined file's sidecar and final-gate line are its own, as in a full mine.
 
         Notes
         -----
@@ -1872,9 +2690,10 @@ class RuleMiner:
         """
         if not isinstance(prune, bool) and prune != 'covered':
             raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
+        mined_modes = _mine_modes(modes)
         if prune is True:
             # Fail HERE, not after the length loop: the old late raise fired at the END
-            # of a potentially week-scale mine (audit Tier-2, 2026-08-03).
+            # of a potentially week-scale mine.
             raise ValueError(
                 "prune=True (the redundant-rule prune) died with the legacy kernel; "
                 "use prune='covered' (AC-judged behavioral coverage) or prune=False")
@@ -1920,9 +2739,9 @@ class RuleMiner:
                     f'max_source_pattern_length ({max_source_pattern_length}); the top cell is '
                     f'written to output_file.')
 
-        # (missed-003: the reset used to happen HERE, before the single-flight lock
-        # below -- a REJECTED call had already destroyed the caller's rules. It now
-        # runs under the lock; nothing between here and the acquire reads the
+        # (The reset runs under the single-flight lock
+        # below, so a REJECTED call cannot destroy the caller's rules; nothing between here
+        # and the acquire reads the
         # ruleset, so the mine's semantics are unchanged.)
 
         # The mine's X is SEEDED (reproducibility) and defaults to a heavy-tailed MIXTURE
@@ -1975,7 +2794,10 @@ class RuleMiner:
             rtol=rtol, atol=atol, min_informative=min_informative,
             seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
             confirm=confirm,
-            relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules)
+            relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules,
+            interval_node_budget=interval_node_budget,
+            judge_warn_s=judge_warn_s, judge_fail_s=judge_fail_s,
+            offer_final_rules=offer_final_rules)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).
@@ -1985,81 +2807,318 @@ class RuleMiner:
         # SINGLE-FLIGHT: fail fast if another mine is active in this process (see
         # _MINE_LOCK). Acquired HERE, directly above the try whose finally releases it
         # -- the validation/prep above may raise (that is its job), and acquiring any
-        # earlier would leak the lock on those paths (hardening H-002/H-009).
+        # earlier would leak the lock on those paths.
         if not _MINE_LOCK.acquire(blocking=False):
             raise RuntimeError(
                 "another find_rules mine is active in this process; mines are "
                 "single-flight (the interval soundness counters recorded in the "
                 "provenance sidecar are process-global)")
-        # The reset happens UNDER the single-flight lock (missed-003): a rejected
+        # The reset happens UNDER the single-flight lock: a rejected
         # call must leave the engine exactly as it found it.
         if reset_rules:
             self.engine._replace_rules([])
         # Graceful-interrupt handler: MAIN THREAD ONLY -- `signal.signal` raises
-        # ValueError anywhere else (hardening H-008: this used to make find_rules
+        # ValueError anywhere else (installing it there would make find_rules
         # unusable from worker threads, and installing it before the prep code could
-        # leak it past an early raise, H-009). Off the main thread the mine runs
+        # leak it past an early raise). Off the main thread the mine runs
         # without interrupt cleanup; `interrupted` then simply never fires.
         handler_installed = False
         old_handler = None
         if threading.current_thread() is threading.main_thread():
             old_handler = signal.signal(signal.SIGINT, signal_handler)
             handler_installed = True
+        from simplipy import _core as _core_module
+        previous_budget = _core_module.set_interval_node_budget(interval_node_budget)
+        # THE JUDGE READS THE MINT'S ROWS: its f64 lane evaluates the rows this mine's mint
+        # reads (its sample and its confirmation rows), so the mint refutes nothing on them the
+        # judge does not; restored when the mine ends
+        from .verify._contract import set_rows
+        mint_rows = [X_data] if X_confirm is None else [X_data, X_confirm]
+        previous_rows = set_rows(np.vstack(mint_rows))
         try:
-            self._find_rules_native(
-                expressions_of_length,
-                max_source_pattern_length,
-                max_target_pattern_length,
-                dummy_variables,
-                X_data,
-                constants_fit_challenges,
-                constants_fit_retries,
-                output_file,
-                prune,
-                verbose,
-                lambda: interrupted,
-                rtol=rtol,
-                atol=atol,
-                min_informative=min_informative,
-                mine_seed=mine_seed,
-                confirm_seed=confirm_seed,
-                X_confirm=X_confirm,
-                relaxed_kruskal=relaxed_kruskal,
-                provenance=provenance,
-                proposal_entries=proposal_entries,
-                leaf_nodes=leaf_nodes,
-                promote_sorts=promote_sorts,
-                symbolic_gate=symbolic_gate,
-                snapshot_at=snapshot_at,
-            )
+            if reset_rules:
+                # every mode's set starts empty: each file is mined from nothing
+                self.engine.real_simplification_rules = None
+                self.engine.permissive_simplification_rules = None
+            else:
+                for rule_mode, _ in _MINE_MODES[1:]:  # a set deferred by `modes=` loads now
+                    self.engine._ensure_mode_loaded(rule_mode)
+            # EACH MODE'S MINE STARTS FROM ITS OWN SET, never from another mode's: a mine reads
+            # its set in its own canon, and another mode's facts read there are not facts. A
+            # mode with no set of its own starts from nothing.
+            initial = {rule_mode: self._mode_rules(rule_mode) for rule_mode, _ in _MINE_MODES}
+            finals: dict[str, list] = {}
+            # Every finished cell of every mode, by (rule mode, the cell's f64 path): the
+            # permissive mine, which runs last, is offered the f64 and real cell it shares a
+            # path with (`offer_final_rules`), a ladder snapshot as well as the run's own.
+            cells: dict[tuple[str, str | None], list] = {}
+            # A mode left out of `modes` keeps its file, and the modes mined beside it read it.
+            for rule_mode, file_mode in _MINE_MODES:
+                if rule_mode in mined_modes:
+                    continue
+                for cell_path in [output_file, *snapshot_at.values()]:
+                    path = None if cell_path is None else _triple_paths(cell_path)[file_mode]
+                    if path is not None and os.path.exists(path):
+                        with open(path) as file:
+                            kept_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
+                        cells[(rule_mode, cell_path)] = kept_rules
+                        if cell_path == output_file:
+                            finals[rule_mode] = kept_rules
+            for rule_mode, _file_mode in _MINE_MODES:
+                if interrupted:
+                    break
+                if rule_mode not in mined_modes:
+                    continue
+                # Each mode after f64 mines against the finished f64 set in the default slot, as
+                # its file is served beside it.
+                self.engine._replace_rules(finals.get('default', initial['default']))
+                self._find_rules_native(
+                    dict(expressions_of_length),
+                    max_source_pattern_length,
+                    max_target_pattern_length,
+                    dummy_variables,
+                    X_data,
+                    constants_fit_challenges,
+                    constants_fit_retries,
+                    output_file,
+                    prune,
+                    verbose,
+                    lambda: interrupted,
+                    rtol=rtol,
+                    atol=atol,
+                    min_informative=min_informative,
+                    mine_seed=mine_seed,
+                    confirm_seed=confirm_seed,
+                    X_confirm=X_confirm,
+                    relaxed_kruskal=relaxed_kruskal,
+                    provenance=copy.deepcopy(provenance),
+                    proposal_entries=proposal_entries,
+                    leaf_nodes=leaf_nodes,
+                    promote_sorts=promote_sorts,
+                    symbolic_gate=symbolic_gate,
+                    snapshot_at=snapshot_at,
+                    rule_mode=rule_mode,
+                    initial_rules=initial[rule_mode],
+                    finals=finals,
+                    judge=judge if judge is not None else functools.partial(
+                        judge_tiers, processes=judge_processes, warn_s=judge_warn_s,
+                        fail_s=judge_fail_s),
+                    judge_warn_s=judge_warn_s,
+                    judge_fail_s=judge_fail_s,
+                    cells=cells,
+                    offer_final_rules=offer_final_rules,
+                    judge_processes=judge_processes,
+                )
+            # The engine ends holding the three files it wrote, as it would load them.
+            if 'default' in finals:
+                self.engine.real_simplification_rules = finals.get('real')
+                self.engine.permissive_simplification_rules = finals.get('permissive')
+                self.engine._rule_canons.clear()  # each set was mined in its own mode
+                self.engine._replace_rules(finals['default'])
         finally:
+            _core_module.set_interval_node_budget(previous_budget)
+            set_rows(previous_rows)
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)
             _MINE_LOCK.release()
 
 
+def verify_mine(rules_path: str, mode: Any, operators: dict, *,
+                judge: Callable | None = None, judge_processes: int = 4) -> dict:
+    """The re-mine gates of one mined file, in its own mode.
+
+    ``rules_path`` is a rule file a mine wrote, read beside its provenance sidecar;
+    ``mode`` the mode it serves (``'f64'``, also ``'default'``, ``'real'``, ``'permissive'``
+    or a :class:`~simplipy.Mode` member); ``operators`` the engine's operator table. Each gate holds or names what breaks it:
+
+    - ``sidecar``: the sidecar exists, records a final, uninterrupted mine, and its mode is
+      ``mode``;
+    - ``rules``: the file holds rules (an empty file passes every other gate vacuously);
+    - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
+    - ``engine_owned_law``: no rule that is a respelling within one canonical state, or an
+      instance of the distributive law as the search applies it (``law_instance``). The sign
+      orbit is not among them yet: a sign pull through an odd function
+      (``neg sin _0 -> sin neg _0``) passes until the sign rule makes the orbit one canon;
+    - ``unlicensed``: every file spelling is licensed in the mode (``verify.licensed``: the
+      judge's tier and the named policies) and every entry the mode serves from it carries a
+      judged tier the mode holds (the mine's final gate, with ``judge``);
+    - ``preempted``: no ground rule whose left side the rule-less engine of the mode already
+      takes to its right side's state: a ground fact the engine folds (``log (-3) ->
+      float("nan")``) is not a rule;
+    - ``dead``: every rule is live -- the engine holding the file takes each instance of a
+      rule's left side to its right side or below (``_dead_rules``); a rule another rule
+      shadows on its own instance ships and never decides an answer;
+    - ``overlaps``: where two rules overlap and the paths do not join, the completion the
+      mode licenses is in the file (``_overlap_gate``), within the mine's cell (a completion
+      source no longer than the sidecar's ``max_source_pattern_length``); the completions it
+      does not license are listed under ``overlaps_refused`` with the judge's tier, the policies
+      that refuse it and the judge's verdict, those beyond the cell are counted under
+      ``overlaps_beyond_cell``, and neither fails;
+    - ``translation``: the mode's load subsumes and drops nothing;
+    - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
+      prices each as this engine does;
+    - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
+      check;
+    - ``offered`` (``permissive`` only): the mine was offered the f64 and real files, and
+      each file its sidecar pins lies beside this one with the pinned sha256.
+
+    Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
+
+    The judge reads the rows the mine's mint read, drawn again from the sidecar's seed and
+    shape (``verify._contract.mine_matrix``), as it did in the mine.
+    """
+    from .verify._contract import mine_matrix, set_rows
+    sidecar_path = rules_path + '.provenance.json'
+    rows = None
+    if os.path.exists(sidecar_path):
+        with open(sidecar_path) as file:
+            recorded = json.load(file)
+        params, shape = recorded.get('params') or {}, recorded.get('X') or {}
+        if isinstance(params.get('seed'), int) and isinstance(shape.get('rows'), int) \
+                and isinstance(shape.get('cols'), int) and 'seeded' in str(shape.get('source')):
+            rows = mine_matrix(params['seed'], shape['rows'], shape['cols'],
+                               bool(params.get('confirm', True)))
+    previous_rows = set_rows(rows)
+    try:
+        return _verify_mine(rules_path, mode, operators, judge=judge,
+                            judge_processes=judge_processes)
+    finally:
+        set_rows(previous_rows)
+
+
+def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
+                 judge: Callable | None, judge_processes: int) -> dict:
+    from .engine import SimpliPyEngine, _RULE_MODE, _coerce_mode
+    mode = _coerce_mode(mode).name
+    rule_mode = _RULE_MODE[_coerce_mode(mode)]
+    with open(rules_path) as file:
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
+    sidecar_path = rules_path + '.provenance.json'
+    sidecar: dict = {}
+    if os.path.exists(sidecar_path):
+        with open(sidecar_path) as file:
+            sidecar = json.load(file)
+    engine = SimpliPyEngine(operators=operators, rules=[])
+    miner = RuleMiner(engine)
+    miner._install(rule_mode, rules)
+    core = engine._core
+    gates: dict[str, list] = {}
+    # NOTHING PASSES VACUOUSLY: the file is a finished mine of this mode, and holds rules.
+    progress = sidecar.get('progress') or {}
+    gates['sidecar'] = (
+        [['no provenance sidecar', sidecar_path]] if not sidecar else
+        ([['not final', progress.get('final')]] if progress.get('final') is not True else [])
+        + ([['interrupted', True]] if progress.get('interrupted') else [])
+        + ([['mode', sidecar.get('mode'), mode]] if sidecar.get('mode') != mode else []))
+    gates['rules'] = [] if rules else [['the file holds no rules', rules_path]]
+    gates['twin_shadow'] = [
+        [list(rules[owner][0]), list(rules[owner][1])]
+        for owner in sorted(_twin_shadow_owners(core.ac_shadow_census(rule_mode=rule_mode)))]
+    gates['engine_owned_law'] = [
+        [list(lhs), list(rhs), law] for lhs, rhs in rules
+        if (law := core.law_instance(list(lhs), list(rhs), rule_mode=rule_mode)) is not None]
+    gates['unlicensed'] = miner._final_gate(
+        rule_mode, judge if judge is not None else functools.partial(
+            judge_tiers, processes=judge_processes), {})[1]
+    gates['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
+                          if _preempted_by(engine, lhs, rhs, mode)]
+    gates['dead'] = _dead_rules(engine, rule_mode, rules)
+    gates['overlaps'], overlaps_refused, beyond = _overlap_gate(
+        engine, rule_mode, rules,
+        judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
+        functools.partial(judge_verdicts, processes=judge_processes),
+        max_source=(sidecar.get('params') or {}).get('max_source_pattern_length'))
+    _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
+    gates['translation'] = ([{'subsumed': subsumed, 'dropped': dropped}]
+                            if subsumed or dropped else [])
+    recorded = sidecar.get('measure')
+    if isinstance(recorded, dict):
+        # Every probe is recorded, in this file's mode, at this engine's price: a probe the
+        # record lacks is one it cannot vouch for (an empty record vouches for nothing).
+        moved, unrecorded = engine._measure_drift(recorded)
+        gates['fingerprint'] = (
+            [[probe, old, now] for probe, (old, now) in sorted(moved.items())]
+            + [[probe, None, 'unrecorded'] for probe in unrecorded]
+            + ([['the measure record is of mode', recorded.get('mode'), mode]]
+               if recorded.get('mode') != mode else []))
+    else:
+        gates['fingerprint'] = [['no measure record in the sidecar', None, None]]
+    recorded_env = (sidecar.get('soundness') or {}).get('env_overrides')
+    gates['env_switches'] = (
+        [['the sidecar records no env_overrides', None]] if recorded_env is None else
+        [[key, value] for key, value in sorted(recorded_env.items())]
+        + [[key, value] for key, value in env_overrides().items()])
+    if mode == 'permissive':
+        gates['offered'] = _offered_pins_broken(rules_path, sidecar.get('offered'))
+    report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
+              for name, found in gates.items()}
+    return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
+            'gates': report, 'overlaps_refused': overlaps_refused,
+            'overlaps_beyond_cell': len(beyond)}
+
+
+def _offered_pins_broken(rules_path: str, offered: Any) -> list:
+    """What breaks the permissive file's ``offered`` pins (empty when they hold): the
+    sidecar must pin the f64 and the real file, by name and sha256, and each must lie beside
+    ``rules_path`` with exactly those bytes."""
+    if not isinstance(offered, dict) or not isinstance(offered.get('files'), dict):
+        return [['the permissive mine was offered no f64 or real file', None, None]]
+    broken: list = []
+    for file_key in ('f64', 'real'):
+        pin = offered['files'].get(file_key)
+        if not isinstance(pin, dict) or not pin.get('file') or not pin.get('sha256'):
+            broken.append([file_key, 'no pin', None])
+            continue
+        path = os.path.join(os.path.dirname(os.path.abspath(rules_path)), pin['file'])
+        if not os.path.exists(path):
+            broken.append([file_key, 'missing', path])
+            continue
+        with open(path, 'rb') as file:
+            digest = hashlib.sha256(file.read()).hexdigest()
+        if digest != pin['sha256']:
+            broken.append([file_key, 'sha256', path])
+    return broken
+
+
+def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
+    """The price of an answer of ``mode`` on a scale shared by all three modes.
+
+    Each mode's own :meth:`~simplipy.SimpliPyEngine.complexity` prices that mode's
+    reading, so prices in different modes are not comparable. This compares answers of
+    different modes in one declared reading instead: ``tokens`` (the answer as a prefix
+    token list, explicit or tagged) is parsed as ``mode`` reads it and priced, certified,
+    in f64's canon. ``mode`` is ``'f64'`` (also ``'default'``), ``'real'``,
+    ``'permissive'`` or a :class:`~simplipy.Mode` member. Returns the price in
+    milli-bits, the unit of :meth:`~simplipy.SimpliPyEngine.complexity`.
+    """
+    from .engine import _RULE_MODE, _coerce_mode
+    return int(engine._core.ac_complexity_certified(list(tokens), 'default', rule_mode=_RULE_MODE[_coerce_mode(mode)]))
+
+
 def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
-    """`corpus` must be at least as capable as `f64` and as `real`, on every expression.
+    """`permissive` must be at least as capable as `f64` and as `real`, on every expression.
 
     THE REPLACEMENT for `rules_permissive == rules_f64 UNION rules_real`, which was retired
-    once folding made the three modes live in different canonical worlds (owner ruling
-    2026-08-20). That set identity was a proxy for this, and a bad one: it measured
-    spelling overlap, so it read `acos 1 -> 0` as "missing from corpus" when corpus
-    performs it -- and performs all 15 such rules -- through its own constructor.
+    once folding made the three modes live in different canonical worlds. That set
+    identity was a proxy for this, and a bad one: it measured spelling overlap, so it read
+    `acos 1 -> 0` as "missing from permissive" when permissive performs it -- and performs
+    all 15 such rules -- through its own constructor.
 
     Stated as behaviour it is checkable and it is what anyone actually wants: for every
-    expression, corpus's endpoint costs no more under the serve ordering than either
-    other mode's. Returns the counterexamples, empty when the property holds.
+    expression, permissive's answer costs no more than either other mode's, all three
+    priced by :func:`cross_mode_complexity`. Returns the violations, empty when the
+    property holds. A row on which a mode raises or an answer cannot be priced is a
+    violation too, reported with its error: a crash never reads as dominance.
     """
     from .engine import Mode
-    bad = []
+    modes = (Mode.f64, Mode.real, Mode.permissive)
+    bad: list[dict[str, Any]] = []
     for expr in expressions:
         try:
-            mu = {m: engine._core.ac_complexity(engine.simplify(list(expr), mode=m))
-                  for m in (Mode.f64, Mode.real, Mode.permissive)}
-        except Exception:
-            continue
-        if None in mu.values():
+            mu = {m: cross_mode_complexity(engine, engine.simplify(list(expr), mode=m), m)
+                  for m in modes}
+        except Exception as error:  # reported as a violation below, never skipped
+            bad.append({'expression': list(expr), 'error': f'{type(error).__name__}: {error}'})
             continue
         if mu[Mode.permissive] > min(mu[Mode.f64], mu[Mode.real]):
             bad.append({'expression': list(expr),

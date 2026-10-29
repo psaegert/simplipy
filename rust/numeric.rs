@@ -14,58 +14,23 @@
 
 use crate::operators::Operators;
 
-/// The transcendentals are evaluated through the SYSTEM libm (the same `<math.h>` functions Python's
-/// `math` module calls), NOT Rust's `f64::*` methods. Rust's std calls the platform libm for most of
-/// them (so they already match Python at 0 ULP), but `f64::atanh` is Rust's OWN composition
-/// (`0.5 * ln_1p(2x/(1-x))`), and its divergence from glibc is UNBOUNDED in ulps toward the domain
-/// edges: measured 2026-08-15 (audit B6), 161 ulps at -0.999 and 1.5e13 ulps at -(1 - 1e-15) --
-/// the 4th significant digit -- with 39% of a dense (-1,1) grid differing. (`asinh`/`acosh`
-/// measured 0-ulp identical to libm over 2.2M points on the same build.) Binding the C symbols
-/// directly guarantees Python==Rust on every platform (both use that platform's libm) -- the
-/// determinism the f64+libm folding spec needs.
-mod cmath {
-    extern "C" {
-        pub fn sin(x: f64) -> f64;
-        pub fn cos(x: f64) -> f64;
-        pub fn tan(x: f64) -> f64;
-        pub fn asin(x: f64) -> f64;
-        pub fn acos(x: f64) -> f64;
-        pub fn atan(x: f64) -> f64;
-        pub fn sinh(x: f64) -> f64;
-        pub fn cosh(x: f64) -> f64;
-        pub fn tanh(x: f64) -> f64;
-        pub fn asinh(x: f64) -> f64;
-        pub fn acosh(x: f64) -> f64;
-        pub fn atanh(x: f64) -> f64;
-        pub fn exp(x: f64) -> f64;
-        pub fn log(x: f64) -> f64;
-        pub fn pow(x: f64, y: f64) -> f64;
-    }
-}
-
-/// `simplipy.operators.pow` / the `pow{N}` ops / the real roots all reduce to `x ** y` = C `pow`
-/// (CPython `float.__pow__`). Route through the system `pow` for guaranteed Python parity.
-///
-/// `black_box` the operands so the optimizer cannot specialize a constant exponent into a different
-/// instruction sequence: LLVM rewrites `pow(x, 2.0)` -> `x * x` (and, under fast-math, `pow(x, 0.5)`
-/// -> `sqrt`), which is ~1 ULP off the libm `pow` result. Without this, `pow2` would silently diverge
-/// from both the binary `pow` operator and the pure-Python folder, and the divergence would depend on
-/// the opt-level / LLVM version. Forcing the real call keeps every `pow{N}` realization bit-identical
-/// to `pow(x, N)` and to the Python `_apply_numeric_op` (which routes through the same libm `pow`).
-#[inline]
-fn cpow(x: f64, y: f64) -> f64 {
-    unsafe { cmath::pow(std::hint::black_box(x), std::hint::black_box(y)) }
-}
+mod besselj;
+mod dd;
+pub(crate) mod elementary;
+mod harmonic;
+#[rustfmt::skip]
+mod harmonic_tables;
+pub mod kernels;
 
 /// The libm `atanh`, for the ONE consumer outside this module's own kernels: the interval
 /// arm (`interval.rs::u_atanh`) must evaluate endpoint images with the SAME function the
 /// fold ships, because its outward-rounding budget (`ULP_LIBM` = 8 ulps) only covers
 /// libm's own rounding error -- not the unbounded std-vs-libm composition gap documented
-/// on `cmath` above (audit B6: the fold at -0.999 sat 161 ulps below the std-computed
+/// in `elementary` (the fold at -0.999 sat 161 ulps below the std-computed
 /// box's lower bound, an enclosure violation).
 #[inline]
 pub(crate) fn libm_atanh(x: f64) -> f64 {
-    unsafe { cmath::atanh(x) }
+    elementary::atanh(x)
 }
 
 /// Contract-aligned power: `pow(negative base — including −∞ — , finite non-integer
@@ -74,12 +39,36 @@ pub(crate) fn libm_atanh(x: f64) -> f64 {
 /// convention) is deliberately overridden, so the override changes only the −∞-base row.
 /// Infinite exponents keep the C99 magnitude-step semantics (`pow(t, ±∞)` decided by
 /// |t| — including negative `t`), which the contract ratifies as-is.
+///
+/// NUMPY'S FAST PATHS. numpy computes `array ** scalar` (its float64 `power` loop under a
+/// broadcast exponent, numpy 2.5.4 `loops_umath_fp.dispatch.c.src`, and `fast_scalar_power` in
+/// `multiarray/number.c`) without `pow` at five exponents: -1 as `1/x`, 0 (either zero) as 1,
+/// 0.5 as `sqrt(x)`, 1 as `x` and 2 as `x*x`. Each is taken here, so the deployed realization
+/// gives numpy's bits, and the fold and the evaluator, which call this function, give the
+/// realization's. The cells that differ from `pow`: `sqrt(-0) = -0` (`pow` gives +0),
+/// `sqrt(-inf)` is NaN as the override above has it, and the correctly rounded `1/x`, `sqrt`
+/// and `x*x` where libm's `pow` is not.
 #[inline]
-fn aligned_pow(x: f64, y: f64) -> f64 {
+pub(crate) fn aligned_pow(x: f64, y: f64) -> f64 {
+    if y == 2.0 {
+        return x * x;
+    }
+    if y == 0.5 {
+        return x.sqrt();
+    }
+    if y == -1.0 {
+        return 1.0 / x;
+    }
+    if y == 0.0 {
+        return 1.0;
+    }
+    if y == 1.0 {
+        return x;
+    }
     if x < 0.0 && y.is_finite() && y.fract() != 0.0 {
         return f64::NAN;
     }
-    cpow(x, y)
+    elementary::pow(x, y)
 }
 
 /// Port of `_evaluate_constant_subtree`: evaluate an all-numeric prefix
@@ -95,6 +84,14 @@ pub fn evaluate_constant_subtree(tokens: &[String], ops: &Operators) -> Option<S
     // (test_division_by_zero_produces_inf). `py_float_repr` emits the `float("inf")`/`float("nan")`
     // tokens. Deterministic + identical to the Python f64+libm reference (NUMERIC_FOLDING_PARITY.md).
     Some(py_float_repr(value))
+}
+
+/// The float64 value of an all-numeric prefix subtree as the evaluator computes it, the sign
+/// of a zero included (`evaluate_constant_subtree` writes a token, which keeps no zero sign).
+pub(crate) fn evaluate_constant_value(tokens: &[String], ops: &Operators) -> Option<f64> {
+    let mut idx = 0;
+    let value = eval_node(tokens, &mut idx, ops)?;
+    (idx == tokens.len()).then_some(value)
 }
 
 /// Recursive prefix evaluation: an operator consumes `arity` operands; a leaf is `float(token)`.
@@ -139,11 +136,17 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
     }
     // Bare or parenthesized, decimal or exact-fraction: the wrapping composes with
     // both grammars. The old paren branch `return`ed parse_pyfloat(inner) EVEN ON
-    // None, so "(-1/3)" never reached the fraction arm below it (hardening H-012,
-    // 2026-08-03 -- the engine-side reader had the same hole, kept aligned).
+    // None, so "(-1/3)" never reached the fraction arm below it.
+    // The engine-side reader had the same hole, kept aligned.
     fn bare_value(t: &str) -> Option<f64> {
         if let Some(v) = parse_pyfloat(t) {
-            return Some(v);
+            // An INTEGER spelling is an integer to the deployed evaluator (Python reads `-0`
+            // as the int 0, `simplipy.utils.evaluator_literal`), and an integer has one zero:
+            // +0.0. A float spelling keeps its IEEE sign (`-0.0` is -0.0, as Python's float
+            // literal is).
+            let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
+            let integer = !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit());
+            return Some(if integer && v == 0.0 { 0.0 } else { v });
         }
         // The AC core's exact-fraction literal `p/q` (`1/3`): the realized infix reads it as
         // Python `int / int` true division, which rounds ONCE to the nearest f64.
@@ -164,7 +167,7 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
 /// `i128`, and from the exact big-integer components beyond that (up to
 /// `rat::READER_DIGITS` digits; `10^400/10^399` is 10.0, not inf/inf). Only beyond that limit
 /// is the f64 `float(p) / float(q)`, which three roundings can leave up to three ulps from the
-/// fraction (the old reader, B6: `673107593011939307760027002528 /
+/// fraction (the old reader: `673107593011939307760027002528 /
 /// 810572757194796821120128085049` read 1.5 ulps low, outside the interval kernel's
 /// one-ulp leaf bracket).
 pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
@@ -195,7 +198,7 @@ pub(crate) fn leaf_value_is_nearest(tok: &str) -> bool {
     parse_pyfloat(t).is_some() || fraction_value(t).is_none_or(|(_, certified)| certified)
 }
 
-/// H-045-R (owner Option B, 2026-08-05): sign and parity of an INTEGER-denoting decimal
+/// Sign and parity of an INTEGER-denoting decimal
 /// literal, read from the SPELLING -- exact at every magnitude, no `i128`/f64 limit.
 /// `Some((negative, odd))` iff the token is a decimal/e-notation literal whose denoted
 /// value is a nonzero integer: the digit string `D` with decimal shift `s` denotes
@@ -270,12 +273,32 @@ fn parse_pyfloat(tok: &str) -> Option<f64> {
 /// arithmetic, custom `inv` zero handling, real odd roots, libm transcendentals via the C symbols).
 pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
     Some(match name {
-        "neg" => |x| -x,
-        // inv: plain IEEE 1/x (1/+0 -> +inf, 1/-0 -> -inf) == the deployed numpy ARRAY branch.
-        // The old +inf-for-any-zero special case was the python SCALAR quirk; the miner
-        // must match deployment (numpy) semantics.
-        "inv" => |x| 1.0 / x,
-        "abs" => |x: f64| x.abs(),
+        // The deployed vocabulary: the deployed kernels themselves (`kernels`), so the fold,
+        // the tape and `simplipy.operators` compute one function.
+        "neg" => kernels::neg,
+        // inv: plain IEEE 1/x (1/+0 -> +inf, 1/-0 -> -inf) == the deployed realization.
+        "inv" => kernels::inv,
+        "abs" => kernels::abs,
+        "sin" => kernels::sin,
+        "cos" => kernels::cos,
+        "tan" => kernels::tan,
+        "asin" => kernels::asin,
+        "acos" => kernels::acos,
+        "atan" => kernels::atan,
+        "sinh" => kernels::sinh,
+        "cosh" => kernels::cosh,
+        "tanh" => kernels::tanh,
+        "asinh" => kernels::asinh,
+        "acosh" => kernels::acosh,
+        "atanh" => kernels::atanh,
+        "exp" => kernels::exp,
+        "log" => kernels::log,
+        // The 0.15 heads: the deployed kernels themselves, like the rest.
+        "floor" => kernels::floor,
+        "ceil" => kernels::ceil,
+        "harmonic" => kernels::harmonic,
+        "erf" => kernels::erf,
+        // The retired hyper-operator vocabulary (input support for configs that declare it).
         "mult2" => |x| 2.0 * x,
         "mult3" => |x| 3.0 * x,
         "mult4" => |x| 4.0 * x,
@@ -292,25 +315,10 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
         // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: negative base (incl. -inf) -> NaN.
         "pow1_2" => |x| aligned_pow(x, 0.5),
         "pow1_4" => |x| aligned_pow(x, 0.25),
-        // pow1_3 / pow1_5: real cube/fifth root, sign-folded, always real (retired-vocabulary
-        // input support; the live spelling is `rootn`, whose odd arm matches this exactly)
+        // pow1_3 / pow1_5: real cube/fifth root, sign-folded, always real (the live spelling is
+        // `rootn`, whose odd arm matches this exactly)
         "pow1_3" => |x| real_odd_root(x, 1.0 / 3.0),
         "pow1_5" => |x| real_odd_root(x, 1.0 / 5.0),
-        // transcendentals via the SYSTEM libm (same functions Python's `math` calls)
-        "sin" => |x| unsafe { cmath::sin(x) },
-        "cos" => |x| unsafe { cmath::cos(x) },
-        "tan" => |x| unsafe { cmath::tan(x) },
-        "asin" => |x| unsafe { cmath::asin(x) },
-        "acos" => |x| unsafe { cmath::acos(x) },
-        "atan" => |x| unsafe { cmath::atan(x) },
-        "sinh" => |x| unsafe { cmath::sinh(x) },
-        "cosh" => |x| unsafe { cmath::cosh(x) },
-        "tanh" => |x| unsafe { cmath::tanh(x) },
-        "asinh" => |x| unsafe { cmath::asinh(x) },
-        "acosh" => |x| unsafe { cmath::acosh(x) },
-        "atanh" => |x| unsafe { cmath::atanh(x) },
-        "exp" => |x| unsafe { cmath::exp(x) },
-        "log" => |x| unsafe { cmath::log(x) },
         _ => return None,
     })
 }
@@ -318,17 +326,149 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
 /// Resolve a binary canonical operator to its scalar kernel as a function pointer, or `None`.
 pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
     Some(match name {
-        "+" => |a, b| a + b,
-        "-" => |a, b| a - b,
-        "*" => |a, b| a * b,
-        // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan
-        "/" => op_div,
+        "+" => kernels::add,
+        "-" => kernels::sub,
+        "*" => kernels::mul,
+        // `/`: plain IEEE x / y, the sign of a zero divisor participating
+        "/" => kernels::div,
         // binary `pow` = `x ** y` = C pow (invalid -> NaN, overflow -> inf)
-        "pow" => aligned_pow,
+        "pow" => kernels::pow,
         // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index.
-        "rootn" => rootn_f64,
+        "rootn" => kernels::rootn,
+        // The 0.15 heads. `besselj(nu, x)`: the order is the first operand, a literal or
+        // any expression.
+        "max" => kernels::max,
+        "min" => kernels::min,
+        "mod" => kernels::modulo,
+        "atan2" => kernels::atan2,
+        "besselj" => kernels::besselj,
         _ => return None,
     })
+}
+
+/// THE f64 RANGE EVENT: the one definition the miner's scan (`eval::Tape::eval_columns_events`)
+/// and the contract judge (`verify._contract.out_of_range`, through `_core.range_event`) share.
+/// f64 promises the evaluator's value wherever nothing overflows or underflows, and overflows
+/// are a special case: at a point where an operation of either side overflows or underflows, a
+/// rewrite may give the true value instead of the evaluator's, as the constructors do
+/// (`x1*x2/x2 -> x1`, `exp(x1)/exp(x1) -> 1`).
+///
+/// The two events are IEEE 754's. An operation OVERFLOWS when its operands are finite and its
+/// exact value is finite, but the float is +-inf (`exp(800)`, `1e200*1e200`); it UNDERFLOWS
+/// when its operands are finite and its exact value is nonzero, but the float is zero or
+/// subnormal (`exp(-800)`, `1e-200*1e-200`). Neither is a POLE, an exact value that is itself
+/// infinite (`1/0`, `log(0)`, `atanh(1)`), nor an EXACT ZERO (`x - x`, `log(1)`): those are
+/// what the operator computes. So `atanh(tanh(20))` holds no event: `tanh` saturates to
+/// exactly 1.0 inside the range, and `atanh(1.0)` is a pole. Each kind names where its
+/// operators have a pole and an exact zero at finite operands; an operator outside the table
+/// has no events, so its points are compared as any other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RangeKind {
+    /// `+ - neg abs mult2..mult5`: a result below the normal range is always exact.
+    ExactWhenTiny,
+    /// `exp cos cosh`: neither a pole nor an exact zero.
+    Plain,
+    /// `*`: an exact zero when an operand is zero.
+    Mul,
+    /// `/`: a pole at a zero divisor, an exact zero at a zero dividend.
+    Div,
+    /// `inv`: a pole at zero.
+    Inv,
+    /// `log`: a pole at zero, an exact zero at one.
+    Log,
+    /// `atanh`: poles at +-1, an exact zero at zero.
+    Atanh,
+    /// `pow`, `rootn`: a pole at a zero base under a negative exponent or index, an exact
+    /// zero at a zero base.
+    PowLike,
+    /// `acos acosh`: an exact zero at one.
+    ZeroAtOne,
+    /// `sin tan asin atan sinh tanh asinh erf harmonic`, `div2..div5`, `pow2..pow5`,
+    /// `pow1_2..pow1_5`: an exact zero at zero. (`harmonic` is NaN, not infinite, at its
+    /// poles, so it has none.)
+    ZeroAtZero,
+    /// `atan2(y, x)`: an exact zero at `y = 0` with `x` positive or `+0`; no pole.
+    Atan2,
+    /// `besselj(nu, x)`: a pole at `x = 0` under a negative non-integer order, an exact zero
+    /// at `x = 0` under any other nonzero order.
+    Besselj,
+}
+
+impl RangeKind {
+    /// The kind of an operator token, `None` outside the table.
+    pub(crate) fn of(name: &str) -> Option<RangeKind> {
+        use RangeKind::*;
+        Some(match name {
+            "+" | "-" | "neg" | "abs" | "mult2" | "mult3" | "mult4" | "mult5" => ExactWhenTiny,
+            // integers or +-0, an operand, or an exact remainder moved by one addition of
+            // the divisor (a subnormal sum is exact): never a rounded tiny result
+            "floor" | "ceil" | "max" | "min" | "mod" => ExactWhenTiny,
+            "erf" | "harmonic" => ZeroAtZero,
+            "atan2" => Atan2,
+            "besselj" => Besselj,
+            "exp" | "cos" | "cosh" => Plain,
+            "*" => Mul,
+            "/" => Div,
+            "inv" => Inv,
+            "log" => Log,
+            "atanh" => Atanh,
+            "pow" | "rootn" => PowLike,
+            "acos" | "acosh" => ZeroAtOne,
+            "sin" | "tan" | "asin" | "atan" | "sinh" | "tanh" | "asinh" | "div2" | "div3"
+            | "div4" | "div5" | "pow2" | "pow3" | "pow4" | "pow5" | "pow1_2" | "pow1_3"
+            | "pow1_4" | "pow1_5" => ZeroAtZero,
+            _ => return None,
+        })
+    }
+
+    /// Is the exact value infinite at these finite operands?
+    fn pole(self, args: &[f64]) -> bool {
+        match self {
+            RangeKind::Div => args[1] == 0.0,
+            RangeKind::Inv | RangeKind::Log => args[0] == 0.0,
+            RangeKind::Atanh => args[0] == 1.0 || args[0] == -1.0,
+            RangeKind::PowLike => args[0] == 0.0 && args[1] < 0.0,
+            RangeKind::Besselj => args[1] == 0.0 && args[0] < 0.0 && args[0].fract() != 0.0,
+            _ => false,
+        }
+    }
+
+    /// Is the exact value zero at these finite operands?
+    fn exact_zero(self, args: &[f64]) -> bool {
+        match self {
+            RangeKind::Mul => args[0] == 0.0 || args[1] == 0.0,
+            RangeKind::Div | RangeKind::PowLike | RangeKind::Atanh | RangeKind::ZeroAtZero => {
+                args[0] == 0.0
+            }
+            RangeKind::Log | RangeKind::ZeroAtOne => args[0] == 1.0,
+            RangeKind::Atan2 => {
+                args[0] == 0.0 && (args[1] > 0.0 || (args[1] == 0.0 && args[1].is_sign_positive()))
+            }
+            RangeKind::Besselj => {
+                args[1] == 0.0 && args[0] != 0.0 && (args[0] > 0.0 || args[0].fract() == 0.0)
+            }
+            RangeKind::ExactWhenTiny | RangeKind::Plain | RangeKind::Inv => false,
+        }
+    }
+
+    /// Did this operation, on `args`, overflow or underflow to `value`?
+    pub(crate) fn event(self, args: &[f64], value: f64) -> bool {
+        if !args.iter().all(|a| a.is_finite()) {
+            return false;
+        }
+        if value.is_infinite() {
+            return !self.pole(args);
+        }
+        if value == 0.0 || value.abs() < f64::MIN_POSITIVE {
+            return self != RangeKind::ExactWhenTiny && !self.exact_zero(args);
+        }
+        false
+    }
+}
+
+/// `RangeKind::event` by operator name: `None` for an operator outside the table.
+pub(crate) fn range_event(name: &str, args: &[f64], value: f64) -> Option<bool> {
+    RangeKind::of(name).map(|k| k.event(args, value))
 }
 
 /// Apply one canonical operator to its numeric operands as IEEE-754 f64 + libm. Thin dispatcher over
@@ -342,21 +482,14 @@ pub(crate) fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
     }
 }
 
-/// Division: plain IEEE `x / y` == the deployed numpy ARRAY branch (sign of a ZERO DIVISOR
-/// participates: 1/-0.0 = -inf; 0/0 = nan). The old sign-of-numerator-only special case was the
-/// python SCALAR quirk; rules certified under it can be false under deployment (numpy)
-/// semantics.
-fn op_div(x: f64, y: f64) -> f64 {
-    x / y
-}
-
 /// IEEE-754 `rootn(x, n)`, honest for every integer index:
-/// odd index = the signed root (total on R); even = the principal root (NaN on negatives,
-/// identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 = the reciprocal of the
-/// positive-index root; n == 0 or a non-integer index = NaN (invalid operation).
+/// odd index = the signed root (total on R, `-0` at `-0`); even = the principal root (NaN on
+/// negatives, `+0` at either zero, identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 =
+/// the reciprocal of the positive-index root; n == 0 or a non-integer index = NaN (invalid
+/// operation).
 /// One semantics, five surfaces: this table, `operators.py::rootn`, `interval.rs`, and
 /// both `hiprec.rs` evaluators -- pinned against each other by the parity tests.
-fn rootn_f64(x: f64, n: f64) -> f64 {
+pub(crate) fn rootn_f64(x: f64, n: f64) -> f64 {
     if n.fract() != 0.0 || n == 0.0 || !n.is_finite() {
         return f64::NAN;
     }
@@ -370,7 +503,7 @@ fn rootn_f64(x: f64, n: f64) -> f64 {
     } else if x < 0.0 {
         f64::NAN
     } else {
-        x.powf(1.0 / k)
+        elementary::pow(x, 1.0 / k)
     };
     if n < 0.0 {
         1.0 / root
@@ -379,14 +512,11 @@ fn rootn_f64(x: f64, n: f64) -> f64 {
     }
 }
 
-/// The real odd root (`rootn`'s odd arm; the retired `pow1_3`/`pow1_5` spellings):
-/// `x<0 -> -(-x)**r` else `x**r`.
+/// The real odd root (`rootn`'s odd arm; the retired `pow1_3`/`pow1_5` spellings): `|x|**r`
+/// carrying the sign of `x`, the sign of zero included (`rootn(-0, 3) = -0`, as IEEE-754 `rootn`
+/// and every other odd function give).
 fn real_odd_root(x: f64, r: f64) -> f64 {
-    if x < 0.0 {
-        -cpow(-x, r)
-    } else {
-        cpow(x, r)
-    }
+    elementary::pow(x.abs(), r).copysign(x)
 }
 
 /// CPython-exact `str(float)` as the result formatter uses it:
@@ -480,8 +610,8 @@ mod tests {
         e.evaluate_constant_subtree(&toks.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
-    /// Exact (non-transcendental) folds + the custom operator semantics. Transcendental folds are
-    /// numerically-correct-modulo-numpy-ULP (see benchmarks/diff_numeric.py); not asserted here.
+    /// Exact (non-transcendental) folds + the custom operator semantics. Transcendental folds go
+    /// through the host libm, so their last bit is the platform's; they are not asserted here.
     #[test]
     fn evaluate_exact_cases() {
         let Some(e) = engine() else { return };
@@ -533,6 +663,102 @@ mod tests {
 mod aligned_pow_tests {
     use super::*;
 
+    /// THE f64 RANGE EVENT: every operator with a kernel has a kind, and the kinds read
+    /// IEEE 754's overflow and underflow, never a pole, an exact zero or a saturation.
+    #[test]
+    fn range_events_are_ieee_overflow_and_underflow() {
+        let unary = [
+            "neg", "inv", "abs", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4",
+            "div5", "pow2", "pow3", "pow4", "pow5", "pow1_2", "pow1_3", "pow1_4", "pow1_5", "sin",
+            "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
+            "atanh", "exp", "log", "floor", "ceil", "harmonic", "erf",
+        ];
+        for op in unary {
+            assert!(
+                unary_fn(op).is_some() && RangeKind::of(op).is_some(),
+                "{op}"
+            );
+        }
+        for op in [
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+        ] {
+            assert!(
+                binary_fn(op).is_some() && RangeKind::of(op).is_some(),
+                "{op}"
+            );
+        }
+        assert_eq!(RangeKind::of("no-such-operator"), None);
+        let ev = |op: &str, args: &[f64]| {
+            let v = apply_op(op, args).unwrap();
+            range_event(op, args, v).unwrap()
+        };
+        // overflow and underflow
+        for (op, args) in [
+            ("exp", vec![800.0]),
+            ("exp", vec![-800.0]),
+            ("exp", vec![-740.0]), // subnormal
+            ("cosh", vec![800.0]),
+            ("*", vec![1e200, 1e200]),
+            ("*", vec![1e-200, 1e-200]),
+            ("+", vec![1e308, 1e308]),
+            ("pow", vec![10.0, 400.0]),
+            ("inv", vec![1e308]),
+            ("rootn", vec![5e-324, -1.0]),
+            ("erf", vec![5e-324]),
+            ("atan2", vec![1e-300, 1e300]),
+            ("besselj", vec![200.0, 1e-3]),
+        ] {
+            assert!(ev(op, &args), "{op}{args:?} must be a range event");
+        }
+        // poles, exact zeros, saturation inside the range, non-finite operands
+        for (op, args) in [
+            ("atanh", vec![1.0]),
+            ("log", vec![0.0]),
+            ("/", vec![1.0, 0.0]),
+            ("pow", vec![0.0, -1.0]),
+            ("rootn", vec![0.0, -2.0]),
+            ("inv", vec![0.0]),
+            ("-", vec![0.5, 0.5]),
+            ("log", vec![1.0]),
+            ("acos", vec![1.0]),
+            ("*", vec![0.0, 1e-200]),
+            ("tanh", vec![20.0]),
+            ("exp", vec![f64::INFINITY]),
+            ("exp", vec![700.0]),
+            ("erf", vec![0.0]),
+            ("harmonic", vec![0.0]),
+            ("harmonic", vec![-2.0]),
+            ("ceil", vec![-0.5]),
+            ("mod", vec![3.0, 3.0]),
+            ("mod", vec![5e-324, 1e-320]),
+            ("max", vec![5e-324, -1.0]),
+            ("atan2", vec![0.0, 1.0]),
+            ("atan2", vec![0.0, 0.0]),
+            ("besselj", vec![1.0, 0.0]),
+            ("besselj", vec![-2.0, 0.0]),
+            ("besselj", vec![-0.5, 0.0]),
+        ] {
+            assert!(!ev(op, &args), "{op}{args:?} must not be a range event");
+        }
+    }
+
+    /// The zero spellings read as the deployed evaluator reads them: an integer has one zero
+    /// (+0), a float spelling keeps its sign, a fraction is `int / int` (+0). The Python
+    /// side's twin is `tests/test_evaluator_literals.py`.
+    #[test]
+    fn an_integer_has_one_zero() {
+        let sign = |t: &str| leaf_value(t).unwrap().is_sign_negative();
+        for t in ["0", "-0", "+0", "00", "-00", "(-0)", "0/5", "-0/5"] {
+            assert!(!sign(t), "{t} must read +0");
+        }
+        for t in ["-0.0", "-.0", "-0.", "-0e0", "(-0.0)"] {
+            assert!(sign(t), "{t} must read -0");
+        }
+        for t in ["0.0", "+0.0", "0e5"] {
+            assert!(!sign(t), "{t} must read +0");
+        }
+    }
+
     /// The contract's normative pow cells at negative and infinite bases: NaN for
     /// negative base (incl. −∞) with finite non-integer exponent; integer exponents
     /// and the magnitude-step infinite-exponent cells unchanged from C99.
@@ -560,13 +786,81 @@ mod aligned_pow_tests {
         assert_eq!(p(-2.0, f64::INFINITY), f64::INFINITY);
         assert_eq!(p(-0.5, f64::INFINITY), 0.0);
         assert_eq!(p(-1.0, f64::INFINITY), 1.0);
-        // IEEE-definitional nan-pow cells (ratified):
+        // IEEE-definitional nan-pow cells:
         assert_eq!(p(1.0, f64::NAN), 1.0);
         assert_eq!(p(f64::NAN, 0.0), 1.0);
-        // one-zero: -0.0 is not a negative base
-        assert_eq!(p(-0.0, 0.5), 0.0);
+        // -0.0 is not a negative base, and a fractional power has no odd part to sign: +0;
+        // the exponent 0.5 is numpy's `sqrt`, which keeps the zero's sign
+        assert_eq!(p(-0.0, 0.25).to_bits(), 0.0f64.to_bits());
+        assert_eq!(p(-0.0, 1.5).to_bits(), 0.0f64.to_bits());
+        assert_eq!(p(-0.0, 0.5).to_bits(), (-0.0f64).to_bits());
         // odd real roots stay sign-folded and defined:
         let r3 = unary_fn("pow1_3").unwrap();
         assert_eq!(r3(-8.0), -2.0);
+    }
+
+    /// numpy's fast paths (`array ** scalar`): the exponents 2, -1, 0.5, 0 and 1 are `x*x`,
+    /// `1/x`, `sqrt(x)`, 1 and `x`, bit for bit, at every cell, through the kernel, the fold's
+    /// dispatch and the unary sugar alike.
+    #[test]
+    fn pow_takes_numpys_fast_paths() {
+        let p = binary_fn("pow").unwrap();
+        let cells = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            2.5,
+            -2.5,
+            5e-324,
+            -5e-324,
+            1e-160,
+            1e200,
+            -1e200,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            std::f64::consts::PI,
+        ];
+        let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits();
+        for x in cells {
+            assert!(same(p(x, 2.0), x * x), "{x}^2");
+            assert!(same(p(x, -1.0), 1.0 / x), "{x}^-1");
+            assert!(same(p(x, 0.5), x.sqrt()), "{x}^0.5");
+            assert!(same(p(x, 0.0), 1.0) && same(p(x, -0.0), 1.0), "{x}^0");
+            assert!(same(p(x, 1.0), x), "{x}^1");
+            assert!(same(kernels::pow(x, 2.0), x * x), "kernel {x}^2");
+            assert!(same(unary_fn("pow2").unwrap()(x), x * x), "pow2({x})");
+            assert!(
+                same(unary_fn("pow1_2").unwrap()(x), x.sqrt()),
+                "pow1_2({x})"
+            );
+        }
+        assert_eq!(p(-0.0, 0.5).to_bits(), (-0.0f64).to_bits());
+        assert!(p(f64::NEG_INFINITY, 0.5).is_nan() && p(-4.0, 0.5).is_nan());
+    }
+
+    /// IEEE-754 `rootn` at a zero: an odd index keeps the sign of zero (and a negative odd index
+    /// turns it into the infinity of that sign), an even index gives `+0` (`+inf`) at either zero.
+    /// Compared by bits, since `-0.0 == 0.0`.
+    #[test]
+    fn rootn_keeps_the_sign_of_zero_under_an_odd_index() {
+        let r = binary_fn("rootn").unwrap();
+        let bits = |v: f64| v.to_bits();
+        for (n, at_neg, at_pos) in [
+            (1.0, -0.0, 0.0),
+            (3.0, -0.0, 0.0),
+            (5.0, -0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            (4.0, 0.0, 0.0),
+            (-1.0, f64::NEG_INFINITY, f64::INFINITY),
+            (-3.0, f64::NEG_INFINITY, f64::INFINITY),
+            (-2.0, f64::INFINITY, f64::INFINITY),
+        ] {
+            assert_eq!(bits(r(-0.0, n)), bits(at_neg), "rootn(-0, {n})");
+            assert_eq!(bits(r(0.0, n)), bits(at_pos), "rootn(+0, {n})");
+        }
+        assert_eq!(bits(unary_fn("pow1_3").unwrap()(-0.0)), bits(-0.0));
     }
 }

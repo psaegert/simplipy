@@ -1,27 +1,29 @@
-//! The licence registry -- C1.20's dual, owner-approved 2026-08-08.
+//! The licence registry.
 //!
 //! The miner's only probe used to be "does the engine already derive this?" (the
 //! Kruskal prune), which reads a doctrinal REFUSAL as ignorance and mints the
-//! forbidden rewrite as a discovery. Three shipped/blocked incidents (the 2026-08-01
-//! `+ <constant> np.pi -> <constant>` mint, F49's seven `e`-absorptions, the
-//! F55-closed `pow acos (-1) <constant>`) were each patched with a bespoke mint-side
+//! forbidden rewrite as a discovery. Three shipped/blocked incidents (a
+//! `+ <constant> np.pi -> <constant>` mint, seven `e`-absorptions, the
+//! `pow acos (-1) <constant>` rule) were each patched with a bespoke mint-side
 //! twin keyed on a proxy (tokens -> spellings -> endpoints), and each proxy rotted as
 //! the canon evolved. This module is the single home the register asked for: every
 //! reified refusal lives here, the mint path consults it at candidate judgment, and
 //! the AC load path consults it as defense in depth. The completeness argument -- one
 //! disposition per doctrinal refusal, with the proof or falsifier that earned it --
-//! is the research harness; the standing obligation (every future
+//! is kept outside this crate; the standing obligation (every future
 //! engine-side refusal ships with a registry disposition IN THE SAME COMMIT) is the
 //! contract clause recorded with this build.
 //!
 //! Design rules, all load-bearing:
 //! - Entries key on VALUES or STATES, never token spellings (the proxy-rot lesson).
 //! - The registry never over-refuses what the contract licenses: `Ext` at a point is
-//!   R3's null-set licence and passes; only defined-value changes (R2, "sign
+//!   the null-set licence and passes; only defined-value changes ("sign
 //!   included") refuse.
-//! - Fail-open on unevaluable adjudications (`contract_point_verdict`'s own
-//!   convention): the registry is a doctrine gate, not a substitute for the numeric
-//!   challenge bars, which keep running unchanged.
+//! - Fail-CLOSED on unevaluable adjudications: a pattern with exceptional points whose
+//!   source or target holds an operator the contract evaluator does not know
+//!   (`hiprec::evaluable`) is refused, since nothing can adjudicate it there. The registry
+//!   is a doctrine gate, not a substitute for the numeric challenge bars, which keep
+//!   running unchanged.
 
 use crate::hiprec::{contract_point_verdict, PointCmp, ProbeAtom};
 use crate::operators::Operators;
@@ -40,10 +42,20 @@ pub enum Refusal {
     /// the non-absorbable remainder (introduced masks; non-bag positions like
     /// `pow np.pi <constant>`).
     SpecialAbsorption,
-    /// SWEEP row 3 (new): R2 at a constructed exceptional point -- the candidate
+    /// SWEEP row 3: a defined-value change at a constructed exceptional point -- the candidate
     /// changes a DEFINED extended-real value (sign of infinity included) at a
     /// definable point of the pattern space. `1/(1-w)` vs `-1/(w-1)` at w=1.
     PoleClassChange,
+}
+
+/// THE GROUND-COMPOSITE POLICY (the specification's 4.3): a right side without a variable is a
+/// single leaf -- a number, `np.pi`, `np.e`, an infinity or `<constant>`. `asin(1) -> acos(0)`
+/// holds and is refused: a composite ground right side only obscures its input, and one with a
+/// constant can absorb almost anything (`cosh(asin(C)) -> log(C)`). The mint's candidate library
+/// drops such targets by it (`worker::CandidateLibrary::build`), and `simplipy.verify.licensed`
+/// applies it.
+pub fn ground_composite(target: &[String], is_variable: impl Fn(&str) -> bool) -> bool {
+    target.len() >= 2 && !target.iter().any(|t| is_variable(t))
 }
 
 /// Count of special-constant tokens (`np.pi` / `np.e`) in a token slice. The raw
@@ -58,7 +70,7 @@ impl Refusal {
     /// variant must be named here or the crate stops compiling. The callers used to spell
     /// these literals themselves, which put an UNREACHABLE arm in `lib.rs` (mint_refusals
     /// has three exits and none is `PoleClassChange`) and duplicated "pole_class_change"
-    /// at the two sites that can emit it (audit A9 / X9). A `_ =>` fallback would silence
+    /// at the two sites that can emit it. A `_ =>` fallback would silence
     /// exactly the rename this arm exists to catch, so there is none.
     pub(crate) fn name(&self) -> &'static str {
         match self {
@@ -76,7 +88,7 @@ impl Refusal {
 ///
 /// `src` is the enumerated source, `ac_out` the engine's own endpoint for it (the
 /// state a bare `<constant>` target would replace -- counting there is
-/// spelling-independent, F49's lesson), `target` the candidate.
+/// spelling-independent), `target` the candidate.
 pub fn mint_refusals(
     src: &[String],
     ac_out: &[String],
@@ -284,11 +296,21 @@ fn affine_of(tokens: &[String], w: &str, var_names: &[String], ops: &Operators) 
     }
 }
 
+/// The integers at which a step head's argument is probed for its jump (`harmonic`'s negative
+/// ones are its poles; the multiples of a constant `mod` divisor are these times it).
+const JUMP_LEVELS: [i64; 5] = [-2, -1, 0, 1, 2];
+
+/// A subtree and the exact rationals `(n, d)` at which it is exceptional.
+type Level<'a> = (&'a [String], Vec<(i64, i64)>);
+
 /// Collect the EXCEPTIONAL POINTS of a pattern: exact rational bindings of one
 /// variable at which a denominator (or `log` argument) vanishes. Scope (documented in
 /// SWEEP.md row 3): `inv X` / `/ A B` / `pow B <negative integer>` denominators and
 /// `log X` at X=0, with the vanishing subtree AFFINE in exactly one variable. This is
-/// the entire F63 orbit surface; transcendental locations (tan) are H-017's lane.
+/// the entire sign-trade orbit surface; transcendental locations (tan) are another lane.
+/// The 0.15 heads' discontinuities join it (`floor`/`ceil` at the integers, `harmonic` at
+/// its poles, `mod` at a zero divisor and at the multiples of a constant one): a rule true off
+/// a jump and false on it is the pole-mirror family with a jump for a pole.
 fn exceptional_points(
     tokens: &[String],
     var_names: &[String],
@@ -299,15 +321,21 @@ fn exceptional_points(
         return;
     }
     let t = &tokens[0];
-    let mut denoms: Vec<&[String]> = Vec::new();
+    // (subtree, the values at which it is exceptional): a denominator at 0, and the 0.15
+    // heads' discontinuities, which the pole handling treats alike -- the step heads' jumps at
+    // the integers, `harmonic`'s poles at the negative integers, `mod`'s zero divisor and the
+    // multiples of a constant divisor. The jump sets are infinite; the small integers are the
+    // representatives a rule false at a jump is false at.
+    let mut levels: Vec<Level> = Vec::new();
+    let zero = vec![(0, 1)];
     match (t.as_str(), ops.arity_of(t.as_str())) {
         // The token names are only trusted as structure when the config's own arity
         // table agrees -- a leaf that happens to be SPELLED "inv" must not have the
         // following tokens read as its child.
-        ("inv" | "log", Some(1)) => denoms.push(&tokens[1..]),
+        ("inv" | "log", Some(1)) => levels.push((&tokens[1..], zero.clone())),
         ("/", Some(2)) => {
             if let Some(la) = subtree_len(&tokens[1..], ops) {
-                denoms.push(&tokens[1 + la..]);
+                levels.push((&tokens[1 + la..], zero.clone()));
             }
         }
         ("pow", Some(2)) => {
@@ -316,23 +344,56 @@ fn exceptional_points(
                 if exp.len() == 1 {
                     if let Some((n, 1)) = lit_q(&exp[0]) {
                         if n < 0 {
-                            denoms.push(&tokens[1..1 + lb]);
+                            levels.push((&tokens[1..1 + lb], zero.clone()));
                         }
+                    }
+                }
+            }
+        }
+        ("floor" | "ceil", Some(1)) => {
+            levels.push((&tokens[1..], JUMP_LEVELS.iter().map(|&k| (k, 1)).collect()))
+        }
+        ("harmonic", Some(1)) => levels.push((
+            &tokens[1..],
+            JUMP_LEVELS
+                .iter()
+                .filter(|&&k| k < 0)
+                .map(|&k| (k, 1))
+                .collect(),
+        )),
+        ("mod", Some(2)) => {
+            if let Some(la) = subtree_len(&tokens[1..], ops) {
+                let (a, b) = (&tokens[1..1 + la], &tokens[1 + la..]);
+                levels.push((b, zero.clone()));
+                // a constant divisor c: the dividend's multiples of c are the jumps
+                if let Some(c) = affine_of(b, "", var_names, ops).filter(|c| c.bn == 0) {
+                    if c.an != 0 {
+                        let mults = JUMP_LEVELS
+                            .iter()
+                            .filter_map(|&k| mul_q(k, 1, c.an, c.ad))
+                            .collect();
+                        levels.push((a, mults));
                     }
                 }
             }
         }
         _ => {}
     }
-    for d in denoms {
+    for (d, values) in levels {
         // exactly one variable, occurring exactly once, affine
         let vars: Vec<&String> = d.iter().filter(|x| var_names.contains(x)).collect();
         if vars.len() == 1 {
             let w = vars[0].clone();
             if let Some(aff) = affine_of(d, &w, var_names, ops) {
-                if let Some(root) = aff.root() {
-                    if !out.iter().any(|(v, r)| *v == w && *r == root) {
-                        out.push((w, root));
+                for (n, dd) in values {
+                    let Some(shifted) = Affine::constant(n, dd).and_then(|c| aff.add(c.neg()))
+                    else {
+                        continue;
+                    };
+                    if let Some(root) = shifted.root() {
+                        if !out.iter().any(|(v, r)| *v == w && *r == root) {
+                            out.push((w.clone(), root));
+                        }
                     }
                 }
             }
@@ -359,8 +420,8 @@ const GENERIC: [(i64, u64); 3] = [(3, 7), (-5, 11), (9, 13)];
 /// sides and adjudicates each with the contract evaluator (one-zero conventions,
 /// precision rungs): a candidate that changes a DEFINED extended-real value at a
 /// definable point (InfChange / RealChange / a lost value) is refused; `Ext` (a nan
-/// hole filled at the point) is R3's licence and passes. Fail-open on unevaluable
-/// points, per `contract_point_verdict`'s own convention.
+/// hole filled at the point) is the null-set licence and passes. A side the contract cannot
+/// evaluate (an operator it does not know) is refused outright: fail closed.
 ///
 /// Cost discipline: callers pre-screen (the function returns immediately when
 /// neither side has a solvable exceptional point), and the mint path consults this
@@ -377,6 +438,9 @@ pub fn pole_refusal(
     exceptional_points(target, var_names, ops, &mut pts);
     if pts.is_empty() {
         return None;
+    }
+    if !crate::hiprec::evaluable(src, ops) || !crate::hiprec::evaluable(target, ops) {
+        return Some(Refusal::PoleClassChange);
     }
     // Variables appearing anywhere (order = var_names order, the atoms vector's frame)
     let used: Vec<String> = var_names
@@ -438,8 +502,8 @@ mod tests {
         Engine::from_strs(cfg, "[]").expect("engine builds")
     }
 
-    /// THE falsifier this entry exists for -- the verified hostile pair of the C1.20
-    /// design session: `-(1/(1-w))` and `1/(w-1)` are stable states, a.e.-equal,
+    /// THE falsifier this entry exists for -- the verified hostile pair:
+    /// `-(1/(1-w))` and `1/(w-1)` are stable states, a.e.-equal,
     /// mu-ordered mirror-below-source (42,000 -> 26,000), invisible to every other
     /// gate (challenges sample no measure-zero set; POLE_GRID is constants-only; all
     /// seven load drops are syntactic; promotion is flatteners-only), and differ at
@@ -468,7 +532,7 @@ mod tests {
     }
 
     /// Sound denominator-bearing rewrites KEEP: agreement at the exceptional point is
-    /// what sound rules do there (`inv(inv(w))` at w=0: inv(+inf) = 0 = w), and R3's
+    /// what sound rules do there (`inv(inv(w))` at w=0: inv(+inf) = 0 = w), and the
     /// point-level licence (`Ext`: a nan hole filled) must not be over-refused --
     /// `w/w -> 1` at w=0 is 0/0 = nan -> 1, the contract's own forcing example.
     #[test]
@@ -508,7 +572,7 @@ mod tests {
             Some(Refusal::ConstIntroduction)
         );
         // Special-bearing source: a Const-bearing target may not lower the count --
-        // counted on the MAX of raw source and endpoint (spelling independence, F49).
+        // counted on the MAX of raw source and endpoint (spelling independence).
         assert_eq!(
             mint_refusals(
                 &s(&["pow", "np.pi", "<constant>"]),
@@ -576,5 +640,117 @@ mod tests {
             &mut pts,
         );
         assert!(pts.is_empty());
+    }
+
+    /// A side the contract cannot evaluate has no adjudication: a pattern with exceptional
+    /// points is refused rather than passed, and the point verdict itself is none. Every head of
+    /// the shipped configs has its high-precision kernels, so the head here is one a config
+    /// could declare without them.
+    #[test]
+    fn an_unevaluable_side_fails_closed() {
+        let names = ["gamma", "inv", "-"];
+        let specs = names
+            .iter()
+            .map(|&n| {
+                let spec = crate::operators::OperatorSpec {
+                    realization: String::new(),
+                    alias: vec![],
+                    inverse: None,
+                    arity: if n == "-" { 2 } else { 1 },
+                    precedence: None,
+                    commutative: false,
+                };
+                (n.to_string(), spec)
+            })
+            .collect();
+        let ops = crate::operators::Operators::from_specs(
+            names.iter().map(|n| n.to_string()).collect(),
+            specs,
+        );
+        let vars = s(&["x0"]);
+        let src = s(&["gamma", "inv", "-", "1", "x0"]);
+        assert_eq!(
+            pole_refusal(&src, &src, &ops, &vars),
+            Some(Refusal::PoleClassChange)
+        );
+        // no exceptional point: nothing to adjudicate
+        let (a, b) = (s(&["gamma", "gamma", "x0"]), s(&["gamma", "x0"]));
+        assert_eq!(pole_refusal(&a, &b, &ops, &vars), None);
+        let verdict = contract_point_verdict(
+            &b,
+            &[],
+            &s(&["x0"]),
+            &[],
+            &ops,
+            &vars,
+            &[ProbeAtom::Val(0.5)],
+        );
+        assert_eq!(verdict, (None, false));
+        assert!(!crate::hiprec::evaluable(&b, &ops));
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        for t in [&["floor", "x0"][..], &["besselj", "1", "x0"][..]] {
+            assert!(crate::hiprec::evaluable(&s(t), &e.operators), "{t:?}");
+        }
+    }
+
+    /// The 0.15 heads' discontinuities are exceptional points, adjudicated like poles: a rule
+    /// true off a jump and false on it is refused there, and one true at the jumps passes.
+    #[test]
+    fn jumps_are_exceptional_points() {
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let vars = s(&["x0"]);
+        let mut pts = Vec::new();
+        exceptional_points(
+            &s(&["floor", "*", "3", "x0"]),
+            &vars,
+            &e.operators,
+            &mut pts,
+        );
+        assert!(pts.contains(&("x0".to_string(), (1, 3))), "{pts:?}");
+        pts.clear();
+        exceptional_points(&s(&["mod", "x0", "2"]), &vars, &e.operators, &mut pts);
+        assert!(pts.contains(&("x0".to_string(), (-4, 1))), "{pts:?}");
+        pts.clear();
+        exceptional_points(
+            &s(&["harmonic", "+", "x0", "1"]),
+            &vars,
+            &e.operators,
+            &mut pts,
+        );
+        assert_eq!(
+            pts,
+            vec![("x0".to_string(), (-3, 1)), ("x0".to_string(), (-2, 1))]
+        );
+        let refused = |l: &[&str], r: &[&str]| pole_refusal(&s(l), &s(r), &e.operators, &vars);
+        // ceil(3x) = floor(3x) + 1 off the jumps, and not at x = 1/3
+        assert_eq!(
+            refused(
+                &["ceil", "*", "3", "x0"],
+                &["+", "floor", "*", "3", "x0", "1"]
+            ),
+            Some(Refusal::PoleClassChange)
+        );
+        // floor(x + 1) = floor(x) + 1 holds at every jump too
+        assert_eq!(
+            refused(&["floor", "+", "x0", "1"], &["+", "floor", "x0", "1"]),
+            None
+        );
+        // mod(x, 1) = x - floor(x) holds everywhere; mod(x, 1) = x only on [0, 1)
+        assert_eq!(
+            refused(&["mod", "x0", "1"], &["-", "x0", "floor", "x0"]),
+            None
+        );
+        assert_eq!(
+            refused(&["mod", "x0", "1"], &["x0"]),
+            Some(Refusal::PoleClassChange)
+        );
     }
 }
