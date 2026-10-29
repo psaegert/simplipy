@@ -1454,6 +1454,9 @@ model predictions.
   whether a bounded function is claimed to reach its bound; a slot's bound value from the
   battery is an exact atom, which the rule read as a float and raised (`erf(cosh(cosh(_0))) ->
   _0` at 2). It reads the atom's value.
+- **The table reads a harmonic number exactly.** `harmonic(n)` at an integer 0 <= n <= 64 is the
+  rational 1 + 1/2 + ... + 1/n (it was an approximation), so `atanh(harmonic(ceil(x)))` meets
+  atanh's pole exactly where ceil(x) = 1, and the mint refuses `-> 0` there as the judge does.
 - **Evidence is one function.** The interval layer's certificate confirms a cell at points read
   in the mode's values (its centre and three drawn in it, by the table in the reals, by the
   f64 kernels in `f64`), and the mint reads the same function for a source as the judge's

@@ -30,7 +30,7 @@ import os
 import numpy as np
 import pytest
 import yaml
-from mpmath import mp
+from mpmath import mp, mpf
 
 from simplipy import SimpliPyEngine
 from simplipy.verify import MODE_TIERS, effective_tier, licensed, verify_rule
@@ -657,6 +657,16 @@ def test_the_saturation_rule_reads_a_battery_atom() -> None:
     # mpf and raised; it is false (erf never reaches 2, and at 0 the left side is erf(cosh(1)))
     got = verify_rule('erf cosh cosh ?1'.split(), ['?1'])
     assert effective_tier(got) == 'reject', got
+
+
+def test_the_table_reads_a_harmonic_number_exactly() -> None:
+    # H_n at a positive integer is the rational 1 + 1/2 + ... + 1/n: atanh(harmonic(ceil(x))) meets
+    # atanh's pole exactly where ceil(x) = 1, where an approximation of 1 was unreadable at every
+    # rung, so the mint passed every candidate on there and the judge refused it eight times over
+    with mp.workdps(50):
+        assert _contract.c_eval(_contract.parse('harmonic 3'.split()), {}) == mpf(11) / 6
+        assert _contract.c_eval(_contract.parse('atanh harmonic 1'.split()), {}) == mpf('inf')
+    assert not mint_accepts('atanh harmonic ceil x1', '0', 'permissive')
 
 
 @pytest.mark.parametrize('pair', [('erf cosh cosh x0', 'log x0'), ('erf cosh cosh x1', '0'),

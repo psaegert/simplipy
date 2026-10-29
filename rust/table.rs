@@ -1266,6 +1266,24 @@ fn bf_integer(v: &BigFloat) -> Option<BigInt> {
     Some(if neg { -n } else { n })
 }
 
+/// The harmonic number H_n of a nonnegative integer `n` as the exact rational it is, while it fits
+/// the exact form (`None` past that, or past n = 64).
+fn harmonic_exact(n: &Rat) -> Option<Rat> {
+    let (p, q) = n.big_parts();
+    if q != BigInt::one() {
+        return None;
+    }
+    let n = p.to_i64()?;
+    if !(0..=64).contains(&n) {
+        return None;
+    }
+    let mut h = Rat::ZERO;
+    for k in 1..=n {
+        h = h.checked_add(&Rat::new(1, k as i128)?)?;
+    }
+    Some(h)
+}
+
 fn harmonic(a: &Val, ctx: &mut Ctx) -> Out {
     match inf_sign(a) {
         Some(true) => return Some(inf(true)),
@@ -1278,6 +1296,14 @@ fn harmonic(a: &Val, ctx: &mut Ctx) -> Out {
     if let Some(x) = exact_rat(a) {
         if x.is_negative() && x.is_integer() {
             return Some(undef()); // the one-sided limits at a pole differ
+        }
+        // at a positive integer the value is exact, 1 + 1/2 + ... + 1/n: `harmonic(1)` is 1, so
+        // `atanh(harmonic(ceil(x)))` meets atanh's pole at 1 exactly where ceil(x) = 1, as the
+        // judge reads it, where an approximation of 1 is unreadable at every rung
+        if x.is_integer() && !x.is_negative() {
+            if let Some(h) = harmonic_exact(x) {
+                return Some(rat(h));
+            }
         }
     }
     if ctx.dps > 2000 {
