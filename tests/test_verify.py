@@ -851,8 +851,14 @@ class TestCleanlinessIsPerMode:
         # the offenders by mode, shown on a failure (captured output is printed in full)
         for m, r in report['modes'].items():
             print(m, sorted((o['idx'], o['lhs'], o['rhs'], o['verdict']) for o in r['offenders']))
-        assert {m: len(r['offenders']) for m, r in report['modes'].items()} == \
-            {'f64': 25, 'real': 79, 'permissive': 36}
+        # f64 follows the platform's math library (F3), and one rule sits on its rounding: row
+        # 126, `asin(sinh(atanh(_0))) -> asin(tan(asin(_0)))`, both sides x/sqrt(1-x^2) under
+        # asin, offends on the CI runners and not on the development host, where the two sides
+        # leave asin's domain at the same double. Every other verdict is the same everywhere.
+        f64 = {o['idx'] for o in report['modes']['f64']['offenders']}
+        assert len(f64 - {126}) == 25
+        assert {m: len(r['offenders']) for m, r in report['modes'].items() if m != 'f64'} == \
+            {'real': 79, 'permissive': 36}
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest: a row where real's one zero and permissive's signed zero give
         # different values).
