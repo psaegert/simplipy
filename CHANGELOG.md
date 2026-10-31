@@ -1254,6 +1254,15 @@ model predictions.
   well, and the high-precision polish took that noise to about 1e-557 instead of 0, a nonzero
   right side where both sides are exactly 0. `(x0 - C)^2 -> x0^2 - C1*x0 + C2` and
   `(x0 + C)/C -> C1*x0 + C2`, refused on every machine before, hold in `real`.
+- **The fit of several constants reaches every constant the judge asks about, and a false rule
+  with constants is refuted.** The float64 fit reads only environments where the left side is
+  moderate (zero or within [1e-6, 1e6]), shrinking the variables toward 0 where the generic
+  values are not, and where float64 cannot fit, Newton in the high-precision values does:
+  `exp(C1*x0 + C2) -> C3*exp(C4*x0)`, whose witness at C2 = 300 is e^300 = 1.9e130, holds in
+  `real` (it went unjudged in every mode). Where the right side is affine in its constants and
+  no value of them matches the left side at the generic points, the rule is refuted there, not
+  left undecided: `C1*x0 + C2*x1 -> C3*(x0 + x1)` and `floor(C1*x0) -> C2*floor(x0)` are
+  `KILL` (clause `a-no-witness`).
 - **The rule judge reads a jump at its preimage.** `ceil(sinh(x0) + 1/2) - floor(sinh(x0) +
   1/2) -> 1` is false in `real` only where sinh(x0) + 1/2 is an integer, at transcendental
   points no double is and no reading near one decides, and the judge passed it. Along each

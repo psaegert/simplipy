@@ -546,6 +546,22 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     assert folded == (holds and (evidence is True or mode == 'permissive'))
 
 
+@pytest.mark.parametrize('lhs, rhs, verdict', [
+    # true: d1 = e^c2 and d2 = c1, at c2 = 300 a witness of 1e130 and at c1 = 1e4 an exponent
+    # float64 cannot fit across the generic values
+    ('exp + * <constant> x0 <constant>', '* <constant> exp * <constant> x0', 'CERTIFIED'),
+    # false: no d at c = (2.5, -1.5) (it asks 15.5 at (1.7, -1.3) and 5.93 at (-1.3, 0.6)), nor
+    # at c = 2.5 (4 at 1.7, 2 at -1.3)
+    ('+ * <constant> x0 * <constant> x1', '* <constant> + x0 x1', 'KILL'),
+    ('floor * <constant> x0', '* <constant> floor x0', 'KILL'),
+])
+def test_the_judge_decides_a_rule_with_constants(lhs, rhs, verdict) -> None:
+    """Assertion 6: the witness fit stays in moderate environments (or the polish's arithmetic)
+    and finds a true rule's witness, and a definite counterexample to every witness is a KILL,
+    not NO-WITNESS."""
+    assert judged(lhs, rhs)['verdict'] == verdict, judged(lhs, rhs)
+
+
 @pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
 def test_the_fold_writes_nan_only_where_the_family_is_nan_at_every_constant(mode) -> None:
     """3.2 owes a constant family its value wherever it is finite, so the fold writes nan only

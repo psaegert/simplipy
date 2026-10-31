@@ -1116,13 +1116,178 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
     further environments as `fit_witness` validates. `None` if no witness is found; with
     `env_out`, the environments the fit used are appended to it, for `mp_polish_multi`.
 
+    THE FIT STAYS IN MODERATE ENVIRONMENTS. Float64's fit reads the generic environments only
+    where the left side's values there are moderate (`_moderate`), first at the generic values
+    themselves and then with every variable shrunk toward 0 (`FIT_SCALES`):
+    `exp(c1 x + c2) -> d1 exp(d2 x)` at c1 = -300 is 1e-220 to 1e170 across the generic values,
+    where the Jacobian overflows and the small values are fitted by a zero coefficient, and
+    between 0.02 and 1000 at a hundredth of them. Where no scale is moderate, or float64 finds
+    no witness, Newton in the contract's values fits (`_fit_multi_mp`): at c2 = 300 the left
+    side is 1e130 at every scale. A witness is a candidate only: the sweep reads it everywhere.
+
     The arithmetic is the same on every machine (`_norm`, `_solve`, exactly rounded sums for
     the normal equations): a fit that reads a BLAS kernel's summation order lands a few ulps
     apart on different CPUs, and a verdict must not depend on the machine."""
     cl_env = _cl_env(cl_val)
+    generic = [_gen_env(shared, k) for k in range(len(GEN))]
+    scaled = [[{n: F(float(v) * scale) for n, v in env.items()} for env in generic]
+              for scale in FIT_SCALES]
+    # float64's fit where the left side is moderate; where it is not, or float64 finds no
+    # witness, the polish's arithmetic (`_fit_multi_mp`), which neither overflows nor underflows,
+    # at the scales in order of their extremes (the witness is polished at the same environments)
+    for fit, order in ((lambda envs: _fit_multi_at(tl, tr, envs, cl_env, rnames)
+                        if _moderate(tl, envs, cl_env) else None, scaled),
+                       (lambda envs: _fit_multi_mp(tl, tr, envs, cl_env, rnames),
+                        sorted(scaled, key=lambda envs: _extremity(tl, envs, cl_env)))):
+        for envs in order:
+            d = fit(envs)
+            if d is not None:
+                if env_out is not None:
+                    env_out.extend(d[1])
+                return d[0]
+    return None
+
+
+def _extremity(tl, envs, cl_env):
+    """How far from 1 the left side's float64 values at `envs` reach, in decades (an overflow
+    or an underflow to 0 as far as any)."""
+    out = 0.0
+    for env in envs:
+        try:
+            with np.errstate(all='ignore'):
+                v = abs(float(d_eval(tl, {**env, **cl_env})))
+        except Exception:
+            continue
+        out = max(out, abs(math.log10(v)) if 0 < v < math.inf else 400.0)
+    return out
+
+
+def _fit_seeds(cl_env, m):
+    """The fit's starting points: the left side's own constants first, in every order (a
+    respelling may move them: `exp(c1 x + c2) -> d1 exp(d2 x)` has d2 = c1), then generic
+    values."""
+    lv = [float(v) for v in cl_env.values()]
+    own = list(dict.fromkeys(tuple((list(p) + [1.0] * m)[:m])
+                             for p in itertools.permutations(lv)))
+    return [list(p) for p in own] + [[1.0] * m, [0.5] * m, [-1.0] * m, [2.0] * m,
+                                     [float(i + 1) for i in range(m)], [0.0] * m]
+
+
+#: The precision of the multi-constant fit in the contract's values, the agreement it asks, and the
+#: step of its Jacobian's differences: a step's error carries a coefficient's whole travel
+#: (e^100 from 100) into its partner, so the differences are read to 70 digits.
+MP_FIT_DPS = 120
+MP_FIT_TOL = mpf(10) ** -30
+MP_FIT_STEP = mpf(10) ** -50
+
+
+def _fit_multi_mp(tl, tr, generic, cl_env, rnames):
+    """THE POLISH'S ARITHMETIC AS THE FIT, where float64's cannot fit: Newton in the contract's
+    values (`MP_FIT_DPS` digits: no overflow, and no witness lost to a coefficient 43 orders
+    above its partner, as float64 loses `exp(c1 x + c2) -> d1 exp(d2 x)` at c2 = 100, d1 = e^100,
+    whose Gauss-Newton step for d2 carries an error of 1e27) from each seed (`_fit_seeds`), on
+    the first `len(rnames)` generic environments where the left side is finite. A root is a
+    witness where it reproduces the left side at EVERY such environment to `MP_FIT_TOL`.
+    `(d, envs)` or None."""
+    m = len(rnames)
+    # the table reads a value up to 10^(dps - 10): the precision grows with the left side's
+    # magnitude (`exp(-1.5 x + 300)` is 1e130)
+    mags = []
+    for env in generic:
+        try:
+            with np.errstate(all='ignore'):
+                v = abs(float(d_eval(tl, {**env, **cl_env})))
+        except Exception:
+            continue
+        if math.isfinite(v) and v > 1:
+            mags.append(v)
+    old = mp.dps
+    try:
+        mp.dps = MP_FIT_DPS + (math.ceil(math.log10(max(mags))) if mags else 0)
+        cl = {n: mpf(float(v)) for n, v in cl_env.items()}
+        envs, targets = [], []
+        for env in generic:
+            e = {n: mpf(float(v)) for n, v in env.items()}
+            try:
+                v = c_eval(tl, {**e, **cl})
+            except Unresolved:
+                continue
+            if cls_mp(v)[0] == 'fin':
+                envs.append(env)
+                targets.append(v)
+        if len(envs) <= m:
+            return None
+        exact = [{**{n: mpf(float(v)) for n, v in env.items()}, **cl} for env in envs]
+
+        def right(e, d):
+            return c_eval(tr, {**e, **dict(zip(rnames, d))})
+
+        def newton(d):
+            """Newton on the relative equations `R(x_k; d)/L_k = 1` (absolute where L_k is 0),
+            the Jacobian read off differences of R itself (a difference of the relative
+            residual loses a coefficient's influence below the working precision)."""
+            for _ in range(60):
+                r = [right(e, d) for e in exact[:m]]
+                res = [x / t - 1 if t else x for x, t in zip(r, targets[:m])]
+                if max(abs(x) for x in res) <= MP_FIT_TOL ** 2:
+                    return d
+                jac = mp.matrix(m, m)
+                for j in range(m):
+                    h = max(abs(d[j]), 1) * MP_FIT_STEP
+                    dj = list(d)
+                    dj[j] += h
+                    for k, (e, t, x) in enumerate(zip(exact[:m], targets[:m], r)):
+                        jac[k, j] = (right(e, dj) - x) / (h * (t if t else 1))
+                step = mp.lu_solve(jac, mp.matrix([-x for x in res]))
+                d = [x + step[j] for j, x in enumerate(d)]
+            return d
+
+        for seed in _fit_seeds(cl_env, m):
+            try:
+                d = newton([mpf(x) for x in seed])
+                if not all(cls_mp(x)[0] == 'fin' and abs(x) < mpf(2) ** 1023 for x in d):
+                    continue
+                if all(cls_mp(rv := right(e, d))[0] == 'fin'
+                       and abs(rv - t) <= MP_FIT_TOL * max(1, abs(t))
+                       for e, t in zip(exact, targets)):
+                    return [float(x) for x in d], envs
+            except (Unresolved, ZeroDivisionError, ValueError, TypeError, OverflowError):
+                continue
+        return None
+    finally:
+        mp.dps = old
+
+
+#: The scales the multi-constant fit reads the generic environments at, in order (see
+#: `fit_witness_multi`).
+FIT_SCALES = (1.0, 0.1, 0.01, 0.001)
+
+#: Moderate values for the f64 fit: every left-side value finite, and zero or within
+#: [1/FIT_MODERATE, FIT_MODERATE] in magnitude. The fit's tolerance is absolute, a fraction of
+#: 1 + the largest value, so it binds every environment only there: a value 1e-220 beside one of
+#: 1e170 is fitted by a zero coefficient, and so is e^-30 alone.
+FIT_MODERATE = 1e6
+
+
+def _moderate(tl, envs, cl_env):
+    """Are the left side's values at `envs` moderate (`FIT_MODERATE`)?"""
+    for env in envs:
+        try:
+            with np.errstate(all='ignore'):
+                v = float(d_eval(tl, {**env, **cl_env}))
+        except Exception:
+            return False
+        if not math.isfinite(v) or (v != 0 and not 1 / FIT_MODERATE <= abs(v) <= FIT_MODERATE):
+            return False
+    return True
+
+
+def _fit_multi_at(tl, tr, generic, cl_env, rnames):
+    """`fit_witness_multi` at one set of generic environments, of which the fit reads those
+    where the left side is defined, and the third and fourth validate it. `(d, envs)`, the
+    witness and the environments it was fitted at, or None."""
     envs, targets = [], []
-    for k in range(len(GEN)):
-        env = _gen_env(shared, k)
+    for env in generic:
         try:
             v = d_eval(tl, {**env, **cl_env})
         except Exception:
@@ -1149,8 +1314,7 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
         return np.array(out)
 
     lv = [float(v) for v in cl_env.values()]
-    seeds = [(lv + [1.0] * m)[:m], [1.0] * m, [0.5] * m, [-1.0] * m, [2.0] * m,
-             [float(i + 1) for i in range(m)], [0.0] * m]
+    seeds = _fit_seeds(cl_env, m)
     best, best_n = None, None
     for seed in seeds:
         d = np.array(seed, dtype=float)
@@ -1217,8 +1381,7 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
         rt, rd = resid(trial), resid(d)
         if rt is not None and rd is not None and _norm(rt) <= _norm(rd):
             d = trial
-    for k in (2, 3):
-        env = _gen_env(shared, k)
+    for env in (generic[2], generic[3]):
         try:
             Lv = d_eval(tl, {**env, **cl_env})
             Rv = d_eval(tr, {**env, **cl_env, **{n: F(x) for n, x in zip(rnames, d)}})
@@ -1228,9 +1391,66 @@ def fit_witness_multi(tl, tr, shared, cl_val, rnames, env_out=None):
             return None
         if np.isfinite(Lv) and abs(Lv - Rv) > 1e-4 * max(1.0, abs(Lv)):
             return None
-    if env_out is not None:
-        env_out.extend(envs)
-    return [float(x) for x in d]
+    return [float(x) for x in d], envs
+
+
+def no_witness_counterexample(tl, tr, shared, cl_builders, rnames):
+    """A DEFINITE COUNTEREXAMPLE to the exists-witness at one binding of the left side's
+    constants (`cl_builders`, exact values by name): where the right side is affine in its own
+    constants (`rnames`) at the generic environments -- checked in the contract's values at two
+    further bindings of them -- `R(x_k; d) = L(x_k; c)` is a linear system in d, and a
+    least-squares residual above the fit's tolerance means that no d satisfies it, which no fit
+    can miss. `floor(c x) -> d floor(x)` at c = 2.5 asks d = 4 at x = 1.7 and d = 2 at
+    x = -1.3; `c1 x0 + c2 x1 -> d (x0 + x1)` at c = (2.5, -1.5) asks d = 15.5 at (1.7, -1.3)
+    and 5.93 at (-1.3, 0.6). Returns the environments read (`{name: float}` each), or None:
+    the right side is not affine there, a value is not finite or not resolved, the system is
+    degenerate, or it has a solution."""
+    m = len(rnames)
+    old = mp.dps
+    try:
+        mp.dps = BASE_DPS
+        envs, lv = [], []
+        for k in range(len(GEN)):
+            env = {n: mpf(float(v)) for n, v in _gen_env(shared, k).items()}
+            env.update({n: b() for n, b in cl_builders.items()})
+            v = c_eval(tl, env)
+            if cls_mp(v)[0] == 'fin':
+                envs.append(env)
+                lv.append(v)
+        if len(envs) <= m:
+            return None
+
+        def right(env, d):
+            v = c_eval(tr, {**env, **dict(zip(rnames, d))})
+            if cls_mp(v)[0] != 'fin':
+                raise Unresolved()
+            return v
+
+        d0 = [mpf(1) / 3 + j for j in range(m)]
+        r0 = [right(e, d0) for e in envs]
+        rows = [[right(e, [d0[i] + (1 if i == j else 0) for i in range(m)]) - r
+                 for j in range(m)] for e, r in zip(envs, r0)]
+        tol = mpf(10) ** (-(mp.dps - 15))
+        for delta in ([mpf(7) / 4 - j for j in range(m)], [3 * j - mpf(5) / 2 for j in range(m)]):
+            for e, r, row in zip(envs, r0, rows):
+                got = right(e, [a + b for a, b in zip(d0, delta)])
+                want = r + mp.fsum(b * x for b, x in zip(row, delta))
+                if abs(got - want) > tol * max(1, abs(got), abs(r)):
+                    return None          # not affine: no definite verdict
+        rhs = [y - r for y, r in zip(lv, r0)]
+        cols = [j for j in range(m) if any(row[j] != 0 for row in rows)]
+        if cols:
+            _, res = mp.qr_solve(mp.matrix([[row[j] for j in cols] for row in rows]),
+                                 mp.matrix(rhs))
+        else:
+            res = mp.sqrt(mp.fsum(x * x for x in rhs))
+        if res <= mpf('1e-6') * (1 + max(abs(y) for y in lv)):
+            return None
+        return [{n: float(v) for n, v in e.items() if n in shared} for e in envs]
+    except (Unresolved, ZeroDivisionError, ValueError):
+        return None
+    finally:
+        mp.dps = old
 
 
 def mp_polish_multi(tl, tr, nvars, cl_builders, d0, envs):
@@ -2187,6 +2407,15 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                                                              **_cl_env(cl_env)}))
                                   for k in range(len(GEN)))
                 if defined:
+                    # where no constant of the right side can match, the rule is false at a
+                    # constant it owes: a definite counterexample, in every mode
+                    cx = no_witness_counterexample(tl, tr, set(nvars), builders, rnames)
+                    if cx is not None:
+                        return {'verdict': 'KILL', 'clause': 'a-no-witness',
+                                'points': [dict(p, **dict(zip(lnames, key))) for p in cx[:3]],
+                                'kinds': ['REAL-CHANGE'], 'measure': 0.0, 'realised': False,
+                                'permissive': False, 'skipped_cl': skipped_cl,
+                                'tier': _tier('KILL', False, False)}
                     if all(c in core for c in key):
                         return {'verdict': 'NO-WITNESS', 'detail': f'cl={key} (LHS defined)',
                                 'permissive': False}
