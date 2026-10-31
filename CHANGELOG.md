@@ -50,6 +50,14 @@ organised by who you are, then the highlights, then every change in detail.
 - **The rule judge runs on mpmath 1.3.** It reads a `Fraction` through its numerator and
   denominator, which every supported mpmath accepts (mpmath before 1.4 builds no `mpf` from a
   `Fraction`, and Torch's SymPy pins mpmath below 1.4).
+- **The operator wrappers take a tensor on either side.** `pow(2.0, tensor)` and
+  `rootn(-8.0, tensor)` take torch's branch, a `torch.nn.Parameter` and a tensor with a gradient
+  too (their graph is kept), and `rootn` takes array-likes on either side.
+- **Generated parameter names are distinct.** `explicit_constant_placeholders` never generates a
+  supplied name (`C_0` supplied, the next slot is `C_1`), and a placeholder is a whole
+  identifier: a data column `C_0feature` stays a variable there and in `substitute_constants`.
+- **`sample_expression` draws beyond int64 counts**, unbiased and deterministic in the seed (length
+  15 over acj2-4 has 2.6e20 expressions); below 2^63 every seed draws what it drew before.
 - **`packaging` is a declared dependency** (it was already installed through `huggingface_hub`).
 - **Rule files mined before 0.15 are refused.** 0.15 changes the canonical forms, the measure
   and the rule judge, and serves only the rule sets mined for it. `SimpliPyEngine.from_config`

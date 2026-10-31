@@ -44,8 +44,9 @@ _torch_checked = False
 
 
 def _is_tensor(x: Any) -> bool:
-    t = type(x)
-    return t.__name__ == 'Tensor' and t.__module__ == 'torch'
+    """Is `x` a torch tensor, a subclass included (`torch.nn.Parameter`)? Read off the type's
+    MRO, so torch is never imported to answer it."""
+    return any(t.__name__ == 'Tensor' and t.__module__ == 'torch' for t in type(x).__mro__)
 
 
 def _torch_of(*xs: Any) -> ModuleType | None:
@@ -66,11 +67,21 @@ def _torch_of(*xs: Any) -> ModuleType | None:
     return _torch_module
 
 
-def _torch_pair(torch: ModuleType, a: Any, b: Any) -> tuple[Any, Any]:
-    """Both operands as tensors, a non-tensor one taking the other's dtype and device."""
-    ref = a if type(a).__module__ == 'torch' else b
-    return (torch.as_tensor(a, dtype=ref.dtype, device=ref.device),
-            torch.as_tensor(b, dtype=ref.dtype, device=ref.device))
+def _torch_pair(torch: ModuleType, a: Any, b: Any,
+                floating: bool = False) -> tuple[Any, Any]:
+    """Both operands as tensors, a non-tensor one taking the other's dtype and device (with
+    `floating`, an integer dtype becomes torch's default float). Either operand may be the
+    tensor, a subclass included, and a tensor operand keeps its gradient."""
+    ref = a if _is_tensor(a) else b
+    dtype = ref.dtype
+    if floating and not ref.is_floating_point():
+        dtype = torch.get_default_dtype()
+
+    def as_tensor(v: Any) -> Any:
+        if _is_tensor(v):
+            return v if v.dtype == dtype else v.to(dtype)
+        return torch.as_tensor(v, dtype=dtype, device=ref.device)
+    return as_tensor(a), as_tensor(b)
 
 
 _F64 = np.dtype(np.float64)
@@ -325,15 +336,12 @@ def rootn(x: float, n: float) -> float:
     ``interval.rs`` and both ``hiprec.rs`` evaluators implement the same table, pinned
     against each other by the cross-evaluator parity tests. Scalars give a Python float.
     """
-    torch = None if _plain(x) else _torch_of(x)
+    torch = None if (_plain(x) and _plain(n)) else _torch_of(x, n)
     if torch is not None:
-        xt = x if x.is_floating_point() else x.to(torch.get_default_dtype())  # type: ignore[attr-defined]
-        nt = torch.as_tensor(n, dtype=xt.dtype, device=xt.device)  # type: ignore[union-attr]
+        xt, nt = _torch_pair(torch, x, n, floating=True)
         return _rootn_table(torch, xt, nt)
     out = _kernel2('rootn', x, n)
-    if isinstance(x, np.ndarray) or isinstance(n, np.ndarray):
-        return out
-    return float(out)
+    return out if np.ndim(out) > 0 else float(out)
 
 
 def pow(x: float, y: float) -> float:
@@ -345,11 +353,11 @@ def pow(x: float, y: float) -> float:
     without ``pow`` the value is numpy's ``array ** scalar``: ``x*x`` at 2, ``1/x`` at -1,
     ``sqrt(x)`` at 0.5 (so ``pow(-0, 0.5) = -0``), 1 at 0 and ``x`` at 1."""
     if not (_plain(x) and _plain(y)):
-        torch = _torch_of(x)
+        torch = _torch_of(x, y)
         if torch is not None:
-            yt = torch.as_tensor(y, dtype=x.dtype, device=x.device)  # type: ignore[attr-defined]
+            xt, yt = _torch_pair(torch, x, y)
             nonint = torch.isfinite(yt) & (yt != torch.floor(yt)) & (yt != 0.5)
-            return torch.pow(torch.where((x == 0) & nonint, torch.zeros_like(x), x), y)
+            return torch.pow(torch.where((xt == 0) & nonint, torch.zeros_like(xt), xt), yt)
         if np.iscomplexobj(x) or np.iscomplexobj(y):
             return np.power(x, y)
     return _kernel2('pow', x, y)

@@ -225,7 +225,7 @@ def is_constant_placeholder(token: str, extra: "Any" = ()) -> bool:
     `substitute_constants`); deciding which LITERALS become placeholders in the first
     place is a masking-policy question and lives in ``simplipy.masking``.
     """
-    return token == "<constant>" or bool(_CONSTANT_ID_PATTERN.match(token)) or token in extra
+    return token == "<constant>" or bool(_CONSTANT_ID_PATTERN.fullmatch(token)) or token in extra
 
 
 def substitute_constants(prefix_expression: list[str], values: list | np.ndarray, constants: list[str] | None = None, inplace: bool = False) -> list[str]:
@@ -337,7 +337,9 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
         The prefix expression to process.
     constants : list[str] or None, optional
         Initial constant names to reuse before generating new ones. The returned
-        list includes the used values plus any newly generated identifiers.
+        list includes the used values plus any newly generated identifiers; a
+        generated identifier is never one of the supplied names (``C_0`` given, the
+        next slot is ``C_1``), so every slot keeps a name of its own.
     inplace : bool, optional
         If ``True``, modifies the input list; otherwise, works on a shallow copy.
         Defaults to ``False``.
@@ -364,6 +366,7 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
         modified_prefix_expression = prefix_expression.copy()
 
     provided_constants = list(constants) if constants is not None else []
+    taken = set(provided_constants)
     used_constants: list[str] = []
     provided_index = 0
     generated_index = 0
@@ -377,6 +380,8 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
                 constant_name = provided_constants[provided_index]
                 provided_index += 1
             else:
+                while f"C_{generated_index}" in taken:
+                    generated_index += 1
                 constant_name = f"C_{generated_index}"
                 generated_index += 1
 
@@ -967,6 +972,21 @@ def count_expressions(n_leaves: int, non_leaf_nodes: dict[str, int], max_length:
     return counts
 
 
+def _uniform_below(n: int, rng: np.random.Generator) -> int:
+    """An integer drawn uniformly from ``range(n)``, for any ``n >= 1``, deterministic in the
+    state of ``rng``. A bound numpy's ``Generator.integers`` takes (below 2^63) is drawn by it;
+    a larger one by rejection over the generator's random bytes: ``n.bit_length()`` random bits,
+    redrawn while they are ``>= n``, which is unbiased and expects fewer than two draws."""
+    if n <= np.iinfo(np.int64).max:
+        return int(rng.integers(n))
+    bits = n.bit_length()
+    excess = 8 * ((bits + 7) // 8) - bits
+    while True:
+        value = int.from_bytes(rng.bytes((bits + 7) // 8), 'little') >> excess
+        if value < n:
+            return value
+
+
 def sample_expression(
         length: int,
         leaf_nodes: list[str],
@@ -980,11 +1000,12 @@ def sample_expression(
     root (``counts`` from :func:`count_expressions`), then recurse. Exactly uniform
     over the full universe WITHOUT materializing it -- this is the only sound way
     to represent lengths whose complete universe is too large to enumerate
-    (dev operator set: 2.4e8 at length 6, 8.8e9 at length 7).
+    (dev operator set: 2.4e8 at length 6, 8.8e9 at length 7). Counts beyond int64 are drawn
+    exactly too (``_uniform_below``).
     """
     if length == 1:
         return (leaf_nodes[int(rng.integers(len(leaf_nodes)))],)
-    remaining = int(rng.integers(counts[length]))
+    remaining = _uniform_below(counts[length], rng)
     for operator, arity in non_leaf_nodes.items():
         for parts in compositions(length - 1, arity):
             weight = 1
