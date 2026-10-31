@@ -81,7 +81,7 @@ UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'JUDGE-TI
 
 
 #: The judged tiers that hold in the reals (the engine's algebra is exact there, F8).
-_REAL_TIERS = frozenset({'core', 'real', 'real-only'})
+_REAL_TIERS = frozenset({'core', 'strict', 'real', 'real-only'})
 
 #: Float64's disagreements F8 lets the engine's exact algebra leave: rounding and what rounding
 #: does near a zero or a pole (a sign, a zero against a nonzero), and a value where float64 reads

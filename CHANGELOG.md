@@ -126,7 +126,7 @@ organised by who you are, then the highlights, then every change in detail.
 - The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
   a file mined before this version can fail `verify-mine` in `real` where a rule read `1/0` as
   `+inf` or tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
-  `UNDECIDED-MEASURE`, and two new tiers, `permissive` and `real-only`.
+  `UNDECIDED-MEASURE`, and three new tiers, `permissive`, `real-only` and `strict`.
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - `verify_triple(..., engine_config=)` checks the three rule sets it is given (the config
   contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which ships in
@@ -1357,14 +1357,16 @@ model predictions.
   16-digit literals, is 14.81738943654907, the double nearest to its value 14.8173894365490680
   (rounding the product first gave 14.817389436549217).
 - **`permissive` serves real's values up to float resolution.** A rule holds in `permissive`
-  where it agrees with real's values up to 8 units in the last place, except at isolated
-  points, and no longer merely where float64 evaluates it alike: `tanh(cosh(-10)) -> 1` holds
-  (the true value, 1 - 2e-9566, is the double 1.0), and so does
-  `tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))` (it differs only at x0 = +-1). A disagreement
-  at a point is isolated where it vanishes when a `?` slot moves off the point; at a `_` slot it
-  is not (`pow(0, asinh(_0)) -> pow(0, _0)` holds in `f64` and not in `permissive`: at
-  `_0 = -1` the left side is +inf and `pow(0, -1)` has no value). Such rules carry the new
-  tier `f64-only`, which only the `f64` file may hold. Past the table's reach (a value beyond
+  where it agrees with real's values up to 8 units in the last place, and no longer merely
+  where float64 evaluates it alike: `tanh(cosh(-10)) -> 1` holds (the true value,
+  1 - 2e-9566, is the double 1.0). Permissive's matcher binds every slot to any subexpression,
+  so its rules are judged at the `_` sort, over real-valued bindings, and no disagreement at an
+  isolated point is excused: `tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))` differs only at
+  x0 = +-1, and so on all of (0, 1] where `x0` is bound to `ceil(x1)` (1 against no value). It
+  holds in `f64` and not in `permissive`, and carries the new tier `f64-only`, which only the
+  `f64` file may hold. A rule `real` and `f64` hold only by an allowance a slot guards (an
+  isolated infinity of the left side at a `?` slot, a `$` slot's zero) carries the new tier
+  `strict`, which the `f64` and `real` files may hold. Past the table's reach (a value beyond
   the doubles' range, `exp(sinh(-50))`) the doubles are float64's under the range standard.
 - **The judge reads every literal the engine writes.** A decimal whose exponent lies past
   4,000 (`2.827881176741212e-244756`, which the engine keeps as written) is read exactly, up to
@@ -1435,10 +1437,9 @@ model predictions.
   variables (the judge's isolated infinity: `sinh(atanh(x)) -> tan(asin(x))`, +inf against
   tan's pole at x = 1); a source value float64 gives off a rounded zero is the table's, as one
   off a rounded pole is (`tan(acos(-1.0))` is -1.2e-16 in float64, tan(pi) is 0); the special
-  points check float64's divergence in `f64` only; and in `permissive` a disagreement at an
-  isolated point is excused at the special points, at the exceptional points and on a sampled
-  row that a move of one variable clears (`ceil(|sin(x)|) -> 1` differs at x = k*pi alone),
-  as permissive's judge excuses it.
+  points check float64's divergence in `f64` only; and in `permissive`, whose agreement is
+  float resolution, the special points and the exceptional points leave a change of the reals
+  to the judge.
 - **A wide miss is read, not refused.** The mint read a near miss's failing rows by the table
   only where float64 failed on at most half of them and refused the rest unread, stricter than
   the judge: `floor(erf(cosh(x))) -> 0` fails float64 wherever erf rounds to 1 (|x| > 2.46, most

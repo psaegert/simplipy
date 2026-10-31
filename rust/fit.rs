@@ -1421,6 +1421,7 @@ mod tests {
             &cols,
             1e-9,
             1e-12,
+            true,
         ));
     }
 }

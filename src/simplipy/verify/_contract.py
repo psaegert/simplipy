@@ -665,12 +665,6 @@ def saturation_verdict(tl, tr, env_mp):
 #: 2 x 4 x 1 = 8.
 REALISED_ULP = int(_table.TABLE_REALISED_ULP) if _TABLE_OK else 8
 
-#: P4's move (`table::ISOLATION_STEP`): a disagreement is isolated where the two sides agree when a
-#: slot moves off the point by this fraction of its magnitude (at least this much), in each
-#: direction. Defined once, in the core; the mint's pre-filter moves its rows by it too.
-ISOLATION_STEP = float(_table.TABLE_ISOLATION_STEP) if _TABLE_OK else 2.0 ** -20
-
-
 def _ulp_gap(a, b):
     """ULP distance between two finite doubles of the same sign (the two zeros as one); inf
     across a sign change (`_core.table_ulp_gap`)."""
@@ -1916,12 +1910,14 @@ def _point_verdict(tl, tr, env_mp):
 #: R, `inf` in f64) or realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by
 #: 1.7e-25) -- so this is an axis, not a rung on the Mode ladder.
 #:
-#:   core        holds in real AND in f64            served by every mode
+#:   core        holds in real, in f64 and in permissive        served by every mode
+#:   strict      holds in real and in f64, not in permissive (an allowance a `?` slot guards, a
+#:               `$` slot's excused zero or an isolated infinity, which permissive's
+#:               any-subexpression binding does not: the owner's ruling of 2026-10-31)
 #:   real        holds in real and permissive, not in f64
-#:   real-only   holds in real only (a `$` slot owed nothing at 0 in real, where permissive's
-#:               real-valued guarantee reaches it)
+#:   real-only   holds in real only (as `strict`, and not in f64)
 #:   f64         holds in f64 and permissive, not in real   f64 and permissive (P3: real's
-#:               values up to float resolution, except at isolated points)
+#:               values up to float resolution)
 #:   f64-only    holds in f64, not in real or permissive (float64's own value: `floor(tanh(x))`
 #:               at a saturation)
 #:   permissive  holds in permissive only            (an extension: `exp(log x) -> x`)
@@ -1942,7 +1938,7 @@ def _tier(verdict, realised, permissive=None):
     f64 = realised is True and verdict not in ('ENGINE-MISALIGN', 'UNDECIDED-MEASURE')
     perm = real if permissive is None else bool(permissive)
     if real and f64:
-        return 'core'
+        return 'core' if perm else 'strict'
     if real:
         return 'real' if perm else 'real-only'
     if f64:
@@ -2105,7 +2101,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
       ENGINE-MISALIGN    the contract holds, the deployed algebra diverges structurally;
       TOLERATED          the contract holds with extensions on a null set only;
       CERTIFIED          the contract holds with no event at all.
-    permissive: clause (a) alone at the real-valued bindings (every slot any real number).
+    permissive: clause (a) alone at the real-valued bindings, every slot judged as the `_` the
+    permissive matcher binds it as (any subexpression), so with no measure-zero allowance: a
+    disagreement or an infinity of the left side at an isolated point is one on positive
+    measure in some instance; up to float resolution (P3).
     f64: the deployed lane (`realised`), each side's own fitted constant, the range standard.
 
     The measure-zero allowances -- an extension on a null set (clause (b)), and nothing owed
@@ -2703,8 +2702,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             c_tolerated.append((v, point))
         else:
             c_kills.append((v, dict(point, unguarded=slot) if slot else point))
-            if real_valued:
-                c_perm.append((v, point, (key, values, *trees)))
+        # permissive owes clause (a) at every real-valued binding: the left side's infinity is a
+        # value there, and no slot guards its measure (permissive binds any subexpression)
+        if real_valued:
+            c_perm.append((v, point, (key, values, *trees)))
 
     # COINCIDENT `?` SLOTS: two `?` slots bound to one variable are an instance the engine
     # rewrites, on which a set that is null in the slots' joint space can have positive
@@ -2744,11 +2745,13 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
     covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
 
-    # P3 (the owner's ruling): permissive also serves the rules that agree with real's values up
-    # to float resolution, except at isolated points. A disagreement is excused where the two
-    # real values round to doubles at most REALISED_ULP apart (F6), or where it is isolated: it
-    # vanishes when a `?` slot moves off the point, and on no other slot's move (a `_` slot bound
-    # to a constant subexpression would hold it on positive measure: unguarded).
+    # PERMISSIVE IS JUDGED AT THE SORT ITS MATCHER BINDS (the owner's ruling, 2026-10-31): every
+    # permissive slot matches any subexpression, so a disagreement at a real-valued binding is
+    # one on positive measure in the instance where the slot is bound to a subexpression constant
+    # at that value (`ceil(abs(cos(_0))) -> 1` at `_0 = asin(ceil(x0))`, 0 against 1 on (0, 1]),
+    # and no measure-zero allowance holds without a match-time guard, which permissive has none
+    # of. P3 excuses a disagreement only where the two real values round to doubles at most
+    # REALISED_ULP apart (F6): a pointwise reading, no measure.
     def doubles(env, trees=None):
         """Both sides' values as the doubles nearest to them, read by the table at two
         precisions, or None where the table cannot read a side or the doubles differ between
@@ -2786,44 +2789,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             return False
         return not in_range[0] and compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq'
 
-    def disagrees(key, values):
-        """Do the two sides disagree at `values` by permissive's reading: not equal, and not
-        within float resolution of each other (an exact reading the rungs cannot settle, as
-        `tanh(sinh(atanh(x)))` against `tanh(tan(asin(x)))` just below 1, is read at float
-        resolution; a side the table cannot read there disagrees)."""
-        env = event_env(key, values)
-        v2, _ = _point_verdict(tl, tr, env)
-        if v2 in ('eq', 'EXT'):
-            # an extension is no disagreement of permissive's: nothing is owed where the left
-            # side has no value (`acos(ceil(acos(x))) -> 0` past x = 1)
-            return False
-        return not float_close(env)
-
-    def isolated(key, values):
-        """P4, the one place it is decided: the disagreement is isolated where a slot's move off
-        the point by `ISOLATION_STEP` makes the two sides agree in EACH direction, and only `?`
-        slots move it at all (a slot whose move in either direction removes it is one it
-        depends on; a `_` slot bound to a constant subexpression would hold it on positive
-        measure)."""
-        both, either = [], []
-        for n, x in values.items():
-            x = x.mpf() if hasattr(x, 'mpf') else mpf(x)
-            if misnan(x) or misinf(x):
-                return False
-            step = mpf(ISOLATION_STEP) * max(1, abs(x))
-            agree = [not disagrees(key, dict(values, **{n: x + d})) for d in (step, -step)]
-            if any(agree):
-                either.append(n)
-            if all(agree):
-                both.append(n)
-        return bool(both) and all(nvars.get(n) == '?' for n in either)
-
     def excused(event):
-        # a preimage's values are its substituted sides' (the heads at their level); whether
-        # it is isolated, the rule's own sides' on either side of it
+        # a preimage's values are its substituted sides' (the heads at their level)
         _, _, (key, values, *trees) = event
-        return float_close(event_env(key, values), trees[0] if trees else None) or \
-            isolated(key, values)
+        return float_close(event_env(key, values), trees[0] if trees else None)
 
     perm_left, seen_perm = [], set()
     for event in perm_kills + c_perm:

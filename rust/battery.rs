@@ -307,9 +307,9 @@ fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointC
 /// the deployed f64 sides agree passes outright; a diverging row is judged by the contract
 /// point verdict (`hiprec::contract_point_verdict`: precision rungs plus snap semantics):
 ///   - confirmed REAL-CHANGE -> REJECT (clause (a): kills at any measure, snap included), but
-///     in permissive, which excuses a disagreement at an isolated point (P3) and leaves the
-///     judge to decide whether this one is (`ceil(sin(x)) -> |ceil(sin(x))|` differs only
-///     where sin(x) = -1);
+///     in permissive, whose agreement is float resolution (P3), which the contract's exact
+///     verdict does not read: the row passes and the judge decides (`asin(1e-8)` against
+///     `1e-8` is a change of the reals and agrees in permissive);
 ///   - EXT / SHRINK / INF-CHANGE -> a tolerated event class, row passes;
 ///   - contract eq or unresolved, NOT snapped -> in f64 (`mode`) REJECT (the deployed
 ///     algebra structurally diverges where the contract does not object -- this also convicts

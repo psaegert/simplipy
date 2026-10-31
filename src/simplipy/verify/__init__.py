@@ -56,15 +56,16 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
 
 
 #: Which judged tiers each mode's rule set is allowed to contain: the tiers whose rules hold in
-#: the mode (`_contract._tier`). `real` holds what holds in real (`real-only` among it: a `$`
-#: slot real owes nothing at 0, where permissive's real-valued guarantee reaches); `f64` what
-#: holds in float64 (`f64-only` among it: float64's own value, off real's beyond float
-#: resolution); `permissive` what holds in permissive -- its own extensions (`permissive`:
-#: `exp(log x) -> x`) and the rules within float resolution of real's values (P3, `f64`) among
-#: it; no mode may carry `reject`.
+#: the mode (`_contract._tier`). `real` holds what holds in real (`real-only` and `strict` among
+#: it: an allowance a `?` or `$` slot guards in real, which permissive's any-subexpression binding
+#: does not); `f64` what holds in float64 (`f64-only` among it: float64's own value, off real's
+#: beyond float resolution; `strict` too); `permissive` what holds in permissive, judged at the
+#: `_` sort its matcher binds -- its own extensions (`permissive`: `exp(log x) -> x`) and the
+#: rules within float resolution of real's values (P3, `f64`) among it; no mode may carry
+#: `reject`.
 MODE_TIERS: dict[str, frozenset] = {
-    'f64': frozenset({'core', 'f64', 'f64-only'}),
-    'real': frozenset({'core', 'real', 'real-only'}),
+    'f64': frozenset({'core', 'strict', 'f64', 'f64-only'}),
+    'real': frozenset({'core', 'strict', 'real', 'real-only'}),
     'permissive': frozenset({'core', 'f64', 'real', 'permissive'}),
 }
 

@@ -207,12 +207,16 @@ SPEC_EXAMPLES = [
     case('pow 0 -2', 'float("inf")', 'real', True),
     case('pow 1 float("inf")', '1', 'real', False),
     case('pow 1 float("inf")', '1', 'f64', True),
-    # P3 as ruled: permissive serves real's values up to float resolution, except at isolated
-    # points -- a deep saturation (1 - 2e-9566 is the double 1.0), a disagreement at x = +-1
-    # only; not float64's own values at a point a `_` slot does not guard
+    # P3 as ruled: permissive serves real's values up to float resolution -- a deep saturation
+    # (1 - 2e-9566 is the double 1.0); not float64's own values. Judged at the `_` its matcher
+    # binds (the owner's ruling, 2026-10-31), it excuses no isolated point: a disagreement at
+    # x = +-1 alone is one on (0, 1] at `?0 = ceil(x0)`, and the isolated infinity real excuses
+    # at a `?` slot is a value permissive owes
     case('tanh cosh (-10)', '1', 'permissive', True),
-    case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', True),
+    case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', False),
     case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', False),
+    case('ceil abs cos x0', '1', 'permissive', False),
+    case('abs log cos x0', 'log inv cos x0', 'permissive', False),
     case('pow 0 asinh _0', 'pow 0 _0', 'f64', True),
     case('pow 0 asinh _0', 'pow 0 _0', 'permissive', False),
 ]
@@ -633,21 +637,26 @@ def test_a_decimal_past_the_exact_readers_is_judged() -> None:
 # ------------------------------------------------------------------------------------------
 # P4 in one place, the wide miss, one evidence.
 # ------------------------------------------------------------------------------------------
-def test_p4_is_the_judges_criterion_and_reads_both_sides() -> None:
-    """P4: permissive may differ from real at an isolated point, where the two sides agree on
-    both sides of it. The move off the point is defined once, in the core, and the judge's
-    permissive criterion reads it (the mint's pre-filter moves its rows by the same step)."""
+def test_permissive_is_judged_at_the_sort_its_matcher_binds() -> None:
+    """P4 as ruled on 2026-10-31 (option A): permissive's matcher binds every slot to any
+    subexpression, so a permissive rule is judged at `_`, over real-valued bindings, and a
+    measure-zero allowance needs a match-time guard, which permissive has none of. A
+    disagreement at an isolated point of `x0` is one on an interval where `x0` is bound to
+    `asin(ceil(x1))` or `ceil(x1)`: no isolated point is excused, and no move off one is
+    defined any more."""
     from simplipy import _core
-    assert _contract.ISOLATION_STEP == _core.TABLE_ISOLATION_STEP == 2.0 ** -20
-    # differs at pi/2 + k*pi alone
-    assert admits('ceil abs cos x0', '1', 'permissive')
-    assert not admits('ceil abs cos x0', '1', 'real')
-    # differs at 1 and on (0.99961, 1]: below 1 the disagreement stays, so it is no isolated one
+    assert not hasattr(_core, 'TABLE_ISOLATION_STEP')
+    # differs at pi/2 + k*pi alone: at `x0 = asin(ceil(x1))`, 0 against 1 on all of (0, 1]
+    assert not admits('ceil abs cos x0', '1', 'permissive')
+    assert admits('ceil abs cos x0', '1', 'f64')
+    # differs at 1 alone, and so on (0, 1] at `x0 = ceil(x1)`; past 1 the left side has no
+    # value, which still owes nothing in permissive (an extension is no disagreement)
+    assert not admits('acos ceil acos x0', '0', 'permissive')
+    assert admits('acos ceil ceil acos x0', 'acos ceil acos x0', 'permissive')
+    # differs at the integers alone
+    assert not admits('- ceil x0 floor x0', '1', 'permissive')
+    # differs at 1 and on (0.99961, 1], and at pi and on (pi, 2*pi): refused as before
     assert not admits('ceil acosh asin x0', '1', 'permissive')
-    # differs at 1 alone: below it both are 0, above it the left side has no value, which owes
-    # nothing in permissive (an extension is no disagreement)
-    assert admits('acos ceil acos x0', '0', 'permissive')
-    # differs at pi and on (pi, 2*pi): no isolated point
     assert not admits('ceil erf sinh x0', 'ceil sin x0', 'permissive')
 
 

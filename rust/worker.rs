@@ -520,12 +520,12 @@ fn adopt_snapped_witness(
     fitted: Vec<f64>,
     rtol: f64,
     atol: f64,
-    rescue: bool,
+    lane: Lane,
 ) -> Vec<f64> {
     let Some(snapped) = crate::battery::snap_candidates(&fitted) else {
         return fitted;
     };
-    let (y_fit, cand_events) = if rescue {
+    let (y_fit, cand_events) = if lane.rescue() {
         (cand_tape.eval_columns(cols, &snapped, n_rows), None)
     } else {
         events_if_any(cand_tape.eval_columns_events(cols, &snapped, n_rows))
@@ -544,7 +544,7 @@ fn adopt_snapped_witness(
         })
         .collect();
     let ok = allclose_extends(&y_adj, &y_fit, rtol, atol)
-        || if rescue {
+        || if lane.rescue() {
             crate::hiprec::rescue(
                 &y_adj,
                 &y_fit,
@@ -557,6 +557,7 @@ fn adopt_snapped_witness(
                 cols,
                 rtol,
                 atol,
+                lane.excuses_isolated_infinity(),
             )
         } else {
             f64_range_rescue(
@@ -919,6 +920,7 @@ fn equivalent_no_const(
                 x_cols,
                 rtol,
                 0.0,
+                true,
             )
         {
             return false;
@@ -1256,8 +1258,6 @@ fn candidate_matches(
     lane: Lane,
 ) -> Option<Option<Vec<f64>>> {
     let rescue = lane.rescue();
-    let _isolated =
-        crate::hiprec::IsolationScope::open(matches!(lane.0, crate::engine::RuleMode::Permissive));
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
@@ -1314,6 +1314,7 @@ fn candidate_matches(
                     cols,
                     rtol,
                     0.0,
+                    lane.excuses_isolated_infinity(),
                 )
             } else {
                 f64_range_rescue(
@@ -1426,6 +1427,7 @@ fn candidate_matches(
                                 cols,
                                 rtol,
                                 atol,
+                                lane.excuses_isolated_infinity(),
                             ) {
                                 Some(Some(c1))
                             } else {
@@ -1468,7 +1470,7 @@ fn candidate_matches(
                     c,
                     rtol,
                     atol,
-                    rescue,
+                    lane,
                 )
             }
         });
@@ -1659,7 +1661,7 @@ fn candidate_matches(
                         c,
                         rtol,
                         atol,
-                        rescue,
+                        lane,
                     )),
                     _ => None,
                 }
@@ -1702,6 +1704,13 @@ impl Lane {
     }
     /// Does the mode owe clause (b), so the domain gate applies (every mode but permissive)?
     pub fn owes_b(self) -> bool {
+        !matches!(self.0, crate::engine::RuleMode::Permissive)
+    }
+    /// Does the mode excuse an infinity of the source at a row of a pair with variables where
+    /// the candidate has no value (clause (c), the judge's isolated infinity, which a `?` slot
+    /// guards)? Every mode but permissive: permissive binds every slot to any subexpression, so
+    /// the infinity is a value it owes (`exp(-log(x)) -> 1/x` at x = 0: +inf against 1/0).
+    pub fn excuses_isolated_infinity(self) -> bool {
         !matches!(self.0, crate::engine::RuleMode::Permissive)
     }
 }
@@ -3476,7 +3485,7 @@ mod tests {
             vec![-0.999_999_999_997_003_7],
             1e-9,
             1e-12,
-            true,
+            Lane::from(true),
         );
         assert_eq!(a, vec![-1.0]);
         // y genuinely x^2.9999997: within snap range of 3 but pow(x, 3) misses by ~1e-7
@@ -3496,7 +3505,7 @@ mod tests {
             vec![2.999_999_7],
             1e-9,
             1e-12,
-            true,
+            Lane::from(true),
         );
         assert_eq!(b, vec![2.999_999_7]);
     }

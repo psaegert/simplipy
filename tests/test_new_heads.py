@@ -344,9 +344,9 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
 
 def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
     """A law of the reals float64 breaks at a jump is minted in real and permissive and refused
-    in f64; a rule false at a jump over the reals too is refused in f64 and real, and minted in
-    permissive, which excuses a disagreement at isolated points (P3: `floor(x) + 1 -> ceil(x)`
-    differs at the integers alone)."""
+    in f64; a rule false at a jump over the reals too is refused in every mode, permissive
+    included, which excuses no isolated point (`floor(x) + 1 -> ceil(x)` differs at the integers
+    alone, and everywhere at `x = floor(x1)`: permissive binds any subexpression)."""
     from simplipy.mining import RuleMiner
     X = RuleMiner(bare)._mining_sample_x(256, 2, np.random.default_rng(0))
 
@@ -358,7 +358,7 @@ def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
         assert not certified(src, tgt, 'default'), (src, tgt)
         assert certified(src, tgt, 'real') and certified(src, tgt, 'permissive'), (src, tgt)
     for mode in ('default', 'real', 'permissive'):
-        assert certified('+ floor x0 1', 'ceil x0', mode) == (mode == 'permissive'), mode
+        assert not certified('+ floor x0 1', 'ceil x0', mode), mode
         assert certified('floor floor x0', 'floor x0', mode)
 
 
@@ -399,11 +399,12 @@ def test_sort_promotion_reads_the_new_heads(bare, mode):
 
 def test_the_judge_refuses_a_rule_false_at_a_jump_preimage():
     # false in real only at sinh(x) + 1/2 = k, a transcendental point no battery or grid holds:
-    # the judge solves the preimage and reads the heads at their level; permissive (P4) keeps it,
-    # the two sides agreeing on both sides of each such point
+    # the judge solves the preimage and reads the heads at their level; permissive refuses it
+    # too, binding the slot to any subexpression (`?0 = asinh(floor(x1) - 1/2)` puts the left
+    # side at 0 everywhere)
     lhs, rhs = '- ceil + sinh ?0 0.5 floor + sinh ?0 0.5', '1'
     got = _contract.judge_rule(lhs.split(), rhs.split())
-    assert got['tier'] == 'permissive' and got['clause'] == 'a-real-change', got
+    assert got['tier'] == 'reject' and got['clause'] == 'a-real-change', got
     assert got['realised'] is False, got
 
 

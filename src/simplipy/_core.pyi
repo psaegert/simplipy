@@ -384,8 +384,6 @@ def table_f64_structural(a: float, b: float) -> str: ...
 #: The units in the last place between two doubles; None across a sign change.
 def table_ulp_gap(a: float, b: float) -> int | None: ...
 TABLE_REALISED_ULP: int
-#: P4's move (`table::ISOLATION_STEP`): the fraction of a slot's magnitude it moves off a point.
-TABLE_ISOLATION_STEP: float
 #: The f64 range event (`rust/numeric.rs`): did the operation `op` on `args` overflow or
 #: underflow to `value`? None for an operator outside the table. The one definition the
 #: miner's scan and `simplipy.verify` share.

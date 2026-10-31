@@ -1432,8 +1432,9 @@ pub enum Permissive {
     /// `inf/inf` (the matcher's `wildcard_all`).
     AnySlot,
     /// The rules that agree with real's values up to float resolution (8 units in the last
-    /// place), except at isolated points, are served (the permissive rule set):
-    /// `asin(1e-8) -> 1e-8`, off by 1.667e-25.
+    /// place) are served (the permissive rule set), judged at the `_` sort this mode's matcher
+    /// binds (`AnySlot`), so with no isolated point excused: `asin(1e-8) -> 1e-8`, off by
+    /// 1.667e-25.
     FloatResolution,
     /// No simplification of permissive's own: a step that HOLDS in permissive by its criterion
     /// -- the input's value is kept wherever the input has one, with an isolated infinity owing

@@ -51,13 +51,15 @@ undecided check never reads as a pass.
 Each rule also gets a **tier**, from three independent questions: does it hold over ℝ,
 does the deployed f64 evaluator reproduce it, and does it hold in `permissive`, whose
 criterion is agreement alone (a permissive rule may give a value where its input has
-none, over real-valued bindings)?
+none, over real-valued bindings)? `permissive` binds every slot to any subexpression, so its
+question is asked at the `_` sort: no disagreement at an isolated point is excused there.
 
 | tier | holds over ℝ | f64-realised | serves |
 |---|---|---|---|
 | `core` | yes | yes | every mode |
+| `strict` | yes, by an allowance a slot guards (a `$` slot's zero, an isolated infinity at a `?` slot) | yes | `f64`, `real` |
 | `real` | yes | no | `real`, `permissive` |
-| `real-only` | yes, a `$` slot owing nothing at 0 | no | `real` |
+| `real-only` | yes, by an allowance a slot guards | no | `real` |
 | `f64` | no | yes | `f64`, `permissive` |
 | `permissive` | by agreement alone (`exp(log(x0)) -> x0`) | no | `permissive` |
 | `reject` | no | no | nothing — recorded in the drop census |

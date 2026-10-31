@@ -536,10 +536,12 @@ class TestTheRealisationAxis:
         assert (_tier('KILL', True), _tier('KILL', False)) == ('f64-only', 'reject')
         assert (_tier('ENGINE-MISALIGN', False), _tier('NO-WITNESS', None)) == ('real', 'reject')
         # permissive's criterion is the third axis: an extension holds there alone, and a rule
-        # real holds only by a `$` slot's excused zero is real's alone
+        # real holds only by an allowance a slot guards (a `$` slot's excused zero, an isolated
+        # infinity at a `?` slot) is real's alone, or real's and f64's: permissive binds every
+        # slot to any subexpression, which no slot guards (the owner's ruling, 2026-10-31)
         assert (_tier('KILL', False, True), _tier('KILL', True, True)) == ('permissive', 'f64')
         assert (_tier('CERTIFIED', False, False), _tier('CERTIFIED', True, False)) \
-            == ('real-only', 'core')
+            == ('real-only', 'strict')
 
     def test_realisation_is_undetermined_across_a_snap_not_asserted(self):
         """A snap means the f64 algebra evaluates a DIFFERENT point, so the deployed
@@ -848,6 +850,9 @@ class TestCleanlinessIsPerMode:
         # log(_0))` and kin, `sinh(atanh(atan(_0))) -> tan(asin(atan(_0)))` and kin), and in
         # every mode +2 false in the reals at the rows near 1, `sin(abs(atanh(_0))) ->
         # abs(sin(atanh(_0)))` and its twin, where atanh passes pi and sin turns negative.
+        # Permissive judged at the `_` its matcher binds (the owner's ruling, 2026-10-31):
+        # permissive 38 (+2, a disagreement or an infinity of the left side at an isolated
+        # point, no longer excused).
         # the offenders by mode, shown on a failure (captured output is printed in full)
         for m, r in report['modes'].items():
             print(m, sorted((o['idx'], o['lhs'], o['rhs'], o['verdict']) for o in r['offenders']))
@@ -858,7 +863,7 @@ class TestCleanlinessIsPerMode:
         f64 = {o['idx'] for o in report['modes']['f64']['offenders']}
         assert len(f64 - {126}) == 25
         assert {m: len(r['offenders']) for m, r in report['modes'].items() if m != 'f64'} == \
-            {'real': 79, 'permissive': 36}
+            {'real': 79, 'permissive': 38}
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest: a row where real's one zero and permissive's signed zero give
         # different values).

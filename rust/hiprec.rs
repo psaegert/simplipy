@@ -188,9 +188,10 @@ pub(crate) fn table_classes(
 /// precision their intermediates demand (`demanded_dps`, from a first reading at `BASE_DPS`:
 /// `cosh(650)^2 - sinh(650)^2` cancels 565 digits, so it is read at 1,180), and confirmed at a
 /// second, finer rung. The source undefined: extendable. An infinity: the candidate must be the
-/// same one, or, at a row of a pair with variables (`with_vars`), owes nothing where it has no
-/// value (the judge's isolated infinity: the measure of the set is the judge's to decide; the
-/// pole of `tan(asin(x))` at x = 1 against `sinh(atanh(1)) = +inf`). Finite: the candidate finite
+/// same one, or, where `with_vars` (a row of a pair with variables, in a mode that excuses it),
+/// owes nothing where it has no value (the judge's isolated infinity: the measure of the set is
+/// the judge's to decide; the pole of `tan(asin(x))` at x = 1 against `sinh(atanh(1)) = +inf`).
+/// Finite: the candidate finite
 /// and within `atol + rtol*|c|` at the finer rung, or a residual that collapses between the two
 /// (an exact zero at the working precision); anything else fails. `None` where a side does not
 /// compile for the table or a reading is Unresolved at either rung (`erf(sinh(-100))` is
@@ -290,77 +291,6 @@ fn table_row(
     })
 }
 
-thread_local! {
-    /// Set for the extent of a permissive mint judgment (`IsolationScope`).
-    static ISOLATED_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// THE SCOPE OF A PERMISSIVE MINT JUDGMENT: permissive excuses a disagreement at an isolated point
-/// (P3), so within it `rescue` excuses a row the table confirms as a disagreement where moving the
-/// row off its point along one variable makes the disagreement vanish (`isolated_row`), as the
-/// judge's `isolated` does. Restores the enclosing setting when dropped.
-pub(crate) struct IsolationScope(bool);
-
-impl IsolationScope {
-    pub(crate) fn open(on: bool) -> Self {
-        IsolationScope(ISOLATED_OK.with(|c| c.replace(on)))
-    }
-}
-
-impl Drop for IsolationScope {
-    fn drop(&mut self) {
-        ISOLATED_OK.with(|c| c.set(self.0));
-    }
-}
-
-/// Is the disagreement at row `row` isolated: does it vanish where one variable moves off the
-/// point, on both sides, by P4's move (`table::isolation_move`, the judge's permissive criterion
-/// reads the same step)? Each side read by the table there. Both sides, so a disagreement at the
-/// edge of a band it holds on is no isolated one (`ceil(acosh(asin(x))) -> 1` differs at x = 1
-/// and on (0.99961, 1]: above 1 the source has no value, below it the disagreement stays). The
-/// mint is a pre-filter: whether a disagreement is isolated is the judge's to decide (P4), and
-/// this check only keeps the mint from refusing one the judge excuses.
-#[allow(clippy::too_many_arguments)]
-fn isolated_row(
-    source: &[String],
-    src_params: &[f64],
-    candidate: &[String],
-    cand_params: &[f64],
-    ops: &Operators,
-    var_names: &[String],
-    x_cols: &[Vec<f64>],
-    row: usize,
-    rtol: f64,
-    atol: f64,
-) -> bool {
-    let point: Vec<f64> = x_cols.iter().map(|c| c[row]).collect();
-    (0..var_names.len())
-        .filter(|&v| source.contains(&var_names[v]) || candidate.contains(&var_names[v]))
-        .any(|v| {
-            [1.0, -1.0].iter().all(|dir| {
-                let mut moved = point.clone();
-                moved[v] = crate::table::isolation_move(moved[v], *dir);
-                let cols: Vec<Vec<f64>> = moved.iter().map(|&x| vec![x]).collect();
-                matches!(
-                    table_row(
-                        source,
-                        src_params,
-                        candidate,
-                        cand_params,
-                        ops,
-                        var_names,
-                        &cols,
-                        0,
-                        rtol,
-                        atol,
-                        true,
-                    ),
-                    Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
-                )
-            })
-        })
-}
-
 /// The binding rows `source_faithful` reads, spread evenly over them.
 const FAITHFUL_ROWS: usize = 16;
 
@@ -447,6 +377,8 @@ fn source_faithful(
 /// row passes at `P` bits. Never called on an f64 accept; a `false` leaves the f64 verdict
 /// unchanged. `atol` is the absolute band of a FITTED constant (the fit arm); a const-free
 /// pair passes 0, because its agreement is relative (see `worker::candidate_matches`).
+/// `isolated_infinity`: the mode excuses an infinity of the source where the candidate has no
+/// value, at a row of a pair with variables (`worker::Lane::excuses_isolated_infinity`).
 #[allow(clippy::too_many_arguments)]
 pub fn rescue(
     y_src: &[f64],
@@ -460,6 +392,7 @@ pub fn rescue(
     x_cols: &[Vec<f64>],
     rtol: f64,
     atol: f64,
+    isolated_infinity: bool,
 ) -> bool {
     // The binding POINTS: every row where the source is defined. A source-inf row the
     // candidate does not already reproduce fails and is escalated: the table's row reading
@@ -540,29 +473,12 @@ pub fn rescue(
             r,
             rtol,
             atol,
-            !one_point,
+            !one_point && isolated_infinity,
         ) {
-            Some(RowVerdict::Fail) => {
-                // permissive excuses an isolated disagreement (`IsolationScope`)
-                let excused = !one_point
-                    && ISOLATED_OK.with(|c| c.get())
-                    && isolated_row(
-                        source,
-                        src_params,
-                        candidate,
-                        cand_params,
-                        ops,
-                        var_names,
-                        x_cols,
-                        r,
-                        rtol,
-                        atol,
-                    );
-                if !excused {
-                    return false; // a confirmed disagreement: keep the f64 verdict
-                }
-                read += 1;
-            }
+            // a confirmed disagreement: keep the f64 verdict. Permissive excuses none at a point
+            // (it binds every slot to any subexpression, so no point is isolated in every
+            // instance: the owner's ruling of 2026-10-31)
+            Some(RowVerdict::Fail) => return false,
             Some(_) => read += 1,
             None => {}
         }
@@ -2867,6 +2783,7 @@ mod tests {
             &cols,
             1e-9,
             1e-12,
+            true,
         );
         assert!(ok, "true identity must be rescued at P bits");
     }
@@ -2895,6 +2812,7 @@ mod tests {
             &cols,
             1e-9,
             1e-12,
+            true,
         );
         assert!(!ok, "tanh(x) != x must stay rejected");
     }
@@ -2927,6 +2845,7 @@ mod tests {
             &cols,
             1e-9,
             1e-12,
+            true,
         );
         assert!(ok);
     }
@@ -2957,6 +2876,7 @@ mod tests {
             &cols,
             1e-9,
             0.0,
+            true,
         );
         assert!(ok, "3 failing points of 7 is a near miss");
     }
@@ -2984,6 +2904,7 @@ mod tests {
             &cols,
             1e-9,
             1e-12,
+            true,
         );
         assert!(!ok);
     }

@@ -263,8 +263,8 @@ impl<'a> Acceptor<'a> {
         {
             return Err(MineRefusal::NotRealised);
         }
-        // permissive excuses a disagreement at an isolated point (P3), and an exceptional point
-        // is one: the judge decides (`1/atanh(ceil(x)) -> 0` differs where ceil(x) = 0 alone)
+        // permissive's agreement is float resolution (P3), which the pole entry's exact verdict
+        // does not read, and the entry refuses a side it cannot evaluate: the judge decides
         if !matches!(self.spec.mode, RuleMode::Permissive)
             && super::refusals::pole_refusal(self.src, t, &self.eng.operators, self.vars).is_some()
         {
