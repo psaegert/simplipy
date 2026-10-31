@@ -3316,24 +3316,11 @@ pub fn value_class(tokens: &[String], ops: &Operators) -> Option<Class> {
         return value_class(&d[0], ops);
     }
     let v = value_set(tokens, ops, &Vs::reals())?;
-    // NULL-KILL at the measure-aware consumer: a finite part
-    // supported ONLY on a null x-set (`fin_null` -- e.g. `clip`'s kept boundary graze,
-    // or the negative-base pow integer slice) may be dropped for the CLASSIFICATION of
-    // a variable/`<constant>`-parameterized family: collapsing kills only a null set,
-    // exactly the licence the miner's nan rules always used (`atanh(cosh C) -> nan` is
-    // defined nowhere and reaches its pole only at the null set C = 0). A GROUND has no
-    // measure space -- its "null-supported" point IS the value (`acosh(cos(0))` = 0) --
-    // so the drop applies only when the expression actually carries a continuum.
-    if v.has_fin
-        && v.fin_null
-        && tokens
-            .iter()
-            .any(|t| var_index(t).is_some() || t == "<constant>")
-    {
-        let mut w = v;
-        w.has_fin = false;
-        return Some(w.cls());
-    }
+    // THE CLASS OVER EVERY BINDING, a finite part on a null set included: a family that is
+    // finite at one constant owes its value there (the specification's 3.2), so `asin(cosh C)`,
+    // pi/2 at C = 0 and undefined elsewhere, is no NaN family. A null-supported finite part the
+    // layer cannot prove attained (an outward-rounded graze, `asin(cosh(inv C))`) reads the same:
+    // Mixed, and nothing collapses (fail closed).
     Some(v.cls())
 }
 
@@ -7033,9 +7020,9 @@ mod tests {
     /// ...and the conservatism it must NOT overturn. `cosh(inv C)`'s `lo = 1` is the
     /// MATHEMATICAL minimum: reached only where `inv C = 0`, which the interval layer merely
     /// over-approximates as reachable and exact arithmetic never reaches at all. No `attain_pt`
-    /// provenance stands behind it, so the graze stays NULL-supported and these keep the
-    /// verdicts they had before the f64-image work -- the flag is PROVEN-only, and absence of
-    /// proof stays fail-closed.
+    /// provenance stands behind it, so the graze stays NULL-supported -- the flag is PROVEN-only
+    /// -- and the class reads Mixed: a null-supported finite part may be attained, so nothing
+    /// collapses, and absence of proof stays fail-closed.
     #[test]
     fn an_unproven_graze_keeps_its_conservative_null_marking() {
         let Some(e) = crate::test_engine() else {
@@ -7052,7 +7039,9 @@ mod tests {
                 v.has_fin && v.fin_null && !v.pinf && !v.ninf,
                 "{src:?}: an unproven graze must stay the null-marked edge: {v:?}"
             );
-            assert_eq!(value_class(&s(src), ops), Some(Class::Nan));
+            // the class keeps the null-supported finite part, which may be attained (a family
+            // finite at one constant owes its value there, 3.2): nothing collapses
+            assert_eq!(value_class(&s(src), ops), Some(Class::Mixed));
         }
         // The outward-rounding artifact graze (`acosh(cos x0)`, cos's enclosure [1-8u, 1]
         // meeting acosh's domain in {1}) is the shape the null marking was introduced for.

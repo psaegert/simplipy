@@ -546,6 +546,20 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     assert folded == (holds and (evidence is True or mode == 'permissive'))
 
 
+@pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+def test_the_fold_writes_nan_only_where_the_family_is_nan_at_every_constant(mode) -> None:
+    """3.2 owes a constant family its value wherever it is finite, so the fold writes nan only
+    for a family with no value at any constant: `asin(cosh(C))` is pi/2 at C = 0 and
+    `acosh(cos(C))` is 0 at C = 0, so neither is nan (the judge kills both as rules), while
+    `acosh(acos(cosh(C)))` (acosh(0) has no value either) is."""
+    for expr in ('asin cosh <constant>', 'acosh cos <constant>'):
+        assert 'float("nan")' not in bare().simplify(expr.split(), mode=mode), expr
+        assert not admits(expr, 'float("nan")', mode), judged(expr, 'float("nan")')
+    assert 'float("nan")' not in bare().simplify('+ x1 acosh cos <constant>'.split(), mode=mode)
+    assert list(bare().simplify('acosh acos cosh <constant>'.split(), mode=mode)) \
+        == ['float("nan")']
+
+
 # ------------------------------------------------------------------------------------------
 # Permissive's own simplifications (4.9): the named list, defined once in the core, and
 # nothing else.

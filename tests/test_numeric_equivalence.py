@@ -386,7 +386,11 @@ class TestCorpusGate:
         # 97 -9,000, 141 -7,585, 187 -7,000, 221 -17,170, 222 -30,170, 238 -9,585, 295
         # -11,000), their `log(c)`, `atanh(c)`, `acos(atanh(c))`, `acosh(acos(c))`, `rootn(c, 2)`,
         # `c^(1/2)` and `c^(5/2)` free constants now.
-        assert walk['complexity_out'] == 54474126, walk['complexity_out']
+        # A FAMILY FINITE AT ONE CONSTANT IS NO NaN FAMILY: 54,474,126 -> 54,707,213. Row 343
+        # holds `acos(cosh(c))`, 0 at c = 0, which the NaN-family fold read as nan and took
+        # the whole row with it; it is a free constant now and the row rests as a sum
+        # (+233,087).
+        assert walk['complexity_out'] == 54707213, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

@@ -1142,10 +1142,11 @@ impl Engine {
         }
         // A FAMILY OF `<constant>` VALUES THAT IS NaN AT EVERY CONSTANT is NaN: a variable-free
         // composite holding a `<constant>` whose value class over every value of its constants is
-        // NaN (`acosh(acos(cosh C))`; the class drops a finite part supported on a null set of
-        // the constants, `acos(cosh 0) = 0`, the licence every mined nan fact of this shape
-        // used). The ground classification above, with the constants ranging over the reals.
-        // Before the absorptions below, which would read the family as a `<constant>`.
+        // NaN (`acosh(acos(cosh C))`: acos(cosh 0) = 0, and acosh(0) has no value either). A
+        // family finite at a single constant is not one (3.2 owes its value there:
+        // `asin(cosh C)` is pi/2 at C = 0), and its class is Mixed. The ground classification
+        // above, with the constants ranging over the reals. Before the absorptions below, which
+        // would read the family as a `<constant>`.
         if is_composite
             && e.contains_const()
             && variable_free(e, &view)
