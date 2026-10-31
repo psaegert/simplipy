@@ -9,6 +9,7 @@ import yaml
 from simplipy import SimpliPyEngine
 
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 MODES = ('default', 'real', 'permissive')
 DISTRIBUTIVE = (['+', '*', '?0', '?1', '*', '?2', '?1'], ['*', '+', '?0', '?2', '?1'])
@@ -17,7 +18,7 @@ DISTRIBUTIVE = (['+', '*', '?0', '?1', '*', '?2', '?1'], ['*', '+', '?0', '?2', 
 @pytest.fixture(scope='module')
 def eng():
     # A RULE-FREE engine over the shipped vocabulary: the mine's own situation.
-    shipped = SimpliPyEngine.from_config(acj_config_path())
+    shipped = legacy_from_config(acj_config_path())
     return SimpliPyEngine(operators=shipped._operators_config, rules=[])
 
 

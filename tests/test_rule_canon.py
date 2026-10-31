@@ -14,6 +14,7 @@ import yaml
 
 from conftest import acj_config_path, require_or_skip
 from simplipy import SimpliPyEngine
+from conftest import legacy_from_config  # noqa: E402
 
 _OPS = {
     "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
@@ -59,19 +60,20 @@ def test_from_config_reads_the_canon_off_each_sidecar(tmp_path) -> None:
     (tmp_path / 'config.yaml').write_text(yaml.safe_dump({
         'engine_generation': 2, 'operators': _OPS, 'rules': 'rules.json',
         'rules_real': 'rules_real.json', 'rules_permissive': 'rules_permissive.json'}))
-    engine = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+    # (the pre-0.15 file is read through the legacy opt-in; the public loader refuses it)
+    engine = legacy_from_config(str(tmp_path / 'config.yaml'))
     assert {m: engine._core.mode_rules_canon(rule_mode=m)
             for m in ('default', 'real', 'permissive')} == {
         'default': 'legacy', 'real': 'real', 'permissive': 'legacy'}
     (tmp_path / 'rules_real.json.provenance.json').write_text(json.dumps({'mode': 'f65'}))
     with pytest.raises(ValueError, match='f65'):
-        SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+        legacy_from_config(str(tmp_path / 'config.yaml'))
 
 
 @pytest.fixture(scope='module')
 def shipped():
     require_or_skip(acj_config_path(), 'needs the acj asset')
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def test_the_shipped_asset_is_read_in_the_legacy_canon(shipped) -> None:
@@ -124,7 +126,8 @@ def default_engine():
                           simplipy.DEFAULT_ENGINE, 'config.yaml')
     if not os.path.exists(config):
         pytest.skip(f'the default artifact {simplipy.DEFAULT_ENGINE} is not staged')
-    return SimpliPyEngine.from_config(config, modes=('f64', 'real', 'permissive'))
+    # a pre-0.15 mine, read through the legacy opt-in
+    return legacy_from_config(config, modes=('f64', 'real', 'permissive'))
 
 
 def test_no_served_nan_rule_has_a_finite_lhs(shipped, default_engine) -> None:

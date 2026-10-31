@@ -16,13 +16,16 @@ configuration). Each artifact is byte-deterministically reproducible from the co
 | `rules_real.json` | `Mode.real` | every rule that is true over ℝ |
 | `rules_permissive.json` | `Mode.permissive` | the permissive superset |
 
-The three files carry their mode in their name. Artifacts published before this
-convention (acj-4 among them) name the f64 file `rules.json`; they load unchanged,
-because `config.yaml` names its rule files explicitly and the loader serves whatever
-the config declares. The `rules_real:` and `rules_permissive:` config keys are optional
-(artifacts published before the rename declare the latter as `rules_corpus:`, which the
-loader reads unchanged),
-and a mode naming no set of its own serves the default (f64) set.
+The three files carry their mode in their name. `config.yaml` names its rule files
+explicitly and the loader serves whatever the config declares, so a file named `rules.json`
+(the convention before 0.15) loads too. The `rules_real:` and `rules_permissive:` config keys
+are optional (the key `rules_corpus:` of earlier artifacts is read as the latter), and a mode
+naming no set of its own serves the default (f64) set.
+
+From 0.15 the loader refuses a rule file mined before 0.15, by the simplipy version its
+provenance sidecar records: 0.15 changed the canonical forms, the measure and the rule judge,
+and serves only the rule sets mined for it (`acj2-4-llm`). The error names the version that
+mined the file. A rule file without a sidecar is a hand-made set and loads.
 
 `Mode.real` is the exception to that fallback: on an artifact without a real set,
 `simplify(mode=Mode.real)` **raises** instead of quietly using the f64 set. The f64

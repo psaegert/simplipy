@@ -59,6 +59,7 @@ import pytest
 
 from simplipy.engine import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 # The measure is carried in MILLI-BITS: a literal's cost is the
 # real quantity log2(1 + |n|), not a bit COUNT, so the ordering can tell 100 from 1000.
@@ -143,7 +144,7 @@ def mu_lit(value) -> int:
 
 @pytest.fixture(scope='module')
 def eng():
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def c(eng, tokens):

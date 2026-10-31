@@ -44,11 +44,12 @@ import pytest
 from simplipy import SimpliPyEngine, masking
 import simplipy.utils as utils
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 class TestTheStandaloneHelperIsGone:

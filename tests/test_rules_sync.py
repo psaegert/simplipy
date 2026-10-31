@@ -18,12 +18,13 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture()
 def engine() -> SimpliPyEngine:
     # Function-scoped on purpose: every test mutates rule state.
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def test_in_sync_engine_pickles_and_worker_matches(engine: SimpliPyEngine) -> None:

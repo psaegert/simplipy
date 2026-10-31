@@ -24,6 +24,7 @@ import yaml
 
 from conftest import acj_config_path
 from simplipy import SimpliPyEngine
+from conftest import legacy_from_config  # noqa: E402
 
 OPS = {
     "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
@@ -99,7 +100,7 @@ class TestShippedArtifactTwin:
         """The one live orientation gap in acj-4-3: pi - acos(x) -> acos(-x) never had its
         twin mined (the flipped target exceeds the tier's token budget); the load-time
         closure supplies it: acos(x) - pi -> -acos(-x)."""
-        e = SimpliPyEngine.from_config(acj_config_path())
+        e = legacy_from_config(acj_config_path())
         got = e.simplify(["-", "acos", "x0", "np.pi"])
         want = e.simplify(["neg", "acos", "neg", "x0"])
         assert got == want, (got, want)
@@ -118,7 +119,7 @@ class TestTheServedSetIsWhatGetsJudged:
     """
 
     def test_served_set_is_the_artifact_plus_exactly_the_twins(self) -> None:
-        e = SimpliPyEngine.from_config(acj_config_path())
+        e = legacy_from_config(acj_config_path())
         kept, subsumed, dropped, twins = e._core.ac_rules_info_in_mode(rule_mode='default')
         served = e._core.ac_served_rules_in_mode(rule_mode='default')
         # RELATIONSHIPS, not absolute counts. The served total moves with any change to
@@ -135,7 +136,7 @@ class TestTheServedSetIsWhatGetsJudged:
         """A verdict is only actionable if it names a row to drop. A twin has no row of
         its own, so it reports its SOURCE -- condemning a twin drops the rule that mints
         it, which is the only edit that removes it from a later load."""
-        e = SimpliPyEngine.from_config(acj_config_path())
+        e = legacy_from_config(acj_config_path())
         served = e._core.ac_served_rules_in_mode(rule_mode='default')
         artifact = e.simplification_rules
         assert all(0 <= src < len(artifact) for _, _, src in served)

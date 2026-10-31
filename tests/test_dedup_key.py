@@ -18,6 +18,7 @@ from simplipy.io import load_config
 from simplipy.utils import deduplicate_rules
 
 from conftest import acj_config_path, acj_rules_path, require_or_skip
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope='module')
@@ -77,7 +78,7 @@ def test_the_key_is_not_the_conversion_api(vocab_engine):
     require_or_skip(acj_rules_path(), 'acj-4-3 asset not staged')
     # The specimen is a rule of the asset whose two sides are two states (the audit's own
     # specimen, `-asin(t) -> asin(-t)`, moves a sign the canonical form now places itself).
-    loaded = SimpliPyEngine.from_config(acj_config_path())
+    loaded = legacy_from_config(acj_config_path())
 
     # 1. Conversion is PURE: same answer with a full artifact loaded and with none,
     #    and that answer is the input's own spelling -- no rule fired.

@@ -8,11 +8,12 @@ import pytest
 
 from simplipy import SimpliPyEngine, normalize_variable_token, to_expression, to_skeleton
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def test_normalize_variable_token():

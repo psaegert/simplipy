@@ -29,6 +29,7 @@ from simplipy.verify import default_corpus
 from simplipy.mining import RuleMiner
 from simplipy.utils import (compositions, count_expressions, enumerate_expressions, sample_expression,
                             violates_wildcard_multiplicity)
+from conftest import legacy_from_config  # noqa: E402
 
 # Arithmetic + the transcendental operators needed to express the known defect cases
 # (asin(cosh(_0)) is NaN except at 0; tanh(exp(exp(_0))) saturates to 1).
@@ -227,7 +228,7 @@ class TestCheckerSoundness:
         from conftest import acj_config_path, require_or_skip
         config = acj_config_path()
         require_or_skip(config, 'acj-4-3 config not staged')
-        dev = SimpliPyEngine.from_config(config)
+        dev = legacy_from_config(config)
         x = np.linspace(-3.0, 3.0, 256).reshape(-1, 1)
         xf = x.flatten(order='C').tolist()
         assert dev._core.find_rule(
@@ -1004,7 +1005,7 @@ def dev():
     from conftest import acj_config_path, require_or_skip
     config = acj_config_path()
     require_or_skip(config, 'acj-4-3 config not staged')
-    return SimpliPyEngine.from_config(config)
+    return legacy_from_config(config)
 
 
 @pytest.fixture(scope="module")
@@ -2407,7 +2408,7 @@ class TestThePerModePrune:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'f64') is True
         # ... and NOT in real, which does not fold, so there the rule is load-bearing
         assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'real') is False
@@ -2418,7 +2419,7 @@ class TestThePerModePrune:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         # BOTH directions. Comparing the rule's own spellings (`1e-08` -> `0.00000001`)
         # is the one specimen a spelling-comparing implementation gets RIGHT, because the
         # engine normalises both sides to the same token before the comparison. The
@@ -2445,7 +2446,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         require_triple('needs the shipped permissive set')
         # NOT wiped: the shipped artifact's own real set is the thing permissive has to
         # dominate. Emptying it first made the check trivial.
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         assert engine._core.mode_rules_len(rule_mode='real') is not None
         rows = default_corpus()[:120]
         # the corpus's known violations (conftest; none since permissive reads real's zero)
@@ -2461,7 +2462,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         engine._core.set_mode_rules('real', [])
 
         class PermissiveCrippled:
@@ -2481,7 +2482,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4 asset')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
 
         class PermissiveRaises:
             def __init__(self, e):
@@ -2508,7 +2509,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import cross_mode_complexity
         require_or_skip(acj_config_path(), 'needs the acj-4 asset')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         e = ['+', 'atanh', 'tanh', 'x1', 'x2']
         assert engine.complexity(e, mode='f64') == 31000
         assert engine.complexity(e, mode='real') == 15000
@@ -2534,7 +2535,7 @@ class TestThePruneIsInstanceSafe:
         from simplipy import Mode
         from simplipy.mining import _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         assert _preempted_by(engine, ['/', '$0', '$0'], ['1'], 'permissive') is False
 
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
@@ -2551,7 +2552,7 @@ class TestThePruneIsInstanceSafe:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import _is_ground, _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'f64') is True
         assert _is_ground(['asin', '1e-08']) is True
         for slotted in (['/', '$0', '$0'], ['atanh', 'tanh', '_0'], ['sin', '?0'],

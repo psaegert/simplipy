@@ -35,6 +35,7 @@ from simplipy import SimpliPyEngine, codify, explicit_constant_placeholders
 from simplipy.verify import default_corpus
 from simplipy.trust import UntrustedModuleError
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 _UNTRUSTED = 'simplipy_trust_probe_mod'
 
@@ -206,7 +207,7 @@ class TestDeployedEvaluationPath:
 
     @pytest.fixture(scope='class')
     def engine(self):
-        return SimpliPyEngine.from_config(acj_config_path())
+        return legacy_from_config(acj_config_path())
 
     def test_shipped_config_needs_only_default_roots(self, engine):
         assert engine.modules == ['numpy', 'simplipy']

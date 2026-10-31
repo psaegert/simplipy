@@ -49,11 +49,46 @@ class TestConfigGate:
         with pytest.raises(IncompatibleArtifactError, match='retired hyper-operator'):
             SimpliPyEngine.from_config(LEGACY_CONFIG)
 
-    def test_acj_config_loads(self):
-        _require_or_skip(ACJ_CONFIG, 'acj-4-3 config not staged')
-        engine = SimpliPyEngine.from_config(ACJ_CONFIG)
+    def test_a_rule_file_mined_before_0_15_refuses(self):
+        # 0.15 serves only the rule sets mined for it: the pinned acj-4 cell (simplipy 0.14.0)
+        # is refused by the public loader, naming the version and the engine to load instead
+        _require_or_skip(ACJ_CONFIG, 'acj-4 config not staged')
+        with pytest.raises(IncompatibleArtifactError, match=r'0\.14\.0.*acj2-4-llm'):
+            SimpliPyEngine.from_config(ACJ_CONFIG)
+
+    def test_the_legacy_opt_in_loads_it(self):
+        # ...and the suites that pin its verdicts read it through the explicit opt-in
+        from conftest import legacy_from_config
+        _require_or_skip(ACJ_CONFIG, 'acj-4 config not staged')
+        engine = legacy_from_config(ACJ_CONFIG)
         assert engine.simplify(engine.to_tagged(['+', 'x0', 'x0'])) \
             == ['<mul>', '2', 'x0', '</mul>']
+        # the opt-in is no part of the public loaders
+        import inspect
+        for loader in (SimpliPyEngine.from_config, SimpliPyEngine.load):
+            assert 'legacy' not in inspect.signature(loader).parameters
+
+    @pytest.mark.parametrize('version, loads', [
+        (None, True), ('0.15.0.dev2', True), ('0.15.3', True), ('0.16.0', True),
+        ('0.14.7', False), ('0.12.0', False)])
+    def test_the_sidecar_says_which_rule_file_loads(self, tmp_path, version, loads):
+        # by the version a rule file's provenance sidecar records; a file without one is a
+        # hand-made set and loads
+        import json
+        config = load_config(acj_config_path())
+        config.update({'engine_generation': 2, 'rules': './rules.json'})
+        for key in ('rules_real', 'rules_corpus', 'rules_permissive'):
+            config.pop(key, None)
+        (tmp_path / 'config.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
+        (tmp_path / 'rules.json').write_text(json.dumps([[['-', '?0', '?0'], ['0']]]))
+        if version is not None:
+            (tmp_path / 'rules.json.provenance.json').write_text(
+                json.dumps({'simplipy_version': version}))
+        if loads:
+            assert SimpliPyEngine.from_config(str(tmp_path / 'config.yaml')).simplification_rules
+        else:
+            with pytest.raises(IncompatibleArtifactError, match=version.replace('.', r'\.')):
+                SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
 
     def test_vocabulary_sniff_refuses_retired_tokens(self, tmp_path):
         # The sniff classifies UN-declared configs (the published legacy artifacts):

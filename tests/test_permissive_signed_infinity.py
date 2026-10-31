@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 
 from simplipy import SimpliPyEngine
+from conftest import legacy_from_config  # noqa: E402
+from simplipy.asset_manager import get_path  # noqa: E402
 
 INF, NINF = 'float("inf")', 'float("-inf")'
 
@@ -36,7 +38,7 @@ VARS = ['x1', 'x2', 'x3']
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.load('acj-5-4-llm', install=True)
+    return legacy_from_config(get_path('acj-5-4-llm', install=True))
 
 
 def values(engine: SimpliPyEngine, expr: list[str], points: np.ndarray) -> np.ndarray:

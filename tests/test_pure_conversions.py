@@ -18,11 +18,12 @@ from conftest import acj_config_path
 from simplipy import SimpliPyEngine
 from simplipy.verify import default_corpus
 from simplipy.io import load_config
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 @pytest.fixture(scope="module")

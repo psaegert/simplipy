@@ -37,6 +37,7 @@ import pytest
 from simplipy import SimpliPyEngine
 from simplipy.verify import default_corpus
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
@@ -222,7 +223,7 @@ class TestEndToEndInvariant:
     def test_simplify_never_increases_const_count(self) -> None:
         """The serve-side statement of the invariant, on the shipped pairing and the
         tracked 400-row corpus plus a Const-bearing battery, in both dialects."""
-        engine = SimpliPyEngine.from_config(CONFIG)
+        engine = legacy_from_config(CONFIG)
         corpus = default_corpus()
         extra = [['acos', 'cos', '<constant>'],
                  ['*', '<constant>', '<constant>'],

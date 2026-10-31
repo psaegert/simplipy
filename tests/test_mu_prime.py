@@ -33,9 +33,9 @@ from fractions import Fraction
 
 import pytest
 
-from simplipy.engine import SimpliPyEngine
 from simplipy.verify import default_corpus
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 MILLI = 1000
 SEL = 1 * MILLI          # the selector bit: one bit, once per priced numeric leaf
@@ -120,7 +120,7 @@ def mu_prime_expected(f: Fraction) -> int:
 
 @pytest.fixture(scope='module')
 def eng():
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def c(eng, tokens):
@@ -665,7 +665,7 @@ class TestFingerprintAndArtifactLoad:
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
-            engine = SimpliPyEngine.from_config(acj_config_path())
+            engine = legacy_from_config(acj_config_path())
         assert [str(x.message) for x in caught if 'measure fingerprint' in str(x.message)] == []
         with open(acj_config_path().replace('config.yaml', 'rules.json.provenance.json')) as f:
             recorded = json.load(f)['measure']

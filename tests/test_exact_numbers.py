@@ -15,6 +15,7 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 A, B = 7 ** 190, 3 ** 280      # A/B is admissible, (A/B)^2 has a numerator beyond DBL_MAX
 MODES = ('f64', 'real')
@@ -22,7 +23,7 @@ MODES = ('f64', 'real')
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def simplify(engine: SimpliPyEngine, prefix: str, mode: str) -> list[str]:

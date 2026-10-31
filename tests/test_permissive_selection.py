@@ -10,6 +10,7 @@ above the answer under a smaller effort. The inputs below broke these before.
 import pytest
 
 from simplipy import SimpliPyEngine
+from conftest import legacy_from_config  # noqa: E402
 
 # Inputs from flash-ansr's training-data generator that permissive returned costlier than they came in.
 PRICIER_THAN_INPUT = [
@@ -40,7 +41,7 @@ LONG_LITERALS = (
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.load('acj-5-4-llm', install=True)
+    return legacy_from_config(__import__('simplipy.asset_manager', fromlist=['get_path']).get_path('acj-5-4-llm', install=True))
 
 
 def price(engine: SimpliPyEngine, expr: list[str]) -> int:

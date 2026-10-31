@@ -9,6 +9,7 @@ import pytest
 from simplipy import Mode, SimpliPyEngine  # noqa: F401  (re-exported for the suite's historical imports)
 
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -182,7 +183,7 @@ class TestEvaluateConstants:
 
     @pytest.fixture(scope='class')
     def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
+        return legacy_from_config(acj_config_path())
 
     def test_it_evaluates_what_simplify_refuses(self, eng):
         assert eng.simplify(['tan', '1']) == ['tan', '1']

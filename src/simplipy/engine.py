@@ -1249,7 +1249,23 @@ class SimpliPyEngine:
         -------
         SimpliPyEngine
             A new instance of the engine configured as per the file.
+
+        Raises
+        ------
+        IncompatibleArtifactError
+            The config's artifact generation or ``requires_simplipy`` excludes this
+            package, or a rule file it names was mined before simplipy 0.15 (its provenance
+            sidecar says by which version; :func:`simplipy.compat.check_rule_file`).
         """
+        return cls._from_config(config_path, modes=modes, trusted_modules=trusted_modules)
+
+    @classmethod
+    def _from_config(cls, config_path: str, *, modes: 'str | Mode | tuple | list' = 'all',
+                     trusted_modules: list[str] | None = None,
+                     legacy: bool = False) -> "SimpliPyEngine":
+        """:meth:`from_config`, and with ``legacy`` the rule files mined before 0.15 too:
+        the explicit opt-in the test suites read their pinned legacy artifacts through
+        (``tests/fixtures``), which the public API does not offer."""
         # Loud validation BEFORE any file is read: a mistyped `modes` must fail here,
         # not after the multi-megabyte rule files are already parsed.
         eager = cls._normalized_modes(modes)
@@ -1348,6 +1364,13 @@ class SimpliPyEngine:
                     f"'{mode_path}'): the engine is built WITHOUT it, so {consequence}. "
                     f"The other modes are unaffected -- each mode's set is its own file.",
                     UserWarning)
+        # THE RULE FILES OF THIS VERSION: a file mined before 0.15 is refused, by the version
+        # its sidecar records (the legacy opt-in of the test suites excepted).
+        if not legacy:
+            from .compat import check_rule_file
+            for checked_path in [rules_path, *mode_sources.values()]:
+                if checked_path is not None:
+                    check_rule_file(checked_path, source=config_path)
         # Each file is read in the canon it was certified in, which its sidecar records.
         canons = {mode_name: _canon_of_record(path) for mode_name, path in mode_sources.items()}
         if rules_path is not None and os.path.exists(rules_path):

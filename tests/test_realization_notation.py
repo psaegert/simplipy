@@ -10,12 +10,13 @@ import numpy as np
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path, require_or_skip
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope='module')
 def eng() -> SimpliPyEngine:
     require_or_skip(acj_config_path(), 'needs the shipped acj engine')
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 class TestRealizationIsANotation:

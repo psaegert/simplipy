@@ -36,6 +36,7 @@ import yaml
 from conftest import acj_config_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
 from simplipy.verify import default_corpus
+from conftest import legacy_from_config  # noqa: E402
 
 MODES = ('default', 'real', 'permissive')
 
@@ -377,7 +378,7 @@ class TestAnEmptySetIsNotAnAbsentOne:
 
     def test_retraction_restores_the_default_set(self):
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
-        e = SimpliPyEngine.from_config(acj_config_path())
+        e = legacy_from_config(acj_config_path())
         e._core.set_mode_rules('real', [])
         assert e._core.mode_rules_len(rule_mode='real') == 0
         e._core.set_mode_rules('real', None)
@@ -431,7 +432,7 @@ class TestTheSetsSurviveEveryRebuild:
 class TestTheModeSurfaceRefusesNonsense:
     def test_an_unknown_rule_mode_raises(self):
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
-        e = SimpliPyEngine.from_config(acj_config_path())
+        e = legacy_from_config(acj_config_path())
         for bad in ('lossy', 'sound', 'Default', ''):  # retired spellings refuse (0.14.0)
             with pytest.raises(ValueError, match='unknown rule_mode'):
                 e._core.ac_simplify_in_mode(['x0'], 48, 'tagged', rule_mode=bad)

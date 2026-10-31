@@ -33,7 +33,7 @@ import pytest
 import simplipy.verify as v
 from simplipy.verify._contract import judge_rule
 from simplipy.verify._monitor import judge_pair
-from conftest import PERMISSIVE_DOMINANCE_KNOWN, acj_config_path, acj_rules_path
+from conftest import PERMISSIVE_DOMINANCE_KNOWN, acj_config_path, acj_rules_path, legacy_from_config
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ACJ_RULES = acj_rules_path()
@@ -356,7 +356,7 @@ class TestShippingArtifact:
         # spellings here would pin the mine's dedup rather than the contract question,
         # which is whether the excused rewrite still happens.
         from simplipy import Mode
-        engine = SimpliPyEngine.from_config(ACJ_RULES.replace('rules.json', 'config.yaml'))
+        engine = legacy_from_config(ACJ_RULES.replace('rules.json', 'config.yaml'))
         for tokens in (['*', 'x0', 'inv', 'x0'], ['*', 'inv', 'x0', 'x0'],
                        ['/', 'x0', 'x0']):
             assert engine.simplify(list(tokens), mode=Mode.real) == ['1'], tokens

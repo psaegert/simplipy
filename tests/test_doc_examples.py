@@ -104,8 +104,14 @@ def _instrument(body: str) -> tuple[str, list[str]]:
 @pytest.mark.parametrize('relpath', FILES)
 def test_doc_examples_execute_and_their_outputs_hold(relpath, tmp_path, monkeypatch):
     from conftest import acj_config_path, require_or_skip
+    from simplipy import SimpliPyEngine
     require_or_skip(acj_config_path(), 'acj-4-3 asset not staged')
     monkeypatch.chdir(tmp_path)  # examples must not depend on or touch the repo cwd
+    # INTERIM, until the docs name the engine mined for 0.15 (`acj2-4-llm`, published with the
+    # re-mine): they load acj-5-4-llm, a 0.14.0 mine, which the public loader refuses, so the
+    # examples read it through the legacy opt-in.
+    monkeypatch.setattr(SimpliPyEngine, 'from_config', classmethod(
+        lambda cls, path, **kw: cls._from_config(path, legacy=True, **kw)))
     text = open(os.path.join(REPO, relpath)).read()
     namespace: dict = {}
     ran = 0

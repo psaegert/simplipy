@@ -38,13 +38,14 @@ from simplipy import SimpliPyEngine
 from simplipy.verify import default_corpus
 from simplipy.normalization import to_expression, to_skeleton
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 # One value, spelled in each of the three external forms (the conversion API's

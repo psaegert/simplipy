@@ -29,6 +29,7 @@ import pytest
 import yaml
 
 import simplipy
+from conftest import legacy_from_config  # noqa: E402
 from conftest import acj_config_path, acj_real_rules_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
 from test_mode_rulesets import (
@@ -462,8 +463,11 @@ def identity_engines():
     """One eager and one f64-only-lean engine over the SAME artifact, module-scoped:
     the identity tests read them, nothing mutates them."""
     cfg, label = _identity_config()
-    eager = _quiet_from_config(cfg)
-    lean = _quiet_from_config(cfg, modes=('f64',))
+    # both artifacts were mined before 0.15: read through the legacy opt-in
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        eager = legacy_from_config(cfg)
+        lean = legacy_from_config(cfg, modes=('f64',))
     return eager, lean, label
 
 
@@ -489,7 +493,9 @@ class TestTheIdentity:
     def test_reload_after_unload_equals_eager(self, identity_engines):
         eager, _, _ = identity_engines
         cfg, _ = _identity_config()
-        cycled = _quiet_from_config(cfg, modes=('f64',))
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            cycled = legacy_from_config(cfg, modes=('f64',))
         for mode in (Mode.real, Mode.permissive):
             expected = [eager.simplify(x, mode=mode) for x in _BATTERY]
             with _announcements(io.StringIO()):

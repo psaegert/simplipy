@@ -28,8 +28,19 @@ _FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         'fixtures', 'legacy_vocab_config.yaml')
 
 
-_ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj-4')
+# THE LEGACY acj-4 CELL, pinned in the suites. 0.15 serves only the rule sets mined for it
+# (`simplipy.compat.check_rule_file`), so the acj-4 and acj-4-3 rule files left the package for
+# `tests/fixtures/`, and the suites read them through `legacy_from_config`, the explicit opt-in
+# the public API does not offer.
+_ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'acj-4')
 _ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines', 'acj-4')
+
+
+def legacy_from_config(config_path, **kwargs) -> SimpliPyEngine:
+    """`SimpliPyEngine.from_config` for a config whose rule files were mined before 0.15 (the
+    pinned acj-4 cell, a cached pre-0.15 asset): the public loader refuses them, and the suites
+    that pin their verdicts opt in here, explicitly."""
+    return SimpliPyEngine._from_config(str(config_path), legacy=True, **kwargs)
 
 
 @pytest.fixture(autouse=True, scope='session')
@@ -50,11 +61,11 @@ def _temporary_files_stay_in_the_pytest_tree(tmp_path_factory):
 
 
 def acj_asset_dir() -> str:
-    """Directory of the acj-4 asset the suites run on: the repo's own mine output
-    when present (the dev tree), else the STAGED asset the package actually serves
-    (public checkouts, CI, sdists) -- the same local-then-cache order as the rust
-    test loader. Post-republish the two are byte-identical, so the suites test the
-    same engine either way."""
+    """Directory of the acj-4 asset the suites run on: the pinned copy under
+    `tests/fixtures/` when present, else the STAGED cache copy -- the same local-then-cache
+    order as the rust test loader. The two are byte-identical, so the suites test the same
+    engine either way. Its rule files were mined before 0.15: load it through
+    `legacy_from_config`."""
     return _ACJ_REPO_DIR if os.path.isdir(_ACJ_REPO_DIR) else _ACJ_CACHE_DIR
 
 

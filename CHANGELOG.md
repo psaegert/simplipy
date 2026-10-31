@@ -36,6 +36,12 @@ organised by who you are, then the highlights, then every change in detail.
   asset from the local copy of the manifest, verifying the files' digests, and go online only
   for an asset that is not installed.
 - **`packaging` is a declared dependency** (it was already installed through `huggingface_hub`).
+- **Rule files mined before 0.15 are refused.** 0.15 changes the canonical forms, the measure
+  and the rule judge, and serves only the rule sets mined for it. `SimpliPyEngine.from_config`
+  and `load` refuse a rule file whose provenance sidecar records a simplipy before 0.15, naming
+  that version: load `acj2-4-llm`, or pin the version that mined the file. A rule file without
+  a sidecar (a hand-made set) loads. The acj-4 and acj-4-3 rule files are no longer in the
+  package (their configs are).
 
 **`f64` and `real` users**
 

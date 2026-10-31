@@ -26,12 +26,12 @@ from simplipy import SimpliPyEngine
 from simplipy.masking import literal_sites
 from simplipy.utils import is_numeric_string, reserved_numeric_spelling
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(
-        acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 # The three reserved families, with sign and case variants.

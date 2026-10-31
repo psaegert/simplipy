@@ -29,6 +29,7 @@ import yaml
 
 from simplipy.engine import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope='module')
@@ -150,8 +151,7 @@ def mined_const(tmp_path_factory):
 
 @pytest.fixture(scope='module')
 def mined_acj():
-    return SimpliPyEngine.from_config(
-        acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 class TestMuEraResolutionRespell:

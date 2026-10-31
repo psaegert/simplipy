@@ -21,6 +21,7 @@ import pytest
 from simplipy import Mode, SimpliPyEngine
 from conftest import (ACJ4_INTERIM_SUBSUMED, ACJ4_INTERIM_UPHILL, acj4_refused_rows, acj_asset_dir,
                       acj_config_path)
+from conftest import legacy_from_config  # noqa: E402
 
 HYPER_PREFIXES = ("mult", "div")
 
@@ -30,8 +31,7 @@ def engine() -> SimpliPyEngine:
     # The SUPPORTED pairing: the AC engine + the AC-JUDGED artifact of the clean
     # vocabulary (acj-4-3, mined and tracked in this repo). Legacy assets neither load
     # (their hyper-operator realizations are deleted) nor parse (strictly clean).
-    return SimpliPyEngine.from_config(
-        acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def _is_hyper(token: str) -> bool:
@@ -612,8 +612,7 @@ class TestMatcherAssignmentCompleteness:
     def fresh_engine(self) -> SimpliPyEngine:
         # NOT the module fixture: set_rules replaces the ruleset, so these tests need a
         # private engine instance.
-        return SimpliPyEngine.from_config(
-            acj_config_path())
+        return legacy_from_config(acj_config_path())
 
     def test_factoring_reach_is_alpha_invariant(self, fresh_engine: SimpliPyEngine) -> None:
         fresh_engine._core.set_mode_rules('default', [self.FACTOR_VARS])

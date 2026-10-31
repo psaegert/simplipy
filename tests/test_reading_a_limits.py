@@ -15,6 +15,7 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 # (source, point, the two-sided limit there: +inf, -inf, or None where the sides disagree)
 CASES = [
@@ -33,7 +34,7 @@ CASES = [
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 #: What `two_sided_limit` returns when a value near the point is NaN: no limit can be read

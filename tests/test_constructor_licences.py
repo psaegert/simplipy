@@ -34,6 +34,7 @@ from simplipy import Mode
 from simplipy.engine import SimpliPyEngine
 from simplipy.verify._monitor import judge_pair
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
@@ -43,7 +44,7 @@ CONFIG = acj_config_path()
 def eng():
     from conftest import require_or_skip
     require_or_skip(CONFIG, 'acj-4-3 config not staged')
-    return SimpliPyEngine.from_config(CONFIG)
+    return legacy_from_config(CONFIG)
 
 
 def rng():
@@ -1011,7 +1012,7 @@ class TestTheBandAndTheRulesetAgree:
         from conftest import acj_config_path, require_or_skip
         from simplipy.verify._contract import judge_rule
         require_or_skip(acj_config_path(), 'needs the shipped acj-4-3 ruleset')
-        engine = SimpliPyEngine.from_config(acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         base = acj_config_path().replace('config.yaml', '')
 
         def collapses(rules):

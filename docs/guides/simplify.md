@@ -227,8 +227,8 @@ states as tokens and reads them back, and callers mask and compare token answers
 spelling serves them.
 
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
-`rules_permissive.json` (artifacts published before the rename, acj-4 among them, call the f64
-file `rules.json`) — so selecting a mode selects a file, and what is loaded is what is served.
+`rules_permissive.json` (a config may name the f64 file `rules.json`, as artifacts before 0.15
+did) — so selecting a mode selects a file, and what is loaded is what is served.
 
 ```python
 from simplipy import Mode

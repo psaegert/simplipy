@@ -78,6 +78,7 @@ from simplipy.verify import default_corpus
 from simplipy.engine import SimpliPyEngine
 from simplipy.verify._monitor import judge_pair
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
 
@@ -133,7 +134,7 @@ def flags(n_disagree: int) -> bool:
 def eng():
     from conftest import require_or_skip
     require_or_skip(CONFIG, 'acj-4-3 config not staged')
-    return SimpliPyEngine.from_config(CONFIG)
+    return legacy_from_config(CONFIG)
 
 
 @pytest.fixture(scope='module')

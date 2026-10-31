@@ -16,6 +16,7 @@ from simplipy import SimpliPyEngine
 from simplipy.mining import RuleMiner
 
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 VARS = ['x0', 'x1']
 SEED = 11
@@ -27,7 +28,7 @@ MODE = 'real'
 @pytest.fixture(scope='module')
 def eng():
     # A RULE-FREE engine over the shipped vocabulary: the mine's own situation.
-    shipped = SimpliPyEngine.from_config(acj_config_path())
+    shipped = legacy_from_config(acj_config_path())
     return SimpliPyEngine(operators=shipped._operators_config, rules=[])
 
 

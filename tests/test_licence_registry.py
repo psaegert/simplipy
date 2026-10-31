@@ -29,6 +29,7 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import ACJ4_INTERIM_SUBSUMED, ACJ4_INTERIM_UPHILL, acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 NEG = {"realization": "simplipy.operators.neg", "alias": [], "inverse": None,
        "arity": 1, "precedence": 2.5, "commutative": False}
@@ -43,7 +44,7 @@ HOSTILE_TGT = ['inv', '-', 'x0', '1']
 
 @pytest.fixture(scope='module')
 def eng():
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def _scratch(tmp_path, rules):

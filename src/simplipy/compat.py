@@ -42,6 +42,11 @@ series, ``>=X.Y,<X.(Y+1)``) and records it in the provenance sidecar, and the
 published config carries it. A pre-release is judged as the release it precedes, so
 the development builds of a release serve the artifacts mined for it. A config
 without the key predates it and loads as before.
+
+From 0.15 a rule FILE mined before :data:`RULES_MINED_SINCE` is refused at the same
+boundary, by the version its provenance sidecar records (:func:`check_rule_file`): 0.15
+changed the canonical forms, the measure and the rule judge, and ships only the rule sets
+mined for it (``acj2-4-llm``). A rule file without a sidecar is a hand-made set and loads.
 """
 
 from typing import Any
@@ -59,6 +64,8 @@ __all__ = [
     "check_config",
     "check_asset_name",
     "requires_simplipy_specifier",
+    "RULES_MINED_SINCE",
+    "check_rule_file",
 ]
 
 #: The generation of THIS package's engine.
@@ -186,6 +193,48 @@ def _check_requires_simplipy(config: dict[str, Any], source: str) -> None:
         f"{source} requires simplipy {declared}, and this is simplipy {running}: its "
         f"rules were mined under another version's canonical forms. Install a version "
         f"that serves it: pip install \"simplipy{declared}\"")
+
+
+#: The oldest simplipy whose rule files this package serves: the release that changed the
+#: canonical forms, the measure and the rule judge (and mined the rule sets again).
+RULES_MINED_SINCE = "0.15"
+
+#: The engine mined for :data:`RULES_MINED_SINCE`, which the refusal names.
+RULES_SUCCESSOR = "acj2-4-llm"
+
+
+def check_rule_file(rules_path: str, source: str) -> None:
+    """Refuse a rule file mined before :data:`RULES_MINED_SINCE`, by the simplipy version
+    its provenance sidecar (``<rules_path>.provenance.json``) records. A file without a
+    sidecar, or a sidecar without a version, is a hand-made set and is not checked.
+
+    0.15 changed the canonical forms, the measure and the rule judge, so a rule set mined
+    before it is neither minimal nor correctly ordered here, and some of its rules do not
+    hold under 0.15's criterion: 0.15 serves only the rule sets mined for it."""
+    import json
+    import os
+    sidecar = rules_path + ".provenance.json"
+    if not os.path.exists(sidecar):
+        return
+    with open(sidecar) as f:
+        record = json.load(f)
+    mined = record.get("simplipy_version") if isinstance(record, dict) else None
+    if not isinstance(mined, str):
+        return
+    try:
+        release = Version(mined).release
+    except InvalidVersion:
+        raise IncompatibleArtifactError(
+            f"{source}: the rule file '{rules_path}' records the malformed simplipy version "
+            f"{mined!r} in its provenance sidecar") from None
+    if release >= Version(RULES_MINED_SINCE).release:
+        return
+    raise IncompatibleArtifactError(
+        f"{source}: the rule file '{rules_path}' was mined by simplipy {mined}, and simplipy "
+        f"{_package_version()} serves only rule files mined by simplipy {RULES_MINED_SINCE} or "
+        f"later (0.15 changed the canonical forms, the measure and the rule judge). Load the "
+        f"engine mined for {RULES_MINED_SINCE}, SimpliPyEngine.load('{RULES_SUCCESSOR}'), or "
+        f"install the version that mined this file: pip install \"simplipy=={mined}\"")
 
 
 def _admits(spec: Any, version: Version) -> bool:

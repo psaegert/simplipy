@@ -16,8 +16,8 @@ import numpy as np
 import pytest
 
 import simplipy
-from simplipy.engine import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
 TAILS = (25.0, -25.0, 1e17, -1e17)  # past both functions' thresholds
@@ -27,7 +27,7 @@ TAILS = (25.0, -25.0, 1e17, -1e17)  # past both functions' thresholds
 def eng():
     from conftest import require_or_skip
     require_or_skip(CONFIG, 'acj config not staged')
-    return SimpliPyEngine.from_config(CONFIG, modes='all')
+    return legacy_from_config(CONFIG, modes='all')
 
 
 def evaluate(eng, tokens, names, X):

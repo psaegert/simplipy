@@ -28,6 +28,7 @@ import yaml
 from simplipy import SimpliPyEngine
 from simplipy.io import load_config
 from conftest import acj_config_path, require_or_skip
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -111,7 +112,7 @@ class TestTheWarningStaysQuietWhenItShould:
         require_or_skip(acj_config_path(), 'the acj-4 asset is not staged')
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', UserWarning)
-            engine = SimpliPyEngine.from_config(acj_config_path())
+            engine = legacy_from_config(acj_config_path())
         assert len(engine.simplification_rules) > 0
         assert not [w for w in caught if 'NO simplification rules' in str(w.message)], \
             'a real ruleset must never raise the rules-less warning'

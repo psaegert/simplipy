@@ -38,6 +38,8 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
+from simplipy.asset_manager import get_path  # noqa: E402
 
 # The named falsifier row and its source spelling -- one hill.
 ROW156 = "x2*(x2+(x1+1)/x2)"
@@ -77,7 +79,7 @@ BUDGET = 32
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 def tok(engine: SimpliPyEngine, s: str) -> list[str]:
@@ -245,7 +247,7 @@ class TestTheSearchOwnsTheDistributiveLaw:
 
     @pytest.fixture(scope='class')
     def llm(self) -> SimpliPyEngine:
-        return SimpliPyEngine.load('acj-5-4-llm', install=True)
+        return legacy_from_config(get_path('acj-5-4-llm', install=True))
 
     @pytest.mark.parametrize('src, want', [
         ('x1*x2 + x1*x3 + x4', 'x4 + x1*(x2 + x3)'),

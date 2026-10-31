@@ -4,12 +4,13 @@ import pytest
 from simplipy import SimpliPyEngine
 from simplipy.utils import violates_wildcard_multiplicity
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope='module')
 def eng() -> SimpliPyEngine:
     """The shipped acj-4 engine, built once for the classes that only read it."""
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 # Minimal operator set for pruning tests
@@ -266,8 +267,7 @@ class TestMode:
         from conftest import require_triple
         require_triple()
         from simplipy import Mode
-        engine = SimpliPyEngine.from_config(
-            acj_config_path())
+        engine = legacy_from_config(acj_config_path())
         # (inf/inf)*x0: SOUND keeps the sound nan; LOSSY relaxes the $-certificate and the
         # structural cancel fires.
         c = ["*", "/", 'float("inf")', 'float("inf")', "x0"]
@@ -338,8 +338,7 @@ def test_repeated_multiplication_avoids_unsupported_powers() -> None:
 
 
 def test_simplify_accepts_numpy_array_tokens() -> None:
-    engine = SimpliPyEngine.from_config(
-        acj_config_path())
+    engine = legacy_from_config(acj_config_path())
     expr = np.array(engine.to_tagged(engine.read_infix("x1 + x2")), dtype=object)
 
     simplified = engine.simplify(expr, max_passes=2)
@@ -350,8 +349,7 @@ def test_simplify_accepts_numpy_array_tokens() -> None:
 
 
 def test_simplify_rejects_invalid_numpy_array_inputs() -> None:
-    engine = SimpliPyEngine.from_config(
-        acj_config_path())
+    engine = legacy_from_config(acj_config_path())
     expr_2d = np.array([["+", "x1", "x2"]], dtype=object)
     expr_numeric = np.array([1, 2, 3])
 
@@ -1056,7 +1054,7 @@ class TestB9MuGuarantee:
 
     def test_mu_non_increase_and_idempotence_hold_400_of_400(self):
         from simplipy.verify import default_corpus
-        eng = SimpliPyEngine.from_config(acj_config_path())
+        eng = legacy_from_config(acj_config_path())
         corpus = default_corpus()
         assert len(corpus) == 400
         token_longer = 0

@@ -8,8 +8,8 @@ engine's vocabulary says it is, and the layer spells every other variable as a d
 """
 import pytest
 
-from simplipy.engine import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
 MODES = ('f64', 'real', 'permissive')
@@ -33,7 +33,7 @@ EXPRESSIONS = [
 def eng():
     from conftest import require_or_skip
     require_or_skip(CONFIG, 'acj config not staged')
-    return SimpliPyEngine.from_config(CONFIG, modes='all')
+    return legacy_from_config(CONFIG, modes='all')
 
 
 def rename(tokens, scheme):
