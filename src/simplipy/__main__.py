@@ -10,13 +10,28 @@ from simplipy.asset_manager import (
 )
 
 
+def _mode_name(value: str) -> str:
+    """A mode name as the CLIs read it: refused as ``simplify(mode=...)`` refuses it, the
+    retired ``real`` included."""
+    from simplipy.engine import _coerce_mode
+    try:
+        return _coerce_mode(value).name
+    except (ValueError, TypeError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def _mode_names(value: str) -> list[str]:
+    """A comma-separated list of mode names (``--modes``), each read by :func:`_mode_name`."""
+    return [_mode_name(name) for name in value.split(',')]
+
+
 def main(argv: str = None) -> None:
     parser = argparse.ArgumentParser(description='SimpliPy CLI Tool')
     subparsers = parser.add_subparsers(dest='command_name', required=True)
 
     find_simplifications_parser = subparsers.add_parser(
         "find-rules",
-        help="Mine an engine's three rule files (f64, real, permissive), each in its own mode")
+        help="Mine an engine's rule files (f64, permissive), each in its own mode")
     find_simplifications_parser.add_argument(
         '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
@@ -24,15 +39,14 @@ def main(argv: str = None) -> None:
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
     find_simplifications_parser.add_argument(
         '-o', '--output-file', type=str, required=True,
-        help='Path of the f64 rules file (convention: rules_f64.json). The real/permissive '
-             'siblings are derived from it with the _f64 marker replaced: '
-             'rules_f64.json writes rules_real.json and rules_permissive.json beside it')
+        help='Path of the f64 rules file (convention: rules_f64.json). The permissive '
+             'sibling is derived from it with the _f64 marker replaced: '
+             'rules_f64.json writes rules_permissive.json beside it')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument(
-        '--modes', type=str, default='f64,real,permissive',
-        help='The modes to mine, comma-separated (default: f64,real,permissive). The other '
-             'files are left as they are, and a listed mode that mines beside them reads them '
-             '(real and permissive mine beside the f64 file; permissive is offered both)')
+        '--modes', type=_mode_names, default='f64,permissive',
+        help='The modes to mine, comma-separated (default: f64,permissive). The other '
+             'file is left as it is, and permissive mines beside the f64 file and is offered it')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 
     # Prune-rules command
@@ -59,8 +73,8 @@ def main(argv: str = None) -> None:
     verify_mine_parser = subparsers.add_parser(
         "verify-mine", help="Check a mined rule file against the re-mine gates in its own mode")
     verify_mine_parser.add_argument('rules_file', type=str, help='The mined rule file (its provenance sidecar beside it)')
-    verify_mine_parser.add_argument('--mode', required=True, choices=['f64', 'default', 'real', 'permissive'],
-                                    help="The mode the file serves ('default' is another name for f64)")
+    verify_mine_parser.add_argument('--mode', required=True, type=_mode_name,
+                                    help="The mode the file serves: f64 (also 'default') or permissive")
     verify_mine_parser.add_argument(
         '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file (its operators)')
@@ -161,7 +175,7 @@ def main(argv: str = None) -> None:
                         os.path.dirname(os.path.abspath(args.output_file)), v)
                     for k, v in (rule_finding_config.get('snapshot_at') or {}).items()},
                 output_file=args.output_file,
-                modes=args.modes.split(','),
+                modes=args.modes,
                 reset_rules=args.reset_rules,
                 prune=rule_finding_config.get('prune', False),
                 verbose=args.verbose)

@@ -27,9 +27,9 @@ pub type MinedRule = (u64, Vec<String>, Vec<String>);
 /// `|s - c| <= rtol*|c|`, so zero agrees only with zero; a FITTED constant keeps the
 /// absolute band `atol + rtol*|c|`, the error of its f64 solve (`worker::candidate_matches`).
 /// - `Default` (f64): the deployed evaluator's values decide; nothing is re-judged.
-/// - `Real`, `Permissive`: f64 is a pre-filter; a near miss is re-judged at high precision
+/// - `Permissive`: f64 is a pre-filter; a near miss is re-judged at high precision
 ///   (`hiprec::rescue`), where a zero is a residual that collapses as the precision
-///   doubles. Permissive accepts the union, which is real's acceptance.
+///   doubles.
 #[derive(Clone, Copy, Debug)]
 pub struct MineSpec {
     pub mode: RuleMode,
@@ -256,8 +256,8 @@ impl<'a> Acceptor<'a> {
         }
         // f64's own file holds only what float64 realises: a pick spelled with a 0.15 head answers
         // to the f64 bar (`battery::f64_bar`), the function the contract judge ANDs into a rule's
-        // `realised`. `floor(x + 1) -> floor(x) + 1` is true over the reals, so real and
-        // permissive mint it, and float64 breaks it at x = -1e-17, so f64 refuses it here.
+        // `realised`. `floor(x + 1) -> floor(x) + 1` is true over the reals, so permissive
+        // mints it, and float64 breaks it at x = -1e-17, so f64 refuses it here.
         if matches!(self.spec.mode, RuleMode::Default)
             && !crate::battery::f64_bar_mint(self.src, t, self.vars, &self.eng.operators)
         {
@@ -538,75 +538,9 @@ impl Engine {
         crate::eval::evaluate_batch(&self.operators, tokens, var_names, x_flat, n_rows, params)
     }
 
-    /// OFFLINE miner: the no-constant equivalence test. See `crate::worker`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn equivalent_no_const_check(
-        &self,
-        source: &[String],
-        candidate: &[String],
-        var_names: &[String],
-        x_flat: &[f64],
-        n_rows: usize,
-        challenges: usize,
-        rtol: f64,
-        atol: f64,
-        min_informative: usize,
-        seed: u64,
-    ) -> Result<bool, String> {
-        crate::worker::equivalent_no_const_check(
-            &self.operators,
-            source,
-            candidate,
-            var_names,
-            x_flat,
-            n_rows,
-            challenges,
-            rtol,
-            atol,
-            min_informative,
-            seed,
-        )
-    }
-
-    /// OFFLINE miner: the full native `find_rule_worker` decision for one source. See
-    /// `crate::worker::find_rule`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn find_rule(
-        &self,
-        source: &[String],
-        simplified_length: usize,
-        max_target: Option<usize>,
-        candidates: &[Vec<String>],
-        var_names: &[String],
-        x_flat: &[f64],
-        n_rows: usize,
-        challenges: usize,
-        retries: usize,
-        seed: u64,
-        rtol: f64,
-        atol: f64,
-        min_informative: usize,
-    ) -> Result<Option<Vec<String>>, String> {
-        self.find_rule_in(
-            source,
-            simplified_length,
-            max_target,
-            candidates,
-            var_names,
-            x_flat,
-            n_rows,
-            challenges,
-            retries,
-            seed,
-            rtol,
-            atol,
-            min_informative,
-            crate::worker::Lane(RuleMode::Real),
-        )
-    }
-
-    /// [`Engine::find_rule`] with the numeric acceptance of a mode (`lane`, `worker::Lane`: f64
-    /// at float resolution, real and permissive re-judging near misses by the table).
+    /// OFFLINE miner: the full native `find_rule_worker` decision for one source, with the
+    /// numeric acceptance of a mode (`lane`, `worker::Lane`: f64 at float resolution,
+    /// permissive re-judging near misses by the table). See `crate::worker::find_rule`.
     #[allow(clippy::too_many_arguments)]
     pub fn find_rule_in(
         &self,
@@ -755,7 +689,7 @@ impl Engine {
         );
     }
 
-    /// Install ONE MODE'S OWN COMPLETE RULE SET (`rules_real.json` / `rules_permissive.json`),
+    /// Install ONE MODE'S OWN COMPLETE RULE SET (`rules_permissive.json`),
     /// or -- with `None` -- retract it so that mode falls back to the default set again.
     ///
     /// `Some(vec![])` is NOT the same call as `None`: it installs an EMPTY set, and that
@@ -769,7 +703,7 @@ impl Engine {
     /// Only the named mode's translation dies. A mode with no set of its own reads the
     /// default translation itself (`Engine::ac_mode_rules`), never its own cell, so
     /// replacing the default set moves its answers without touching its cell, and
-    /// installing `real` can never move a `default` or `permissive` answer.
+    /// installing `permissive` can never move a `default` answer.
     ///
     /// The set is read in its own mode's canon (an in-memory set is stated for the mode it
     /// is installed for); [`Engine::set_mode_rules_read_in`] names another.
@@ -792,10 +726,6 @@ impl Engine {
                     CompiledRules::compile(Vec::new(), canon, &mut self.tokens, &self.operators)
                 });
                 self.ac_rules_cell = std::sync::OnceLock::new();
-            }
-            RuleMode::Real => {
-                self.real_rules = compiled;
-                self.ac_real_rules_cell = std::sync::OnceLock::new();
             }
             RuleMode::Permissive => {
                 self.permissive_rules = compiled;

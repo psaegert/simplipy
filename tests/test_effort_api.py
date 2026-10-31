@@ -51,23 +51,9 @@ class TestTheBudgetCrossesTheHill:
         assert isinstance(hi, list)
         assert engine.complexity(hi) < engine.complexity(tokens)
 
-    def test_real_mode_fails_closed_regardless_of_effort(self, engine) -> None:
-        # The scaffolding suite never covered `real`; the public wire must not
-        # weaken the fail-closed guard on an artifact without a real set.
-        with pytest.raises(ValueError, match='real'):
-            engine.simplify(HILL, mode=Mode.real, effort=BUDGET)
-
-
-class TestRealModeExplores:
-    def test_the_shipped_artifact_crosses_the_hill_in_real_mode(self) -> None:
-        # Closes the scaffolding suite's coverage gap: exploration under `real`, on an
-        # artifact that serves a real set. Its rule files were mined before 0.15: read
-        # through the legacy opt-in.
-        from conftest import acj_config_path, legacy_from_config, require_or_skip
-        require_or_skip(acj_config_path(), 'acj-4 not resolvable here')
-        engine = legacy_from_config(acj_config_path())
-        hi = engine.simplify(HILL, mode=Mode.real, effort=BUDGET)
-        assert engine.complexity(hi) < engine.complexity(engine.simplify(HILL, mode=Mode.real, effort=0))
+    def test_the_retired_mode_is_refused_whatever_the_effort(self, engine) -> None:
+        with pytest.raises(ValueError, match='the real mode is retired'):
+            engine.simplify(HILL, mode='real', effort=BUDGET)
 
 
 class TestEffortValidation:

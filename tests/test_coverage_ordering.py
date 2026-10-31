@@ -164,8 +164,7 @@ class TestStrictKruskalSearchesRespells:
             seed=7, relaxed_kruskal=False, verbose=False)
 
         # Each file is mined in its own mode.
-        for mode, rules in (('real', engine.real_simplification_rules),
-                            ('permissive', engine.permissive_simplification_rules)):
+        for mode, rules in (('permissive', engine.permissive_simplification_rules),):
             assert engine.simplify(["/", "1", "exp", "neg", "x0"], mode=mode) == \
                 ["exp", "x0"], (mode, rules)
 
@@ -222,7 +221,6 @@ class TestPruneProbesWhatTheSlotBinds:
 
     def _engine(self):
         engine = SimpliPyEngine(operators=_SENTINEL_OPS, rules=[self.SENTINEL])
-        engine.real_simplification_rules = [self.SENTINEL]
         engine.permissive_simplification_rules = [self.SENTINEL]
         engine._replace_rules(engine.simplification_rules)
         return engine

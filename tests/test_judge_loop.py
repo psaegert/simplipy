@@ -25,12 +25,13 @@ _OPERATORS = {
 
 SOURCE = ['*', 'exp', 'x0', 'exp', 'x0']
 
-# A source with two accepted candidates of DIFFERENT classes (equal on the reals), in scan
-# order, in `real` (f64 does not realise `tan(atan(x)) -> x`: 330 units in the last place on the
-# mining sample).
-WITNESS = ['tan', 'atan', 'tan', 'atan', 'x0']
-FIRST = ['x0']
-SECOND = ['tan', 'atan', 'x0']
+# A source with two accepted candidates of DIFFERENT classes (one value, exactly so in float64:
+# `ceil(floor(x))` is `floor(x)`), in scan order, in f64.
+WITNESS = ['ceil', 'floor', 'ceil', 'floor', 'x0']
+FIRST = ['floor', 'x0']
+SECOND = ['ceil', 'floor', 'x0']
+#: Another spelling of FIRST's class: an exclusion names a class.
+FIRST_RESPELLED = ['*', '1', 'floor', 'x0']
 
 
 @pytest.fixture(scope='module')
@@ -40,16 +41,18 @@ def eng() -> SimpliPyEngine:
 
 @pytest.fixture(scope='module')
 def acj() -> SimpliPyEngine:
-    from conftest import acj_config_path, require_or_skip
-    require_or_skip(acj_config_path(), 'needs the acj vocabulary')
-    return SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'], rules=[])
+    """A rule-free engine over the acj2-4 vocabulary (floor and ceil among it)."""
+    import os
+    config = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4',
+                          'config.yaml')
+    return SimpliPyEngine(operators=yaml.safe_load(open(config))['operators'], rules=[])
 
 
-def _scan(eng, mode='real'):
+def _scan(eng, mode='default'):
     """`mine(batch, indices, exclusions)` over a library of hand-picked candidates."""
     x = RuleMiner(eng)._mining_sample_x(512, 1, np.random.default_rng(7))
     lib = eng._core.build_candidate_library(
-        [FIRST, ['*', '1', 'x0'], ['sin', 'x0'], SECOND], ['x0'],
+        [FIRST, FIRST_RESPELLED, ['sin', 'x0'], SECOND], ['x0'],
         x.flatten(order='C').tolist(), x.shape[0], rule_mode=mode)
 
     def mine(batch, indices, exclusions):
@@ -63,26 +66,26 @@ def test_the_premise_two_classes_in_scan_order_and_exclusion_by_class(acj) -> No
     assert mine([WITNESS], None, None) == [(0, WITNESS, FIRST)]
     assert mine([WITNESS], None, {0: [FIRST]}) == [(0, WITNESS, SECOND)]
     # an exclusion names a CLASS: another spelling of the refused target excludes it too
-    assert mine([WITNESS], None, {0: [['*', '1', 'x0']]}) == [(0, WITNESS, SECOND)]
+    assert mine([WITNESS], None, {0: [FIRST_RESPELLED]}) == [(0, WITNESS, SECOND)]
     assert mine([WITNESS], None, {0: [FIRST, SECOND]}) == []
 
 
 def test_a_refused_pick_yields_to_the_next_licensed_candidate(acj) -> None:
     """NO SHADOWING: the judge files the cheapest pick under another mode, and the loop
     must return the next candidate the mode licenses -- not drop the source."""
-    refused = (('tan', 'atan', 'tan', 'atan', '?0'), ('?0',))
+    refused = (('ceil', 'floor', 'ceil', 'floor', '?0'), ('floor', '?0'))
 
     def judge_as(tier):
         return lambda pairs: [tier if tuple(map(tuple, p)) == refused else 'core' for p in pairs]
 
-    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'real',
-                                               judge_as('f64-only'), {}, ['x0'])
+    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
+                                               judge_as('permissive'), {}, ['x0'])
     assert found == [(WITNESS, SECOND)]
     assert stats['judge_rounds'] == 2
     assert stats['excluded'] == [[WITNESS, FIRST]]
-    # a tier real licenses: no exclusion, the first pick stands
-    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'real',
-                                               judge_as('real'), {}, ['x0'])
+    # a tier f64 licenses: no exclusion, the first pick stands
+    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
+                                               judge_as('f64-only'), {}, ['x0'])
     assert found == [(WITNESS, FIRST)] and stats['judge_rounds'] == 1
 
 
@@ -95,8 +98,8 @@ def test_the_judge_memo_is_consulted_before_the_judge(acj) -> None:
 
     judged: dict = {}
     miner = RuleMiner(acj)
-    miner._mine_length([WITNESS], _scan(acj), 'real', judge, judged, ['x0'])
-    miner._mine_length([WITNESS], _scan(acj), 'real', judge, judged, ['x0'])
+    miner._mine_length([WITNESS], _scan(acj), 'default', judge, judged, ['x0'])
+    miner._mine_length([WITNESS], _scan(acj), 'default', judge, judged, ['x0'])
     assert len(calls) == 1 and judged
 
 
@@ -118,10 +121,10 @@ def _offset_scan(eng, batch, offset, exclusions):
     """The shard by `index_offset` rather than explicit `indices`."""
     x = RuleMiner(eng)._mining_sample_x(512, 1, np.random.default_rng(7))
     lib = eng._core.build_candidate_library(
-        [FIRST, ['*', '1', 'x0'], ['sin', 'x0'], SECOND], ['x0'],
-        x.flatten(order='C').tolist(), x.shape[0], rule_mode='real')
+        [FIRST, FIRST_RESPELLED, ['sin', 'x0'], SECOND], ['x0'],
+        x.flatten(order='C').tolist(), x.shape[0], rule_mode='default')
     return eng._core.mine_one_length(batch, lib, None, 16, 16, 7, 1e-9, 1e-12, None, True,
-                                     rule_mode='real', index_offset=offset,
+                                     rule_mode='default', index_offset=offset,
                                      exclusions=exclusions)
 
 
@@ -212,7 +215,7 @@ def test_a_crashed_mine_resumes_from_its_last_length_to_the_same_files(tmp_path)
     assert checkpoint['completed_length'] == 3
     assert len(mine(tmp_path / 'resumed')) == 1, 'the rerun must not re-mine lengths 1..3'
     assert not (tmp_path / 'resumed' / 'mined.json.checkpoint.json').exists()
-    for name in ('mined.json', 'mined_real.json', 'mined_permissive.json'):
+    for name in ('mined.json', 'mined_permissive.json'):
         assert (tmp_path / 'once' / name).read_bytes() == \
             (tmp_path / 'resumed' / name).read_bytes(), name
 
@@ -326,13 +329,13 @@ def test_a_mine_sets_the_node_budget_for_itself(tmp_path) -> None:
 
 def test_a_proposal_whose_target_the_mode_refuses_reads_rejected_at_the_judge(tmp_path) -> None:
     """THE PROPOSALS ARE ONE MORE LENGTH OF THE JUDGE LOOP (miner.md 2.11): the certified
-    target of `* exp x0 exp x0` goes to the mine's judge, which files its class `real`;
-    the f64 mine excludes it, finds no other class, and the trail says why."""
+    target of `* exp x0 exp x0` goes to the mine's judge, which files its class
+    `permissive`; the f64 mine excludes it, finds no other class, and the trail says why."""
     proposal = {'source': SOURCE, 'target': ['exp', '*', '2', 'x0']}
     refused_lhs = ('*', 'exp', '?0', 'exp', '?0')
 
     def judge(pairs):
-        return ['real' if tuple(p[0]) == refused_lhs else 'core' for p in pairs]
+        return ['permissive' if tuple(p[0]) == refused_lhs else 'core' for p in pairs]
 
     (tmp_path / 'rules.json').write_text('[]')
     (tmp_path / 'config.yaml').write_text(yaml.safe_dump(
@@ -342,16 +345,11 @@ def test_a_proposal_whose_target_the_mode_refuses_reads_rejected_at_the_judge(tm
                       dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
                       promote_sorts=False, verbose=False, proposals=[proposal], judge=judge,
                       output_file=str(tmp_path / 'mined.json'))
-    side = {mode: json.load(open(tmp_path / f'mined{suffix}.json.provenance.json'))
-            for mode, suffix in (('f64', ''), ('real', '_real'))}
-    entry, = side['f64']['proposals']['trail']
+    side = json.load(open(tmp_path / 'mined.json.provenance.json'))
+    entry, = side['proposals']['trail']
     assert (entry['verdict'], entry['stage']) == ('rejected', 'judge'), entry
-    loop = side['f64']['proposals']['judge_loop']
+    loop = side['proposals']['judge_loop']
     assert loop['judge_rounds'] == 2 and len(loop['excluded']) == 1, loop
-    # `real` licenses the tier: the proposal certifies there in one round
-    entry, = side['real']['proposals']['trail']
-    assert entry['verdict'] == 'certified', entry
-    assert side['real']['proposals']['judge_loop'] == {'judge_rounds': 1, 'excluded': []}
 
 
 class _HeldJudge:
@@ -473,7 +471,7 @@ def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
     side = json.load(open(out + '.provenance.json'))
     assert (side['created'], side['host']) == origin
     assert [(r['host'], r['after_length']) for r in side['resumed']] == [('elsewhere', 3)]
-    assert 'resumed' not in json.load(open(str(tmp_path / 'mined_real.json.provenance.json')))
+    assert 'resumed' not in json.load(open(str(tmp_path / 'mined_permissive.json.provenance.json')))
 
 
 def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
@@ -481,12 +479,12 @@ def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
     import simplipy.mining
     monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 2)
     other = ['tan', 'atan', 'sin', 'x0']
-    stubborn = ('tan', 'atan', 'tan', 'atan', '?0')
+    stubborn = tuple(WITNESS[:-1]) + ('?0',)
 
     def judge(pairs):
-        return ['f64-only' if tuple(p[0]) == stubborn else 'core' for p in pairs]
+        return ['permissive' if tuple(p[0]) == stubborn else 'core' for p in pairs]
 
-    found, stats = RuleMiner(acj)._mine_length([WITNESS, other], _scan(acj), 'real',
+    found, stats = RuleMiner(acj)._mine_length([WITNESS, other], _scan(acj), 'default',
                                                judge, {}, ['x0'])
     assert found == [(other, ['sin', 'x0'])], found
     assert stats['stubborn'] == [[WITNESS, [FIRST, SECOND]]], stats
@@ -531,7 +529,7 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     # refuses the length-4 pick, `log exp log ?0 -> log ?0` (f64 no longer realises
     # `log exp neg ?0 -> neg ?0`, which is off by more than 8 units in the last place at small x)
     def judge(pairs):
-        return ['real' if len(p[0]) >= 4 else 'core' for p in pairs]
+        return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
 
     with pytest.raises(RuntimeError, match=r"gave up on 1 source\(s\) of length 4.*"
                                            r"'log', 'exp', 'log', 'x0'"):
@@ -541,7 +539,7 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
             symbolic_gate=False, output_file=out, judge=judge)
     ckpt = json.load(open(out + '.checkpoint.json'))
     assert ckpt['completed_length'] == 3
-    assert [['log', 'exp', 'log', '?0'], ['log', '?0'], 'real'] in ckpt['judged']
+    assert [['log', 'exp', 'log', '?0'], ['log', '?0'], 'permissive'] in ckpt['judged']
 
 
 def test_the_watchdog_fails_the_mine_from_any_thread(monkeypatch) -> None:
@@ -595,7 +593,7 @@ def test_a_judgment_without_a_timeout_leaves_the_alarm_alone() -> None:
 
 
 def _mode_mine(directory, crash_in=None, **kw):
-    """A small three-mode mine in `directory`, recording which mode each mined length
+    """A small two-mode mine in `directory`, recording which mode each mined length
     belongs to; with `crash_in`, it dies when that mode's first length starts."""
     modes: list = []
     original = RuleMiner._mine_length
@@ -622,20 +620,19 @@ def _mode_mine(directory, crash_in=None, **kw):
     return modes, engine
 
 
-_FILES = ('mined.json', 'mined_real.json', 'mined_permissive.json')
+_FILES = ('mined.json', 'mined_permissive.json')
 
 
 def test_a_crash_in_a_later_mode_reuses_the_finished_files(tmp_path) -> None:
-    """RESUME FROM DISK FIRST, a finished mode: the f64 and real files are final when the
-    permissive mine dies, and their sidecars record this mine's key and each file's sha256.
-    The rerun takes both as they are and mines permissive alone, to the files a one-shot mine
-    writes."""
+    """RESUME FROM DISK FIRST, a finished mode: the f64 file is final when the permissive
+    mine dies, and its sidecar records this mine's key and the file's sha256. The rerun takes
+    it as it is and mines permissive alone, to the files a one-shot mine writes."""
     import hashlib
     once, _ = _mode_mine(tmp_path / 'once')
-    assert set(once) == {'default', 'real', 'permissive'}
+    assert set(once) == {'default', 'permissive'}
     with pytest.raises(KeyboardInterrupt):
         _mode_mine(tmp_path / 'crashed', crash_in='permissive')
-    finished = {name: (tmp_path / 'crashed' / name).read_bytes() for name in _FILES[:2]}
+    finished = {name: (tmp_path / 'crashed' / name).read_bytes() for name in _FILES[:1]}
     assert json.loads(finished['mined.json']), 'vacuous: an empty f64 file'
     side = json.load(open(tmp_path / 'crashed' / 'mined.json.provenance.json'))
     assert side['resume']['rules_sha256'] == hashlib.sha256(finished['mined.json']).hexdigest()
@@ -646,7 +643,7 @@ def test_a_crash_in_a_later_mode_reuses_the_finished_files(tmp_path) -> None:
             (tmp_path / 'crashed' / name).read_bytes(), name
     for name, raw in finished.items():
         assert (tmp_path / 'crashed' / name).read_bytes() == raw, name
-    # the engine ends holding the three files, as after a one-shot mine
+    # the engine ends holding the files, as after a one-shot mine
     assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules] == \
         [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.loads(finished['mined.json'])]
 
@@ -656,9 +653,9 @@ def test_a_finished_file_is_reused_only_by_its_own_mine(tmp_path) -> None:
     parameters, or a file edited after the mine, mine the mode again."""
     _mode_mine(tmp_path / 'a')
     again, _ = _mode_mine(tmp_path / 'a')
-    assert again == [], 'vacuous: the same mine reuses all three files'
+    assert again == [], 'vacuous: the same mine reuses both files'
     other, _ = _mode_mine(tmp_path / 'a', interval_node_budget=12345)
-    assert set(other) == {'default', 'real', 'permissive'}, other
+    assert set(other) == {'default', 'permissive'}, other
     rules = json.load(open(tmp_path / 'a' / 'mined.json'))
     assert rules, 'vacuous: an empty file edits to the same bytes'
     (tmp_path / 'a' / 'mined.json').write_text(json.dumps(rules[1:], indent=4))
@@ -680,11 +677,11 @@ def test_what_the_engine_does_itself_is_refused_where_the_mine_first_considers_i
     picks = {0: (['abs', 'tan', 'atan', 'x0'], ['acosh', 'cosh', 'x0']),   # permissive cancels
              2: (['log', '-3'], ['float("nan")'])}                         # the fold does it
     assert miner._unlicensed(dict(picks), 'permissive', core, {}, ['x0']) == {0, 2}
-    # in real the inverse pair stays, so the rule fires on its instance
+    # in f64 the inverse pair stays, so the rule fires on its instance
     live = {1: (['sin', 'asin', 'x0'], ['x0'])}
-    assert miner._unlicensed(live, 'real', core, {}, ['x0']) == set()
+    assert miner._unlicensed(live, 'default', core, {}, ['x0']) == set()
     # the mode's set is as it was: the picks were installed for the test and taken out again
-    assert miner._mode_rules('permissive') == [] and miner._mode_rules('real') == []
+    assert miner._mode_rules('permissive') == [] and miner._mode_rules('default') == []
 
 
 def test_every_policy_refuses_where_the_mine_first_considers_a_pick() -> None:

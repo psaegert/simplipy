@@ -55,19 +55,29 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
     return _contract.judge_rule(list(lhs), list(rhs), deployed_check=deployed_check)
 
 
-#: Which judged tiers each mode's rule set is allowed to contain: the tiers whose rules hold in
-#: the mode (`_contract._tier`). `real` holds what holds in real (`real-only` and `strict` among
-#: it: an allowance a `?` or `$` slot guards in real, which permissive's any-subexpression binding
-#: does not); `f64` what holds in float64 (`f64-only` among it: float64's own value, off real's
-#: beyond float resolution; `strict` too); `permissive` what holds in permissive, judged at the
-#: `_` sort its matcher binds -- its own extensions (`permissive`: `exp(log x) -> x`) and the
-#: rules within float resolution of real's values (P3, `f64`) among it; no mode may carry
-#: `reject`.
+#: The tiers (`_contract.TIERS`, the one registry): each tier names the modes a judged rule
+#: holds in. `core` holds in f64 and in permissive; `f64-only` in f64 alone (float64's own value,
+#: off the reals beyond float resolution); `permissive` in permissive alone, judged at the `_`
+#: sort its matcher binds (its own extensions, `exp(log x) -> x`, and the rules within float
+#: resolution of the reals' values); `reject` in no mode.
+TIERS: dict[str, tuple] = dict(_contract.TIERS)
+
+#: Which judged tiers each mode's rule set is allowed to contain: the tiers that hold in the
+#: mode, read off `TIERS`.
 MODE_TIERS: dict[str, frozenset] = {
-    'f64': frozenset({'core', 'strict', 'f64', 'f64-only'}),
-    'real': frozenset({'core', 'strict', 'real', 'real-only'}),
-    'permissive': frozenset({'core', 'f64', 'real', 'permissive'}),
-}
+    mode: frozenset(tier for tier, modes in TIERS.items() if mode in modes)
+    for mode in _contract.MODES}
+
+
+def tier_table() -> str:
+    """The tier table of the verify guide, rendered from the registry (`TIERS`): one row per
+    tier, one column per mode saying whether the mode's file may hold it, and its meaning."""
+    head = ['tier'] + [f'`{mode}`' for mode in _contract.MODES] + ['meaning']
+    rows = ['| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
+    for tier, modes in TIERS.items():
+        cells = [f'`{tier}`'] + ['yes' if mode in modes else 'no' for mode in _contract.MODES]
+        rows.append('| ' + ' | '.join(cells + [_contract.TIER_MEANINGS[tier]]) + ' |')
+    return '\n'.join(rows)
 
 
 def effective_tier(detail: dict) -> str:
@@ -92,7 +102,7 @@ _LOAD_POLICY = {'const-count-increase': 'constant_count',
                 'unbound-rhs-wildcard': 'well_formed', 'unparseable-side': 'well_formed'}
 
 #: A mode's name as the engine's rule sets are named.
-_RULE_MODE = {'f64': 'default', 'real': 'real', 'permissive': 'permissive'}
+_RULE_MODE = {'f64': 'default', 'permissive': 'permissive'}
 
 
 def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
@@ -140,8 +150,8 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
 def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
              max_source: int | None = None, detail: dict | None = None) -> dict:
     """``licensed(L, R, mode)`` (the specification's 3.4): the rule holds in the mode -- its
-    judged tier is one ``MODE_TIERS`` gives the mode, so permissive also takes what holds in
-    f64 -- and no named policy refuses it (:func:`policy_refusals`). ``detail`` is the judge's
+    judged tier is one ``MODE_TIERS`` gives the mode -- and no named policy refuses it
+    (:func:`policy_refusals`). ``detail`` is the judge's
     verdict on the rule when the caller has it. Returns ``{'licensed', 'holds', 'tier',
     'refused_by'}``: ``asin(1) -> acos(0)`` holds in every mode and is refused by
     ``ground_composite``; ``exp(tan(asin(1))) -> inf`` holds in f64 and is refused by
@@ -163,9 +173,8 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     """Gate a whole rule set: judge every rule at its own trigger points.
 
     ``rules``: a list of ``[lhs, rhs]`` token-list pairs, or a path to such a JSON file.
-    ``mode``: which mode's set this is -- ``'f64'`` (also ``'default'``), ``'real'``,
-    ``'permissive'`` or a :class:`~simplipy.Mode` member. See below; ``None`` keeps the
-    mode-less meaning.
+    ``mode``: which mode's set this is -- ``'f64'`` (also ``'default'``), ``'permissive'``
+    or a :class:`~simplipy.Mode` member. See below; ``None`` keeps the mode-less meaning.
     ``report_path``: optional path to dump the full per-rule report.
     ``build_path``: optional path to write the kept set (CERTIFIED + TOLERATED).
     ``judge_timeout_s``: per-rule wall-clock cap (a rule that exceeds it is bucketed
@@ -173,10 +182,10 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
 
     CLEANLINESS IS PER MODE. With one rule set per mode, "no fatal bucket" is the wrong
     test in both directions. `atanh(tanh t) -> t` is ENGINE-MISALIGN and belongs in
-    ``rules_real.json``, where it is perfectly clean -- calling that file dirty would
+    ``rules_permissive.json``, where it is perfectly clean -- calling that file dirty would
     condemn the rules the split exists to keep. And a rule that is f64-realised but
-    mathematically false is clean for ``rules_f64.json`` and NOT for ``rules_real.json``,
-    which a bucket count cannot express at all.
+    false in the reals' values beyond float resolution is clean for ``rules_f64.json`` and NOT
+    for ``rules_permissive.json``, which a bucket count cannot express at all.
 
     So with ``mode`` given, ``is_clean`` means *every rule's judged tier is one this mode
     licenses* (``MODE_TIERS``) -- a rule can be clean for one file and dirty for another,
@@ -184,8 +193,8 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     their tier.
 
     With ``mode=None`` only CERTIFIED/TOLERATED are clean, the meaning before rule sets
-    were split by mode. It is NOT the right gate for a shipped triple; use
-    :func:`verify_triple`.
+    were split by mode. It is NOT the right gate for a shipped artifact; use
+    :func:`verify_artifact`.
 
     ``report['buckets']`` maps each bucket name to the list of rule indices in it and
     ``report['exit_code']`` is 0 iff clean.
@@ -221,28 +230,23 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     return report
 
 
-def verify_triple(f64_rules: list | str, real_rules: list | str,
-                  permissive_rules: list | str, *, engine_config: str | None = None,
-                  corpus_rows: list | None = None, judge_timeout_s: int = 30) -> dict:
-    """Gate a whole TRIPLE: each file against its own mode, plus permissive capability.
+def verify_artifact(f64_rules: list | str, permissive_rules: list | str, *,
+                    engine_config: str | None = None, corpus_rows: list | None = None,
+                    judge_timeout_s: int = 30) -> dict:
+    """Gate a whole ARTIFACT: each file against its own mode, plus permissive capability.
 
-    A mine run is valid only if all three sets fall out of it, so the artifact is verified
-    as one thing. Three per-file sweeps answer "is every rule in this file licensed for
-    this mode".
+    A mine run is valid only if both sets fall out of it, so the artifact is verified as one
+    thing. Two per-file sweeps answer "is every rule in this file licensed for this mode".
 
-    WHAT IS *NOT* CHECKED, AND WHY. An earlier version required
-    ``rules_permissive == rules_f64 UNION rules_real``. That is wrong once folding is
-    mode-dependent, because the three modes then reduce in different canonical worlds and
-    each file omits what its OWN constructor already performs -- so set overlap measures
-    SPELLING, not capability. On the 0.14.0 artifact the union exceeds the permissive
-    file by 362 rules and permissive performs every one of them; the identity would report a
-    correct artifact as dirty.
+    WHAT IS *NOT* CHECKED, AND WHY: a set identity between the files. Folding is
+    mode-dependent, so the modes reduce in different canonical worlds and each file omits what
+    its OWN constructor already performs -- set overlap measures SPELLING, not capability.
 
-    The property it stood proxy for is behavioural: **permissive is at least as capable as
-    either other mode**. Pass ``engine_config`` (and optionally ``corpus_rows``) to check
-    it -- the report then carries ``permissive_dominance``. The check runs on an engine
-    built from the config's operators and the three rule sets given here, never the rule
-    files the config names, and prices every answer by
+    The property that matters is behavioural: **permissive is at least as capable as f64**.
+    Pass ``engine_config`` (and optionally ``corpus_rows``) to check it -- the report then
+    carries ``permissive_dominance``. The check runs on an engine built from the config's
+    operators and the two rule sets given here, never the rule files the config names, and
+    prices every answer by
     :func:`simplipy.mining.cross_mode_complexity`. A row on which a mode raises is a
     violation, reported with its error. Without an engine nothing can be said about the
     relationship between the files, and ``relationships`` stays empty rather than
@@ -262,7 +266,7 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
     'permissive_dominance': ... }``.
     """
     reports = {}
-    for mode, rules in (('f64', f64_rules), ('real', real_rules), ('permissive', permissive_rules)):
+    for mode, rules in (('f64', f64_rules), ('permissive', permissive_rules)):
         reports[mode] = verify_ruleset(rules, mode=mode, judge_timeout_s=judge_timeout_s)
 
     problems: list = []
@@ -274,23 +278,23 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
             # violations".
             reason = 'corpus_rows was given but is empty'
             warnings.warn(
-                f'verify_triple: permissive dominance was NOT checked -- {reason}. '
+                f'verify_artifact: permissive dominance was NOT checked -- {reason}. '
                 'is_clean does not cover it.', UserWarning)
             dominance = {'checked': False, 'reason': reason}
         else:
             from ..engine import SimpliPyEngine
             from ..io import load_config
             from ..mining import assert_permissive_dominates
-            # The SUBJECT is the triple passed in, not the files the config names: the
+            # The SUBJECT is the pair passed in, not the files the config names: the
             # config contributes its operators (the deployed semantics) and nothing else.
             engine = SimpliPyEngine(operators=load_config(engine_config)['operators'],
-                                    rules=_load(f64_rules), rules_real=_load(real_rules),
+                                    rules=_load(f64_rules),
                                     rules_permissive=_load(permissive_rules))
             violations = assert_permissive_dominates(engine, rows)
             dominance = {'checked': True, 'violations': violations}
             if violations:
                 problems.append(
-                    f'permissive is not the most capable mode on {len(violations)} '
+                    f'permissive is less capable than f64 on {len(violations)} '
                     f'rows, e.g. {violations[0]}')
 
     return {'is_clean': all(x['is_clean'] for x in reports.values()) and not problems,
@@ -298,11 +302,19 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
             'permissive_dominance': dominance}
 
 
+def verify_triple(*args: Any, **kwargs: Any) -> dict:
+    """Refused: the gate of the three-file artifact, whose middle file was the retired real
+    mode's. An artifact is the f64 and the permissive file; :func:`verify_artifact` gates it."""
+    from ..engine import _REAL_MODE_RETIRED
+    raise ValueError(f'verify_triple gated the real set: {_REAL_MODE_RETIRED}; '
+                     'verify_artifact(f64_rules, permissive_rules) gates an artifact')
+
+
 def default_corpus() -> list[list[str]]:
     """The release gate's expression corpus: 400 prefix-token expressions.
 
     Shipped with the package (``simplipy/verify/data/raw_skeletons_nv.json``), so the
-    gate sweeps the same rows in a wheel install as in a checkout. :func:`verify_triple`
+    gate sweeps the same rows in a wheel install as in a checkout. :func:`verify_artifact`
     sweeps it when no ``corpus_rows`` are given, and the test suites read it from here.
     """
     from importlib.resources import files
@@ -338,6 +350,7 @@ def selftest() -> bool:
     return _gate.selftest() and _contract.selftest(verbose=False)
 
 
-__all__ = ['FATAL_BUCKETS', 'MODE_TIERS', 'POLICIES', 'default_corpus',
+__all__ = ['FATAL_BUCKETS', 'MODE_TIERS', 'POLICIES', 'TIERS', 'default_corpus', 'tier_table',
            'effective_tier', 'licensed', 'policy_refusals', 'verify_rule',
-           'verify_ruleset', 'verify_triple', 'monitor_ruleset', 'selftest']
+           'verify_ruleset', 'verify_artifact', 'verify_triple', 'monitor_ruleset',
+           'selftest']

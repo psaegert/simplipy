@@ -50,16 +50,10 @@ from . import _contract
 
 VAR_RE = re.compile(r'^x(\d+)$')
 
-#: The file mode each spelling of a mode names (`judge_pair(mode=)`).
-_MODES = {'f64': 'f64', 'default': 'f64', 'real': 'real', 'permissive': 'permissive'}
-
-
 def _mode_name(mode):
-    """The file mode (`f64`, `real` or `permissive`) of a mode name or `simplipy.Mode` member."""
-    name = getattr(mode, 'name', mode)
-    if name not in _MODES:
-        raise ValueError(f'unknown mode {mode!r}: one of {sorted(_MODES)}')
-    return _MODES[name]
+    """The file mode (`f64` or `permissive`) of a mode name or `simplipy.Mode` member."""
+    from ..engine import _coerce_mode
+    return _coerce_mode(mode).name
 
 
 def _as_rule(inp, out, engine):
@@ -80,9 +74,6 @@ UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'JUDGE-TI
              'UNDECIDED-MEASURE')
 
 
-#: The judged tiers that hold in the reals (the engine's algebra is exact there, F8).
-_REAL_TIERS = frozenset({'core', 'strict', 'real', 'real-only'})
-
 #: Float64's disagreements F8 lets the engine's exact algebra leave: rounding and what rounding
 #: does near a zero or a pole (a sign, a zero against a nonzero), and a value where float64 reads
 #: the input as NaN (the rewrite holds in the reals: the reals' value, or an extension on a null
@@ -102,8 +93,8 @@ def _steps(inp, mode, engine):
 
 def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     """Judge one rewrite ``inp -> out`` made in ``mode`` (``'f64'``, also ``'default'``,
-    ``'real'``, ``'permissive'`` or a :class:`~simplipy.Mode` member; the default is the
-    engine's default mode) as the rule judge judges the rule ``inp -> out``.
+    ``'permissive'`` or a :class:`~simplipy.Mode` member; the default is the engine's default
+    mode) as the rule judge judges the rule ``inp -> out``.
 
     Returns ``(verdict, detail)``: ``OK`` where the judged tier is one the mode licenses
     (``verify.MODE_TIERS``), ``VIOLATION`` where it is not, and ``UNSCORED`` where the
@@ -136,12 +127,12 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
                                        f'{step.get("verdict")}'
                 return 'VIOLATION', (f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)} is '
                                      f'{step_tier}, not {name}\'s')
-            exact_steps = exact_steps and step_tier in _REAL_TIERS
+            exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
     if tier in MODE_TIERS[name]:
         return 'OK', f'{verdict} ({tier})'
     if verdict in UNDECIDED:
         return 'UNSCORED', f'{verdict}: {str(detail.get("detail"))[:200]}'
-    if engine is not None and tier in _REAL_TIERS:
+    if engine is not None and verdict in _contract.HOLDS_IN_THE_REALS:
         # F8: the rewrite holds in the reals; float64's own events must be kept
         kinds = set(detail.get('f64_kinds') or ())
         if detail.get('realised') is None:
@@ -198,7 +189,7 @@ DEFAULT_LEAVES = ['x0', 'x1', '0', '1', 'np.pi', '2.0', '(-0.5)', '3.0']
 # flagged input whose output CHANGED versus the unpoisoned engine.
 POISON = [
     # a value change at a point f64 holds: float64's sin(fl(pi/2)) is exactly 1.0, where
-    # pow(1, inf) is 1 (the reals give pow(1, inf) no value, so real tolerates the rewrite)
+    # pow(1, inf) is 1 (the reals give pow(1, inf) no value, so they tolerate the rewrite)
     (('pow', 'sin', '?0', 'float("inf")'), ('0',)),
     # masked-scale: drops the coefficient of pre-masked traffic
     (('*', '<constant>', '?0'), ('?0',)),

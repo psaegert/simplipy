@@ -47,7 +47,7 @@ NEGATING = ['- * 2 {t} {t}', '- {t} * 2 {t}', '- 0 {t}', '- * 3 {t} * 2 {t}', '-
 def bare():
     """The acj2-4 operators with an empty rule set per mode: the constructors on their own."""
     ops = yaml.safe_load(open(ACJ2_4))['operators']
-    return SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+    return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
 @pytest.fixture(scope='module')
@@ -112,11 +112,11 @@ def test_f64_spells_the_kept_zero_term(bare, expression, expected):
     assert ' '.join(bare.simplify(expression.split(), mode='f64')) == expected
 
 
-@pytest.mark.parametrize('mode', ('real', 'permissive'))
+@pytest.mark.parametrize('mode', ('permissive',))
 @pytest.mark.parametrize('expression, expected', [
     ('+ ceil x1 0', 'ceil x1'),
     ('- * 2 ceil x1 ceil x1', 'ceil x1'),
     ('- 0 floor x1', 'neg floor x1'),
 ])
-def test_real_and_permissive_drop_the_zero_term(bare, mode, expression, expected):
+def test_permissive_drops_the_zero_term(bare, mode, expression, expected):
     assert ' '.join(bare.simplify(expression.split(), mode=mode)) == expected

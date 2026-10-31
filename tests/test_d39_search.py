@@ -18,10 +18,9 @@ today's chain (the effort=0 semantics).
 
 Scaffolding surface pinned here (the public ``effort=`` API is separate):
 NOTE: this suite drives the core through the retired two-valued ``wildcard_all``
-bool, so it covers the default and corpus semantics and NOT ``real``. That is the
+bool, which covers both modes, the default and permissive. That is the
 scaffolding's own surface (the public ``effort=`` API is
-not wired to it), so the gap is scoped rather than accidental --
-but a ``real``-mode explore regression would not be caught here.
+not wired to it).
 
 ``Engine._core.ac_simplify_explore(tokens, max_passes, form, explore_budget, rule_mode=('permissive' if wildcard_all else 'default'))`` -- ``ac_simplify``'s signature plus the trailing budget,
 budget 0 the default. Tests observe from OUTSIDE through that entry point;
@@ -243,7 +242,7 @@ class TestTheSearchOwnsTheDistributiveLaw:
     moves one factor of a product into one of its sum factors; both are search moves under the
     whole-state acceptance, in every mode alike (no rule states the law)."""
 
-    MODES = ('f64', 'real', 'permissive')
+    MODES = ('f64', 'permissive')
 
     @pytest.fixture(scope='class')
     def llm(self) -> SimpliPyEngine:

@@ -11,7 +11,7 @@ from simplipy import SimpliPyEngine
 from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
-MODES = ('default', 'real', 'permissive')
+MODES = ('default', 'permissive')
 DISTRIBUTIVE = (['+', '*', '?0', '?1', '*', '?2', '?1'], ['*', '+', '?0', '?2', '?1'])
 
 
@@ -24,11 +24,11 @@ def eng():
 
 def test_the_mark_is_the_serve_answer_of_the_mode(eng):
     mark = eng._core.mine_mark
-    # f64 folds the ground transcendental; real reads the exact value from the table
+    # f64 folds the ground transcendental; permissive reads the exact value from the table
     assert mark(['cos', '0'], rule_mode='default') == ['1']
-    assert mark(['cos', '0'], rule_mode='real') == ['1']
-    # real's constructor collapses the inverse pair; f64's saturation guard keeps it
-    assert mark(['atanh', 'tanh', 'x0'], rule_mode='real') == ['x0']
+    assert mark(['cos', '0'], rule_mode='permissive') == ['1']
+    # permissive collapses the inverse pair; f64's saturation guard keeps it
+    assert mark(['atanh', 'tanh', 'x0'], rule_mode='permissive') == ['x0']
     assert mark(['atanh', 'tanh', 'x0'], rule_mode='default') == ['atanh', 'tanh', 'x0']
     # the serve answer runs the search: every mode factors
     for mode in MODES:
@@ -38,21 +38,20 @@ def test_the_mark_is_the_serve_answer_of_the_mode(eng):
 def test_sources_are_the_canonical_projections_of_the_mode(eng):
     enumerated = [['+', 'cos', '0', 'sin', 'x0'], ['+', '1', 'sin', 'x0'],
                   ['atanh', 'tanh', 'x0'], ['cos', '0']]
-    # no reading folds `cos 0` (f64's walk does, as a step); f64 keeps `atanh tanh x0`
-    assert eng._core.mine_sources(enumerated, rule_mode='default') == [
-        ['+', 'cos', '0', 'sin', 'x0'], ['+', 'sin', 'x0', '1'], ['atanh', 'tanh', 'x0'],
-        ['cos', '0']]
-    # real reads `cos 0` as the table's 1 (so the first two sources are one, and `cos 0` the
-    # atom 1), and `atanh tanh x0` is the atom x0
-    assert eng._core.mine_sources(enumerated, rule_mode='real') == [['+', 'sin', 'x0', '1']]
+    # no reading folds `cos 0` (the walk does, as a step); f64 keeps `atanh tanh x0`, and so does
+    # permissive, whose sources are read as its rule sides are (certified licences)
+    for mode in MODES:
+        assert eng._core.mine_sources(enumerated, rule_mode=mode) == [
+            ['+', 'cos', '0', 'sin', 'x0'], ['+', 'sin', 'x0', '1'], ['atanh', 'tanh', 'x0'],
+            ['cos', '0']], mode
 
 
 @pytest.mark.parametrize('mode', MODES)
 def test_rules_are_read_in_the_mode(eng, mode):
-    # real reads `atanh(tanh(t))` as `t` in the pattern too, so the rule states what its
-    # constructor does; f64 keeps the pattern (tanh saturates in floats), and so does permissive
+    # f64 keeps the pattern (tanh saturates in floats), and so does permissive, whose rule sides
+    # are read with certified licences
     served = eng._core.ac_translate_preview([(['atanh', 'tanh', '?0'], ['?0'])], rule_mode=mode)
-    assert (served == []) == (mode == 'real'), served
+    assert served != [], (mode, served)
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -65,7 +64,7 @@ def test_the_miner_refuses_the_law_the_load_refuses(tmp_path, eng, mode):
     (tmp_path / 'rules.json').write_text(json.dumps([list(DISTRIBUTIVE)]))
     (tmp_path / 'config.yaml').write_text(yaml.safe_dump(
         {'operators': eng._operators_config, 'rules': 'rules.json',
-         'rules_real': 'rules.json', 'rules_permissive': 'rules.json'}))
+         'rules_permissive': 'rules.json'}))
     loaded = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
     assert loaded._core.ac_rules_drop_census(rule_mode=mode).get('engine-owned-law') == 1
 
@@ -88,7 +87,7 @@ def test_a_rule_stating_the_exp_law_is_refused_in_either_direction(tmp_path, eng
     (tmp_path / 'rules.json').write_text(json.dumps(EXP_LAW))
     (tmp_path / 'config.yaml').write_text(yaml.safe_dump(
         {'operators': eng._operators_config, 'rules': 'rules.json',
-         'rules_real': 'rules.json', 'rules_permissive': 'rules.json'}))
+         'rules_permissive': 'rules.json'}))
     loaded = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
     assert loaded._core.ac_served_rules_in_mode(rule_mode=mode) == []
     assert loaded._core.ac_rules_drop_census(rule_mode=mode) == {'arithmetic-subsumed': len(EXP_LAW)}
@@ -96,7 +95,7 @@ def test_a_rule_stating_the_exp_law_is_refused_in_either_direction(tmp_path, eng
 
 @pytest.mark.parametrize('name,args', [
     ('ac_simplify_in_mode', (['x0'],)), ('ac_simplify_infix_in_mode', (['x0'],)),
-    ('ac_simplify_explore', (['x0'],)), ('prettify', (['x0'],)), ('ac_complexity', (['x0'],)),
+    ('ac_simplify_explore', (['x0'],)), ('ac_complexity', (['x0'],)),
     ('ac_complexity_certified', (['x0'],)), ('ac_rules_info_in_mode', ()),
     ('ac_served_rules_in_mode', ()), ('mode_rules_len', ()),
     ('find_rule', (['x0'], 1, None, [['x0']], ['x0'], [1.0], 1)),
@@ -157,7 +156,8 @@ def test_the_law_gate_takes_the_searchs_licence(eng, mode, source, lhs, rhs):
 
 def test_each_mode_mines_from_its_own_set():
     """Without `reset_rules`, a mode's mine starts from that mode's own set, never from
-    another mode's: the f64 set's rule does not seed the real and permissive files."""
+    another mode's: the f64 set's rule does not seed the permissive file, nor the permissive
+    set's the f64 file."""
     ops = {
         "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
         "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
@@ -165,17 +165,15 @@ def test_each_mode_mines_from_its_own_set():
         "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     }
     f64_only = (('log', 'exp', 'exp', '?0'), ('exp', '?0'))
-    real_only = (('exp', 'log', 'exp', '?0'), ('exp', '?0'))
-    engine = SimpliPyEngine(operators=ops, rules=[f64_only], rules_real=[real_only],
-                            rules_permissive=[])
+    permissive_only = (('exp', 'log', 'exp', '?0'), ('exp', '?0'))
+    engine = SimpliPyEngine(operators=ops, rules=[f64_only], rules_permissive=[permissive_only])
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
                       X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
                       judge=lambda pairs: ['core'] * len(pairs))
     assert f64_only in engine.simplification_rules
-    assert f64_only not in engine.real_simplification_rules
-    assert real_only in engine.real_simplification_rules
+    assert permissive_only not in engine.simplification_rules
     assert f64_only not in engine.permissive_simplification_rules
-    assert real_only not in engine.permissive_simplification_rules
+    assert permissive_only in engine.permissive_simplification_rules
 
 
 def test_the_refund_reads_the_constructors_dedup(monkeypatch):
@@ -217,15 +215,14 @@ _OFFER_OPERATORS = {
     "atan": {"realization": "np.arctan", "alias": [], "inverse": "tan", "arity": 1, "precedence": 3, "commutative": False},
     "abs": {"realization": "np.abs", "alias": [], "inverse": None, "arity": 1, "precedence": 3, "commutative": False},
 }
-# True on R, and beyond the length-2 horizon of the mine below, so permissive's own scan
-# never reaches it: only the offered real file can bring it. (`tan(atan(x)) -> x` was the
-# example until permissive cancelled inverse pairs itself; `abs` is no entry of its list.)
-REAL_ONLY = (('*', 'abs', '?0', 'abs', '?0'), ('*', '?0', '?0'))
+# Exact in float64 and true on R, and beyond the length-2 horizon of the mine below, so
+# permissive's own scan never reaches it: only the offered f64 file can bring it. (`abs` is no
+# entry of permissive's own list.)
+OFFERED = (('*', 'abs', '?0', 'abs', '?0'), ('*', '?0', '?0'))
 
 
 def _offer_mine(tmp_path, offer):
-    engine = SimpliPyEngine(operators=_OFFER_OPERATORS, rules=[], rules_real=[REAL_ONLY],
-                            rules_permissive=[])
+    engine = SimpliPyEngine(operators=_OFFER_OPERATORS, rules=[OFFERED], rules_permissive=[])
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
                       X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
                       judge=lambda pairs: ['core'] * len(pairs), offer_final_rules=offer,
@@ -234,16 +231,17 @@ def _offer_mine(tmp_path, offer):
     return engine, side
 
 
-def test_the_permissive_mine_is_offered_the_finished_files(tmp_path):
-    """Permissive promises less than f64 and real, so their rules hold there too. Its mine
-    runs last and passes both finished files through its proposal lane: a real rule its own
-    scan never reaches enters the permissive file, and the sidecar pins both files."""
+def test_the_permissive_mine_is_offered_the_finished_file(tmp_path):
+    """The permissive mine runs last and passes the finished f64 file through its proposal lane,
+    where each rule is certified by permissive's own acceptance: an f64 rule its own scan never
+    reaches enters the permissive file where it holds there, and the sidecar pins the file."""
     import hashlib
     engine, side = _offer_mine(tmp_path, offer=True)
-    assert REAL_ONLY in engine.real_simplification_rules
-    assert REAL_ONLY in engine.permissive_simplification_rules
+    assert OFFERED in engine.simplification_rules
+    assert OFFERED in engine.permissive_simplification_rules
     offered = side['offered']
-    for key, name in (('f64', 'rules_f64.json'), ('real', 'rules_real.json')):
+    assert set(offered['files']) == {'f64'}
+    for key, name in (('f64', 'rules_f64.json'),):
         pin = offered['files'][key]
         assert pin['file'] == name
         assert pin['sha256'] == hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
@@ -256,7 +254,7 @@ def test_the_permissive_mine_is_offered_the_finished_files(tmp_path):
 
 def test_the_offer_can_be_declined(tmp_path):
     engine, side = _offer_mine(tmp_path, offer=False)
-    assert REAL_ONLY not in engine.permissive_simplification_rules
+    assert OFFERED not in engine.permissive_simplification_rules
     assert 'offered' not in side and side['params']['offer_final_rules'] is False
 
 
@@ -264,7 +262,7 @@ def test_the_f64_scan_reads_the_range_standard(eng):
     """The scan's f64 check applies the judge's standard (`numeric::RangeKind`, one
     definition): on a row where an operation of either side overflows or underflows, the
     true value is accepted beside the evaluator's. The mine's own matrix carries such rows
-    (exp overflows past 709.78 and underflows below -745.13). Real reads the true value
+    (exp overflows past 709.78 and underflows below -745.13). Permissive reads the true value
     everywhere and is unchanged."""
     import numpy as np
     from simplipy.mining import RuleMiner
@@ -275,7 +273,7 @@ def test_the_f64_scan_reads_the_range_standard(eng):
         return eng._core.judge_pair(source, target, ['x0', 'x1'], X.flatten().tolist(),
                                     X.shape[0], rule_mode=mode, rtol=1e-11, atol=1e-12)[0]
 
-    pairs = {  # pair -> (f64, real)
+    pairs = {  # pair -> (f64, permissive)
         (('rootn', 'exp', 'x0', '2'), ('exp', '/', 'x0', '2')): (True, True),
         # the fit arm: the fitted constant |C| on the rows past the overflow
         (('rootn', '*', 'pow', '<constant>', '2', 'exp', 'x0', '2'),
@@ -286,7 +284,7 @@ def test_the_f64_scan_reads_the_range_standard(eng):
     }
     for (source, target), want in pairs.items():
         got = (judged(list(source), list(target), 'default'),
-               judged(list(source), list(target), 'real'))
+               judged(list(source), list(target), 'permissive'))
         assert got == want, (source, target, got)
 
 

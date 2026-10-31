@@ -149,7 +149,7 @@ class TestKernelLiterals:
     ])
     def test_beyond_i128_literals_fold_only_when_certain(self, engine: SimpliPyEngine,
                                                          prefix: list[str], out: list[str] | None) -> None:
-        for mode in ('f64', 'real'):
+        for mode in ('f64', 'permissive'):
             assert list(engine.simplify(prefix, mode=mode)) == (prefix if out is None else out)
 
     @pytest.mark.parametrize('zero', ['+0/5', '(+0/5)', '+00/7', '-0/5'])

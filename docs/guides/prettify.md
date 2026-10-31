@@ -150,9 +150,7 @@ floats is written as its float64, computed as SimpliPy's evaluator computes it a
 `precision`. A function of a number written exactly stays a function, and so does one whose
 float would be 0, infinite or subnormal, and one whose float would let reading the display
 build another sum: a number times a sum is distributed over the sum it stands in, and a term
-collects with a like term. Numbers a product keeps apart for their size (a number of `real` has
-at most 1,100 bits) are one float, the product of the floats they are written as. No numbers
-combine to inf, 0 or a subnormal.
+collects with a like term. No numbers combine to inf, 0 or a subnormal.
 
 ```python
 engine.prettify(engine.simplify("x1*exp(-381/2)"))
@@ -180,7 +178,7 @@ engine.prettify(engine.simplify("(x2 + 0.5)^(500000000000000/4427)"))
 
 **Notation**: scientific from `1e6` and below `1e-3`, with a lowercase `e`.
 
-## Forms and modes
+## Forms
 
 `prettify` answers in the dialect it was given, as `simplify` does: infix text for a `str`,
 tokens for tokens. `form=` chooses one: `'infix'`, `'explicit'` or `'tagged'`.
@@ -240,6 +238,3 @@ the canonical form holds exactly is still written by the rules above, so where t
 tokens divide by an integer (`/ * 3.1415926535897e37 * x1 x2 3313`) the display writes one
 float (`9.482621954692726e33*(x1*x2)`), and the one-slash layout still joins every divisor of a
 product into one denominator.
-
-`mode` (default `f64`) is the mode whose number domain reads the numbers; the display rules are
-designed for `f64`.

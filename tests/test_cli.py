@@ -136,10 +136,10 @@ class TestCLI:
         assert params["relaxed_kruskal"] is False
         assert params["confirm"] is False
 
-    def test_find_rules_modes_mines_only_the_listed_files(self, tmp_path) -> None:
-        """`--modes real` mines the real file alone, beside the f64 file already there, and
-        leaves the f64 and permissive files as they are; the real file is the one the full mine
-        wrote. An unknown mode name is refused before any mining."""
+    def test_find_rules_modes_mines_only_the_listed_files(self, tmp_path, capsys) -> None:
+        """`--modes permissive` mines the permissive file alone, beside the f64 file already
+        there, and leaves the f64 file as it is; the permissive file is the one the full mine
+        wrote. An unknown mode name, and the retired `real`, are refused before any mining."""
         import os
         (tmp_path / "rules.json").write_text("[]")
         engine_cfg = tmp_path / "engine.yaml"
@@ -150,20 +150,22 @@ class TestCLI:
             "dummy_variables": 1, "extra_internal_terms": ["0", "1"], "n_samples": 256,
             "constants_fit_retries": 4, "seed": 7, "promote_sorts": False}))
         out = tmp_path / "mined.json"
-        files = [out, tmp_path / "mined_real.json", tmp_path / "mined_permissive.json"]
+        files = [out, tmp_path / "mined_permissive.json"]
         main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
               "--reset-rules"])
         full = [f.read_bytes() for f in files]
-        stamps = {f: os.stat(f).st_mtime_ns for f in (files[0], files[2])}
+        stamps = {files[0]: os.stat(files[0]).st_mtime_ns}
         files[1].unlink()
-        (tmp_path / "mined_real.json.provenance.json").unlink()
+        (tmp_path / "mined_permissive.json.provenance.json").unlink()
         main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
-              "--reset-rules", "--modes", "real"])
+              "--reset-rules", "--modes", "permissive"])
         assert [f.read_bytes() for f in files] == full
-        assert {f: os.stat(f).st_mtime_ns for f in (files[0], files[2])} == stamps
-        with pytest.raises(ValueError, match="modes must name"):
-            main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
-                  "--modes", "f32"])
+        assert {files[0]: os.stat(files[0]).st_mtime_ns} == stamps
+        for name, message in (("f32", "unknown mode 'f32'"), ("real", "the real mode is retired")):
+            with pytest.raises(SystemExit):
+                main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out),
+                      "--modes", name])
+            assert message in capsys.readouterr().err
 
     def test_find_rules_unknown_config_key_rejected(self, tmp_path, capsys) -> None:
         """FAIL-CLOSED: an unknown find-rules config key is an error naming the key,

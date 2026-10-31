@@ -120,11 +120,11 @@ def rules_free(tmp_path_factory):
     import json
     from simplipy.io import load_config
     d = tmp_path_factory.mktemp('rules_free')
-    for f in ('rules.json', 'rules_real.json', 'rules_permissive.json'):
+    for f in ('rules.json', 'rules_permissive.json'):
         (d / f).write_text(json.dumps([]))
     (d / 'config.yaml').write_text(yaml.safe_dump({
         'engine_generation': 2, 'operators': load_config(CONFIG)['operators'], 'rules': 'rules.json',
-        'rules_real': 'rules_real.json', 'rules_permissive': 'rules_permissive.json'}))
+        'rules_permissive': 'rules_permissive.json'}))
     return SimpliPyEngine.from_config(str(d / 'config.yaml'))
 
 
@@ -135,7 +135,7 @@ class TestGroundNanFolds:
     index's value is decided by the interval layer and fails closed where its enclosure holds an
     integer."""
 
-    @pytest.mark.parametrize('mode', [Mode.f64, Mode.real, Mode.permissive])
+    @pytest.mark.parametrize('mode', [Mode.f64, Mode.permissive])
     @pytest.mark.parametrize('source', [
         'rootn x1 asinh tanh 4',     # index 0.8807...: NaN at every radicand
         'rootn -5 asinh tanh 4',     # a ground radicand: the ground classification
@@ -149,15 +149,11 @@ class TestGroundNanFolds:
 
     def test_an_index_whose_enclosure_holds_an_integer_stays(self, rules_free):
         # acos(cos 1) is exactly 1 and 2 + sin(pi) exactly 2: no proof that the index is no
-        # integer, so the root stays (in f64 too, where the evaluator's acos(cos 1) is not 1);
-        # permissive cancels the inverse pair (4.9), and the root of index 1 is its radicand
-        for mode in (Mode.f64, Mode.real):
-            assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=mode) == \
-                ['rootn', 'x1', 'acos', 'cos', '1']
+        # integer, so the root stays in f64, where the evaluator's acos(cos 1) is not 1;
+        # permissive cancels the inverse pair, and the root of index 1 is its radicand
+        assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=Mode.f64) == \
+            ['rootn', 'x1', 'acos', 'cos', '1']
         assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=Mode.permissive) == ['x1']
-        # in real the table reads sin(pi) = 0 exactly, so the index is the integer 2
-        assert rules_free.simplify('rootn x1 + 2 sin np.pi'.split(), mode=Mode.real) == \
-            ['rootn', 'x1', '2']
 
 
 class TestSymbolicExponentMergeLicence:
@@ -177,7 +173,7 @@ class TestSymbolicExponentMergeLicence:
                    'pow x0 * 0.5 + pow sin x1 2 pow cos x1 2'.split())
 
     @pytest.mark.xfail(strict=True, reason=(
-        "the judge refuses x0^x1 * x0^x1 -> x0^(2*x1) in f64 and real: at x0 = 0, x1 < 0 the "
+        "the judge refuses x0^x1 * x0^x1 -> x0^(2*x1) in f64: at x0 = 0, x1 < 0 the "
         "left side is +inf and 0^(2*x1) has no value (clause (c), a line of measure zero the "
         "judge does not read as isolated), and float64's x0 < 0, x1 = 1/2 is an extension"))
     def test_generic_symbolic_exponent_still_merges(self, eng):
@@ -301,11 +297,9 @@ class TestCertificateCompletenessTowers:
         # nfn's fail-closure on binary pow inside the reciprocal factor's spelling. The answer
         # factors to x8*(x8 - 1): true over the reals, and float64's rounding near x8 = 1 keeps
         # it more than 8 units in the last place from the input's value -- which f64 does not
-        # promise for a whole answer (F8: the engine's own algebra exact in the reals), so the
-        # monitor passes it in f64 as in real
+        # promise for a whole answer (the engine's own algebra is exact in the reals), so the
+        # monitor passes it
         out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split())
-        assert judge_pair('/ x8 / x8 - pow x8 2 x8'.split(), list(out), rng(), mode='real',
-                          engine=eng)[0] == 'OK'
         assert out == eng.simplify('- pow x8 2 x8'.split()), f'tower kept: {out}'
 
     def test_pow5_reciprocal_pair_cancels_in_every_mode(self, eng):
@@ -339,12 +333,9 @@ class TestCertificateCompletenessTowers:
         # POISON: 1/(x9*(x8-|x8|)) -- the BARE sum factor has a fat zero set (the
         # audit's infinity-sign-flip class): no sign may move through it. In f64 the
         # inverse distributes over the members, each keeping the orientation it is written
-        # in, so the sum stays `x8 - |x8|` and its `+0` gives `+inf/x9`, float64's value;
-        # real reads its one zero and keeps exactly one reciprocal.
+        # in, so the sum stays `x8 - |x8|` and its `+0` gives `+inf/x9`, float64's value.
         out = check(eng, 'inv * x9 - x8 abs x8'.split())
         assert out == ['/', 'inv', '-', 'x8', 'abs', 'x8', 'x9'], f'unsound distribution: {out}'
-        real = eng.simplify('inv * x9 - x8 abs x8'.split(), mode='real')
-        assert real.count('inv') + real.count('/') == 1, f'real distributed: {real}'
 
     def test_zero_kills_pole_bearing_factor(self, eng):
         # 0 * sinh(0.25*x5^2*(x17+cos x17)/x6) -> 0 (row-481 shape): the argument's
@@ -498,15 +489,14 @@ class TestPowerOfExpIsExp:
         # `exp(0) -> 1` is a literal EVALUATION. It used to stay with the rules, because
         # the constructor was forbidden to evaluate anything transcendental; under
         # mode-aware folding the f64 constructor does it directly, and exactly -- exp(0)
-        # is 1 in f64 and in mathematics alike. `real` reads it from the table, which holds
-        # the exact value.
+        # is 1 in f64 and in mathematics alike. `permissive` reads it from the table, which
+        # holds the exact value.
         from simplipy import Mode
-        bare._core.set_mode_rules('real', [])
         assert bare.simplify(['exp', '0'], mode=Mode.f64) == ['1']
-        assert bare.simplify(['exp', '0'], mode=Mode.real) == ['1']
+        assert bare.simplify(['exp', '0'], mode=Mode.permissive) == ['1']
         # `exp(1) -> e` is a different thing and unchanged: it chooses between two exact
         # SYMBOLS for one value, so it is not an evaluation at all and is unconditional.
-        assert bare.simplify(['exp', '1'], mode=Mode.real) == ['np.e']
+        assert bare.simplify(['exp', '1']) == ['np.e']
         assert eng.simplify(['exp', '0']) == ['1']
 
     def test_it_is_a_descent(self, eng) -> None:
@@ -551,14 +541,11 @@ class TestPowerOfExpIsExp:
         # fold condition excludes it without needing a licence -- pinned here because a
         # future widening of the gate would silently reopen it.
         # The ground `exp(-inf)` is 0 first, so no composition sees it: the evaluator's 0 in
-        # `f64`, the table's limit in `real`.
-        from simplipy import Mode
+        # `f64`, the table's limit in `permissive`.
         bare = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
-        bare._core.set_mode_rules('real', [])
         for tokens, f64 in ((['pow', 'exp', 'float("-inf")', 'x0'], ['pow', '0', 'x0']),
                             (['pow', 'exp', 'float("-inf")', '2'], ['0']),
                             (['rootn', 'exp', 'float("-inf")', '2'], ['0'])):
-            assert bare.simplify(list(tokens), mode=Mode.real) == f64, tokens
             assert bare.simplify(list(tokens)) == f64, tokens
 
     def test_it_does_not_fire_without_an_e_base_or_without_exp(self, eng) -> None:
@@ -620,12 +607,10 @@ class TestEvenFunctionsAreSignBlind:
     def test_the_POLE_TRILEMMA_trap_is_refused(self, bare) -> None:
         # `inv` is odd on the reals minus the origin. With one zero `neg(0) = 0`, and the limit
         # rule gives `1/0` no value (+inf from one side, -inf from the other), so `inv(neg 0)` and
-        # `neg(inv 0)` agree in `real`: both have none. float64's signed zero is odd at the pole
-        # (`1/-0 = -inf`), so in `f64` the two spellings agree too.
-        real = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[],
-                              rules_real=[])
-        assert real.simplify(['inv', 'neg', '0'], mode=Mode.real) == ['float("nan")']
-        assert real.simplify(['neg', 'inv', '0'], mode=Mode.real) == ['float("nan")']
+        # `neg(inv 0)` agree in `permissive`: both have none. float64's signed zero is odd at
+        # the pole (`1/-0 = -inf`), so in `f64` the two spellings agree too.
+        assert bare.simplify(['inv', 'neg', '0'], mode=Mode.permissive) == ['float("nan")']
+        assert bare.simplify(['neg', 'inv', '0'], mode=Mode.permissive) == ['float("nan")']
         assert bare.simplify(['inv', 'neg', '0'], mode=Mode.f64) == ['float("-inf")']
         assert bare.simplify(['neg', 'inv', '0'], mode=Mode.f64) == ['float("-inf")']
         # `abs(1/(-x)) -> abs(1/x)` DOES hold and does fire -- not through a parity claim
@@ -715,64 +700,39 @@ class TestInversePairsCollapse:
 
         The BAND axis: `atanh(tanh t) = t` for every real t, and the band exists only
         because f64 saturates (tanh attains 1.0 from 19.061547465398498, and atanh(1.0)
-        is inf). So `real` and `corpus` collapse it and `f64` must not.
+        is inf). So `permissive` collapses it and `f64` must not.
 
         The RECALL axis: `(-1)^c` is finite only at the integers, a null set of constants,
         so no certificate licenses its collapse to a fitted constant; only the permissive
-        mode skips the certificate. So `corpus` collapses it and `f64` AND `real` must not.
-
-        `real` sits on the opposite side of each -- it relaxes the band and keeps the
-        certificate -- so the two axes are genuinely independent and a single bool has no
-        value that describes it."""
+        mode skips the certificate."""
         from simplipy import Mode
-        bare._core.set_mode_rules('real', [])   # an EMPTY real set: constructors only
 
         band = ['atanh', 'tanh', '30']          # 30 > 19.061547465398498
         # f64 does not merely REFUSE the collapse -- with folding it answers what f64
         # genuinely computes: tanh(30) attains exactly 1.0, so atanh of it is inf, and
         # `np.arctanh(np.tanh(30.0))` really is inf. Faithful, and still not `30`.
         assert bare.simplify(list(band), mode=Mode.f64) == ['float("inf")']
-        assert bare.simplify(list(band), mode=Mode.real) == ['30']
         assert bare.simplify(list(band), mode=Mode.permissive) == ['30']
 
         recall = ['pow', '(-1)', '<constant>']   # finite only at integer constants
         assert bare.simplify(list(recall), mode=Mode.f64) == ['pow', '-1', '<constant>']
-        assert bare.simplify(list(recall), mode=Mode.real) == ['pow', '-1', '<constant>']
         assert bare.simplify(list(recall), mode=Mode.permissive) == ['<constant>']
 
-        inside = ['atanh', 'tanh', '1']         # inside every band: all three agree
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        inside = ['atanh', 'tanh', '1']         # inside every band: both agree
+        for mode in (Mode.f64, Mode.permissive):
             assert bare.simplify(list(inside), mode=mode) == ['1']
 
-    def test_real_is_equally_sound_not_more_permissive(self, bare) -> None:
-        """The ruling: "exp(log(-3)) must be rejected under real but
-        permitted under corpus. We do not want unsound simplifications in any of these
-        two. That's what corpus is for."
-
-        `f64` and `real` are two notions of SOUNDNESS under two arithmetics; only `corpus`
-        trades soundness for recall. `exp(log c) = c` needs c > 0 -- at c = -3 the left
-        side is nan and the right is -3, which is wrong in MATHEMATICS, not merely in
-        floating point, so `real` must refuse it exactly as `f64` does."""
+    def test_a_ground_nan_is_never_answered_by_a_value(self, bare) -> None:
+        """`exp(log c) = c` needs c > 0. A fitted `<constant>` owes a witness only where the
+        source is finite (the judge's criterion, `interval::constant_collapse`), so
+        `exp(log c)` is a fitted constant in every mode -- log(c) is finite on c > 0. The
+        ground `exp(log(-3))` involves no rule: the engine evaluates it and `log(-3)` is nan.
+        No mode answers `-3`."""
         from simplipy import Mode
-        bare._core.set_mode_rules('real', [])
-
-        # The CONSTANT question: a fitted `<constant>` owes a witness only where the source
-        # is finite (the judge's criterion, `interval::constant_collapse`), so `exp(log c)`
-        # is a fitted constant in every mode -- log(c) is finite on c > 0. `(-1)^c` is
-        # finite only at the integers, which certify nothing, so `f64` and `real` refuse it
-        # and only `corpus` collapses it.
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        for mode in (Mode.f64, Mode.permissive):
             assert bare.simplify(['exp', 'log', '<constant>'], mode=mode) == ['<constant>']
-        unproven = ['pow', '(-1)', '<constant>']
-        assert bare.simplify(list(unproven), mode=Mode.f64) == ['pow', '-1', '<constant>']
-        assert bare.simplify(list(unproven), mode=Mode.real) == ['pow', '-1', '<constant>']
-        assert bare.simplify(list(unproven), mode=Mode.permissive) == ['<constant>']
-
-        # The owner's concrete example is GROUND, so no rule is involved at all: the
-        # engine evaluates it exactly and `log(-3)` is nan. Every mode answers nan, and
-        # the property that matters is the one none of them has -- none returns `-3`.
         ground = ['exp', 'log', '(-3)']
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        for mode in (Mode.f64, Mode.permissive):
             got = bare.simplify(list(ground), mode=mode)
             assert got == ['float("nan")'], (mode, got)
             assert got != ['(-3)'], mode
@@ -1004,10 +964,10 @@ class TestTheBandAndTheRulesetAgree:
         RULESET performed the same collapse in the same mode, the two would contradict
         each other -- which is what the audit found on the pre-triple artifact, where
         `inv(acosh(cosh x0))` became `abs(1/x0)` through a rule while the constructor
-        refused it. The triple resolves it by tiering them `real`; this is the tripwire
-        that says so, and would fire if a future judge change tiered one `core`."""
-        from conftest import require_triple
-        require_triple()
+        refused it. The judge keeps the family out of f64; this is the tripwire that says
+        so, and would fire if a future judge change tiered one `core` or `f64-only`."""
+        from conftest import require_mode_sets
+        require_mode_sets()
         import json
         from conftest import acj_config_path, require_or_skip
         from simplipy.verify._contract import judge_rule
@@ -1023,13 +983,13 @@ class TestTheBandAndTheRulesetAgree:
                         or (len(r[0]) >= 3 and r[0][1] == 'acosh' and r[0][2] == 'cosh'))
                     and r[1] != ['<constant>'] and '<constant>' not in r[0]]
 
-        in_real = collapses(json.load(open(base + 'rules_real.json')))
-        assert in_real, 'the family must exist in rules_real, or this test guards nothing'
+        in_permissive = collapses(json.load(open(base + 'rules_corpus.json')))
+        assert in_permissive, 'the family must exist in rules_permissive, or this test guards nothing'
         in_f64 = collapses(json.load(open(base + 'rules.json')))
         assert in_f64 == [], f'an acosh-cosh collapse is served in f64: {in_f64[:3]}'
-        for lhs, rhs in in_real:
+        for lhs, rhs in in_permissive:
             tier = judge_rule(list(lhs), list(rhs), engine)['tier']
-            assert tier == 'real', f'{" ".join(lhs)} -> {" ".join(rhs)} tiers {tier!r}'
+            assert tier == 'permissive', f'{" ".join(lhs)} -> {" ".join(rhs)} tiers {tier!r}'
 
     def test_the_collapse_really_is_wrong_in_f64(self) -> None:
         # NOTE: this asserts IEEE facts, not repository behaviour -- no change here can
@@ -1044,17 +1004,13 @@ class TestTheBandAndTheRulesetAgree:
         assert abs(1.0 / 800.0) == 0.00125
 
 
-class TestCorpusTakesTheBestOfBoth:
-    """`corpus` is the most capable mode, and that cannot be delivered by sequencing.
-    Folding is bottom-up, so `tanh 30` becomes `1` before `atanh` ever sees it -- no
-    "try real's arm first" inside a node recovers `atanh(tanh 30) -> 30`. Corpus runs
-    the whole pipeline under BOTH disciplines and keeps the cheaper endpoint."""
+class TestPermissiveTakesTheBestOfBoth:
+    """`permissive` is the most capable mode: it keeps a structural answer where f64's fold
+    would give a non-finite token, and folds where f64 does."""
 
     @pytest.fixture(scope='class')
     def bare(self):
-        e = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
-        e._core.set_mode_rules('real', [])
-        return e
+        return SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
 
     def test_corpus_keeps_the_structural_answer_when_it_is_cheaper(self, bare) -> None:
         """mu prices `30` at 4000 and `float("inf")` at 8000, so the unfolded endpoint
@@ -1063,7 +1019,6 @@ class TestCorpusTakesTheBestOfBoth:
         training."""
         from simplipy import Mode
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.f64) == ['float("inf")']
-        assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.real) == ['30']
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.permissive) == ['30']
 
     def test_f64_folds_a_whole_ground_node_before_its_parts(self, bare) -> None:
@@ -1078,55 +1033,16 @@ class TestCorpusTakesTheBestOfBoth:
         # literal gives 14170.787488305119
         assert bare.simplify(list(source), mode=Mode.permissive) == ['14170.787488305128']
         assert bare.complexity(['14170.787488305119'], mode=Mode.f64) == 58354
-        assert bare.simplify(list(source), mode=Mode.real) == ['exp', '9.55893790547399']
         # the reading complexity prices keeps a ground constant as written in every mode
         assert bare.complexity(['asin', '1e-08'], mode=Mode.f64) == \
-            bare.complexity(['asin', '1e-08'], mode=Mode.real)
+            bare.complexity(['asin', '1e-08'], mode=Mode.permissive)
 
-    def test_corpus_still_folds_where_real_cannot(self, bare) -> None:
-        """The other half: `real` leaves `asin(1e-8)` alone because no literal spells the
-        true value, and the f64 endpoint is cheaper, so corpus takes it."""
+    def test_permissive_folds_a_ground_value_no_literal_spells(self, bare) -> None:
+        """No literal spells the true value of `asin(1e-8)`; permissive writes the float."""
         from simplipy import Mode
-        assert bare.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '1e-8']
         assert bare.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['1e-8']
 
-    def test_the_selection_is_STRICT_so_a_tie_goes_to_the_folded_form(self, bare) -> None:
-        """POLICY, not derivation -- and it is enforced by the shape of the comparison
-        rather than by a branch of its own.
-
-        The dispatcher keeps the unfolded endpoint only when it is STRICTLY cheaper
-        (`cu < cf`); every other case, tie included, takes the folded one. So the tie
-        policy is not separately reachable: a search over 65 expressions whose real and
-        f64 endpoints differ found NO mu tie at all. What is testable, and what actually
-        carries the policy, is the strictness -- unfolded must win only on a strict
-        descent, and folded must win when it is merely no worse.
-
-        (An earlier version of this test claimed mu priced `* 2 asin 1e-8` and `2e-8`
-        identically at 6170. Measured, they are 25,170 and 6,170 -- a 19,000 strict
-        descent, so it exercised the ordinary arm and the stated numbers were wrong.)
-        """
-        from simplipy import Mode
-        # The strictness is pinned BEHAVIORALLY: the FFI instrument
-        # now prices tokens through the requested mode's parse route, so it folds an
-        # f64-foldable spelling regardless of which mode produced it and can no
-        # longer separate a real endpoint from its f64 fold. Which endpoint corpus
-        # RETURNS is the arbitration's own verdict, and that is what carries the
-        # policy.
-        # folded strictly cheaper -> folded
-        t = ['+', 'asin', '1e-08', 'asin', '1e-08']
-        real_end = bare.simplify(list(t), mode=Mode.real)
-        f64_end = bare.simplify(list(t), mode=Mode.f64)
-        assert real_end != f64_end, "the exemplar must separate the branches"
-        assert bare.simplify(list(t), mode=Mode.permissive) == f64_end
-
-        # unfolded strictly cheaper -> unfolded, which is the only way it wins
-        band = ['atanh', 'tanh', '30']
-        real_band = bare.simplify(list(band), mode=Mode.real)
-        f64_band = bare.simplify(list(band), mode=Mode.f64)
-        assert real_band != f64_band, "the exemplar must separate the branches"
-        assert bare.simplify(list(band), mode=Mode.permissive) == real_band
-
-    def test_corpus_is_never_worse_than_either_parent(self, bare) -> None:
+    def test_permissive_is_never_worse_than_f64(self, bare) -> None:
         """The property that makes 'most capable' checkable rather than aspirational."""
         from simplipy import Mode
         cases = [['atanh', 'tanh', '30'], ['asin', '1e-08'], ['tan', '1'],
@@ -1134,5 +1050,5 @@ class TestCorpusTakesTheBestOfBoth:
                  ['+', 'asin', '1e-08', 'asin', '1e-08']]
         for t in cases:
             mu = {m: bare._core.ac_complexity(bare.simplify(list(t), mode=m), rule_mode='default')
-                  for m in (Mode.f64, Mode.real, Mode.permissive)}
-            assert mu[Mode.permissive] <= min(mu[Mode.f64], mu[Mode.real]), (t, mu)
+                  for m in (Mode.f64, Mode.permissive)}
+            assert mu[Mode.permissive] <= mu[Mode.f64], (t, mu)

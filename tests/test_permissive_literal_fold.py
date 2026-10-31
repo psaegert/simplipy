@@ -64,13 +64,12 @@ def test_permissive_folds_the_monster_to_its_float(engine):
     assert repr(float(exact_value(MONSTER))) == "0.46867105279529636"
 
 
-def test_strict_tier_keeps_the_exact_fraction(engine):
-    # (Mode.real needs a mined real ruleset, which a rules-less engine cannot serve; the fold
-    # is gated on the permissive mode alone, so the f64 tier stands for both strict tiers.)
+def test_f64_keeps_the_exact_fraction(engine):
+    # the fold is gated on the permissive mode alone
     out = prefix(engine, MONSTER, Mode.f64)
-    # The strict tier keeps the EXACT value, 2e29/426738538271436458205631863649, in the token
-    # printer's own spelling (the reader's integer-over-decimal spelling is the infix text's,
-    # test_ratio_spelling.py) -- not the permissive tier's float.
+    # f64 keeps the EXACT value, 2e29/426738538271436458205631863649, in the token printer's own
+    # spelling (the reader's integer-over-decimal spelling is the infix text's,
+    # test_ratio_spelling.py) -- not permissive's float.
     assert out == ["/", "2e29", "426738538271436458205631863649"], out
     assert Fraction(out[1]) / Fraction(out[2]) == exact_value(MONSTER)
 

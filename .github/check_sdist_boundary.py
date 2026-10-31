@@ -16,7 +16,7 @@ alone is silently wrong:
   test suite loads them, so a tarball missing one is a tarball whose tests cannot run
   (audit C54). The required set is DERIVED from the checkout, not hardcoded: a
   hardcoded list demanded the retired `acj-2-1`/`acj-3-2` cells forever (audit U1),
-  and would go stale again the day the acj-4-3 cell grows its `real`/`corpus` thirds.
+  and would go stale again the day the acj-4-3 cell grows its permissive file.
   Deriving it keeps the meaning fixed while the inventory moves: whatever the tree
   ships, the sdist ships whole.
 

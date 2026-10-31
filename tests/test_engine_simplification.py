@@ -181,19 +181,17 @@ class TestIsValid:
 
 
 class TestMode:
-    """The soundness `Mode` AXIS: `f64` (default) is sound as the deployed evaluator
-    computes, `real` is sound as mathematics defines, and `corpus` is the permissive
-    superset that relaxes the constant-fold's finiteness gate and the matcher's
-    `!`-certificate. The first test below asserts the members are exactly these three."""
+    """The `Mode`s: `f64` (default) is sound as the deployed evaluator computes, and
+    `permissive` reads real's values and relaxes the constant-fold's finiteness gate and the
+    matcher's `!`-certificate. The first test below asserts the members are exactly these
+    two."""
 
     def test_mode_is_an_axis_not_an_ordering(self) -> None:
-        """The `IntEnum` said soundness is ordinal. It is not: `inv(acosh(cosh x)) ->
-        abs(inv x)` is mathematically true and NOT f64-realised, `asin(1e-8) -> 1e-8` is
-        f64-exact and mathematically false. Neither is "more sound", so `<` must not
-        type-check -- a comparison between modes is a category error, not a question
-        with a wrong answer."""
+        """The `IntEnum` said soundness is ordinal. It is not: a comparison between modes
+        is a category error, not a question with a wrong answer, so `<` must not
+        type-check."""
         from simplipy import Mode
-        assert [m.name for m in Mode] == ["f64", "real", "permissive"]
+        assert [m.name for m in Mode] == ["f64", "permissive"]
         with pytest.raises(TypeError):
             Mode.f64 < Mode.permissive        # type: ignore[operator]
 
@@ -203,18 +201,15 @@ class TestMode:
         with pytest.raises(AttributeError):
             Mode.EXACT        # type: ignore[attr-defined]
 
-    def test_real_fails_closed_when_the_artifact_has_no_real_ruleset(self) -> None:
-        """`corpus` may fall back to the default set -- its divergence is search
-        semantics, so the fallback IS today's LOSSY. `real` may not: its only divergence
-        is which rules are certified, so falling back would answer a request for
-        mathematical soundness with the f64 set, which contains rules that are
-        f64-exact and mathematically false."""
+    def test_the_retired_mode_is_refused(self) -> None:
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         engine.simplify(["x0"], mode=Mode.f64)
         engine.simplify(["x0"], mode=Mode.permissive)
-        with pytest.raises(ValueError, match="mode='real' needs a ruleset mined for it"):
-            engine.simplify(["x0"], mode=Mode.real)
+        with pytest.raises(ValueError, match="the real mode is retired"):
+            engine.simplify(["x0"], mode="real")
+        with pytest.raises(AttributeError):
+            Mode.real        # type: ignore[attr-defined]
 
     def test_the_documented_lower_case_strings_bind(self) -> None:
         """The old coercion upper-cased before lookup, which would now miss every
@@ -223,13 +218,12 @@ class TestMode:
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         for spelling in ("f64", "F64", "PERMISSIVE"):
             engine.simplify(["x0"], mode=spelling)
-        # ` real ` still BINDS (it reaches the fail-closed check, not the unknown-mode
-        # branch), which is what this test is about
-        with pytest.raises(ValueError, match="needs a ruleset mined for it"):
+        # ` real ` is read as the retired mode's name, not as an unknown one
+        with pytest.raises(ValueError, match="the real mode is retired"):
             engine.simplify(["x0"], mode=" real ")
         with pytest.raises(ValueError, match="unknown mode"):
             engine.simplify(["x0"], mode="sound-ish")
-        assert Mode["real"] is Mode.real
+        assert Mode["permissive"] is Mode.permissive
 
     def test_sound_keeps_constant_over_zero(self) -> None:
         """`<constant>/0` is +-inf/nan for every constant, so SOUND must NOT fold it."""
@@ -264,8 +258,8 @@ class TestMode:
         stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
         applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
         three edges behave consistently under `Mode.permissive`."""
-        from conftest import require_triple
-        require_triple()
+        from conftest import require_mode_sets
+        require_mode_sets()
         from simplipy import Mode
         engine = legacy_from_config(acj_config_path())
         # (inf/inf)*x0: SOUND keeps the sound nan; LOSSY relaxes the $-certificate and the
@@ -1032,15 +1026,14 @@ class TestMultSort:
     def test_the_judge_reads_the_seeds_sorts(self, tmp_path) -> None:
         # The promotion-side twin: promotion seeds the cancellation identities where the judge
         # licenses them. At a `!` binding the subtree may be 0 on a set of positive measure,
-        # where 0/0 has no value, so `/ !0 !0 -> 1` holds in neither f64 nor real; at a `$`
-        # binding (finite and nonzero a.e.) `/ $0 $0 -> 1` and `/ 0 $0 -> 0` hold.
+        # where 0/0 has no value, so `/ !0 !0 -> 1` does not hold in f64; at a `$` binding
+        # (finite and nonzero a.e.) `/ $0 $0 -> 1` and `/ 0 $0 -> 0` hold.
         from simplipy.verify import MODE_TIERS, effective_tier, verify_rule
 
         def holds(lhs, rhs, mode):
             return effective_tier(verify_rule(lhs.split(), rhs.split())) in MODE_TIERS[mode]
-        for mode in ('f64', 'real'):
-            assert not holds('/ !0 !0', '1', mode)
-            assert holds('/ $0 $0', '1', mode) and holds('/ 0 $0', '0', mode)
+        assert not holds('/ !0 !0', '1', 'f64')
+        assert holds('/ $0 $0', '1', 'f64') and holds('/ 0 $0', '0', 'f64')
 
 
 class TestB9MuGuarantee:

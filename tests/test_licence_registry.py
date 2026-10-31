@@ -63,10 +63,10 @@ class TestLoadConsumer:
         # exceptional point, and the pass costs nothing the translation pins notice.
         # RE-PINNED for the 0.14.0 triple: (5558, 0, 0, 8) -> (5327, 0, 0, 8).
         #
-        # WHY, and it is not the dedup. The shipped `rules.json` is now the f64 THIRD of a
-        # triple: 5,319 rows, against the 0.13 line's 6,594. Rules that are true over R
-        # and NOT f64-realised moved to rules_real.json, and the ground literal
-        # evaluations folding now performs were pruned. `kept` counts SERVED patterns, so
+        # WHY, and it is not the dedup. The shipped `rules.json` is the f64 file of a
+        # per-mode artifact: 5,319 rows, against the 0.13 line's 6,594. Rules that are true
+        # over R and NOT f64-realised left it, and the ground literal evaluations folding
+        # now performs were pruned. `kept` counts SERVED patterns, so
         # it follows the file. Translation stays pristine 0/0 and twins stay 8: nothing
         # about the surviving rules changed.
         kept, subsumed, dropped, twins = eng._core.ac_rules_info_in_mode(rule_mode='default')

@@ -110,8 +110,9 @@ def test_doc_examples_execute_and_their_outputs_hold(relpath, tmp_path, monkeypa
     # INTERIM, until the docs name the engine mined for 0.15 (`acj2-4-llm`, published with the
     # re-mine): they load acj-5-4-llm, a 0.14.0 mine, which the public loader refuses, so the
     # examples read it through the legacy opt-in.
+    from conftest import legacy_from_config
     monkeypatch.setattr(SimpliPyEngine, 'from_config', classmethod(
-        lambda cls, path, **kw: cls._from_config(path, legacy=True, **kw)))
+        lambda cls, path, **kw: legacy_from_config(path, **kw)))
     text = open(os.path.join(REPO, relpath)).read()
     namespace: dict = {}
     ran = 0

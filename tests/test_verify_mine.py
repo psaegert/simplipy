@@ -16,7 +16,7 @@ _OPERATORS = {
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
 }
-FILES = {'f64': 'mined.json', 'real': 'mined_real.json', 'permissive': 'mined_permissive.json'}
+FILES = {'f64': 'mined.json', 'permissive': 'mined_permissive.json'}
 
 
 def core_judge(pairs):
@@ -39,10 +39,9 @@ def mine(tmp_path_factory):
 def _plant(tmp_path, mine, mode, rules, sidecar_edit=None):
     """A copy of the clean file of `mode` with `rules` in place of its rows; its sidecar is
     the clean one, edited by `sidecar_edit`. A permissive file lies beside the clean f64
-    and real files its sidecar pins (the `offered` gate)."""
+    file its sidecar pins (the `offered` gate)."""
     if mode == 'permissive':
-        for other in ('f64', 'real'):
-            (tmp_path / FILES[other]).write_bytes((mine / FILES[other]).read_bytes())
+        (tmp_path / FILES['f64']).write_bytes((mine / FILES['f64']).read_bytes())
     path = tmp_path / FILES[mode]
     path.write_text(json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules]))
     side = json.load(open(mine / (FILES[mode] + '.provenance.json')))
@@ -52,7 +51,7 @@ def _plant(tmp_path, mine, mode, rules, sidecar_edit=None):
     return str(path)
 
 
-@pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+@pytest.mark.parametrize('mode', ['f64', 'permissive'])
 def test_a_clean_mine_passes_every_gate(mine, mode) -> None:
     report = verify_mine(str(mine / FILES[mode]), mode, _OPERATORS, judge_processes=1)
     assert report['ok'], report['gates']
@@ -81,8 +80,8 @@ def test_the_engine_owned_law_gate(tmp_path, mine) -> None:
     factor = (('+', '*', '?0', '?1', '*', '?2', '?1'), ('*', '+', '?0', '?2', '?1'))
     canon = (('*', '?0', '1'), ('?0',))
     mined = (('*', 'exp', '?0', 'exp', '?0'), ('exp', '*', '2', '?0'))  # a rule of its own
-    path = _plant(tmp_path, mine, 'real', [factor, canon, mined])
-    gate = _gate(verify_mine(path, 'real', _OPERATORS, judge=core_judge), 'engine_owned_law')
+    path = _plant(tmp_path, mine, 'f64', [factor, canon, mined])
+    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'engine_owned_law')
     assert gate['examples'] == [[list(factor[0]), list(factor[1]), 'engine-owned-law'],
                                 [list(canon[0]), list(canon[1]), 'canon']], gate
 
@@ -100,23 +99,18 @@ def test_the_engine_owned_law_gate_catches_the_sign_pull(tmp_path, mine) -> None
 
 
 def test_the_unlicensed_gate(tmp_path, mine) -> None:
-    """An f64 file holding a rule the judge files `real`."""
+    """An f64 file holding a rule the judge files `permissive`."""
     rule = (('log', 'exp', '?0'), ('?0',))
     path = _plant(tmp_path, mine, 'f64', [rule])
 
     def judge(pairs):
-        return ['real' if tuple(map(tuple, p)) == rule else 'core' for p in pairs]
+        return ['permissive' if tuple(map(tuple, p)) == rule else 'core' for p in pairs]
 
     gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=judge), 'unlicensed')
-    assert not gate['ok'] and gate['examples'] == [[list(rule[0]), list(rule[1]), 'real', []]]
+    assert not gate['ok'] and gate['examples'] == [[list(rule[0]), list(rule[1]), 'permissive', []]]
     # the same file read as `permissive`, which licenses the tier
     path = _plant(tmp_path, mine, 'permissive', [rule])
     assert _gate(verify_mine(path, 'permissive', _OPERATORS, judge=judge), 'unlicensed')['ok']
-    # in `real` the tier holds and a named policy refuses: the real canon cancels log(exp(x))
-    # itself, so the rule is the engine's own
-    path = _plant(tmp_path, mine, 'real', [rule])
-    gate = _gate(verify_mine(path, 'real', _OPERATORS, judge=judge), 'unlicensed')
-    assert gate['examples'] == [[list(rule[0]), list(rule[1]), 'real', ['engine_owned']]], gate
 
 
 def test_the_unlicensed_gate_reads_the_named_policies(tmp_path, mine) -> None:
@@ -124,7 +118,7 @@ def test_the_unlicensed_gate_reads_the_named_policies(tmp_path, mine) -> None:
     ground composite on its right (`verify.licensed`), so a file holding it fails the gate in
     every mode."""
     rule = (('*', '2', 'log', '3'), ('log', '9'))
-    for mode in ('f64', 'real', 'permissive'):
+    for mode in ('f64', 'permissive'):
         path = _plant(tmp_path, mine, mode, [rule])
         gate = _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'unlicensed')
         want = [list(rule[0]), list(rule[1]), 'core']
@@ -156,12 +150,12 @@ def test_a_longer_rule_is_live_beside_its_prefix(tmp_path, mine) -> None:
     `cos(asin(tanh(x)))`)."""
     rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
              (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
-    path = _plant(tmp_path, mine, 'real', rules)
+    path = _plant(tmp_path, mine, 'permissive', rules)
     ops = _acj_operators()
-    assert _gate(verify_mine(path, 'real', ops, judge=core_judge), 'dead')['ok']
-    engine = SimpliPyEngine(operators=ops, rules=[], rules_real=rules)
-    assert engine.simplify('sin acos tanh x0'.split(), mode='real') == ['inv', 'cosh', 'x0']
-    assert engine.simplify('sin acos x0'.split(), mode='real') == ['cos', 'asin', 'x0']
+    assert _gate(verify_mine(path, 'permissive', ops, judge=core_judge), 'dead')['ok']
+    engine = SimpliPyEngine(operators=ops, rules=[], rules_permissive=rules)
+    assert engine.simplify('sin acos tanh x0'.split(), mode='permissive') == ['inv', 'cosh', 'x0']
+    assert engine.simplify('sin acos x0'.split(), mode='permissive') == ['cos', 'asin', 'x0']
 
 
 def _length_4(side) -> None:
@@ -177,23 +171,23 @@ def test_the_overlaps_gate(tmp_path, mine) -> None:
     rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
              (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
     ops = _acj_operators()
-    path = _plant(tmp_path, mine, 'real', rules, _length_4)
-    gate = _gate(verify_mine(path, 'real', ops, judge=core_judge), 'overlaps')
+    path = _plant(tmp_path, mine, 'permissive', rules, _length_4)
+    gate = _gate(verify_mine(path, 'permissive', ops, judge=core_judge), 'overlaps')
     assert not gate['ok'], gate
     assert {(' '.join(e['completion'][0]), ' '.join(e['completion'][1]))
             for e in gate['examples']} == {('cos asin tanh x0', 'inv cosh x0')}, gate
     completed = rules + [(('cos', 'asin', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
-    path = _plant(tmp_path, mine, 'real', completed, _length_4)
-    assert _gate(verify_mine(path, 'real', ops, judge=core_judge), 'overlaps')['ok']
+    path = _plant(tmp_path, mine, 'permissive', completed, _length_4)
+    assert _gate(verify_mine(path, 'permissive', ops, judge=core_judge), 'overlaps')['ok']
 
     def refuse(pairs):
         return ['reject'] * len(pairs)
 
-    path = _plant(tmp_path, mine, 'real', rules, _length_4)
-    report = verify_mine(path, 'real', ops, judge=refuse)
+    path = _plant(tmp_path, mine, 'permissive', rules, _length_4)
+    report = verify_mine(path, 'permissive', ops, judge=refuse)
     assert _gate(report, 'overlaps')['ok'] and len(report['overlaps_refused']) == 1, report
-    path = _plant(tmp_path, mine, 'real', rules)
-    report = verify_mine(path, 'real', ops, judge=core_judge)
+    path = _plant(tmp_path, mine, 'permissive', rules)
+    report = verify_mine(path, 'permissive', ops, judge=core_judge)
     assert _gate(report, 'overlaps')['ok'] and report['overlaps_beyond_cell'] == 1, report
 
 
@@ -205,14 +199,14 @@ def test_the_translation_gate(tmp_path, mine) -> None:
 
 
 def test_the_fingerprint_gate(tmp_path, mine) -> None:
-    rules = json.load(open(mine / FILES['real']))
+    rules = json.load(open(mine / FILES['permissive']))
 
     def move_a_probe(side):
         probe = sorted(side['measure']['probes'])[0]
         side['measure']['probes'][probe] += 1
 
-    path = _plant(tmp_path, mine, 'real', rules, move_a_probe)
-    gate = _gate(verify_mine(path, 'real', _OPERATORS, judge=core_judge), 'fingerprint')
+    path = _plant(tmp_path, mine, 'permissive', rules, move_a_probe)
+    gate = _gate(verify_mine(path, 'permissive', _OPERATORS, judge=core_judge), 'fingerprint')
     assert not gate['ok'] and gate['count'] == 1, gate
 
 
@@ -225,7 +219,7 @@ def _interrupted(side):
 
 
 def _another_mode(side):
-    side['mode'] = 'real'
+    side['mode'] = 'f64'
 
 
 def _no_probes(side):
@@ -283,20 +277,25 @@ def test_the_cli_exit_code(tmp_path, mine) -> None:
                                       'rules': str(mine / 'rules.json')}))
     report = tmp_path / 'report.json'
     with pytest.raises(SystemExit) as done:
-        main(['verify-mine', str(mine / FILES['real']), '--mode', 'real', '-e', str(config),
-              '--judge-processes', '1', '--report', str(report)])
+        main(['verify-mine', str(mine / FILES['permissive']), '--mode', 'permissive', '-e',
+              str(config), '--judge-processes', '1', '--report', str(report)])
     assert done.value.code == 0 and json.load(open(report))['ok']
-    planted = _plant(tmp_path, mine, 'real', [(('*', '1', '?0'), ('?0',))])
+    planted = _plant(tmp_path, mine, 'permissive', [(('*', '1', '?0'), ('?0',))])
     with pytest.raises(SystemExit) as done:
-        main(['verify-mine', planted, '--mode', 'real', '-e', str(config), '--judge-processes', '1'])
+        main(['verify-mine', planted, '--mode', 'permissive', '-e', str(config),
+              '--judge-processes', '1'])
     assert done.value.code == 1
+    # the retired mode is refused before any file is read
+    with pytest.raises(SystemExit) as done:
+        main(['verify-mine', planted, '--mode', 'real', '-e', str(config)])
+    assert done.value.code != 0
 
 
 def test_a_sidecar_records_the_acceptance_and_the_code(mine) -> None:
-    side = json.load(open(mine / (FILES['real'] + '.provenance.json')))
+    side = json.load(open(mine / (FILES['permissive'] + '.provenance.json')))
     assert side['acceptance']['rescue'] is True
     assert side['acceptance']['near_miss_frac'] == 0.5
-    assert side['acceptance']['tiers'] == ['core', 'real', 'real-only', 'strict']
+    assert side['acceptance']['tiers'] == ['core', 'permissive']
     assert len(side['acceptance']['judge_digest']) == 64
     assert set(side['code_digest']) == {'core', 'python'}
     f64 = json.load(open(mine / (FILES['f64'] + '.provenance.json')))
@@ -306,8 +305,8 @@ def test_a_sidecar_records_the_acceptance_and_the_code(mine) -> None:
 
 
 def test_the_offered_gate(tmp_path, mine) -> None:
-    """The permissive sidecar pins the f64 and real files it was offered: each must lie
-    beside it with the pinned bytes, and a sidecar that pins nothing fails."""
+    """The permissive sidecar pins the f64 file it was offered: it must lie beside it with
+    the pinned bytes, and a sidecar that pins nothing fails."""
     import shutil
     for name in FILES.values():
         shutil.copy(mine / name, tmp_path / name)
@@ -320,14 +319,14 @@ def test_the_offered_gate(tmp_path, mine) -> None:
     assert offered()['ok'], offered()
     assert 'offered' not in verify_mine(str(tmp_path / FILES['f64']), 'f64', _OPERATORS,
                                         judge=core_judge)['gates']
-    # the real file changes after the mine
-    real = json.load(open(tmp_path / FILES['real']))
-    (tmp_path / FILES['real']).write_text(json.dumps(real[1:], indent=4))
+    # the f64 file changes after the mine
+    f64 = json.load(open(tmp_path / FILES['f64']))
+    (tmp_path / FILES['f64']).write_text(json.dumps(f64[1:], indent=4))
     gate = offered()
-    assert not gate['ok'] and gate['examples'] == [['real', 'sha256', str(tmp_path / FILES['real'])]]
+    assert not gate['ok'] and gate['examples'] == [['f64', 'sha256', str(tmp_path / FILES['f64'])]]
     # the f64 file is gone
     (tmp_path / FILES['f64']).unlink()
-    assert [e[:2] for e in offered()['examples']] == [['f64', 'missing'], ['real', 'sha256']]
+    assert [e[:2] for e in offered()['examples']] == [['f64', 'missing']]
     # a permissive mine that was offered nothing
     side_path = tmp_path / (FILES['permissive'] + '.provenance.json')
     side = json.load(open(side_path))

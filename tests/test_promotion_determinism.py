@@ -16,13 +16,13 @@ from simplipy.promotion import promote
 from simplipy.verify import licensed, verify_rule
 
 ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
-MODES = ('f64', 'real', 'permissive')
+MODES = ('f64', 'permissive')
 
 
 @pytest.fixture(scope='module')
 def bare():
     ops = yaml.safe_load(open(ACJ2_4))['operators']
-    return SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+    return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
 def _by_rule(kept):
@@ -61,7 +61,7 @@ def _strongest(lhs, rhs, mode, engine):
 @pytest.mark.parametrize('mode', MODES)
 def test_each_rule_ships_at_the_strongest_sort_the_judge_licenses(bare, mode):
     """`ceil(1/cosh(x)) -> 1` holds for every real x, and at x = +-inf the left side is
-    ceil(0) = 0: the `_` rung is refused in f64 and real, the `!` rung (a finite subtree) holds.
+    ceil(0) = 0: the `_` rung is refused in f64, the `!` rung (a finite subtree) holds.
     permissive binds a slot to real values only, so the `_` rung holds there."""
     kept = _by_rule(promote(RULES, bare, rule_mode=mode)[0])
     for lhs, rhs in RULES:
@@ -81,7 +81,7 @@ def test_each_rung_is_asked_of_the_judge(bare):
         asked.extend((tuple(lhs), tuple(rhs)) for lhs, rhs in pairs)
         return ['reject'] * len(pairs)
 
-    kept, report = promote(RULES, bare, rule_mode='real', judge=refusing)
+    kept, report = promote(RULES, bare, rule_mode='f64', judge=refusing)
     assert ('ceil', 'inv', 'cosh', '_0') in [lhs for lhs, _ in asked]
     assert ('ceil', 'inv', 'cosh', '!0') in [lhs for lhs, _ in asked]
     assert not report['promoted_any'] and not report['promoted_bang']
@@ -95,7 +95,7 @@ def test_a_miscalibrated_rule_judge_stops_promotion(bare, monkeypatch):
     monkeypatch.setattr(verify, 'verify_rule', lambda lhs, rhs, *a, **k: dict(
         real(lhs, rhs, *a, **k), tier='core'))
     with pytest.raises(RuntimeError, match='positive control'):
-        promote(RULES, bare, rule_mode='real')
+        promote(RULES, bare, rule_mode='f64')
 
 
 def test_a_rule_without_slots_passes_through_at_once(bare):
@@ -113,7 +113,7 @@ def test_a_rule_without_slots_passes_through_at_once(bare):
         return ['reject'] * len(pairs)      # the seeds, refused here, are asked about too
 
     start = time.monotonic()
-    kept, _ = promote(offenders, bare, rule_mode='real', run_positive_controls=False,
+    kept, _ = promote(offenders, bare, rule_mode='f64', run_positive_controls=False,
                       judge=judge)
     assert time.monotonic() - start < 5.0
     assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept] == offenders

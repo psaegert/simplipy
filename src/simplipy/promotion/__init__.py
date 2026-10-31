@@ -113,7 +113,7 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     a miss.
     ``verbose`` reports each step; ``progress`` overrides the reporter (see
     :mod:`simplipy.progress`).
-    ``rule_mode`` is the mode the rules serve in (``'f64'``, also ``'default'``, ``'real'``,
+    ``rule_mode`` is the mode the rules serve in (``'f64'``, also ``'default'``,
     ``'permissive'`` or a :class:`~simplipy.Mode` member): each rung is licensed in it, and the
     derivability refund asks that mode's engine.
     ``judge``: the judged tier of each pair of a batch, as the mine's judge gives it

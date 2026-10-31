@@ -11,6 +11,13 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Everyone**
 
+- **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
+  computes, and `permissive`, for training-corpus canonicalisation, which reads the reals'
+  values. `Mode.real`, `mode='real'` and a config's `rules_real:` set raise `ValueError` at
+  every entry: `simplify`, `load`, the verify APIs and CLIs, `find-rules`, the masking and
+  normalization helpers, and certification. An artifact is two files, `rules_f64.json` and
+  `rules_permissive.json`; `verify_artifact(f64, permissive)` gates it, and `verify_triple`
+  raises.
 - **Answers and prices change.** The search owns the distributive law, poles are read by their
   limits, numbers stay exact beyond 128 bits, and `complexity` prices each mode in its own
   reading, a literal costing at most what its float costs. Regenerate every test, cache or
@@ -25,9 +32,8 @@ organised by who you are, then the highlights, then every change in detail.
   int now sees `None`; pass `effort=4` for the old cap.
 - **Loading does more up front.** Every rule set named at load is compiled before `load`
   returns, so the first call in each mode answers at once. With `acj-5-4-llm` the process peaks
-  at about 0.9 GB with all three sets, about 0.7 GB with `modes=('f64', 'permissive')` and about
-  0.45 GB with `f64` alone; a set left out builds on its mode's first use, in about 3–4 s and
-  about 100 MB.
+  at about 0.7 GB with both sets and about 0.45 GB with `f64` alone; a set left out builds on
+  its mode's first use, in about 3–4 s and about 100 MB.
 - **Messages go through `logging`.** The default-engine announcement and the first-use build of
   a deferred set are WARNING records on the `simplipy` logger, install progress is INFO and an
   install failure ERROR; the library itself prints nothing (`list_assets` excepted, whose output
@@ -43,26 +49,25 @@ organised by who you are, then the highlights, then every change in detail.
   a sidecar (a hand-made set) loads. The acj-4 and acj-4-3 rule files are no longer in the
   package (their configs are).
 
-**`f64` and `real` users**
+**`f64` users**
 
 - **What `f64` promises.** `f64` promises the deployed evaluator's value wherever no operation
   overflows or underflows. Where one does, a rewrite may give the true value instead, as the
   constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads f64 rules by
   the same standard.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
-  expanded answers change. `effort=0`, the chain alone, does not factor (in `real` it did,
-  through four common-factor rules).
+  expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
   them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
   `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit.
 - **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/4)` is `+0`,
   the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
   an exact zero is inverted, `f64` keeps the sign float64 gives it: `1/(x1*(x2 - x2))` is
-  `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` and `permissive` read one
-  zero, and `1/0` has no value there (the limit rule), so it is NaN.
+  `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `permissive` reads one zero, and
+  `1/0` has no value there (the limit rule), so it is NaN.
 - **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
   integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
-  and one sign bit; `real` and `permissive` read it as 0. An `f64` ground fold writes its float
+  and one sign bit; `permissive` reads it as 0. An `f64` ground fold writes its float
   exactly, -0 included, and the floats of pi and e as `np.pi` and `np.e`: `1/(-0.0)` is `-inf`
   (it was `inf`), `atan2(0, -0.0)` is `np.pi` (it was `0`), `x + -0.0` is `x`. A written
   product or negation of numbers that is zero takes float64's sign: `-1*0`, `0*(-2)` and `-(0)`
@@ -111,10 +116,9 @@ organised by who you are, then the highlights, then every change in detail.
 - **The ground fold is a step of the chain**, kept only where it is cheaper (`asin(1e-8)` is
   `1e-8`).
 - **The sign of an infinity is kept**: distributing over an infinity needs certified
-  finiteness, as in `f64` and `real` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
-- **The lean profile.** A worker that needs inference and corpus canonicalisation only loads
-  `modes=('f64', 'permissive')`, about 0.7 GB with `acj-5-4-llm`; `real` then builds on its
-  first use.
+  finiteness, as in `f64` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
+- **The lean profile.** A worker that needs inference only loads `modes=('f64',)`, about
+  0.45 GB with `acj-5-4-llm`; `permissive` then builds on its first use.
 
 **Publishers of rule files**
 
@@ -128,15 +132,16 @@ organised by who you are, then the highlights, then every change in detail.
   variable set during the mine.
 - The load refuses a rule that states the distributive law (a rule one factoring turns from its
   left side into its right; drop reason `engine-owned-law`). A file mined before 0.15 loses such
-  rows in `real` and `permissive`.
+  rows in `permissive`.
 - The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
-  a file mined before this version can fail `verify-mine` in `real` where a rule read `1/0` as
-  `+inf` or tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
-  `UNDECIDED-MEASURE`, and four new tiers, `permissive`, `real-only`, `f64-only` and `strict`.
+  a file mined before this version can fail `verify-mine` where a rule read `1/0` as `+inf` or
+  tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
+  `UNDECIDED-MEASURE`, and the tiers are `core` (f64 and permissive), `f64-only`, `permissive`
+  and `reject`, read off one registry (`simplipy.verify.TIERS`).
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
-- `verify_triple(..., engine_config=)` checks the three rule sets it is given (the config
-  contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which ships in
-  the wheel, when `corpus_rows` is not given.
+- `verify_artifact(f64, permissive, engine_config=)` checks the two rule sets it is given (the
+  config contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which
+  ships in the wheel, when `corpus_rows` is not given.
 - <!-- PENDING the re-mine: name the new artifacts and the pinned revision here. -->The rule
   files are mined again for 0.15 and published under new names; `simplipy.DEFAULT_ENGINE` and
   `simplipy.DEFAULT_ENGINE_REVISION` name the artifact and revision this version loads by
@@ -144,15 +149,16 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Users of the miner API**
 
-- `find_rules` mines `rules_f64.json`, `rules_real.json` and `rules_permissive.json` each in its
-  own mode, and writes a checkpoint after every completed length, which a rerun of the same mine
-  resumes from; the rerun takes a mode whose file is already final as it is.
+- `find_rules` mines `rules_f64.json` and `rules_permissive.json` each in its own mode (the
+  permissive mine is offered the f64 file), and writes a checkpoint after every completed
+  length, which a rerun of the same mine resumes from; the rerun takes a mode whose file is
+  already final as it is.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
   `find_rules(judge=, judge_processes=)` and `find_rules(offer_final_rules=)`. `save_every=`
   (CLI `-s/--save-every`) is removed: the rule file is written once, when the mode's mine ends
   (see Removed).
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
-  keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
+  keyword `rule_mode` (`'f64'` or its alias `'default'`, or `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
 - The sidecar's `gates.unlicensed` rows are `[lhs, rhs, tier, refused_by]` and each of its
   `gates.overlaps_refused` carries `refused_by`, the named policies that refuse it.
@@ -206,9 +212,7 @@ model predictions.
   (`1.8488479557720672e-83*x1` for `x1*exp(-381/2)`), and never 0, inf or a subnormal; a function
   of a number written exactly stays (`sin(2)`), and so does one whose float would let reading the
   display distribute it over a sum or collect a like term (`x1 + atan(1.2345678)*(x2 + x3)`,
-  `x1 + x2 + x1/log(0.7377233226141932)`). Numbers a product keeps apart for their size are one
-  float, the product of the floats they are written as (`x1 + 0.11030062109689767*x2` in `real`
-  for a 330-digit literal times `0.893435038202104*x2`). It changes how a number is written, never the
+  `x1 + x2 + x1/log(0.7377233226141932)`). It changes how a number is written, never the
   structure: a number whose spelling would let parts collect or cancel, drop a multiplier or an
   exponent of 1, or make a non-integer exponent an integer is written as that spelling and the
   rest to its value (`(1 + 3.1e-21)*x1` for `1.0000000000000000000031*x1`,

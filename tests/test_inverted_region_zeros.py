@@ -5,8 +5,8 @@ every `x1 >= 0`, so `-(|x1| - x1)` is `-0` there and `1/-(|x1| - x1)` is `-inf`.
 reads a sum and its negation as one sum turned around, and `f64` wrote that inverse as
 `1/(x1 - |x1|)`, `+inf` there. Where the zero-set certificate cannot show a sum's zero set null and
 the sum is inverted, `f64` now keeps the sign with the inverse, also through an odd power, an odd
-function or an odd root of the sum and in a product holding it. `real` reads the one zero of the
-reals, whose inverse is `+inf`, and `permissive` a value up to the sign of a zero.
+function or an odd root of the sum and in a product holding it. `permissive` reads a value up
+to the sign of a zero.
 """
 import itertools
 
@@ -56,6 +56,6 @@ def test_f64_keeps_the_infinity_of_an_inverted_region_zero(eng, expression, expe
     assert ' '.join(answer) == expected
 
 
-@pytest.mark.parametrize('mode', ('real', 'permissive'))
-def test_real_and_permissive_read_the_sum_turned_around(eng, mode):
+@pytest.mark.parametrize('mode', ('permissive',))
+def test_permissive_reads_the_sum_turned_around(eng, mode):
     assert ' '.join(eng.simplify('inv neg - abs x1 x1'.split(), mode=mode)) == 'inv - x1 abs x1'

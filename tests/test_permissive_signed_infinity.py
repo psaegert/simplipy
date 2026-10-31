@@ -93,6 +93,6 @@ def test_the_search_leaves_these_alone(engine, expr) -> None:
 def test_finite_pieces_still_distribute(engine, expr, expected) -> None:
     # The move itself is kept wherever no piece spells an infinity, in every mode.
     t = expr.split()
-    for mode in ('f64', 'real', 'permissive'):
+    for mode in ('f64', 'permissive'):
         assert ' '.join(engine.simplify(t, mode=mode, effort=0)) != expected, mode  # the search did it
         assert ' '.join(engine.simplify(t, mode=mode)) == expected, mode

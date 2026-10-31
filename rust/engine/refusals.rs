@@ -83,7 +83,7 @@ impl Refusal {
 
 /// The cheap, syntactic registry entries at MINT-candidate judgment. EXACT
 /// relocation of the two licences that lived inline in `mine_one_length`'s accept
-/// closure (behavior-identical by construction; the triple re-mine byte-identity is
+/// closure (behavior-identical by construction; the re-mine byte-identity is
 /// the falsifier for this relocation).
 ///
 /// `src` is the enumerated source, `ac_out` the engine's own endpoint for it (the

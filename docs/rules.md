@@ -7,12 +7,12 @@ complete mining configuration.
 
 ## How mining works
 
-`SimpliPyEngine.find_rules` mines three files in one run, one per mode:
-`rules_f64.json` (`Mode.f64`), `rules_real.json` (`Mode.real`) and `rules_permissive.json`
-(`Mode.permissive`). Each file is mined in its own mode from start to end: the mode reads
-each source, the mode's own answer is the mark a target must beat, the mode's numerics
-accept a target, and the contract judge's tier must be one the mode licenses. The real and
-permissive mines run against the finished f64 set, as their files are served beside it.
+`SimpliPyEngine.find_rules` mines two files in one run, one per mode:
+`rules_f64.json` (`Mode.f64`) and `rules_permissive.json` (`Mode.permissive`). Each file is
+mined in its own mode from start to end: the mode reads each source, the mode's own answer
+is the mark a target must beat, the mode's numerics accept a target, and the contract
+judge's tier must be one the mode licenses. The permissive mine runs against the finished
+f64 set, as its file is served beside it.
 
 **Phase 1 — building the source universe.** All valid prefix expressions up to
 `max_source_pattern_length` are enumerated bottom-up, and the enumeration is cross-checked
@@ -40,15 +40,15 @@ against an exact counting recurrence.
    rows is required (`min_informative`). In `f64` the deployed evaluator's values decide,
    except on a row where an operation of either side overflows or underflows: there the
    true value is accepted too, so such a row is re-judged at high precision (the judge
-   reads the same event, one definition in the core). In `real` and `permissive` a near
-   miss (at most half of the points failing in f64) is re-judged at high precision.
+   reads the same event, one definition in the core). In `permissive` a near miss (at most
+   half of the points failing in f64) is re-judged at high precision.
 5. **Confirm**: the pick is re-judged on an independent, twice-as-wide matrix with fresh
    seeds; a pick that fails yields to the next candidate.
 6. **Judge**: the length's picks go to the contract judge (`simplipy.verify`), each as the
    pattern the file will carry and as every entry the mode serves from it. A pick whose
-   judged tier the mode does not license (`f64`: core, strict, f64, f64-only; `real`: core,
-   strict, real, real-only; `permissive`: core, f64, real, permissive), or that the mode does
-   not serve, is excluded by class and only its source is scanned again. The scan is deterministic, so the result is the
+   judged tier the mode does not license (`simplipy.verify.MODE_TIERS`, read off the one tier
+   registry; see the [tier table](guides/verify.md)), or that the mode does not serve, is
+   excluded by class and only its source is scanned again. The scan is deterministic, so the result is the
    scan that consults the judge per candidate: a target another mode would keep never
    hides one this mode licenses. The loop settles within 8 rounds or fails the mine.
 7. **Install**: the licensed picks are deduplicated into wildcard patterns (of two targets
@@ -73,14 +73,13 @@ exact rules before patterns and file order among equals; the first rule that mat
 descends fires. A rule mined for a longer source therefore takes its instances wherever
 the file places it.
 
-The permissive mine runs last, and its post-pass is also offered the finished f64 and real
-files (`offer_final_rules`, on by default). Permissive promises less than either mode, so
-their rules hold there too, and its answer must never cost more than theirs, while a
-per-mode mine finds only what its own scan reaches. Every rule of the two files runs through
-the proposal lane right after the proposals, certified by permissive's own acceptance, and
-enters only where permissive's answer is not already as low.
+The permissive mine runs last, and its post-pass is also offered the finished f64 file
+(`offer_final_rules`, on by default). Permissive's answer must never cost more than f64's,
+while a per-mode mine finds only what its own scan reaches. Every rule of the f64 file runs
+through the proposal lane right after the proposals, certified by permissive's own
+acceptance, and enters only where permissive's answer is not already as low.
 
-The procedure is **deterministic**: a fixed `seed` reproduces the three files byte-for-byte,
+The procedure is **deterministic**: a fixed `seed` reproduces the two files byte-for-byte,
 independent of process, hash randomization, thread count or the judge's process count. One
 master seed derives the evaluation matrices and every per-length, per-source and per-rule
 seed, and a source's seed and exclusions follow its global index, so a length mined in
@@ -99,7 +98,7 @@ the universe coverage, the mode, how the mode accepted (`acceptance`: tolerances
 and at which gate a near miss is re-judged, the licensed tiers, the judge's digest), per
 length the classes, picks, judge rounds, exclusions and twin-shadowed rows (`per_length`),
 the file gates (`gates`), the digests of the code that mined it (`code_digest`), in the
-permissive sidecar the f64 and real files it was offered, pinned by name and sha256, with the
+permissive sidecar the f64 file it was offered, pinned by name and sha256, with the
 lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
 mine (`soundness.env_overrides`), so a published file is reproducible from its artifact.
@@ -157,18 +156,17 @@ simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yam
 - `-o` is the output path for the collected rules
 - `-v` enables verbose output
 - `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
-- `--modes f64,real` mines only the listed modes (default: all three) and leaves the other files as they are; a mode mined beside an existing file reads it (`real` and `permissive` mine beside the f64 file, and `permissive` is offered both)
+- `--modes f64` mines only the listed modes (default: both) and leaves the other file as it is; a mode mined beside an existing file reads it (`permissive` mines beside the f64 file and is offered it)
 
 The published `acj-5-4-llm` artifact is this machinery at its shipped scale:
 complete sources through length 5, targets through length 4, plus the
 LLM-augmented proposal lane, certified by the same gates as the mined rules.
-It is mined as a triple and independently gate-verified — 138,651 rules in
-`rules_f64.json`, 133,294 in `rules_real.json`, 139,299 in
-`rules_permissive.json`, all three modes clean, with 13 real-tier constant
-folds relocated out of the f64 set by the gate (each present in the real and
-permissive sets). The exact mine configuration ships with the asset as
-`mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml -o rules_f64.json -v --reset-rules`
-reproduces the triple byte-for-byte at the recorded environment. The
+It is mined and independently gate-verified — 138,651 rules in
+`rules_f64.json` and 139,299 in `rules_permissive.json`, both modes clean, with 13
+constant folds that hold in the reals and not in float64 relocated out of the f64 set by
+the gate (each present in the permissive set). The exact mine configuration ships with the
+asset as `mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml -o rules_f64.json -v --reset-rules`
+reproduces the files byte-for-byte at the recorded environment. The
 configuration format, annotated:
 
 ```yaml
@@ -230,8 +228,8 @@ promote_sorts: true
 # interval_undecided counters flag systematic exhaustion. Recorded in the sidecar.
 # interval_node_budget: 800000
 
-# Offer the permissive mine the finished f64 and real files through its proposal
-# lane (the default); its sidecar pins both files.
+# Offer the permissive mine the finished f64 file through its proposal lane (the
+# default); its sidecar pins the file.
 offer_final_rules: true
 
 # Optional: LLM/human-proposed rules, certified against the mined state at the
@@ -256,7 +254,7 @@ the mine advances, and the checkpoint is updated after every completed length.
 `simplipy verify-mine` checks one mined file against the re-mine gates in its own mode:
 
 ```sh
-simplipy verify-mine rules_real.json --mode real -e config.yaml
+simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 ```
 
 | gate | holds when |
@@ -270,7 +268,7 @@ simplipy verify-mine rules_real.json --mode real -e config.yaml
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
-| `offered` | (`permissive` only) the sidecar pins the f64 and real files the mine was offered, and each lies beside the file with the pinned sha256 |
+| `offered` | (`permissive` only) the sidecar pins the f64 file the mine was offered, and it lies beside the file with the pinned sha256 |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.
@@ -474,8 +472,8 @@ simplipy list --type engine
 # --- Available engine assets ---
 # - acj-5-4-llm [installed] Complete AC-judged rule mine of the clean 23-operator
 #                         vocabulary (sources to length 5, targets to length 4) plus the
-#                         LLM-augmented proposal lane, mined as a triple and independently
-#                         gate-verified ... Pairs with simplipy >= 0.14.
+#                         LLM-augmented proposal lane, independently gate-verified ...
+#                         Pairs with simplipy >= 0.14.
 # - acj-4                 Complete AC-judged rule mine ... (sources and targets to length 4), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.

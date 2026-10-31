@@ -2498,18 +2498,6 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     r
 }
 
-/// The floor of the quotient `a / b` where it is one integer at every value of the two sets: a
-/// certainly finite `a` over a divisor certainly finite and nonzero (the `floor(a/b)` of the
-/// real `mod`); `None` where it is not decided.
-pub(crate) fn quotient_floor(a: &Vs, b: &Vs) -> Option<f64> {
-    let finite = |v: &Vs| v.has_fin && !(v.nan || v.pinf || v.ninf);
-    if !finite(a) || !finite(b) || (b.lo <= 0.0 && 0.0 <= b.hi) {
-        return None;
-    }
-    let q = u_step(&b_mul(a, &u_inv(b)), f64::floor);
-    q.is_const().then_some(q.lo)
-}
-
 fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
     if let Some(r) = table_at_points(op, &[a, b]) {
         return Some(r);
@@ -3149,8 +3137,8 @@ impl Drop for ReadingScope {
     }
 }
 
-/// Run `f` in THE REAL READING: the values of `real` (and `permissive`, whose values are
-/// real's), taken from THE TABLE wherever the layer meets a point. A literal, a bound
+/// Run `f` in THE REAL READING: the reals' values (`permissive`'s), taken from THE TABLE wherever
+/// the layer meets a point. A literal, a bound
 /// `<constant>`, an operation on such points, and a step head (`floor`, `ceil`) whose value is
 /// one integer on the cell are the table's values; so is any operation whose operands are exact
 /// points (`table_at_points`): `1/0` and `pow(0, -1)` are undefined, `pow(0, -2)` is +inf,
@@ -3651,7 +3639,7 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 ///
 /// `f64` (the `f64` mode) reads the expression in float64, where `tanh` and `atan` are constant
 /// on whole tails (`on_float64_tails`): `1/(tanh(x1) - 1)` is `+inf` wherever x1 >= 19.06.
-/// `real` and `permissive` read it over the reals.
+/// `permissive` reads it over the reals.
 pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     with_reading(!f64, || finite_ae_in_reading(tokens, ops, f64))
 }
@@ -4045,7 +4033,7 @@ fn harmonic_nan_tail(t: &[String], ops: &Operators) -> bool {
 const CERT_RECURSION_MAX: u32 = 32;
 
 /// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed. `f64` reads
-/// the expression in float64 (`on_float64_tails`), `real` and `permissive` over the reals.
+/// the expression in float64 (`on_float64_tails`), `permissive` over the reals.
 pub fn zero_set_null(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     with_reading(!f64, || zero_set_null_in_reading(tokens, ops, f64))
 }
@@ -4077,8 +4065,8 @@ fn zero_set_null_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bo
 /// licence (`engine::ac::ac_zsn`). Deliberately NOT wired into `finite_nonzero_ae`:
 /// the `$`-cancel licence keeps its SELFCANCEL asymmetry (the c = 0 atom stays
 /// protected there), pinned by test. `f64` (the `f64` mode) reads the expression in float64,
-/// where `tanh` and `atan` are constant on whole tails (`on_float64_tails`); `real` and
-/// `permissive` read it over the reals.
+/// where `tanh` and `atan` are constant on whole tails (`on_float64_tails`); `permissive`
+/// reads it over the reals.
 pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     with_reading(!f64, || {
         zero_set_null_generic_const_in_reading(tokens, ops, f64)
@@ -6132,7 +6120,7 @@ fn finite_nonzero_ae_in_reading(tokens: &[String], ops: &Operators, f64: bool) -
 /// (`tanh(x1)`, at +-1) is harmless, and one on which it is any other constant (`3*atan(x1)`, at
 /// +-3*fl(pi/2)) is refused. The constant is the one float64 computes there (the engine's
 /// evaluator, whose `tanh` saturates after the deployed one's: where it reads an integer, so does
-/// the deployed one). `real` and `permissive` read y over the reals.
+/// the deployed one). `permissive` reads y over the reals.
 pub fn nonconstant_entire(t: &[String], ops: &Operators, f64: bool) -> bool {
     with_reading(!f64, || nonconstant_entire_in_reading(t, ops, f64))
 }
@@ -6656,7 +6644,7 @@ pub struct FiniteCells {
 /// point of the cell is finite, which is the evidence a mine binds (`worker::candidate_matches`
 /// binds source-finite rows only). `f64` reads the cell as float64 evaluates it, its exact tails
 /// included (`f64_tail_reading`): `acosh(erf(x))` is finite where float64's erf is 1. Without
-/// it the cell is read over the reals, the semantics `real` and `permissive` judge in, where
+/// it the cell is read over the reals, the semantics `permissive` judges in, where
 /// that source is NaN everywhere. The cells come from the same box, horizon and dyadic
 /// subdivision `defined_measure_p_at` reads, so "positive measure" means the same thing to the
 /// evidence decision and to the domain gate.
@@ -9015,16 +9003,16 @@ mod new_head_tests {
                 !fc.cells.is_empty() && fc.cells.iter().all(|c| c[0].0 > -1.0),
                 "f64={f64}"
             );
-            let mode = if f64 {
-                crate::engine::RuleMode::Default
-            } else {
-                crate::engine::RuleMode::Real
-            };
-            assert!(collapse_licence(&s(&["harmonic", "<constant>"]), ops, mode));
+            for c in [
+                s(&["harmonic", "<constant>"]),
+                s(&["log", "harmonic", "<constant>"]),
+            ] {
+                assert_eq!(evidence(&c, ops, f64), Some(true), "f64={f64}: {c:?}");
+            }
             assert!(collapse_licence(
                 &s(&["log", "harmonic", "<constant>"]),
                 ops,
-                mode
+                crate::engine::RuleMode::Default
             ));
             let x = finite_cells(&s(&["harmonic", "x0"]), &[], ops, 4, f64).unwrap();
             assert!(x.cells.len() >= 4, "f64={f64}: {:?}", x.cells);

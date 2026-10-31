@@ -468,7 +468,7 @@ class TestContracts:
         assert engine.simplify(["0e2147483647"]) == ["0"]
         # a float spelling of zero with a minus sign is float64's -0, which f64 writes
         assert engine.simplify(["-0.00e2147483647"]) == ["-0.0"]
-        assert engine.simplify(["-0.00e2147483647"], mode='real') == ["0"]
+        assert engine.simplify(["-0.00e2147483647"], mode='permissive') == ["0"]
         # Nonzero mantissas beyond i128 keep their overflow bound and stay symbolic.
         assert engine.simplify(["1e2147483647"]) == ["1e2147483647"]
 
@@ -478,7 +478,7 @@ class TestContracts:
         # ordering well-founded and closes a former open question. The pair below
         # disagrees between the two orders: 1/3 is value-LARGER but size-SMALLER than
         # 1/1000000007, so under the old pair ordering the big-denominator spelling was
-        # "below"; under the triple it is above.
+        # "below"; under the (size, value) order it is above.
         small_lit = ["*", "x0", "pow", "3", "-1"]           # x0 * 1/3
         big_lit = ["*", "x0", "pow", "1000000007", "-1"]    # x0 * 1/1000000007
         assert engine._core.ac_ordered_below_in(small_lit, big_lit, rule_mode='default') is True
@@ -818,14 +818,13 @@ class TestZeroPoles:
     """Where an exact zero is inverted, `f64` keeps the sign IEEE 754 gives it, since its
     evaluator is float64: a product holding an exact zero is a zero of its other members' sign,
     and its inverse distributes over them (`(0*f)^k = inf * f^k`, exact in IEEE arithmetic for
-    every `f`). `real` and `permissive` read the one zero of the reals, where `1/0` has no value
-    (the limit rule: +inf from one side, -inf from the other), while `1/0^2` is +inf. Every
+    every `f`). `permissive` reads the one zero of the reals, where `1/0` has no value
+    (division by zero is undefined however written), while `1/0^2` is +inf. Every
     spelling of one value gets one answer in each mode: `inv(0/tanh(-2))`, `inv(0*tanh(-2))` and
     `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the first and `+inf` for the
     others)."""
 
-    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("nan")'),
-                                           ('real', 'float("nan")')])
+    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("nan")')])
     def test_a_negative_zero_inverts_to_minus_inf(self, engine: SimpliPyEngine, mode, want) -> None:
         for tokens in (['inv', '/', '0', 'tanh', '-2'],
                        ['inv', '*', '0', 'tanh', '-2'],
@@ -847,8 +846,8 @@ class TestZeroPoles:
     def test_a_written_signed_zero_keeps_float64s_sign_in_f64(self, engine) -> None:
         # A written negation of a zero is f64's `-0.0`, which an odd function keeps, and a written
         # difference subtracts by adding the negation (`-0 - 0` is `-0`): float64 gives -inf for
-        # all three. real and permissive read the one zero, where 1/0 has no value.
-        for mode in ('f64', 'permissive', 'real'):
+        # all three. permissive reads the one zero, where 1/0 has no value.
+        for mode in ('f64', 'permissive'):
             for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0'],
                            ['inv', '-', '-0.0', '0']):
                 want = 'float("-inf")' if mode == 'f64' else 'float("nan")'
@@ -857,9 +856,9 @@ class TestZeroPoles:
         assert engine.simplify(['inv', '+', '-0.0', '0'], mode='f64') == ['float("inf")']
         assert engine.simplify(['-', 'x1', '0'], mode='f64') == ['x1']
 
-    @pytest.mark.parametrize('mode', ['real', 'permissive'])
-    def test_real_reads_one_zero(self, engine: SimpliPyEngine, mode) -> None:
-        # one zero, and 1/0 has no value (V4); permissive's values are real's
+    @pytest.mark.parametrize('mode', ['permissive'])
+    def test_permissive_reads_one_zero(self, engine: SimpliPyEngine, mode) -> None:
+        # one zero, and 1/0 has no value; permissive's values are the reals'
         assert engine.simplify(['inv', '*', '0', 'x1'], mode=mode) == ['float("nan")']
         assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode=mode) == \
             ['float("nan")']
@@ -867,10 +866,10 @@ class TestZeroPoles:
 
     def test_fuzz_row_188677_family(self, engine: SimpliPyEngine) -> None:
         # x2 / ((0*x1/tanh(-2)) / inf): the inverse of a product holding a zero, which takes the
-        # sign of x1 and of tanh(-2): -inf*x2/x1 in f64; no value in real (1/0, one zero).
+        # sign of x1 and of tanh(-2): -inf*x2/x1 in f64; no value in permissive (1/0, one zero).
         import numpy as np
         tokens = ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']
-        assert engine.simplify(list(tokens), mode='real') == ['float("nan")']
+        assert engine.simplify(list(tokens), mode='permissive') == ['float("nan")']
         out = engine.simplify(list(tokens))
         x = np.array([[1.5, 2.5], [-1.5, 2.5], [1.5, -2.5], [-1.5, -2.5]])
         f = engine.as_callable(out, ['x1', 'x2'])
@@ -966,43 +965,43 @@ class TestTranscendentalAtomEnclosures:
 
     def test_zero_times_cofactor_is_the_positive_pole(self, engine: SimpliPyEngine) -> None:
         # These rest on `sin(np.pi) = 0`, which is exactly true and NOT f64-realised
-        # (f64 gives 1.2246467991473532e-16): real reads it from the table. The pole is
-        # therefore reached in `real`, where 1/0 has no value, and the default mode keeps the
-        # expression -- the two soundnesses disagreeing, on one row.
-        from conftest import require_triple
-        require_triple()
+        # (f64 gives 1.2246467991473532e-16): permissive reads it from the table. The pole is
+        # therefore reached in `permissive`, where 1/0 has no value, and the default mode keeps
+        # the expression -- the two readings disagreeing, on one row.
+        from conftest import require_mode_sets
+        require_mode_sets()
         from simplipy import Mode
         for tokens in (['inv', '*', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'tan', 'np.pi', 'x1']):
-            assert engine.simplify(list(tokens), mode=Mode.real) == ['float("nan")'], tokens
+            assert engine.simplify(list(tokens), mode=Mode.permissive) == ['float("nan")'], tokens
             assert engine.simplify(list(tokens), mode=Mode.f64) != ['float("inf")'], tokens
 
     def test_fuzz_row_172346(self, engine: SimpliPyEngine) -> None:
         # inv( abs(sin(np.pi)) / inv(x4 - x1 + 2*x2) ): the reciprocal cofactor
         # canonicalizes with a rational -1, which turned the split pole visibly negative.
         # `sin(np.pi) = 0` is exactly true, and f64 computes 1.2246467991473532e-16, so the
-        # pole is reached in the mode whose authority is mathematics, where 1/0 has no value.
-        from conftest import require_triple
-        require_triple()
+        # pole is reached in the mode that reads real's values, where 1/0 has no value.
+        from conftest import require_mode_sets
+        require_mode_sets()
         from simplipy import Mode
         out = engine.simplify(['inv', '/', 'abs', 'sin', 'np.pi',
                                'inv', '-', '-', 'x4', 'x1', '*', 'x2', '-2'],
-                              mode=Mode.real)
+                              mode=Mode.permissive)
         assert out == ['float("nan")'], out
 
     def test_true_nonzero_atom_grounds_still_certify(self, engine: SimpliPyEngine) -> None:
         # The enclosure must not blanket-refuse: pi itself and shifted atoms are
         # rigorously bounded away from 0, so the licensed split still fires.
-        from conftest import require_triple
-        require_triple()
+        from conftest import require_mode_sets
+        require_mode_sets()
         assert engine.simplify(engine.to_tagged(['inv', '*', 'np.pi', 'x1'])) != \
             ['inv', '<mul>', 'np.pi', 'x1', '</mul>']  # some reduction happened
-        # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In `f64` the
+        # sin(pi)+2 is certainly nonzero; in `permissive` the table's value is 2. In `f64` the
         # walk folds it to its float, which is 2.0 too (sin(pi) is 1.2e-16 there).
         from simplipy import Mode
         out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'],
-                              mode=Mode.real)
+                              mode=Mode.permissive)
         assert 'sin' not in out, out
         # The CERTIFIED ENDPOINT, not merely "something changed" -- the split having
         # fired is the property, and `!= input` is true of every subject whether the
@@ -1365,8 +1364,8 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
 
     def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
         # A PARTNERED sentinel cancels in phase 1, before the licence expires.
-        from conftest import require_triple
-        require_triple()
+        from conftest import require_mode_sets
+        require_mode_sets()
         x = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
         assert engine.simplify(list(x), mode=Mode.permissive) == ['x0']
 

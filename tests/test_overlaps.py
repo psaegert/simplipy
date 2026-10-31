@@ -45,11 +45,11 @@ def test_the_unjoined_overlap_names_its_completion():
     the cheaper, and once the file holds it the overlap joins."""
     rules = [(('sin', 'acos', '_0'), ('cos', 'asin', '_0')),
              (('sin', 'acos', 'tanh', '_0'), ('inv', 'cosh', '_0'))]
-    found = _unjoined_overlaps(_engine('real', rules), 'real', rules)
+    found = _unjoined_overlaps(_engine('default', rules), 'default', rules)
     assert {(' '.join(o['completion'][0]), ' '.join(o['completion'][1])) for o in found} \
         == {('cos asin tanh x0', 'inv cosh x0')}, found
     rules.append((('cos', 'asin', 'tanh', '_0'), ('inv', 'cosh', '_0')))
-    assert _unjoined_overlaps(_engine('real', rules), 'real', rules) == []
+    assert _unjoined_overlaps(_engine('default', rules), 'default', rules) == []
 
 
 def test_the_gate_judges_the_cell_and_counts_the_rest():
@@ -64,11 +64,11 @@ def test_the_gate_judges_the_cell_and_counts_the_rest():
         asked.extend(pairs)
         return ['core'] * len(pairs)
 
-    engine = _engine('real', rules)
-    missing, refused, beyond = _overlap_gate(engine, 'real', rules, judge, max_source=4)
+    engine = _engine('default', rules)
+    missing, refused, beyond = _overlap_gate(engine, 'default', rules, judge, max_source=4)
     assert [' '.join(o['completion'][0]) for o in missing] == ['cos asin tanh x0'], missing
     assert refused == [] and beyond == [] and len(asked) == 1
     asked.clear()
-    missing, refused, beyond = _overlap_gate(engine, 'real', rules, judge, max_source=3)
+    missing, refused, beyond = _overlap_gate(engine, 'default', rules, judge, max_source=3)
     assert missing == [] and refused == [] and asked == []
     assert [' '.join(o['completion'][0]) for o in beyond] == ['cos asin tanh x0'], beyond

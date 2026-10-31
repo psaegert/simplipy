@@ -201,8 +201,8 @@ SHORT_SUMS = [
 @pytest.mark.parametrize('text,mode,expected', SHORT_SUMS, ids=[t for t, _, _ in SHORT_SUMS])
 def test_a_number_is_written_exactly_as_a_short_sum_or_as_its_float(eng, text, mode, expected):
     answer = eng.simplify(text, mode=mode)
-    assert eng.prettify(answer, mode=mode) == expected
-    assert eng.prettify(expected, mode=mode) == expected
+    assert eng.prettify(answer) == expected
+    assert eng.prettify(expected) == expected
     # every display here is exact: it reads back to the answer itself
     assert eng.simplify(expected, mode=mode) == answer
 
@@ -405,38 +405,31 @@ def test_any_other_function_of_numbers_stays(eng, text, expected):
 # A fold reads back as a number, which the canonical constructors can build into a sum otherwise
 # than the function stood: distributed over a sum, collected with a like term. Such a fold is not
 # made and the function stays. A fold that only turns a sum around (`cos(c) - x2` is
-# `-(x2 + 0.997)`) is made, and the display is of the sum reading it back builds. Numbers a
-# product keeps apart for their size (`real` admits a number of at most 1,100 bits) are one
-# float: the product of the floats they are written as, which reading the display combines.
-LONG = '0.' + '1234567891' * 33
+# `-(x2 + 0.997)`) is made, and the display is of the sum reading it back builds.
 CONTRACT = [
-    ('x1 + atan(1.2345678)*(x2 + x3)', 'f64', None, 'x1 + atan(1.2345678)*(x2 + x3)'),
-    ('x1 + atan(1.2345678)*(x2 + x3)', 'f64', 3, 'x1 + atan(1.23)*(x2 + x3)'),
-    ('x1 + x2 + x1/log(0.7377233226141932)', 'real', None, 'x1 + x2 + x1/log(0.7377233226141932)'),
-    ('x1 + x2 + x1/log(0.7377233226141932)', 'real', 3, 'x1 + x2 + x1/log(0.738)'),
+    ('x1 + atan(1.2345678)*(x2 + x3)', None, 'x1 + atan(1.2345678)*(x2 + x3)'),
+    ('x1 + atan(1.2345678)*(x2 + x3)', 3, 'x1 + atan(1.23)*(x2 + x3)'),
+    ('x1 + x2 + x1/log(0.7377233226141932)', None, 'x1 + x2 + x1/log(0.7377233226141932)'),
+    ('x1 + x2 + x1/log(0.7377233226141932)', 3, 'x1 + x2 + x1/log(0.738)'),
     # distributed and its numbers combined: as many terms, another structure
-    ('x2*(0.35 - exp(23.145219203872042)*(0.0087/x1 + 0.113))', 'real', None,
+    ('x2*(0.35 - exp(23.145219203872042)*(0.0087/x1 + 0.113))', None,
      'x2*(0.35 - exp(23.145219203872042)*(0.0087/x1 + 0.113))'),
-    ('x3/(x1*(cos(273.2392845492178) - x2))', 'real', None, 'x3/(-x1*(x2 + 0.9968592784913302))'),
-    ('x3/(x1*(cos(273.2392845492178) - x2))', 'real', 3, 'x3/(-x1*(x2 + 0.997))'),
-    (f'x1 + {LONG}*0.893435038202104*x2', 'real', None, 'x1 + 0.11030062109689767*x2'),
-    (f'x1 + {LONG}*0.893435038202104*x2', 'real', 3, 'x1 + 0.11*x2'),
+    ('x3/(x1*(cos(273.2392845492178) - x2))', None, 'x3/(-x1*(x2 + 0.9968592784913302))'),
+    ('x3/(x1*(cos(273.2392845492178) - x2))', 3, 'x3/(-x1*(x2 + 0.997))'),
 ]
 
 
-@pytest.mark.parametrize('text,mode,precision,expected', CONTRACT,
-                         ids=[f'{t[:40]}-{m}-{p}' for t, m, p, _ in CONTRACT])
-def test_the_contract_holds_where_a_fold_or_a_size_would_break_it(eng, text, mode, precision, expected):
+@pytest.mark.parametrize('text,precision,expected', CONTRACT,
+                         ids=[f'{t[:40]}-{p}' for t, p, _ in CONTRACT])
+def test_the_contract_holds_where_a_fold_or_a_size_would_break_it(eng, text, precision, expected):
     """The display reads back to the structure, is its own display, and at full precision
     evaluates as the expression."""
     import numpy as np
-    from simplipy.engine import _RULE_MODE, _coerce_mode
-    shown = eng.prettify(text, mode=mode, precision=precision)
+    shown = eng.prettify(text, precision=precision)
     assert shown == expected
-    assert eng.prettify(shown, mode=mode, precision=precision) == shown
+    assert eng.prettify(shown, precision=precision) == shown
     tokens = list(eng._core.parse(text, True, False, True))
-    rule_mode = _RULE_MODE[_coerce_mode(mode)]
-    _, kept = eng._core.prettify(tokens, 3, 'infix', precision, rule_mode=rule_mode, check_structure=True)
+    _, kept = eng._core.prettify(tokens, 3, 'infix', precision, check_structure=True)
     assert kept
     if precision is None:
         back = list(eng._core.parse(shown, True, False, True))
@@ -446,21 +439,17 @@ def test_the_contract_holds_where_a_fold_or_a_size_would_break_it(eng, text, mod
                            rtol=P2_RTOL, atol=0)
 
 
-@pytest.mark.parametrize('mode', ['f64', 'real'])
 @pytest.mark.parametrize('precision', [None, 3])
-def test_a_fold_in_a_sum_keeps_the_structure_on_a_fuzz(eng, mode, precision):
+def test_a_fold_in_a_sum_keeps_the_structure_on_a_fuzz(eng, precision):
     """Functions of numbers beside a sum, a like term and a sign: every display reads back to
     the structure and is its own display."""
-    from simplipy.engine import _RULE_MODE, _coerce_mode
     shapes = ['x1 + {g}*(x2 + x3)', 'x1 + x2 + x1/{g}', 'x3/(x1*({g} - x2))', 'x1 + {g}*x1*(x2 - x3)',
               'x2*(0.35 - {g}*(0.0087/x1 + 0.113))']
-    rule_mode = _RULE_MODE[_coerce_mode(mode)]
     lost = []
     for text in fold_fuzz(200, seed=5, shapes=shapes):
         tokens = list(eng._core.parse(text, True, False, True))
-        shown, kept = eng._core.prettify(tokens, 3, 'infix', precision, rule_mode=rule_mode,
-                                         check_structure=True)
-        if not kept or eng.prettify(shown, mode=mode, precision=precision) != shown:
+        shown, kept = eng._core.prettify(tokens, 3, 'infix', precision, check_structure=True)
+        if not kept or eng.prettify(shown, precision=precision) != shown:
             lost.append((text, shown))
     assert not lost, lost[:5]
 
@@ -579,7 +568,7 @@ def structure(eng, expression, precision=None, keep_grouping=False):
     """`(display, kept)`: whether the display reads back, through the canonical constructors, to
     the shape of the state after the display's folds."""
     form, tokens = eng._read_input(expression)
-    return eng._core.prettify(tokens, 3, form, precision, rule_mode='default', check_structure=True,
+    return eng._core.prettify(tokens, 3, form, precision, check_structure=True,
                               keep_grouping=keep_grouping)
 
 

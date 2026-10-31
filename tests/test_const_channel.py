@@ -152,7 +152,7 @@ class TestSeveralConstantsOnTheLeft:
     the judge (the mine's judge loop, `licensed` at its gates) decides the rule, and the load
     serves it. `pow(rootn(x, C1), C2) -> pow(x, C3)` is false (at C1 = 3, C2 = 1 its left side
     is the real cube root, defined for x < 0, where no `pow(x, C3)` is) and licensed in no
-    mode; `C1*exp(x + C2) -> C3*exp(x)` holds in real and permissive."""
+    mode; `C1*exp(x + C2) -> C3*exp(x)` holds in permissive."""
     ROOT_RULE = (('pow', 'rootn', '?0', '<constant>', '<constant>'), ('pow', '?0', '<constant>'))
     EXP_RULE = (('*', '<constant>', 'exp', '+', '?0', '<constant>'),
                 ('*', '<constant>', 'exp', '?0'))
@@ -170,22 +170,22 @@ class TestSeveralConstantsOnTheLeft:
         assert engine.simplify('* <constant> exp + x0 <constant>'.split(), mode='f64') == \
             ['*', '<constant>', 'exp', 'x0']
 
-    @pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
     def test_licensed_decides_it(self, ops, mode) -> None:
         from simplipy.verify import licensed
-        bare = SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+        bare = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
         root = licensed(list(self.ROOT_RULE[0]), list(self.ROOT_RULE[1]), mode, bare)
         assert not root['licensed'] and not root['holds'], root
         exp = licensed(list(self.EXP_RULE[0]), list(self.EXP_RULE[1]), mode, bare)
         assert exp['holds'] == (mode != 'f64'), exp
 
-    @pytest.mark.parametrize('rule_mode', ['default', 'real', 'permissive'])
+    @pytest.mark.parametrize('rule_mode', ['default', 'permissive'])
     def test_the_mint_scans_it(self, ops, rule_mode) -> None:
         """A source with two constants has a source context: the mint's scan certifies
         `C1 + C2*x -> C3*x + C4` (the judge loop and the gates then read `licensed`)."""
         import numpy as np
         from simplipy.mining import RuleMiner
-        bare = SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+        bare = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
         X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
         assert bare._core.judge_pair(
             ['+', '<constant>', '*', '<constant>', 'x0'], ['+', '*', '<constant>', 'x0', '<constant>'],

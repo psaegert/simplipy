@@ -641,7 +641,7 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
         silently swallowed an existing caller's positional ``verbose``.
     rule_mode : str or Mode
         REQUIRED, keyword-only: the mode the rules serve in, ``'f64'`` (also
-        ``'default'``), ``'real'``, ``'permissive'`` or a :class:`~simplipy.Mode` member.
+        ``'default'``), ``'permissive'`` or a :class:`~simplipy.Mode` member.
         It decides how a rule side is read (the key) and which target wins (its serve
         ordering).
     canon : str or None, optional

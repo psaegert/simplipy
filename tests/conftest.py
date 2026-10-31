@@ -39,8 +39,31 @@ _ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'en
 def legacy_from_config(config_path, **kwargs) -> SimpliPyEngine:
     """`SimpliPyEngine.from_config` for a config whose rule files were mined before 0.15 (the
     pinned acj-4 cell, a cached pre-0.15 asset): the public loader refuses them, and the suites
-    that pin their verdicts opt in here, explicitly."""
-    return SimpliPyEngine._from_config(str(config_path), legacy=True, **kwargs)
+    that pin their verdicts opt in here, explicitly. A pre-0.15 config may name a set of the
+    retired real mode, which every loader refuses: such a config is read through a copy without
+    that key (`_without_the_retired_set`)."""
+    return SimpliPyEngine._from_config(_without_the_retired_set(str(config_path)), legacy=True,
+                                       **kwargs)
+
+
+def _without_the_retired_set(config_path: str) -> str:
+    """`config_path`, or, where it names a `rules_real` set, a copy of it without that key in a
+    temporary directory, every other rule file named by its absolute path (so its provenance
+    sidecar is read beside it)."""
+    import yaml
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    if 'rules_real' not in config:
+        return config_path
+    del config['rules_real']
+    base = os.path.dirname(os.path.abspath(config_path))
+    for key in ('rules', 'rules_permissive', 'rules_corpus'):
+        if config.get(key) and not os.path.isabs(config[key]):
+            config[key] = os.path.normpath(os.path.join(base, config[key]))
+    path = os.path.join(tempfile.mkdtemp(prefix='legacy-config-'), 'config.yaml')
+    with open(path, 'w') as f:
+        yaml.safe_dump(config, f, sort_keys=False)
+    return path
 
 
 @pytest.fixture(autouse=True, scope='session')
@@ -77,10 +100,6 @@ def acj_rules_path() -> str:
     return os.path.join(acj_asset_dir(), 'rules.json')
 
 
-def acj_real_rules_path() -> str:
-    return os.path.join(acj_asset_dir(), 'rules_real.json')
-
-
 def acj_corpus_rules_path() -> str:
     # the published acj-4 artifact predates the 'permissive' rename and ships the
     # file under its historic name; a re-mined cell ships the new one
@@ -98,10 +117,10 @@ def require_or_skip(path: str, why: str) -> None:
         pytest.skip(why)
 
 
-def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
-    """All three rule sets of the acj-4 cell, gated like every other staged asset: a
-    missing file skips locally and fails under SIMPLIPY_TEST_REQUIRE_ASSETS."""
-    for path in (acj_rules_path(), acj_real_rules_path(), acj_corpus_rules_path()):
+def require_mode_sets(why: str = 'the acj-4 rule files are not staged') -> None:
+    """Both rule sets of the acj-4 cell (f64, permissive), gated like every other staged
+    asset: a missing file skips locally and fails under SIMPLIPY_TEST_REQUIRE_ASSETS."""
+    for path in (acj_rules_path(), acj_corpus_rules_path()):
         require_or_skip(path, f'{why} ({os.path.basename(path)} is missing)')
 
 
@@ -155,9 +174,7 @@ def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:
 
 
 # Known violations of the permissive-dominance sweep over the shipped corpus (rows where the
-# permissive answer prices above another mode's on f64's yardstick). None: permissive reads
-# real's values, one zero and no value at 1/0, so a divisor holding `x13 - x13` gives no value in
-# both (the one row float64's signed zero once split from real is gone with it).
+# permissive answer prices above f64's on f64's yardstick). None.
 PERMISSIVE_DOMINANCE_KNOWN: tuple = ()
 
 

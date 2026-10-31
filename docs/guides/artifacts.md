@@ -1,64 +1,57 @@
 # Artifacts and assets
 
 Every published engine asset carries `config.yaml` (the operator table and engine
-configuration), the rule sets that config names. A 0.14.0 mine produces the full
-**TRIPLE**, `rules_f64.json`, `rules_real.json` and `rules_permissive.json`, and `mine.yaml` (the exact mine
+configuration), the rule sets that config names. A mine produces one file per mode,
+`rules_f64.json` and `rules_permissive.json`, and `mine.yaml` (the exact mine
 configuration). Each artifact is byte-deterministically reproducible from the config with one
 `simplipy find-rules` command at the recorded environment
 (see [environment qualification](../method/environment-qualification.md)).
 
 
-## The triple
+## The rule files
 
 | file | mode | contains |
 |---|---|---|
 | `rules_f64.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
-| `rules_real.json` | `Mode.real` | every rule that is true over ℝ |
 | `rules_permissive.json` | `Mode.permissive` | the permissive superset |
 
-The three files carry their mode in their name. `config.yaml` names its rule files
+The two files carry their mode in their name. `config.yaml` names its rule files
 explicitly and the loader serves whatever the config declares, so a file named `rules.json`
-(the convention before 0.15) loads too. The `rules_real:` and `rules_permissive:` config keys
-are optional (the key `rules_corpus:` of earlier artifacts is read as the latter), and a mode
-naming no set of its own serves the default (f64) set.
+(the convention before 0.15) loads too. The `rules_permissive:` config key is optional (the
+key `rules_corpus:` of earlier artifacts is read as it), and a mode naming no set of its own
+serves the default (f64) set. A config naming a `rules_real:` set is refused: the real mode
+is retired.
 
 From 0.15 the loader refuses a rule file mined before 0.15, by the simplipy version its
 provenance sidecar records: 0.15 changed the canonical forms, the measure and the rule judge,
 and serves only the rule sets mined for it (`acj2-4-llm`). The error names the version that
 mined the file. A rule file without a sidecar is a hand-made set and loads.
 
-`Mode.real` is the exception to that fallback: on an artifact without a real set,
-`simplify(mode=Mode.real)` **raises** instead of quietly using the f64 set. The f64
-set contains rules that floating point reproduces exactly but that are false as
-mathematics — `asin(1e-8) → 1e-8` is bit-identical in f64 and wrong over ℝ by the
-cubic term. A caller selecting `Mode.real` is asking precisely for those rules to be
-absent, so the fallback would serve them the one thing they opted out of.
-
-Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('f64', 'permissive'))`
-builds only the named sets, each compiled before `load` returns — the profile a training
-worker runs, inference plus corpus canonicalisation, at about 0.7 GB instead of about 0.9 GB
-with acj-5-4-llm (about 0.45 GB for `f64` alone) — and any other config-named set builds on its
-mode's first use, once, in about 3–4 s, announced with one log record. The default
+Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('f64',))` builds only the
+named sets, each compiled before `load` returns — the profile an inference worker runs, at
+about 0.45 GB instead of about 0.7 GB with both sets of acj-5-4-llm — and any other
+config-named set builds on its mode's first use, once, in about 3–4 s, announced with one log
+record. The default
 `modes='all'` builds everything. `engine.unload_mode(mode)` is the paired operational RAM knob:
 it drops that mode's built structures (about 100 MB per set with acj-5-4-llm) and the mode's next
 use lazily reloads them; the default f64 set is always present and refuses to unload.
 
-**The triple is the unit of mining, pinning and distribution.** One mine run writes all
-three files, each mined in its own mode (see [How mining works](../rules.md#how-mining-works)),
-and the byte-identity promise covers the three: a re-mine at the recorded environment
+**The two files are the unit of mining, pinning and distribution.** One mine run writes
+both, each mined in its own mode (see [How mining works](../rules.md#how-mining-works)),
+and the byte-identity promise covers both: a re-mine at the recorded environment
 reproduces them. Each file's sidecar records its own mine: the mode, how it accepted
 (`acceptance`), per length the judge loop's rounds and exclusions (`per_length`), and the
 file gates (`gates`: the rows dropped as unlicensed in the mode or as already performed by
 its constructor) — a rule the mine finds and the mode does not license is recorded there,
 never silently absent.
 
-Verify a shipped triple with `simplipy.verify.verify_triple`, which sweeps each file
+Verify a shipped artifact with `simplipy.verify.verify_artifact`, which sweeps each file
 against its own mode's contract, and a freshly mined file with `simplipy verify-mine <file>
 --mode <m> -e <engine>`, which also checks the re-mine gates (twin-shadowed rows, engine-owned laws,
 translation, the measure fingerprint, environment switches; see
 [Verifying a mine](../rules.md#verifying-a-mine)). Cleanliness is per mode:
-`atanh(tanh t) → t` is exactly what belongs in `rules_real.json` and would be a defect in
-`rules_f64.json`.
+`atanh(tanh t) → t` is exactly what belongs in `rules_permissive.json` and would be a
+defect in `rules_f64.json`.
 
 The provenance
 sidecar records how the ruleset came to be: the mine parameters, the core build stamp
@@ -72,7 +65,7 @@ artifact-affecting switch is read since 0.15 — and the interval layer's fail-c
 counters), and the
 measure fingerprint (the μ constants and the probe values, priced in the file's own mode,
 with a digest) — so artifacts mined under different orderings are distinguishable from
-provenance alone. Each of the three rule files has its own sidecar. Loading reads every
+provenance alone. Each rule file has its own sidecar. Loading reads every
 sidecar present and warns, naming the probes, when a recorded probe now prices
 differently; a probe added after the file was mined is not recorded and not a mismatch.
 

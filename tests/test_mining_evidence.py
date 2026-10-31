@@ -15,14 +15,14 @@ from simplipy import SimpliPyEngine
 from simplipy.mining import RuleMiner
 
 ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
-MODES = ('default', 'real', 'permissive')
+MODES = ('default', 'permissive')
 
 
 @pytest.fixture(scope='module')
 def bare():
     """The acj2-4 operators with an empty rule set per mode: the core on its own."""
     ops = yaml.safe_load(open(ACJ2_4))['operators']
-    return SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+    return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
 def x_with_band(engine, in_band: int, n: int = 512) -> np.ndarray:
@@ -49,9 +49,6 @@ def test_a_narrow_domain_has_evidence_whatever_the_sample_holds(bare, in_band):
             'asinh atanh floor x0'.split(), 'atanh floor x0'.split(), ['x0', 'x1'],
             X.flatten().tolist(), X.shape[0], rtol=1e-11, atol=1e-12, rule_mode=mode)
         assert ok, (mode, in_band, why)
-    assert bare._core.equivalent_no_const(
-        'asinh atanh floor x0'.split(), 'atanh floor x0'.split(), ['x0', 'x1'],
-        X.flatten().tolist(), X.shape[0])
 
 
 def test_a_source_finite_on_a_null_set_has_no_evidence_however_many_rows_hit_it(bare):
@@ -67,7 +64,8 @@ def test_a_source_finite_on_a_null_set_has_no_evidence_however_many_rows_hit_it(
         assert not ok and why == 'uncertified', (mode, why)
         assert bare._core.find_rule('asin cosh x0'.split(), 3, None, [['<constant>']],
                                     ['x0', 'x1'], xf, 512, rule_mode=mode) is None
-    assert not bare._core.equivalent_no_const('asin cosh x0'.split(), ['1'], ['x0', 'x1'], xf, 512)
+        assert bare._core.judge_pair('asin cosh x0'.split(), ['1'], ['x0', 'x1'], xf, 512,
+                                     rtol=1e-11, atol=1e-12, rule_mode=mode)[0] is False, mode
 
 
 def test_a_refutation_needs_converged_values(bare):
@@ -80,7 +78,7 @@ def test_a_refutation_needs_converged_values(bare):
     for x in (-937.8, -705.0, 705.0):
         ok, why = bare._core.judge_pair('sin acos tanh x0'.split(), 'inv cosh x0'.split(),
                                         ['x0', 'x1'], rows(x), 8, rtol=1e-11, atol=1e-12,
-                                        min_informative=1, rule_mode='real')
+                                        min_informative=1, rule_mode='permissive')
         assert ok, (x, why)
     for mode in MODES:
         ok, _ = bare._core.judge_pair('exp sinh x0'.split(), ['0'], ['x0', 'x1'],
@@ -92,8 +90,8 @@ def test_a_refutation_needs_converged_values(bare):
 def test_each_mode_reads_evidence_in_its_own_semantics(bare):
     """`acosh(erf(x0))` is NaN over the reals and finite (0) wherever float64 rounds erf to 1,
     x0 >= 5.92. `f64` reads float64, its tails exactly (the enclosure of erf there straddles 1
-    by its outward step), so its rule has evidence; `real` and `permissive` judge over the
-    reals, where the source is finite nowhere, and certify nothing on it."""
+    by its outward step), so its rule has evidence; `permissive` judges over the reals,
+    where the source is finite nowhere, and certifies nothing on it."""
     X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
 
     def certified(src, tgt, mode):
@@ -101,7 +99,7 @@ def test_each_mode_reads_evidence_in_its_own_semantics(bare):
                                      512, rtol=1e-11, atol=1e-12, rule_mode=mode)
     ok, why = certified('atan acosh erf x0', 'acosh erf x0', 'default')
     assert ok, why
-    for mode in ('real', 'permissive'):
+    for mode in ('permissive',):
         for src, tgt in (('atan acosh erf x0', 'acosh erf x0'),
                          ('acosh tanh x0', 'acosh erf x0')):
             assert certified(src, tgt, mode) == (False, 'uncertified'), (src, mode)
@@ -109,8 +107,8 @@ def test_each_mode_reads_evidence_in_its_own_semantics(bare):
 
 def test_the_evidence_decision_counts_the_rows_in_the_modes_values(bare):
     """`tan(atan2(x0, 0))` has no value off x0 = 0 in the reals (tan at pi/2), where float64
-    gives 1.633e16; `real` and `permissive` read the source's rows by the table before they
-    count its evidence, so it has none there and certifies nothing (it took every target, each
+    gives 1.633e16; `permissive` reads the source's rows by the table before it counts its
+    evidence, so it has none there and certifies nothing (it took every target, each
     refused by the judge). `f64` reads float64's 1.633e16, which no other target matches."""
     X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(42))
     for mode in MODES:
@@ -151,8 +149,7 @@ def test_the_engine_collapses_what_the_mint_would(bare):
     licence."""
     for src in ('log <constant>', 'acos <constant>', 'atan atanh <constant>',
                 'exp log <constant>', 'pow 0 <constant>'):
-        for mode in ('f64', 'real', 'permissive'):
+        for mode in ('f64', 'permissive'):
             assert bare.simplify(src.split(), mode=mode) == ['<constant>'], (src, mode)
-    for mode in ('f64', 'real'):
-        assert ' '.join(bare.simplify('pow (-1) <constant>'.split(), mode=mode)) == \
-            'pow -1 <constant>', mode
+    assert ' '.join(bare.simplify('pow (-1) <constant>'.split(), mode='f64')) == \
+        'pow -1 <constant>'

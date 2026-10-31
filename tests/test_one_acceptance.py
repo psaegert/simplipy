@@ -20,9 +20,9 @@ from conftest import legacy_from_config  # noqa: E402
 
 VARS = ['x0', 'x1']
 SEED = 11
-# The channels are compared in `real`: its serve answer leaves the specials standing
-# (permissive absorbs and folds them), so every acceptance entry gets to speak.
-MODE = 'real'
+# The channels are compared in `permissive`, whose serve answer reads real's values: every
+# acceptance entry gets to speak.
+MODE = 'permissive'
 
 
 @pytest.fixture(scope='module')
@@ -82,7 +82,7 @@ PAIRS = [
     # A constant-only source the engine collapses itself (`C^e` is finite for C >= 0) has
     # an atomic mark: nothing is below it.
     (('pow', '<constant>', 'exp', '1'), ('<constant>',), False, 'atomic_mark'),
-    # `log(1)` is 0 in the table, so real's mark of `x0*log(1)` is the atomic 0 (the pole
+    # `log(1)` is 0 in the table, so permissive's mark of `x0*log(1)` is the atomic 0 (the pole
     # reason, a value at x0 = 0 changing from 0 to nan, is pinned in test_licence_registry)
     (('*', 'x0', 'log', '1'), ('log', '/', 'x0', 'x0'), False, 'atomic_mark'),
 ]
@@ -114,12 +114,11 @@ class TestJudgePair:
     def test_bag_collection_is_accepted(self, eng, rows):
         assert _judge(eng, rows[1], ('+', 'x0', 'x0'), ('*', '2', 'x0')) == (True, 'accepted')
 
-    def test_saturation_identity_is_real_not_f64(self, eng, rows):
+    def test_saturation_identity_holds_in_permissive_not_f64(self, eng, rows):
         # True over the reals, false in f64 near saturation: f64 never re-judges at high
-        # precision, real and permissive do.
+        # precision, permissive does.
         pair = (('atanh', 'tanh', 'x0'), ('x0',))
         assert _judge(eng, rows[1], *pair, mode='default') == (False, 'uncertified')
-        assert _judge(eng, rows[1], *pair, mode='real') == (True, 'accepted')
         assert _judge(eng, rows[1], *pair, mode='permissive') == (True, 'accepted')
 
     def test_a_target_needing_resolution_is_not_the_pair_asked(self, eng, rows):
@@ -139,10 +138,10 @@ class TestJudgePair:
 
 class TestZeroIsZero:
     """A const-free pair agrees relatively, so zero agrees only with zero: in f64 on the
-    deployed evaluator's values, in real and permissive at high precision, where a zero is a
+    deployed evaluator's values, in permissive at high precision, where a zero is a
     residual that collapses as the precision doubles."""
 
-    @pytest.mark.parametrize('mode', ['default', 'real', 'permissive'])
+    @pytest.mark.parametrize('mode', ['default', 'permissive'])
     def test_a_tiny_value_is_not_zero(self, eng, rows, mode):
         # exp(sinh(-5)) = 5.9e-33: inside the old absolute band, false in every mode.
         assert _judge(eng, rows[1], ('exp', 'sinh', '(-5)'), ('0',), mode=mode) \
@@ -156,16 +155,16 @@ class TestZeroIsZero:
         # sin(pi) is 0 exactly; f64 computes 1.2e-16 from the rounded pi.
         pair = (('sin', 'np.pi'), ('0',))
         assert _judge(eng, rows[1], *pair, mode='default') == (False, 'uncertified')
-        assert _judge(eng, rows[1], *pair, mode='real') == (True, 'accepted')
+        assert _judge(eng, rows[1], *pair, mode='permissive') == (True, 'accepted')
 
 
-@pytest.mark.parametrize('mode', ['default', 'real'])
+@pytest.mark.parametrize('mode', ['default', 'permissive'])
 def test_resolution_and_the_pair_judgment_agree(eng, rows, mode):
     """One numeric verdict for "this target equals this source": the scan resolves
     `<constant>` in `+ x0 <constant>` for `x0 + atanh(tanh 8)` to the literal `8`, and ships
     `+ x0 8` iff `judge_pair` accepts that pair on the same rows. f64 computes
     atanh(tanh 8) = 8 - 1.0e-10, which fails the relative bar where |x0 + 8| < 10 (refused);
-    the value is 8, and with those rows a minority real re-judges them (accepts). Judged
+    the value is 8, and with those rows a minority permissive re-judges them (accepts). Judged
     without the mint acceptance (`find_rule`), whose serve mark would fold the ground part."""
     n = 64
     x0 = [100.0 + i for i in range(n - 8)] + [0.0, 0.5, 1.0, -1.0, 2.0, -2.0, 0.25, 3.0]
@@ -177,4 +176,4 @@ def test_resolution_and_the_pair_judgment_agree(eng, rows, mode):
                           1e-12, None, rule_mode=mode)
     ok, _ = _judge(eng, x, src, ['+', 'x0', '8'], mode=mode)
     assert (scan == ['+', 'x0', '8']) == ok, scan
-    assert ok == (mode == 'real')
+    assert ok == (mode == 'permissive')

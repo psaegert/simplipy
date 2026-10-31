@@ -30,7 +30,6 @@
 //! short spellings make equal, the one written first keeps its short spelling and the other is
 //! written as it plus its rest.
 
-use super::ac::RuleMode;
 use super::memo::SimplifyCtx;
 use super::Engine;
 use crate::ac::convert::from_prefix;
@@ -109,29 +108,24 @@ fn render(node: &Node, form: PrettyForm, grouped: bool) -> Pretty {
 impl Engine {
     /// The shape of the state a display reads back as, read exactly as `prettify` reads its
     /// input: infix text through the strict infix parse, tokens as they stand, then the
-    /// canonical constructors in `mode`'s number domain.
-    fn read_shape(&self, shown: &Pretty, mode: RuleMode) -> Option<String> {
+    /// canonical constructors in the f64 number domain.
+    fn read_shape(&self, shown: &Pretty) -> Option<String> {
         let tokens = self.read_display(shown)?;
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(&tokens, &ctx);
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         let state = canon(from_prefix(&toks, &bare)?, &bare);
         Some(shape(&state, &bare))
     }
 
     /// `prettify`: the display of `tokens` (any dialect) as `options` say (the digit budget, a
-    /// float's significant digits, the form, the grouping of sums), its numbers read in `mode`'s
+    /// float's significant digits, the form, the grouping of sums), its numbers read in the f64
     /// number domain, every number written so that the display keeps the structure (see the
     /// module documentation). `None` on malformed input.
-    pub fn ac_prettify(
-        &self,
-        tokens: &[String],
-        options: PrettyOptions,
-        mode: RuleMode,
-    ) -> Option<Pretty> {
-        self.ac_prettify_structure(tokens, options, mode, false)
+    pub fn ac_prettify(&self, tokens: &[String], options: PrettyOptions) -> Option<Pretty> {
+        self.ac_prettify_structure(tokens, options, false)
             .map(|(shown, _)| shown)
     }
 
@@ -154,18 +148,17 @@ impl Engine {
         &self,
         tokens: &[String],
         options: PrettyOptions,
-        mode: RuleMode,
         verify: bool,
     ) -> Option<(Pretty, bool)> {
-        let first = self.display_keeping(tokens, options, mode, verify)?;
+        let first = self.display_keeping(tokens, options, verify)?;
         if (options.precision.is_none() && !first.reorders) || !first.kept {
             return Some((first.shown, first.kept));
         }
         let Some(read) = self.read_display(&first.shown) else {
             return Some((first.shown, first.kept));
         };
-        match self.display_keeping(&read, options, mode, true) {
-            Some(again) if again.kept && self.read_shape(&again.shown, mode) == first.reference => {
+        match self.display_keeping(&read, options, true) {
+            Some(again) if again.kept && self.read_shape(&again.shown) == first.reference => {
                 Some((again.shown, true))
             }
             _ => Some((first.shown, first.kept)),
@@ -187,7 +180,6 @@ impl Engine {
         &self,
         tokens: &[String],
         options: PrettyOptions,
-        mode: RuleMode,
         verify: bool,
     ) -> Option<Kept> {
         let PrettyOptions {
@@ -200,7 +192,7 @@ impl Engine {
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         let state = canon(from_prefix(&toks, &bare)?, &bare);
         let pass = |choices: &Choices| -> (Pretty, Vec<Rat>, bool) {
             let display = Display::new(&bare, digits, precision, form.layout())
@@ -218,7 +210,7 @@ impl Engine {
                 .with_choices(Choices::all(Choice::Exact))
                 .kept_shape(&state),
         );
-        let kept = |p: &Pretty| self.read_shape(p, mode) == reference;
+        let kept = |p: &Pretty| self.read_shape(p) == reference;
         // With the grouping kept at full precision the display evaluates as the state does: its
         // sums and products in the state's order (rule 10) and every number as the state's
         // tokens write it, exactly. A float one rounding from a quotient the tokens divide by

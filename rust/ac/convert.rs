@@ -152,7 +152,7 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     // in it bit for bit in float64: a negative coefficient of that argument leaves the call
     // (`atan2(-S, x) = -atan2(S, x)`) before a product decides its members, so a sum that
     // vanishes on a region keeps the orientation it was written in, as under an inverse
-    // (`inverts_a_signed_zero`). Not in `real`, whose one zero gives `atan2(0, -1) = pi`.
+    // (`inverts_a_signed_zero`). Not in `permissive`, whose one zero gives `atan2(0, -1) = pi`.
     if s == "atan2" && view.arity(t) == Some(2) && cx.ieee_zeros() {
         let mut ym = Vec::new();
         let at = parse_members(tokens, idx + 1, cx, &mut ym)?;

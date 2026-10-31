@@ -104,8 +104,8 @@ class TestTheWarningIsNonFatal:
 
 
 class TestTheWarningStaysQuietWhenItShould:
-    def test_a_real_ruleset_does_not_warn(self) -> None:
-        """The rules-less warning must stay silent for a real ruleset, and so must every
+    def test_a_shipped_ruleset_does_not_warn(self) -> None:
+        """The rules-less warning must stay silent for a shipped ruleset, and so must every
         other warning: the cell's sidecar records no probe that moved
         (`test_mu_prime.TestFingerprintAndArtifactLoad`). Any warning is a defect.
         """

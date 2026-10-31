@@ -81,17 +81,16 @@ class TestGroundFoldLicence:
         # `f(special)` collapses ONLY to exact values, and those ship as MINED certified
         # rules -- the f64 fold may not approximate. This retires the documented
         # `sin(np.pi) -> 1.2246e-16` wart as a POLICY consequence.
-        from conftest import require_triple
-        require_triple()
+        from conftest import require_mode_sets
+        require_mode_sets()
         check(eng, ['cos', 'np.e'], ['cos', 'np.e'])
         check(eng, ['exp', 'np.pi'], ['exp', 'np.pi'])
         # `sin(np.pi) -> 0` is exactly true and NOT f64-realised: f64 computes
         # 1.2246467991473532e-16 there, so the rewrite changes what the deployed
-        # evaluator returns. From 0.14.0 it is a `real`-tier rule -- served by `real`
-        # and `corpus`, declined by the default mode, which is the point of the split.
+        # evaluator returns. It holds in permissive alone, declined by the default mode, which
+        # is the point of the split.
         from simplipy import Mode
         assert eng.simplify(['sin', 'np.pi'], mode=Mode.f64) == ['sin', 'np.pi']
-        assert eng.simplify(['sin', 'np.pi'], mode=Mode.real) == ['0']
         assert eng.simplify(['sin', 'np.pi'], mode=Mode.permissive) == ['0']
 
     def test_pow_with_special_stays(self, eng):
@@ -191,38 +190,35 @@ class TestExactCollapsesMint:
     def test_bare_exact_collapses_mint(self, mined):
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
         # In f64 the walk folds a ground node to the float the evaluator computes, here exactly
-        # -1 and 1, so the f64 mine has nothing to mint for them; the real mine mints them.
+        # -1 and 1, so the f64 mine has nothing to mint for them.
         assert list(mined.simplify(['cos', 'np.pi'])) == ['-1']
         assert list(mined.simplify(['log', 'np.e'])) == ['1']
         assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)
         # `sin(np.pi) -> 0` is exactly true and f64 computes 1.2246467991473532e-16: the judge
-        # files it `real`, so the f64 mine, whose set the engine holds in its default slot,
-        # leaves it to the modes that license it. The real engine reads sin(pi) and cos(pi) from
-        # the table itself, so the real mine has nothing to mint for them; log(e), which the
-        # table holds only approximately, it mints.
+        # files it `permissive`, so the f64 mine, whose set the engine holds in its default
+        # slot, leaves it out. Permissive writes the table's values of sin(pi), cos(pi) and
+        # log(e) as floats itself, so its mine has nothing to mint for them.
         assert (('sin', 'np.pi'), ('0',)) not in rules, sorted(rules)
-        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
-        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
-        assert mined.simplify(['cos', 'np.pi'], mode='real') == ['-1']
-        assert (('sin', 'np.pi'), ('0',)) not in real, sorted(real)
-        assert (('log', 'np.e'), ('1',)) in real, sorted(real)
+        permissive = {(tuple(lhs), tuple(rhs))
+                      for lhs, rhs in mined.permissive_simplification_rules or []}
+        assert mined.simplify(['sin', 'np.pi'], mode='permissive') == ['0']
+        assert mined.simplify(['cos', 'np.pi'], mode='permissive') == ['-1']
+        assert mined.simplify(['log', 'np.e'], mode='permissive') == ['1']
+        assert (('sin', 'np.pi'), ('0',)) not in permissive, sorted(permissive)
 
     def test_mined_engine_serves_the_collapse(self, mined):
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
         assert mined.simplify(['cos', 'np.pi']) == ['-1']
         assert mined.simplify(['log', 'np.e']) == ['1']
         # `sin(np.pi)` is the one of the three f64 does not realise (f64 computes
-        # 1.2246467991473532e-16), so the f64 mine leaves it out and the real mine mints
-        # it: the mined engine serves the collapse in `real` and keeps f64's own value in
-        # the default mode. Asserted from the mined sets themselves -- an earlier version
-        # installed the rule into `real` and then asserted that same rule fires, which
-        # says nothing about the mine at all.
+        # 1.2246467991473532e-16), so the f64 mine leaves it out: the mined engine serves the
+        # collapse in `permissive` and keeps f64's own value in the default mode.
         # Where the ROUTED artifact serves it is pinned in `TestGroundFoldLicence` against
-        # the shipped triple.
-        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
+        # the shipped cell.
+        assert mined.simplify(['sin', 'np.pi'], mode='permissive') == ['0']
         assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
         from simplipy.verify._contract import judge_rule
-        assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'real'
+        assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'permissive'
 
     def test_ground_rules_bypass_sort_promotion(self, eng):
         # The promotion sorts classify WILDCARD instantiation domains; a ground rule has
@@ -236,7 +232,7 @@ class TestExactCollapsesMint:
                 (('tan', 'np.pi'), ('0',)), (('log', 'np.e'), ('1',))]
         # A rule with slots is JUDGED, never bypassed -- the other half of the property
         # this test guards: it climbs the rungs, each asking the judge. `cos(x + pi) ->
-        # -cos(x)` is true over the reals (tier `real`) and false in f64 wherever pi falls
+        # -cos(x)` is true over the reals (tier `permissive`) and false in f64 wherever pi falls
         # below the ulp of x (`1e20 + pi == 1e20`), so f64 licenses neither `_` nor `!`.
         judged_not_bypassed = (('cos', '+', '_0', 'np.pi'), ('neg', 'cos', '_0'))
         # The bypass is every rule without a slot: there is no sort to respell. Pure-literal
@@ -254,24 +250,20 @@ class TestExactCollapsesMint:
             assert rule in kept_set, (rule, sorted(kept_set))
         assert not {(('cos', '+', s + '0', 'np.pi'), ('neg', 'cos', s + '0')) for s in '_!'} & kept_set
         assert report['stage_counts']['ground_passthrough'] == 5
-        # The pipeline's answer to the respell CHANGED with the mode triple, and the
-        # old claim -- "the symbolic gate refuses it" -- is retired. The bucket is still
-        # KILL: `1 + e^-1 -> 1.3678794411714423` respells the exact value as its f64
-        # rounding, so it is mathematically false. But it is EXACTLY what f64 computes,
-        # so its tier is `f64` and the gate ROUTES it into rules.json rather than
-        # dropping it. That is correct under the split: in the mode whose authority is
-        # the deployed evaluator, the rewrite is exact.
+        # The bucket is KILL: `1 + e^-1 -> 1.3678794411714423` respells the exact value as
+        # its f64 rounding, so it is false in the reals' values. But it is EXACTLY what f64
+        # computes, and within float resolution of the exact value, so it holds in both
+        # modes and the gate ROUTES it rather than dropping it.
         from simplipy.verify import verify_ruleset
         from simplipy.verify._contract import judge_rule
         gate = verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]])
         assert gate['buckets']['KILL'] == [0], gate['buckets']
         verdict = judge_rule(list(f64_respell[0]), list(f64_respell[1]))
-        assert verdict['realised'] is True and verdict['tier'] == 'f64', verdict
-        # ... and it is therefore clean for the f64 file and NOT for the real one
-        assert verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
-                              mode='f64')['is_clean'] is True
-        assert verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
-                              mode='real')['is_clean'] is False
+        assert verdict['realised'] is True and verdict['tier'] == 'core', verdict
+        # ... and it is therefore clean for both files
+        for mode in ('f64', 'permissive'):
+            assert verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
+                                  mode=mode)['is_clean'] is True
 
     def test_inexact_values_still_refused(self, mined):
         # cos(e), exp(pi), e*pi have no exact alphabet spelling: nothing may mint, and

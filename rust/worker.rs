@@ -870,168 +870,6 @@ fn battery_rows_ok(
     )
 }
 
-/// The NO-CONSTANT equivalence test: the candidate has no `<constant>`, so it is
-/// a fixed function -- evaluate it once. The SOURCE may carry `n_src_const` constants, and the rule
-/// must hold for ALL of them, so the source's instances (`SourceCtx`: the `source_const_magnitudes`
-/// rounds times every sign combination) each require `allclose_extends(source, candidate)`
-/// (generic equivalence: source-finite rows bind, source-nonfinite rows are extendable).
-/// Rejects on the first mismatch (the guard against a coincidental single-value match).
-/// PARITY: a fast-path reject is re-judged by the SAME `hiprec::rescue` the production arm
-/// (`candidate_matches`) applies, and the evidence decision is the source's own
-/// (`evidence_rows`, on the same rows) -- the two entry points must never diverge (inf rows are
-/// must-match at f64, so without the rescue `log(exp(x)) -> x` would be rejected here while
-/// certified there).
-#[allow(clippy::too_many_arguments)]
-fn equivalent_no_const(
-    sc: &SourceCtx<'_>,
-    candidate: &Tape,
-    cand_tokens: &[String],
-    ops: &Operators,
-    var_names: &[String],
-    rtol: f64,
-    atol: f64,
-    min_informative: usize,
-) -> bool {
-    let (x_cols, n_rows) = (&sc.cols[..], sc.n_rows);
-    let source_tokens = sc.source;
-    let y_cand = candidate.eval_columns(x_cols, &[], n_rows);
-    // Fast NECESSARY-condition gate: every evidence row needs the candidate finite on it, and
-    // evidence rows are UNIQUE rows, so finite(y_cand) bounds the evidence from above. Kills
-    // all-NaN/all-inf candidates (the asin(cosh(_0)) -> nan family) outright.
-    if crate::eval::count_finite(&y_cand) < min_informative {
-        return false;
-    }
-    for (params, y) in &sc.y {
-        // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
-        // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
-        // Inf rows are must-match at f64; the near-miss rescue then re-judges the
-        // failing rows by escalation (saturation inf resolves finite, a true pole stays).
-        // A const-free pair agrees RELATIVELY (see `candidate_matches`): no absolute band.
-        if !allclose_extends(y, &y_cand, rtol, 0.0)
-            && !crate::hiprec::rescue(
-                y,
-                &y_cand,
-                source_tokens,
-                params,
-                cand_tokens,
-                &[],
-                ops,
-                var_names,
-                x_cols,
-                rtol,
-                0.0,
-                true,
-            )
-        {
-            return false;
-        }
-    }
-    // SPECIAL-POINT PHASE (see `rust/battery.rs`). PARITY: identical to the
-    // const-free arm of `candidate_matches` -- the two entry points must never diverge.
-    let source = &sc.tape;
-    for (params, _) in &sc.y {
-        if !battery_rows_ok(
-            source,
-            source_tokens,
-            params,
-            candidate,
-            cand_tokens,
-            &[],
-            sc.battery.as_ref(),
-            ops,
-            var_names,
-            rtol,
-            atol,
-            crate::engine::RuleMode::Real,
-        ) {
-            return false;
-        }
-    }
-    // the special source-constant sweep (skip semantics: an instance where the
-    // source is nowhere finite binds nothing; a binding instance is judged at the
-    // CONTRACT points only -- the sweep never binds generic X rows)
-    if sc.n_const == 1 {
-        for &s in crate::battery::SPECIAL_CONSTS.iter() {
-            let sp = vec![s];
-            let y_s = source.eval_columns(x_cols, &sp, n_rows);
-            if crate::eval::count_finite(&y_s) == 0 {
-                continue;
-            }
-            if !battery_rows_ok(
-                source,
-                source_tokens,
-                &sp,
-                candidate,
-                cand_tokens,
-                &[],
-                sc.battery.as_ref(),
-                ops,
-                var_names,
-                rtol,
-                atol,
-                crate::engine::RuleMode::Real,
-            ) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// FFI-facing wrapper: compile both expressions and run the no-constant equivalence test. The
-/// candidate must be constant-free (its `<constant>` count is 0); the source's constant count drives
-/// the resampling. `var_names` columns come from row-major `x_flat`.
-#[allow(clippy::too_many_arguments)]
-pub fn equivalent_no_const_check(
-    ops: &Operators,
-    source: &[String],
-    candidate: &[String],
-    var_names: &[String],
-    x_flat: &[f64],
-    n_rows: usize,
-    challenges: usize,
-    rtol: f64,
-    atol: f64,
-    min_informative: usize,
-    seed: u64,
-) -> Result<bool, String> {
-    let cand_tape = Tape::compile(candidate, ops, var_names)?;
-    if cand_tape.n_params != 0 {
-        return Err("candidate has <constant> tokens; use exist_constants_fit for constant-bearing candidates".to_string());
-    }
-    let n_vars = var_names.len();
-    if x_flat.len() != n_rows * n_vars {
-        return Err("x_flat shape mismatch".to_string());
-    }
-    let cols = columns_from_row_major(x_flat, n_rows, n_vars);
-    // EVIDENCE GATE: the source's own decision -- an (almost-)nowhere-defined source is not
-    // rewritten from its corner rows alone.
-    let Some(sc) = SourceCtx::new(
-        ops,
-        source,
-        var_names,
-        &cols,
-        n_rows,
-        challenges,
-        seed,
-        crate::engine::RuleMode::Real,
-        min_informative,
-    )?
-    else {
-        return Ok(false);
-    };
-    Ok(equivalent_no_const(
-        &sc,
-        &cand_tape,
-        candidate,
-        ops,
-        var_names,
-        rtol,
-        atol,
-        min_informative,
-    ))
-}
-
 /// Winner selection: among matched candidates prefer the FEWEST `<constant>`s
 /// (stable -> discovery-order tiebreak), skip any that violate wildcard multiplicity, and if the
 /// chosen target is bare `<constant>` while the source is all-numeric, fold to the literal value.
@@ -1258,7 +1096,7 @@ fn candidate_matches(
     lane: Lane,
 ) -> Option<Option<Vec<f64>>> {
     let rescue = lane.rescue();
-    // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
+    // Fast NECESSARY-condition gate, const-free arm (the candidate is a fixed function): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
         return None;
@@ -1291,7 +1129,7 @@ fn candidate_matches(
             //   underflows, the true value is accepted beside the evaluator's (the f64 range
             //   standard, `f64_range_rescue`): `rootn(exp(x), 2) -> exp(x/2)` certifies past
             //   exp's overflow, `atanh(tanh(x)) -> x` does not (tanh saturates in range).
-            // - real and permissive (rescue): f64 is a PRE-FILTER, and a near-miss reject is
+            // - permissive (rescue): f64 is a PRE-FILTER, and a near-miss reject is
             //   re-judged at high precision on exactly the failing rows (`hiprec::rescue`),
             //   where a zero is a residual that collapses as the precision doubles. True
             //   identities whose f64 evaluation loses precision -- atanh(tanh(x)) -> x,
@@ -1691,9 +1529,9 @@ fn candidate_matches(
 /// THE MODE A PAIR IS MINTED FOR, which the mint's numeric acceptance reads:
 /// - `f64` reads the deployed evaluator's values, agreeing at float resolution (F6, 8 units in
 ///   the last place) under the range standard;
-/// - `real` and `permissive` pre-filter in f64 and re-judge a near miss by the table
-///   (`hiprec::rescue`); real owes clause (b) (the domain gate, read in the reals), permissive
-///   owes none (its criterion is agreement alone) and collapses a constant without evidence.
+/// - `permissive` pre-filters in f64 and re-judges a near miss by the table
+///   (`hiprec::rescue`); it owes no clause (b) (its criterion is agreement alone) and
+///   collapses a constant without evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lane(pub crate::engine::RuleMode);
 
@@ -1712,17 +1550,6 @@ impl Lane {
     /// the infinity is a value it owes (`exp(-log(x)) -> 1/x` at x = 0: +inf against 1/0).
     pub fn excuses_isolated_infinity(self) -> bool {
         !matches!(self.0, crate::engine::RuleMode::Permissive)
-    }
-}
-
-/// `true` reads as `real`'s lane and `false` as f64's (the per-call paths and tests).
-impl From<bool> for Lane {
-    fn from(rescue: bool) -> Self {
-        Lane(if rescue {
-            crate::engine::RuleMode::Real
-        } else {
-            crate::engine::RuleMode::Default
-        })
     }
 }
 
@@ -1790,7 +1617,7 @@ const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
 /// is decided HERE, from the source's domain and never from a count of sampled rows: the source
 /// is informative iff `interval::finite_cells` certifies, at one of its instances, a cell of the
 /// horizon box on which it is finite everywhere, in the mode's own semantics (`f64`: float64's,
-/// tails included; otherwise the reals', which `real` and `permissive` judge in). Fail closed:
+/// tails included; otherwise the reals', which `permissive` judges in). Fail closed:
 /// an undecided search certifies nothing.
 ///
 /// An informative source then needs `min_informative` rows where some instance is finite,
@@ -1800,7 +1627,7 @@ const TOPUP_SALT: u64 = 0xE71D_E0CE_5EED_0F01;
 /// DRAWN from the certified cells -- a cell chosen in proportion to its volume, a point uniform in
 /// it, columns the source does not read uniform on the horizon -- from a stream fixed by `seed`,
 /// until the floor is met; the rows already there are kept. A draw whose value in the mode is
-/// not finite (real's and permissive's read by the table where float64 reads a rounded pole,
+/// not finite (permissive's read by the table where float64 reads a rounded pole,
 /// `hiprec::table_classes`) is skipped, and a top-up that exhausts its draws fails closed. First
 /// of all the source must have evidence (`interval::evidence`, the function the judge's policy
 /// reads): in the reals `tan(atan2(x, 0))` has none, its value undefined off x = 0, though the
@@ -2481,12 +2308,11 @@ pub fn find_rule_with_lib(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    lane: impl Into<Lane>,
+    lane: Lane,
     accept: Option<AcceptFn<'_>>,
     confirm: Option<AcceptFn<'_>>,
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Result<Option<Vec<String>>, String> {
-    let lane: Lane = lane.into();
     // GUARD FIRST (BEFORE the all-constant short-circuit).
     let max_cand_len = match max_target {
         Some(mt) => simplified_length.min(mt + 1),
@@ -2790,9 +2616,8 @@ pub fn find_rule(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    lane: impl Into<Lane>,
+    lane: Lane,
 ) -> Result<Option<Vec<String>>, String> {
-    let lane: Lane = lane.into();
     // Per-call path: no engine here to score mu, so the library is unscored and the legacy
     // token bound stands (`max_mu = None`). The MINE goes through the resident-library path.
     let mus = vec![None; candidates.len()];
@@ -2840,9 +2665,8 @@ pub fn judge_pair(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    lane: impl Into<Lane>,
+    lane: Lane,
 ) -> Result<Option<&'static str>, String> {
-    let lane: Lane = lane.into();
     let Some(sc) = SourceCtx::new(
         ops,
         source,
@@ -3000,6 +2824,40 @@ mod tests {
         ));
     }
 
+    /// The mint's pair judgment in `mode` (`Engine::judge_pair`): `true` where it accepts
+    /// `src -> tgt` on the rows.
+    #[allow(clippy::too_many_arguments)]
+    fn pair_accepted(
+        e: &crate::engine::Engine,
+        src: &[String],
+        tgt: &[String],
+        vars: &[String],
+        xf: &[f64],
+        n: usize,
+        mode: crate::engine::RuleMode,
+        rtol: f64,
+        atol: f64,
+        min_informative: usize,
+        seed: u64,
+    ) -> bool {
+        let spec = crate::engine::MineSpec {
+            mode,
+            rtol,
+            atol,
+            min_informative,
+            challenges: 16,
+            retries: 16,
+        };
+        e.judge_pair(src, tgt, vars, xf, n, &spec, seed)
+            .unwrap()
+            .is_none()
+    }
+
+    const LANES: [crate::engine::RuleMode; 2] = [
+        crate::engine::RuleMode::Default,
+        crate::engine::RuleMode::Permissive,
+    ];
+
     #[test]
     fn no_const_equiv() {
         let Some(e) = crate::test_engine() else {
@@ -3012,51 +2870,29 @@ mod tests {
             xf.push((r as f64) * 0.1 - 3.0);
             xf.push((r as f64) * -0.05 + 1.5);
         }
-        // source: neg(neg(x0)) == candidate x0  (const-free both) -> equivalent
-        assert!(e
-            .equivalent_no_const_check(
-                &s(&["neg", "neg", "x0"]),
-                &s(&["x0"]),
-                &vars,
-                &xf,
-                n,
-                16,
-                1e-5,
-                1e-8,
-                8,
-                0
-            )
-            .unwrap());
-        // source: + <constant> x0  vs candidate x0 : holds ONLY for constant 0 -> resampling rejects
-        assert!(!e
-            .equivalent_no_const_check(
-                &s(&["+", "<constant>", "x0"]),
-                &s(&["x0"]),
-                &vars,
-                &xf,
-                n,
-                16,
-                1e-5,
-                1e-8,
-                8,
-                0
-            )
-            .unwrap());
-        // source: * <constant> x0 vs candidate x0 : holds only for constant 1 -> rejected
-        assert!(!e
-            .equivalent_no_const_check(
-                &s(&["*", "<constant>", "x0"]),
-                &s(&["x0"]),
-                &vars,
-                &xf,
-                n,
-                16,
-                1e-5,
-                1e-8,
-                8,
-                0
-            )
-            .unwrap());
+        for mode in LANES {
+            let ok = |src: &[&str]| {
+                pair_accepted(
+                    &e,
+                    &s(src),
+                    &s(&["x0"]),
+                    &vars,
+                    &xf,
+                    n,
+                    mode,
+                    1e-5,
+                    1e-8,
+                    8,
+                    0,
+                )
+            };
+            // neg(neg(x0)) == x0 (const-free both) -> equivalent
+            assert!(ok(&["neg", "neg", "x0"]), "{mode:?}");
+            // + <constant> x0 vs x0 holds ONLY for constant 0 -> resampling rejects
+            assert!(!ok(&["+", "<constant>", "x0"]), "{mode:?}");
+            // * <constant> x0 vs x0 holds only for constant 1 -> rejected
+            assert!(!ok(&["*", "<constant>", "x0"]), "{mode:?}");
+        }
     }
 
     #[test]
@@ -3074,7 +2910,7 @@ mod tests {
         let lib = vec![s(&["x0"]), s(&["x1"]), s(&["neg", "x0"]), s(&["abs", "x0"])];
         // neg(neg(x0)) (len 3) simplifies to x0 -> find_rule should return ["x0"]
         let r = e
-            .find_rule(
+            .find_rule_in(
                 &s(&["neg", "neg", "x0"]),
                 3,
                 Some(2),
@@ -3088,12 +2924,13 @@ mod tests {
                 1e-5,
                 1e-8,
                 8,
+                Lane(crate::engine::RuleMode::Permissive),
             )
             .unwrap();
         assert_eq!(r, Some(s(&["x0"])));
         // sin(x0) (len 2) has no shorter equivalent in the library -> None
         let r2 = e
-            .find_rule(
+            .find_rule_in(
                 &s(&["sin", "x0"]),
                 2,
                 Some(2),
@@ -3107,6 +2944,7 @@ mod tests {
                 1e-5,
                 1e-8,
                 8,
+                Lane(crate::engine::RuleMode::Permissive),
             )
             .unwrap();
         assert_eq!(r2, None);
@@ -3126,7 +2964,7 @@ mod tests {
         let xf: Vec<f64> = (0..n).map(|i| -8.0 + 0.25 * i as f64).collect();
         let lib = vec![s(&["x0"]), s(&["exp", "x0"]), s(&["neg", "cos", "x0"])];
         let r = e
-            .find_rule(
+            .find_rule_in(
                 &s(&["pow", "np.e", "x0"]),
                 3,
                 Some(2),
@@ -3140,6 +2978,7 @@ mod tests {
                 1e-9,
                 1e-12,
                 8,
+                Lane(crate::engine::RuleMode::Permissive),
             )
             .unwrap();
         assert_eq!(
@@ -3148,7 +2987,7 @@ mod tests {
             "pow(np.e, x) -> exp(x) must be mined"
         );
         let r2 = e
-            .find_rule(
+            .find_rule_in(
                 &s(&["cos", "+", "np.pi", "x0"]),
                 4,
                 Some(3),
@@ -3162,6 +3001,7 @@ mod tests {
                 1e-9,
                 1e-12,
                 8,
+                Lane(crate::engine::RuleMode::Permissive),
             )
             .unwrap();
         assert_eq!(
@@ -3230,7 +3070,7 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
-                true,
+                Lane(crate::engine::RuleMode::Permissive),
                 None,
                 None,
                 None,
@@ -3348,7 +3188,7 @@ mod tests {
             1e-9,
             1e-12,
             16,
-            true,
+            Lane(crate::engine::RuleMode::Permissive),
             None,
             None,
             None,
@@ -3371,7 +3211,7 @@ mod tests {
             1e-9,
             1e-12,
             16,
-            true,
+            Lane(crate::engine::RuleMode::Permissive),
             Some(&not_star_head),
             None,
             None,
@@ -3409,7 +3249,7 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
-                true,
+                Lane(crate::engine::RuleMode::Permissive),
                 None,
                 Some(confirm),
                 None,
@@ -3485,7 +3325,7 @@ mod tests {
             vec![-0.999_999_999_997_003_7],
             1e-9,
             1e-12,
-            Lane::from(true),
+            Lane(crate::engine::RuleMode::Permissive),
         );
         assert_eq!(a, vec![-1.0]);
         // y genuinely x^2.9999997: within snap range of 3 but pow(x, 3) misses by ~1e-7
@@ -3505,13 +3345,15 @@ mod tests {
             vec![2.999_999_7],
             1e-9,
             1e-12,
-            Lane::from(true),
+            Lane(crate::engine::RuleMode::Permissive),
         );
         assert_eq!(b, vec![2.999_999_7]);
     }
 
     /// The certification gaps closed by witness snapping + the special-point phase
-    /// (`rust/battery.rs`); each case is a family observed live in (4,3) mining runs.
+    /// (`rust/battery.rs`); each case is a family observed live in (4,3) mining runs, judged in
+    /// each lane by what it owes: f64 the deployed evaluator's values and clause (b), permissive
+    /// the reals' values (the rescue) and agreement alone.
     #[test]
     fn special_phase_closes_certification_gaps() {
         let Some(e) = crate::test_engine() else {
@@ -3520,76 +3362,94 @@ mod tests {
         let vars = s(&["x0"]);
         let n = 512usize;
         let xf = grid_1var(n);
-        let fr = |src: &[&str], cand: &[&str]| {
-            let src = s(src);
-            let cand = s(cand);
-            let slen = src.len();
-            let mt = cand.len();
-            e.find_rule(
-                &src,
-                slen,
-                Some(mt),
-                &[cand],
-                &vars,
-                &xf,
-                n,
-                16,
-                16,
-                7,
-                1e-9,
-                1e-12,
-                32,
-            )
-            .unwrap()
-        };
-        // 1. WITNESS SNAPPING + domain gate: exp(log(x^3)) is defined only on x > 0; the raw
-        //    fit (2.9999999999999996) is NaN on x < 0 and hides the extension, the snapped
-        //    3.0 is total on R -- a positive-measure domain extension (a 37-rule family in
-        //    (4,3) mining runs before this phase existed).
-        assert_eq!(
-            fr(
-                &["exp", "log", "pow", "x0", "3"],
-                &["pow", "x0", "<constant>"]
-            ),
-            None
-        );
-        // 2. a domain-PRESERVING constant witness stays minable: exp(log(x)/3) = x^(1/3) on
-        //    x > 0, and the fitted 1/3 is far from every snap target -- pow(x, 1/3) is NaN
-        //    on x < 0 exactly like the source (a certified live rule).
-        assert!(fr(
-            &["exp", "/", "log", "x0", "3"],
-            &["pow", "x0", "<constant>"]
-        )
-        .is_some());
-        // 3. null-set completion stays allowed (x/x -> 1 at 0: the limit-completion doctrine).
-        assert!(fr(&["/", "x0", "x0"], &["1"]).is_some());
-        // 4. contract point x = pi/2: f64 sin(pi/2) is EXACTLY 1.0 and pow(1, inf) = 1, not
-        //    0 -- clause (a) at a real battery point; the hiprec rescue must not overturn a
-        //    contract point (re-evaluating the f64 pi/2 "more precisely" answers a different
-        //    question than "what happens at pi/2").
-        assert_eq!(fr(&["pow", "sin", "x0", "float(\"inf\")"], &["0"]), None);
-        // 5. pow-of-cos in CONSTANT space: pow(cos c, inf) = 1 at c = 0 -- the special
-        //    source-constant battery reaches what no random draw does.
-        assert_eq!(
-            fr(&["pow", "cos", "<constant>", "float(\"inf\")"], &["0"]),
-            None
-        );
-        // 6. deployed-consistency at battery points is f64's question: atanh(tanh(tan x))
-        //    diverges from tan x by ~3e-7 at x = +-1.5 in f64 (a live (4,3) family), and the
-        //    reals' values agree, so this real lane certifies it (the judge files it `real`) ...
-        assert_eq!(
-            fr(&["atanh", "tanh", "tan", "x0"], &["tan", "x0"]),
-            Some(s(&["tan", "x0"]))
-        );
-        // ... while atanh(tanh(x)) -> x stays certified (the rescue's flagship identity).
-        assert!(fr(&["atanh", "tanh", "x0"], &["x0"]).is_some());
+        for mode in LANES {
+            let f64 = mode == crate::engine::RuleMode::Default;
+            let fr = |src: &[&str], cand: &[&str]| {
+                let src = s(src);
+                let cand = s(cand);
+                let slen = src.len();
+                let mt = cand.len();
+                e.find_rule_in(
+                    &src,
+                    slen,
+                    Some(mt),
+                    &[cand],
+                    &vars,
+                    &xf,
+                    n,
+                    16,
+                    16,
+                    7,
+                    1e-9,
+                    1e-12,
+                    32,
+                    Lane(mode),
+                )
+                .unwrap()
+            };
+            // 1. WITNESS SNAPPING + domain gate: exp(log(x^3)) is defined only on x > 0; the
+            //    raw fit (2.9999999999999996) is NaN on x < 0 and hides the extension, the
+            //    snapped 3.0 is total on R -- a positive-measure domain extension, which f64
+            //    refuses (clause (b)) and permissive allows.
+            assert_eq!(
+                fr(
+                    &["exp", "log", "pow", "x0", "3"],
+                    &["pow", "x0", "<constant>"]
+                )
+                .is_some(),
+                !f64,
+                "{mode:?}"
+            );
+            // 2. a domain-PRESERVING constant witness stays minable: exp(log(x)/3) = x^(1/3)
+            //    on x > 0, and the fitted 1/3 is far from every snap target -- pow(x, 1/3) is
+            //    NaN on x < 0 exactly like the source (a certified live rule).
+            assert!(
+                fr(
+                    &["exp", "/", "log", "x0", "3"],
+                    &["pow", "x0", "<constant>"]
+                )
+                .is_some(),
+                "{mode:?}"
+            );
+            // 3. null-set completion stays allowed (x/x -> 1 at 0: the limit-completion
+            //    doctrine).
+            assert!(fr(&["/", "x0", "x0"], &["1"]).is_some(), "{mode:?}");
+            // 4. contract point x = pi/2: f64 sin(pi/2) is EXACTLY 1.0 and pow(1, inf) = 1,
+            //    not 0 -- clause (a) at a battery point, in f64. In the reals' values pow(1, inf)
+            //    has no value, and the left side is 0 wherever it has one: permissive mints it.
+            assert_eq!(
+                fr(&["pow", "sin", "x0", "float(\"inf\")"], &["0"]).is_some(),
+                !f64,
+                "{mode:?}"
+            );
+            // 5. pow-of-cos in CONSTANT space: pow(cos c, inf) = 1 at c = 0 -- the special
+            //    source-constant battery reaches what no random draw does.
+            assert_eq!(
+                fr(&["pow", "cos", "<constant>", "float(\"inf\")"], &["0"]),
+                None,
+                "{mode:?}"
+            );
+            // 6. atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in f64 (a live
+            //    (4,3) family), and the reals' values agree: permissive's rescue certifies it,
+            //    f64 refuses it; atanh(tanh(x)) -> x likewise (tanh saturates in float64).
+            assert_eq!(
+                fr(&["atanh", "tanh", "tan", "x0"], &["tan", "x0"]).is_some(),
+                !f64,
+                "{mode:?}"
+            );
+            assert_eq!(
+                fr(&["atanh", "tanh", "x0"], &["x0"]).is_some(),
+                !f64,
+                "{mode:?}"
+            );
+        }
     }
 
     /// The unresolvable-seam class: a removable
     /// singularity whose cancellation is spelled through DIFFERENT subexpressions cancels
     /// exactly in f64 but leaves a precision-roulette residue at the precision rungs. The
-    /// contract cannot decide the point, and in the reals' lane that is no refutation: the
-    /// rule completes a null set (the judge files it `real`); f64's divergence check is f64's.
+    /// contract cannot decide the point, and in the reals' lane (permissive's) that is no
+    /// refutation: the rule completes a null set; f64's divergence check is f64's.
     #[test]
     fn seam_class_and_stable_null_completion_kept_in_the_reals() {
         let Some(e) = crate::test_engine() else {
@@ -3610,38 +3470,36 @@ mod tests {
         let seam = s(&[
             "/", "+", "pow", "x0", "3", "*", "pow", "x0", "2", "x1", "+", "x0", "x1",
         ]);
-        assert!(e
-            .equivalent_no_const_check(
-                &seam,
-                &s(&["pow", "x0", "2"]),
-                &vars,
-                &xf,
-                n,
-                16,
-                1e-9,
-                1e-12,
-                32,
-                7
-            )
-            .unwrap());
+        assert!(pair_accepted(
+            &e,
+            &seam,
+            &s(&["pow", "x0", "2"]),
+            &vars,
+            &xf,
+            n,
+            crate::engine::RuleMode::Permissive,
+            1e-9,
+            1e-12,
+            32,
+            7
+        ));
         // (x+y)^3/(x+y)^2 -> x+y: the cancellation is spelled ONCE, cancels exactly at every
         // precision, 0/0 = nan stably -- the ratified null-set-completion class stays.
         let stable = s(&[
             "/", "pow", "+", "x0", "x1", "3", "pow", "+", "x0", "x1", "2",
         ]);
-        assert!(e
-            .equivalent_no_const_check(
-                &stable,
-                &s(&["+", "x0", "x1"]),
-                &vars,
-                &xf,
-                n,
-                16,
-                1e-9,
-                1e-12,
-                32,
-                7
-            )
-            .unwrap());
+        assert!(pair_accepted(
+            &e,
+            &stable,
+            &s(&["+", "x0", "x1"]),
+            &vars,
+            &xf,
+            n,
+            crate::engine::RuleMode::Permissive,
+            1e-9,
+            1e-12,
+            32,
+            7
+        ));
     }
 }

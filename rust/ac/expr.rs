@@ -1009,7 +1009,7 @@ fn numeric_leaf(s: &str) -> bool {
 /// A PIECE OF A LITERAL: a number, a numeric-string leaf, an integer power of a piece, or a sum
 /// or product of pieces -- variable-free arithmetic that denotes one rational value.
 ///
-/// The exact number domain (`real`) holds every such value within the 1,100-bit cap as one
+/// The exact number domain holds every such value within the 1,100-bit cap as one
 /// `Rat`, which [`mu_rat`] prices at most at its float's price. The f64 domain admits only
 /// numbers whose components are at most 2^1022 (`rat::number_domain`) and holds the rest in
 /// pieces: a literal whose exact fraction leaves it stays a leaf as written
@@ -1332,9 +1332,6 @@ fn cmp_vec(a: &[Ex], b: &[Ex], view: &TokenView) -> Ordering {
 /// The enclosure certificate's type ([`Cx::cert_encl`]): a ground composite's closed float64 box.
 pub type EnclosureCert<'a> = &'a dyn Fn(&Ex) -> Option<(f64, f64)>;
 
-/// The order certificate's type ([`Cx::cert_order`]): the real order of two ground values.
-pub type OrderCert<'a> = &'a dyn Fn(&Ex, &Ex) -> Option<Ordering>;
-
 /// The canonicalization context: the token view (leaf classification, string order) plus the two
 /// OPTIONAL soundness certificates. With a certificate absent the corresponding gated collection
 /// simply does not happen -- fail-closed, exactly like the old matcher's certifier plumbing.
@@ -1369,16 +1366,9 @@ pub struct Cx<'a> {
     /// real function and for the deployed kernel), `None` for anything else. Read outside `f64`
     /// alone, where a lattice bag orders its ground members by it (`max(sin 1, 1/2) = sin 1`).
     pub cert_encl: Option<EnclosureCert<'a>>,
-    /// The ORDER certificate, `real` alone: the order of two ground lattice members whose
-    /// enclosures overlap, decided at high precision (`hiprec::ground_order`), `None` where it is
-    /// not (fail closed). `f64` and `permissive` order members by their float64 values.
-    pub cert_order: Option<OrderCert<'a>>,
-    /// WHICH SOUNDNESS this construction preserves. Was a `lossy: bool`, which could only
-    /// ask "may I skip certification?" -- and that is the wrong question for a guard whose
-    /// reason is f64 saturation rather than recall. `real` needs those guards OFF (the
-    /// identities they protect are mathematically total) while keeping every recall
-    /// certificate ON, and no boolean can say that. Both old readings are derived below,
-    /// so the mode stays the single representation.
+    /// WHICH SOUNDNESS this construction preserves: the mode, from which every reading below
+    /// is derived (`f64_semantics`, `permits`, `ieee_zeros`, `table_values`), so the mode stays
+    /// the single representation.
     pub mode: RuleMode,
     /// Whether the walk folds a ground node to the float the deployed evaluator computes for
     /// it (`Engine::ground_fold`), in `f64`. DERIVED from the mode by `Cx::folds_for`; the
@@ -1431,7 +1421,7 @@ pub enum Permissive {
     /// Every slot matches any subexpression, without its certificate: `$0/$0 -> 1` also matches
     /// `inf/inf` (the matcher's `wildcard_all`).
     AnySlot,
-    /// The rules that agree with real's values up to float resolution (8 units in the last
+    /// The rules that agree with the reals' values up to float resolution (8 units in the last
     /// place) are served (the permissive rule set), judged at the `_` sort this mode's matcher
     /// binds (`AnySlot`), so with no isolated point excused: `asin(1e-8) -> 1e-8`, off by
     /// 1.667e-25.
@@ -1506,43 +1496,41 @@ impl<'a> Cx<'a> {
 
 impl<'a> Cx<'a> {
     /// THE DERIVATION of `fold_f64` from a mode: `f64` folds a ground node to its float in the
-    /// pass. `real` cannot (the result is not representable -- `tan(1)` is irrational and no
-    /// literal spells it), and `permissive` folds in its pass by its lossy reading.
+    /// pass, and `permissive` folds in its pass by its lossy reading.
     #[inline]
     pub fn folds_for(mode: RuleMode) -> bool {
         matches!(mode, RuleMode::Default)
     }
 
     /// The F64 reading: is this construction answerable only in what the deployed f64
-    /// evaluator computes? True for `f64` alone. `real` reasons over the reals, where
-    /// saturation does not exist, and `permissive` skips the gate anyway -- so a guard that
-    /// exists BECAUSE of f64 saturation must ask this and not `permits`.
+    /// evaluator computes? True for `f64` alone. `permissive` reasons over the reals, where
+    /// saturation does not exist -- so a guard that exists BECAUSE of f64 saturation must ask
+    /// this and not `permits`.
     #[inline]
     pub fn f64_semantics(&self) -> bool {
         matches!(self.mode, RuleMode::Default)
     }
 
-    /// The number domain this construction runs in (`rat::number_domain`): exact in `real`
-    /// mode, f64 in every other mode -- `permissive` is evaluated in float64 too -- and exact
-    /// whenever the enclosing run is: a certificate-free `Cx::bare` inside a real-mode run
-    /// builds and prints that run's numbers (it is mode Default only for its licences).
+    /// The number domain this construction runs in (`rat::number_domain`): f64 in every mode
+    /// -- `permissive` is evaluated in float64 too -- and exact whenever the enclosing run is
+    /// (an exact display or reading).
     #[inline]
     pub fn f64_numbers(&self) -> bool {
-        !matches!(self.mode, RuleMode::Real) && super::rat::f64_numbers()
+        super::rat::f64_numbers()
     }
 
     /// The SIGNED-ZERO reading: does this construction answer in float64's signed zeros (IEEE
     /// 754)? `f64` is evaluated in float64, where an exact zero carries the sign of what formed
-    /// it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign. `real` and
-    /// `permissive`, whose values are real's, have one zero, and `1/0` has no value there.
+    /// it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign.
+    /// `permissive`, whose values are the reals', has one zero, and `1/0` has no value there.
     #[inline]
     pub fn ieee_zeros(&self) -> bool {
         matches!(self.mode, RuleMode::Default)
     }
 
     /// Are this mode's values THE TABLE's real values, so that an operation on literals (a
-    /// rational, an infinity, NaN) is the table's exact value (`table_literal_fold`)? `real`,
-    /// and `permissive`, whose values are real's: `1/0` has no value there either.
+    /// rational, an infinity, NaN) is the table's exact value (`table_literal_fold`)?
+    /// `permissive`, whose values are the reals': `1/0` has no value there.
     #[inline]
     pub fn table_values(&self) -> bool {
         !matches!(self.mode, RuleMode::Default)
@@ -1569,7 +1557,6 @@ impl<'a> Cx<'a> {
             cert_nce: None,
             cert_region: None,
             cert_encl: None,
-            cert_order: None,
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
@@ -4430,8 +4417,7 @@ impl Drop for RegionScope {
 /// (`Ex::has_measure_space`: a ground sum, or a pattern's) has no zero set to read, and a sum
 /// whose sign an absorption owner takes into its terms whatever its zero set -- one holding a
 /// `<constant>` (the refit), an infinity term or a term absorbing a negation
-/// -- keeps its owner. `real` reads one unsigned zero, and `permissive` a value up to the
-/// sign of a zero.
+/// -- keeps its owner. `permissive` reads a value up to the sign of a zero.
 pub(crate) fn keeps_zero_sign(s: &Ex, cx: &Cx) -> bool {
     let owned = s.contains_const()
         || matches!(s, Ex::Add(ts) if ts.iter().any(|t| {
@@ -4451,8 +4437,8 @@ fn region_zero_null(e: &Ex, cx: &Cx) -> bool {
         }
 }
 
-/// Is `f64` the construction, in the run's float64 numbers? A certificate-free context inside a
-/// `real` run is mode `f64` only for its licences (`Cx::f64_numbers`), and reads one zero.
+/// Is `f64` the construction, in the run's float64 numbers? A construction in the exact number
+/// domain (`Cx::f64_numbers`) reads one zero.
 fn f64_zero_signs(cx: &Cx) -> bool {
     cx.f64_semantics() && cx.f64_numbers()
 }
@@ -4786,9 +4772,8 @@ pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<E
 /// product exactly in IEEE 754 arithmetic: the exact zero is +0, so `(0*f)^k` is `0^k * f^k`, that
 /// is `inf * f^k`, for every `f`, a zero, an infinity and NaN included. Each member keeps its own
 /// power and the zero the pole, so the answer keeps the infinity's sign: `1/(x1*(x2 - x2))` is
-/// `inf/x1`, `1/-(x1 - x1)` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`. `real` keeps its one zero:
-/// there the product is the zero and its inverse `+inf`. Asked where the members of an inverted
-/// product are still apart (`raised_members`), and by `pow`'s distribution licence
+/// `inf/x1`, `1/-(x1 - x1)` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`. Asked where the members of
+/// an inverted product are still apart (`raised_members`), and by `pow`'s distribution licence
 /// (`power_bag`), where a product that holds a zero is inverted whole.
 ///
 /// So with a member that vanishes on a region with the sign its orientation gives it, in `f64`
@@ -8632,7 +8617,6 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
     }
     let mode = match cx.mode {
         RuleMode::Default => 0u8,
-        RuleMode::Real => 1,
         RuleMode::Permissive => 2,
     };
     let bits = mode
@@ -8773,7 +8757,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
                 // the coefficient, where the ground fold of a ground product writes float64's -0
                 // and the zero of a product with a variable is the one zero (`-x1*sin(0)` is
                 // `0`). Read as the zero again, the flip would drop the sign (`-sin(0)` as
-                // `sin(0)`, a +0). `real` and `permissive` read one zero.
+                // `sin(0)`, a +0). `permissive` reads one zero.
                 Ex::Num(r) if r.is_zero() && cx.f64_semantics() && cx.f64_numbers() => None,
                 Ex::Num(r) => {
                     let flipped = fun(*op, with(Ex::Num(r.checked_neg()?)), cx);
@@ -9350,7 +9334,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     } else {
         (base, exp)
     };
-    // In `real` and `permissive` a power of two literals is the table's exact value
+    // In `permissive` a power of two literals is the table's exact value
     // (`table_literal_fold`):
     // `pow(0, -1)` is NaN (1/0, the limit rule), `pow(0, -2)` +inf, `pow(1, inf)`,
     // `pow(inf, 0)` and `pow(nan, 0)` NaN -- before the one-zero arms and the `x^0` and `1^x`
@@ -10003,11 +9987,11 @@ pub fn land_root(e: Ex, cx: &Cx) -> Ex {
 /// `atan2(y, x)` built from the product members of its arguments, as float64 reads them: it
 /// reads the sign of a zero in both (`atan2(-0, -1) = -pi`, `atan2(+0, -0) = pi`). In the
 /// float64 modes a negative coefficient of `y` leaves the call (`atan2(-S, x) = -atan2(S, x)`,
-/// exact there, and not in `real`, whose one zero gives `atan2(0, -1) = pi`), and each argument
-/// keeps its members apart (`mul_undecided`), so neither a sum that vanishes on a region nor a
-/// written zero changes the sign of its zero by a product's orientation decision. Every
-/// construction of an `atan2` node goes through here: the parse, the canonical rebuild (a rule's
-/// right-hand side after substitution) and the pass's rebuild.
+/// exact there, and not in `permissive`, whose one zero gives `atan2(0, -1) = pi`), and each
+/// argument keeps its members apart (`mul_undecided`), so neither a sum that vanishes on a
+/// region nor a written zero changes the sign of its zero by a product's orientation decision.
+/// Every construction of an `atan2` node goes through here: the parse, the canonical rebuild (a
+/// rule's right-hand side after substitution) and the pass's rebuild.
 pub(crate) fn atan2_of(op: Tok, mut ym: Vec<Ex>, xm: Vec<Ex>, cx: &Cx) -> Ex {
     let negative = |m: &Ex| matches!(m, Ex::Num(r) if r.is_negative());
     if !cx.ieee_zeros() {
@@ -10037,7 +10021,7 @@ pub(crate) fn atan2_of(op: Tok, mut ym: Vec<Ex>, xm: Vec<Ex>, cx: &Cx) -> Ex {
 /// `atan2(-0, -1) = -pi`), so a search move inside an argument is taken only where neither the
 /// part it rewrites nor the part it writes does (`search::site_list`): elsewhere the part's zero
 /// set is null, and a move that keeps the value almost everywhere keeps its sign there. `false`
-/// outside `f64`: `real` reads one zero and `permissive` a value up to the sign of a zero.
+/// outside `f64`: `permissive` reads a value up to the sign of a zero.
 pub(crate) fn vanishes_with_a_sign(e: &Ex, cx: &Cx) -> bool {
     let signed = |m: &Ex| {
         matches!(m, Ex::Num(r) if r.is_zero())
@@ -10154,9 +10138,10 @@ fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
     Rat::from_big(if ceil { f + 1 } else { f }, BigInt::from(1))
 }
 
-/// REAL'S LITERAL ARITHMETIC IS THE TABLE'S: the value of the operation `op` at literal
-/// arguments (rationals, the infinities, NaN) as THE TABLE reads it in `real` (`table::apply`),
-/// where it is exact -- a rational, an infinity, or NaN where the limit rule gives no value:
+/// PERMISSIVE'S LITERAL ARITHMETIC IS THE TABLE'S: the value of the operation `op` at literal
+/// arguments (rationals, the infinities, NaN) as THE TABLE reads it in the reals' values
+/// (`table::apply`), where it is exact -- a rational, an infinity, or NaN where the limit rule
+/// gives no value:
 /// `pow(0, -1)` and `rootn(0, -3)` (1/0: the sides disagree), `pow(1, inf)`, `pow(inf, 0)` and
 /// `pow(nan, 0)` are NaN, `rootn(0, -2)` and `pow(0, -2)` +inf, `exp(-inf)` 0, `tanh(inf)` 1,
 /// `acosh(1)` 0. `None` for an approximation (a transcendental value stays symbolic) or an
@@ -10186,26 +10171,6 @@ fn table_literal_fold(op: &str, args: &[Ex]) -> Option<Ex> {
 /// Is `e` a literal the table reads exactly: a rational, an infinity or NaN?
 fn table_literal(e: &Ex) -> bool {
     matches!(e, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::NaN)
-}
-
-/// The exact value with `real` of `floor`, `ceil` or `mod` at rational arguments (the real
-/// `mod`: `a - b floor(a/b)`, NaN at `b = 0`); `None` for any other head or a result that leaves
-/// `Rat`.
-fn exact_step_fold(op: Tok, args: &[Ex], real: bool, cx: &Cx) -> Option<Ex> {
-    let v = cx.view;
-    match args {
-        [Ex::Num(r)] if real && v.tok_is(op, "floor") => rat_floor(r, false).map(Ex::Num),
-        [Ex::Num(r)] if real && v.tok_is(op, "ceil") => rat_floor(r, true).map(Ex::Num),
-        [Ex::Num(a), Ex::Num(b)] if real && v.tok_is(op, "mod") => {
-            if b.is_zero() {
-                return Some(Ex::NaN);
-            }
-            let k = rat_floor(&a.checked_mul(&b.checked_inv()?)?, false)?;
-            a.checked_add(&b.checked_mul(&k)?.checked_neg()?)
-                .map(Ex::Num)
-        }
-        _ => None,
-    }
 }
 
 /// Is `op` a LATTICE head, `max` or `min` (a bag of members, [`lattice`])?
@@ -10301,9 +10266,6 @@ fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
         Some(Ordering::Less)
     } else if alo.cmp_exact(&bhi) == Ordering::Greater {
         Some(Ordering::Greater)
-    } else if matches!(cx.mode, RuleMode::Real) {
-        // Overlapping enclosures: `real` reads the two at high precision (`Cx::cert_order`).
-        (cx.cert_order?)(a, b)
     } else {
         None
     }
@@ -10621,17 +10583,10 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     if !args.is_empty() && lattice_head(op, cx.view) {
         return lattice(op, args, cx);
     }
-    // THE STEP HEADS OF RATIONALS ARE EXACT ARITHMETIC, so they fold here as `abs` does:
-    // `floor`, `ceil` and `mod` (`mod(a, 0)` is NaN) in `real` only, where a literal is its
-    // rational: `f64` and `permissive` read a literal at its nearest float
-    // (`floor(0.99999999999999999)` is 1 there), so their ground fold computes these with the
-    // deployed kernels instead.
-    if !args.is_empty() && args.iter().all(|a| matches!(a, Ex::Num(_))) {
-        if let Some(folded) = exact_step_fold(op, &args, matches!(cx.mode, RuleMode::Real), cx) {
-            return folded;
-        }
-    }
-    // In `real` and `permissive` an operation on literals is the table's exact value
+    // The step heads of literals (`floor`, `ceil`, `mod`) are no constructor's: the ground
+    // fold computes them, `f64` with the deployed kernels at a literal's nearest float
+    // (`floor(0.99999999999999999)` is 1 there) and `permissive` by the table.
+    // In `permissive` an operation on literals is the table's exact value
     // (`table_literal_fold`):
     // `rootn(0, -3)` is NaN, `rootn(0, -2)` +inf, `exp(-inf)` 0, `tanh(inf)` 1, `acosh(1)` 0.
     if cx.table_values() && !args.is_empty() && args.iter().all(table_literal) {
@@ -11201,7 +11156,6 @@ mod tests {
                 cert_nce: None,
                 cert_region: None,
                 cert_encl: None,
-                cert_order: None,
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,
@@ -11254,7 +11208,7 @@ mod tests {
     fn a_constant_absorbs_the_orientation_sign_of_every_class() {
         with_view(|view| {
             let sin = view.intern("sin");
-            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+            for mode in [RuleMode::Default, RuleMode::Permissive] {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
                 let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
@@ -11297,7 +11251,7 @@ mod tests {
             let sin = view.intern("sin");
             let z = || Ex::Leaf(view.intern("x2"));
             let half = Ex::Num(Rat::new(1, 2).unwrap());
-            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+            for mode in [RuleMode::Default, RuleMode::Permissive] {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
                 let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
@@ -11347,7 +11301,7 @@ mod tests {
     fn a_zero_keeps_its_ieee_sign_where_it_is_inverted() {
         with_view(|view| {
             let lg = |cx: &Cx| fun(view.intern("log"), vec![x(view)], cx);
-            for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
+            for mode in [RuleMode::Default, RuleMode::Permissive] {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
                 let ieee = matches!(mode, RuleMode::Default);
@@ -11356,8 +11310,8 @@ mod tests {
                         .unwrap_or_else(|held| vec![pow(held, Ex::int(-1), &cx)]);
                     mul(raised, &cx)
                 };
-                // 1/(x0*0) is inf/x0 in f64 (-inf wherever x0 < 0); in real and permissive 1/0
-                // has no value (the limit rule: +inf from one side, -inf from the other)
+                // 1/(x0*0) is inf/x0 in f64 (-inf wherever x0 < 0); in permissive 1/0 has no
+                // value (division by zero is undefined however written)
                 let want = if ieee {
                     mul(vec![Ex::PosInf, pow(x(view), Ex::int(-1), &cx)], &cx)
                 } else {
@@ -11372,11 +11326,9 @@ mod tests {
                 if ieee {
                     let want = mul(vec![Ex::PosInf, pow(lg(&cx), Ex::int(-1), &cx)], &cx);
                     assert_eq!(held, want, "{mode:?}");
-                } else if matches!(mode, RuleMode::Real) {
-                    assert!(matches!(held, Ex::Pow(..)), "{mode:?}: {held:?}");
                 } else {
                     // permissive cancels `0*log(x0)` to 0 without a definedness check, and
-                    // then reads 1/0 as real does: no value
+                    // then reads 1/0 by the table: no value
                     assert_eq!(held, Ex::NaN, "{mode:?}");
                 }
             }
@@ -11386,7 +11338,7 @@ mod tests {
     #[test]
     fn a_zero_term_stays_where_the_rest_may_be_neg_zero_on_a_region() {
         with_view(|view| {
-            for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
+            for mode in [RuleMode::Default, RuleMode::Permissive] {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
                 let x1 = Ex::Leaf(view.intern("x1"));
@@ -11462,7 +11414,7 @@ mod tests {
         with_view(|view| {
             let exp = view.intern("exp");
             let y = || Ex::Leaf(view.intern("x1"));
-            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+            for mode in [RuleMode::Default, RuleMode::Permissive] {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
                 let e = |a: Ex| fun(exp, vec![a], &cx);
@@ -12343,11 +12295,11 @@ mod tests {
     /// construction saw together: a state and the parse of its own print differed.
     #[test]
     fn refused_partition_is_one_coefficient() {
-        for mode in [RuleMode::Real, RuleMode::Default] {
+        for mode in [RuleMode::Default, RuleMode::Permissive] {
             with_view(|view| {
                 let mut cx = Cx::bare(view);
                 cx.mode = mode;
-                // 10^300 * 10^300 is beyond 2^1022 and beyond 1,100 bits: refused in both domains.
+                // 10^300 * 10^300 is beyond 2^1022: refused in the f64 domain.
                 let n = Rat::from_big(
                     num_traits::pow(num_bigint::BigInt::from(10), 300),
                     num_bigint::BigInt::from(1),
@@ -12404,15 +12356,13 @@ mod tests {
         }
     }
 
-    /// Integers beyond 128 bits are integers (number plan phase 2). The map of the 128-bit
-    /// boundary found the sites that read "does not fit i128" as "is not an integer", each
-    /// unsound once such an integer reaches it. Real mode has the exact parity; the f64 domain
-    /// knows no parity beyond 2^53 (phase 2c), and every site must then refuse as well.
+    /// Integers beyond 128 bits are integers. The map of the 128-bit boundary found the sites
+    /// that read "does not fit i128" as "is not an integer", each unsound once such an integer
+    /// reaches it. The f64 domain knows no parity beyond 2^53, and every site must then refuse
+    /// (in `f64`: permissive composes powers naively, ignoring the sign).
     #[test]
     fn big_integers_keep_their_integer_reading() {
-        for mode in [RuleMode::Real, RuleMode::Default] {
-            with_view(|view| big_integer_sites(view, mode));
-        }
+        with_view(|view| big_integer_sites(view, RuleMode::Default));
     }
 
     fn big_integer_sites(view: &TokenView, mode: RuleMode) {
@@ -12425,11 +12375,7 @@ mod tests {
             let ten40 = big(num_traits::pow(num_bigint::BigInt::from(10), 40));
             let odd = ten40.checked_add(&Rat::ONE).unwrap(); // 10^40 + 1
             assert!(ten40.small_int().is_none() && ten40.is_integer());
-            if mode == RuleMode::Real {
-                assert!(ten40.is_even_integer() && odd.is_odd_integer());
-            } else {
-                assert!(ten40.parity().is_none() && odd.parity().is_none());
-            }
+            assert!(ten40.parity().is_none() && odd.parity().is_none());
             let rootn = view.intern("rootn");
 
             // 1. rootn(x, 10^40) is a root with an integer index, not the invalid operation.

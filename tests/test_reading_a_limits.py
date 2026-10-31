@@ -65,7 +65,7 @@ def two_sided_limit(engine: SimpliPyEngine, tokens: list[str], point: dict[str, 
     return None
 
 
-@pytest.mark.parametrize("mode", ["f64", "real", "permissive"])
+@pytest.mark.parametrize("mode", ["f64", "permissive"])
 @pytest.mark.parametrize("src,point,limit", CASES)
 def test_answer_keeps_the_two_sided_limit(engine, mode, src, point, limit) -> None:
     tokens = list(engine.read_infix(src))

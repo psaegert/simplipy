@@ -19,9 +19,10 @@ A test marked `expected_failure` fails today on a known defect, named by its id 
 the phase that fixes it. The marks are strict: when a fix lands, its tests pass, the mark makes
 them fail, and the fix removes the mark.
 
-"Admits" is the judge's word for "this mode's file may hold the rule by its truth": `real`
-admits what holds in real, `f64` what holds in f64, and `permissive` what holds in permissive
-or in f64 (the specification's P3). Policies (evidence, ground composites) are not part of it:
+"Admits" is the judge's word for "this mode's file may hold the rule by its truth": `f64`
+admits what holds in f64 and `permissive` what holds in permissive (the specification's P3
+among it). The reference permissive is defined against, real's values, is the column `reals`:
+the judge's verdict in them. Policies (evidence, ground composites) are not part of it:
 `simplipy.verify.licensed` adds them (the specification's 3.4).
 """
 import functools
@@ -37,8 +38,10 @@ from simplipy.verify import MODE_TIERS, effective_tier, licensed, verify_rule
 from simplipy.verify import _contract
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODES = ('real', 'f64', 'permissive')
-RULE_MODE = {'f64': 'default', 'real': 'real', 'permissive': 'permissive'}
+MODES = ('f64', 'permissive')
+RULE_MODE = {'f64': 'default', 'permissive': 'permissive'}
+#: The reference column: the judge's verdict in real's values, which permissive is defined against.
+REALS = 'reals'
 
 #: The known defects, each fixed by one phase of the plan.
 DEFECTS = {
@@ -51,8 +54,8 @@ DEFECTS = {
     'N1': 'positive measure read as more than 5% of a sample grid',
     'N2': 'the f64 check of the 0.15 operators probes data variables at +-inf',
     'N3': '`_` excused at +-inf',
-    'N6': 'real reads 1/0 and its kin as +inf, against the limit rule (V4)',
-    'N7': 'real reads 1^inf, inf^0 and NaN^0 as 1, against the limit rule (V5) and V6',
+    'N6': 'the table reads 1/0 and its kin as +inf, against the limit rule (V4)',
+    'N7': 'the table reads 1^inf, inf^0 and NaN^0 as 1, against the limit rule (V5) and V6',
     'N8': "the judge's f64 reading of a written -0.0 is +0 (a literal is its nearest double, F2)",
     'N9': 'the interval enclosure of a two-sided pole omits the undefined value',
     'N10': "the mint's f64 rows agree to a relative 1e-11, looser than f64's 8 units (F6)",
@@ -77,6 +80,8 @@ def judged(lhs: str, rhs: str) -> dict:
 
 
 def admits(lhs: str, rhs: str, mode: str) -> bool:
+    if mode == REALS:
+        return judged(lhs, rhs)['verdict'] in _contract.HOLDS_IN_THE_REALS
     return effective_tier(judged(lhs, rhs)) in MODE_TIERS[mode]
 
 
@@ -84,7 +89,7 @@ def admits(lhs: str, rhs: str, mode: str) -> bool:
 def bare() -> SimpliPyEngine:
     ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
                                            'config.yaml')))['operators']
-    return SimpliPyEngine(operators=ops, rules=[], rules_real=[], rules_permissive=[])
+    return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
 @functools.lru_cache(maxsize=1)
@@ -114,7 +119,7 @@ def test_the_judge_reads_the_rows_the_mint_reads(lhs, rhs):
     assert np.array_equal(rows, _contract.mine_rows(512, 2, np.random.default_rng(0)))
     assert not mint_accepts(lhs.replace('_0', 'x0'), rhs.replace('_0', 'x0'), 'f64')
     assert not admits(lhs, rhs, 'f64'), judged(lhs, rhs)
-    assert admits(lhs, rhs, 'real'), judged(lhs, rhs)
+    assert admits(lhs, rhs, REALS), judged(lhs, rhs)
 
 
 def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:
@@ -131,87 +136,87 @@ def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:
 # ------------------------------------------------------------------------------------------
 SPEC_EXAMPLES = [
     # section 3.1: rules with variables
-    case('/ x0 x0', '1', 'real', True), case('/ x0 x0', '1', 'f64', True),
+    case('/ x0 x0', '1', REALS, True), case('/ x0 x0', '1', 'f64', True),
     case('/ x0 x0', '1', 'permissive', True),
-    case('exp log x0', 'x0', 'real', False), case('exp log x0', 'x0', 'f64', False),
+    case('exp log x0', 'x0', REALS, False), case('exp log x0', 'x0', 'f64', False),
     case('exp log x0', 'x0', 'permissive', True),
-    case('- log x0 log x0', '0', 'real', False), case('- log x0 log x0', '0', 'f64', False),
+    case('- log x0 log x0', '0', REALS, False), case('- log x0 log x0', '0', 'f64', False),
     case('- log x0 log x0', '0', 'permissive', True),
-    case('atanh tanh x0', 'x0', 'real', True), case('atanh tanh x0', 'x0', 'f64', False),
+    case('atanh tanh x0', 'x0', REALS, True), case('atanh tanh x0', 'x0', 'f64', False),
     case('atanh tanh x0', 'x0', 'permissive', True),
-    case('asin 1e-8', '1e-8', 'real', False), case('asin 1e-8', '1e-8', 'f64', True),
+    case('asin 1e-8', '1e-8', REALS, False), case('asin 1e-8', '1e-8', 'f64', True),
     case('asin 1e-8', '1e-8', 'permissive', True),
-    case('rootn pow x0 2 2', 'abs x0', 'real', True),
+    case('rootn pow x0 2 2', 'abs x0', REALS, True),
     case('rootn pow x0 2 2', 'abs x0', 'f64', True),
     case('rootn pow x0 2 2', 'abs x0', 'permissive', True),
-    case('rootn pow x0 2 2', 'x0', 'real', False), case('rootn pow x0 2 2', 'x0', 'f64', False),
+    case('rootn pow x0 2 2', 'x0', REALS, False), case('rootn pow x0 2 2', 'x0', 'f64', False),
     case('rootn pow x0 2 2', 'x0', 'permissive', False),
-    case('tan asin ceil x0', 'atanh ceil x0', 'real', False),
+    case('tan asin ceil x0', 'atanh ceil x0', REALS, False),
     case('tan asin ceil x0', 'atanh ceil x0', 'f64', False),
     case('tan asin ceil x0', 'atanh ceil x0', 'permissive', True),
-    case('ceil inv cosh x0', '1', 'real', True),
+    case('ceil inv cosh x0', '1', REALS, True),
     case('ceil inv cosh x0', '1', 'f64', True),
     case('ceil inv cosh x0', '1', 'permissive', True),
     # the 5% grid bar: an extension on (-0.1, 0.1) is positive measure
-    case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'real', False),
+    case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', REALS, False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'permissive', True),
     # the owner's rulings: isolated infinities (c), the guard, coincident slots, undecided
-    case('abs log cos x0', 'log inv cos x0', 'real', True),
-    case('abs log cos _0', 'log inv cos _0', 'real', False),
-    case('atan tan asin _0', 'asin _0', 'real', False),
-    case('atan tan asin x0', 'asin x0', 'real', True),
-    case('/ - x0 x1 - x1 x0', '-1', 'real', False),
+    case('abs log cos x0', 'log inv cos x0', REALS, True),
+    case('abs log cos _0', 'log inv cos _0', REALS, False),
+    case('atan tan asin _0', 'asin _0', REALS, False),
+    case('atan tan asin x0', 'asin x0', REALS, True),
+    case('/ - x0 x1 - x1 x0', '-1', REALS, False),
     case('/ - x0 x1 - x1 x0', '-1', 'f64', False),
     case('/ - x0 x1 - x1 x0', '-1', 'permissive', True),
-    case('/ !0 !0', '1', 'real', False),
+    case('/ !0 !0', '1', REALS, False),
     # section 2: the sorts
-    case('- ?0 ?0', '0', 'real', True), case('- ?0 ?0', '0', 'f64', True),
-    case('- !0 !0', '0', 'real', True), case('- !0 !0', '0', 'f64', True),
-    case('/ $0 $0', '1', 'real', True), case('/ $0 $0', '1', 'f64', True),
-    case('- _0 _0', '0', 'real', False), case('- _0 _0', '0', 'f64', False),
+    case('- ?0 ?0', '0', REALS, True), case('- ?0 ?0', '0', 'f64', True),
+    case('- !0 !0', '0', REALS, True), case('- !0 !0', '0', 'f64', True),
+    case('/ $0 $0', '1', REALS, True), case('/ $0 $0', '1', 'f64', True),
+    case('- _0 _0', '0', REALS, False), case('- _0 _0', '0', 'f64', False),
     case('- _0 _0', '0', 'permissive', True),
     # `_` at +inf: 0*tanh(inf) = 0 has a value, 0*inf has none
-    case('* 0 tanh _0', '* 0 _0', 'real', False),
+    case('* 0 tanh _0', '* 0 _0', REALS, False),
     case('* 0 tanh _0', '* 0 _0', 'f64', False),
     # section 3.2: constants
-    case('acos <constant>', '<constant>', 'real', True),
+    case('acos <constant>', '<constant>', REALS, True),
     case('acos <constant>', '<constant>', 'f64', True),
-    case('exp + x0 <constant>', '* <constant> exp x0', 'real', True),
-    case('* <constant> exp x0', 'exp + x0 <constant>', 'real', False),
+    case('exp + x0 <constant>', '* <constant> exp x0', REALS, True),
+    case('* <constant> exp x0', 'exp + x0 <constant>', REALS, False),
     case('* <constant> exp x0', 'exp + x0 <constant>', 'f64', False),
-    case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'real', False),
+    case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', REALS, False),
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'f64', False),
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'permissive', False),
-    case('* exp + x0 <constant> <constant>', '* <constant> exp x0', 'real', True),
-    case('pow 0 <constant>', '<constant>', 'real', True),
+    case('* exp + x0 <constant> <constant>', '* <constant> exp x0', REALS, True),
+    case('pow 0 <constant>', '<constant>', REALS, True),
     case('pow 0 <constant>', '<constant>', 'f64', True),
-    case('pow -1 <constant>', '<constant>', 'real', True),
-    case('pow -1 <constant>', '1', 'real', False), case('pow -1 <constant>', '1', 'f64', False),
+    case('pow -1 <constant>', '<constant>', REALS, True),
+    case('pow -1 <constant>', '1', REALS, False), case('pow -1 <constant>', '1', 'f64', False),
     # section 3.3: ground rules
-    case('cos np.pi', '-1', 'real', True), case('cos np.pi', '-1', 'f64', True),
-    case('sin np.pi', '0', 'real', True), case('sin np.pi', '0', 'f64', False),
+    case('cos np.pi', '-1', REALS, True), case('cos np.pi', '-1', 'f64', True),
+    case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'f64', False),
     case('sin np.pi', '0', 'permissive', True),
-    case('log -1', '0', 'real', False),
+    case('log -1', '0', REALS, False),
     case('log -1', '0', 'f64', False),
     case('log -1', '0', 'permissive', True),
-    case('exp tan asin 1', 'float("inf")', 'real', False),
+    case('exp tan asin 1', 'float("inf")', REALS, False),
     case('exp tan asin 1', 'float("inf")', 'f64', True),
     case('exp tan asin 1', 'float("inf")', 'permissive', True),
-    case('asin 1', 'acos 0', 'real', True), case('asin 1', 'acos 0', 'f64', True),
+    case('asin 1', 'acos 0', REALS, True), case('asin 1', 'acos 0', 'f64', True),
     # the limit rule (V4, V5, V6)
-    case('/ 1 0', 'float("inf")', 'real', False),
+    case('/ 1 0', 'float("inf")', REALS, False),
     case('/ 1 0', 'float("inf")', 'f64', True),
     case('/ 1 0', 'float("inf")', 'permissive', True),
-    case('pow 0 -1', 'float("inf")', 'real', False),
-    case('pow 0 -2', 'float("inf")', 'real', True),
-    case('pow 1 float("inf")', '1', 'real', False),
+    case('pow 0 -1', 'float("inf")', REALS, False),
+    case('pow 0 -2', 'float("inf")', REALS, True),
+    case('pow 1 float("inf")', '1', REALS, False),
     case('pow 1 float("inf")', '1', 'f64', True),
     # P3 as ruled: permissive serves real's values up to float resolution -- a deep saturation
     # (1 - 2e-9566 is the double 1.0); not float64's own values. Judged at the `_` its matcher
     # binds (the owner's ruling, 2026-10-31), it excuses no isolated point: a disagreement at
-    # x = +-1 alone is one on (0, 1] at `?0 = ceil(x0)`, and the isolated infinity real excuses
-    # at a `?` slot is a value permissive owes
+    # x = +-1 alone is one on (0, 1] at `?0 = ceil(x0)`, and the isolated infinity the reals'
+    # verdict excuses at a `?` slot is a value permissive owes
     case('tanh cosh (-10)', '1', 'permissive', True),
     case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', False),
     case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', False),
@@ -231,16 +236,16 @@ def test_the_judge_gives_the_specifications_verdict(lhs, rhs, mode, expected) ->
 #: policy), each with the policy the specification names.
 POLICY_EXAMPLES = [
     ('asin 1', 'acos 0', 'f64', 'ground_composite'),
-    ('asin 1', 'acos 0', 'real', 'ground_composite'),
+    ('asin 1', 'acos 0', 'permissive', 'ground_composite'),
     ('exp tan asin 1', 'float("inf")', 'f64', 'evidence'),
-    ('pow -1 <constant>', '<constant>', 'real', 'evidence'),
-    ('abs x0', 'rootn pow x0 2 2', 'real', 'ordering'),
-    ('exp * 2 _0', '* exp _0 exp _0', 'real', 'duplication'),
-    ('+ * x0 x1 * x0 x2', '* x0 + x1 x2', 'real', 'engine_owned'),
-    ('log -3', 'float("nan")', 'real', 'engine_owned'),
+    ('pow -1 <constant>', '<constant>', 'f64', 'evidence'),
+    ('abs x0', 'rootn pow x0 2 2', 'f64', 'ordering'),
+    ('exp * 2 _0', '* exp _0 exp _0', 'permissive', 'duplication'),
+    ('+ * x0 x1 * x0 x2', '* x0 + x1 x2', 'permissive', 'engine_owned'),
+    ('log -3', 'float("nan")', 'permissive', 'engine_owned'),
     # permissive cancels an inverse pair itself (4.9), so the rule is the engine's
     ('exp log x0', 'x0', 'permissive', 'engine_owned'),
-    ('pow + x0 <constant> 2', '+ + pow x0 2 * <constant> x0 <constant>', 'real',
+    ('pow + x0 <constant> 2', '+ + pow x0 2 * <constant> x0 <constant>', 'permissive',
      'constant_count'),
 ]
 
@@ -252,8 +257,8 @@ def test_a_named_policy_refuses_what_holds(lhs, rhs, mode, policy) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('exp + log x0 log x1', '* x0 x1', 'permissive'), ('acos <constant>', '<constant>', 'real'),
-    ('exp + x0 <constant>', '* <constant> exp x0', 'real'), ('ceil inv cosh x0', '1', 'f64'),
+    ('exp + log x0 log x1', '* x0 x1', 'permissive'), ('acos <constant>', '<constant>', 'f64'),
+    ('exp + x0 <constant>', '* <constant> exp x0', 'permissive'), ('ceil inv cosh x0', '1', 'f64'),
 ])
 def test_licensed_is_holds_and_every_policy(lhs, rhs, mode) -> None:
     got = licensed(lhs.split(), rhs.split(), mode, bare(), detail=judged(lhs, rhs))
@@ -338,10 +343,10 @@ def test_the_table_reads_real_values(expr, expected) -> None:
 
 @pytest.mark.parametrize('expr, expected', [
     pytest.param(e, v, id=e) for e, v, _ in REAL_TABLE])
-def test_the_real_fold_agrees_with_the_table(expr, expected) -> None:
-    """A ground expression the real engine folds to a literal folds to the table's value (it may
-    also leave it as written)."""
-    folded = literal_reading(list(bare().simplify(expr.split(), mode='real')))
+def test_the_permissive_fold_agrees_with_the_table(expr, expected) -> None:
+    """A ground expression permissive folds to a literal folds to the table's value, written as
+    the double nearest to it (it may also leave it as written)."""
+    folded = literal_reading(list(bare().simplify(expr.split(), mode='permissive')))
     assert folded is None or folded == expected
 
 
@@ -397,23 +402,21 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
 # Assertion 1: a pre-filter rejects only what the judge rejects.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('tan asin ceil x0', 'atanh ceil x0', 'real'),
     ('tan asin ceil x0', 'atanh ceil x0', 'permissive'),
-    ('pow 0 <constant>', '<constant>', 'real'),
+    ('pow 0 <constant>', '<constant>', 'permissive'),
     ('pow 0 <constant>', '<constant>', 'f64'),
     ('exp <constant>', '<constant>', 'f64'),
     # the mint's f64 bar reads data as finite (no probe at +-inf), and permissive's mint owes no
     # clause (b)
     ('ceil inv cosh x0', '1', 'f64'),
     ('exp log x0', 'x0', 'permissive'),
-    ('rootn pow x0 2 2', 'x0', 'real'), ('exp log x0', 'x0', 'f64'),
+    ('rootn pow x0 2 2', 'x0', 'permissive'), ('exp log x0', 'x0', 'f64'),
     # rows the table cannot read are skipped, as the judge skips them (erf(sinh(-100)) is
     # -1 + e^-(1.7e86)); the special points check float64's divergence in f64 only
-    ('ceil erf sinh x0', 'ceil erf x0', 'real'), ('floor erf sinh x0', 'floor erf x0', 'real'),
-    # the judge's isolated infinity: +inf against tan's pole at x0 = 1
-    ('sinh atanh x0', 'tan asin x0', 'real'),
+    ('ceil erf sinh x0', 'ceil erf x0', 'permissive'),
+    ('floor erf sinh x0', 'floor erf x0', 'permissive'),
     # a value float64 gives off a rounded zero is read by the table: tan(acos(-1)) is 0
-    ('tan acos floor x0', 'inv atanh floor x0', 'real'),
+    ('tan acos floor x0', 'inv atanh floor x0', 'permissive'),
     # permissive excuses a disagreement at an isolated point (P3): the battery's points, the
     # exceptional points and a sampled row on one
     ('abs ceil sin x0', 'ceil sin x0', 'permissive'), ('ceil abs sin x0', '1', 'permissive'),
@@ -424,8 +427,8 @@ def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('ceil inv cosh ?0', '1', 'real'), ('ceil inv cosh ?0', '1', 'f64'),
-    ('- ?0 ?0', '0', 'real'), ('/ ?0 ?0', '1', 'real'),
+    ('ceil inv cosh ?0', '1', 'permissive'), ('ceil inv cosh ?0', '1', 'f64'),
+    ('- ?0 ?0', '0', 'f64'), ('/ ?0 ?0', '1', 'f64'),
 ])
 def test_a_promotion_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
     """Promotion keeps a rule the judge admits at its own sort (it may ship it at a stronger
@@ -487,8 +490,7 @@ def test_a_mint_acceptance_of_a_pair_is_a_judge_admission(lhs, rhs, mode) -> Non
     assert not mint_accepts(lhs, rhs, mode) or admits(lhs, rhs, mode), judged(lhs, rhs)
 
 
-@pytest.mark.parametrize('mode', [
-    'real', 'f64', 'permissive'])
+@pytest.mark.parametrize('mode', MODES)
 def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
     refused = [(s, t, judged(s, t)['verdict']) for s, t in mint_picks(mode)
                if not admits(s, t, mode)]
@@ -499,9 +501,9 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
 # Assertion 3: a policy gives the same answer from every step that applies it.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('asin 1', 'acos 0', 'f64'), ('asin 1', 'acos 0', 'real'),
-    ('exp tan asin 1', 'float("inf")', 'real'),
-    ('rootn pow x0 2 2', 'x0', 'real'),
+    ('asin 1', 'acos 0', 'f64'), ('asin 1', 'acos 0', 'permissive'),
+    ('exp tan asin 1', 'float("inf")', 'permissive'),
+    ('rootn pow x0 2 2', 'x0', 'f64'),
 ])
 def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs, mode) -> None:
     """An overlap whose completion is `lhs -> rhs`: the gate lists it as missing only if the
@@ -517,8 +519,8 @@ def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs
 
 @pytest.mark.parametrize('expr, mode', [
     ('exp <constant>', 'f64'),
-    ('exp <constant>', 'real'),
-    ('acos <constant>', 'f64'), ('log <constant>', 'real'),
+    ('exp <constant>', 'permissive'),
+    ('acos <constant>', 'f64'), ('log <constant>', 'f64'),
 ])
 def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:
     """The engine folds a constant expression to `<constant>` exactly where the mint would mint
@@ -528,10 +530,10 @@ def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:
 
 
 @pytest.mark.parametrize('expr, mode, folds', [
-    ('pow 0 <constant>', 'f64', True), ('pow 0 <constant>', 'real', True),
-    ('exp <constant>', 'f64', True), ('acos <constant>', 'real', True),
-    ('pow -1 <constant>', 'f64', False), ('pow -1 <constant>', 'real', False),
-    ('pow -1 <constant>', 'permissive', True), ('+ <constant> <constant>', 'real', True),
+    ('pow 0 <constant>', 'f64', True), ('pow 0 <constant>', 'permissive', True),
+    ('exp <constant>', 'f64', True), ('acos <constant>', 'f64', True),
+    ('pow -1 <constant>', 'f64', False),
+    ('pow -1 <constant>', 'permissive', True), ('+ <constant> <constant>', 'f64', True),
 ])
 def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     """The engine collapses a constant expression to `<constant>` exactly where the collapse
@@ -575,7 +577,7 @@ def test_the_judge_decides_a_rule_with_constants(lhs, rhs, verdict) -> None:
     assert judged(lhs, rhs)['verdict'] == verdict, judged(lhs, rhs)
 
 
-@pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+@pytest.mark.parametrize('mode', MODES)
 def test_the_fold_writes_nan_only_where_the_family_is_nan_at_every_constant(mode) -> None:
     """3.2 owes a constant family its value wherever it is finite, so the fold writes nan only
     for a family with no value at any constant: `asin(cosh(C))` is pi/2 at C = 0 and
@@ -638,11 +640,11 @@ def test_permissive_writes_the_tables_ground_values_as_floats(expr, want) -> Non
 @pytest.mark.parametrize('expr', [
     'abs x0', 'max x0 0', 'floor x0', 'min x0 x1', 'abs - x0 x1', 'max abs x0 x1',
     'floor * 2 x0', 'ceil x0'])
-def test_permissive_leaves_what_is_no_entry_as_real_does(expr) -> None:
+def test_permissive_leaves_what_is_no_entry_as_f64_does(expr) -> None:
     """`abs`, `max`, `floor` and `min` are no entry of the list: their shape is the point of
-    the expression, and permissive gives real's answer."""
+    the expression, and permissive gives f64's answer."""
     e = bare()
-    assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='real')
+    assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='f64')
 
 
 # ------------------------------------------------------------------------------------------
@@ -730,7 +732,7 @@ def test_an_unreadable_wide_miss_is_refused(pair) -> None:
     assert not mint_accepts(*pair, 'permissive')
 
 
-@pytest.mark.parametrize('mode', ['real', 'permissive'])
+@pytest.mark.parametrize('mode', ['permissive'])
 def test_a_wide_miss_is_read_not_refused(mode) -> None:
     # float64 rounds erf(cosh(x)) to 1 wherever |x| > 2.46, most of the mint's rows; the reals keep
     # it below 1, and the mint reads a spread of the failing rows by the table

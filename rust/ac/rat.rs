@@ -17,9 +17,9 @@
 //!
 //! An operation whose result leaves the small form computes it in the big form, and the result
 //! stands if it is REPRESENTABLE in the current number domain (`number_domain`): within the cap in
-//! the exact domain (`real` mode), and in the f64 domain (every other mode) only when the deployed
-//! float64 evaluator reads it within one rounding and every printed spelling of it reads back as
-//! itself. Every refusal keeps the symbolic form.
+//! the exact domain (the table's and the prices' readings), and in the f64 domain (every mode)
+//! only when the deployed float64 evaluator reads it within one rounding and every printed
+//! spelling of it reads back as itself. Every refusal keeps the symbolic form.
 
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -36,8 +36,8 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 pub const CAP_BITS: u64 = 1100;
 
 thread_local! {
-    /// The current thread's number domain: f64 (`true`, the default and every mode but `real`)
-    /// or exact (`false`, `real`). The constructors enter it from their context's mode.
+    /// The current thread's number domain: f64 (`true`, the default and every mode) or exact
+    /// (`false`: the table's and the prices' readings of a literal).
     static F64_NUMBERS: Cell<bool> = const { Cell::new(true) };
 }
 
@@ -448,8 +448,8 @@ impl Rat {
     /// pass (three rows of the phase-1 review), all-or-nothing folding broke on a prefix that
     /// folds where the whole bag does not (`x1*1e300*1e10*1e-100`), and folding sorted
     /// neighbours only left two members apart that the printed order brought together
-    /// (`x1 + 912.../295... - 4e28 - 1e-325`, real mode). Each member is tried against at most
-    /// the kept members and every fold removes one, so the cost is quadratic in the bag, and
+    /// (`x1 + 912.../295... - 4e28 - 1e-325`, the exact domain). Each member is tried against at
+    /// most the kept members and every fold removes one, so the cost is quadratic in the bag, and
     /// a refusal that the magnitudes decide costs no big-integer arithmetic (`log2_window`).
     pub fn partition_with(
         members: Vec<Rat>,
@@ -748,8 +748,7 @@ impl Rat {
     /// This used to be `#[cfg(test)]`, carrying the note "f64 has authority nowhere in
     /// the engine". That was true of a single-mode engine and is exactly the sentence the
     /// mode split overturns: in `Mode.f64` the deployed f64 evaluator IS the authority,
-    /// so the constructor must be able to ask it. `Mode.real` still never calls this --
-    /// there, f64 has authority nowhere, as before. A big number reads as its nearest f64.
+    /// so the constructor must be able to ask it. A big number reads as its nearest f64.
     pub fn to_f64(&self) -> f64 {
         match &self.0 {
             Repr::Small { p, q } => *p as f64 / *q as f64,

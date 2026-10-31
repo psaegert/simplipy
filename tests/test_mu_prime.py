@@ -509,7 +509,7 @@ class TestOneMeasurePerMode:
 
     def test_the_reading_is_the_mode_own(self, eng):
         for e in self.SPECIMENS:
-            for mode, rule_mode in (('f64', 'default'), ('real', 'real'), ('permissive', 'permissive')):
+            for mode, rule_mode in (('f64', 'default'), ('permissive', 'permissive')):
                 assert eng.complexity(e, mode=mode) == \
                     eng._core.ac_complexity_certified(e, 'mode', rule_mode=rule_mode), (e, mode)
                 assert eng.complexity(e, certified=False, mode=mode) == \
@@ -522,14 +522,14 @@ class TestOneMeasurePerMode:
             assert eng.complexity(e) == cross_mode_complexity(eng, e, 'f64'), e
 
     def test_the_modes_read_one_expression_differently(self, eng):
-        # f64 reads atanh(tanh(x0)) as written (tanh saturates in floats), real as x0. A ground
-        # constant is read as written in every mode: the float evaluator reads exp(5132.3) as
-        # inf, and f64's WALK folds 1/exp(5132.3) to 0, while its reading keeps it.
+        # f64 reads atanh(tanh(x0)) as written (tanh saturates in floats), permissive as x0. A
+        # ground constant is read as written in every mode: the float evaluator reads
+        # exp(5132.3) as inf, and f64's WALK folds 1/exp(5132.3) to 0, while its reading keeps it.
         e = ['atanh', 'tanh', 'x0']
         assert eng.complexity(e, mode='f64') > eng.complexity(['x0'], mode='f64')
-        assert eng.complexity(e, mode='real') == eng.complexity(['x0'], mode='real')
+        assert eng.complexity(e, mode='permissive') == eng.complexity(['x0'], mode='permissive')
         e = ['+', 'x0', '/', '1', 'exp', '5132.277024704901']
-        assert eng.complexity(e, mode='f64') == eng.complexity(e, mode='real')
+        assert eng.complexity(e, mode='f64') == eng.complexity(e, mode='permissive')
         assert list(eng.simplify(list(e), mode='f64')) == ['x0']
 
     def test_simplify_never_prices_above_its_input_in_its_mode(self, eng):
@@ -543,7 +543,7 @@ class TestOneMeasurePerMode:
              'exp', '5132.277024704901', 'asinh', 'x3', 'x3'],
         ]
         for expr in exprs:
-            for mode in (Mode.f64, Mode.real, Mode.permissive):
+            for mode in (Mode.f64, Mode.permissive):
                 out = list(eng.simplify(list(expr), mode=mode))
                 assert eng.complexity(out, mode=mode) <= eng.complexity(list(expr), mode=mode), (expr, mode)
 
@@ -555,9 +555,9 @@ class TestOneMeasurePerMode:
 
 class TestTheFloatCapOnEveryPath:
     """A literal costs at most what its float costs, however a state holds it. The f64 number
-    domain (f64 and permissive) admits a number only where its numerator and denominator are at
-    most 2^1022, and holds in pieces a value that `real` holds as one number: a literal as
-    written, a product, a sum, a reciprocal. Each costs what `real` prices the one number at."""
+    domain (every mode's) admits a number only where its numerator and denominator are at most
+    2^1022, and holds in pieces a value beyond it: a literal as written, a product, a sum, a
+    reciprocal. Each costs what the one exact number is priced at, alike in both modes."""
 
     A, B = '1.2345678901234567e-305', '9.876543210987654e-10'  # A's denominator is 10^321
 
@@ -570,22 +570,20 @@ class TestTheFloatCapOnEveryPath:
         '1.23456789012345678901234567e-305',     # a leaf longer than its float
         '1.2345678901234567e-290 * 1e-15 * x1',  # two numbers whose product leaves the domain
     ])
-    def test_every_mode_prices_what_real_prices(self, eng, text):
-        real = eng.complexity(text, mode='real')
-        for mode in ('f64', 'permissive'):
-            assert eng.complexity(text, mode=mode) == real, mode
+    def test_both_modes_price_alike(self, eng, text):
+        assert eng.complexity(text, mode='f64') == eng.complexity(text, mode='permissive')
 
     def test_the_quotient_costs_its_float(self, eng):
         quotient = f'{self.A} / {self.B}'
         its_float = repr(float(Fraction(self.A) / Fraction(self.B)))
-        for mode in ('f64', 'real', 'permissive'):
+        for mode in ('f64', 'permissive'):
             assert eng.complexity(quotient, mode=mode) == eng.complexity(its_float, mode=mode) == 59436
 
     def test_a_value_beyond_the_cap_keeps_its_price(self, eng):
         # 1e400 has no number in either domain (its 1,329 bits pass the 1,100-bit cap), so its
         # product with 1e-300 keeps the price of its pieces, alike in every mode.
         text = 'x1 * 1e400 * 1e-300'
-        prices = {mode: eng.complexity(text, mode=mode) for mode in ('f64', 'real', 'permissive')}
+        prices = {mode: eng.complexity(text, mode=mode) for mode in ('f64', 'permissive')}
         assert len(set(prices.values())) == 1
         assert prices['f64'] > eng.complexity('x1 * 1e100', mode='f64')
 
@@ -645,15 +643,14 @@ class TestFingerprintAndArtifactLoad:
         compound = ('pow x0 2', 'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1',
                     'atanh tanh x0')
         readings = {m: {k: eng._measure_fingerprint(m)['probes'][k] for k in compound}
-                    for m in ('f64', 'real', 'permissive')}
+                    for m in ('f64', 'permissive')}
         assert readings['f64'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 13170,
                                    '* inv exp 5132.3 x0': 33647, '/ x0 * x0 x1': 9000,
                                    'atanh tanh x0': 22000}
-        # real: atanh(tanh(x0)) is x0
-        assert readings['real'] == dict(readings['f64'], **{'atanh tanh x0': 6000})
-        # permissive also reads (x0^2)^(1/2) as x0
-        assert readings['permissive'] == dict(readings['real'], **{'pow pow x0 2 0.5': 6000})
-        for m in ('f64', 'real', 'permissive'):
+        # permissive reads atanh(tanh(x0)) and (x0^2)^(1/2) as x0
+        assert readings['permissive'] == dict(readings['f64'], **{'atanh tanh x0': 6000,
+                                                                  'pow pow x0 2 0.5': 6000})
+        for m in ('f64', 'permissive'):
             assert eng._measure_fingerprint(m)['mode'] == m
 
     def test_acj_load_compares_what_was_recorded(self):

@@ -77,7 +77,7 @@ class TestConfigGate:
         import json
         config = load_config(acj_config_path())
         config.update({'engine_generation': 2, 'rules': './rules.json'})
-        for key in ('rules_real', 'rules_corpus', 'rules_permissive'):
+        for key in ('rules_corpus', 'rules_permissive'):
             config.pop(key, None)
         (tmp_path / 'config.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
         (tmp_path / 'rules.json').write_text(json.dumps([[['-', '?0', '?0'], ['0']]]))

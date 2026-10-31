@@ -2,10 +2,11 @@
 
 `simplipy.verify` is the **rule judge**: it decides whether a rule holds in a mode,
 and the miner's own certification is a pre-filter that may only refuse what the judge
-refuses. Every value it compares comes from one table per mode, defined once in the
-compiled core: in `real` a literal is the rational it spells and a pole takes its limit
-where every direction gives the same one (`pow(0, -2)` is `+inf`, `1/0` has no value), in
-`f64` an operation is the engine's own float64 kernel. The judge's own part is the
+refuses. Every value it compares comes from one table, defined once in the compiled
+core: read in the reals, a literal is the rational it spells and a pole takes its limit
+where every direction gives the same one (`pow(0, -2)` is `+inf`, `1/0` has no value); read
+in `f64`, an operation is the engine's own float64 kernel. `permissive` reads the reals'
+values. The judge's own part is the
 procedure: the precision ladder, the fitted constants and the sample points. It is a
 power-user surface: verdicts are environment-qualified (see
 [environment qualification](../method/environment-qualification.md)), and the judge
@@ -16,7 +17,7 @@ refuses what it cannot evaluate rather than guessing.
 Judges every rule at its own symbolic trigger points, classifying each into nine
 buckets. Coverage is 100% of the rule set by construction.
 
-A rule holds in `real` when, wherever its left side has a value, its right side has the
+A rule holds in the reals when, wherever its left side has a value, its right side has the
 same value, and its right side gives a value where the left side has none only on a set
 of measure zero, decided by certified cells (`x0/x0 -> 1` holds; `exp(log(x0)) -> x0`
 does not). A rule without variables has one point and no tolerance; a `_` slot is
@@ -44,33 +45,33 @@ function on a positive-measure set, so the judge kills it.
 
 A rule the judge cannot evaluate — `NO-WITNESS`, `UNSUPPORTED-SHAPE`,
 `JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode, and one whose
-measure the cells cannot decide (`UNDECIDED-MEASURE`) is refused in `real`: an
+measure the cells cannot decide (`UNDECIDED-MEASURE`) is refused in `f64`: an
 undecided check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
-Each rule also gets a **tier**, from three independent questions: does it hold over ℝ,
-does the deployed f64 evaluator reproduce it, and does it hold in `permissive`, whose
-criterion is agreement alone (a permissive rule may give a value where its input has
-none, over real-valued bindings)? `permissive` binds every slot to any subexpression, so its
-question is asked at the `_` sort: no disagreement at an isolated point is excused there.
+Each rule also gets a **tier**: the modes it holds in, from two independent questions. Does
+the deployed f64 evaluator reproduce it? Does it hold in `permissive`, whose criterion is
+the reals' values up to float resolution, and agreement alone where the input has no value
+(a permissive rule may give a value where its input has none, over real-valued bindings)?
+`permissive` binds every slot to any subexpression, so its question is asked at the `_`
+sort: no disagreement at an isolated point is excused there. The tiers are one registry,
+`simplipy.verify.TIERS`, and this table is rendered from it (`simplipy.verify.tier_table()`):
 
-| tier | holds over ℝ | f64-realised | serves |
+<!-- tier-table: begin (rendered by simplipy.verify.tier_table(); a test checks it) -->
+| tier | `f64` | `permissive` | meaning |
 |---|---|---|---|
-| `core` | yes | yes | every mode |
-| `strict` | yes, by an allowance a slot guards (a `$` slot's zero, an isolated infinity at a `?` slot) | yes | `f64`, `real` |
-| `real` | yes | no | `real`, `permissive` |
-| `real-only` | yes, by an allowance a slot guards | no | `real` |
-| `f64` | no | yes | `f64`, `permissive` |
-| `f64-only` | no, nor in `permissive` (`tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))`) | yes | `f64` |
-| `permissive` | by agreement alone (`exp(log(x0)) -> x0`) | no | `permissive` |
-| `reject` | no | no | nothing — recorded in the drop census |
+| `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it) and in permissive |
+| `f64-only` | yes | no | float64's own value, off the reals beyond float resolution (`floor(tanh(40)) -> 1`), or true by an allowance a slot guards, which permissive's any-subexpression binding does not give |
+| `permissive` | no | yes | true in the reals and not reproduced by float64 (`atanh(tanh(x0)) -> x0`), or an extension (`exp(log(x0)) -> x0`) |
+| `reject` | no | no | holds in no mode; recorded in the drop census |
+<!-- tier-table: end -->
 
 "f64-realised" means the deployed evaluator computes the rewrite, to within 8 ULP, at every
 battery and grid point where no operation of either side overflows or underflows. At a point
 where one does, the rewrite may give the true value instead, as the canonical constructors do,
 so `rootn(exp(x0), 2) → exp(x0/2)` is `core` although `exp` overflows past 709.78. A pole
 (`atanh(1)`, `log(0)`) is not an overflow and saturation inside the range is not one either,
-so `atanh(tanh(x0)) → x0` stays `real`. The verdict's `out_of_range` counts the points read
+so `atanh(tanh(x0)) → x0` stays `permissive`. The verdict's `out_of_range` counts the points read
 this way.
 
 ## Cleanliness is per mode
@@ -82,33 +83,32 @@ the whole point and which a bucket count cannot express:
 ```python
 rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 saturates to inf at large t
 
-verify_ruleset([rule], mode='real')['is_clean']    # -> True   belongs there
-verify_ruleset([rule], mode='permissive')['is_clean']  # -> True
-verify_ruleset([rule], mode='f64')['is_clean']     # -> False  f64 contradicts it
+verify_ruleset([rule], mode='permissive')['is_clean']  # -> True   belongs there
+verify_ruleset([rule], mode='f64')['is_clean']         # -> False  f64 contradicts it
 ```
 
 `report['offenders']` names the rules that fail, with their tier. Omitting `mode`
-keeps the pre-triple meaning — only `CERTIFIED`/`TOLERATED` are clean — because that
+keeps the mode-less meaning — only `CERTIFIED`/`TOLERATED` are clean — because that
 is what every caller written before the split means by the word; it is **not** the
 right gate for a shipped artifact.
 
-For a whole artifact use `verify_triple`, which sweeps each file against its own
-mode's contract **and** checks the relationships between them. A routing bug that
+For a whole artifact use `verify_artifact`, which sweeps each file against its own
+mode's contract **and** checks the relationship between them. A routing bug that
 moved a rule between sets leaves every individual sweep clean:
 
-<!-- docs-example: skip: reads a published triple off disk; the paths are per-artifact -->
+<!-- docs-example: skip: reads a published artifact off disk; the paths are per-artifact -->
 ```python
-from simplipy.verify import verify_triple
-report = verify_triple('rules.json', 'rules_real.json', 'rules_permissive.json')
+from simplipy.verify import verify_artifact
+report = verify_artifact('rules.json', 'rules_permissive.json')
 report['is_clean'], report['relationships']
 ```
 
-With `engine_config=` it also checks that `permissive` is at least as capable as
-either other mode on every expression of a corpus: `corpus_rows`, or by default the
-400-expression corpus that ships with the package (`simplipy.verify.default_corpus()`).
-The check runs on the config's operators and the three rule sets passed in, prices
-every mode's answer on one shared scale, and counts a row on which a mode raises as a
-violation.
+With `engine_config=` it also checks that `permissive` is at least as capable as `f64` on
+every expression of a corpus: `corpus_rows`, or by default the 400-expression corpus that
+ships with the package (`simplipy.verify.default_corpus()`). The check runs on the config's
+operators and the two rule sets passed in, prices both modes' answers on one shared scale,
+and counts a row on which a mode raises as a violation. `verify_triple`, the gate of the
+earlier three-file artifact, raises: its middle file was the retired real mode's.
 
 The same tier routing gates the miner's own output, so the two authorities cannot
 drift apart.
@@ -130,7 +130,7 @@ duplication of a `_` slot, and what the engine does itself (`policy_refusals`):
 <!-- docs-example: skip: needs an engine; see tests/test_differential.py -->
 ```python
 from simplipy.verify import licensed
-licensed(['asin', '1'], ['acos', '0'], 'real', engine)
+licensed(['asin', '1'], ['acos', '0'], 'f64', engine)
 # -> {'licensed': False, 'holds': True, 'tier': 'core', 'refused_by': ['ground_composite']}
 ```
 

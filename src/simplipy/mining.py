@@ -228,13 +228,13 @@ def _load_proposals(
 #: ONE MINE PER FILE: each file is mined in its own mode -- the mode's serve answer is the
 #: mark, its canon reads the sources, its numerics accept -- in this order, so the
 #: permissive mine reads the finished f64 set as serving does. (rule mode, file key)
-_MINE_MODES = (('default', 'f64'), ('real', 'real'), ('permissive', 'permissive'))
+_MINE_MODES = (('default', 'f64'), ('permissive', 'permissive'))
 
-#: The mode `certify_rules` judges a proposal in: the union of the three files' acceptance.
+#: The mode `certify_rules` judges a proposal in.
 _CERTIFY_RULE_MODE = 'permissive'
 
 #: The engine attribute holding each rule mode's own set.
-_RULES_ATTR = {'default': 'simplification_rules', 'real': 'real_simplification_rules',
+_RULES_ATTR = {'default': 'simplification_rules',
                'permissive': 'permissive_simplification_rules'}
 
 #: The judge loop gives up on ONE SOURCE -- loudly -- when the judge has refused its pick this
@@ -386,17 +386,15 @@ def _file_mode(rule_mode: str) -> str:
 
 
 def _mine_modes(modes: Any) -> set:
-    """The rule modes a mine runs, from ``find_rules(modes=...)``: file mode names (``f64``,
-    also ``default``, ``real``, ``permissive``), all three when ``None``."""
+    """The rule modes a mine runs, from ``find_rules(modes=...)``: mode names (``f64``, also
+    ``default``, ``permissive``, or :class:`~simplipy.Mode` members), both when ``None``."""
     if modes is None:
         return {rule_mode for rule_mode, _ in _MINE_MODES}
+    from .engine import _coerce_rule_mode
     names = [modes] if isinstance(modes, str) else list(modes)
-    by_name = {file_mode: rule_mode for rule_mode, file_mode in _MINE_MODES}
-    by_name['default'] = 'default'
-    unknown = [name for name in names if name not in by_name]
-    if unknown or not names:
-        raise ValueError(f'modes must name f64, real or permissive, got {modes!r}')
-    return {by_name[name] for name in names}
+    if not names:
+        raise ValueError(f'modes must name f64 or permissive, got {modes!r}')
+    return {_coerce_rule_mode(name) for name in names}
 
 
 def _mode_tiers(rule_mode: str) -> frozenset:
@@ -473,20 +471,20 @@ def _judge_digest() -> str:
 _SLOT_SIGILS = ('_', '?', '!', '$', '<')
 
 
-def _triple_paths(out_path: str) -> dict[str, str]:
-    """The three files a mine writes, derived from the requested output path.
+def _mode_paths(out_path: str) -> dict[str, str]:
+    """The files a mine writes, one per mode, derived from the requested output path.
 
-    The f64 set takes the path exactly as passed. The siblings replace the mode
+    The f64 set takes the path exactly as passed. The sibling replaces the mode
     marker rather than append to it: a trailing ``_f64`` on the stem is stripped
     first, so ``rules_f64.json`` (the naming convention from 0.14.0 on) yields
-    ``rules_real.json`` / ``rules_permissive.json``. Markerless names get the same
-    siblings: reproducing a pre-rename artifact byte for byte pins the pre-rename
-    simplipy anyway, so a historic-filename carve-out here would protect nothing.
+    ``rules_permissive.json``. Markerless names get the same sibling: reproducing a
+    pre-rename artifact byte for byte pins the pre-rename simplipy anyway, so a
+    historic-filename carve-out here would protect nothing.
     """
     base, ext = os.path.splitext(out_path)
     if base.endswith('_f64'):
         base = base[:-len('_f64')]
-    return {'f64': out_path, 'real': f'{base}_real{ext}', 'permissive': f'{base}_permissive{ext}'}
+    return {'f64': out_path, 'permissive': f'{base}_permissive{ext}'}
 
 
 def _is_ground(tokens: Any) -> bool:
@@ -531,9 +529,6 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
     if bare is None:
         from .engine import SimpliPyEngine
         bare = SimpliPyEngine(operators=engine._operators_config, rules=[])
-        # `real` fails closed without a set of its own; an EMPTY one says "this mode
-        # serves no rules", which is exactly the constructor-only engine we want.
-        bare._core.set_mode_rules('real', [])
         engine._ruleless_twin = bare
     # No error is read as "not preempted": a ground rule side the engine cannot read is a
     # defect of the rule set, and the gate reports it by raising instead of keeping the rule.
@@ -1128,8 +1123,8 @@ class RuleMiner:
         throughout (marks, sources, library, acceptance, the rules installed so far). The
         file's rules are written and recorded in ``finals[rule_mode]``, and every cell it
         finishes (a ladder snapshot or the file) in ``cells[(rule_mode, cell path)]``. With
-        ``offer_final_rules``, the permissive mine is offered the f64 and real cell of the
-        same path through its proposal lane (see :meth:`find_rules`).
+        ``offer_final_rules``, the permissive mine is offered the f64 cell of the same path
+        through its proposal lane (see :meth:`find_rules`).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
@@ -1181,7 +1176,7 @@ class RuleMiner:
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
             rule_mode=rule_mode)
         file_mode = dict(_MINE_MODES)[rule_mode]
-        out_file = None if output_file is None else _triple_paths(output_file)[file_mode]
+        out_file = None if output_file is None else _mode_paths(output_file)[file_mode]
         if verbose:
             print(f'=== mining the {file_mode} file (rule mode {rule_mode})')
         if verbose:
@@ -1257,18 +1252,16 @@ class RuleMiner:
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
                     # tally cannot be audited (it never says which candidate died at which gate).
                     prov['proposals']['trail'] = trail
-            # THE OFFERED FILES (`offer_final_rules`): permissive promises less than f64 and
-            # real, so every rule of theirs holds in permissive too, and permissive's answer
-            # must never cost more than theirs. A per-mode mine finds only what its own scan
-            # reaches, so the permissive mine -- the last of the three -- is offered the
-            # finished f64 and real cell of the same path through the same channel: each rule
-            # is certified by permissive's own acceptance (a source the engine already takes
-            # at least as low reads `already_covered`) and enters as any proposal does. The
-            # sidecar pins each file by its sha256.
+            # THE OFFERED FILE (`offer_final_rules`): a per-mode mine finds only what its own
+            # scan reaches, so the permissive mine -- the last -- is offered the finished f64
+            # cell of the same path through the same channel: each rule is certified by
+            # permissive's own acceptance and judge (a source the engine already takes at least
+            # as low reads `already_covered`) and enters as any proposal does, so an f64 rule is
+            # kept only where it holds in permissive. The sidecar pins the file by its sha256.
             if offer_final_rules and rule_mode == 'permissive' and not interrupted():
                 files: dict = {}
                 entries: list = []
-                for file_key, other in (('f64', 'default'), ('real', 'real')):
+                for file_key, other in (('f64', 'default'),):
                     if cells is None or (other, out_path) not in cells:
                         raise RuntimeError(
                             f'the permissive cell {out_path!r} has no finished {file_key} '
@@ -1276,12 +1269,12 @@ class RuleMiner:
                     other_rules = cells[(other, out_path)]
                     files[file_key] = {
                         'file': (None if out_path is None
-                                 else os.path.basename(_triple_paths(out_path)[file_key])),
+                                 else os.path.basename(_mode_paths(out_path)[file_key])),
                         'sha256': _rules_sha256(other_rules), 'count': len(other_rules)}
                     entries += [(_slots_to_variables(lhs, dummy_variables),
                                  _slots_to_variables(rhs, dummy_variables))
                                 for lhs, rhs in other_rules]
-                entries = list(dict.fromkeys(entries))  # file order, f64 first
+                entries = list(dict.fromkeys(entries))  # file order
                 outcomes, _offered_trail, judge_loop = _lane(entries)
                 if prov is not None:
                     prov['offered'] = {'files': files, 'count': len(entries),
@@ -1343,9 +1336,9 @@ class RuleMiner:
                     if _tier_of in _mode_tiers(rule_mode):
                         # THE MODE LICENSES THE TIER, so the gate must not delete it:
                         # a fatal bucket is fatal only where its tier is not licensed --
-                        # ENGINE-MISALIGN is `real` (true, the deployed engine diverges),
-                        # an f64-realised KILL is `f64` (false, bit-exact in the deployed
-                        # algebra) -- and this file keeps what its own mode licenses.
+                        # an f64-realised KILL is `f64-only` (false in the reals, bit-exact in
+                        # the deployed algebra) -- and this file keeps what its own mode
+                        # licenses.
                         # Fail-closed is UNCHANGED for everything else: NO-WITNESS,
                         # UNSUPPORTED-SHAPE, JUDGE-TIMEOUT and UNRESOLVED-COVERAGE carry
                         # no tier at all, so they read `reject` and still drop.
@@ -1514,7 +1507,7 @@ class RuleMiner:
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
                 # Promotion takes `?`-sorted rules: the set is promoted already, so the
                 # completions alone are (promoting a promoted rule again dropped `max(1,
-                # cos(!0)) -> 1` and 37 more rows of the reduced length-4 real file).
+                # cos(!0)) -> 1` and 37 more rows of a reduced length-4 file).
                 _added = [r for r in self._mode_rules(rule_mode) if r not in _before]
                 if promote_sorts and _added:
                     from .promotion import promote
@@ -1596,7 +1589,7 @@ class RuleMiner:
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '
                       f'{len(final)} rules')
             if out_path is not None:
-                _path = _triple_paths(out_path)[file_mode]
+                _path = _mode_paths(out_path)[file_mode]
                 with open(_path, 'w') as file:
                     json.dump([[list(lhs), list(rhs)] for lhs, rhs in final], file, indent=4)
                 if prov is not None:
@@ -1694,7 +1687,7 @@ class RuleMiner:
         # later mode costs only that mode; another mine, or an edited file, mines anew.
         if out_file is not None:
             cell_files: dict[str | None, str] = {output_file: out_file}
-            cell_files.update({snapshot_at[length]: _triple_paths(snapshot_at[length])[file_mode]
+            cell_files.update({snapshot_at[length]: _mode_paths(snapshot_at[length])[file_mode]
                                for length in snapshot_at if length < max_source_pattern_length})
             done: dict[str | None, list] = {}
             for cell, path in cell_files.items():
@@ -2515,8 +2508,8 @@ class RuleMiner:
         """Systematically discovers new simplification rules.
 
         This method automates the discovery of simplification rules, one file per mode
-        (``rules_f64.json``, ``rules_real.json``, ``rules_permissive.json``), each mined in
-        its own mode. It operates in two phases:
+        (``rules_f64.json``, ``rules_permissive.json``), each mined in its own mode. It
+        operates in two phases:
         1.  **Generation**: It combinatorially generates all possible valid
             expressions up to `max_source_pattern_length`.
         2.  **Verification**: It tests each generated expression for equivalence
@@ -2656,21 +2649,18 @@ class RuleMiner:
             seconds (default 60) is logged, and one past ``judge_fail_s`` (default 600) fails
             the mine with the rule's name. Recorded in the sidecar's parameters.
         offer_final_rules : bool, optional
-            Offer the permissive mine the finished f64 and real files (default True).
-            Permissive promises less than either mode, so each of their rules holds there
-            too, and its answer must never cost more than theirs. The permissive file is
-            mined last, and every rule of the other two files runs through its proposal
-            lane: certified by permissive's own acceptance, it enters only where
-            permissive's answer is not already as low. The permissive sidecar pins both
-            files (``offered``: name, sha256, count) beside the lane's outcomes. Config key
-            ``offer_final_rules``; recorded in the sidecar's parameters.
+            Offer the permissive mine the finished f64 file (default True). The permissive
+            file is mined last, and every rule of the f64 file runs through its proposal
+            lane: certified by permissive's own acceptance and judge, it enters only where it
+            holds in permissive and permissive's answer is not already as low. The permissive
+            sidecar pins the file (``offered``: name, sha256, count) beside the lane's
+            outcomes. Config key ``offer_final_rules``; recorded in the sidecar's parameters.
         modes : list[str] or None, optional
-            The modes to mine (``'f64'``, ``'real'``, ``'permissive'``; ``None``, the default,
-            mines all three). The other modes' files are left as they are. A listed mode that
-            mines beside another reads that one's file at the output path: ``real`` and
-            ``permissive`` mine with the ``f64`` file in the default slot, and ``permissive`` is
-            offered the ``f64`` and ``real`` files (``offer_final_rules``), which must then
-            exist. Each mined file's sidecar and final-gate line are its own, as in a full mine.
+            The modes to mine (``'f64'``, ``'permissive'``; ``None``, the default, mines
+            both). The other mode's file is left as it is. ``permissive`` mines with the
+            ``f64`` file at the output path in the default slot, and is offered it
+            (``offer_final_rules``), which must then exist. Each mined file's sidecar and
+            final-gate line are its own, as in a full mine.
 
         Notes
         -----
@@ -2831,7 +2821,6 @@ class RuleMiner:
         try:
             if reset_rules:
                 # every mode's set starts empty: each file is mined from nothing
-                self.engine.real_simplification_rules = None
                 self.engine.permissive_simplification_rules = None
             else:
                 for rule_mode, _ in _MINE_MODES[1:]:  # a set deferred by `modes=` loads now
@@ -2842,15 +2831,15 @@ class RuleMiner:
             initial = {rule_mode: self._mode_rules(rule_mode) for rule_mode, _ in _MINE_MODES}
             finals: dict[str, list] = {}
             # Every finished cell of every mode, by (rule mode, the cell's f64 path): the
-            # permissive mine, which runs last, is offered the f64 and real cell it shares a
-            # path with (`offer_final_rules`), a ladder snapshot as well as the run's own.
+            # permissive mine, which runs last, is offered the f64 cell it shares a path with
+            # (`offer_final_rules`), a ladder snapshot as well as the run's own.
             cells: dict[tuple[str, str | None], list] = {}
             # A mode left out of `modes` keeps its file, and the modes mined beside it read it.
             for rule_mode, file_mode in _MINE_MODES:
                 if rule_mode in mined_modes:
                     continue
                 for cell_path in [output_file, *snapshot_at.values()]:
-                    path = None if cell_path is None else _triple_paths(cell_path)[file_mode]
+                    path = None if cell_path is None else _mode_paths(cell_path)[file_mode]
                     if path is not None and os.path.exists(path):
                         with open(path) as file:
                             kept_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
@@ -2862,8 +2851,8 @@ class RuleMiner:
                     break
                 if rule_mode not in mined_modes:
                     continue
-                # Each mode after f64 mines against the finished f64 set in the default slot, as
-                # its file is served beside it.
+                # Permissive mines against the finished f64 set in the default slot, as its
+                # file is served beside it.
                 self.engine._replace_rules(finals.get('default', initial['default']))
                 self._find_rules_native(
                     dict(expressions_of_length),
@@ -2902,9 +2891,8 @@ class RuleMiner:
                     offer_final_rules=offer_final_rules,
                     judge_processes=judge_processes,
                 )
-            # The engine ends holding the three files it wrote, as it would load them.
+            # The engine ends holding the files it wrote, as it would load them.
             if 'default' in finals:
-                self.engine.real_simplification_rules = finals.get('real')
                 self.engine.permissive_simplification_rules = finals.get('permissive')
                 self.engine._rule_canons.clear()  # each set was mined in its own mode
                 self.engine._replace_rules(finals['default'])
@@ -2921,8 +2909,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     """The re-mine gates of one mined file, in its own mode.
 
     ``rules_path`` is a rule file a mine wrote, read beside its provenance sidecar;
-    ``mode`` the mode it serves (``'f64'``, also ``'default'``, ``'real'``, ``'permissive'``
-    or a :class:`~simplipy.Mode` member); ``operators`` the engine's operator table. Each gate holds or names what breaks it:
+    ``mode`` the mode it serves (``'f64'``, also ``'default'``, ``'permissive'`` or a
+    :class:`~simplipy.Mode` member); ``operators`` the engine's operator table. Each gate holds
+    or names what breaks it:
 
     - ``sidecar``: the sidecar exists, records a final, uninterrupted mine, and its mode is
       ``mode``;
@@ -2952,8 +2941,8 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       prices each as this engine does;
     - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
       check;
-    - ``offered`` (``permissive`` only): the mine was offered the f64 and real files, and
-      each file its sidecar pins lies beside this one with the pinned sha256.
+    - ``offered`` (``permissive`` only): the mine was offered the f64 file, and the file its
+      sidecar pins lies beside this one with the pinned sha256.
 
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
 
@@ -3052,12 +3041,12 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
 
 def _offered_pins_broken(rules_path: str, offered: Any) -> list:
     """What breaks the permissive file's ``offered`` pins (empty when they hold): the
-    sidecar must pin the f64 and the real file, by name and sha256, and each must lie beside
-    ``rules_path`` with exactly those bytes."""
+    sidecar must pin the f64 file, by name and sha256, and it must lie beside ``rules_path``
+    with exactly those bytes."""
     if not isinstance(offered, dict) or not isinstance(offered.get('files'), dict):
-        return [['the permissive mine was offered no f64 or real file', None, None]]
+        return [['the permissive mine was offered no f64 file', None, None]]
     broken: list = []
-    for file_key in ('f64', 'real'):
+    for file_key in ('f64',):
         pin = offered['files'].get(file_key)
         if not isinstance(pin, dict) or not pin.get('file') or not pin.get('sha256'):
             broken.append([file_key, 'no pin', None])
@@ -3074,14 +3063,14 @@ def _offered_pins_broken(rules_path: str, offered: Any) -> list:
 
 
 def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
-    """The price of an answer of ``mode`` on a scale shared by all three modes.
+    """The price of an answer of ``mode`` on a scale shared by both modes.
 
     Each mode's own :meth:`~simplipy.SimpliPyEngine.complexity` prices that mode's
     reading, so prices in different modes are not comparable. This compares answers of
     different modes in one declared reading instead: ``tokens`` (the answer as a prefix
     token list, explicit or tagged) is parsed as ``mode`` reads it and priced, certified,
-    in f64's canon. ``mode`` is ``'f64'`` (also ``'default'``), ``'real'``,
-    ``'permissive'`` or a :class:`~simplipy.Mode` member. Returns the price in
+    in f64's canon. ``mode`` is ``'f64'`` (also ``'default'``), ``'permissive'`` or a
+    :class:`~simplipy.Mode` member. Returns the price in
     milli-bits, the unit of :meth:`~simplipy.SimpliPyEngine.complexity`.
     """
     from .engine import _RULE_MODE, _coerce_mode
@@ -3089,22 +3078,17 @@ def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
 
 
 def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
-    """`permissive` must be at least as capable as `f64` and as `real`, on every expression.
+    """`permissive` must be at least as capable as `f64`, on every expression.
 
-    THE REPLACEMENT for `rules_permissive == rules_f64 UNION rules_real`, which was retired
-    once folding made the three modes live in different canonical worlds. That set
-    identity was a proxy for this, and a bad one: it measured spelling overlap, so it read
-    `acos 1 -> 0` as "missing from permissive" when permissive performs it -- and performs
-    all 15 such rules -- through its own constructor.
-
-    Stated as behaviour it is checkable and it is what anyone actually wants: for every
-    expression, permissive's answer costs no more than either other mode's, all three
-    priced by :func:`cross_mode_complexity`. Returns the violations, empty when the
-    property holds. A row on which a mode raises or an answer cannot be priced is a
-    violation too, reported with its error: a crash never reads as dominance.
+    Stated as behaviour, not as a set identity between the files (which measures spelling
+    overlap: each mode's constructor performs what its file then omits): for every
+    expression, permissive's answer costs no more than f64's, both priced by
+    :func:`cross_mode_complexity`. Returns the violations, empty when the property holds. A
+    row on which a mode raises or an answer cannot be priced is a violation too, reported
+    with its error: a crash never reads as dominance.
     """
     from .engine import Mode
-    modes = (Mode.f64, Mode.real, Mode.permissive)
+    modes = (Mode.f64, Mode.permissive)
     bad: list[dict[str, Any]] = []
     for expr in expressions:
         try:
@@ -3113,7 +3097,7 @@ def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
         except Exception as error:  # reported as a violation below, never skipped
             bad.append({'expression': list(expr), 'error': f'{type(error).__name__}: {error}'})
             continue
-        if mu[Mode.permissive] > min(mu[Mode.f64], mu[Mode.real]):
+        if mu[Mode.permissive] > mu[Mode.f64]:
             bad.append({'expression': list(expr),
                         'mu': {m.name: v for m, v in mu.items()}})
     return bad

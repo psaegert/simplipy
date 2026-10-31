@@ -196,7 +196,7 @@ operators:
     precedence: 2
     commutative: false
 
-# NO RULE SETS YET: the acj2-4 mines write `rules:`, `rules_real:` and `rules_permissive:`
+# NO RULE SETS YET: the acj2-4 mines write `rules:` and `rules_permissive:`
 # beside this file. Until then an engine loaded from it simplifies with the constructors alone
 # (and says so).
 

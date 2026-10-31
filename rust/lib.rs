@@ -28,28 +28,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rustc_hash::FxHashSet;
 
-pyo3::create_exception!(
-    _core,
-    MissingModeSet,
-    pyo3::exceptions::PyLookupError,
-    "A call that must be served by its mode's own rule set (`own_set=True`) found the core \
-     holding none for that mode."
-);
-
-/// THE FAIL-CLOSED CHECK of a call that must be served by its mode's OWN set (`real`, whose
-/// one divergence from the default set is which rules are certified): refused when the core
-/// holds none for the mode, rather than served from the default set the core falls back to.
-/// Callers decide it under the read guard the call answers under, so no push or retraction
-/// lands between the check and the answer.
-fn ensure_own_set(inner: &engine::Engine, mode: engine::RuleMode, own_set: bool) -> PyResult<()> {
-    if own_set && inner.mode_rules_len(mode).is_none() {
-        return Err(MissingModeSet::new_err(format!(
-            "the core holds no rule set of its own for {mode:?}"
-        )));
-    }
-    Ok(())
-}
-
 /// Reject inputs the recursive kernel cannot safely handle, with a clean `ValueError` BEFORE it runs.
 /// Two off-distribution hazards, both of which would otherwise ABORT the interpreter (uncatchable):
 ///   1. PATHOLOGICALLY LONG input -> the tree recursions (parse / canonicalize / serialize) recurse
@@ -75,8 +53,7 @@ type ValueSetBox = (bool, bool, bool, bool, f64, f64);
 fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     engine::RuleMode::parse(name).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "unknown rule_mode {name:?}: expected 'default' (the f64 set), 'real' or \
-             'permissive'"
+            "unknown rule_mode {name:?}: expected 'default' (the f64 set) or 'permissive'"
         ))
     })
 }
@@ -88,8 +65,7 @@ fn parse_rule_canon(name: Option<&str>, mode: engine::RuleMode) -> PyResult<ac::
         None => Ok(ac::rules::RuleCanon::Mode(mode)),
         Some(name) => ac::rules::RuleCanon::parse(name).ok_or_else(|| {
             PyValueError::new_err(format!(
-                "unknown rule canon {name:?}: expected 'legacy', 'default', 'real' or \
-                 'permissive'"
+                "unknown rule canon {name:?}: expected 'legacy', 'default' or 'permissive'"
             ))
         }),
     }
@@ -196,14 +172,12 @@ fn ac_simplify_impl(
     mode: engine::RuleMode,
     form: engine::AcForm,
     explore_budget: usize,
-    own_set: bool,
 ) -> PyResult<Py<PyList>> {
-    // ONE read guard for the whole call, taken with the GIL released: the fail-closed check,
-    // the validation and the answer read the same engine, and a thread queued behind a waiting
-    // push never holds the GIL while it waits.
+    // ONE read guard for the whole call, taken with the GIL released: the validation and the
+    // answer read the same engine, and a thread queued behind a waiting push never holds the
+    // GIL while it waits.
     let out = py.detach(|| {
         let inner = core.inner();
-        ensure_own_set(&inner, mode, own_set)?;
         // The documented empty-input contract: `simplify([]) == []` (the one valid
         // case `is_valid` rejects). Restored explicitly after the malformed-input
         // hardening accidentally made it raise.
@@ -231,12 +205,10 @@ fn ac_simplify_infix_impl(
     max_passes: usize,
     mode: engine::RuleMode,
     explore_budget: usize,
-    own_set: bool,
 ) -> PyResult<String> {
     // One read guard, GIL released, as in `ac_simplify_impl`.
     py.detach(|| {
         let inner = core.inner();
-        ensure_own_set(&inner, mode, own_set)?;
         // Empty-input contract, as in `ac_simplify`: the empty rendering.
         if tokens.is_empty() {
             return Ok(String::new());
@@ -421,30 +393,21 @@ pub(crate) fn test_engine() -> Option<Engine> {
         legacy,
     )
     .expect("engine loads");
-    // The acj-4 cell ships the full triple, and each mode serves ITS OWN complete file
-    // (the python loader reads the config's `rules_real:`/`rules_permissive:` keys; the
-    // rust core is handed resolved content). Loading only rules.json here would run
-    // Real/Corpus tests against the default set -- the doctrine-bearing mode rules
-    // (e.g. the permissive `/ $0 $0 -> 1` sentinel cancel) would silently not be served.
-    for (mode, files) in [
-        (engine::RuleMode::Real, &["rules_real.json"][..]),
-        // pre-rename artifacts (acj-4 among them) ship the permissive file under
-        // its published name; a re-mined cell ships the new one
-        (
-            engine::RuleMode::Permissive,
-            &["rules_permissive.json", "rules_corpus.json"][..],
-        ),
-    ] {
-        let text = files
-            .iter()
-            .find_map(|file| {
-                std::fs::read_to_string(format!("{home}/.cache/simplipy/engines/acj-4/{file}")).ok()
-            })
-            .expect("acj-4 ships a full triple");
-        let raw: Vec<(Vec<String>, Vec<String>)> =
-            serde_json::from_str(&text).expect("triple rules file parses");
-        e.set_mode_rules_read_in(mode, Some(raw), legacy);
-    }
+    // Each mode serves ITS OWN complete file (the python loader reads the config's
+    // `rules_permissive:` key; the rust core is handed resolved content). Loading only
+    // rules.json here would run permissive tests against the default set -- the
+    // doctrine-bearing mode rules (e.g. the permissive `/ $0 $0 -> 1` sentinel cancel) would
+    // silently not be served. Pre-rename artifacts (acj-4 among them) ship the permissive
+    // file under its published name; a re-mined cell ships the new one.
+    let text = ["rules_permissive.json", "rules_corpus.json"]
+        .iter()
+        .find_map(|file| {
+            std::fs::read_to_string(format!("{home}/.cache/simplipy/engines/acj-4/{file}")).ok()
+        })
+        .expect("acj-4 ships a permissive file");
+    let raw: Vec<(Vec<String>, Vec<String>)> =
+        serde_json::from_str(&text).expect("permissive rules file parses");
+    e.set_mode_rules_read_in(engine::RuleMode::Permissive, Some(raw), legacy);
     Some(e)
 }
 
@@ -508,11 +471,7 @@ impl PyEngine {
 /// pays for a translation and the only deferred work is the Python shim's `modes=`
 /// selection, which decides which sets are pushed at all.
 fn translate_held_sets(engine: &engine::Engine) {
-    for mode in [
-        engine::RuleMode::Default,
-        engine::RuleMode::Real,
-        engine::RuleMode::Permissive,
-    ] {
+    for mode in [engine::RuleMode::Default, engine::RuleMode::Permissive] {
         engine.ac_rules_for(mode);
     }
 }
@@ -592,19 +551,16 @@ impl PyEngine {
         })
     }
 
-    /// Simplify `tokens` in the rule mode `rule_mode`: `"default"` (the f64 set, `Mode.f64`),
-    /// `"real"` or `"permissive"`. Each mode serves ONE DISTINCT, COMPLETE set, and every mode
-    /// runs one walk: its chain, then the search.
+    /// Simplify `tokens` in the rule mode `rule_mode`: `"default"` (the f64 set, `Mode.f64`)
+    /// or `"permissive"`. Each mode serves ONE DISTINCT, COMPLETE set, and every mode runs one
+    /// walk: its chain, then the search.
     ///
     /// The empty input answers empty; a malformed input raises `ValueError`. `form` is the
     /// output projection (`"tagged"` or `"explicit"`).
     /// `explore_budget` is the public `effort=`
     /// (see [`explore_budget_of`]: `None`, the default here as in `simplify`, explores until
     /// a round finds nothing). 0 routes to the chain's own entry, byte-identical behaviour.
-    /// `own_set=True` serves only the mode's OWN set: where the core holds none for the mode,
-    /// the call raises `MissingModeSet` instead of serving the default set ([`ensure_own_set`],
-    /// decided under the call's own read guard).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, *, rule_mode, own_set=false))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
@@ -614,7 +570,6 @@ impl PyEngine {
         form: &str,
         explore_budget: Option<usize>,
         rule_mode: &str,
-        own_set: bool,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             self,
@@ -624,7 +579,6 @@ impl PyEngine {
             parse_rule_mode(rule_mode)?,
             parse_ac_form(form)?,
             explore_budget_of(explore_budget),
-            own_set,
         )
     }
 
@@ -740,8 +694,8 @@ impl PyEngine {
     }
 
     /// `ac_simplify_in_mode`'s answer as pretty infix text (see `ac_simplify_in_mode`, whose
-    /// `explore_budget` and `own_set` this reads the same way).
-    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, *, rule_mode, own_set=false))]
+    /// `explore_budget` this reads the same way).
+    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, *, rule_mode))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
@@ -749,7 +703,6 @@ impl PyEngine {
         max_passes: usize,
         explore_budget: Option<usize>,
         rule_mode: &str,
-        own_set: bool,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             self,
@@ -758,7 +711,6 @@ impl PyEngine {
             max_passes,
             parse_rule_mode(rule_mode)?,
             explore_budget_of(explore_budget),
-            own_set,
         )
     }
 
@@ -816,7 +768,7 @@ impl PyEngine {
         }
         let mode = parse_rule_mode(rule_mode)?;
         let canon = parse_rule_canon(canon, mode)?;
-        Ok(py.detach(|| self.inner().ac_canonical_keys(&exprs, mode, canon)))
+        Ok(py.detach(|| self.inner().ac_canonical_keys(&exprs, canon)))
     }
 
     /// OFFLINE miner: the MARK a mine of `rule_mode` sets for `source` -- the mode's serve
@@ -893,12 +845,12 @@ impl PyEngine {
     /// `prettify`: the DISPLAY of an expression's canonical state under the digit budget
     /// `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`, `"tagged"`), a float
     /// shown with `precision` significant digits (`None`: the shortest decimal of its float64),
-    /// its numbers read in `rule_mode`'s number domain, written so that the display keeps the
+    /// its numbers read in the f64 number domain, written so that the display keeps the
     /// structure. Display only: it applies no rules, and nothing in the engine calls this or
     /// reads what it returns. `check_structure` answers `(display, kept)`: whether the display
     /// reads back to the shape of the state after the display's folds. `keep_grouping` writes
     /// every sum and product with the grouping of the explicit token form.
-    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode, check_structure=false, keep_grouping=false))]
+    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, check_structure=false, keep_grouping=false))]
     #[allow(clippy::too_many_arguments)]
     fn prettify(
         &self,
@@ -907,7 +859,6 @@ impl PyEngine {
         digits: usize,
         form: &str,
         precision: Option<usize>,
-        rule_mode: &str,
         check_structure: bool,
         keep_grouping: bool,
     ) -> PyResult<Py<PyAny>> {
@@ -916,7 +867,6 @@ impl PyEngine {
                 "unknown form {form:?}: expected 'infix', 'explicit' or 'tagged'"
             ))
         })?;
-        let mode = parse_rule_mode(rule_mode)?;
         if digits == 0 {
             return Err(PyValueError::new_err("digits must be at least 1"));
         }
@@ -935,7 +885,6 @@ impl PyEngine {
                         form,
                         keep_grouping,
                     },
-                    mode,
                     check_structure,
                 )
                 .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
@@ -996,7 +945,7 @@ impl PyEngine {
         })
     }
 
-    /// The four translation counts of `rule_mode`'s served set (`"default"` / `"real"` /
+    /// The four translation counts of `rule_mode`'s served set (`"default"` /
     /// `"permissive"`): `(kept, subsumed by arithmetic, dropped, orientation twins)`, where
     /// `kept` is the serving rule count including the minted twins. Forces the named mode's
     /// lazy translation, and only that one.
@@ -1011,7 +960,7 @@ impl PyEngine {
     }
 
     /// The rules `rule_mode` actually fires, with `source` indexing THAT MODE'S OWN file.
-    /// The judge surface for the triple.
+    /// The judge surface for the mode files.
     #[pyo3(signature = (*, rule_mode))]
     fn ac_served_rules_in_mode(
         &self,
@@ -1316,46 +1265,10 @@ impl PyEngine {
         crate::eval::allclose(&a, &b, rtol, atol)
     }
 
-    /// OFFLINE miner: the no-constant equivalence test. The candidate
-    /// must be constant-free; the source's constants are resampled over `challenges` rounds
-    /// and every sign combination, requiring `allclose(source, candidate)` every time.
-    /// `min_informative=None` resolves to `n_rows / 8`: certification requires that many
-    /// SOURCE-FINITE evidence rows (accumulated across challenge instances), killing vacuous
-    /// all-NaN/inf acceptance. Generic-equivalence semantics: source-finite rows bind; where
-    /// the source is NaN/inf the replacement may EXTEND the domain (x/x -> 1).
-    #[pyo3(signature = (source, candidate, var_names, x_flat, n_rows, challenges=16, rtol=1e-9, atol=1e-12, min_informative=None, seed=0))]
-    #[allow(clippy::too_many_arguments)]
-    fn equivalent_no_const(
-        &self,
-        py: Python<'_>,
-        source: Vec<String>,
-        candidate: Vec<String>,
-        var_names: Vec<String>,
-        x_flat: Vec<f64>,
-        n_rows: usize,
-        challenges: usize,
-        rtol: f64,
-        atol: f64,
-        min_informative: Option<usize>,
-        seed: u64,
-    ) -> PyResult<bool> {
-        // Universal floor: an EXPLICIT 0 would silently disable the evidence gate, and no
-        // gate is switched off by a bare numeric argument.
-        ensure_tokens_are_tokens(&source)?;
-        ensure_tokens_are_tokens(&candidate)?;
-        let mi = min_informative.unwrap_or(n_rows / 8).max(1);
-        py.detach(|| {
-            self.inner().equivalent_no_const_check(
-                &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, mi, seed,
-            )
-        })
-        .map_err(PyValueError::new_err)
-    }
-
     /// OFFLINE: the `!`-sort certificate -- is the expression DEFINED AND FINITE a.e. over its
     /// variables (within the standalone horizon box)? Fail-closed: every undecided path is
     /// `false`. The same predicate the engine's `!` pattern matching runs behind its cache,
-    /// read over the reals as `real` and `permissive` read it (`f64` also reads float64's
+    /// read over the reals as `permissive` reads it (`f64` also reads float64's
     /// constant tails of `tanh` and `atan`). No caller inside the package: kept as a probe of
     /// the certificate layer for scripts that query `_core` directly.
     fn interval_finite_ae(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<bool> {
@@ -1454,8 +1367,9 @@ impl PyEngine {
     /// on the box must be inside the returned set. Over-approximation is what makes
     /// "no defined value anywhere on this box" conservative, hence a witness always TRUE, hence
     /// the gate unable to reject a sound rule. If this ever under-reports, that proof is void.
-    /// `real` reads the reals, every point by THE TABLE (`interval::with_real_reading`), where
-    /// `inv(0)` is undefined; otherwise float64, where it is +inf.
+    /// `real` reads the reals (permissive's reading), every point by THE TABLE
+    /// (`interval::with_real_reading`), where `inv(0)` is undefined; otherwise float64, where it
+    /// is +inf.
     #[pyo3(signature = (tokens, los, his, real = false))]
     fn interval_value_set_box(
         &self,
@@ -1789,9 +1703,9 @@ impl PyEngine {
         })
     }
 
-    /// Install ONE MODE'S OWN COMPLETE RULE SET -- `"real"` (`rules_real.json`) or
-    /// `"permissive"` (`rules_permissive.json`), each a self-contained file carrying the core
-    /// rules AND that mode's own, never a supplement to `rules.json`.
+    /// Install ONE MODE'S OWN COMPLETE RULE SET -- `"permissive"` (`rules_permissive.json`),
+    /// a self-contained file carrying the core rules AND that mode's own, never a supplement
+    /// to `rules.json`.
     ///
     /// `rules=None` RETRACTS the set, and that mode falls back to the default one.
     /// `rules=[]` is a DIFFERENT call: it installs an EMPTY set, and that mode then
@@ -1802,9 +1716,9 @@ impl PyEngine {
     /// this way, length by length) and keeps the pushed-rules digest (`rules_in_sync`).
     ///
     /// The base-rule digest (`rules_in_sync`) deliberately does NOT cover these sets: it
-    /// answers "does the core hold the DEFAULT recipe it was pushed", and the other two
-    /// sets are separate recipes carried by the Python shim's own attributes, which
-    /// re-push them on every core rebuild.
+    /// answers "does the core hold the DEFAULT recipe it was pushed", and the permissive
+    /// set is a separate recipe carried by the Python shim's own attribute, which re-pushes
+    /// it on every core rebuild.
     ///
     /// Safe while other threads are inside the core: the push waits, with the GIL
     /// released, for the calls in flight to return, and new calls queue behind it. The
@@ -2535,7 +2449,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
     m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
     m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;
-    m.add("MissingModeSet", m.py().get_type::<MissingModeSet>())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
@@ -2547,7 +2460,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(kernel_unary_scalar, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_binary_scalar, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
-    // The near-miss gate of the high-precision re-judgement (real and permissive): the
+    // The near-miss gate of the high-precision re-judgement (permissive): the
     // fraction of a pair's points that may fail f64 for it to escalate. Recorded per mine.
     m.add("NEAR_MISS_FRAC", hiprec::NEAR_MISS_FRAC)?;
     m.add(

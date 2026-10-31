@@ -31,10 +31,9 @@ sound, never costlier than the input in the measure the chain itself descends �
 mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
 mode=m)` is that measure: each mode reads an expression into its own canonical form,
 because the modes accept different simplifications as true (`f64` follows the float
-evaluator, so `atanh(tanh(x))` is not `x`, as `tanh` saturates to `1` in floats; `real` follows
-exact arithmetic, so it is;
-`permissive` also what holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64`
-and `real` give `abs(x)`), and prices
+evaluator, so `atanh(tanh(x))` is not `x`, as `tanh` saturates to `1` in floats; `permissive`
+follows the reals, so it is, and also what holds only up to sign or domain, so `(x^2)^(1/2)`
+is `x`, where `f64` gives `abs(x)`), and prices
 that form. So
 `complexity(simplify(e, mode=m), mode=m) ≤ complexity(e, mode=m)` in every mode, and
 prices of different modes are prices of different readings, not comparable across
@@ -120,14 +119,14 @@ A cap counts every candidate tried, refused ones included, over the whole expres
 the cap a search needs grows with the expression: one of srbf's model predictions needs 5
 candidates to reach its uncapped answer, a sum of two copies of it 10 and of six 30, so no fixed
 cap is enough. Capped at 4, the old default, 1,632 of srbf's 125,127 model predictions change on
-a second call in `f64` and in `real`, every one to a cheaper form, because the first call stopped
-between two improvements. Uncapped, none does in `f64` or `real`, on any of the three sets. On
+a second call in `f64`, every one to a cheaper form, because the first call stopped
+between two improvements. Uncapped, none does in `f64`, on any of the three sets. On
 the predictions no answer is costlier than at cap 4 and 1,633 are cheaper. The search is one
 walk: it rebuilds each candidate of the current answer into the whole expression it makes,
 tries them cheapest first, steps to the first whose descent ends cheaper than the current
 answer, and stops when a whole round finds nothing; `effort=k` is the first `k` descents of that
 walk. On srbf's predictions it spends 15% more matcher steps and constructor calls than
-`effort=4` in `f64` (16% in `real`). Every internal caller that passes no
+`effort=4` in `f64`. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
@@ -168,7 +167,8 @@ between two improvements, which a second call then continues.
 ## Soundness modes
 
 `simplify(expr, mode=...)` selects a point on an **axis**, not a rung on a ladder.
-`simplipy.Mode` has three members: `f64` (the default), `real` and `permissive`.
+`simplipy.Mode` has two members: `f64` (the default) and `permissive`. The `real` mode is
+retired: naming it raises, and its values in the reals are what `permissive` reads.
 
 The axis exists because soundness is two *incomparable* notions, not one ordering. A rewrite
 can be true in mathematics and not reproduced by floating point, or reproduced exactly by
@@ -187,9 +187,6 @@ between modes raises `TypeError`.
   point. Where an operation overflows or underflows, an answer may hold the evaluator's value
   there or the true one: `log(exp(800))` is `800`, where f64 computes `inf` (see [What `f64`
   mode does and does not promise](#what-f64-mode-does-and-does-not-promise)).
-
-- **`Mode.real`** is sound as mathematics defines, independent of any float format. Use it
-  when a rewrite must hold symbolically.
 
 - **`Mode.permissive`** is the permissive superset, for training-corpus canonicalisation ("beautification").
   Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
@@ -226,7 +223,7 @@ tagged `['<mul>', '500000000000000', '<div>', '3141592653589793', '</mul>']`): t
 states as tokens and reads them back, and callers mask and compare token answers, so one fixed
 spelling serves them.
 
-Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
+Each mode names one **distinct, complete** rule set — `rules_f64.json` /
 `rules_permissive.json` (a config may name the f64 file `rules.json`, as artifacts before 0.15
 did) — so selecting a mode selects a file, and what is loaded is what is served.
 
@@ -249,13 +246,11 @@ engine.simplify('rootn(x0^2, 2)', mode=Mode.permissive)    # -> 'x0'
 engine.simplify('1/<constant>')                            # -> '<constant>'
 ```
 
-`Mode.real` needs a `rules_real.json`, and **fails closed** on an artifact without one
-rather than quietly serving it the f64 set. Against the shipped triple it shows the two
-soundnesses disagreeing on a single expression:
+The two modes disagree on a single expression where float64 saturates:
 
 ```python
-engine.simplify('atanh(tanh(30))', mode=Mode.f64)   # -> 'inf'   what f64 computes
-engine.simplify('atanh(tanh(30))', mode=Mode.real)  # -> '30'    what is true
+engine.simplify('atanh(tanh(30))', mode=Mode.f64)         # -> 'inf'   what f64 computes
+engine.simplify('atanh(tanh(30))', mode=Mode.permissive)  # -> '30'    what is true
 ```
 
 
@@ -390,8 +385,8 @@ three declared corpora — a symbolic-regression training prior of flash-ansr (s
 n = 65,536), the same prior under the engine mask policy 'all'
 (n = 65,536), and an external neutral problem set (SOOSE fc/nc/wc,
 n = 600; every row compiles in the engine language). The engine is the
-pinned acj-5-4-llm artifact: `f64` is the shipped default, `real` is
-`Mode.real`, `permissive` is `Mode.permissive`, every arm at `effort=4`, the
+pinned acj-5-4-llm artifact: `f64` is the shipped default, `permissive` is
+`Mode.permissive`, every arm at `effort=4`, the
 default before 0.15.0. Scoring runs in the deployment space:
 ratio = `complexity(output)` / `complexity(input)`, priced by the engine's
 shipped `complexity()` instrument in the default (f64) canonicalization;
@@ -406,24 +401,20 @@ cap and end the wall-clock ECDFs below 1.
 | corpus | arm | mean ratio | wins | made bigger |
 |---|---|---|---|---|
 | SR prior, unmasked | simplipy f64 (default) | **0.966** | 13.2% | **0.0%** |
-| | simplipy real | **0.965** | 15.0% | 0.04% |
 | | simplipy permissive | **0.936** | **36.9%** | 0.003% |
 | | sympy simplify | 1.085 | 22.3% | 45.1% |
 | SR prior, masked | simplipy f64 (default) | **0.998** | 1.8% | **0.0%** |
-| | simplipy real | **0.997** | 3.4% | 0.003% |
 | | simplipy permissive | **0.958** | **33.5%** | **0.0%** |
 | | sympy simplify | 1.068 | 18.3% | 43.2% |
 | external set | simplipy f64 (default) | 0.995 | 3.8% | **0.0%** |
-| | simplipy real | 0.995 | 4.0% | **0.0%** |
 | | simplipy permissive | 0.992 | 9.8% | **0.0%** |
 | | sympy simplify | 1.006 | 26.3% | 15.0% |
 
 The f64 arm at effort 4 (the default when this was measured) made no expression bigger: 0 of
-131,072 SR rows and 0 of 600 external rows. The real and permissive arms
-minimize their own mode's reduction ordering, which is not the default
-pricing: under the table's measure they returned a form pricing above
-the input on a handful of rows (real 23/65,536 unmasked and 2/65,536
-masked; permissive 2/65,536 unmasked and 0 masked). Every such output is
+131,072 SR rows and 0 of 600 external rows. The permissive arm
+minimizes its own mode's reduction ordering, which is not the default
+pricing: under the table's measure it returned a form pricing above
+the input on a handful of rows (2/65,536 unmasked and 0 masked). Every such output is
 that mode's idempotent fixpoint; the increase enters through
 mode-specific respells — exact rational folds and pole materialization
 to `float("inf")` — never through an uphill rule application or search

@@ -10,11 +10,11 @@ import huggingface_hub as hf_hub  # the lazy-import patch target
 # An active internet connection is required to run them. The asset MANAGER is
 # generation-agnostic (mirroring/inspection is a sanctioned-open boundary), but the
 # suite exercises it on a generation-2 artifact. NOTE: the PUBLISHED test asset is
-# pre-triple -- four files, `rules.json` only -- so these tests cover the manager's
-# handling of an artifact that names no `rules_real`/`rules_corpus`, which is exactly
-# the backwards-compatibility case (such an asset loads, and every mode serves the
-# default set). They do NOT cover installing a triple; that wants a published
-# three-file test asset.
+# a single-file one -- `rules.json` only -- so these tests cover the manager's
+# handling of an artifact that names no `rules_corpus`, which is exactly the
+# backwards-compatibility case (such an asset loads, and every mode serves the default
+# set). They do NOT cover installing a per-mode artifact; that wants a published
+# two-file test asset.
 VALID_ENGINE = "acj-4-3"
 VALID_TEST_DATA = "expressions_10k"
 INVALID_ASSET = "this-asset-does-not-exist"

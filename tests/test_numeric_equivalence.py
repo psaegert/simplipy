@@ -268,20 +268,20 @@ class TestCorpusGate:
         # band in f64 mode, so one corpus row stops collapsing an `asinh(sinh(.))` the
         # deployed evaluator cannot reproduce (sinh overflows at 710.475860) and keeps
         # its larger form. LOSSY output is UNMOVED, 0 of 400 rows.
-        # RE-PINNED for the 0.14.0 triple: 84,698,486 -> 84,714,486. TWO corpus rows,
+        # RE-PINNED for the 0.14.0 per-mode files: 84,698,486 -> 84,714,486. TWO corpus rows,
         # +8,000 each, and TWO rules:
         #
         #   cos(asin(sin x)) -> |cos x|     true on R; f64 disagrees
         #   exp(x/0)         -> inf^x       true on R; at x = 0 f64 gives exp(nan) = nan
         #                                   against inf^0 = 1
         #
-        # Both are true and NOT f64-realised, so both serve `real` and no longer the
+        # Both are true and NOT f64-realised, so neither serves the
         # default mode, and f64's own constructor reaches a form that costs 8,000 more
         # in each case. This is the measured price of the mode split, not a regression.
         # THE SYMBOL TABLE: 84,714,486 -> 56,665,486. The MEASURE changed
         # -- structure is no longer a flat 8 bits a node -- so the old pin is not
         # comparable and this is a re-pin, not a movement. What is comparable, and
-        # measured beside it: sound (`f64`) and `real` outputs are BYTE-IDENTICAL on all
+        # measured beside it: the `f64` outputs are BYTE-IDENTICAL on all
         # 400 rows across the change, and 14 corpus-mode rows re-spell through the
         # mu-driven reciprocal-rejoin projection, which is the one output decision the
         # prices own.

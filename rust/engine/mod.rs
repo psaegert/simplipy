@@ -87,7 +87,7 @@ pub struct Engine {
     /// Per-ENGINE, not global: certificates depend on this engine's operator semantics, and
     /// tests build many engines with different op sets in one process. Generational (see
     /// `BangCache`): bounded memory, never stops memoizing. One per reading, indexed by
-    /// `ac_cert`'s `f64`: 0 over the reals (`real`, `permissive`), 1 in float64 (`f64`), whose
+    /// `ac_cert`'s `f64`: 0 over the reals (`permissive`), 1 in float64 (`f64`), whose
     /// `tanh` and `atan` are constant on whole tails.
     bang_cache: [std::sync::Mutex<BangCache>; 2],
     /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
@@ -95,23 +95,16 @@ pub struct Engine {
     /// The DEFAULT mode's translated ruleset, built lazily on first `ac_simplify` (see
     /// `engine/ac.rs`) so consumers that never opt in pay nothing at construction.
     ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
-    /// THE `real` MODE'S OWN COMPLETE RULE SET (`rules_real.json`), interned exactly like
-    /// `rules` -- NOT a supplement to it: one distinct rule set
-    /// for each mode, and the triple is pinned for provenance (only triples are
-    /// mined and distributed). So this file carries the core rules AND the real-only
-    /// rules, complete, and the engine never computes a union to decide what `real` serves.
+    /// THE `permissive` MODE'S OWN COMPLETE RULE SET (`rules_permissive.json`), interned
+    /// exactly like `rules` -- NOT a supplement to it: one distinct, self-contained rule set
+    /// for each mode, so the engine never computes a union to decide what a mode serves.
     ///
     /// `None` -- the state of every engine not handed one -- means the mode names NO SET
     /// OF ITS OWN and serves the default set. `Some(vec![])` is the different, sayable
     /// statement "this mode serves nothing"; see `Engine::ac_rules_for`.
-    real_rules: Option<CompiledRules>,
-    /// THE `permissive` MODE'S OWN COMPLETE RULE SET (`rules_permissive.json`), same discipline:
-    /// core plus BOTH the real-only and permissive-only rules, in one self-contained file.
     permissive_rules: Option<CompiledRules>,
-    /// `real`'s translated set, lazily built by the same `translate_rules` as the default
-    /// cell. Untouched by a consumer that never asks for `real`.
-    ac_real_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
-    /// `permissive`'s translated set, same discipline as `ac_real_rules_cell`.
+    /// `permissive`'s translated set, lazily built by the same `translate_rules` as the
+    /// default cell. Untouched by a consumer that never asks for `permissive`.
     ac_permissive_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
 }
 
@@ -235,13 +228,11 @@ impl Engine {
             bang_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
             mult_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
             ac_rules_cell: std::sync::OnceLock::new(),
-            // NO per-mode sets at construction: `from_strs` builds exactly today's engine
-            // from exactly today's `rules.json`, and the other two files -- when a config
-            // names them -- arrive afterwards through `set_mode_rules`. That is what makes
-            // "absent files are a no-op" true by construction rather than by argument.
-            real_rules: None,
+            // NO permissive set at construction: `from_strs` builds the engine from the
+            // default `rules.json` alone, and the permissive file -- when a config names it
+            // -- arrives afterwards through `set_mode_rules`. That is what makes "an absent
+            // file is a no-op" true by construction rather than by argument.
             permissive_rules: None,
-            ac_real_rules_cell: std::sync::OnceLock::new(),
             ac_permissive_rules_cell: std::sync::OnceLock::new(),
         })
     }

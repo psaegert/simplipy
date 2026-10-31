@@ -6,7 +6,7 @@
 //! slot sort quantifies over. The contract judge reads it through `_core.TableExpr` and the
 //! `table_*` functions; nothing in Python keeps a copy.
 //!
-//! **real** (and **permissive**, which has real's values):
+//! **the reals** (permissive's values):
 //!
 //! - The values are the reals, +inf and -inf; undefined (NaN) is the absence of a value. There is
 //!   one zero.
@@ -1819,35 +1819,21 @@ fn bf_to_f64(b: &BigFloat) -> f64 {
     y
 }
 
-/// THE TABLE's real value of a ground expression (no free name) at `dps` digits: `None` where
-/// it holds a token the table cannot read or the point is Unresolved at that precision. The
-/// engine's real ground fold reads it (`Engine::table_ground_fold`).
-pub fn ground_value(tokens: &[String], ops: &crate::operators::Operators, dps: i32) -> Option<Val> {
-    ground_reading(tokens, ops, dps, false)
-}
-
-/// `ground_value` in the float-resolution reading (`Ctx::saturate`): permissive's ground fold,
-/// which writes the double nearest to the value (P3).
+/// THE TABLE's real value of a ground expression (no free name) at `dps` digits, in the
+/// float-resolution reading (`Ctx::saturate`): permissive's ground fold, which writes the double
+/// nearest to the value (P3). `None` where it holds a token the table cannot read or the point
+/// is Unresolved at that precision.
 pub fn ground_value_float(
     tokens: &[String],
     ops: &crate::operators::Operators,
     dps: i32,
-) -> Option<Val> {
-    ground_reading(tokens, ops, dps, true)
-}
-
-fn ground_reading(
-    tokens: &[String],
-    ops: &crate::operators::Operators,
-    dps: i32,
-    saturate: bool,
 ) -> Option<Val> {
     let arity: std::collections::HashMap<String, u8> = tokens
         .iter()
         .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
         .collect();
     let e = Expr::compile(tokens, &[], &arity).ok()?;
-    e.eval_real_reading(&[], dps, saturate)?.value
+    e.eval_real_reading(&[], dps, true)?.value
 }
 
 // -------------------------------------------------------------------------- comparison

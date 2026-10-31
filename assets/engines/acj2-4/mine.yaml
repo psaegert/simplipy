@@ -2,8 +2,7 @@
 # operators plus floor, ceil, max, min, mod, erf, harmonic, atan2 and besselj, each priced at
 # the transcendental tier). Reproduce with ONE command:
 #   simplipy find-rules -e config.yaml -c mine.yaml -o rules.json -v --reset-rules
-# It writes rules.json (f64), rules_real.json and rules_permissive.json, each with its
-# provenance sidecar.
+# It writes rules.json (f64) and rules_permissive.json, each with its provenance sidecar.
 #
 # NO SECOND NUMBER: the target cap is 4 and so is the source bound, so the cap refuses nothing.
 #

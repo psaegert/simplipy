@@ -1,12 +1,12 @@
 """Exact numbers beyond 128 bits (number plan phase 2c).
 
 A literal is an exact rational whose numerator and denominator have at most 1,100 bits each;
-before, a number left the exact form at 128 bits and stayed an opaque symbol. Real mode folds
-every number within that cap. f64 mode holds a number only when its numerator and denominator
-are both at most 2^1022, so the number and its reciprocal are normal float64s; other literals
-stay leaves as written. In f64 mode an integer beyond 2^53 has unknown parity, and a literal
-the evaluator reads as inf (or as 0) is neither certainly finite nor certainly nonzero. A bag
-of literals folds until no two of its members fold, which re-reads to itself in any order.
+before, a number left the exact form at 128 bits and stayed an opaque symbol. Every mode holds
+a number only when its numerator and denominator are both at most 2^1022, so the number and its
+reciprocal are normal float64s; other literals stay leaves as written. An integer beyond 2^53
+has unknown parity, and a literal the evaluator reads as inf (or as 0) is neither certainly
+finite nor certainly nonzero. A bag of literals folds until no two of its members fold, which
+re-reads to itself in any order.
 """
 from fractions import Fraction
 
@@ -18,7 +18,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 A, B = 7 ** 190, 3 ** 280      # A/B is admissible, (A/B)^2 has a numerator beyond DBL_MAX
-MODES = ('f64', 'real')
+MODES = ('f64', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -57,17 +57,17 @@ class TestPlanConsequences:
     def test_two_spellings_of_one_coefficient_cancel(self, engine: SimpliPyEngine, mode: str) -> None:
         assert simplify(engine, '- * 3e-40 x1 * x1 * 1e-40 3', mode) == ['0']
 
-    @pytest.mark.parametrize('mode', MODES)
+    # f64 alone: permissive writes a literal as its float (its own simplification)
+    @pytest.mark.parametrize('mode', ('f64',))
     def test_the_larmor_denominator_is_one_number(self, engine: SimpliPyEngine, mode: str) -> None:
         out = simplify(
             engine, '/ * pow x1 2 pow x2 2 * 6 * 3.1415926535897 * 8.854e-12 pow 2.99792458e8 3', mode)
         exact = 6 * Fraction('3.1415926535897') * Fraction('8.854e-12') * Fraction('2.99792458e8') ** 3
         assert numbers(out) == [Fraction(2), Fraction(2), exact]
 
-    def test_a_sum_beyond_float64_folds_in_real_mode_only(self, engine: SimpliPyEngine) -> None:
+    def test_a_sum_beyond_float64_is_collected_as_a_symbol(self, engine: SimpliPyEngine) -> None:
         # 1e308 is beyond 2^1022: an f64 leaf as written, collected like any symbol (as in main)
         assert simplify(engine, '+ x1 + 1e308 1e308', 'f64') == ['+', '*', '2', '1e308', 'x1']
-        assert numbers(simplify(engine, '+ x1 + 1e308 1e308', 'real')) == [2 * 10 ** 308]
 
     @pytest.mark.parametrize('mode', MODES)
     def test_a_product_beyond_the_cap_keeps_its_members(self, engine: SimpliPyEngine, mode: str) -> None:
@@ -79,24 +79,18 @@ class TestAdmissibleInF64Mode:
     def test_a_literal_beyond_the_cap_stays_as_written(self, engine: SimpliPyEngine, mode: str) -> None:
         assert simplify(engine, '* x1 1e400', mode) == ['*', '1e400', 'x1']
 
-    def test_a_subnormal_is_a_number_in_real_mode_only(self, engine: SimpliPyEngine) -> None:
-        # both modes print it as written; only `real` holds it as a number, so only `real` folds it
-        for mode in ('f64', 'real'):
-            assert simplify(engine, '* x1 5e-324', mode) == ['*', '5e-324', 'x1']
+    def test_a_subnormal_stays_as_written(self, engine: SimpliPyEngine) -> None:
+        # a subnormal is no number of the f64 domain: it is printed as written and not folded
+        assert simplify(engine, '* x1 5e-324', 'f64') == ['*', '5e-324', 'x1']
         assert simplify(engine, '* x1 * 2 5e-324', 'f64') == ['*', '2', '*', '5e-324', 'x1']
-        assert simplify(engine, '* x1 * 2 5e-324', 'real') == ['*', '1e-323', 'x1']
 
     def test_a_numerator_beyond_dbl_max_does_not_fold_in_f64_mode(self, engine: SimpliPyEngine) -> None:
         prefix = f'* x1 * / {A} {B} / {A} {B}'
         assert simplify(engine, prefix, 'f64') == ['*', '/', str(A), str(B), '*', '/', str(A), str(B), 'x1']
-        # beyond 128 bits a fraction prints as ONE member (a local `/ p q`), never split
-        assert simplify(engine, prefix, 'real') == ['*', '/', str(A ** 2), str(B ** 2), 'x1']
 
 
 class TestF64SeesWhatTheEvaluatorSees:
     def test_a_literal_read_as_inf_is_not_certainly_finite(self, engine: SimpliPyEngine) -> None:
-        for prefix in ('* 0 1e400', '- exp 1e400 exp 1e400'):
-            assert simplify(engine, prefix, 'real') == ['0']
         assert simplify(engine, '* 0 1e400', 'f64') == ['*', '0', '1e400']
         # float64's exp of the infinity 1e400 reads as is that infinity: the member 1e400 (the
         # member fold), and the difference stays the NaN it is
@@ -107,7 +101,6 @@ class TestF64SeesWhatTheEvaluatorSees:
         odd = 'pow -1 9007199254740993'
         # no parity fold in f64; the walk folds the ground node to the evaluator's float
         assert simplify(engine, odd, 'f64') == ['1']
-        assert simplify(engine, odd, 'real') == ['-1']
         # the evaluator reads the exponent as the even float 2^53
         assert constant(engine, odd.split()) == 1.0
         for mode in MODES:
@@ -115,7 +108,8 @@ class TestF64SeesWhatTheEvaluatorSees:
 
 
 class TestCap:
-    @pytest.mark.parametrize('mode', MODES)
+    # f64 alone: permissive writes a literal as its float (its own simplification)
+    @pytest.mark.parametrize('mode', ('f64',))
     def test_a_power_within_the_cap_folds(self, engine: SimpliPyEngine, mode: str) -> None:
         assert numbers(simplify(engine, '* pow 2 1000 x1', mode)) == [2 ** 1000]
 
@@ -177,7 +171,7 @@ class TestFixedPoint:
 
 # 1e300*1e300 leaves the domain in every mode (10^600 is beyond 1,100 bits): the product keeps
 # both members, and the term's coefficient is that partition, both members together.
-MODES3 = ('f64', 'real', 'permissive')
+MODES3 = ('f64', 'permissive')
 REFUSED_ROWS = [
     # each changed on a second call before (boundary-literal fuzz)
     '-1e300*1e300*x1 - 1e300*1e300*x2',
@@ -297,30 +291,21 @@ class TestReviewFindings:
             once = simplify(engine, prefix, 'f64')
             assert list(engine.simplify(once, mode='f64')) == once
 
-    @pytest.mark.parametrize('prefix, mode', [
-        ('* * pow x1 1e-306 pow x1 1000 pow x1 1001', 'f64'),
-        (f'* * pow x1 1/{3 ** 693} pow x1 4 pow x1 5', 'real'),
-    ])
-    def test_exponent_pools_merge_in_one_pass(self, engine: SimpliPyEngine, prefix: str, mode: str) -> None:
-        once = simplify(engine, prefix, mode)
-        assert list(engine.simplify(once, mode=mode)) == once
-        assert ('2001' if mode == 'f64' else '9') in once, once
-
-    def test_a_constant_absorbs_kept_literal_members(self, engine: SimpliPyEngine) -> None:
-        prefix = '* x1 * <constant> * 5e-324 / 1 8.0685647420949626e321'
-        assert simplify(engine, prefix, 'real') == ['*', '<constant>', 'x1']
+    def test_exponent_pools_merge_in_one_pass(self, engine: SimpliPyEngine) -> None:
+        prefix = '* * pow x1 1e-306 pow x1 1000 pow x1 1001'
+        once = simplify(engine, prefix, 'f64')
+        assert list(engine.simplify(once, mode='f64')) == once
+        assert '2001' in once, once
 
     def test_a_leaf_read_as_inf_or_zero_does_not_cancel_in_f64_mode(self, engine: SimpliPyEngine) -> None:
         for prefix in ('/ 1e400 1e400', '/ 1e-400 1e-400'):
             out = simplify(engine, prefix, 'f64')
             assert out != ['1'] and np.isnan(constant(engine, out)), out
             assert np.isnan(constant(engine, prefix.split()))
-            assert simplify(engine, prefix, 'real') == ['1']
 
-    def test_exponents_merge_beyond_2_53_only_in_real_mode(self, engine: SimpliPyEngine) -> None:
+    def test_exponents_do_not_merge_beyond_2_53(self, engine: SimpliPyEngine) -> None:
         prefix = '* pow x1 9007199254740992 x1'
         assert simplify(engine, prefix, 'f64') == ['*', 'x1', 'pow', 'x1', '9007199254740992']
-        assert simplify(engine, prefix, 'real') == ['pow', 'x1', '9007199254740993']
 
     def test_a_big_fraction_coefficient_evaluates_without_overflow(self, engine: SimpliPyEngine) -> None:
         p, q = 7 ** 360, 3 ** 630      # about 1,011 and 999 bits; p/q is about 4.5e3

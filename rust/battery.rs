@@ -313,8 +313,8 @@ fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointC
 ///   - EXT / SHRINK / INF-CHANGE -> a tolerated event class, row passes;
 ///   - contract eq or unresolved, NOT snapped -> in f64 (`mode`) REJECT (the deployed
 ///     algebra structurally diverges where the contract does not object -- this also convicts
-///     the precision-roulette seam class); in real and permissive the row passes, as their
-///     values are the reals' (`ceil(erf(sinh(-3))) -> ceil(erf(-3))`: float64 rounds the first
+///     the precision-roulette seam class); in permissive the row passes, as its values are
+///     the reals' (`ceil(erf(sinh(-3))) -> ceil(erf(-3))`: float64 rounds the first
 ///     erf to -1, and both are 0);
 ///   - snapped (symbolic-cancellation / pole-proximity at the point) -> row passes (the f64
 ///     algebra evaluates a DIFFERENT point there; measurement error, not a value claim).

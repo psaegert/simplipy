@@ -3,7 +3,7 @@
 The certificate of a null zero set (reading A, the distribution licences, orientation) applied the
 identity theorem only to expressions analytic on all of R^n, so a sum over `log`, a root or `asin`
 was never shown null and kept the sign it was written with under an inverse: `-1/(x1 - log(x1))`
-stayed as written in `f64` and `real`, where `permissive` (which needs no certificate) wrote
+stayed as written in `f64`, where `permissive` (which needs no certificate) wrote
 `1/(log(x1) - x1)`. A NaN region holds no zero, so the certificate reads the zero set where the
 expression is defined. A sum that vanishes on a region of its domain (`x1 - |x1|`) keeps its sign.
 """
@@ -13,7 +13,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
-MODES = ('f64', 'real', 'permissive')
+MODES = ('f64', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -36,7 +36,6 @@ def test_a_sign_moves_through_a_sum_null_on_its_domain(eng, mode, expression, ex
 
 @pytest.mark.parametrize('mode, expected', [
     ('f64', '/ -1 - x1 abs x1'),
-    ('real', '/ -1 - x1 abs x1'),
     ('permissive', 'inv - abs x1 x1'),
 ])
 def test_a_sum_zero_on_a_region_of_its_domain_keeps_its_sign(eng, mode, expected):

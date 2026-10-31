@@ -10,7 +10,7 @@ the input is -inf. The certificates behind the cancellations read them too: `t/t
 NaN on the tail. The merge of `x^y * x^y` into `x^(2y)` reads the levels of the exponent: on a
 tail a `tanh` or `atan` exponent is constant, so its level set there is the whole tail, harmless at
 an integer (`tanh(x1)`) and refused elsewhere (`3*atan(x1)`). `f64` reads each function on its
-float64 range; `real` and `permissive` keep the real reading.
+float64 range; `permissive` keeps the real reading.
 """
 import numpy as np
 import pytest
@@ -73,14 +73,13 @@ def test_f64_keeps_the_infinities_of_a_zero_on_a_tail(eng, expression):
 
 @pytest.mark.parametrize('mode, expected', [
     ('f64', '/ -1 - * x2 tanh x1 x2'),
-    ('real', '/ inv - 1 tanh x1 x2'),
     ('permissive', '/ inv - 1 tanh x1 x2'),
 ])
 def test_only_f64_reads_the_tails(eng, mode, expected):
     assert ' '.join(eng.simplify('* -1 inv - * x2 tanh x1 x2'.split(), mode=mode)) == expected
 
 
-@pytest.mark.parametrize('mode', ('f64', 'real', 'permissive'))
+@pytest.mark.parametrize('mode', ('f64', 'permissive'))
 @pytest.mark.parametrize('expression, expected', [
     # the tails do not cancel: x2 - x1 and -x2 - x1, fl(pi/2) - x1 are zero on null sets
     ('* -1 inv - * x2 tanh x1 x1', 'inv - x1 * x2 tanh x1'),
@@ -113,7 +112,6 @@ def test_f64_keeps_the_nan_of_a_cancellation_on_a_tail(eng, expression):
 
 @pytest.mark.parametrize('mode, expected', [
     ('f64', '/ - tanh x1 1 - tanh x1 1'),
-    ('real', '1'),
     ('permissive', '1'),
 ])
 def test_only_f64_reads_the_tails_of_a_cancellation(eng, mode, expected):
@@ -122,7 +120,6 @@ def test_only_f64_reads_the_tails_of_a_cancellation(eng, mode, expected):
 
 @pytest.mark.parametrize('mode, expected', [
     ('f64', '* pow x2 * 3 atan x1 pow x2 * 3 atan x1'),
-    ('real', 'pow x2 * 6 atan x1'),
     ('permissive', 'pow x2 * 6 atan x1'),
 ])
 def test_an_exponent_constant_on_a_tail_merges_only_at_an_integer(eng, mode, expected):

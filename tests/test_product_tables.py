@@ -20,7 +20,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
-MODES = ('f64', 'real', 'permissive')
+MODES = ('f64', 'permissive')
 BAG_TOKENS = {'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>'}
 
 
@@ -239,7 +239,7 @@ def test_a_constant_sum_takes_the_sign_into_its_terms(eng, mode, effort, src, ex
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 
-@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('mode', ('f64',))
 @pytest.mark.parametrize('src', POLES)
 def test_the_answer_keeps_every_value_at_the_zeros(eng, mode, src):
     k = np.array([-2.0, -0.5, 0.0, 0.5, 2.0])

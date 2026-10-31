@@ -13,7 +13,7 @@ emptied DEP_OPS slots. Each test here pins one of those failure modes shut:
 3. rootn is judged with the engine's five-surface semantics on both judges,
 4. the gate + contract poison self-test passes (legacy AND live vocabulary,
    including the $-sort),
-5. the shipping artifact's rootn/$ rules get real verdicts (no crashes, no
+5. the shipping artifact's rootn/$ rules get verdicts (no crashes, no
    NO-WITNESS-by-SyntaxError),
 6. tiny exists-witnesses survive fitting (the absolute-snap / zero-freeze regression
    that fabricated clause-(a) kills of sound constant-space rules),
@@ -79,7 +79,7 @@ class TestMonitorSpeaksBagLanguage:
         verdict, _ = judge_pair(
             ['/', 'rootn', 'x0', '2', 'rootn', 'x0', '2'],
             ['<mul>', 'pow', 'x0', '0.5', '<div>', 'pow', 'x0', '0.5', '</mul>'], rng(),
-            mode='real', engine=bag_engine)
+            mode='permissive', engine=bag_engine)
         assert verdict == 'OK'
 
     def test_a_tagged_side_without_an_engine_is_unscored(self):
@@ -123,19 +123,19 @@ class TestRootnSemantics:
     def test_vacuous_index_rules_are_killed(self):
         # the artifact-defect class the repaired gate caught: a non-integer rootn index
         # is an invalid operation, so the LHS is NaN a.e. and the rewrite would invent a
-        # function. The interval layer's real reading encloses the expression-position index:
+        # function. The interval layer's reading in the reals encloses the expression-position index:
         # tanh stays inside (-1, 1), which holds no nonzero integer, so the left side is
         # undefined everywhere and the extension is measured
         r = judge_rule(['rootn', '(-1)', 'tanh', '?0'], ['(-1)'])
         assert r['verdict'] == 'KILL' and r['measure'] > 0, r
-        assert r['tier'] not in v.MODE_TIERS['real']
+        assert r['tier'] not in v.MODE_TIERS['f64']
 
 
 class TestZeroLanes:
     """The monitor reads a rewrite in its mode's values, through the judge: f64's IEEE 754
-    signed zeros (`1/(x*0)` is +-inf by the sign of x), real's one zero, where an inverted
-    exact zero has no value (the limit rule), and permissive's real values, with nothing owed
-    where the input has none."""
+    signed zeros (`1/(x*0)` is +-inf by the sign of x), and permissive's values in the reals,
+    where an inverted exact zero has no value (the limit rule), with nothing owed where the
+    input has none."""
 
     #: Inputs whose exact zero is inverted, with the IEEE answer and the one-zero `+inf`.
     POLES = [
@@ -148,9 +148,9 @@ class TestZeroLanes:
         def verdict(out, mode):
             return judge_pair(src.split(), out.split(), rng(), mode=mode)[0]
         assert verdict(ieee, 'f64') == 'OK' and verdict(one_zero, 'f64') == 'VIOLATION'
-        assert verdict('float("nan")', 'real') == 'OK'
-        assert verdict(ieee, 'real') == verdict(one_zero, 'real') == 'VIOLATION'
         assert verdict(ieee, 'permissive') == verdict(one_zero, 'permissive') == 'OK'
+        with pytest.raises(ValueError, match='the real mode is retired'):
+            verdict(ieee, 'real')
 
     def test_an_undecided_judgment_is_unscored(self):
         # the interval layer does not see `x13 - x13` as an exact zero, so the measure of the
@@ -194,12 +194,10 @@ class TestZeroLanes:
             assert (np.isnan(ieee) and got != got) or got == ieee, (tokens, got)
 
     def test_a_zero_valued_literal_span_keeps_its_sign(self):
-        # `* -1 0` folds to an exact zero, whose sign IEEE reads as -0; real reads one zero,
-        # whose inverse has no value
+        # `* -1 0` folds to an exact zero, whose sign IEEE reads as -0
         assert judge_pair(['inv', '*', '-1', '0'], ['float("-inf")'], rng(), mode='f64')[0] == 'OK'
-        assert judge_pair(['inv', '*', '-1', '0'], ['float("nan")'], rng(), mode='real')[0] == 'OK'
         assert judge_pair(['inv', '*', '-1', '0'], ['float("inf")'], rng(),
-                          mode='real')[0] == 'VIOLATION'
+                          mode='f64')[0] == 'VIOLATION'
 
     def test_an_unknown_mode_is_refused(self):
         with pytest.raises(ValueError, match='mode'):
@@ -281,7 +279,7 @@ class TestShippingArtifact:
             assert r['verdict'] in census, (lhs, rhs, r)
             # a KILL is admitted only as what this f64 file may hold: false over the reals and
             # bit-exact in float64 (below)
-            assert r['verdict'] != 'KILL' or r['tier'] == 'f64', (lhs, rhs, r)
+            assert r['verdict'] != 'KILL' or r['tier'] in v.MODE_TIERS['f64'], (lhs, rhs, r)
             census[r['verdict']] += 1
         # measured census of the shipped artifact. An artifact
         # refresh re-pins this alongside the gate_acj REFS, with evidence. The 4330 ->
@@ -316,9 +314,9 @@ class TestShippingArtifact:
         # against the 0.13 line's 6,594). Two causes, both intended. The judge is
         # stricter -- the contract tolerance became purely RELATIVE, so rules that
         # survived on an absolute 1e-25 floor no longer do -- and the file is now the
-        # f64 THIRD of a triple, so every rule that is true but not f64-realised has
-        # moved to rules_real.json. TOLERATED reaching 0 follows from the same split:
-        # a tolerated-but-unrealised rule is `real`-tier and is not in this file.
+        # f64 file of an artifact, so every rule that is true but not f64-realised has
+        # moved to the permissive file. TOLERATED reaching 0 follows from the same split:
+        # a tolerated-but-unrealised rule is `permissive`-tier and is not in this file.
         # 3815 -> 3820 at THE acj-4 TRIPLE (f64 5,319 -> 5,338). Fully
         # enumerated, two families: +21 structural rootn admissions (neg-through-odd-root
         # commutation, abs/rootn orderings, rootn->pow(+-0.2) respellings at |index| 5)
@@ -331,26 +329,25 @@ class TestShippingArtifact:
         # -> pow abs _0 -0.2` at 0, the `acos`/`acosh` siblings at 1). Fully enumerated.
         # 3817/3 -> 3817/0/3 under the owner's guard ruling: that one point is a null set no
         # `_` slot guards (bound to a subexpression that is 0 on an interval the extension
-        # has positive measure), so the three are KILLs -- `f64`-tier, since float64 reads
+        # has positive measure), so the three are KILLs -- held in f64, since float64 reads
         # both sides as +inf there, and so still this file's to hold.
         assert census == {'CERTIFIED': 3817, 'TOLERATED': 0, 'KILL': 3}, census
         # The f64 file excuses NOTHING: the four excused rules of the one documented null-set
         # class (clause (b), undefined->defined on the null set {0} only) are TOLERATED
-        # and not f64-realised, which is the `real` tier, so they live in rules_real.json
-        # and are asserted there by the next test. A new excused rule in either place is
+        # and not f64-realised, which is the `permissive` tier, so they live in the
+        # permissive file and are asserted there by the next test. A new excused rule in either place is
         # a contract question, never a re-pin.
 
-    def test_the_excused_rules_live_in_the_real_file(self):
+    def test_the_excused_rules_live_in_the_permissive_file(self):
         """The other half of the split, kept as its own test so that shipping the f64
-        set WITHOUT a triple reports honestly: the census above still runs and passes,
-        and this one skips for want of a subject rather than dragging the pair down."""
-        from conftest import require_triple
-        require_triple()
-        real_path = ACJ_RULES.replace('rules.json', 'rules_real.json')
-        real_rules = json.load(open(real_path))
-        real_keys = {(tuple(a), tuple(b)) for a, b in real_rules}
-        assert (('/', '$0', '$0'), ('1',)) in real_keys      # x/x -> 1
-        assert (('/', '0', '$0'), ('0',)) in real_keys       # 0/x -> 0
+        set WITHOUT its permissive sibling reports honestly: the census above still runs and
+        passes, and this one skips for want of a subject rather than dragging the pair down."""
+        from conftest import acj_corpus_rules_path, require_mode_sets
+        require_mode_sets()
+        permissive_rules = json.load(open(acj_corpus_rules_path()))
+        permissive_keys = {(tuple(a), tuple(b)) for a, b in permissive_rules}
+        assert (('/', '$0', '$0'), ('1',)) in permissive_keys      # x/x -> 1
+        assert (('/', '0', '$0'), ('0',)) in permissive_keys       # 0/x -> 0
         # The two MULTIPLICATIVE spellings are AC-duplicates of `x/x -> 1` and the 0.14
         # mine dedups them, so the SPELLINGS are gone and the BEHAVIOUR is not. Asserting
         # spellings here would pin the mine's dedup rather than the contract question,
@@ -359,8 +356,8 @@ class TestShippingArtifact:
         engine = legacy_from_config(ACJ_RULES.replace('rules.json', 'config.yaml'))
         for tokens in (['*', 'x0', 'inv', 'x0'], ['*', 'inv', 'x0', 'x0'],
                        ['/', 'x0', 'x0']):
-            assert engine.simplify(list(tokens), mode=Mode.real) == ['1'], tokens
-        assert engine.simplify(['/', '0', 'x0'], mode=Mode.real) == ['0']
+            assert engine.simplify(list(tokens), mode=Mode.permissive) == ['1'], tokens
+        assert engine.simplify(['/', '0', 'x0'], mode=Mode.permissive) == ['0']
 
 
 class TestJudgeParityExactness:
@@ -498,16 +495,17 @@ class TestTheRealisationAxis:
         cases = [
             # true AND realised
             (['*', '(-1)', 'asin', '_0'], ['asin', 'neg', '_0'], 'core'),
+            # realised, NOT true, but within float resolution of the true value: bit-identical
+            # in f64, wrong by 1.7e-17 relatively, which permissive serves
+            (['asin', 'pow', '10', '(-8)'], ['1e-08'], 'core'),
             # true, NOT realised: tanh attains exactly 1.0 from 19.061547465398498,
             # so the deployed engine answers inf where the rule answers the argument
-            (['atanh', 'neg', 'tanh', '!0'], ['neg', '!0'], 'real'),
-            # realised, NOT true: bit-identical in f64, wrong by 1.7e-17 relatively
-            (['asin', 'pow', '10', '(-8)'], ['1e-08'], 'f64'),
-            # NEITHER -- constructed, not drawn from the artifact. Which artifact rules
-            # land in `reject` depends on the constructor (the inverse-pair band moved
-            # two of them into `real`), so an artifact exemplar would pin this test to
-            # one combination of branches. `sin t -> t` is false on R and not
-            # reproduced by f64, unconditionally.
+            (['atanh', 'neg', 'tanh', '!0'], ['neg', '!0'], 'permissive'),
+            # realised, NOT true beyond float resolution: float64's tanh(40) is 1.0, the
+            # true one below 1
+            (['floor', 'tanh', '40'], ['1'], 'f64-only'),
+            # NEITHER -- constructed, not drawn from the artifact. `sin t -> t` is false on R
+            # and not reproduced by f64, unconditionally.
             (['sin', '_0'], ['_0'], 'reject'),
         ]
         for lhs, rhs, want in cases:
@@ -520,41 +518,43 @@ class TestTheRealisationAxis:
 
         `/ ?0 ?0 -> 1` is true off the null set {0}, which is what TOLERATED means; f64
         answers nan at 0, a hole the rewrite fills at exactly the event the contract
-        tolerated. A disagreement of any other kind keeps a TOLERATED rule `real` (the
-        table below)."""
+        tolerated. A disagreement of any other kind keeps a TOLERATED rule `permissive`
+        (the table below)."""
         from simplipy.verify._contract import _tier, judge_rule
         got = judge_rule(['/', '?0', '?0'], ['1'])
         assert got['verdict'] == 'TOLERATED'
         assert got['realised'] is True
         assert got['tier'] == 'core'
         # the whole table, so a future edit has to move a documented cell on purpose
-        # `None` files as `real` too: absent deployed
+        # `None` files as not realised too: absent deployed
         # evidence cannot support a claim of f64 soundness.
         assert [_tier(v, r) for v in ('CERTIFIED', 'TOLERATED') for r in (True, False, None)] \
-            == ['core', 'real', 'real', 'core', 'real', 'real']
-        # held in f64 and not judged in permissive (read as real's): float64's own value
+            == ['core', 'permissive', 'permissive', 'core', 'permissive', 'permissive']
+        # held in f64 and not judged in permissive (read in the reals): float64's own value
         assert (_tier('KILL', True), _tier('KILL', False)) == ('f64-only', 'reject')
-        assert (_tier('ENGINE-MISALIGN', False), _tier('NO-WITNESS', None)) == ('real', 'reject')
-        # permissive's criterion is the third axis: an extension holds there alone, and a rule
-        # real holds only by an allowance a slot guards (a `$` slot's excused zero, an isolated
-        # infinity at a `?` slot) is real's alone, or real's and f64's: permissive binds every
-        # slot to any subexpression, which no slot guards (the owner's ruling, 2026-10-31)
-        assert (_tier('KILL', False, True), _tier('KILL', True, True)) == ('permissive', 'f64')
+        assert (_tier('ENGINE-MISALIGN', False), _tier('NO-WITNESS', None)) == \
+            ('permissive', 'reject')
+        # permissive's criterion is its own axis: an extension holds there alone, and a rule
+        # that holds in the reals only by an allowance a slot guards (a `$` slot's excused
+        # zero, an isolated infinity at a `?` slot) is f64's alone or no mode's: permissive
+        # binds every slot to any subexpression, which no slot guards
+        assert (_tier('KILL', False, True), _tier('KILL', True, True)) == ('permissive', 'core')
         assert (_tier('CERTIFIED', False, False), _tier('CERTIFIED', True, False)) \
-            == ('real-only', 'strict')
+            == ('reject', 'f64-only')
 
     def test_realisation_is_undetermined_across_a_snap_not_asserted(self):
         """A snap means the f64 algebra evaluates a DIFFERENT point, so the deployed
         comparison is skipped rather than answered -- `None`, never a guess. Asserting
         realisation there would convict on a measurement artifact. (`sin(np.pi)` itself no
         longer snaps: the table reads pi exactly, sin(pi) = 0, and float64's
-        1.2246467991473532e-16 is simply not 0 -- `real`, not realised.)"""
+        1.2246467991473532e-16 is simply not 0 -- `permissive`, not realised.)"""
         from simplipy.verify._contract import judge_rule
         got = judge_rule(['sin', 'exp', 'log', 'np.pi'], ['0'])
         assert got['verdict'] == 'CERTIFIED'
         assert got['realised'] is None
         exact = judge_rule(['sin', 'np.pi'], ['0'])
-        assert (exact['verdict'], exact['realised'], exact['tier']) == ('CERTIFIED', False, 'real')
+        assert (exact['verdict'], exact['realised'], exact['tier']) == \
+            ('CERTIFIED', False, 'permissive')
 
     def test_the_axis_is_additive_engine_misalign_keeps_its_gate(self):
         """The realisation accumulator runs unconditionally; ENGINE-MISALIGN keeps its
@@ -588,7 +588,7 @@ class TestUlpGapZeroCanonicalization:
 
 
 class TestTheRealisationBound:
-    """`realised` decides the `f64` tier and therefore what ships in `rules.json`. The
+    """`realised` decides the f64 tiers and therefore what ships in `rules.json`. The
     bar it uses is derived (see `compare_deployed_realised`), and these pin the three
     properties that derivation rests on."""
 
@@ -613,7 +613,7 @@ class TestTheRealisationBound:
         rounding = judge_rule(['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'])
         assert rounding['realised'] is True and rounding['tier'] == 'core'
         divergent = judge_rule(['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'])
-        assert divergent['realised'] is False and divergent['tier'] == 'real'
+        assert divergent['realised'] is False and divergent['tier'] == 'permissive'
 
     def test_the_bound_is_the_tables_and_sits_in_an_empty_region(self) -> None:
         """WHY 8 AND NOT 4 OR 16. Over the rules bit-exactness moves, the gap distribution
@@ -623,10 +623,10 @@ class TestTheRealisationBound:
         (`_core.TABLE_REALISED_ULP`), and the judge's mirror is the same number.
 
         The 1-ULP rounding of `1/exp(x)` is `core`, and the 2377-ULP divergence is not. (The
-        6-ULP straddler of the old probe set, `abs(sin(acos x)) -> cos(asin x)`, is `real` now
+        6-ULP straddler of the old probe set, `abs(sin(acos x)) -> cos(asin x)`, is `permissive` now
         for another reason: at x = 1 the table reads cos(pi/2) as exactly 0, no longer
         snapping, so the f64 lane compares 0 against float64's cos(fl(pi/2)) = 6.1e-17. And
-        `pi - acos(x) -> acos(-x)`, whose worst gap on the judge's grid was 7 ULP, is `real`
+        `pi - acos(x) -> acos(-x)`, whose worst gap on the judge's grid was 7 ULP, is `permissive`
         since the f64 lane reads the mint's rows too: near x = -1 the subtraction cancels, 77
         ULP at x = -0.99971.)"""
         from simplipy import _core
@@ -637,10 +637,10 @@ class TestTheRealisationBound:
             eight = float(np.nextafter(eight, np.inf))
         assert _core.table_f64_agree(1.0, eight) == 'eq'
         assert _core.table_f64_agree(1.0, float(np.nextafter(eight, np.inf))) == 'REAL-CHANGE'
-        probes = [(['-', 'np.pi', 'acos', '_0'], ['acos', 'neg', '_0'], 'real'),     # 77 ULP
-                  (['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'], 'core'),           # 1 ULP
-                  (['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'], 'real'),      # 2377 ULP
-                  (['abs', 'sin', 'acos', '_0'], ['cos', 'asin', '_0'], 'real'),
+        probes = [(['-', 'np.pi', 'acos', '_0'], ['acos', 'neg', '_0'], 'permissive'),  # 77 ULP
+                  (['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'], 'core'),              # 1 ULP
+                  (['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'], 'permissive'),   # 2377 ULP
+                  (['abs', 'sin', 'acos', '_0'], ['cos', 'asin', '_0'], 'permissive'),
                   (['pow', 'np.e', 'sinh', '(-5)'], ['0'], 'reject')]                # gross
         assert [C.judge_rule(a, b)['tier'] for a, b, _ in probes] == [t for _, _, t in probes]
 
@@ -659,7 +659,7 @@ class TestTheF64RangeStandard:
         """`rootn(exp(x), 2) -> exp(x/2)` and `exp(x)/exp(x) -> 1` are true on R and
         computed by f64 at every point where exp stays in range; they differed only past
         exp's overflow (709.78) and underflow (-745.13), which made them ENGINE-MISALIGN,
-        tier `real`, and kept them out of the f64 set. Their ground instances, which the
+        tier `permissive`, and kept them out of the f64 set. Their ground instances, which the
         constructors perform (`rootn(exp(800.5), 2) -> exp(1601/4)`), are f64 too."""
         for lhs, rhs in ((['rootn', 'exp', '?0', '2'], ['exp', '/', '?0', '2']),
                          (['rootn', 'exp', '?0', '2'], ['exp', '*', '0.5', '?0']),
@@ -684,7 +684,7 @@ class TestTheF64RangeStandard:
         assert (got['tier'], got['out_of_range']) == ('reject', 0), got
         assert judge_rule(['exp', '1000'], ['float("inf")'])['tier'] in self.F64
         got = judge_rule(['exp', 'sinh', '(-10)'], ['0'])
-        assert (got['verdict'], got['realised'], got['tier']) == ('KILL', True, 'f64'), got
+        assert (got['verdict'], got['realised'], got['tier']) == ('KILL', True, 'core'), got
 
     def test_saturation_inside_the_range_is_still_compared(self) -> None:
         """`tanh` attains exactly 1.0 from 19.06 without leaving the range, and
@@ -692,7 +692,7 @@ class TestTheF64RangeStandard:
         refuses `atanh(tanh(x)) -> x`."""
         got = judge_rule(['atanh', 'tanh', '?0'], ['?0'])
         assert (got['verdict'], got['tier'], got['out_of_range']) \
-            == ('ENGINE-MISALIGN', 'real', 0), got
+            == ('ENGINE-MISALIGN', 'permissive', 0), got
         assert got['tier'] not in self.F64
 
     def test_a_difference_at_an_ordinary_point_still_refuses(self) -> None:
@@ -704,7 +704,8 @@ class TestTheF64RangeStandard:
         from simplipy.verify import _contract as C
         got = judge_rule(['log', 'exp', '?0'], ['?0'])
         assert got['out_of_range'] > 0
-        assert (got['verdict'], got['realised'], got['tier']) == ('CERTIFIED', False, 'real')
+        assert (got['verdict'], got['realised'], got['tier']) == \
+            ('CERTIFIED', False, 'permissive')
         x = C.F(0.0137421)
         in_range = [True]
         with np.errstate(all='ignore'):
@@ -712,14 +713,13 @@ class TestTheF64RangeStandard:
         assert in_range[0] and C._ulp_gap(float(lhs), float(x)) > C.REALISED_ULP
         assert judge_rule(['sin', '?0'], ['?0'])['tier'] == 'reject'
 
-    def test_real_reads_the_contract_alone(self) -> None:
+    def test_permissive_reads_the_contract_alone(self) -> None:
         """The contract lane is untouched: every rule above is true on R, so each stays
-        licensed in `real` (and in `permissive`), and a false one stays out."""
+        licensed in `permissive`, and a false one stays out."""
         for lhs, rhs in ((['rootn', 'exp', '?0', '2'], ['exp', '/', '?0', '2']),
                          (['log', 'exp', '?0'], ['?0']), (['atanh', 'tanh', '?0'], ['?0'])):
-            tier = judge_rule(lhs, rhs)['tier']
-            assert tier in v.MODE_TIERS['real'] and tier in v.MODE_TIERS['permissive']
-        assert judge_rule(['sin', '?0'], ['?0'])['tier'] not in v.MODE_TIERS['real']
+            assert judge_rule(lhs, rhs)['tier'] in v.MODE_TIERS['permissive']
+        assert judge_rule(['sin', '?0'], ['?0'])['tier'] not in v.MODE_TIERS['permissive']
 
     @pytest.mark.parametrize('op, args, out', [
         ('exp', (800.0,), True), ('exp', (-800.0,), True), ('exp', (-740.0,), True),
@@ -756,90 +756,85 @@ class TestTheF64RangeStandard:
 
 
 class TestCleanlinessIsPerMode:
-    """Before the triple there was one rule set and one contract, so "clean" could mean
-    "no fatal bucket". That is now wrong in both directions, and the soundness claim ("0.14.0 is sound,
-    full stop") makes the per-mode gate load-bearing rather than optional."""
+    """With one rule set per mode, "clean" cannot mean "no fatal bucket": that is wrong in
+    both directions, and the soundness claim makes the per-mode gate load-bearing rather
+    than optional."""
 
     CORE = [['+', 'x0', '0'], ['x0']]
-    REAL = [['atanh', 'tanh', 'x0'], ['x0']]
+    PERMISSIVE = [['atanh', 'tanh', 'x0'], ['x0']]
     REJECT = [['sin', 'x0'], ['x0']]
 
     def test_the_same_rule_is_clean_for_one_file_and_dirty_for_another(self) -> None:
-        """`atanh(tanh t) -> t` is true on R and not f64-realised. In rules_real.json it
+        """`atanh(tanh t) -> t` is true on R and not f64-realised. In the permissive file it
         is exactly what belongs there; in rules.json it would be a rewrite the deployed
         evaluator contradicts. One rule, two answers -- which a bucket count cannot say."""
         from simplipy.verify import verify_ruleset
-        assert verify_ruleset([self.REAL], mode='real')['is_clean'] is True
-        assert verify_ruleset([self.REAL], mode='permissive')['is_clean'] is True
-        assert verify_ruleset([self.REAL], mode='f64')['is_clean'] is False
+        assert verify_ruleset([self.PERMISSIVE], mode='permissive')['is_clean'] is True
+        assert verify_ruleset([self.PERMISSIVE], mode='f64')['is_clean'] is False
+        with pytest.raises(ValueError, match='the real mode is retired'):
+            verify_ruleset([self.PERMISSIVE], mode='real')
 
     def test_no_mode_may_carry_a_reject(self) -> None:
         from simplipy.verify import verify_ruleset
-        for mode in ('f64', 'real', 'permissive'):
+        for mode in ('f64', 'permissive'):
             rep = verify_ruleset([self.CORE, self.REJECT], mode=mode)
             assert rep['is_clean'] is False, mode
             assert [o['tier'] for o in rep['offenders']] == ['reject'], mode
 
-    def test_the_legacy_meaning_survives_for_pre_triple_callers(self) -> None:
+    def test_the_mode_less_meaning_survives(self) -> None:
         """`mode=None` keeps "only CERTIFIED/TOLERATED are clean", because that is what
-        every caller written before the triple means by the word."""
+        every caller written before the per-mode split means by the word."""
         from simplipy.verify import verify_ruleset
         assert verify_ruleset([self.CORE])['is_clean'] is True
-        assert verify_ruleset([self.REAL])['is_clean'] is False
+        assert verify_ruleset([self.PERMISSIVE])['is_clean'] is False
 
     def test_an_unknown_mode_raises_rather_than_silently_gating_nothing(self) -> None:
         from simplipy.verify import verify_ruleset
         with pytest.raises(ValueError, match='unknown mode'):
             verify_ruleset([self.CORE], mode='banana')
 
-    def test_a_triple_is_verified_as_ONE_artifact(self) -> None:
-        """Three per-file sweeps, and NOT the retired set identity. `permissive == f64
-        UNION real` was dropped once folding became mode-dependent: each file omits what its
-        own constructor performs, so set overlap measures spelling. On the shipped artifact
-        the union exceeds the permissive file by 362 rules and permissive performs every one -- the
-        identity would call a correct artifact dirty."""
-        from simplipy.verify import verify_triple
-        good = verify_triple([self.CORE], [self.CORE, self.REAL], [self.CORE, self.REAL])
+    def test_an_artifact_is_verified_as_ONE_artifact(self) -> None:
+        """Two per-file sweeps, and no set identity between the files: each file omits what
+        its own constructor performs, so set overlap measures spelling."""
+        from simplipy.verify import verify_artifact
+        good = verify_artifact([self.CORE], [self.CORE, self.PERMISSIVE])
         assert good['is_clean'] is True and good['relationships'] == []
-
-        # a permissive file SMALLER than the union is now legitimate, not a defect
-        pruned = verify_triple([self.CORE], [self.CORE, self.REAL], [self.CORE])
+        # a permissive file without the f64 file's rules is legitimate, not a defect
+        pruned = verify_artifact([self.CORE], [self.PERMISSIVE])
         assert pruned['is_clean'] is True, pruned['relationships']
         assert pruned['relationships'] == []
         # a genuine defect is still caught, per file
-        dirty = verify_triple([self.CORE, self.REJECT], [self.CORE], [self.CORE])
+        dirty = verify_artifact([self.CORE, self.REJECT], [self.CORE])
         assert dirty['is_clean'] is False
         assert dirty['modes']['f64']['is_clean'] is False
 
-    def test_the_shipped_triple_passes_its_own_public_gate(self) -> None:
-        """The regression that made this necessary: `verify_triple` kept enforcing the
-        retired union identity after the miner stopped, so the documented artifact gate
-        reported the 0.14.0 artifact as dirty while every per-file sweep was clean."""
-        from conftest import acj_config_path, acj_corpus_rules_path, require_triple
+    def test_the_three_file_gate_is_refused(self) -> None:
         from simplipy.verify import verify_triple
+        with pytest.raises(ValueError, match='the real mode is retired'):
+            verify_triple([self.CORE], [self.CORE], [self.CORE])
+
+    def test_the_shipped_artifact_passes_its_own_public_gate(self) -> None:
+        """The documented artifact gate on the shipped files: every per-file sweep, and
+        permissive dominance over the corpus."""
+        from conftest import acj_config_path, acj_corpus_rules_path, require_mode_sets
+        from simplipy.verify import verify_artifact
         base = acj_config_path().replace('config.yaml', '')
-        # the TRIPLE is the subject, so guard on the triple and not merely on the config:
-        # the f64 set ships on its own while the real/permissive sets are re-mined
-        require_triple('needs the shipped acj-4-3 triple')
-        # the third file keeps its published name on pre-rename artifacts; the
+        # the artifact is the subject, so guard on both files and not merely on the config
+        require_mode_sets('needs the shipped acj-4-3 artifact')
+        # the permissive file keeps its published name on pre-rename artifacts; the
         # conftest helper resolves whichever spelling the cell actually ships
-        report = verify_triple(base + 'rules.json', base + 'rules_real.json',
-                               acj_corpus_rules_path(),
-                               engine_config=acj_config_path())
+        report = verify_artifact(base + 'rules.json', acj_corpus_rules_path(),
+                                 engine_config=acj_config_path())
         # THE ARTIFACT WAS MINED UNDER THE JUDGE BEFORE THE TABLE, and 0.15 mines it again.
         # Read in THE TABLE's values and by the one criterion, its files hold rules that do
         # not hold in their mode, each for a reason the specification names, and exactly
         # these counts: f64 6 (`sin acos _0 -> cos asin _0` and kin: at 1, float64 gives 0
         # on one side and cos(fl(pi/2)) = 6.1e-17 on the other, which the judge read past
-        # while it snapped cos(pi/2)); real 56 (36 where the right side's 1/0 has no value at
-        # the left side's pole, `abs(log(cos _0)) -> log(1/cos _0)` at pi/2; 14 where a `_`
-        # slot at -inf meets 1/exp(-inf) = 1/0; 6 ground facts through pow(-1, inf) or
-        # tan(pi/2)); permissive 24 (the first family at its real-valued points). Under the
-        # owner's rulings on isolated infinities and guards: real 77 (+22 extensions at a null
-        # set no `_` slot guards, `abs atan tan _0 -> abs asin sin _0` at pi/2; -1 now holding
-        # by clause (c), `neg log log ?0 -> log inv log ?0`), permissive 23 (-1, the same).
-        # Under P3 as ruled (permissive serves real's values up to float resolution, except at
-        # isolated points, no longer float64's values): permissive 34 (+12 that hold in f64
+        # while it snapped cos(pi/2)); permissive 24 (the first family at its points in the
+        # reals). Under the rulings on isolated infinities and guards: permissive 23 (-1 now
+        # holding by clause (c), `neg log log ?0 -> log inv log ?0`).
+        # Permissive serving the reals' values up to float resolution, except at
+        # isolated points, no longer float64's values: permissive 34 (+12 that hold in f64
         # only -- 7 `neg log acos _0 -> log inv acos _0` and kin, an infinity of the left side
         # at a point a `_` slot does not guard; 4 `pow 0 atan _0 -> pow 0 _0` and kin at
         # `_0 = -inf`; `tanh sinh atanh _0 -> tanh tan asin _0` at `_0 = +-1`, unguarded -- and
@@ -850,9 +845,8 @@ class TestCleanlinessIsPerMode:
         # log(_0))` and kin, `sinh(atanh(atan(_0))) -> tan(asin(atan(_0)))` and kin), and in
         # every mode +2 false in the reals at the rows near 1, `sin(abs(atanh(_0))) ->
         # abs(sin(atanh(_0)))` and its twin, where atanh passes pi and sin turns negative.
-        # Permissive judged at the `_` its matcher binds (the owner's ruling, 2026-10-31):
-        # permissive 38 (+2, a disagreement or an infinity of the left side at an isolated
-        # point, no longer excused).
+        # Permissive judged at the `_` its matcher binds: permissive 38 (+2, a disagreement
+        # or an infinity of the left side at an isolated point, no longer excused).
         # the offenders by mode, shown on a failure (captured output is printed in full)
         for m, r in report['modes'].items():
             print(m, sorted((o['idx'], o['lhs'], o['rhs'], o['verdict']) for o in r['offenders']))
@@ -863,10 +857,9 @@ class TestCleanlinessIsPerMode:
         f64 = {o['idx'] for o in report['modes']['f64']['offenders']}
         assert len(f64 - {126}) == 25
         assert {m: len(r['offenders']) for m, r in report['modes'].items() if m != 'f64'} == \
-            {'real': 79, 'permissive': 38}
+            {'permissive': 38}
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
-        # violations (conftest: a row where real's one zero and permissive's signed zero give
-        # different values).
+        # violations (conftest).
         assert report['permissive_dominance'] == {
             'checked': True, 'violations': list(PERMISSIVE_DOMINANCE_KNOWN)}
         assert report['is_clean'] is False, report['relationships']
@@ -878,13 +871,13 @@ class TestCleanlinessIsPerMode:
         loudly, and must neither pass nor fail `is_clean`."""
         import simplipy.verify as V
         with pytest.warns(UserWarning, match='NOT checked'):
-            report = V.verify_triple([self.CORE], [self.CORE], [self.CORE],
-                                     engine_config='<never dereferenced on 0 rows>',
-                                     corpus_rows=[])
+            report = V.verify_artifact([self.CORE], [self.CORE],
+                                       engine_config='<never dereferenced on 0 rows>',
+                                       corpus_rows=[])
         dom = report['permissive_dominance']
         assert not isinstance(dom, list), 'an empty list would read as a pass'
         assert dom == {'checked': False, 'reason': 'corpus_rows was given but is empty'}
-        # unchecked is unknown: it must not dirty an otherwise clean triple
+        # unchecked is unknown: it must not dirty an otherwise clean artifact
         assert report['is_clean'] is True and report['relationships'] == []
 
     def test_the_default_corpus_ships_with_the_package(self) -> None:
@@ -902,29 +895,29 @@ class TestCleanlinessIsPerMode:
         """The positive half of the contract: with rows given, the report says the sweep
         ran (`checked: True`) and carries the violation list -- empty on a dominating
         artifact, so a real pass is now spelled differently from a skipped check."""
-        from conftest import acj_config_path, require_triple
-        require_triple('the dominance sweep simplifies in all three modes')
-        from simplipy.verify import verify_triple
-        report = verify_triple([self.CORE], [self.CORE], [self.CORE],
-                               engine_config=acj_config_path(),
-                               corpus_rows=[['sin', 'x1'], ['+', 'x1', '1']])
+        from conftest import acj_config_path, require_mode_sets
+        require_mode_sets('the dominance sweep simplifies in both modes')
+        from simplipy.verify import verify_artifact
+        report = verify_artifact([self.CORE], [self.CORE],
+                                 engine_config=acj_config_path(),
+                                 corpus_rows=[['sin', 'x1'], ['+', 'x1', '1']])
         assert report['permissive_dominance'] == {'checked': True, 'violations': []}
         assert report['is_clean'] is True
 
-    def test_dominance_is_checked_on_the_triple_given(self) -> None:
-        """The subject is the three rule sets passed in, not the files the config names:
-        the config contributes its operators and nothing else. A real set holding a rule
+    def test_dominance_is_checked_on_the_files_given(self) -> None:
+        """The subject is the two rule sets passed in, not the files the config names:
+        the config contributes its operators and nothing else. An f64 set holding a rule
         the permissive set lacks (`sin x0 -> x0`, judged unsound, but dominance is about
         capability) out-simplifies permissive on `sin(x0)`, and the check must see it --
         the config's own files never carry that rule."""
         from conftest import acj_config_path, require_or_skip
         require_or_skip(acj_config_path(), 'needs the acj-4 config for its operators')
-        from simplipy.verify import verify_triple
-        report = verify_triple([self.CORE], [self.REJECT], [self.CORE],
-                               engine_config=acj_config_path(),
-                               corpus_rows=[['sin', 'x0'], ['+', 'x1', '1']])
+        from simplipy.verify import verify_artifact
+        report = verify_artifact([self.REJECT], [self.CORE],
+                                 engine_config=acj_config_path(),
+                                 corpus_rows=[['sin', 'x0'], ['+', 'x1', '1']])
         assert report['permissive_dominance'] == {'checked': True, 'violations': [
-            {'expression': ['sin', 'x0'], 'mu': {'f64': 12000, 'real': 6000, 'permissive': 12000}}]}
+            {'expression': ['sin', 'x0'], 'mu': {'f64': 6000, 'permissive': 12000}}]}
         assert report['is_clean'] is False
 
 
@@ -937,13 +930,13 @@ class TestOperandScaledPrecision:
         """`log(cosh(25t) + sinh(25t)) = log(e^{25t}) = 25t` for every real t -- exactly
         true, no domain holes. It was KILLed at bc-positive-measure (measure 0.1198)
         because the cancellation drives the sum to a computed ZERO, so the left side read
-        `log(0) = -inf` at BOTH rungs. It is `real`: true on R, and not f64-realised
+        `log(0) = -inf` at BOTH rungs. It is `permissive`: true on R, and not f64-realised
         because exp overflows at 709.782713."""
         from simplipy.verify._contract import judge_rule
         got = judge_rule('log + cosh * 25 ?0 sinh * 25 ?0'.split(),
                          '* 25 ?0'.split())
         assert got['verdict'] != 'KILL'
-        assert got['tier'] == 'real'
+        assert got['tier'] == 'permissive'
 
     def test_the_shipped_identities_are_no_longer_near_the_bar(self) -> None:
         """Three EXACT identities on the shipped artifact sat at 6 of 167 grid points
@@ -1016,7 +1009,7 @@ class TestTheExistsWitnessIsActuallySearchedFor:
     def test_the_search_reaches_the_f64_ceiling(self) -> None:
         """`pow(exp(9), 5) = 3.5e19` is an unremarkable constant-fold whose witness is
         the value itself. The old grid could not BRACKET it, so 15 rules of the shipped
-        `rules_real.json` were reported witness-less on a search artifact."""
+        rule files were reported witness-less on a search artifact."""
         import math
 
         from simplipy.verify._contract import _XS, fit_witness, parse
@@ -1200,7 +1193,8 @@ class TestAnExactZeroIsNotAnUndecayableGap:
         cover the rows above. `exp(sinh(-10))` is exactly 1.03e-4783 at EVERY working
         precision -- tiny, but FIXED, and false. Flooring a nonzero separation at an
         absolute `10^-dps` swamps it and manufactures a decay it does not have, so
-        nothing nonzero is floored. These must stay `f64`-tier kills, never `real`."""
+        nothing nonzero is floored. These must stay kills held in f64 (and, within float
+        resolution, in permissive), never true."""
         from simplipy.verify._contract import judge_rule
         for lhs, rhs in ((['exp', 'sinh', '(-10)'], ['0']),
                          (['exp', 'sinh', '(-8)'], ['0']),
@@ -1209,7 +1203,7 @@ class TestAnExactZeroIsNotAnUndecayableGap:
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') == 'KILL', (lhs, got)
             assert got.get('clause') == 'a-real-change', (lhs, got)
-            assert got.get('tier') == 'f64', (lhs, got)
+            assert got.get('tier') == 'core', (lhs, got)
 
     def test_the_reading_is_absolute_so_no_scale_can_normalise_it_away(self) -> None:
         """The unit underneath. A separation reported as a QUOTIENT of its own scale is
@@ -1234,9 +1228,10 @@ class TestABoundedFunctionNeverAttainsItsLimit:
     nobody for want of asking it."""
 
     def test_deep_saturation_is_convicted_and_routed_to_f64(self) -> None:
-        """These are real rows of the shipped sets. They are f64-REALISED (the deployed
-        `tanh(cosh(-10))` is exactly 1.0), so conviction routes them to the f64 tier --
-        exactly the file they ship in. The gate confirms them instead of abstaining."""
+        """These are rows of the shipped sets. They are f64-REALISED (the deployed
+        `tanh(cosh(-10))` is exactly 1.0) and within float resolution of the true value, so
+        conviction keeps them in a tier f64 licenses -- the file they ship in. The gate
+        confirms them instead of abstaining."""
         from simplipy.verify._contract import judge_rule
         for lhs, rhs in ((['tanh', 'cosh', '(-10)'], ['1']),
                          (['tanh', 'cosh', 'cosh', '(-3)'], ['1']),
@@ -1246,7 +1241,7 @@ class TestABoundedFunctionNeverAttainsItsLimit:
                          (['inv', 'cosh', 'exp', '10'], ['0'])):
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') == 'KILL', (lhs, got)
-            assert got.get('tier') == 'f64', (lhs, got)
+            assert got.get('tier') == 'core', (lhs, got)
 
     def test_an_infinite_argument_does_attain_the_limit(self) -> None:
         """The condition that keeps this sound. `tanh(inf)` IS exactly 1 and `exp(-inf)`
@@ -1292,7 +1287,7 @@ class TestABoundedFunctionNeverAttainsItsLimit:
                          (['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0'])):
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') != 'KILL', (lhs, got)
-            assert got.get('tier') == 'real', (lhs, got)
+            assert got.get('tier') == 'permissive', (lhs, got)
 
 
 class TestTheQuantifierWidensWithoutConvictingTheTrue:
@@ -1456,7 +1451,7 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
                     ['pow', '7', 'sinh', '(-8)']):
             got = judge_rule(lhs, ['0'])
             assert got.get('verdict') == 'KILL', (lhs, got)
-            assert got.get('tier') == 'f64', (lhs, got)
+            assert got.get('tier') == 'core', (lhs, got)
 
     def test_the_witness_search_reaches_the_f64_ceiling(self) -> None:
         """A search that stops at a round 1e300 has no bracket for `cosh(-3)^300 =
@@ -1583,7 +1578,7 @@ class TestNanIsInTheWidestSortsQuantifier:
 
     def test_nan_erasure_at_a_wildcard_binding_is_fatal(self) -> None:
         """`- _0 _0 -> 0` erases nan for every nan-valued subtree; without the nan-erasure rule
-        it judged TOLERATED/real and `verify_ruleset` called it clean."""
+        it judged TOLERATED and `verify_ruleset` called it clean."""
         r = judge_rule('- _0 _0'.split(), ['0'])
         assert r['verdict'] == 'KILL', r
         assert r['clause'] == 'a-nonfinite-binding', r
@@ -1642,7 +1637,7 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
         assert (r['verdict'], effective_tier(r)) == ('CERTIFIED', 'core'), r
         r = verify_rule(*false)
         assert (r['verdict'], effective_tier(r)) == ('KILL', 'reject'), r
-        for mode in (None, 'f64', 'real', 'permissive'):
+        for mode in (None, 'f64', 'permissive'):
             assert verify_ruleset([true], mode=mode)['is_clean'] is True, mode
             assert verify_ruleset([false], mode=mode)['is_clean'] is False, mode
         # a false rule stays dirty everywhere too
@@ -1729,7 +1724,7 @@ def test_a_multi_constant_identity_is_certified(lhs, rhs) -> None:
     # from the unsnapped fit undid the joint snap on a tie), and the polish took it to ~1e-557:
     # a nonzero right side at x = 0, where the left side is exactly 0, convicted the identity.
     got = v.verify_rule(lhs.split(), rhs.split())
-    assert got['verdict'] == 'CERTIFIED' and v.effective_tier(got) == 'real', got
+    assert got['verdict'] == 'CERTIFIED' and v.effective_tier(got) == 'permissive', got
 
 
 def test_the_multi_constant_fit_is_the_same_on_every_blas_kernel() -> None:
@@ -1766,7 +1761,7 @@ def test_the_monitor_holds_each_rule_step_to_the_mode() -> None:
     # true in the reals, and not in f64 (at 1: 0 against cos(fl(pi/2)) = 6.1e-17): the step
     verdict, detail = judge_pair(['sin', 'acos', 'x0'], out, engine=eng)
     assert verdict == 'VIOLATION' and 'the step' in detail, detail
-    assert judge_pair(['sin', 'acos', 'x0'], out, engine=eng, mode='real')[0] == 'OK'
+    assert judge_pair(['sin', 'acos', 'x0'], out, engine=eng, mode='permissive')[0] == 'OK'
 
 
 def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
@@ -1782,3 +1777,18 @@ def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
     src = 'inv + 0 neg pow x0 4'.split()
     verdict, detail = judge_pair(src, eng.simplify(src), engine=eng)
     assert verdict == 'VIOLATION' and 'INF-CHANGE' in detail, detail
+
+
+# ------------------------------------------------------------------------------------------
+# The tier registry is one table: the modes' licences are read off it, and the guide renders it.
+# ------------------------------------------------------------------------------------------
+def test_the_tiers_are_one_registry_and_the_guide_renders_it() -> None:
+    assert v.MODE_TIERS == {mode: frozenset(tier for tier, modes in v.TIERS.items() if mode in modes)
+                            for mode in ('f64', 'permissive')}
+    assert v.TIERS['core'] == ('f64', 'permissive')
+    with open(os.path.join(REPO, 'docs', 'guides', 'verify.md')) as fh:
+        guide = fh.read()
+    begin, end = '<!-- tier-table: begin', '<!-- tier-table: end -->'
+    assert guide.count(begin) == 1 and guide.count(end) == 1
+    block = guide.split(begin, 1)[1].split('-->', 1)[1].split(end, 1)[0]
+    assert block.strip() == v.tier_table()

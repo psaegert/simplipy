@@ -190,7 +190,6 @@ class TestMuEraResolutionRespell:
         # twin of the same vocabulary, the mining-time situation. The f64 walk folds the
         # ground quotient to its float itself, exactly 0.5, so the serve answer is no mark;
         # the resolution channel reads the source.)
-        import numpy as np
         # The RESOLUTION is the guard; the resolved exact 1/2 then takes its argmin
         # spelling (`/ 1 2`, not `0.5`).
         assert mined_acj.simplify(['/', 'acos', '0', 'np.pi']) \
@@ -199,15 +198,10 @@ class TestMuEraResolutionRespell:
         core = bare._core
         src = ['/', 'acos', '0', 'np.pi']
         assert bare.simplify(list(src)) == ['/', '1', '2']
-        x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
-        # f64's mark is the walk's answer already (as permissive's is), and so is real's: the
-        # table reads acos(0) = pi/2 exactly. A quotient the table holds only approximately,
-        # log(4)/log(2), real reads as written, and its resolution recovers the exact 2.
+        # f64's mark is the walk's answer already, and so is permissive's: the table reads
+        # acos(0) = pi/2 exactly.
         assert core.mine_mark(src, rule_mode='default') == ['/', '1', '2']
-        assert core.mine_mark(src, rule_mode='real') == ['/', '1', '2']
-        lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256, rule_mode='real')
-        res = core.find_rule_lib(['/', 'log', '4', 'log', '2'], lib, 3, rule_mode='real')
-        assert res == ['2'], res
+        assert core.mine_mark(src, rule_mode='permissive') == ['/', '1', '2']
 
 
 class TestDeterminedSourceConstIntroduction:

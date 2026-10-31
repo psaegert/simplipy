@@ -1,10 +1,10 @@
 """A rule file is read in the canon it was certified in.
 
 A rule is judged on the pattern its mine wrote, read in its mine's canon. Read in another
-canon, its LHS can become a pattern nothing judged: real's canon reads the f64 fact
-`rootn 2 atanh tanh 3 -> nan` (f64's atanh(tanh(3)) is not 3) as `rootn 2 3 -> nan`, which
-turned `rootn(2, 3)` into nan in real. A per-mode mine's sidecar records its mode; a file
-mined before per-mode mines records none and is read in the one canon those mines used."""
+canon, its LHS can become a pattern nothing judged: a canon that cancels `atanh(tanh(t))` reads
+the f64 fact `rootn 2 atanh tanh 3 -> nan` (f64's atanh(tanh(3)) is not 3) as
+`rootn 2 3 -> nan`, which is false. A per-mode mine's sidecar records its mode; a file mined
+before per-mode mines records none and is read in the one canon those mines used."""
 import json
 import re
 
@@ -28,45 +28,56 @@ _OPS = {
 }
 #: An f64 fact: f64's atanh(tanh(3)) is not 3, so rootn reads a non-integer degree.
 _F64_FACT = [[['rootn', '2', 'atanh', 'tanh', '3'], ['float("nan")']]]
-MODES = ('f64', 'real', 'permissive')
+MODES = ('f64', 'permissive')
 
 
-@pytest.mark.parametrize('canon, expected', [('legacy', 'rootn(2, 3)'), ('real', 'nan')])
-def test_a_set_is_read_in_the_canon_it_was_certified_in(canon, expected) -> None:
-    """The f64 fact in a legacy real set never fires; read in real's canon, it is
-    `rootn 2 3 -> nan` and fires (the reading this pins against)."""
-    engine = SimpliPyEngine(operators=_OPS, rules=[], rules_real=_F64_FACT,
-                            rule_canons={'real': canon})
-    assert engine._core.mode_rules_canon(rule_mode='real') == canon
-    assert engine.simplify('rootn(2, 3)', mode='real') == expected
-    # the canon is part of the recipe: a rebuilt core reads the set the same way
+@pytest.mark.parametrize('canon, core_name', [
+    ('legacy', 'legacy'), ('permissive', 'permissive'), ('f64', 'default')])
+def test_a_set_is_read_in_the_canon_it_was_certified_in(canon, core_name) -> None:
+    """The canon a set was certified in is part of its recipe: the core reads the set in it, and
+    a rebuilt core reads it the same way. The f64 fact never fires on `rootn(2, 3)`."""
+    expected = SimpliPyEngine(operators=_OPS, rules=[]).simplify('rootn(2, 3)', mode='permissive')
+    engine = SimpliPyEngine(operators=_OPS, rules=[], rules_permissive=_F64_FACT,
+                            rule_canons={'permissive': canon})
+    assert engine._core.mode_rules_canon(rule_mode='permissive') == core_name
+    assert engine.simplify('rootn(2, 3)', mode='permissive') == expected
     engine.compile_rules()
-    assert engine.simplify('rootn(2, 3)', mode='real') == expected
+    assert engine._core.mode_rules_canon(rule_mode='permissive') == core_name
+    assert engine.simplify('rootn(2, 3)', mode='permissive') == expected
+
+
+def test_the_retired_canon_is_refused() -> None:
+    with pytest.raises(ValueError, match='the real mode is retired'):
+        SimpliPyEngine(operators=_OPS, rules=[], rules_permissive=_F64_FACT,
+                       rule_canons={'permissive': 'real'})
 
 
 def test_an_in_memory_set_is_read_in_its_own_mode() -> None:
-    engine = SimpliPyEngine(operators=_OPS, rules=[], rules_real=[])
+    engine = SimpliPyEngine(operators=_OPS, rules=[], rules_permissive=[])
     assert {m: engine._core.mode_rules_canon(rule_mode=m)
-            for m in ('default', 'real', 'permissive')} == {
-        'default': 'default', 'real': 'real', 'permissive': 'default'}
+            for m in ('default', 'permissive')} == {
+        'default': 'default', 'permissive': 'permissive'}
 
 
 def test_from_config_reads_the_canon_off_each_sidecar(tmp_path) -> None:
-    for name in ('rules.json', 'rules_real.json', 'rules_permissive.json'):
+    for name in ('rules.json', 'rules_permissive.json'):
         (tmp_path / name).write_text(json.dumps(_F64_FACT))
-    # a per-mode mine of real; a pre-0.15 sidecar without a mode; no sidecar at all
-    (tmp_path / 'rules_real.json.provenance.json').write_text(json.dumps({'mode': 'real'}))
+    # a per-mode mine of permissive; a pre-0.15 sidecar without a mode
+    (tmp_path / 'rules_permissive.json.provenance.json').write_text(json.dumps({'mode': 'permissive'}))
     (tmp_path / 'rules.json.provenance.json').write_text(json.dumps({'simplipy_version': '0.14.0'}))
     (tmp_path / 'config.yaml').write_text(yaml.safe_dump({
         'engine_generation': 2, 'operators': _OPS, 'rules': 'rules.json',
-        'rules_real': 'rules_real.json', 'rules_permissive': 'rules_permissive.json'}))
+        'rules_permissive': 'rules_permissive.json'}))
     # (the pre-0.15 file is read through the legacy opt-in; the public loader refuses it)
     engine = legacy_from_config(str(tmp_path / 'config.yaml'))
     assert {m: engine._core.mode_rules_canon(rule_mode=m)
-            for m in ('default', 'real', 'permissive')} == {
-        'default': 'legacy', 'real': 'real', 'permissive': 'legacy'}
-    (tmp_path / 'rules_real.json.provenance.json').write_text(json.dumps({'mode': 'f65'}))
+            for m in ('default', 'permissive')} == {
+        'default': 'legacy', 'permissive': 'permissive'}
+    (tmp_path / 'rules_permissive.json.provenance.json').write_text(json.dumps({'mode': 'f65'}))
     with pytest.raises(ValueError, match='f65'):
+        legacy_from_config(str(tmp_path / 'config.yaml'))
+    (tmp_path / 'rules_permissive.json.provenance.json').write_text(json.dumps({'mode': 'real'}))
+    with pytest.raises(ValueError, match='the real mode is retired'):
         legacy_from_config(str(tmp_path / 'config.yaml'))
 
 
@@ -78,8 +89,8 @@ def shipped():
 
 def test_the_shipped_asset_is_read_in_the_legacy_canon(shipped) -> None:
     assert {m: shipped._core.mode_rules_canon(rule_mode=m)
-            for m in ('default', 'real', 'permissive')} == {
-        'default': 'legacy', 'real': 'legacy', 'permissive': 'legacy'}
+            for m in ('default', 'permissive')} == {
+        'default': 'legacy', 'permissive': 'legacy'}
 
 
 @pytest.mark.parametrize('expr', ['rootn(2, 3)', 'x1 + rootn(2, 3)', 'x1*rootn(10, 5)', 'rootn(-2, 3)'])
@@ -127,20 +138,10 @@ def default_engine():
     if not os.path.exists(config):
         pytest.skip(f'the default artifact {simplipy.DEFAULT_ENGINE} is not staged')
     # a pre-0.15 mine, read through the legacy opt-in
-    return legacy_from_config(config, modes=('f64', 'real', 'permissive'))
+    return legacy_from_config(config, modes=('f64', 'permissive'))
 
 
 def test_no_served_nan_rule_has_a_finite_lhs(shipped, default_engine) -> None:
-    """Every served `-> nan` row's LHS is undefined where the evaluator reads it. Read in
-    real's canon, the default artifact's real file serves the misread family (212 rows on
-    acj-5-4-llm, `rootn -10 3 -> nan` among them): the check can fail."""
+    """Every served `-> nan` row's LHS is undefined where the evaluator reads it."""
     for engine in (shipped, default_engine):
-        for mode in ('real', 'permissive'):
-            assert _off_rows(engine, mode) == [], mode
-    misread = SimpliPyEngine(operators=default_engine._operators_config, rules=[],
-                             rules_real=default_engine.real_simplification_rules,
-                             rule_canons={'real': 'real'})
-    off = _off_rows(misread, 'real')
-    assert len(off) == 212, len(off)
-    assert misread.simplify('rootn(2, 3)', mode='real') == 'nan'
-    assert default_engine.simplify('rootn(2, 3)', mode='real') == 'rootn(2, 3)'
+        assert _off_rows(engine, 'permissive') == []

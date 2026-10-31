@@ -190,23 +190,15 @@ class TestEvaluateConstants:
         assert eng.evaluate_constants(['tan', '1']) == ['1.5574077246549023']
 
     def test_simplify_folds_only_where_mu_says_cheaper(self, eng):
-        """The claim this used to make -- "no mode folds a ground transcendental" -- was
-        retired by mode-aware folding, and its own `real` arm was wiped rather than
-        checked (`set_mode_rules('real', [])`, against a docstring saying the artifact's
-        real set was used).
-
-        What holds now: `f64` and `corpus` fold when mu prices the literal cheaper, and
-        `real` never folds a transcendental at all -- `tan(1)` is irrational and no
-        literal spells it. `tan 1` survives everywhere because its float costs 58,877
-        against the expression's 11,000; `asin 1e-08` folds where folding is allowed."""
-        from conftest import require_triple
-        require_triple()
-        assert eng._core.mode_rules_len(rule_mode='real') is not None, 'the artifact must ship one'
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        """`f64` and `permissive` fold a ground transcendental when mu prices the literal
+        cheaper: `tan 1` survives in both because its float costs 58,877 against the
+        expression's 11,000; `asin 1e-08` folds."""
+        from conftest import require_mode_sets
+        require_mode_sets()
+        assert eng._core.mode_rules_len(rule_mode='permissive') is not None, 'the artifact must ship one'
+        for mode in (Mode.f64, Mode.permissive):
             assert eng.simplify(['tan', '1'], mode=mode) == ['tan', '1'], mode
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.f64) == ['1e-8']
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['1e-8']
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '1e-8']
+            assert eng.simplify(['asin', '1e-08'], mode=mode) == ['1e-8'], mode
 
     def test_a_fitted_constant_is_not_a_value(self, eng):
         """`<constant>` is a degree of freedom, so a subtree carrying one is not

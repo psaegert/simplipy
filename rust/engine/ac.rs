@@ -140,22 +140,20 @@ impl Engine {
     }
 
     /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE, never a base
-    /// plus a supplement. `rules.json` is the DEFAULT set, `rules_real.json` the `Real`
-    /// set, `rules_permissive.json` the `Corpus` set; each file is self-contained, so WHAT IS
-    /// LOADED IS WHAT IS SERVED, and nothing has to be unioned to answer "which rules
-    /// fire here".
+    /// plus a supplement. `rules.json` is the DEFAULT set and `rules_permissive.json` the
+    /// `Permissive` set; each file is self-contained, so WHAT IS LOADED IS WHAT IS SERVED, and
+    /// nothing has to be unioned to answer "which rules fire here".
     ///
-    /// That property is the entire reason the triple is worth its bytes. The provenance
+    /// That property is the entire reason a file per mode is worth its bytes. The provenance
     /// hole closed earlier existed PRECISELY because the served set was COMPUTED rather
     /// than STATED -- `rules.json` said 5,545 while the engine served 5,553, and eight
     /// load-minted twins went unjudged for exactly as long as that gap stood. An overlay
-    /// design (base ++ tier) recreates that shape by construction; three complete sets
-    /// cannot.
+    /// design (base ++ tier) recreates that shape by construction; complete sets cannot.
     ///
     /// ABSENCE, NOT EMPTINESS, is the fallback key. A mode with NO SET OF ITS OWN
     /// (`None`) serves the DEFAULT set -- the very same `&AcRules`, pointer-equal, not a
     /// second identical index -- which is what makes the no-op property ("a config naming
-    /// no `rules_real:`/`rules_permissive:` is byte-for-byte the engine that shipped") hold by
+    /// no `rules_permissive:` is byte-for-byte the engine that shipped") hold by
     /// CONSTRUCTION rather than by re-derivation. A set that is PRESENT BUT EMPTY
     /// (`Some([])`) is a DIFFERENT statement and is honoured as one: that mode serves
     /// NOTHING. Keying the fallback on emptiness would collapse the two and make an
@@ -164,9 +162,6 @@ impl Engine {
     pub(crate) fn ac_rules_for(&self, mode: RuleMode) -> &AcRules {
         match mode {
             RuleMode::Default => self.ac_rules(),
-            RuleMode::Real => {
-                self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell, RuleMode::Real)
-            }
             RuleMode::Permissive => self.ac_mode_rules(
                 &self.permissive_rules,
                 &self.ac_permissive_rules_cell,
@@ -232,9 +227,9 @@ impl Engine {
         mode: RuleMode,
         canon: crate::ac::rules::RuleCanon,
     ) -> AcRules {
-        // A mode's rules are read in that mode's number domain, whichever run
-        // first asks for them (translation is lazy and may start inside another mode's run).
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        // A mode's rules are read in the serving number domain (f64's), whichever run
+        // first asks for them (translation is lazy and may start inside another run).
+        let _domain = crate::ac::rat::number_domain(true);
         let is_wildcard = |s: &str| {
             s.len() >= 2
                 && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
@@ -296,7 +291,6 @@ impl Engine {
             cert_nce: None,
             cert_region: None,
             cert_encl: None,
-            cert_order: None,
             mode,
             fold_f64,
             sentinels_expired: false,
@@ -389,7 +383,6 @@ impl Engine {
     pub fn mode_rules_len(&self, mode: RuleMode) -> Option<usize> {
         match mode {
             RuleMode::Default => Some(self.rules.raw.len()),
-            RuleMode::Real => self.real_rules.as_ref().map(|c| c.raw.len()),
             RuleMode::Permissive => self.permissive_rules.as_ref().map(|c| c.raw.len()),
         }
     }
@@ -399,7 +392,6 @@ impl Engine {
     pub fn mode_rules_canon(&self, mode: RuleMode) -> crate::ac::rules::RuleCanon {
         let own = match mode {
             RuleMode::Default => None,
-            RuleMode::Real => self.real_rules.as_ref(),
             RuleMode::Permissive => self.permissive_rules.as_ref(),
         };
         own.unwrap_or(&self.rules).canon
@@ -424,7 +416,7 @@ impl Engine {
 
     /// [`Engine::ac_served_rules`] for ANY mode: the set that mode actually fires, with
     /// `source` indexing THAT MODE'S OWN artifact file. This is the surface a judge needs
-    /// to rule on the triple -- each of the three files is judged against the rules its
+    /// to rule on the artifact -- each mode's file is judged against the rules its
     /// own mode serves, and a verdict is actionable in the file it came from because no
     /// tier offsets sit between the index and the line.
     pub fn ac_served_rules_in_mode(&self, mode: RuleMode) -> Vec<ServedRule> {
@@ -488,8 +480,8 @@ impl Engine {
     /// analysis (and the same generational memo) as the old kernel.
     ///
     /// `f64` (the `f64` mode) reads the expression in float64, where `tanh` and `atan` are
-    /// constant on whole tails; `real` and `permissive` read it over the reals. Each reading has
-    /// its own memo.
+    /// constant on whole tails; `permissive` reads it over the reals. Each reading has its own
+    /// memo.
     fn ac_cert(&self, e: &Ex, ctx: &SimplifyCtx, mult: bool, f64: bool) -> bool {
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
@@ -564,94 +556,6 @@ impl Engine {
         enclosure
     }
 
-    /// The order certificate behind `Cx::cert_order` (`real`): the order of two GROUND values
-    /// read at high precision (`hiprec::ground_order`, each literal its exact number), where the
-    /// float64-wide enclosures overlap. Memoized per call.
-    fn ac_order(&self, a: &Ex, b: &Ex, ctx: &SimplifyCtx) -> Option<std::cmp::Ordering> {
-        let view = self.view(ctx);
-        if !is_ground(a, &view) || !is_ground(b, &view) {
-            return None;
-        }
-        let bare = Cx::bare(&view);
-        let ta = crate::ac::convert::to_prefix_literal_tokens(a, &bare);
-        let tb = crate::ac::convert::to_prefix_literal_tokens(b, &bare);
-        let key = (ta, tb);
-        if let Some(hit) = ctx.order_scratch.borrow().get(&key) {
-            return *hit;
-        }
-        let order = crate::hiprec::ground_order(
-            &self.resolve_seq(&key.0, ctx),
-            &self.resolve_seq(&key.1, ctx),
-            &self.operators,
-        );
-        ctx.order_scratch.borrow_mut().insert(key, order);
-        order
-    }
-
-    /// THE EXACT GROUND FOLD (`real`): a ground node of a head whose value is an exact number
-    /// wherever a certified enclosure decides it folds to that number, the interval layer's
-    /// value set (sound for the real function) being the certificate:
-    ///
-    /// * `floor` and `ceil` of an argument whose enclosure lies between two integers, or that is
-    ///   exactly one (`floor(tanh 1) = 0`, `ceil(cos 0) = 1`, `floor(atan2(1, 0)) = 1`); `erf`
-    ///   at 0 and at +-inf; `besselj(nu, 0)` at an order certainly positive, zero or a negative
-    ///   integer (`besselj(sin 1, 0) = 0`); `atan2(0, x)` at an `x` certainly positive
-    ///   (`atan2(0, cosh 1) = 0`): a value set that is one point;
-    /// * `mod(a, b)` at a certainly finite `a`, where the floor of the quotient is decided the
-    ///   same way: `a - b floor(a/b)` (`mod(1, sinh 1) = 1`, `mod(2, sin 1) = 2 - 2 sin 1`);
-    ///   under an infinite divisor, `a` where it is zero or has the divisor's sign (numpy's
-    ///   cells: `mod(-1, -inf) = -1`). The divisor 0, an infinite dividend and the infinite
-    ///   remainders are classes, folded above.
-    /// * `abs(a)` at an `a` certainly non-negative is the member `a` (`abs(sin 1) = sin 1`), as
-    ///   `mod(a, b)` is `a` where the quotient's floor is 0.
-    ///
-    /// An undecided enclosure leaves the node as written: nothing breaks a tie.
-    fn exact_ground_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
-        let Ex::Fun(op, args) = e else { return None };
-        let bare = Cx::bare(view);
-        let value_set = |e: &Ex| {
-            let strs = self.resolve_seq(&to_prefix(e, &bare), ctx);
-            crate::interval::value_set(&strs, &self.operators, &crate::interval::Vs::reals())
-        };
-        let exact = |x: f64| {
-            let _exact = crate::ac::rat::number_domain(false);
-            crate::ac::rat::Rat::from_f64_exact(x)
-        };
-        let name = view.resolve_owned(*op);
-        match (name.as_str(), args.as_slice()) {
-            ("floor" | "ceil" | "erf", [_]) | ("besselj" | "atan2", [_, _]) => {
-                let v = value_set(e)?;
-                if v.is_const() {
-                    exact(v.lo).map(Ex::Num)
-                } else {
-                    None
-                }
-            }
-            ("abs", [a]) => {
-                let v = value_set(a)?;
-                (v.has_fin && !v.nan && !v.ninf && v.lo >= 0.0).then(|| a.clone())
-            }
-            ("mod", [a, b]) => {
-                let va = value_set(a)?;
-                if !(va.has_fin && !(va.nan || va.pinf || va.ninf)) {
-                    return None;
-                }
-                let vb = value_set(b)?;
-                if !vb.nan && !vb.has_fin && vb.pinf != vb.ninf {
-                    let keeps = if vb.pinf { va.lo >= 0.0 } else { va.hi <= 0.0 };
-                    return keeps.then(|| a.clone());
-                }
-                let k = exact(crate::interval::quotient_floor(&va, &vb)?)?;
-                if k.is_zero() {
-                    return Some(a.clone());
-                }
-                let shift = crate::ac::expr::mul(vec![Ex::Num(k.checked_neg()?), b.clone()], &bare);
-                Some(crate::ac::expr::add(vec![a.clone(), shift], &bare))
-            }
-            _ => None,
-        }
-    }
-
     /// The zero-set certificate behind `Cx::cert_nzae`: NONZERO a.e., decided by the
     /// structural zero-set analysis (`interval::zero_set_null_generic_const` --
     /// identity-theorem witness for analytic compositions, `<constant>` analyzed as a
@@ -659,7 +563,7 @@ impl Engine {
     /// fail-closed on everything else). Uncached: the structural
     /// recursion is cheap and the witness budget is small. `f64` (the `f64` mode) reads each
     /// function on its float64 range, where `tanh` and `atan` are constant on whole tails;
-    /// `real` and `permissive` read the real functions.
+    /// `permissive` reads the real functions.
     fn ac_zsn(&self, e: &Ex, ctx: &SimplifyCtx, f64: bool) -> bool {
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
@@ -763,30 +667,18 @@ impl Engine {
         None
     }
 
-    /// THE TABLE'S GROUND FOLD (`real`, and `permissive`'s classes): a ground node's real value
-    /// as THE TABLE reads it (`table::ground_value`), as the literal that spells it exactly: a
-    /// rational (in `real` only), a rational multiple of pi (`real` only), an infinity, or NaN
-    /// where the table gives no value. `None` where the value is an approximation (a
-    /// transcendental stays symbolic) or the point is Unresolved at the working precision.
-    fn table_ground_fold(&self, v: &crate::table::Val, exact: bool, bare: &Cx) -> Option<Ex> {
+    /// THE TABLE'S CLASS FOLD (`permissive`): a ground node whose real value THE TABLE reads as
+    /// an infinity folds to it, and one the table gives no value folds to NaN. `None` for a
+    /// finite value (written as its float by `table_float_fold`) or a point Unresolved at the
+    /// working precision.
+    fn table_class_fold(v: &crate::table::Val) -> Option<Ex> {
         use crate::table::{Exact, Val};
-        match v.clone() {
+        match v {
             Val::Exact(Exact::Undef) => Some(Ex::NaN),
             Val::Exact(Exact::PosInf) => Some(Ex::PosInf),
             Val::Exact(Exact::NegInf) => Some(Ex::NegInf),
-            Val::Exact(Exact::Rat(r)) if exact => Some(Ex::Num(r)),
-            Val::Exact(Exact::Pi(q)) if exact => {
-                Some(crate::ac::expr::mul(vec![Ex::Num(q), Ex::Pi], bare))
-            }
             _ => None,
         }
-    }
-
-    /// THE TABLE'S READING of a ground node at a working precision past a double's, and cheap
-    /// (`table::ground_value`): `None` where a token is no table token or the point is
-    /// Unresolved there.
-    fn table_value(&self, strs: &[String]) -> Option<crate::table::Val> {
-        crate::table::ground_value(strs, &self.operators, TABLE_GROUND_DPS)
     }
 
     /// The table's float-resolution reading of a ground node (`table::ground_value_float`), the
@@ -807,7 +699,7 @@ impl Engine {
         (y.is_finite() && (y.is_normal() || (y == 0.0 && zero))).then_some(y)
     }
 
-    /// PERMISSIVE'S GROUND FOLD (P3): a ground node's value is THE TABLE's (`table_value`),
+    /// PERMISSIVE'S GROUND FOLD (P3): a ground node's value is THE TABLE's (`table_value_float`),
     /// written as the shortest decimal of the double nearest to it, in the f64 number domain
     /// (as `ground_fold` writes the evaluator's float): `floor(tanh(40))` is 0, where float64
     /// rounds tanh(40) to 1.0 and floors it to 1.
@@ -868,7 +760,7 @@ impl Engine {
     /// constructor folds a transcendental, so `atanh(tanh 30)` reads as `30` in permissive),
     /// and a literal dearer than its expression is refused (`sin 1` stays). A whole ground node
     /// folds before its children, so `rootn(exp(19.11787581094798), 2)` is
-    /// `14170.787488305119` and not the root of a 9-digit literal. `real` never folds.
+    /// `14170.787488305119` and not the root of a 9-digit literal.
     fn ground_fold(&self, strs: &[String], signed: bool, view: &TokenView) -> Option<Ex> {
         let tok = crate::numeric::evaluate_constant_subtree(strs, &self.operators)?;
         let y = crate::numeric::leaf_value(&tok)?;
@@ -944,7 +836,6 @@ impl Engine {
         ctx: &SimplifyCtx,
         lossy: bool,
         fold_f64: bool,
-        real: bool,
         class_memo: &RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>>,
     ) -> Option<Ex> {
         let children: Vec<&Ex> = match e {
@@ -956,8 +847,6 @@ impl Engine {
         let bare = Cx::bare(&view);
         let mode = if lossy {
             RuleMode::Permissive
-        } else if real {
-            RuleMode::Real
         } else {
             RuleMode::Default
         };
@@ -1008,24 +897,16 @@ impl Engine {
             // arm reads the one thing the interval cannot see: the token. (Vs
             // point-support provenance is the RECORDED design direction if more
             // point-derived-enclosure consumers appear.)
-            // REAL'S VALUES ARE THE TABLE'S (`table::ground_value`): in `real` a ground node
-            // folds to its exact value wherever the table carries one -- `exp(-inf)` is 0,
-            // `tanh(inf)` 1, `acosh(1)` 0, `asin(1)` pi/2 -- and to NaN where it has none (`1/0`
-            // and `pow(0, -1)`, the limit rule). `permissive`'s values are real's: its classes
-            // (an infinity, NaN) are the table's, and a finite value is its float (below).
-            let reading = if real {
-                self.table_value(&strs)
-            } else if lossy {
+            // `permissive`'s values are THE TABLE's real values (`table::ground_value_float`):
+            // its classes (an infinity, NaN where the table gives no value -- `1/0` and
+            // `pow(0, -1)`) are the table's, and a finite value is its float (below).
+            let reading = if lossy {
                 self.table_value_float(&strs)
             } else {
                 None
             };
-            let from_table = if real || lossy {
-                Some(
-                    reading
-                        .as_ref()
-                        .and_then(|v| self.table_ground_fold(v, real, &bare)),
-                )
+            let from_table = if lossy {
+                Some(reading.as_ref().and_then(Self::table_class_fold))
             } else {
                 None
             };
@@ -1089,9 +970,6 @@ impl Engine {
                             .then_with(|| crate::ac::expr::cmp_ex(a, b, &view))
                     })
                 }
-                // THE EXACT GROUND FOLD (`real`): where the table carries no exact value, a
-                // member a certified enclosure decides (`abs(sin 1) = sin 1`).
-                None if real => self.exact_ground_fold(e, ctx, &view),
                 // In `f64` an infinity takes the sign float64 gives it, which a signed zero
                 // decides (`1/ceil(-0.5)` is -inf, where the interval layer's one zero reads
                 // +inf): a class the evaluator contradicts does not fold.
@@ -1299,7 +1177,7 @@ impl Engine {
         // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
         // does so on purpose.
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
-        self.project(ctx, best, form, mode)
+        self.project(ctx, best, form)
     }
 
     /// [`Engine::ac_simplify_proj`] with the fold discipline stated rather than derived.
@@ -1314,31 +1192,24 @@ impl Engine {
         fold_tr: bool,
     ) -> Option<Vec<String>> {
         let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, mode, 0, fold_tr);
-        self.project(ctx, best, form, mode)
+        self.project(ctx, best, form)
     }
 
     /// The shared tail of both projections: malformed input is `None` -- the AC parser is
     /// the arbiter, and the FAILURE SIGNAL propagates to the caller (the FFI raises
     /// ValueError). The old contract returned the input unchanged, which silently passed
     /// garbage through the one entry point whose inputs skip `is_valid`.
-    fn project(
-        &self,
-        ctx: SimplifyCtx,
-        best: Option<Ex>,
-        form: AcForm,
-        mode: RuleMode,
-    ) -> Option<Vec<String>> {
+    fn project(&self, ctx: SimplifyCtx, best: Option<Ex>, form: AcForm) -> Option<Vec<String>> {
         // Malformed input is `None` -- the AC parser is the arbiter, and the FAILURE
         // SIGNAL propagates to the caller (the FFI raises ValueError). The old contract
         // returned the input unchanged, which silently passed garbage through the one
         // entry point whose inputs skip `is_valid`.
         let best = best?;
         let view = self.view(&ctx);
-        // Spelled in the run's number domain: `mode` built these numbers. Only
-        // the domain follows the run; the spelling context stays `bare` (a lossy mode's
-        // licences would change the spelling).
+        // Spelled in the run's number domain, f64's; the spelling context stays `bare` (a
+        // lossy mode's licences would change the spelling).
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
@@ -1362,11 +1233,10 @@ impl Engine {
         let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
-        // Spelled in the run's number domain: `mode` built these numbers. Only
-        // the domain follows the run; the spelling context stays `bare` (a lossy mode's
-        // licences would change the spelling).
+        // Spelled in the run's number domain, f64's; the spelling context stays `bare` (a
+        // lossy mode's licences would change the spelling).
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
@@ -1400,7 +1270,7 @@ impl Engine {
         let fires = {
             let view = self.view(&ctx);
             let bare = Cx::bare(&view);
-            let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+            let _domain = crate::ac::rat::number_domain(true);
             steps
                 .iter()
                 .map(|(l, r)| {
@@ -1411,7 +1281,7 @@ impl Engine {
                 })
                 .collect()
         };
-        Some((self.project(ctx, best, form, mode)?, fires))
+        Some((self.project(ctx, best, form)?, fires))
     }
 
     /// Simplify in `mode` with a SUPPRESSION SET of artifact rule rows (rows of `mode`'s
@@ -1435,7 +1305,7 @@ impl Engine {
             Cx::folds_for(mode),
             Some(suppressed),
         );
-        self.project(ctx, best, form, mode)
+        self.project(ctx, best, form)
     }
 
     /// The PRETTY INFIX rendering of the simplified expression: `x8 + 1.2*x3`, `-x0/3`,
@@ -1452,7 +1322,7 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         Some(to_infix_pretty(&best, &bare))
     }
 
@@ -1469,7 +1339,7 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         Some(to_infix_pretty(&best, &bare))
     }
 
@@ -1504,17 +1374,12 @@ impl Engine {
         max_passes: usize,
     ) -> Option<(u64, u64, Vec<String>)> {
         let src_c = self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)?;
-        // THE MINE CANONICALISES UNFOLDED. The default RULE
-        // SET, but with transcendental folding OFF -- `real`'s discipline, which is the
-        // finest-grained canonical form there is, so every rule is discoverable.
-        //
-        // Measured, on a small mine: with folding on during mining, `real` loses 15 rules
-        // and f64 loses 29. The `real` losses are EXACT identities -- `cos 0 -> 1`,
-        // `acos 1 -> 0`, `exp 0 -> 1`, `log 1 -> 0` -- which `real` genuinely needs,
-        // because `real` does not fold and so has nothing else to perform them. The mine
-        // folded the source `cos 0` to `1` before the target search ever ran, and the
-        // rule was never discovered, for ANY mode. Folding is a per-mode SERVE behaviour;
-        // the per-mode prune then drops from each file what that mode already performs.
+        // THE MINE CANONICALISES UNFOLDED. The default RULE SET, but with transcendental
+        // folding OFF, which is the finest-grained canonical form there is, so every rule is
+        // discoverable: with folding on, the mine folds the source `cos 0` to `1` before the
+        // target search ever runs, and the rule is never discovered, for ANY mode. Folding
+        // is a per-mode SERVE behaviour; the per-mode prune then drops from each file what
+        // that mode already performs.
         let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, RuleMode::Default, 0, false);
         let best = best?;
         let view = self.view(&ctx);
@@ -1600,7 +1465,7 @@ impl Engine {
     pub fn ac_canonical_key(&self, tokens: &[String], mode: RuleMode) -> Option<Vec<String>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let own = crate::ac::rules::RuleCanon::Mode(mode);
-        self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, mode, own)
+        self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, own)
             .pop()?
     }
 
@@ -1611,11 +1476,10 @@ impl Engine {
     pub fn ac_canonical_keys(
         &self,
         exprs: &[Vec<String>],
-        mode: RuleMode,
         read_in: crate::ac::rules::RuleCanon,
     ) -> Vec<Option<Vec<String>>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        self.ac_canonical_keys_in(exprs, &ctx, mode, read_in)
+        self.ac_canonical_keys_in(exprs, &ctx, read_in)
     }
 
     /// The canonical state of `tokens` as `mode` READS a rule side or a mine source
@@ -1630,7 +1494,7 @@ impl Engine {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         let cx = crate::ac::rules::rule_cx(&view, mode);
         let e = canon(from_prefix(&toks, &cx)?, &cx);
         let bare = Cx::bare(&view);
@@ -1655,7 +1519,7 @@ impl Engine {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let (lt, rt) = (self.intern_seq(lhs, &ctx), self.intern_seq(rhs, &ctx));
         let view = self.view(&ctx);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         let cx = crate::ac::rules::rule_cx(&view, mode);
         let l = canon(from_prefix(&lt, &cx)?, &cx);
         let r = canon(from_prefix(&rt, &cx)?, &cx);
@@ -1707,7 +1571,7 @@ impl Engine {
         let view = self.view(&ctx);
         let rules = self.translate_in(&toks, &view, mode, crate::ac::rules::RuleCanon::Mode(mode));
         let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         rules
             .rules
             .iter()
@@ -1737,10 +1601,9 @@ impl Engine {
         &self,
         exprs: &[Vec<String>],
         ctx: &SimplifyCtx,
-        mode: RuleMode,
         read_in: crate::ac::rules::RuleCanon,
     ) -> Vec<Option<Vec<String>>> {
-        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let _domain = crate::ac::rat::number_domain(true);
         exprs
             .iter()
             .map(|tokens| {
@@ -1809,7 +1672,6 @@ impl Engine {
         let czn = |e: &Ex| self.ac_zsn(e, ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, ctx, f64);
         let cen = |e: &Ex| self.ac_encl(e, ctx);
-        let cor = |a: &Ex, b: &Ex| self.ac_order(a, b, ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1818,7 +1680,6 @@ impl Engine {
             cert_nce: Some(&cnc),
             cert_region: None,
             cert_encl: Some(&cen),
-            cert_order: Some(&cor),
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
@@ -1960,14 +1821,13 @@ impl Engine {
 
         let f64 = matches!(mode, RuleMode::Default);
         // The interval layer reads this mode's values for the whole call: float64's in `f64`,
-        // the reals' (the table's at every point) in `real` and `permissive`.
+        // the reals' (the table's at every point) in `permissive`.
         let _reading = crate::interval::ReadingScope::open(!f64);
         let cf = |e: &Ex| self.ac_cert(e, &ctx, false, f64);
         let cfz = |e: &Ex| self.ac_cert(e, &ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, &ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, &ctx, f64);
         let cen = |e: &Ex| self.ac_encl(e, &ctx);
-        let cor = |a: &Ex, b: &Ex| self.ac_order(a, b, &ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1976,7 +1836,6 @@ impl Engine {
             cert_nce: Some(&cnc),
             cert_region: None,
             cert_encl: Some(&cen),
-            cert_order: Some(&cor),
             mode,
             fold_f64: fold_tr,
             sentinels_expired: false,
@@ -2015,8 +1874,7 @@ impl Engine {
         };
         let class_memo: RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>> =
             RefCell::new(FxHashMap::default());
-        let real = matches!(mode, RuleMode::Real);
-        let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, fold_tr, real, &class_memo);
+        let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, fold_tr, &class_memo);
         let pass = PassCtx {
             // MODE SELECTION, half of it: the pass serves the mode's OWN complete set.
             // The twin below (phase 2) is the other half and MUST agree -- leaving the
@@ -2168,7 +2026,6 @@ impl Engine {
                 cert_nce: Some(&cnc),
                 cert_region: None,
                 cert_encl: Some(&cen),
-                cert_order: Some(&cor),
                 mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
@@ -2246,26 +2103,22 @@ impl Engine {
     }
 }
 
-/// THE ENGINE'S RULE MODE -- three inhabitants, one distinct COMPLETE rule set each
-/// (`rules_f64.json`, `rules_real.json`, `rules_permissive.json`). This is the internal
-/// selection key; the Python-facing `simplipy.Mode` maps onto it at exactly ONE place
-/// (`_RULE_MODE` in `engine.py`, read back by `parse_rule_mode` in `rust/lib.rs`).
+/// THE ENGINE'S RULE MODE -- two inhabitants, one distinct COMPLETE rule set each
+/// (`rules_f64.json`, `rules_permissive.json`). This is the internal selection key; the
+/// Python-facing `simplipy.Mode` maps onto it at exactly ONE place (`_RULE_MODE` in
+/// `engine.py`, read back by `parse_rule_mode` in `rust/lib.rs`).
 ///
 /// ```text
 ///     Default     `Mode.f64`        -- rules_f64.json, the deployed f64 set
-///     Real        `Mode.real`       -- rules_real.json, sound as mathematics defines
 ///     Permissive  `Mode.permissive` -- rules_permissive.json, training-corpus canonicalisation
 /// ```
 ///
 /// `wildcard_all` (the blanket-placeholder RECALL switch) is a FUNCTION of the mode, not
 /// a second parameter beside it: one value states both which set serves and which search
-/// semantics run, so the two can never be set inconsistently. `Real` takes `Default`'s
-/// search semantics -- it differs from `Default` in WHICH RULES ARE CERTIFIED, not in how
-/// placeholders bind.
+/// semantics run, so the two can never be set inconsistently.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RuleMode {
     Default,
-    Real,
     Permissive,
 }
 
@@ -2277,8 +2130,7 @@ impl RuleMode {
     }
 
     /// The mode a bare `wildcard_all` flag names: `true` the permissive set, `false` the
-    /// default (f64) one. `real` has no flag spelling; the FFI names every mode by
-    /// [`RuleMode::parse`].
+    /// default (f64) one.
     pub fn from_wildcard_all(wildcard_all: bool) -> Self {
         if wildcard_all {
             RuleMode::Permissive
@@ -2291,7 +2143,6 @@ impl RuleMode {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "default" => Some(RuleMode::Default),
-            "real" => Some(RuleMode::Real),
             "permissive" => Some(RuleMode::Permissive),
             _ => None,
         }
@@ -2311,9 +2162,9 @@ pub enum AcForm {
 #[cfg(test)]
 mod tests {
 
-    /// The 0.15 step and lattice heads of literals: exact in `real` (the constructor), the
-    /// deployed float in `f64` and `permissive` (the ground fold); transcendental heads of
-    /// literals stay written where the literal is dearer, and fold where it is cheaper.
+    /// The 0.15 step and lattice heads of literals: the deployed float in `f64` and
+    /// `permissive` (the ground fold); transcendental heads of literals stay written where the
+    /// literal is dearer, and fold where it is cheaper.
     #[test]
     fn new_heads_of_literals_fold_in_every_mode() {
         let e = Engine::from_strs(
@@ -2327,7 +2178,7 @@ mod tests {
                 .unwrap()
                 .join(" ")
         };
-        for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+        for mode in [RuleMode::Default, RuleMode::Permissive] {
             assert_eq!(run(&["floor", "2.5"], mode), "2", "{mode:?}");
             assert_eq!(run(&["ceil", "-2.5"], mode), "-2", "{mode:?}");
             assert_eq!(run(&["max", "1", "/", "1", "3"], mode), "1", "{mode:?}");
@@ -2359,12 +2210,16 @@ mod tests {
                 "{mode:?}"
             );
         }
-        // f64 reads a literal at its float, real at its rational
+        // f64 reads a literal at its float; permissive's ground value is the table's, where a
+        // literal is the rational it spells
         assert_eq!(
             run(&["floor", "0.99999999999999999"], RuleMode::Default),
             "1"
         );
-        assert_eq!(run(&["floor", "0.99999999999999999"], RuleMode::Real), "0");
+        assert_eq!(
+            run(&["floor", "0.99999999999999999"], RuleMode::Permissive),
+            "0"
+        );
         // the f64 kernels fold where the literal is cheaper
         assert_eq!(run(&["erf", "0"], RuleMode::Default), "0");
         assert_eq!(run(&["besselj", "0", "0"], RuleMode::Default), "1");
@@ -2536,7 +2391,7 @@ mod tests {
     // rule sets say, and would make every assertion here pass vacuously.
     const P_ALL: (&[&str], &[&str]) = (&["sin", "acos", "_0"], &["cos", "asin", "_0"]);
     const P_DEFAULT: (&[&str], &[&str]) = (&["sinh", "abs", "_0"], &["abs", "sinh", "_0"]);
-    const P_REAL: (&[&str], &[&str]) = (&["tanh", "asinh", "_0"], &["sin", "atan", "_0"]);
+    const P_OTHER: (&[&str], &[&str]) = (&["tanh", "asinh", "_0"], &["sin", "atan", "_0"]);
     const P_CORPUS: (&[&str], &[&str]) = (&["tanh", "abs", "_0"], &["abs", "tanh", "_0"]);
 
     /// The probe rule's LHS/RHS with `_0` instantiated at `x0`.
@@ -2571,11 +2426,10 @@ mod tests {
     fn constructor_cannot_reach_the_probes() {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![]);
-        // The acj-4 asset ships a full triple, so the helper arrives with mode sets
+        // The acj-4 asset ships a permissive file, so the helper arrives with that set
         // installed; a CONSTRUCTOR control must hold none anywhere.
-        e.set_mode_rules(RuleMode::Real, None);
         e.set_mode_rules(RuleMode::Permissive, None);
-        for r in [P_ALL, P_DEFAULT, P_REAL, P_CORPUS] {
+        for r in [P_ALL, P_DEFAULT, P_OTHER, P_CORPUS] {
             let (lhs, _) = probe(r);
             assert!(
                 !fires(&e, r, RuleMode::Default),
@@ -2596,50 +2450,48 @@ mod tests {
     #[test]
     fn absent_mode_sets_are_the_default_set_itself() {
         let Some(mut e) = engine() else { return };
-        // The absent state under test is CONSTRUCTED: the shipped acj-4 triple installs
-        // both mode sets, so clearing them is what makes this the no-set engine.
-        e.set_mode_rules(RuleMode::Real, None);
+        // The absent state under test is CONSTRUCTED: the shipped acj-4 cell installs a
+        // permissive set, so clearing it is what makes this the no-set engine.
         e.set_mode_rules(RuleMode::Permissive, None);
-        assert_eq!(e.mode_rules_len(RuleMode::Real), None);
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), None);
         assert_eq!(e.mode_rules_len(RuleMode::Default), Some(e.rules.raw.len()));
-        for mode in [RuleMode::Real, RuleMode::Permissive] {
-            assert_eq!(e.ac_rules_info_in_mode(mode), e.ac_rules_info());
-            assert!(std::ptr::eq(e.ac_rules_for(mode), e.ac_rules()));
-        }
+        assert_eq!(
+            e.ac_rules_info_in_mode(RuleMode::Permissive),
+            e.ac_rules_info()
+        );
+        assert!(std::ptr::eq(
+            e.ac_rules_for(RuleMode::Permissive),
+            e.ac_rules()
+        ));
     }
 
     /// EACH MODE SERVES EXACTLY THE SET IT NAMES, in every direction: a rule present in
-    /// one file only fires there and nowhere else, and a rule present in all three fires
-    /// in all three. This is the ruling's whole content, stated as behaviour.
+    /// one file only fires there and nowhere else, and a rule present in both fires in
+    /// both. This is the ruling's whole content, stated as behaviour.
     #[test]
     fn each_mode_serves_exactly_its_own_set() {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![rule(P_ALL), rule(P_DEFAULT)]);
-        e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_ALL), rule(P_REAL)]));
         e.set_mode_rules(
             RuleMode::Permissive,
-            Some(vec![rule(P_ALL), rule(P_REAL), rule(P_CORPUS)]),
+            Some(vec![rule(P_ALL), rule(P_OTHER), rule(P_CORPUS)]),
         );
         // WHAT IS LOADED IS WHAT IS SERVED: no rule is dropped or minted in between, so
         // the served counts are the file lengths and the behaviour below is attributable.
         assert_eq!(e.mode_rules_len(RuleMode::Default), Some(2));
-        assert_eq!(e.mode_rules_len(RuleMode::Real), Some(2));
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(3));
         assert_eq!(e.ac_rules_info_in_mode(RuleMode::Default).0, 2);
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Real).0, 2);
         assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 3);
 
         let table = [
-            (P_ALL, [true, true, true]),
-            (P_DEFAULT, [true, false, false]),
-            (P_REAL, [false, true, true]),
-            (P_CORPUS, [false, false, true]),
+            (P_ALL, [true, true]),
+            (P_DEFAULT, [true, false]),
+            (P_OTHER, [false, true]),
+            (P_CORPUS, [false, true]),
         ];
         for (r, want) in table {
             let got = [
                 fires(&e, r, RuleMode::Default),
-                fires(&e, r, RuleMode::Real),
                 fires(&e, r, RuleMode::Permissive),
             ];
             assert_eq!(got, want, "probe {:?} fired in the wrong modes", r.0);
@@ -2660,56 +2512,59 @@ mod tests {
             vec![short.clone(), long.clone()],
             vec![long.clone(), short.clone()],
         ] {
-            e.set_mode_rules(RuleMode::Real, Some(set));
-            let got = simp_mode(&e, &t(&["sin", "acos", "tanh", "x0"]), RuleMode::Real);
+            e.set_rules(set);
+            let got = simp_mode(&e, &t(&["sin", "acos", "tanh", "x0"]), RuleMode::Default);
             assert_eq!(got, t(&["inv", "cosh", "x0"]));
-            let got = simp_mode(&e, &t(&["sin", "acos", "x0"]), RuleMode::Real);
+            let got = simp_mode(&e, &t(&["sin", "acos", "x0"]), RuleMode::Default);
             assert_eq!(got, t(&["cos", "asin", "x0"]));
         }
     }
 
     /// A PUSH TRANSLATES ONLY THE SET IT REPLACES: replacing the default set keeps the
-    /// other modes' translations, and a mode with no set of its own still serves the new
-    /// default set (it reads the default translation itself, never its own cell).
+    /// permissive translation (a mode with no set of its own reads the default translation
+    /// itself, never its own cell: `a_default_push_moves_every_mode_that_has_no_set`).
     #[test]
     fn a_push_keeps_the_other_modes_translations() {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![rule(P_ALL)]);
-        e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
-        e.set_mode_rules(RuleMode::Permissive, None);
-        e.ac_rules_for(RuleMode::Real);
+        e.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_OTHER)]));
+        e.ac_rules_for(RuleMode::Permissive);
         e.set_rules(vec![rule(P_DEFAULT)]);
         assert!(
-            e.ac_real_rules_cell.get().is_some(),
-            "real was translated again"
+            e.ac_permissive_rules_cell.get().is_some(),
+            "permissive was translated again"
         );
-        assert!(fires(&e, P_REAL, RuleMode::Real));
-        assert!(
-            fires(&e, P_DEFAULT, RuleMode::Permissive) && !fires(&e, P_ALL, RuleMode::Permissive)
-        );
+        assert!(fires(&e, P_OTHER, RuleMode::Permissive));
+        assert!(fires(&e, P_DEFAULT, RuleMode::Default) && !fires(&e, P_ALL, RuleMode::Default));
     }
 
     /// AN EMPTY SET IS NOT AN ABSENT ONE. `Some(vec![])` says "this mode serves nothing"
     /// and is honoured; `None` says "this mode names no set" and falls back to the
     /// default one. Keying the fallback on emptiness would collapse the two -- and would
     /// make an empty set unsayable, which is the same computed-instead-of-stated mistake
-    /// the triple exists to remove.
+    /// the per-mode files exist to remove.
     #[test]
     fn an_empty_set_is_not_an_absent_one() {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![rule(P_DEFAULT)]);
 
-        e.set_mode_rules(RuleMode::Real, Some(vec![]));
-        assert_eq!(e.mode_rules_len(RuleMode::Real), Some(0));
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Real).0, 0);
-        assert!(!fires(&e, P_DEFAULT, RuleMode::Real));
-        assert!(!std::ptr::eq(e.ac_rules_for(RuleMode::Real), e.ac_rules()));
+        e.set_mode_rules(RuleMode::Permissive, Some(vec![]));
+        assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(0));
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 0);
+        assert!(!fires(&e, P_DEFAULT, RuleMode::Permissive));
+        assert!(!std::ptr::eq(
+            e.ac_rules_for(RuleMode::Permissive),
+            e.ac_rules()
+        ));
 
         // ...and RETRACTION restores the fallback exactly, cell and all.
-        e.set_mode_rules(RuleMode::Real, None);
-        assert_eq!(e.mode_rules_len(RuleMode::Real), None);
-        assert!(fires(&e, P_DEFAULT, RuleMode::Real));
-        assert!(std::ptr::eq(e.ac_rules_for(RuleMode::Real), e.ac_rules()));
+        e.set_mode_rules(RuleMode::Permissive, None);
+        assert_eq!(e.mode_rules_len(RuleMode::Permissive), None);
+        assert!(fires(&e, P_DEFAULT, RuleMode::Permissive));
+        assert!(std::ptr::eq(
+            e.ac_rules_for(RuleMode::Permissive),
+            e.ac_rules()
+        ));
     }
 
     /// A mode's set faces the SAME LOAD GATES as the default one: a mode relaxes what a
@@ -2744,27 +2599,22 @@ mod tests {
     #[test]
     fn no_mode_pays_for_another_modes_index() {
         let Some(mut e) = engine() else { return };
-        e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
         e.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
         assert!(e.ac_rules_cell.get().is_none());
-        assert!(e.ac_real_rules_cell.get().is_none());
         assert!(e.ac_permissive_rules_cell.get().is_none());
 
         // A DEFAULT call builds the default index and only that one.
-        let (lhs, _) = probe(P_REAL);
+        let (lhs, _) = probe(P_OTHER);
         simp_mode(&e, &lhs, RuleMode::Default);
         assert!(e.ac_rules_cell.get().is_some());
-        assert!(e.ac_real_rules_cell.get().is_none());
         assert!(e.ac_permissive_rules_cell.get().is_none());
 
-        // The mirror image on a fresh engine: a REAL call builds `real`'s index alone.
+        // The mirror image on a fresh engine: a PERMISSIVE call builds its own index alone.
         let Some(mut f) = engine() else { return };
-        f.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
         f.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
-        simp_mode(&f, &lhs, RuleMode::Real);
-        assert!(f.ac_real_rules_cell.get().is_some());
+        simp_mode(&f, &lhs, RuleMode::Permissive);
+        assert!(f.ac_permissive_rules_cell.get().is_some());
         assert!(f.ac_rules_cell.get().is_none());
-        assert!(f.ac_permissive_rules_cell.get().is_none());
     }
 
     /// Replacing the DEFAULT set must move a mode that has NO SET OF ITS OWN: such a mode
@@ -2773,16 +2623,12 @@ mod tests {
     #[test]
     fn a_default_push_moves_every_mode_that_has_no_set() {
         let Some(mut e) = engine() else { return };
-        e.set_mode_rules(RuleMode::Real, None);
         e.set_mode_rules(RuleMode::Permissive, None);
         e.set_rules(vec![rule(P_DEFAULT)]);
-        assert!(fires(&e, P_DEFAULT, RuleMode::Real));
         assert!(fires(&e, P_DEFAULT, RuleMode::Permissive));
-        e.set_rules(vec![rule(P_REAL)]);
-        assert!(!fires(&e, P_DEFAULT, RuleMode::Real));
+        e.set_rules(vec![rule(P_OTHER)]);
         assert!(!fires(&e, P_DEFAULT, RuleMode::Permissive));
-        assert!(fires(&e, P_REAL, RuleMode::Real));
-        assert!(fires(&e, P_REAL, RuleMode::Permissive));
+        assert!(fires(&e, P_OTHER, RuleMode::Permissive));
     }
 
     /// Installing one mode's set can never move ANOTHER mode's answer -- the sets are
@@ -2795,24 +2641,22 @@ mod tests {
         let before = simp_mode(&e, &lhs, RuleMode::Default);
         e.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
         assert_eq!(simp_mode(&e, &lhs, RuleMode::Default), before);
-        assert!(fires(&e, P_DEFAULT, RuleMode::Real));
     }
 
-    /// `wildcard_all` is a FUNCTION of the mode, and today's two-valued `simplipy.Mode`
-    /// maps onto exactly two of the three rungs. Pinned so the coming `Mode` rename has
-    /// to change this line deliberately rather than by accident.
+    /// `wildcard_all` is a FUNCTION of the mode, and `simplipy.Mode` maps onto the two
+    /// modes. Pinned so a change to the map has to change this line deliberately rather
+    /// than by accident.
     #[test]
     fn the_mode_map_is_what_ships_today() {
         assert_eq!(RuleMode::from_wildcard_all(false), RuleMode::Default);
         assert_eq!(RuleMode::from_wildcard_all(true), RuleMode::Permissive);
         assert!(!RuleMode::Default.wildcard_all());
-        assert!(!RuleMode::Real.wildcard_all());
         assert!(RuleMode::Permissive.wildcard_all());
         assert_eq!(RuleMode::parse("default"), Some(RuleMode::Default));
-        assert_eq!(RuleMode::parse("real"), Some(RuleMode::Real));
         assert_eq!(RuleMode::parse("permissive"), Some(RuleMode::Permissive));
-        // the pre-release 'corpus' spelling is retired, not aliased: a stray string
-        // that resolves to a mode by accident is the bug the parse doctrine forbids
+        // retired spellings are no mode, not aliases: a stray string that resolves to a
+        // mode by accident is the bug the parse doctrine forbids
+        assert_eq!(RuleMode::parse("real"), None);
         assert_eq!(RuleMode::parse("corpus"), None);
         assert_eq!(RuleMode::parse("lossy"), None);
     }
@@ -2827,7 +2671,7 @@ mod tests {
         e.set_rules(vec![rule(P_DEFAULT)]);
         e.set_mode_rules(
             RuleMode::Permissive,
-            Some(vec![rule(P_ALL), rule(P_REAL), rule(P_CORPUS)]),
+            Some(vec![rule(P_ALL), rule(P_OTHER), rule(P_CORPUS)]),
         );
         let served = e.ac_served_rules_in_mode(RuleMode::Permissive);
         assert_eq!(served.len(), 3);
@@ -2887,134 +2731,10 @@ mod tests {
         e.bang_cache[0].lock().unwrap().insert(key, true, &e.tokens);
     }
 
-    /// `Ex::Num` exponents classify by the
-    /// exact rational -- an i128-parseable beyond-2^53 literal parses to Num, whose
-    /// f64 image differs from the denoted integer; the interval bracket then made the
-    /// continuum convention assert Nan for a genuinely FINITE value
-    /// (`pow(-9007199254740994, 10^19+1) -> nan` live, fuzz-extreme row 1756).
-    #[test]
-    fn h051_num_exponents_classify_exactly() {
-        let Some(e) = engine() else { return };
-        let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
-                .unwrap()
-        };
-        let odd = "10000000000000000001"; // 10^19 + 1: Num, not f64-representable
-        let even = "10000000000000000000"; // 10^19
-        assert_eq!(s(&["pow", "float(\"-inf\")", odd]), t(&["float(\"-inf\")"]));
-        assert_eq!(s(&["pow", "float(\"-inf\")", even]), t(&["float(\"inf\")"]));
-        // (-inf)^{-odd}: the constructor decomposes pow(x, -n) = inv(pow(x, n)),
-        // this arm folds the inner to -inf, and inv(-inf) = 0 EXACTLY (total
-        // extended-real arithmetic) -- unlike the opaque-Leaf negative case, which
-        // cannot decompose and refuses.
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "-10000000000000000001"]),
-            t(&["0"])
-        );
-        // finite-negative-base at ANY integer exponent is a FINITE class: refusal,
-        // never the asserted Nan (row 1756's chain).
-        assert_eq!(
-            s(&["pow", "-", "-3", "9007199254740991", odd]),
-            t(&["pow", "-9007199254740994", odd])
-        );
-        // non-integer Num exponents keep the interval class's correct Nan
-        assert_eq!(
-            s(&["pow", "-9007199254740994", "/", odd, "3"]),
-            t(&["float(\"nan\")"])
-        );
-        // The ENCLOSING-composite guard (`contains_bracket_poisoned_pow`): row
-        // 1756's full div chain -- the outer ground node's interval class asserts
-        // Nan through the internally re-bracketed exponent, and the fold must
-        // refuse rather than ship it (the pow-node arm cannot see the outer node).
-        let chain = [
-            "/",
-            "pow",
-            "-",
-            "-3",
-            "9007199254740991",
-            odd,
-            "-0.9999999999999999",
-        ];
-        let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Real).unwrap();
-        assert_eq!(
-            kept,
-            // The coefficient now takes the DIVISOR side, per the
-            // ratified §8 rule restored for out-of-bound fractions -- `0.9999999999999999`
-            // (18 chars) against `10000000000000000/9999999999999999` (34). Same value,
-            // spelling only; the classification this test guards is the `pow` pair, which
-            // is unchanged. The sign splits out as `-1` (never inside `<div>`).
-            t(&[
-                "<mul>",
-                "-1",
-                "pow",
-                "-9007199254740994",
-                odd,
-                "<div>",
-                "0.9999999999999999",
-                "</mul>"
-            ])
-        );
-        assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Real).unwrap(), kept);
-    }
-
-    /// `pow` with a negative ground base and a
-    /// beyond-i128 INTEGER literal exponent classifies EXACTLY from the spelling's
-    /// sign and parity -- the old path asserted Nan through the interval bracket's
-    /// a.e. convention (the bracket at 1e40 spans many integers, so the
-    /// single-integer honesty gate could not fire). Finite negative bases REFUSE
-    /// (the true value is a finite real at every integer exponent); (-inf) folds by
-    /// parity; non-integer spellings keep the correct Nan; the certified-point
-    /// (i128-reachable) and +inf paths are untouched.
-    #[test]
-    fn h045_beyond_i128_integer_exponents_classify_exactly() {
-        let Some(e) = engine() else { return };
-        let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
-                .unwrap()
-        };
-        let odd_huge = "10000000000000000000000000000000000000001"; // 10^40 + 1
-                                                                    // (-inf)^{+int}: extended-real exact, sign by parity.
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "1e40"]),
-            t(&["float(\"inf\")"])
-        );
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", odd_huge]),
-            t(&["float(\"-inf\")"])
-        );
-        // (-inf)^{-int} = 0 is FINITE: sound refusal, in both negation spellings.
-        // The SIGNED leaf spelling "-1e40" splits into structure at parse
-        // (the sign is never inside an opaque leaf), so the kept form is the
-        // structural negation -- identical to the `neg`-spelled twin below.
-        // Phase 2c: 1e40 is an exact number (no longer an opaque leaf), so the negative
-        // exponent decomposes as Num exponents do: inv((-inf)^(10^40)) = 0 exactly.
-        assert_eq!(s(&["pow", "float(\"-inf\")", "-1e40"]), t(&["0"]));
-        assert_eq!(s(&["pow", "float(\"-inf\")", "neg", "1e40"]), t(&["0"]));
-        // Finite negative bases: finite class, REFUSE (the old path shipped nan).
-        // Phase 2c: 1e40 is the exact integer 10^40 (printed `1e40`); 2^(10^40) is far over the
-        // cap and stays, while (-1)^(10^40) is exactly 1 in real mode.
-        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", "1e40"]));
-        assert_eq!(s(&["pow", "(-1)", "1e40"]), t(&["1"]));
-        // A ground COMPOSITE base classifying -inf takes the same arm.
-        assert_eq!(s(&["pow", "log", "0", "1e40"]), t(&["float(\"inf\")"]));
-        // Untouched paths: +inf base; non-integer spelling keeps the correct Nan;
-        // the i128-certified point path.
-        assert_eq!(
-            s(&["pow", "float(\"inf\")", "1e40"]),
-            t(&["float(\"inf\")"])
-        );
-        assert_eq!(s(&["pow", "(-2)", "1.5e-40"]), t(&["float(\"nan\")"]));
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "1e19"]),
-            t(&["float(\"inf\")"])
-        );
-    }
-
     /// In f64 mode an integer beyond 2^53 has no known parity --
     /// the deployed evaluator reads it as an even float -- so a parity fold refuses. Main folded
-    /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. Real mode keeps the exact
-    /// parity (`h045_...`, `h051_...`, run in real mode). The walk's ground fold reads the node
-    /// as the evaluator does, so `f64` answers 1.
+    /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. The walk's ground fold
+    /// reads the node as the evaluator does, so `f64` answers 1.
     #[test]
     fn f64_parity_beyond_2_53_is_unknown() {
         let Some(e) = engine() else { return };
@@ -3031,11 +2751,6 @@ mod tests {
             s(&["pow", "float(\"-inf\")", big_odd]),
             t(&["pow", "float(\"-inf\")", big_odd])
         );
-        let r = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
-                .unwrap()
-        };
-        assert_eq!(r(&["pow", "(-1)", odd]), t(&["-1"]));
     }
 
     /// REGRESSION (64k/1M-gate idempotence rows 29663/37873/59042 + 274133/514869): a
@@ -4411,15 +4126,15 @@ mod tests {
             t(&["float(\"-inf\")"]),
             "(-inf)^3 must fold through the exact path, not ship the enclosure nan"
         );
-        // In `real` the table reads the exponent exactly (acos(1) = 0, sin(0) = 0) and
+        // In `permissive` the table reads the exponent exactly (acos(1) = 0, sin(0) = 0) and
         // undefined propagates (V6): `pow(nan, 0)` has no value, so the fold is NaN, never
         // the a.e. class of an enclosure.
         let s3 = t(&["pow", "float(\"nan\")", "sin", "sin", "acos", "1"]);
-        let out = e.ac_simplify(&s3, 48, RuleMode::Real).unwrap();
+        let out = e.ac_simplify(&s3, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             out,
             t(&["float(\"nan\")"]),
-            "real reads pow(nan, 0) as undefined"
+            "permissive reads pow(nan, 0) as undefined"
         );
         // In `f64` the exponent is not an enclosure at all: folding computes
         // acos(1) = 0, sin(0) = 0 exactly -- in f64 AND in mathematics -- and `b^0 = 1`
@@ -4555,7 +4270,7 @@ mod tests {
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).expect("corpus present"))
                 .expect("corpus parses");
-        for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+        for mode in [RuleMode::Default, RuleMode::Permissive] {
             for expr in corpus.iter() {
                 e.ac_explore_proj(expr, 48, mode, super::AcForm::Tagged, usize::MAX)
                     .expect("corpus row parses");

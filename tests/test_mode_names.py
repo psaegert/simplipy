@@ -18,7 +18,7 @@ _OPS = {
     "sin": {"realization": "np.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 3, "commutative": False},
 }
 
-_BOTH = r"'f64' \(also 'default'\), 'real' or 'permissive'"
+_BOTH = r"'f64' \(also 'default'\) or 'permissive'"
 
 
 @pytest.fixture(scope='module')
@@ -32,10 +32,18 @@ def test_f64_and_default_are_one_mode(name) -> None:
     assert _coerce_rule_mode(name) == 'default'
 
 
-@pytest.mark.parametrize('name, rule_mode', [('real', 'real'), ('permissive', 'permissive'),
-                                             (Mode.real, 'real'), (Mode.permissive, 'permissive')])
-def test_the_other_modes(name, rule_mode) -> None:
+@pytest.mark.parametrize('name, rule_mode', [('permissive', 'permissive'),
+                                             (Mode.permissive, 'permissive')])
+def test_the_other_mode(name, rule_mode) -> None:
     assert _coerce_rule_mode(name) == rule_mode
+
+
+@pytest.mark.parametrize('name', ['real', 'REAL', ' real '])
+def test_the_retired_mode_is_refused_by_the_one_coercion(name) -> None:
+    with pytest.raises(ValueError, match='the real mode is retired'):
+        _coerce_mode(name)
+    with pytest.raises(ValueError, match='the real mode is retired'):
+        Mode(name.strip())
 
 
 def test_an_unknown_name_names_both_spellings() -> None:
@@ -113,3 +121,51 @@ def test_cross_mode_complexity_reads_both(engine) -> None:
 def test_the_mining_surface_declares_its_entries() -> None:
     import simplipy.mining as mining
     assert {'RuleMiner', 'verify_mine', 'cross_mode_complexity'} <= set(mining.__all__)
+
+
+_RETIRED = 'the real mode is retired'
+
+
+def test_every_entry_refuses_the_retired_mode(engine, tmp_path) -> None:
+    """`real` names no mode at any entry: each one raises the one refusal before any work."""
+    import json
+    import yaml
+    from simplipy.mining import cross_mode_complexity, verify_mine
+    from simplipy.promotion import promote
+    from simplipy.utils import deduplicate_rules
+    from simplipy.verify import licensed, verify_artifact, verify_ruleset, verify_triple
+    from simplipy.verify._monitor import judge_pair
+    expr = ['+', 'x0', 'x0']
+    entries = {
+        'simplify': lambda: engine.simplify(expr, mode='real'),
+        'complexity': lambda: engine.complexity(expr, mode='real'),
+        'unload_mode': lambda: engine.unload_mode('real'),
+        'prune_covered_rules': lambda: engine.prune_covered_rules(rule_mode='real'),
+        'deduplicate_rules': lambda: deduplicate_rules([], ['x0'], engine=engine, rule_mode='real'),
+        'promote': lambda: promote([], engine, rule_mode='real'),
+        'find_rules': lambda: engine.find_rules(modes=['real'], max_source_pattern_length=1,
+                                                verbose=False),
+        'verify_ruleset': lambda: verify_ruleset([], mode='real'),
+        'verify_triple': lambda: verify_triple([], [], []),
+        'licensed': lambda: licensed(['sin', 'x0'], ['sin', 'x0'], 'real', engine),
+        'judge_pair': lambda: judge_pair(['x0'], ['x0'], mode='real'),
+        'verify_mine': lambda: verify_mine(str(tmp_path / 'absent.json'), 'real', _OPS),
+        'cross_mode_complexity': lambda: cross_mode_complexity(engine, expr, 'real'),
+        'core': lambda: engine._core.set_mode_rules('real', []),
+    }
+    for name, call in entries.items():
+        with pytest.raises(ValueError, match=_RETIRED if name != 'core' else 'real'):
+            call()
+    # a config naming a real set, at load
+    (tmp_path / 'rules.json').write_text('[]')
+    (tmp_path / 'rules_real.json').write_text('[]')
+    (tmp_path / 'config.yaml').write_text(yaml.safe_dump(
+        {'engine_generation': 2, 'operators': _OPS, 'rules': 'rules.json',
+         'rules_real': 'rules_real.json'}))
+    for load in (SimpliPyEngine.from_config, lambda path: SimpliPyEngine.from_config(path, modes='all')):
+        with pytest.raises(ValueError, match=_RETIRED):
+            load(str(tmp_path / 'config.yaml'))
+    with pytest.raises(ValueError, match=_RETIRED):
+        SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'), modes=('f64', 'real'))
+    assert verify_artifact([], [])['is_clean'] is True
+    assert json.loads((tmp_path / 'rules_real.json').read_text()) == []

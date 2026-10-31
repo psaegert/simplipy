@@ -266,7 +266,7 @@ class TestSimplifyPreservesTheDialect:
         out = engine.simplify(['<mul>', '2', 'atan', 'x0', '</mul>'])
         assert out == ['<mul>', '2', 'atan', 'x0', '</mul>']
 
-    @pytest.mark.parametrize('mode', ['real', 'f64', 'permissive'])
+    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
     def test_a_tagged_answer_spells_a_quotient_as_to_tagged_does(self, engine, mode) -> None:
         # One tagged spelling per value: a reciprocal or a negative power in a tagged answer is
         # the bag `to_tagged` writes for its explicit spelling, wherever it stands.

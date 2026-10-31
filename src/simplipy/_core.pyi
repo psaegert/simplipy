@@ -11,9 +11,6 @@ __build__: str
 NEAR_MISS_FRAC: float
 ARTIFACT_ENV_SWITCHES: list[str]
 
-#: Raised by a call passed ``own_set=True`` when the core holds no set of its own for the mode.
-class MissingModeSet(LookupError): ...
-
 class CandidateLibrary:
     @property
     def n_candidates(self) -> int: ...
@@ -30,8 +27,7 @@ class Engine:
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
         *,
-        rule_mode: Literal["default", "real", "permissive"],
-        own_set: bool = ...,  # serve only the mode's own set: MissingModeSet where it has none
+        rule_mode: Literal["default", "permissive"],
     ) -> list[str]: ...
     #: Simplify in `rule_mode` with artifact rows (and their minted orientation twins)
     #: suppressed at the matcher's fire site -- behaviorally the engine built without
@@ -63,8 +59,7 @@ class Engine:
         max_passes: int = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
         *,
-        rule_mode: Literal["default", "real", "permissive"],
-        own_set: bool = ...,
+        rule_mode: Literal["default", "permissive"],
     ) -> str: ...
     def prettify(
         self,
@@ -73,7 +68,6 @@ class Engine:
         form: Literal["infix", "explicit", "tagged"] = ...,
         precision: int | None = ...,  # significant digits of a float; None: its shortest decimal
         *,
-        rule_mode: Literal["default", "real", "permissive"],  # the number domain; no rules
         check_structure: bool = ...,  # answer (display, whether it keeps the structure)
         keep_grouping: bool = ...,  # every sum grouped as the explicit tokens group it
     ) -> str | list[str] | tuple[str | list[str], bool]: ...
@@ -84,7 +78,7 @@ class Engine:
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int = ...,
         *,
-        rule_mode: Literal["default", "real", "permissive"],
+        rule_mode: Literal["default", "permissive"],
     ) -> list[str]: ...
     def ac_ordered_below_in(self, a: list[str], b: list[str], *, rule_mode: str) -> bool: ...
     #: Census of the nodes `mu` charges, over the bare canonical forms of a batch.
@@ -98,8 +92,8 @@ class Engine:
         self, rules: list[tuple[list[str], list[str]]], *, rule_mode: str
     ) -> list[tuple[list[str], list[str], int]]: ...
     def law_instance(self, lhs: list[str], rhs: list[str], *, rule_mode: str) -> str | None: ...
-    def ac_complexity(self, tokens: list[str], canon: Literal["default", "mode"] = ..., *, rule_mode: Literal["default", "real", "permissive"]) -> int: ...
-    def ac_complexity_certified(self, tokens: list[str], canon: Literal["default", "mode"] = ..., *, rule_mode: Literal["default", "real", "permissive"]) -> int: ...
+    def ac_complexity(self, tokens: list[str], canon: Literal["default", "mode"] = ..., *, rule_mode: Literal["default", "permissive"]) -> int: ...
+    def ac_complexity_certified(self, tokens: list[str], canon: Literal["default", "mode"] = ..., *, rule_mode: Literal["default", "permissive"]) -> int: ...
     def ac_rules_info_in_mode(self, *, rule_mode: str) -> tuple[int, int, int, int]: ...
     def mode_rules_len(self, *, rule_mode: str) -> int | None: ...
     def mode_rules_canon(self, *, rule_mode: str) -> str: ...
@@ -175,19 +169,6 @@ class Engine:
     @staticmethod
     def allclose(
         a: list[float], b: list[float], rtol: float = ..., atol: float = ...
-    ) -> bool: ...
-    def equivalent_no_const(
-        self,
-        source: list[str],
-        candidate: list[str],
-        var_names: list[str],
-        x_flat: list[float],
-        n_rows: int,
-        challenges: int = ...,
-        rtol: float = ...,
-        atol: float = ...,
-        min_informative: int | None = ...,
-        seed: int = ...,
     ) -> bool: ...
     def interval_finite_ae(self, tokens: list[str]) -> bool: ...
     def interval_class(self, tokens: list[str]) -> str: ...

@@ -4,7 +4,7 @@
 
 A single implementation of the criterion (the specification's section 3): every soundness
 instrument (the rule-completeness gate, the mine's gates, verify-mine) reads it. Every value at a
-point is THE TABLE's (`rust/table.rs`, read through `_core.TableExpr`): real's exact or
+point is THE TABLE's (`rust/table.rs`, read through `_core.TableExpr`): the reals' exact or
 high-precision values with the limit rule at poles and infinite arguments (`1/0` and
 `pow(0, -1)` are undefined, `pow(0, -2)` is +inf, `log(0)` is -inf), and f64's evaluator values
 with the range standard. The judge keeps its procedure -- the precision ladder, the constant
@@ -811,7 +811,7 @@ def _gen_env(names, k):
 #: only has to be BRACKETED on this grid -- 300 bisection steps do the rest -- and the
 #: dense body below stops at 1e12, which cannot bracket the perfectly ordinary
 #: constant-folds `pow(exp(9), 5) = 3.5e19` or `pow(cosh(7), 5) = 5.0e13`. 15 rules of
-#: the shipped `rules_real.json` were reported witness-less for that reason alone, and
+#: a shipped rule file were reported witness-less for that reason alone, and
 #: `skipped_cl` swallowed the report. Density is not delicate: measured over the whole
 #: 296-rule constant population, every tail from 1 point per 12 decades to 1 per decade
 #: recovers the SAME 27 fits and moves NO witness that already fitted.
@@ -1964,8 +1964,8 @@ def _point_verdict(tl, tr, env_mp):
         # tanh(60) is inside it at dps 50 (band 1e-40) and well outside at dps 120
         # (1e-110). Bailing out at rung 1 therefore abstained on rows a higher rung can
         # settle -- measured, when the band went on tanh, that short-circuit sent 275
-        # rules of rules_real.json to UNRESOLVED-COVERAGE and dropped the kills from 65 to
-        # 27. An Unresolved is a statement about the RUNG, not about the rule.
+        # rules of a shipped rule file to UNRESOLVED-COVERAGE and dropped the kills from 65
+        # to 27. An Unresolved is a statement about the RUNG, not about the rule.
         rungs = (BASE_DPS, dps2, dps3)
         r_lo = lo_dps = hi_dps = None
         for i in range(len(rungs) - 1):
@@ -2125,45 +2125,55 @@ def _point_verdict(tl, tr, env_mp):
         mp.dps = old
 
 
-#: The cells of the soundness LATTICE, one per combination of the three modes' criteria. The
-#: notions are INCOMPARABLE -- a rule can be true and unrealised (`atanh(tanh t) -> t`, exact on
-#: R, `inf` in f64) or realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by
-#: 1.7e-25) -- so this is an axis, not a rung on the Mode ladder.
-#:
-#:   core        holds in real, in f64 and in permissive        served by every mode
-#:   strict      holds in real and in f64, not in permissive (an allowance a `?` slot guards, a
-#:               `$` slot's excused zero or an isolated infinity, which permissive's
-#:               any-subexpression binding does not: the owner's ruling of 2026-10-31)
-#:   real        holds in real and permissive, not in f64
-#:   real-only   holds in real only (as `strict`, and not in f64)
-#:   f64         holds in f64 and permissive, not in real   f64 and permissive (P3: real's
-#:               values up to float resolution)
-#:   f64-only    holds in f64, not in real or permissive (float64's own value: `floor(tanh(x))`
-#:               at a saturation)
-#:   permissive  holds in permissive only            (an extension: `exp(log x) -> x`)
-#:   reject      holds in no mode
+#: The modes, in the order every table lists them.
+MODES = ('f64', 'permissive')
+
+#: THE TIERS, the one registry: each tier is the set of modes a judged rule holds in, and so the
+#: modes whose files may hold it (`verify.MODE_TIERS` is read off it, and the documentation's
+#: tier table is checked against it). The two criteria are INCOMPARABLE -- a rule can hold in
+#: permissive and not in f64 (`atanh(tanh t) -> t`, exact over the reals, `inf` in f64) or in f64
+#: and not in permissive (`floor(tanh(x)) -> 1` at a saturation, float64's own value) -- so this
+#: is an axis, not a ladder.
+TIERS = {
+    'core': ('f64', 'permissive'),
+    'f64-only': ('f64',),
+    'permissive': ('permissive',),
+    'reject': (),
+}
+
+#: What each tier of `TIERS` means, as the documentation's tier table states it.
+TIER_MEANINGS = {
+    'core': 'holds in f64 (the deployed evaluator reproduces it) and in permissive',
+    'f64-only': ("float64's own value, off the reals beyond float resolution "
+                 "(`floor(tanh(40)) -> 1`), or true by an allowance a slot guards, which "
+                 "permissive's any-subexpression binding does not give"),
+    'permissive': ('true in the reals and not reproduced by float64 '
+                   '(`atanh(tanh(x0)) -> x0`), or an extension (`exp(log(x0)) -> x0`)'),
+    'reject': 'holds in no mode; recorded in the drop census',
+}
+
+#: The verdicts under which a rule holds in the reals' values (the reference permissive is
+#: defined against, and the reals in which the engine's own algebra is exact).
+HOLDS_IN_THE_REALS = frozenset({'CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'})
+
+
 def _tier(verdict, realised, permissive=None):
-    """The tier of a judged rule: `verdict` is real's (CERTIFIED / TOLERATED / ENGINE-MISALIGN
-    hold), `realised` f64's (`True` only: `None` means the deployed lane never got an
-    observation, and absent evidence supports no claim -- `sin(np.pi) -> 0` is exactly true while
-    f64 computes 1.2246467991473532e-16), `permissive` permissive's (`None`: not judged, read as
-    real's)."""
-    if verdict not in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN', 'KILL', 'UNDECIDED-MEASURE'):
+    """The tier of a judged rule (`TIERS`): the modes it holds in. `verdict` is the criterion
+    in the reals' values (`HOLDS_IN_THE_REALS`), `realised` f64's (`True` only: `None` means the
+    deployed lane never got an observation, and absent evidence supports no claim --
+    `sin(np.pi) -> 0` is exactly true while f64 computes 1.2246467991473532e-16), `permissive`
+    permissive's (`None`: not judged, read in the reals)."""
+    if verdict not in HOLDS_IN_THE_REALS | {'KILL', 'UNDECIDED-MEASURE'}:
         # NO-WITNESS, UNRESOLVED-COVERAGE, UNSUPPORTED-SHAPE, JUDGE-TIMEOUT: the judge reached
         # no answer, and holds in no mode
         return 'reject'
-    real = verdict in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN')
-    # an undecided measure refuses real and f64, which both owe clause (b); permissive does not
-    # owe it (the owner's ruling, specification 4.10)
-    f64 = realised is True and verdict not in ('ENGINE-MISALIGN', 'UNDECIDED-MEASURE')
-    perm = real if permissive is None else bool(permissive)
-    if real and f64:
-        return 'core' if perm else 'strict'
-    if real:
-        return 'real' if perm else 'real-only'
-    if f64:
-        return 'f64' if perm else 'f64-only'
-    return 'permissive' if perm else 'reject'
+    # an undecided measure refuses f64, which owes clause (b); permissive does not owe it
+    # (specification 4.10)
+    held = {'f64': realised is True and verdict not in ('ENGINE-MISALIGN', 'UNDECIDED-MEASURE'),
+            'permissive': (verdict in HOLDS_IN_THE_REALS) if permissive is None
+            else bool(permissive)}
+    modes = tuple(m for m in MODES if held[m])
+    return next(tier for tier, tier_modes in TIERS.items() if tier_modes == modes)
 
 
 def judge_rule(lhs, rhs, deployed_check=True):
@@ -2178,8 +2188,8 @@ def judge_rule(lhs, rhs, deployed_check=True):
     told apart where a head of the rule reads it, and an isolated NaN of the left side excused:
     `ceil(atan(x)/x) -> 1` is realised, though the left side has no value at x = +-0), so
     `floor(x + 1) -> floor(x) + 1` is CERTIFIED and not realised (float64 breaks it at
-    x = -1e-17): tier `real`. The bar probes each slot over its sort's values (a `?` slot over
-    finite doubles only: +-inf is no data), and a probe where an operation overflowed or
+    x = -1e-17): tier `permissive`. The bar probes each slot over its sort's values (a `?` slot
+    over finite doubles only: +-inf is no data), and a probe where an operation overflowed or
     underflowed agrees where the rewrite gives the true value (the range standard), judged
     here by the contract."""
     r = _judge_contract(lhs, rhs, deployed_check)
@@ -2309,10 +2319,10 @@ def _extension_width(lhs, lp, rhs, rp, names):
 
 
 def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
-    """-> dict: real's verdict, with clause/class, points and the certified measure, f64's
+    """-> dict: the reals' verdict, with clause/class, points and the certified measure, f64's
     `realised` and permissive's `permissive`; `judge_rule` adds the tier.
 
-    real's verdict (the criterion of the specification's section 3):
+    the reals' verdict (the criterion of the specification's section 3):
       KILL               a disagreement at a point where the left side has a value (clause (a):
                          a real binding, a `_` slot's +-inf or NaN, any constant owed); any
                          disagreement at a `_` slot's non-finite binding; or a certified cell
@@ -2357,7 +2367,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # THE SATURATION PROBES ARE WITHHELD WHERE A WITNESS MUST BE RE-FITTED AT THEM.
     # Measured over the shipped rules.json: on the 71 rows whose constant appears only on
     # the SOURCE side, the probes move exactly 16 rows and every one moves cleanly from
-    # `core` to `real` -- they are the rules found unrealised in f64. On
+    # `core` to `permissive` -- they are the rules found unrealised in f64. On
     # the 272 rows that also fit a TARGET constant they produce 88 clause-(a) KILLs, and
     # every one diagnosed is an artifact of the exists-witness machinery at magnitudes it
     # cannot resolve, not a false rule. So the probe is put where its answer can be read

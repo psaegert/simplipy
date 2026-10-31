@@ -298,20 +298,20 @@ pub(crate) fn rule_cx<'a>(view: &'a TokenView<'a>, mode: crate::engine::RuleMode
 
 /// THE CANON A RULE SET WAS CERTIFIED IN, and so the one it is read in. A rule is judged on
 /// the pattern its mine wrote, read in its mine's canon; read in another canon, its LHS can
-/// become a different pattern, which nothing judged. Real's canon reads the f64 fact
-/// `rootn 2 atanh tanh 3 -> nan` (f64's `atanh(tanh(3))` is not 3) as `rootn 2 3 -> nan`,
-/// which is false. Read in the canon it was mined in, the pattern stays the one judged, and a
-/// pattern the serving canon never produces never fires.
+/// become a different pattern, which nothing judged. A canon that cancels `atanh(tanh(t))`
+/// reads the f64 fact `rootn 2 atanh tanh 3 -> nan` (f64's `atanh(tanh(3))` is not 3) as
+/// `rootn 2 3 -> nan`, which is false. Read in the canon it was mined in, the pattern stays the
+/// one judged, and a pattern the serving canon never produces never fires.
 ///
 /// Numerals are read in the SERVING mode's number domain whatever the canon (a numeral
-/// denotes the number it spells, and real reads it exactly); the canon decides the structure.
+/// denotes the number it spells); the canon decides the structure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleCanon {
     /// A per-mode mine of this mode (0.15 on), and every set handed over in memory: the
     /// mode's own reading ([`rule_cx`]).
     Mode(crate::engine::RuleMode),
     /// A mine from before per-mode mines (0.14 and earlier): one mode-blind canon for all
-    /// three files, Default's, unfolded and uncertified ([`Cx::bare`]), the reading every
+    /// its files, Default's, unfolded and uncertified ([`Cx::bare`]), the reading every
     /// file was loaded in until per-mode mines.
     Legacy,
 }
@@ -339,7 +339,6 @@ impl RuleCanon {
         match self {
             RuleCanon::Legacy => "legacy",
             RuleCanon::Mode(RuleMode::Default) => "default",
-            RuleCanon::Mode(RuleMode::Real) => "real",
             RuleCanon::Mode(RuleMode::Permissive) => "permissive",
         }
     }
