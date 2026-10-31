@@ -505,10 +505,15 @@ def test_besselj_identities_hold_bit_for_bit_in_float64():
                      ('besselj 1 * -2 x0', 'neg besselj 1 * 2 x0'), ('besselj -1 neg x0', 'besselj 1 x0')):
         names = sorted({t for t in (lhs + ' ' + rhs).split() if t in ('x0', 'x1')})
         assert f64_bar(lhs.split(), rhs.split(), names, ext)[0], (lhs, rhs)
-    # the bar can fail: no parity at a non-integer order, and an odd order's sum keeps its zero
+    # the bar can fail: no parity at a non-integer order
     assert not f64_bar('besselj 0.5 neg x0'.split(), 'besselj 0.5 x0'.split(), ['x0'], ext)[0]
-    assert not f64_bar('besselj 1 - x0 x1'.split(), 'neg besselj 1 - x1 x0'.split(), ['x0', 'x1'],
-                       ext)[0]
+    # an odd order's difference is +0 against -0 at x0 = x1, one value where no head of the rule
+    # reads a zero's sign (F6)
+    assert f64_bar('besselj 1 - x0 x1'.split(), 'neg besselj 1 - x1 x0'.split(), ['x0', 'x1'],
+                   ext)[0]
+    # and two values where one does: 1/J1(x0 - x1) is +inf against -inf there
+    assert not f64_bar('inv besselj 1 - x0 x1'.split(), 'neg inv besselj 1 - x1 x0'.split(),
+                       ['x0', 'x1'], ext)[0]
 
 
 def test_besselj_is_judged_by_the_contract():

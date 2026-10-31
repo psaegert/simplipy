@@ -1747,10 +1747,14 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     contract evaluates the step heads exactly, a value inside the working-precision band of a
     jump, a pole or the cut is unresolved rather than guessed, and the licence registry probes
     the jumps of an argument affine in one variable, so `ceil(3x) -> floor(3x) + 1` is refused
-    at x = 1/3. In float64 a rule spelled with one of the nine must also agree bit for bit with
-    the float64 kernels, a zero's sign included, at each variable's battery, +-inf, NaN, -0, the
-    float neighbours of the integers, tiny and huge magnitudes and the negative integers, every
-    0.05 over [-25, 25] and on the diagonal: one function in the core (`f64_bar`), which the
+    at x = 1/3. In float64 a rule spelled with one of the nine must also agree with the float64
+    kernels by float64's agreement (within 8 units in the last place, the two zeros one value
+    except where a head of the rule reads a zero's sign, an isolated NaN of the left side
+    excused where a data variable's neighbouring doubles give it a value: `ceil(atan(x)/x) -> 1`,
+    `erf(0.1*x) -> erf(x/10)` and `floor(floor(x) + 0.5) -> floor(x)` hold in `f64`) at each
+    variable's battery, +-inf, NaN, -0, the float neighbours of the integers, tiny and huge
+    magnitudes and the negative integers, every 0.05 over [-25, 25] and on the diagonal: one
+    function in the core (`f64_bar`), which the
     contract judge ANDs into a rule's realisation and the `f64` mine applies to every pick. So
     `floor(x + 1) -> floor(x) + 1`, `mod(x + 1, 1) -> mod(x, 1)` and `floor(mod(x, 1)) -> 0`,
     true over the reals and false in float64 just below an integer, are minted in `real` and

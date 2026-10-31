@@ -566,6 +566,11 @@ pub const NEW_HEADS: [&str; 9] = [
     "floor", "ceil", "erf", "harmonic", "max", "min", "mod", "atan2", "besselj",
 ];
 
+/// The heads whose value at a zero operand depends on the zero's sign (F7): `1/(-0)` is -inf,
+/// `atan2(-0, -1)` is -pi, `pow(-0, -3)` and `rootn(-0, -3)` are -inf. Where a rule holds one,
+/// the deployed bar tells the two zeros apart.
+const ZERO_SIGN_READERS: [&str; 5] = ["/", "inv", "pow", "rootn", "atan2"];
+
 /// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
 /// constant cannot be judged bit for bit beside them.
 const JUMP_HEADS: [&str; 3] = ["floor", "ceil", "mod"];
@@ -739,14 +744,18 @@ fn range_row_true(
     matches!(d.cmp(&tol), Some(o) if o <= 0)
 }
 
-/// THE DEPLOYED BAR: do `lhs` and `rhs` agree BIT FOR BIT in float64 (the sign of a zero
-/// included, since an inverse or `atan2` reads it; NaN equal to NaN), with the engine's own
-/// kernels, at every probe? The probes are, per
-/// variable of `var_names` either side uses, the `BATTERY` points, +-inf, NaN and
-/// `DEPLOYED_EXTRA` (their full product); a generic grid per variable with the others at
-/// 1.7 and -1.3; and the diagonal of that grid. No probe is excused: no tolerance, no range
-/// event, no extension of a NaN. The last `n_finite` names of `var_names` are fitted constants,
-/// probed over the finite values only.
+/// THE DEPLOYED BAR: do `lhs` and `rhs` AGREE in float64 (F6, `table::f64_agree`: NaN with NaN,
+/// one infinity, finite values within `REALISED_ULP`, the two zeros as one value), with the
+/// engine's own kernels, at every probe? The zeros are told apart by their sign where a head of
+/// the rule reads a zero's sign (`ZERO_SIGN_READERS`: `1/x`, `atan2`, ...), and nowhere else:
+/// `floor(floor(x) + 0.5) -> floor(x)` is +0 against -0 at x = -0, one value. A probe where the
+/// left side alone has no value is excused where it is isolated: a data (`?`) variable's move to
+/// its neighbouring double, in each direction, gives the left side a value there, a null set of
+/// the data, which float64's constructors fill as the rewrite does (`ceil(atan(x)/x) -> 1` at
+/// x = +-0). The probes are, per variable of `var_names` either side uses, the `BATTERY` points,
+/// +-inf, NaN and `DEPLOYED_EXTRA` (their full product); a generic grid per variable with the
+/// others at 1.7 and -1.3; and the diagonal of that grid. The last `n_finite` names of
+/// `var_names` are fitted constants, probed over the finite values only.
 ///
 /// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into a rule's
 /// `realised` and the f64 mint applies to every pick, so the judge licenses exactly what the
@@ -845,7 +854,37 @@ fn deployed_exact_over(
         tl.eval_columns(&cols, &[], n),
         tr.eval_columns(&cols, &[], n),
     );
-    let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits();
+    let reads_zero_sign = lhs
+        .iter()
+        .chain(rhs)
+        .any(|t| ops.arity_of(t).is_some() && ZERO_SIGN_READERS.contains(&t.as_str()));
+    let same = |a: f64, b: f64| {
+        if a == 0.0 && b == 0.0 {
+            return !reads_zero_sign || a.to_bits() == b.to_bits();
+        }
+        crate::table::f64_agree(a, b) == crate::table::Cmp::Eq
+    };
+    // the left side's NaN at a probe is isolated where a data variable's neighbouring doubles,
+    // on each side, give it a value
+    let isolated_nan = |row: &[f64]| {
+        used.iter()
+            .filter(|&&v| v < first_finite && sorts.get(v) == Some(&'?') && row[v].is_finite())
+            .any(|&v| {
+                let cols: Vec<Vec<f64>> = (0..width)
+                    .map(|c| {
+                        if c == v {
+                            vec![
+                                crate::ac::rat::next_up(row[c]),
+                                crate::ac::rat::next_down(row[c]),
+                            ]
+                        } else {
+                            vec![row[c]; 2]
+                        }
+                    })
+                    .collect();
+                tl.eval_columns(&cols, &[], 2).iter().all(|y| !y.is_nan())
+            })
+    };
     // The range standard's reading of a differing probe: did an operation of either side
     // overflow or underflow there (`table::Expr::eval_f64`, the same kernels)?
     let range_reader = defer_range
@@ -869,7 +908,7 @@ fn deployed_exact_over(
     };
     let mut range_rows: Vec<Vec<f64>> = Vec::new();
     for i in 0..n {
-        if same(yl[i], yr[i]) {
+        if same(yl[i], yr[i]) || (yl[i].is_nan() && !yr[i].is_nan() && isolated_nan(&rows[i])) {
             continue;
         }
         if out_of_range(&rows[i]) {
@@ -943,9 +982,8 @@ mod deployed_bar_tests {
             // a saturation and the next integer part the step head from the smooth one
             ("acosh erf floor x0", "acosh erf x0"),
             ("acosh tanh floor x0", "acosh tanh x0"),
-            // a zero's sign is a value an inverse reads: ceil(asinh(-1)) is -0
-            ("ceil asinh -1", "0"),
-            ("mod floor x0 1", "* 0 x0"),
+            // a zero's sign is a value where a head of the rule reads it: 0/x is -0 for x < 0
+            ("* 0 inv x0", "0"),
         ] {
             assert!(
                 !deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops).ok,
@@ -959,11 +997,38 @@ mod deployed_bar_tests {
             ("max x0 x1", "max x1 x0"),
             ("min x0 float(\"inf\")", "x0"),
             ("erf neg x0", "neg erf x0"),
+            // F6: the two zeros are one value where no head of the rule reads a zero's sign,
+            // and values 8 units in the last place apart agree
+            ("mod floor x0 1", "* 0 x0"),
+            ("floor + floor x0 0.5", "floor x0"),
+            ("erf * 0.1 x0", "erf / x0 10"),
         ] {
             let d = deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops);
             assert!(d.ok, "{l} -> {r} at {:?}", d.first);
             assert!(d.probes > 300);
         }
+        // ceil(asinh(-1)) is -0, one value with 0
+        assert!(deployed_exact_over(&s("ceil asinh -1"), &s("0"), &v, 0, &[], false, ops).ok);
+    }
+
+    /// An isolated NaN of the left side, where the right side has a value, is excused at a data
+    /// (`?`) variable: its neighbouring doubles give the left side a value. A NaN on positive
+    /// measure is not, nor one at a slot of another sort (a `_` can be constant on an interval).
+    #[test]
+    fn the_bar_excuses_an_isolated_nan_of_the_left_side() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0");
+        let bar = |l: &str, r: &str, sort: char| {
+            deployed_exact_over(&s(l), &s(r), &v, 0, &[sort], false, ops).ok
+        };
+        assert!(bar("ceil / atan x0 x0", "1", '?'));
+        assert!(!bar("ceil / atan x0 x0", "1", '_'));
+        assert!(!bar("floor acosh x0", "0", '?'));
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a

@@ -1404,7 +1404,7 @@ fn shl_256((hi, lo): (u128, u128), k: u32) -> Option<(u128, u128)> {
 
 /// Integer k-th root, exact or nothing: the r >= 0 with `r^k == n` (n >= 0), else `None`.
 /// The next f64 toward +inf (`f64::next_up`, which is stable only from Rust 1.86; the MSRV is 1.83).
-fn next_up(x: f64) -> f64 {
+pub(crate) fn next_up(x: f64) -> f64 {
     if x.is_nan() || x == f64::INFINITY {
         return x;
     }
@@ -1416,7 +1416,7 @@ fn next_up(x: f64) -> f64 {
 }
 
 /// The next f64 toward -inf (`f64::next_down`, likewise).
-fn next_down(x: f64) -> f64 {
+pub(crate) fn next_down(x: f64) -> f64 {
     if x.is_nan() || x == f64::NEG_INFINITY {
         return x;
     }

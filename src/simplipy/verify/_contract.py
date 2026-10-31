@@ -1953,8 +1953,10 @@ def judge_rule(lhs, rhs, deployed_check=True):
     (`_tier`).
 
     A rule spelled with a 0.15 head (`NEW_HEADS`) is realised in float64 only where the core's
-    f64 bar agrees too (`_core.f64_bar_sorted`: bit for bit at the jumps, the signed zeros and
-    the poles float64 parts from the reals at, which the battery and the grid do not reach), so
+    f64 bar agrees too (`_core.f64_bar_sorted`: by F6's agreement at the jumps and the poles
+    float64 parts from the reals at, which the battery and the grid do not reach, a zero's sign
+    told apart where a head of the rule reads it, and an isolated NaN of the left side excused:
+    `ceil(atan(x)/x) -> 1` is realised, though the left side has no value at x = +-0), so
     `floor(x + 1) -> floor(x) + 1` is CERTIFIED and not realised (float64 breaks it at
     x = -1e-17): tier `real`. The bar probes each slot over its sort's values (a `?` slot over
     finite doubles only: +-inf is no data), and a probe where an operation overflowed or
