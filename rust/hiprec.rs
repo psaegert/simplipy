@@ -64,7 +64,7 @@ pub const WIDE_MISS_TRIES: usize = 16;
 
 /// Verdict of one row at one precision. `Extend` = source nonfinite (domain-extendable),
 /// exactly `allclose_extends`' semantics lifted to `p` bits.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum RowVerdict {
     Pass,
     Extend,
@@ -191,12 +191,19 @@ pub(crate) fn table_classes(
 /// same one, or, where `with_vars` (a row of a pair with variables, in a mode that excuses it),
 /// owes nothing where it has no value (the judge's isolated infinity: the measure of the set is
 /// the judge's to decide; the pole of `tan(asin(x))` at x = 1 against `sinh(atanh(1)) = +inf`).
-/// Finite: the candidate finite
-/// and within `atol + rtol*|c|` at the finer rung, or a residual that collapses between the two
-/// (an exact zero at the working precision); anything else fails. `None` where a side does not
-/// compile for the table or a reading is Unresolved at either rung (`erf(sinh(-100))` is
-/// -1 + e^-(1.7e86), `atanh(tanh(800))` 800 in a boundary band): the row says nothing about the
-/// true values, and the caller skips it, as the judge skips a point it cannot resolve.
+/// Finite: the candidate finite and within `atol + rtol*|c|` at the finer rung, or a residual
+/// that collapses between the two (an exact zero at the working precision); anything else fails.
+///
+/// A ROW UNREAD IS READ AS THE JUDGE READS ITS POINT (`_contract._point_verdict`), never more
+/// leniently: a rung that cannot read a side (a value inside a boundary band) says something
+/// about the rung, so the row is read again a rung higher, up to past the judge's third rung
+/// (`ROW_CLIMB`), and one unread there too is decided by the saturation rule
+/// (`saturation_refutes`) where it applies.
+/// `floor(sin(asinh(x))) -> floor(erf(x))` at x = -14.99: erf is -1 + 1e-99, inside the band at
+/// the demanded fifty digits and read at 250; `tanh(cosh(10)) -> 1` is decided by the rule.
+/// `None` where a side does not compile for the table or neither decides the row
+/// (`erf(sinh(-100))` is -1 + e^-(1.7e86)): the row says nothing about the true values, and the
+/// caller skips it, as the judge skips a point it cannot resolve.
 #[allow(clippy::too_many_arguments)]
 fn table_row(
     source: &[String],
@@ -211,7 +218,6 @@ fn table_row(
     atol: f64,
     with_vars: bool,
 ) -> Option<RowVerdict> {
-    use crate::table::{class_of, Ctx};
     let (se, senv) = table_side(source, src_params, ops, var_names, x_cols, row)?;
     let (ce, cenv) = table_side(candidate, cand_params, ops, var_names, x_cols, row)?;
     let mut cc = Consts::new().ok()?;
@@ -225,22 +231,65 @@ fn table_row(
         .clamp(BASE_DPS, MAX_DPS);
     let start = demanded;
     let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
+    let higher = (2 * fine).clamp(ROW_CLIMB, 2 * MAX_DPS);
+    let highest = higher + higher / 2;
+    let first = (os.value, oc.value);
+    for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
+        if let Some(v) = table_rungs(
+            &se, &senv, &ce, &cenv, &first, lo, hi, rtol, atol, with_vars,
+        ) {
+            return Some(v);
+        }
+    }
+    saturation_refutes(
+        source,
+        src_params,
+        candidate,
+        cand_params,
+        ops,
+        var_names,
+        x_cols,
+        row,
+    )
+    .then_some(RowVerdict::Fail)
+}
+
+/// The rung `table_row` climbs to past an unread row, at least: the judge's third rung
+/// (`_contract.GAP_RUNGS`).
+const ROW_CLIMB: i32 = GAP_RUNGS[2];
+
+/// `table_row` at the rungs `start` and `fine`: the verdict, or `None` where a reading at either
+/// is Unresolved. `first` holds the two sides' readings at `BASE_DPS`, which serve a rung there.
+#[allow(clippy::too_many_arguments)]
+fn table_rungs(
+    se: &crate::table::Expr,
+    senv: &[crate::table::Val],
+    ce: &crate::table::Expr,
+    cenv: &[crate::table::Val],
+    first: &(Option<crate::table::Val>, Option<crate::table::Val>),
+    start: i32,
+    fine: i32,
+    rtol: f64,
+    atol: f64,
+    with_vars: bool,
+) -> Option<RowVerdict> {
+    use crate::table::{class_of, Ctx};
     let mut seen: Vec<(BigFloat, BigFloat, BigFloat, usize)> = Vec::new();
     for dps in [start, fine] {
         // the first readings serve the first rung where it is theirs
         let s = if dps == BASE_DPS {
-            os.value.clone()?
+            first.0.clone()?
         } else {
-            se.eval_real(&senv, dps)?.value?
+            se.eval_real(senv, dps)?.value?
         };
         let (s_undef, s_inf) = class_of(&s);
         if s_undef {
             return Some(RowVerdict::Extend);
         }
         let c = if dps == BASE_DPS {
-            oc.value.clone()?
+            first.1.clone()?
         } else {
-            ce.eval_real(&cenv, dps)?.value?
+            ce.eval_real(cenv, dps)?.value?
         };
         let (c_undef, c_inf) = class_of(&c);
         if let Some(up) = s_inf {
@@ -289,6 +338,63 @@ fn table_row(
     } else {
         RowVerdict::Fail
     })
+}
+
+/// THE SATURATION RULE at a row the table cannot read at any rung, as the judge reads such a
+/// point (`_contract.saturation_verdict`, `ct_saturation_verdict`): a bounded function never
+/// attains its limit at a finite argument, so a side `f(a)` (`saturating_bounds`: `tanh`,
+/// `erf`, `exp`, `inv`) against the other side WRITTEN as one of `f`'s bounds -- one token,
+/// never a fitted `<constant>` -- disagrees wherever the table reads `a` finite.
+/// `tanh(cosh(10)) -> 1`: cosh(10) is 11013.2, and tanh of it 1 - 2e-9566.
+#[allow(clippy::too_many_arguments)]
+fn saturation_refutes(
+    source: &[String],
+    src_params: &[f64],
+    candidate: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    row: usize,
+) -> bool {
+    use crate::table::{class_of, Ctx};
+    let finite = |v: &crate::table::Val| {
+        let (undef, inf) = class_of(v);
+        !undef && inf.is_none()
+    };
+    for (side, params, other) in [
+        (source, src_params, candidate),
+        (candidate, cand_params, source),
+    ] {
+        let Some(bounds) = side.first().and_then(|o| saturating_bounds(o)) else {
+            continue;
+        };
+        if side.len() < 2 || other.len() != 1 || other[0] == "<constant>" {
+            continue; // a computed side is no written bound
+        }
+        let read = |tokens: &[String], params: &[f64]| {
+            let (e, env) = table_side(tokens, params, ops, var_names, x_cols, row)?;
+            e.eval_real(&env, BASE_DPS)?.value
+        };
+        let (Some(arg), Some(lim)) = (read(&side[1..], params), read(other, &[])) else {
+            continue;
+        };
+        if !finite(&arg) || !finite(&lim) {
+            continue; // the limit IS attained at an infinite argument
+        }
+        let Some(mut ctx) = Ctx::new(BASE_DPS) else {
+            continue;
+        };
+        let p = dps_to_prec(BASE_DPS);
+        let l = ctx.value_bf(&lim);
+        if bounds
+            .iter()
+            .any(|b| matches!(l.cmp(&BigFloat::from_f64(*b, p)), Some(0)))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The binding rows `source_faithful` reads, spread evenly over them.
@@ -2815,6 +2921,47 @@ mod tests {
             true,
         );
         assert!(!ok, "tanh(x) != x must stay rejected");
+    }
+
+    /// A row the table cannot read at the rungs its intermediates demand is read as the judge
+    /// reads the point: a rung higher, then by the saturation rule. At x = -14.9862579,
+    /// erf(x) is -1 + 1e-99, inside the band at fifty and eighty digits, so floor(erf(x)) is -1
+    /// against floor(sin(asinh(x))) = 0; tanh(cosh(10)) is 1 - 2e-9566, unread at every rung and
+    /// never the written 1.
+    #[test]
+    fn an_unread_row_is_read_as_the_judge_reads_it() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = ["x0".to_string()];
+        let cols = vec![vec![-14.9862579]];
+        let row = |src: &[&str], cand: &[&str]| {
+            table_row(
+                &s(src),
+                &[],
+                &s(cand),
+                &[],
+                ops,
+                &v,
+                &cols,
+                0,
+                1e-11,
+                1e-12,
+                true,
+            )
+        };
+        assert_eq!(
+            row(&["floor", "sin", "asinh", "x0"], &["floor", "erf", "x0"]),
+            Some(RowVerdict::Fail)
+        );
+        assert_eq!(row(&["tanh", "cosh", "10"], &["1"]), Some(RowVerdict::Fail));
+        assert_eq!(
+            row(&["floor", "erf", "x0"], &["-1"]),
+            Some(RowVerdict::Pass)
+        );
     }
 
     /// Saturated-at-P rows are extendable, not wrong: atanh(tanh(400)) is inf at 1024
