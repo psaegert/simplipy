@@ -1336,7 +1336,10 @@ model predictions.
   shipped corpus `permissive` is now at most as dear as `f64` and `real` on every row. `f64`
   keeps float64's values (`1/(x1*0)` is `inf/x1`). The table's `max` and `min` of an exact and an
   approximate value it cannot tell apart is approximate, never the exact member: `max(2,
-  cosh(acosh(2)))` stays as written in `real`.
+  cosh(acosh(2)))` stays as written in `real`. Likewise `floor` and `ceil` of an approximate
+  value in an integer's band, on the integer included, are undecided until a finer reading
+  leaves the band: `floor(1 - exp(-200))` and `ceil(exp(-200) - 1)` stay as written in `real`
+  (they folded to 1 and -1; both are 0).
 - **The interval layer reads each mode's values.** In `real` and `permissive` (and in the
   judge's measure) every point is the table's value and no float64 saturation exists: `1/0` and
   `tan(asin(1))` are undefined, `tanh(x)` stays below 1 past 19.06, `erf(x)` below 1 past 5.92

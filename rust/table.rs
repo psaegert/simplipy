@@ -1189,8 +1189,11 @@ fn asin_approx(name: &str, a: &Val, ctx: &mut Ctx) -> Out {
     }))
 }
 
-/// `floor` / `ceil`: exact on an exact value; on an approximation, exact unless the value is
-/// inside the band of an integer it is not, or past the working resolution.
+/// `floor` / `ceil`: exact on an exact value; on an approximation, decided only outside the band
+/// of every integer and inside the working resolution. An approximation in an integer's band,
+/// ON the integer included, is undecided: one that rounds onto an integer at the working
+/// precision may lie on either side of it (`tanh(400)` is the fifty-digit 1.0 and below 1, so
+/// its floor is 0), and a finer rung decides it or the caller fails closed.
 fn step(floor: bool, a: &Val, ctx: &mut Ctx) -> Out {
     if let Some(up) = inf_sign(a) {
         return Some(inf(up));
@@ -1213,15 +1216,13 @@ fn step(floor: bool, a: &Val, ctx: &mut Ctx) -> Out {
     }
     let nearest = x.round(0, RM);
     let d = x.sub(&nearest, ctx.p, RM).abs();
-    if !d.is_zero() {
-        let scale = if cmp_gt(&x.abs(), &one(ctx.p)) {
-            x.abs()
-        } else {
-            one(ctx.p)
-        };
-        if cmp_lt(&d, &scale.mul(&ctx.floor, ctx.p, RM)) {
-            return None;
-        }
+    let scale = if cmp_gt(&x.abs(), &one(ctx.p)) {
+        x.abs()
+    } else {
+        one(ctx.p)
+    };
+    if cmp_lt(&d, &scale.mul(&ctx.floor, ctx.p, RM)) {
+        return None;
     }
     let v = if floor { x.floor() } else { x.ceil() };
     Some(match bf_integer(&v) {
@@ -2227,5 +2228,21 @@ mod tests {
         assert_eq!(f64_agree(-0.0, 0.0), Cmp::Eq);
         assert_eq!(f64_agree(f64::NAN, 1.0), Cmp::Ext);
         assert_eq!(f64_agree(f64::INFINITY, 1.0), Cmp::InfChange);
+    }
+
+    /// A step head over an approximation in an integer's band, on the integer included, is
+    /// undecided at the working precision, and a finer rung decides it: `tanh(400)` is the
+    /// fifty-digit 1.0 and below 1, so its floor is 0, never 1.
+    #[test]
+    fn a_step_of_an_approximation_on_an_integer_is_undecided() {
+        let toks: Vec<String> = "floor tanh 400".split(' ').map(String::from).collect();
+        let e = Expr::compile(&toks, &[], &arity()).unwrap();
+        assert_eq!(class(&e.eval_real(&[], 50).unwrap().value), "unresolved");
+        let v = e.eval_real(&[], 400).unwrap().value.unwrap();
+        assert!(is_exact_zero(&v), "{v:?}");
+        assert_eq!(class(&real("ceil + 1 * -1 exp -200", &[])), "unresolved");
+        // an exact value is exact, and one off every integer's band is decided
+        assert_eq!(class(&real("floor 2.5", &[])), "fin");
+        assert_eq!(class(&real("floor tanh 1", &[])), "fin");
     }
 }
