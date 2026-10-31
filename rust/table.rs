@@ -15,9 +15,15 @@
 //!   value by its formula (a pole, a boundary, an infinite argument) its value is THE LIMIT
 //!   RULE's: the limit of the operation as its arguments approach the point from inside its
 //!   domain, taken in all arguments together, if every direction gives the same limit; otherwise
-//!   undefined. `log(0)` is -inf (one side in the domain), `pow(0, -2)` is +inf (both sides
-//!   agree), `1/0` and `tan(pi/2)` are undefined (the sides disagree), `pow(1, inf)` is undefined
-//!   (along x = 1 + 1/y the value tends to e).
+//!   undefined. `log(0)` is -inf (one side in the domain), `1/0` and `tan(pi/2)` are undefined
+//!   (the sides disagree), `pow(1, inf)` is undefined (along x = 1 + 1/y the value tends to e),
+//!   `mod(0, inf)` is undefined (along (1/n, n) the remainder tends to 0, along (-1/n, n) to
+//!   +inf), `pow(-inf, 0)` is 1 (a negative base admits only integer exponents, and near 0 the
+//!   only one is 0).
+//! - Division by zero is undefined however it is written, even where a limit exists: `1/0`,
+//!   `inv(0)`, a negative power of zero (`pow(0, -2)`, though 1/x^2 tends to +inf at 0), a
+//!   remainder by zero (`mod(1, 0)`), a root whose index is not a finite integer
+//!   (`rootn(2, inf)`). So `x^-2` and `1/x^2` agree everywhere.
 //! - Undefined propagates: an operation with an undefined operand is undefined.
 //!
 //! The evaluator carries a value EXACTLY wherever it can -- rationals, rational multiples of pi,
@@ -677,9 +683,14 @@ fn pow(a: &Val, b: &Val, ctx: &mut Ctx) -> Out {
     if is_undef(a) || is_undef(b) {
         return Some(undef());
     }
-    // x^0 = 1 has a value at every finite x; inf^0 is an indeterminate form
+    // x^0 = 1 has a value at every finite x; at -inf the base admits only integer exponents and
+    // near 0 the only one is 0, so the limit is 1; inf^0 is an indeterminate form
     if is_zero(b) {
-        return Some(if is_inf(a) { undef() } else { int(1) });
+        return Some(if inf_sign(a) == Some(true) {
+            undef()
+        } else {
+            int(1)
+        });
     }
     // 1^y = 1 for finite y; 1^inf is indeterminate
     if exact_rat(a).is_some_and(|r| r.is_one()) {
@@ -733,18 +744,9 @@ fn pow(a: &Val, b: &Val, ctx: &mut Ctx) -> Out {
         });
     }
     if is_zero(a) {
-        if sign(b) > 0 {
-            return Some(zero());
-        }
-        // a negative exponent at a zero base: a pole
-        if is_integer(b) {
-            return Some(match odd(b, ctx) {
-                Some(true) => undef(), // +-inf on either side
-                Some(false) => inf(true),
-                None => return None,
-            });
-        }
-        return Some(inf(true)); // a non-integer power has only the positive side
+        // a negative power of zero is a division by zero: undefined however it is written, so
+        // `pow(0, -2)` and `1/pow(0, 2)` agree
+        return Some(if sign(b) > 0 { zero() } else { undef() });
     }
     if sign(a) < 0 {
         if let Val::Approx(e) = b {
@@ -804,9 +806,8 @@ fn rat_pow_frac(x: &Rat, y: &Rat) -> Option<Rat> {
 
 /// `rootn(a, n)`: the real n-th root for an integer index -- the signed root for an odd index,
 /// the principal root (NaN on negatives) for an even one, the reciprocal for a negative index --
-/// undefined for a zero or non-integer index; at a zero radicand under a negative index the
-/// limit rule's value (+inf where only the positive side exists, undefined where the sides are
-/// +-inf).
+/// undefined for an index that is zero or no finite integer, and at a zero radicand under a
+/// negative index (a division by zero).
 fn rootn(a: &Val, n: &Val, ctx: &mut Ctx) -> Out {
     if is_undef(a) || is_undef(n) || is_inf(n) || is_zero(n) || !is_integer(n) {
         return Some(undef());
@@ -827,7 +828,7 @@ fn rootn(a: &Val, n: &Val, ctx: &mut Ctx) -> Out {
         };
     }
     if negative_index && is_zero(a) {
-        return Some(if odd_k { undef() } else { inf(true) });
+        return Some(undef());
     }
     let root = if let Some(up) = inf_sign(a) {
         if up || odd_k {
@@ -1380,16 +1381,17 @@ fn binary(name: &str, a: &Val, b: &Val, ctx: &mut Ctx) -> Option<Out> {
     Some(out)
 }
 
-/// numpy's floored remainder at the reals: undefined at a zero divisor and an infinite
-/// dividend; against an infinite divisor its limit (the dividend where the signs agree, the
-/// divisor's infinity otherwise).
+/// numpy's floored remainder at the reals: undefined at a zero divisor (a division by zero) and
+/// an infinite dividend; against an infinite divisor its limit (the dividend where the signs
+/// agree, the divisor's infinity otherwise), undefined at a zero dividend, where the limit taken
+/// in both arguments together disagrees (0 along (1/n, n), +inf along (-1/n, n)).
 fn modulo(a: &Val, b: &Val, ctx: &mut Ctx) -> Out {
     if is_undef(a) || is_undef(b) || is_zero(b) || is_inf(a) {
         return Some(undef());
     }
     if let Some(bpos) = inf_sign(b) {
         if is_zero(a) {
-            return Some(zero());
+            return Some(undef());
         }
         return Some(if (sign(a) > 0) == bpos {
             a.clone()
@@ -2143,9 +2145,17 @@ mod tests {
             ("/ 1 0", "nan"),
             ("pow 0 -1", "nan"),
             ("rootn 0 -3", "nan"),
-            ("pow 0 -2", "+inf"),
-            ("pow 0 -0.5", "+inf"),
-            ("rootn 0 -2", "+inf"),
+            ("pow 0 -2", "nan"),
+            ("inv pow 0 2", "nan"),
+            ("pow 0 -0.5", "nan"),
+            ("pow 0 float(\"-inf\")", "nan"),
+            ("rootn 0 -2", "nan"),
+            ("mod 1 0", "nan"),
+            ("mod 0 float(\"inf\")", "nan"),
+            ("mod 0 float(\"-inf\")", "nan"),
+            ("mod -1 float(\"inf\")", "+inf"),
+            ("rootn 2 float(\"inf\")", "nan"),
+            ("rootn 1 atanh -1", "nan"),
             ("log 0", "-inf"),
             ("atanh 1", "+inf"),
             ("atanh -1", "-inf"),
@@ -2168,6 +2178,8 @@ mod tests {
             ("exp float(\"-inf\")", int(0)),
             ("tanh float(\"inf\")", int(1)),
             ("pow 0 0", int(1)),
+            ("pow float(\"-inf\") 0", int(1)),
+            ("mod 1 float(\"inf\")", int(1)),
             ("rootn -8 3", int(-2)),
             ("acosh 1", int(0)),
             ("ceil 0.5", int(1)),

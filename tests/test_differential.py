@@ -209,7 +209,7 @@ SPEC_EXAMPLES = [
     case('/ 1 0', 'float("inf")', 'f64', True),
     case('/ 1 0', 'float("inf")', 'permissive', True),
     case('pow 0 -1', 'float("inf")', REALS, False),
-    case('pow 0 -2', 'float("inf")', REALS, True),
+    case('pow 0 -2', 'float("inf")', REALS, False),
     case('pow 1 float("inf")', '1', REALS, False),
     case('pow 1 float("inf")', '1', 'f64', True),
     # P3 as ruled: permissive serves real's values up to float resolution -- a deep saturation
@@ -223,7 +223,9 @@ SPEC_EXAMPLES = [
     case('ceil abs cos x0', '1', 'permissive', False),
     case('abs log cos x0', 'log inv cos x0', 'permissive', False),
     case('pow 0 asinh _0', 'pow 0 _0', 'f64', True),
-    case('pow 0 asinh _0', 'pow 0 _0', 'permissive', False),
+    # a negative power of zero has no value however its exponent is spelled, so `0^asinh(x)`
+    # and `0^x` agree at every binding: 0 for x > 0, 1 at 0, no value for x < 0
+    case('pow 0 asinh _0', 'pow 0 _0', 'permissive', True),
 ]
 
 
@@ -321,7 +323,10 @@ def literal_reading(tokens: list[str]) -> str | None:
 
 REAL_TABLE = [
     ('inv 0', 'nan', 'N6'), ('pow 0 -1', 'nan', 'N6'), ('rootn 0 -3', 'nan', 'N6'),
-    ('pow 0 -2', '+inf', None), ('pow 0 -0.5', '+inf', None), ('rootn 0 -2', '+inf', None),
+    ('pow 0 -2', 'nan', None), ('pow 0 -0.5', 'nan', None), ('rootn 0 -2', 'nan', None),
+    ('inv pow 0 2', 'nan', None), ('mod 1 0', 'nan', None), ('mod 0 float("inf")', 'nan', None),
+    ('mod 0 float("-inf")', 'nan', None), ('rootn 2 float("inf")', 'nan', None),
+    ('pow float("-inf") 0', '1.0', None), ('mod 1 float("inf")', '1.0', None),
     ('log 0', '-inf', None), ('atanh 1', '+inf', None), ('atanh -1', '-inf', None),
     ('tan asin 1', 'nan', None), ('exp float("-inf")', '0.0', None),
     ('tanh float("inf")', '1.0', None), ('atan float("inf")', repr(np.pi / 2), None),
@@ -366,7 +371,8 @@ def test_f64_reads_the_evaluator(expr, expected) -> None:
 
 
 @pytest.mark.parametrize('expr, expected', [
-    ('inv 0', 'nan'), ('pow 0 -1', 'nan'), ('pow 0 -2', '+inf'), ('log 0', '-inf'),
+    ('inv 0', 'nan'), ('pow 0 -1', 'nan'), ('pow 0 -2', 'nan'), ('log 0', '-inf'),
+    ('rootn 0 -2', 'nan'), ('mod 0 float("inf")', 'nan'), ('pow float("-inf") 0', '1.0'),
     ('tan asin 1', 'nan'), ('pow 1 float("inf")', 'nan'), ('pow float("nan") 0', 'nan'),
     ('rootn 0 -3', 'nan'), ('tanh float("inf")', '1.0'), ('exp float("-inf")', '0.0')])
 def test_interval_enclosures_contain_the_table_values(expr, expected) -> None:

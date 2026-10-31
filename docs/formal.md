@@ -577,7 +577,9 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   class literal (`nan`/$\pm$`inf`), $\diamond$, resp. the literal of that value,
   **accepted only if** $u' <_o u$. Exact rational arithmetic lives in the constructors (bag
   coefficient merging, integer/rational `pow`, exact roots, the two determined reciprocal arms
-  $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$), and a ground composite whose rigorous
+  $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$ in `f64`, as float64 computes them; in
+  `permissive` an operation on literals takes the table's value, where a division by zero has
+  none however it is written, so $0^{-k}$ is NaN there), and a ground composite whose rigorous
   interval *class* is non-finite folds to that class literal in every mode (a class is an
   exact fact — no finite value is read, so no rounding can occur). Two shapes beside it fold to
   `nan` the same way: a `rootn` whose index is ground and whose rigorous value set reaches no

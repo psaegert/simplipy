@@ -5,9 +5,10 @@
 A single implementation of the criterion (the specification's section 3): every soundness
 instrument (the rule-completeness gate, the mine's gates, verify-mine) reads it. Every value at a
 point is THE TABLE's (`rust/table.rs`, read through `_core.TableExpr`): the reals' exact or
-high-precision values with the limit rule at poles and infinite arguments (`1/0` and
-`pow(0, -1)` are undefined, `pow(0, -2)` is +inf, `log(0)` is -inf), and f64's evaluator values
-with the range standard. The judge keeps its procedure -- the precision ladder, the constant
+high-precision values with the limit rule at poles and infinite arguments (`log(0)` is -inf,
+`pow(-inf, 0)` is 1, `mod(0, inf)` is undefined) and a division by zero undefined however it is
+written (`1/0`, `pow(0, -2)`, `mod(1, 0)`), and f64's evaluator values with the range
+standard. The judge keeps its procedure -- the precision ladder, the constant
 fitting, the sampled points -- and owns none of the values.
 
 The criterion, per mode:

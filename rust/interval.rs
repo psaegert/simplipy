@@ -3141,14 +3141,14 @@ impl Drop for ReadingScope {
 /// the layer meets a point. A literal, a bound
 /// `<constant>`, an operation on such points, and a step head (`floor`, `ceil`) whose value is
 /// one integer on the cell are the table's values; so is any operation whose operands are exact
-/// points (`table_at_points`): `1/0` and `pow(0, -1)` are undefined, `pow(0, -2)` is +inf,
-/// `pow(1, inf)` and `pow(nan, 0)` are undefined. Elsewhere the interval arithmetic is the
-/// layer's own, without float64's saturations: `tanh` stays below 1 and `exp` above 0 at every
-/// finite argument (`tanh(x) = 1` past 19.06 is float64's, not the reals'). This is the contract
-/// judge's measure (`table_extension_width`): a cell is certified in the table's values, so
-/// `tan(asin(ceil(x)))` is undefined on all of (0, 1] (the table's `tan(pi/2)`), where the
-/// layer's float enclosure of `asin(1)` reads a finite pole neighbourhood. Thread-local, and
-/// restored on return.
+/// points (`table_at_points`): `1/0`, `pow(0, -1)` and `pow(0, -2)` are undefined (a division
+/// by zero), `pow(1, inf)`, `pow(nan, 0)` and `mod(0, inf)` are undefined, `pow(-inf, 0)` is 1.
+/// Elsewhere the interval arithmetic is the layer's own, without float64's saturations: `tanh`
+/// stays below 1 and `exp` above 0 at every finite argument (`tanh(x) = 1` past 19.06 is
+/// float64's, not the reals'). This is the contract judge's measure (`table_extension_width`):
+/// a cell is certified in the table's values, so `tan(asin(ceil(x)))` is undefined on all of
+/// (0, 1] (the table's `tan(pi/2)`), where the layer's float enclosure of `asin(1)` reads a
+/// finite pole neighbourhood. Thread-local, and restored on return.
 pub fn with_real_reading<T>(f: impl FnOnce() -> T) -> T {
     with_reading(true, f)
 }
@@ -3171,7 +3171,7 @@ fn singleton_val(v: &Vs) -> Option<crate::table::Val> {
 }
 
 /// THE TABLE'S BOUNDARY ENTRIES in the real reading: the value of `op` where every operand is an
-/// exact point (`singleton_val`) -- `inv(0)` undefined, `pow(0, -2)` +inf, `tanh(inf)` 1. `None`
+/// exact point (`singleton_val`) -- `inv(0)` and `pow(0, -2)` undefined, `tanh(inf)` 1. `None`
 /// outside the real reading, at a non-point operand, or where the table cannot read the point.
 fn table_at_points(op: &str, args: &[&Vs]) -> Option<Vs> {
     if !real_reading() {
@@ -3687,7 +3687,7 @@ fn finite_ae_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bool {
 /// that is not listed makes the arm unsound for unbounded trees (the clean fix -- a
 /// faithful attains-infinity flag on `Vs` -- is the budgeted contingency). The
 /// measured corrections are in: `atanh` (+-1 -> -+inf) and `rootn` (negative index:
-/// rootn(0, -2) = +inf) were missing from the prototype's table; `rootn` and `pow`
+/// float64's rootn(0, -2) = +inf) were missing from the prototype's table; `rootn` and `pow`
 /// are listed wholesale because the check is syntactic and an index's sign may not be
 /// a literal -- conservative, fail-closed (the benign families certify structurally
 /// through `nonfinite_null`, so the recall cost lands only on subdivision-exclusive

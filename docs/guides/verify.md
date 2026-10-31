@@ -4,8 +4,10 @@
 and the miner's own certification is a pre-filter that may only refuse what the judge
 refuses. Every value it compares comes from one table, defined once in the compiled
 core: read in the reals, a literal is the rational it spells and a pole takes its limit
-where every direction gives the same one (`pow(0, -2)` is `+inf`, `1/0` has no value); read
-in `f64`, an operation is the engine's own float64 kernel. `permissive` reads the reals'
+where every direction gives the same one (`log(0)` is `-inf`, `tan(pi/2)` has no value), and
+a division by zero has no value however it is written (`1/0`, `pow(0, -2)`, `mod(1, 0)`), so
+`x^-2` and `1/x^2` agree everywhere; read in `f64`, an operation is the engine's own float64
+kernel. `permissive` reads the reals'
 values. The judge's own part is the
 procedure: the precision ladder, the fitted constants and the sample points. It is a
 power-user surface: verdicts are environment-qualified (see

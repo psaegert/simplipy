@@ -9336,8 +9336,8 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     };
     // In `permissive` a power of two literals is the table's exact value
     // (`table_literal_fold`):
-    // `pow(0, -1)` is NaN (1/0, the limit rule), `pow(0, -2)` +inf, `pow(1, inf)`,
-    // `pow(inf, 0)` and `pow(nan, 0)` NaN -- before the one-zero arms and the `x^0` and `1^x`
+    // `pow(0, -1)` and `pow(0, -2)` are NaN (a division by zero), `pow(1, inf)`, `pow(inf, 0)`
+    // and `pow(nan, 0)` NaN, `pow(-inf, 0)` 1 -- before the one-zero arms and the `x^0` and `1^x`
     // identities below, which hold for every finite real.
     // Permissive's sentinel licence comes first: until the phase-1 fixpoint `1/inf` stays
     // written, so `inf/inf` can still cancel as like terms (see the reciprocal arm below).
@@ -10142,10 +10142,10 @@ fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
 /// arguments (rationals, the infinities, NaN) as THE TABLE reads it in the reals' values
 /// (`table::apply`), where it is exact -- a rational, an infinity, or NaN where the limit rule
 /// gives no value:
-/// `pow(0, -1)` and `rootn(0, -3)` (1/0: the sides disagree), `pow(1, inf)`, `pow(inf, 0)` and
-/// `pow(nan, 0)` are NaN, `rootn(0, -2)` and `pow(0, -2)` +inf, `exp(-inf)` 0, `tanh(inf)` 1,
-/// `acosh(1)` 0. `None` for an approximation (a transcendental value stays symbolic) or an
-/// operator the table does not know.
+/// `pow(0, -1)`, `pow(0, -2)`, `rootn(0, -2)` and `mod(1, 0)` (a division by zero),
+/// `pow(1, inf)`, `pow(inf, 0)`, `pow(nan, 0)` and `mod(0, inf)` are NaN, `pow(-inf, 0)` 1,
+/// `exp(-inf)` 0, `tanh(inf)` 1, `acosh(1)` 0. `None` for an approximation (a transcendental
+/// value stays symbolic) or an operator the table does not know.
 fn table_literal_fold(op: &str, args: &[Ex]) -> Option<Ex> {
     use crate::table::{Exact, Val};
     let vals: Option<Vec<Val>> = args
@@ -10588,7 +10588,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // (`floor(0.99999999999999999)` is 1 there) and `permissive` by the table.
     // In `permissive` an operation on literals is the table's exact value
     // (`table_literal_fold`):
-    // `rootn(0, -3)` is NaN, `rootn(0, -2)` +inf, `exp(-inf)` 0, `tanh(inf)` 1, `acosh(1)` 0.
+    // `rootn(0, -2)` and `mod(0, inf)` are NaN, `exp(-inf)` 0, `tanh(inf)` 1, `acosh(1)` 0.
     if cx.table_values() && !args.is_empty() && args.iter().all(table_literal) {
         if let Some(folded) = table_literal_fold(&cx.view.resolve_owned(op), &args) {
             return folded;

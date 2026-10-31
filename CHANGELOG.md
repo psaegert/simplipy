@@ -108,6 +108,14 @@ organised by who you are, then the highlights, then every change in detail.
 
 **`permissive` users**
 
+- **A division by zero has no value, however it is written.** `1/0`, `inv(0)`, a negative power
+  of zero (`pow(0, -2)`, though 1/x^2 tends to +inf at 0), a remainder by zero (`mod(1, 0)`)
+  and a root whose index is no finite integer (`rootn(2, inf)`) have none, so `x^-2` and
+  `1/x^2` agree everywhere; `pow(-inf, 0)` is 1, and `mod(0, inf)` has no value (the remainder
+  tends to 0 along (1/n, n) and to +inf along (-1/n, n)). A fully numeric expression takes this
+  value: `pow(0, -2)` and `rootn(0, -2)` are NaN (they were inf), `mod(0, atanh(1))` is NaN (it
+  was 0), `pow(-inf, 0)` is 1 (it was NaN). The rule judge reads the same values; `f64` follows
+  the evaluator and does not change.
 - **One walk.** `permissive` runs its chain and then the search, like every mode, so its answer
   never prices above the input and a second call returns it unchanged. Its answers change
   accordingly.

@@ -331,7 +331,10 @@ class TestShippingArtifact:
         # `_` slot guards (bound to a subexpression that is 0 on an interval the extension
         # has positive measure), so the three are KILLs -- held in f64, since float64 reads
         # both sides as +inf there, and so still this file's to hold.
-        assert census == {'CERTIFIED': 3817, 'TOLERATED': 0, 'KILL': 3}, census
+        # 3817/0/3 -> 3820/0/0: a negative power of zero has no value either (a division by
+        # zero, however it is written), so at that point neither side has one, and the three
+        # are CERTIFIED.
+        assert census == {'CERTIFIED': 3820, 'TOLERATED': 0, 'KILL': 0}, census
         # The f64 file excuses NOTHING: the four excused rules of the one documented null-set
         # class (clause (b), undefined->defined on the null set {0} only) are TOLERATED
         # and not f64-realised, which is the `permissive` tier, so they live in the
@@ -856,8 +859,12 @@ class TestCleanlinessIsPerMode:
         # leave asin's domain at the same double. Every other verdict is the same everywhere.
         f64 = {o['idx'] for o in report['modes']['f64']['offenders']}
         assert len(f64 - {126}) == 25
+        # A negative power of zero has no value: permissive 39 (-4 `pow 0 asinh _0 -> pow 0 _0`
+        # and kin, whose sides now agree at every binding, none having a value below 0; +5
+        # `/ log _0 (-2k) -> log rootn _0 (-2k)`, whose right side has no value at 0, where the
+        # left side is +inf).
         assert {m: len(r['offenders']) for m, r in report['modes'].items() if m != 'f64'} == \
-            {'permissive': 38}
+            {'permissive': 39}
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {

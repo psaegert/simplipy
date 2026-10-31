@@ -819,7 +819,7 @@ class TestZeroPoles:
     evaluator is float64: a product holding an exact zero is a zero of its other members' sign,
     and its inverse distributes over them (`(0*f)^k = inf * f^k`, exact in IEEE arithmetic for
     every `f`). `permissive` reads the one zero of the reals, where `1/0` has no value
-    (division by zero is undefined however written), while `1/0^2` is +inf. Every
+    (division by zero is undefined however written), and so has `1/0^2`. Every
     spelling of one value gets one answer in each mode: `inv(0/tanh(-2))`, `inv(0*tanh(-2))` and
     `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the first and `+inf` for the
     others)."""
@@ -832,9 +832,10 @@ class TestZeroPoles:
                        ['inv', 'neg', '-', 'x1', 'x1'],
                        engine.read_infix('pow(0/tanh(-2), -3)')):
             assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
-        # an even power of a zero is +inf, whatever its sign: both sides agree
+        # an even negative power of a zero: +inf in float64, whatever the zero's sign; no value
+        # in the reals, a division by zero
         assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -2)'), mode=mode) == \
-            ['float("inf")']
+            ['float("inf")' if mode == 'f64' else 'float("nan")']
 
     def test_a_zero_takes_the_sign_of_its_co_members(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['inv', '*', '0', 'x1'], mode='f64') == ['/', 'float("inf")', 'x1']
