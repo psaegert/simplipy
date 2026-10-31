@@ -57,9 +57,9 @@ organised by who you are, then the highlights, then every change in detail.
   `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit.
 - **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/4)` is `+0`,
   the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
-  an exact zero is inverted, `f64` (and `permissive`) keep the sign float64 gives it:
-  `1/(x1*(x2 - x2))` is `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` reads
-  one zero and keeps `inf`.
+  an exact zero is inverted, `f64` keeps the sign float64 gives it: `1/(x1*(x2 - x2))` is
+  `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` and `permissive` read one
+  zero, and `1/0` has no value there (the limit rule), so it is NaN.
 - **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
   integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
   and one sign bit; `real` and `permissive` read it as 0. An `f64` ground fold writes its float
@@ -132,7 +132,7 @@ organised by who you are, then the highlights, then every change in detail.
 - The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
   a file mined before this version can fail `verify-mine` in `real` where a rule read `1/0` as
   `+inf` or tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
-  `UNDECIDED-MEASURE`, and three new tiers, `permissive`, `real-only` and `strict`.
+  `UNDECIDED-MEASURE`, and four new tiers, `permissive`, `real-only`, `f64-only` and `strict`.
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - `verify_triple(..., engine_config=)` checks the three rule sets it is given (the config
   contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which ships in

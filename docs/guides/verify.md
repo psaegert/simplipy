@@ -61,6 +61,7 @@ question is asked at the `_` sort: no disagreement at an isolated point is excus
 | `real` | yes | no | `real`, `permissive` |
 | `real-only` | yes, by an allowance a slot guards | no | `real` |
 | `f64` | no | yes | `f64`, `permissive` |
+| `f64-only` | no, nor in `permissive` (`tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))`) | yes | `f64` |
 | `permissive` | by agreement alone (`exp(log(x0)) -> x0`) | no | `permissive` |
 | `reject` | no | no | nothing — recorded in the drop census |
 

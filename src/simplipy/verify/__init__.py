@@ -83,7 +83,9 @@ POLICIES = ('evidence', 'constant_count', 'ground_composite', 'cell_bound', 'ord
             'specials', 'duplication', 'engine_owned', 'well_formed')
 
 #: The load's refusals (`Engine.load_refusal`) by the policy each applies. `pole-class-change`
-#: is a pre-filter of truth, not a policy, and licenses nothing either way.
+#: is a pre-filter of truth, not a policy, and licenses nothing either way. `catch-all-lhs` is a
+#: left side the canon leaves no composite: written as one, it is what the engine folds itself
+#: (`1/0 -> nan`, `C - C -> 0`: `engine_owned`), and only a written leaf is ill-formed.
 _LOAD_POLICY = {'const-count-increase': 'constant_count',
                 'not-ordered-below': 'ordering', 'engine-owned-law': 'engine_owned',
                 'subsumed': 'engine_owned', 'catch-all-lhs': 'well_formed',
@@ -115,7 +117,9 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
                             mode == 'f64') is not True:
         out.append('evidence')
     load = engine._core.load_refusal(lhs, rhs, rule_mode=rule_mode)
-    if load in _LOAD_POLICY:
+    if load == 'catch-all-lhs' and len(lhs) > 1:
+        out.append('engine_owned')
+    elif load in _LOAD_POLICY:
         out.append(_LOAD_POLICY[load])
     if _core.policy_ground_composite(rhs):
         out.append('ground_composite')

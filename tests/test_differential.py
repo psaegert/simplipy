@@ -546,6 +546,19 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     assert folded == (holds and (evidence is True or mode == 'permissive'))
 
 
+@pytest.mark.parametrize('lhs, rhs, policy', [
+    ('/ 1 0', 'float("nan")', 'engine_owned'),
+    ('- <constant> <constant>', '0', 'engine_owned'),
+    ('x0', '0', 'well_formed'),
+])
+def test_a_left_side_the_engine_folds_to_a_leaf_is_the_engines_own(lhs, rhs, policy) -> None:
+    """A written composite the canon folds to a leaf is what the engine does itself
+    (`engine_owned`); only a written leaf is an ill-formed left side (`well_formed`)."""
+    from simplipy.verify import policy_refusals
+    got = policy_refusals(lhs.split(), rhs.split(), 'f64', bare())
+    assert policy in got and ({'engine_owned', 'well_formed'} - {policy}).isdisjoint(got), got
+
+
 @pytest.mark.parametrize('lhs, rhs, verdict', [
     # true: d1 = e^c2 and d2 = c1, at c2 = 300 a witness of 1e130 and at c1 = 1e4 an exponent
     # float64 cannot fit across the generic values
