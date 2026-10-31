@@ -32,8 +32,10 @@ reproducer where possible.
   `revision` and per-file `sha256` digests, enforced at install and at cache
   resolution. Any way to make the engine load rule content that does not
   match the manifest digests is a vulnerability, as is path escape during
-  asset install/uninstall (asset paths are resolved and contained under the
-  asset root by design).
+  asset resolution, install or uninstall: every path a manifest names (the
+  directory, the files, the entrypoint, the files its digests name) is
+  resolved and contained under the asset root before any filesystem use, and
+  an absolute path or one with a `..` segment is refused.
 - Denial of service through crafted expressions or configs that bypass the
   documented budgets (`max_passes`, mining caps).
 

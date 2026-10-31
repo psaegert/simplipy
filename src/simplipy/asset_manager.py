@@ -11,8 +11,8 @@ and resolve an asset name or local path to a concrete entrypoint file
 import json
 import logging
 import shutil
-from pathlib import Path
-from typing import Literal
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any, Literal
 
 import platformdirs
 from filelock import FileLock
@@ -134,8 +134,28 @@ def _asset_files_present(local_dir: Path, asset_info: dict) -> bool:
         return False
     files = asset_info.get('files')
     if not files:
-        return (base / asset_info['entrypoint']).exists()
-    return all((base / f).exists() for f in files)
+        return _inside(base, asset_info['entrypoint'], 'entrypoint').exists()
+    return all(_inside(base, f, 'file name').exists() for f in files)
+
+
+def _inside(base: Path, rel: Any, what: str) -> Path:
+    """The manifest path ``rel`` resolved STRICTLY INSIDE ``base``, or a ``ValueError`` naming
+    the field (``what``). The one containment check every path-bearing manifest field passes
+    before any filesystem use: a manifest is downloaded data, never a path authority. A path
+    that is absolute or holds a ``..`` segment is refused outright, and the resolved path must
+    lie under ``base`` (a link cannot lead out)."""
+    if not isinstance(rel, str) or not rel:
+        raise ValueError(f'manifest {what} {rel!r} is not a relative path; refusing')
+    parts = rel.replace('\\', '/').split('/')
+    if PurePosixPath(rel).is_absolute() or PureWindowsPath(rel).is_absolute() or '..' in parts:
+        raise ValueError(f'manifest {what} {rel!r} is absolute or leaves its directory; '
+                         'refusing (a manifest is data, not a path authority)')
+    root = Path(base).resolve()
+    path = (root / rel).resolve()
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError(f'manifest {what} {rel!r} escapes {str(root)!r}; refusing '
+                         '(a manifest is data, not a path authority)')
+    return path
 
 
 def _asset_root(local_dir: Path, asset_info: dict) -> Path:
@@ -145,21 +165,23 @@ def _asset_root(local_dir: Path, asset_info: dict) -> Path:
     join unvalidated. No `..` is needed for the
     escape: `Path(cache) / '/etc/x'` IS `Path('/etc/x')` -- absolute paths defeat
     any fix that only rejects traversal segments, so the rule is resolve-and-contain,
-    never segment filtering. Every consumer of `asset_info['directory']` (and the
-    per-file joins) goes through here before touching the filesystem.
+    never segment filtering. Every consumer of the asset's paths goes through here before
+    touching the filesystem: the directory, and every path-bearing field under it (`files`,
+    `entrypoint`, the keys of `sha256`), each through `_inside`.
     """
-    root = (local_dir / asset_info['directory']).resolve()
-    base = Path(local_dir).resolve()
-    if not root.is_relative_to(base) or root == base:
-        raise ValueError(
-            f"manifest directory {asset_info['directory']!r} escapes the asset cache "
-            f"root {str(base)!r}; refusing (a manifest is data, not a path authority)")
-    for f in asset_info.get('files', []):
-        fp = (root / f).resolve()
-        if not fp.is_relative_to(root):
-            raise ValueError(
-                f"manifest file name {f!r} escapes the asset directory; refusing")
+    root = _inside(Path(local_dir), asset_info.get('directory'), 'directory')
+    for f in asset_info.get('files') or []:
+        _inside(root, f, 'file name')
+    if 'entrypoint' in asset_info:
+        _inside(root, asset_info['entrypoint'], 'entrypoint')
+    for name in (asset_info.get('sha256') or {}):
+        _inside(root, name, 'sha256 file name')
     return root
+
+
+def _entrypoint(local_dir: Path, asset_info: dict) -> Path:
+    """The asset's entrypoint file, contained (`_inside`)."""
+    return _inside(_asset_root(local_dir, asset_info), asset_info['entrypoint'], 'entrypoint')
 
 
 def _verify_asset_digests(local_dir: Path, asset_info: dict) -> None:
@@ -177,7 +199,7 @@ def _verify_asset_digests(local_dir: Path, asset_info: dict) -> None:
         return
     base = _asset_root(local_dir, asset_info)
     for name, expected in digests.items():
-        path = base / name
+        path = _inside(base, name, 'sha256 file name')
         if not path.exists():
             continue  # completeness is _asset_files_present's job
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -259,7 +281,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     cached_info = _cached_manifest(repo_id=repo_id, manifest_filename=manifest_filename).get(asset)
     if cached_info and _asset_files_present(local_dir, cached_info):
         _verify_asset_digests(local_dir, cached_info)  # Raises on a corrupted cache
-        return str(_asset_root(local_dir, cached_info) / cached_info['entrypoint'])
+        return str(_entrypoint(local_dir, cached_info))
 
     # Otherwise, treat 'asset' as an official asset name
     manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
@@ -271,7 +293,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
         list_assets(asset_type='all')
         raise ValueError(f"Error: Unknown asset: '{asset}'. See above for available assets.")
 
-    entrypoint_path = _asset_root(local_dir, asset_info) / asset_info['entrypoint']
+    entrypoint_path = _entrypoint(local_dir, asset_info)
 
     if _asset_files_present(local_dir, asset_info):
         _verify_asset_digests(local_dir, asset_info)  # Raises on a corrupted cache

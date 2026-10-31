@@ -33,8 +33,20 @@ import itertools
 import math
 import re
 from fractions import Fraction
+from typing import Any
 import numpy as np
-from mpmath import mp, mpf, isnan as misnan, isinf as misinf
+from mpmath import mp, isnan as misnan, isinf as misinf
+from mpmath import mpf as _mpmath_mpf
+from mpmath.libmp import from_rational as _from_rational
+
+
+def mpf(v: Any = 0) -> Any:
+    """mpmath's `mpf`, a `Fraction` read through its numerator and denominator and rounded
+    once at the working precision: mpmath before 1.4 builds no `mpf` from a `Fraction`, and
+    the judge runs on every mpmath the package supports (1.3 among them)."""
+    if isinstance(v, Fraction):
+        return mp.make_mpf(_from_rational(v.numerator, v.denominator, mp.prec, 'n'))
+    return _mpmath_mpf(v)
 
 # No `np.seterr(all='ignore')` here -- that call is PROCESS-WIDE and ran at
 # import, silently changing the embedder's numpy error handling because this module

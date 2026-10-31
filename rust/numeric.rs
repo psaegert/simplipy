@@ -323,6 +323,20 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
     })
 }
 
+/// THE CORE'S OPERATOR SCHEMA: the arity the core evaluates `name` with natively
+/// ([`unary_fn`], [`binary_fn`]), or `None` for a name it has no kernel for. A config declaring
+/// such a name with another arity is refused at ingestion (`Engine::from_strs`): every native
+/// dispatch indexes its operands by this arity.
+pub fn native_arity(name: &str) -> Option<u8> {
+    if unary_fn(name).is_some() {
+        Some(1)
+    } else if binary_fn(name).is_some() {
+        Some(2)
+    } else {
+        None
+    }
+}
+
 /// Resolve a binary canonical operator to its scalar kernel as a function pointer, or `None`.
 pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
     Some(match name {

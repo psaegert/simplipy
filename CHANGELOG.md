@@ -41,6 +41,15 @@ organised by who you are, then the highlights, then every change in detail.
 - **An installed asset loads without the network.** `load` and `get_path` resolve an installed
   asset from the local copy of the manifest, verifying the files' digests, and go online only
   for an asset that is not installed.
+- **Every path a manifest names stays inside the asset cache.** The directory, the files, the
+  entrypoint and the files the digests name are resolved strictly inside the cache before any
+  filesystem use; an absolute path or one with a `..` segment raises `ValueError`.
+- **A config declares the arity the core evaluates an operator with.** An operator the core
+  has a kernel for (`sin`, `max`, `besselj`, ...) declared with another arity is refused at
+  ingestion with `ValueError` (a zero-arity `sin` used to panic at evaluation).
+- **The rule judge runs on mpmath 1.3.** It reads a `Fraction` through its numerator and
+  denominator, which every supported mpmath accepts (mpmath before 1.4 builds no `mpf` from a
+  `Fraction`, and Torch's SymPy pins mpmath below 1.4).
 - **`packaging` is a declared dependency** (it was already installed through `huggingface_hub`).
 - **Rule files mined before 0.15 are refused.** 0.15 changes the canonical forms, the measure
   and the rule judge, and serves only the rule sets mined for it. `SimpliPyEngine.from_config`

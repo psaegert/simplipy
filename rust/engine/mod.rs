@@ -184,6 +184,20 @@ impl Engine {
                     .into());
                 }
             }
+            // THE CORE'S OPERATOR SCHEMA: a name the core evaluates natively has the arity of
+            // its kernel, and every native dispatch indexes its operands by it, so a config
+            // declaring `sin` with arity 0 is refused here, not met at evaluation.
+            if let Some(native) = crate::numeric::native_arity(name) {
+                if spec.arity != native {
+                    return Err(format!(
+                        "config error: the core evaluates {name:?} with arity {native}, but the \
+                         config declares arity {}; declare arity {native} or give the operator \
+                         another name",
+                        spec.arity
+                    )
+                    .into());
+                }
+            }
             // ...and its PRECEDENCE, for the same reason. The guard used to check arity
             // and aliases only, which left the closure breach open from the other side:
             // the realization rendering is a string PYTHON evaluates, and Python's
