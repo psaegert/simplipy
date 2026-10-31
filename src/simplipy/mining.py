@@ -825,15 +825,19 @@ class RuleMiner:
     def _unlicensed(self, picks: dict, rule_mode: str, judge: Callable, judged: dict,
                     dummy_variables: list[str]) -> set:
         """The picks the mode may not ship: a pick whose pattern (the spelling the file will
-        carry) or one of whose served entries (the rule as the mode loads it, orientation
-        twins included) carries a judged tier the mode does not license, or that the mode's
-        load does not serve at all. Verdicts are memoised by pair across rounds and lengths
-        (``judged``).
+        carry) ``verify.licensed`` refuses in the mode -- the judge's tier, or a named policy
+        (evidence, the constant count, ground composites, the ordering, the specials,
+        duplication, what the engine does itself, well-formedness) -- one of whose served
+        entries (the rule as the mode loads it, orientation twins included) carries a judged
+        tier the mode does not license, or that the mode's load does not serve at all.
+        Verdicts are memoised by pair across rounds and lengths (``judged``).
 
-        WHAT THE ENGINE DOES ITSELF IS REFUSED HERE (4.8), where the mine first considers a
-        pick, by the tests the final gate checks: a ground pick the mode's rule-less engine
-        already takes to its right side (``_preempted_by``), and a pick that does not fire on
-        its own generic instances with the picks installed beside the mode's rules
+        EVERY POLICY REFUSES HERE, where the mine first considers a pick (4.8), by the tests
+        the final gate checks: `harmonic(tan(asin(-1))) -> nan` holds and has no evidence, and
+        is refused here, not dropped at the end. Among them what the engine does itself: a
+        ground pick the mode's rule-less engine already takes to its right side
+        (``_preempted_by``, the ``engine_owned`` policy), and a pick that does not fire on its
+        own generic instances with the picks installed beside the mode's rules
         (``_dead_rules``: another rule or the mode's own simplification takes the instance
         first, `abs(tan(atan(x0)))` is `abs(x0)` in permissive before
         `abs(tan(atan(_0))) -> acosh(cosh(_0))` can match). Nothing is dropped afterwards."""
@@ -855,12 +859,10 @@ class RuleMiner:
             for pair, tier in zip(todo, judge(todo)):
                 judged[pair] = tier
         allowed = _mode_tiers(rule_mode)
-        bad = {k for k, pair in enumerate(patterns) if judged[pair] not in allowed}
+        licence = _licences(self.engine, rule_mode, patterns, judge, judged)
+        bad = {k for k, pair in enumerate(patterns) if not licence[pair]['licensed']}
         bad |= set(range(len(order))) - {k for _, _, k in served}
         bad |= {k for lhs, rhs, k in served if judged[(tuple(lhs), tuple(rhs))] not in allowed}
-        mode = _file_mode(rule_mode)
-        bad |= {k for k, (lhs, rhs) in enumerate(patterns)
-                if k not in bad and _preempted_by(self.engine, lhs, rhs, mode)}
         live = [k for k in range(len(order)) if k not in bad]
         if live:
             current = self._mode_rules(rule_mode)
@@ -875,12 +877,14 @@ class RuleMiner:
         return {order[k] for k in bad}
 
     def _final_gate(self, rule_mode: str, judge: Callable, judged: dict) -> tuple[list, list]:
-        """THE FINAL PER-FILE GATE over the mode's installed set: every file spelling is asked
-        ``verify.licensed`` in the mode (the judge's tier and the named policies), every entry
-        the mode serves from it the judge's tier (``judged`` memoises tiers by pair), and a row
-        with any refused spelling is dropped. The file spelling is what release verification
-        reads; the served entries are what fires.
-        -> (kept rules, [[lhs, rhs, tier, refused_by] per dropped row])."""
+        """THE FINAL PER-FILE GATE over the mode's installed set, a CHECK: every file spelling
+        is asked ``verify.licensed`` in the mode (the judge's tier and the named policies),
+        every entry the mode serves from it the judge's tier (``judged`` memoises tiers by
+        pair). The file spelling is what release verification reads; the served entries are
+        what fires. It drops nothing: every policy refused a pick where the mine first
+        considered it (``_unlicensed``, 4.8), so the refused rows are expected none, and
+        ``verify-mine`` fails on a file that holds one.
+        -> (the licensed rows, [[lhs, rhs, tier, refused_by] per refused row])."""
         final = self._mode_rules(rule_mode)
         served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
         entries = [(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in served]
@@ -1381,25 +1385,18 @@ class RuleMiner:
                                            for k, v in sorted(_routed.items())},
                         'census': {b: len(ids) for b, ids in _buckets.items()},
                         'kept': len(self._mode_rules(rule_mode))}
-            # THE FILE IS WHAT THIS MODE LICENSES (miner.md 2.11): the final gate judges the
-            # file's own spellings AND the entries the mode serves from them, with the loop's
-            # judge and memo, and drops what the mode does not license, counted. It judges
-            # BEFORE EACH PRUNE, so a prune only ever leans on licensed rules (a rule pruned as
-            # covered by one the gate then dropped would be lost), and once more at the end,
-            # on what ships: the post-pass (promotion) respells and re-sorts, so the per-length
-            # verdicts describe an earlier set.
+            # THE FILE IS WHAT THIS MODE LICENSES (miner.md 2.11): every pick was asked
+            # `verify.licensed` where the mine first considered it (the judge loop), and
+            # promotion licenses every rung, so the final gate, at the end, on what ships, only
+            # CHECKS the file's own spellings and the entries the mode serves from them, with
+            # the loop's judge and memo: expected empty, recorded, never dropped (4.8).
             gate: dict = {'unlicensed': [], 'preempted': []}
 
             def _final_gate() -> None:
                 if not (symbolic_gate and self._mode_rules(rule_mode) and not interrupted()):
                     return
-                kept, off = self._final_gate(rule_mode, judge, judged)
-                if off:
-                    gate['unlicensed'] += off
-                    self._install(rule_mode, kept)
-                    _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
+                gate['unlicensed'] = self._final_gate(rule_mode, judge, judged)[1]
             if prune == 'covered':
-                _final_gate()
                 self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                 # The prune removes only rules the REMAINING set already reaches,
                 # so a certified proposal dropped here is still served compositionally
@@ -1444,7 +1441,6 @@ class RuleMiner:
                 # redundant instances; genuinely novel ground rules (`cos 0 -> 1`)
                 # have no wildcard cover and survive.
                 if prune == 'covered':
-                    _final_gate()
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                     _note_drops('prune_covered_post_promotion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
@@ -1455,7 +1451,7 @@ class RuleMiner:
             # promoted set, as the overlaps a stronger sort opens exist only there, and what it
             # certifies goes through the same prune and promotion. A certified completion can
             # overlap again, so the pass repeats TO ITS FIXPOINT: each round reads the set the
-            # overlap gate reads (the final gate settled first) and asks the gate's question,
+            # overlap gate reads and asks the gate's question,
             # and a completion the mode did not license is asked again on the next round's set;
             # the pass ends when a round offers nothing new or certifies nothing. Only
             # completions within the mine's cell are offered (`_in_cell`): a longer source lies
@@ -1479,7 +1475,6 @@ class RuleMiner:
                 _round += 1
                 _t_round = time.monotonic()
                 _entries = []
-                _final_gate()
                 _unjoined = _unjoined_overlaps(self.engine, rule_mode,
                                                self._mode_rules(rule_mode), prog=_cprog)
                 _within = [o for o in _unjoined if _in_cell(o, cell_source_length)]
@@ -1514,7 +1509,6 @@ class RuleMiner:
                 if not outcomes['certified']:
                     break
                 if prune == 'covered':
-                    _final_gate()
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                     _note_drops('prune_covered_completion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
@@ -1541,7 +1535,6 @@ class RuleMiner:
                     _note_drops('sort_promotion_completion',
                                 lambda _identity: 'derivable-refund')
                     if prune == 'covered':
-                        _final_gate()
                         self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                         _note_drops('prune_covered_completion',
                                     lambda _identity: 'behaviourally-covered-by-remaining-rules')

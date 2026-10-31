@@ -2162,16 +2162,15 @@ class TestTheFinalGate:
         assert miner._unlicensed({3: pick}, 'real', judge, {}, ['x0']) == set()
 
     def test_a_pick_the_mode_does_not_serve_is_licensed_nowhere(self) -> None:
-        """Never infer a licence for something the matcher never saw: `atanh(tanh(x0)) -> x0`
-        is dead in real (its reading collapses the LHS) and alive in f64, where `tanh`
-        saturates."""
+        """Never infer a licence for something the matcher never saw: `log(exp(x0)) -> x0` is
+        dead in real (its reading collapses the LHS) and alive in f64, where `exp` overflows."""
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import RuleMiner
         import yaml
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
         ops = yaml.safe_load(open(acj_config_path()))['operators']
         miner = RuleMiner(SimpliPyEngine(operators=ops, rules=[]))
-        picks = {7: (['atanh', 'tanh', 'x0'], ['x0'])}
+        picks = {7: (['log', 'exp', 'x0'], ['x0'])}
 
         def judge(pairs):
             return ['core'] * len(pairs)

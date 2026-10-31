@@ -492,14 +492,14 @@ def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
     assert stats['stubborn'] == [[WITNESS, [FIRST, SECOND]]], stats
 
 
-def test_the_final_gate_judges_before_every_prune_and_what_ships(tmp_path, monkeypatch) -> None:
-    """A prune leans only on licensed rules (a rule pruned as covered by one the final gate
-    then drops would be lost), and the final gate judges the set that ships."""
+def test_the_final_gate_checks_what_ships_and_drops_nothing(tmp_path, monkeypatch) -> None:
+    """Every policy refuses a pick where the mine first considers it (4.8 "When"), so the final
+    gate only checks: once per mode, last, on the set that ships, which it leaves as it is."""
     events = []
     real_gate, real_prune = RuleMiner._final_gate, SimpliPyEngine.prune_covered_rules
 
     def gate(self, rule_mode, judge, judged):
-        events.append(('gate', rule_mode, len(self._mode_rules(rule_mode))))
+        events.append(('gate', rule_mode, list(self._mode_rules(rule_mode))))
         return real_gate(self, rule_mode, judge, judged)
 
     def prune(self, verbose=False, *, rule_mode):
@@ -516,12 +516,10 @@ def test_the_final_gate_judges_before_every_prune_and_what_ships(tmp_path, monke
     engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
                       X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, prune='covered',
                       judge=lambda pairs: ['core'] * len(pairs))
-    f64 = [kind for kind, mode, _ in events if mode == 'default']
-    # every prune right after a gate, the overlap completion's rounds each settled by one (the set
-    # the overlap gate reads), and the set that ships gated last
-    assert f64[-1] == 'gate' and f64.count('prune') == 2, events
-    assert all(f64[i - 1] == 'gate' for i, kind in enumerate(f64) if kind == 'prune'), events
-    assert events[[e[1] for e in events].index('real') - 1][0] == 'gate'
+    f64 = [(kind, rules) for kind, mode, rules in events if mode == 'default']
+    assert [kind for kind, _ in f64].count('gate') == 1 and f64[-1][0] == 'gate', events
+    shipped = {(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules}
+    assert {(tuple(lhs), tuple(rhs)) for lhs, rhs in f64[-1][1]} == shipped
 
 
 def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path, monkeypatch) -> None:
@@ -687,3 +685,21 @@ def test_what_the_engine_does_itself_is_refused_where_the_mine_first_considers_i
     assert miner._unlicensed(live, 'real', core, {}, ['x0']) == set()
     # the mode's set is as it was: the picks were installed for the test and taken out again
     assert miner._mode_rules('permissive') == [] and miner._mode_rules('real') == []
+
+
+def test_every_policy_refuses_where_the_mine_first_considers_a_pick() -> None:
+    """The per-length loop asks `verify.licensed`, not the judge's tier alone: a pick a named
+    policy refuses is refused there, never dropped by the final gate (4.8 "When"). The tier of
+    each is `core` here, so only the policy can refuse it."""
+    import os
+    from simplipy.verify import policy_refusals
+    config = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4',
+                          'config.yaml')
+    ops = yaml.safe_load(open(config))['operators']
+    miner = RuleMiner(SimpliPyEngine(operators=ops, rules=[]))
+    core = lambda pairs: ['core'] * len(pairs)  # noqa: E731
+    picks = {0: (['harmonic', 'tan', 'asin', '-1'], ['float("nan")']),   # no evidence
+             1: (['asin', '1'], ['acos', '0'])}                           # a ground composite
+    assert 'evidence' in policy_refusals(*picks[0], 'f64', miner.engine)
+    assert 'ground_composite' in policy_refusals(*picks[1], 'f64', miner.engine)
+    assert miner._unlicensed(dict(picks), 'default', core, {}, ['x0']) == {0, 1}

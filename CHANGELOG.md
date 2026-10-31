@@ -1487,17 +1487,20 @@ model predictions.
   the length's picks installed beside the mode's rules (another rule, or the mode's own
   simplification, takes the instance first: in `permissive`, whose inverse pairs cancel
   ignoring the branch, `abs(atanh(tanh(_0))) -> acosh(cosh(_0))` meets `abs(x0)` before it can
-  match), and the scan goes on to the source's next candidate. The final gate checks both
-  (`gates.preempted`, `gates.dead`) and drops nothing.
+  match), and the scan goes on to the source's next candidate. So does every other named
+  policy: the loop asks `verify.licensed` of each pick (`harmonic(tan(asin(-1))) -> nan` holds
+  and has no evidence). The final gate checks all of them once, on the set that ships
+  (`gates.unlicensed`, `gates.preempted`, `gates.dead`), and drops nothing.
 - **The overlap completion runs to its fixpoint.** Each round reads the set the overlap gate
-  reads, the final gate settled first, and offers the completions the mode licenses there; a
+  reads and offers the completions the mode licenses there; a
   completion it did not license is asked again on the next round's set, and one the mint refused
   is offered again once the set has moved (the mint's mark to beat is the set's answer). The
   pass ends when a round offers or certifies nothing (a safety cap of 32 rounds; it was 3).
   `1/atanh(ceil(x)) -> 0` and `sinh(acosh(1/x)) -> tan(acos(x))`, which the reduced mine's
   `permissive` file lacked, are completed.
 - **The gates ask `licensed`.** The mine's completion step offers, its overlap gate demands,
-  and its final gate and `verify-mine` keep only what `verify.licensed` passes in the mode: the
+  its judge loop keeps, and its final gate and `verify-mine` pass only what `verify.licensed`
+  passes in the mode: the
   judge's tier and the named policies, each read from its one place (evidence, the constant
   count, ground composites, the mine's cell, the ordering, specials, duplication, what the
   engine does itself, well-formedness), where they read the tier alone. `asin(1) -> acos(0)`
@@ -1903,8 +1906,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   length after the scan with nothing saved: it is given up on after 8 refusals while the others
   converge, the checkpoint (with every verdict reached) is written, and the mine fails naming
   the source and its excluded targets. The proposals' loop caps per proposal.
-- **The post-pass judges before it prunes.** The final gate now runs before each covered-rule
-  prune and once more on the set that ships, so a prune never leans on a rule the gate drops.
+- **The final gate checks, once.** Every pick is licensed where the mine first considers it
+  and promotion licenses every rung, so the final gate runs once, on the set that ships, and
+  drops nothing; a prune leans only on licensed rules by construction.
 - **`verify-mine` passes nothing vacuously.** New gates `sidecar` (a final, uninterrupted mine
   of the mode asked) and `rules` (the file is not empty); `fingerprint` fails on a probe the
   record lacks (an empty record) and on a record of another mode. The `engine_owned_law` gate
