@@ -65,6 +65,10 @@ engine.simplify(engine.to_tagged(expr))      # convert, then simplify: the tagge
 # > ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
 ```
 
+`simplify(expr, mode=...)` takes `'f64'`, the default, sound as the deployed float64
+evaluator computes, or `'permissive'`, for training-corpus canonicalisation, which reads the
+reals' values and promises per rule. The `real` mode is retired: naming it raises.
+
 ## Normalization
 
 The root-exported `to_skeleton`, `to_expression`, and `normalize_variable_token`

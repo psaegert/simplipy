@@ -1,6 +1,7 @@
 //! besselj(nu, x): the Bessel function of the first kind J_nu(x) of a real order and a real
-//! argument, as scipy 1.18.1's `scipy.special.jv` computes it, bit for bit at every argument
-//! `x >= 0` (`-0.0` included) and at a non-integer order everywhere: a transliteration of
+//! argument, as scipy 1.18.1's `scipy.special.jv` computes it (bit for bit where measured, see
+//! below) at every argument `x >= 0` (`-0.0` included) and at a non-integer order everywhere:
+//! a transliteration of
 //! `xsf::cyl_bessel_j(double, double)`, which evaluates AMOS's complex-argument `besj` (with
 //! `besy` for a negative non-integer order, `J_-v = cos(pi v) J_v - sin(pi v) Y_v`) and falls
 //! back to Cephes's `jv` wherever AMOS gives NaN.
@@ -24,9 +25,11 @@
 //!
 //! The elementary functions, complex ones included, come from `numeric::elementary`: the
 //! platform's libm, and the complex product and quotient as GCC's runtime computes them, as
-//! for scipy's own build. So the bits equal scipy's on the same glibc host: measured identical
-//! on 914,361 (order, argument) pairs spanning every regime above and every special cell, and
-//! on 2.5 million pairs with orders to 1e308 once the two departures are read.
+//! for scipy's own build. On the development host (Linux, glibc 2.43) the bits equal scipy's:
+//! measured identical on 914,361 (order, argument) pairs spanning every regime above and every
+//! special cell, and on 2.5 million pairs with orders to 1e308 once the two departures are
+//! read. That is a measurement of one platform, not a promise for every one: on another host
+//! (glibc 2.35), 65 of the 167,361 points of the repository grid differ, by at most 30 ulp.
 
 // The transliterations keep the C++'s literals and control flow as written.
 #[allow(
@@ -108,8 +111,9 @@ fn rotate_jy(j: C64, y: C64, v: f64) -> C64 {
     c * j - s * y
 }
 
-/// J_nu(x): `scipy.special.jv(nu, x)` (scipy 1.18.1) bit for bit at every argument `x >= 0`,
-/// `-0.0` included, and at a non-integer order everywhere. See the module documentation.
+/// J_nu(x): `scipy.special.jv(nu, x)` (scipy 1.18.1)'s code at every argument `x >= 0`, `-0.0`
+/// included, and at a non-integer order everywhere, its bits scipy's where measured. See the
+/// module documentation.
 ///
 /// A negative integer order reads the reflection `J_{-n}(x) = (-1)^n J_n(x)`, and an integer
 /// order at a negative argument the parity `J_n(-x) = (-1)^n J_n(x)`, so both hold bit for bit,

@@ -595,13 +595,20 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   the constants as for any family). The interval layer reads a positive base under a
   non-integer exponent by its four corner powers, so `acosh(1/pi^(1/6))` classifies as `nan`.
   Where a finite value would
-  be read, *`f64` and `permissive` fold in this step*, and no constructor folds a transcendental in any mode: a ground node no rule rewrote is
-  evaluated by the deployed f64 evaluator (the system libm, each literal at its nearest float)
-  and offered as the shortest decimal that reads back as a normal (or zero) result, kept only
-  where it descends. The pass reaches an enclosing node before its children, so
-  `rootn(exp(19.11787581094798), 2)` is `14170.787488305119` (in `f64` too: the constructor fold
-  it replaces made the inner `exp` a 9-digit literal first); `asin(1e-8)` is `1e-8`,
-  `sin(91618929858.17857)` is `-0.9807991153359534`, and `sin(1)` stays (its float costs more).
+  be read, *`f64` and `permissive` fold in this step*, each in its own values, and no
+  constructor folds a transcendental in any mode. In `f64` a ground node no rule rewrote is
+  evaluated by the deployed f64 evaluator (the system libm, each literal at its nearest float);
+  in `permissive` it takes THE TABLE's value in the reals, each literal the rational it spells,
+  written as the double nearest to that value (a value the table carries exactly, `cos(0)`,
+  `exp(-inf)`, `sin(pi)`, is that number). Either is offered as the shortest decimal that reads
+  back as the double, kept only where it descends. The pass reaches an enclosing node before
+  its children, so `rootn(exp(19.11787581094798), 2)` is `14170.787488305119` in `f64` and
+  `14170.787488305128` in `permissive` (the root of e^19.11787581094798, the decimal read
+  exactly, is 14170.7874883051273...); `asin(1e-8)` is `1e-8` in both;
+  `sin(91618929858.17857)` is `-0.9807991153359534` in `f64` and `-0.9807984116169761` in
+  `permissive`, whose argument is the decimal itself and not its nearest double; `sin(1)`
+  stays in both (its float costs more), and `sin(np.pi)` stays in `f64` and is `0` in
+  `permissive`.
   `atanh(tanh(30))` is `30` in `permissive`, whose constructor identity reads the shape first,
   and `inf` in `f64`, where the identity does not hold (`tanh` saturates): the whole node's float
   is no number, so the fold moves on to `tanh(30)`, whose float is `1`, as the evaluator computes
@@ -879,13 +886,15 @@ its *committed* steps (immediate or composite) all strictly descend $<_o$ at the
 so L2/L3 and the descent argument hold verbatim. A discarded exploration is finite wasted
 work that changes no state.
 
-*Defense-in-depth* [ENFORCED]. Two bounds remain in the code although T6 makes them
-non-load-bearing: the release-mode step cap (`STEP_CAP` = $10^6$ accepted steps per call)
-and the outer pass budget (`max_passes`, default 48; one pass reaches the fixpoint, asserted in debug builds against a fresh memo, so the second pass only confirms it). They exist to fail closed against a *bug*
-in the ordering invariant (a mis-implemented gate would otherwise loop), not against any
-legitimate input; neither has ever been observed to bind [EMPIRICAL], and by T6 a binding
-bound now *proves* an implementation bug. When one binds, rewriting stops and the state
-reached is returned — sound, possibly non-minimal.
+*Resource limits* [ENFORCED]. Two bounds remain in the code: the release-mode step cap
+(`STEP_CAP` = $10^6$ accepted steps per call) and the outer pass budget (`max_passes`, default
+48; one pass reaches the fixpoint, asserted in debug builds against a fresh memo, so the second
+pass only confirms it). T6 makes every call finite, not short: a valid descent can take more
+than $10^6$ steps (a chain of $n$ rules, each rewriting one spelling of a counter into the next,
+takes $2^n - 1$), so a binding cap is a resource limit, not proof of a bug. Neither binds on the
+corpora the gates measure [EMPIRICAL]. When one binds, rewriting stops and the state reached is
+returned — sound, possibly non-minimal — and each binding of the step cap is counted
+(`step_cap_binds`).
 
 **Equal-$\mu$ ties, measured** [EMPIRICAL, on the 128-bit engine — instrumented build over 50,800 simplify
 calls: the 400-expression mined corpus in the `f64` and `permissive` modes, plus 50,000 fuzz
@@ -1008,7 +1017,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
 | L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle; a value f64 holds in pieces prices as its one number |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
-| T6 defense-in-depth | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | by T6 a binding bound proves an implementation bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
+| T6 resource limits | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | a binding cap is a resource limit (a terminating descent can need more steps), not proof of a bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 |
 | ordering exactness | `Rat::cmp_exact` (256-bit) | Euclidean-oracle fuzz (60k pairs, 3 magnitude regimes) + transitivity triples |
 

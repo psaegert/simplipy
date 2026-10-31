@@ -449,9 +449,11 @@ def atan2(y: Any, x: Any) -> Any:
 def besselj(nu: Any, x: Any) -> Any:
     """The Bessel function of the first kind J_nu(x) of real order nu, element-wise.
 
-    Bit for bit ``scipy.special.jv`` (scipy 1.18.1, whose code the core carries: AMOS, with
-    the reflection through Y for a negative order and Cephes where AMOS fails), and so
-    scipy's accuracy: measured against 50-digit mpmath on nu in [0, 50], x in [0, 100],
+    The core carries scipy 1.18.1's ``scipy.special.jv`` code (AMOS, with the reflection
+    through Y for a negative order and Cephes where AMOS fails), and so scipy's accuracy. Its
+    bits are scipy's where measured, not on every platform: on the development host (Linux,
+    glibc 2.43) none of the 167,361 points of the repository grid differ, and another host
+    measured 65 of them apart, by at most 30 ulp. Accuracy: measured against 50-digit mpmath on nu in [0, 50], x in [0, 100],
     within 2,634 ulp at least 0.1 away from a zero of J_nu and within 1.4e-14 absolute near
     one. NaN for a non-integer order of a negative argument (the value is complex there) and
     for an infinite argument; ``J_0(0) = 1``, ``J_nu(0) = 0`` for nu > 0 and for a negative

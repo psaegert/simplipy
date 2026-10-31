@@ -1912,7 +1912,7 @@ class SimpliPyEngine:
         """Mask literals: the front door over :mod:`simplipy.masking`.
 
         Pure delegation to the toolkit -- the mechanism, the role walk, and the
-        one-constant-per-degree-of-freedom collect stage are all
+        collect stage that removes the redundant constants it recognises are all
         :func:`simplipy.masking.mask`'s; this method only reads the input form and
         names the shipped policies.
 
@@ -1931,9 +1931,10 @@ class SimpliPyEngine:
         collect : bool, keyword-only, optional
             Forwarded to :func:`simplipy.masking.mask`. ``True`` (the default) runs
             the COLLECT stage: the engine is re-run over the substituted tokens,
-            which is what enforces ONE ``<constant>`` per degree of freedom --
-            ``2*x0/3`` is one free value, and a positional pass alone would abstract
-            it into two. Because the collect stage IS a ``simplify`` call,
+            which removes the redundant ``<constant>``s it recognises -- ``2*x0/3`` is
+            one free value, and a positional pass alone would abstract it into two.
+            Not every redundancy is recognised: ``(a*x + b)/(c*y + d)`` keeps a common
+            scale of its four constants. Because the collect stage IS a ``simplify`` call,
             simplification RULES fire and the canonical ORDER is re-imposed, so
             terms may be RE-ORDERED and shapes normalized (``x0 / <constant>``
             becomes ``<constant> * x0``) relative to the input spelling. Pass

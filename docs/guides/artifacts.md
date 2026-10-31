@@ -13,7 +13,7 @@ configuration). Each artifact is byte-deterministically reproducible from the co
 | file | mode | contains |
 |---|---|---|
 | `rules_f64.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
-| `rules_permissive.json` | `Mode.permissive` | the permissive superset |
+| `rules_permissive.json` | `Mode.permissive` | every rule that holds in permissive: the reals' values up to float resolution, or a value where the input has none |
 
 The two files carry their mode in their name. `config.yaml` names its rule files
 explicitly and the loader serves whatever the config declares, so a file named `rules.json`

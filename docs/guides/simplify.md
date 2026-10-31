@@ -133,10 +133,12 @@ follows the default.
 `permissive` is one walk, like every mode: its chain to a fixpoint, then the search, in its own
 canon and rules. No constructor folds a transcendental, so a constructor identity always
 sees the shape it reads (`atanh(tanh(30))` is `30`); its ground fold is a step of the chain,
-tried after the rules at each node and kept only when it is cheaper (`asin(1e-8)` is `1e-8`, and
-`exp(9.55893790547399)` is `14170.787488305119`), as in `f64`, where the fold reads a whole ground
-node before its parts (`rootn(exp(19.11787581094798), 2)` is `14170.787488305119`, not the root
-of `200811218.03870487`). Its literals are exact and rounded once, where
+tried after the rules at each node and kept only when it is cheaper, as in `f64`. It takes the
+table's value in the reals, written as the double nearest to it, where `f64` computes the
+deployed evaluator's (`asin(1e-8)` is `1e-8` in both; `exp(9.55893790547399)` is
+`14170.787488305128`, where `f64` gives `14170.787488305119`), and like `f64` it reads a whole
+ground node before its parts (`rootn(exp(19.11787581094798), 2)` is `14170.787488305128`, not the
+root of `200811218.03870487`). Its literals are exact and rounded once, where
 they land: a literal that becomes a constant term, a coefficient, a function's argument or a
 power's operand beside a non-literal moves to whichever of the two floats around it prints
 shorter, when that spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
@@ -188,8 +190,12 @@ between modes raises `TypeError`.
   there or the true one: `log(exp(800))` is `800`, where f64 computes `inf` (see [What `f64`
   mode does and does not promise](#what-f64-mode-does-and-does-not-promise)).
 
-- **`Mode.permissive`** is the permissive superset, for training-corpus canonicalisation ("beautification").
-  Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
+- **`Mode.permissive`** is for training-corpus canonicalisation ("beautification"). Its
+  promise is per rule: every rule it applies agrees with the reals' values up to float
+  resolution (8 units in the last place), or gives a value where its input has none. A whole
+  answer carries no such bound: rounding-sized differences compose over the steps, and
+  `floor`, `ceil` and cancellations magnify them (`floor` of a value one unit in the last place
+  below an integer is a whole unit off). Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
   its group-axiom gate, the constant-fold drops its finiteness gate, and an exact literal whose
   fraction prices above the shortest float spelling of its value folds to that float (the
   quotient of two 16-digit decimals becomes `0.46867105279529636` instead of a 60-digit
@@ -282,6 +288,26 @@ not one either: `tanh(20)` is exactly `1.0` in float64 without leaving the range
 It does **not** promise that a *sequence* of rewrites carries the same bound. Each rule
 carries it individually; simplification composes rules, and floating-point error composes
 with them.
+
+A step cap bounds each call (10^6 accepted rewrite steps). It is a resource limit, not
+proof of a bug: a valid terminating descent can take more steps (a chain of n rules can take
+2^n - 1 of them). When it binds, rewriting stops at a state reached by sound steps, which may
+not be minimal, and the binding is counted (`engine._core.step_cap_binds()`).
+
+**The f64 realizations.** `f64` means the shipped realizations, `simplipy.operators`, each the
+core's float64 kernel, so the deployed value, the constant fold, the miner and the rule judge
+compute the same bits. Where they differ from numpy, they differ by name:
+
+| operator | realization | difference from numpy |
+|---|---|---|
+| `+`, `-`, `*`, `/`, `neg`, `inv`, `abs`, `floor`, `ceil` | IEEE 754 arithmetic | none |
+| `exp`, `log`, the trigonometric and hyperbolic functions and their inverses, `erf`, `atan2` | the platform's libm, as Python's `math` computes them | none where numpy uses the same libm |
+| `pow` | C's `pow`; a negative base under a non-integer exponent is NaN | at the exponents numpy computes without `pow` (`x*x` at 2, `1/x` at -1, `sqrt` at 0.5) the value is numpy's `array ** scalar` |
+| `mod` | numpy's floored remainder, the divisor's sign | none |
+| `max`, `min` | IEEE 754-2019 maximum and minimum: NaN if either operand is, and `max(-0, +0) = max(+0, -0) = +0` | `np.maximum` and `np.minimum` return their second operand at a zero tie |
+| `rootn` | the package's own kernel, IEEE 754 `rootn` | numpy has none |
+| `harmonic` | the package's own kernel, within 0.53 ulp on x > -1 | numpy has none |
+| `besselj` | the package's own kernel, scipy 1.18.1's `jv` code | numpy has none; against `scipy.special.jv`, measured on the development host (Linux, glibc 2.43): 0 of the 167,361 points of the repository grid differ, and another host measured 65 of them apart, by at most 30 ulp |
 
 It does **not** promise to preserve your evaluation order. The canonical form flattens sums
 and products into bags and re-emits them, and IEEE-754 addition commutes but does not

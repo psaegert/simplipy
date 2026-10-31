@@ -31,10 +31,12 @@ rather than its magnitude).
 A custom ``(value, role) -> str | None`` policy remains the primitive, so any other rule
 (mask only floats, keep a given vocabulary, ...) is a one-line function.
 
-ONE CONSTANT PER DEGREE OF FREEDOM -- the invariant every kind must satisfy. Masking is
-TWO stages: (a) the positional substitution the policy drives, then (b) a COLLECT pass
-that re-runs the engine over the result. Stage (b) is what makes the invariant hold, and
-it is needed because the serializers split ONE state node across several tokens: a
+REDUNDANT CONSTANTS, the ones the engine recognises, are removed. Masking is TWO stages:
+(a) the positional substitution the policy drives, then (b) a COLLECT pass that re-runs the
+engine over the result. Stage (b) removes the redundancies the engine's canonical form and
+rules recognise; it does not establish one constant per degree of freedom in general:
+``(a*x + b)/(c*y + d)`` keeps its four constants, though scaling all four by one value changes
+nothing. It is needed because the serializers split ONE state node across several tokens: a
 rational is one node but prints as ``<mul> 2 x0 <div> 3 </mul>``, so a positional pass
 alone would abstract it into TWO ``<constant>``s for ONE degree of freedom, and
 ``(c1*x)/c2`` is a flat direction for the refiner. Re-running the engine also collapses

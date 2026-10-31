@@ -49,15 +49,17 @@ A custom `(value, role) -> str | None` policy remains the primitive
 literal positions with their roles), so any other rule — mask only floats,
 keep a given vocabulary — is a one-line function.
 
-## One constant per degree of freedom
+## Redundant constants
 
 Masking runs **two** stages: (a) the positional substitution the policy
 drives, then (b) a **collect** pass that re-runs the engine over the result.
-Stage (b) is what makes the invariant *one `<constant>` per degree of freedom*
-hold: the serializers can split one state node across several tokens (a
-rational is one node but prints as `<mul> 2 x0 <div> 3 </mul>`), so a
-positional pass alone would abstract it into two `<constant>`s for one degree
-of freedom — a flat direction for any downstream refiner. The collect pass
+Stage (b) removes the redundant `<constant>`s the engine recognises: the
+serializers can split one state node across several tokens (a rational is one
+node but prints as `<mul> 2 x0 <div> 3 </mul>`), so a positional pass alone
+would abstract it into two `<constant>`s for one degree of freedom — a flat
+direction for any downstream refiner. It does not find every redundancy:
+`(a*x + b)/(c*y + d)` keeps its four constants, though scaling all four by one
+value changes nothing. The collect pass
 also collapses `c1*c2` and `c1+c2` (one degree of freedom each) while
 correctly leaving `c1*x0 + c2*x1` alone (two), and normalizes the shape the
 way a human would write it (`x0 / <constant>` → `<constant> * x0`).

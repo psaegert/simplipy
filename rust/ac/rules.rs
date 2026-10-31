@@ -27,7 +27,7 @@
 //! canonically, and re-enter when the rebuild descends the reduction ordering (else refuse
 //! it). Every accepted step -- fire or rebuild -- strictly descends that ordering at its
 //! node, and the ordering is WELL-FOUNDED, so termination is a theorem; the hard step cap
-//! is defense-in-depth against ordering-invariant bugs (see `ordered_below` and
+//! is a resource limit (a terminating descent can still be long; see `ordered_below` and
 //! docs/formal.md).
 
 use std::cell::{Cell, RefCell};
@@ -1062,10 +1062,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
 
 /// Hard bound on accepted descent steps (fires + oriented rebuilds) per simplify call.
 /// Since the reduction ordering is well-founded (see `ordered_below`), every run is
-/// finite as a THEOREM and this cap is defense-in-depth against bugs in the ordering
-/// invariant itself, not a load-bearing bound. Orders of magnitude above any observed
-/// run; when it binds, the pass completes descent-free, which is sound -- but the answer
-/// may then be a non-fixpoint, so every binding is counted ([`step_cap_binds`]).
+/// finite as a THEOREM, but finite is not short: a chain of n rules can take 2^n - 1 steps.
+/// So the cap is a RESOURCE LIMIT, not proof of a bug when it binds. Orders of magnitude above
+/// any observed run; when it binds, the pass completes descent-free, which is sound -- but
+/// the answer may then be a non-fixpoint, so every binding is counted ([`step_cap_binds`]).
 const STEP_CAP: u64 = 1_000_000;
 
 /// Descent steps refused because `STEP_CAP` had bound, process-wide. Expected 0 on every

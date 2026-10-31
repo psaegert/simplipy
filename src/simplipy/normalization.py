@@ -165,7 +165,7 @@ def to_skeleton(expression: str | list[str] | tuple[str, ...] | np.ndarray | Non
     that keeps the structural literals.
 
     Because the front door's collect stage re-runs the engine (that is what
-    enforces one ``<constant>`` per degree of freedom -- ``2*x0/3`` is ONE free
+    removes the redundant ``<constant>``s it recognises -- ``2*x0/3`` is ONE free
     value), simplification RULES fire, so a skeleton depends on the engine
     ARTIFACT and not only on the expression. For a rules-free, strictly positional
     abstraction of the canonical spelling, call

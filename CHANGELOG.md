@@ -11,6 +11,11 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Everyone**
 
+- **`permissive` promises per rule.** Every rule it applies agrees with the reals' values up
+  to float resolution, or gives a value where its input has none; a whole answer carries no
+  such bound, since `floor`, `ceil` and cancellations magnify a rounding-sized difference.
+- **Masking removes the redundant constants it recognises.** It does not find every
+  redundancy: `(a*x + b)/(c*y + d)` keeps four constants, among them a common scale.
 - **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
   computes, and `permissive`, for training-corpus canonicalisation, which reads the reals'
   values. `Mode.real`, `mode='real'` and a config's `rules_real:` set raise `ValueError` at
@@ -1682,8 +1687,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   euler_gamma, the core's own kernel: within 0.53 ulp on x > -1, `H(-0) = -0`, NaN at every
   negative integer), `erf` and `atan2(y, x)` (the platform libm's), and `besselj(nu, x)`, the
   Bessel function of the first kind of real order: scipy 1.18.1's `jv` carried in the core
-  (AMOS and Cephes, BSD-3-Clause, notices in `LICENSES_bundled.txt`), identical to
-  `scipy.special.jv` bit for bit, and so with scipy's accuracy. Each is a core kernel, and the
+  (AMOS and Cephes, BSD-3-Clause, notices in `LICENSES_bundled.txt`), with scipy's accuracy;
+  its bits are scipy's where measured, not on every platform (the development host: 0 of the
+  167,361 points of the repository grid differ; another host: 65 of them, by at most 30
+  ulp). Each is a core kernel, and the
   evaluator dispatches it, so the folds, the miner, simplify and the realization compute the
   same bits. `max(a, b, c)` reads as one bag of three members (and `min` alike).
   `assets/engines/acj2-4/config.yaml` declares acj-4's operators plus the nine, every
@@ -1895,8 +1902,8 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `besselj(2**31, -1.0)` is `0.0` (scipy gives NaN: its integer test is a C `int` cast).
     Where scipy's routines give up under orders of about 3e17 and more, a value a bound puts
     below the subnormals is `0.0` (`besselj(1e300, 100)`; scipy gives NaN). Everywhere else the
-    value is `scipy.special.jv`'s bit for bit, over 2.5 million (order, argument) pairs with
-    orders to 1e308. scipy's other NaN cells stay: the oscillating region of orders beyond
+    value is `scipy.special.jv`'s bit for bit on the development host, over 2.5 million (order,
+    argument) pairs with orders to 1e308, and within 30 ulp where another host differs. scipy's other NaN cells stay: the oscillating region of orders beyond
     3e17, and negative non-integer orders below about -470 where the value nears the float
     range's end.
   - *High precision and the judge.* `besselj` has a high-precision kernel in the core (the
