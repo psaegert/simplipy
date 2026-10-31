@@ -61,14 +61,11 @@ class TestTheBudgetCrossesTheHill:
 class TestRealModeExplores:
     def test_the_shipped_artifact_crosses_the_hill_in_real_mode(self) -> None:
         # Closes the scaffolding suite's coverage gap: exploration under `real`, on an
-        # artifact that serves a real set.
-        try:
-            engine = SimpliPyEngine.load('acj-4')
-        except Exception:
-            import os
-            if os.environ.get('SIMPLIPY_TEST_REQUIRE_ASSETS'):
-                raise
-            pytest.skip('acj-4 not resolvable here')
+        # artifact that serves a real set. Its rule files were mined before 0.15: read
+        # through the legacy opt-in.
+        from conftest import acj_config_path, legacy_from_config, require_or_skip
+        require_or_skip(acj_config_path(), 'acj-4 not resolvable here')
+        engine = legacy_from_config(acj_config_path())
         hi = engine.simplify(HILL, mode=Mode.real, effort=BUDGET)
         assert engine.complexity(hi) < engine.complexity(engine.simplify(HILL, mode=Mode.real, effort=0))
 
@@ -132,8 +129,11 @@ def _copies(k):
 
 @pytest.fixture(scope='module')
 def shipped():
+    # The 0.14 hub artifact: mined before 0.15, so read through the legacy opt-in.
+    from conftest import legacy_from_config
+    from simplipy.asset_manager import get_path
     try:
-        return SimpliPyEngine.load('acj-5-4-llm')
+        return legacy_from_config(get_path('acj-5-4-llm'))
     except Exception:
         import os
         if os.environ.get('SIMPLIPY_TEST_REQUIRE_ASSETS'):
