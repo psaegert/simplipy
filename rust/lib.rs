@@ -1034,19 +1034,23 @@ impl PyEngine {
     }
 
     /// THE LOAD'S VERDICT on one rule read in `rule_mode` (`Engine::load_refusal`): the
-    /// refusing gate's name, or None when the load serves the rule.
-    #[pyo3(signature = (lhs, rhs, *, rule_mode))]
+    /// refusing gate's name, or None when the load serves the rule. `canon` is the canon the
+    /// rule is read in (`parse_rule_canon`; `None` is the mode's own), as the load reads a file
+    /// in the canon it was certified in.
+    #[pyo3(signature = (lhs, rhs, *, rule_mode, canon=None))]
     fn load_refusal(
         &self,
         py: Python<'_>,
         lhs: Vec<String>,
         rhs: Vec<String>,
         rule_mode: &str,
+        canon: Option<&str>,
     ) -> PyResult<Option<String>> {
         ensure_tokens_are_tokens(&lhs)?;
         ensure_tokens_are_tokens(&rhs)?;
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner().load_refusal(&lhs, &rhs, mode)))
+        let canon = parse_rule_canon(canon, mode)?;
+        Ok(py.detach(|| self.inner().load_refusal(&lhs, &rhs, mode, canon)))
     }
 
     /// The licence registry for one would-be rule, as a PROBE: the mint channels
@@ -2006,19 +2010,11 @@ fn f64_bar_sorted(
         .map(|d| (d.ok, d.probes, d.first, d.range_rows))
 }
 
-/// A rule's slot or variable token: a wildcard (`_0`, `?0`, `!0`, `$0`) or a dummy (`x0`).
-fn rule_variable(t: &str) -> bool {
-    let rest = t
-        .strip_prefix(['_', '?', '!', '$', 'x'])
-        .unwrap_or_default();
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-}
-
-/// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite`) on a rule's right side,
-/// its slots and dummies the variables.
+/// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite_rule`) on a rule's right
+/// side, its slots and dummies the variables: the load's gate.
 #[pyfunction]
 fn policy_ground_composite(rhs: Vec<String>) -> bool {
-    crate::engine::refusals::ground_composite(&rhs, rule_variable)
+    crate::engine::refusals::ground_composite_rule(&rhs)
 }
 
 /// THE NO-DUPLICATION POLICY (`worker::violates_wildcard_multiplicity`): does the right side

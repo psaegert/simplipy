@@ -79,8 +79,12 @@ this way.
 ## Cleanliness is per mode
 
 `verify_ruleset(rules, mode=...)` asks whether every rule's tier is one that mode
-licenses. The same rule can be clean for one file and a defect in another, which is
-the whole point and which a bucket count cannot express:
+licenses, and whether the load admits it: the load's gates are policies (the constant count,
+a ground composite, the ordering, what the engine does itself, well-formedness), read through
+one predicate, `load_policy_refusal`, which the load, `licensed` and `verify_ruleset` share.
+`asin(1) -> acos(0)` holds in every mode and is clean in none (`refused_by:
+['ground_composite']`). The same rule can be clean for one file and a defect in another,
+which is the whole point and which a bucket count cannot express:
 
 ```python
 rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 saturates to inf at large t

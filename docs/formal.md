@@ -509,8 +509,10 @@ sorted wildcard leaves (sorts `_`, `!`, `$`, `?` bind under certificate side con
 see the matcher). Rules come from a mined asset in raw prefix form and pass through
 **translation** (`AcRules::translate`), which parses both sides with the *same* boundary
 converter as subjects, canonicalizes them with a bare (certificate-free) context in the
-reading of the mode whose file it is, and applies seven load-time gates (numbered G1–G4 and
-G6–G8; there is no G5):
+reading of the mode whose file it is, and applies eight load-time gates, G1–G8. They are the
+policies the specification names for the load and well-formedness, never truth: a
+hand-written false rule such as `sin(x0) -> x0` loads, and `simplipy.verify.licensed` and
+`verify_ruleset` read these same gates (`load_policy_refusal`):
 
 | Gate | Drops / normalizes | Why |
 |---|---|---|
@@ -518,6 +520,7 @@ G6–G8; there is no G5):
 | G2 | $\mathrm{nf}(\ell) = \mathrm{nf}(\rho)$ (arithmetic-subsumed) | the engine's own arithmetic already performs the rewrite |
 | G3 | rules whose canonical RHS holds more $\diamond$ than their canonical LHS | masking is representation, not simplification |
 | G4 | non-composite LHS | catch-alls below the arithmetic waterline |
+| G5 | an RHS without a variable that is not a single leaf (`asin(1) -> acos(0)`) | a composite ground right side only obscures its input, and one with a $\diamond$ can absorb almost anything (`cosh(asin(C)) -> log(C)`); the mint's candidate library refuses it by the same predicate |
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mu(\mathrm{nf}(\rho)) > \mu(\mathrm{nf}(\ell))$ (uphill patterns) | no loaded rule climbs; sides of one price load, and the `oriented` gate decides each application under the full ordering (§5) |
 | G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node. A law the constructors own, such as the collection of powers of e ($e^a e^b = e^{a+b}$), needs no gate of its own: a rule stating it, in either direction, has $\mathrm{nf}(\ell) = \mathrm{nf}(\rho)$ and G2 refuses it |
@@ -536,7 +539,8 @@ Every drop is counted by reason (`ac_rules_drop_census`). On the shipped `acj-5-
 | `f64` | 138,334 | 83 | 0 | 0 | 0 | 337 | 138,588 |
 | `permissive` | 139,299 | 122 | 0 | 0 | 5 | 457 | 139,629 |
 
-No row is dropped by G1, G3 or G6, and the registry refuses none.
+No row is dropped by G1, G3, G5 or G6 (G5 measured on the current build: 0 in both files),
+and the registry refuses none.
 
 **How a rule is mined, per mode.** Each mode $m$'s file is mined in $m$. For a source $s$
 (the canonical projection of its class in $m$'s reading) the mark is $m$'s own answer
@@ -1000,7 +1004,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 |---|---|---|
 | I1–I4 canonical invariants | constructors in `ac/expr.rs` | `no_nested_bags` + `stable()` debug asserts; property tests in `tests/test_ac_core.py` |
 | L1 nf termination | structural recursion; the two audited self-calls (`pow`, `fun`/rootn) | full suites exercise both self-call sites |
-| G1–G4, G6–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
+| G1–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
 | L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle; a value f64 holds in pieces prices as its one number |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |

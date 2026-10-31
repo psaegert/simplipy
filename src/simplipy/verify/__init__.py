@@ -96,7 +96,7 @@ POLICIES = ('evidence', 'constant_count', 'ground_composite', 'cell_bound', 'ord
 #: is a pre-filter of truth, not a policy, and licenses nothing either way. `catch-all-lhs` is a
 #: left side the canon leaves no composite: written as one, it is what the engine folds itself
 #: (`1/0 -> nan`, `C - C -> 0`: `engine_owned`), and only a written leaf is ill-formed.
-_LOAD_POLICY = {'const-count-increase': 'constant_count',
+_LOAD_POLICY = {'const-count-increase': 'constant_count', 'ground-composite': 'ground_composite',
                 'not-ordered-below': 'ordering', 'engine-owned-law': 'engine_owned',
                 'subsumed': 'engine_owned', 'catch-all-lhs': 'well_formed',
                 'unbound-rhs-wildcard': 'well_formed', 'unparseable-side': 'well_formed'}
@@ -105,20 +105,37 @@ _LOAD_POLICY = {'const-count-increase': 'constant_count',
 _RULE_MODE = {'f64': 'default', 'permissive': 'permissive'}
 
 
+def load_policy_refusal(lhs: list[str], rhs: list[str], mode: str, engine: Any,
+                        canon: str | None = None) -> str | None:
+    """The named policy (``POLICIES``) by which the LOAD refuses ``lhs -> rhs`` in ``mode``, or
+    ``None``: the load's own predicate (`Engine.load_refusal`, the gates every rule file passes
+    when it is loaded), which applies the specification's 4.11 -- the constant count (4.2), the
+    ground composite (4.3), the ordering (4.5), what the engine does itself (4.8), and
+    well-formedness. The load, :func:`licensed` and :func:`verify_ruleset` read it here, so the
+    three agree. It checks policies, never truth: `sin(x0) -> x0` passes it. ``canon`` is the
+    canon the rule is read in (``'legacy'``, ``'f64'`` or ``'permissive'``; ``None``, the
+    mode's own), as the load reads a file in the canon its sidecar records."""
+    read_in = None if canon is None else _RULE_MODE.get(canon, canon)
+    load = engine._core.load_refusal(list(lhs), list(rhs), rule_mode=_RULE_MODE[mode],
+                                     canon=read_in)
+    if load == 'catch-all-lhs' and len(lhs) > 1:
+        return 'engine_owned'
+    return _LOAD_POLICY.get(load) if load is not None else None
+
+
 def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
                     max_source: int | None = None) -> list[str]:
     """The named policies (``POLICIES``) that refuse ``lhs -> rhs`` in ``mode``, each read
     from its one place: evidence (4.1, the core's certified cells in the mode's values,
-    `_core.table_evidence`); the load's gates (4.2 constant count, 4.5 ordering, 4.8 the
-    engine's own laws, well-formedness: `load_refusal`); the
-    ground-composite predicate (4.3); the mine's cell (4.4, with ``max_source``); the
+    `_core.table_evidence`); the load's gates (4.2 constant count, 4.3 ground composite, 4.5
+    ordering, 4.8 the engine's own laws, well-formedness: :func:`load_policy_refusal`); the
+    mine's cell (4.4, with ``max_source``); the
     registry's special absorption and constant introduction (4.6, 4.2); the duplication
     predicate (4.7); and the ground facts the engine's fold performs (4.8, the preemption
     gate). ``engine`` is a :class:`~simplipy.SimpliPyEngine` holding the operators."""
     from .. import _core  # type: ignore[attr-defined]
     from ..mining import _in_cell, _preempted_by
     lhs, rhs = list(lhs), list(rhs)
-    rule_mode = _RULE_MODE[mode]
     out: list[str] = []
     slots = sorted({'?' + t[1:] if t in ('x0', 'x1', 'x2') else t
                     for t in lhs + rhs if _contract.SLOT_RE.match(t) or t in ('x0', 'x1', 'x2')})
@@ -126,13 +143,9 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     if _core.table_evidence(_contract._spelled(lhs, spelling), dict(_contract.ARITY),
                             mode == 'f64') is not True:
         out.append('evidence')
-    load = engine._core.load_refusal(lhs, rhs, rule_mode=rule_mode)
-    if load == 'catch-all-lhs' and len(lhs) > 1:
-        out.append('engine_owned')
-    elif load in _LOAD_POLICY:
-        out.append(_LOAD_POLICY[load])
-    if _core.policy_ground_composite(rhs):
-        out.append('ground_composite')
+    load = load_policy_refusal(lhs, rhs, mode, engine)
+    if load is not None:
+        out.append(load)
     if not _in_cell({'completion': [lhs, rhs]}, max_source):
         out.append('cell_bound')
     registry = engine._core.registry_mint_refusal(lhs, lhs, rhs, [])
@@ -167,7 +180,32 @@ def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
             'refused_by': refused}
 
 
-def verify_ruleset(rules: list | str, *, mode: str | None = None,
+def _vocabulary_engine() -> Any:
+    """A rule-less engine over the judge's vocabulary (`_contract.ARITY`, each operator realized
+    by `simplipy.operators`): the operators :func:`verify_ruleset` reads the load's policies with
+    when it is given no engine. Built once."""
+    global _VOCABULARY_ENGINE
+    if _VOCABULARY_ENGINE is None:
+        from .. import _core, operators
+        from ..engine import SimpliPyEngine  # type: ignore[attr-defined]
+        core = _core.core_serialization_ops()
+        specs: dict[str, dict] = {}
+        for name, arity in _contract.ARITY.items():
+            if name in core:
+                specs[name] = {'realization': core[name]['realization'] or name, 'alias': [],
+                               'arity': arity, 'precedence': core[name]['precedence'],
+                               'commutative': name in ('+', '*')}
+            elif name in operators.__all__:
+                specs[name] = {'realization': f'simplipy.operators.{name}', 'alias': [],
+                               'arity': arity, 'commutative': False}
+        _VOCABULARY_ENGINE = SimpliPyEngine(operators=specs, rules=[])
+    return _VOCABULARY_ENGINE
+
+
+_VOCABULARY_ENGINE: Any = None
+
+
+def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = None,
                    report_path: str | None = None,
                    build_path: str | None = None, judge_timeout_s: int = 30) -> dict:
     """Gate a whole rule set: judge every rule at its own trigger points.
@@ -188,9 +226,13 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     for ``rules_permissive.json``, which a bucket count cannot express at all.
 
     So with ``mode`` given, ``is_clean`` means *every rule's judged tier is one this mode
-    licenses* (``MODE_TIERS``) -- a rule can be clean for one file and dirty for another,
-    which is the whole point. ``report['offenders']`` lists the ones that are not, with
-    their tier.
+    licenses* (``MODE_TIERS``) *and the load's policies admit it* (:func:`load_policy_refusal`,
+    the predicate the load applies) -- a rule can be clean for one file and dirty for another,
+    which is the whole point, and `asin(1) -> acos(0)` holds in every mode and is clean in
+    none (`ground_composite`). ``report['offenders']`` lists the ones that are not, with their
+    tier and ``refused_by``. ``engine`` holds the operators the policies are read with (a
+    :class:`~simplipy.SimpliPyEngine`; by default a rule-less engine over the judge's
+    vocabulary).
 
     With ``mode=None`` only CERTIFIED/TOLERATED are clean, the meaning before rule sets
     were split by mode. It is NOT the right gate for a shipped artifact; use
@@ -219,10 +261,18 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
         return report
 
     allowed = MODE_TIERS[mode]
-    offenders = [{'idx': d.get('idx'), 'lhs': d.get('lhs'), 'rhs': d.get('rhs'),
-                  'verdict': d.get('verdict'), 'tier': d.get('tier')}
-                 for d in report.get('detail', [])
-                 if effective_tier(d) not in allowed]
+    engine = engine if engine is not None else _vocabulary_engine()
+    # a file is read in the canon it was certified in, as the load reads it
+    from ..engine import _canon_of_record
+    canon = _canon_of_record(rules) if isinstance(rules, str) else None
+    offenders = []
+    for d in report.get('detail', []):
+        refused = load_policy_refusal(str(d.get('lhs')).split(), str(d.get('rhs')).split(),
+                                      mode, engine, canon)
+        if effective_tier(d) not in allowed or refused is not None:
+            offenders.append({'idx': d.get('idx'), 'lhs': d.get('lhs'), 'rhs': d.get('rhs'),
+                              'verdict': d.get('verdict'), 'tier': d.get('tier'),
+                              'refused_by': [refused] if refused is not None else []})
     report['mode'] = mode
     report['offenders'] = offenders
     report['is_clean'] = not offenders
@@ -351,6 +401,6 @@ def selftest() -> bool:
 
 
 __all__ = ['FATAL_BUCKETS', 'MODE_TIERS', 'POLICIES', 'TIERS', 'default_corpus', 'tier_table',
-           'effective_tier', 'licensed', 'policy_refusals', 'verify_rule',
+           'effective_tier', 'licensed', 'load_policy_refusal', 'policy_refusals', 'verify_rule',
            'verify_ruleset', 'verify_artifact', 'verify_triple', 'monitor_ruleset',
            'selftest']

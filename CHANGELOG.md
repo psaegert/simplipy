@@ -147,6 +147,13 @@ organised by who you are, then the highlights, then every change in detail.
   `UNDECIDED-MEASURE`, and the tiers are `core` (f64 and permissive), `f64-only`, `permissive`
   and `reject`, read off one registry (`simplipy.verify.TIERS`).
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
+- The load refuses a rule whose right side has no variable and is not one leaf (drop reason
+  `ground-composite`): `asin(1) -> acos(0)` holds and is not served. The load's gates are
+  policies, never truth, and one predicate reads them: `simplipy.verify.load_policy_refusal`,
+  which `licensed`, `verify_ruleset(mode=)` and `verify_artifact` share, so a rule the load
+  refuses is clean for no file. `verify_ruleset` takes `engine=`, the operators the policies
+  are read with (by default a rule-less engine over the judge's vocabulary), and each
+  offender carries `refused_by`.
 - `verify_artifact(f64, permissive, engine_config=)` checks the two rule sets it is given (the
   config contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which
   ships in the wheel, when `corpus_rows` is not given.

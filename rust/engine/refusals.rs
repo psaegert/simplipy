@@ -52,10 +52,24 @@ pub enum Refusal {
 /// single leaf -- a number, `np.pi`, `np.e`, an infinity or `<constant>`. `asin(1) -> acos(0)`
 /// holds and is refused: a composite ground right side only obscures its input, and one with a
 /// constant can absorb almost anything (`cosh(asin(C)) -> log(C)`). The mint's candidate library
-/// drops such targets by it (`worker::CandidateLibrary::build`), and `simplipy.verify.licensed`
-/// applies it.
+/// drops such targets by it (`worker::CandidateLibrary::build`), and the load refuses such a
+/// rule by [`ground_composite_rule`], which `simplipy.verify.licensed` reads.
 pub fn ground_composite(target: &[String], is_variable: impl Fn(&str) -> bool) -> bool {
     target.len() >= 2 && !target.iter().any(|t| is_variable(t))
+}
+
+/// A rule's slot or variable token: a wildcard (`_0`, `?0`, `!0`, `$0`) or a dummy (`x0`).
+pub fn rule_variable(t: &str) -> bool {
+    let rest = t
+        .strip_prefix(['_', '?', '!', '$', 'x'])
+        .unwrap_or_default();
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// [`ground_composite`] on a rule's right side, its slots and dummies the variables: the load's
+/// gate and the predicate `simplipy.verify` reads.
+pub fn ground_composite_rule(rhs: &[String]) -> bool {
+    ground_composite(rhs, rule_variable)
 }
 
 /// Count of special-constant tokens (`np.pi` / `np.e`) in a token slice. The raw

@@ -415,6 +415,14 @@ impl AcRules {
                 out.note_drop("unparseable-side");
                 continue;
             };
+            // The ground-composite policy (the specification's 4.3): a right side without a
+            // variable is one leaf. `asin(1) -> acos(0)` holds and is refused. The load checks
+            // policies, never truth.
+            let rhs_tokens: Vec<String> = rhs_t.iter().map(|t| view.resolve_owned(*t)).collect();
+            if crate::engine::refusals::ground_composite_rule(&rhs_tokens) {
+                out.note_drop("ground-composite");
+                continue;
+            }
             // A left side may hold several `<constant>`s: the matcher binds each to a value of
             // its own, and the judge reads each as its own symbol (the specification's 3.2).
             let lhs = canon(lhs0, &cx);

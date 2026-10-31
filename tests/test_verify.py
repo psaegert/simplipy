@@ -763,7 +763,8 @@ class TestCleanlinessIsPerMode:
     both directions, and the soundness claim makes the per-mode gate load-bearing rather
     than optional."""
 
-    CORE = [['+', 'x0', '0'], ['x0']]
+    # `1/exp(x) -> exp(-x)`: true, realised in f64, and admitted by the load's policies
+    CORE = [['/', '1', 'exp', 'x0'], ['exp', 'neg', 'x0']]
     PERMISSIVE = [['atanh', 'tanh', 'x0'], ['x0']]
     REJECT = [['sin', 'x0'], ['x0']]
 
@@ -857,14 +858,20 @@ class TestCleanlinessIsPerMode:
         # 126, `asin(sinh(atanh(_0))) -> asin(tan(asin(_0)))`, both sides x/sqrt(1-x^2) under
         # asin, offends on the CI runners and not on the development host, where the two sides
         # leave asin's domain at the same double. Every other verdict is the same everywhere.
-        f64 = {o['idx'] for o in report['modes']['f64']['offenders']}
-        assert len(f64 - {126}) == 25
         # A negative power of zero has no value: permissive 39 (-4 `pow 0 asinh _0 -> pow 0 _0`
         # and kin, whose sides now agree at every binding, none having a value below 0; +5
         # `/ log _0 (-2k) -> log rootn _0 (-2k)`, whose right side has no value at 0, where the
         # left side is +inf).
-        assert {m: len(r['offenders']) for m, r in report['modes'].items() if m != 'f64'} == \
-            {'permissive': 39}
+        # The gate reads the load's policies too, each file in the canon its sidecar records
+        # (here the one before per-mode mines), so the rows the load refuses are offenders:
+        # f64 +18 (17 the engine does itself, `neg asin _0 -> asin neg _0` and kin; 1 not
+        # ordered below its left side), permissive +27 (21 and 6).
+        tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
+                for m, r in report['modes'].items()}
+        policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
+                       for m, r in report['modes'].items()}
+        assert len(tier['f64'] - {126}) == 25 and len(policy_only['f64']) == 18
+        assert len(tier['permissive']) == 39 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {
@@ -1633,12 +1640,11 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
 
     def test_a_rule_with_two_left_constants_is_judged(self) -> None:
         """Each `<constant>` is its own symbol (the specification's 3.2), so a rule with two
-        on its left side is decided like any other: `C1 + C2*x -> d1*x + d2` holds with
-        d1 = C2, d2 = C1, and `pow(rootn(x, C1), C2) -> pow(x, C3)` fails at C1 = 3, C2 = 1
+        on its left side is decided like any other: `x/(C1*C2) -> d*x` holds with
+        d = 1/(C1*C2), and `pow(rootn(x, C1), C2) -> pow(x, C3)` fails at C1 = 3, C2 = 1
         on x < 0. (The mine and the load take such rules where `licensed` does.)"""
         from simplipy.verify import effective_tier, verify_rule, verify_ruleset
-        true = [['+', '<constant>', '*', '<constant>', 'x0'],
-                ['+', '*', '<constant>', 'x0', '<constant>']]
+        true = [['/', 'x0', '*', '<constant>', '<constant>'], ['*', '<constant>', 'x0']]
         false = [['pow', 'rootn', '?0', '<constant>', '<constant>'], ['pow', '?0', '<constant>']]
         r = verify_rule(*true)
         assert (r['verdict'], effective_tier(r)) == ('CERTIFIED', 'core'), r

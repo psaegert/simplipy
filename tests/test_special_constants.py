@@ -253,17 +253,19 @@ class TestExactCollapsesMint:
         # The bucket is KILL: `1 + e^-1 -> 1.3678794411714423` respells the exact value as
         # its f64 rounding, so it is false in the reals' values. But it is EXACTLY what f64
         # computes, and within float resolution of the exact value, so it holds in both
-        # modes and the gate ROUTES it rather than dropping it.
+        # modes and the gate ROUTES it rather than dropping it. The load does not serve it:
+        # its right side, a 17-digit literal, prices above its left side, so the ordering
+        # policy refuses it, and a file holding it is clean for neither mode.
         from simplipy.verify import verify_ruleset
         from simplipy.verify._contract import judge_rule
         gate = verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]])
         assert gate['buckets']['KILL'] == [0], gate['buckets']
         verdict = judge_rule(list(f64_respell[0]), list(f64_respell[1]))
         assert verdict['realised'] is True and verdict['tier'] == 'core', verdict
-        # ... and it is therefore clean for both files
         for mode in ('f64', 'permissive'):
-            assert verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
-                                  mode=mode)['is_clean'] is True
+            [offender] = verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
+                                        mode=mode)['offenders']
+            assert (offender['tier'], offender['refused_by']) == ('core', ['ordering']), offender
 
     def test_inexact_values_still_refused(self, mined):
         # cos(e), exp(pi), e*pi have no exact alphabet spelling: nothing may mint, and
