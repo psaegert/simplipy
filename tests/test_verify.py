@@ -1793,15 +1793,10 @@ def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
 
 
 # ------------------------------------------------------------------------------------------
-# The tier registry is one table: the modes' licences are read off it, and the guide renders it.
+# The tier registry is one table: the modes' licences are read off it (the guide renders it:
+# test_doc_examples.py).
 # ------------------------------------------------------------------------------------------
-def test_the_tiers_are_one_registry_and_the_guide_renders_it() -> None:
+def test_the_tiers_are_one_registry() -> None:
     assert v.MODE_TIERS == {mode: frozenset(tier for tier, modes in v.TIERS.items() if mode in modes)
                             for mode in ('f64', 'permissive')}
     assert v.TIERS['core'] == ('f64', 'permissive')
-    with open(os.path.join(REPO, 'docs', 'guides', 'verify.md')) as fh:
-        guide = fh.read()
-    begin, end = '<!-- tier-table: begin', '<!-- tier-table: end -->'
-    assert guide.count(begin) == 1 and guide.count(end) == 1
-    block = guide.split(begin, 1)[1].split('-->', 1)[1].split(end, 1)[0]
-    assert block.strip() == v.tier_table()

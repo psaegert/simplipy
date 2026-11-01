@@ -129,3 +129,14 @@ def test_doc_examples_execute_and_their_outputs_hold(relpath, tmp_path, monkeypa
                         + m.group('body')[:400])
         ran += 1
     assert ran > 0, f'{relpath}: no executable examples found (vacuous)'
+
+
+def test_the_verify_guide_renders_the_tier_registry() -> None:
+    """The verify guide's tier table is the registry's own rendering, never a copy."""
+    import simplipy.verify as v
+    with open(os.path.join(REPO, 'docs', 'guides', 'verify.md')) as fh:
+        guide = fh.read()
+    begin, end = '<!-- tier-table: begin', '<!-- tier-table: end -->'
+    assert guide.count(begin) == 1 and guide.count(end) == 1
+    block = guide.split(begin, 1)[1].split('-->', 1)[1].split(end, 1)[0]
+    assert block.strip() == v.tier_table()
