@@ -2239,9 +2239,10 @@ def _tier(verdict, realised, permissive=None):
         # NO-WITNESS, UNRESOLVED-COVERAGE, UNSUPPORTED-SHAPE, JUDGE-TIMEOUT: the judge reached
         # no answer, and holds in no mode
         return 'reject'
-    # an undecided measure refuses f64, which owes clause (b); permissive does not owe it
-    # (specification 4.10)
-    held = {'f64': realised is True and verdict not in ('ENGINE-MISALIGN', 'UNDECIDED-MEASURE'),
+    # the reals' measure undecided refuses no mode by itself: f64 owes clause (b) in float64's
+    # values, which `realised` holds (an undecided f64 measure is no realisation), and
+    # permissive does not owe it (specification 4.10)
+    held = {'f64': realised is True and verdict != 'ENGINE-MISALIGN',
             'permissive': (verdict in HOLDS_IN_THE_REALS) if permissive is None
             else bool(permissive)}
     modes = tuple(m for m in MODES if held[m])
@@ -3220,7 +3221,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                                   'verdict': sub_r.get('verdict'),
                                   'clause': sub_r.get('clause'),
                                   'points': sub_r.get('points') or sub_r.get('cell')}
-                if sub_r.get('realised') is False and correlated_f64 is None:
+                # f64 owes the instance in its own values: held where float64 was read on it
+                if (deployed_check and sub_r.get('realised') is not True
+                        and correlated_f64 is None):
                     correlated_f64 = [b for b in blocks if len(b) > 1]
 
     # f64 HOLDS by its own values, whatever the reals' verdict: no disagreement at a point read

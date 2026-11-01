@@ -167,6 +167,11 @@ SPEC_EXAMPLES = [
     case('/ - tanh x0 1 - tanh x0 1', '1', REALS, True),
     case('/ - tanh x0 1 - tanh x0 1', '1', 'f64', False),
     case('/ - x0 0.1 - x0 0.1', '1', 'f64', True),
+    # the reals' measure is owed by no mode: both sides have no value in the reals on x0 >= 0,
+    # where the cells read x0 - |x0| as a hull through 0 and cannot decide the reals' measure;
+    # f64 decides it in its own values (the deployed evaluator's infinities agree there)
+    case('inv * x1 - x0 abs x0', '/ inv - x0 abs x0 x1', 'f64', True),
+    case('inv * x1 - x0 abs x0', '/ inv - x0 abs x0 x1', 'permissive', True),
     # the 5% grid bar: an extension on (-0.1, 0.1) is positive measure
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', REALS, False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),

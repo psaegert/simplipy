@@ -1375,8 +1375,9 @@ model predictions.
   so `atan(tan(asin(_0))) -> asin(_0)` is refused (with `x0` it holds). Two `?` slots can bind
   one variable, so every way they can coincide is judged as its own rule:
   `(x0 - x1)/(x1 - x0) -> -1` is refused in `real` and `f64` (with x0 = x1 the left side has no
-  value anywhere). A measure the cells cannot decide refuses `real` and `f64`, which both owe
-  it, and not `permissive`, which does not.
+  value anywhere). A measure the cells cannot decide refuses the mode that owes it in the
+  values it was read in: the reals' refuses `real`, float64's refuses `f64`, and `permissive`
+  owes neither.
 - **`f64` decides its measure on its own values.** A set of bindings has measure zero when it
   lies on lower-dimensional cells of the interval layer's partition of the real input space,
   and `f64` reads those cells in float64's values: a saturation plateau is a cell like any
@@ -1384,7 +1385,10 @@ model predictions.
   neighbouring doubles are no extension (`x0/x0 -> 1` at 0). `x0 + 0*sqrt(x0^2 - 1e-6) -> x0`,
   with no value on (-0.001, 0.001), narrower than any cell, is refused in `f64`, and
   `(x0 - 0.1)/(x0 - 0.1) -> 1`, whose float64 left side has no value at the one double 0.1, holds
-  there.
+  there. The reals' measure, where the cells cannot decide it, no longer refuses `f64` by
+  itself: `1/(x1*(x0 - |x0|)) -> (1/(x0 - |x0|))/x1`, which has no value in the reals on all of
+  x0 >= 0 on either side, holds in `f64`. A way two `?` slots coincide holds in `f64` only where
+  float64 was read on it and held.
 - **The judge decides two fragments exactly.** A rule of one variable whose sides are built
   from rational literals, `+`, `-`, `neg`, products and quotients by a constant, `abs`, `max`
   and `min` is compared cell by cell with exact rational breakpoints, and is proved or refuted

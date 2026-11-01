@@ -52,9 +52,10 @@ The second rule is the classic trap this package exists to catch:
 function on a positive-measure set, so the judge kills it.
 
 A rule the judge cannot evaluate — `NO-WITNESS`, `UNSUPPORTED-SHAPE`,
-`JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode, and one whose
-measure the cells cannot decide (`UNDECIDED-MEASURE`) is refused in `f64`: an
-undecided check never reads as a pass.
+`JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode. A measure the
+cells cannot decide is refused where it is owed: `f64` owes it in float64's values, so
+an undecided float64 measure refuses `f64`; `UNDECIDED-MEASURE` labels the reals'
+measure, which `permissive` does not owe. An undecided check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
 Each rule also gets a **tier**: the modes it holds in, from two independent questions. Does
