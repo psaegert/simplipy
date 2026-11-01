@@ -1672,6 +1672,17 @@ model predictions.
   judge licenses, so the mine could not close their overlaps. `inv(atanh(ceil(x0))) -> 0`, its
   `floor` twin and `sinh(acosh(1/x0)) -> tan(acos(x0))` are served and minted, and the reduced
   length-4 permissive file's three unjoined overlaps are closed within the cell.
+- **The judge's witness fit.**
+  - Its seeds, each assignment of the left side's constants to the right side's, are generated
+    directly, in the order they had: n!/(n-m)! of them, never the n! permutations they were
+    read off (40,320 at eight constants, where two on the right keep 56).
+  - The search in the reals solves a root again from an environment it misses, where the
+    environments it was solved at do not pin it. `max(x0, log(C)) -> max(D, x0)` is witnessed at
+    C = 0.001 (D = log(0.001), pinned only where x0 < -6.9), where it was refused with
+    uncertainty; it stays refused at C = 0, where no finite D exists.
+  - A root is a witness only where each of its constants moves the right side at an
+    environment it was not solved at: at C = 0 the search ends at D = -13, which the other
+    environments reproduce without reading it.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with

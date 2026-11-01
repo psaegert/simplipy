@@ -1301,14 +1301,33 @@ def _extremity(tl, envs, cl_env):
 
 
 def _fit_seeds(cl_env, m):
-    """The fit's starting points: the left side's own constants first, in every order (a
-    respelling may move them: `exp(c1 x + c2) -> d1 exp(d2 x)` has d2 = c1), then generic
-    values."""
+    """The fit's starting points: the left side's own constants first, each assignment of
+    distinct ones to the `m` right-side constants (a respelling may move them:
+    `exp(c1 x + c2) -> d1 exp(d2 x)` has d2 = c1; with fewer, the rest start at 1), then generic
+    values.
+
+    The assignments are generated directly, in the order of their first appearance as a prefix of
+    the permutations of the left side's constants, a value repeated among them tried once per
+    position: n!/(n-m)! assignments of n distinct constants, each built in O(n m), never the n!
+    permutations they are prefixes of (40,320 at n = 8, where m = 2 keeps 56)."""
     lv = [float(v) for v in cl_env.values()]
-    own = list(dict.fromkeys(tuple((list(p) + [1.0] * m)[:m])
-                             for p in itertools.permutations(lv)))
-    return [list(p) for p in own] + [[1.0] * m, [0.5] * m, [-1.0] * m, [2.0] * m,
-                                     [float(i + 1) for i in range(m)], [0.0] * m]
+    k = min(len(lv), m)
+    own = []
+
+    def extend(prefix, rest):
+        if len(prefix) == k:
+            own.append(prefix + [1.0] * (m - k))
+            return
+        tried = []
+        for i, v in enumerate(rest):
+            if v in tried:
+                continue
+            tried.append(v)
+            extend(prefix + [v], rest[:i] + rest[i + 1:])
+
+    extend([], lv)
+    return own + [[1.0] * m, [0.5] * m, [-1.0] * m, [2.0] * m,
+                  [float(i + 1) for i in range(m)], [0.0] * m]
 
 
 #: The precision of the fit in the contract's values, and the step of its Jacobian's
@@ -1359,8 +1378,22 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
     whose Gauss-Newton step for d2 carries an error of 1e27) from each seed (`_fit_seeds`), on
     the first `len(rnames)` generic environments where the left side is finite. A root is a
     witness where it reproduces the left side at EVERY such environment to `MP_FIT_TOL`, or with
-    `strict` within `MP_FIT_AGREE` decades of the working precision.
-    `(d, envs)` or None."""
+    `strict` within `MP_FIT_AGREE` decades of the working precision, and each of its constants
+    moves the right side at an environment it was not solved at.
+
+    ONE ENVIRONMENT DOES NOT PIN A WITNESS. Where the right side does not move with its constant
+    at an environment, Newton has nothing to solve there: `max(x0, log(C)) -> max(D, x0)` at
+    C = 0.001 is x0 at every environment the strict search reads but the two below
+    log(0.001) = -6.9 (x0 = -8 and -13), where it is -6.9. So a root that reproduces the
+    environments it was solved at and misses another is solved again from the one it misses,
+    until it reproduces every environment or the search returns to one it has solved at: from
+    x0 = 1.7, D = 0.001 misses x0 = -1.3; from there D = -1.3 misses x0 = -13; from there
+    D = log(0.001) reproduces all ten.
+    NOR DOES AN ENVIRONMENT THAT DOES NOT READ IT. At C = 0 the left side is x0 everywhere, and
+    the same walk ends at D = -13, which every other environment reproduces without reading it
+    (max(-13, x0) is x0 there whatever D is): a boundary of the sample, not a witness, and no
+    witness exists (max(D, x0) is D below D).
+    `(d, envs)`, the environments it was solved at first, or None."""
     m = len(rnames)
     # the table reads a value up to 10^(dps - 10): the precision grows with the left side's
     # magnitude (`exp(-1.5 x + 300)` is 1e130), read in the contract's values where float64
@@ -1400,13 +1433,14 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
         def right(e, d):
             return c_eval(tr, {**e, **dict(zip(rnames, d))})
 
-        def newton(d):
-            """Newton on the relative equations `R(x_k; d)/L_k = 1` (absolute where L_k is 0),
-            the Jacobian read off differences of R itself (a difference of the relative
-            residual loses a coefficient's influence below the working precision)."""
+        def newton(d, at):
+            """Newton on the relative equations `R(x_k; d)/L_k = 1` (absolute where L_k is 0) at
+            the environments `at`, the Jacobian read off differences of R itself (a difference of
+            the relative residual loses a coefficient's influence below the working precision)."""
+            es, ts = [exact[k] for k in at], [targets[k] for k in at]
             for _ in range(60):
-                r = [right(e, d) for e in exact[:m]]
-                res = [x / t - 1 if t else x for x, t in zip(r, targets[:m])]
+                r = [right(e, d) for e in es]
+                res = [x / t - 1 if t else x for x, t in zip(r, ts)]
                 if max(abs(x) for x in res) <= stop:
                     return d
                 jac = mp.matrix(m, m)
@@ -1414,27 +1448,81 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
                     h = max(abs(d[j]), 1) * mpf(MP_FIT_STEP)
                     dj = list(d)
                     dj[j] += h
-                    for k, (e, t, x) in enumerate(zip(exact[:m], targets[:m], r)):
+                    for k, (e, t, x) in enumerate(zip(es, ts, r)):
                         jac[k, j] = (right(e, dj) - x) / (h * (t if t else 1))
                 step = mp.lu_solve(jac, mp.matrix([-x for x in res]))
                 d = [x + step[j] for j, x in enumerate(d)]
             return d
 
+        def read_elsewhere(d, at):
+            """Does each constant of `d` move the right side at an environment outside `at`?"""
+            rest = [exact[k] for k in range(len(exact)) if k not in at]
+            base = [right(e, d) for e in rest]
+            for j in range(m):
+                dj = list(d)
+                dj[j] += max(abs(d[j]), 1) * mpf(MP_FIT_STEP)
+                if all(right(e, dj) == b for e, b in zip(rest, base)):
+                    return False
+            return True
+
+        def window(first):
+            return [(first + j) % len(exact) for j in range(m)]
+
+        def miss(d):
+            """The first environment where `d` does not reproduce the left side, or None."""
+            for k, (e, t) in enumerate(zip(exact, targets)):
+                rv = right(e, d)
+                if not (cls_mp(rv)[0] == 'fin' and abs(rv - t) <= agree * max(1, abs(t))):
+                    return k
+            return None
+
+        def solve(d, at):
+            """Newton from `d` at the window `at`: `(root, its first miss)`, the root None where
+            it is not finite."""
+            d = newton([mpf(x) for x in d], at)
+            if not all(cls_mp(x)[0] == 'fin' for x in d):
+                return None, None
+            return d, miss(d)
+
+        def found(d, at):
+            # constants range over the finite reals (3.2): a witness past the doubles' range
+            # (e^1000 for `exp(x + c) -> d*exp(x)` at c = 1000) is kept as it is, and float64
+            # reads it as its infinity, where it owes nothing (its left side is not finite there
+            # either)
+            return ([float(x) if abs(x) < mpf(2) ** 1023 else +x for x in d],
+                    [envs[k] for k in at] + [env for k, env in enumerate(envs) if k not in at])
+
+        failures = (Unresolved, ZeroDivisionError, ValueError, TypeError, OverflowError)
+        # the first environments, from every seed; then each root that reproduced the
+        # environments it was solved at and missed another is solved again from the
+        # environment it missed, until a root reproduces every environment or the search
+        # returns to an environment it has solved at
+        missed = []
         for seed in _fit_seeds(cl_env, m):
             try:
-                d = newton([mpf(x) for x in seed])
-                if not all(cls_mp(x)[0] == 'fin' for x in d):
-                    continue
-                if all(cls_mp(rv := right(e, d))[0] == 'fin'
-                       and abs(rv - t) <= agree * max(1, abs(t))
-                       for e, t in zip(exact, targets)):
-                    # constants range over the finite reals (3.2): a witness past the doubles'
-                    # range (e^1000 for `exp(x + c) -> d*exp(x)` at c = 1000) is kept as it is,
-                    # and float64 reads it as its infinity, where it owes nothing (its left
-                    # side is not finite there either)
-                    return [float(x) if abs(x) < mpf(2) ** 1023 else +x for x in d], envs
-            except (Unresolved, ZeroDivisionError, ValueError, TypeError, OverflowError):
+                d, k = solve(seed, window(0))
+            except failures:
                 continue
+            if d is None:
+                continue
+            if k is None:
+                if read_elsewhere(d, window(0)):
+                    return found(d, window(0))
+            elif k not in window(0):
+                missed.append((d, k))
+        for d, k in missed:
+            solved = set(window(0))
+            while k is not None and k not in solved:
+                at = window(k)
+                solved.update(at)
+                try:
+                    d, k = solve(d, at)
+                except failures:
+                    break
+                if d is None or k in at:
+                    break
+                if k is None and read_elsewhere(d, at):
+                    return found(d, at)
         return None
     finally:
         mp.dps = old
