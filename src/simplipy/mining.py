@@ -381,6 +381,38 @@ def judge_verdicts(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S
     return [verdict for part in parts for verdict in part]
 
 
+def _basis_chunk(pairs: list, mode: str, warn_s: float = JUDGE_WARN_S,
+                 fail_s: float = JUDGE_FAIL_S) -> list[str]:
+    return [(d.get('basis') or {}).get(mode, 'refused')
+            for d in _watched_judgments(pairs, warn_s, fail_s)]
+
+
+def judge_bases(pairs: list, mode: str, processes: int = 4, warn_s: float = JUDGE_WARN_S,
+                fail_s: float = JUDGE_FAIL_S) -> list[str]:
+    """What the contract judge's verdict on each ``(lhs, rhs)`` pair rests on in ``mode``
+    (``'f64'`` or ``'permissive'``), in order: ``'proved'`` (an exact route proves it there),
+    ``'evidence'`` (it holds there on the judge's points alone) or ``'refused'``; judged as
+    :func:`judge_tiers` judges. A mine records it per rule in its provenance sidecar."""
+    pairs = [(list(lhs), list(rhs)) for lhs, rhs in pairs]
+    if processes <= 1 or len(pairs) < _JUDGE_POOL_MIN:
+        return _basis_chunk(pairs, mode, warn_s, fail_s) if pairs else []
+    import multiprocessing
+    size = -(-len(pairs) // processes)
+    chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
+    from .verify._contract import judge_rows, set_rows
+    with multiprocessing.get_context('spawn').Pool(
+            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
+        parts = pool.map(functools.partial(_basis_chunk, mode=mode, warn_s=warn_s,
+                                           fail_s=fail_s), chunks)
+    return [basis for part in parts for basis in part]
+
+
+def _basis_record(bases: list[str]) -> dict:
+    """The sidecar's record of a file's bases: the count of each and the basis of every rule,
+    in the file's order."""
+    return {**{b: bases.count(b) for b in ('proved', 'evidence', 'refused')}, 'rules': bases}
+
+
 def _file_mode(rule_mode: str) -> str:
     return dict(_MINE_MODES)[rule_mode]
 
@@ -1615,6 +1647,12 @@ class RuleMiner:
                                      'file': os.path.basename(_path)}
                     # A rerun of this mine reuses the file as it is (`_finished_cell`).
                     prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
+                    # What each rule's verdict rests on in this mode (the specification's 3.4):
+                    # proved by an exact route, or held on the judge's points alone.
+                    if not interrupted():
+                        prov['basis'] = _basis_record(judge_bases(
+                            final, file_mode, processes=judge_processes,
+                            warn_s=judge_warn_s, fail_s=judge_fail_s))
                 # An interrupted mine still writes what it has, but it is NOT final: the
                 # lengths after the interrupt were never mined and the proposal channel,
                 # the gates and sort promotion above were skipped. The sidecar says so.
@@ -2942,9 +2980,12 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
       check;
     - ``offered`` (``permissive`` only): the mine was offered the f64 file, and the file its
-      sidecar pins lies beside this one with the pinned sha256.
+      sidecar pins lies beside this one with the pinned sha256;
+    - ``basis``: the sidecar records what every rule's verdict rests on in the mode, proved or
+      evidence (``judge_bases``), one entry per rule of the file.
 
-    Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
+    Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}, 'basis'}``,
+    ``basis`` the number of rules proved and held on evidence alone.
 
     The judge reads the rows the mine's mint read, drawn again from the sidecar's seed and
     shape (``verify._contract.mine_matrix``), as it did in the mine.
@@ -3032,11 +3073,21 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         + [[key, value] for key, value in env_overrides().items()])
     if mode == 'permissive':
         gates['offered'] = _offered_pins_broken(rules_path, sidecar.get('offered'))
+    # What every rule's verdict rests on (the specification's 3.4), as the mine recorded it.
+    basis = sidecar.get('basis')
+    labels = basis.get('rules') if isinstance(basis, dict) else None
+    gates['basis'] = (
+        [['the sidecar records no basis', None, None]] if not isinstance(labels, list) else
+        ([['recorded for', len(labels), len(rules)]] if len(labels) != len(rules) else [])
+        + [[list(lhs), list(rhs), b] for (lhs, rhs), b in zip(rules, labels)
+           if b not in ('proved', 'evidence')])
     report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
               for name, found in gates.items()}
     return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
             'gates': report, 'overlaps_refused': overlaps_refused,
-            'overlaps_beyond_cell': len(beyond)}
+            'overlaps_beyond_cell': len(beyond),
+            'basis': ({b: labels.count(b) for b in ('proved', 'evidence')}
+                      if isinstance(labels, list) else None)}
 
 
 def _offered_pins_broken(rules_path: str, offered: Any) -> list:

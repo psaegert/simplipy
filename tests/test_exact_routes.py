@@ -92,3 +92,24 @@ def test_a_left_side_one_literal_over_its_whole_domain_is_proved() -> None:
     d = judged('* 0 exp ?0', '0')
     assert d['exact']['route'] == 'whole-domain' and d['exact']['reals'] == 'proved', d
     assert d['verdict'] == 'CERTIFIED'
+
+
+@pytest.mark.parametrize('lhs, rhs, f64, permissive', [
+    ('cos np.pi', '-1', 'proved', 'proved'),                # one point, read exactly
+    ('sin np.pi', '0', 'refused', 'proved'),                # float64's sin(pi) is 1.2e-16
+    ('log -1', '0', 'refused', 'refused'),                  # no tolerance at one point
+    ('acos <constant>', '<constant>', 'proved', 'proved'),  # the constant's own value
+    ('abs neg x0', 'abs x0', 'proved', 'proved'),           # exact in float64 too
+    ('- max x0 0 min x0 0', 'abs x0', 'evidence', 'proved'),  # float64 rounds the difference
+    ('/ x0 x0', '1', 'evidence', 'evidence'),               # the battery's points alone
+    ('atanh tanh x0', 'x0', 'refused', 'evidence'),
+])
+def test_every_verdict_says_what_it_rests_on(lhs: str, rhs: str, f64: str,
+                                             permissive: str) -> None:
+    """The basis of a verdict per mode (the specification's 3.4): proved by an exact route,
+    held on the judge's points alone (evidence), or refused."""
+    assert judged(lhs, rhs)['basis'] == {'f64': f64, 'permissive': permissive}
+
+
+def test_an_unjudgeable_rule_is_refused_in_every_mode() -> None:
+    assert judged('foo ?0', '?0')['basis'] == {'f64': 'refused', 'permissive': 'refused'}

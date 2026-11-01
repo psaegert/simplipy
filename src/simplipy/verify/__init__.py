@@ -50,7 +50,10 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
     """Judge a single ``lhs -> rhs`` rule at its symbolic trigger points.
 
     Returns a dict with ``verdict`` (CERTIFIED / TOLERATED / KILL / ENGINE-MISALIGN /
-    NO-WITNESS / UNSUPPORTED-SHAPE) and the supporting witness points / measure.
+    NO-WITNESS / UNSUPPORTED-SHAPE) and the supporting witness points / measure, its ``tier``,
+    and its ``basis`` per mode: ``'proved'`` (an exact route decides the rule over its whole
+    domain, ``exact``), ``'evidence'`` (it holds at every point the judge read) or
+    ``'refused'``.
     """
     return _contract.judge_rule(list(lhs), list(rhs), deployed_check=deployed_check)
 

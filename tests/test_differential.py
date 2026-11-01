@@ -210,21 +210,22 @@ SPEC_EXAMPLES = [
     case('pow 0 <constant>', '<constant>', 'f64', True),
     case('pow -1 <constant>', '<constant>', REALS, True),
     case('pow -1 <constant>', '1', REALS, False), case('pow -1 <constant>', '1', 'f64', False),
-    # section 3.3: ground rules
+    # section 3.3: ground rules, one point and no tolerance in any mode: permissive's extension
+    # is for expressions with variables, a fully numeric one takes its table value
     case('cos np.pi', '-1', REALS, True), case('cos np.pi', '-1', 'f64', True),
     case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'f64', False),
     case('sin np.pi', '0', 'permissive', True),
     case('log -1', '0', REALS, False),
     case('log -1', '0', 'f64', False),
-    case('log -1', '0', 'permissive', True),
+    case('log -1', '0', 'permissive', False),
     case('exp tan asin 1', 'float("inf")', REALS, False),
     case('exp tan asin 1', 'float("inf")', 'f64', True),
-    case('exp tan asin 1', 'float("inf")', 'permissive', True),
+    case('exp tan asin 1', 'float("inf")', 'permissive', False),
     case('asin 1', 'acos 0', REALS, True), case('asin 1', 'acos 0', 'f64', True),
     # the limit rule (V4, V5, V6)
     case('/ 1 0', 'float("inf")', REALS, False),
     case('/ 1 0', 'float("inf")', 'f64', True),
-    case('/ 1 0', 'float("inf")', 'permissive', True),
+    case('/ 1 0', 'float("inf")', 'permissive', False),
     case('pow 0 -1', 'float("inf")', REALS, False),
     case('pow 0 -2', 'float("inf")', REALS, False),
     case('pow 1 float("inf")', '1', REALS, False),

@@ -270,6 +270,29 @@ def test_the_env_switch_gate(tmp_path, mine, monkeypatch) -> None:
     assert gate['examples'] == [['SIMPLIPY_SOMETHING', '1']]
 
 
+@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+def test_the_basis_gate(tmp_path, mine, mode) -> None:
+    """The sidecar records what every rule's verdict rests on in the mode, proved or on
+    evidence alone, one entry per rule: a mine's own record passes, a missing, short or refused
+    one fails."""
+    rules = json.load(open(mine / FILES[mode]))
+    report = verify_mine(_plant(tmp_path, mine, mode, rules), mode, _OPERATORS, judge=core_judge)
+    assert _gate(report, 'basis')['ok'] and sum(report['basis'].values()) == len(rules), report
+
+    def drop(side):
+        side.pop('basis')
+
+    def short(side):
+        side['basis']['rules'] = side['basis']['rules'][:-1]
+
+    def refused(side):
+        side['basis']['rules'][0] = 'refused'
+
+    for edit in (drop, short, refused):
+        path = _plant(tmp_path, mine, mode, rules, edit)
+        assert not _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'basis')['ok']
+
+
 def test_the_cli_exit_code(tmp_path, mine) -> None:
     from simplipy.__main__ import main
     config = tmp_path / 'config.yaml'

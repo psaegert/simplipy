@@ -200,6 +200,9 @@ def main(argv: str = None) -> None:
             print(f'     overlaps not licensed: {len(refused)} '
                   f'({", ".join(f"{k} {v}" for k, v in sorted(by_policy.items())) or "none"}); '
                   f'beyond the cell: {report["overlaps_beyond_cell"]}')
+            if report['basis']:
+                print(f'     basis: {report["basis"]["proved"]} proved, '
+                      f'{report["basis"]["evidence"]} on evidence alone')
             if args.report:
                 with open(args.report, 'w') as f:
                     json.dump(report, f, indent=2)

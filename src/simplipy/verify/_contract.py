@@ -2215,15 +2215,45 @@ def judge_rule(lhs, rhs, deployed_check=True):
     here by the contract.
 
     Where a rule lies in a fragment the judge decides exactly (`_exact`: one variable and
-    piecewise-affine sides, or a left side enclosed by one literal over its whole domain), the
-    exact route's proof or refutation stands beside the battery's reading
-    (`_with_exact_routes`)."""
+    piecewise-affine sides, a ground point read exactly, a constant's own value, or a left side
+    enclosed by one literal over its whole domain), the exact route's proof or refutation stands
+    beside the battery's reading (`_with_exact_routes`).
+
+    Every verdict says how it was reached, per mode (`basis`, the specification's 3.4):
+    'proved' where an exact route proves the rule in the mode, 'evidence' where the mode holds it
+    on the battery's points alone, 'refused' where it does not hold in the mode."""
     r = _judge_contract(lhs, rhs, deployed_check)
-    if 'tier' not in r:
-        return r
-    if deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
-        r = _with_f64_bar(lhs, rhs, r)
-    return _with_exact_routes(lhs, rhs, r, deployed_check)
+    if 'tier' in r:
+        if deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
+            r = _with_f64_bar(lhs, rhs, r)
+        r = _with_exact_routes(lhs, rhs, r, deployed_check)
+    return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
+
+
+#: What a verdict rests on in a mode (the specification's 3.4).
+BASES = ('proved', 'evidence', 'refused')
+
+
+def _basis(r, mode):
+    """The basis of the judged rule `r` in `mode` (`BASES`): refused where the mode does not
+    hold it, proved where an exact route proves it there and nothing the battery read
+    contradicts the proof, else evidence."""
+    if mode not in TIERS[r.get('tier') or 'reject']:
+        return 'refused'
+    ex = r.get('exact') or {}
+    if ex.get(mode) == 'proved' and not r.get('exact_conflict'):
+        return 'proved'
+    return 'evidence'
+
+
+def _real_spec(tree):
+    """The table's exact-or-approximate value of a ground `tree` at the working precision, with
+    whether a snap read it: `(spec, snapped)`, or None where the table cannot read it."""
+    expr, names, extra = _compiled(tree)
+    if names:
+        return None
+    spec, unresolved, snapped, *_ = expr.eval_real([], BASE_DPS)
+    return None if unresolved else (tuple(spec), snapped)
 
 
 def _with_exact_routes(lhs, rhs, r, deployed_check):
@@ -2237,7 +2267,10 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         tr = parse(rhs, '<C_R>', number=True)
     except (UnsupportedToken, ValueError):
         return r
-    ex = _exact.piecewise_affine(tl, tr, d_eval, _table.table_f64_agree)
+    agree = _table.table_f64_agree
+    ex = (_exact.piecewise_affine(tl, tr, d_eval, agree)
+          or _exact.ground(tl, tr, _real_spec, lambda t, rng: d_eval(t, {}, rng), agree)
+          or _exact.own_value(tl, tr))
     sorts = dict(slots_of(rhs, '<C_R>', number=True), **slots_of(lhs, '<C_L>', number=True))
     variables = sorted(n for n in sorts if not n.startswith('<C'))
     open_slots = [n for n in variables if sorts[n] == '_']
@@ -2254,8 +2287,9 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
     r = dict(r, exact=ex)
     realised, permissive = r.get('realised'), r.get('permissive')
     if ex['reals'] == 'refuted' and r['verdict'] in HOLDS_IN_THE_REALS:
+        witness = ex.get('witness')
         r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'],
-                 points=[{variables[0]: float(ex['witness'])}])
+                 points=[{variables[0]: float(witness)} if witness is not None else {}])
     elif ex['reals'] == 'proved' and (r['verdict'] == 'UNDECIDED-MEASURE' or (
             r['verdict'] == 'KILL' and r.get('clause') != 'a-nonfinite-binding')):
         # the route covers every finite binding; a `_` slot's non-finite atoms are the battery's
@@ -2725,8 +2759,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 acc['resolved'] += 1
             if ground and not has_cl and v == 'EXT':
                 # a GROUND rule has one point, its whole domain: an extension there is no
-                # null event (no tolerance, 3.3)
+                # null event, in permissive too (no tolerance, 3.3: a fully numeric
+                # expression takes its table value)
                 acc['a'].append((v, point))
+                acc['perm'].append((v, point, (key, values)))
             else:
                 judge_point(acc, v, point, kind, real_valued, (key, values))
             ed = {n: F(float(x)) for n, x in values.items()}

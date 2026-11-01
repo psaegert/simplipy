@@ -545,16 +545,16 @@ class TestTheRealisationAxis:
         assert (_tier('CERTIFIED', False, False), _tier('CERTIFIED', True, False)) \
             == ('reject', 'f64-only')
 
-    def test_realisation_is_undetermined_across_a_snap_not_asserted(self):
-        """A snap means the f64 algebra evaluates a DIFFERENT point, so the deployed
-        comparison is skipped rather than answered -- `None`, never a guess. Asserting
-        realisation there would convict on a measurement artifact. (`sin(np.pi)` itself no
-        longer snaps: the table reads pi exactly, sin(pi) = 0, and float64's
+    def test_a_ground_rule_is_decided_in_float64_exactly(self):
+        """A ground rule has one point, and float64's value there is the realizations' value at
+        the literals' doubles (F2, F3): decided exactly, whatever the reals' reading met on the
+        way (`exp(log(pi))` is pi there, a snap). float64's sin(exp(log(pi))) is not 0.
+        (`sin(np.pi)`: the table reads pi exactly, sin(pi) = 0, and float64's
         1.2246467991473532e-16 is simply not 0 -- `permissive`, not realised.)"""
         from simplipy.verify._contract import judge_rule
         got = judge_rule(['sin', 'exp', 'log', 'np.pi'], ['0'])
         assert got['verdict'] == 'CERTIFIED'
-        assert got['realised'] is None
+        assert got['realised'] is False and got['basis']['f64'] == 'refused'
         exact = judge_rule(['sin', 'np.pi'], ['0'])
         assert (exact['verdict'], exact['realised'], exact['tier']) == \
             ('CERTIFIED', False, 'permissive')
@@ -866,12 +866,15 @@ class TestCleanlinessIsPerMode:
         # (here the one before per-mode mines), so the rows the load refuses are offenders:
         # f64 +18 (17 the engine does itself, `neg asin _0 -> asin neg _0` and kin; 1 not
         # ordered below its left side), permissive +27 (21 and 6).
+        # A rule without variables has no tolerance in permissive either: permissive 45 (+6,
+        # `pow((-1), +-inf) -> 1`, `exp(tan(asin(-1))) -> 0` and three `tanh(tan(...))` at a pole
+        # of tan, whose left side has no value).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
         assert len(tier['f64'] - {126}) == 25 and len(policy_only['f64']) == 18
-        assert len(tier['permissive']) == 39 and len(policy_only['permissive']) == 27
+        assert len(tier['permissive']) == 45 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {

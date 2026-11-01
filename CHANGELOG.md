@@ -1384,6 +1384,15 @@ model predictions.
   width w from 1e-3 to 1e-200 (it was licensed in every mode: no sample point lies within w of
   0.123456789). A left side the interval layer encloses by the right side's literal over its
   whole domain is proved too (`0*exp(x0) -> 0`). The verdict reports the route (`exact`).
+- **Every verdict says what it rests on.** `verify_rule(...)['basis']` gives, per mode,
+  `proved` (an exact route: the two fragments above, a rule without variables or constants
+  whose values are read exactly, or `L(C) -> C` without variables, whose witness is the left
+  side's own value), `evidence` (it holds at every point the judge read, no proof) or
+  `refused`. A mine records the basis of every rule of each file in the provenance sidecar
+  (`basis`), and `verify-mine` checks the record is there for every rule (gate `basis`) and
+  reports how many rules hold on evidence alone. A rule without variables has no tolerance in
+  `permissive` either: `log(-1) -> 0` and `1/0 -> inf` are refused there, where a fully
+  numeric expression takes its table value.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's

@@ -2,8 +2,8 @@
 """The judge's exact routes: a rule decided over its whole domain, with no sampling.
 
 Equality is undecidable for the language a rule is spelled in (Richardson), so the judge's
-general procedure is a battery of points; on two fragments it decides exactly, and there its
-verdict is a proof or a refutation, not evidence.
+general procedure is a battery of points; on the fragments below it decides exactly, and there
+its verdict is a proof or a refutation, not evidence.
 
 - THE PIECEWISE-AFFINE ROUTE (`piecewise_affine`). A side built from one variable, rational
   literals, `+`, `-`, `neg`, products and quotients where one factor is constant on every cell,
@@ -18,7 +18,13 @@ verdict is a proof or a refutation, not evidence.
   in a coefficient the route answers unknown.
 - THE WHOLE-DOMAIN ENCLOSURE (`whole_domain_literal`). A left side whose interval enclosure
   over every finite binding of its variables and constants is one value and nothing else, the
-  right side's literal, is that value everywhere: `ceil(1/cosh(x0)) -> 1`.
+  right side's literal, is that value everywhere: `0*exp(x0) -> 0`.
+- THE GROUND POINT (`ground`). A rule with no variable and no constant has one point. Where the
+  table's values of both sides there are exact (a rational, a rational multiple of pi, an
+  infinity, undefined) the comparison is exact; float64's values are always exact, its kernels
+  being the realizations.
+- THE CONSTANT'S OWN VALUE (`own_value`). `L(C) -> C` with no variable holds in every mode: the
+  witness is the left side's own value wherever it is finite, and nothing is owed elsewhere.
 
 Each route reports per mode: 'proved', 'refuted' or None (unknown). The reals' answer is the
 route's own. Permissive's follows it, a refutation only where the two real values at the
@@ -307,3 +313,73 @@ def whole_domain_literal(lhs_spelled, tr, value_set, literal_f64):
     if fv is not None and is_exactly(value_set(lhs_spelled, True), fv):
         out['f64'] = 'proved'
     return out if any(out[m] for m in ('reals', 'permissive', 'f64')) else None
+
+
+#: The table's exact value kinds (`table::val_spec`); `m` is an approximation.
+_EXACT_KINDS = frozenset({'q', 'pi', 'inf', 'nan'})
+
+
+def _exact_value(spec):
+    """A table spec as a comparable exact value: `('q', Fraction)`, `('pi', Fraction)` (a multiple
+    of pi), `('inf', sign)`, `('nan',)`; zero as `('q', 0)` whatever its kind."""
+    kind, a, b = spec
+    if kind == 'nan':
+        return ('nan',)
+    if kind == 'inf':
+        return ('inf', a)
+    q = Fraction(int(a), int(b))
+    return ('q', q) if kind == 'q' or q == 0 else ('pi', q)
+
+
+def _double(v):
+    """The double nearest to an exact value that is no multiple of pi."""
+    if v[0] == 'nan':
+        return math.nan
+    if v[0] == 'inf':
+        return math.inf if v[1] == '+' else -math.inf
+    return float(v[1])
+
+
+def ground(tl, tr, real_spec, f64_value, f64_agree):
+    """The ground-point route: `None` where the rule has a variable or a constant, else
+    `{'route', 'reals', 'permissive', 'f64'}`. `real_spec(tree)` is the table's `(spec,
+    snapped)` at the working precision, or None where the table cannot read it;
+    `f64_value(tree, in_range)` is float64's value, `in_range[0]` cleared where an operation
+    overflowed or underflowed. The reals and permissive are decided where both table values are
+    exact and no snap read them (permissive where they round to doubles exactly: no multiple of
+    pi); f64 wherever its doubles agree, and where they differ with no operation leaving the
+    range (at a range event the true value stands, which the table decides)."""
+    slots = set()
+    for t in (tl, tr):
+        _ops_and_slots(t, set(), slots)
+    if slots:
+        return None
+    out = {'route': 'ground', 'reals': None, 'permissive': None, 'f64': None}
+    in_range = [True]
+    with np.errstate(all='ignore'):
+        dl, dr = float(f64_value(tl, in_range)), float(f64_value(tr, in_range))
+    if f64_agree(dl, dr) == 'eq':
+        out['f64'] = 'proved'
+    elif in_range[0]:
+        out['f64'] = 'refuted'
+    read = [real_spec(t) for t in (tl, tr)]
+    if all(r is not None and not r[1] and r[0][0] in _EXACT_KINDS for r in read):
+        lv, rv = (_exact_value(r[0]) for r in read)
+        out['reals'] = 'proved' if lv == rv else 'refuted'
+        if 'pi' not in (lv[0], rv[0]):
+            out['permissive'] = 'proved' if f64_agree(_double(lv), _double(rv)) == 'eq' \
+                else 'refuted'
+    return out
+
+
+def own_value(tl, tr):
+    """The constant's-own-value route: `{'route', 'reals', 'permissive', 'f64'}`, every mode
+    proved, where the right side is one `<constant>` and the left side has a constant and no
+    variable; else `None`."""
+    if tr[0] != 'slot' or not tr[1].startswith('<C'):
+        return None
+    slots = set()
+    _ops_and_slots(tl, set(), slots)
+    if not slots or any(not s.startswith('<C') for s in slots):
+        return None
+    return {'route': 'own-value', 'reals': 'proved', 'permissive': 'proved', 'f64': 'proved'}

@@ -132,8 +132,22 @@ verify_rule(['*', 'x0', '1'], ['x0'])['verdict']
 # -> 'CERTIFIED'
 ```
 
-On two fragments the judge decides a rule exactly, over its whole domain, and reports how
-(`verdict['exact']`):
+Equality is undecidable for the language rules are spelled in (Richardson, 1968), so the judge
+cannot decide every rule exactly. It gives every rule a definite answer and says what the answer
+rests on, per mode (`verdict['basis']`):
+
+- **`proved`**: an exact route decides the rule over its whole domain (below);
+- **`evidence`**: the rule holds at every point the judge read (its sort batteries, a grid, the
+  mine's rows, the preimages of jumps, at a precision that is climbed until the reading settles)
+  and the measure of clause (b) is decided by certified cells; no counterexample was found, which
+  is no proof;
+- **`refused`**: a counterexample, or a check that could not decide (an undecided check never
+  reads as a pass).
+
+A mine records the basis of every rule of each file in its provenance sidecar (`basis`), and
+`verify-mine` reports how many rules each file holds on evidence alone.
+
+The exact routes (`verdict['exact']`):
 
 - **Piecewise-affine rules of one variable.** Sides built from one variable, rational literals,
   `+`, `-`, `neg`, products and quotients by a constant, `abs`, `max` and `min` are continuous
@@ -146,6 +160,13 @@ On two fragments the judge decides a rule exactly, over its whole domain, and re
 - **A left side that is one literal everywhere.** Where the interval layer encloses the left
   side, over every finite binding of its variables and constants, by the right side's literal
   and nothing else, the rule is proved (`0*exp(x0) -> 0`).
+- **A rule without variables or constants** has one point. Where the table's values of both
+  sides are exact (a rational, a rational multiple of pi, an infinity, no value) the comparison
+  is exact (`cos(pi) -> -1`); float64's values are always exact. A ground rule has no tolerance in
+  any mode: `log(-1) -> 0` is refused in `permissive` too, where a fully numeric expression
+  takes its table value.
+- **`L(C) -> C` without variables** holds in every mode: the witness is the left side's own
+  value wherever it is finite (`acos(C) -> C`).
 
 What a mode's file may hold is `licensed`: the rule holds in the mode, and no named policy
 refuses it — evidence (the left side finite on a set of positive measure), the constant
