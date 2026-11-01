@@ -250,7 +250,16 @@ impl Engine {
                     vars.push(t.clone());
                 }
             }
-            if super::refusals::pole_refusal(&lhs, &rhs, &self.operators, &vars).is_some() {
+            // The pole entry reads f64's values at the exceptional points (`1/0` is +inf there):
+            // a pre-filter of f64's truth. Permissive's values are the reals' -- `1/0` has no
+            // value, where permissive may give one -- and its agreement is float
+            // resolution, which the entry's exact verdict does not read: its judge decides, as
+            // the permissive mint's acceptance does (`Acceptor::license`). So a permissive file
+            // is served the completions its judge licenses (`inv(atanh(ceil(x0))) -> 0`, whose
+            // left side is `1/0` at ceil(x0) = 0).
+            if !matches!(mode, RuleMode::Permissive)
+                && super::refusals::pole_refusal(&lhs, &rhs, &self.operators, &vars).is_some()
+            {
                 n_registry_dropped += 1;
                 continue;
             }
@@ -2575,28 +2584,31 @@ mod tests {
         ));
     }
 
-    /// A mode's set faces the SAME LOAD GATES as the default one: a mode relaxes what a
-    /// rule may CLAIM about the deployed engine, never what the loader will admit.
-    /// `sin _0 -> log _0` changes a defined value at a constructed exceptional point and
-    /// the licence registry refuses it; `sin _0 -> exp sin _0` climbs in price and
-    /// translation drops it (G7). Both are refused in a mode set exactly as in the default
-    /// one.
+    /// A mode's set faces the SAME LOAD POLICIES as the default one: a mode relaxes what a
+    /// rule may CLAIM about the deployed engine, never what the loader's policies admit.
+    /// `sin _0 -> exp sin _0` climbs in price and translation drops it in both sets. The
+    /// pole entry is f64's pre-filter -- it reads f64's values at the exceptional points --
+    /// so `sin _0 -> log _0`, which changes f64's defined value at `x0 = 0`, is refused in
+    /// the default set and left to the judge in a permissive one.
     #[test]
-    fn mode_sets_face_the_same_load_gates() {
+    fn mode_sets_face_the_same_load_policies() {
         let Some(mut e) = engine() else { return };
-        e.set_rules(vec![]);
-        e.set_mode_rules(
-            RuleMode::Permissive,
-            Some(vec![
-                (t(&["sin", "_0"]), t(&["log", "_0"])),
-                (t(&["sin", "_0"]), t(&["exp", "sin", "_0"])),
-            ]),
-        );
+        let pair = vec![
+            (t(&["sin", "_0"]), t(&["log", "_0"])),
+            (t(&["sin", "_0"]), t(&["exp", "sin", "_0"])),
+        ];
+        e.set_rules(pair.clone());
+        e.set_mode_rules(RuleMode::Permissive, Some(pair));
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(2));
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 0);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Default).0, 0);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 1);
+        assert_eq!(
+            simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Default),
+            t(&["sin", "x0"])
+        );
         assert_eq!(
             simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Permissive),
-            t(&["sin", "x0"])
+            t(&["log", "x0"])
         );
     }
 

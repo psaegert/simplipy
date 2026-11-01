@@ -90,6 +90,21 @@ def test_the_mint_refuses_what_the_licence_refuses(acj, src, hint, mode, policy)
     assert policy in got['refused_by'], got
 
 
+@pytest.mark.parametrize('lhs, rhs', [('inv atanh ceil ?0', '0'), ('inv atanh floor ?0', '0'),
+                                      ('sinh acosh inv ?0', 'tan acos ?0')])
+def test_the_permissive_load_serves_the_completions_its_judge_licenses(acj, lhs, rhs) -> None:
+    """The load's pole entry reads f64's values at the exceptional points (`1/0` is +inf there)
+    and pre-filters f64 alone. In permissive, where `1/0` has no value and a rule may give one,
+    the completions of the overlaps `inv(sinh(atanh(_0))) -> tan(acos(_0))` (at `ceil` and
+    `floor`) and `tan(asin(tanh(_0))) -> sinh(_0)` (at `acosh(inv(x0))`), which the judge
+    licenses, are served and accepted, so the mine closes the overlaps within its cell."""
+    pair = (tuple(lhs.split()), tuple(rhs.split()))
+    assert acj._core.load_refusal(list(pair[0]), list(pair[1]), rule_mode='permissive') is None
+    assert acj._core.load_refusal(list(pair[0]), list(pair[1]),
+                                  rule_mode='default') == 'pole-class-change'
+    assert RuleMiner(acj)._refusals([pair], 'permissive', judge_tiers, {}) == {}
+
+
 def test_a_promoted_sort_that_does_not_fire_is_refused(acj) -> None:
     """In permissive, `pow(0, inv(?0)) -> 0` holds at every sort, and at `_` it does not fire on
     its own generic instance: `0^(1/(1/(x0 + x1)))` is cancelled to `0^(x0 + x1)` before the

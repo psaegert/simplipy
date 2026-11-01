@@ -1666,6 +1666,12 @@ model predictions.
   - Finalization fails, naming the rule, where a rule of the file would fail a gate (its
     licence, an entry it serves, preemption, liveness, a law the engine owns, a row the load
     mints anyway, the load's translation), and writes nothing.
+- **The permissive load serves what its judge licenses.** The load's pole entry, a pre-filter
+  that reads f64's values at a rule's exceptional points (`1/0` is +inf there), applies to f64
+  alone: in `permissive`, where `1/0` has no value and a rule may give one, it refused rules its
+  judge licenses, so the mine could not close their overlaps. `inv(atanh(ceil(x0))) -> 0`, its
+  `floor` twin and `sinh(acosh(1/x0)) -> tan(acos(x0))` are served and minted, and the reduced
+  length-4 permissive file's three unjoined overlaps are closed within the cell.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with

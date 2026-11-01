@@ -374,16 +374,20 @@ class TestTheModeSurfaceRefusesNonsense:
             with pytest.raises(ValueError, match='unknown rule_mode'):
                 e._core.mode_rules_len(rule_mode=bad)
 
-    def test_mode_sets_face_the_same_load_gates(self, tmp_path):
+    def test_mode_sets_face_the_same_load_policies(self, tmp_path):
         """A mode relaxes what a rule may CLAIM about the deployed engine, never what
-        the loader will admit. `sin _0 -> log _0` changes a defined value at a
-        constructed exceptional point (licence-registry refusal) and `sin _0 -> exp sin _0`
-        climbs in price (G7) -- both are refused in a mode's set exactly as they are in the
-        default one."""
+        the loader's policies admit: `sin _0 -> exp sin _0` climbs in price and is refused in
+        a mode's set as in the default one. The pole entry is f64's pre-filter (it reads
+        f64's values at the exceptional points), so `sin _0 -> log _0`, which changes f64's
+        defined value at `x0 = 0`, is refused in the default set and left to the judge in a
+        permissive one."""
         bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['exp', 'sin', '_0']]]
-        cfg = write_artifact(tmp_path, rules=[P_DEFAULT], corpus=bad)
+        cfg = write_artifact(tmp_path, rules=bad, corpus=bad)
         e = SimpliPyEngine.from_config(cfg)
         assert e._core.mode_rules_len(rule_mode='permissive') == 2
-        assert e._core.ac_rules_info_in_mode(rule_mode='permissive')[0] == 0
-        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', 0, rule_mode='permissive') \
+        assert e._core.ac_rules_info_in_mode(rule_mode='default')[0] == 0
+        assert e._core.ac_rules_info_in_mode(rule_mode='permissive')[0] == 1
+        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', 0, rule_mode='default') \
             == ['sin', 'x0']
+        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', 0, rule_mode='permissive') \
+            == ['log', 'x0']
