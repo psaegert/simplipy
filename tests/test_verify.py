@@ -1068,43 +1068,38 @@ class TestTheExistsWitnessIsActuallySearchedFor:
 
     def test_a_defined_lhs_with_no_witness_is_convicted_not_swallowed(self) -> None:
         """The rule holds at every constant that fits, so the verdict used to be
-        CERTIFIED. A cl where the LHS HAS a value and no c_t reproduces it falsifies the
-        exists-claim outright, whether or not that cl is one of the core CONSTS."""
+        CERTIFIED. A cl where the LHS is finite owes a witness, and one the search does not
+        find refuses the rule with uncertainty, whether or not that cl is one of the core
+        CONSTS -- never "nothing owed". `x + e^c` is finite at every constant, so none is
+        skipped: float64 overflows past c = 709.78, and the search goes on in the reals."""
         import math
 
         import simplipy.verify._contract as C
-        lhs, rhs = ['pow', 'exp', '9', '<constant>'], ['<constant>']
+        lhs, rhs = ['+', '?0', 'exp', '<constant>'], ['+', '?0', '<constant>']
         assert C.judge_rule(list(lhs), list(rhs))['verdict'] == 'CERTIFIED'
 
-        real_fit = C.fit_witness
+        real_fit, real_mp = C.fit_witness, C._fit_multi_mp
 
         def blind_at_pi(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
-            # pi is NOT in CONSTS, so the old code appended it to `skipped_cl`
             if cl_val and abs(cl_val['<C_L0>'] - math.pi) < 1e-12:
                 return None
             return real_fit(tl, tr, shared, cl_val, env_out, rname)
 
-        C.fit_witness = blind_at_pi
+        def blind_mp_at_pi(tl, tr, generic, cl_env, rnames, strict=False):
+            if abs(float(cl_env['<C_L0>']) - math.pi) < 1e-12:
+                return None
+            return real_mp(tl, tr, generic, cl_env, rnames, strict)
+
+        C.fit_witness, C._fit_multi_mp = blind_at_pi, blind_mp_at_pi
         try:
             got = C.judge_rule(list(lhs), list(rhs))
         finally:
-            C.fit_witness = real_fit
+            C.fit_witness, C._fit_multi_mp = real_fit, real_mp
         assert got['verdict'] == 'NO-WITNESS', got
         assert 'cl=' in got['detail'], got
-        # pi is the cl the fit was BLINDED at, so pi is what convicts.
+        # pi is the cl the search was BLINDED at, so pi is what refuses.
         assert str(math.pi) in got['detail'], got
-        # `skipped_cl` is no longer empty, and that is correct rather than a regression:
-        # the widened battery reaches |c| = 1e4, and `exp(9)^c` overflows there, so those
-        # constants are genuinely degenerate. Assert the PROPERTY instead of the old
-        # empty list -- every skipped cl must be one where no witness can be DETERMINED
-        # (`_fit_target_env` is the judge's own test for that), and the blinded pi must
-        # not be among them, or the conviction would be coming from the wrong place.
-        assert (math.pi,) not in got['skipped_cl'], got
-        tl = C.parse(lhs, '<C_L>', number=True)
-        tr = C.parse(rhs, '<C_R>', number=True)
-        assert got['skipped_cl'], 'the widened battery must reach the degenerate range'
-        for (cl,) in got['skipped_cl']:
-            assert C._fit_target_env(tl, tr, set(), {'<C_L0>': cl}, '<C_R0>') is None, (cl, got)
+        assert got['skipped_cl'] == [], got
 
     def test_an_undefined_lhs_is_still_a_legitimate_skip(self) -> None:
         """The other half of the split must not move: where the LHS has NO value the
@@ -1360,8 +1355,9 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
         # witness (5.1e-131), which the band used to snap to 0
         (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'core')),
         (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'core')),
-        # past MAX_DPS, where the judge documents abstention and used to convict
-        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0, ('UNRESOLVED-COVERAGE', None)),
+        # past MAX_DPS, where the battery abstains and used to convict: the left side's own
+        # value is the witness, a proof
+        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0, ('CERTIFIED', 'core')),
         # the witness search stopped eight decades short of the f64 ceiling
         (['pow', 'cosh', '(-3)', '<constant>'], ['<constant>'], 300.0, ('CERTIFIED', 'core')),
         (['pow', 'sinh', '3', '<constant>'], ['<constant>'], 300.0, ('CERTIFIED', 'core')),

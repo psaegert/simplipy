@@ -595,15 +595,28 @@ def test_a_left_side_the_engine_folds_to_a_leaf_is_the_engines_own(lhs, rhs, pol
     # float64 cannot fit across the generic values
     ('exp + * <constant> x0 <constant>', '* <constant> exp * <constant> x0', 'CERTIFIED'),
     # false: no d at c = (2.5, -1.5) (it asks 15.5 at (1.7, -1.3) and 5.93 at (-1.3, 0.6)), nor
-    # at c = 2.5 (4 at 1.7, 2 at -1.3)
-    ('+ * <constant> x0 * <constant> x1', '* <constant> + x0 x1', 'KILL'),
-    ('floor * <constant> x0', '* <constant> floor x0', 'KILL'),
+    # at c = 2.5 (4 at 1.7, 2 at -1.3); a search that finds no witness refuses with
+    # uncertainty, and sampling proves no impossibility
+    ('+ * <constant> x0 * <constant> x1', '* <constant> + x0 x1', 'NO-WITNESS'),
+    ('floor * <constant> x0', '* <constant> floor x0', 'NO-WITNESS'),
+    # at C = 0 the left side is -1 at every x (log 0 is -inf), a value no tanh(x + D) gives:
+    # owed (the left side is finite there), and refused, though float64's fit saturates
+    ('tanh + x0 log <constant>', 'tanh + x0 <constant>', 'NO-WITNESS'),
+    # an explicit witness exists for every (C0, C1) (D0 = C0, D1 = atan(C1^(1/101))/(12 pi)):
+    # no counterexample, whatever the search finds
+    ('+ * <constant> x0 <constant>', '+ * <constant> x0 pow tan * 12 * np.pi <constant> 101',
+     'NO-WITNESS'),
 ])
 def test_the_judge_decides_a_rule_with_constants(lhs, rhs, verdict) -> None:
     """Assertion 6: the witness fit stays in moderate environments (or the polish's arithmetic)
-    and finds a true rule's witness, and a definite counterexample to every witness is a KILL,
-    not NO-WITNESS."""
-    assert judged(lhs, rhs)['verdict'] == verdict, judged(lhs, rhs)
+    and finds a true rule's witness. Eligibility is decided apart from the search: where the
+    left side is finite at a constant a witness is owed, and a search that finds none refuses
+    the rule with uncertainty (NO-WITNESS), never 'owes nothing' and never a proved
+    impossibility (KILL)."""
+    got = judged(lhs, rhs)
+    assert got['verdict'] == verdict, got
+    if verdict == 'NO-WITNESS':
+        assert got['basis'] == {'f64': 'refused', 'permissive': 'refused'}, got
 
 
 @pytest.mark.parametrize('mode', MODES)

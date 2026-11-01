@@ -340,6 +340,10 @@ def table_evidence(tokens: list[str], arity: dict[str, int], f64: bool) -> bool 
 #: reals) in float64's values (`f64`) or the reals': (has_fin, pinf, ninf, nan, lo, hi).
 def table_value_set(tokens: list[str], arity: dict[str, int],
                     f64: bool) -> tuple[bool, bool, bool, bool, float, float] | None: ...
+#: Eligibility's certificate (spec 3.2): may `tokens`, its constants bound to `params`, be finite
+#: on a positive-measure set of its variables? False certifies it is not; None: cannot tell.
+def table_finite_somewhere(tokens: list[str], params: list[float], arity: dict[str, int],
+                           f64: bool = ...) -> bool | None: ...
 #: THE TABLE (`rust/table.rs`): an expression compiled against each mode's values.
 class TableExpr:
     def __init__(self, tokens: list[str], names: list[str], arity: dict[str, int]) -> None: ...

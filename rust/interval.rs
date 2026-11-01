@@ -3299,6 +3299,18 @@ pub fn value_set(tokens: &[String], ops: &Operators, dom: &Vs) -> Option<Vs> {
     value_set_p(tokens, ops, &doms, &[])
 }
 
+/// May `tokens`, its `<constant>`s bound to `params`, be finite on a set of positive measure of
+/// its variables? The enclosure over every finite binding of the variables: `Some(false)` only
+/// where it holds no finite part of positive measure, a certificate that the constants are owed
+/// nothing (the specification's 3.2); `None` where the layer cannot enclose it.
+pub fn finite_somewhere(tokens: &[String], ops: &Operators, params: &[f64]) -> Option<bool> {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return finite_somewhere(&d[0], ops, params);
+    }
+    let doms = vec![Vs::reals(); n_var_slots(&[tokens])];
+    value_set_p(tokens, ops, &doms, params).map(|v| v.fin_pm())
+}
+
 pub fn value_class(tokens: &[String], ops: &Operators) -> Option<Class> {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return value_class(&d[0], ops);

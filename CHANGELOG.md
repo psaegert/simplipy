@@ -1301,15 +1301,24 @@ model predictions.
   well, and the high-precision polish took that noise to about 1e-557 instead of 0, a nonzero
   right side where both sides are exactly 0. `(x0 - C)^2 -> x0^2 - C1*x0 + C2` and
   `(x0 + C)/C -> C1*x0 + C2`, refused on every machine before, hold in `real`.
-- **The fit of several constants reaches every constant the judge asks about, and a false rule
-  with constants is refuted.** The float64 fit reads only environments where the left side is
-  moderate (zero or within [1e-6, 1e6]), shrinking the variables toward 0 where the generic
-  values are not, and where float64 cannot fit, Newton in the high-precision values does:
-  `exp(C1*x0 + C2) -> C3*exp(C4*x0)`, whose witness at C2 = 300 is e^300 = 1.9e130, holds in
-  `real` (it went unjudged in every mode). Where the right side is affine in its constants and
-  no value of them matches the left side at the generic points, the rule is refuted there, not
-  left undecided: `C1*x0 + C2*x1 -> C3*(x0 + x1)` and `floor(C1*x0) -> C2*floor(x0)` are
-  `KILL` (clause `a-no-witness`).
+- **The fit of several constants reaches every constant the judge asks about.** The float64
+  fit reads only environments where the left side is moderate (zero or within [1e-6, 1e6]),
+  shrinking the variables toward 0 where the generic values are not, and where float64 cannot
+  fit, Newton in the high-precision values does: `exp(C1*x0 + C2) -> C3*exp(C4*x0)`, whose
+  witness at C2 = 300 is e^300 = 1.9e130, holds in `real` (it went unjudged in every mode).
+- **A constant is owed a witness wherever the left side is finite there.** Whether a constant is
+  owed is decided apart from the witness search: where the left side is finite at a point the
+  judge reads, or the interval layer cannot show it is finite on no set of positive measure, a
+  witness is owed. A search that finds none refuses the rule with uncertainty (`NO-WITNESS`):
+  it no longer reads as "nothing owed" where float64's fit saturates (`tanh(x0 + log(C)) ->
+  tanh(x0 + C)`, whose left side is -1 everywhere at C = 0, was licensed in `permissive`), nor
+  as a proved impossibility from sampled points (`C1*x0 + C2 -> C3*x0 + tan(12*pi*C4)^101` has
+  an explicit witness and was `KILL`). A single constant's search goes on in the high-precision
+  values where float64's fit saturates or overflows, keeps a witness past the doubles' range
+  (constants range over the finite reals: `exp(x0 + C) -> C*exp(x0)` at C = 1000 needs
+  e^1000), and accepts a root only where it reproduces the left side to the working precision
+  at every point read, ten times farther out included. An exact route's proof stands where the
+  search reaches no answer (`pow(exp(9), C) -> C`, the constant's own value).
 - **The rule judge reads a jump at its preimage.** `ceil(sinh(x0) + 1/2) - floor(sinh(x0) +
   1/2) -> 1` is false in `real` only where sinh(x0) + 1/2 is an integer, at transcendental
   points no double is and no reading near one decides, and the judge passed it. Along each

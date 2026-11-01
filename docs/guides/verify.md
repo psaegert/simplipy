@@ -28,7 +28,9 @@ values, where a saturation plateau is a cell like any other (`tanh(x)` is 1.0 pa
 an extension at a double counts as measure zero only where its neighbouring doubles are no
 extension (`x0/x0 -> 1` at 0). A rule without variables has one point and no tolerance; a `_`
 slot is checked at `+inf`, `-inf` and NaN; each `<constant>` is its own symbol, and nothing is
-owed at a constant where the left side has no finite value.
+owed at a constant where the left side has no finite value. Where it has one, a witness for the
+right side's constants is owed, and a search that finds none refuses the rule (`NO-WITNESS`):
+`tanh(x0 + log(C)) -> tanh(x0 + C)` is refused, its left side being -1 everywhere at C = 0.
 
 ```python
 from simplipy.verify import verify_ruleset

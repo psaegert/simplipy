@@ -996,6 +996,49 @@ def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
     return None
 
 
+def _finite_somewhere(lhs, spelling, key, f64):
+    """The interval layer's enclosure of the left side `lhs` over every binding of its
+    variables, its constants at `key`: False certifies no finite part of positive measure, in
+    the reals' values or with `f64` float64's; True or None (cannot tell) does not."""
+    return _table.table_finite_somewhere(_spelled(lhs, spelling), [float(c) for c in key],
+                                         dict(ARITY), f64)
+
+
+def _eligible(tl, lhs, spelling, nvars, builders, key):
+    """THE SPECIFICATION'S 3.2 ELIGIBILITY, decided apart from the witness search: is the left
+    side, its constants at `key` (`builders`, their exact values), finite on a set of bindings
+    of positive measure, so that a witness is owed there? Finite at a generic point, in
+    float64's values or the reals', says yes, and so does a point the table cannot read (unread
+    is not nowhere finite). Otherwise the interval layer's enclosure over every binding decides:
+    only its certificate that no finite part has positive measure, in both readings, says no. A
+    left side without variables has one point, and its reading there decides."""
+    envs = [_gen_env(set(nvars), k) for k in range(len(GEN))]
+    cl_f = {n: F(c) for n, c in zip(builders, key)}
+    for env in envs:
+        try:
+            with np.errstate(all='ignore'):
+                if np.isfinite(d_eval(tl, {**env, **cl_f})):
+                    return True
+        except Exception:
+            return True
+    old = mp.dps
+    try:
+        mp.dps = BASE_DPS
+        for env in envs:
+            e = {n: mpf(float(v)) for n, v in env.items()}
+            e.update({n: b() for n, b in builders.items()})
+            try:
+                if cls_mp(c_eval(tl, e))[0] == 'fin':
+                    return True
+            except Unresolved:
+                return True
+    finally:
+        mp.dps = old
+    if not nvars:
+        return False
+    return any(_finite_somewhere(lhs, spelling, key, f64) is not False for f64 in (False, True))
+
+
 def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
     """fit the exists-witness for a RHS <constant> on generic reals (deployed algebra);
     validated on two further generic envs; None if no witness exists/found. With `env_out` (a
@@ -1205,37 +1248,77 @@ def _fit_seeds(cl_env, m):
                                      [float(i + 1) for i in range(m)], [0.0] * m]
 
 
-#: The precision of the multi-constant fit in the contract's values, the agreement it asks, and the
-#: step of its Jacobian's differences: a step's error carries a coefficient's whole travel
-#: (e^100 from 100) into its partner, so the differences are read to 70 digits.
+#: The precision of the fit in the contract's values, and the step of its Jacobian's
+#: differences: a step's error carries a coefficient's whole travel (e^100 from 100) into its
+#: partner, so the differences are read to 70 digits.
 MP_FIT_DPS = 120
-MP_FIT_TOL = mpf(10) ** -30
 MP_FIT_STEP = mpf(10) ** -50
+#: The agreement the fit asks of a root, relative: Newton stops at `MP_FIT_TOL ** 2` and a root
+#: is a witness where it reproduces the left side to `MP_FIT_TOL` at every environment.
+MP_FIT_TOL = mpf(10) ** -30
+#: With `strict`, the one-constant search where float64's fit saturated: Newton stops
+#: `MP_FIT_STOP` decades short of the working precision, and a root is a witness where it
+#: reproduces the left side within `MP_FIT_AGREE` decades of it at every environment. A
+#: witness converges quadratically and agrees everywhere to the precision; a saturation
+#: near-witness (`tanh(x + d)` near -1, d pushed toward -inf) crawls half a unit of d per step,
+#: and its residual differs between environments by e^(2 * their distance), far more than the
+#: ten decades between the two.
+MP_FIT_STOP = 20
+MP_FIT_AGREE = 30
+#: The most digits the fit reads a left side at, past the ladder's `MAX_DPS`: a witness of
+#: e^10000 (`exp(x + c) -> d*exp(x)` at c = 1e4) needs 4,343.
+FIT_MAX_DPS = 10000
 
 
-def _fit_multi_mp(tl, tr, generic, cl_env, rnames):
+def _real_decades(tree, env):
+    """The decimal exponent of `tree`'s value at `env` (floats) in the contract's values, where
+    float64 overflows: read at a precision that climbs until the table can read it (it reads a
+    value up to 10^(dps - 10)); None where it cannot within `FIT_MAX_DPS` or the value is not
+    finite."""
+    old = mp.dps
+    try:
+        for dps in (BASE_DPS, 250, 500, 1000, MAX_DPS, 5000, FIT_MAX_DPS):
+            mp.dps = dps
+            try:
+                v = c_eval(tree, {n: mpf(float(x)) for n, x in env.items()})
+            except Unresolved:
+                continue
+            return float(mp.log10(abs(v))) if cls_mp(v)[0] == 'fin' and v != 0 else None
+        return None
+    finally:
+        mp.dps = old
+
+
+def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
     """THE POLISH'S ARITHMETIC AS THE FIT, where float64's cannot fit: Newton in the contract's
     values (`MP_FIT_DPS` digits: no overflow, and no witness lost to a coefficient 43 orders
     above its partner, as float64 loses `exp(c1 x + c2) -> d1 exp(d2 x)` at c2 = 100, d1 = e^100,
     whose Gauss-Newton step for d2 carries an error of 1e27) from each seed (`_fit_seeds`), on
     the first `len(rnames)` generic environments where the left side is finite. A root is a
-    witness where it reproduces the left side at EVERY such environment to `MP_FIT_TOL`.
+    witness where it reproduces the left side at EVERY such environment to `MP_FIT_TOL`, or with
+    `strict` within `MP_FIT_AGREE` decades of the working precision.
     `(d, envs)` or None."""
     m = len(rnames)
     # the table reads a value up to 10^(dps - 10): the precision grows with the left side's
-    # magnitude (`exp(-1.5 x + 300)` is 1e130)
-    mags = []
+    # magnitude (`exp(-1.5 x + 300)` is 1e130), read in the contract's values where float64
+    # overflows (`exp(x + 1000)` is 1e435)
+    decades = []
     for env in generic:
         try:
             with np.errstate(all='ignore'):
                 v = abs(float(d_eval(tl, {**env, **cl_env})))
         except Exception:
             continue
-        if math.isfinite(v) and v > 1:
-            mags.append(v)
+        if math.isinf(v):
+            decades.append(_real_decades(tl, {**env, **cl_env}))
+        elif v > 1:
+            decades.append(math.log10(v))
+    decades = [k for k in decades if k is not None]
     old = mp.dps
     try:
-        mp.dps = MP_FIT_DPS + (math.ceil(math.log10(max(mags))) if mags else 0)
+        mp.dps = MP_FIT_DPS + min(FIT_MAX_DPS, math.ceil(max(decades)) if decades else 0)
+        stop = mpf(10) ** -(mp.dps - MP_FIT_STOP) if strict else MP_FIT_TOL ** 2
+        agree = mpf(10) ** -(mp.dps - MP_FIT_AGREE) if strict else MP_FIT_TOL
         cl = {n: mpf(float(v)) for n, v in cl_env.items()}
         envs, targets = [], []
         for env in generic:
@@ -1261,7 +1344,7 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames):
             for _ in range(60):
                 r = [right(e, d) for e in exact[:m]]
                 res = [x / t - 1 if t else x for x, t in zip(r, targets[:m])]
-                if max(abs(x) for x in res) <= MP_FIT_TOL ** 2:
+                if max(abs(x) for x in res) <= stop:
                     return d
                 jac = mp.matrix(m, m)
                 for j in range(m):
@@ -1277,12 +1360,16 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames):
         for seed in _fit_seeds(cl_env, m):
             try:
                 d = newton([mpf(x) for x in seed])
-                if not all(cls_mp(x)[0] == 'fin' and abs(x) < mpf(2) ** 1023 for x in d):
+                if not all(cls_mp(x)[0] == 'fin' for x in d):
                     continue
                 if all(cls_mp(rv := right(e, d))[0] == 'fin'
-                       and abs(rv - t) <= MP_FIT_TOL * max(1, abs(t))
+                       and abs(rv - t) <= agree * max(1, abs(t))
                        for e, t in zip(exact, targets)):
-                    return [float(x) for x in d], envs
+                    # constants range over the finite reals (3.2): a witness past the doubles'
+                    # range (e^1000 for `exp(x + c) -> d*exp(x)` at c = 1000) is kept as it is,
+                    # and float64 reads it as its infinity, where it owes nothing (its left
+                    # side is not finite there either)
+                    return [float(x) if abs(x) < mpf(2) ** 1023 else +x for x in d], envs
             except (Unresolved, ZeroDivisionError, ValueError, TypeError, OverflowError):
                 continue
         return None
@@ -1424,65 +1511,6 @@ def _fit_multi_at(tl, tr, generic, cl_env, rnames):
         if np.isfinite(Lv) and abs(Lv - Rv) > 1e-4 * max(1.0, abs(Lv)):
             return None
     return [float(x) for x in d], envs
-
-
-def no_witness_counterexample(tl, tr, shared, cl_builders, rnames):
-    """A DEFINITE COUNTEREXAMPLE to the exists-witness at one binding of the left side's
-    constants (`cl_builders`, exact values by name): where the right side is affine in its own
-    constants (`rnames`) at the generic environments -- checked in the contract's values at two
-    further bindings of them -- `R(x_k; d) = L(x_k; c)` is a linear system in d, and a
-    least-squares residual above the fit's tolerance means that no d satisfies it, which no fit
-    can miss. `floor(c x) -> d floor(x)` at c = 2.5 asks d = 4 at x = 1.7 and d = 2 at
-    x = -1.3; `c1 x0 + c2 x1 -> d (x0 + x1)` at c = (2.5, -1.5) asks d = 15.5 at (1.7, -1.3)
-    and 5.93 at (-1.3, 0.6). Returns the environments read (`{name: float}` each), or None:
-    the right side is not affine there, a value is not finite or not resolved, the system is
-    degenerate, or it has a solution."""
-    m = len(rnames)
-    old = mp.dps
-    try:
-        mp.dps = BASE_DPS
-        envs, lv = [], []
-        for k in range(len(GEN)):
-            env = {n: mpf(float(v)) for n, v in _gen_env(shared, k).items()}
-            env.update({n: b() for n, b in cl_builders.items()})
-            v = c_eval(tl, env)
-            if cls_mp(v)[0] == 'fin':
-                envs.append(env)
-                lv.append(v)
-        if len(envs) <= m:
-            return None
-
-        def right(env, d):
-            v = c_eval(tr, {**env, **dict(zip(rnames, d))})
-            if cls_mp(v)[0] != 'fin':
-                raise Unresolved()
-            return v
-
-        d0 = [mpf(1) / 3 + j for j in range(m)]
-        r0 = [right(e, d0) for e in envs]
-        rows = [[right(e, [d0[i] + (1 if i == j else 0) for i in range(m)]) - r
-                 for j in range(m)] for e, r in zip(envs, r0)]
-        tol = mpf(10) ** (-(mp.dps - 15))
-        for delta in ([mpf(7) / 4 - j for j in range(m)], [3 * j - mpf(5) / 2 for j in range(m)]):
-            for e, r, row in zip(envs, r0, rows):
-                got = right(e, [a + b for a, b in zip(d0, delta)])
-                want = r + mp.fsum(b * x for b, x in zip(row, delta))
-                if abs(got - want) > tol * max(1, abs(got), abs(r)):
-                    return None          # not affine: no definite verdict
-        rhs = [y - r for y, r in zip(lv, r0)]
-        cols = [j for j in range(m) if any(row[j] != 0 for row in rows)]
-        if cols:
-            _, res = mp.qr_solve(mp.matrix([[row[j] for j in cols] for row in rows]),
-                                 mp.matrix(rhs))
-        else:
-            res = mp.sqrt(mp.fsum(x * x for x in rhs))
-        if res <= mpf('1e-6') * (1 + max(abs(y) for y in lv)):
-            return None
-        return [{n: float(v) for n, v in e.items() if n in shared} for e in envs]
-    except (Unresolved, ZeroDivisionError, ValueError):
-        return None
-    finally:
-        mp.dps = old
 
 
 def mp_polish_multi(tl, tr, nvars, cl_builders, d0, envs):
@@ -2246,9 +2274,9 @@ def judge_rule(lhs, rhs, deployed_check=True):
     'proved' where an exact route proves the rule in the mode, 'evidence' where the mode holds it
     on the battery's points alone, 'refused' where it does not hold in the mode."""
     r = _judge_contract(lhs, rhs, deployed_check)
-    if 'tier' in r:
-        if deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
-            r = _with_f64_bar(lhs, rhs, r)
+    if 'tier' in r and deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
+        r = _with_f64_bar(lhs, rhs, r)
+    if r.get('verdict') != 'UNSUPPORTED-SHAPE':
         r = _with_exact_routes(lhs, rhs, r, deployed_check)
     return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
 
@@ -2309,7 +2337,20 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         return r
     r = dict(r, exact=ex)
     realised, permissive = r.get('realised'), r.get('permissive')
-    if ex['reals'] == 'refuted' and r['verdict'] in HOLDS_IN_THE_REALS:
+    if 'tier' not in r:
+        # the battery reached no answer (no witness found, too few points read): an exact
+        # route's answer stands alone, and a mode it does not decide holds nothing
+        if ex['reals'] not in ('proved', 'refuted'):
+            return r
+        realised = {'proved': True, 'refuted': False}.get(ex['f64']) if deployed_check \
+            else None
+        permissive = ex['permissive'] == 'proved'
+        r.update(verdict='CERTIFIED' if ex['reals'] == 'proved' else 'KILL')
+        if ex['reals'] == 'refuted':
+            witness = ex.get('witness')
+            r.update(clause='a-exact', kinds=['REAL-CHANGE'],
+                     points=[{variables[0]: float(witness)} if witness is not None else {}])
+    elif ex['reals'] == 'refuted' and r['verdict'] in HOLDS_IN_THE_REALS:
         witness = ex.get('witness')
         r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'],
                  points=[{variables[0]: float(witness)} if witness is not None else {}])
@@ -2545,32 +2586,30 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             if len(rnames) == 1:
                 w = fit_witness(tl, tr, set(nvars), cl_env, fit_env, rnames[0])
                 ws = None if w is None else [w]
+                if ws is None:
+                    # float64's fit saturates or overflows where the contract's values do not
+                    # (`|x|^c` at c = 1e4, `exp(x + c)` at c = 1000): the search goes on in
+                    # them, and a witness must hold at the generic points ten times farther
+                    # out too, where a saturated left side is no longer matched by a shift
+                    # (`tanh(x + d)` near -1 at d = -45 is no `tanh(x + log(0))`)
+                    generic = [_gen_env(set(nvars), k) for k in range(len(GEN))]
+                    farther = [{n: F(float(v) * 10) for n, v in env.items()} for env in generic]
+                    found = _fit_multi_mp(tl, tr, generic + farther, _cl_env(cl_env), rnames,
+                                          strict=True)
+                    if found is not None:
+                        ws, fit_env = found[0], list(found[1])
             else:
                 ws = fit_witness_multi(tl, tr, set(nvars), cl_env, rnames, fit_env)
             if ws is None:
-                # LHS UNDEFINED at this constant for the generic envs: nothing is owed there
-                # (3.2), a skip with a tally. LHS defined (DETERMINATE, not merely finite: a
-                # saturated LHS pins nothing, see `_fit_target_env`) and no witness: the
-                # rule fails at a constant it owes.
-                if len(rnames) == 1:
-                    defined = _fit_target_env(tl, tr, set(nvars), cl_env, rnames[0]) is not None
-                else:
-                    defined = any(source_defined(d_eval(tl, {**_gen_env(set(nvars), k),
-                                                             **_cl_env(cl_env)}))
-                                  for k in range(len(GEN)))
-                if defined:
-                    # where no constant of the right side can match, the rule is false at a
-                    # constant it owes: a definite counterexample, in every mode
-                    cx = no_witness_counterexample(tl, tr, set(nvars), builders, rnames)
-                    if cx is not None:
-                        return {'verdict': 'KILL', 'clause': 'a-no-witness',
-                                'points': [dict(p, **dict(zip(lnames, key))) for p in cx[:3]],
-                                'kinds': ['REAL-CHANGE'], 'measure': 0.0, 'realised': False,
-                                'permissive': False, 'skipped_cl': skipped_cl,
-                                'tier': _tier('KILL', False, False)}
+                # ELIGIBILITY IS DECIDED APART FROM THE SEARCH (3.2): a constant at which the
+                # left side is finite on a set of positive measure is owed a witness, and a
+                # search that found none refuses the rule with uncertainty -- never "owes
+                # nothing" (`tanh(x + log(C))` at C = 0 is -1 everywhere, a value no
+                # `tanh(x + D)` gives), never a proved impossibility.
+                if _eligible(tl, lhs, spelling, nvars, builders, key):
                     if all(c in core for c in key):
-                        return {'verdict': 'NO-WITNESS', 'detail': f'cl={key} (LHS defined)',
-                                'permissive': False}
+                        return {'verdict': 'NO-WITNESS', 'permissive': False,
+                                'detail': f'cl={key} (LHS finite there, no witness found)'}
                     unwitnessed_cl.append(key)
                     continue
                 skipped_cl.append(key)
@@ -2589,10 +2628,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             return {'verdict': 'NO-WITNESS', 'detail': 'no cl with a finite LHS/witness',
                     'permissive': False}
         if unwitnessed_cl:
-            # forall-c exists-d is falsified at a constant where the LHS is defined. Reported
+            # forall-c exists-d is not shown at a constant where the LHS is finite. Reported
             # for ALL such constants: one is a corner, a spread is a false rule.
             return {'verdict': 'NO-WITNESS', 'skipped_cl': skipped_cl,
-                    'detail': f'cl={sorted(unwitnessed_cl)} (LHS defined)',
+                    'detail': f'cl={sorted(unwitnessed_cl)} (LHS finite there, no witness found)',
                     'permissive': False}
         cl_battery = kept
 
@@ -2705,13 +2744,15 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             if real_valued:
                 acc['perm'].append((v, point, where))
 
-    def owed(acc):
+    def owed(acc, key):
         """3.2: is anything owed at this constant? Where the left side is finite at no real
-        point the judge read, nothing is (a fitted constant never lands there: the f64 fit
-        may still have found one at the constant's float, `log(|cos(c)|)` at fl(pi/2), but the
-        exact pi/2 gives -inf); without constants, always. A constant where the left side was
-        read nowhere is owed: unread is not nowhere finite."""
-        return not has_cl or acc['finite'] or acc['known'] == 0
+        point the judge read, and the interval layer certifies no finite part of positive
+        measure there, nothing is (a fitted constant never lands there: the f64 fit may still
+        have found one at the constant's float, `log(|cos(c)|)` at fl(pi/2), but the exact pi/2
+        gives -inf); without constants, always. A constant where the left side was read nowhere
+        is owed: unread is not nowhere finite."""
+        return (not has_cl or acc['finite'] or acc['known'] == 0
+                or (bool(nvars) and _finite_somewhere(lhs, spelling, key, False) is not False))
 
     vacuous, owed_keys = [], set()
     ext_where = []
@@ -2733,7 +2774,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 f64_null_keys.add(key)
         dep_seen[0] = dep_seen[0] or acc['seen']
         dep_out_of_range[0] += acc['oor']
-        if not owed(acc):
+        if not owed(acc, key):
             # nothing owed here, which the resolved points decided: they count as coverage
             skipped_cl.append(key)
             vacuous.append(key)
