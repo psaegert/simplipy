@@ -2081,6 +2081,34 @@ fn table_evidence(
     py.detach(|| crate::interval::evidence(&tokens, &ops, f64))
 }
 
+/// What `table_value_set` returns: `(has_fin, pinf, ninf, nan, lo, hi)`.
+type WholeValueSet = (bool, bool, bool, bool, f64, f64);
+
+/// THE INTERVAL ENCLOSURE OVER THE WHOLE DOMAIN: the value set of `tokens` with every variable
+/// and every `<constant>` ranging over all finite reals, in the mode's values (float64's with
+/// `f64`, else the reals', THE TABLE's values at every point the layer meets): `(has_fin, pinf,
+/// ninf, nan, lo, hi)`, or `None` where the layer cannot enclose it. The judge's proved route
+/// reads it: a left side whose set is one value and nothing else is that value at every
+/// binding (`ceil(1/cosh(x0))` is 1).
+#[pyfunction]
+fn table_value_set(
+    py: Python<'_>,
+    tokens: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+    f64: bool,
+) -> Option<WholeValueSet> {
+    let ops = arity_table(arity);
+    let whole = || crate::interval::value_set(&tokens, &ops, &crate::interval::Vs::reals());
+    py.detach(|| {
+        if f64 {
+            crate::interval::with_reading(false, whole)
+        } else {
+            crate::interval::with_real_reading(whole)
+        }
+    })
+    .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi))
+}
+
 /// An operator table from a name -> arity map (no realizations: the core's own kernels).
 fn arity_table(arity: std::collections::BTreeMap<String, u8>) -> crate::operators::Operators {
     let order: Vec<String> = arity.keys().cloned().collect();
@@ -2435,6 +2463,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
     m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(table_value_set, m)?)?;
     m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;

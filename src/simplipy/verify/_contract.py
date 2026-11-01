@@ -45,6 +45,8 @@ from mpmath import mp, isnan as misnan, isinf as misinf
 from mpmath import mpf as _mpmath_mpf
 from mpmath.libmp import from_rational as _from_rational
 
+from . import _exact
+
 
 def mpf(v: Any = 0) -> Any:
     """mpmath's `mpf`, a `Fraction` read through its numerator and denominator and rounded
@@ -2210,10 +2212,68 @@ def judge_rule(lhs, rhs, deployed_check=True):
     x = -1e-17): tier `permissive`. The bar probes each slot over its sort's values (a `?` slot
     over finite doubles only: +-inf is no data), and a probe where an operation overflowed or
     underflowed agrees where the rewrite gives the true value (the range standard), judged
-    here by the contract."""
+    here by the contract.
+
+    Where a rule lies in a fragment the judge decides exactly (`_exact`: one variable and
+    piecewise-affine sides, or a left side enclosed by one literal over its whole domain), the
+    exact route's proof or refutation stands beside the battery's reading
+    (`_with_exact_routes`)."""
     r = _judge_contract(lhs, rhs, deployed_check)
-    if not deployed_check or 'tier' not in r or not NEW_HEADS & (set(lhs) | set(rhs)):
+    if 'tier' not in r:
         return r
+    if deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
+        r = _with_f64_bar(lhs, rhs, r)
+    return _with_exact_routes(lhs, rhs, r, deployed_check)
+
+
+def _with_exact_routes(lhs, rhs, r, deployed_check):
+    """The judged rule `r` with the exact routes' answers (`_exact`): a refutation refuses the
+    rule in its modes (`max(0, 0.001 - abs(x0 - 0.123456789)) -> 0`, false on an interval of
+    width 0.002 that no battery point reaches), a proof is recorded beside the verdict
+    (`exact`). Where a proof meets a refusal the battery read at a real binding, the refusal
+    stands (fail closed) and `exact_conflict` says so."""
+    try:
+        tl = parse(lhs, '<C_L>', number=True)
+        tr = parse(rhs, '<C_R>', number=True)
+    except (UnsupportedToken, ValueError):
+        return r
+    ex = _exact.piecewise_affine(tl, tr, d_eval, _table.table_f64_agree)
+    sorts = dict(slots_of(rhs, '<C_R>', number=True), **slots_of(lhs, '<C_L>', number=True))
+    variables = sorted(n for n in sorts if not n.startswith('<C'))
+    open_slots = [n for n in variables if sorts[n] == '_']
+    # the whole domain of a `_` slot holds its non-finite atoms, which the battery reads
+    # exhaustively only for a rule of that one slot
+    if ex is None and variables and (not open_slots or len(variables) == 1):
+        spelling = {n: f'x{i}' for i, n in enumerate(variables)}
+        ex = _exact.whole_domain_literal(
+            _spelled(lhs, spelling), tr,
+            lambda tokens, f64: _table.table_value_set(tokens, dict(ARITY), f64),
+            _table.table_literal_f64)
+    if ex is None:
+        return r
+    r = dict(r, exact=ex)
+    realised, permissive = r.get('realised'), r.get('permissive')
+    if ex['reals'] == 'refuted' and r['verdict'] in HOLDS_IN_THE_REALS:
+        r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'],
+                 points=[{variables[0]: float(ex['witness'])}])
+    elif ex['reals'] == 'proved' and (r['verdict'] == 'UNDECIDED-MEASURE' or (
+            r['verdict'] == 'KILL' and r.get('clause') != 'a-nonfinite-binding')):
+        # the route covers every finite binding; a `_` slot's non-finite atoms are the battery's
+        r['exact_conflict'] = True
+    if ex['permissive'] == 'refuted':
+        permissive = False
+    if deployed_check and ex['f64'] == 'refuted':
+        realised = False
+    elif deployed_check and ex['f64'] == 'proved' and realised is None:
+        realised = True
+    r.update(realised=realised, permissive=permissive,
+             tier=_tier(r['verdict'], realised, permissive))
+    return r
+
+
+def _with_f64_bar(lhs, rhs, r):
+    """The judged rule `r` with the core's f64 bar for a rule spelled with a 0.15 head ANDed into
+    its `realised` (`judge_rule`)."""
     from simplipy._core import f64_bar_sorted  # type: ignore[attr-defined]
     slot = {}
     for t in list(lhs) + list(rhs):

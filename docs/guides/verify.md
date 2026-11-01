@@ -132,6 +132,21 @@ verify_rule(['*', 'x0', '1'], ['x0'])['verdict']
 # -> 'CERTIFIED'
 ```
 
+On two fragments the judge decides a rule exactly, over its whole domain, and reports how
+(`verdict['exact']`):
+
+- **Piecewise-affine rules of one variable.** Sides built from one variable, rational literals,
+  `+`, `-`, `neg`, products and quotients by a constant, `abs`, `max` and `min` are continuous
+  piecewise-affine functions, compared cell by cell with exact rational breakpoints. The rule is
+  proved, or refuted at a rational witness: `max(0, 1e-200 - abs(x0 - 0.123456789)) -> 0` is
+  false on an interval no sample point reaches, and is refused in every mode. In `f64` such a
+  proof carries over only where every operation is exact on doubles (`neg`, `abs`, `max`,
+  `min`). Rules of several variables, and functions past 256 breakpoints or 4,096-bit
+  coefficients, are left to the sampled procedure.
+- **A left side that is one literal everywhere.** Where the interval layer encloses the left
+  side, over every finite binding of its variables and constants, by the right side's literal
+  and nothing else, the rule is proved (`0*exp(x0) -> 0`).
+
 What a mode's file may hold is `licensed`: the rule holds in the mode, and no named policy
 refuses it — evidence (the left side finite on a set of positive measure), the constant
 count, ground composites, the mine's cell, the serve ordering, special constants,

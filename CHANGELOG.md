@@ -1376,6 +1376,14 @@ model predictions.
   with no value on (-0.001, 0.001), narrower than any cell, is refused in `f64`, and
   `(x0 - 0.1)/(x0 - 0.1) -> 1`, whose float64 left side has no value at the one double 0.1, holds
   there.
+- **The judge decides two fragments exactly.** A rule of one variable whose sides are built
+  from rational literals, `+`, `-`, `neg`, products and quotients by a constant, `abs`, `max`
+  and `min` is compared cell by cell with exact rational breakpoints, and is proved or refuted
+  at a rational witness; past 256 breakpoints or 4,096-bit coefficients it is left to the
+  sampled procedure. `max(0, w - abs(x0 - 0.123456789)) -> 0` is refused in every mode for every
+  width w from 1e-3 to 1e-200 (it was licensed in every mode: no sample point lies within w of
+  0.123456789). A left side the interval layer encloses by the right side's literal over its
+  whole domain is proved too (`0*exp(x0) -> 0`). The verdict reports the route (`exact`).
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's
