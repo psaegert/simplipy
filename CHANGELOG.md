@@ -1355,10 +1355,12 @@ model predictions.
   puts on a null set. Where the cells cannot decide (the horizon or the node budget runs out),
   the verdict is `UNDECIDED-MEASURE`, refused in `real` and counted with the other fatal
   buckets.
-- **Isolated infinities, guarding slots and coincident slots.** Where the left side is +-inf
-  only on a set of measure zero, the right side owes nothing there (rules with variables):
-  `abs(log(cos(x0))) -> log(1/cos(x0))` holds in `real`, though at pi/2 the right side meets 1/0.
-  These allowances, and the extension on a null set, hold only where a slot guards the null
+- **An infinity is a value, guarding slots and coincident slots.** Where the left side is
+  +-inf, the right side must be the same infinity, at every point and in every mode: an
+  enclosing `atan` or `1/.` turns the infinity into a finite value, so an excuse there would
+  not survive an enclosing expression. `abs(log(cos(x0))) -> log(1/cos(x0))` is refused: at
+  pi/2 the left side is +inf and the right side meets 1/0. The one allowance, an extension on a
+  null set, holds only where a slot guards the null
   set: a `?` slot binds a variable, `!` and `$` slots guard the values their certificates
   exclude, and a `_` slot guards nothing -- bound to `floor(x0) + 1` it is 1 on all of [0, 1),
   so `atan(tan(asin(_0))) -> asin(_0)` is refused (with `x0` it holds). Two `?` slots can bind

@@ -161,8 +161,15 @@ SPEC_EXAMPLES = [
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', REALS, False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'permissive', True),
-    # the owner's rulings: isolated infinities (c), the guard, coincident slots, undecided
-    case('abs log cos x0', 'log inv cos x0', REALS, True),
+    # the owner's rulings: an infinity is a value (no clause (c)), the guard, coincident slots,
+    # undecided. At x = pi/2 the left side is +inf and the right side meets 1/0: an enclosing
+    # atan shows the difference, so it is no excuse in any mode
+    case('abs log cos x0', 'log inv cos x0', REALS, False),
+    case('abs log cos x0', 'log inv cos x0', 'f64', False),
+    case('atan abs log cos x0', 'atan log inv cos x0', REALS, False),
+    case('- ceil x0 floor x0', '1', REALS, False),
+    case('- ceil x0 floor x0', '1', 'f64', False),
+    case('- ceil x0 floor x0', '1', 'permissive', False),
     case('abs log cos _0', 'log inv cos _0', REALS, False),
     case('atan tan asin _0', 'asin _0', REALS, False),
     case('atan tan asin x0', 'asin x0', REALS, True),
@@ -215,8 +222,8 @@ SPEC_EXAMPLES = [
     # P3 as ruled: permissive serves real's values up to float resolution -- a deep saturation
     # (1 - 2e-9566 is the double 1.0); not float64's own values. Judged at the `_` its matcher
     # binds (the owner's ruling, 2026-10-31), it excuses no isolated point: a disagreement at
-    # x = +-1 alone is one on (0, 1] at `?0 = ceil(x0)`, and the isolated infinity the reals'
-    # verdict excuses at a `?` slot is a value permissive owes
+    # x = +-1 alone is one on (0, 1] at `?0 = ceil(x0)`, and an infinity of the left side is a
+    # value it owes, as every mode does
     case('tanh cosh (-10)', '1', 'permissive', True),
     case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', False),
     case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', False),

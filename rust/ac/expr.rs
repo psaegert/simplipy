@@ -1427,8 +1427,8 @@ pub enum Permissive {
     /// 1.667e-25.
     FloatResolution,
     /// No simplification of permissive's own: a step that HOLDS in permissive by its criterion
-    /// -- the input's value is kept wherever the input has one, with an isolated infinity owing
-    /// nothing -- and which the sound modes refuse because it gives a value where the input has
+    /// -- the input's value is kept wherever the input has one, an infinity included -- and
+    /// which the sound modes refuse because it gives a value where the input has
     /// none (`x0^(1/2) * x0^(1/2)` is `x0`) or because of a zero's sign or a pole's limit.
     Agreement,
 }

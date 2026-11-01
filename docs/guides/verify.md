@@ -19,10 +19,11 @@ refuses what it cannot evaluate rather than guessing.
 Judges every rule at its own symbolic trigger points, classifying each into nine
 buckets. Coverage is 100% of the rule set by construction.
 
-A rule holds in the reals when, wherever its left side has a value, its right side has the
-same value, and its right side gives a value where the left side has none only on a set
-of measure zero, decided by certified cells (`x0/x0 -> 1` holds; `exp(log(x0)) -> x0`
-does not). A rule without variables has one point and no tolerance; a `_` slot is
+A rule holds in the reals when, wherever its left side has a value, an infinity included, its
+right side has the same value, and its right side gives a value where the left side has none
+only on a set of measure zero, decided by certified cells (`x0/x0 -> 1` holds; `exp(log(x0)) ->
+x0` does not, and neither does `abs(log(cos(x0))) -> log(1/cos(x0))`, whose left side is `+inf`
+at pi/2, where the right side has no value). A rule without variables has one point and no tolerance; a `_` slot is
 checked at `+inf`, `-inf` and NaN; each `<constant>` is its own symbol, and nothing is
 owed at a constant where the left side has no finite value.
 

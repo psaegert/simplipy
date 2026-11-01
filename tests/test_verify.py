@@ -539,8 +539,8 @@ class TestTheRealisationAxis:
             ('permissive', 'reject')
         # permissive's criterion is its own axis: an extension holds there alone, and a rule
         # that holds in the reals only by an allowance a slot guards (a `$` slot's excused
-        # zero, an isolated infinity at a `?` slot) is f64's alone or no mode's: permissive
-        # binds every slot to any subexpression, which no slot guards
+        # zero, an extension at a `?` slot's isolated point) is f64's alone or no mode's:
+        # permissive binds every slot to any subexpression, which no slot guards
         assert (_tier('KILL', False, True), _tier('KILL', True, True)) == ('permissive', 'core')
         assert (_tier('CERTIFIED', False, False), _tier('CERTIFIED', True, False)) \
             == ('reject', 'f64-only')

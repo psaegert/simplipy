@@ -12,9 +12,11 @@ standard. The judge keeps its procedure -- the precision ladder, the constant
 fitting, the sampled points -- and owns none of the values.
 
 The criterion, per mode:
-  - (a) agreement: at every binding the sorts quantify over where `L` has a value, `R` has an
-    agreeing one (real: equal; f64: within 8 units in the last place, or the true value at a
-    range event). A disagreement at any such point fails the rule, whatever its measure.
+  - (a) agreement: at every binding the sorts quantify over where `L` has a value, finite or
+    infinite, `R` has an agreeing one (real: equal; f64: within 8 units in the last place, or
+    the true value at a range event). A disagreement at any such point fails the rule, whatever
+    its measure: an infinity is a value like any other, and an enclosing `atan` or `1/.` turns
+    it into a finite one.
   - (b) no invented function: the bindings where `L` is undefined and `R` has a value form a
     set of measure zero. Measure is decided by certified cells of the interval layer, read in
     the table's values (`_core.table_extension_width`), never by a fraction of a grid. A `_`
@@ -2336,11 +2338,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     `realised` and permissive's `permissive`; `judge_rule` adds the tier.
 
     the reals' verdict (the criterion of the specification's section 3):
-      KILL               a disagreement at a point where the left side has a value (clause (a):
-                         a real binding, a `_` slot's +-inf or NaN, any constant owed); any
-                         disagreement at a `_` slot's non-finite binding; or a certified cell
-                         of positive measure where the left side is undefined and the right
-                         side has a value (clause (b)); a ground rule's one point, no tolerance;
+      KILL               a disagreement at a point where the left side has a value, finite or
+                         infinite (clause (a): a real binding, a `_` slot's +-inf or NaN, any
+                         constant owed); any disagreement at a `_` slot's non-finite binding;
+                         or a certified cell of positive measure where the left side is
+                         undefined and the right side has a value (clause (b)); a ground
+                         rule's one point, no tolerance;
       UNDECIDED-MEASURE  clause (b) could not be decided (the interval layer's horizon or budget
                          ran out): refused, fail closed;
       ENGINE-MISALIGN    the contract holds, the deployed algebra diverges structurally;
@@ -2348,17 +2351,18 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
       CERTIFIED          the contract holds with no event at all.
     permissive: clause (a) alone at the real-valued bindings, every slot judged as the `_` the
     permissive matcher binds it as (any subexpression), so with no measure-zero allowance: a
-    disagreement or an infinity of the left side at an isolated point is one on positive
-    measure in some instance; up to float resolution (P3).
+    disagreement at an isolated point is one on positive measure in some instance; up to float
+    resolution (P3).
     f64: the deployed lane (`realised`), each side's own fitted constant, the range standard.
 
-    The measure-zero allowances -- an extension on a null set (clause (b)), and nothing owed
-    where the left side is +-inf on a null set (clause (c), rules with variables only) -- hold
-    only where a slot guards them (the owner's rulings, specification 3.1): a `?` slot, which
-    binds a variable, after every way the `?` slots can coincide is judged too (`coincide`);
-    `!` and `$` slots guard their certificates' null events, which they owe nothing at. An
-    event that depends on any other slot is a positive-measure event in some instance (a `_`
-    bound to a constant subexpression) and refuses the rule."""
+    The one measure-zero allowance, an extension on a null set (clause (b)), holds only where a
+    slot guards it (the owner's rulings, specification 3.1): a `?` slot, which binds a variable,
+    after every way the `?` slots can coincide is judged too (`coincide`); `!` and `$` slots
+    guard their certificates' null events, which they owe nothing at. An extension that depends
+    on any other slot is one on positive measure in some instance (a `_` bound to a constant
+    subexpression) and refuses the rule. Where the left side has a value, an infinity included,
+    nothing is excused: `abs(log(cos(x))) -> log(1/cos(x))` fails at pi/2, where the left side
+    is +inf and the right side meets 1/0."""
     try:
         tl = parse(lhs, '<C_L>', number=True)
         tr = parse(rhs, '<C_R>', number=True)
@@ -2523,7 +2527,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             pass
 
     def lane():
-        return {'a': [], 'atom': [], 'ext': [], 'c': [], 'perm': [], 'finite': False, 'known': 0,
+        return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
                 'kinds': set()}
@@ -2542,9 +2546,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             acc['atom'].append((v, point))
         elif v == 'EXT':
             acc['ext'].append((point, where))
-        elif not ground and lhs_kind in ('+inf', '-inf'):
-            # the left side is +-inf here: clause (c) decides, after the sweep
-            acc['c'].append((v, point, where, real_valued))
         else:
             acc['a'].append((v, point))
             if real_valued:
@@ -2559,7 +2560,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return not has_cl or acc['finite'] or acc['known'] == 0
 
     vacuous, owed_keys = [], set()
-    ext_where, c_events = [], []
+    ext_where = []
 
     def merge(acc, key):
         nonlocal resolved_pts, attempted_pts
@@ -2587,7 +2588,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             ext_events.extend(p for p, _ in acc['ext'])
             ext_where.extend(acc['ext'])
             ext_keys.add(key)
-        c_events.extend(acc['c'])
 
     for builders, key in cl_battery:
         cr_mp = witness.get(key, {}) if has_cr else {}
@@ -2902,11 +2902,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 # on, reads the extension at its points. The check cannot decide: refused.
                 undecided.append(('cells-vs-grid',) + tuple(key))
 
-    # THE GUARD (the owner's ruling): a measure-zero allowance holds only where a slot guards
-    # it. An event (an extension, or an isolated infinity of the left side) that depends on a
-    # slot other than `?` -- it disappears when that slot moves to a generic value -- is an
-    # event on positive measure in the instance where the slot is bound to a subexpression
-    # constant at that value, and refuses the rule.
+    # THE GUARD (the owner's ruling): the measure-zero allowance of clause (b) holds only where
+    # a slot guards it. An extension that depends on a slot other than `?` -- it disappears
+    # when that slot moves to a generic value -- is an extension on positive measure in the
+    # instance where the slot is bound to a subexpression constant at that value, and refuses
+    # the rule.
     by_key = {k: b for b, k in cl_battery}
     open_slots = [n for n in names if nvars[n] != '?']
 
@@ -2918,17 +2918,13 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             return e
         return env
 
-    def depends_on_open_slot(kind, key, values):
+    def depends_on_open_slot(key, values):
         for n in open_slots:
             for alt in (mpf(17) / 10, mpf(-13) / 10):
                 moved = dict(values)
                 moved[n] = alt
                 v2, _ = _point_verdict(tl, tr, event_env(key, moved))
-                if kind == 'b':
-                    persists = v2 == 'EXT'
-                else:
-                    persists = _LHS_KIND[0] in ('+inf', '-inf') and v2 not in (None, 'eq')
-                if not persists:
+                if v2 != 'EXT':
                     return n
         return None
 
@@ -2938,28 +2934,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         if sig in seen or not open_slots:
             continue
         seen.add(sig)
-        slot = depends_on_open_slot('b', key, values)
+        slot = depends_on_open_slot(key, values)
         if slot is not None:
             b_unguarded.append(dict(point, unguarded=slot))
-    # CLAUSE (c): where the left side is +-inf only on a set of measure zero the right side
-    # owes nothing there -- certified by the infinite-set certificate, and guarded as above
-    c_tolerated, c_kills, c_perm, seen = [], [], [], set()
-    infinite_null = bool(c_events) and _table.table_infinite_null(
-        _spelled(lhs, spelling), dict(ARITY))
-    for v, point, (key, values, *trees), real_valued in c_events:
-        sig = repr(sorted(point.items()))
-        if sig in seen:
-            continue
-        seen.add(sig)
-        slot = depends_on_open_slot('c', key, values) if open_slots else None
-        if infinite_null and slot is None:
-            c_tolerated.append((v, point))
-        else:
-            c_kills.append((v, dict(point, unguarded=slot) if slot else point))
-        # permissive owes clause (a) at every real-valued binding: the left side's infinity is a
-        # value there, and no slot guards its measure (permissive binds any subexpression)
-        if real_valued:
-            c_perm.append((v, point, (key, values, *trees)))
 
     # COINCIDENT `?` SLOTS: two `?` slots bound to one variable are an instance the engine
     # rewrites, on which a set that is null in the slots' joint space can have positive
@@ -3049,7 +3026,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return float_close(event_env(key, values), trees[0] if trees else None)
 
     perm_left, seen_perm = [], set()
-    for event in perm_kills + c_perm:
+    for event in perm_kills:
         sig = repr(sorted(event[1].items()))
         if sig in seen_perm:
             continue
@@ -3085,9 +3062,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return verdict('KILL', clause='a-nonfinite-binding',
                        points=[p for _, p in atom_kills[:3]],
                        kinds=sorted({k for k, _ in atom_kills}))
-    if c_kills:
-        return verdict('KILL', clause='c-infinity', points=[p for _, p in c_kills[:3]],
-                       kinds=sorted({k for k, _ in c_kills}))
     if b_unguarded:
         return verdict('KILL', clause='b-unguarded', points=b_unguarded[:3], kinds=['EXT'])
     if b_kill is not None:
@@ -3113,11 +3087,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         # contract certifies; deployed diverges: a genuine realisation split
         return verdict('ENGINE-MISALIGN', points=[p for _, p in dep_div[:3]],
                        kinds=sorted({k for k, _ in dep_div}))
-    if ext_events or c_tolerated:
+    if ext_events:
         base['realised'] = True if fills_nan and correlated_f64 is None else _realised
-        events = [('EXT', p) for p in ext_events[:3]] + [(k, p) for k, p in c_tolerated[:3]]
-        classes = (['EXT'] if ext_events else []) + (['INF'] if c_tolerated else [])
-        return verdict('TOLERATED', classes=classes, events=events)
+        return verdict('TOLERATED', classes=['EXT'], events=[('EXT', p) for p in ext_events[:3]])
     if vacuous_rule:
         return verdict('CERTIFIED', vacuous=True)
     return verdict('CERTIFIED')
@@ -3137,9 +3109,9 @@ TOUCHSTONES = [
      'floor(x) + 1 it is 1 on all of [0, 1), where the right side invents pi/2 (the guard)'),
     ('atan tan asin ?0', 'asin ?0', 'TOLERATED',
      'the same extension over data: a `?` slot binds a variable, so +-1 is a null set'),
-    ('abs log cos ?0', 'log inv cos ?0', 'TOLERATED',
-     'clause (c): the left side is +inf at pi/2 + k pi only, a null set, where the right side '
-     'meets 1/0 and owes nothing; they agree wherever the left side is finite'),
+    ('abs log cos ?0', 'log inv cos ?0', 'KILL',
+     'at x = pi/2 the left side is +inf, a value, and the right side meets 1/0 and has none: '
+     'an enclosing atan would show the difference, so no isolated infinity is excused'),
     ('/ - ?0 ?1 - ?1 ?0', '-1', 'UNDECIDED-MEASURE',
      'with ?0 = ?1 the left side is undefined everywhere and -1 is not: the coincidence is '
      'an instance, judged as its own rule, whose cells cannot see through x - x (refused)'),

@@ -4765,9 +4765,9 @@ fn cleared_witness(t: &[String], ops: &Operators) -> bool {
     // a FAT zero set the numerator never sees. Without this side condition the
     // certificate declared `inv(inf + h)` nonzero-a.e. while it is identically 0,
     // licensing a per-factor move that flips the sign of infinity on positive
-    // measure (benchmark row 17425). `isn` is the existing
+    // measure (benchmark row 17425). `infinite_set_null` is the existing
     // authority for exactly this question; an empty denominator cleared nothing.
-    if !d.is_empty() && !isn(&d, ops, 0) {
+    if !d.is_empty() && !infinite_set_null(&d, ops) {
         return false;
     }
     analytic_nonzero_witness(&n, ops)
@@ -5919,9 +5919,8 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
 /// reciprocal factors). Fail-closed like every certificate in this module; the
 /// zero-set sub-claims inherit `zero_set_null`'s `<constant>` refusal.
 ///
-/// The contract judge reads it for the criterion's clause (c): where a rule's left side is
-/// +-inf only on a set of measure zero, its right side owes nothing there
-/// (`abs(log(cos x)) -> log(1/cos x)` at pi/2; `table_infinite_null`).
+/// Read by the denominator-clearing certificate (`cleared_witness`): `1/g` is zero exactly
+/// where `g` is infinite.
 pub fn infinite_set_null(tokens: &[String], ops: &Operators) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return infinite_set_null(&d[0], ops);
