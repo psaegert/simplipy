@@ -137,10 +137,10 @@ fn source_const_magnitudes(
 /// §5 DIRAC REFUTER for a LITERAL target. Refuter ONLY: it can subtract a rule, never license
 /// one, so it is sound by construction and unsound only if read as a certificate.
 ///
-/// WHY IT EXISTS. A variable-free `<constant>`-bearing source is quantified over its constants,
-/// and §5's proven theorem says a constant slot binds as a DIRAC: one disagreeing constant value
-/// carries FULL data measure, so the contract's "where the source is DEFINED the target must be defined and
-/// exactly equal" applies with ZERO tolerance. The interval classifier answers a MEASURE question
+/// WHY IT EXISTS. A variable-free `<constant>`-bearing source is quantified over its constants
+/// (the specification's 3.2): at every constant where the source is FINITE the target must agree,
+/// in the mode's values and by the mode's agreement, and at one where it is not, nothing is owed.
+/// The interval classifier answers a MEASURE question
 /// ("what is the value class almost everywhere?") and the all-constant short-circuit then
 /// republished that answer as an ATTAINABILITY claim ("the source is nan, full stop"). Measured
 /// consequences of that republication: `pow (-1) <constant> -> nan` (false at every integer C,
@@ -418,7 +418,12 @@ fn slot_witnesses(source: &[String], ops: &Operators) -> Vec<f64> {
     w
 }
 
-fn dirac_refutes_literal(source: &[String], target: &[String], ops: &Operators) -> bool {
+fn dirac_refutes_literal(
+    source: &[String],
+    target: &[String],
+    ops: &Operators,
+    mode: crate::engine::RuleMode,
+) -> bool {
     if target.len() != 1 {
         return false;
     }
@@ -462,25 +467,56 @@ fn dirac_refutes_literal(source: &[String], target: &[String], ops: &Operators) 
                 toks.push(t.clone());
             }
         }
-        // Fold with the engine's own numeric semantics; `None` = unfoldable, which is no evidence.
-        let Some(tok) = crate::numeric::evaluate_constant_subtree(&toks, ops) else {
+        // The source's value at the witness in the mode's values: f64's fold (the engine's own
+        // kernels), permissive's the reals' value as its nearest double (P3); `None` (unfoldable,
+        // unreadable) is no evidence.
+        let Some(got) = constant_value(&toks, ops, mode) else {
             continue;
         };
-        let Some(got) = crate::numeric::leaf_value(&tok) else {
-            continue;
-        };
-        // Extended equality: nan matches nan, an infinity must match SIGN included (the contract counts
-        // +-inf as DEFINED), and finite values must be exactly equal.
-        let agrees = if got.is_nan() || want.is_nan() {
-            got.is_nan() && want.is_nan()
-        } else {
-            got == want
-        };
-        if !agrees {
+        // Owed only where the source is finite there (3.2), and by the mode's agreement (F6, P3).
+        if got.is_finite() && crate::table::f64_agree(got, want) != crate::table::Cmp::Eq {
             return true; // one Dirac witness disagrees => REFUTED
         }
     }
     false
+}
+
+/// A variable-free expression's value in the mode's values (the Dirac refuter's reading): f64's,
+/// the engine's own fold (`numeric::evaluate_constant_subtree`); permissive's, the reals' value
+/// rounded to the nearest double, read by the table at two precisions that agree. `None` where it
+/// cannot be read.
+fn constant_value(
+    tokens: &[String],
+    ops: &Operators,
+    mode: crate::engine::RuleMode,
+) -> Option<f64> {
+    if matches!(mode, crate::engine::RuleMode::Default) {
+        let tok = crate::numeric::evaluate_constant_subtree(tokens, ops)?;
+        return crate::numeric::leaf_value(&tok);
+    }
+    let arity: std::collections::HashMap<String, u8> = tokens
+        .iter()
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let e = crate::table::Expr::compile(tokens, &[], &arity).ok()?;
+    let mut seen: Vec<f64> = Vec::with_capacity(2);
+    for dps in [50, 120] {
+        let v = e.eval_float_resolution(&[], dps)?.value?;
+        let mut ctx = crate::table::Ctx::new(dps)?;
+        seen.push(match crate::table::class_of(&v) {
+            (true, _) => f64::NAN,
+            (_, Some(up)) => {
+                if up {
+                    f64::INFINITY
+                } else {
+                    f64::NEG_INFINITY
+                }
+            }
+            _ => crate::table::nearest_f64(&v, &mut ctx)?,
+        });
+    }
+    (seen[0].to_bits() == seen[1].to_bits() || (seen[0].is_nan() && seen[1].is_nan()))
+        .then_some(seen[1])
 }
 
 /// DIAGNOSTIC: `SIMPLIPY_GATE_TRACE="<source tokens>"` prints every gate rejection for that
@@ -1078,6 +1114,8 @@ fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
 #[allow(clippy::too_many_arguments)]
 fn candidate_matches(
     y_src: &[(Vec<f64>, Vec<f64>)],
+    src_owed: &[bool],
+    owed_special: &[bool],
     src_events: &[Option<Vec<bool>>],
     cand: &CandEntry,
     cand_rows: &CandRows<'_>,
@@ -1109,10 +1147,13 @@ fn candidate_matches(
         // The domain gate needs `c` to bind the candidate's `<constant>` leaves.
         // The source's range events on this instance (f64 only; see `f64_range_rescue`).
         let ev_src = src_events.get(inst).and_then(|e| e.as_deref());
-        // NOTHING IS OWED WHERE THE SOURCE IS NOWHERE FINITE (3.2): an instance of the source's
-        // constants at which no row is finite (`pow(0, C)` at C < 0, +inf everywhere) binds
-        // nothing, as a vacuous instance.
-        let vacuous = !inst_params.is_empty() && !y.iter().any(|v| v.is_finite());
+        // NOTHING IS OWED WHERE THE SOURCE IS NOT FINITE ON A SET OF POSITIVE MEASURE (3.2): an
+        // instance of the source's constants at which no row is finite (`pow(0, C)` at C < 0,
+        // +inf everywhere), or at which the source is finite on a null set alone (`owed_at`:
+        // `log(pow(C, x))` at C < 0, finite at the even integers), binds nothing, as a vacuous
+        // instance.
+        let vacuous = !inst_params.is_empty()
+            && (!src_owed.get(inst).copied().unwrap_or(true) || !y.iter().any(|v| v.is_finite()));
         let ok: Option<Option<Vec<f64>>> = if vacuous {
             Some(None)
         } else if cand.n_const == 0 {
@@ -1459,7 +1500,8 @@ fn candidate_matches(
             } else {
                 events_if_any(src_tape.eval_columns_events(cols, &sp, n_rows))
             };
-            if crate::eval::count_finite(&y_s) == 0 {
+            if crate::eval::count_finite(&y_s) == 0 || !owed_special.get(k).copied().unwrap_or(true)
+            {
                 continue;
             }
             let cp: Option<Vec<f64>> = if cand.n_const == 0 {
@@ -1598,6 +1640,35 @@ fn source_instances(
     out
 }
 
+/// THE SPECIFICATION'S 3.2 ELIGIBILITY at one instance of a source's constants (`params`): is a
+/// witness owed there -- the source finite on a set of positive measure of its variables, in the
+/// mode's values? Nothing else is asked of an instance: one that owes nothing binds nothing,
+/// whatever its rows hold. Only the interval layer's certificate that the source is finite on no
+/// set of positive measure (`interval::finite_somewhere`, read in the mode's values: the function
+/// the judge's eligibility reads) says no; an enclosure that cannot tell owes (fail closed). At
+/// C = -0.02, `log(pow(C, x))` is finite at the even integers alone and owes nothing, so the
+/// domain gate never reads it there. A source without constants is always owed.
+fn owed_at(
+    source: &[String],
+    params: &[f64],
+    ops: &Operators,
+    mode: crate::engine::RuleMode,
+) -> bool {
+    if params.is_empty() {
+        return true;
+    }
+    let real = !matches!(mode, crate::engine::RuleMode::Default);
+    crate::interval::with_reading(real, || {
+        crate::interval::finite_somewhere(source, ops, params)
+    }) != Some(false)
+}
+
+/// The sources the mint could not judge and refused, fail closed (the specification's 4.10): a
+/// source with evidence whose rows fall short of the evidence floor and cannot be topped up from
+/// a certified cell (`evidence_rows`), and a variable-free source the interval layer cannot read
+/// (`SourceCtx::blind`). Counted, never read as a judgment; the mine records the count.
+pub static MINT_UNDECIDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Witness cells collected for an evidence top-up (`evidence_rows`): enough that the drawn
 /// rows spread over the certified finite set, not only over its widest cell.
 const TOPUP_CELLS: usize = 32;
@@ -1660,6 +1731,39 @@ fn evidence_rows(
     if !licensed {
         return None;
     }
+    // A source with evidence is owed a judgment: rows it cannot be given are undecided, counted.
+    let rows = evidence_topup(
+        source,
+        tape,
+        ops,
+        var_names,
+        y,
+        n_rows,
+        min_informative,
+        seed,
+        f64,
+    );
+    if rows.is_none() {
+        MINT_UNDECIDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    rows
+}
+
+/// The rows of `evidence_rows` for a source with evidence: none to add where its given rows hold
+/// `min_informative` finite ones, else rows drawn from its certified finite cells; `None` where
+/// no instance has a certified cell or the draws run out.
+#[allow(clippy::too_many_arguments)]
+fn evidence_topup(
+    source: &[String],
+    tape: &Tape,
+    ops: &Operators,
+    var_names: &[String],
+    y: &[(Vec<f64>, Vec<f64>)],
+    n_rows: usize,
+    min_informative: usize,
+    seed: u64,
+    f64: bool,
+) -> Option<Vec<Vec<f64>>> {
     let mut evidence = vec![false; n_rows];
     for (_, yi) in y {
         for (e, v) in evidence.iter_mut().zip(yi) {
@@ -1908,6 +2012,12 @@ struct SourceCtx<'s> {
     /// Rows were appended, so a library candidate's cached values do not cover them.
     augmented: bool,
     y: Vec<(Vec<f64>, Vec<f64>)>,
+    /// Per instance of `y`, whether a witness is owed there (`owed_at`): the specification's 3.2
+    /// eligibility, the judge's own certificate.
+    owed: Vec<bool>,
+    /// Per special source constant (`battery::SPECIAL_CONSTS`) of a single-constant source,
+    /// whether a witness is owed there; empty for any other source.
+    owed_special: Vec<bool>,
     /// Per instance of `y`, the rows where an operation overflowed or underflowed
     /// (`numeric::RangeKind`), `None` where none did; read by f64's range standard only, and
     /// computed only for it.
@@ -2010,12 +2120,22 @@ impl<'s> SourceCtx<'s> {
         } else {
             Vec::new()
         };
-        // REACHABILITY gate (exact, interval-analytic) for a VARIABLE-FREE source: every value
-        // component the source takes over its constants must be reachable by the candidate over its
-        // own (see `interval::reaches_all_of`). Scoped to variable-free sources -- the class the
-        // interval engine is validated on, and exactly the family the sampled POLE_GRID exists for
-        // (`pow(asin(C/2), inf) -> 0`, whose +inf band a fixed grid can straddle and miss).
-        // Computed ONCE per source, outside the scan.
+        let owed: Vec<bool> = y
+            .iter()
+            .map(|(p, _)| owed_at(source, p, ops, mode))
+            .collect();
+        let owed_special: Vec<bool> = if n_const == 1 {
+            crate::battery::SPECIAL_CONSTS
+                .iter()
+                .map(|&s| owed_at(source, &[s], ops, mode))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // REACHABILITY gate (exact, interval-analytic) for a VARIABLE-FREE source: the finite
+        // values the source owes over its constants must be reachable by the candidate over its
+        // own (see `interval::reaches_finite_of`). Scoped to variable-free sources, the class the
+        // interval engine is validated on. Computed ONCE per source, outside the scan.
         let var_free = !source.iter().any(|t| var_names.contains(t));
         let reach = if var_free {
             crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
@@ -2023,6 +2143,9 @@ impl<'s> SourceCtx<'s> {
             None
         };
         let blind = var_free && reach.is_none() && crate::interval::holds_partial_head(source, ops);
+        if blind {
+            MINT_UNDECIDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         // Special-point battery over THIS source's variable set (None for a variable-free
         // source), shared across the whole candidate scan; see `rust/battery.rs`.
         let battery = crate::battery::SpecialBattery::build(
@@ -2038,6 +2161,8 @@ impl<'s> SourceCtx<'s> {
             n_rows,
             augmented: n_extra > 0,
             y,
+            owed,
+            owed_special,
             events,
             reach,
             blind,
@@ -2096,13 +2221,15 @@ fn certify_candidate(
         && !source.iter().any(|t| var_names.contains(t));
     if let Some(sv) = sc.reach.as_ref().filter(|_| !collapse) {
         if let Some(cv) = &cand.reals_vs {
-            if !crate::interval::reaches_all_of(cv, sv) {
-                return None; // cannot reach a component the source takes: FALSE, no sampling
+            if !crate::interval::reaches_finite_of(cv, sv) {
+                return None; // cannot reach a value the source owes: FALSE, no sampling
             }
         }
     }
     let witness = candidate_matches(
         &sc.y,
+        &sc.owed,
+        &sc.owed_special,
         &sc.events,
         cand,
         &CandRows::on(cand, sc),
@@ -2157,6 +2284,8 @@ fn certify_candidate(
             CandEntry::compile(t, ops, var_names, cols, n_rows, u64::MAX).is_ok_and(|entry| {
                 candidate_matches(
                     &sc.y,
+                    &sc.owed,
+                    &sc.owed_special,
                     &sc.events,
                     &entry,
                     &CandRows::cached(&entry),
@@ -2200,7 +2329,7 @@ fn certify_candidate(
     // entirely, so guarding only the arms would leave that whole family unjudged.
     // Judged on the RESOLVED spelling: a resolved bare literal is exactly the
     // single-token collapse this refuter exists for.
-    if dirac_refutes_literal(source, &target, ops) {
+    if dirac_refutes_literal(source, &target, ops, lane.0) {
         return None;
     }
     // THE EMITTED TARGET IS WHAT SHIPS. The library's fold filter
@@ -2225,38 +2354,25 @@ fn certify_candidate(
     {
         return None;
     }
-    // CLASS PRESERVATION for a VARIABLE-FREE source (ratified licence).
-    // Such a source is a constant-family: its whole behaviour is a function of its
-    // `<constant>` slots, so a rewrite to a LITERAL must preserve the value CLASS, which
-    // is a measure statement over the constant axis. `reaches_all_of` above deliberately
-    // ignores nan (a nan row is extendable, "decided by measure rather than by
-    // reachability") -- this is where that measure decision is made: `pow (-1)
-    // <constant>` (nan a.e.) cannot become anything finite.
-    //
-    // A COLLAPSE TO `<constant>` answers to THE COLLAPSE LICENCE instead
+    // A COLLAPSE TO `<constant>` of a variable-free source answers to THE COLLAPSE LICENCE
     // (`interval::collapse_licence`, in the lane's mode): the target constant is fitted, and a
     // source constant at which the source is NaN or infinite is never the fit, so the collapse
     // owes a witness exactly where the source is finite, and it needs evidence (a cell of the
     // constants on which the source is finite). `atan atanh <constant>`, `acos <constant>` and
     // `pow 0 <constant>` collapse; `pow (-1) <constant>`, finite only at the integers, does
     // not. The engine's fold (`engine/ac.rs::ac_fold`) reads the same function, so what the
-    // mint would collapse the engine already does, and the mine never writes it.
+    // mint would collapse the engine already does, and the mine never writes it. A literal
+    // target owes the source's value where the source is finite and nothing elsewhere (3.2):
+    // the reach of the finite part above, the rows, the special constants and the Dirac
+    // refuter decide it, and the source's value CLASS beyond its finite part is no obligation.
     let var_free = !source.iter().any(|t| var_names.contains(t));
-    if var_free && sc.n_const > 0 && target.len() == 1 && target[0] == "<constant>" {
-        if !crate::interval::collapse_licence(source, ops, lane.0) {
-            return None;
-        }
-    } else if let Some(sv) = &sc.reach {
-        // `target` is the candidate's own tokens unless literal resolution
-        // respelled it -- reuse the build-time value set where it is.
-        let tv = if is_resolution {
-            crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
-        } else {
-            cand.reals_vs
-        };
-        if !tv.is_some_and(|cv| cv.cls() == sv.cls()) {
-            return None;
-        }
+    if var_free
+        && sc.n_const > 0
+        && target.len() == 1
+        && target[0] == "<constant>"
+        && !crate::interval::collapse_licence(source, ops, lane.0)
+    {
+        return None;
     }
     // A head the high-precision evaluators do not know has no contract verdict, so the judge
     // refuses its rule (UNSUPPORTED-SHAPE): the mint refuses it too.
@@ -2460,19 +2576,19 @@ pub fn find_rule_with_lib(
             // refuter guards whatever the scan proposes.
             Some(crate::interval::Class::Nan) => {
                 let t = vec!["float(\"nan\")".to_string()];
-                if !dirac_refutes_literal(source, &t, ops) && accepted(&t) {
+                if !dirac_refutes_literal(source, &t, ops, lane.0) && accepted(&t) {
                     return Ok(Some(t));
                 }
             }
             Some(crate::interval::Class::PosInf) => {
                 let t = vec!["float(\"inf\")".to_string()];
-                if !dirac_refutes_literal(source, &t, ops) && accepted(&t) {
+                if !dirac_refutes_literal(source, &t, ops, lane.0) && accepted(&t) {
                     return Ok(Some(t));
                 }
             }
             Some(crate::interval::Class::NegInf) => {
                 let t = vec!["float(\"-inf\")".to_string()];
-                if !dirac_refutes_literal(source, &t, ops) && accepted(&t) {
+                if !dirac_refutes_literal(source, &t, ops, lane.0) && accepted(&t) {
                     return Ok(Some(t));
                 }
             }
@@ -2801,8 +2917,28 @@ mod tests {
         assert!(dirac_refutes_literal(
             &s(&["acosh", "sin", "*", "<constant>", "4"]),
             &s(&["float(\"nan\")"]),
-            ops
+            ops,
+            crate::engine::RuleMode::Default,
         ));
+        // owed only where the source is finite: `log(pow(0, C))` is 0 at C = 0 and an infinity
+        // at every other constant, where `0` owes nothing; `pow(0, C)` is 1 at C = 0
+        assert!(dirac_refutes_literal(
+            &s(&["pow", "0", "<constant>"]),
+            &s(&["0"]),
+            ops,
+            crate::engine::RuleMode::Default,
+        ));
+        for mode in [
+            crate::engine::RuleMode::Default,
+            crate::engine::RuleMode::Permissive,
+        ] {
+            assert!(!dirac_refutes_literal(
+                &s(&["log", "pow", "0", "<constant>"]),
+                &s(&["0"]),
+                ops,
+                mode,
+            ));
+        }
     }
 
     #[test]
@@ -3350,6 +3486,23 @@ mod tests {
         assert_eq!(b, vec![2.999_999_7]);
     }
 
+    /// The specification's 3.2 at an instance (`owed_at`): `log(C^x)` at C = -1.5 is finite at the
+    /// integers alone and owes nothing, in either mode's values; at C = 2.5 it is owed, and a
+    /// source without constants always is.
+    #[test]
+    fn a_constant_finite_on_a_null_set_owes_nothing() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let src = s(&["log", "pow", "<constant>", "x0"]);
+        for mode in LANES {
+            assert!(!owed_at(&src, &[-1.5], ops, mode), "{mode:?}");
+            assert!(owed_at(&src, &[2.5], ops, mode), "{mode:?}");
+            assert!(owed_at(&s(&["sin", "x0"]), &[], ops, mode), "{mode:?}");
+        }
+    }
+
     /// The certification gaps closed by witness snapping + the special-point phase
     /// (`rust/battery.rs`); each case is a family observed live in (4,3) mining runs, judged in
     /// each lane by what it owes: f64 the deployed evaluator's values and clause (b), permissive
@@ -3422,11 +3575,13 @@ mod tests {
                 !f64,
                 "{mode:?}"
             );
-            // 5. pow-of-cos in CONSTANT space: pow(cos c, inf) = 1 at c = 0 -- the special
-            //    source-constant battery reaches what no random draw does.
+            // 5. pow-of-cos in CONSTANT space: in float64 pow(cos c, inf) = 1 at c = 0 -- the
+            //    special source-constant battery reaches what no random draw does, and f64
+            //    refuses. In the reals pow(1, inf) has no value, so nothing is owed at c = 0 and
+            //    the left side is 0 wherever it has one: permissive mints it, as its judge admits.
             assert_eq!(
-                fr(&["pow", "cos", "<constant>", "float(\"inf\")"], &["0"]),
-                None,
+                fr(&["pow", "cos", "<constant>", "float(\"inf\")"], &["0"]).is_some(),
+                !f64,
                 "{mode:?}"
             );
             // 6. atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in f64 (a live

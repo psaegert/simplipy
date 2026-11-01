@@ -1574,16 +1574,17 @@ class RuleMiner:
                                     lambda _identity: 'behaviourally-covered-by-remaining-rules')
             if prov is not None:
                 prov['completion'] = _completion
-            # SOUNDNESS PROVENANCE, second half: the interval layer's
-            # three fail-closed miss counters, read AFTER the mine as deltas over this
-            # mine's baseline -- the exposure ("how often could the gate not decide?")
-            # is a recorded number, never assumed zero. The counters mark UNDECIDED
-            # verdicts whose callers rejected (lost recall, not lost soundness).
+            # SOUNDNESS PROVENANCE, second half: the fail-closed miss counters -- the interval
+            # layer's three and the mint's own (`mint`: sources it could not judge) -- read AFTER
+            # the mine as deltas over this mine's baseline: the exposure ("how often could a
+            # check not decide?") is a recorded number, never assumed zero. The counters mark
+            # UNDECIDED verdicts whose callers rejected (lost recall, not lost soundness).
             if prov is not None:
                 prov['soundness']['interval_undecided'] = {
                     'horizon': self.engine._core.interval_horizon_misses() - _ivl_baseline[0],
                     'node_budget': self.engine._core.interval_node_budget_misses() - _ivl_baseline[1],
                     'unanalyzable': self.engine._core.interval_unanalyzable_misses() - _ivl_baseline[2],
+                    'mint': self.engine._core.mint_undecided_misses() - _ivl_baseline[3],
                 }
             # The census must describe the ARTIFACT, not the moment of
             # certification. Runs before ANY of it is written (artifact and sidecar
@@ -1687,7 +1688,8 @@ class RuleMiner:
         # budget is a parameter). Recorded up front so interrupted mines carry it.
         _ivl_baseline = (self.engine._core.interval_horizon_misses(),
                          self.engine._core.interval_node_budget_misses(),
-                         self.engine._core.interval_unanalyzable_misses())
+                         self.engine._core.interval_unanalyzable_misses(),
+                         self.engine._core.mint_undecided_misses())
         if provenance is not None:
             provenance['soundness'] = {
                 # EVERY set non-inert SIMPLIPY_* variable, raw: a default run

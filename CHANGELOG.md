@@ -1629,6 +1629,26 @@ model predictions.
   float resolution: `acos(ceil(acos(x))) -> 0` differs at 1 alone and holds, while
   `ceil(erf(sinh(x))) -> ceil(sin(x))` (on (pi, 2*pi) too) and `ceil(acosh(asin(x))) -> 1` (on
   (0.99961, 1] too) do not. The mint's pre-filter moves its rows by the same step.
+- **The mint reads as the judge reads.** Every check the mint applies before the judge either
+  refuses only at a counterexample in the mode's values, by the mode's agreement, or counts the
+  case as undecided.
+  - The `f64` mint reads the judge's magnitude ladder (one ladder, `table::F64_MAGNITUDES`):
+    `sinh(asinh(x0)) -> x0` and its compositions, 66 units in the last place apart at 1e100,
+    are no longer proposed in `f64`.
+  - The special points are read in each mode's values: `f64` reads float64 at their doubles and
+    the reals only for a true value where an operation overflows or underflows; `permissive`
+    reads the reals at the points themselves at float resolution, at every point:
+    `ceil(cos(asin(x0))) -> 1` is refused at x0 = 1, where cos(pi/2) is 0 (float64 gives
+    6.1e-17), and `ceil(asinh(cos(x0))) -> ceil(cos(x0))` at x0 = pi.
+  - A constant at which the source is finite on no set of positive measure owes nothing (3.2)
+    and binds nothing: `log(C^x0) -> C*x0` is no longer refused at C < 0, where the source is
+    finite at the even integers alone.
+  - A variable-free source owes its value only where it is finite: the Dirac refuter refutes a
+    literal only at a constant where the source is finite, by the mode's agreement and in its
+    values, and reachability asks the candidate to reach the source's finite part alone.
+    `pow(cos(C), inf) -> 0` is minted in `permissive`, where pow(1, inf) has no value.
+  - A source with evidence whose rows the mint cannot top up, and a variable-free source the
+    interval layer cannot read, are counted (`soundness.interval_undecided.mint`).
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with

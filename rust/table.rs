@@ -1934,6 +1934,38 @@ pub fn f64_structural(a: f64, b: f64) -> Cmp {
 /// four library calls of at most one unit of error, which can oppose: 2 x 4 x 1.
 pub const REALISED_ULP: u64 = 8;
 
+/// THE f64 MAGNITUDE LADDER: the magnitudes, from the smallest normal double to the largest, at
+/// which f64's agreement is read along each variable (both signs, the other variables at a generic
+/// value), past the reach of a sample grid. Rounding harmless at moderate magnitudes is not
+/// harmless at every one: `sinh(asinh(x))` is 66 units in the last place off at 1e100, and
+/// `log(exp(x))` and `acosh(cosh(x))` lose their argument at small ones. Where the core keeps one
+/// of its own inverse collapses to a safe magnitude (`sinh o asinh` to |t| <= 710, `log o exp` to
+/// t >= 1, `acosh o cosh` to |t| >= 1, `atanh o tanh` to |t| <= 2), the ladder runs past the limit.
+/// One ladder, read by the judge's f64 lane and the f64 mint (`battery::f64_magnitudes_mint`).
+pub const F64_MAGNITUDES: [f64; 21] = [
+    2.2250738585072014e-308,
+    1e-300,
+    1e-200,
+    1e-100,
+    1e-50,
+    1e-16,
+    1e-8,
+    1e5,
+    1e7,
+    1e10,
+    1e15,
+    1e20,
+    1e30,
+    1e50,
+    1e100,
+    1e150,
+    1e200,
+    1e250,
+    1e300,
+    1e307,
+    f64::MAX,
+];
+
 /// The units in the last place between two finite doubles of the same sign (the zeros as one);
 /// `u64::MAX` across a sign change.
 pub fn ulp_gap(a: f64, b: f64) -> u64 {

@@ -519,16 +519,55 @@ def test_a_mint_acceptance_of_a_pair_is_a_judge_admission(lhs, rhs, mode) -> Non
     assert not mint_accepts(lhs, rhs, mode) or admits(lhs, rhs, mode), judged(lhs, rhs)
 
 
-@pytest.mark.parametrize('mode', [
-    pytest.param('f64', marks=pytest.mark.xfail(strict=True, reason=(
-        "the mint's f64 rows read no magnitude past 1e3, where the judge's magnitude ladder "
-        "refutes `sinh(asinh(x)) -> x` (66 units in the last place at 1e100) and "
-        "`rootn(pow(x, 3), 3) -> x` (101 at 1e-100)"))),
-    'permissive'])
+@pytest.mark.parametrize('mode', MODES)
 def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
+    """The f64 mint reads the judge's magnitude ladder (`table::F64_MAGNITUDES`): it refuses
+    `sinh(asinh(x)) -> x` (66 units in the last place at 1e100) and `rootn(pow(x, 3), 3) -> x`
+    (101 at 1e-100), as the judge does."""
+    from simplipy import _core
+    assert tuple(_core.TABLE_F64_MAGNITUDES) == _contract.F64_MAGNITUDES
     refused = [(s, t, judged(s, t)['verdict']) for s, t in mint_picks(mode)
                if not admits(s, t, mode)]
     assert not refused, refused
+
+
+@pytest.mark.parametrize('lhs, rhs, mode', [
+    # a constant that owes nothing binds nothing (3.2): at C < 0, `log(C^x)` is finite at the even
+    # integers alone, so the domain gate never reads it there
+    ('log pow <constant> x0', '* <constant> x0', 'permissive'),
+    ('log pow <constant> x0', '* <constant> x0', 'f64'),
+    # permissive reads the reals at the battery's points, at float resolution: at x = 1,
+    # cos(asin(x)) is exactly 0 (float64 gives 6.1e-17), and at x = pi, asinh(cos(x)) rounds up
+    # to 0 where cos(x) is -1; asin(1e-8) agrees with 1e-8 at float resolution
+    ('ceil cos asin x0', '1', 'permissive'), ('ceil asinh cos x0', 'ceil cos x0', 'permissive'),
+    ('floor abs sin x0', '0', 'permissive'), ('asin 1e-8', '1e-8', 'permissive'),
+    # f64 reads float64 at the battery's doubles: pow(1.0, inf) is 1 at x = pi/2's double
+    ('pow sin x0 float("inf")', '0', 'f64'), ('pow sin x0 float("inf")', '0', 'permissive'),
+    # a variable-free source owes its value only where it is finite (3.2): pow(asin(C/2), inf) is
+    # 0 for |C| < 1.683 and +inf on the band up to 2, where `0` owes nothing
+    ('pow asin / <constant> 2 float("inf")', '0', 'permissive'),
+    ('pow cos <constant> float("inf")', '0', 'permissive'),
+    ('pow cos <constant> float("inf")', '0', 'f64'),
+    # the magnitude ladder
+    ('sinh asinh x0', 'x0', 'f64'), ('tan atan asinh x0', 'asinh x0', 'f64'),
+])
+def test_the_mint_reads_as_the_judge_reads(lhs, rhs, mode) -> None:
+    """One reading: the mint's pair judgment accepts exactly where the judge admits."""
+    assert mint_accepts(lhs, rhs, mode) == admits(lhs, rhs, mode), judged(lhs, rhs)
+
+
+@pytest.mark.parametrize('src', ['inv ceil sin x0', 'inv ceil tanh x0', 'inv floor erf x0',
+                                 'inv max 0 x0', 'inv floor tanh x0', 'asin cosh x0',
+                                 'tan atan2 x0 0', 'acosh tanh x0', 'atanh floor x0'])
+@pytest.mark.parametrize('mode', MODES)
+def test_the_mints_evidence_is_the_policys(src, mode) -> None:
+    """The mint scans a source exactly where the evidence policy (4.1, `table_evidence`, the
+    function the judge's licence reads) gives it evidence: a source pairs with itself where it
+    has evidence and nowhere else, so a change to the interval layer moves the mint and the
+    licence together."""
+    from simplipy import _core
+    evidence = _core.table_evidence(src.split(), dict(_contract.ARITY), mode == 'f64') is True
+    assert mint_accepts(src, src, mode) == evidence
 
 
 # ------------------------------------------------------------------------------------------

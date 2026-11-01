@@ -138,6 +138,14 @@ impl MineRefusal {
     }
 }
 
+/// f64's reading of a pick beyond the rows: the 0.15 heads' f64 bar and the magnitude ladder, the
+/// two float64 readings the contract judge makes of every rule (`battery::f64_bar_mint`,
+/// `battery::f64_magnitudes_mint`).
+fn realised_in_f64(src: &[String], t: &[String], vars: &[String], eng: &Engine) -> bool {
+    crate::battery::f64_bar_mint(src, t, vars, &eng.operators)
+        && crate::battery::f64_magnitudes_mint(src, t, vars, &eng.operators)
+}
+
 /// THE acceptance predicate (one copy). Built from a source and its [`Mark`]; every mint
 /// channel asks it, so a channel cannot accept what another refuses.
 pub(crate) struct Acceptor<'a> {
@@ -257,9 +265,11 @@ impl<'a> Acceptor<'a> {
         // f64's own file holds only what float64 realises: a pick spelled with a 0.15 head answers
         // to the f64 bar (`battery::f64_bar`), the function the contract judge ANDs into a rule's
         // `realised`. `floor(x + 1) -> floor(x) + 1` is true over the reals, so permissive
-        // mints it, and float64 breaks it at x = -1e-17, so f64 refuses it here.
+        // mints it, and float64 breaks it at x = -1e-17, so f64 refuses it here. Every pick
+        // answers to the judge's magnitude ladder too (`battery::f64_magnitudes_mint`):
+        // `sinh(asinh(x)) -> x` is 66 units in the last place off at 1e100.
         if matches!(self.spec.mode, RuleMode::Default)
-            && !crate::battery::f64_bar_mint(self.src, t, self.vars, &self.eng.operators)
+            && !realised_in_f64(self.src, t, self.vars, self.eng)
         {
             return Err(MineRefusal::NotRealised);
         }
@@ -514,10 +524,10 @@ impl Engine {
             spec.min_informative,
             spec.lane(),
         )?;
-        // f64 holds only what float64 realises (`Acceptor::license`'s f64 bar)
+        // f64 holds only what float64 realises (`Acceptor::license`'s f64 bar and ladder)
         if why.is_none()
             && matches!(spec.mode, RuleMode::Default)
-            && !crate::battery::f64_bar_mint(src, tgt, var_names, &self.operators)
+            && !realised_in_f64(src, tgt, var_names, self)
         {
             return Ok(Some(MineRefusal::NotRealised.name()));
         }

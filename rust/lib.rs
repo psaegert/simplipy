@@ -1342,6 +1342,14 @@ impl PyEngine {
         crate::interval::UNANALYZABLE_MISSES.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// OFFLINE: how many sources the mint could not judge and refused (fail closed, counted):
+    /// a source with evidence whose rows fall short of the evidence floor and cannot be topped
+    /// up from a certified cell, and a variable-free source the interval layer cannot read
+    /// (`worker::MINT_UNDECIDED`). Read after a mine, beside the three interval counters.
+    fn mint_undecided_misses(&self) -> u64 {
+        crate::worker::MINT_UNDECIDED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Process-wide count of rewrite steps the step cap refused (`ac::rules::STEP_CAP`).
     /// Expected 0 on every input: the reduction ordering is well-founded, so a binding cap
     /// is an ordering bug and the answer it cut short may not be a fixpoint.
@@ -2498,6 +2506,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
     m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
     m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;
+    m.add("TABLE_F64_MAGNITUDES", table::F64_MAGNITUDES.to_vec())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;

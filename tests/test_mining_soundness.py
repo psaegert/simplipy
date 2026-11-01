@@ -665,7 +665,7 @@ class TestProvenance:
         assert "node_budget_env" not in sound  # the budget is a parameter now
         assert side["params"]["interval_node_budget"] is None  # the default budget
         undecided = sound["interval_undecided"]
-        assert set(undecided) == {"horizon", "node_budget", "unanalyzable"}
+        assert set(undecided) == {"horizon", "node_budget", "unanalyzable", "mint"}
         assert all(isinstance(v, int) and v >= 0 for v in undecided.values())
 
     def test_sidecar_records_the_environment(self, tmp_path) -> None:

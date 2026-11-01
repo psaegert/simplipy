@@ -70,7 +70,7 @@ pub struct Vs {
     pub has_fin: bool,
     /// The finite component exists ONLY on a measure-NULL x-set (e.g. `pow(negative, exponent)`
     /// is finite exactly where the exponent is an integer). `has_fin` keeps REACHABILITY
-    /// semantics (`reaches_all_of` must see point-reachable values); this flag carries the
+    /// semantics (`reaches_finite_of` must see point-reachable values); this flag carries the
     /// POSITIVE-MEASURE semantics the domain gate's witness needs. Set only where PROVEN null;
     /// false is the conservative default (= the pre-flag behaviour, which blocks the witness).
     pub fin_null: bool,
@@ -2591,7 +2591,7 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
             // POSITIVE-MEASURE annotation: fin
             // from the integer slice alone is supported on {x : exponent(x) in Z} -- null for a
             // non-constant exponent (the constant case IS the b_int disjunct). has_fin keeps
-            // reachability semantics for `reaches_all_of`; the domain gate's witness reads
+            // reachability semantics for `reaches_finite_of`; the domain gate's witness reads
             // `defined_pm()` and can now fire on nan-a.e. sources -- the ">=2-var negative-base
             // pow family" an earlier fix had silenced. Fin from the other disjuncts inherits
             // the operands' own support flags.
@@ -6424,24 +6424,17 @@ pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
     }
 }
 
-/// Can `cand` reach every value COMPONENT the `src` reaches on positive measure?
+/// Can `cand` reach the values a variable-free `src` OWES (the specification's 3.2)?
 ///
 /// The two sides' constants are quantified DIFFERENTLY: a rule must hold for EVERY source
-/// constant (∀), while the candidate's constants are CHOSEN by the fit (∃). So the source's
-/// achievable components -- the union over its constants -- must all be reachable by the
-/// candidate over its own. This is an exact NECESSARY condition, decided with no sampling.
-///
-/// It is what makes the sampled `POLE_GRID` unnecessary for the artifact family it was added for.
-/// `pow(asin(C/2), inf)` is 0 for |C| < 2·sin(1) ≈ 1.683, **+inf** on the narrow band
-/// C ∈ (1.683, 2), and NaN past |C| > 2. The band is only 0.317 wide and falls BETWEEN the grid
-/// points 1.6 and 2.5, so a sampled sweep can straddle it seed-dependently -- admitting
-/// `pow(asin(C/2), inf) -> 0`. Here the source's `pinf` is simply set and the literal `0`
-/// cannot reach it: rejected on structure, at every seed, for free.
-///
-/// NaN is deliberately EXCLUDED: a NaN source row is extendable (`x/x -> 1`), and how far that
-/// may go is the domain gate's question, decided by measure rather than by reachability.
-pub fn reaches_all_of(cand: &Vs, src: &Vs) -> bool {
-    (!src.has_fin || cand.has_fin) && (!src.pinf || cand.pinf) && (!src.ninf || cand.ninf)
+/// constant at which the source is finite (∀), while the candidate's constants are CHOSEN by the
+/// fit (∃), and at a constant where the source is not finite nothing is owed. So the candidate
+/// must reach the source's finite part over its own constants, and neither its infinities nor
+/// its NaN. This is an exact NECESSARY condition, decided with no sampling. `pow(asin(C/2), inf)`
+/// is 0 for |C| < 2·sin(1) ≈ 1.683, +inf on the band (1.683, 2) and NaN past |C| > 2: `-> 0`
+/// reaches what it owes, and `-> inf` does not.
+pub fn reaches_finite_of(cand: &Vs, src: &Vs) -> bool {
+    !src.has_fin || cand.has_fin
 }
 
 /// Is `expr` (at these constants) defined on a POSITIVE-MEASURE set -- i.e. is it a function at
@@ -7082,7 +7075,7 @@ mod tests {
     }
 
     /// The b_pow direction flag, RESOLVED: a negative base with a continuum exponent is finite
-    /// exactly on the integer slice -- REACHABLE (has_fin, for `reaches_all_of`) but measure-NULL
+    /// exactly on the integer slice -- REACHABLE (has_fin, for `reaches_finite_of`) but measure-NULL
     /// (`fin_null`, for the domain gate). Pre-fix, the phantom positive-measure fin blocked the
     /// witness on nan-a.e. sources: the ">=2-variable negative-base pow family" was silenced.
     #[test]
@@ -8097,20 +8090,16 @@ mod tests {
             "source is +inf on the band C in (1.683, 2) -- the grid straddles it"
         );
 
-        // the mined artifact: a literal 0 cannot reach the +inf the source takes
+        // the source owes its value only where it is finite (3.2): a literal 0 reaches that part,
+        // and the +inf band is owed nothing, so reachability does not refuse `-> 0` (the rows,
+        // the special constants and the Dirac refuter judge its value)
         let zero = value_set(&s(&["0"]), ops, &Vs::reals()).unwrap();
-        assert!(
-            !reaches_all_of(&zero, &sv),
-            "`-> 0` must be rejected: it cannot be +inf"
-        );
-        // ... nor can a fitted <constant>, which is finite by construction
-        let c = value_set(&s(&["<constant>"]), ops, &Vs::reals()).unwrap();
-        assert!(
-            !reaches_all_of(&c, &sv),
-            "`-> <constant>` must be rejected: a fit is finite"
-        );
-        // ... but the source itself trivially can (the gate is necessary, not sufficient)
-        assert!(reaches_all_of(&sv, &sv));
+        assert!(reaches_finite_of(&zero, &sv));
+        // a literal infinity reaches no finite value the source owes
+        let inf = value_set(&s(&["float(\"inf\")"]), ops, &Vs::reals()).unwrap();
+        assert!(!reaches_finite_of(&inf, &sv));
+        // ... and the source itself trivially can (the gate is necessary, not sufficient)
+        assert!(reaches_finite_of(&sv, &sv));
     }
 
     /// Reachability is a ONE-WAY test: the candidate may reach MORE than the source (its extra
@@ -8127,12 +8116,13 @@ mod tests {
         let wide = value_set(&s(&["pow", "0", "<constant>"]), ops, &Vs::reals()).unwrap();
         assert!(wide.has_fin && wide.pinf);
         assert!(
-            reaches_all_of(&wide, &fin),
+            reaches_finite_of(&wide, &fin),
             "a wider candidate must stay allowed"
         );
+        let nan = value_set(&s(&["float(\"nan\")"]), ops, &Vs::reals()).unwrap();
         assert!(
-            !reaches_all_of(&fin, &wide),
-            "a narrower candidate must be rejected"
+            !reaches_finite_of(&nan, &fin),
+            "a candidate without the finite part the source owes must be rejected"
         );
     }
 

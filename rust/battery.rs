@@ -38,13 +38,6 @@ use crate::fit::Rng;
 use crate::hiprec::ProbeAtom;
 use crate::operators::Operators;
 
-/// The STRUCTURAL deployed band: `|a - b| <= 1e-9 * max(1, |a|, |b|)`, the mirror of
-/// `_contract.compare_deployed_structural`. It answers "has the deployed algebra DIVERGED"
-/// -- an infinity where a finite value belongs, a gap far outside rounding -- and a few ULP
-/// is none of those. Deliberately loose: convicting rounding here renames sound rules as
-/// misaligned, measured in Python at 396 against a true 10.
-pub const JUDGE_REL: f64 = 1e-9;
-
 /// The deployed-REALISATION bound, in ULP -- the mirror of `_contract.REALISED_ULP`, and
 /// the same derivation. IEEE-754 mandates correct rounding only for + - * / and sqrt; the
 /// measured libm error reaches 1 ULP on cos, cosh, sinh and tanh; a rewrite has TWO sides,
@@ -285,43 +278,23 @@ fn ulp_at(x: f64) -> f64 {
     f64::from_bits(a.to_bits() + 1) - a
 }
 
-/// "Has the deployed algebra DIVERGED?" -- the STRUCTURAL question, the mirror of
-/// `_contract.compare_deployed_structural`, and a DIFFERENT question from the one above.
-/// Python measured what answering both with one comparison costs: 396 misalignments against
-/// a true 10. Rust asked it once, so tightening that single bar to the realisation one would
-/// have rejected every sound rule whose two sides round a few ULP apart.
-fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp {
-    use crate::hiprec::PointCmp as P;
-    if let Some(cl) = dep_classes(s, c) {
-        return cl;
-    }
-    let tol = witness_band(s, rtol, atol) + JUDGE_REL * s.abs().max(c.abs()).max(1.0);
-    if (s - c).abs() <= tol {
-        P::Eq
-    } else {
-        P::RealChange
-    }
-}
-
-/// Row semantics at the special points. A row where
-/// the deployed f64 sides agree passes outright; a diverging row is judged by the contract
-/// point verdict (`hiprec::contract_point_verdict`: precision rungs plus snap semantics):
-///   - confirmed REAL-CHANGE -> REJECT (clause (a): kills at any measure, snap included), but
-///     in permissive, whose agreement is float resolution (P3), which the contract's exact
-///     verdict does not read: the row passes and the judge decides (`asin(1e-8)` against
-///     `1e-8` is a change of the reals and agrees in permissive);
-///   - EXT / SHRINK / INF-CHANGE -> a tolerated event class, row passes;
-///   - contract eq or unresolved, NOT snapped -> in f64 (`mode`) REJECT (the deployed
-///     algebra structurally diverges where the contract does not object -- this also convicts
-///     the precision-roulette seam class); in permissive the row passes, as its values are
-///     the reals' (`ceil(erf(sinh(-3))) -> ceil(erf(-3))`: float64 rounds the first
-///     erf to -1, and both are 0);
-///   - snapped (symbolic-cancellation / pole-proximity at the point) -> row passes (the f64
-///     algebra evaluates a DIFFERENT point there; measurement error, not a value claim).
+/// Row semantics at the special points, each mode on its own values, refusing only at a
+/// counterexample there.
 ///
-/// `events` (f64 only) marks the rows where an operation of either side overflowed or
-/// underflowed (`numeric::RangeKind`): there f64 accepts the true value, so a row the contract
-/// finds equal passes however the deployed sides diverge, as in the contract judge's battery.
+/// - **f64** reads float64's values at the points' doubles, as the judge's f64 lane does. A row
+///   where the two sides agree (F6; a fitted constant within its band, `dep_realised`) passes.
+///   Where an operation of either side overflowed or underflowed (`events`), the true value at
+///   the doubles is accepted (the range standard, `hiprec::range_rescue`; a row the table
+///   cannot read passes, as the judge skips it). The left side without a value against a value
+///   is an extension at a point, measured by the domain gate, and passes. Any other
+///   disagreement refuses.
+/// - **permissive** reads the reals' values at the points themselves (pi/2 is pi/2), each side
+///   as the double nearest to it (P3, `point_doubles`), at every point, as the judge's permissive
+///   lane does: float64 agreeing at a point is no reading of the reals there (`asin(1.0)` is
+///   pi/2 exactly, where `ceil(cos(asin(x)))` is 0 and float64 gives 1). The two doubles
+///   agreeing (F6; a fitted constant within its band) passes, and so does an extension (the left
+///   side without a value); anything else refuses: `ceil(asinh(cos(x))) -> ceil(cos(x))` is 0
+///   against -1 at x = pi, and `asin(1e-8) -> 1e-8` agrees. A point the table cannot read passes.
 #[allow(clippy::too_many_arguments)]
 pub fn rows_consistent(
     y_src: &[f64],
@@ -341,59 +314,137 @@ pub fn rows_consistent(
     use crate::engine::RuleMode;
     use crate::hiprec::PointCmp as P;
     let lane_f64 = matches!(mode, RuleMode::Default);
-    let f64_exact = lane_f64 && cand_params.is_empty();
-    for r in 0..battery.n_rows {
-        // f64's const-free pair agrees at float resolution, as the judge's deployed lane reads it
-        // (F6): a defined source point that disagrees refuses unless an operation left the range
-        // there and the contract agrees (the range standard, below)
-        let dv = if f64_exact {
-            if crate::table::f64_agree(y_src[r], y_cand[r]) == crate::table::Cmp::Eq {
-                P::Eq
-            } else if y_src[r].is_nan() || events.is_some_and(|e| e[r]) {
-                P::RealChange
-            } else {
-                return false;
-            }
+    let agree = |s: f64, c: f64| {
+        if cand_params.is_empty() {
+            crate::table::f64_agree(s, c) == crate::table::Cmp::Eq
         } else {
-            dep_realised(y_src[r], y_cand[r], rtol, atol)
-        };
-        if dv == P::Eq {
-            continue;
+            dep_realised(s, c, rtol, atol) == P::Eq
         }
-        let (v, snapped) = crate::hiprec::contract_point_verdict(
-            source,
-            src_params,
-            cand,
-            cand_params,
-            ops,
-            var_names,
-            &battery.atoms[r],
-        );
-        let reject = match v {
-            Some(P::RealChange) => !matches!(mode, RuleMode::Permissive),
-            Some(P::Ext) | Some(P::Shrink) | Some(P::InfChange) => false,
-            // The contract does not object, so the only thing left to convict is a
-            // DIVERGENCE -- and that is the structural question, not the realisation one.
-            // A few ULP between two spellings is rounding; asking the realisation bar here
-            // would reject sound rules for it.
-            Some(P::Eq) if events.is_some_and(|e| e[r]) => false,
-            Some(P::Eq) | None => {
-                lane_f64 && !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
-            }
+    };
+    for r in 0..battery.n_rows {
+        let (s, c) = (y_src[r], y_cand[r]);
+        let reject = if !lane_f64 {
+            point_doubles(
+                source,
+                src_params,
+                cand,
+                cand_params,
+                ops,
+                var_names,
+                &battery.atoms[r],
+            )
+            .is_some_and(|(a, b)| !(agree(a, b) || (a.is_nan() && !b.is_nan())))
+        } else if agree(s, c) {
+            false
+        } else if events.is_some_and(|e| e[r]) {
+            let cols1: Vec<Vec<f64>> = battery.cols.iter().map(|col| vec![col[r]]).collect();
+            !crate::hiprec::range_rescue(
+                &[s],
+                &[c],
+                Some(&[true]),
+                None,
+                source,
+                src_params,
+                cand,
+                cand_params,
+                ops,
+                var_names,
+                &cols1,
+                rtol,
+                atol,
+            )
+        } else {
+            !(s.is_nan() && !c.is_nan())
         };
         if reject {
             if std::env::var("SIMPLIPY_BATTERY_TRACE").is_ok() {
                 eprintln!(
-                    "BATTERY-REJECT src=[{}] sp={:?} cand=[{}] cp={:?} row={} coords={:?} s={:e} c={:e} dv={:?} v={:?} snapped={}",
+                    "BATTERY-REJECT src=[{}] sp={:?} cand=[{}] cp={:?} row={} coords={:?} s={:e} c={:e}",
                     source.join(" "), src_params, cand.join(" "), cand_params, r,
-                    battery.atoms[r].iter().map(|a| a.value()).collect::<Vec<_>>(),
-                    y_src[r], y_cand[r], dv, v, snapped,
+                    battery.atoms[r].iter().map(|a| a.value()).collect::<Vec<_>>(), s, c,
                 );
             }
             return false;
         }
     }
     true
+}
+
+/// Both sides' values in the reals at a battery point (`atoms`, read exactly: pi/2 is pi/2, each
+/// `<constant>` its double), as the doubles nearest to them -- permissive's reading of a value
+/// (P3) -- read by the table at two precisions; `None` where a side cannot be read or the two
+/// readings round apart (a residue, not a value). The judge's permissive lane reads its points so
+/// (`_contract`'s `doubles`).
+fn point_doubles(
+    source: &[String],
+    src_params: &[f64],
+    target: &[String],
+    tgt_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    atoms: &[ProbeAtom],
+) -> Option<(f64, f64)> {
+    let spell = |tokens: &[String], params: &[f64]| -> Option<Vec<String>> {
+        let mut out = Vec::with_capacity(tokens.len());
+        let mut k = 0usize;
+        for t in tokens {
+            if t == "<constant>" {
+                out.push(crate::numeric::py_float_repr(*params.get(k)?));
+                k += 1;
+            } else if let Some(i) = var_names.iter().position(|v| v == t) {
+                out.extend(atom_tokens(atoms.get(i)?));
+            } else {
+                out.push(t.clone());
+            }
+        }
+        Some(out)
+    };
+    let (ls, rs) = (spell(source, src_params)?, spell(target, tgt_params)?);
+    let mut arity: std::collections::HashMap<String, u8> = ls
+        .iter()
+        .chain(&rs)
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    // the atoms' own spelling (`atom_tokens`) reads `*` and `/` whatever the configuration holds
+    arity.insert("*".to_string(), 2);
+    arity.insert("/".to_string(), 2);
+    let le = crate::table::Expr::compile(&ls, &[], &arity).ok()?;
+    let re = crate::table::Expr::compile(&rs, &[], &arity).ok()?;
+    let mut seen: Vec<(f64, f64)> = Vec::with_capacity(2);
+    for dps in [50, 120] {
+        let mut ctx = crate::table::Ctx::new(dps)?;
+        let mut double = |e: &crate::table::Expr| -> Option<f64> {
+            let v = e.eval_float_resolution(&[], dps)?.value?;
+            Some(match crate::table::class_of(&v) {
+                (true, _) => f64::NAN,
+                (_, Some(up)) => {
+                    if up {
+                        f64::INFINITY
+                    } else {
+                        f64::NEG_INFINITY
+                    }
+                }
+                _ => crate::table::nearest_f64(&v, &mut ctx)?,
+            })
+        };
+        seen.push((double(&le)?, double(&re)?));
+    }
+    let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+    (same(seen[0].0, seen[1].0) && same(seen[0].1, seen[1].1)).then_some(seen[1])
+}
+
+/// A battery atom spelled as tokens the table reads exactly: a double as its literal, `n pi / d`
+/// as `(n * np.pi) / d`, `e` as `np.e`, -1.7 and `n / d` as decimals' quotients.
+fn atom_tokens(a: &ProbeAtom) -> Vec<String> {
+    let s = |x: &str| x.to_string();
+    let num = |x: f64| crate::numeric::py_float_repr(x);
+    match a {
+        ProbeAtom::Val(v) => vec![num(*v)],
+        ProbeAtom::PiFrac(n, d) => vec![s("/"), s("*"), num(*n as f64), s("np.pi"), num(*d as f64)],
+        ProbeAtom::E => vec![s("np.e")],
+        ProbeAtom::Dec17Neg => vec![s("-1.7")],
+        ProbeAtom::Rat(n, d) => vec![s("/"), num(*n as f64), num(*d as f64)],
+    }
 }
 
 /// Snap fitted constants to the canonical witness targets: nearest integer, else
@@ -450,28 +501,13 @@ mod tests {
     }
 
     #[test]
-    fn the_pre_screen_asks_realisation_and_the_reject_asks_divergence() {
+    fn the_pre_screen_asks_realisation() {
         use crate::hiprec::PointCmp as P;
-        // `pow np.e sinh (-5) -> 0`: the deployed sides are 5.94e-33 and 0.0. Under the
-        // STRUCTURAL band -- `1e-9 * max(1, |a|, |b|)`, a pure ABSOLUTE floor for anything
-        // below 1 -- that reads as equal, so the row was minted and the contract was never
-        // asked whether it is true. It is not. In ULP the two are ~4.5e18 apart.
+        // `pow np.e sinh (-5) -> 0`: the deployed sides are 5.94e-33 and 0.0, ~4.5e18 units in
+        // the last place apart: no agreement, whatever an absolute floor would read
         let (s, c) = (5.942_307_292_381_135e-33, 0.0);
         assert_eq!(dep_realised(s, c, 0.0, 0.0), P::RealChange);
-        assert_eq!(dep_structural(s, c, 0.0, 0.0), P::Eq);
-
-        // ...and why the structural bar has to STAY loose: a few ULP between two spellings
-        // is rounding, not a divergence, and convicting it renames sound rules as
-        // misaligned. Python measured that at 396 against a true 10.
         let a = 1.0_f64;
-        for k in [3u64, 100, 1_000_000] {
-            let b = f64::from_bits(a.to_bits() + k);
-            assert_eq!(
-                dep_structural(a, b, 0.0, 0.0),
-                P::Eq,
-                "{k} ULP is not a divergence"
-            );
-        }
         assert_eq!(
             dep_realised(a, f64::from_bits(a.to_bits() + 3), 0.0, 0.0),
             P::Eq
@@ -482,7 +518,7 @@ mod tests {
             "100 ULP is past the realisation bar"
         );
 
-        // the mine's own witness band still rides on top of both
+        // the mine's own witness band rides on top of it
         assert_eq!(dep_realised(1.0, 1.0 + 1e-6, 1e-5, 0.0), P::Eq);
     }
 
@@ -680,6 +716,103 @@ pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &
             .range_rows
             .iter()
             .all(|row| range_row_true(lhs, rhs, var_names, row, ops))
+}
+
+/// THE f64 MAGNITUDE LADDER AT THE MINT (`table::F64_MAGNITUDES`), the judge's f64 lane read the
+/// same way (`_contract`'s `magnitudes`): along each variable either side uses, every magnitude of
+/// the ladder in both signs, the other variables at 1.7 and then at -1.3. A probe where float64's
+/// two sides agree (F6) passes; one where an operation of either side overflowed or underflowed
+/// passes where the rewrite gives the true value (`range_row_true`, the table; an unreadable one
+/// passes, as the judge skips it); one where the left side alone has no value passes where that
+/// is isolated along a variable (its neighbouring doubles on both sides are no extension, the
+/// judge's `isolated_f64`); any other disagreement refuses, as it refuses f64 in the judge.
+/// `sinh(asinh(x)) -> x` is refused: 66 units in the last place apart at 1e100. A pair holding a
+/// `<constant>` is left to the judge, which reads the ladder at its own fitted witness.
+pub fn f64_magnitudes_mint(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> bool {
+    if lhs.iter().chain(rhs).any(|t| t == "<constant>") {
+        return true;
+    }
+    let used: Vec<usize> = (0..var_names.len())
+        .filter(|&i| lhs.iter().chain(rhs).any(|t| *t == var_names[i]))
+        .collect();
+    if used.is_empty() {
+        return true;
+    }
+    let (Ok(tl), Ok(tr)) = (
+        crate::eval::Tape::compile(lhs, ops, var_names),
+        crate::eval::Tape::compile(rhs, ops, var_names),
+    ) else {
+        return true; // a side the tape cannot read is the judge's to refuse
+    };
+    let width = var_names.len().max(1);
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    for cfg in [1.7f64, -1.3] {
+        for &v in &used {
+            for &m in &crate::table::F64_MAGNITUDES {
+                for x in [m, -m] {
+                    let mut row = vec![cfg; width];
+                    row[v] = x;
+                    rows.push(row);
+                }
+            }
+        }
+    }
+    let eval = |rows: &[Vec<f64>]| {
+        let n = rows.len();
+        let cols: Vec<Vec<f64>> = (0..width)
+            .map(|c| rows.iter().map(|r| r[c]).collect())
+            .collect();
+        let (yl, el) = tl.eval_columns_events(&cols, &[], n);
+        let (yr, er) = tr.eval_columns_events(&cols, &[], n);
+        (
+            yl,
+            yr,
+            el.iter()
+                .zip(&er)
+                .map(|(a, b)| *a || *b)
+                .collect::<Vec<bool>>(),
+        )
+    };
+    let (yl, yr, events) = eval(&rows);
+    let agree = |a: f64, b: f64| crate::table::f64_agree(a, b) == crate::table::Cmp::Eq;
+    for (i, row) in rows.iter().enumerate() {
+        if agree(yl[i], yr[i]) {
+            continue;
+        }
+        if events[i] {
+            if range_row_true(lhs, rhs, var_names, row, ops) {
+                continue;
+            }
+            return false;
+        }
+        if yl[i].is_nan() && !yr[i].is_nan() {
+            let isolated = used.iter().any(|&v| {
+                let near: Vec<Vec<f64>> = [
+                    crate::ac::rat::next_up(row[v]),
+                    crate::ac::rat::next_down(row[v]),
+                ]
+                .iter()
+                .map(|&y| {
+                    let mut r = row.clone();
+                    r[v] = y;
+                    r
+                })
+                .collect();
+                let (nl, nr, ne) = eval(&near);
+                (0..2).all(|k| ne[k] || !(nl[k].is_nan() && !nr[k].is_nan()))
+            });
+            if isolated {
+                continue;
+            }
+        }
+        return false;
+    }
+    true
 }
 
 /// Does the rewrite give the TRUE value at one range row of the f64 bar? Both sides read by the
