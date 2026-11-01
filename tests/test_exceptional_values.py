@@ -72,10 +72,9 @@ def test_a_pole_edge_attained_on_positive_measure_holds_the_infinity(eng) -> Non
     is finite, and float64's evidence finds `atanh(tanh(x))` finite on a set of positive
     measure (it read it as finite nowhere)."""
     tokens = ['atanh', 'tanh', 'x0']
-    has_fin, pinf, _, nan, _, _ = eng._core.interval_value_set_box(tokens, [0.0], [64.0],
-                                                                  real=False)
+    box = eng._core.interval_value_set_box
+    has_fin, pinf, _, nan, _, _ = box(tokens, [0.0], [64.0], real=False)
     assert has_fin and pinf and not nan
-    has_fin, pinf, _, nan, _, hi = eng._core.interval_value_set_box(tokens, [0.0], [10.0],
-                                                                   real=False)
+    has_fin, pinf, _, nan, _, hi = box(tokens, [0.0], [10.0], real=False)
     assert has_fin and not pinf and not nan and hi < 11
     assert _core.table_evidence(tokens, dict(ARITY), True) is True
