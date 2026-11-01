@@ -820,6 +820,17 @@ GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
 # twice the say in `meas`. Order preserved; the point SET is unchanged.
 GRID = list(dict.fromkeys(GRID))
 
+#: THE f64 MAGNITUDE LADDER: float64's lane probes each slot here too, from the smallest normal
+#: double to the largest, both signs, where the grid (to 1e4) and the mine's rows (to 1e3) do
+#: not reach. Rounding that is harmless at moderate magnitudes is not harmless at every one:
+#: `sinh(asinh(x))` is 66 units in the last place off at 1e100, and `log(exp(x))` and
+#: `acosh(cosh(x))` lose their argument at small ones. Where the core keeps one of its own
+#: inverse collapses to a safe magnitude (`sinh o asinh` to |t| <= 710, `log o exp` to t >= 1,
+#: `acosh o cosh` to |t| >= 1, `atanh o tanh` to |t| <= 2), the ladder runs past the limit.
+F64_MAGNITUDES = (2.2250738585072014e-308, 1e-300, 1e-200, 1e-100, 1e-50, 1e-16, 1e-8,
+                  1e5, 1e7, 1e10, 1e15, 1e20, 1e30, 1e50, 1e100, 1e150, 1e200, 1e250, 1e300,
+                  1e307, 1.7976931348623157e308)
+
 # ---------------------------------------------------------------- witness fitting
 GEN = [1.7, -1.3, 0.6, 2.3, -0.8]
 
@@ -2783,6 +2794,44 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             deployed(ed, v, point, kind == 'real', snapped, acc)
         merge(acc, key)
 
+    def magnitudes(acc, lanes, cr_f64):
+        """THE f64 MAGNITUDE PROBES (`F64_MAGNITUDES`), at the generic constants: along each lane,
+        the slot at every magnitude of the ladder, both signs. float64's sides are compared
+        first: where they agree there is nothing to read; where they disagree and no operation
+        left the range, f64 fails there, whatever the reals say; where an operation overflowed or
+        underflowed, the true value stands, and the contract reads it (a point it cannot read
+        says nothing)."""
+        if not deployed_check:
+            return
+        for cfg, n in lanes:
+            for m in F64_MAGNITUDES:
+                for x in (m, -m):
+                    vals = {k: cfg for k in names}
+                    vals[n] = x
+                    ed = {k: F(y) for k, y in vals.items()}
+                    ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
+                    ed.update({k: F(w) for k, w in cr_f64.items()})
+                    in_range = [True]
+                    with np.errstate(all='ignore'):
+                        dl, dr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
+                    acc['seen'] = True
+                    acc['finite_f64'] = acc['finite_f64'] or bool(np.isfinite(dl))
+                    if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq':
+                        continue
+                    point = dict(vals)
+                    point.update(dict(zip(lnames, grid_key)))
+                    v, snapped = None, False
+                    if not in_range[0]:
+                        def env_mp(vals=vals):
+                            e = {k: mpf(y) for k, y in vals.items()}
+                            e.update({k: b() for k, b in gbuilders.items()})
+                            e.update(fitted(grid_key))
+                            return e
+                        v, snapped = _point_verdict(tl, tr, env_mp)
+                        if v is None:
+                            continue
+                    deployed(ed, v, point, True, snapped, acc)
+
     def mint_rows(acc, cr_f64):
         """THE MINT'S ROWS (`judge_rows`), at the generic constants: the deployed sides at every
         row the mine's mint reads, slot k reading column k (a slot past the columns the grid's
@@ -3021,6 +3070,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             grid_ext = bool(acc['ext'])
             preimages(acc, lanes, cr_f64)
             mint_rows(acc, cr_f64)
+            magnitudes(acc, lanes, cr_f64)
             # the grid's points count toward nothing in coverage (that is the battery's)
             acc['resolved'] = acc['attempted'] = 0
             merge(acc, grid_key)

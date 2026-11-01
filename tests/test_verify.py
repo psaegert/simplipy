@@ -108,7 +108,11 @@ class TestMonitorFailsClosed:
 
 class TestRootnSemantics:
     def test_monitor_judges_rootn(self):
-        assert judge_pair(['rootn', 'pow', 'x0', '3', '3'], ['x0'], rng())[0] == 'OK'
+        # the cube root of a cube is exact in the reals; float64's kernels are 101 units in the
+        # last place off at 1e-100, so as a rewrite it holds in permissive and not in f64
+        assert judge_pair(['rootn', 'pow', 'x0', '3', '3'], ['x0'], rng(),
+                          mode='permissive')[0] == 'OK'
+        assert judge_pair(['rootn', 'pow', 'x0', '3', '3'], ['x0'], rng())[0] == 'VIOLATION'
         assert judge_pair(['rootn', 'pow', 'x0', '2', '2'], ['x0'], rng())[0] == 'VIOLATION'
 
     def test_gate_judges_rootn(self):
@@ -648,6 +652,27 @@ class TestTheRealisationBound:
         assert [C.judge_rule(a, b)['tier'] for a, b, _ in probes] == [t for _, _, t in probes]
 
 
+class TestTheF64MagnitudeLadder:
+    """float64's lane probes every slot from the smallest normal double to the largest: a
+    rounding harmless at moderate magnitudes is not harmless at every one."""
+
+    @pytest.mark.parametrize('lhs, rhs', [
+        ('sinh asinh _0', '_0'),                # 66 units in the last place at 1e100
+        ('sinh asinh ?0', '?0'),
+        ('tan atan asinh !0', 'asinh !0'),      # tan near pi/2 magnifies atan's rounding
+    ])
+    def test_a_rule_false_in_float64_at_a_large_magnitude_is_refused(self, lhs, rhs) -> None:
+        from simplipy.verify._contract import judge_rule
+        got = judge_rule(lhs.split(), rhs.split())
+        assert got['verdict'] in ('CERTIFIED', 'ENGINE-MISALIGN') and \
+            got['tier'] == 'permissive', got
+
+    def test_a_range_event_at_a_large_magnitude_takes_the_true_value(self) -> None:
+        """`asinh(sinh(x)) -> x`: sinh overflows past 710.48, where the true value stands."""
+        from simplipy.verify._contract import judge_rule
+        assert judge_rule(['asinh', 'sinh', '?0'], ['?0'])['tier'] == 'core'
+
+
 class TestTheF64RangeStandard:
     """f64 promises the evaluator's value wherever nothing overflows or underflows;
     overflows are a special case. The constructors give the true value where an
@@ -869,11 +894,14 @@ class TestCleanlinessIsPerMode:
         # A rule without variables has no tolerance in permissive either: permissive 45 (+6,
         # `pow((-1), +-inf) -> 1`, `exp(tan(asin(-1))) -> 0` and three `tanh(tan(...))` at a pole
         # of tan, whose left side has no value).
+        # float64's lane probes magnitudes up to the largest double: f64 28 (+3 false in float64
+        # at large magnitudes, `sinh asinh _0 -> _0`, `pow _0 log 2 -> pow 2 log _0` and
+        # `tan atan acosh !0 -> acosh !0`).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 25 and len(policy_only['f64']) == 18
+        assert len(tier['f64'] - {126}) == 28 and len(policy_only['f64']) == 18
         assert len(tier['permissive']) == 45 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).

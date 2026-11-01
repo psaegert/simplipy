@@ -73,7 +73,9 @@ sort: no disagreement at an isolated point is excused there. The tiers are one r
 <!-- tier-table: end -->
 
 "f64-realised" means the deployed evaluator computes the rewrite, to within 8 ULP, at every
-battery and grid point where no operation of either side overflows or underflows. At a point
+battery and grid point, and at every slot magnitude from the smallest normal double to the
+largest, where no operation of either side overflows or underflows (`sinh(asinh(x0)) → x0` is
+66 ULP off at 1e100 and stays `permissive`). At a point
 where one does, the rewrite may give the true value instead, as the canonical constructors do,
 so `rootn(exp(x0), 2) → exp(x0/2)` is `core` although `exp` overflows past 709.78. A pole
 (`atanh(1)`, `log(0)`) is not an overflow and saturation inside the range is not one either,

@@ -1400,6 +1400,13 @@ model predictions.
   `x^2 + 1 + 1e-3000 -> x^2 + 1`, false by 1e-3000 everywhere, is refused with uncertainty (it
   was licensed in every mode); at 1e-100 the readings reach the separation, and the rule is
   false in the reals and holds in `f64` and `permissive`.
+- **`f64` is judged at every magnitude.** The judge's float64 lane reads each slot from the
+  smallest normal double to the largest (its grid stopped at 1e4 and the mine's rows at 1e3),
+  past every magnitude to which the core keeps one of its own inverse collapses. Where float64's
+  sides differ with no operation leaving the range, `f64` fails; where one leaves it, the true
+  value stands. `sinh(asinh(x0)) -> x0` (66 units in the last place off at 1e100),
+  `rootn(pow(x0, 3), 3) -> x0` (101 at 1e-100), `pow(x0, log(2)) -> pow(2, log(x0))` and
+  `tan(atan(asinh(x0))) -> asinh(x0)` now hold in `permissive` only.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's
