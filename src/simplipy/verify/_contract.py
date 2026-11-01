@@ -110,6 +110,11 @@ def _own_precision():
         _LOCAL.context = None
 
 
+def _mpmath_mpf(v: Any = 0) -> Any:
+    """mpmath's own `mpf` constructor, in the judge's context (`mp`)."""
+    return mp.mpf(v)
+
+
 def mpf(v: Any = 0) -> Any:
     """mpmath's `mpf` in the judge's context (`mp`), a `Fraction` read through its numerator and
     denominator and rounded once at the working precision: mpmath before 1.4 builds no `mpf`
@@ -117,7 +122,7 @@ def mpf(v: Any = 0) -> Any:
     them)."""
     if isinstance(v, Fraction):
         return mp.make_mpf(_from_rational(v.numerator, v.denominator, mp.prec, 'n'))
-    return mp.mpf(v)
+    return _mpmath_mpf(v)
 
 # No `np.seterr(all='ignore')` here -- that call is PROCESS-WIDE and ran at
 # import, silently changing the embedder's numpy error handling because this module
