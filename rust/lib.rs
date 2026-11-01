@@ -1603,6 +1603,69 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
+    /// `find_rule_lib` with its trace: `(target, steps)`, each step `(candidate, emitted,
+    /// verdict)` -- every candidate the scan considered with the pre-filter that rejected it or
+    /// `certified`, and every target the acceptance answered (`licensed`, `confirmed` or the
+    /// refusal's name), in scan order (`worker::ScanStep`). A step on the source alone
+    /// (`evidence`, `evaluable`) has neither candidate nor target.
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![]))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn find_rule_lib_traced(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        library: PyRef<'_, PyCandidateLibrary>,
+        max_target: Option<usize>,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+        min_informative: Option<usize>,
+        rule_mode: &str,
+        confirm_x: Option<Vec<f64>>,
+        confirm_rows: usize,
+        confirm_min_informative: Option<usize>,
+        confirm_seed: u64,
+        exclusions: Vec<Vec<String>>,
+    ) -> PyResult<(
+        Option<Vec<String>>,
+        Vec<(Vec<String>, Vec<String>, &'static str)>,
+    )> {
+        ensure_tokens_are_tokens(&source)?;
+        let spec = mine_spec(
+            &library,
+            rule_mode,
+            rtol,
+            atol,
+            min_informative,
+            challenges,
+            retries,
+        )?;
+        let lib = &library.inner;
+        let confirm = confirm_set(
+            confirm_x,
+            confirm_rows,
+            lib.var_names().len(),
+            confirm_min_informative,
+            confirm_seed,
+        )?;
+        let (target, steps) = py.detach(|| {
+            crate::worker::traced(|| {
+                self.inner().find_rule_lib(
+                    &source,
+                    lib,
+                    max_target,
+                    &spec,
+                    confirm.as_ref(),
+                    seed,
+                    &exclusions,
+                )
+            })
+        });
+        Ok((target.map_err(PyValueError::new_err)?, steps))
+    }
+
     /// OFFLINE miner: THE HINT ARM -- a proposed (source, hint) pair judged by the scan's own
     /// acceptance: the licences against the engine's mark, `judge_pair` on the library's
     /// rows at the source's scan `seed`, then stage 2 on `confirm_x` when given. Returns

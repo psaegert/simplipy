@@ -556,6 +556,23 @@ def test_the_mint_reads_as_the_judge_reads(lhs, rhs, mode) -> None:
     assert mint_accepts(lhs, rhs, mode) == admits(lhs, rhs, mode), judged(lhs, rhs)
 
 
+@pytest.mark.parametrize('src, tgt', [('tan atan x0', 'x0'), ('* tan atan x0 x1', '* x0 x1'),
+                                      ('log exp tanh x0', 'tanh x0')])
+def test_the_mints_f64_rows_agree_at_eight_units(src, tgt) -> None:
+    """The f64 scan reads its rows by F6's agreement, 8 units in the last place, and no looser:
+    `tan(atan(x))` is up to 565 units from x on the mine's rows (8e-14 relative, inside a
+    relative 1e-11), so the rows reject `x0` for it, before any check of the acceptance
+    (`find_rule_lib_traced`): the f64 bar and the magnitude ladder would refuse the pick too,
+    and hide a looser row agreement from every other test."""
+    X = mine_rows()
+    core = bare()._core
+    lib = core.build_candidate_library([tgt.split()], ['x0', 'x1'], X.flatten().tolist(),
+                                       X.shape[0], rule_mode='default')
+    _, steps = core.find_rule_lib_traced(src.split(), lib, None, rtol=1e-11, atol=1e-12,
+                                         rule_mode='default')
+    assert [v for cand, _, v in steps if cand == tgt.split()] == ['rows'], steps
+
+
 @pytest.mark.parametrize('src', ['inv ceil sin x0', 'inv ceil tanh x0', 'inv floor erf x0',
                                  'inv max 0 x0', 'inv floor tanh x0', 'asin cosh x0',
                                  'tan atan2 x0 0', 'acosh tanh x0', 'atanh floor x0'])

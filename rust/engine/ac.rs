@@ -230,11 +230,6 @@ impl Engine {
         // A mode's rules are read in the serving number domain (f64's), whichever run
         // first asks for them (translation is lazy and may start inside another run).
         let _domain = crate::ac::rat::number_domain(true);
-        let is_wildcard = |s: &str| {
-            s.len() >= 2
-                && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
-                && s[1..].chars().all(|c| c.is_ascii_digit())
-        };
         let mut n_registry_dropped = 0usize;
         // `kept_idx` keeps the ARTIFACT position of every rule that reaches translate,
         // so the provenance translate records (indices into `kept`) can be lifted back
@@ -244,22 +239,7 @@ impl Engine {
         for (i, (l, r)) in raw.iter().enumerate() {
             let lhs: Vec<String> = l.iter().map(|t| view.resolve_owned(*t)).collect();
             let rhs: Vec<String> = r.iter().map(|t| view.resolve_owned(*t)).collect();
-            let mut vars: Vec<String> = Vec::new();
-            for t in lhs.iter().chain(rhs.iter()) {
-                if is_wildcard(t) && !vars.contains(t) {
-                    vars.push(t.clone());
-                }
-            }
-            // The pole entry reads f64's values at the exceptional points (`1/0` is +inf there):
-            // a pre-filter of f64's truth. Permissive's values are the reals' -- `1/0` has no
-            // value, where permissive may give one -- and its agreement is float
-            // resolution, which the entry's exact verdict does not read: its judge decides, as
-            // the permissive mint's acceptance does (`Acceptor::license`). So a permissive file
-            // is served the completions its judge licenses (`inv(atanh(ceil(x0))) -> 0`, whose
-            // left side is `1/0` at ceil(x0) = 0).
-            if !matches!(mode, RuleMode::Permissive)
-                && super::refusals::pole_refusal(&lhs, &rhs, &self.operators, &vars).is_some()
-            {
+            if self.pole_entry_refuses(&lhs, &rhs, mode) {
                 n_registry_dropped += 1;
                 continue;
             }
@@ -275,6 +255,31 @@ impl Engine {
             *s = kept_idx[*s];
         }
         r
+    }
+
+    /// The load's pole entry (`refusals::pole_refusal`) on a rule's written sides, its slots
+    /// read as variables. It reads f64's values at the exceptional points (`1/0` is +inf
+    /// there): a pre-filter of f64's truth. Permissive's values are the reals' -- `1/0` has no
+    /// value, where permissive may give one -- and its agreement is float resolution, which the
+    /// entry's exact verdict does not read: its judge decides, as the permissive mint's
+    /// acceptance does (`Acceptor::license`). So a permissive file is served the completions its
+    /// judge licenses (`inv(atanh(ceil(x0))) -> 0`, whose left side is `1/0` at ceil(x0) = 0).
+    fn pole_entry_refuses(&self, lhs: &[String], rhs: &[String], mode: RuleMode) -> bool {
+        if matches!(mode, RuleMode::Permissive) {
+            return false;
+        }
+        let is_wildcard = |s: &str| {
+            s.len() >= 2
+                && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
+                && s[1..].chars().all(|c| c.is_ascii_digit())
+        };
+        let mut vars: Vec<String> = Vec::new();
+        for t in lhs.iter().chain(rhs.iter()) {
+            if is_wildcard(t) && !vars.contains(t) {
+                vars.push(t.clone());
+            }
+        }
+        super::refusals::pole_refusal(lhs, rhs, &self.operators, &vars).is_some()
     }
 
     /// Run `f` in the LICENCE CONTEXT of `mode`'s search over patterns, the context gate G8
@@ -1546,9 +1551,9 @@ impl Engine {
     /// THE LOAD'S VERDICT on one rule read in `mode`, without installing it: the name of
     /// the gate that refuses it -- the translate census's reasons (`multi-constant-lhs`,
     /// `const-count-increase`, `ground-composite`, `catch-all-lhs`, `unbound-rhs-wildcard`,
-    /// `not-ordered-below`, `engine-owned-law`, `unparseable-side`), `subsumed` (both sides one
-    /// canonical state),
-    /// `pole-class-change` (the registry's pre-filter) -- or `None` when the load serves it.
+    /// `not-ordered-below`, `engine-owned-law`, `unparseable-side`), then `pole-class-change`
+    /// (f64's pre-filter, named only where no policy's gate refuses the rule), then `subsumed`
+    /// (both sides one canonical state) -- or `None` when the load serves it.
     /// The load checks policies, not truth (the specification's 4.11); `licensed` reads its
     /// policies here. `canon` is the canon the rule is read in, as the load reads a file in
     /// the canon it was certified in.
@@ -1562,12 +1567,19 @@ impl Engine {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = vec![(self.intern_seq(lhs, &ctx), self.intern_seq(rhs, &ctx))];
         let view = self.view(&ctx);
-        let rules = self.translate_in(&toks, &view, mode, canon);
-        if rules.n_registry_dropped > 0 {
-            return Some("pole-class-change".to_string());
-        }
+        // the policies' gates first: the pole entry, a pre-filter of f64's truth, refuses no rule
+        // a policy would not name too (a slot the left side does not bind is ill-formed in every
+        // mode, whatever f64's values at its exceptional points)
+        let _domain = crate::ac::rat::number_domain(true);
+        let fold_f64 = canon.cx(&view).fold_f64;
+        let rules = self.with_law_cx(&view, mode, fold_f64, |law| {
+            AcRules::translate(&toks, &view, canon, law)
+        });
         if let Some((reason, _)) = rules.drop_census.first() {
             return Some(reason.to_string());
+        }
+        if self.pole_entry_refuses(lhs, rhs, mode) {
+            return Some("pole-class-change".to_string());
         }
         (rules.n_subsumed > 0).then(|| "subsumed".to_string())
     }

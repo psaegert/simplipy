@@ -528,6 +528,41 @@ fn gate_trace() -> Option<&'static String> {
         .as_ref()
 }
 
+/// One step of a scan: the candidate considered (empty for a step on the source itself or on
+/// an emitted target), the target it emits (empty where it emits none), and the verdict -- the
+/// pre-filter that rejected the candidate, `certified`, or the acceptance's answer on the
+/// target (`licensed` or the refusal's name).
+pub type ScanStep = (Vec<String>, Vec<String>, &'static str);
+
+/// A candidate's refusal by `certify_candidate`: the check that made it, and the target it
+/// refused where that is not the candidate itself (a resolved literal), else empty.
+type Refused = (&'static str, Vec<String>);
+
+thread_local! {
+    static SCAN_TRACE: std::cell::RefCell<Option<Vec<ScanStep>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with this thread's scan recording its steps (`note`), and returns them beside
+/// `f`'s result: the pairs a scan considers, each with the verdict that decided it.
+pub fn traced<R>(f: impl FnOnce() -> R) -> (R, Vec<ScanStep>) {
+    SCAN_TRACE.with(|t| *t.borrow_mut() = Some(Vec::new()));
+    let out = f();
+    let steps = SCAN_TRACE
+        .with(|t| t.borrow_mut().take())
+        .unwrap_or_default();
+    (out, steps)
+}
+
+/// Records one step of the scan where a trace is open on this thread (`traced`).
+pub(crate) fn note(candidate: &[String], target: &[String], verdict: &'static str) {
+    SCAN_TRACE.with(|t| {
+        if let Some(steps) = t.borrow_mut().as_mut() {
+            steps.push((candidate.to_vec(), target.to_vec(), verdict));
+        }
+    });
+}
+
 /// WITNESS SNAPPING (see `battery::snap_candidates`): the shipped rule's
 /// exists-witness set contains the integer/half-integer snap of the fitted constants
 /// whenever the snap still fits, and deployment realizes the rule AT the snap -- so the
@@ -1106,8 +1141,9 @@ fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
 
 /// Test one candidate against a source across the challenge/sign-combo loop. Const-free candidates
 /// use the `allclose` check (against the precomputed `y_const_free`); constant-bearing candidates
-/// use the fit (`exist_constants_fit_prepared`, `retries` restarts) per combo. Rejects on first
-/// failure (`None`). A match returns the FIRST instance's target witness (`Some(c)` = the fitted
+/// use the fit (`exist_constants_fit_prepared`, `retries` restarts) per combo. Rejects on the
+/// first failure, naming the check (`finite_rows`, `rows`, `fit`, `domain_gate`, `special_points`,
+/// `special_constants`). A match returns the FIRST instance's target witness (`Some(c)` = the fitted
 /// constants for the candidate's `<constant>` slots, `None` = a vacuous instance that determined
 /// nothing) -- for a const-FREE source there is exactly one instance, so this IS the candidate's
 /// witness, which literal resolution (`resolve_const_slots`) pins to tokens.
@@ -1132,12 +1168,12 @@ fn candidate_matches(
     min_informative: usize,
     fit_seed: u64,
     lane: Lane,
-) -> Option<Option<Vec<f64>>> {
+) -> Result<Option<Vec<f64>>, &'static str> {
     let rescue = lane.rescue();
     // Fast NECESSARY-condition gate, const-free arm (the candidate is a fixed function): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
-        return None;
+        return Err("finite_rows");
     }
     // the certified (source-constants, target-witness) pairs, for the special-point phase
     let mut certified: Vec<(Vec<f64>, Option<Vec<f64>>)> = Vec::with_capacity(y_src.len());
@@ -1327,7 +1363,7 @@ fn candidate_matches(
                         cand.tokens.join(" ")
                     );
                 }
-                return None;
+                return Err(if cand.n_const == 0 { "rows" } else { "fit" });
             }
         };
         // witness snapping before the domain gate (see `adopt_snapped_witness`)
@@ -1455,7 +1491,12 @@ fn candidate_matches(
                             crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d));
                     }
                 }
-                return None;
+                // an undecided gate refuses, counted as undecided (fail closed)
+                return Err(if verdict.is_none() {
+                    "domain_undecided"
+                } else {
+                    "domain_gate"
+                });
             }
         }
         certified.push((inst_params.clone(), fitted));
@@ -1482,7 +1523,7 @@ fn candidate_matches(
             atol,
             lane.0,
         ) {
-            return None;
+            return Err("special_points");
         }
     }
     // 2. The special source-constant battery: a pattern-bound source constant reaches
@@ -1561,11 +1602,11 @@ fn candidate_matches(
                 atol,
                 lane.0,
             ) {
-                return None;
+                return Err("special_constants");
             }
         }
     }
-    Some(certified.into_iter().next().and_then(|(_, w)| w))
+    Ok(certified.into_iter().next().and_then(|(_, w)| w))
 }
 
 /// THE MODE A PAIR IS MINTED FOR, which the mint's numeric acceptance reads:
@@ -2174,9 +2215,10 @@ impl<'s> SourceCtx<'s> {
 /// THE per-candidate certification: every check one (source, candidate) pair must pass,
 /// in one place -- the variable-subset and Const-count prefilters, reachability, the
 /// numeric match (`candidate_matches`: equivalence or fit, the domain gate, the special
-/// battery), literal resolution, the Dirac refuter, the var-free-composite emit guard and
-/// class preservation. The scan calls it per candidate; `judge_pair` calls it once.
-/// `None` is a refusal; the scan then moves to the next candidate.
+/// battery), literal resolution, the Dirac refuter, the var-free-composite emit guard, the
+/// collapse licence and evaluability. The scan calls it per candidate; `judge_pair` calls it
+/// once. `Err` is a refusal, naming the check that made it; the scan then moves to the next
+/// candidate.
 #[allow(clippy::too_many_arguments)]
 fn certify_candidate(
     sc: &SourceCtx<'_>,
@@ -2190,13 +2232,13 @@ fn certify_candidate(
     seed: u64,
     lane: Lane,
     accept_resolved: Option<AcceptFn<'_>>,
-) -> Option<Certified> {
+) -> Result<Certified, Refused> {
     let source = sc.source;
     // the rows this source is judged on (`SourceCtx::cols`)
     let cols: &[Vec<f64>] = &sc.cols;
     let n_rows = sc.n_rows;
     if cand.var_mask & !sc.mask != 0 {
-        return None; // candidate uses a variable the source lacks
+        return Err(("variable_mask", Vec::new())); // candidate uses a variable the source lacks
     }
     // The Const-count invariant at the mint (its serve twin is the translate-time
     // count gate; one invariant, both layers): a fire may never INCREASE the number
@@ -2207,10 +2249,10 @@ fn certify_candidate(
     // source, Const-bearing candidates stay IN the scan: their slots are fixed
     // reals, resolved to literal tokens below.
     if sc.n_const > 0 && cand.n_const > sc.n_const {
-        return None;
+        return Err(("constant_count", Vec::new()));
     }
     if sc.blind {
-        return None;
+        return Err(("blind", Vec::new()));
     }
     // A collapse to a bare `<constant>` owes a witness only where the source is finite (3.2):
     // it need not reach the source's infinities (`pow(0, C)` is +inf on C < 0), and the
@@ -2222,7 +2264,7 @@ fn certify_candidate(
     if let Some(sv) = sc.reach.as_ref().filter(|_| !collapse) {
         if let Some(cv) = &cand.reals_vs {
             if !crate::interval::reaches_finite_of(cv, sv) {
-                return None; // cannot reach a value the source owes: FALSE, no sampling
+                return Err(("reach", Vec::new())); // cannot reach a value the source owes: FALSE, no sampling
             }
         }
     }
@@ -2246,7 +2288,8 @@ fn certify_candidate(
         min_informative,
         seed,
         lane,
-    )?;
+    )
+    .map_err(|why| (why, Vec::new()))?;
     // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
     // source's drawn constants and the fit's chosen constants are both in scope)
     // LITERAL RESOLUTION (the Const-count invariant's constructive arm): a
@@ -2260,7 +2303,19 @@ fn certify_candidate(
     // (the fold family) lands on the mark's own state and is refused there.
     let is_resolution = sc.n_const == 0 && cand.n_const > 0;
     let target: Vec<String> = if is_resolution {
-        let resolved = sc.y.first().and_then(|inst| {
+        let refuse = |why: &'static str, resolved: Vec<String>| {
+            if let Some(t) = gate_trace() {
+                if source.join(" ").starts_with(t.as_str()) {
+                    eprintln!(
+                        "RESOLVE-FAIL {why} src=[{}] cand=[{}] witness={witness:?}",
+                        source.join(" "),
+                        cand.tokens.join(" ")
+                    );
+                }
+            }
+            Err((why, resolved))
+        };
+        let Some(resolved) = sc.y.first().and_then(|inst| {
             resolve_const_slots(
                 &cand.tokens,
                 witness.as_deref(),
@@ -2270,18 +2325,19 @@ fn certify_candidate(
                 cols,
                 &inst.1,
             )
-        });
-        let resolved = resolved.filter(|t| match accept_resolved {
-            Some(f) => f(t),
-            None => true,
-        });
+        }) else {
+            return refuse("resolution", Vec::new());
+        };
+        if accept_resolved.is_some_and(|f| !f(&resolved)) {
+            return refuse("not_structural", resolved);
+        }
         // ONE VERDICT FOR "THIS TARGET EQUALS THIS SOURCE". The fit certified the slot at
         // its fitted f64 value; the rule ships the RESOLVED literal, a const-free target.
         // It is certified as one, by the same const-free check `judge_pair` runs, so a
         // resolution can never ship a literal the pair judgment refuses (`atanh tanh 8`:
         // the fit absorbs f64's 7.99999999997, the literal `8` is f64-false and true).
-        let resolved = resolved.filter(|t| {
-            CandEntry::compile(t, ops, var_names, cols, n_rows, u64::MAX).is_ok_and(|entry| {
+        let certified = CandEntry::compile(&resolved, ops, var_names, cols, n_rows, u64::MAX)
+            .is_ok_and(|entry| {
                 candidate_matches(
                     &sc.y,
                     &sc.owed,
@@ -2303,24 +2359,12 @@ fn certify_candidate(
                     seed,
                     lane,
                 )
-                .is_some()
-            })
-        });
-        match resolved {
-            Some(t) => t,
-            None => {
-                if let Some(t) = gate_trace() {
-                    if source.join(" ").starts_with(t.as_str()) {
-                        eprintln!(
-                            "RESOLVE-FAIL src=[{}] cand=[{}] witness={witness:?}",
-                            source.join(" "),
-                            cand.tokens.join(" ")
-                        );
-                    }
-                }
-                return None;
-            }
+                .is_ok()
+            });
+        if !certified {
+            return refuse("resolved_rows", resolved);
         }
+        resolved
     } else {
         cand.tokens.clone()
     };
@@ -2330,7 +2374,7 @@ fn certify_candidate(
     // Judged on the RESOLVED spelling: a resolved bare literal is exactly the
     // single-token collapse this refuter exists for.
     if dirac_refutes_literal(source, &target, ops, lane.0) {
-        return None;
+        return Err(("dirac", target));
     }
     // THE EMITTED TARGET IS WHAT SHIPS. The library's fold filter
     // asks what the CONSTRUCTOR folds a candidate to, but the scan emits the
@@ -2352,7 +2396,7 @@ fn certify_candidate(
                 || t.starts_with('!')
         })
     {
-        return None;
+        return Err(("ground_composite", target));
     }
     // A COLLAPSE TO `<constant>` of a variable-free source answers to THE COLLAPSE LICENCE
     // (`interval::collapse_licence`, in the lane's mode): the target constant is fitted, and a
@@ -2372,14 +2416,14 @@ fn certify_candidate(
         && target[0] == "<constant>"
         && !crate::interval::collapse_licence(source, ops, lane.0)
     {
-        return None;
+        return Err(("collapse_licence", target));
     }
     // A head the high-precision evaluators do not know has no contract verdict, so the judge
     // refuses its rule (UNSUPPORTED-SHAPE): the mint refuses it too.
     if !(crate::hiprec::evaluable(source, ops) && crate::hiprec::evaluable(&target, ops)) {
-        return None;
+        return Err(("evaluable", target));
     }
-    Some(Certified {
+    Ok(Certified {
         tokens: target,
         resolved: is_resolution,
     })
@@ -2443,6 +2487,7 @@ pub fn find_rule_with_lib(
     // A source spelled with a head the high-precision evaluators do not know has no contract
     // verdict on any path, the ground arms below included: nothing is accepted for it.
     if !crate::hiprec::evaluable(source, ops) {
+        note(&[], &[], "evaluable");
         return Ok(None);
     }
     let accepted = |t: &[String]| match accept {
@@ -2610,6 +2655,7 @@ pub fn find_rule_with_lib(
         min_informative,
     )?
     else {
+        note(&[], &[], "evidence");
         return Ok(None);
     };
     // THE SEARCH BOUND. `max_mu` (the caller's mark, i.e. mu of the engine's own endpoint
@@ -2653,7 +2699,7 @@ pub fn find_rule_with_lib(
             if resolvable_only && cand.n_const == 0 {
                 continue; // its own mu is its price, and it is already above the mark
             }
-            let Some(c) = certify_candidate(
+            let c = match certify_candidate(
                 &sc,
                 cand,
                 ops,
@@ -2665,9 +2711,14 @@ pub fn find_rule_with_lib(
                 seed,
                 lane,
                 accept_resolved,
-            ) else {
-                continue;
+            ) {
+                Ok(c) => c,
+                Err((why, target)) => {
+                    note(&cand.tokens, &target, why);
+                    continue;
+                }
             };
+            note(&cand.tokens, &c.tokens, "certified");
             if c.resolved {
                 resolved_matches.push(c.tokens);
             } else {
@@ -2800,7 +2851,7 @@ pub fn judge_pair(
     };
     // compiled on the rows the source is judged on (the evidence top-up included)
     let cand = CandEntry::compile(target, ops, var_names, &sc.cols, sc.n_rows, u64::MAX)?;
-    let Some(c) = certify_candidate(
+    let Ok(c) = certify_candidate(
         &sc,
         &cand,
         ops,

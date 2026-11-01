@@ -217,6 +217,25 @@ class Engine:
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
     ) -> list[str] | None: ...
+    def find_rule_lib_traced(
+        self,
+        source: list[str],
+        library: CandidateLibrary,
+        max_target: int | None = ...,
+        challenges: int = ...,
+        retries: int = ...,
+        seed: int = ...,
+        rtol: float = ...,
+        atol: float = ...,
+        min_informative: int | None = ...,
+        *,
+        rule_mode: str,
+        confirm_x: list[float] | None = ...,
+        confirm_rows: int = ...,
+        confirm_min_informative: int | None = ...,
+        confirm_seed: int = ...,
+        exclusions: list[list[str]] = ...,
+    ) -> tuple[list[str] | None, list[tuple[list[str], list[str], str]]]: ...
     def judge_hint(
         self,
         source: list[str],

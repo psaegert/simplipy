@@ -406,8 +406,13 @@ impl<'a> Acceptor<'a> {
         let spec = self.spec;
         // The exact short-circuit arms answer to the licences; numeric matches to the
         // licences and then confirmation (see `worker::find_rule_with_lib`).
-        let license = |t: &[String]| self.license(t).is_ok();
-        let confirm = |t: &[String]| self.confirm(t).is_ok();
+        // each answer is a step of the scan's trace (`worker::traced`), where one is open
+        let noted = |t: &[String], answer: Result<(), MineRefusal>, ok: &'static str| {
+            crate::worker::note(&[], t, answer.map_or_else(MineRefusal::name, |()| ok));
+            answer.is_ok()
+        };
+        let license = |t: &[String]| noted(t, self.license(t), "licensed");
+        let confirm = |t: &[String]| noted(t, self.confirm(t), "confirmed");
         let accept_resolved = |t: &[String]| self.accept_resolved(t).is_ok();
         // The token bound stays at SOURCE length: canon can respell a source shorter
         // without reducing it (`/ 1 exp x0` parses to `inv exp x0`), and tightening by

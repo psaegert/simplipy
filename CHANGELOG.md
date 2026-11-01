@@ -1689,6 +1689,26 @@ model predictions.
   whose measure is undecided in the reals, is a `VIOLATION` in f64 (0/0 against 1 at every
   double), where it was `UNSCORED`. Holding an engine's answer to F8, a rewrite f64 refuses
   whose exactness in the reals the judge cannot decide stays `UNSCORED`.
+- **The differential test runs the specification's workload.** `tests/test_differential_workload.py`
+  holds every step to the judge on generated inputs, in f64 and permissive: every (source,
+  candidate) pair the length-4 scan considers for 500 sources, with the verdict that decided it;
+  the overlap completions proposed on a shipped rule file; every respelling sort promotion
+  tries; a probe table of each operator at its poles, +-0, +-inf, NaN, the overflow and
+  underflow thresholds and the subnormals; and the specification's examples of values.
+  - The scan records its steps: `find_rule_lib_traced` returns, beside the pick, every candidate
+    the scan considered with the check that rejected it (the variable mask, the constant count,
+    reach, the rows, the fit, the domain gate, which names an undecided measure apart, the
+    special points and constants, literal resolution, the Dirac refuter, the emit guard, the
+    collapse licence, evaluability) or the acceptance's answer on the target it emits.
+  - The load names a policy before f64's pole entry: a pair whose right side holds a slot its
+    left side does not bind reads as ill-formed in f64 too, where the pole entry, a pre-filter
+    of truth, hid the policy from the licence.
+  - The probe table found defects outside the miner, each a test marked with it: the engine's
+    f64 fold of a numeric expression is not float64's value in written order (`0.1 + 0.2` folds
+    to 0.3, `0 * (-1)` to +0); and the interval layer's f64 reading has one zero, reads no double
+    as an integer exponent of a negative base, reads `besselj` at an infinite order as 0, and
+    encloses an overflow as a finite part bounded by +inf on both sides, while its real
+    enclosure of a sum past the largest double has a nan bound.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with
