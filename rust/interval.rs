@@ -3391,6 +3391,20 @@ pub static NODE_BUDGET_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic:
 /// Read via `interval_unanalyzable_misses()`.
 pub static UNANALYZABLE_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The value set of `e` over one cell, in the layer's reading: in float64's, each `tanh`, `atan`
+/// and `erf` whose argument lies past its threshold over the whole cell is its exact limit there
+/// (`f64_tail_reading`), so a saturation plateau reads as the cell of positive measure it is
+/// (`(tanh(x) - 1)/(tanh(x) - 1)` has no value past 19.06), not as the outward-rounded enclosure
+/// that straddles the limit.
+fn value_set_cell(e: &[String], ops: &Operators, doms: &[Vs], params: &[f64]) -> Option<Vs> {
+    if !real_reading() {
+        if let Some((t, p)) = f64_tail_reading(e, ops, doms, params) {
+            return value_set_p(&t, ops, doms, &p);
+        }
+    }
+    value_set_p(e, ops, doms, params)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rec_ext(
     src: &[String],
@@ -3417,7 +3431,7 @@ fn rec_ext(
         return;
     } // cannot beat the incumbent: prune
     let doms = doms_from_box(bx, used, width, (-r, r));
-    let sv = match value_set_p(src, ops, &doms, sp) {
+    let sv = match value_set_cell(src, ops, &doms, sp) {
         Some(v) => v,
         None => {
             // UNANALYZABLE source box: `value_set_p` failed closed (e.g. rootn with an
@@ -3430,7 +3444,7 @@ fn rec_ext(
     if !sv.nan {
         return;
     } // no nan anywhere here: nothing to prove
-    let tv = match value_set_p(tgt, ops, &doms, tp) {
+    let tv = match value_set_cell(tgt, ops, &doms, tp) {
         Some(v) => v,
         None => {
             // UNANALYZABLE target box: a witness needs the target PROVEN defined, and

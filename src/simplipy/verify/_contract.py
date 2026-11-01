@@ -18,9 +18,13 @@ The criterion, per mode:
     its measure: an infinity is a value like any other, and an enclosing `atan` or `1/.` turns
     it into a finite one.
   - (b) no invented function: the bindings where `L` is undefined and `R` has a value form a
-    set of measure zero. Measure is decided by certified cells of the interval layer, read in
-    the table's values (`_core.table_extension_width`), never by a fraction of a grid. A `_`
-    slot bound to +-inf or NaN is a point of its sort's domain: nothing is excused there.
+    set of measure zero, one that lies on lower-dimensional cells of the interval layer's
+    partition of the real input space. A certified cell of positive measure, each cell read in
+    the mode's values (`_core.table_extension_width`; in f64 a saturation plateau is such a
+    cell), refuses the rule, never a fraction of a grid. In f64 an extension at a double the
+    judge reads is a null event only where it is isolated along a `?` slot (its neighbouring
+    doubles are no extension). A `_` slot bound to +-inf or NaN is a point of its sort's
+    domain: nothing is excused there.
   - permissive: clause (a) alone, over the real-valued bindings (every slot any real number).
   - constants are independent symbols; at constants where `L` is not finite nothing is owed.
   - a ground rule has one point, and no tolerance: if `L` is undefined, `R` must be too.
@@ -2325,12 +2329,16 @@ def _renamed(tokens, rename):
 MAX_COINCIDENT_SLOTS = 4
 
 
-def _extension_width(lhs, lp, rhs, rp, names):
+def _extension_width(lhs, lp, rhs, rp, names, f64=False):
     """Clause (b)'s measure: the volume of the largest certified cell where the left side is
-    undefined and the right side has a value, in the table's values (`None`: undecided)."""
+    undefined and the right side has a value (`None`: undecided). The cells partition the real
+    input space; each is read in the table's real values, or with `f64` in float64's, where a
+    saturation plateau (`tanh(x)` is 1.0 past 19.06) is a cell like any other: full-dimensional,
+    never of measure zero."""
     return _table.table_extension_width(_spelled(lhs, names), [float(c) for c in lp],
                                         _spelled(rhs, names), [float(c) for c in rp],
-                                        dict(ARITY))
+                                        dict(ARITY), f64)
+
 
 
 def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
@@ -2495,9 +2503,35 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     dep_bad, dep_div, dep_seen, dep_out_of_range = [], [], [False], [0]
     dep_kinds = set()
     resolved_pts = attempted_pts = 0
+    q_names = [n for n in names if nvars[n] == '?']
+
+    def isolated_f64(env):
+        """Does float64's extension at `env` (the left side NaN, the right side a value) lie on a
+        lower-dimensional cell, a null set (ruling 15)? It does where, along some `?` slot, the
+        neighbouring doubles on both sides are no extension: `x/x -> 1` at 0, where
+        5e-324/5e-324 is 1. A neighbour where an operation overflowed or underflowed is no
+        float64 extension: there the true value stands (the range standard; `x^5/x^5` at
+        5e-324). Only a `?` slot guards a null set; a saturation plateau, a whole cell of
+        doubles, is no null set."""
+        for n in q_names:
+            x = float(env[n])
+            if not math.isfinite(x):
+                continue
+            for y in (math.nextafter(x, math.inf), math.nextafter(x, -math.inf)):
+                e = dict(env)
+                e[n] = F(y)
+                in_range = [True]
+                with np.errstate(all='ignore'):
+                    dl, dr = d_eval(tl, e, in_range), d_eval(tr, e, in_range)
+                if in_range[0] and np.isnan(dl) and not np.isnan(dr):
+                    break
+            else:
+                return True
+        return False
 
     def deployed(tl_env, v, point, all_real, snapped, out):
-        """The f64 lane at one point: append `(kind, point)` to `out['bad']` / `out['div']`."""
+        """The f64 lane at one point: append `(kind, point)` to `out['bad']` / `out['div']`; an
+        extension on a lower-dimensional cell is clause (b)'s, and is counted apart."""
         if not deployed_check or snapped:
             return
         try:
@@ -2514,8 +2548,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             _dcl, _dcr = cls_np(_dl), cls_np(_dr)
             dv = compare_deployed_realised(_dcl, _dcr)
             if dv != 'eq':
-                out['bad'].append((dv, point))
                 out['kinds'].add(_f64_kind(dv, _dl, _dr))
+                if dv == 'EXT' and isolated_f64(tl_env):
+                    out['null'] += 1
+                    return
+                out['bad'].append((dv, point))
             elif _dl == 0 and _dr == 0 and math.copysign(1.0, _dl) != math.copysign(1.0, _dr):
                 out['kinds'].add('ZERO-SIGN')
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
@@ -2530,7 +2567,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
-                'kinds': set()}
+                'kinds': set(), 'null': 0}
 
     def judge_point(acc, v, point, kind, real_valued, where):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
@@ -2561,6 +2598,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
 
     vacuous, owed_keys = [], set()
     ext_where = []
+    f64_owed, f64_null_keys = set(), set()
 
     def merge(acc, key):
         nonlocal resolved_pts, attempted_pts
@@ -2573,6 +2611,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             dep_bad.extend(acc['bad'])
             dep_div.extend(acc['div'])
             dep_kinds.update(acc['kinds'])
+            f64_owed.add(key)
+            if acc['null']:
+                f64_null_keys.add(key)
         dep_seen[0] = dep_seen[0] or acc['seen']
         dep_out_of_range[0] += acc['oor']
         if not owed(acc):
@@ -2902,6 +2943,24 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 # on, reads the extension at its points. The check cannot decide: refused.
                 undecided.append(('cells-vs-grid',) + tuple(key))
 
+    # CLAUSE (b) IN f64 (ruling 15): the same cells, each read in float64's values, where a
+    # saturation plateau is a cell like any other (`0*atanh(tanh(x))` has no value past 19.06):
+    # at the generic constants and wherever float64 extended on a null set. Undecided refuses
+    # f64, which owes (b).
+    f64_width, f64_undecided = 0.0, False
+    if not ground and deployed_check:
+        checks = [grid_key] if grid_key in f64_owed else []
+        checks += sorted(k for k in f64_null_keys if k != grid_key)
+        for key in checks:
+            if has_cr and key not in witness_f64:
+                continue
+            rp = [witness_f64[key][n] for n in rnames] if has_cr else []
+            w = _extension_width(lhs, key, rhs, rp, spelling, f64=True)
+            if w is None:
+                f64_undecided = True
+            else:
+                f64_width = max(f64_width, w)
+
     # THE GUARD (the owner's ruling): the measure-zero allowance of clause (b) holds only where
     # a slot guards it. An extension that depends on a slot other than `?` -- it disappears
     # when that slot moves to a generic value -- is an extension on positive measure in the
@@ -2963,14 +3022,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 if sub_r.get('realised') is False and correlated_f64 is None:
                     correlated_f64 = [b for b in blocks if len(b) > 1]
 
-    # ONE f64 STANDARD: the constructors fill a NaN hole on a null set (`x1/x1` is `1` in
-    # f64), so a TOLERATED rule whose every deployed disagreement is such a fill -- the left
-    # side NaN where the right side has a value (`EXT`), at a point the contract itself
-    # tolerated as a null event -- is realised in f64 as well.
-    _realised = (not dep_bad) if dep_seen[0] else None
+    # f64 HOLDS by its own values, whatever the reals' verdict: no disagreement at a point read
+    # (an extension on a lower-dimensional cell is clause (b)'s, `isolated_f64`, as the
+    # constructors fill `x1/x1` with 1), and no cell of positive measure where float64 extends.
+    _realised = (not dep_bad and not f64_undecided and f64_width == 0) if dep_seen[0] else None
     if correlated_f64 is not None:
         _realised = False
-    fills_nan = bool(dep_bad) and all(k == 'EXT' and p in ext_events for k, p in dep_bad)
     # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
@@ -3037,7 +3094,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     permissive = covered and not perm_left
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised': _realised, 'out_of_range': dep_out_of_range[0],
-            'permissive': permissive, 'resolved_points': resolved_pts}
+            'permissive': permissive, 'resolved_points': resolved_pts,
+            'f64_measure': None if f64_undecided else f64_width}
     if perm_left:
         base['permissive_points'] = [p for _, p, _ in perm_left[:3]]
     if correlated_f64 is not None:
@@ -3088,7 +3146,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return verdict('ENGINE-MISALIGN', points=[p for _, p in dep_div[:3]],
                        kinds=sorted({k for k, _ in dep_div}))
     if ext_events:
-        base['realised'] = True if fills_nan and correlated_f64 is None else _realised
         return verdict('TOLERATED', classes=['EXT'], events=[('EXT', p) for p in ext_events[:3]])
     if vacuous_rule:
         return verdict('CERTIFIED', vacuous=True)

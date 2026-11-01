@@ -23,8 +23,11 @@ A rule holds in the reals when, wherever its left side has a value, an infinity 
 right side has the same value, and its right side gives a value where the left side has none
 only on a set of measure zero, decided by certified cells (`x0/x0 -> 1` holds; `exp(log(x0)) ->
 x0` does not, and neither does `abs(log(cos(x0))) -> log(1/cos(x0))`, whose left side is `+inf`
-at pi/2, where the right side has no value). A rule without variables has one point and no tolerance; a `_` slot is
-checked at `+inf`, `-inf` and NaN; each `<constant>` is its own symbol, and nothing is
+at pi/2, where the right side has no value). In `f64` the same cells are read in float64's
+values, where a saturation plateau is a cell like any other (`tanh(x)` is 1.0 past 19.06), and
+an extension at a double counts as measure zero only where its neighbouring doubles are no
+extension (`x0/x0 -> 1` at 0). A rule without variables has one point and no tolerance; a `_`
+slot is checked at `+inf`, `-inf` and NaN; each `<constant>` is its own symbol, and nothing is
 owed at a constant where the left side has no finite value.
 
 ```python

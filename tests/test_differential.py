@@ -157,6 +157,16 @@ SPEC_EXAMPLES = [
     case('ceil inv cosh x0', '1', REALS, True),
     case('ceil inv cosh x0', '1', 'f64', True),
     case('ceil inv cosh x0', '1', 'permissive', True),
+    # measure for f64 on the real cells: a set of measure zero lies on lower-dimensional cells.
+    # No value on (-0.001, 0.001), narrower than any cell, read at doubles whose neighbours have
+    # no value either: no null set in f64. A saturation plateau is a full-dimensional cell:
+    # float64's 0/0 past 19.06 is no null set. Float64's 0/0 at the one double x = 0.1 is an
+    # extension on a point: f64 holds, by its own values
+    case('+ x0 * 0 rootn - pow x0 2 1e-6 2', 'x0', 'f64', False),
+    case('+ x0 * 0 rootn - pow x0 2 1e-6 2', 'x0', 'permissive', True),
+    case('/ - tanh x0 1 - tanh x0 1', '1', REALS, True),
+    case('/ - tanh x0 1 - tanh x0 1', '1', 'f64', False),
+    case('/ - x0 0.1 - x0 0.1', '1', 'f64', True),
     # the 5% grid bar: an extension on (-0.1, 0.1) is positive measure
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', REALS, False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),

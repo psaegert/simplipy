@@ -1368,6 +1368,14 @@ model predictions.
   `(x0 - x1)/(x1 - x0) -> -1` is refused in `real` and `f64` (with x0 = x1 the left side has no
   value anywhere). A measure the cells cannot decide refuses `real` and `f64`, which both owe
   it, and not `permissive`, which does not.
+- **`f64` decides its measure on its own values.** A set of bindings has measure zero when it
+  lies on lower-dimensional cells of the interval layer's partition of the real input space,
+  and `f64` reads those cells in float64's values: a saturation plateau is a cell like any
+  other, never of measure zero, and a float64 extension at a double is excused only where its
+  neighbouring doubles are no extension (`x0/x0 -> 1` at 0). `x0 + 0*sqrt(x0^2 - 1e-6) -> x0`,
+  with no value on (-0.001, 0.001), narrower than any cell, is refused in `f64`, and
+  `(x0 - 0.1)/(x0 - 0.1) -> 1`, whose float64 left side has no value at the one double 0.1, holds
+  there.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's

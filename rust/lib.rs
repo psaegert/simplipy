@@ -2026,10 +2026,14 @@ fn policy_duplicates(lhs: Vec<String>, rhs: Vec<String>) -> bool {
 
 /// THE JUDGE'S MEASURE (clause (b) of the criterion): the volume of the largest certified cell
 /// on which `source` (its `<constant>`s bound to `src_params`) is undefined and `target` (bound
-/// to `tgt_params`) has a value, read in THE TABLE's real values at every point of a cell
-/// (`interval::with_real_reading`). `0.0`: no positive-measure extension; `None`: undecided
-/// (the horizon or the node budget ran out), which the judge reads as a refusal.
+/// to `tgt_params`) has a value. The cells partition the real input space, and every cell is
+/// read in the mode's values: THE TABLE's real values at every point of a cell
+/// (`interval::with_real_reading`), or with `f64` float64's, saturations included, so that
+/// `tanh(x) = 1.0` past 19.06 is a cell of positive measure. `0.0`: no positive-measure
+/// extension; `None`: undecided (the horizon or the node budget ran out), which the judge reads
+/// as a refusal.
 #[pyfunction]
+#[pyo3(signature = (source, src_params, target, tgt_params, arity, f64 = false))]
 fn table_extension_width(
     py: Python<'_>,
     source: Vec<String>,
@@ -2037,12 +2041,17 @@ fn table_extension_width(
     target: Vec<String>,
     tgt_params: Vec<f64>,
     arity: std::collections::BTreeMap<String, u8>,
+    f64: bool,
 ) -> Option<f64> {
     let ops = arity_table(arity);
+    let measure =
+        || crate::interval::domain_extension_p(&source, &src_params, &target, &tgt_params, &ops);
     py.detach(|| {
-        crate::interval::with_real_reading(|| {
-            crate::interval::domain_extension_p(&source, &src_params, &target, &tgt_params, &ops)
-        })
+        if f64 {
+            crate::interval::with_reading(false, measure)
+        } else {
+            crate::interval::with_real_reading(measure)
+        }
     })
 }
 
