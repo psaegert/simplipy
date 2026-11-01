@@ -94,11 +94,19 @@ def test_the_constant_witness_is_polished_where_it_is_determined():
     lane: these identities were convicted."""
     j = _contract.judge_rule
     for lhs, rhs in (('max x0 acos <constant>', 'max <constant> x0'),
-                     ('max x0 log <constant>', 'max <constant> x0'),
                      ('atan2 x0 acosh <constant>', 'atan2 x0 <constant>'),
                      ('+ x0 log <constant>', '+ <constant> x0')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] == 'CERTIFIED', (lhs, rhs, r)
+
+
+def test_a_constant_whose_left_side_has_no_finite_witness_refuses_the_rule():
+    """Constants range over the finite reals: at C = 0 the left side `max(x0, log C)` is x0
+    (log 0 is -inf), finite everywhere, and no finite D makes `max(D, x0)` equal to x0, so the
+    rule is refused in both modes."""
+    r = _contract.judge_rule('max x0 log <constant>'.split(), 'max <constant> x0'.split())
+    assert r['verdict'] == 'NO-WITNESS' and '(0.0,)' in r['detail'], r
+    assert r['basis'] == {'f64': 'refused', 'permissive': 'refused'}, r
 
 
 def test_the_fit_keeps_the_witness_it_found():
