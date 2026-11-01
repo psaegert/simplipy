@@ -1319,6 +1319,17 @@ model predictions.
   e^1000), and accepts a root only where it reproduces the left side to the working precision
   at every point read, ten times farther out included. An exact route's proof stands where the
   search reaches no answer (`pow(exp(9), C) -> C`, the constant's own value).
+- **The interval layer keeps the value at a zero divisor.** A value set holds every value its
+  cell reaches: a reciprocal (`inv`, `/`, a negative power) of a hull that reaches 0 now holds,
+  beside its finite part, the value there (none in the reals, +inf in float64), and an infinity
+  times a hull that reaches 0 holds NaN. Whether that value is taken on a null set is decided in
+  the input space, by the zero-set certificate of the divisor, its constants bound: a divisor
+  whose zero set is null (`x0`, `x1*x2`, `x3 - exp(x10)`) holds it on a null set only, which the
+  value set leaves out, and one whose zero is an interval of the input keeps it (`floor(x0)` is
+  0 on all of [0, 1)). `tanh(floor(x0)/floor(x0))`, 0/0 on all of [0, 1), is no longer certified
+  finite almost everywhere, and `0*tanh(floor(x0)/floor(x0))` stays as it is in `f64` (it became
+  0, where float64 gives NaN). `0*tanh(1/floor(x0))` is still 0 in `f64`: float64's 1/+0 is
+  +inf, and tanh of it 1.
 - **The rule judge reads a jump at its preimage.** `ceil(sinh(x0) + 1/2) - floor(sinh(x0) +
   1/2) -> 1` is false in `real` only where sinh(x0) + 1/2 is an integer, at transcendental
   points no double is and no reading near one decides, and the judge passed it. Along each

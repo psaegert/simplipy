@@ -707,14 +707,125 @@ fn u_abs(v: &Vs) -> Vs {
     r
 }
 
+/// Does `v`'s finite part reach 0: a hull across it, or closed at it?
+fn reaches_zero(v: &Vs) -> bool {
+    v.has_fin
+        && ((v.lo < 0.0 && 0.0 < v.hi)
+            || (v.lo == 0.0 && !v.lo_open)
+            || (v.hi == 0.0 && !v.hi_open))
+}
+
+/// THE VALUE AT A ZERO DIVISOR, kept beside the hull of a reciprocal (`inv`, `/`, a negative
+/// power): no value in the reals (a division by zero, the table's V8) and +inf in float64 (the
+/// one zero). A value set holds every value its cell reaches on a set of positive measure. The
+/// hull cannot tell whether the divisor's zero set is a null set (`1/x` at 0) or an interval of
+/// the input (`1/floor(x)` on [0, 1)); the input space can (`zero_set_certified`): where the
+/// divisor's zero set is certified null, the pole's value is held on a null set only and is left
+/// out, and everywhere else it is kept.
+fn mark_zero_divisor(r: &mut Vs) {
+    if real_reading() {
+        r.nan = true;
+    } else {
+        r.pinf = true;
+    }
+}
+
+/// Asks, lazily, whether an operand's ZERO SET is a null set of the input (`zero_set_certified`):
+/// the reciprocal arms ask only where the operand's hull reaches 0.
+type ZeroNull<'a> = &'a dyn Fn() -> bool;
+
+/// An operand of a binary node, as `apply_binary` asks about its zero set: the first, the second,
+/// or the second's reciprocal (whose zero set is the second's infinite set).
+#[derive(Clone, Copy)]
+enum Operand {
+    First,
+    Second,
+    SecondInverse,
+}
+
+thread_local! {
+    /// `zero_set_certified`'s verdicts on this thread, by spelling and reading (bounded).
+    static ZERO_CERTS: std::cell::RefCell<rustc_hash::FxHashMap<(Vec<String>, bool), bool>> =
+        std::cell::RefCell::new(Default::default());
+}
+
+/// IS AN OPERAND'S ZERO SET A NULL SET OF THE INPUT? `zero_set_null` in the layer's reading, of
+/// the operand's tokens (`span`) with each `<constant>` spelled as the value the cell binds it to
+/// (`params[consts]`; an unbound one fails closed), or, with `inverse`, of its reciprocal (whose
+/// zero set is the operand's infinite set). This is where the measure of a pole's preimage is
+/// decided: in the input space, where `floor` turns the point 0 into the interval [0, 1). Memoized
+/// per thread; a question met again while it is being decided fails closed.
+fn zero_set_certified(
+    span: &[String],
+    params: &[f64],
+    consts: std::ops::Range<usize>,
+    ops: &Operators,
+    inverse: bool,
+) -> bool {
+    let mut key: Vec<String> = Vec::with_capacity(span.len() + 1);
+    if inverse {
+        key.push("inv".into());
+    }
+    let mut n = consts.start;
+    for tok in span {
+        if tok == "<constant>" {
+            match params.get(n).filter(|c| n < consts.end && c.is_finite()) {
+                Some(c) => key.push(format!("{c:?}")),
+                None => key.push(tok.clone()),
+            }
+            n += 1;
+        } else {
+            key.push(tok.clone());
+        }
+    }
+    let memo = (key, real_reading());
+    if let Some(hit) = ZERO_CERTS.with(|m| m.borrow().get(&memo).copied()) {
+        return hit;
+    }
+    ZERO_CERTS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 1 << 16 {
+            m.clear();
+        }
+        m.insert(memo.clone(), false);
+    });
+    let verdict = {
+        let _scope = ZsnScope::open();
+        zero_set_null_in_reading(&memo.0, ops, !memo.1)
+    };
+    ZERO_CERTS.with(|m| m.borrow_mut().insert(memo, verdict));
+    verdict
+}
+
+/// The zero-set certificate of a node's operand (`zero_set_certified`): `spans` holds each
+/// operand's token range and the range of `<constant>` bindings it consumed.
+fn operand_zero_null(
+    t: &[String],
+    params: &[f64],
+    spans: &[(std::ops::Range<usize>, std::ops::Range<usize>)],
+    ops: &Operators,
+    which: Operand,
+) -> bool {
+    let (n, inverse) = match which {
+        Operand::First => (0, false),
+        Operand::Second => (1, false),
+        Operand::SecondInverse => (1, true),
+    };
+    spans
+        .get(n)
+        .is_some_and(|(s, c)| zero_set_certified(&t[s.clone()], params, c.clone(), ops, inverse))
+}
+
 /// 1/x is EXACT iff |x| is a power of two (finite, zero mantissa): those reciprocals --
 /// 1/1, 1/2, 1/(-4) -- never widen, keeping `inv(cosh C) <= 1` provable.
 fn recip_exact(x: f64) -> bool {
     x.is_finite() && x != 0.0 && (x.to_bits() & ((1u64 << 52) - 1)) == 0
 }
 
-/// 1/x: the POLE at 0 is a measure-ZERO point unless the input is the constant 0.
-fn u_inv(v: &Vs) -> Vs {
+/// 1/x: a hull across the pole is unbounded, and holds the pole's own value
+/// (`mark_zero_divisor`): +inf for the constant 0, and beside the finite part of a hull that
+/// reaches 0 unless `zero_null` certifies the operand's zero set null.
+fn u_inv(v: &Vs, zero_null: ZeroNull) -> Vs {
     let mut r = Vs::empty();
     r.nan = v.nan;
     if v.pinf || v.ninf {
@@ -751,7 +862,7 @@ fn u_inv(v: &Vs) -> Vs {
                 }
             }
         } else if v.lo < 0.0 && 0.0 < v.hi {
-            // crosses the pole -> unbounded, but every value finite
+            // crosses the pole -> unbounded, the pole itself marked below
             r.has_fin = true;
             r.lo = -INF;
             r.hi = INF;
@@ -801,6 +912,9 @@ fn u_inv(v: &Vs) -> Vs {
         if r.has_fin {
             // fin here derives from v's fin UNLESS the inf-image point 0 also contributed
             r.fin_null = v.fin_null && !(v.pinf || v.ninf);
+        }
+        if !v.fin_is_point() && reaches_zero(v) && !zero_null() {
+            mark_zero_divisor(&mut r);
         }
     }
     r
@@ -1751,7 +1865,8 @@ fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
     })
 }
 
-fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
+/// One unary node; `zero_null` certifies the operand's zero set (`ZeroNull`).
+fn apply_unary(op: &str, v: &Vs, zero_null: ZeroNull) -> Option<Vs> {
     if let Some(r) = table_at_points(op, &[v]) {
         return Some(r);
     }
@@ -1762,7 +1877,7 @@ fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
         "harmonic" => return u_harmonic(v),
         "neg" => u_neg(v),
         "abs" => u_abs(v),
-        "inv" => u_inv(v),
+        "inv" => u_inv(v, zero_null),
         "exp" => u_exp(v),
         "log" => u_log(v),
         "sin" => u_trig(v, true),
@@ -1891,7 +2006,9 @@ fn b_add(a: &Vs, b: &Vs) -> Vs {
     r
 }
 
-fn b_mul(a: &Vs, b: &Vs) -> Vs {
+/// `a * b`; `a_zero_null` / `b_zero_null` may certify a factor's zero set null in the input
+/// (`zero_set_certified`): an infinity against that factor's zero is NaN on a null set only.
+fn b_mul(a: &Vs, b: &Vs, a_zero_null: ZeroNull, b_zero_null: ZeroNull) -> Vs {
     let mut r = Vs::empty();
     r.nan = a.nan || b.nan;
     // Extreme fuzz row 433087: these three infinite blocks used to
@@ -1912,9 +2029,12 @@ fn b_mul(a: &Vs, b: &Vs) -> Vs {
             r.ninf |= a.pinf;
             r.pinf |= a.ninf;
         }
-        if b.is_const() && b.lo == 0.0 {
+        // inf*0 = nan wherever the other factor's hull reaches 0: identically for the constant
+        // 0, and possibly inside a hull (`0/0` is `0 * inv(0)`) unless that factor's zero set
+        // is certified null
+        if reaches_zero(b) && ((b.fin_is_point() && b.lo == 0.0) || !b_zero_null()) {
             r.nan = true;
-        } // inf*0 = nan identically
+        }
     }
     if (b.pinf || b.ninf) && a.has_fin {
         if a.hi > 0.0 {
@@ -1925,7 +2045,7 @@ fn b_mul(a: &Vs, b: &Vs) -> Vs {
             r.ninf |= b.pinf;
             r.pinf |= b.ninf;
         }
-        if a.is_const() && a.lo == 0.0 {
+        if reaches_zero(a) && ((a.fin_is_point() && a.lo == 0.0) || !a_zero_null()) {
             r.nan = true;
         }
     }
@@ -1990,7 +2110,9 @@ fn b_mul(a: &Vs, b: &Vs) -> Vs {
     r
 }
 
-fn b_pow(a: &Vs, b: &Vs) -> Vs {
+/// `pow(a, b)`; `a_zero_null` may certify the base's zero set null (a negative power's pole,
+/// `mark_zero_divisor`).
+fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
     let mut r = Vs::empty();
     r.nan = a.nan || b.nan;
     let ar = abs_range(a);
@@ -2315,8 +2437,8 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     // doc: this branch alone carries open-edge poles, fin_null, and negative exponents.)
     // The value hull of the endpoint powers is exact on monotone pieces, plus the parity
     // minimum 0 (k > 0, even) resp. the pole reach (k < 0, base interval containing 0)
-    // as UNBOUNDED OPEN EDGES -- the module convention for poles (`inv` over [-64,64]
-    // reads has_fin, pinf=false, hi=+inf). Over-approximation (the hull) is the sound
+    // as UNBOUNDED OPEN EDGES, the pole's own value beside them where the base reaches 0
+    // (`mark_zero_divisor`, as `inv` over [-64,64]). Over-approximation (the hull) is the sound
     // direction for every consumer: witnesses and containment proofs fail conservatively.
     // Attained base infinities map through sign/parity; NaN propagates; `x^0` and the
     // const-const exact branch returned above.
@@ -2382,6 +2504,12 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
                 cands.push((INF, true)); // pole reach: open edge by convention
                 if k % 2 != 0 && a.lo < 0.0 {
                     cands.push((-INF, true));
+                }
+                // ...and the pole's own value where the base reaches 0: a negative power of
+                // zero is a division by zero (held on a null set where the base's zero set is
+                // certified null)
+                if reaches_zero(a) && (a.fin_is_point() || !a_zero_null()) {
+                    mark_zero_divisor(&mut z);
                 }
             }
         }
@@ -2498,7 +2626,8 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
     r
 }
 
-fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
+/// One binary node; `zero_null` certifies an operand's zero set (`Operand`, `ZeroNull`).
+fn apply_binary(op: &str, a: &Vs, b: &Vs, zero_null: &dyn Fn(Operand) -> bool) -> Option<Vs> {
     if let Some(r) = table_at_points(op, &[a, b]) {
         return Some(r);
     }
@@ -2510,9 +2639,16 @@ fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
         "besselj" => return b_besselj(a, b),
         "+" => b_add(a, b),
         "-" => b_add(a, &u_neg(b)),
-        "*" => b_mul(a, b),
-        "/" => b_mul(a, &u_inv(b)),
-        "pow" => b_pow(a, b),
+        "*" => b_mul(a, b, &|| zero_null(Operand::First), &|| {
+            zero_null(Operand::Second)
+        }),
+        "/" => b_mul(
+            a,
+            &u_inv(b, &|| zero_null(Operand::Second)),
+            &|| zero_null(Operand::First),
+            &|| zero_null(Operand::SecondInverse),
+        ),
+        "pow" => b_pow(a, b, &|| zero_null(Operand::First)),
         // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index:
         // odd = the signed root, even = the principal root, 1 = identity, negative =
         // reciprocal. Sound only when the index is a KNOWN nonzero-integer point (a
@@ -2546,7 +2682,8 @@ fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
                 u_even_root(a, k)
             };
             if b.lo < 0.0 {
-                u_inv(&root)
+                // the root's zero set is the radicand's
+                u_inv(&root, &|| zero_null(Operand::First))
             } else {
                 root
             }
@@ -3079,14 +3216,20 @@ pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f6
         }
         if ops.is_operator(tok) {
             let ar = ops.arity_of(tok)?;
+            let k0 = *k;
             if ar == 1 {
                 let (v, j) = go(t, i + 1, ops, doms, p, k)?;
-                return Some((apply_unary(tok, &v)?, j));
+                let spans = [(i + 1..j, k0..*k)];
+                let zn = || operand_zero_null(t, p, &spans, ops, Operand::First);
+                return Some((apply_unary(tok, &v, &zn)?, j));
             }
             if ar == 2 {
                 let (a, j) = go(t, i + 1, ops, doms, p, k)?;
+                let ka = *k;
                 let (b, m) = go(t, j, ops, doms, p, k)?;
-                return Some((apply_binary(tok, &a, &b)?, m));
+                let spans = [(i + 1..j, k0..ka), (j..m, ka..*k)];
+                let zn = |which: Operand| operand_zero_null(t, p, &spans, ops, which);
+                return Some((apply_binary(tok, &a, &b, &zn)?, m));
             }
         }
         None
@@ -3247,10 +3390,13 @@ fn value_set_table_points(
         }
         let ar = ops.arity_of(tok)?;
         let mut kids = Vec::with_capacity(ar as usize);
+        let mut spans = Vec::with_capacity(ar as usize);
         let mut j = i + 1;
         for _ in 0..ar {
+            let k0 = *k;
             let (v, pt, next) = go(t, j, ops, doms, p, k, ctx)?;
             kids.push((v, pt));
+            spans.push((j..next, k0..*k));
             j = next;
         }
         if kids.iter().all(|(_, pt)| pt.is_some()) {
@@ -3262,9 +3408,10 @@ fn value_set_table_points(
                 }
             }
         }
+        let zn = |which: Operand| operand_zero_null(t, p, &spans, ops, which);
         let v = match (ar, kids.as_slice()) {
-            (1, [(a, _)]) => apply_unary(tok, a)?,
-            (2, [(a, _), (b, _)]) => apply_binary(tok, a, b)?,
+            (1, [(a, _)]) => apply_unary(tok, a, &|| zn(Operand::First))?,
+            (2, [(a, _), (b, _)]) => apply_binary(tok, a, b, &zn)?,
             _ => return None,
         };
         // A step head that is one integer across the cell is that integer exactly -- unless its
@@ -3784,9 +3931,9 @@ fn finite_ae_subdivision(tokens: &[String], ops: &Operators) -> bool {
         };
         if v.has_fin && !v.nan && !v.pinf && !v.ninf && v.lo.is_finite() && v.hi.is_finite() {
             // Clean: finite AND BOUNDED across the whole cell. Boundedness is load-bearing:
-            // the domain encodes a pole's reach in the (lo, hi) bounds, not the attained-inf
-            // flags (inv over [-64,64] reads has_fin=true, pinf=false, hi=+inf), and an
-            // UNBOUNDED fin part may contain the pole this certificate exists to exclude.
+            // an UNBOUNDED fin part may hold a pole's reach this certificate exists to exclude
+            // (the pole's own value is flagged beside the hull, `mark_zero_divisor`; the
+            // reach toward it is in the bounds).
             // (Consequence, stated: exp(exp(x)) does not certify -- its interval hi overflows
             // f64 -- so the certificate stays inside f64-representable boundedness.)
             return true;
@@ -8474,6 +8621,11 @@ mod tests {
 mod aligned_pow_interval_tests {
     use super::*;
 
+    /// No certificate: the operand's zero set may be anything.
+    fn uncertified() -> bool {
+        false
+    }
+
     fn ninf_base() -> Vs {
         let mut v = Vs::empty();
         v.ninf = true;
@@ -8498,29 +8650,29 @@ mod aligned_pow_interval_tests {
     /// const integers, magnitude-step for infinite exponents; +inf base unchanged.
     #[test]
     fn neg_inf_base_rows() {
-        let r = b_pow(&ninf_base(), &pt(0.25));
+        let r = b_pow(&ninf_base(), &pt(0.25), &uncertified);
         assert!(r.nan && !r.pinf && !r.ninf && !r.has_fin);
-        let r = b_pow(&ninf_base(), &pt(2.0));
+        let r = b_pow(&ninf_base(), &pt(2.0), &uncertified);
         assert!(r.pinf && !r.nan && !r.ninf);
-        let r = b_pow(&ninf_base(), &pt(3.0));
+        let r = b_pow(&ninf_base(), &pt(3.0), &uncertified);
         assert!(r.ninf && !r.nan && !r.pinf);
-        let r = b_pow(&ninf_base(), &pt(-2.0));
+        let r = b_pow(&ninf_base(), &pt(-2.0), &uncertified);
         assert!(r.has_fin && r.lo == 0.0 && r.hi == 0.0 && !r.nan);
-        let r = b_pow(&ninf_base(), &range(0.1, 5.0));
+        let r = b_pow(&ninf_base(), &range(0.1, 5.0), &uncertified);
         assert!(r.nan && !r.pinf && !r.ninf);
         // magnitude-step at infinite exponents: |t| > 1
         let mut binf = Vs::empty();
         binf.pinf = true;
-        let r = b_pow(&ninf_base(), &binf);
+        let r = b_pow(&ninf_base(), &binf, &uncertified);
         assert!(r.pinf && !r.nan);
         let mut bninf = Vs::empty();
         bninf.ninf = true;
-        let r = b_pow(&ninf_base(), &bninf);
+        let r = b_pow(&ninf_base(), &bninf, &uncertified);
         assert!(r.has_fin && r.lo == 0.0 && r.hi == 0.0);
         // +inf base: unchanged convention
         let mut pinf_base = Vs::empty();
         pinf_base.pinf = true;
-        let r = b_pow(&pinf_base, &pt(0.25));
+        let r = b_pow(&pinf_base, &pt(0.25), &uncertified);
         assert!(r.pinf && !r.nan);
     }
 }
