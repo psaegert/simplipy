@@ -158,10 +158,13 @@ class TestZeroLanes:
 
     def test_an_undecided_judgment_is_unscored(self):
         # the interval layer does not see `x13 - x13` as an exact zero, so the measure of the
-        # extension is undecided: neither passed nor convicted
-        verdict, detail = judge_pair('/ 1 * x11 - x13 x13'.split(), '/ float("inf") x11'.split(),
-                                     rng())
+        # extension is undecided: neither passed nor convicted. (`1/(x11*(x13 - x13)) ->
+        # inf/x11`, undecided in the reals too, passes in f64, which decides its measure in
+        # float64's values: the deployed zeros' signs make the two sides agree.)
+        verdict, detail = judge_pair('/ - x13 x13 - x13 x13'.split(), ['1'], rng())
         assert verdict == 'UNSCORED' and 'UNDECIDED-MEASURE' in detail, detail
+        assert judge_pair('/ 1 * x11 - x13 x13'.split(), '/ float("inf") x11'.split(),
+                          rng())[0] == 'OK'
 
     def test_the_default_lane_is_the_engines_default_mode(self):
         src, ieee, one_zero = self.POLES[0]
