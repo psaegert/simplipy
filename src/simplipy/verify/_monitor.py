@@ -69,9 +69,14 @@ def _as_rule(inp, out, engine):
     return sides
 
 
-#: The judge's verdicts that are no decision: the rewrite is neither passed nor convicted.
-UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT',
-             'UNDECIDED-MEASURE')
+#: Each mode's reading in a judgment: True (holds), False (refused on a counterexample) or None
+#: (no answer: neither passed nor convicted).
+_READING = {'f64': 'realised', 'permissive': 'permissive'}
+
+#: The reals' verdicts that are no answer: under F8 they leave open whether the engine's own
+#: algebra was exact.
+_REALS_UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT',
+                    'UNDECIDED-MEASURE')
 
 
 #: Float64's disagreements F8 lets the engine's exact algebra leave: rounding and what rounding
@@ -96,14 +101,17 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     ``'permissive'`` or a :class:`~simplipy.Mode` member; the default is the engine's default
     mode) as the rule judge judges the rule ``inp -> out``.
 
-    Returns ``(verdict, detail)``: ``OK`` where the judged tier is one the mode licenses
-    (``verify.MODE_TIERS``), ``VIOLATION`` where it is not, and ``UNSCORED`` where the
-    judge cannot read the rewrite or reaches no decision on it (an undecided measure among
-    them; fail closed: the sweep counts it). ``engine`` reads a tagged
-    side (`to_prefix`). ``rng`` is accepted for the callers that pass one; the judgment is
+    Returns ``(verdict, detail)``, by the mode's own reading of the judgment: ``OK`` where the
+    judged tier is one the mode licenses (``verify.MODE_TIERS``), ``VIOLATION`` where the mode
+    refuses it, and ``UNSCORED`` where the judge cannot read the rewrite or the mode reaches no
+    answer on it (fail closed: the sweep counts it). The reals' verdict, a diagnostic, is no
+    mode's label: `(x - x)/(x - x) -> 1` is a VIOLATION in f64, which refuses it on its own
+    values, and OK in permissive, though the reals' measure is undecided. ``engine`` reads a
+    tagged side (`to_prefix`). ``rng`` is accepted for the callers that pass one; the judgment is
     deterministic and draws nothing. With ``engine``, the rewrite is held to F8 (above): its rule
-    steps are judged too, and a rewrite true in the reals whose float64 disagreements are
-    rounding alone is OK."""
+    steps are judged too, a rewrite true in the reals whose float64 disagreements are rounding
+    alone is OK, and one f64 refuses whose exactness in the reals the judge cannot decide is
+    UNSCORED."""
     from . import MODE_TIERS, effective_tier
     name = _mode_name(mode)
     try:
@@ -122,16 +130,22 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
             step = _contract.judge_rule(list(lhs), list(rhs))
             step_tier = effective_tier(step)
             if step_tier not in MODE_TIERS[name]:
-                if step.get('verdict') in UNDECIDED:
+                if step.get(_READING[name]) is None:
                     return 'UNSCORED', f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)}: ' \
-                                       f'{step.get("verdict")}'
+                                       f'{name} reaches no answer ({step.get("verdict")})'
                 return 'VIOLATION', (f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)} is '
                                      f'{step_tier}, not {name}\'s')
             exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
     if tier in MODE_TIERS[name]:
         return 'OK', f'{verdict} ({tier})'
-    if verdict in UNDECIDED:
-        return 'UNSCORED', f'{verdict}: {str(detail.get("detail"))[:200]}'
+    if detail.get(_READING[name]) is None:
+        return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '
+                            f'{str(detail.get("detail"))[:200]}')
+    if engine is not None and name == 'f64' and verdict in _REALS_UNDECIDED:
+        # F8 excuses float64's rounding where the engine's algebra is exact in the reals, and
+        # the reals reach no answer on it
+        return 'UNSCORED', (f'F8: the reals reach no answer ({verdict}): '
+                            f'{str(detail.get("detail"))[:200]}')
     if engine is not None and verdict in _contract.HOLDS_IN_THE_REALS:
         # F8: the rewrite holds in the reals; float64's own events must be kept
         kinds = set(detail.get('f64_kinds') or ())

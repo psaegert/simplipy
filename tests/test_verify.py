@@ -156,15 +156,28 @@ class TestZeroLanes:
         with pytest.raises(ValueError, match='the real mode is retired'):
             verdict(ieee, 'real')
 
-    def test_an_undecided_judgment_is_unscored(self):
-        # the interval layer does not see `x13 - x13` as an exact zero, so the measure of the
-        # extension is undecided: neither passed nor convicted. (`1/(x11*(x13 - x13)) ->
-        # inf/x11`, undecided in the reals too, passes in f64, which decides its measure in
-        # float64's values: the deployed zeros' signs make the two sides agree.)
-        verdict, detail = judge_pair('/ - x13 x13 - x13 x13'.split(), ['1'], rng())
-        assert verdict == 'UNSCORED' and 'UNDECIDED-MEASURE' in detail, detail
+    def test_a_rewrite_is_labelled_by_its_modes_verdict(self):
+        # each mode labels a rewrite by its own reading. `(x13 - x13)/(x13 - x13) -> 1`: the
+        # interval layer does not see `x13 - x13` as an exact zero, so the reals' measure is
+        # undecided (a diagnostic); f64 refuses it on its own values (0/0 against 1 at every
+        # double), and permissive, which may give a value where the input has none, holds it.
+        # (`1/(x11*(x13 - x13)) -> inf/x11`, undecided in the reals too, passes in f64, which
+        # decides its measure in float64's values: the deployed zeros' signs make the two sides
+        # agree.)
+        src = '/ - x13 x13 - x13 x13'.split()
+        assert judge_pair(src, ['1'], rng())[0] == 'VIOLATION'
+        assert judge_pair(src, ['1'], rng(), mode='permissive')[0] == 'OK'
         assert judge_pair('/ 1 * x11 - x13 x13'.split(), '/ float("inf") x11'.split(),
                           rng())[0] == 'OK'
+
+    def test_a_mode_without_an_answer_is_unscored(self):
+        # `x^2 + 1 + 1e-3000 -> x^2 + 1`: the reals' readings demand 6,000 digits, so permissive,
+        # which reads them, reaches no answer: neither passed nor convicted; f64 reads 1e-3000 as
+        # 0.0 and the two sides are bit-identical
+        src, out = '+ + pow x13 2 1 1e-3000'.split(), '+ pow x13 2 1'.split()
+        verdict, detail = judge_pair(src, out, rng(), mode='permissive')
+        assert verdict == 'UNSCORED' and 'UNRESOLVED-COVERAGE' in detail, detail
+        assert judge_pair(src, out, rng())[0] == 'OK'
 
     def test_the_default_lane_is_the_engines_default_mode(self):
         src, ieee, one_zero = self.POLES[0]

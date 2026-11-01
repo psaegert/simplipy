@@ -1683,6 +1683,12 @@ model predictions.
   - A root is a witness only where each of its constants moves the right side at an
     environment it was not solved at: at C = 0 the search ends at D = -13, which the other
     environments reproduce without reading it.
+- **The rule monitor labels a rewrite by its mode's verdict.** `judge_pair` reads the mode's
+  own answer: `OK` where the mode holds the rewrite, `VIOLATION` where it refuses it, `UNSCORED`
+  where it reaches no answer. The reals' verdict is no mode's label: `(x - x)/(x - x) -> 1`,
+  whose measure is undecided in the reals, is a `VIOLATION` in f64 (0/0 against 1 at every
+  double), where it was `UNSCORED`. Holding an engine's answer to F8, a rewrite f64 refuses
+  whose exactness in the reals the judge cannot decide stays `UNSCORED`.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with
