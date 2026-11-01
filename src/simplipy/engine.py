@@ -2395,10 +2395,11 @@ class SimpliPyEngine:
     find_rules.__wrapped__ = RuleMiner.find_rules  # type: ignore[attr-defined]
 
     def certify_rules(self, *args: Any, **kwargs: Any) -> Any:
-        """Certify proposed rules against this engine.
+        """Certify proposed rules against this engine, in an explicit ``mode``.
 
         Thin delegator to :meth:`simplipy.mining.RuleMiner.certify_rules`: the
-        signature and the semantics are the miner's."""
+        signature and the semantics are the miner's; each result is a
+        :class:`~simplipy.mining.CertifiedRule` with its mode and basis."""
         return RuleMiner(self).certify_rules(*args, **kwargs)
 
     certify_rules.__wrapped__ = RuleMiner.certify_rules  # type: ignore[attr-defined]

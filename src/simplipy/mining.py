@@ -16,7 +16,7 @@ import re
 import signal
 import threading
 import time
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, NamedTuple, TYPE_CHECKING
 from typing import Any
 from copy import deepcopy
 
@@ -34,11 +34,24 @@ from simplipy.utils import (
     remap_expression)
 
 if TYPE_CHECKING:
-    from .engine import SimpliPyEngine
+    from .engine import Mode, SimpliPyEngine
 
 # The miner is this module's
 # power-user surface; the module helpers (_MINE_LOCK, ...) are private.
-__all__ = ['RuleMiner', 'verify_mine', 'cross_mode_complexity']
+__all__ = ['CertifiedRule', 'RuleMiner', 'verify_mine', 'cross_mode_complexity']
+
+
+class CertifiedRule(NamedTuple):
+    """A rule :meth:`RuleMiner.certify_rules` certified: its ``source`` and ``target``, how
+    (``certificate``: ``'minimal'``, no shorter target exists in the candidate library, or
+    ``'verified'``, the hint was verified), the ``mode`` it was certified in and is licensed
+    for, and what the judge's verdict rests on there (``basis``: ``'proved'``, an exact route
+    proves it, or ``'evidence'``, it holds at every point the judge read)."""
+    source: tuple[str, ...]
+    target: tuple[str, ...]
+    certificate: str
+    mode: str
+    basis: str
 
 
 # THE ARTIFACT-AFFECTING SWITCH REGISTRY: every environment variable that can change a
@@ -229,9 +242,6 @@ def _load_proposals(
 #: mark, its canon reads the sources, its numerics accept -- in this order, so the
 #: permissive mine reads the finished f64 set as serving does. (rule mode, file key)
 _MINE_MODES = (('default', 'f64'), ('permissive', 'permissive'))
-
-#: The mode `certify_rules` judges a proposal in.
-_CERTIFY_RULE_MODE = 'permissive'
 
 #: The engine attribute holding each rule mode's own set.
 _RULES_ATTR = {'default': 'simplification_rules',
@@ -2133,6 +2143,8 @@ class RuleMiner:
             self,
             sources: list,
             targets: list | None = None,
+            *,
+            mode: 'Mode | str',
             max_target_pattern_length: int = 4,
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
@@ -2143,8 +2155,8 @@ class RuleMiner:
             atol: float = 1e-12,
             min_informative: int | None = None,
             seed: int | None = 42,
-            verbose: bool = False) -> list[tuple[tuple[str, ...], tuple[str, ...], str]]:
-        """Certify externally proposed simplification rules with the mining gates.
+            verbose: bool = False) -> list[CertifiedRule]:
+        """Certify externally proposed simplification rules with the mining gates, in ``mode``.
 
         For each proposed ``source`` expression this runs the exact certification chain
         the miner uses: validity check, then a shortest-first scan of the complete
@@ -2165,16 +2177,22 @@ class RuleMiner:
         discriminator; KILLs dropped) -- so certified output is held to exactly the bar
         mined rules are.
 
-        Parameters mirror :meth:`find_rules`. The engine is not modified; returns a list
-        of ``(source, target, certificate)`` tuples with certificate ``'minimal'`` or
-        ``'verified'``. Merge accepted pairs explicitly, e.g.::
+        ``mode`` (``'f64'``, ``'permissive'`` or a :class:`~simplipy.Mode` member; no default)
+        is the mode the chain runs in -- its serve answer is the mark, its canon reads the
+        sources, its numerics accept -- and the mode whose tiers the symbolic gate keeps
+        (``MODE_TIERS``): every returned rule is licensed there. Other parameters mirror
+        :meth:`find_rules`. The engine is not modified; returns a list of
+        :class:`CertifiedRule` ``(source, target, certificate, mode, basis)``. Merge accepted
+        rules into the set of the mode they were certified in, e.g.::
 
-            pairs = engine.certify_rules(proposals, hints)
+            rules = engine.certify_rules(proposals, hints, mode='f64')
             engine.simplification_rules = deduplicate_rules(
-                engine.simplification_rules + [(s, t) for s, t, _ in pairs], dummies,
+                engine.simplification_rules + [(r.source, r.target) for r in rules], dummies,
                 engine=engine, rule_mode='f64')
             engine.compile_rules()
         """
+        from .engine import _coerce_mode
+        rule_mode = {file_mode: rm for rm, file_mode in _MINE_MODES}[_coerce_mode(mode).name]
         sources = [tuple(str(t) for t in s) for s in sources]
         hint_list: list = list(targets) if targets is not None else [None] * len(sources)
         if len(hint_list) != len(sources):
@@ -2191,18 +2209,19 @@ class RuleMiner:
                 "in the provenance sidecar are process-global)")
         try:
             return self._certify_rules_locked(
-                sources, hint_list, max_target_pattern_length, dummy_variables,
+                sources, hint_list, rule_mode, max_target_pattern_length, dummy_variables,
                 extra_internal_terms, X, constants_fit_challenges,
                 constants_fit_retries, rtol, atol, min_informative, seed, verbose)
         finally:
             _MINE_LOCK.release()
 
     def _certify_rules_locked(
-            self, sources: list, hint_list: list, max_target_pattern_length: int,
+            self, sources: list, hint_list: list, rule_mode: str,
+            max_target_pattern_length: int,
             dummy_variables: int | list[str] | None, extra_internal_terms: list[str] | None,
             X: int | None, constants_fit_challenges: int, constants_fit_retries: int,
             rtol: float, atol: float, min_informative: int | None, seed: int | None,
-            verbose: bool) -> list[tuple[tuple[str, ...], tuple[str, ...], str]]:
+            verbose: bool) -> list[CertifiedRule]:
         dummy_variables = self._resolve_dummy_variables(
             dummy_variables,
             default=lambda: (sorted({t for s in sources for t in s
@@ -2232,7 +2251,7 @@ class RuleMiner:
                       for expression in sorted(expressions[length])]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(),
-            X_data.shape[0], rule_mode=_CERTIFY_RULE_MODE)
+            X_data.shape[0], rule_mode=rule_mode)
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates '
                   f'({library.n_filtered:,} var-free filtered)')
@@ -2254,7 +2273,7 @@ class RuleMiner:
                 mine_seed + (len(source) << 40) + index,
                 self._confirm_kwargs(X_confirm, X_data, min_informative,
                                      confirm_seed + (len(source) << 40) + index),
-                _CERTIFY_RULE_MODE)
+                rule_mode)
             if target is None:
                 continue
             certified.append((source, tuple(target), certificate))
@@ -2273,28 +2292,29 @@ class RuleMiner:
         # JUDGE-TIMEOUT / UNRESOLVED-COVERAGE): they read `reject` and drop, because an
         # unjudged certificate is an unearned one. TOLERATED passes, exactly as at the
         # mining gate.
-        if certified:
-            from .verify import effective_tier, verify_ruleset
-            from .verify._contract import set_rows
-            # the judge reads the rows this certification's mint read
-            previous_rows = set_rows(np.vstack([X_data, X_confirm]))
-            try:
-                _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
-            finally:
-                set_rows(previous_rows)
-            # detail entries carry lhs/rhs as SPACE-JOINED strings
-            _drop = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d['verdict']
-                     for d in _rep['detail']
-                     if effective_tier(d) not in _mode_tiers(_CERTIFY_RULE_MODE)}
-            if _drop:
+        if not certified:
+            return []
+        from .verify import effective_tier, verify_ruleset
+        from .verify._contract import set_rows
+        # the judge reads the rows this certification's mint read
+        previous_rows = set_rows(np.vstack([X_data, X_confirm]))
+        try:
+            _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
+        finally:
+            set_rows(previous_rows)
+        # detail entries carry lhs/rhs as SPACE-JOINED strings
+        judged = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d for d in _rep['detail']}
+        mode = _file_mode(rule_mode)
+        out: list[CertifiedRule] = []
+        for s, t, c in certified:
+            d = judged[(tuple(s), tuple(t))]
+            if effective_tier(d) not in _mode_tiers(rule_mode):
                 if verbose:
-                    for s, t, _c in certified:
-                        v = _drop.get((tuple(s), tuple(t)))
-                        if v is not None:
-                            print(f'symbolic gate {v}: {list(s)} -> {list(t)}')
-                certified = [(s, t, c) for s, t, c in certified
-                             if (tuple(s), tuple(t)) not in _drop]
-        return certified
+                    print(f'symbolic gate {d["verdict"]}: {list(s)} -> {list(t)}')
+                continue
+            out.append(CertifiedRule(tuple(s), tuple(t), c, mode,
+                                     (d.get('basis') or {}).get(mode, 'evidence')))
+        return out
 
     def _certify_proposals(
             self,

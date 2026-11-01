@@ -11,8 +11,10 @@ planted clause-(b) positive-measure poison, and a planted infinity poison, and m
 NOT kill the planted phantom (the tolerated sign-flip rule). A gate that cannot catch
 a poisoned rule set, or that convicts the sound, refuses to bless.
 """
+import contextlib
 import json
 import signal
+import time
 
 from ._contract import judge_rule
 
@@ -23,6 +25,26 @@ class _JudgeTimeout(Exception):
 
 def _alarm(_s, _f):
     raise _JudgeTimeout()
+
+
+@contextlib.contextmanager
+def caller_timer_kept(handler):
+    """THE CALLER'S TIMER IS KEPT: `handler` answers SIGALRM for the scope's duration (main thread
+    only), and on the way out the caller's handler is back and the caller's pending real-time
+    timer is re-armed, less the time the scope took; one that fell due inside the scope fires at
+    once. The scope's own alarms (`signal.alarm`) run in between."""
+    pending, interval = signal.getitimer(signal.ITIMER_REAL)
+    start = time.monotonic()
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    previous = signal.signal(signal.SIGALRM, handler)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if pending > 0:
+            left = pending - (time.monotonic() - start)
+            signal.setitimer(signal.ITIMER_REAL, max(left, 1e-6), interval)
 
 
 JUDGE_TIMEOUT_S = 30   # per-rule budget. A gate that can HANG is not a gate: mpmath has
@@ -81,7 +103,8 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
           announce_report=True):
     # Install the timeout handler for the duration of the sweep ONLY: the process may
     # have its own SIGALRM use (a host harness, another timeout wrapper), and clobbering
-    # it without restore leaks our handler past this call.
+    # it without restore leaks our handler past this call; a timer the caller has pending is
+    # re-armed on the way out, less the sweep's time (`caller_timer_kept`).
     # MAIN THREAD ONLY: `signal.signal` raises anywhere else, which made every
     # off-main-thread mine crash in its finalize gate.
     # Off the main thread the sweep runs with timeouts DISARMED, as with no timeout asked:
@@ -97,13 +120,9 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
         print('off-main-thread sweep: judge timeout protection unavailable '
               '(SIGALRM is main-thread-only)', flush=True)
         return _sweep_inner(rules, report_path, build_path, 0, announce_report)
-    prev_handler = signal.signal(signal.SIGALRM, _alarm)
-    try:
+    with caller_timer_kept(_alarm):
         return _sweep_inner(rules, report_path, build_path, judge_timeout_s,
                             announce_report)
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, prev_handler)
 
 
 def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_report):

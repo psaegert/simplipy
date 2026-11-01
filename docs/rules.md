@@ -351,16 +351,24 @@ proposals = [
 hints = [None, None, ["*", "4", "*", "x0", "x1"]]  # optional target suggestions
 
 extra_terms = ['<constant>', '0', '1', '(-1)', 'np.pi', 'np.e']  # target vocabulary
-certified = engine.certify_rules(proposals, hints,
+certified = engine.certify_rules(proposals, hints, mode="f64",
                                  extra_internal_terms=extra_terms, verbose=True)
-# certified: a list of (source, target, 'minimal' | 'verified') triples
+# certified: a list of CertifiedRule(source, target, certificate, mode, basis), each
+# licensed in the mode it was certified in ('minimal' | 'verified'; 'proved' | 'evidence')
 
 dummies = ["x0", "x1"]
-engine.simplification_rules = deduplicate_rules(
-    engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies,
+engine.simplification_rules = deduplicate_rules(   # the f64 set takes the f64 certificates
+    engine.simplification_rules + [(r.source, r.target) for r in certified], dummies,
     engine=engine, rule_mode="f64")   # keys on the mode's internal form, not the spelling
 engine.compile_rules()
 ```
+
+`mode` is required: the chain runs in that mode (its serve answer is the mark, its canon
+reads the sources, its numerics accept), and the symbolic gate keeps only rules whose tier
+that mode licenses, so a rule certified in `permissive` (`atanh(tanh(x0)) -> x0`) belongs in
+`permissive_simplification_rules`, never in the f64 set. Each result carries its `basis`:
+`'proved'` where an exact route proves it in the mode, `'evidence'` where it holds at every
+point the judge read.
 
 For each proposal, `certify_rules` checks validity, searches the complete candidate
 library for a certified-**minimal** target (a source the engine already reduces is

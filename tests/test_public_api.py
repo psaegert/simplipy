@@ -40,7 +40,7 @@ MODULE_ALLS = {
         'AssetType',
     },
     'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT'},
-    'simplipy.mining': {'RuleMiner', 'verify_mine', 'cross_mode_complexity'},
+    'simplipy.mining': {'CertifiedRule', 'RuleMiner', 'verify_mine', 'cross_mode_complexity'},
     # The two public modules below were missed at first. The
     # compatibility policy says every public module declares its column; these
     # rows make that sentence literally true and pin it.

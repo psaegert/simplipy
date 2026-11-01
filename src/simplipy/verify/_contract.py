@@ -35,26 +35,89 @@ Precision honesty:
   - Every non-eq point verdict is CONFIRMED at a second rung; rung disagreement ->
     Unresolved (the point is skipped, never convicted).
 """
+import contextlib
 import itertools
 import math
 import re
+import threading
 from fractions import Fraction
 from typing import Any
+import mpmath as _mpmath
 import numpy as np
-from mpmath import mp, isnan as misnan, isinf as misinf
-from mpmath import mpf as _mpmath_mpf
+from mpmath import isnan as misnan, isinf as misinf
 from mpmath.libmp import from_rational as _from_rational
 
 from . import _exact
 
 
+class _Registers(threading.local):
+    """THE JUDGE'S STATE, ONE PER THREAD, so that concurrent judgments neither share nor see each
+    other's: the mpmath context a judgment computes in (`context`, None outside one), this
+    thread's context, built once (`owned`), and the scratch registers of one judgment -- the
+    snaps a table reading met (`snaps`), the intermediates' magnitudes a ladder sizes its rungs
+    by (`mag_sink`), the left side's kind at the last point resolved (`lhs_kind`) and the
+    precision the last polished witness is good to (`polish_dps`)."""
+
+    def __init__(self) -> None:
+        self.context: Any = None
+        self.owned: Any = None
+        self.snaps = 0
+        self.mag_sink: list = []
+        self.lhs_kind: Any = None
+        self.polish_dps: Any = None
+
+
+_LOCAL = _Registers()
+
+
+class _Precision:
+    """mpmath's context as the judge reads it: the judgment's own while one runs in this thread
+    (`_own_precision`), else mpmath's global one (the judge's parts called on their own read
+    the caller's precision, as before)."""
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_LOCAL.context or _mpmath.mp, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(_LOCAL.context or _mpmath.mp, name, value)
+
+
+mp: Any = _Precision()
+
+
+@contextlib.contextmanager
+def _own_precision():
+    """A judgment's precision and registers are its own: the thread's mpmath context, at the
+    default precision, and empty registers, for the judgment's duration. A caller's
+    `mpmath.mp` is never touched, and concurrent judgments in other threads never meet. A
+    judgment inside one keeps the outer one's context and restores its precision."""
+    if _LOCAL.context is not None:
+        dps = _LOCAL.context.dps
+        try:
+            yield
+        finally:
+            _LOCAL.context.dps = dps
+        return
+    if _LOCAL.owned is None:
+        _LOCAL.owned = _mpmath.MPContext()
+    _LOCAL.owned.dps = 15
+    _LOCAL.context = _LOCAL.owned
+    _LOCAL.snaps, _LOCAL.mag_sink, _LOCAL.lhs_kind, _LOCAL.polish_dps = 0, [], None, None
+    try:
+        yield
+    finally:
+        _LOCAL.context = None
+
+
 def mpf(v: Any = 0) -> Any:
-    """mpmath's `mpf`, a `Fraction` read through its numerator and denominator and rounded
-    once at the working precision: mpmath before 1.4 builds no `mpf` from a `Fraction`, and
-    the judge runs on every mpmath the package supports (1.3 among them)."""
+    """mpmath's `mpf` in the judge's context (`mp`), a `Fraction` read through its numerator and
+    denominator and rounded once at the working precision: mpmath before 1.4 builds no `mpf`
+    from a `Fraction`, and the judge runs on every mpmath the package supports (1.3 among
+    them)."""
     if isinstance(v, Fraction):
         return mp.make_mpf(_from_rational(v.numerator, v.denominator, mp.prec, 'n'))
-    return _mpmath_mpf(v)
+    return mp.mpf(v)
 
 # No `np.seterr(all='ignore')` here -- that call is PROCESS-WIDE and ran at
 # import, silently changing the embedder's numpy error handling because this module
@@ -105,10 +168,6 @@ class Unresolved(Exception):
 #: judge has run out of evidence, and "skip, never convict" is the house rule.
 BASE_DPS = 50
 MAX_DPS = 2000
-
-SNAP_EVENTS = [0]  # incremented when a symbolic-cancellation snap / pole-guard fires;
-                   # at such points the f64 deployed algebra evaluates a DIFFERENT point
-                   # (a measurement artifact), so the deployed check is skipped
 
 
 def source_defined(value):
@@ -323,7 +382,7 @@ def _spec(v):
     if isinstance(v, (Fraction, int)) and not isinstance(v, bool):
         q = Fraction(v)
         return ('q', str(q.numerator), str(q.denominator))
-    if not isinstance(v, type(mpf(0))):
+    if not hasattr(v, '_mpf_'):
         return tv_of_float(v).spec
     if misnan(v):
         return ('nan', '', '')
@@ -407,18 +466,18 @@ def c_eval(tree, env):
     """Evaluate under the contract semantics: THE TABLE's real values (`_core.TableExpr`), at the
     current precision. `env` binds each slot to a `TV`, an mpf or a number. Raises `Unresolved`
     where the table cannot judge the point honestly at this precision; records a snap
-    (`SNAP_EVENTS`) and the intermediates' magnitudes (`_MAG_SINK`) for the ladder."""
+    (`_LOCAL.snaps`) and the intermediates' magnitudes (`_LOCAL.mag_sink`) for the ladder."""
     expr, names, extra = _compiled(tree)
     args = [_spec(extra[n] if n in extra else env[n]) for n in names]
     spec, unresolved, snapped, inf_node, mag, small = expr.eval_real(args, mp.dps)
     if snapped:
-        SNAP_EVENTS[0] += 1
-    if _MAG_SINK:
+        _LOCAL.snaps += 1
+    if _LOCAL.mag_sink:
         m, sm = _from_spec(mag), _from_spec(small)
-        if m > _MAG_SINK[-1][0]:
-            _MAG_SINK[-1][0] = m
-        if sm != 0 and (_MAG_SINK[-1][1] == 0 or sm < _MAG_SINK[-1][1]):
-            _MAG_SINK[-1][1] = sm
+        if m > _LOCAL.mag_sink[-1][0]:
+            _LOCAL.mag_sink[-1][0] = m
+        if sm != 0 and (_LOCAL.mag_sink[-1][1] == 0 or sm < _LOCAL.mag_sink[-1][1]):
+            _LOCAL.mag_sink[-1][1] = sm
     if unresolved:
         raise Unresolved()
     return _from_spec(spec)
@@ -433,10 +492,6 @@ def _table_reading(tree, env, dps):
     args = [_spec(extra[n] if n in extra else env[n]) for n in names]
     spec = expr.eval_float_resolution(args, dps)
     return None if spec is None else _from_spec(spec)
-
-
-#: Filled by `c_eval` when a `_measured_dps` scope is open; see `_required_dps`.
-_MAG_SINK: list = []
 
 
 def _required_dps(mag, small=None):
@@ -654,7 +709,7 @@ def saturation_verdict(tl, tr, env_mp):
         bounds = SATURATING.get(src[0]) if len(src) == 2 else None
         if not bounds:
             continue
-        snap0 = SNAP_EVENTS[0]
+        snap0 = _LOCAL.snaps
         try:
             arg = c_eval(src[1], env_mp())
             if tgt[0] == 'lit':
@@ -672,7 +727,7 @@ def saturation_verdict(tl, tr, env_mp):
                 continue                     # computed: provenance is not a written bound
         except (Unresolved, KeyError):
             continue
-        if SNAP_EVENTS[0] != snap0:
+        if _LOCAL.snaps != snap0:
             continue                         # a snapped value is a DIFFERENT point
         if misnan(arg) or misinf(arg) or misnan(lim) or misinf(lim):
             continue                         # the limit is attained at an infinite arg
@@ -1317,8 +1372,8 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
     old = mp.dps
     try:
         mp.dps = MP_FIT_DPS + min(FIT_MAX_DPS, math.ceil(max(decades)) if decades else 0)
-        stop = mpf(10) ** -(mp.dps - MP_FIT_STOP) if strict else MP_FIT_TOL ** 2
-        agree = mpf(10) ** -(mp.dps - MP_FIT_AGREE) if strict else MP_FIT_TOL
+        stop = mpf(10) ** -(mp.dps - MP_FIT_STOP) if strict else mpf(MP_FIT_TOL) ** 2
+        agree = mpf(10) ** -(mp.dps - MP_FIT_AGREE) if strict else mpf(MP_FIT_TOL)
         cl = {n: mpf(float(v)) for n, v in cl_env.items()}
         envs, targets = [], []
         for env in generic:
@@ -1348,7 +1403,7 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
                     return d
                 jac = mp.matrix(m, m)
                 for j in range(m):
-                    h = max(abs(d[j]), 1) * MP_FIT_STEP
+                    h = max(abs(d[j]), 1) * mpf(MP_FIT_STEP)
                     dj = list(d)
                     dj[j] += h
                     for k, (e, t, x) in enumerate(zip(exact[:m], targets[:m], r)):
@@ -1519,7 +1574,7 @@ def mp_polish_multi(tl, tr, nvars, cl_builders, d0, envs):
     landscape defeats it. Returns `{name: mpf}`."""
     names = list(d0)
     old = mp.dps
-    _POLISH_DPS[0] = None
+    _LOCAL.polish_dps = None
     try:
         mp.dps = 2 * GAP_RUNGS[-1] + 50
 
@@ -1563,19 +1618,12 @@ def mp_polish_multi(tl, tr, nvars, cl_builders, d0, envs):
                         sol = zeroed
                 except Unresolved:
                     pass
-            _POLISH_DPS[0] = mp.dps - 30
+            _LOCAL.polish_dps = mp.dps - 30
             return dict(zip(names, sol))
         except (Unresolved, ZeroDivisionError, ValueError, TypeError):
             return {n: mpf(d0[n]) for n in names}
     finally:
         mp.dps = old
-
-
-#: The precision (decimal digits) the last `mp_polish` / `mp_polish_multi` witness is good to,
-#: or None where the polish fell back to its seed (the f64 fit). A comparison at a rung finer
-#: than the witness measures the fit, not the functions: the judge reads such a point as
-#: Unresolved (skip, never convict).
-_POLISH_DPS = [None]
 
 
 def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
@@ -1593,10 +1641,10 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
     identity at x = 0. The fit already moved on to a point that pins the witness."""
     old = mp.dps
     gen = None if env0 is None else {n: float(v) for n, v in env0.items()}
-    _POLISH_DPS[0] = None
+    _LOCAL.polish_dps = None
 
     def done(v, ok):
-        _POLISH_DPS[0] = (mp.dps - 30) if ok else None
+        _LOCAL.polish_dps = (mp.dps - 30) if ok else None
         return v
 
     try:
@@ -1631,7 +1679,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
         # clause-(a) KILL of a rule that is true by construction. Costs nothing for an
         # ordinary rule: small intermediates give back exactly the old 300.
         mp.dps = GAP_RUNGS[-1] + 50
-        _MAG_SINK.append([mpf(0), mpf(0)])
+        _LOCAL.mag_sink.append([mpf(0), mpf(0)])
         try:
             c_eval(tl, build_env())
         except Unresolved:
@@ -1644,14 +1692,14 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
             # already falls back for real if the deeper rung refuses too.
             pass
         finally:
-            _mag, _small = _MAG_SINK.pop()
+            _mag, _small = _LOCAL.mag_sink.pop()
         mp.dps = max(mp.dps,
                      max(GAP_RUNGS[2],
                          2 * max(GAP_RUNGS[1], _required_dps(_mag, _small))) + 50)
         # `_WIT_RESID` was 10^-270 = "deeper than the deepest rung" when the deepest rung
         # was a fixed 250. It has to follow the ladder for the same reason the depth does.
         # A TARGET THE TABLE CANNOT READ AT THIS DEPTH is read at a shallower one: the witness
-        # is then good to fewer digits, and `_POLISH_DPS` says so, so the rungs finer than it
+        # is then good to fewer digits, and `_LOCAL.polish_dps` says so, so the rungs finer than it
         # skip the point instead of convicting a frozen gap (`erf` reads to 8,192 bits, and
         # `erf(1)^10000 -> c_t` asks for 3,122 digits).
         while True:
@@ -1798,7 +1846,7 @@ _KINK_HEADS = frozenset({'abs', 'max', 'min'})
 #: At most this many preimages per rule.
 MAX_PREIMAGES = 16
 #: The precision a preimage is solved at; a rung finer than `_PREIMAGE_DPS - 30` reads it as
-#: Unresolved (as a polished witness, `_POLISH_DPS`). Within the polish's precision, so a
+#: Unresolved (as a polished witness, `_LOCAL.polish_dps`). Within the polish's precision, so a
 #: fitted constant on the probed side stays readable.
 _PREIMAGE_DPS = 2 * GAP_RUNGS[-1]
 
@@ -1939,11 +1987,6 @@ def _solve_preimage(f, lo, hi):
 
 
 # ---------------------------------------------------------------- the judge
-#: The left side's kind ('fin', 'nan', '+inf', '-inf') at the last point `_point_verdict`
-#: resolved: whether the left side is finite there decides what a constant owes (3.2).
-_LHS_KIND = [None]
-
-
 def _point_verdict(tl, tr, env_mp):
     """confirmed contract verdict at one point -> (verdict|None, snapped)
 
@@ -1990,7 +2033,7 @@ def _point_verdict(tl, tr, env_mp):
         sizes a cancellation."""
         mp.dps = dps
         if track:
-            _MAG_SINK.append([mpf(0), mpf(0)])
+            _LOCAL.mag_sink.append([mpf(0), mpf(0)])
         try:
             cl = cls_mp(c_eval(tl, env_mp()))
             cr = cls_mp(c_eval(tr, env_mp()))
@@ -1998,18 +2041,18 @@ def _point_verdict(tl, tr, env_mp):
             return None
         finally:
             if track:
-                once.mag, once.small = _MAG_SINK.pop()
-        _LHS_KIND[0] = _kind(cl)
+                once.mag, once.small = _LOCAL.mag_sink.pop()
+        _LOCAL.lhs_kind = _kind(cl)
         v = compare_classes(cl, cr)
         return (v, None) if v is not None else (None, gap_reading(cl, cr))
 
     old = mp.dps
-    snap0 = SNAP_EVENTS[0]
-    _LHS_KIND[0] = None
+    snap0 = _LOCAL.snaps
+    _LOCAL.lhs_kind = None
     try:
         once.mag = once.small = None
         r1 = once(BASE_DPS, track=True)
-        snapped1 = SNAP_EVENTS[0] > snap0
+        snapped1 = _LOCAL.snaps > snap0
         # RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates
         # are 10^217: both rungs are swamped alike, agree on a manufactured verdict, and
         # the class comparison reads that agreement as evidence. The precision now comes
@@ -2121,7 +2164,7 @@ def _point_verdict(tl, tr, env_mp):
         # ONE SCALE FOR BOTH RUNGS, AND IT IS THE VALUE'S, NEVER THE
         # COMPUTATION'S. The separations are absolute; the scale is
         # fixed here, so it divides out of the ratio and touches nothing but the floor.
-        # This used to take the largest INTERMEDIATE into the max (`_MAG_SINK`'s
+        # This used to take the largest INTERMEDIATE into the max (`_LOCAL.mag_sink`'s
         # `once.mag`), on the argument that an exactly-cancelling source offers no
         # scale from its own value -- and that scaled the floor by everything the
         # computation passed through: `acos(inv(exp(exp 5))) -> div2 np.pi` has a
@@ -2138,7 +2181,7 @@ def _point_verdict(tl, tr, env_mp):
         # value scale (the residue itself) convicts the true identity at 19.8% of
         # the grid. The distinguisher is s_lo itself: the families the gap exists for arrive with
         # `s_lo ~ pi/2` -- the coarse rung SAW the value, so the value sets the
-        # floor and the fixed 3.5e-65 gap stands. `_MAG_SINK` keeps its other
+        # floor and the fixed 3.5e-65 gap stands. `_LOCAL.mag_sink` keeps its other
         # consumer, the precision-demand estimator, either way.
         mag = getattr(once, 'mag', None) or mpf(0)
         scale = max(s_lo, s_hi) if s_lo != 0 else max(s_hi, abs(mag))
@@ -2273,13 +2316,18 @@ def judge_rule(lhs, rhs, deployed_check=True):
 
     Every verdict says how it was reached, per mode (`basis`, the specification's 3.4):
     'proved' where an exact route proves the rule in the mode, 'evidence' where the mode holds it
-    on the battery's points alone, 'refused' where it does not hold in the mode."""
-    r = _judge_contract(lhs, rhs, deployed_check)
-    if 'tier' in r and deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
-        r = _with_f64_bar(lhs, rhs, r)
-    if r.get('verdict') != 'UNSUPPORTED-SHAPE':
-        r = _with_exact_routes(lhs, rhs, r, deployed_check)
-    return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
+    on the battery's points alone, 'refused' where it does not hold in the mode.
+
+    A judgment's precision and scratch state are its own (`_own_precision`): the caller's
+    `mpmath.mp` is never touched, and judgments on other threads give the verdicts they give
+    alone."""
+    with _own_precision():
+        r = _judge_contract(lhs, rhs, deployed_check)
+        if 'tier' in r and deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
+            r = _with_f64_bar(lhs, rhs, r)
+        if r.get('verdict') != 'UNSUPPORTED-SHAPE':
+            r = _with_exact_routes(lhs, rhs, r, deployed_check)
+        return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
 
 
 #: What a verdict rests on in a mode (the specification's 3.4).
@@ -2573,7 +2621,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
 
     def fitted(key):
         """The polished witness at `key`, re-rounded at the current rung -- Unresolved at a
-        rung finer than the witness itself (`_POLISH_DPS`)."""
+        rung finer than the witness itself (`_LOCAL.polish_dps`)."""
         if not has_cr:
             return {}
         limit = witness_dps.get(key)
@@ -2624,7 +2672,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             else:
                 witness[key] = mp_polish_multi(tl, tr, nvars, builders,
                                                dict(zip(rnames, ws)), fit_env)
-            witness_dps[key] = _POLISH_DPS[0]
+            witness_dps[key] = _LOCAL.polish_dps
             witness_f64[key] = dict(zip(rnames, ws))
             kept.append((builders, key))
         if not kept:
@@ -2732,7 +2780,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
         'atom' (a `_` slot at +-inf or NaN); `real_valued` says permissive's guarantee
         reaches the point; `where` is `(constant key, slot values)`, to move a slot from."""
-        lhs_kind = _LHS_KIND[0]
+        lhs_kind = _LOCAL.lhs_kind
         if kind == 'real' and lhs_kind is not None:
             acc['known'] += 1
             acc['finite'] = acc['finite'] or lhs_kind == 'fin'

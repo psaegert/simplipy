@@ -174,8 +174,8 @@ organised by who you are, then the highlights, then every change in detail.
   policies, never truth, and one predicate reads them: `simplipy.verify.load_policy_refusal`,
   which `licensed`, `verify_ruleset(mode=)` and `verify_artifact` share, so a rule the load
   refuses is clean for no file. `verify_ruleset` takes `engine=`, the operators the policies
-  are read with (by default a rule-less engine over the judge's vocabulary), and each
-  offender carries `refused_by`.
+  are read with (by default a rule-less engine over the operators the file's provenance sidecar
+  records, else over the judge's vocabulary), and each offender carries `refused_by`.
 - `verify_artifact(f64, permissive, engine_config=)` checks the two rule sets it is given (the
   config contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which
   ships in the wheel, when `corpus_rows` is not given.
@@ -205,6 +205,10 @@ organised by who you are, then the highlights, then every change in detail.
   it explicitly (see Removed).
 - `N_PTS` and `THRESH` are no longer read; `utils.remove_pow1` and
   `explicit_constant_placeholders(convert_numbers_to_constant=)` are removed.
+- `certify_rules` takes a required keyword `mode` (`'f64'` or `'permissive'`): its chain runs in
+  that mode and it keeps only the rules that mode licenses. It returns
+  `simplipy.mining.CertifiedRule` `(source, target, certificate, mode, basis)`; it certified in
+  `permissive` and returned triples, which the documented example installed into the f64 set.
 
 ### Highlights
 
@@ -1336,6 +1340,17 @@ model predictions.
   infinity beside its finite part, so a cell that reaches the ray is no finite cell and the
   cells below it are. `atanh(tanh(x0))` has evidence in `f64` (it is finite for |x0| below
   about 19.06); it read as finite nowhere.
+- **A judgment keeps its precision and its state to itself.** The judge computes in an mpmath
+  context of its own on each thread while a judgment runs, and its scratch registers are per
+  thread: a caller's `mpmath.mp` is never touched, and 96 concurrent `verify_rule` calls give
+  the serial verdicts (concurrent calls corrupted each other's precision and verdicts).
+- **The ruleset check and the monitor keep the caller's timer.** `verify_ruleset` and the
+  monitor's sweep answer the alarm signal for their own duration and re-arm a timer the caller
+  has pending on the way out, less the time they took; they cancelled it.
+- **The monitor reads the native algebra's answer with the native engine.** Where a violating
+  answer goes past one the rule-less engine gives itself, that answer is judged with the
+  rule-less engine's own steps; it was judged with the loaded engine's, whose poisoned step
+  then read as the native algebra's fault.
 - **The rule judge reads a jump at its preimage.** `ceil(sinh(x0) + 1/2) - floor(sinh(x0) +
   1/2) -> 1` is false in `real` only where sinh(x0) + 1/2 is an integer, at transcendental
   points no double is and no reading near one decides, and the judge passed it. Along each

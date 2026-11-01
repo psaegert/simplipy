@@ -24,6 +24,7 @@ Both carry poison self-tests that must pass before they are trusted. Neither has
 evaluator of its own: every value either compares is the core's.
 """
 import json
+import os
 import warnings
 from typing import Any
 
@@ -183,17 +184,20 @@ def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
             'refused_by': refused}
 
 
-def _vocabulary_engine() -> Any:
+def _vocabulary_engine(names: tuple[str, ...] | None = None) -> Any:
     """A rule-less engine over the judge's vocabulary (`_contract.ARITY`, each operator realized
-    by `simplipy.operators`): the operators :func:`verify_ruleset` reads the load's policies with
-    when it is given no engine. Built once."""
-    global _VOCABULARY_ENGINE
-    if _VOCABULARY_ENGINE is None:
+    by `simplipy.operators`), or over its operators among `names`: the operators
+    :func:`verify_ruleset` reads the load's policies with when it is given no engine. Built once
+    per operator set."""
+    key = None if names is None else tuple(sorted(set(names)))
+    if key not in _VOCABULARY_ENGINES:
         from .. import _core, operators
         from ..engine import SimpliPyEngine  # type: ignore[attr-defined]
         core = _core.core_serialization_ops()
         specs: dict[str, dict] = {}
         for name, arity in _contract.ARITY.items():
+            if key is not None and name not in key:
+                continue
             if name in core:
                 specs[name] = {'realization': core[name]['realization'] or name, 'alias': [],
                                'arity': arity, 'precedence': core[name]['precedence'],
@@ -201,11 +205,23 @@ def _vocabulary_engine() -> Any:
             elif name in operators.__all__:
                 specs[name] = {'realization': f'simplipy.operators.{name}', 'alias': [],
                                'arity': arity, 'commutative': False}
-        _VOCABULARY_ENGINE = SimpliPyEngine(operators=specs, rules=[])
-    return _VOCABULARY_ENGINE
+        _VOCABULARY_ENGINES[key] = SimpliPyEngine(operators=specs, rules=[])
+    return _VOCABULARY_ENGINES[key]
 
 
-_VOCABULARY_ENGINE: Any = None
+_VOCABULARY_ENGINES: dict = {}
+
+
+def _operators_of_record(rules_path: str) -> tuple[str, ...] | None:
+    """The operators the rule file at ``rules_path`` was mined over, as its provenance sidecar
+    records them (``operators``), or None where it records none."""
+    sidecar = rules_path + '.provenance.json'
+    if not os.path.exists(sidecar):
+        return None
+    with open(sidecar) as fh:
+        record = json.load(fh)
+    names = record.get('operators') if isinstance(record, dict) else None
+    return tuple(str(n) for n in names) if isinstance(names, list) else None
 
 
 def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = None,
@@ -234,8 +250,8 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = 
     which is the whole point, and `asin(1) -> acos(0)` holds in every mode and is clean in
     none (`ground_composite`). ``report['offenders']`` lists the ones that are not, with their
     tier and ``refused_by``. ``engine`` holds the operators the policies are read with (a
-    :class:`~simplipy.SimpliPyEngine`; by default a rule-less engine over the judge's
-    vocabulary).
+    :class:`~simplipy.SimpliPyEngine`); by default a rule-less engine over the operators the
+    file's provenance sidecar records (``rules`` a path), else over the judge's vocabulary.
 
     With ``mode=None`` only CERTIFIED/TOLERATED are clean, the meaning before rule sets
     were split by mode. It is NOT the right gate for a shipped artifact; use
@@ -264,7 +280,9 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = 
         return report
 
     allowed = MODE_TIERS[mode]
-    engine = engine if engine is not None else _vocabulary_engine()
+    if engine is None:
+        engine = _vocabulary_engine(_operators_of_record(rules) if isinstance(rules, str)
+                                    else None)
     # a file is read in the canon it was certified in, as the load reads it
     from ..engine import _canon_of_record
     canon = _canon_of_record(rules) if isinstance(rules, str) else None

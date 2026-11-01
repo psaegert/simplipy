@@ -244,23 +244,18 @@ JUDGE_TIMEOUT_S = 10   # a single expression may not eat the sweep; a timeout is
 def sweep(rules, corpus, rng, baseline_engine, config_path, tag='',
           judge_timeout_s=JUDGE_TIMEOUT_S):
     # Timeout protection is SIGALRM-based and therefore main-thread-only. Install for
-    # the duration of the sweep and RESTORE on the way out: clobbering the process handler
-    # permanently would crash any off-main-thread caller.
-    import signal
+    # the duration of the sweep and RESTORE on the way out, the caller's pending timer
+    # included (`_gate.caller_timer_kept`): clobbering the process handler permanently would
+    # crash any off-main-thread caller.
     import threading
-    on_main = threading.current_thread() is threading.main_thread()
-    if on_main:
-        prev_handler = signal.signal(signal.SIGALRM, _alarm)
-    else:
+    from ._gate import caller_timer_kept
+    if threading.current_thread() is not threading.main_thread():
         print(f'  [{tag}] off-main-thread sweep: judge timeout protection unavailable '
               f'(SIGALRM is main-thread-only)', flush=True)
-    try:
+        return _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag, 0)
+    with caller_timer_kept(_alarm):
         return _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
-                            judge_timeout_s if on_main else 0)
-    finally:
-        if on_main:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, prev_handler)
+                            judge_timeout_s)
 
 
 def _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
@@ -269,10 +264,11 @@ def _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
     eng = build_engine(rules, config_path)
     viol, native, unscored, changed, timeouts = [], [], 0, 0, 0
 
-    def judged(expr, out):
+    def judged(expr, out, engine):
+        """`expr -> out` judged with the rule steps `engine` takes on `expr`."""
         signal.alarm(judge_timeout_s)
         try:
-            return judge_pair(list(expr), out, rng, engine=eng)
+            return judge_pair(list(expr), out, rng, engine=engine)
         finally:
             signal.alarm(0)
 
@@ -289,7 +285,7 @@ def _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
             continue
         changed += 1
         try:
-            v, detail = judged(expr, out)
+            v, detail = judged(expr, out, eng)
         except _JudgeTimeout:
             timeouts += 1
             print(f'  [{tag}] TIMEOUT-unresolved: {" ".join(expr)}  ->  {" ".join(out)}', flush=True)
@@ -306,9 +302,10 @@ def _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
             elif base_out is not None and base_out != list(expr):
                 # CAUSE attribution: if the rules-empty engine's own rewrite of this
                 # expression ALREADY violates, the violation is native and the rule set
-                # merely rewrote further on top.
+                # merely rewrote further on top. The baseline's answer is judged with the
+                # baseline's own steps: the loaded engine's steps are the rule set's.
                 try:
-                    vb, _ = judged(expr, base_out)
+                    vb, _ = judged(expr, base_out, baseline_engine)
                 except _JudgeTimeout:
                     vb = None
                 if vb == 'VIOLATION':

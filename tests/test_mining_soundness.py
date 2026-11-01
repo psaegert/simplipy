@@ -768,8 +768,8 @@ class TestCertifyRules:
             ["log", "pow2", "exp", "x0"],                            # log((e^a)^2) -> a+a: TRUE, unrealised
         ]
         hints = [None, None, ["*", "exp", "x0", "+", "1", "exp", "x1"], None]
-        out = engine.certify_rules(proposals, hints, dummy_variables=3, X=256, seed=7)
-        by_src = {tuple(s): (t, c) for s, t, c in out}
+        out = engine.certify_rules(proposals, hints, dummy_variables=3, X=256, seed=7, mode='permissive')
+        by_src = {tuple(s): (t, c) for s, t, c, _mode, _basis in out}
         assert by_src[tuple(proposals[0])] == (("exp", "neg", "x0"), "minimal")
         assert tuple(proposals[1]) not in by_src
         assert by_src[tuple(proposals[2])] == (("*", "exp", "x0", "+", "1", "exp", "x1"), "verified")
@@ -786,11 +786,31 @@ class TestCertifyRules:
         from simplipy.verify._contract import judge_rule
         assert judge_rule(list(proposals[3]), ['+', 'x0', 'x0'])['tier'] == 'permissive'
 
+    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
+    def test_each_rule_is_certified_in_the_mode_it_is_licensed_for(self, engine, mode) -> None:
+        """`certify_rules` runs in the mode it is given and keeps only rules whose tier that
+        mode licenses; each result says its mode and what the judge's verdict rests on there,
+        so a caller installs it into that mode's set."""
+        from simplipy.mining import CertifiedRule
+        from simplipy.verify import MODE_TIERS, effective_tier, verify_rule
+        from simplipy.verify._contract import BASES
+        out = engine.certify_rules([["inv", "exp", "x0"]], dummy_variables=1, X=256, seed=7,
+                                   mode=mode)
+        assert out and all(isinstance(r, CertifiedRule) for r in out), out
+        for r in out:
+            assert r.mode == mode and r.basis in BASES and r.basis != 'refused', r
+            assert effective_tier(verify_rule(list(r.source), list(r.target))) \
+                in MODE_TIERS[mode], r
+
+    def test_the_mode_is_named_by_the_caller(self, engine) -> None:
+        with pytest.raises(TypeError):
+            engine.certify_rules([["inv", "exp", "x0"]], X=64, seed=7)
+
     def test_skips_sources_the_engine_already_reduces(self, engine) -> None:
         engine.find_rules(max_source_pattern_length=3, dummy_variables=1,
                           extra_internal_terms=["0", "1", "<constant>"], X=256,
                           seed=7, verbose=False, promote_sorts=False)
-        out = engine.certify_rules([["+", "x0", "0"]], X=256, seed=7)
+        out = engine.certify_rules([["+", "x0", "0"]], X=256, seed=7, mode='permissive')
         assert out == []
 
     def test_the_instrument_convicts_the_saturation_impostor(self) -> None:
@@ -814,8 +834,8 @@ class TestCertifyRules:
         out = engine.certify_rules(
             [["tanh", "exp", "np.e"], ["inv", "exp", "x0"]],
             [["1"], None],
-            dummy_variables=2, extra_internal_terms=["np.e"], X=256, seed=7)
-        by_src = {tuple(s): (t, c) for s, t, c in out}
+            dummy_variables=2, extra_internal_terms=["np.e"], X=256, seed=7, mode='permissive')
+        by_src = {tuple(s): (t, c) for s, t, c, _mode, _basis in out}
         # The control must be a true identity the deployed engine ALSO performs, or its
         # own refusal would mask the gate's verdict. `log(e^a e^b) -> a+b` used to sit
         # here and no longer qualifies: true on R, but ENGINE-MISALIGN past exp's
@@ -905,8 +925,8 @@ class TestSymbolicGateFatalBuckets:
         out = engine.certify_rules(
             [["log", "*", "exp", "x0", "exp", "x1"],
              ["inv", "exp", "x0"]],
-            dummy_variables=2, X=256, seed=7)
-        by_src = {tuple(s): (t, c) for s, t, c in out}
+            dummy_variables=2, X=256, seed=7, mode='permissive')
+        by_src = {tuple(s): (t, c) for s, t, c, _mode, _basis in out}
         assert by_src.get(("inv", "exp", "x0")) \
             == (("exp", "neg", "x0"), "minimal"), "control identity failed upstream"
         assert ("log", "*", "exp", "x0", "exp", "x1") not in by_src, \
@@ -938,8 +958,8 @@ class TestCoverageGateSearches:
         the two powers of e into `exp(x0 + x1)`, so no target lies strictly below it."""
         out = engine.certify_rules(
             [self.DIAG, ["*", "exp", "x0", "exp", "x1"], ["inv", "exp", "x0"]],
-            dummy_variables=2, X=256, seed=7)
-        by_src = {tuple(s): (t, c) for s, t, c in out}
+            dummy_variables=2, X=256, seed=7, mode='permissive')
+        by_src = {tuple(s): (t, c) for s, t, c, _mode, _basis in out}
         assert by_src.get(tuple(self.DIAG)) == (self.BETTER, "minimal")
         assert ("*", "exp", "x0", "exp", "x1") not in by_src
         assert by_src.get(("inv", "exp", "x0")) == (("exp", "neg", "x0"), "minimal")
@@ -951,8 +971,8 @@ class TestCoverageGateSearches:
         when it was handed over explicitly)."""
         out = engine.certify_rules([self.DIAG], [list(self.BETTER)],
                                    max_target_pattern_length=3, dummy_variables=2,
-                                   X=256, seed=7)
-        assert [(tuple(s), tuple(t), c) for s, t, c in out] \
+                                   X=256, seed=7, mode='permissive')
+        assert [(tuple(s), tuple(t), c) for s, t, c, _mode, _basis in out] \
             == [(tuple(self.DIAG), self.BETTER, "verified")]
 
     def test_dead_on_arrival_hint_is_refused(self, engine) -> None:
@@ -960,14 +980,14 @@ class TestCoverageGateSearches:
         the serving pass would refuse (the mint-then-drop family): `inv inv x0` folds to
         `x0` natively, so the hint `x0` is exactly the engine's result, not below it."""
         assert engine.certify_rules([["inv", "inv", "x0"]], [["x0"]],
-                                    dummy_variables=1, X=256, seed=7) == []
+                                    dummy_variables=1, X=256, seed=7, mode='permissive') == []
 
     def test_fully_folded_source_stays_uncertified(self, engine) -> None:
         """`+ x0 0` folds to `x0` at parse; nothing expressible beats `x0`. The verdict
         is the same as before the fix -- but now it is search-verified, not guessed
         from the spelling shrink."""
         assert engine.certify_rules([["+", "x0", "0"]], dummy_variables=1,
-                                    X=256, seed=7) == []
+                                    X=256, seed=7, mode='permissive') == []
 
 
 class TestEmitParseClosure:
@@ -1092,8 +1112,8 @@ class TestSpecialPointCertification:
         out = dev.certify_rules(
             [seam_plus, seam_minus, stable],
             [['pow', 'x0', '2'], ['pow', 'x0', '2'], ['-', 'x0', 'x1']],
-            dummy_variables=2, X=1024, seed=7)
-        by_src = {tuple(s): t for s, t, _ in out}
+            dummy_variables=2, X=1024, seed=7, mode='permissive')
+        by_src = {tuple(s): t for s, t, *_ in out}
         assert tuple(seam_plus) not in by_src
         assert tuple(seam_minus) not in by_src
         assert by_src[tuple(stable)] == ('-', 'x0', 'x1')
@@ -1626,7 +1646,7 @@ class TestD28CertifyLock:
         assert em._MINE_LOCK.acquire(blocking=False)
         try:
             with pytest.raises(RuntimeError, match='single-flight'):
-                engine.certify_rules([["+", "x0", "0"]], X=64, seed=7)
+                engine.certify_rules([["+", "x0", "0"]], X=64, seed=7, mode='permissive')
         finally:
             em._MINE_LOCK.release()
 
@@ -1725,8 +1745,8 @@ class TestProposalHintLengthAllowance:
         eng = self._engine(str(tmp_path / "certify"))
         out = eng.certify_rules([self.SIN_SRC], [self.SIN_TGT], dummy_variables=1,
                                 extra_internal_terms=["1", "2", "<constant>"],
-                                max_target_pattern_length=3, X=256, seed=7)
-        assert [(tuple(s), tuple(t), c) for s, t, c in out] \
+                                max_target_pattern_length=3, X=256, seed=7, mode='permissive')
+        assert [(tuple(s), tuple(t), c) for s, t, c, _mode, _basis in out] \
             == [(tuple(self.SIN_SRC), tuple(self.SIN_TGT), "verified")], \
             "certify_rules refused a hint that strictly descends the serve ordering"
 
@@ -1811,8 +1831,8 @@ class TestProposalHintLengthAllowance:
         assert len(self.LONG_TGT) > len(self.LONG_SRC), "specimen must be LONGER"
         out = eng.certify_rules([self.LONG_SRC], [self.LONG_TGT], dummy_variables=1,
                                 extra_internal_terms=["1", "2", "<constant>"],
-                                max_target_pattern_length=3, X=256, seed=7)
-        assert [(tuple(s), tuple(t), c) for s, t, c in out] \
+                                max_target_pattern_length=3, X=256, seed=7, mode='permissive')
+        assert [(tuple(s), tuple(t), c) for s, t, c, _mode, _basis in out] \
             == [(tuple(self.LONG_SRC), tuple(self.LONG_TGT), "verified")]
         endpoint = core.mine_mark(list(self.LONG_SRC), rule_mode='default')
         assert core.ac_ordered_below_in(list(self.LONG_TGT), endpoint, rule_mode='default'), \
@@ -1833,7 +1853,7 @@ class TestProposalHintLengthAllowance:
         assert not core.ac_ordered_below_in(endpoint, list(self.TIE_TGT), rule_mode='default'), "tie: not above either"
         assert eng.certify_rules([self.TIE_SRC], [self.TIE_TGT], dummy_variables=1,
                                  extra_internal_terms=["1", "2", "<constant>"],
-                                 max_target_pattern_length=3, X=256, seed=7) == []
+                                 max_target_pattern_length=3, X=256, seed=7, mode='permissive') == []
         _, sidecar, _ = self._mine(
             str(tmp_path / "mine"), [{"source": self.TIE_SRC, "target": self.TIE_TGT}])
         assert sidecar["proposals"]["trail"][-1]["verdict"] == "rejected"
@@ -2283,7 +2303,7 @@ class TestCertifyRulesRoutesLikeTheMine:
         require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
         engine = self._bare(tmp_path)
         out = engine.certify_rules([['atanh', 'tanh', 'x0'], ['log', 'exp', 'x0']],
-                                   dummy_variables=1, X=256, verbose=False)
+                                   dummy_variables=1, X=256, verbose=False, mode='permissive')
         # certify_rules judges in permissive, whose serve answer already performs both
         # inverse pairs: there is nothing to certify, and nothing is deleted either.
         assert out == []
@@ -2297,7 +2317,7 @@ class TestCertifyRulesRoutesLikeTheMine:
         require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
         engine = self._bare(tmp_path)
         out = engine.certify_rules([['sin', 'x0']], targets=[['x0']],
-                                   dummy_variables=1, X=256, verbose=False)
+                                   dummy_variables=1, X=256, verbose=False, mode='permissive')
         assert not [r for r in out if tuple(r[1]) == ('x0',)]
 
 

@@ -1465,11 +1465,11 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
         old = mp.dps
         try:
             mp.dps = 50
-            C._MAG_SINK.append([mpf(0), mpf(0)])
+            C._LOCAL.mag_sink.append([mpf(0), mpf(0)])
             try:
                 C.c_eval(tree, {'_0': mpf(30)})
             finally:
-                _mag, _small = C._MAG_SINK.pop()
+                _mag, _small = C._LOCAL.mag_sink.pop()
             assert _small >= 1, f'a difference was taken for a small operand: {_small}'
         finally:
             mp.dps = old
@@ -1830,3 +1830,96 @@ def test_the_tiers_are_one_registry() -> None:
     assert v.MODE_TIERS == {mode: frozenset(tier for tier, modes in v.TIERS.items() if mode in modes)
                             for mode in ('f64', 'permissive')}
     assert v.TIERS['core'] == ('f64', 'permissive')
+
+
+class TestTheJudgeKeepsItsStateToItself:
+    """Precision and scratch state are local to each judgment: concurrent calls give the serial
+    verdicts, and the caller's `mpmath.mp` is untouched."""
+
+    RULES = [('/ ?0 ?0', '1'), ('rootn pow ?0 2 2', '?0'), ('rootn pow ?0 2 2', 'abs ?0'),
+             ('atanh tanh ?0', '?0'), ('exp log ?0', '?0'), ('+ ?0 pow sin ?0 float("inf")', '?0'),
+             ('* <constant> + ?0 <constant>', '+ * <constant> ?0 <constant>'),
+             ('ceil inv cosh ?0', '1'), ('- tanh ?0 tanh ?0', '0'), ('asin sin ?0', '?0'),
+             ('pow exp <constant> ?0', 'exp * <constant> ?0'), ('abs neg ?0', 'abs ?0')]
+
+    @staticmethod
+    def reading(r: dict) -> tuple:
+        return r['verdict'], r.get('tier'), json.dumps(r.get('basis'), sort_keys=True)
+
+    def test_the_callers_precision_is_untouched(self) -> None:
+        import mpmath
+        old = mpmath.mp.dps
+        try:
+            mpmath.mp.dps = 7
+            judged = judge_rule('atanh tanh ?0'.split(), '?0'.split())
+            assert mpmath.mp.dps == 7
+        finally:
+            mpmath.mp.dps = old
+        assert self.reading(judged) == self.reading(judge_rule('atanh tanh ?0'.split(),
+                                                               '?0'.split()))
+
+    def test_concurrent_calls_give_the_serial_verdicts(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        serial = {rule: self.reading(judge_rule(rule[0].split(), rule[1].split()))
+                  for rule in self.RULES}
+        work = [self.RULES[k % len(self.RULES)] for k in range(96)]
+        with ThreadPoolExecutor(max_workers=96) as pool:
+            got = list(pool.map(lambda rule: self.reading(judge_rule(rule[0].split(),
+                                                                     rule[1].split())), work))
+        assert got == [serial[rule] for rule in work]
+
+
+class TestTheCallersTimerIsKept:
+    """The ruleset check and the monitor install their per-rule timeout for their own duration
+    and re-arm a timer the caller has pending, less the time they took."""
+
+    def test_the_ruleset_check_keeps_a_pending_timer(self) -> None:
+        import signal
+        import time
+        fired = []
+        previous = signal.signal(signal.SIGALRM, lambda *_: fired.append(True))
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 100.0)
+            start = time.monotonic()
+            v.verify_ruleset([[['/', '?0', '?0'], ['1']]], judge_timeout_s=30)
+            took = time.monotonic() - start
+            left, _ = signal.getitimer(signal.ITIMER_REAL)
+            assert 0 < left <= 100.0 - took + 0.05, (left, took)
+            assert left >= 100.0 - took - 1.0, (left, took)
+            assert signal.getsignal(signal.SIGALRM) is not signal.SIG_DFL and not fired
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+
+
+def test_the_monitor_attributes_to_the_baseline_engines_own_answer() -> None:
+    """A poisoned rule rewrites past an answer the rules-empty engine gives itself: the
+    baseline's answer is judged with the baseline's own steps, and the violation is the rule
+    set's, not the native algebra's."""
+    from simplipy.verify import _monitor
+    poison = [(['*', '?0', '+', '?1', '?2'], ['+', '?1', '?2'])]
+    expr = ['*', 'x0', '+', 'x1', '+', 'x2', '0']
+    baseline = _monitor.build_engine([], ACJ_CONFIG)
+    assert baseline.simplify(list(expr)) not in (list(expr),), 'the baseline must rewrite it'
+    viol, native, _, changed = _monitor.sweep(poison, [expr], np.random.default_rng(0),
+                                              baseline, ACJ_CONFIG)
+    assert changed == 1 and len(viol) == 1 and not native, (viol, native)
+
+
+def test_the_ruleset_check_reads_the_artifacts_own_operators(tmp_path) -> None:
+    """A rule file whose provenance sidecar records its operators is read with an engine over
+    those operators: a rule spelled with one the artifact does not have is refused by the
+    load's well-formedness, as the load of that artifact would refuse it."""
+    rule = [['floor', 'floor', '_0'], ['floor', '_0']]
+    path = tmp_path / 'rules.json'
+    path.write_text(json.dumps([rule]))
+    sidecar = tmp_path / 'rules.json.provenance.json'
+    from simplipy.verify._contract import ARITY
+    everything = sorted(ARITY)
+    sidecar.write_text(json.dumps({'mode': 'f64', 'operators': everything}))
+    assert v.verify_ruleset(str(path), mode='f64')['is_clean']
+    sidecar.write_text(json.dumps({'mode': 'f64',
+                                   'operators': [n for n in everything if n != 'floor']}))
+    report = v.verify_ruleset(str(path), mode='f64')
+    assert not report['is_clean'], report
+    assert report['offenders'][0]['refused_by'] == ['well_formed'], report['offenders']
