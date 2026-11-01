@@ -1596,13 +1596,24 @@ impl Expr {
 
     fn node_real(&self, i: usize, env: &[Val], ctx: &mut Ctx) -> Out {
         match &self.nodes[i] {
-            Node::Var(k) => Some(env.get(*k)?.clone()),
-            Node::Lit(leaf, _) => Some(match leaf {
-                Leaf::Exact(e) => Val::Exact(e.clone()),
-                Leaf::Big(p, q) => approx(ctx.ratio(p, q)),
-                Leaf::Dec(m, k) => approx(ctx.decimal(m, *k)),
-                Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
-            }),
+            // A leaf is an operand like any intermediate: the precision a computation demands is
+            // set by the magnitudes it combines, and `1 + 1e-3000` demands 3,000 digits however
+            // the 1e-3000 is spelled.
+            Node::Var(k) => {
+                let v = env.get(*k)?.clone();
+                ctx.note_mag(&v, false);
+                Some(v)
+            }
+            Node::Lit(leaf, _) => {
+                let v = match leaf {
+                    Leaf::Exact(e) => Val::Exact(e.clone()),
+                    Leaf::Big(p, q) => approx(ctx.ratio(p, q)),
+                    Leaf::Dec(m, k) => approx(ctx.decimal(m, *k)),
+                    Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
+                };
+                ctx.note_mag(&v, false);
+                Some(v)
+            }
             Node::Op(name, kids) => {
                 let a = self.node_real(kids[0], env, ctx)?;
                 let v = if kids.len() == 1 {

@@ -142,7 +142,9 @@ rests on, per mode (`verdict['basis']`):
   and the measure of clause (b) is decided by certified cells; no counterexample was found, which
   is no proof;
 - **`refused`**: a counterexample, or a check that could not decide (an undecided check never
-  reads as a pass).
+  reads as a pass). Two readings that agree only because the precision ran out are no equality:
+  a point whose operands demand more than 2,000 digits is undecided
+  (`x^2 + 1 + 1e-3000 -> x^2 + 1` is refused; at 1e-100 the readings reach the separation).
 
 A mine records the basis of every rule of each file in its provenance sidecar (`basis`), and
 `verify-mine` reports how many rules each file holds on evidence alone.

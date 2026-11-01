@@ -698,9 +698,24 @@ def test_the_judge_reads_every_literal_the_engine_emits(expr, mode) -> None:
 
 def test_a_decimal_past_the_exact_readers_is_judged() -> None:
     """The table reads `m * 10^k` at any exponent up to 1e6: a rule over it is judged, not
-    refused as unsupported."""
+    refused as unsupported. Its readings demand more digits than the precision ceiling, so two
+    equal readings there are no equality: the judge's answer is uncertain, a refusal."""
     v = verify_rule('* 2.827881176741212e-244756 x0'.split(), '* x0 2.827881176741212e-244756'.split())
-    assert v['verdict'] == 'CERTIFIED', v
+    assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
+
+
+def test_precision_run_out_is_no_equality() -> None:
+    """`x^2 + 1 + 1e-3000 -> x^2 + 1` is false by 1e-3000 at every x. The readings demand
+    6,000 digits (a literal is an operand the precision is sized by), past the ceiling, so
+    their agreement is no equality: refused with uncertainty, never certified. At 1e-100 the
+    rungs reach the separation: false in the reals, while float64 adds the double 1e-100 to 1
+    exactly and permissive reads the reals' values at float resolution (P3), so it holds in
+    both."""
+    v = verify_rule('+ + pow x0 2 1 1e-3000'.split(), '+ pow x0 2 1'.split())
+    assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
+    assert v['basis'] == {'f64': 'refused', 'permissive': 'refused'}
+    w = verify_rule('+ + pow x0 2 1 1e-100'.split(), '+ pow x0 2 1'.split())
+    assert (w['verdict'], w['tier']) == ('KILL', 'core'), w
 
 
 # ------------------------------------------------------------------------------------------

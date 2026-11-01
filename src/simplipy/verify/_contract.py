@@ -2065,8 +2065,20 @@ def _point_verdict(tl, tr, env_mp):
         # which is why `pow np.e sinh -10 -> 0` still reads 1.03e-4783 at every rung and
         # is still convicted below. This also subsumes the exactly-zero-on-both-sides
         # case, which is why the scale below can no longer be zero.
+        #
+        # PRECISION RUN OUT IS NO EQUALITY. Where the point asks for more digits than the
+        # ceiling allows (`_demanded_dps` past `MAX_DPS`), the finer rung is clamped, and a
+        # separation below its resolution reads as none: `x^2 + 1 + 1e-3000 -> x^2 + 1` is
+        # false by 1e-3000 at every x, and both clamped rungs read the two sides equal. The
+        # same clamped rung can show a gap the coarse rung read as zero (1e-1500 at dps 2000,
+        # 0 at dps 50); measured from the coarse rung's floor that is no decay but a gap
+        # appearing. Neither is a reading of equality: the point is Unresolved (refused with
+        # uncertainty, never certified). A decay between two readings that both saw a gap
+        # stays evidence of agreement.
+        exhausted = _demanded_dps(getattr(once, 'mag', None),
+                                  getattr(once, 'small', None)) > MAX_DPS
         if d_hi == 0:
-            return 'eq', snapped1
+            return (None if exhausted else 'eq'), snapped1
         # ONE SCALE FOR BOTH RUNGS, AND IT IS THE VALUE'S, NEVER THE
         # COMPUTATION'S. The separations are absolute; the scale is
         # fixed here, so it divides out of the ratio and touches nothing but the floor.
@@ -2109,7 +2121,7 @@ def _point_verdict(tl, tr, env_mp):
         # nothing. Half the added precision separates them with >=30 decades to spare.
         drop = mp.log10(g_lo / g_hi)
         if drop > (hi_dps - lo_dps) / 2:
-            return 'eq', snapped1
+            return (None if exhausted and d_lo == 0 else 'eq'), snapped1
         # PAST THE CEILING, UNRESOLVED -- NEVER CONVICTED. That is what `MAX_DPS`
         # documents, and the ladder did not do it: it read a rung clamped to 2000 as
         # though it were the rung the point asked for. At c = -3000, `exp(c) = 1e-1303`

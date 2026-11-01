@@ -1393,6 +1393,13 @@ model predictions.
   reports how many rules hold on evidence alone. A rule without variables has no tolerance in
   `permissive` either: `log(-1) -> 0` and `1/0 -> inf` are refused there, where a fully
   numeric expression takes its table value.
+- **Precision run out is no equality.** The judge sizes its precision by the magnitudes a
+  point combines, its literals and variables' values included (a literal of 1e-3000 added to 1
+  demands 6,000 digits), and where a point demands more than the 2,000-digit ceiling, two
+  readings that agree at the ceiling are no reading of equality: the point is undecided.
+  `x^2 + 1 + 1e-3000 -> x^2 + 1`, false by 1e-3000 everywhere, is refused with uncertainty (it
+  was licensed in every mode); at 1e-100 the readings reach the separation, and the rule is
+  false in the reals and holds in `f64` and `permissive`.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's
