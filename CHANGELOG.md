@@ -1330,6 +1330,12 @@ model predictions.
   finite almost everywhere, and `0*tanh(floor(x0)/floor(x0))` stays as it is in `f64` (it became
   0, where float64 gives NaN). `0*tanh(1/floor(x0))` is still 0 in `f64`: float64's 1/+0 is
   +inf, and tanh of it 1.
+- **A saturation ray at a pole holds the pole's value.** float64's tanh is 1.0 on the whole
+  ray past 19.06, where `atanh(tanh(x0))` is +inf: the interval layer's enclosure of a domain
+  edge at a pole that the operand attains on a set of positive measure now holds the pole's
+  infinity beside its finite part, so a cell that reaches the ray is no finite cell and the
+  cells below it are. `atanh(tanh(x0))` has evidence in `f64` (it is finite for |x0| below
+  about 19.06); it read as finite nowhere.
 - **The rule judge reads a jump at its preimage.** `ceil(sinh(x0) + 1/2) - floor(sinh(x0) +
   1/2) -> 1` is false in `real` only where sinh(x0) + 1/2 is an integer, at transcendental
   points no double is and no reading near one decides, and the judge passed it. Along each

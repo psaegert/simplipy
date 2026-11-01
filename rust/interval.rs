@@ -654,6 +654,23 @@ fn domain_op(
         // Image of a null x-support is null-supported; a degenerate boundary overlap
         // kept by `clip` carries its own null marking.
         r.fin_null = v.fin_null || cl.fin_null;
+        // A POLE EDGE THE OPERAND ATTAINS ON POSITIVE MEASURE is the pole's value there, beside
+        // the unbounded edge of the rest of the hull: float64's tanh is 1.0 on the whole ray
+        // past 19.06 (`sat_hi`), so `atanh(tanh(x))` is +inf there, and a hull [1 - 8 ulp, 1]
+        // that reached the pole only as an edge read it finite everywhere. The degenerate
+        // hull, the edge alone, is the case above.
+        for (edge, at_pole, open, sat, inf_at) in [
+            (cl.lo == dlo, pole_lo, cl.lo_open, cl.sat_lo, inf_at_lo),
+            (cl.hi == dhi, pole_hi, cl.hi_open, cl.sat_hi, inf_at_hi),
+        ] {
+            if let (true, true, false, true, Some(sign)) = (edge, at_pole, open, sat, inf_at) {
+                if sign > 0.0 {
+                    r.pinf = true;
+                } else {
+                    r.ninf = true;
+                }
+            }
+        }
     }
     r
 }

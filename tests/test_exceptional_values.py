@@ -6,8 +6,8 @@ import os
 import pytest
 import yaml
 
-from simplipy import SimpliPyEngine
-from simplipy.verify._contract import judge_rule
+from simplipy import SimpliPyEngine, _core
+from simplipy.verify._contract import ARITY, judge_rule
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 F29 = 'tanh / floor x0 floor x0'.split()
@@ -64,3 +64,18 @@ def test_a_null_pole_is_still_certified(eng) -> None:
     float64's 1/+0 = +inf is a value: `0*tanh(1/floor(x))` is 0 at every float64 input."""
     assert eng._core.interval_finite_ae(['tanh', 'inv', 'x0']) is True
     assert eng.simplify(['*', '0', 'tanh', 'inv', 'floor', 'x0'], mode='f64') == ['0']
+
+
+def test_a_pole_edge_attained_on_positive_measure_holds_the_infinity(eng) -> None:
+    """float64's tanh is 1.0 on the whole ray past 19.06, where `atanh(tanh(x))` is +inf: the
+    enclosure of a cell that reaches the ray holds +inf beside its finite part, a cell below it
+    is finite, and float64's evidence finds `atanh(tanh(x))` finite on a set of positive
+    measure (it read it as finite nowhere)."""
+    tokens = ['atanh', 'tanh', 'x0']
+    has_fin, pinf, _, nan, _, _ = eng._core.interval_value_set_box(tokens, [0.0], [64.0],
+                                                                  real=False)
+    assert has_fin and pinf and not nan
+    has_fin, pinf, _, nan, _, hi = eng._core.interval_value_set_box(tokens, [0.0], [10.0],
+                                                                   real=False)
+    assert has_fin and not pinf and not nan and hi < 11
+    assert _core.table_evidence(tokens, dict(ARITY), True) is True
