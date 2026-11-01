@@ -1065,22 +1065,27 @@ def _finite_somewhere(lhs, spelling, key, f64):
 
 
 def _eligible(tl, lhs, spelling, nvars, builders, key):
-    """THE SPECIFICATION'S 3.2 ELIGIBILITY, decided apart from the witness search: is the left
-    side, its constants at `key` (`builders`, their exact values), finite on a set of bindings
-    of positive measure, so that a witness is owed there? Finite at a generic point, in
-    float64's values or the reals', says yes, and so does a point the table cannot read (unread
-    is not nowhere finite). Otherwise the interval layer's enclosure over every binding decides:
-    only its certificate that no finite part has positive measure, in both readings, says no. A
-    left side without variables has one point, and its reading there decides."""
+    """THE SPECIFICATION'S 3.2 ELIGIBILITY, decided apart from the witness search and per mode:
+    is the left side, its constants at `key` (`builders`, their exact values), finite on a set
+    of bindings of positive measure, so that a witness is owed there? Each mode asks it of its
+    own values: f64 of float64's (`'f64'`), permissive of the reals' (`'reals'`). Finite at a
+    generic point says yes, and so does a point that cannot be read (unread is not nowhere
+    finite). Otherwise the interval layer's enclosure over every binding, read in the same
+    values, decides: only its certificate that no finite part has positive measure says no. A
+    left side without variables has one point, and its reading there decides.
+    -> `{'f64': bool, 'reals': bool}`."""
     envs = [_gen_env(set(nvars), k) for k in range(len(GEN))]
     cl_f = {n: F(c) for n, c in zip(builders, key)}
+    owes = {'f64': False, 'reals': False}
     for env in envs:
         try:
             with np.errstate(all='ignore'):
                 if np.isfinite(d_eval(tl, {**env, **cl_f})):
-                    return True
+                    owes['f64'] = True
+                    break
         except Exception:
-            return True
+            owes['f64'] = True
+            break
     old = mp.dps
     try:
         mp.dps = BASE_DPS
@@ -1089,14 +1094,17 @@ def _eligible(tl, lhs, spelling, nvars, builders, key):
             e.update({n: b() for n, b in builders.items()})
             try:
                 if cls_mp(c_eval(tl, e))[0] == 'fin':
-                    return True
+                    owes['reals'] = True
+                    break
             except Unresolved:
-                return True
+                owes['reals'] = True
+                break
     finally:
         mp.dps = old
-    if not nvars:
-        return False
-    return any(_finite_somewhere(lhs, spelling, key, f64) is not False for f64 in (False, True))
+    if nvars:
+        for mode, f64 in (('f64', True), ('reals', False)):
+            owes[mode] = owes[mode] or _finite_somewhere(lhs, spelling, key, f64) is not False
+    return owes
 
 
 def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
@@ -2273,35 +2281,32 @@ TIER_MEANINGS = {
 }
 
 #: The verdicts under which a rule holds in the reals' values (the reference permissive is
-#: defined against, and the reals in which the engine's own algebra is exact).
+#: defined against, and the reals in which the engine's own algebra is exact). A diagnostic: it
+#: decides no mode.
 HOLDS_IN_THE_REALS = frozenset({'CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'})
 
 
-def _tier(verdict, realised, permissive=None):
-    """The tier of a judged rule (`TIERS`): the modes it holds in. `verdict` is the criterion
-    in the reals' values (`HOLDS_IN_THE_REALS`), `realised` f64's (`True` only: `None` means the
-    deployed lane never got an observation, and absent evidence supports no claim --
-    `sin(np.pi) -> 0` is exactly true while f64 computes 1.2246467991473532e-16), `permissive`
-    permissive's (`None`: not judged, read in the reals)."""
-    if verdict not in HOLDS_IN_THE_REALS | {'KILL', 'UNDECIDED-MEASURE'}:
-        # NO-WITNESS, UNRESOLVED-COVERAGE, UNSUPPORTED-SHAPE, JUDGE-TIMEOUT: the judge reached
-        # no answer, and holds in no mode
-        return 'reject'
-    # the reals' measure undecided refuses no mode by itself: f64 owes clause (b) in float64's
-    # values, which `realised` holds (an undecided f64 measure is no realisation), and
-    # permissive does not owe it (specification 4.10)
-    held = {'f64': realised is True and verdict != 'ENGINE-MISALIGN',
-            'permissive': (verdict in HOLDS_IN_THE_REALS) if permissive is None
-            else bool(permissive)}
+def _tier(realised, permissive):
+    """The tier of a judged rule (`TIERS`): the modes it holds in, each read on its own values.
+    `realised` is f64's reading (float64's values, the reals read only for the true value at a
+    range event), `permissive` permissive's (the reals' values at float resolution). Each is
+    True (holds), False (refused) or None (no answer reached: refused with uncertainty). The
+    reals' verdict (`CERTIFIED`, `KILL`, ...) is a diagnostic and no input: `sin(np.pi) -> 0`
+    is exactly true while float64 computes 1.2246467991473532e-16, and
+    `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in f64, whose two sides are bit-identical, though the
+    reals' reading cannot resolve the gap."""
+    held = {'f64': realised is True, 'permissive': permissive is True}
     modes = tuple(m for m in MODES if held[m])
     return next(tier for tier, tier_modes in TIERS.items() if tier_modes == modes)
 
 
 def judge_rule(lhs, rhs, deployed_check=True):
-    """-> dict: verdict CERTIFIED | TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS |
-    UNRESOLVED-COVERAGE | UNDECIDED-MEASURE | UNSUPPORTED-SHAPE, with clause/class, points, the
-    certified measure (`_judge_contract`), and the tier the three modes' criteria give
-    (`_tier`).
+    """-> dict: the verdict per mode -- each mode judged on its own values: f64's reading
+    (`realised`), permissive's (`permissive`), the tier they give (`_tier`) and what each rests
+    on (`basis`) -- with the reals' outcome beside them as a diagnostic (`verdict`: CERTIFIED |
+    TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS | UNRESOLVED-COVERAGE | UNDECIDED-MEASURE |
+    UNSUPPORTED-SHAPE, with clause/class, points and the certified measure, `_judge_contract`).
+    The reals' outcome decides no mode by itself.
 
     A rule spelled with a 0.15 head (`NEW_HEADS`) is realised in float64 only where the core's
     f64 bar agrees too (`_core.f64_bar_sorted`: by F6's agreement at the jumps and the poles
@@ -2341,12 +2346,12 @@ BASES = ('proved', 'evidence', 'refused')
 
 def _basis(r, mode):
     """The basis of the judged rule `r` in `mode` (`BASES`): refused where the mode does not
-    hold it, proved where an exact route proves it there and nothing the battery read
-    contradicts the proof, else evidence."""
+    hold it, proved where an exact route proves it there and the proof stands (`exact_conflict`
+    names the modes where it does not), else evidence."""
     if mode not in TIERS[r.get('tier') or 'reject']:
         return 'refused'
     ex = r.get('exact') or {}
-    if ex.get(mode) == 'proved' and not r.get('exact_conflict'):
+    if ex.get(mode) == 'proved' and mode not in (r.get('exact_conflict') or ()):
         return 'proved'
     return 'evidence'
 
@@ -2362,11 +2367,15 @@ def _real_spec(tree):
 
 
 def _with_exact_routes(lhs, rhs, r, deployed_check):
-    """The judged rule `r` with the exact routes' answers (`_exact`): a refutation refuses the
-    rule in its modes (`max(0, 0.001 - abs(x0 - 0.123456789)) -> 0`, false on an interval of
-    width 0.002 that no battery point reaches), a proof is recorded beside the verdict
-    (`exact`). Where a proof meets a refusal the battery read at a real binding, the refusal
-    stands (fail closed) and `exact_conflict` says so."""
+    """The judged rule `r` with the exact routes' answers (`_exact`), mode by mode: a refutation
+    in a mode refuses the rule there (`max(0, 0.001 - abs(x0 - 0.123456789)) -> 0`, false on an
+    interval of width 0.002 that no battery point reaches); a proof in a mode stands where the
+    battery's reading there reached no answer (no witness found, too few points read) and is
+    recorded beside a reading that holds (`exact`). Where a proof meets a refusal in its mode,
+    the refusal stands (fail closed), and `exact_conflict` names the mode. A proof the reals'
+    battery reading contradicts at a real binding is doubted in every mode: it upgrades no
+    reading and labels nothing proved. The reals' verdict name follows the route's reals answer,
+    as a diagnostic."""
     try:
         tl = parse(lhs, '<C_L>', number=True)
         tr = parse(rhs, '<C_R>', number=True)
@@ -2390,38 +2399,40 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
     if ex is None:
         return r
     r = dict(r, exact=ex)
-    realised, permissive = r.get('realised'), r.get('permissive')
-    if 'tier' not in r:
-        # the battery reached no answer (no witness found, too few points read): an exact
-        # route's answer stands alone, and a mode it does not decide holds nothing
-        if ex['reals'] not in ('proved', 'refuted'):
-            return r
-        realised = {'proved': True, 'refuted': False}.get(ex['f64']) if deployed_check \
-            else None
-        permissive = ex['permissive'] == 'proved'
+    verdict = r.get('verdict')
+    witness = ex.get('witness')
+    refuted_at = [{variables[0]: _exact.as_double(witness)} if witness is not None else {}]
+    # the reals' name, a diagnostic: the route's answer where the battery reached none, a
+    # refutation beside a reading that held
+    doubted = False
+    if verdict in ('NO-WITNESS', 'UNRESOLVED-COVERAGE') and ex['reals'] in ('proved', 'refuted'):
         r.update(verdict='CERTIFIED' if ex['reals'] == 'proved' else 'KILL')
         if ex['reals'] == 'refuted':
-            witness = ex.get('witness')
-            r.update(clause='a-exact', kinds=['REAL-CHANGE'],
-                     points=[{variables[0]: _exact.as_double(witness)}
-                               if witness is not None else {}])
-    elif ex['reals'] == 'refuted' and r['verdict'] in HOLDS_IN_THE_REALS:
-        witness = ex.get('witness')
-        r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'],
-                 points=[{variables[0]: _exact.as_double(witness)}
-                               if witness is not None else {}])
-    elif ex['reals'] == 'proved' and (r['verdict'] == 'UNDECIDED-MEASURE' or (
-            r['verdict'] == 'KILL' and r.get('clause') != 'a-nonfinite-binding')):
-        # the route covers every finite binding; a `_` slot's non-finite atoms are the battery's
-        r['exact_conflict'] = True
-    if ex['permissive'] == 'refuted':
-        permissive = False
-    if deployed_check and ex['f64'] == 'refuted':
-        realised = False
-    elif deployed_check and ex['f64'] == 'proved' and realised is None:
-        realised = True
-    r.update(realised=realised, permissive=permissive,
-             tier=_tier(r['verdict'], realised, permissive))
+            r.update(clause='a-exact', kinds=['REAL-CHANGE'], points=refuted_at)
+    elif ex['reals'] == 'refuted' and verdict in HOLDS_IN_THE_REALS:
+        r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'], points=refuted_at)
+    elif ex['reals'] == 'proved' and (verdict == 'UNDECIDED-MEASURE' or (
+            verdict == 'KILL' and r.get('clause') != 'a-nonfinite-binding')):
+        # the route covers every finite binding, and the battery read the reals apart at one
+        # (a `_` slot's non-finite atoms are the battery's alone): the proof is doubted
+        doubted = True
+    readings = {'f64': r.get('realised') if deployed_check else None,
+                'permissive': r.get('permissive')}
+    conflict = []
+    for mode in MODES:
+        if mode == 'f64' and not deployed_check:
+            continue
+        if ex[mode] == 'refuted':
+            readings[mode] = False
+        elif ex[mode] == 'proved':
+            if doubted or readings[mode] is False:
+                conflict.append(mode)
+            elif readings[mode] is None:
+                readings[mode] = True
+    r.update(realised=readings['f64'], permissive=readings['permissive'],
+             tier=_tier(readings['f64'], readings['permissive']))
+    if conflict:
+        r['exact_conflict'] = conflict
     return r
 
 
@@ -2464,7 +2475,7 @@ def _with_f64_bar(lhs, rhs, r):
     ok = ok and range_ok
     realised = r.get('realised') is not False and ok
     return dict(r, realised=realised,
-                tier=_tier(r['verdict'], realised, r.get('permissive')),
+                tier=_tier(realised, r.get('permissive')),
                 f64_bar={'ok': ok, 'probes': probes, 'range_probes': len(range_rows),
                          'first': None if first is None else dict(zip(keys, first))})
 
@@ -2622,7 +2633,15 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # ENGINE-MISALIGNs across f64 saturation cliffs (asin(tanh(exp(3))): f64 sees exactly
     # pi/2, the contract pi/2 - 2.3e-9).
     witness, witness_f64, witness_dps = {}, {}, {}
-    skipped_cl, unwitnessed_cl = [], []
+    skipped_cl = []
+    # the constants each mode owes a witness at and none was found: f64 owes where float64's left
+    # side is finite, the reals (permissive's reference) where theirs is
+    unwitnessed = {'f64': [], 'reals': []}
+
+    def no_witness(detail, **extra):
+        # no witness where both modes owe one: neither holds, with uncertainty
+        return {'verdict': 'NO-WITNESS', 'realised': None, 'permissive': None, 'tier': 'reject',
+                'detail': detail, **extra}
 
     def fitted(key):
         """The polished witness at `key`, re-rounded at the current rung -- Unresolved at a
@@ -2657,18 +2676,21 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             else:
                 ws = fit_witness_multi(tl, tr, set(nvars), cl_env, rnames, fit_env)
             if ws is None:
-                # ELIGIBILITY IS DECIDED APART FROM THE SEARCH (3.2): a constant at which the
-                # left side is finite on a set of positive measure is owed a witness, and a
-                # search that found none refuses the rule with uncertainty -- never "owes
-                # nothing" (`tanh(x + log(C))` at C = 0 is -1 everywhere, a value no
-                # `tanh(x + D)` gives), never a proved impossibility.
-                if _eligible(tl, lhs, spelling, nvars, builders, key):
-                    if all(c in core for c in key):
-                        return {'verdict': 'NO-WITNESS', 'permissive': False,
-                                'detail': f'cl={key} (LHS finite there, no witness found)'}
-                    unwitnessed_cl.append(key)
+                # ELIGIBILITY IS DECIDED APART FROM THE SEARCH (3.2), PER MODE: a constant at
+                # which the left side is finite on a set of positive measure, in the mode's
+                # values, is owed a witness there, and a search that found none refuses the rule
+                # in that mode with uncertainty -- never "owes nothing" (`tanh(x + log(C))` at
+                # C = 0 is -1 everywhere, a value no `tanh(x + D)` gives), never a proved
+                # impossibility.
+                owes = _eligible(tl, lhs, spelling, nvars, builders, key)
+                if not (owes['f64'] or owes['reals']):
+                    skipped_cl.append(key)
                     continue
-                skipped_cl.append(key)
+                for mode in unwitnessed:
+                    if owes[mode]:
+                        unwitnessed[mode].append(key)
+                if owes['f64'] and owes['reals'] and all(c in core for c in key):
+                    return no_witness(f'cl={key} (LHS finite there, no witness found)')
                 continue
             if len(rnames) == 1:
                 witness[key] = {rnames[0]: mp_polish(tl, tr, nvars, builders, ws[0],
@@ -2681,14 +2703,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             witness_f64[key] = dict(zip(rnames, ws))
             kept.append((builders, key))
         if not kept:
-            return {'verdict': 'NO-WITNESS', 'detail': 'no cl with a finite LHS/witness',
-                    'permissive': False}
-        if unwitnessed_cl:
-            # forall-c exists-d is not shown at a constant where the LHS is finite. Reported
-            # for ALL such constants: one is a corner, a spread is a false rule.
-            return {'verdict': 'NO-WITNESS', 'skipped_cl': skipped_cl,
-                    'detail': f'cl={sorted(unwitnessed_cl)} (LHS finite there, no witness found)',
-                    'permissive': False}
+            return no_witness('no cl with a finite LHS/witness')
+        if unwitnessed['f64'] and unwitnessed['reals']:
+            # forall-c exists-d is not shown, in either mode, at a constant where the LHS is
+            # finite. Reported for ALL such constants: one is a corner, a spread is a false rule.
+            return no_witness(f'cl={sorted(set(unwitnessed["f64"] + unwitnessed["reals"]))} '
+                              f'(LHS finite there, no witness found)', skipped_cl=skipped_cl)
         cl_battery = kept
 
     # battery sweep (cap the slot-product deterministically)
@@ -2742,9 +2762,13 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return False
 
     def deployed(tl_env, v, point, all_real, snapped, out):
-        """The f64 lane at one point: append `(kind, point)` to `out['bad']` / `out['div']`; an
-        extension on a lower-dimensional cell is clause (b)'s, and is counted apart."""
-        if not deployed_check or snapped:
+        """The f64 lane at one point, on float64's own values: append `(kind, point)` to
+        `out['bad']` / `out['div']`; an extension on a lower-dimensional cell is clause (b)'s,
+        and is counted apart. The reals' reading `v` (and whether a snap read it) is asked only
+        at a range event, where the true value is accepted (F5): where an operation of either
+        side overflowed or underflowed and float64's sides differ, a true value the reals
+        resolved decides, and one they did not leaves the point unread (`out['unread']`)."""
+        if not deployed_check:
             return
         try:
             in_range = [True]
@@ -2752,13 +2776,18 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 _dl, _dr = d_eval(tl, tl_env, in_range), d_eval(tr, tl_env, in_range)
             out['seen'] = True
             out['finite_f64'] = out['finite_f64'] or bool(np.isfinite(_dl))
-            if not in_range[0] and v == 'eq':
+            _dcl, _dcr = cls_np(_dl), cls_np(_dr)
+            dv = compare_deployed_realised(_dcl, _dcr)
+            if not in_range[0] and not snapped and v == 'eq':
                 # THE f64 STANDARD: an operation of either side overflowed or underflowed,
                 # and the rewrite gives the true value -- an agreeing observation
                 out['oor'] += 1
+                out['read'] += 1
                 return
-            _dcl, _dcr = cls_np(_dl), cls_np(_dr)
-            dv = compare_deployed_realised(_dcl, _dcr)
+            if not in_range[0] and dv != 'eq' and (v is None or snapped):
+                out['unread'] += 1
+                return
+            out['read'] += 1
             if dv != 'eq':
                 out['kinds'].add(_f64_kind(dv, _dl, _dr))
                 if dv == 'EXT' and isolated_f64(tl_env):
@@ -2779,7 +2808,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
-                'kinds': set(), 'null': 0}
+                'kinds': set(), 'null': 0, 'read': 0, 'unread': 0}
 
     def judge_point(acc, v, point, kind, real_valued, where):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
@@ -2813,6 +2842,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     vacuous, owed_keys = [], set()
     ext_where = []
     f64_owed, f64_null_keys = set(), set()
+    f64_read = [0, 0]           # f64's battery points read, and left unread at a range event
 
     def merge(acc, key):
         nonlocal resolved_pts, attempted_pts
@@ -2826,6 +2856,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             dep_div.extend(acc['div'])
             dep_kinds.update(acc['kinds'])
             f64_owed.add(key)
+            f64_read[0] += acc['read']
+            f64_read[1] += acc['unread']
             if acc['null']:
                 f64_null_keys.add(key)
         dep_seen[0] = dep_seen[0] or acc['seen']
@@ -2982,11 +3014,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             point.update(dict(zip(lnames, grid_key)))
             judge_point(acc, v, point, 'real', True,
                         (grid_key, {m: mpf(x) for m, x in vals.items()}))
-            if v is not None:
-                ed = {m: F(x) for m, x in vals.items()}
-                ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
-                ed.update({k: F(w) for k, w in cr_f64.items()})
-                deployed(ed, v, point, True, snapped, acc)
+            ed = {m: F(x) for m, x in vals.items()}
+            ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
+            ed.update({k: F(w) for k, w in cr_f64.items()})
+            deployed(ed, v, point, True, snapped, acc)
 
     def preimages(acc, lanes, cr_f64):
         """THE JUMP PREIMAGES (`_jump_probes`), at the generic constants: along each lane, where
@@ -3113,8 +3144,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             v2, sn2 = _point_verdict(tl, tr, lambda exact=exact: {
                 **{m: +y for m, y in exact.items()},
                 **{k: bb() for k, bb in gbuilders.items()}, **fitted(grid_key)})
-            if v2 is not None:
-                deployed(ed, v2, dict(point, **{n: dv}), True, sn2, acc)
+            unread = acc['unread']
+            deployed(ed, v2, dict(point, **{n: dv}), True, sn2, acc)
+            if acc['unread'] == unread:
                 break
         return True
 
@@ -3155,10 +3187,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     point.update(dict(zip(lnames, grid_key)))
                     judge_point(acc, v, point, 'real', True,
                                 (grid_key, {m: mpf(x) for m, x in vals.items()}))
-                    if v is None or n is None:
-                        # the deployed lane reads the per-slot grid where the contract
-                        # resolved: an unresolved point says nothing about the true value a
-                        # range event accepts (`ceil(1/cosh(1e4))` needs 4,353 digits)
+                    if n is None:
+                        # the diagonal is f64's in the coincidences, judged as their own rules
                         continue
                     ed = {m: F(x) for m, x in vals.items()}
                     ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
@@ -3169,7 +3199,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             mint_rows(acc, cr_f64)
             magnitudes(acc, lanes, cr_f64)
             # the grid's points count toward nothing in coverage (that is the battery's)
-            acc['resolved'] = acc['attempted'] = 0
+            acc['resolved'] = acc['attempted'] = acc['read'] = acc['unread'] = 0
             merge(acc, grid_key)
     finally:
         mp.dps = old
@@ -3282,9 +3312,16 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # f64 HOLDS by its own values, whatever the reals' verdict: no disagreement at a point read
     # (an extension on a lower-dimensional cell is clause (b)'s, `isolated_f64`, as the
     # constructors fill `x1/x1` with 1), and no cell of positive measure where float64 extends.
-    _realised = (not dep_bad and not f64_undecided and f64_width == 0) if dep_seen[0] else None
-    if correlated_f64 is not None:
+    # Like the reals' battery, float64's must have been read: a battery mostly left unread at
+    # range events whose true value no rung resolved reaches no answer.
+    f64_total = f64_read[0] + f64_read[1]
+    f64_covered = f64_total == 0 or f64_read[0] >= 0.25 * f64_total
+    _realised = (not dep_bad and not f64_undecided and f64_width == 0) \
+        if dep_seen[0] and f64_covered else None
+    if dep_bad or correlated_f64 is not None:
         _realised = False
+    if unwitnessed['f64'] and _realised is not False:
+        _realised = None       # owed a witness at a constant, and none found: no answer
     # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
@@ -3348,7 +3385,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         if not excused(event):
             perm_left.append(event)
             break
-    permissive = covered and not perm_left
+    # permissive's reading: a counterexample refuses it; a battery mostly unresolved in the reals,
+    # or a constant owed a witness in the reals and none found, reaches no answer
+    permissive = False if perm_left else (True if covered and not unwitnessed['reals'] else None)
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised': _realised, 'out_of_range': dep_out_of_range[0],
             'permissive': permissive, 'resolved_points': resolved_pts,
@@ -3367,9 +3406,15 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
 
     def verdict(name, **extra):
         out = dict(base, verdict=name, **extra)
-        out['tier'] = _tier(name, out['realised'], out['permissive'])
+        out['tier'] = _tier(out['realised'], out['permissive'])
         return out
 
+    # THE REALS' NAME FOR THE OUTCOME, a diagnostic beside the modes' readings above
+    if unwitnessed['reals']:
+        # forall-c exists-d is not shown in the reals at a constant where their left side is
+        # finite: no answer in the reals, whatever the other constants showed
+        return verdict('NO-WITNESS', detail=f'cl={sorted(unwitnessed["reals"])} (LHS finite '
+                                            f'there, no witness found)')
     if a_kills:
         return verdict('KILL', clause='a-real-change', points=[p for _, p in a_kills[:3]],
                        kinds=sorted({k for k, _ in a_kills}))
@@ -3386,13 +3431,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return verdict('KILL', clause='coincident-slots', coincidence=correlated)
     if not covered:
         # "skip, never convict" must not become "skip everything, acquit": a rule whose
-        # battery is almost entirely Unresolved has no evidence either way (e.g. a
-        # 1e15-argument trig rule certifying from one resolved point). The bar is a
-        # FRACTION of attempted points: a ground rule with its single point resolved has
-        # full coverage.
-        return {'verdict': 'UNRESOLVED-COVERAGE', 'resolved_points': resolved_pts,
-                'attempted_points': attempted_pts, 'skipped_cl': skipped_cl,
-                'permissive': False}
+        # battery is almost entirely Unresolved has no evidence either way in the reals (e.g.
+        # a 1e15-argument trig rule certifying from one resolved point), and permissive, which
+        # reads the reals, reaches no answer. The bar is a FRACTION of attempted points: a
+        # ground rule with its single point resolved has full coverage. f64 reads its own
+        # values, whatever the reals resolved.
+        return verdict('UNRESOLVED-COVERAGE', attempted_points=attempted_pts)
     if correlated is not None:
         undecided.append(('coincidence', str(correlated['coincide'])))
     if undecided:

@@ -535,22 +535,13 @@ class TestTheRealisationAxis:
         assert got['verdict'] == 'TOLERATED'
         assert got['realised'] is True
         assert got['tier'] == 'core'
-        # the whole table, so a future edit has to move a documented cell on purpose
-        # `None` files as not realised too: absent deployed
-        # evidence cannot support a claim of f64 soundness.
-        assert [_tier(v, r) for v in ('CERTIFIED', 'TOLERATED') for r in (True, False, None)] \
-            == ['core', 'permissive', 'permissive', 'core', 'permissive', 'permissive']
-        # held in f64 and not judged in permissive (read in the reals): float64's own value
-        assert (_tier('KILL', True), _tier('KILL', False)) == ('f64-only', 'reject')
-        assert (_tier('ENGINE-MISALIGN', False), _tier('NO-WITNESS', None)) == \
-            ('permissive', 'reject')
-        # permissive's criterion is its own axis: an extension holds there alone, and a rule
-        # that holds in the reals only by an allowance a slot guards (a `$` slot's excused
-        # zero, an extension at a `?` slot's isolated point) is f64's alone or no mode's:
-        # permissive binds every slot to any subexpression, which no slot guards
-        assert (_tier('KILL', False, True), _tier('KILL', True, True)) == ('permissive', 'core')
-        assert (_tier('CERTIFIED', False, False), _tier('CERTIFIED', True, False)) \
-            == ('reject', 'f64-only')
+        # the whole table, so a future edit has to move a documented cell on purpose: each mode
+        # holds where its own reading holds (True), and `None` (no answer reached) refuses as
+        # `False` does -- absent evidence supports no claim. The reals' verdict is no input.
+        readings = (True, False, None)
+        assert [_tier(f, p) for f in readings for p in readings] == [
+            'core', 'f64-only', 'f64-only', 'permissive', 'reject', 'reject',
+            'permissive', 'reject', 'reject']
 
     def test_a_ground_rule_is_decided_in_float64_exactly(self):
         """A ground rule has one point, and float64's value there is the realizations' value at

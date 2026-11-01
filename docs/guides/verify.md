@@ -51,14 +51,22 @@ The second rule is the classic trap this package exists to catch:
 `exp(log(x0))` equals `x0` only on `x0 > 0` — rewriting it changes the
 function on a positive-measure set, so the judge kills it.
 
-A rule the judge cannot evaluate — `NO-WITNESS`, `UNSUPPORTED-SHAPE`,
-`JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode. A measure the
-cells cannot decide is refused where it is owed: `f64` owes it in float64's values, so
-an undecided float64 measure refuses `f64`; `UNDECIDED-MEASURE` labels the reals'
-measure, which `permissive` does not owe. An undecided check never reads as a pass.
+Each mode is judged on its own values: `f64` on float64's, reading the reals only for the true
+value where an operation overflows or underflows; `permissive` on the reals' values at float
+resolution. The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals'
+outcome, a diagnostic that decides no mode by itself. A mode whose reading reaches no answer
+refuses the rule, with uncertainty: a witness search that finds none where the mode's left side
+is finite (`NO-WITNESS`), a token the judge cannot read (`UNSUPPORTED-SHAPE`), a judgment past its
+time (`JUDGE-TIMEOUT`). A battery the reals mostly cannot resolve (`UNRESOLVED-COVERAGE`) leaves
+`permissive` without an answer, while `f64` reads float64's values:
+`x^2 + 1 + 1e-3000 -> x^2 + 1` holds in `f64`, where `1e-3000` is the double 0.0 and the two
+sides are bit-identical. A measure the cells cannot decide is refused where it is owed: `f64`
+owes it in float64's values, so an undecided float64 measure refuses `f64`;
+`UNDECIDED-MEASURE` labels the reals' measure, which `permissive` does not owe. An undecided
+check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
-Each rule also gets a **tier**: the modes it holds in, from two independent questions. Does
+Each rule gets a **tier**: the modes it holds in, from two independent questions. Does
 the deployed f64 evaluator reproduce it? Does it hold in `permissive`, whose criterion is
 the reals' values up to float resolution, and agreement alone where the input has no value
 (a permissive rule may give a value where its input has none, over real-valued bindings)?
@@ -103,9 +111,8 @@ verify_ruleset([rule], mode='f64')['is_clean']         # -> False  f64 contradic
 ```
 
 `report['offenders']` names the rules that fail, with their tier. Omitting `mode`
-keeps the mode-less meaning — only `CERTIFIED`/`TOLERATED` are clean — because that
-is what every caller written before the split means by the word; it is **not** the
-right gate for a shipped artifact.
+keeps the mode-less meaning — only the reals' `CERTIFIED`/`TOLERATED` are clean — a
+diagnostic that decides no mode; it is **not** the right gate for a shipped artifact.
 
 For a whole artifact use `verify_artifact`, which sweeps each file against its own
 mode's contract **and** checks the relationship between them. A routing bug that
@@ -149,7 +156,8 @@ rests on, per mode (`verdict['basis']`):
 - **`refused`**: a counterexample, or a check that could not decide (an undecided check never
   reads as a pass). Two readings that agree only because the precision ran out are no equality:
   a point whose operands demand more than 2,000 digits is undecided
-  (`x^2 + 1 + 1e-3000 -> x^2 + 1` is refused; at 1e-100 the readings reach the separation).
+  (`x^2 + 1 + 1e-3000 -> x^2 + 1` is refused in `permissive`, which reads the reals; at 1e-100
+  the readings reach the separation).
 
 A mine records the basis of every rule of each file in its provenance sidecar (`basis`), and
 `verify-mine` reports how many rules each file holds on evidence alone.

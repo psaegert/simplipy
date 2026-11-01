@@ -727,16 +727,20 @@ def test_a_decimal_past_the_exact_readers_is_judged() -> None:
     assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
 
 
-def test_precision_run_out_is_no_equality() -> None:
-    """`x^2 + 1 + 1e-3000 -> x^2 + 1` is false by 1e-3000 at every x. The readings demand
-    6,000 digits (a literal is an operand the precision is sized by), past the ceiling, so
-    their agreement is no equality: refused with uncertainty, never certified. At 1e-100 the
-    rungs reach the separation: false in the reals, while float64 adds the double 1e-100 to 1
-    exactly and permissive reads the reals' values at float resolution (P3), so it holds in
-    both."""
-    v = verify_rule('+ + pow x0 2 1 1e-3000'.split(), '+ pow x0 2 1'.split())
+@pytest.mark.parametrize('slot', ['x0', '?0', '_0'])
+def test_precision_run_out_is_no_equality(slot) -> None:
+    """`x^2 + 1 + 1e-3000 -> x^2 + 1` is false by 1e-3000 at every x in the reals. Their
+    readings demand 6,000 digits (a literal is an operand the precision is sized by), past the
+    ceiling, so their agreement is no equality: permissive, which reads the reals, is refused
+    with uncertainty, never certified. Each mode is judged on its own values: float64 reads
+    `1e-3000` as 0.0 and the two sides are bit-identical, so the rule holds in f64, whatever
+    the reals resolved. At 1e-100 the rungs reach the separation: false in the reals, while
+    float64 adds the double 1e-100 to 1 exactly and permissive reads the reals' values at float
+    resolution (P3), so it holds in both."""
+    v = verify_rule(f'+ + pow {slot} 2 1 1e-3000'.split(), f'+ pow {slot} 2 1'.split())
     assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
-    assert v['basis'] == {'f64': 'refused', 'permissive': 'refused'}
+    assert (v['realised'], v['permissive']) == (True, None), v
+    assert v['basis'] == {'f64': 'evidence', 'permissive': 'refused'}, v
     w = verify_rule('+ + pow x0 2 1 1e-100'.split(), '+ pow x0 2 1'.split())
     assert (w['verdict'], w['tier']) == ('KILL', 'core'), w
 

@@ -1369,24 +1369,23 @@ class RuleMiner:
                 _fatal: dict = {b: set() for b in FATAL_BUCKETS}
                 _routed: dict = {}
                 for d in _detail:
-                    if d.get('verdict') not in _fatal:
-                        continue
                     _src_lhs, _src_rhs = self._mode_rules(rule_mode)[
                         _served[d['idx']][2]]
                     _pair = (tuple(_src_lhs), tuple(_src_rhs))
                     _tier_of = d.get('tier') or 'reject'
                     if _tier_of in _mode_tiers(rule_mode):
-                        # THE MODE LICENSES THE TIER, so the gate must not delete it:
-                        # a fatal bucket is fatal only where its tier is not licensed --
-                        # an f64-realised KILL is `f64-only` (false in the reals, bit-exact in
-                        # the deployed algebra) -- and this file keeps what its own mode
-                        # licenses.
-                        # Fail-closed is UNCHANGED for everything else: NO-WITNESS,
-                        # UNSUPPORTED-SHAPE, JUDGE-TIMEOUT and UNRESOLVED-COVERAGE carry
-                        # no tier at all, so they read `reject` and still drop.
-                        _routed.setdefault(_tier_of, set()).add(_pair)
+                        # THE MODE'S VERDICT DECIDES, the reals' bucket is its diagnostic:
+                        # a rule the mode holds stays whatever the reals' bucket -- an
+                        # f64-realised KILL is `f64-only` (false in the reals, bit-exact in
+                        # the deployed algebra) -- and is recorded where that bucket is fatal.
+                        if d.get('verdict') in _fatal:
+                            _routed.setdefault(_tier_of, set()).add(_pair)
                     else:
-                        _fatal[d['verdict']].add(_pair)
+                        # a rule the mode does not hold drops, filed under the reals' bucket
+                        # where it is a fatal one (a mode without an answer refuses: fail
+                        # closed)
+                        _fatal.setdefault(d.get('verdict') if d.get('verdict') in _fatal
+                                          else 'NOT-HELD', set()).add(_pair)
                 _drop = set().union(*_fatal.values())
                 if _drop:
                     self._install(rule_mode, [
@@ -1412,7 +1411,7 @@ class RuleMiner:
                     prov['symbolic_gate'] = {
                         **{('killed' if b == 'KILL' else b.lower().replace('-', '_')):
                            sorted([list(bl), list(br)] for bl, br in _fatal[b])
-                           for b in FATAL_BUCKETS},
+                           for b in (*FATAL_BUCKETS, *sorted(set(_fatal) - set(FATAL_BUCKETS)))},
                         # Convicted by the contract but KEPT, because a mode tier owns
                         # them. Recorded so the carve-out is visible in the sidecar
                         # rather than looking like the gate simply missed them.

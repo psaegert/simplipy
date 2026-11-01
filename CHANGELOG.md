@@ -1445,9 +1445,18 @@ model predictions.
   point combines, its literals and variables' values included (a literal of 1e-3000 added to 1
   demands 6,000 digits), and where a point demands more than the 2,000-digit ceiling, two
   readings that agree at the ceiling are no reading of equality: the point is undecided.
-  `x^2 + 1 + 1e-3000 -> x^2 + 1`, false by 1e-3000 everywhere, is refused with uncertainty (it
-  was licensed in every mode); at 1e-100 the readings reach the separation, and the rule is
-  false in the reals and holds in `f64` and `permissive`.
+  `x^2 + 1 + 1e-3000 -> x^2 + 1`, false by 1e-3000 everywhere in the reals, is refused with
+  uncertainty in `permissive` (it was licensed in every mode); at 1e-100 the readings reach the
+  separation, and the rule is false in the reals and holds in `f64` and `permissive`.
+- **Each mode is judged on its own values.** `f64` reads float64's values, and the reals only for
+  the true value where an operation overflows or underflows; `permissive` reads the reals' values
+  at float resolution. The verdict name (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) is the
+  reals' outcome, a diagnostic that no longer decides a mode by itself:
+  `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in `f64`, where `1e-3000` is the double 0.0 and the two
+  sides are bit-identical. A mode whose reading reaches no answer refuses the rule with
+  uncertainty: a constant owed a witness in the mode's values with none found, or a battery the
+  mode could not read. `f64` reads every point it is given in float64, whether or not the reals
+  resolved it.
 - **`f64` is judged at every magnitude.** The judge's float64 lane reads each slot from the
   smallest normal double to the largest (its grid stopped at 1e4 and the mine's rows at 1e3),
   past every magnitude to which the core keeps one of its own inverse collapses. Where float64's

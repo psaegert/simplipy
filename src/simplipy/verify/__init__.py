@@ -48,13 +48,16 @@ def _load(rules: list | str) -> list:
 
 
 def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> dict:
-    """Judge a single ``lhs -> rhs`` rule at its symbolic trigger points.
+    """Judge a single ``lhs -> rhs`` rule at its symbolic trigger points, each mode on its own
+    values: ``f64`` on float64's (the reals read only for the true value at a range event),
+    ``permissive`` on the reals' values at float resolution.
 
-    Returns a dict with ``verdict`` (CERTIFIED / TOLERATED / KILL / ENGINE-MISALIGN /
-    NO-WITNESS / UNSUPPORTED-SHAPE) and the supporting witness points / measure, its ``tier``,
-    and its ``basis`` per mode: ``'proved'`` (an exact route decides the rule over its whole
-    domain, ``exact``), ``'evidence'`` (it holds at every point the judge read) or
-    ``'refused'``.
+    Returns a dict with the verdict per mode -- its ``tier`` (the modes it holds in) and its
+    ``basis`` per mode: ``'proved'`` (an exact route decides the rule over its whole domain,
+    ``exact``), ``'evidence'`` (it holds at every point the judge read) or ``'refused'`` -- and,
+    as a diagnostic that decides no mode, the reals' outcome ``verdict`` (CERTIFIED / TOLERATED
+    / KILL / ENGINE-MISALIGN / NO-WITNESS / UNRESOLVED-COVERAGE / UNDECIDED-MEASURE /
+    UNSUPPORTED-SHAPE) with the supporting witness points and measure.
     """
     return _contract.judge_rule(list(lhs), list(rhs), deployed_check=deployed_check)
 
@@ -253,8 +256,8 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = 
     :class:`~simplipy.SimpliPyEngine`); by default a rule-less engine over the operators the
     file's provenance sidecar records (``rules`` a path), else over the judge's vocabulary.
 
-    With ``mode=None`` only CERTIFIED/TOLERATED are clean, the meaning before rule sets
-    were split by mode. It is NOT the right gate for a shipped artifact; use
+    With ``mode=None`` only the reals' CERTIFIED/TOLERATED are clean: a diagnostic that
+    decides no mode. It is NOT the right gate for a shipped artifact; use
     :func:`verify_artifact`.
 
     ``report['buckets']`` maps each bucket name to the list of rule indices in it and

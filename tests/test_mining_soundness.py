@@ -2262,20 +2262,20 @@ class TestTheGateRoutesInsteadOfDeleting:
             from simplipy.verify import verify_ruleset
             assert verify_ruleset(path, mode=mode)['offenders'] == [], mode
 
-    def test_the_unjudgeable_buckets_still_fail_closed(self) -> None:
-        """Relaxing the gate must not relax it for verdicts that carry no tier at all.
-        NO-WITNESS, UNSUPPORTED-SHAPE, JUDGE-TIMEOUT and UNRESOLVED-COVERAGE mean the
-        second authority never reached an answer, and "confirmed by two independent
-        authorities" is the claim a shipped rule makes. (UNDECIDED-MEASURE is decided in f64
-        and permissive: it carries their tiers, as KILL does.)"""
-        from simplipy.verify import FATAL_BUCKETS
+    def test_a_mode_without_an_answer_fails_closed(self) -> None:
+        """A mode whose reading reaches no answer refuses the rule: a witness search that finds
+        none where both modes' left sides are finite (NO-WITNESS) holds in no mode, and a
+        battery the reals cannot resolve (UNRESOLVED-COVERAGE) leaves permissive, which reads
+        the reals, without one. f64 reads float64's own values: where its two sides are
+        bit-identical it holds, whatever the reals resolved."""
+        from simplipy.verify import verify_rule
         from simplipy.verify._contract import _tier
-        for bucket in FATAL_BUCKETS:
-            if bucket in ('ENGINE-MISALIGN', 'KILL', 'UNDECIDED-MEASURE'):
-                continue
-            for realised in (True, False, None):
-                for permissive in (True, False, None):
-                    assert _tier(bucket, realised, permissive) == 'reject', bucket
+        assert _tier(None, None) == 'reject'
+        none = verify_rule('max <constant> ?0'.split(), ['<constant>'])
+        assert (none['verdict'], none['tier']) == ('NO-WITNESS', 'reject'), none
+        uncovered = verify_rule('+ + pow ?0 2 1 1e-3000'.split(), '+ pow ?0 2 1'.split())
+        assert uncovered['verdict'] == 'UNRESOLVED-COVERAGE', uncovered
+        assert uncovered['basis'] == {'f64': 'evidence', 'permissive': 'refused'}, uncovered
 
 
 class TestCertifyRulesRoutesLikeTheMine:
