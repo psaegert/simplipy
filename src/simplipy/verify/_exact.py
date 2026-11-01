@@ -55,6 +55,15 @@ class Unknown(Exception):
     """The route cannot decide the rule: outside the fragment, or past a size limit."""
 
 
+def as_double(q):
+    """The double nearest to the exact value `q`, or None past the doubles' range (`1e400`):
+    there it has no double, and no float resolution to be compared at."""
+    try:
+        return float(q)
+    except OverflowError:
+        return None
+
+
 def _check_size(*values):
     for v in values:
         if v.numerator.bit_length() > MAX_BITS or v.denominator.bit_length() > MAX_BITS:
@@ -220,7 +229,8 @@ def _f64_exact(trees):
         for op in ops:
             if isinstance(op, tuple):
                 v = op[1]
-                if not isinstance(v, (Fraction, int)) or Fraction(v) != Fraction(float(v)):
+                if not isinstance(v, (Fraction, int)) or as_double(v) is None \
+                        or Fraction(v) != Fraction(as_double(v)):
                     return False
             elif op not in _F64_EXACT:
                 return False
@@ -267,11 +277,13 @@ def piecewise_affine(tl, tr, d_eval, f64_agree):
         return out
     x = _witness(d)
     out.update(reals='refuted', witness=x)
-    lv, rv = _build(tl, var).at(x), _build(tr, var).at(x)
-    out['permissive'] = 'refuted' if f64_agree(float(lv), float(rv)) != 'eq' else None
+    lv, rv = (as_double(_build(t, var).at(x)) for t in (tl, tr))
+    out['permissive'] = 'refuted' if None not in (lv, rv) and f64_agree(lv, rv) != 'eq' \
+        else None
     out['f64'] = None
-    xf = float(x)
-    for y in (xf, math.nextafter(xf, math.inf), math.nextafter(xf, -math.inf)):
+    xf = as_double(x)
+    for y in () if xf is None else (xf, math.nextafter(xf, math.inf),
+                                    math.nextafter(xf, -math.inf)):
         in_range = [True]
         with np.errstate(all='ignore'):
             dl, dr = d_eval(tl, {var: np.float64(y)}, in_range), d_eval(tr, {var: np.float64(y)},
@@ -332,12 +344,12 @@ def _exact_value(spec):
 
 
 def _double(v):
-    """The double nearest to an exact value that is no multiple of pi."""
+    """The double nearest to an exact value that is no multiple of pi (`as_double`)."""
     if v[0] == 'nan':
         return math.nan
     if v[0] == 'inf':
         return math.inf if v[1] == '+' else -math.inf
-    return float(v[1])
+    return as_double(v[1])
 
 
 def ground(tl, tr, real_spec, f64_value, f64_agree):
@@ -366,9 +378,9 @@ def ground(tl, tr, real_spec, f64_value, f64_agree):
     if all(r is not None and not r[1] and r[0][0] in _EXACT_KINDS for r in read):
         lv, rv = (_exact_value(r[0]) for r in read)
         out['reals'] = 'proved' if lv == rv else 'refuted'
-        if 'pi' not in (lv[0], rv[0]):
-            out['permissive'] = 'proved' if f64_agree(_double(lv), _double(rv)) == 'eq' \
-                else 'refuted'
+        dl, dr = (_double(v) if v[0] != 'pi' else None for v in (lv, rv))
+        if None not in (dl, dr):
+            out['permissive'] = 'proved' if f64_agree(dl, dr) == 'eq' else 'refuted'
     return out
 
 

@@ -1392,7 +1392,10 @@ model predictions.
   sampled procedure. `max(0, w - abs(x0 - 0.123456789)) -> 0` is refused in every mode for every
   width w from 1e-3 to 1e-200 (it was licensed in every mode: no sample point lies within w of
   0.123456789). A left side the interval layer encloses by the right side's literal over its
-  whole domain is proved too (`0*exp(x0) -> 0`). The verdict reports the route (`exact`).
+  whole domain is proved too (`0*exp(x0) -> 0`). The verdict reports the route (`exact`). A
+  value past the doubles' range has no double and is compared at no float resolution:
+  `x0*1e400 -> 1e400*x0` is proved in `real` and `permissive` and left to the sampled procedure
+  in `f64`.
 - **Every verdict says what it rests on.** `verify_rule(...)['basis']` gives, per mode,
   `proved` (an exact route: the two fragments above, a rule without variables or constants
   whose values are read exactly, or `L(C) -> C` without variables, whose witness is the left

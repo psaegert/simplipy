@@ -2349,11 +2349,13 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         if ex['reals'] == 'refuted':
             witness = ex.get('witness')
             r.update(clause='a-exact', kinds=['REAL-CHANGE'],
-                     points=[{variables[0]: float(witness)} if witness is not None else {}])
+                     points=[{variables[0]: _exact.as_double(witness)}
+                               if witness is not None else {}])
     elif ex['reals'] == 'refuted' and r['verdict'] in HOLDS_IN_THE_REALS:
         witness = ex.get('witness')
         r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'],
-                 points=[{variables[0]: float(witness)} if witness is not None else {}])
+                 points=[{variables[0]: _exact.as_double(witness)}
+                               if witness is not None else {}])
     elif ex['reals'] == 'proved' and (r['verdict'] == 'UNDECIDED-MEASURE' or (
             r['verdict'] == 'KILL' and r.get('clause') != 'a-nonfinite-binding')):
         # the route covers every finite binding; a `_` slot's non-finite atoms are the battery's

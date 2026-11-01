@@ -60,6 +60,18 @@ def test_a_false_identity_is_refuted_with_its_witness() -> None:
     assert out['reals'] == 'refuted' and out['witness'] < 0, out
 
 
+def test_a_value_beyond_the_doubles_is_read_without_a_double() -> None:
+    """A literal past the doubles' range has no double: the route decides the reals and leaves
+    float64 to the battery, and an exact value past the range is compared at no float
+    resolution (`as_double` is None)."""
+    for lhs, rhs in (('max ?0 1e400', 'max 1e400 ?0'), ('* ?0 1e400', '* 1e400 ?0')):
+        out = route(lhs, rhs)
+        assert (out['reals'], out['permissive'], out['f64']) == ('proved', 'proved', None), out
+    out = route('* ?0 1e400', '* ?0 2e400')
+    assert (out['reals'], out['permissive']) == ('refuted', None), out
+    assert _exact.as_double(10 ** 400) is None and _exact.as_double(10 ** 300) == 1e300
+
+
 @pytest.mark.parametrize('lhs, rhs', [
     ('* ?0 ?0', '?0'),                     # a product of two varying factors
     ('+ ?0 ?1', '+ ?1 ?0'),                # two variables
