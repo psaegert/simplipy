@@ -101,7 +101,7 @@ def _run_controls(mode, engine):
 
 
 def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None,
-            rule_mode, judge=None):
+            rule_mode, judge=None, accept=None):
     """Assign each ``?``-sorted mined rule the strongest sort the judge licenses; prune the
     rules the ``_``-promoted set derives.
 
@@ -118,6 +118,12 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     derivability refund asks that mode's engine.
     ``judge``: the judged tier of each pair of a batch, as the mine's judge gives it
     (:func:`simplipy.mining.judge_tiers` when None).
+    ``accept``: the mine's acceptance (``RuleMiner._refusals``): ``accept(pairs, context)``, the
+    indices of ``pairs`` it refuses with the rules ``context`` installed beside them. A rung's
+    respellings and the seeds go through it, as every rule the mine considers does (an entry
+    the respelling serves must hold, and the respelling must fire on its own generic instances:
+    in `permissive`, `pow(0, inv(_0)) -> 0` does not, its instance `0^(1/(1/(x0 + x1)))` being
+    cancelled to `0^(x0 + x1)` first, and stays at `?`). None: the licence alone.
     Returns ``(kept_rules, report)`` where ``kept_rules`` is a list of ``[lhs, rhs]`` lists and
     ``report`` lists the rules each rung promoted (``promoted_any``, ``promoted_bang``, the
     seeds among the latter with the reason ``seed`` or ``seed-mult``) with ``stage_counts``.
@@ -151,10 +157,20 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     verdicts = _rungs([(_respell(l, '_'), _respell(r, '_')) for l, r in slotted], mode, engine,
                       judge)
     promote_set = set()
+    tiers = {}
     for (l, r), v in zip(slotted, verdicts):
         if v['licensed']:
             promote_set.add((l, r))
-            report['promoted_any'].append((l, r, 'rung', v['tier']))
+            tiers[(l, r)] = v['tier']
+    if accept is not None and promote_set:
+        rung = [p for p in slotted if p in promote_set]
+        any_form = {p: (_respell(p[0], '_'), _respell(p[1], '_')) for p in rung}
+        refused = accept([any_form[p] for p in rung],
+                         [any_form.get(p, p) for p in rules] + ground)
+        promote_set -= {rung[k] for k in refused}
+    for p in slotted:
+        if p in promote_set:
+            report['promoted_any'].append((p[0], p[1], 'rung', tiers[p]))
     prog.stage("rung _", rules=len(slotted), licensed=len(promote_set),
                seconds=round(time.monotonic() - started, 1))
 
@@ -168,6 +184,13 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     at_q = [p for p in sorted_rules if any(t[:1] == '?' and _is_slot(t) for t in p[0] + p[1])]
     bang = {p: (_respell(p[0], '!'), _respell(p[1], '!')) for p in at_q}
     verdicts = dict(zip(at_q, _rungs([bang[p] for p in at_q], mode, engine, judge)))
+    licensed_bang = [p for p in at_q if verdicts[p]['licensed']]
+    if accept is not None and licensed_bang:
+        context = [bang[p] if verdicts.get(p, {}).get('licensed') else p
+                   for p in sorted_rules] + ground
+        refused = accept([bang[p] for p in licensed_bang], context)
+        for k in refused:
+            verdicts[licensed_bang[k]] = dict(verdicts[licensed_bang[k]], licensed=False)
     kept = []
     for p in sorted_rules:
         v = verdicts.get(p)
@@ -193,12 +216,19 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     seeded = 0
     for seeds, reason in ((ADD_SEEDS, 'seed'), (MULT_SEEDS, 'seed-mult')):
         todo = [(s, k) for s, k in zip(seeds, _ac_key([l for l, _ in seeds])) if k not in seen]
+        chosen = []
         for (s, k), v in zip(todo, _rungs([s for s, _ in todo], mode, engine, judge)):
-            if v['licensed'] and k not in seen:
-                kept.append(s)
-                report['promoted_bang'].append((s[0], s[1], reason, v['tier']))
-                seen.add(k)
-                seeded += 1
+            if v['licensed'] and k not in seen and all(k != c[1] for c in chosen):
+                chosen.append((s, k, v))
+        if accept is not None and chosen:
+            # a seed is a rule the mine considers: it goes through the same acceptance
+            refused = accept([s for s, _, _ in chosen], kept + ground + [s for s, _, _ in chosen])
+            chosen = [c for j, c in enumerate(chosen) if j not in refused]
+        for s, k, v in chosen:
+            kept.append(s)
+            report['promoted_bang'].append((s[0], s[1], reason, v['tier']))
+            seen.add(k)
+            seeded += 1
 
     kept = [[list(l), list(r)] for l, r in kept + ground]
     report['stage_counts'] = {

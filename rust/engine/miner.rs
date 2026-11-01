@@ -120,6 +120,9 @@ pub enum MineRefusal {
     Unconfirmed,
     /// f64 mode: float64 does not realise the pick (`battery::f64_bar`).
     NotRealised,
+    /// A named policy of the licence refuses the pick's written pattern: the load's predicate
+    /// (`Engine::load_refusal`) or evidence (`interval::evidence`), by the policy's name.
+    Policy(&'static str),
 }
 
 impl MineRefusal {
@@ -134,8 +137,26 @@ impl MineRefusal {
             MineRefusal::Excluded => "excluded",
             MineRefusal::Unconfirmed => "unconfirmed",
             MineRefusal::NotRealised => "not_realised",
+            MineRefusal::Policy(name) => name,
         }
     }
+}
+
+/// The licence's policy (the specification's section 4, `verify.POLICIES`) a load refusal
+/// (`Engine::load_refusal`) applies, by its name; `None` for the registry's pole entry, a
+/// pre-filter of truth and no policy.
+fn load_policy(refusal: &str, lhs_len: usize) -> Option<&'static str> {
+    Some(match refusal {
+        "pole-class-change" => return None,
+        "const-count-increase" => "constant_count",
+        "ground-composite" => "ground_composite",
+        "not-ordered-below" => "ordering",
+        "catch-all-lhs" if lhs_len > 1 => "engine_owned",
+        "engine-owned-law" | "subsumed" => "engine_owned",
+        "catch-all-lhs" | "unbound-rhs-wildcard" | "unparseable-side" => "well_formed",
+        // a gate of the load beyond the named policies: the mode would not serve the rule
+        _ => "not_served",
+    })
 }
 
 /// f64's reading of a pick beyond the rows: the 0.15 heads' f64 bar and the magnitude ladder, the
@@ -159,6 +180,8 @@ pub(crate) struct Acceptor<'a> {
     /// this source (`Refusal::Excluded`): the scan yields to the next candidate of another
     /// class, so another tier's pick can never shadow a licensed one.
     excluded: &'a [Vec<String>],
+    /// The source's evidence in the mode's values (the licence's policy, 4.1), read once.
+    evidence: std::sync::OnceLock<bool>,
 }
 
 impl<'a> Acceptor<'a> {
@@ -188,6 +211,7 @@ impl<'a> Acceptor<'a> {
             vars,
             confirm,
             excluded,
+            evidence: std::sync::OnceLock::new(),
         })
     }
 
@@ -261,6 +285,36 @@ impl<'a> Acceptor<'a> {
             == Some(Some("engine-owned-law"))
         {
             return Err(MineRefusal::EngineOwnedLaw);
+        }
+        // THE LICENCE'S POLICIES, read where the licence reads them: the load's predicate on the
+        // written pattern (`Engine::load_refusal`: the constant count, a ground composite, the
+        // ordering of the written sides, what the engine does itself, well-formedness) and the
+        // evidence of its left side in the mode's values (`interval::evidence`). A pick the
+        // licence refuses is refused here, and the scan goes on to the next candidate: in
+        // `permissive`, `abs(x0) -> acosh(cosh(x0))` sits below the mark in the mode's reading
+        // (the inverse pair cancels) and is not ordered below as written.
+        let (p_src, p_t) = (pattern(self.src), pattern(t));
+        if let Some(policy) = self
+            .eng
+            .load_refusal(
+                &p_src,
+                &p_t,
+                self.spec.mode,
+                crate::ac::rules::RuleCanon::Mode(self.spec.mode),
+            )
+            .and_then(|r| load_policy(&r, p_src.len()))
+        {
+            return Err(MineRefusal::Policy(policy));
+        }
+        let evidence = *self.evidence.get_or_init(|| {
+            crate::interval::evidence(
+                self.src,
+                &self.eng.operators,
+                matches!(self.spec.mode, RuleMode::Default),
+            ) == Some(true)
+        });
+        if !evidence {
+            return Err(MineRefusal::Policy("evidence"));
         }
         // f64's own file holds only what float64 realises: a pick spelled with a 0.15 head answers
         // to the f64 bar (`battery::f64_bar`), the function the contract judge ANDs into a rule's

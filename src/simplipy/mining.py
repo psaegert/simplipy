@@ -145,7 +145,7 @@ def _reconcile_proposal_census(
     """Rewrite the proposal census so it describes the ARTIFACT, not the moment of
     certification.
 
-    :meth:`RuleMiner._certify_proposals` records its verdicts BEFORE the symbolic gate,
+    :meth:`RuleMiner._certify_proposals` records its verdicts BEFORE
     the covered-prune and the sort promotion have run, and every one of those stages may
     still drop a certified pair -- soundly. Left alone, the sidecar advertises rules the
     artifact does not contain: measured on the published ``acj-4-3-llm`` asset, 19 of the
@@ -603,6 +603,26 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     return dead
 
 
+def _rule_gates(engine: Any, rule_mode: str, rules: Any) -> dict[str, list]:
+    """The load's gates on the rules the mode holds, installed in ``engine``: ``twin_shadow``
+    (rows the load would mint anyway), ``engine_owned_law`` (a respelling within one canonical
+    state, or an instance of a law the search applies) and ``translation`` (what the mode's load
+    subsumes or drops). Each lists what breaks it; read by the mine's finalization and by
+    :func:`verify_mine`."""
+    core = engine._core
+    rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+    _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
+    return {
+        'twin_shadow': [[list(rules[owner][0]), list(rules[owner][1])] for owner in sorted(
+            _twin_shadow_owners(core.ac_shadow_census(rule_mode=rule_mode)))],
+        'engine_owned_law': [
+            [list(lhs), list(rhs), law] for lhs, rhs in rules
+            if (law := core.law_instance(list(lhs), list(rhs), rule_mode=rule_mode)) is not None],
+        'translation': ([{'subsumed': subsumed, 'dropped': dropped}]
+                        if subsumed or dropped else []),
+    }
+
+
 #: A safety cap on the rounds of overlap completion: the pass runs to its fixpoint (a round that
 #: offers nothing new or certifies nothing), which the cell bounds; the cap only stops a defect.
 _COMPLETION_ROUNDS = 32
@@ -877,7 +897,8 @@ class RuleMiner:
         own generic instances with the picks installed beside the mode's rules
         (``_dead_rules``: another rule or the mode's own simplification takes the instance
         first, `abs(tan(atan(x0)))` is `abs(x0)` in permissive before
-        `abs(tan(atan(_0))) -> acosh(cosh(_0))` can match). Nothing is dropped afterwards."""
+        `abs(tan(atan(_0))) -> acosh(cosh(_0))` can match). Nothing is dropped afterwards.
+        The checks are the mine's one acceptance (`_refusals`), on the picks' patterns."""
         order = sorted(picks)
         patterns = []
         for idx in order:
@@ -886,6 +907,27 @@ class RuleMiner:
                                               variable_prefix='?')
             p_tgt, _ = remap_expression(list(tgt), dummy_variables, mapping, variable_prefix='?')
             patterns.append((tuple(p_src), tuple(p_tgt)))
+        refused = self._refusals(patterns, rule_mode, judge, judged)
+        return {order[k] for k in refused}
+
+    def _refusals(self, patterns: list, rule_mode: str, judge: Callable, judged: dict,
+                  context: list | None = None) -> dict[int, str]:
+        """THE ACCEPTANCE of rules the mine considers (picks, proposals, completions, promoted
+        sorts, seeds), in one place: the indices of ``patterns`` it refuses, each with the first
+        check that refused it. Four checks, each decided here, where the mine first considers a
+        rule, and never by dropping it later:
+
+        - ``licence``: :func:`verify.licensed` in the mode -- the judge's tier and the one policy
+          predicate (``verify.policy_refusals``);
+        - ``not_served``: the mode's load does not serve the rule;
+        - ``served_entry``: an entry the mode serves from it (an orientation twin included) has a
+          judged tier the mode does not hold (the symbolic gate, which judges what fires);
+        - ``dead``: with the rules installed beside ``context`` (default: the mode's set), the
+          rule does not fire on its own generic instances (liveness, ``_dead_rules``).
+
+        Verdicts are memoised by pair (``judged``)."""
+        if not patterns:
+            return {}
         served = self.engine._core.ac_translate_preview(
             [(list(lhs), list(rhs)) for lhs, rhs in patterns], rule_mode=rule_mode)
         todo = list(dict.fromkeys(
@@ -897,21 +939,31 @@ class RuleMiner:
                 judged[pair] = tier
         allowed = _mode_tiers(rule_mode)
         licence = _licences(self.engine, rule_mode, patterns, judge, judged)
-        bad = {k for k, pair in enumerate(patterns) if not licence[pair]['licensed']}
-        bad |= set(range(len(order))) - {k for _, _, k in served}
-        bad |= {k for lhs, rhs, k in served if judged[(tuple(lhs), tuple(rhs))] not in allowed}
-        live = [k for k in range(len(order)) if k not in bad]
+        out: dict[int, str] = {}
+        for k, pair in enumerate(patterns):
+            if not licence[pair]['licensed']:
+                out[k] = 'licence'
+        for k in set(range(len(patterns))) - {k for _, _, k in served}:
+            out.setdefault(k, 'not_served')
+        for lhs, rhs, k in served:
+            if judged[(tuple(lhs), tuple(rhs))] not in allowed:
+                out.setdefault(k, 'served_entry')
+        live = [k for k in range(len(patterns)) if k not in out]
         if live:
             current = self._mode_rules(rule_mode)
-            self._install(rule_mode, current + [patterns[k] for k in live
-                                                if patterns[k] not in set(current)])
+            base = current if context is None else [(tuple(lhs), tuple(rhs))
+                                                    for lhs, rhs in context]
+            self._install(rule_mode, base + [patterns[k] for k in live
+                                             if patterns[k] not in set(base)])
             try:
                 dead = {(tuple(d[0]), tuple(d[1]))
                         for d in _dead_rules(self.engine, rule_mode, [patterns[k] for k in live])}
             finally:
                 self._install(rule_mode, current)
-            bad |= {k for k in live if patterns[k] in dead}
-        return {order[k] for k in bad}
+            for k in live:
+                if patterns[k] in dead:
+                    out[k] = 'dead'
+        return out
 
     def _final_gate(self, rule_mode: str, judge: Callable, judged: dict) -> tuple[list, list]:
         """THE FINAL PER-FILE GATE over the mode's installed set, a CHECK: every file spelling
@@ -1240,8 +1292,8 @@ class RuleMiner:
                       cell_source_length: int = max_source_pattern_length) -> list:
             self._install(rule_mode, list(mined))
             # --- Census reconciliation state -------------------------------------
-            # The proposal census is written at CERTIFICATION time, upstream of four
-            # stages that may each still drop a certified pair (symbolic gate, both
+            # The proposal census is written at CERTIFICATION time, upstream of three
+            # stages that may each still drop a certified pair (both
             # covered-prunes, sort promotion). `_watch` follows every certified pair
             # through them and `_drops` records WHICH stage took it and WHY, so the
             # sidecar can carry a terminal outcome instead of a stale claim.
@@ -1261,6 +1313,11 @@ class RuleMiner:
                 for identity in watched:
                     if identity not in _drops and identity not in alive:
                         _drops[identity] = (stage, reason_of(identity))
+
+            def _accept(pairs: list, context: list) -> set:
+                """The mine's acceptance (`_refusals`) for promotion's rungs and seeds."""
+                return set(self._refusals([(tuple(lhs), tuple(rhs)) for lhs, rhs in pairs],
+                                          rule_mode, judge, judged, context))
 
             def _lane(entries: list, lane_judge: Callable | None = None,
                       prog: Any = None) -> tuple[dict, list, dict]:
@@ -1321,109 +1378,12 @@ class RuleMiner:
                 if prov is not None:
                     prov['offered'] = {'files': files, 'count': len(entries),
                                        'outcomes': outcomes, 'judge_loop': judge_loop}
-            # SYMBOLIC GATE (the third authority): every
-            # confirmed rule is re-judged by the independent symbolic verifier
-            # (`simplipy.verify`) at exact symbolic trigger points with the
-            # precision-stability discriminator -- a residual that COLLAPSES as
-            # precision doubles is computational rounding (exact identity,
-            # CERTIFIED); one that is STABLE is a real gap between two functions
-            # (KILL), however small. This is the only instrument that can separate
-            # `sin pi -> 0` (true) from `tanh(exp pi) -> 1` (false by 1.5e-20):
-            # every numeric acceptance is tolerance-bounded, and the impostor
-            # family lives below any usable tolerance. KILLs are dropped here,
-            # BEFORE the prune and promotion see the set; TOLERATED (null-set
-            # extension doctrine, matching the engine's own licences) passes.
-            if symbolic_gate and not interrupted() and self._mode_rules(rule_mode):
-                from .verify import FATAL_BUCKETS
-                # JUDGE WHAT SERVES, NOT WHAT THE ARTIFACT SAYS. The gate used to judge
-                # `simplification_rules` -- the artifact -- but translation is not the
-                # identity on it: rules drop, and ORIENTATION TWINS are MINTED at load
-                # (`AcRules::translate`), from the LOADING engine's canon. Those twins fire
-                # and had never been judged by any authority, because they do not exist
-                # until after the artifact is read. `ac_served_rules` is the matcher's own
-                # rule set, so coverage is 100% of what can fire -- and it stays 100% if a
-                # later engine mints a different closure, which is exactly what an artifact
-                # cannot promise. Judging the served set also judges the DEPLOYED spelling
-                # (the canonical projection) rather than the mine's.
-                _served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
-                # Under the mine's watchdog, with no wall-clock timeout (`_watched_judgments`).
-                _detail = _watched_judgments([(lhs, rhs) for lhs, rhs, _ in _served],
-                                             judge_warn_s, judge_fail_s)
-                _buckets: dict = {b: [] for b in ('CERTIFIED', 'TOLERATED', *FATAL_BUCKETS)}
-                for d in _detail:
-                    _buckets.setdefault(d['verdict'], []).append(d['idx'])
-                # EVERY fatal bucket drops, not only KILL: a rule the judge
-                # cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) or
-                # cannot reconcile (ENGINE-MISALIGN / UNRESOLVED-COVERAGE) never passed
-                # the second authority, and "confirmed by two independent authorities"
-                # is the claim a shipped rule makes. Fail closed: a vocabulary the
-                # contract cannot judge yields no rules, visibly, rather than rules
-                # with an unearned certificate.
-                # A verdict is attributed through the served entry's PROVENANCE, not
-                # through its spelling: the served side is canonical and the artifact side
-                # is the mine's, so `d['lhs'].split()` no longer names a droppable row
-                # (`/ cosh <constant> 0` serves as `* float("inf") cosh <constant>`). A
-                # twin has no row of its own at all and reports its SOURCE, so condemning
-                # one drops the rule that mints it -- fail-closed, and the only action that
-                # removes a twin from a later load.
-                _fatal: dict = {b: set() for b in FATAL_BUCKETS}
-                _routed: dict = {}
-                for d in _detail:
-                    _src_lhs, _src_rhs = self._mode_rules(rule_mode)[
-                        _served[d['idx']][2]]
-                    _pair = (tuple(_src_lhs), tuple(_src_rhs))
-                    _tier_of = d.get('tier') or 'reject'
-                    if _tier_of in _mode_tiers(rule_mode):
-                        # THE MODE'S VERDICT DECIDES, the reals' bucket is its diagnostic:
-                        # a rule the mode holds stays whatever the reals' bucket -- an
-                        # f64-realised KILL is `f64-only` (false in the reals, bit-exact in
-                        # the deployed algebra) -- and is recorded where that bucket is fatal.
-                        if d.get('verdict') in _fatal:
-                            _routed.setdefault(_tier_of, set()).add(_pair)
-                    else:
-                        # a rule the mode does not hold drops, filed under the reals' bucket
-                        # where it is a fatal one (a mode without an answer refuses: fail
-                        # closed)
-                        _fatal.setdefault(d.get('verdict') if d.get('verdict') in _fatal
-                                          else 'NOT-HELD', set()).add(_pair)
-                _drop = set().union(*_fatal.values())
-                if _drop:
-                    self._install(rule_mode, [
-                        (lhs, rhs) for lhs, rhs in self._mode_rules(rule_mode)
-                        if (tuple(lhs), tuple(rhs)) not in _drop])
-                    # The gate's own bucket IS the drop reason -- a certified
-                    # proposal killed here reads `certified_then_dropped(symbolic_gate,
-                    # KILL)` in the sidecar rather than staying `certified`.
-                    _gate_reason = {_rule_identity(bl, br, dummy_variables): bucket
-                                    for bucket, pairs in _fatal.items() for bl, br in pairs}
-                    _note_drops('symbolic_gate',
-                                lambda identity: _gate_reason.get(identity, 'fatal-verdict'))
-                if verbose:
-                    print(f'Symbolic gate: {len(_fatal["KILL"])} killed, '
-                          f'{len(_drop) - len(_fatal["KILL"])} unjudgeable, '
-                          f'{sum(len(v) for v in _routed.values())} routed to a mode tier '
-                          f'({", ".join(f"{k}={len(v)}" for k, v in sorted(_routed.items())) or "none"}), '
-                          f'{len(self._mode_rules(rule_mode))} remain')
-                if prov is not None:
-                    # The full census travels with the artifact: every fatal
-                    # bucket has its own key, PRESENT EVEN WHEN EMPTY -- the sidecar
-                    # must show what the gate saw, not only what it dropped.
-                    prov['symbolic_gate'] = {
-                        **{('killed' if b == 'KILL' else b.lower().replace('-', '_')):
-                           sorted([list(bl), list(br)] for bl, br in _fatal[b])
-                           for b in (*FATAL_BUCKETS, *sorted(set(_fatal) - set(FATAL_BUCKETS)))},
-                        # Convicted by the contract but KEPT, because a mode tier owns
-                        # them. Recorded so the carve-out is visible in the sidecar
-                        # rather than looking like the gate simply missed them.
-                        'routed_to_tier': {k: sorted([list(bl), list(br)] for bl, br in v)
-                                           for k, v in sorted(_routed.items())},
-                        'census': {b: len(ids) for b, ids in _buckets.items()},
-                        'kept': len(self._mode_rules(rule_mode))}
-            # THE FILE IS WHAT THIS MODE LICENSES (miner.md 2.11): every pick was asked
-            # `verify.licensed` where the mine first considered it (the judge loop), and
-            # promotion licenses every rung, so the final gate, at the end, on what ships, only
-            # CHECKS the file's own spellings and the entries the mode serves from them, with
-            # the loop's judge and memo: expected empty, recorded, never dropped (4.8).
+            # THE FILE IS WHAT THIS MODE LICENSES: every rule was decided where the mine first
+            # considered it (`_refusals`: the licence, the entries it serves, liveness) -- picks,
+            # proposals, completions, promoted sorts and seeds alike -- so the final gate, at the
+            # end, on what ships, only CHECKS the file's own spellings and the entries the mode
+            # serves from them, with the loop's judge and memo. Nothing is dropped: a file a rule
+            # of which would fail a gate fails finalization, naming the rule (4.8).
             gate: dict = {'unlicensed': [], 'preempted': []}
 
             def _final_gate() -> None:
@@ -1451,7 +1411,7 @@ class RuleMiner:
                 from .promotion import promote
                 kept, promotion_report = promote(self._mode_rules(rule_mode), self.engine,
                                                  verbose=verbose, rule_mode=rule_mode,
-                                                 judge=judge)
+                                                 judge=judge, accept=_accept)
                 self._install(rule_mode, kept)
                 # Promotion drops a rule only in its derivability refund (its lists name the
                 # rules each rung promoted, which stay).
@@ -1552,8 +1512,10 @@ class RuleMiner:
                 _added = [r for r in self._mode_rules(rule_mode) if r not in _before]
                 if promote_sorts and _added:
                     from .promotion import promote
-                    kept, _report = promote(_added, self.engine, verbose=verbose,
-                                            rule_mode=rule_mode, judge=judge)
+                    _rest = [r for r in self._mode_rules(rule_mode) if r not in set(_added)]
+                    kept, _report = promote(
+                        _added, self.engine, verbose=verbose, rule_mode=rule_mode, judge=judge,
+                        accept=lambda pairs, context: _accept(pairs, _rest + list(context)))
                     # Promotion seeds the cancellation identities into a set that lacks them;
                     # the promoted set holds them already, so a batch's seeds are not its rows
                     # (seeded again, `- !0 !0 -> 0` and `* 0 !0 -> 0` twin-shadowed their own
@@ -1630,6 +1592,19 @@ class RuleMiner:
                       f'({len(gate["overlaps_refused"])} more not licensed, '
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '
                       f'{len(final)} rules')
+            # FINALIZATION FAILS ON AN OFFENDER, naming it, and drops nothing: every rule was
+            # decided where the mine first considered it, so a rule of the file that would fail a
+            # gate is a defect of the mine. Nothing is written; the checkpoint stays. (A mine run
+            # with its gates off, `symbolic_gate=False`, neither accepts its seeds nor checks.)
+            if symbolic_gate and not interrupted():
+                offenders = {'unlicensed': gate['unlicensed'], 'preempted': gate['preempted'],
+                             'dead': gate['dead'], **_rule_gates(self.engine, rule_mode, final)}
+                offenders = {name: found for name, found in offenders.items() if found}
+                if offenders:
+                    raise RuntimeError(
+                        f'the {file_mode} file holds rules that fail a gate, which the mine '
+                        f'refuses where it first considers a rule: '
+                        + '; '.join(f'{name}: {found[:3]}' for name, found in offenders.items()))
             if out_path is not None:
                 _path = _mode_paths(out_path)[file_mode]
                 with open(_path, 'w') as file:
@@ -1800,6 +1775,24 @@ class RuleMiner:
                            'provenance': provenance},
                           file, default=str)
 
+        # THE SEEDS GO THROUGH THE SAME ACCEPTANCE (`_refusals`): a rule the mine starts from is a
+        # rule it considers, so one the mode does not license, whose served entries it does not
+        # hold, or that does not fire beside the other seeds, is refused here and never written
+        # (a continuation mine seeded with `asin(1) -> acos(0)`, true and refused by the ground
+        # composite policy, starts without it). A resumed mine's rules were accepted already.
+        if rules and not resumed_at and symbolic_gate:
+            given = list(rules)
+            self._install(rule_mode, given)
+            refused = self._refusals(given, rule_mode, judge, judged, context=given)
+            rules = [rule for k, rule in enumerate(given) if k not in refused]
+            self._install(rule_mode, rules)
+            if verbose and refused:
+                print(f'Seeds: {len(refused)} of {len(given)} refused at acceptance')
+            if provenance is not None:
+                provenance['seeds'] = {
+                    'given': len(given),
+                    'refused': [[list(given[k][0]), list(given[k][1]), why]
+                                for k, why in sorted(refused.items())]}
         completed = resumed_at
         for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
             if interrupted():
@@ -2375,8 +2368,8 @@ class RuleMiner:
         ``already_covered`` / ``rejected`` / ``duplicate`` (certified, but canonically
         identical to an earlier certified proposal and not lower in the serve ordering) /
         ``certified_then_dropped``. The last one is filled in LATER, by
-        :func:`_reconcile_proposal_census`: certification runs upstream of the symbolic
-        gate, the covered-prunes and the sort promotion, so the tally this method returns
+        :func:`_reconcile_proposal_census`: certification runs upstream of
+        the covered-prunes and the sort promotion, so the tally this method returns
         is provisional and the reconciliation moves every certified pair the artifact
         does not contain out of ``certified``. The key is present even when zero.
 
@@ -3045,7 +3038,6 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
     engine = SimpliPyEngine(operators=operators, rules=[])
     miner = RuleMiner(engine)
     miner._install(rule_mode, rules)
-    core = engine._core
     gates: dict[str, list] = {}
     # NOTHING PASSES VACUOUSLY: the file is a finished mine of this mode, and holds rules.
     progress = sidecar.get('progress') or {}
@@ -3055,12 +3047,9 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         + ([['interrupted', True]] if progress.get('interrupted') else [])
         + ([['mode', sidecar.get('mode'), mode]] if sidecar.get('mode') != mode else []))
     gates['rules'] = [] if rules else [['the file holds no rules', rules_path]]
-    gates['twin_shadow'] = [
-        [list(rules[owner][0]), list(rules[owner][1])]
-        for owner in sorted(_twin_shadow_owners(core.ac_shadow_census(rule_mode=rule_mode)))]
-    gates['engine_owned_law'] = [
-        [list(lhs), list(rhs), law] for lhs, rhs in rules
-        if (law := core.law_instance(list(lhs), list(rhs), rule_mode=rule_mode)) is not None]
+    load_gates = _rule_gates(engine, rule_mode, rules)
+    gates['twin_shadow'] = load_gates['twin_shadow']
+    gates['engine_owned_law'] = load_gates['engine_owned_law']
     gates['unlicensed'] = miner._final_gate(
         rule_mode, judge if judge is not None else functools.partial(
             judge_tiers, processes=judge_processes), {})[1]
@@ -3072,9 +3061,7 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
         functools.partial(judge_verdicts, processes=judge_processes),
         max_source=(sidecar.get('params') or {}).get('max_source_pattern_length'))
-    _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
-    gates['translation'] = ([{'subsumed': subsumed, 'dropped': dropped}]
-                            if subsumed or dropped else [])
+    gates['translation'] = load_gates['translation']
     recorded = sidecar.get('measure')
     if isinstance(recorded, dict):
         # Every probe is recorded, in this file's mode, at this engine's price: a probe the

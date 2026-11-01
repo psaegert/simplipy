@@ -57,15 +57,21 @@ against an exact counting recurrence.
    installed before the next length's marks are taken, so a refused rule never prunes a
    longer source.
 
+Every rule the mine considers is decided where it first considers it, never dropped
+afterwards, by one acceptance: the licence (the judge's tier and the named policies), the
+entries the mode serves from it (each must hold in the mode, an orientation twin included),
+and liveness (it fires on its own generic instances beside the rules installed). The picks of
+each length, the proposals, the overlap completions, each sort promotion's respellings and the
+seeds of a mine that starts from a set (`reset_rules=False`) all go through it: a seed it
+refuses is never written, and the sidecar names it (`seeds`).
+
 After the last length, each mode runs its post-pass: the proposals, if any (one more length
-of the judge loop), the symbolic gate on the entries the mode serves, the covered prune
-(asked of the mode's answer, on the instances each slot binds in that mode), sort
-promotion, the covered prune again, and the file gates — every file spelling and served
-entry the mode does not license is dropped, and so is a ground rule the mode's constructor
-already performs; both are listed in the sidecar, and so is every rule that is not live
-(`gates.dead`, expected empty): a rule the engine holding the file does not serve on its own
-left side, because another rule takes that instance first and ends dearer. Then the file
-and its sidecar are written.
+of the judge loop), the covered prune (asked of the mode's answer, on the instances each slot
+binds in that mode), sort promotion, the covered prune again, the overlap completion, and the
+file gates on what ships — every file spelling and served entry licensed in the mode, no
+ground rule the mode's constructor already performs, every rule live, no law the engine
+applies itself, no row the load mints anyway. A file a rule of which fails one of them fails
+the mine, naming the rule; nothing is dropped. Then the file and its sidecar are written.
 
 At each node the engine tries the rules of the node's head most specific first — the nodes
 a match must find beyond one per placeholder, so `sin acos tanh _0` before `sin acos _0` —
@@ -364,7 +370,7 @@ engine.compile_rules()
 ```
 
 `mode` is required: the chain runs in that mode (its serve answer is the mark, its canon
-reads the sources, its numerics accept), and the symbolic gate keeps only rules whose tier
+reads the sources, its numerics accept), and the judge keeps only rules whose tier
 that mode licenses, so a rule certified in `permissive` (`atanh(tanh(x0)) -> x0`) belongs in
 `permissive_simplification_rules`, never in the f64 set. Each result carries its `basis`:
 `'proved'` where an exact route proves it in the mode, `'evidence'` where it holds at every

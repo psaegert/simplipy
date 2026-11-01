@@ -902,20 +902,10 @@ class TestSymbolicGateFatalBuckets:
         excluded = [pair for row in prov["per_length"].values() for pair in row["excluded"]]
         assert [p for p in excluded if "log" in p[0] or "log" in p[1]], \
             "vacuous: the judge loop excluded no log rule"
-        gate = prov["symbolic_gate"]
-        assert gate["unsupported_shape"] == []  # present even when empty: the channel ran
-        assert gate["killed"] == []
-        assert gate["no_witness"] == []  # present even when empty: the channel ran
-        census = gate["census"]
-        assert census.get("UNSUPPORTED-SHAPE", 0) == len(gate["unsupported_shape"])
-        assert census["CERTIFIED"] == gate["kept"]
-        # `kept` is counted BEFORE the final gates, and `rules.json` is written after
-        # them, so the two differ by exactly what the gates dropped -- each named in the
-        # sidecar. The sidecar states that rather than leaving "smaller than expected"
-        # indistinguishable from "something was lost".
-        prov = json.load(open(out + ".provenance.json"))
-        assert gate["kept"] == (len(mined) + len(prov["gates"]["unlicensed"])
-                                + len(prov["gates"]["preempted"]))
+        # the symbolic gate decides where the mine first considers a pick, and nothing is
+        # dropped afterwards: the file passes the final gate as written
+        assert "symbolic_gate" not in prov
+        assert prov["gates"]["unlicensed"] == [] and prov["gates"]["preempted"] == []
 
     def test_certify_rules_refuses_the_same_buckets(self, engine, monkeypatch) -> None:
         """The certify_rules gate site must apply the same fatal set: a certification the judge
@@ -2005,16 +1995,13 @@ class TestCertifiedThenDropped:
         assert _rule_identity(["log", "*", "inv", "x0", "inv", "x1"],
                               ["neg", "log", "*", "x0", "x0"], dummies) != base
 
-    def test_a_convicted_pair_with_a_tier_is_ROUTED_not_dropped(self, tmp_path) -> None:
-        """A convicted pair with a tier is routed. `cosh(x0)^2 - sinh(x0)^2 = 1`
-        certifies and the symbolic gate then convicts it -- and when `rules.json` was the
-        only destination, the right thing to do was delete it and say so in the census.
-
-        It is not the right thing any more. The identity is exactly true on the extended
-        line and fails only because f64 cosh/sinh overflow at 710.475860, which is the
-        definition of the `permissive` tier. So the gate keeps it where its mode licenses
-        it -- rules_permissive, NOT the f64 set -- and the census reads `certified` because
-        it did survive -- with `routed_to_tier` naming where.
+    def test_a_pair_is_decided_per_mode_where_it_is_first_considered(self, tmp_path) -> None:
+        """`cosh(x0)^2 - sinh(x0)^2 = 1` is exactly true on the extended line and fails in f64
+        only because cosh and sinh overflow at 710.475860: it holds in permissive alone. Each
+        mode's mine decides it where it first considers the proposal -- the judge's tier, the
+        policies, the entries it serves, liveness -- and drops nothing afterwards: the
+        permissive set holds it, the f64 set does not, and no symbolic gate sits after the
+        fact.
 
         The census property this test guards: a pair the census calls `certified` must be
         findable in the artifact of its mode, here the permissive set."""
@@ -2024,17 +2011,7 @@ class TestCertifiedThenDropped:
         key = self._key(source, target)
         assert key in {self._key(lhs, rhs) for lhs, rhs in artifact}, \
             "a rule that is true on R must survive the mine somewhere"
-
-        gate = sidecar["symbolic_gate"]
-        want_lhs = ["-", "pow2", "cosh", "?0", "pow2", "sinh", "?0"]
-        routed = gate.get("routed_to_tier", {})
-        assert any(lhs == want_lhs for pairs in routed.values() for lhs, _ in pairs), \
-            f"the gate must name the pair as routed, not drop it: {routed}"
-        # and it must NOT appear in any drop bucket
-        buckets = {b: v for b, v in gate.items()
-                   if isinstance(v, list) and all(isinstance(x, list) and len(x) == 2 for x in v)}
-        assert not [b for b, pairs in buckets.items() if any(lhs == want_lhs for lhs, _ in pairs)], \
-            f"a pair with a tier must not be convicted into a drop bucket: {gate}"
+        assert "symbolic_gate" not in sidecar
 
         entry, = sidecar["proposals"]["trail"]
         assert entry["verdict"] == "certified"

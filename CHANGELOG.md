@@ -1649,6 +1649,23 @@ model predictions.
     `pow(cos(C), inf) -> 0` is minted in `permissive`, where pow(1, inf) has no value.
   - A source with evidence whose rows the mint cannot top up, and a variable-free source the
     interval layer cannot read, are counted (`soundness.interval_undecided.mint`).
+- **Every rule the mine considers is decided where it first considers it.** One acceptance --
+  the licence (the judge's tier and the named policies), the entries the mode serves from the
+  rule, and liveness -- decides each pick, proposal, completion, sort promotion's respelling and
+  seed, and nothing is dropped afterwards.
+  - The symbolic gate that dropped, after the proposals, what the mode did not hold is gone:
+    its judgment is made at acceptance, and the sidecar's `symbolic_gate` record with it.
+  - The mint reads the licence's policies on the pick's written pattern (the load's predicate,
+    evidence): in `permissive`, `abs(x0) -> acosh(cosh(x0))` is no longer proposed.
+  - A seed of a mine that starts from a set (`reset_rules=False`) goes through the acceptance,
+    and a refused one is never written: `asin(1) -> acos(0)`, true and refused by the ground
+    composite policy. The sidecar names it (`seeds`).
+  - Sort promotion refuses a respelling that does not fire on its own generic instance: in
+    `permissive`, `pow(0, inv(_0)) -> 0`, whose instance `0^(1/(1/(x0 + x1)))` is cancelled
+    first, ships at a sort where it fires.
+  - Finalization fails, naming the rule, where a rule of the file would fail a gate (its
+    licence, an entry it serves, preemption, liveness, a law the engine owns, a row the load
+    mints anyway, the load's translation), and writes nothing.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with
