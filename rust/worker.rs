@@ -890,6 +890,48 @@ fn pin_root_on_row(
     })
 }
 
+/// THE WITNESS IN THE REALS of a one-constant target at one instance of the source (its
+/// constants `src_params`, its float64 values `y_src` on `cols`): float64's fitted witness pinned
+/// at the arbiter precision (`pin_root_on_row` on `hiprec::point_diff`), the double nearest to the
+/// root, on the first of a few finite rows that brackets it. `None` for a witness of several
+/// constants, or where no row brackets the root.
+#[allow(clippy::too_many_arguments)]
+fn witness_in_reals(
+    cand_tokens: &[String],
+    witness: &[f64],
+    source: &[String],
+    src_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    y_src: &[f64],
+) -> Option<Vec<f64>> {
+    const MAX_PIN_ROWS: usize = 8;
+    let [w] = witness else { return None };
+    if !w.is_finite() {
+        return None;
+    }
+    let g = |c: f64, row: usize| -> Option<crate::hiprec::ArbFloat> {
+        crate::hiprec::point_diff(
+            source,
+            src_params,
+            cand_tokens,
+            &[c],
+            ops,
+            var_names,
+            cols,
+            row,
+        )
+    };
+    y_src
+        .iter()
+        .enumerate()
+        .filter(|(_, y)| y.is_finite())
+        .take(MAX_PIN_ROWS)
+        .find_map(|(row, _)| pin_root_on_row(&g, *w, row))
+        .map(|c| vec![c])
+}
+
 /// Evaluate both sides of one certified instance on the special battery and apply the
 /// special-point row semantics (`battery::rows_consistent`). `true` when there is nothing
 /// to check (no battery: variable-free source).
@@ -1175,8 +1217,8 @@ fn candidate_matches(
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
         return Err("finite_rows");
     }
-    // the certified (source-constants, target-witness) pairs, for the special-point phase
-    let mut certified: Vec<(Vec<f64>, Option<Vec<f64>>)> = Vec::with_capacity(y_src.len());
+    // the certified (instance, target-witness) pairs, for the special-point phase
+    let mut certified: Vec<(usize, Option<Vec<f64>>)> = Vec::with_capacity(y_src.len());
     for (inst, (inst_params, y)) in y_src.iter().enumerate() {
         // WITNESS, not just a bool: None = reject; Some(None) = VACUOUS pass (no constants
         // determined -- every row was extendable); Some(Some(c)) = pass AT the constants `c`.
@@ -1499,30 +1541,44 @@ fn candidate_matches(
                 });
             }
         }
-        certified.push((inst_params.clone(), fitted));
+        certified.push((inst, fitted));
     }
     // (THE EVIDENCE GATE is the source's own decision, `evidence_rows`: a source finite only on
     // a null set binds nothing generic, and has no `SourceCtx` to be judged against.)
     // SPECIAL-POINT PHASE (see `rust/battery.rs`): runs only for candidates
     // that certified everything above, so its cost is per accepted (source, candidate) pair.
+    // The points read the mode's values at the witness. A mode that reads the reals there
+    // (permissive) holds the pair where float64's witness agrees, or where the witness the reals
+    // give does (`witness_in_reals`): float64's fit is off the reals' witness by its kernels'
+    // error and its own tolerance, which can exceed the agreement the points ask.
+    let special_ok = |sp: &[f64], cp: &[f64], y: &[f64]| -> bool {
+        let check = |w: &[f64]| {
+            battery_rows_ok(
+                src_tape,
+                source,
+                sp,
+                &cand.tape,
+                &cand.tokens,
+                w,
+                battery,
+                ops,
+                var_names,
+                rtol,
+                atol,
+                lane.0,
+            )
+        };
+        check(cp)
+            || (rescue
+                && witness_in_reals(&cand.tokens, cp, source, sp, ops, var_names, cols, y)
+                    .is_some_and(|w| w != cp && check(&w)))
+    };
     // 1. Contract points at every certified instance's witness. A vacuous instance pins
     //    no target function and is skipped, exactly like the domain gate above.
-    for (inst_params, fitted) in &certified {
+    for (inst, fitted) in &certified {
         let Some(cand_params) = fitted else { continue };
-        if !battery_rows_ok(
-            src_tape,
-            source,
-            inst_params,
-            &cand.tape,
-            &cand.tokens,
-            cand_params,
-            battery,
-            ops,
-            var_names,
-            rtol,
-            atol,
-            lane.0,
-        ) {
+        let (inst_params, y) = &y_src[*inst];
+        if !special_ok(inst_params, cand_params, y) {
             return Err("special_points");
         }
     }
@@ -1588,20 +1644,7 @@ fn candidate_matches(
                 }
             };
             let Some(cp) = cp else { continue };
-            if !battery_rows_ok(
-                src_tape,
-                source,
-                &sp,
-                &cand.tape,
-                &cand.tokens,
-                &cp,
-                battery,
-                ops,
-                var_names,
-                rtol,
-                atol,
-                lane.0,
-            ) {
+            if !special_ok(&sp, &cp, &y_s) {
                 return Err("special_constants");
             }
         }
@@ -3216,6 +3259,69 @@ mod tests {
         crate::engine::RuleMode::Default,
         crate::engine::RuleMode::Permissive,
     ];
+
+    /// PERMISSIVE READS ITS WITNESS IN THE REALS at the special points: a witness off the reals'
+    /// one by more than the points' agreement (float64's fit is off by its kernels' error and its
+    /// own tolerance) refuses `besselj(cos(1), C) -> C` at C = 0.1, where the interval layer
+    /// cannot decide the point and the table's readings do; the witness pinned in the reals
+    /// agrees there.
+    #[test]
+    fn permissive_special_points_read_the_witness_in_the_reals() {
+        let ops = {
+            let arity = [("besselj", 2u8), ("cos", 1u8)];
+            let specs: rustc_hash::FxHashMap<String, crate::operators::OperatorSpec> = arity
+                .iter()
+                .map(|(name, a)| {
+                    let spec = crate::operators::OperatorSpec {
+                        realization: String::new(),
+                        alias: vec![],
+                        inverse: None,
+                        arity: *a,
+                        precedence: None,
+                        commutative: false,
+                    };
+                    (name.to_string(), spec)
+                })
+                .collect();
+            Operators::from_specs(arity.iter().map(|(n, _)| n.to_string()).collect(), specs)
+        };
+        let ops = &ops;
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let cols = vec![grid_1var(n)];
+        let src = s(&["besselj", "cos", "1", "<constant>"]);
+        let tgt = s(&["<constant>"]);
+        let src_tape = Tape::compile(&src, ops, &vars).unwrap();
+        let tgt_tape = Tape::compile(&tgt, ops, &vars).unwrap();
+        let sp = [0.1];
+        let y = src_tape.eval_columns(&cols, &sp, n);
+        let off = [y[0] * (1.0 + 1e-10)];
+        let battery = crate::battery::SpecialBattery::build(
+            vars.len(),
+            &crate::battery::used_variables(&src, &vars),
+        );
+        let ok = |w: &[f64]| {
+            battery_rows_ok(
+                &src_tape,
+                &src,
+                &sp,
+                &tgt_tape,
+                &tgt,
+                w,
+                battery.as_ref(),
+                ops,
+                &vars,
+                1e-11,
+                1e-12,
+                crate::engine::RuleMode::Permissive,
+            )
+        };
+        assert!(!ok(&off), "a witness off the reals' one refuses");
+        let w = witness_in_reals(&tgt, &off, &src, &sp, ops, &vars, &cols, &y).unwrap();
+        assert!(ok(&w), "the witness in the reals agrees: {w:?}");
+        // several constants: no witness in the reals is pinned
+        assert!(witness_in_reals(&tgt, &[1.0, 2.0], &src, &sp, ops, &vars, &cols, &y).is_none());
+    }
 
     #[test]
     fn no_const_equiv() {

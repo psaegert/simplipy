@@ -1688,7 +1688,12 @@ model predictions.
     the reals only for a true value where an operation overflows or underflows; `permissive`
     reads the reals at the points themselves at float resolution, at every point:
     `ceil(cos(asin(x0))) -> 1` is refused at x0 = 1, where cos(pi/2) is 0 (float64 gives
-    6.1e-17), and `ceil(asinh(cos(x0))) -> ceil(cos(x0))` at x0 = pi.
+    6.1e-17), and `ceil(asinh(cos(x0))) -> ceil(cos(x0))` at x0 = pi. Permissive reads them at
+    the witness the reals give too: where float64's fitted witness of a one-constant target
+    misses the points' agreement (its kernels' error and its own tolerance), the witness is
+    pinned in the reals at the arbiter precision, the double nearest to the root, and the pair
+    holds where either agrees: permissive's own reading refused `besselj(cos(1), C) -> C` at
+    C = 0.1, where float64's fitted witness is 1.4e-11 off the reals' value.
   - A constant at which the source is finite on no set of positive measure owes nothing (3.2)
     and binds nothing: `log(C^x0) -> C*x0` is no longer refused at C < 0, where the source is
     finite at the even integers alone.
