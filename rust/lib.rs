@@ -2167,6 +2167,32 @@ fn table_mode_evidence(
     Ok(py.detach(|| crate::interval::evidence_in(&tokens, &ops, mode)))
 }
 
+/// PERMISSIVE'S READING AT FLOAT RESOLUTION (P3) of `lhs` against `rhs` at one point, each of
+/// `names` bound to the table value its spec in `values` gives (`interval::float_resolution`):
+/// `("agree", nan, nan)` or `("differ", nan, nan)` from a rigorous enclosure of both sides at the
+/// point, `("doubles", a, b)` the doubles nearest to the two sides read at the precision the
+/// point demands, or `None` where nothing was read. Running out of precision never reads as
+/// equality.
+#[pyfunction]
+fn table_float_resolution(
+    py: Python<'_>,
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    names: Vec<String>,
+    values: Vec<TableSpec>,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<(String, f64, f64)> {
+    let ops = arity_table(arity);
+    let reading =
+        py.detach(|| crate::interval::float_resolution(&lhs, &rhs, &names, &values, &ops));
+    match reading {
+        crate::interval::FloatReading::Agree => Some(("agree".into(), f64::NAN, f64::NAN)),
+        crate::interval::FloatReading::Differ => Some(("differ".into(), f64::NAN, f64::NAN)),
+        crate::interval::FloatReading::Doubles(a, b) => Some(("doubles".into(), a, b)),
+        crate::interval::FloatReading::Unread => None,
+    }
+}
+
 /// ELIGIBILITY's certificate (the specification's 3.2): may `tokens`, its `<constant>`s bound to
 /// `params`, be finite on a set of positive measure of its variables, in the reals' values or
 /// with `f64` in float64's (`interval::finite_somewhere`)? `False` certifies the constants are
@@ -2574,6 +2600,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
     m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_mode_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(table_float_resolution, m)?)?;
     m.add_function(wrap_pyfunction!(table_value_set, m)?)?;
     m.add_function(wrap_pyfunction!(table_finite_somewhere, m)?)?;
     m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;
@@ -2585,6 +2612,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
     m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
     m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;
+    m.add("TABLE_BASE_DPS", table::BASE_DPS)?;
+    m.add("TABLE_MAX_DPS", table::MAX_DPS)?;
     m.add("TABLE_F64_MAGNITUDES", table::F64_MAGNITUDES.to_vec())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;

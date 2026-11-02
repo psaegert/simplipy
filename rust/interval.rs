@@ -3450,6 +3450,247 @@ fn value_set_table_points(
     go(tokens, 0, ops, doms, params, &mut k, &mut ctx).map(|(v, _, _)| v)
 }
 
+/// The real reading's value set of `tokens` at ONE POINT, each variable `x<i>` bound to `env[i]`
+/// (a value of THE TABLE), with an error bound that holds at any working precision: a node whose
+/// operands are all EXACT table values takes the table's value there (`table::apply`) and is
+/// carried on as a point only where that value is exact itself; an approximate value enters as
+/// its float enclosure (`table::f64_enclosure`: one operation on exact operands, read far past a
+/// double's precision), and every node above it is the layer's outward-rounded interval
+/// arithmetic. No chain of approximations is trusted past one operation, so a cancellation whose
+/// working-precision residue would read as a value (`(x + 1e-3000) - x`) encloses as wide as its
+/// bound. A pole is taken at the point (no zero set is null at a point). `None` where a token
+/// cannot be read or the table snapped a value.
+fn point_value_set(tokens: &[String], ops: &Operators, env: &[crate::table::Val]) -> Option<Vs> {
+    use crate::table::{Ctx, Val};
+    fn exact(v: &Val) -> bool {
+        matches!(v, Val::Exact(_))
+    }
+    fn go(
+        t: &[String],
+        i: usize,
+        ops: &Operators,
+        env: &[Val],
+        ctx: &mut Ctx,
+    ) -> Option<(Vs, Option<Val>, usize)> {
+        let tok = t.get(i)?.as_str();
+        if let Some(k) = var_index(tok) {
+            let v = env.get(k)?;
+            return Some((vs_of_table(v, ctx)?, exact(v).then(|| v.clone()), i + 1));
+        }
+        if !ops.is_operator(tok) {
+            let mut k = 0usize;
+            let bracket = leaf_vs(tok, &[Vs::reals()], &[], &mut k)?;
+            return Some(match crate::table::literal_val(tok, ctx) {
+                Some(pt) => {
+                    let vs = vs_of_table(&pt, ctx).unwrap_or(bracket);
+                    (vs, exact(&pt).then_some(pt), i + 1)
+                }
+                None => (bracket, None, i + 1),
+            });
+        }
+        let ar = ops.arity_of(tok)?;
+        let mut kids: Vec<(Vs, Option<Val>)> = Vec::with_capacity(ar as usize);
+        let mut j = i + 1;
+        for _ in 0..ar {
+            let (v, pt, next) = go(t, j, ops, env, ctx)?;
+            kids.push((v, pt));
+            j = next;
+        }
+        if kids.iter().all(|(_, pt)| pt.is_some()) {
+            // a value the table cannot read at this precision (inside a boundary band) is the
+            // layer's interval arithmetic's, below
+            let args: Vec<Val> = kids.iter().filter_map(|(_, pt)| pt.clone()).collect();
+            let val = crate::table::apply(tok, &args, ctx);
+            if ctx.snapped {
+                return None;
+            }
+            if let Some(val) = val {
+                let vs = vs_of_table(&val, ctx)?;
+                return Some((vs, exact(&val).then_some(val), j));
+            }
+        }
+        let v = match (ar, kids.as_slice()) {
+            (1, [(a, _)]) => apply_unary(tok, a, &|| false)?,
+            (2, [(a, _), (b, _)]) => apply_binary(tok, a, b, &|_| false)?,
+            _ => return None,
+        };
+        Some((v, None, j))
+    }
+    let mut ctx = Ctx::new(POINT_DPS)?;
+    go(tokens, 0, ops, env, &mut ctx).map(|(v, _, _)| v)
+}
+
+/// What permissive reads of a pair of sides at one point at FLOAT RESOLUTION (P3): the two sides'
+/// values as the doubles nearest to them, agreeing when at most `table::REALISED_ULP` units in
+/// the last place apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FloatReading {
+    /// A rigorous enclosure of both sides at the point: every double either side can round to
+    /// lies within the bound of every double the other can.
+    Agree,
+    /// A rigorous enclosure of both sides at the point: no double either side can round to lies
+    /// within the bound of one the other can.
+    Differ,
+    /// The doubles nearest to the two sides, read by the table at the precision the point's
+    /// magnitudes demand and at twice that, where both readings give them.
+    Doubles(f64, f64),
+    /// No reading: the enclosures cannot tell, and the point demands more than the precision
+    /// ceiling, or the readings differ (a residue, not a value), or a side cannot be read.
+    Unread,
+}
+
+/// The verdict of two point enclosures at float resolution (`FloatReading`), `None` where they
+/// cannot tell: a side not finite, unbounded, or straddling the bound.
+fn resolution_verdict(l: &Vs, r: &Vs) -> Option<FloatReading> {
+    let finite =
+        |v: &Vs| v.has_fin && !v.nan && !v.pinf && !v.ninf && v.lo.is_finite() && v.hi.is_finite();
+    if !(finite(l) && finite(r)) {
+        return None;
+    }
+    let gap = crate::table::ulp_gap;
+    let bound = crate::table::REALISED_ULP;
+    if gap(l.lo, r.hi).max(gap(l.hi, r.lo)) <= bound {
+        return Some(FloatReading::Agree);
+    }
+    let nearest = if l.hi < r.lo {
+        gap(l.hi, r.lo)
+    } else if r.hi < l.lo {
+        gap(r.hi, l.lo)
+    } else {
+        0
+    };
+    (nearest > bound).then_some(FloatReading::Differ)
+}
+
+/// PERMISSIVE'S READING AT FLOAT RESOLUTION (P3) of `lhs` against `rhs` at one point: each name
+/// of `names` bound to the table value its spec gives (`env`, `table::val_from_spec`). Running
+/// out of precision never reads as equality:
+///
+/// - first the interval layer's enclosure of both sides at the point (`point_value_set`), a
+///   rigorous bound: it decides agreement where every double the two can round to lies within
+///   `table::REALISED_ULP` units, and disagreement where none does. `x^2 + 1 + 1e-3000` against
+///   `x^2 + 1` agrees at every point, whose reals' readings would demand 6,050 digits;
+///   `((x + 1e-3000) - x) * 1e3000` encloses unbounded and decides nothing.
+/// - else the table's readings at the precision the point's magnitudes demand
+///   (`table::demanded_dps`, the bound the operations give) and at twice that, the doubles
+///   nearest to them where both readings agree on them. A point that demands more than
+///   `table::MAX_DPS` is unread: `((x + pi + 1e-200) - (x + pi)) * 1e200` is 1, read at 450
+///   digits, and 0 at fifty.
+///
+/// The judge reads its permissive lane so (`_contract`), and the permissive mint its special
+/// points (`battery::rows_consistent`).
+pub fn float_resolution(
+    lhs: &[String],
+    rhs: &[String],
+    names: &[String],
+    env: &[(String, String, String)],
+    ops: &Operators,
+) -> FloatReading {
+    use crate::table::{class_of, nearest_f64, val_from_spec, Ctx, Expr};
+    let vals_at = |dps: i32| -> Option<(Ctx, Vec<crate::table::Val>)> {
+        let mut ctx = Ctx::new(dps)?;
+        let vals = env
+            .iter()
+            .map(|(k, a, b)| val_from_spec(k, a, b, &mut ctx))
+            .collect::<Option<Vec<_>>>()?;
+        Some((ctx, vals))
+    };
+    let renamed = |tokens: &[String]| -> Vec<String> {
+        tokens
+            .iter()
+            .map(|t| match names.iter().position(|n| n == t) {
+                Some(i) => format!("x{i}"),
+                None => t.clone(),
+            })
+            .collect()
+    };
+    if let Some((_, vals)) = vals_at(POINT_DPS) {
+        let (l, r) = (renamed(lhs), renamed(rhs));
+        let enclosed = with_real_reading(|| {
+            Some((
+                point_value_set(&l, ops, &vals)?,
+                point_value_set(&r, ops, &vals)?,
+            ))
+        });
+        if let Some(verdict) = enclosed.and_then(|(lv, rv)| resolution_verdict(&lv, &rv)) {
+            return verdict;
+        }
+    }
+    let arity: std::collections::HashMap<String, u8> = lhs
+        .iter()
+        .chain(rhs)
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let (Ok(le), Ok(re)) = (
+        Expr::compile(lhs, names, &arity),
+        Expr::compile(rhs, names, &arity),
+    ) else {
+        return FloatReading::Unread;
+    };
+    // the magnitudes the two sides combine, read at the ordinary precision
+    let Some((_, vals)) = vals_at(crate::table::BASE_DPS) else {
+        return FloatReading::Unread;
+    };
+    let (Some(lo), Some(ro)) = (
+        le.eval_float_resolution(&vals, crate::table::BASE_DPS),
+        re.eval_float_resolution(&vals, crate::table::BASE_DPS),
+    ) else {
+        return FloatReading::Unread;
+    };
+    let larger = |a: &astro_float::BigFloat, b: &astro_float::BigFloat| {
+        if crate::hiprec::cmp_gt(b, a) {
+            b.clone()
+        } else {
+            a.clone()
+        }
+    };
+    let smaller = |a: &astro_float::BigFloat, b: &astro_float::BigFloat| {
+        if a.is_zero() || (!b.is_zero() && crate::hiprec::cmp_lt(b, a)) {
+            b.clone()
+        } else {
+            a.clone()
+        }
+    };
+    let demand = crate::table::demanded_dps(
+        &larger(&lo.max_mag, &ro.max_mag),
+        &smaller(&lo.min_mag, &ro.min_mag),
+    );
+    if demand > i64::from(crate::table::MAX_DPS) {
+        return FloatReading::Unread;
+    }
+    let first = (demand as i32).max(crate::table::BASE_DPS);
+    let mut seen: Vec<(f64, f64)> = Vec::with_capacity(2);
+    for dps in [first, (2 * first).max(120)] {
+        let Some((mut ctx, vals)) = vals_at(dps) else {
+            return FloatReading::Unread;
+        };
+        let mut double = |e: &Expr| -> Option<f64> {
+            let v = e.eval_float_resolution(&vals, dps)?.value?;
+            Some(match class_of(&v) {
+                (true, _) => f64::NAN,
+                (_, Some(up)) => {
+                    if up {
+                        f64::INFINITY
+                    } else {
+                        f64::NEG_INFINITY
+                    }
+                }
+                _ => nearest_f64(&v, &mut ctx)?,
+            })
+        };
+        let (Some(a), Some(b)) = (double(&le), double(&re)) else {
+            return FloatReading::Unread;
+        };
+        seen.push((a, b));
+    }
+    let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+    if same(seen[0].0, seen[1].0) && same(seen[0].1, seen[1].1) {
+        FloatReading::Doubles(seen[1].0, seen[1].1)
+    } else {
+        FloatReading::Unread
+    }
+}
+
 /// `value_set_p` with every variable AND every `<constant>` sharing the single interval `dom`.
 ///
 /// Correct for `value_class`, which asks for the union over the WHOLE space: there every variable

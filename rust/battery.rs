@@ -324,7 +324,8 @@ pub fn rows_consistent(
     for r in 0..battery.n_rows {
         let (s, c) = (y_src[r], y_cand[r]);
         let reject = if !lane_f64 {
-            point_doubles(
+            use crate::interval::FloatReading;
+            match point_reading(
                 source,
                 src_params,
                 cand,
@@ -332,8 +333,12 @@ pub fn rows_consistent(
                 ops,
                 var_names,
                 &battery.atoms[r],
-            )
-            .is_some_and(|(a, b)| !(agree(a, b) || (a.is_nan() && !b.is_nan())))
+            ) {
+                FloatReading::Agree | FloatReading::Unread => false,
+                // a fitted constant agrees within its band, which the enclosure does not read
+                FloatReading::Differ => cand_params.is_empty(),
+                FloatReading::Doubles(a, b) => !(agree(a, b) || (a.is_nan() && !b.is_nan())),
+            }
         } else if agree(s, c) {
             false
         } else if events.is_some_and(|e| e[r]) {
@@ -372,10 +377,10 @@ pub fn rows_consistent(
 
 /// Both sides' values in the reals at a battery point (`atoms`, read exactly: pi/2 is pi/2, each
 /// `<constant>` its double), as the doubles nearest to them -- permissive's reading of a value
-/// (P3) -- read by the table at two precisions; `None` where a side cannot be read or the two
-/// readings round apart (a residue, not a value). The judge's permissive lane reads its points so
-/// (`_contract`'s `doubles`).
-fn point_doubles(
+/// (P3, `interval::float_resolution`: a rigorous enclosure at the point, else the table's
+/// readings at the precision the point demands; running out of precision is no reading). The
+/// judge's permissive lane reads its points so (`_contract._float_resolution`).
+fn point_reading(
     source: &[String],
     src_params: &[f64],
     target: &[String],
@@ -383,7 +388,23 @@ fn point_doubles(
     ops: &Operators,
     var_names: &[String],
     atoms: &[ProbeAtom],
-) -> Option<(f64, f64)> {
+) -> crate::interval::FloatReading {
+    match spelled_at(source, src_params, target, tgt_params, var_names, atoms) {
+        Some((ls, rs)) => crate::interval::float_resolution(&ls, &rs, &[], &[], ops),
+        None => crate::interval::FloatReading::Unread,
+    }
+}
+
+/// Both sides spelled at a battery point: each variable as its atom's tokens (`atom_tokens`),
+/// each `<constant>` as its double; `None` where a parameter is missing.
+fn spelled_at(
+    source: &[String],
+    src_params: &[f64],
+    target: &[String],
+    tgt_params: &[f64],
+    var_names: &[String],
+    atoms: &[ProbeAtom],
+) -> Option<(Vec<String>, Vec<String>)> {
     let spell = |tokens: &[String], params: &[f64]| -> Option<Vec<String>> {
         let mut out = Vec::with_capacity(tokens.len());
         let mut k = 0usize;
@@ -399,42 +420,12 @@ fn point_doubles(
         }
         Some(out)
     };
-    let (ls, rs) = (spell(source, src_params)?, spell(target, tgt_params)?);
-    let mut arity: std::collections::HashMap<String, u8> = ls
-        .iter()
-        .chain(&rs)
-        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
-        .collect();
-    // the atoms' own spelling (`atom_tokens`) reads `*` and `/` whatever the configuration holds
-    arity.insert("*".to_string(), 2);
-    arity.insert("/".to_string(), 2);
-    let le = crate::table::Expr::compile(&ls, &[], &arity).ok()?;
-    let re = crate::table::Expr::compile(&rs, &[], &arity).ok()?;
-    let mut seen: Vec<(f64, f64)> = Vec::with_capacity(2);
-    for dps in [50, 120] {
-        let mut ctx = crate::table::Ctx::new(dps)?;
-        let mut double = |e: &crate::table::Expr| -> Option<f64> {
-            let v = e.eval_float_resolution(&[], dps)?.value?;
-            Some(match crate::table::class_of(&v) {
-                (true, _) => f64::NAN,
-                (_, Some(up)) => {
-                    if up {
-                        f64::INFINITY
-                    } else {
-                        f64::NEG_INFINITY
-                    }
-                }
-                _ => crate::table::nearest_f64(&v, &mut ctx)?,
-            })
-        };
-        seen.push((double(&le)?, double(&re)?));
-    }
-    let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
-    (same(seen[0].0, seen[1].0) && same(seen[0].1, seen[1].1)).then_some(seen[1])
+    Some((spell(source, src_params)?, spell(target, tgt_params)?))
 }
 
 /// A battery atom spelled as tokens the table reads exactly: a double as its literal, `n pi / d`
-/// as `(n * np.pi) / d`, `e` as `np.e`, -1.7 and `n / d` as decimals' quotients.
+/// as `(n * np.pi) / d`, `e` as `np.e`, -1.7 and `n / d` as decimals' quotients (`*` and `/` are
+/// the core's own operators, read whatever the configuration holds).
 fn atom_tokens(a: &ProbeAtom) -> Vec<String> {
     let s = |x: &str| x.to_string();
     let num = |x: f64| crate::numeric::py_float_repr(x);

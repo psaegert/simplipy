@@ -1449,10 +1449,21 @@ model predictions.
 - **Precision run out is no equality.** The judge sizes its precision by the magnitudes a
   point combines, its literals and variables' values included (a literal of 1e-3000 added to 1
   demands 6,000 digits), and where a point demands more than the 2,000-digit ceiling, two
-  readings that agree at the ceiling are no reading of equality: the point is undecided.
-  `x^2 + 1 + 1e-3000 -> x^2 + 1`, false by 1e-3000 everywhere in the reals, is refused with
-  uncertainty in `permissive` (it was licensed in every mode); at 1e-100 the readings reach the
-  separation, and the rule is false in the reals and holds in `f64` and `permissive`.
+  readings that agree at the ceiling are no reading of equality: the point is undecided in the
+  reals. At 1e-100 the readings reach the separation, and the rule is false in the reals and
+  holds in `f64` and `permissive`.
+- **`permissive` reads float resolution without exact equality.** Its criterion is agreement
+  of the doubles nearest to the two sides (P3), which needs no exact equality, and a point is
+  read under a rigorous bound: the interval layer's enclosure of both sides at the point
+  (`simplipy._core.table_float_resolution`), else the table's readings at the precision the
+  point's magnitudes demand. `x^2 + 1 + 1e-3000 -> x^2 + 1` and `x + 1e-3000 -> x`, false by
+  1e-3000 in the reals, hold in `permissive` by its own criterion: every double either side can
+  round to is the same. Running out of precision never reads as equality:
+  `((x + 1e-3000) - x) * 1e3000 -> 0` stays refused (the left side is 1), and
+  `((x + pi + 1e-200) - (x + pi)) * 1e200 -> 0`, which two readings at fifty and 120 digits
+  excused as float resolution, is refused (read at the 450 digits the point demands, the left
+  side is 1). `x + 1e-20 -> x` stays refused. The permissive mint reads its special points the
+  same way.
 - **Each mode is judged on its own values.** `f64` reads float64's values, and the reals only for
   the true value where an operation overflows or underflows; `permissive` reads the reals' values
   at float resolution. The verdict name (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) is the

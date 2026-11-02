@@ -360,6 +360,12 @@ def table_evidence(tokens: list[str], arity: dict[str, int], f64: bool) -> bool 
 #: Evidence in a rule mode (`'default'` or `'permissive'`): float64's for f64; float64's or the
 #: reals' for permissive, which includes f64. None when undecided.
 def table_mode_evidence(tokens: list[str], arity: dict[str, int], mode: str) -> bool | None: ...
+#: Permissive's reading at float resolution of `lhs` against `rhs` at one point (each of `names`
+#: bound to its table spec in `values`): ('agree' | 'differ', nan, nan) from a rigorous enclosure,
+#: ('doubles', a, b) read at the precision the point demands, or None (nothing read).
+def table_float_resolution(lhs: list[str], rhs: list[str], names: list[str],
+                           values: list[tuple[str, str, str]],
+                           arity: dict[str, int]) -> tuple[str, float, float] | None: ...
 #: The interval enclosure over the whole domain (every variable and constant over the finite
 #: reals) in float64's values (`f64`) or the reals': (has_fin, pinf, ninf, nan, lo, hi).
 def table_value_set(tokens: list[str], arity: dict[str, int],
@@ -398,6 +404,8 @@ def table_f64_structural(a: float, b: float) -> str: ...
 #: The units in the last place between two doubles; None across a sign change.
 def table_ulp_gap(a: float, b: float) -> int | None: ...
 TABLE_REALISED_ULP: int
+TABLE_BASE_DPS: int
+TABLE_MAX_DPS: int
 #: The f64 magnitude ladder (`table::F64_MAGNITUDES`): the judge's f64 lane and the f64 mint read it.
 TABLE_F64_MAGNITUDES: list[float]
 #: The f64 range event (`rust/numeric.rs`): did the operation `op` on `args` overflow or

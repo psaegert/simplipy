@@ -1742,6 +1742,9 @@ pub fn f64_enclosure(v: &Val, ctx: &mut Ctx) -> Option<(f64, f64, bool, bool)> {
     let y = bf_to_f64(&b.abs());
     let (lo, hi, lo_open, hi_open) = if y.is_infinite() {
         (f64::MAX, f64::INFINITY, false, true)
+    } else if b.exponent().is_some_and(|e| e <= -1074) {
+        // below 2^-1074, the smallest subnormal: `1e-3000` lies in (0, 5e-324]
+        (0.0, f64::from_bits(1), true, false)
     } else if y < 4.0 * f64::MIN_POSITIVE {
         (0.0, 4.0 * f64::MIN_POSITIVE, true, false)
     } else {
@@ -1933,6 +1936,42 @@ pub fn f64_structural(a: f64, b: f64) -> Cmp {
 /// The f64 agreement bound, in units in the last place: a rewrite has two sides, each up to about
 /// four library calls of at most one unit of error, which can oppose: 2 x 4 x 1.
 pub const REALISED_ULP: u64 = 8;
+
+/// The ordinary working precision of a reading of the reals, in decimal digits
+/// (`_contract.BASE_DPS`).
+pub const BASE_DPS: i32 = 50;
+
+/// The precision ceiling of a reading of the reals (`_contract.MAX_DPS`): a point that demands
+/// more is unread, and readings that agree past it are no equality.
+pub const MAX_DPS: i32 = 2000;
+
+/// THE PRECISION A READING DEMANDS, from the magnitudes its operations combine (the judge's
+/// ladder rule, `_contract._demanded_dps`): `BASE_DPS + 2k`, `k` the decades of the largest
+/// intermediate above 1 or of the smallest nonzero one below 1. A cancellation between magnitudes
+/// 10^k apart loses about 2k digits before any correct digit survives: `x + 1e-200` demands 450
+/// digits, `1 + 1e-3000` 6,050.
+pub fn demanded_dps(max_mag: &BigFloat, min_mag: &BigFloat) -> i64 {
+    let log10 = |b: &BigFloat| -> Option<f64> {
+        if b.is_zero() || b.is_nan() || b.is_inf() {
+            return None;
+        }
+        let a = b.abs();
+        let y = bf_to_f64(&a);
+        if y.is_finite() && y > 0.0 {
+            return Some(y.log10());
+        }
+        a.exponent()
+            .map(|e| f64::from(e) * std::f64::consts::LOG10_2)
+    };
+    let mut k = 0i64;
+    if let Some(l) = log10(max_mag).filter(|l| *l > 0.0) {
+        k = k.max(l.floor() as i64 + 1);
+    }
+    if let Some(l) = log10(min_mag).filter(|l| *l < 0.0) {
+        k = k.max(-(l.floor() as i64));
+    }
+    i64::from(BASE_DPS) + 2 * k
+}
 
 /// THE f64 MAGNITUDE LADDER: the magnitudes, from the smallest normal double to the largest, at
 /// which f64's agreement is read along each variable (both signs, the other variables at a generic

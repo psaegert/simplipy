@@ -797,14 +797,15 @@ def test_precision_run_out_is_no_equality(slot) -> None:
     readings demand 6,000 digits (a literal is an operand the precision is sized by), past the
     ceiling, so their agreement is no equality: the reals' verdict is undecided, never
     certified. Each mode is judged on its own values: float64 reads `1e-3000` as 0.0 and the two
-    sides are bit-identical, so the rule holds in f64, whatever the reals resolved, and in
-    permissive, which includes f64. At 1e-100 the rungs reach the separation: false in the reals, while
+    sides are bit-identical, so the rule holds in f64, whatever the reals resolved; permissive's
+    float resolution needs no equality, and the enclosures of both sides at each point decide
+    that they round to the same doubles. At 1e-100 the rungs reach the separation: false in the
+    reals, while
     float64 adds the double 1e-100 to 1 exactly and permissive reads the reals' values at float
     resolution (P3), so it holds in both."""
     v = verify_rule(f'+ + pow {slot} 2 1 1e-3000'.split(), f'+ pow {slot} 2 1'.split())
     assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
-    assert (v['realised'], v['permissive']) == (True, None), v
-    # permissive includes f64
+    assert (v['realised'], v['permissive']) == (True, True), v
     assert v['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}, v
     w = verify_rule('+ + pow x0 2 1 1e-100'.split(), '+ pow x0 2 1'.split())
     assert (w['verdict'], w['tier']) == ('KILL', 'core'), w

@@ -488,15 +488,40 @@ def c_eval(tree, env):
     return _from_spec(spec)
 
 
-def _table_reading(tree, env, dps):
-    """The table's value of `tree` at `env` and `dps` in its float-resolution reading
-    (`TableExpr.eval_float_resolution`: a saturation inside the boundary band reads as the
-    working float's value, `tanh(cosh(-10))` as 1 to fifty digits), the value P3 rounds to a
-    double; None where the table cannot read it at this precision."""
-    expr, names, extra = _compiled(tree)
-    args = [_spec(extra[n] if n in extra else env[n]) for n in names]
-    spec = expr.eval_float_resolution(args, dps)
-    return None if spec is None else _from_spec(spec)
+def _float_resolution(tl, tr, env, extends=False):
+    """PERMISSIVE'S READING AT FLOAT RESOLUTION (P3) of `tl` against `tr` at the point `env()`
+    builds (`_core.table_float_resolution`), the two sides' values as the doubles nearest to
+    them: True where they agree (F6), or, with `extends`, where the left side has no value there
+    (permissive may give one); False where they disagree; None where nothing was read.
+
+    Running out of precision never reads as equality. The reading is decided by a rigorous
+    bound first, the interval layer's enclosure of both sides at the point (`x^2 + 1 + 1e-3000`
+    agrees with `x^2 + 1` at every point, whose reals' readings would demand 6,050 digits), else
+    by the table's readings at the precision the point's magnitudes demand and at twice that (a
+    saturation inside the boundary band reads as the working float's value, `tanh(cosh(-10))` as
+    1); a point that demands more than the ceiling is unread (`((x + 1e-3000) - x) * 1e3000`, 1
+    in the reals and 0 at any affordable precision)."""
+    def exact(v):
+        # a binding that holds a double is that double exactly, a point of the enclosure
+        if hasattr(v, '_mpf_') and not (misnan(v) or misinf(v)) and mpf(float(v)) == v:
+            return Fraction(float(v))
+        return v
+
+    names, extra = {}, {}
+    tokens = [_tree_tokens(t, names, extra) for t in (tl, tr)]
+    order = list(names)
+    e = env()
+    try:
+        specs = [_spec(exact(extra[n] if n in extra else e[n])) for n in order]
+    except KeyError:
+        return None
+    reading = _table.table_float_resolution(tokens[0], tokens[1], order, specs, dict(ARITY))
+    if reading is None:
+        return None
+    kind, a, b = reading
+    if kind in ('agree', 'differ'):
+        return kind == 'agree'
+    return (extends and a != a) or _table.table_f64_agree(a, b) == 'eq'
 
 
 def _required_dps(mag, small=None):
@@ -2836,6 +2861,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     dep_bad, dep_div, dep_seen, dep_out_of_range = [], [], [False], [0]
     dep_kinds = set()
     resolved_pts = attempted_pts = 0
+    float_read = [0]       # battery points only permissive's float-resolution reading decided
     q_names = [n for n in names if nvars[n] == '?']
 
     def isolated_f64(env):
@@ -2907,9 +2933,23 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
 
     def lane():
         return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
-                'resolved': 0, 'attempted': 0,
+                'resolved': 0, 'attempted': 0, 'fr': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
                 'kinds': set(), 'null': 0, 'read': 0, 'unread': 0}
+
+    def unread_at_float_resolution(acc, v, point, where, env, count):
+        """A point the reals' ladder left unread (`v` None, precision run out): permissive's
+        float-resolution reading needs no exact equality (P3), and a rigorous bound or the
+        precision the point demands may decide it (`_float_resolution`). A disagreement is
+        permissive's counterexample; an agreement, with `count`, a point permissive read. A
+        ground rule's one point owes its value (3.3): no extension there."""
+        if v is not None:
+            return
+        agreed = _float_resolution(tl, tr, env, extends=not (ground and not has_cl))
+        if agreed is False:
+            acc['perm'].append(('REAL-CHANGE', point, where))
+        elif agreed and count:
+            acc['fr'] += 1
 
     def judge_point(acc, v, point, kind, real_valued, where):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
@@ -2949,6 +2989,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         nonlocal resolved_pts, attempted_pts
         resolved_pts += acc['resolved']
         attempted_pts += acc['attempted']
+        float_read[0] += acc['fr']
         # f64 owes at a constant by ITS values: where the deployed left side is finite
         # somewhere (`pow(sin(c), inf)` at fl(pi/2) is pow(1.0, inf) = 1 in float64, though
         # undefined at the exact pi/2), whatever real owes there
@@ -3000,6 +3041,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             point = {n: float(x) for n, x in values.items()}
             point.update(dict(zip(lnames, key)))
             point.update({n: float(w) for n, w in cr_mp.items()})
+            if real_valued:
+                unread_at_float_resolution(acc, v, point, (key, values), env_mp,
+                                           count=not skip_real)
             if skip_real:
                 # a `$` slot at 0: owed nothing in real (its certificate), a real-valued
                 # binding permissive's guarantee covers
@@ -3286,8 +3330,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     v, snapped = _point_verdict(tl, tr, env_mp)
                     point = dict(vals)
                     point.update(dict(zip(lnames, grid_key)))
-                    judge_point(acc, v, point, 'real', True,
-                                (grid_key, {m: mpf(x) for m, x in vals.items()}))
+                    where = (grid_key, {m: mpf(x) for m, x in vals.items()})
+                    judge_point(acc, v, point, 'real', True, where)
+                    unread_at_float_resolution(acc, v, point, where, env_mp, count=False)
                     if n is None:
                         # the diagonal is f64's in the coincidences, judged as their own rules
                         continue
@@ -3300,7 +3345,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             mint_rows(acc, cr_f64)
             magnitudes(acc, lanes, cr_f64)
             # the grid's points count toward nothing in coverage (that is the battery's)
-            acc['resolved'] = acc['attempted'] = acc['read'] = acc['unread'] = 0
+            acc['resolved'] = acc['attempted'] = acc['read'] = acc['unread'] = acc['fr'] = 0
             merge(acc, grid_key)
     finally:
         mp.dps = old
@@ -3427,6 +3472,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
     covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
+    # permissive's reading: the reals' resolved points and the points its float-resolution
+    # reading decided where the ladder ran out of precision (`_float_resolution`)
+    read_pts = resolved_pts + float_read[0]
+    perm_covered = read_pts > 0 and read_pts / max(1, attempted_pts) >= 0.25
 
     # PERMISSIVE IS JUDGED AT THE SORT ITS MATCHER BINDS (the owner's ruling, 2026-10-31): every
     # permissive slot matches any subexpression, so a disagreement at a real-valued binding is
@@ -3434,31 +3483,14 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # at that value (`ceil(abs(cos(_0))) -> 1` at `_0 = asin(ceil(x0))`, 0 against 1 on (0, 1]),
     # and no measure-zero allowance holds without a match-time guard, which permissive has none
     # of. P3 excuses a disagreement only where the two real values round to doubles at most
-    # REALISED_ULP apart (F6): a pointwise reading, no measure.
-    def doubles(env, trees=None):
-        """Both sides' values as the doubles nearest to them, read by the table at two
-        precisions, or None where the table cannot read a side or the doubles differ between
-        the two (a residue, not a value)."""
-        old_dps = mp.dps
-        try:
-            seen = []
-            for dps in (BASE_DPS, 120):
-                mp.dps = dps
-                e = env()
-                vals = [_table_reading(t, e, dps) for t in (trees or (tl, tr))]
-                if any(v is None for v in vals):
-                    return None
-                seen.append(tuple(_num(cls_mp(v)) for v in vals))
-        finally:
-            mp.dps = old_dps
-        (l1, r1), (l2, r2) = seen
-        same = all(a == b or (a != a and b != b) for a, b in ((l1, l2), (r1, r2)))
-        return (l2, r2) if same else None
-
+    # REALISED_ULP apart (F6): a pointwise reading, no measure, decided by a rigorous bound or
+    # read at the precision the point demands (`_float_resolution`), never by readings that ran
+    # out of precision.
     def float_close(env, trees=None):
-        d = doubles(env, trees)
-        if d is not None:
-            return _table.table_f64_agree(*d) == 'eq'
+        sl, sr = trees or (tl, tr)
+        agreed = _float_resolution(sl, sr, env)
+        if agreed is not None:
+            return agreed
         # Past the table's reach (a value beyond the doubles' range, `exp(sinh(-50))` at
         # 10^(-1.1e21)): the range standard. Where an operation overflowed or underflowed,
         # the double nearest to the true value is float64's, 0 or an infinity.
@@ -3486,9 +3518,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         if not excused(event):
             perm_left.append(event)
             break
-    # permissive's reading: a counterexample refuses it; a battery mostly unresolved in the reals,
-    # or a constant owed a witness in the reals and none found, reaches no answer
-    permissive = False if perm_left else (True if covered and not unwitnessed['reals'] else None)
+    # permissive's reading: a counterexample refuses it; a battery mostly unread at float
+    # resolution, or a constant owed a witness in the reals and none found, reaches no answer
+    permissive = False if perm_left else (
+        True if perm_covered and not unwitnessed['reals'] else None)
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised': _realised, 'out_of_range': dep_out_of_range[0],
             'permissive': permissive, 'resolved_points': resolved_pts,
