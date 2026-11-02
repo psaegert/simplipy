@@ -509,28 +509,30 @@ def probe_table() -> tuple:
     return tuple(out)
 
 
-#: The defects this workload found, each in a step outside the miner, with the probes that show
-#: it (`_defect_of`). A test marked with one fails today; the fix removes the mark.
+#: The defects this workload checks for, each in a step outside the miner, with the probes that
+#: show it (`_defect_of`). A test of an open one (`OPEN`) is marked and fails today; the fix
+#: removes it from `OPEN`, and the test keeps the defect from coming back.
 DEFECTS = {
     'D1': "the engine's f64 fold of a numeric expression is not float64's value in written order "
           "(F8): `0.1 + 0.2` folds to 0.3, `0 * (-1)` to +0, `0.5/1.8e308` to 0, "
           "`besselj(inf, 3)` to 0",
-    'I1': "the interval layer's f64 reading has one zero: it encloses `1/(-0.0)` as +inf, "
-          "where float64 gives -inf",
-    'I2': "the interval layer reads no double as an integer exponent of a negative base: it "
-          "encloses `(-2)^1.8e308` as nan, an even power, +inf in float64",
-    'I3': "the interval layer's f64 reading of `besselj` at an infinite order is 0, where the "
-          "kernel gives nan",
-    'I4': "the interval layer's real enclosure of a sum or difference past the largest double has "
-          "a nan bound: `5e-324 + 1.8e308`",
-    'I5': "the interval layer's f64 enclosure of an overflow is a finite part bounded by +inf on "
-          "both sides, containing neither float64's +inf nor the true value: `2 * 1.8e308`, "
-          "`exp(710)`",
+    'I1': "the interval layer's f64 reading of a point zero's reciprocal must take the zero's "
+          "sign: `1/(-0.0)` is -inf in float64",
+    'I2': "the interval layer's f64 reading must read every double past 2^53 as an even "
+          "integer exponent: `(-2)^1.8e308` is +inf in float64",
+    'I3': "the interval layer's f64 reading of `besselj` at an infinite order must hold the "
+          "kernel's nan: `besselj(inf, 3)`",
+    'I4': "the interval layer's real enclosure of a value past the largest double must be open "
+          "towards infinity, with no nan bound: `5e-324 + 1.8e308`",
+    'I5': "the interval layer's f64 enclosure of an overflow must hold float64's infinity and the "
+          "true value: `2 * 1.8e308`, `exp(710)`",
 }
+#: The defects still open.
+OPEN = {'D1'}
 
 
 def known(defect: str):
-    assert defect in DEFECTS, defect
+    assert defect in OPEN, defect
     return pytest.mark.xfail(strict=True, reason=f'{defect}: {DEFECTS[defect]}')
 
 
@@ -614,11 +616,34 @@ def test_every_consumer_reads_the_tables_values() -> None:
     assert not unknown, unknown
 
 
-@pytest.mark.parametrize('defect', [pytest.param(d, marks=known(d)) for d in DEFECTS])
+@pytest.mark.parametrize('defect', [pytest.param(d, marks=known(d)) if d in OPEN else d
+                                    for d in DEFECTS])
 def test_a_known_defect_is_gone(defect) -> None:
     left = [(c, ' '.join(t), got, want) for c, t, got, want in disagreements()
             if _defect_of(c, t, got) == defect]
     assert not left, left[:10]
+
+
+@pytest.mark.parametrize('expr, infinities', [
+    # a zero the layer signs: a literal, a product of two points, the reciprocal of an infinity
+    ('inv -0.0', '-'), ('inv * -0.0 3', '-'), ('inv * 0 -1', '-'), ('inv * -0.0 -2', '+'),
+    ('inv / 1 float("-inf")', '-'), ('inv / -1 float("-inf")', '+'),
+    ('inv / -0.0 float("-inf")', '+'), ('inv inv float("-inf")', '-'), ('inv neg 0', '-'),
+    ('pow -0.0 -1', '-'), ('pow -0.0 -2', '+'),
+    # a zero of a node that does not compute its sign may carry either
+    ('inv atan2 -0.0 1', '+-'), ('inv max 0 -0.0', '+-'), ('inv min -0.0 0', '+-'),
+    ('inv pow -0.0 1', '+-'), ('inv besselj 1 -0.0', '+-'), ('inv * -0.0 0.5', '+-'),
+])
+def test_the_f64_enclosure_holds_the_sign_of_a_zero(expr, infinities) -> None:
+    """The reciprocal of a point zero is, in float64's reading, the infinity of each sign the zero
+    may carry: the layer signs the zero where it computes float64's sign, and reads either sign
+    elsewhere, so the enclosure holds float64's value."""
+    from simplipy import _core
+    tokens = expr.split()
+    value, _ = _core.TableExpr(tokens, [], dict(_contract.ARITY)).eval_f64([])
+    box = _core.table_value_set(tokens, dict(_contract.ARITY), True)
+    assert _contains(box, value), (box, value)
+    assert ('+' if box[1] else '') + ('-' if box[2] else '') == infinities, box
 
 
 # ------------------------------------------------------------------------------------------

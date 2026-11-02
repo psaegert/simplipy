@@ -846,7 +846,15 @@ fn u_inv(v: &Vs, zero_null: ZeroNull) -> Vs {
     let mut r = Vs::empty();
     r.nan = v.nan;
     if v.pinf || v.ninf {
-        r.merge_pt(0.0);
+        // 1/+inf is +0 and 1/-inf is -0 in float64 (`zero_signs`); the reals have one zero
+        let (lo, hi) = if real_reading() {
+            (0.0, 0.0)
+        } else {
+            zero_point(v.ninf, v.pinf)
+        };
+        r.has_fin = true;
+        r.lo = lo;
+        r.hi = hi;
     }
     if v.has_fin {
         // `fin_is_point`, NOT `is_const`: the finite part may be the degenerate point {0} while
@@ -856,17 +864,16 @@ fn u_inv(v: &Vs, zero_null: ZeroNull) -> Vs {
         // denominator produces on positive measure.
         if v.fin_is_point() {
             if v.lo == 0.0 {
-                // ONE ZERO: the point
-                // zero is THE unsigned zero and its pole is +inf by convention -- the sign of an
-                // f64 zero is measurement rendering, never a value. This branch used to read the
-                // sign bit (1/(-0) = -inf, referee-era deployment semantics) to protect the
-                // gates from under-reporting what IEEE evaluation reaches; the one-zero convention formally
-                // overturned that semantics (the miner-side signed-zero tie-break was
-                // deleted at ratification) and the surviving read here shipped a `-inf` LITERAL
-                // for `inv(0/tanh(-2))` while every structurally-collapsing sibling spelling
-                // shipped +inf. Deployment still EMITS -inf on the -0 slice at runtime; that is
-                // documented measurement error, not a value this layer may report.
-                r.pinf = true;
+                // THE RECIPROCAL OF A POINT ZERO: in the reals a division by zero, no value (V8);
+                // in float64 the infinity of each sign the zero may carry (`zero_signs`; F4, F7:
+                // `1/(-0.0)` is -inf).
+                if real_reading() {
+                    r.nan = true;
+                } else {
+                    let (neg, pos) = zero_signs(v);
+                    r.ninf |= neg;
+                    r.pinf |= pos;
+                }
             } else {
                 // 1/c is generally inexact: bracket the computed reciprocal;
                 // reciprocals of powers of two are exact and stay points.
@@ -1714,12 +1721,14 @@ fn b_mod(a: &Vs, b: &Vs) -> Option<Vs> {
 ///   (`negative_order_bound`), doubled for the kernel's error, refused where it nears the float
 ///   range's end (the kernel overflows there).
 ///
-/// NaN at +-inf (scipy's cell), under an order that may be a non-integer at a negative argument,
+/// NaN at +-inf in float64 (scipy's cell), where the reals take the limit (0 at +inf, and at -inf
+/// under an integer order); NaN under an order that may be a non-integer at a negative argument,
 /// under an order beyond `BESSELJ_NU_MEASURED` in magnitude, where the kernel's own routines give
 /// up (it is NaN at order 3.8e16, x = 2.05), and under a negative non-integer order beyond
 /// `BESSELJ_NEG_NU_MEASURED` (NaN at order -470.8, x = 78.7, where the value nears the float
-/// range's end). A NaN order is NaN, an infinite one 0 at x >= 0 and NaN below (scipy's cells);
-/// a range of orders holding both finite and infinite ones is refused.
+/// range's end). A NaN order is NaN. An infinite order is, in the reals, the limit (0 for +inf at
+/// every finite argument, none for -inf); in float64 the kernel's cells, 0 on 0 <= x <= 2, NaN
+/// elsewhere. A range of orders holding both finite and infinite ones is refused.
 /// The orders up to which the besselj kernel is read as NaN-free at every finite argument
 /// (measured: no NaN at orders up to 1.1e9 over 3,200 arguments out to the largest float, so
 /// this keeps a wide margin), integer orders of both signs alike.
@@ -1729,32 +1738,61 @@ const BESSELJ_NU_MEASURED: f64 = 1e3;
 const BESSELJ_NEG_NU_MEASURED: f64 = 400.0;
 
 fn b_besselj(nu: &Vs, x: &Vs) -> Option<Vs> {
+    let real = real_reading();
+    let inf_order = nu.pinf || nu.ninf;
     if !nu.has_fin {
-        // A NaN order gives NaN; an infinite one 0 at x >= 0 and NaN below (scipy's cells).
+        // A NaN order gives NaN, and so does an infinite one at an infinite argument. An infinite
+        // order at a finite argument: in the reals the limit, 0 for +inf and none for -inf;
+        // float64's kernel gives `(x/2)^|nu| / Gamma(|nu| + 1)` there, 0 on 0 <= x <= 2 and NaN
+        // past 2 (`inf * 0`), and NaN below 0.
         let mut r = Vs::empty();
-        r.nan = nu.nan
-            || ((nu.pinf || nu.ninf) && (x.nan || x.pinf || x.ninf || (x.has_fin && x.lo < 0.0)));
-        if (nu.pinf || nu.ninf) && x.has_fin && x.hi >= 0.0 {
-            r.has_fin = true;
-            r.lo = 0.0;
-            r.hi = 0.0;
+        r.nan = nu.nan || (inf_order && (x.nan || x.pinf || x.ninf));
+        if inf_order && x.has_fin {
+            if real {
+                r.nan |= nu.ninf;
+                if nu.pinf {
+                    r.merge_pt(0.0);
+                }
+            } else {
+                r.nan |= x.lo < 0.0 || x.hi > 2.0;
+                if x.hi >= 0.0 && x.lo <= 2.0 {
+                    r.merge_pt(0.0);
+                }
+            }
         }
         return Some(r);
     }
-    if nu.pinf || nu.ninf {
+    if inf_order {
         return None;
     }
     let integer_order = nu.is_const() && nu.lo.fract() == 0.0;
     // May the order be an integer: a point that is one, or a range that holds one?
     let may_be_integer = integer_order
         || (!nu.is_const() && (nu.lo.floor() != nu.hi.floor() || nu.lo.fract() == 0.0));
+    // At an infinite argument: in the reals the limit, 0 at +inf and, under an integer order, at
+    // -inf (no value under any other); float64's kernel gives NaN.
     let mut r = Vs::empty();
     r.nan = nu.nan
         || x.nan
-        || x.pinf
-        || x.ninf
+        || (!real && (x.pinf || x.ninf))
+        || (x.ninf && !integer_order)
         || (!integer_order && x.has_fin && x.lo < 0.0)
         || nu.lo.abs().max(nu.hi.abs()) > BESSELJ_NU_MEASURED;
+    let mut r = besselj_finite_arguments(nu, x, integer_order, may_be_integer, r)?;
+    if real && (x.pinf || (x.ninf && may_be_integer)) {
+        r.merge_pt(0.0);
+    }
+    Some(r)
+}
+
+/// `b_besselj`'s finite order at the finite arguments, onto `r` (its NaN already read).
+fn besselj_finite_arguments(
+    nu: &Vs,
+    x: &Vs,
+    integer_order: bool,
+    may_be_integer: bool,
+    mut r: Vs,
+) -> Option<Vs> {
     if !x.has_fin {
         return Some(r);
     }
@@ -1882,8 +1920,79 @@ fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
     })
 }
 
-/// One unary node; `zero_null` certifies the operand's zero set (`ZeroNull`).
+/// A FINITE PART PAST THE LARGEST DOUBLE. An arm computes its bounds in float64, and a bound whose
+/// computation overflowed reads +-inf; a finite part's lower bound at +inf (or upper bound at
+/// -inf) is such an overflow, every value of it a finite real beyond the largest double: `2 *
+/// 1.8e308`, `exp(710)`. That part is `(MAX, inf)` (resp. `(-inf, -MAX)`), which holds the true
+/// value, and in float64's reading the infinity too, the evaluator's value there (both are
+/// accepted at a range event), on the finite part's support (a part on a null set adds no
+/// infinity, which is on positive measure). An enclosure `[inf, inf]` held neither.
+fn settle_overflow(mut r: Vs) -> Vs {
+    if !r.has_fin {
+        return r;
+    }
+    if r.lo == INF {
+        r.lo = f64::MAX;
+        r.lo_open = true;
+        r.hi = INF;
+        r.hi_open = true;
+        r.sat_lo = false;
+        r.sat_hi = false;
+        if !real_reading() && !r.fin_null {
+            r.pinf = true;
+        }
+    } else if r.hi == -INF {
+        r.hi = -f64::MAX;
+        r.hi_open = true;
+        r.lo = -INF;
+        r.lo_open = true;
+        r.sat_lo = false;
+        r.sat_hi = false;
+        if !real_reading() && !r.fin_null {
+            r.ninf = true;
+        }
+    }
+    r
+}
+
+/// THE SIGNS A ZERO POINT MAY CARRY in float64's reading, `(negative, positive)`, as its bounds
+/// write them: `[-0.0, -0.0]` is -0 alone, `[+0.0, +0.0]` is +0 alone, `[-0.0, +0.0]` either.
+/// Float64 tells the two apart through a reciprocal (`1/(-0.0)` is -inf, F4, F7), so a point's
+/// zero is signed where the layer computes IEEE's sign: a literal, a negation, `abs`, a sum, a
+/// product of two points, the reciprocal of an infinity. Every other node's zero point may carry
+/// either sign (`settle_zero_sign`). The reals have one zero, +0.0.
+fn zero_signs(v: &Vs) -> (bool, bool) {
+    (v.lo.is_sign_negative(), v.hi.is_sign_positive())
+}
+
+/// The bounds of a zero point of the signs given (`zero_signs`).
+fn zero_point(negative: bool, positive: bool) -> (f64, f64) {
+    (
+        if negative || !positive { -0.0 } else { 0.0 },
+        if positive || !negative { 0.0 } else { -0.0 },
+    )
+}
+
+/// The nodes whose zero point carries IEEE's sign (`zero_signs`).
+const SIGN_EXACT: [&str; 7] = ["neg", "abs", "+", "-", "*", "/", "inv"];
+
+/// A ZERO POINT OF A NODE THAT DOES NOT COMPUTE ITS SIGN may carry either sign in float64's
+/// reading (`zero_signs`): `atan2(-0.0, 1)` and `mod(1, -1)` are -0.0 in float64.
+fn settle_zero_sign(op: &str, mut r: Vs) -> Vs {
+    if !real_reading() && r.has_fin && r.lo == 0.0 && r.hi == 0.0 && !SIGN_EXACT.contains(&op) {
+        (r.lo, r.hi) = zero_point(true, true);
+    }
+    r
+}
+
+/// One unary node; `zero_null` certifies the operand's zero set (`ZeroNull`). A finite part past
+/// the largest double is settled (`settle_overflow`), and so is the sign of a zero point
+/// (`settle_zero_sign`).
 fn apply_unary(op: &str, v: &Vs, zero_null: ZeroNull) -> Option<Vs> {
+    apply_unary_arm(op, v, zero_null).map(|r| settle_zero_sign(op, settle_overflow(r)))
+}
+
+fn apply_unary_arm(op: &str, v: &Vs, zero_null: ZeroNull) -> Option<Vs> {
     if let Some(r) = table_at_points(op, &[v]) {
         return Some(r);
     }
@@ -2070,6 +2179,30 @@ fn b_mul(a: &Vs, b: &Vs, a_zero_null: ZeroNull, b_zero_null: ZeroNull) -> Vs {
         r.pinf |= (a.pinf && b.pinf) || (a.ninf && b.ninf);
         r.ninf |= (a.pinf && b.ninf) || (a.ninf && b.pinf);
     }
+    if a.has_fin
+        && b.has_fin
+        && !real_reading()
+        && a.fin_is_point()
+        && b.fin_is_point()
+        && (a.lo == 0.0 || b.lo == 0.0)
+    {
+        // A PRODUCT OF TWO POINTS WITH A ZERO FACTOR, in float64: a zero of each sign the
+        // factors' signs give (`0 * (-1)` is -0.0, `-0.0 * -2` is +0.0).
+        let signs = |v: &Vs| {
+            if v.lo == 0.0 {
+                zero_signs(v)
+            } else {
+                (v.lo < 0.0, v.lo > 0.0)
+            }
+        };
+        let ((an, ap), (bn, bp)) = (signs(a), signs(b));
+        let (lo, hi) = zero_point((an && bp) || (ap && bn), (ap && bp) || (an && bn));
+        r.has_fin = true;
+        r.lo = lo;
+        r.hi = hi;
+        r.fin_null = a.fin_null || b.fin_null;
+        return r;
+    }
     if a.has_fin && b.has_fin {
         let m = |x: f64, y: f64| -> f64 {
             if (x == 0.0 && y.is_infinite()) || (y == 0.0 && x.is_infinite()) {
@@ -2105,18 +2238,18 @@ fn b_mul(a: &Vs, b: &Vs, a_zero_null: ZeroNull, b_zero_null: ZeroNull) -> Vs {
         if hi != 0.0 {
             hi = out_hi(hi, ULP_ARITH);
         }
-        // ONE ZERO: zero endpoints are normalized to +0.0. This block used to do
-        // the OPPOSITE -- restore the IEEE sign of the endpoint products so that u_inv and
-        // b_pow's zero-base branch could read the bit and pick a signed pole; §9.2 made that
-        // sign non-normative and a fuzz row caught it shipping `-inf` for `inv(0/tanh(-2))`. No
-        // consumer reads the bit anymore; flushing here keeps a `-0.0` that IEEE endpoint
-        // arithmetic happens to produce (e.g. `0 * negative`) from ever leaving the fold, so
-        // the representation cannot re-grow a reader.
-        if lo == 0.0 {
-            lo = 0.0;
-        }
-        if hi == 0.0 {
-            hi = 0.0;
+        // A ZERO ENDPOINT IS +0.0 (the reals have one zero), but for a zero point in float64's
+        // reading, which may carry either sign here (`zero_signs`; a product of two points is
+        // signed above).
+        if lo == 0.0 && hi == 0.0 && !real_reading() {
+            (lo, hi) = zero_point(true, true);
+        } else {
+            if lo == 0.0 {
+                lo = 0.0;
+            }
+            if hi == 0.0 {
+                hi = 0.0;
+            }
         }
         r.has_fin = true;
         r.lo = lo;
@@ -2125,6 +2258,19 @@ fn b_mul(a: &Vs, b: &Vs, a_zero_null: ZeroNull, b_zero_null: ZeroNull) -> Vs {
         r.hi_open = hi.is_infinite();
     }
     r
+}
+
+/// Is every exponent `b` holds an even integer in float64's reading? Every double of magnitude
+/// at least 2^53 is one (`1.8e308`), and float64's reading reads doubles alone; the reals read a
+/// literal's denotation, whose bracket holds non-integers.
+fn f64_even_exponents(b: &Vs) -> bool {
+    const TWO_53: f64 = 9_007_199_254_740_992.0;
+    !real_reading()
+        && b.has_fin
+        && !b.nan
+        && !b.pinf
+        && !b.ninf
+        && (b.lo >= TWO_53 || b.hi <= -TWO_53)
 }
 
 /// `pow(a, b)`; `a_zero_null` may certify the base's zero set null (a negative power's pole,
@@ -2214,17 +2360,21 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
         }
         return r;
     }
-    // base is the constant 0: 0^b = 0 (b>0), +inf (b<0), 1 (b=0, measure-zero)
+    // base is the constant 0: 0^b = 0 (b>0), a division by zero (b<0), 1 (b=0, measure-zero)
     if a.is_const() && a.lo == 0.0 {
         if b.has_fin {
-            // ONE ZERO: pow(0, y < 0) = +inf for EVERY y -- the base is THE
-            // unsigned zero, so the odd-integer null slice that IEEE `pow(-0.0, odd k < 0) =
-            // -inf` carved out does not exist in the value model. The `a.lo.is_sign_negative()`
-            // ninf-add that lived here was the referee-era deployment read (the "fix direction
-            // still flagged" thread of the contract); deployment's -inf on the -0
-            // slice is documented measurement error, not a reachable value.
+            // A NEGATIVE POWER OF ZERO: no value in the reals (V8); in float64 +inf, and at an
+            // odd integer exponent the infinity of each sign the zero may carry (`zero_signs`:
+            // `pow(-0.0, -1)` is -inf).
             if b.lo < 0.0 {
-                r.pinf = true;
+                if real_reading() {
+                    r.nan = true;
+                } else {
+                    let (neg, pos) = zero_signs(a);
+                    let odd = b.is_const() && b.lo % 2.0 == -1.0;
+                    r.ninf |= odd && neg;
+                    r.pinf |= !odd || pos;
+                }
             }
             if b.hi > 0.0 {
                 r.merge_pt(0.0); // measured; merge_pt clears the null annotation
@@ -2259,7 +2409,15 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
                 r.merge_pt(0.0); // measured (the y < 0 half)
             }
         }
-        if a.ninf {
+        if a.ninf && f64_even_exponents(b) {
+            // every exponent an even integer in float64's reading: `(-inf)^b` is `(+inf)^b`
+            if b.hi > 0.0 {
+                r.pinf = true;
+            }
+            if b.lo < 0.0 {
+                r.merge_pt(0.0);
+            }
+        } else if a.ninf {
             if b.is_const() {
                 let k = b.lo;
                 if k.is_finite() && k.fract() == 0.0 {
@@ -2314,6 +2472,15 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
             r.merge_pt(0.0);
         }
         return r;
+    }
+    // a NEGATIVE constant base under exponents that are all even integers in float64's reading:
+    // `|a|^b` (`(-2)^1.8e308` is +inf, an even power), the exponents being doubles, the largest
+    // of them finite
+    if a.is_const() && a.lo < 0.0 && f64_even_exponents(b) {
+        let mut doubles = *b;
+        doubles.lo = doubles.lo.max(-f64::MAX);
+        doubles.hi = doubles.hi.min(f64::MAX);
+        return b_pow(&u_abs(a), &doubles, a_zero_null);
     }
     // a NEGATIVE constant base with a CONTINUUM exponent: non-integer a.e. -> nan a.e.
     if a.is_const() && a.lo < 0.0 && !b.is_const() {
@@ -2437,6 +2604,13 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
         ];
         let lo = corners.iter().copied().fold(f64::INFINITY, f64::min);
         let hi = corners.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if lo == f64::INFINITY {
+            // every corner overflowed: a finite part past the largest double, which the node
+            // settles (`settle_overflow`)
+            let mut z = Vs::interval(INF, INF, true, true);
+            z.fin_null = a.fin_null;
+            return z;
+        }
         if lo.is_normal() && hi.is_finite() {
             let mut z = Vs::empty();
             z.merge_pt(out_lo(lo, ULP_LIBM));
@@ -2643,8 +2817,14 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
     r
 }
 
-/// One binary node; `zero_null` certifies an operand's zero set (`Operand`, `ZeroNull`).
+/// One binary node; `zero_null` certifies an operand's zero set (`Operand`, `ZeroNull`). A finite
+/// part past the largest double is settled (`settle_overflow`), and so is the sign of a zero
+/// point (`settle_zero_sign`).
 fn apply_binary(op: &str, a: &Vs, b: &Vs, zero_null: &dyn Fn(Operand) -> bool) -> Option<Vs> {
+    apply_binary_arm(op, a, b, zero_null).map(|r| settle_zero_sign(op, settle_overflow(r)))
+}
+
+fn apply_binary_arm(op: &str, a: &Vs, b: &Vs, zero_null: &dyn Fn(Operand) -> bool) -> Option<Vs> {
     if let Some(r) = table_at_points(op, &[a, b]) {
         return Some(r);
     }
@@ -7483,26 +7663,33 @@ mod tests {
         );
     }
 
+    /// The reciprocal of a point zero, in float64's reading, is the infinity of each sign the zero
+    /// may carry (`zero_signs`): signed where the layer computes float64's sign, either sign
+    /// elsewhere. In the reals a division by zero has no value.
     #[test]
-    fn inverse_of_a_point_zero_is_the_positive_pole() {
+    fn inverse_of_a_point_zero_takes_each_sign_it_may_carry() {
         let Some(e) = crate::test_engine() else {
             return;
         };
         let ops = e.operators_ref();
+        // `0 * x0` is -0 wherever x0 < 0 and +0 wherever x0 > 0: both infinities, each on a set
+        // of positive measure
         let v = value_set(&s(&["inv", "*", "0", "x0"]), ops, &Vs::reals()).unwrap();
+        assert!(v.pinf && v.ninf, "1/(0 * x0) is +-inf: {v:?}");
+        let real = with_real_reading(|| value_set(&s(&["inv", "*", "0", "x0"]), ops, &Vs::reals()))
+            .unwrap();
         assert!(
-            v.pinf && !v.ninf,
-            "1/(point zero) is the +inf pole and nothing else: {v:?}"
+            real.nan && !real.pinf && !real.ninf,
+            "no value in the reals: {real:?}"
         );
-        // pow with a constant-zero base and a negative-capable exponent: +inf on the y<0 side,
-        // the point 0 on the y>0 side, no -inf anywhere.
+        // pow with a zero base and a negative-capable exponent: +inf on the y<0 side (-inf only
+        // at the odd integers, a null set), the point 0 on the y>0 side
         let w = value_set(&s(&["pow", "*", "0", "x0", "x0"]), ops, &Vs::reals()).unwrap();
         assert!(
             w.pinf && !w.ninf,
             "pow(point zero, exponent<0) is +inf only: {w:?}"
         );
-        // The documented -0.0 minter is flushed: `x1*0` on x1 < 0 -- the exact fold that used
-        // to preserve the endpoint products' IEEE sign -- now hands downstream THE zero.
+        // `x1*0` on x1 < 0 is -0 in float64: the zero point may carry that sign
         let neg = Vs::interval(-60.0, -5.9, false, false);
         let e01 = value_set_p(
             &s(&["*", "x1", "0"]),
@@ -7512,8 +7699,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            e01.fin_is_point() && e01.lo == 0.0 && e01.lo.is_sign_positive(),
-            "x1*0 on x1<0 must be the unsigned zero point: {e01:?}"
+            e01.fin_is_point() && e01.lo == 0.0 && zero_signs(&e01).0,
+            "x1*0 on x1<0 may be -0: {e01:?}"
         );
         let g3 = value_set_p(
             &s(&["pow", "*", "x1", "0", "x0"]),
@@ -7526,14 +7713,12 @@ mod tests {
             g3.pinf && !g3.ninf,
             "pow(point zero, exponent spanning <0) is +inf only: {g3:?}"
         );
-        // The one-zero observable at the classification oracle: the surviving zero-times-
-        // reciprocal bag classifies POSINF (it used to classify NEGINF and the ground fold
-        // shipped the literal).
+        // a product of two points is signed: `0/(-2)` is -0, its reciprocal -inf alone
         let h = value_set(&s(&["inv", "/", "0", "-2"]), ops, &Vs::reals()).unwrap();
-        assert!(
-            h.pinf && !h.ninf,
-            "inv(0/(-2)) must classify the +inf pole: {h:?}"
-        );
+        assert!(h.ninf && !h.pinf, "inv(0/(-2)) is -inf: {h:?}");
+        // the zero of a node that does not compute its sign may carry either
+        let a = value_set(&s(&["inv", "pow", "0", "3"]), ops, &Vs::reals()).unwrap();
+        assert!(a.ninf && a.pinf, "1/pow(0, 3) is either infinity: {a:?}");
     }
 
     /// `np.pi`/`np.e` are outward-rounded ENCLOSURES inside this layer,
@@ -8542,18 +8727,17 @@ mod tests {
             value_class(&s(&["pow", "float(\"-inf\")", &two200]), ops),
             Some(Class::PosInf)
         );
-        // INTERVAL-LAYER CONVENTION, documented: an integer literal whose nearest f64 is NOT
-        // that integer (`1e40`:
-        // 10^40 is no double) cannot certify here, keeps the
-        // bracket, and THIS layer's continuum convention still reads Nan for
-        // `(-inf)^1e40` -- but the ENGINE's ground fold now classifies the shape
-        // exactly from the spelling's sign and parity BEFORE consulting this class
-        // (engine/ac.rs::h045_exact_pow_class; live simplify answers +inf, pinned
-        // there). Vs point-support provenance stays the RECORDED design direction
-        // if more point-derived-enclosure consumers appear.
+        // An integer literal whose nearest f64 is NOT that integer (`1e40`: 10^40 is no double)
+        // keeps its bracket; in float64's reading every double of the bracket is an even
+        // integer (past 2^53 every double is), so `(-inf)^1e40` is +inf. The reals read the
+        // literal's exact value, the even integer 10^40: +inf too.
         assert_eq!(
             value_class(&s(&["pow", "float(\"-inf\")", "1e40"]), ops),
-            Some(Class::Nan)
+            Some(Class::PosInf)
+        );
+        assert_eq!(
+            with_real_reading(|| value_class(&s(&["pow", "float(\"-inf\")", "1e40"]), ops)),
+            Some(Class::PosInf)
         );
     }
 

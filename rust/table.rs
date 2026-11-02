@@ -1723,8 +1723,18 @@ pub fn f64_enclosure(v: &Val, ctx: &mut Ctx) -> Option<(f64, f64, bool, bool)> {
         }
         if let Some((y, other)) = r.float_bracket() {
             return Some(match other {
-                None => (y, y, false, false),
                 Some(o) => (y.min(o), y.max(o), false, false),
+                // the largest double has no double past it: a value beyond it is no point
+                None if y.abs() == f64::MAX
+                    && Rat::from_f64_exact(y).is_none_or(|e| r.cmp_exact(&e).is_ne()) =>
+                {
+                    if y > 0.0 {
+                        (f64::MAX, f64::INFINITY, true, true)
+                    } else {
+                        (f64::NEG_INFINITY, -f64::MAX, true, true)
+                    }
+                }
+                None => (y, y, false, false),
             });
         }
     }
@@ -1749,10 +1759,14 @@ pub fn f64_enclosure(v: &Val, ctx: &mut Ctx) -> Option<(f64, f64, bool, bool)> {
         (0.0, 4.0 * f64::MIN_POSITIVE, true, false)
     } else {
         // two units in the last place each way: the reading truncates the mantissa below its
-        // top word and rounds once
+        // top word and rounds once; past the largest double the end is open
         let down = |x: f64| f64::from_bits(x.to_bits() - 2);
-        let up = |x: f64| f64::from_bits(x.to_bits() + 2);
-        (down(y), up(y), false, false)
+        let up = f64::from_bits(y.to_bits() + 2);
+        if up.is_finite() {
+            (down(y), up, false, false)
+        } else {
+            (down(y), f64::INFINITY, false, true)
+        }
     };
     Some(if neg {
         (-hi, -lo, hi_open, lo_open)

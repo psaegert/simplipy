@@ -878,14 +878,16 @@ class TestZeroPoles:
             got = np.asarray(f(x[:, 0], x[:, 1]), dtype=float)
         assert list(got) == [-np.inf, np.inf, np.inf, -np.inf], out
 
-    def test_interval_layer_speaks_one_zero(self, engine: SimpliPyEngine) -> None:
-        # The interval oracle reads the reals' one zero: the class of a point-zero pole is
-        # POSINF regardless of how IEEE arithmetic renders the zero. The float64 modes distribute
-        # the inverse of a product holding a zero before a ground node is classified.
-        for tokens in (['inv', '/', '0', 'tanh', '-2'],
-                       ['inv', '/', '0', '-2'],
-                       ['inv', '*', '0', 'x0']):
-            assert engine._core.interval_class(list(tokens)) == 'POSINF', tokens
+    def test_interval_layer_reads_float64s_signed_zero(self, engine: SimpliPyEngine) -> None:
+        # The interval oracle reads float64's signed zero: a zero whose sign it computes (a
+        # literal, a product of two points) inverts to that sign's infinity; a zero whose sign it
+        # does not compute (`0/tanh(-2)`, through tanh's bracket; `0*x0`, -0 wherever x0 < 0)
+        # inverts to either infinity, which holds float64's. The float64 modes distribute the
+        # inverse of a product holding a zero before a ground node is classified.
+        for tokens, want in ((['inv', '/', '0', '-2'], 'NEGINF'), (['inv', '-0.0'], 'NEGINF'),
+                             (['inv', '0'], 'POSINF'), (['inv', '/', '0', 'tanh', '-2'], 'MIXED'),
+                             (['inv', '*', '0', 'x0'], 'MIXED')):
+            assert engine._core.interval_class(list(tokens)) == want, tokens
 
 
 class TestAtanhTanhBandIsPrecisionDerived:

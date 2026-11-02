@@ -2763,12 +2763,12 @@ mod tests {
         e.bang_cache[0].lock().unwrap().insert(key, true, &e.tokens);
     }
 
-    /// In f64 mode an integer beyond 2^53 has no known parity --
-    /// the deployed evaluator reads it as an even float -- so a parity fold refuses. Main folded
-    /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. The walk's ground fold
-    /// reads the node as the evaluator does, so `f64` answers 1.
+    /// In f64 mode an integer literal beyond 2^53 is read as the double nearest to it, and every
+    /// double past 2^53 is an even integer: `(-1)^9007199254740993` is 1.0 in the evaluator (not
+    /// -1), and `(-inf)^10000000000000000001` is +inf. The walk's ground fold reads the node as
+    /// the evaluator does.
     #[test]
-    fn f64_parity_beyond_2_53_is_unknown() {
+    fn f64_parity_beyond_2_53_is_the_doubles() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
             e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
@@ -2781,7 +2781,7 @@ mod tests {
         let big_odd = "10000000000000000001";
         assert_eq!(
             s(&["pow", "float(\"-inf\")", big_odd]),
-            t(&["pow", "float(\"-inf\")", big_odd])
+            t(&["float(\"inf\")"])
         );
     }
 

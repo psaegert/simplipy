@@ -909,8 +909,9 @@ model predictions.
   are normal float64 values; any other literal stays as written (`1e308`, `1e400`, the subnormal
   `5e-324`), as before. `real` mode holds everything within the cap: `x1 + 1e308 + 1e308` is
   `x1 + 2e308` there and `2*1e308 + x1` in f64 mode. Two more f64 readings follow the evaluator:
-  an integer beyond 2^53 has unknown parity (`(-1)^9007199254740993` stays, and `x1^(2^53)*x1`
-  is not merged: the evaluator reads 2^53 + 1 as 2^53), and a literal the evaluator reads as inf
+  an integer beyond 2^53 is the double nearest to it, an even integer (`(-1)^9007199254740993` is
+  1 and `(-inf)^10000000000000000001` is +inf, as float64 gives them, and `x1^(2^53)*x1` is not
+  merged: the evaluator reads 2^53 + 1 as 2^53), and a literal the evaluator reads as inf
   or as 0 is neither certainly finite nor certainly nonzero (`0*1e400` and `1e400/1e400` stay;
   the evaluator gives NaN). `real` keeps exact parity and finiteness.
 - **Literal bags fold to a canonical partition.** The literals of a product or sum, the
@@ -1508,6 +1509,19 @@ model predictions.
   evidence in `real` (it is undefined everywhere), and `rootn(-1, tanh(x0)) -> -1` is refused
   with a measured extension instead of an undecided measure (`tanh` stays inside (-1, 1), which
   holds no nonzero integer index).
+- **The interval layer holds every value it encloses.** In `f64`'s reading a point zero keeps
+  the sign float64 gives it where the layer computes it (a literal, a negation, `abs`, a sum, a
+  product of two points, the reciprocal of an infinity) and may carry either sign elsewhere, and
+  its reciprocal, or a negative power of it, is the infinity of each sign it may carry:
+  `1/(-0.0)` and `1/(0*(-1))` are -inf, `1/atan2(-0.0, 1)` is either (it was +inf); in the reals
+  it has no value. A negative base under exponents past 2^53, each an even integer in float64,
+  is the even power (`(-2)^1.8e308` is +inf; it was NaN). `besselj` at an infinite order holds
+  the kernel's NaN past x = 2 in `f64` (it was 0), and in the reals takes the limit (0 for +inf
+  at every finite argument, no value for -inf), as at an infinite argument (0 at +inf, and at
+  -inf under an integer order). A value past the largest double is enclosed open towards
+  infinity (`5e-324 + 1.8e308` had a NaN bound), and an overflow (`2 * 1.8e308`, `exp(710)`)
+  holds the true value and, in `f64`, float64's infinity (it was a finite part pinned at +inf).
+  The judge's whole-domain proofs and the mint's certificates rest on these enclosures.
 - **`permissive`'s own simplifications are one named list.** Inverse pairs cancel, powers
   compose, like terms cancel without a definedness check, constants collapse without evidence, a
   literal becomes its float where that is cheaper, every slot matches any subexpression, and the
@@ -1738,12 +1752,11 @@ model predictions.
   - The load names a policy before f64's pole entry: a pair whose right side holds a slot its
     left side does not bind reads as ill-formed in f64 too, where the pole entry, a pre-filter
     of truth, hid the policy from the licence.
-  - The probe table found defects outside the miner, each a test marked with it: the engine's
-    f64 fold of a numeric expression is not float64's value in written order (`0.1 + 0.2` folds
-    to 0.3, `0 * (-1)` to +0); and the interval layer's f64 reading has one zero, reads no double
-    as an integer exponent of a negative base, reads `besselj` at an infinite order as 0, and
-    encloses an overflow as a finite part bounded by +inf on both sides, while its real
-    enclosure of a sum past the largest double has a nan bound.
+  - The probe table found defects outside the miner. One stays open, a test marked with it: the
+    engine's f64 fold of a numeric expression is not float64's value in written order
+    (`0.1 + 0.2` folds to 0.3, `0 * (-1)` to +0). The interval layer's enclosures that missed a
+    value hold it now ("The interval layer holds every value it encloses"), and their tests guard
+    them.
 - **What the engine does itself is refused where the mine first considers it.** The per-length
   judge loop refuses a pick the mode's rule-less engine already takes to its right side (a
   ground fact the engine folds) and a pick that does not fire on its own generic instances with
