@@ -7077,6 +7077,61 @@ pub fn evidence_in(
     }
 }
 
+/// EVIDENCE AT ONE TUPLE of the constants (`params`, in order): `evidence` with the constants
+/// bound, the one function that decides positive measure (4.1). `Some(true)` where a certified
+/// cell of the variables' box is finite in the reading's values and confirmed at its points;
+/// `Some(false)` where the search completes without one; `None` where it cannot decide. A
+/// variable-free expression has one point, which decides.
+pub fn evidence_at(tokens: &[String], params: &[f64], ops: &Operators, f64: bool) -> Option<bool> {
+    let spelled = constants_as_variables(tokens);
+    let consts: Vec<String> = spelled
+        .iter()
+        .zip(tokens)
+        .filter(|(_, t)| t.as_str() == "<constant>")
+        .map(|(v, _)| v.clone())
+        .collect();
+    if consts.len() != params.len() {
+        return None;
+    }
+    for want in [1, EVIDENCE_CELLS] {
+        let fc = finite_cells(tokens, params, ops, want, f64)?;
+        if fc.cells.is_empty() {
+            return Some(false);
+        }
+        // a cell over the variables, each constant at its value (a variable-free expression's
+        // one cell spans no variable)
+        let mut vars = fc.vars.clone();
+        vars.extend(consts.iter().cloned());
+        let confirmed = fc.cells.iter().any(|cell| {
+            let mut c: Vec<(f64, f64)> = if fc.vars.is_empty() {
+                Vec::new()
+            } else {
+                cell.clone()
+            };
+            c.extend(params.iter().map(|&p| (p, p)));
+            confirmed_cell(&spelled, &vars, &c, ops, f64)
+        });
+        if confirmed {
+            return Some(true);
+        }
+        if fc.cells.len() < want {
+            break;
+        }
+    }
+    Some(false)
+}
+
+/// THE ELIGIBILITY OF ONE TUPLE (3.2): does `tokens`, its constants at `params`, owe a witness
+/// there, being finite on a set of bindings of positive measure, in the reading's values (`f64`:
+/// float64's, else the reals')? The one evidence function decides it (`evidence_at`), after the
+/// whole-domain enclosure, which certifies no finite part of positive measure at no search
+/// (`finite_somewhere`). Where neither decides, a witness is owed (fail closed). At C < 0,
+/// `log(C^x0)` is finite at the even integers alone and owes nothing.
+pub fn owes_at(tokens: &[String], params: &[f64], ops: &Operators, f64: bool) -> bool {
+    with_reading(!f64, || finite_somewhere(tokens, ops, params)) != Some(false)
+        && evidence_at(tokens, params, ops, f64) != Some(false)
+}
+
 /// The certified cells `evidence` confirms at points, at most.
 const EVIDENCE_CELLS: usize = 4;
 

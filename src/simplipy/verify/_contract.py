@@ -1076,24 +1076,28 @@ def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
     return None
 
 
-def _finite_somewhere(lhs, spelling, key, f64):
-    """The interval layer's enclosure of the left side `lhs` over every binding of its
-    variables, its constants at `key`: False certifies no finite part of positive measure, in
-    the reals' values or with `f64` float64's; True or None (cannot tell) does not."""
-    return _table.table_finite_somewhere(_spelled(lhs, spelling), [float(c) for c in key],
-                                         dict(ARITY), f64)
+def _owes_at(lhs, spelling, key, f64):
+    """Does the left side `lhs`, its constants at `key`, owe a witness there, being finite on a
+    set of bindings of positive measure, in the reals' values or with `f64` float64's? The one
+    evidence function decides it at the tuple (`_core.table_owes_at`); where it cannot, a
+    witness is owed."""
+    return _table.table_owes_at(_spelled(lhs, spelling), [float(c) for c in key], dict(ARITY),
+                                f64)
 
 
 def _eligible(tl, lhs, spelling, nvars, builders, key):
     """THE SPECIFICATION'S 3.2 ELIGIBILITY, decided apart from the witness search and per mode:
     is the left side, its constants at `key` (`builders`, their exact values), finite on a set
     of bindings of positive measure, so that a witness is owed there? Each mode asks it of its
-    own values: f64 of float64's (`'f64'`), permissive of the reals' (`'reals'`). Finite at a
-    generic point says yes, and so does a point that cannot be read (unread is not nowhere
-    finite). Otherwise the interval layer's enclosure over every binding, read in the same
-    values, decides: only its certificate that no finite part has positive measure says no. A
-    left side without variables has one point, and its reading there decides.
+    own values: f64 of float64's (`'f64'`), permissive of the reals' (`'reals'`). The one
+    evidence function decides it at the tuple (`_owes_at`), and where it cannot, a witness is
+    owed: finite at a point is no positive measure (`log(C^x)` at C < 0 is finite at the even
+    integers alone, and owes nothing there). A left side without variables has one point, and
+    its reading there decides (a point that cannot be read owes: unread is not nowhere finite).
     -> `{'f64': bool, 'reals': bool}`."""
+    if nvars:
+        return {mode: _owes_at(lhs, spelling, key, f64)
+                for mode, f64 in (('f64', True), ('reals', False))}
     envs = [_gen_env(set(nvars), k) for k in range(len(GEN))]
     cl_f = {n: F(c) for n, c in zip(builders, key)}
     owes = {'f64': False, 'reals': False}
@@ -1121,9 +1125,6 @@ def _eligible(tl, lhs, spelling, nvars, builders, key):
                 break
     finally:
         mp.dps = old
-    if nvars:
-        for mode, f64 in (('f64', True), ('reals', False)):
-            owes[mode] = owes[mode] or _finite_somewhere(lhs, spelling, key, f64) is not False
     return owes
 
 
@@ -2970,30 +2971,33 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             if real_valued:
                 acc['perm'].append((v, point, where))
 
-    def owed(acc, key):
-        """3.2: is anything owed at this constant? Where the left side is finite at no real
-        point the judge read, and the interval layer certifies no finite part of positive
-        measure there, nothing is (a fitted constant never lands there: the f64 fit may still
-        have found one at the constant's float, `log(|cos(c)|)` at fl(pi/2), but the exact pi/2
-        gives -inf); without constants, always. A constant where the left side was read nowhere
-        is owed: unread is not nowhere finite."""
-        return (not has_cl or acc['finite'] or acc['known'] == 0
-                or (bool(nvars) and _finite_somewhere(lhs, spelling, key, False) is not False))
+    owes_cache = {}
+
+    def owes_at(key, builders):
+        """3.2, per mode (`_eligible`): is a witness owed at this constant tuple? Without
+        constants, always. Where nothing is owed, nothing is checked (a fitted constant never
+        lands there: the f64 fit may still have found one at the constant's float,
+        `log(|cos(c)|)` at fl(pi/2), but the exact pi/2 gives -inf)."""
+        if not has_cl:
+            return {'f64': True, 'reals': True}
+        if key not in owes_cache:
+            owes_cache[key] = _eligible(tl, lhs, spelling, nvars, builders, key)
+        return owes_cache[key]
 
     vacuous, owed_keys = [], set()
     ext_where = []
     f64_owed, f64_null_keys = set(), set()
     f64_read = [0, 0]           # f64's battery points read, and left unread at a range event
 
-    def merge(acc, key):
+    def merge(acc, key, builders):
         nonlocal resolved_pts, attempted_pts
         resolved_pts += acc['resolved']
         attempted_pts += acc['attempted']
         float_read[0] += acc['fr']
-        # f64 owes at a constant by ITS values: where the deployed left side is finite
-        # somewhere (`pow(sin(c), inf)` at fl(pi/2) is pow(1.0, inf) = 1 in float64, though
-        # undefined at the exact pi/2), whatever real owes there
-        if not has_cl or acc['finite_f64']:
+        owes = owes_at(key, builders)
+        # f64 owes at a constant by ITS values (`pow(sin(c), inf)` at fl(pi/2) is pow(1.0, inf)
+        # = 1 in float64, though undefined at the exact pi/2), whatever real owes there
+        if owes['f64']:
             dep_bad.extend(acc['bad'])
             dep_div.extend(acc['div'])
             dep_kinds.update(acc['kinds'])
@@ -3004,8 +3008,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 f64_null_keys.add(key)
         dep_seen[0] = dep_seen[0] or acc['seen']
         dep_out_of_range[0] += acc['oor']
-        if not owed(acc, key):
-            # nothing owed here, which the resolved points decided: they count as coverage
+        if not owes['reals']:
+            # nothing owed here: the resolved points count as coverage
             skipped_cl.append(key)
             vacuous.append(key)
             return
@@ -3066,7 +3070,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             ed.update({n: F(c) for n, c in zip(lnames, key)})
             ed.update({n: F(w) for n, w in cr_f64.items()})   # each algebra its OWN constant
             deployed(ed, v, point, kind == 'real', snapped, acc)
-        merge(acc, key)
+        merge(acc, key, builders)
 
     def magnitudes(acc, lanes, cr_f64):
         """THE f64 MAGNITUDE PROBES (`F64_MAGNITUDES`), at the generic constants: along each lane,
@@ -3346,7 +3350,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             magnitudes(acc, lanes, cr_f64)
             # the grid's points count toward nothing in coverage (that is the battery's)
             acc['resolved'] = acc['attempted'] = acc['read'] = acc['unread'] = acc['fr'] = 0
-            merge(acc, grid_key)
+            merge(acc, grid_key, gbuilders)
     finally:
         mp.dps = old
 

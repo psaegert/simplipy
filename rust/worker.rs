@@ -1783,11 +1783,11 @@ fn source_instances(
 /// THE SPECIFICATION'S 3.2 ELIGIBILITY at one instance of a source's constants (`params`): is a
 /// witness owed there -- the source finite on a set of positive measure of its variables, in the
 /// mode's values? Nothing else is asked of an instance: one that owes nothing binds nothing,
-/// whatever its rows hold. Only the interval layer's certificate that the source is finite on no
-/// set of positive measure (`interval::finite_somewhere`, read in the mode's values: the function
-/// the judge's eligibility reads) says no; an enclosure that cannot tell owes (fail closed). At
-/// C = -0.02, `log(pow(C, x))` is finite at the even integers alone and owes nothing, so the
-/// domain gate never reads it there. A source without constants is always owed.
+/// whatever its rows hold. The one evidence function decides it at the tuple
+/// (`interval::owes_at`, the function the judge's eligibility reads); where it cannot decide, the
+/// instance owes (fail closed). At C = -0.02, `log(pow(C, x))` is finite at the even integers
+/// alone and owes nothing, so the domain gate never reads it there. A source without constants
+/// is always owed.
 fn owed_at(
     source: &[String],
     params: &[f64],
@@ -1797,10 +1797,12 @@ fn owed_at(
     if params.is_empty() {
         return true;
     }
-    let real = !matches!(mode, crate::engine::RuleMode::Default);
-    crate::interval::with_reading(real, || {
-        crate::interval::finite_somewhere(source, ops, params)
-    }) != Some(false)
+    crate::interval::owes_at(
+        source,
+        params,
+        ops,
+        matches!(mode, crate::engine::RuleMode::Default),
+    )
 }
 
 /// The sources the mint could not judge and refused, fail closed (the specification's 4.10): a

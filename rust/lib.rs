@@ -2193,28 +2193,21 @@ fn table_float_resolution(
     }
 }
 
-/// ELIGIBILITY's certificate (the specification's 3.2): may `tokens`, its `<constant>`s bound to
-/// `params`, be finite on a set of positive measure of its variables, in the reals' values or
-/// with `f64` in float64's (`interval::finite_somewhere`)? `False` certifies the constants are
-/// owed nothing; `None`: the layer cannot tell.
+/// ELIGIBILITY (the specification's 3.2): does `tokens`, its `<constant>`s bound to `params`, owe
+/// a witness there, being finite on a set of positive measure of its variables, in the reals'
+/// values or with `f64` in float64's? The one evidence function decides it at the tuple
+/// (`interval::owes_at`); where it cannot, a witness is owed.
 #[pyfunction]
 #[pyo3(signature = (tokens, params, arity, f64 = false))]
-fn table_finite_somewhere(
+fn table_owes_at(
     py: Python<'_>,
     tokens: Vec<String>,
     params: Vec<f64>,
     arity: std::collections::BTreeMap<String, u8>,
     f64: bool,
-) -> Option<bool> {
+) -> bool {
     let ops = arity_table(arity);
-    let finite = || crate::interval::finite_somewhere(&tokens, &ops, &params);
-    py.detach(|| {
-        if f64 {
-            crate::interval::with_reading(false, finite)
-        } else {
-            crate::interval::with_real_reading(finite)
-        }
-    })
+    py.detach(|| crate::interval::owes_at(&tokens, &params, &ops, f64))
 }
 
 /// What `table_value_set` returns: `(has_fin, pinf, ninf, nan, lo, hi)`.
@@ -2602,7 +2595,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_mode_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_float_resolution, m)?)?;
     m.add_function(wrap_pyfunction!(table_value_set, m)?)?;
-    m.add_function(wrap_pyfunction!(table_finite_somewhere, m)?)?;
+    m.add_function(wrap_pyfunction!(table_owes_at, m)?)?;
     m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;

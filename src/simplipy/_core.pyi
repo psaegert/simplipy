@@ -370,10 +370,11 @@ def table_float_resolution(lhs: list[str], rhs: list[str], names: list[str],
 #: reals) in float64's values (`f64`) or the reals': (has_fin, pinf, ninf, nan, lo, hi).
 def table_value_set(tokens: list[str], arity: dict[str, int],
                     f64: bool) -> tuple[bool, bool, bool, bool, float, float] | None: ...
-#: Eligibility's certificate (spec 3.2): may `tokens`, its constants bound to `params`, be finite
-#: on a positive-measure set of its variables? False certifies it is not; None: cannot tell.
-def table_finite_somewhere(tokens: list[str], params: list[float], arity: dict[str, int],
-                           f64: bool = ...) -> bool | None: ...
+#: Eligibility (spec 3.2): does `tokens`, its constants bound to `params`, owe a witness there,
+#: being finite on a positive-measure set of its variables? The one evidence function decides it
+#: at the tuple; where it cannot, a witness is owed.
+def table_owes_at(tokens: list[str], params: list[float], arity: dict[str, int],
+                  f64: bool = ...) -> bool: ...
 #: THE TABLE (`rust/table.rs`): an expression compiled against each mode's values.
 class TableExpr:
     def __init__(self, tokens: list[str], names: list[str], arity: dict[str, int]) -> None: ...

@@ -1316,10 +1316,15 @@ model predictions.
   shrinking the variables toward 0 where the generic values are not, and where float64 cannot
   fit, Newton in the high-precision values does: `exp(C1*x0 + C2) -> C3*exp(C4*x0)`, whose
   witness at C2 = 300 is e^300 = 1.9e130, holds in `real` (it went unjudged in every mode).
-- **A constant is owed a witness wherever the left side is finite there.** Whether a constant is
-  owed is decided apart from the witness search: where the left side is finite at a point the
-  judge reads, or the interval layer cannot show it is finite on no set of positive measure, a
-  witness is owed. A search that finds none refuses the rule with uncertainty (`NO-WITNESS`):
+- **A constant is owed a witness wherever the left side is finite there on a set of positive
+  measure.** Whether a constant is owed is decided apart from the witness search, in each mode's
+  values, by the one evidence function at the constant (`_core.table_owes_at`, the certified
+  cells the evidence policy reads), in the judge and the mint alike; where it cannot decide, a
+  witness is owed. Finite at a point is no positive measure: `log(C^x0) -> C*x0` owes nothing at
+  C < 0, where its left side is finite at the even integers alone (`f64` refused it for an
+  extension at C = -1.5; it still refuses it for float64's rounding, `log(2.5^x)` being 57 units
+  in the last place from `log(2.5)*x` at x = 0.0137). A search that finds none refuses the rule
+  with uncertainty (`NO-WITNESS`):
   it no longer reads as "nothing owed" where float64's fit saturates (`tanh(x0 + log(C)) ->
   tanh(x0 + C)`, whose left side is -1 everywhere at C = 0, was licensed in `permissive`), nor
   as a proved impossibility from sampled points (`C1*x0 + C2 -> C3*x0 + tan(12*pi*C4)^101` has
@@ -1703,7 +1708,8 @@ model predictions.
     and the judge decides it (it holds both rules in permissive). The saturation magnitudes,
     which the judge withholds from a target with constants, stay unfitted.
   - A constant at which the source is finite on no set of positive measure owes nothing (3.2)
-    and binds nothing: `log(C^x0) -> C*x0` is no longer refused at C < 0, where the source is
+    and binds nothing, read with the one evidence function at the constant, as the judge reads
+    it: `log(C^x0) -> C*x0` is no longer refused at C < 0, where the source is
     finite at the even integers alone.
   - A variable-free source owes its value only where it is finite: the Dirac refuter refutes a
     literal only at a constant where the source is finite, by the mode's agreement and in its
