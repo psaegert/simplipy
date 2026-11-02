@@ -1694,6 +1694,14 @@ model predictions.
     pinned in the reals at the arbiter precision, the double nearest to the root, and the pair
     holds where either agrees: permissive's own reading refused `besselj(cos(1), C) -> C` at
     C = 0.1, where float64's fitted witness is 1.4e-11 off the reals' value.
+  - At a special constant where the source owes a witness, the mint fits the target as at a
+    drawn instance. In `f64`, whose values the fit reads, a target with no witness there is
+    refused by the mint, as the judge refuses it, and no longer left to the judge loop:
+    `1/C^x -> C^x` at C = 0, where float64's left side is 0 on x < 0, and
+    `exp(x + log(C)) -> C*exp(x)` at C = 0, where float64's `0*exp(838)` is NaN. Permissive
+    reads the reals, which a fit in float64 does not: there an unfitted instance binds nothing,
+    and the judge decides it (it holds both rules in permissive). The saturation magnitudes,
+    which the judge withholds from a target with constants, stay unfitted.
   - A constant at which the source is finite on no set of positive measure owes nothing (3.2)
     and binds nothing: `log(C^x0) -> C*x0` is no longer refused at C < 0, where the source is
     finite at the even integers alone.

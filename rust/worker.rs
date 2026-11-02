@@ -890,6 +890,114 @@ fn pin_root_on_row(
     })
 }
 
+/// THE FIT AT ONE INSTANCE of the source's constants (`inst_params`, the source's values `y` on
+/// `cols`, its range events `ev_src`): `Some(Some(c))`, the witness the mode accepts at `c`;
+/// `Some(None)`, a vacuous fit that determined no constants; `None`, no witness found. A near
+/// miss is read as the mode reads one: f64 by its range standard, the other modes by the table
+/// at the robust refit. The drawn instances and the special constants are fitted alike.
+#[allow(clippy::too_many_arguments)]
+fn fit_instance(
+    cand: &CandEntry,
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    y: &[f64],
+    ev_src: Option<&[bool]>,
+    source: &[String],
+    inst_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    rtol: f64,
+    atol: f64,
+    retries: usize,
+    seed: u64,
+    lane: Lane,
+) -> Option<Option<Vec<f64>>> {
+    let rescue = lane.rescue();
+    match crate::fit::exist_constants_fit_prepared(
+        &cand.tape,
+        cand.linearity,
+        cols,
+        n_rows,
+        y,
+        rtol,
+        atol,
+        retries,
+        seed,
+        cand.loglin.as_ref().map(|(f, t)| (*f, t)),
+    ) {
+        crate::fit::FitVerdict::Pass(c) => Some(c),
+        crate::fit::FitVerdict::Fail => None,
+        // f64 does not escalate a near miss: the deployed evaluator's values decide,
+        // except at the rows where an operation of either side overflows or
+        // underflows, where the true value is accepted at the fitted constants (the
+        // f64 range standard, `f64_range_rescue`).
+        crate::fit::FitVerdict::NearMiss(c0) if !rescue => {
+            let (y_fit, ev_fit) = events_if_any(cand.tape.eval_columns_events(cols, &c0, n_rows));
+            if f64_range_rescue(
+                y,
+                &y_fit,
+                ev_src,
+                ev_fit.as_deref(),
+                source,
+                inst_params,
+                &cand.tokens,
+                &c0,
+                ops,
+                var_names,
+                cols,
+                rtol,
+                atol,
+            ) {
+                Some(Some(c0))
+            } else {
+                None
+            }
+        }
+        // FIT-ARM ESCALATION: a true constant-bearing rule whose SOURCE
+        // f64 evaluation is corrupted on a few rows (atanh(tanh(C*x)) -> C*x) fails
+        // the fit with CONTAMINATED constants (the corrupted rows pull the least
+        // squares), so first recover the majority fit by robust median trimming
+        // (`fit::refit_robust`), then re-judge the rows that still fail -- at P bits,
+        // at the refit constants (a legitimate "constants exist" witness).
+        // `hiprec::rescue` applies its own near-miss cost gate.
+        crate::fit::FitVerdict::NearMiss(c0) => {
+            match crate::fit::refit_robust(
+                &cand.tape,
+                cand.linearity,
+                cols,
+                n_rows,
+                y,
+                &c0,
+                rtol,
+                atol,
+            ) {
+                None => None, // no small-outlier consensus: keep the f64 reject
+                Some(c1) => {
+                    let y_fit = cand.tape.eval_columns(cols, &c1, n_rows);
+                    if crate::hiprec::rescue(
+                        y,
+                        &y_fit,
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &c1,
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        atol,
+                        lane.excuses_isolated_infinity(),
+                    ) {
+                        Some(Some(c1))
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// THE WITNESS IN THE REALS of a one-constant target at one instance of the source (its
 /// constants `src_params`, its float64 values `y_src` on `cols`): float64's fitted witness pinned
 /// at the arbiter precision (`pin_root_on_row` on `hiprec::point_diff`), the double nearest to the
@@ -1310,90 +1418,22 @@ fn candidate_matches(
                     .wrapping_add((inst as u64).wrapping_mul(SEED_GOLDEN)),
             )
             .next_u64();
-            match crate::fit::exist_constants_fit_prepared(
-                &cand.tape,
-                cand.linearity,
+            fit_instance(
+                cand,
                 cols,
                 n_rows,
                 y,
+                ev_src,
+                source,
+                inst_params,
+                ops,
+                var_names,
                 rtol,
                 atol,
                 retries,
                 s,
-                cand.loglin.as_ref().map(|(f, t)| (*f, t)),
-            ) {
-                crate::fit::FitVerdict::Pass(c) => Some(c),
-                crate::fit::FitVerdict::Fail => None,
-                // f64 does not escalate a near miss: the deployed evaluator's values decide,
-                // except at the rows where an operation of either side overflows or
-                // underflows, where the true value is accepted at the fitted constants (the
-                // f64 range standard, `f64_range_rescue`).
-                crate::fit::FitVerdict::NearMiss(c0) if !rescue => {
-                    let (y_fit, ev_fit) =
-                        events_if_any(cand.tape.eval_columns_events(cols, &c0, n_rows));
-                    if f64_range_rescue(
-                        y,
-                        &y_fit,
-                        ev_src,
-                        ev_fit.as_deref(),
-                        source,
-                        inst_params,
-                        &cand.tokens,
-                        &c0,
-                        ops,
-                        var_names,
-                        cols,
-                        rtol,
-                        atol,
-                    ) {
-                        Some(Some(c0))
-                    } else {
-                        None
-                    }
-                }
-                // FIT-ARM ESCALATION: a true constant-bearing rule whose SOURCE
-                // f64 evaluation is corrupted on a few rows (atanh(tanh(C*x)) -> C*x) fails
-                // the fit with CONTAMINATED constants (the corrupted rows pull the least
-                // squares), so first recover the majority fit by robust median trimming
-                // (`fit::refit_robust`), then re-judge the rows that still fail -- at P bits,
-                // at the refit constants (a legitimate "constants exist" witness).
-                // `hiprec::rescue` applies its own near-miss cost gate.
-                crate::fit::FitVerdict::NearMiss(c0) => {
-                    match crate::fit::refit_robust(
-                        &cand.tape,
-                        cand.linearity,
-                        cols,
-                        n_rows,
-                        y,
-                        &c0,
-                        rtol,
-                        atol,
-                    ) {
-                        None => None, // no small-outlier consensus: keep the f64 reject
-                        Some(c1) => {
-                            let y_fit = cand.tape.eval_columns(cols, &c1, n_rows);
-                            if crate::hiprec::rescue(
-                                y,
-                                &y_fit,
-                                source,
-                                inst_params,
-                                &cand.tokens,
-                                &c1,
-                                ops,
-                                var_names,
-                                cols,
-                                rtol,
-                                atol,
-                                lane.excuses_isolated_infinity(),
-                            ) {
-                                Some(Some(c1))
-                            } else {
-                                None
-                            }
-                        }
-                    }
-                }
-            }
+                lane,
+            )
         };
         let fitted = match ok {
             Some(f) => f,
@@ -1583,11 +1623,17 @@ fn candidate_matches(
         }
     }
     // 2. The special source-constant battery: a pattern-bound source constant reaches
-    //    0, pi/2, ... in deployment. Skip semantics: an instance with a nowhere-finite
-    //    source, or (const-bearing arm) no fittable witness, binds nothing; a binding
-    //    instance must agree at the contract points. Scoped to single-constant sources
-    //    -- multi-constant shapes have no ratified special-constant semantics beyond
-    //    one constant.
+    //    0, pi/2, ... in deployment. An instance where the source owes nothing (finite on no
+    //    set of positive measure) binds nothing. Where it owes a witness, the target must have
+    //    one, as the judge asks: a const-bearing target is fitted there like a drawn instance.
+    //    In f64, whose values the fit reads, no witness refuses the pair (`1/C^x -> C^x` at
+    //    C = 0, where float64's left side is 0 on x < 0), except at the saturation magnitudes,
+    //    which the judge withholds from a target with constants (its fit cannot resolve them).
+    //    A mode that reads the reals is not read by a fit in float64 (`exp(x + log(C)) ->
+    //    C*exp(x)` at C = 0 has the witness 0 in the reals, where float64's 0*exp(838) is NaN):
+    //    there an unfitted instance binds nothing, and the judge decides it. A binding instance
+    //    must agree at the contract points. Scoped to single-constant sources -- multi-constant
+    //    shapes have no ratified special-constant semantics beyond one constant.
     let n_src_const = y_src.first().map(|(p, _)| p.len()).unwrap_or(0);
     if n_src_const == 1 {
         for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
@@ -1606,25 +1652,27 @@ fn candidate_matches(
                 // source-constant sweep never binds generic X rows)
                 Some(Vec::new())
             } else {
-                // existence is only generically binding: an unfittable special instance
-                // is SKIPPED, a fitted one binds below
                 let sseed = Rng::new(
                     fit_seed ^ cand.hash ^ (0xC0DEu64 + k as u64).wrapping_mul(SEED_GOLDEN),
                 )
                 .next_u64();
-                match crate::fit::exist_constants_fit_prepared(
-                    &cand.tape,
-                    cand.linearity,
+                match fit_instance(
+                    cand,
                     cols,
                     n_rows,
                     &y_s,
+                    ev_s.as_deref(),
+                    source,
+                    &sp,
+                    ops,
+                    var_names,
                     rtol,
                     atol,
                     retries,
                     sseed,
-                    cand.loglin.as_ref().map(|(f, t)| (*f, t)),
+                    lane,
                 ) {
-                    crate::fit::FitVerdict::Pass(Some(c)) => Some(adopt_snapped_witness(
+                    Some(Some(c)) => Some(adopt_snapped_witness(
                         &cand.tape,
                         &cand.tokens,
                         source,
@@ -1640,7 +1688,9 @@ fn candidate_matches(
                         atol,
                         lane,
                     )),
-                    _ => None,
+                    Some(None) => None,
+                    None if rescue || crate::battery::SATURATION_CONSTS.contains(&s) => None,
+                    None => return Err("special_constants"),
                 }
             };
             let Some(cp) = cp else { continue };

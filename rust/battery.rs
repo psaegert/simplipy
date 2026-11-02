@@ -136,6 +136,13 @@ pub const SPECIAL_CONSTS: [f64; 48] = [
     -1e17,
 ];
 
+/// The saturation magnitudes of `SPECIAL_CONSTS`, where float64 attains a bound mathematics only
+/// approaches: the judge withholds them from a target with constants, whose witness its fit
+/// cannot resolve there.
+pub const SATURATION_CONSTS: [f64; 10] = [
+    19.0, -19.0, 20.0, -20.0, 50.0, -50.0, 750.0, -750.0, 1e17, -1e17,
+];
+
 /// Cap on battery combinations per source: the slot-product is capped at 500 with a
 /// deterministic seeded sample (>= 3-variable sources).
 const MAX_COMBOS: usize = 500;
@@ -475,6 +482,14 @@ pub fn used_variables(source: &[String], var_names: &[String]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The saturation magnitudes are the special constants' last ten, the ones the judge
+    /// withholds from a target with constants.
+    #[test]
+    fn saturation_constants_end_the_special_constants() {
+        let tail = &SPECIAL_CONSTS[SPECIAL_CONSTS.len() - SATURATION_CONSTS.len()..];
+        assert_eq!(tail, &SATURATION_CONSTS[..]);
+    }
 
     #[test]
     fn battery_shapes_and_determinism() {
