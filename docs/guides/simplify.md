@@ -182,7 +182,10 @@ floating point and mathematically false:
 | `asin(1e-8) → 1e-8` | no — wrong by the cubic term, `1.667e-25` | bit-identical |
 
 Neither rule is "more sound" than the other, so there is no rung to put them on, and `<`
-between modes raises `TypeError`.
+between modes raises `TypeError`. The rule sets are nested all the same: `permissive` includes
+`f64`. Every rule that holds in `f64` holds in `permissive`, which serves it with its own
+matcher and promises for that step what `f64` promises; `permissive` adds the rules true in the
+reals at float resolution and its own simplifications.
 
 - **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes, wherever no
   operation overflows or underflows. Use it whenever the output will be evaluated in floating
@@ -190,9 +193,11 @@ between modes raises `TypeError`.
   there or the true one: `log(exp(800))` is `800`, where f64 computes `inf` (see [What `f64`
   mode does and does not promise](#what-f64-mode-does-and-does-not-promise)).
 
-- **`Mode.permissive`** is for training-corpus canonicalisation ("beautification"). Its
-  promise is per rule: every rule it applies agrees with the reals' values up to float
-  resolution (8 units in the last place), or gives a value where its input has none. A whole
+- **`Mode.permissive`** is for training-corpus canonicalisation ("beautification"). It
+  includes `f64`: every rule that holds in `f64` holds in `permissive` too. Its promise is per
+  rule:
+  every rule it applies agrees with the reals' values up to float resolution (8 units in the
+  last place), or gives a value where its input has none, or holds in `f64`. A whole
   answer carries no such bound: rounding-sized differences compose over the steps, and
   `floor`, `ceil` and cancellations magnify them (`floor` of a value one unit in the last place
   below an integer is a whole unit off). Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops

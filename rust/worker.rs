@@ -1614,11 +1614,17 @@ fn candidate_matches(
 ///   the last place) under the range standard;
 /// - `permissive` pre-filters in f64 and re-judges a near miss by the table
 ///   (`hiprec::rescue`); it owes no clause (b) (its criterion is agreement alone) and
-///   collapses a constant without evidence.
+///   collapses a constant without evidence. Permissive includes f64: a pair f64's lane
+///   certifies, with f64's own acceptance, is certified for permissive too (`Lanes`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lane(pub crate::engine::RuleMode);
 
 impl Lane {
+    /// Does the mode include f64, so that a pair f64 certifies is certified in it too (every
+    /// mode but f64 itself)?
+    pub fn includes_f64(self) -> bool {
+        matches!(self.0, crate::engine::RuleMode::Permissive)
+    }
     /// Is a near miss re-judged by the table (every mode but f64)?
     pub fn rescue(self) -> bool {
         !matches!(self.0, crate::engine::RuleMode::Default)
@@ -2212,6 +2218,186 @@ impl<'s> SourceCtx<'s> {
     }
 }
 
+/// F64'S ACCEPTANCE BEYOND THE ROWS, for a pair f64's lane certified on behalf of a mode that
+/// includes f64: float64 realises it (the 0.15 heads' bar and the magnitude ladder,
+/// `battery::f64_bar_mint`, `battery::f64_magnitudes_mint`) and the pole entry does not refuse it
+/// (`refusals::pole_refusal`) -- what f64's own acceptance applies to every pick
+/// (`engine::miner::Acceptor::license`). The refusal's name, as f64's acceptance names it, or
+/// `None`.
+fn f64_refusal(
+    source: &[String],
+    target: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> Option<&'static str> {
+    if !(crate::battery::f64_bar_mint(source, target, var_names, ops)
+        && crate::battery::f64_magnitudes_mint(source, target, var_names, ops))
+    {
+        return Some("not_realised");
+    }
+    crate::engine::refusals::pole_refusal(source, target, ops, var_names)
+        .map(|_| crate::engine::refusals::Refusal::PoleClassChange.name())
+}
+
+/// Does the Dirac refuter refute a literal target in the lane's mode? A mode that includes f64
+/// refutes it only where f64 does too.
+fn lane_refutes_literal(source: &[String], target: &[String], ops: &Operators, lane: Lane) -> bool {
+    dirac_refutes_literal(source, target, ops, lane.0)
+        && (!lane.includes_f64()
+            || dirac_refutes_literal(source, target, ops, crate::engine::RuleMode::Default))
+}
+
+/// ONE SOURCE'S CERTIFICATION IN A MODE: its own context (`SourceCtx`, in the mode's values) and,
+/// for a mode that includes f64 (permissive), f64's context, built on the first candidate the
+/// mode's own check refuses. A pair is certified where the mode's own check certifies it, or
+/// where f64's lane does and f64's own acceptance takes it (`f64_accepts`): permissive serves
+/// every rule f64 holds. `ceil(abs(cos(x)))`'s collapse to 1 is refused in the reals (0 at pi/2)
+/// and certified in float64, where `cos(asin(1.0))` is 6.1e-17.
+struct Lanes<'s> {
+    lane: Lane,
+    own: Option<SourceCtx<'s>>,
+    f64: std::cell::OnceCell<Option<SourceCtx<'s>>>,
+    ops: &'s Operators,
+    source: &'s [String],
+    var_names: &'s [String],
+    cols: &'s [Vec<f64>],
+    n_rows: usize,
+    challenges: usize,
+    seed: u64,
+    min_informative: usize,
+}
+
+impl<'s> Lanes<'s> {
+    /// `None` where the source has no context in any lane (no evidence in the mode: nothing
+    /// certifies).
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        ops: &'s Operators,
+        source: &'s [String],
+        var_names: &'s [String],
+        cols: &'s [Vec<f64>],
+        n_rows: usize,
+        challenges: usize,
+        seed: u64,
+        lane: Lane,
+        min_informative: usize,
+    ) -> Result<Option<Self>, String> {
+        let own = SourceCtx::new(
+            ops,
+            source,
+            var_names,
+            cols,
+            n_rows,
+            challenges,
+            seed,
+            lane.0,
+            min_informative,
+        )?;
+        let lanes = Lanes {
+            lane,
+            own,
+            f64: std::cell::OnceCell::new(),
+            ops,
+            source,
+            var_names,
+            cols,
+            n_rows,
+            challenges,
+            seed,
+            min_informative,
+        };
+        if lanes.own.is_none() && lanes.f64_ctx().is_none() {
+            return Ok(None);
+        }
+        Ok(Some(lanes))
+    }
+
+    /// f64's context of the source, for a mode that includes f64 (built once, on first use).
+    fn f64_ctx(&self) -> Option<&SourceCtx<'s>> {
+        if !self.lane.includes_f64() {
+            return None;
+        }
+        self.f64
+            .get_or_init(|| {
+                SourceCtx::new(
+                    self.ops,
+                    self.source,
+                    self.var_names,
+                    self.cols,
+                    self.n_rows,
+                    self.challenges,
+                    self.seed,
+                    crate::engine::RuleMode::Default,
+                    self.min_informative,
+                )
+                .ok()
+                .flatten()
+            })
+            .as_ref()
+    }
+
+    /// The pair's certification in the mode (see the type). Where every lane refuses, the
+    /// refusal is the mode's own check's, or, where the source has no context in the mode's own
+    /// reading, `evidence`: the one route left, f64's, refused the pair, and the mode's own
+    /// route has no evidence (a policy).
+    #[allow(clippy::too_many_arguments)]
+    fn certify(
+        &self,
+        cand: &CandEntry,
+        retries: usize,
+        rtol: f64,
+        atol: f64,
+        min_informative: usize,
+        seed: u64,
+        accept_resolved: Option<AcceptFn<'_>>,
+    ) -> Result<Certified, Refused> {
+        let own = self.own.as_ref().map(|sc| {
+            certify_candidate(
+                sc,
+                cand,
+                self.ops,
+                self.var_names,
+                retries,
+                rtol,
+                atol,
+                min_informative,
+                seed,
+                self.lane,
+                accept_resolved,
+            )
+        });
+        if let Some(Ok(c)) = own {
+            return Ok(c);
+        }
+        let in_f64 = self.f64_ctx().map(|sc64| {
+            certify_candidate(
+                sc64,
+                cand,
+                self.ops,
+                self.var_names,
+                retries,
+                rtol,
+                atol,
+                min_informative,
+                seed,
+                Lane(crate::engine::RuleMode::Default),
+                accept_resolved,
+            )
+            .and_then(|c| {
+                match f64_refusal(self.source, &c.tokens, self.var_names, self.ops) {
+                    None => Ok(c),
+                    Some(why) => Err((why, c.tokens)),
+                }
+            })
+        });
+        match (own, in_f64) {
+            (_, Some(Ok(c))) => Ok(c),
+            (Some(refused), _) => refused,
+            (None, _) => Err(("evidence", Vec::new())),
+        }
+    }
+}
+
 /// THE per-candidate certification: every check one (source, candidate) pair must pass,
 /// in one place -- the variable-subset and Const-count prefilters, reachability, the
 /// numeric match (`candidate_matches`: equivalence or fit, the domain gate, the special
@@ -2621,19 +2807,19 @@ pub fn find_rule_with_lib(
             // refuter guards whatever the scan proposes.
             Some(crate::interval::Class::Nan) => {
                 let t = vec!["float(\"nan\")".to_string()];
-                if !dirac_refutes_literal(source, &t, ops, lane.0) && accepted(&t) {
+                if !lane_refutes_literal(source, &t, ops, lane) && accepted(&t) {
                     return Ok(Some(t));
                 }
             }
             Some(crate::interval::Class::PosInf) => {
                 let t = vec!["float(\"inf\")".to_string()];
-                if !dirac_refutes_literal(source, &t, ops, lane.0) && accepted(&t) {
+                if !lane_refutes_literal(source, &t, ops, lane) && accepted(&t) {
                     return Ok(Some(t));
                 }
             }
             Some(crate::interval::Class::NegInf) => {
                 let t = vec!["float(\"-inf\")".to_string()];
-                if !dirac_refutes_literal(source, &t, ops, lane.0) && accepted(&t) {
+                if !lane_refutes_literal(source, &t, ops, lane) && accepted(&t) {
                     return Ok(Some(t));
                 }
             }
@@ -2642,8 +2828,9 @@ pub fn find_rule_with_lib(
     }
     // THE EVIDENCE GUARD: an uninformative source certifies no candidate, so its scan would
     // return `None` after judging the whole library; it returns here, before the per-source
-    // context and every candidate's gates.
-    let Some(sc) = SourceCtx::new(
+    // context and every candidate's gates. (In a mode that includes f64, a source informative
+    // in float64's values is scanned in f64's lane, `Lanes`.)
+    let Some(lanes) = Lanes::new(
         ops,
         source,
         &lib.var_names,
@@ -2651,7 +2838,7 @@ pub fn find_rule_with_lib(
         lib.n_rows,
         challenges,
         seed,
-        lane.0,
+        lane,
         min_informative,
     )?
     else {
@@ -2699,17 +2886,13 @@ pub fn find_rule_with_lib(
             if resolvable_only && cand.n_const == 0 {
                 continue; // its own mu is its price, and it is already above the mark
             }
-            let c = match certify_candidate(
-                &sc,
+            let c = match lanes.certify(
                 cand,
-                ops,
-                &lib.var_names,
                 retries,
                 rtol,
                 atol,
                 min_informative,
                 seed,
-                lane,
                 accept_resolved,
             ) {
                 Ok(c) => c,
@@ -2834,7 +3017,7 @@ pub fn judge_pair(
     min_informative: usize,
     lane: Lane,
 ) -> Result<Option<&'static str>, String> {
-    let Some(sc) = SourceCtx::new(
+    let Some(lanes) = Lanes::new(
         ops,
         source,
         var_names,
@@ -2842,28 +3025,17 @@ pub fn judge_pair(
         n_rows,
         challenges,
         seed,
-        lane.0,
+        lane,
         min_informative,
     )?
     else {
         // uninformative: no candidate certifies
         return Ok(Some("uncertified"));
     };
-    // compiled on the rows the source is judged on (the evidence top-up included)
-    let cand = CandEntry::compile(target, ops, var_names, &sc.cols, sc.n_rows, u64::MAX)?;
-    let Ok(c) = certify_candidate(
-        &sc,
-        &cand,
-        ops,
-        var_names,
-        retries,
-        rtol,
-        atol,
-        min_informative,
-        seed,
-        lane,
-        None,
-    ) else {
+    // compiled on the caller's rows, as the library compiles its candidates; a context whose
+    // evidence decision appended rows reads the candidate on them (`CandRows::on`)
+    let cand = CandEntry::compile(target, ops, var_names, cols, n_rows, u64::MAX)?;
+    let Ok(c) = lanes.certify(&cand, retries, rtol, atol, min_informative, seed, None) else {
         return Ok(Some("uncertified"));
     };
     match select_best(source, vec![c.tokens], ops, None) {

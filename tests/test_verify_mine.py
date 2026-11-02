@@ -359,6 +359,38 @@ def test_the_offered_gate(tmp_path, mine) -> None:
     assert not gate['ok'] and gate['count'] == 1, gate
 
 
+def test_the_covers_f64_gate(tmp_path, mine) -> None:
+    """Permissive includes f64, so the permissive file covers the f64 file it was offered: on
+    each f64 rule's generic instance, permissive's answer is no dearer than the rule's right
+    side. A clean mine passes; an f64 file holding a rule whose instance the permissive file
+    leaves dearer (its pin following it, so the offered gate holds) fails, naming the rule."""
+    import hashlib
+    import shutil
+    for name in FILES.values():
+        shutil.copy(mine / name, tmp_path / name)
+        shutil.copy(mine / (name + '.provenance.json'), tmp_path / (name + '.provenance.json'))
+    path = str(tmp_path / FILES['permissive'])
+
+    def gates():
+        return verify_mine(path, 'permissive', _OPERATORS, judge=core_judge)['gates']
+
+    assert gates()['covers_f64']['ok'], gates()['covers_f64']
+    assert 'covers_f64' not in verify_mine(str(tmp_path / FILES['f64']), 'f64', _OPERATORS,
+                                           judge=core_judge)['gates']
+    planted = [['exp', 'neg', 'log', '?0'], ['/', '1', '?0']]
+    f64 = json.load(open(tmp_path / FILES['f64'])) + [planted]
+    (tmp_path / FILES['f64']).write_text(json.dumps(f64, indent=4))
+    side_path = tmp_path / (FILES['permissive'] + '.provenance.json')
+    side = json.load(open(side_path))
+    side['offered']['files']['f64']['sha256'] = hashlib.sha256(
+        (tmp_path / FILES['f64']).read_bytes()).hexdigest()
+    side_path.write_text(json.dumps(side))
+    found = gates()
+    assert found['offered']['ok'], found['offered']
+    assert not found['covers_f64']['ok']
+    assert [e[:2] for e in found['covers_f64']['examples']] == [planted]
+
+
 def _acj_operators():
     from conftest import acj_config_path, require_or_skip
     require_or_skip(acj_config_path(), 'needs the acj vocabulary')

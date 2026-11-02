@@ -171,12 +171,18 @@ class TestZeroLanes:
                           rng())[0] == 'OK'
 
     def test_a_mode_without_an_answer_is_unscored(self):
-        # `x^2 + 1 + 1e-3000 -> x^2 + 1`: the reals' readings demand 6,000 digits, so permissive,
-        # which reads them, reaches no answer: neither passed nor convicted; f64 reads 1e-3000 as
-        # 0.0 and the two sides are bit-identical
-        src, out = '+ + pow x13 2 1 1e-3000'.split(), '+ pow x13 2 1'.split()
-        verdict, detail = judge_pair(src, out, rng(), mode='permissive')
+        # `((x + 1e-3000) - x) * 1e3000 -> 0`: the reals' readings demand 6,000 digits, so
+        # permissive's own criterion reaches no answer; float64 reads 1e-3000 as 0.0 and 1e3000
+        # as inf, where the left side has no value at any double (0 * inf) and 0 does, so f64
+        # refuses it. Permissive, which includes f64, is neither passed nor convicted
+        src = '* - + x13 1e-3000 x13 1e3000'.split()
+        verdict, detail = judge_pair(src, ['0'], rng(), mode='permissive')
         assert verdict == 'UNSCORED' and 'UNRESOLVED-COVERAGE' in detail, detail
+        assert judge_pair(src, ['0'], rng())[0] == 'VIOLATION'
+        # `x^2 + 1 + 1e-3000 -> x^2 + 1`: f64 reads 1e-3000 as 0.0 and the two sides are
+        # bit-identical, and permissive includes f64
+        src, out = '+ + pow x13 2 1 1e-3000'.split(), '+ pow x13 2 1'.split()
+        assert judge_pair(src, out, rng(), mode='permissive')[0] == 'OK'
         assert judge_pair(src, out, rng())[0] == 'OK'
 
     def test_the_default_lane_is_the_engines_default_mode(self):
@@ -510,10 +516,11 @@ class TestTheRealisationAxis:
     The two notions of soundness are INCOMPARABLE -- a rule can be true and
     unrealised (`atanh(tanh t) -> t`: exactly t on R, `inf` in f64 past 19.06) or
     realised and untrue (`asin(1e-8) -> 1e-8`: bit-identical in f64, wrong by
-    1.7e-17). So this is a second axis, and the tier is the cell it lands in.
+    1.7e-17). So this is a second axis. Permissive includes f64: a realised rule holds in
+    both modes, whatever the reals say, and the tier is the set of modes it holds in.
     """
 
-    def test_the_four_tiers_are_reachable_and_correctly_assigned(self):
+    def test_the_tiers_are_reachable_and_correctly_assigned(self):
         from simplipy.verify._contract import judge_rule
         cases = [
             # true AND realised
@@ -525,8 +532,8 @@ class TestTheRealisationAxis:
             # so the deployed engine answers inf where the rule answers the argument
             (['atanh', 'neg', 'tanh', '!0'], ['neg', '!0'], 'permissive'),
             # realised, NOT true beyond float resolution: float64's tanh(40) is 1.0, the
-            # true one below 1
-            (['floor', 'tanh', '40'], ['1'], 'f64-only'),
+            # true one below 1; it holds in f64, and so in permissive
+            (['floor', 'tanh', '40'], ['1'], 'core'),
             # NEITHER -- constructed, not drawn from the artifact. `sin t -> t` is false on R
             # and not reproduced by f64, unconditionally.
             (['sin', '_0'], ['_0'], 'reject'),
@@ -548,12 +555,13 @@ class TestTheRealisationAxis:
         assert got['verdict'] == 'TOLERATED'
         assert got['realised'] is True
         assert got['tier'] == 'core'
-        # the whole table, so a future edit has to move a documented cell on purpose: each mode
-        # holds where its own reading holds (True), and `None` (no answer reached) refuses as
-        # `False` does -- absent evidence supports no claim. The reals' verdict is no input.
+        # the whole table, so a future edit has to move a documented cell on purpose: f64 holds
+        # where its reading holds (True), permissive where f64's or its own reading holds
+        # (permissive includes f64), and `None` (no answer reached) refuses as `False` does --
+        # absent evidence supports no claim. The reals' verdict is no input.
         readings = (True, False, None)
         assert [_tier(f, p) for f in readings for p in readings] == [
-            'core', 'f64-only', 'f64-only', 'permissive', 'reject', 'reject',
+            'core', 'core', 'core', 'permissive', 'reject', 'reject',
             'permissive', 'reject', 'reject']
 
     def test_a_ground_rule_is_decided_in_float64_exactly(self):
@@ -904,12 +912,16 @@ class TestCleanlinessIsPerMode:
         # float64's lane probes magnitudes up to the largest double: f64 28 (+3 false in float64
         # at large magnitudes, `sinh asinh _0 -> _0`, `pow _0 log 2 -> pow 2 log _0` and
         # `tan atan acosh !0 -> acosh !0`).
+        # Permissive includes f64: permissive 31 (-14 that hold in f64: `pow abs _0 inf -> pow _0
+        # inf` and kin at `_0 = +-1`, `tanh sinh atanh _0 -> tanh tan asin _0`, `exp(-inf * ?0)
+        # -> pow 0 ?0` and its `!0` twin, `pow(-1, +-inf) -> 1` and four ground rules at a pole
+        # of tan, `tanh tan asin 1 -> 1` and kin, where float64 reads a finite value).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
         assert len(tier['f64'] - {126}) == 28 and len(policy_only['f64']) == 18
-        assert len(tier['permissive']) == 45 and len(policy_only['permissive']) == 27
+        assert len(tier['permissive']) == 31 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {

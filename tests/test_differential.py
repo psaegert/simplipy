@@ -21,7 +21,8 @@ them fail, and the fix removes the mark.
 
 "Admits" is the judge's word for "this mode's file may hold the rule by its truth": `f64`
 admits what holds in f64 and `permissive` what holds in permissive (the specification's P3
-among it). The reference permissive is defined against, real's values, is the column `reals`:
+among it, and every rule f64 holds: permissive includes f64). The reference permissive is
+defined against, real's values, is the column `reals`:
 the judge's verdict in them. Policies (evidence, ground composites) are not part of it:
 `simplipy.verify.licensed` adds them (the specification's 3.4).
 """
@@ -216,7 +217,9 @@ SPEC_EXAMPLES = [
     case('pow -1 <constant>', '<constant>', REALS, True),
     case('pow -1 <constant>', '1', REALS, False), case('pow -1 <constant>', '1', 'f64', False),
     # section 3.3: ground rules, one point and no tolerance in any mode: permissive's extension
-    # is for expressions with variables, a fully numeric one takes its table value
+    # is for expressions with variables, a fully numeric one takes its table value. Permissive
+    # includes f64, so a ground rule float64 holds holds in permissive too (and has no evidence
+    # where its left side is not finite: no file holds it)
     case('cos np.pi', '-1', REALS, True), case('cos np.pi', '-1', 'f64', True),
     case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'f64', False),
     case('sin np.pi', '0', 'permissive', True),
@@ -225,25 +228,27 @@ SPEC_EXAMPLES = [
     case('log -1', '0', 'permissive', False),
     case('exp tan asin 1', 'float("inf")', REALS, False),
     case('exp tan asin 1', 'float("inf")', 'f64', True),
-    case('exp tan asin 1', 'float("inf")', 'permissive', False),
+    case('exp tan asin 1', 'float("inf")', 'permissive', True),
     case('asin 1', 'acos 0', REALS, True), case('asin 1', 'acos 0', 'f64', True),
     # the limit rule (V4, V5, V6)
     case('/ 1 0', 'float("inf")', REALS, False),
     case('/ 1 0', 'float("inf")', 'f64', True),
-    case('/ 1 0', 'float("inf")', 'permissive', False),
+    case('/ 1 0', 'float("inf")', 'permissive', True),
     case('pow 0 -1', 'float("inf")', REALS, False),
     case('pow 0 -2', 'float("inf")', REALS, False),
     case('pow 1 float("inf")', '1', REALS, False),
     case('pow 1 float("inf")', '1', 'f64', True),
     # P3 as ruled: permissive serves real's values up to float resolution -- a deep saturation
-    # (1 - 2e-9566 is the double 1.0); not float64's own values. Judged at the `_` its matcher
-    # binds (the owner's ruling, 2026-10-31), it excuses no isolated point: a disagreement at
-    # x = +-1 alone is one on (0, 1] at `?0 = ceil(x0)`, and an infinity of the left side is a
-    # value it owes, as every mode does
+    # (1 - 2e-9566 is the double 1.0). Judged at the `_` its matcher binds (the owner's ruling,
+    # 2026-10-31), its own criterion excuses no isolated point: a disagreement at x = +-1 alone
+    # is one on (0, 1] at `?0 = ceil(x0)`, and an infinity of the left side is a value it owes,
+    # as every mode does. Permissive includes f64: a rule float64 holds holds there too, though
+    # its own criterion refuses it (float64's asin(1.0) falls short of pi/2, and cos(asin(1.0))
+    # is 6.1e-17)
     case('tanh cosh (-10)', '1', 'permissive', True),
-    case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', False),
-    case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', False),
-    case('ceil abs cos x0', '1', 'permissive', False),
+    case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', True),
+    case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', True),
+    case('ceil abs cos x0', '1', 'permissive', True),
     case('abs log cos x0', 'log inv cos x0', 'permissive', False),
     case('pow 0 asinh _0', 'pow 0 _0', 'f64', True),
     # a negative power of zero has no value however its exponent is spelled, so `0^asinh(x)`
@@ -263,6 +268,8 @@ POLICY_EXAMPLES = [
     ('asin 1', 'acos 0', 'f64', 'ground_composite'),
     ('asin 1', 'acos 0', 'permissive', 'ground_composite'),
     ('exp tan asin 1', 'float("inf")', 'f64', 'evidence'),
+    ('exp tan asin 1', 'float("inf")', 'permissive', 'evidence'),
+    ('/ 1 0', 'float("inf")', 'permissive', 'evidence'),
     ('pow -1 <constant>', '<constant>', 'f64', 'evidence'),
     ('abs x0', 'rootn pow x0 2 2', 'f64', 'ordering'),
     ('exp * 2 _0', '* exp _0 exp _0', 'permissive', 'duplication'),
@@ -578,12 +585,13 @@ def test_the_mints_f64_rows_agree_at_eight_units(src, tgt) -> None:
                                  'tan atan2 x0 0', 'acosh tanh x0', 'atanh floor x0'])
 @pytest.mark.parametrize('mode', MODES)
 def test_the_mints_evidence_is_the_policys(src, mode) -> None:
-    """The mint scans a source exactly where the evidence policy (4.1, `table_evidence`, the
-    function the judge's licence reads) gives it evidence: a source pairs with itself where it
-    has evidence and nowhere else, so a change to the interval layer moves the mint and the
-    licence together."""
+    """The mint scans a source exactly where the evidence policy (4.1, `table_mode_evidence`,
+    the function the judge's licence reads; permissive's is float64's or the reals') gives it
+    evidence: a source pairs with itself where it has evidence and nowhere else, so a change to
+    the interval layer moves the mint and the licence together."""
     from simplipy import _core
-    evidence = _core.table_evidence(src.split(), dict(_contract.ARITY), mode == 'f64') is True
+    evidence = _core.table_mode_evidence(src.split(), dict(_contract.ARITY),
+                                         RULE_MODE[mode]) is True
     assert mint_accepts(src, src, mode) == evidence
 
 
@@ -787,16 +795,17 @@ def test_a_decimal_past_the_exact_readers_is_judged() -> None:
 def test_precision_run_out_is_no_equality(slot) -> None:
     """`x^2 + 1 + 1e-3000 -> x^2 + 1` is false by 1e-3000 at every x in the reals. Their
     readings demand 6,000 digits (a literal is an operand the precision is sized by), past the
-    ceiling, so their agreement is no equality: permissive, which reads the reals, is refused
-    with uncertainty, never certified. Each mode is judged on its own values: float64 reads
-    `1e-3000` as 0.0 and the two sides are bit-identical, so the rule holds in f64, whatever
-    the reals resolved. At 1e-100 the rungs reach the separation: false in the reals, while
+    ceiling, so their agreement is no equality: the reals' verdict is undecided, never
+    certified. Each mode is judged on its own values: float64 reads `1e-3000` as 0.0 and the two
+    sides are bit-identical, so the rule holds in f64, whatever the reals resolved, and in
+    permissive, which includes f64. At 1e-100 the rungs reach the separation: false in the reals, while
     float64 adds the double 1e-100 to 1 exactly and permissive reads the reals' values at float
     resolution (P3), so it holds in both."""
     v = verify_rule(f'+ + pow {slot} 2 1 1e-3000'.split(), f'+ pow {slot} 2 1'.split())
     assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
     assert (v['realised'], v['permissive']) == (True, None), v
-    assert v['basis'] == {'f64': 'evidence', 'permissive': 'refused'}, v
+    # permissive includes f64
+    assert v['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}, v
     w = verify_rule('+ + pow x0 2 1 1e-100'.split(), '+ pow x0 2 1'.split())
     assert (w['verdict'], w['tier']) == ('KILL', 'core'), w
 
@@ -813,9 +822,11 @@ def test_permissive_is_judged_at_the_sort_its_matcher_binds() -> None:
     defined any more."""
     from simplipy import _core
     assert not hasattr(_core, 'TABLE_ISOLATION_STEP')
-    # differs at pi/2 + k*pi alone: at `x0 = asin(ceil(x1))`, 0 against 1 on all of (0, 1]
-    assert not admits('ceil abs cos x0', '1', 'permissive')
+    # differs at pi/2 + k*pi alone: at `x0 = asin(ceil(x1))`, 0 against 1 on all of (0, 1], so
+    # permissive's own criterion refuses it; it holds in f64, and so in permissive
+    assert judged('ceil abs cos x0', '1')['permissive'] is False
     assert admits('ceil abs cos x0', '1', 'f64')
+    assert admits('ceil abs cos x0', '1', 'permissive')
     # differs at 1 alone, and so on (0, 1] at `x0 = ceil(x1)`; past 1 the left side has no
     # value, which still owes nothing in permissive (an extension is no disagreement)
     assert not admits('acos ceil acos x0', '0', 'permissive')
@@ -866,11 +877,17 @@ def test_a_wide_miss_is_read_not_refused(mode) -> None:
 def test_the_mint_and_the_policy_read_one_evidence(mode) -> None:
     # off x = 0, tan(atan2(x, 0)) is tan(pi/2): no value in the reals, 1.633e16 in float64. The
     # enclosure read the constant pi/2 as a varying argument's pole; the evidence function reads
-    # its certified cells at points, for the mint's sources and the judge's policy alike
+    # its certified cells at points, for the mint's sources and the judge's policy alike.
+    # Permissive includes f64, and its evidence is that of a reading the rule holds in: `-> nan`
+    # holds by permissive's own criterion alone, vacuously (no value in the reals), and float64's
+    # evidence, where it is false, licenses nothing
     from simplipy import _core
     tokens = 'tan atan2 x0 0'.split()
-    assert _core.table_evidence(tokens, dict(_contract.ARITY), mode == 'f64') is (mode == 'f64')
+    assert _core.table_evidence(tokens, dict(_contract.ARITY), True) is True
+    assert _core.table_evidence(tokens, dict(_contract.ARITY), False) is False
+    assert _core.table_mode_evidence(tokens, dict(_contract.ARITY), RULE_MODE[mode]) is True
     got = licensed(tokens, ['float("nan")'], mode, bare(),
                    detail=judged('tan atan2 x0 0', 'float("nan")'))
+    assert not got['licensed'], got
     assert ('evidence' in got['refused_by']) is (mode != 'f64'), got
     assert not mint_accepts('tan atan2 x0 0', 'float("nan")', mode)

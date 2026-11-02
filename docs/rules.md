@@ -80,10 +80,13 @@ descends fires. A rule mined for a longer source therefore takes its instances w
 the file places it.
 
 The permissive mine runs last, and its post-pass is also offered the finished f64 file
-(`offer_final_rules`, on by default). Permissive's answer must never cost more than f64's,
-while a per-mode mine finds only what its own scan reaches. Every rule of the f64 file runs
-through the proposal lane right after the proposals, certified by permissive's own
-acceptance, and enters only where permissive's answer is not already as low.
+(`offer_final_rules`, on by default). Permissive includes f64: every rule that holds in f64
+holds in permissive, so permissive's answer must never cost more than f64's, while a per-mode
+mine finds only what its own scan reaches. Every rule of the f64 file runs through the proposal
+lane right after the proposals, certified by permissive's own acceptance (its mint certifies
+what f64's certifies, its judge licenses what f64 holds), and enters where permissive's answer
+is not already as low, under permissive's own ordering and liveness. The gate `covers_f64`
+checks that the permissive file covers the f64 file.
 
 The procedure is **deterministic**: a fixed `seed` reproduces the two files byte-for-byte,
 independent of process, hash randomization, thread count or the judge's process count. One
@@ -275,6 +278,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
 | `offered` | (`permissive` only) the sidecar pins the f64 file the mine was offered, and it lies beside the file with the pinned sha256 |
+| `covers_f64` | (`permissive` only) the file covers the pinned f64 file, as permissive includes f64: on each f64 rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.

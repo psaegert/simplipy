@@ -63,10 +63,10 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
 
 
 #: The tiers (`_contract.TIERS`, the one registry): each tier names the modes a judged rule
-#: holds in. `core` holds in f64 and in permissive; `f64-only` in f64 alone (float64's own value,
-#: off the reals beyond float resolution); `permissive` in permissive alone, judged at the `_`
-#: sort its matcher binds (its own extensions, `exp(log x) -> x`, and the rules within float
-#: resolution of the reals' values); `reject` in no mode.
+#: holds in. Permissive includes f64: `core` holds in f64, and so in permissive (float64's own
+#: value included, `floor(tanh(40)) -> 1`); `permissive` in permissive alone, by its own
+#: criterion judged at the `_` sort its matcher binds (its extensions, `exp(log x) -> x`, and the
+#: rules within float resolution of the reals' values); `reject` in no mode.
 TIERS: dict[str, tuple] = dict(_contract.TIERS)
 
 #: Which judged tiers each mode's rule set is allowed to contain: the tiers that hold in the
@@ -134,7 +134,8 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
                     max_source: int | None = None) -> list[str]:
     """The named policies (``POLICIES``) that refuse ``lhs -> rhs`` in ``mode``, each read
     from its one place: evidence (4.1, the core's certified cells in the mode's values,
-    `_core.table_evidence`); the load's gates (4.2 constant count, 4.3 ground composite, 4.5
+    `_core.table_mode_evidence`; permissive includes f64, so its evidence is float64's or the
+    reals'); the load's gates (4.2 constant count, 4.3 ground composite, 4.5
     ordering, 4.8 the engine's own laws, well-formedness: :func:`load_policy_refusal`); the
     mine's cell (4.4, with ``max_source``); the
     registry's special absorption and constant introduction (4.6, 4.2); the duplication
@@ -144,11 +145,8 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     from ..mining import _in_cell, _preempted_by
     lhs, rhs = list(lhs), list(rhs)
     out: list[str] = []
-    slots = sorted({'?' + t[1:] if t in ('x0', 'x1', 'x2') else t
-                    for t in lhs + rhs if _contract.SLOT_RE.match(t) or t in ('x0', 'x1', 'x2')})
-    spelling = {s: f'x{i}' for i, s in enumerate(slots)}
-    if _core.table_evidence(_contract._spelled(lhs, spelling), dict(_contract.ARITY),
-                            mode == 'f64') is not True:
+    if _core.table_mode_evidence(_evidence_spelling(lhs, rhs), dict(_contract.ARITY),
+                                 _RULE_MODE[mode]) is not True:
         out.append('evidence')
     load = load_policy_refusal(lhs, rhs, mode, engine)
     if load is not None:
@@ -167,11 +165,40 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     return [p for p in POLICIES if p in out]
 
 
+def _evidence_spelling(lhs: list[str], rhs: list[str]) -> list[str]:
+    """The left side as the evidence function reads it: each slot (a dummy `x<k>` read as `?<k>`)
+    spelled as the interval layer's dummy, numbered over both sides."""
+    slots = sorted({'?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+                    for t in list(lhs) + list(rhs)
+                    if _contract.SLOT_RE.match(t) or t in ('x0', 'x1', 'x2')})
+    return _contract._spelled(list(lhs), {s: f'x{i}' for i, s in enumerate(slots)})
+
+
+def _held_with_evidence(lhs: list[str], rhs: list[str], detail: dict, tier: str) -> bool:
+    """Does permissive hold the rule in a reading that has evidence? Permissive includes f64, so
+    a rule holds there where f64 holds it or by permissive's own criterion, and its evidence is
+    float64's or the reals' (4.1): the evidence of a reading the rule holds in. A rule f64 holds
+    needs float64's evidence, one held by permissive's own criterion the reals'.
+    `tan(atan2(x0, 0)) -> nan` holds by permissive's own criterion, vacuously (the left side has
+    no value in the reals off x0 = 0), and float64's evidence, where the rule is false, licenses
+    nothing. Where only the tier is known (`core`), permissive's own reading is not, and is taken
+    as not holding (fail closed)."""
+    from .. import _core  # type: ignore[attr-defined]
+    held_f64 = (detail['realised'] is True) if 'realised' in detail else tier == 'core'
+    held_own = (detail['permissive'] is True) if 'permissive' in detail \
+        else tier == 'permissive'
+    spelled, arity = _evidence_spelling(lhs, rhs), dict(_contract.ARITY)
+    return (held_f64 and _core.table_evidence(spelled, arity, True) is True) or \
+        (held_own and _core.table_evidence(spelled, arity, False) is True)
+
+
 def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
              max_source: int | None = None, detail: dict | None = None) -> dict:
     """``licensed(L, R, mode)`` (the specification's 3.4): the rule holds in the mode -- its
     judged tier is one ``MODE_TIERS`` gives the mode -- and no named policy refuses it
-    (:func:`policy_refusals`). ``detail`` is the judge's
+    (:func:`policy_refusals`). In permissive, which includes f64, the rule's evidence is that
+    of a reading it holds in (float64's for a rule f64 holds, the reals' for one permissive's own
+    criterion holds, `_held_with_evidence`). ``detail`` is the judge's
     verdict on the rule when the caller has it. Returns ``{'licensed', 'holds', 'tier',
     'refused_by'}``: ``asin(1) -> acos(0)`` holds in every mode and is refused by
     ``ground_composite``; ``exp(tan(asin(1))) -> inf`` holds in f64 and is refused by
@@ -183,6 +210,9 @@ def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
     tier = effective_tier(detail)
     holds = tier in MODE_TIERS[mode]
     refused = policy_refusals(lhs, rhs, mode, engine, max_source)
+    if mode == 'permissive' and holds and 'evidence' not in refused \
+            and not _held_with_evidence(lhs, rhs, detail, tier):
+        refused = [p for p in POLICIES if p in refused or p == 'evidence']
     return {'licensed': holds and not refused, 'holds': holds, 'tier': tier,
             'refused_by': refused}
 

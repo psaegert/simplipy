@@ -6636,6 +6636,26 @@ pub fn evidence(tokens: &[String], ops: &Operators, f64: bool) -> Option<bool> {
     Some(false)
 }
 
+/// EVIDENCE IN A MODE (4.1): f64's is float64's (`evidence` with `f64`). Permissive includes f64,
+/// so its evidence is float64's or the reals': `(-1)^erf(C)` is finite in float64 on |C| >= 5.92,
+/// where erf rounds to +-1, and so has evidence in permissive, though in the reals it is finite at
+/// C = 0 alone. `None` where neither reading certifies a cell and one of them is undecided.
+pub fn evidence_in(
+    tokens: &[String],
+    ops: &Operators,
+    mode: crate::engine::RuleMode,
+) -> Option<bool> {
+    let f64 = evidence(tokens, ops, true);
+    if matches!(mode, crate::engine::RuleMode::Default) || f64 == Some(true) {
+        return f64;
+    }
+    match evidence(tokens, ops, false) {
+        Some(true) => Some(true),
+        Some(false) => f64,
+        None => None,
+    }
+}
+
 /// The certified cells `evidence` confirms at points, at most.
 const EVIDENCE_CELLS: usize = 4;
 

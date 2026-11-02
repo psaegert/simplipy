@@ -408,8 +408,8 @@ _BATTERY = [
 
 @pytest.fixture(scope='module')
 def identity_engines():
-    """One eager and one f64-only-lean engine over the SAME artifact, module-scoped:
-    the identity tests read them, nothing mutates them."""
+    """One eager engine and one lean engine that loads the f64 set alone, over the SAME
+    artifact, module-scoped: the identity tests read them, nothing mutates them."""
     cfg, label = _identity_config()
     # the cell was mined before 0.15: read through the legacy opt-in
     with warnings.catch_warnings():

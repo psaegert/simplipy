@@ -2152,6 +2152,21 @@ fn table_evidence(
     py.detach(|| crate::interval::evidence(&tokens, &ops, f64))
 }
 
+/// EVIDENCE IN A MODE (policy 4.1, `interval::evidence_in`): float64's for `f64`; for
+/// `permissive`, which includes f64, float64's or the reals'. `None`: undecided (no evidence,
+/// fail closed).
+#[pyfunction]
+fn table_mode_evidence(
+    py: Python<'_>,
+    tokens: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+    mode: &str,
+) -> PyResult<Option<bool>> {
+    let mode = parse_rule_mode(mode)?;
+    let ops = arity_table(arity);
+    Ok(py.detach(|| crate::interval::evidence_in(&tokens, &ops, mode)))
+}
+
 /// ELIGIBILITY's certificate (the specification's 3.2): may `tokens`, its `<constant>`s bound to
 /// `params`, be finite on a set of positive measure of its variables, in the reals' values or
 /// with `f64` in float64's (`interval::finite_somewhere`)? `False` certifies the constants are
@@ -2558,6 +2573,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
     m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(table_mode_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_value_set, m)?)?;
     m.add_function(wrap_pyfunction!(table_finite_somewhere, m)?)?;
     m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;

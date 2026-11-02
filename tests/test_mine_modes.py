@@ -164,16 +164,17 @@ def test_each_mode_mines_from_its_own_set():
         "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
         "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     }
-    f64_only = (('log', 'exp', 'exp', '?0'), ('exp', '?0'))
-    permissive_only = (('exp', 'log', 'exp', '?0'), ('exp', '?0'))
-    engine = SimpliPyEngine(operators=ops, rules=[f64_only], rules_permissive=[permissive_only])
+    in_f64_set = (('log', 'exp', 'exp', '?0'), ('exp', '?0'))
+    in_permissive_set = (('exp', 'log', 'exp', '?0'), ('exp', '?0'))
+    engine = SimpliPyEngine(operators=ops, rules=[in_f64_set],
+                            rules_permissive=[in_permissive_set])
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
                       X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
                       judge=lambda pairs: ['core'] * len(pairs))
-    assert f64_only in engine.simplification_rules
-    assert permissive_only not in engine.simplification_rules
-    assert f64_only not in engine.permissive_simplification_rules
-    assert permissive_only in engine.permissive_simplification_rules
+    assert in_f64_set in engine.simplification_rules
+    assert in_permissive_set not in engine.simplification_rules
+    assert in_f64_set not in engine.permissive_simplification_rules
+    assert in_permissive_set in engine.permissive_simplification_rules
 
 
 def test_the_refund_reads_the_constructors_dedup(monkeypatch):

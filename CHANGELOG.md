@@ -11,9 +11,13 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Everyone**
 
+- **`permissive` includes `f64`.** Every rule that holds in `f64` holds in `permissive`, and
+  the permissive file covers the f64 file: on each f64 rule's instance, permissive's answer is
+  no dearer than the rule's right side.
 - **`permissive` promises per rule.** Every rule it applies agrees with the reals' values up
-  to float resolution, or gives a value where its input has none; a whole answer carries no
-  such bound, since `floor`, `ceil` and cancellations magnify a rounding-sized difference.
+  to float resolution, or gives a value where its input has none, or holds in `f64` (float64's
+  values agree); a whole answer carries no such bound, since `floor`, `ceil` and cancellations
+  magnify a rounding-sized difference.
 - **Masking removes the redundant constants it recognises.** It does not find every
   redundancy: `(a*x + b)/(c*y + d)` keeps four constants, among them a common scale.
 - **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
@@ -166,8 +170,9 @@ organised by who you are, then the highlights, then every change in detail.
 - The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
   a file mined before this version can fail `verify-mine` where a rule read `1/0` as `+inf` or
   tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
-  `UNDECIDED-MEASURE`, and the tiers are `core` (f64 and permissive), `f64-only`, `permissive`
-  and `reject`, read off one registry (`simplipy.verify.TIERS`).
+  `UNDECIDED-MEASURE`, and the tiers are `core` (holds in f64, and so in permissive),
+  `permissive` (holds in permissive alone) and `reject`, read off one registry
+  (`simplipy.verify.TIERS`).
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - The load refuses a rule whose right side has no variable and is not one leaf (drop reason
   `ground-composite`): `asin(1) -> acos(0)` holds and is not served. The load's gates are
@@ -1520,8 +1525,8 @@ model predictions.
   so its rules are judged at the `_` sort, over real-valued bindings, and no disagreement at an
   isolated point is excused: `tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))` differs only at
   x0 = +-1, and so on all of (0, 1] where `x0` is bound to `ceil(x1)` (1 against no value). It
-  holds in `f64` and not in `permissive`, and carries the new tier `f64-only`, which only the
-  `f64` file may hold. A rule `real` and `f64` hold only by an allowance a slot guards (an
+  holds in `f64`, and so in `permissive`, which includes every rule `f64` holds (tier `core`,
+  below). A rule `real` and `f64` hold only by an allowance a slot guards (an
   isolated infinity of the left side at a `?` slot, a `$` slot's zero) carries the new tier
   `strict`, which the `f64` and `real` files may hold. Past the table's reach (a value beyond
   the doubles' range, `exp(sinh(-50))`) the doubles are float64's under the range standard.
@@ -1533,6 +1538,25 @@ model predictions.
   `permissive` (tier `permissive`), and so does every rule that holds in `f64`
   (`asin(1e-8) -> 1e-8`). A rule that holds in `real` only because a `$` slot owes nothing at 0
   is tier `real-only`.
+- **`permissive` includes `f64`.** A rule holds in `permissive` where it holds in `f64`, or where
+  permissive's own criterion holds (the reals' values at float resolution, with its
+  extensions). Permissive serves an f64 rule with its own matcher, every slot binding any
+  subexpression, and such a step promises what `f64` promises: float64's values agree wherever
+  the left side has one. `ceil(abs(cos(x0))) -> 1`, `erf(sinh(atanh(x0))) -> erf(tan(asin(x0)))`
+  and its `tanh` twin hold in `permissive` (in float64, `cos(asin(1.0))` is 6.1e-17 and
+  `asin(1.0)` falls short of pi/2); `ceil(x0) - floor(x0) -> 1` stays refused in both modes (the
+  left side is 0 at every integer). The tiers are `core` (holds in f64, and so in both),
+  `permissive` (holds in permissive alone) and `reject`. Evidence in `permissive` is float64's
+  or the reals' (`simplipy._core.table_mode_evidence`), that of a reading the rule holds in:
+  `(-1)^erf(C) -> C` has evidence in float64, where erf rounds to +-1 past |C| = 5.92, and is
+  licensed in `permissive`; `tan(atan2(x0, 0)) -> nan` holds by permissive's own criterion
+  alone, vacuously (no value in the reals off x0 = 0), and float64's evidence, where it is
+  false, licenses nothing. The
+  permissive mint certifies a pair where its own check does or where f64's does, with f64's
+  acceptance; permissive's ordering, price and liveness stay its own. The permissive mine keeps
+  every rule the f64 file holds through its offered lane, and `verify-mine` checks that the
+  permissive file covers the f64 file (gate `covers_f64`): on each f64 rule's generic instance,
+  permissive's answer costs no more, in permissive's price, than the rule's right side.
 - **The f64 check of the 0.15 heads reads data as finite.** The judge probes a `?` slot over
   finite doubles only, and where an operation overflows the rewrite may give the true value:
   `ceil(1/cosh(x0)) -> 1` is `core` (it was `real`: the check tried `x0 = inf`).

@@ -289,7 +289,8 @@ impl<'a> Acceptor<'a> {
         // THE LICENCE'S POLICIES, read where the licence reads them: the load's predicate on the
         // written pattern (`Engine::load_refusal`: the constant count, a ground composite, the
         // ordering of the written sides, what the engine does itself, well-formedness) and the
-        // evidence of its left side in the mode's values (`interval::evidence`). A pick the
+        // evidence of its left side in the mode (`interval::evidence_in`: permissive's is
+        // float64's or the reals'). A pick the
         // licence refuses is refused here, and the scan goes on to the next candidate: in
         // `permissive`, `abs(x0) -> acosh(cosh(x0))` sits below the mark in the mode's reading
         // (the inverse pair cancels) and is not ordered below as written.
@@ -307,11 +308,8 @@ impl<'a> Acceptor<'a> {
             return Err(MineRefusal::Policy(policy));
         }
         let evidence = *self.evidence.get_or_init(|| {
-            crate::interval::evidence(
-                self.src,
-                &self.eng.operators,
-                matches!(self.spec.mode, RuleMode::Default),
-            ) == Some(true)
+            crate::interval::evidence_in(self.src, &self.eng.operators, self.spec.mode)
+                == Some(true)
         });
         if !evidence {
             return Err(MineRefusal::Policy("evidence"));

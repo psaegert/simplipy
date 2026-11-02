@@ -2127,11 +2127,11 @@ class TestTheFinalGate:
         assert served and a not in served, 'vacuous: the served spelling is the file spelling'
 
         def judge(pairs):
-            return ['f64-only' if tuple(p) in served else 'core' for p in pairs]
+            return ['permissive' if tuple(p) in served else 'core' for p in pairs]
 
-        assert miner._final_gate('default', judge, {}) == ([a], [])
-        kept, dropped = miner._final_gate('permissive', judge, {})
-        assert kept == [] and dropped == [[list(a[0]), list(a[1]), 'f64-only', []]]
+        kept, dropped = miner._final_gate('default', judge, {})
+        assert kept == [] and dropped == [[list(a[0]), list(a[1]), 'permissive', []]]
+        assert miner._final_gate('permissive', judge, {}) == ([a], [])
 
     def test_the_loop_judges_a_picks_file_spelling_too(self) -> None:
         """The judge loop asks the judge about the pattern the file will carry as well as
@@ -2174,9 +2174,10 @@ class TestTheFinalGate:
 class TestTheGateRoutesInsteadOfDeleting:
     """Every fatal bucket used to drop, which was right when `rules.json` was the only
     destination: a rule the contract convicts had nowhere to live. Two of those buckets DO
-    have somewhere -- ENGINE-MISALIGN is `permissive`, an f64-realised KILL is `f64-only` --
-    and deleting them in the gate leaves nothing to route, making rules_permissive.json and
-    rules.json identical and voiding the split silently.
+    have somewhere -- ENGINE-MISALIGN is `permissive`, an f64-realised KILL is `core` (it holds in
+    f64, and so in permissive, which includes f64) -- and deleting them in the gate leaves nothing
+    to route, making rules_permissive.json and rules.json identical and voiding the split
+    silently.
 
     This is the hazard the roadmap flagged as "arming the deployed check without the tier
     makes the next mine DELETE sound rules, including the atanh(tanh x) beautification".
@@ -2241,18 +2242,16 @@ class TestTheGateRoutesInsteadOfDeleting:
 
     def test_a_mode_without_an_answer_fails_closed(self) -> None:
         """A mode whose reading reaches no answer refuses the rule: a witness search that finds
-        none where both modes' left sides are finite (NO-WITNESS) holds in no mode, and a
-        battery the reals cannot resolve (UNRESOLVED-COVERAGE) leaves permissive, which reads
-        the reals, without one. f64 reads float64's own values: where its two sides are
-        bit-identical it holds, whatever the reals resolved."""
+        none where both modes' left sides are finite (NO-WITNESS) holds in no mode. f64 reads
+        float64's own values: where its two sides are bit-identical it holds, whatever the reals
+        resolved, and so does permissive, which includes f64."""
         from simplipy.verify import verify_rule
         from simplipy.verify._contract import _tier
         assert _tier(None, None) == 'reject'
         none = verify_rule('max <constant> ?0'.split(), ['<constant>'])
         assert (none['verdict'], none['tier']) == ('NO-WITNESS', 'reject'), none
         uncovered = verify_rule('+ + pow ?0 2 1 1e-3000'.split(), '+ pow ?0 2 1'.split())
-        assert uncovered['verdict'] == 'UNRESOLVED-COVERAGE', uncovered
-        assert uncovered['basis'] == {'f64': 'evidence', 'permissive': 'refused'}, uncovered
+        assert uncovered['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}, uncovered
 
 
 class TestCertifyRulesRoutesLikeTheMine:
@@ -2348,8 +2347,8 @@ class TestTheFinalGateJudgesTheFileSpelling:
     """
 
     #: The two named exemplars verbatim, plus the measured divergent family: the family
-    #: members whose served respelling judges `core`/`f64-only` while their file spelling
-    #: judges `permissive` (reconstructed with the shipped judge).
+    #: members whose served respelling judges `core` while their file spelling judges
+    #: `permissive` (reconstructed with the shipped judge).
     OFFENDERS = [
         (['pow', 'cosh', 'log', '3', '_0'], ['pow', '0.6', 'neg', '_0']),
         (['+', 'tanh', 'log', '9', '_0'], ['+', 'inv', '1.025', '_0']),

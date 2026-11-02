@@ -58,28 +58,33 @@ outcome, a diagnostic that decides no mode by itself. A mode whose reading reach
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side
 is finite (`NO-WITNESS`), a token the judge cannot read (`UNSUPPORTED-SHAPE`), a judgment past its
 time (`JUDGE-TIMEOUT`). A battery the reals mostly cannot resolve (`UNRESOLVED-COVERAGE`) leaves
-`permissive` without an answer, while `f64` reads float64's values:
+permissive's own criterion without an answer, while `f64` reads float64's values:
 `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in `f64`, where `1e-3000` is the double 0.0 and the two
-sides are bit-identical. A measure the cells cannot decide is refused where it is owed: `f64`
+sides are bit-identical, and so in `permissive`, which includes `f64` (below). A measure the
+cells cannot decide is refused where it is owed: `f64`
 owes it in float64's values, so an undecided float64 measure refuses `f64`;
 `UNDECIDED-MEASURE` labels the reals' measure, which `permissive` does not owe. An undecided
 check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
-Each rule gets a **tier**: the modes it holds in, from two independent questions. Does
-the deployed f64 evaluator reproduce it? Does it hold in `permissive`, whose criterion is
-the reals' values up to float resolution, and agreement alone where the input has no value
-(a permissive rule may give a value where its input has none, over real-valued bindings)?
-`permissive` binds every slot to any subexpression, so its question is asked at the `_`
-sort: no disagreement at an isolated point is excused there. The tiers are one registry,
-`simplipy.verify.TIERS`, and this table is rendered from it (`simplipy.verify.tier_table()`):
+Each rule gets a **tier**: the modes it holds in, from two questions. Does the deployed f64
+evaluator reproduce it? Does it hold by `permissive`'s own criterion, the reals' values up to
+float resolution, and agreement alone where the input has no value (a permissive rule may give
+a value where its input has none, over real-valued bindings)? `permissive` binds every slot to
+any subexpression, so its own question is asked at the `_` sort: no disagreement at an isolated
+point is excused there. **Permissive includes f64**: a rule holds in `permissive` where it holds
+in `f64` or by permissive's own criterion, and a step permissive takes by an f64 rule promises
+what `f64` promises (float64's values agree wherever the left side has one). So
+`floor(tanh(40)) -> 1`, float64's own value and off the reals, and `ceil(abs(cos(x0))) -> 1`,
+false at pi/2 in the reals and true at every double, hold in both modes; `ceil(x0) - floor(x0)
+-> 1` holds in neither. The tiers are one registry, `simplipy.verify.TIERS`, and this table is
+rendered from it (`simplipy.verify.tier_table()`):
 
 <!-- tier-table: begin (rendered by simplipy.verify.tier_table(); a test checks it) -->
 | tier | `f64` | `permissive` | meaning |
 |---|---|---|---|
-| `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it) and in permissive |
-| `f64-only` | yes | no | float64's own value, off the reals beyond float resolution (`floor(tanh(40)) -> 1`), or true by an allowance a slot guards, which permissive's any-subexpression binding does not give |
-| `permissive` | no | yes | true in the reals and not reproduced by float64 (`atanh(tanh(x0)) -> x0`), or an extension (`exp(log(x0)) -> x0`) |
+| `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it), and so in permissive, which includes every rule f64 holds |
+| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and not reproduced by float64 (`atanh(tanh(x0)) -> x0`), or an extension (`exp(log(x0)) -> x0`) |
 | `reject` | no | no | holds in no mode; recorded in the drop census |
 <!-- tier-table: end -->
 
@@ -109,6 +114,9 @@ rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 saturates to inf
 verify_ruleset([rule], mode='permissive')['is_clean']  # -> True   belongs there
 verify_ruleset([rule], mode='f64')['is_clean']         # -> False  f64 contradicts it
 ```
+
+The converse does not happen: permissive includes f64, so a rule that holds in `f64` holds in
+`permissive` too (a policy can still tell the files apart, the ordering being each mode's own).
 
 `report['offenders']` names the rules that fail, with their tier. Omitting `mode`
 keeps the mode-less meaning — only the reals' `CERTIFIED`/`TOLERATED` are clean — a

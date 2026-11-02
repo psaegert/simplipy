@@ -23,9 +23,9 @@ the reals with float64's own events kept: its disagreements with the input what 
 (a sign or a zero near a cancellation or a pole included) or a value where float64 reads the
 input as NaN, never a zero's sign (F7) or an infinity gained or lost (at an overflow or
 underflow the true value is accepted, the judge's range standard). `x/(x/(x^2 - x)) -> x*(x - 1)` is exact, though float64's rounding near
-x = 1 keeps the two apart: it is OK. Where a step holds in the mode and not in the reals (an
-f64-only rule), the engine's algebra around it cannot be read apart from the step, and a rewrite
-the mode does not license as a whole is UNSCORED.
+x = 1 keeps the two apart: it is OK. Where a step holds in the mode and not in the reals (a rule
+float64 holds and the reals do not), the engine's algebra around it cannot be read apart from the
+step, and a rewrite the mode does not license as a whole is UNSCORED.
 
 Self-test: :func:`selftest` poisons a copy of the rule set with known-unsound rules and fails
 loudly unless the monitor flags and attributes every one of them.
@@ -69,9 +69,11 @@ def _as_rule(inp, out, engine):
     return sides
 
 
-#: Each mode's reading in a judgment: True (holds), False (refused on a counterexample) or None
-#: (no answer: neither passed nor convicted).
-_READING = {'f64': 'realised', 'permissive': 'permissive'}
+def _reading(detail, mode):
+    """The mode's reading of a judgment (`_contract.mode_reading`, permissive including f64): True
+    (holds), False (refused on a counterexample) or None (no answer: neither passed nor
+    convicted)."""
+    return _contract.mode_reading(detail.get('realised'), detail.get('permissive'), mode)
 
 #: The reals' verdicts that are no answer: under F8 they leave open whether the engine's own
 #: algebra was exact.
@@ -130,7 +132,7 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
             step = _contract.judge_rule(list(lhs), list(rhs))
             step_tier = effective_tier(step)
             if step_tier not in MODE_TIERS[name]:
-                if step.get(_READING[name]) is None:
+                if _reading(step, name) is None:
                     return 'UNSCORED', f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)}: ' \
                                        f'{name} reaches no answer ({step.get("verdict")})'
                 return 'VIOLATION', (f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)} is '
@@ -138,7 +140,7 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
             exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
     if tier in MODE_TIERS[name]:
         return 'OK', f'{verdict} ({tier})'
-    if detail.get(_READING[name]) is None:
+    if _reading(detail, name) is None:
         return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '
                             f'{str(detail.get("detail"))[:200]}')
     if engine is not None and name == 'f64' and verdict in _REALS_UNDECIDED:

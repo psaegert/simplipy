@@ -2341,25 +2341,25 @@ MODES = ('f64', 'permissive')
 
 #: THE TIERS, the one registry: each tier is the set of modes a judged rule holds in, and so the
 #: modes whose files may hold it (`verify.MODE_TIERS` is read off it, and the documentation's
-#: tier table is checked against it). The two criteria are INCOMPARABLE -- a rule can hold in
-#: permissive and not in f64 (`atanh(tanh t) -> t`, exact over the reals, `inf` in f64) or in f64
-#: and not in permissive (`floor(tanh(x)) -> 1` at a saturation, float64's own value) -- so this
-#: is an axis, not a ladder.
+#: tier table is checked against it). PERMISSIVE INCLUDES f64: a rule holds in permissive where
+#: it holds in f64, or where permissive's own criterion holds (the reals' values at float
+#: resolution, with its extensions). So a rule f64 holds is `core`, whatever permissive's own
+#: reading says (`floor(tanh(40)) -> 1` is float64's own value, off the reals); a rule only
+#: permissive's own criterion holds is `permissive` (`atanh(tanh t) -> t`, exact over the reals,
+#: `inf` in f64).
 TIERS = {
     'core': ('f64', 'permissive'),
-    'f64-only': ('f64',),
     'permissive': ('permissive',),
     'reject': (),
 }
 
 #: What each tier of `TIERS` means, as the documentation's tier table states it.
 TIER_MEANINGS = {
-    'core': 'holds in f64 (the deployed evaluator reproduces it) and in permissive',
-    'f64-only': ("float64's own value, off the reals beyond float resolution "
-                 "(`floor(tanh(40)) -> 1`), or true by an allowance a slot guards, which "
-                 "permissive's any-subexpression binding does not give"),
-    'permissive': ('true in the reals and not reproduced by float64 '
-                   '(`atanh(tanh(x0)) -> x0`), or an extension (`exp(log(x0)) -> x0`)'),
+    'core': ('holds in f64 (the deployed evaluator reproduces it), and so in permissive, which '
+             'includes every rule f64 holds'),
+    'permissive': ("holds in permissive alone: true in the reals at float resolution and not "
+                   "reproduced by float64 (`atanh(tanh(x0)) -> x0`), or an extension "
+                   "(`exp(log(x0)) -> x0`)"),
     'reject': 'holds in no mode; recorded in the drop census',
 }
 
@@ -2369,17 +2369,29 @@ TIER_MEANINGS = {
 HOLDS_IN_THE_REALS = frozenset({'CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'})
 
 
+def mode_reading(realised, permissive, mode):
+    """A mode's reading of a judged rule: True (holds), False (refused on a counterexample) or
+    None (no answer reached). `realised` is f64's own reading (float64's values, the reals read
+    only for the true value at a range event), `permissive` permissive's own criterion's (the
+    reals' values at float resolution). Permissive includes f64: it holds where either holds,
+    is refused where both are, and reaches no answer otherwise."""
+    if mode == 'f64':
+        return realised
+    if realised is True or permissive is True:
+        return True
+    if realised is False and permissive is False:
+        return False
+    return None
+
+
 def _tier(realised, permissive):
-    """The tier of a judged rule (`TIERS`): the modes it holds in, each read on its own values.
-    `realised` is f64's reading (float64's values, the reals read only for the true value at a
-    range event), `permissive` permissive's (the reals' values at float resolution). Each is
-    True (holds), False (refused) or None (no answer reached: refused with uncertainty). The
-    reals' verdict (`CERTIFIED`, `KILL`, ...) is a diagnostic and no input: `sin(np.pi) -> 0`
-    is exactly true while float64 computes 1.2246467991473532e-16, and
-    `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in f64, whose two sides are bit-identical, though the
-    reals' reading cannot resolve the gap."""
-    held = {'f64': realised is True, 'permissive': permissive is True}
-    modes = tuple(m for m in MODES if held[m])
+    """The tier of a judged rule (`TIERS`): the modes it holds in, each read on its own values,
+    permissive including f64 (`mode_reading`). Each reading is True (holds), False (refused) or
+    None (no answer reached: refused with uncertainty). The reals' verdict (`CERTIFIED`, `KILL`,
+    ...) is a diagnostic and no input: `sin(np.pi) -> 0` is exactly true while float64 computes
+    1.2246467991473532e-16, and `floor(tanh(40)) -> 1` holds in f64, and so in permissive,
+    though the reals' value is below 1."""
+    modes = tuple(m for m in MODES if mode_reading(realised, permissive, m) is True)
     return next(tier for tier, tier_modes in TIERS.items() if tier_modes == modes)
 
 
@@ -2430,11 +2442,17 @@ BASES = ('proved', 'evidence', 'refused')
 def _basis(r, mode):
     """The basis of the judged rule `r` in `mode` (`BASES`): refused where the mode does not
     hold it, proved where an exact route proves it there and the proof stands (`exact_conflict`
-    names the modes where it does not), else evidence."""
+    names the modes where it does not), else evidence. Permissive includes f64, so a proof that
+    holds the rule in f64 proves it in permissive too."""
     if mode not in TIERS[r.get('tier') or 'reject']:
         return 'refused'
     ex = r.get('exact') or {}
-    if ex.get(mode) == 'proved' and mode not in (r.get('exact_conflict') or ()):
+    conflict = r.get('exact_conflict') or ()
+
+    def proved(m):
+        return ex.get(m) == 'proved' and m not in conflict
+
+    if proved(mode) or (mode == 'permissive' and r.get('realised') is True and proved('f64')):
         return 'proved'
     return 'evidence'
 

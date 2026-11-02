@@ -603,6 +603,33 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     return dead
 
 
+def _uncovered_f64_rules(engine: Any, f64_rules: Any) -> list:
+    """THE COVERAGE GATE: permissive includes f64, so the permissive file covers the f64 file.
+    On each f64 rule's generic instance (each slot a fresh variable, ``<constant>`` kept), the
+    serve answer of permissive (the engine holding the permissive file) must cost no more, in
+    permissive's price (its certified complexity, what its simplify descends), than the rule's
+    right side there. Permissive's ordering and liveness are its own, so the rule itself need not
+    be in the file: an answer at least as cheap covers it. Expected empty.
+    -> ``[lhs, rhs, instance, answer]`` per f64 rule not covered (an answer or a side permissive
+    cannot price is not covered)."""
+    from .engine import _coverage_variants
+    core = engine._core
+    uncovered: list = []
+    for lhs, rhs in f64_rules:
+        (instance, promise), = _coverage_variants(tuple(lhs), tuple(rhs), 'permissive',
+                                                  non_finite=False, composite=False)
+        try:
+            answer = list(core.mine_mark(list(instance), rule_mode='permissive'))
+            cost = core.ac_complexity_certified(answer, 'mode', rule_mode='permissive')
+            bar = core.ac_complexity_certified(list(promise), 'mode', rule_mode='permissive')
+        except ValueError:
+            uncovered.append([list(lhs), list(rhs), list(instance), None])
+            continue
+        if cost > bar:
+            uncovered.append([list(lhs), list(rhs), list(instance), answer])
+    return uncovered
+
+
 def _rule_gates(engine: Any, rule_mode: str, rules: Any) -> dict[str, list]:
     """The load's gates on the rules the mode holds, installed in ``engine``: ``twin_shadow``
     (rows the load would mint anyway), ``engine_owned_law`` (a respelling within one canonical
@@ -1351,12 +1378,14 @@ class RuleMiner:
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
                     # tally cannot be audited (it never says which candidate died at which gate).
                     prov['proposals']['trail'] = trail
-            # THE OFFERED FILE (`offer_final_rules`): a per-mode mine finds only what its own
-            # scan reaches, so the permissive mine -- the last -- is offered the finished f64
-            # cell of the same path through the same channel: each rule is certified by
-            # permissive's own acceptance and judge (a source the engine already takes at least
-            # as low reads `already_covered`) and enters as any proposal does, so an f64 rule is
-            # kept only where it holds in permissive. The sidecar pins the file by its sha256.
+            # THE OFFERED FILE (`offer_final_rules`): permissive includes f64, and a per-mode mine
+            # finds only what its own scan reaches, so the permissive mine -- the last -- is
+            # offered the finished f64 cell of the same path through the same channel. Every f64
+            # rule holds in permissive; each is certified by permissive's own acceptance (its
+            # mint certifies what f64's lane certifies, its judge licenses what f64 holds) and
+            # enters as any proposal does, under permissive's own ordering and liveness (a source
+            # the engine already takes at least as low reads `already_covered`). The coverage
+            # gate checks the result. The sidecar pins the file by its sha256.
             if offer_final_rules and rule_mode == 'permissive' and not interrupted():
                 files: dict = {}
                 entries: list = []
@@ -1576,6 +1605,13 @@ class RuleMiner:
                 max_source=cell_source_length,
                 prog=Progress(verbose, prefix='  [gate] '))
             gate['overlaps_beyond_cell'] = len(_beyond)
+            # THE COVERAGE GATE on what ships (permissive includes f64, expected empty): every
+            # rule of the f64 cell the file was offered is covered by permissive's answer,
+            # recorded, not dropped; `verify-mine` fails on a file that misses one.
+            if offer_final_rules and rule_mode == 'permissive' and cells is not None \
+                    and ('default', out_path) in cells:
+                gate['covers_f64'] = _uncovered_f64_rules(self.engine,
+                                                          cells[('default', out_path)])
             for lane_outcomes, lane_trail, lane_watch in _lanes:
                 if lane_watch:
                     _reconcile_proposal_census(
@@ -1591,7 +1627,9 @@ class RuleMiner:
                       f'{len(gate["overlaps"])} unjoined overlaps '
                       f'({len(gate["overlaps_refused"])} more not licensed, '
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '
-                      f'{len(final)} rules')
+                      + (f'{len(gate["covers_f64"])} f64 rules not covered, '
+                         if 'covers_f64' in gate else '')
+                      + f'{len(final)} rules')
             # FINALIZATION FAILS ON AN OFFENDER, naming it, and drops nothing: every rule was
             # decided where the mine first considered it, so a rule of the file that would fail a
             # gate is a defect of the mine. Nothing is written; the checkpoint stays. (A mine run
@@ -1629,6 +1667,8 @@ class RuleMiner:
                                      'overlaps': gate['overlaps'],
                                      'overlaps_refused': gate['overlaps_refused'],
                                      'overlaps_beyond_cell': gate['overlaps_beyond_cell'],
+                                     **({'covers_f64': gate['covers_f64']}
+                                        if 'covers_f64' in gate else {}),
                                      'file': os.path.basename(_path)}
                     # A rerun of this mine reuses the file as it is (`_finished_cell`).
                     prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
@@ -2701,12 +2741,14 @@ class RuleMiner:
             seconds (default 60) is logged, and one past ``judge_fail_s`` (default 600) fails
             the mine with the rule's name. Recorded in the sidecar's parameters.
         offer_final_rules : bool, optional
-            Offer the permissive mine the finished f64 file (default True). The permissive
-            file is mined last, and every rule of the f64 file runs through its proposal
-            lane: certified by permissive's own acceptance and judge, it enters only where it
-            holds in permissive and permissive's answer is not already as low. The permissive
-            sidecar pins the file (``offered``: name, sha256, count) beside the lane's
-            outcomes. Config key ``offer_final_rules``; recorded in the sidecar's parameters.
+            Offer the permissive mine the finished f64 file (default True). Permissive includes
+            f64: every rule of the f64 file holds in permissive. The permissive file is mined
+            last, and every rule of the f64 file runs through its proposal lane: certified by
+            permissive's own acceptance and judge, it enters where permissive's answer is not
+            already as low, under permissive's own ordering and liveness, and the coverage gate
+            (``covers_f64``) checks that the file covers the f64 file. The permissive sidecar
+            pins the file (``offered``: name, sha256, count) beside the lane's outcomes. Config
+            key ``offer_final_rules``; recorded in the sidecar's parameters.
         modes : list[str] or None, optional
             The modes to mine (``'f64'``, ``'permissive'``; ``None``, the default, mines
             both). The other mode's file is left as it is. ``permissive`` mines with the
@@ -2995,6 +3037,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       check;
     - ``offered`` (``permissive`` only): the mine was offered the f64 file, and the file its
       sidecar pins lies beside this one with the pinned sha256;
+    - ``covers_f64`` (``permissive`` only): permissive includes f64, so the file covers the
+      pinned f64 file -- on each f64 rule's generic instance, permissive's answer costs no more,
+      in permissive's price, than the rule's right side (``_uncovered_f64_rules``);
     - ``basis``: the sidecar records what every rule's verdict rests on in the mode, proved or
       evidence (``judge_bases``), one entry per rule of the file.
 
@@ -3081,6 +3126,11 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         + [[key, value] for key, value in env_overrides().items()])
     if mode == 'permissive':
         gates['offered'] = _offered_pins_broken(rules_path, sidecar.get('offered'))
+        # permissive includes f64: the file covers every rule of the f64 file it was offered
+        f64_rules = _offered_f64_rules(rules_path, sidecar.get('offered'))
+        gates['covers_f64'] = (
+            [['no pinned f64 file to cover', None, None, None]] if f64_rules is None
+            else _uncovered_f64_rules(engine, f64_rules))
     # What every rule's verdict rests on (the specification's 3.4), as the mine recorded it.
     basis = sidecar.get('basis')
     labels = basis.get('rules') if isinstance(basis, dict) else None
@@ -3096,6 +3146,16 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
             'overlaps_beyond_cell': len(beyond),
             'basis': ({b: labels.count(b) for b in ('proved', 'evidence')}
                       if isinstance(labels, list) else None)}
+
+
+def _offered_f64_rules(rules_path: str, offered: Any) -> list | None:
+    """The rules of the f64 file the permissive file's sidecar pins (``offered``), read beside
+    ``rules_path``; ``None`` where a pin is broken (``_offered_pins_broken``)."""
+    if _offered_pins_broken(rules_path, offered):
+        return None
+    pin = offered['files']['f64']
+    with open(os.path.join(os.path.dirname(os.path.abspath(rules_path)), pin['file'])) as file:
+        return [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
 
 
 def _offered_pins_broken(rules_path: str, offered: Any) -> list:

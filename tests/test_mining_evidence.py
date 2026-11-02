@@ -90,19 +90,20 @@ def test_a_refutation_needs_converged_values(bare):
 def test_each_mode_reads_evidence_in_its_own_semantics(bare):
     """`acosh(erf(x0))` is NaN over the reals and finite (0) wherever float64 rounds erf to 1,
     x0 >= 5.92. `f64` reads float64, its tails exactly (the enclosure of erf there straddles 1
-    by its outward step), so its rule has evidence; `permissive` judges over the reals,
-    where the source is finite nowhere, and certifies nothing on it."""
+    by its outward step), so its rule has evidence; permissive's own criterion judges over the
+    reals, where the source is finite nowhere, and certifies nothing on it. Permissive includes
+    f64, so it certifies what f64's lane certifies, with float64's evidence:
+    `atan(acosh(erf(x0))) -> acosh(erf(x0))` holds in f64; `acosh(tanh(x0)) -> acosh(erf(x0))`
+    does not (the right side has a value on [5.92, 19.06), where the left side has none)."""
     X = RuleMiner(bare)._mining_sample_x(512, 2, np.random.default_rng(0))
 
     def certified(src, tgt, mode):
         return bare._core.judge_pair(src.split(), tgt.split(), ['x0', 'x1'], X.flatten().tolist(),
                                      512, rtol=1e-11, atol=1e-12, rule_mode=mode)
-    ok, why = certified('atan acosh erf x0', 'acosh erf x0', 'default')
-    assert ok, why
-    for mode in ('permissive',):
-        for src, tgt in (('atan acosh erf x0', 'acosh erf x0'),
-                         ('acosh tanh x0', 'acosh erf x0')):
-            assert certified(src, tgt, mode) == (False, 'uncertified'), (src, mode)
+    for mode in ('default', 'permissive'):
+        ok, why = certified('atan acosh erf x0', 'acosh erf x0', mode)
+        assert ok, (mode, why)
+        assert not certified('acosh tanh x0', 'acosh erf x0', mode)[0], mode
 
 
 def test_the_evidence_decision_counts_the_rows_in_the_modes_values(bare):

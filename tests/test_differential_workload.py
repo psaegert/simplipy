@@ -254,7 +254,8 @@ def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
     # a source with evidence whose rows could not be drawn is refused undecided
     for src, _, steps in scans(mode):
         if any(v == 'evidence' for _, _, v in steps) and any(t in ('x0', 'x1') for t in src) \
-                and _core.table_evidence(list(src), dict(_contract.ARITY), mode == 'f64') is True:
+                and _core.table_mode_evidence(list(src), dict(_contract.ARITY),
+                                              RULE_MODE[mode]) is True:
             undecided['evidence rows'] += 1
     REPORT[('assertion 1', mode)] = {
         'rejections': {v: len(by_kind(mode)[v][1]) for v in todo},
@@ -296,24 +297,35 @@ def _policies(lhs, rhs, mode) -> list:
 def test_the_scans_policies_are_the_licences(mode) -> None:
     """A policy refusal of the scan (its constant count, emit guard and collapse licence, the
     acceptance's load predicate, evidence and registry) is one the licence makes of the same
-    pair, and a source the scan reads has evidence by the policy's function (4.1) where it has
-    variables (a source of constants alone reads the collapse licence)."""
+    pair, or the pair holds in no reading of the mode (the judge refuses it, whatever names the
+    scan's refusal), and a source the scan reads has evidence by the policy's function (4.1)
+    where it has variables (a source of constants alone reads the collapse licence). The
+    licence that reads no tier names the policies a pair meets whatever it judges; where it does
+    not name the scan's, the licence on the judge's verdict decides: permissive's evidence is
+    that of a reading the rule holds in, so `acosh(erf(tan(x0))) -> 0`, which permissive's own
+    criterion holds vacuously (no value in the reals) and f64 refuses, has none."""
     from simplipy import _core
     wrong = []
     for src, _, steps in scans(mode):
         if not any(t in ('x0', 'x1') for t in src) or not any(c for c, _, _ in steps):
             continue
-        if _core.table_evidence(list(src), dict(_contract.ARITY), mode == 'f64') is not True:
+        if _core.table_mode_evidence(list(src), dict(_contract.ARITY),
+                                     RULE_MODE[mode]) is not True:
             wrong.append(('read without evidence', ' '.join(src)))
-    checked = {}
+    checked, unnamed = {}, []
     for v, (k, pairs) in by_kind(mode).items():
         if k not in MINT_POLICIES:
             continue
         checked[v] = len(sampled(pairs))
-        for lhs, rhs in sampled(pairs):
-            if k not in _policies(lhs, rhs, mode):
-                wrong.append((v, ' '.join(lhs), ' '.join(rhs), _policies(lhs, rhs, mode)))
-    REPORT[('assertion 3, the scan', mode)] = checked
+        unnamed += [(v, k, lhs, rhs) for lhs, rhs in sampled(pairs)
+                    if k not in _policies(lhs, rhs, mode)]
+    record = judge([(lhs, rhs) for _, _, lhs, rhs in unnamed])
+    for v, k, lhs, rhs in unnamed:
+        got = licensed(list(lhs), list(rhs), mode, engine(), max_source=MAX_SOURCE,
+                       detail=record[(lhs, rhs)])
+        if got['holds'] and k not in got['refused_by']:
+            wrong.append((v, ' '.join(lhs), ' '.join(rhs), got['refused_by']))
+    REPORT[('assertion 3, the scan', mode)] = dict(checked, judged=len(unnamed))
     assert checked and not wrong, wrong
 
 

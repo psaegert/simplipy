@@ -965,7 +965,7 @@ class TestTheBandAndTheRulesetAgree:
         each other -- which is what the audit found on the pre-triple artifact, where
         `inv(acosh(cosh x0))` became `abs(1/x0)` through a rule while the constructor
         refused it. The judge keeps the family out of f64; this is the tripwire that says
-        so, and would fire if a future judge change tiered one `core` or `f64-only`."""
+        so, and would fire if a future judge change tiered one `core`."""
         from conftest import require_mode_sets
         require_mode_sets()
         import json

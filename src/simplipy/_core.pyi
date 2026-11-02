@@ -357,6 +357,9 @@ def permissive_simplifications() -> list[str]: ...
 #: Evidence (policy 4.1): is `tokens` finite on a positive-measure set of its variables and
 #: constants, in float64's values (`f64`) or the table's real ones? None when undecided.
 def table_evidence(tokens: list[str], arity: dict[str, int], f64: bool) -> bool | None: ...
+#: Evidence in a rule mode (`'default'` or `'permissive'`): float64's for f64; float64's or the
+#: reals' for permissive, which includes f64. None when undecided.
+def table_mode_evidence(tokens: list[str], arity: dict[str, int], mode: str) -> bool | None: ...
 #: The interval enclosure over the whole domain (every variable and constant over the finite
 #: reals) in float64's values (`f64`) or the reals': (has_fin, pinf, ninf, nan, lo, hi).
 def table_value_set(tokens: list[str], arity: dict[str, int],

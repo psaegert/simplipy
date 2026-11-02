@@ -85,7 +85,7 @@ def test_a_refused_pick_yields_to_the_next_licensed_candidate(acj) -> None:
     assert stats['excluded'] == [[WITNESS, FIRST]]
     # a tier f64 licenses: no exclusion, the first pick stands
     found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
-                                               judge_as('f64-only'), {}, ['x0'])
+                                               judge_as('core'), {}, ['x0'])
     assert found == [(WITNESS, FIRST)] and stats['judge_rounds'] == 1
 
 
