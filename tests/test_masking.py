@@ -309,6 +309,8 @@ class TestBesseljOrder:
         from simplipy.io import load_config
         ops = dict(load_config(acj_config_path())['operators'])
         ops['besselj'] = {'realization': 'scipy.special.jv', 'alias': [], 'arity': 2, 'commutative': False}
+        for name in ('bessely', 'besseli', 'besselk'):
+            ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': 2, 'commutative': False}
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')  # the engine has no rules, and says so
             return SimpliPyEngine(operators=ops, rules=[])
@@ -330,3 +332,17 @@ class TestBesseljOrder:
         assert masking.mask(tokens, bessel_engine, masking.mask_all, collect=False) == [
             "besselj", "<constant>", "*", "<constant>", "x0"]
         assert masking.mask_fittable("2", masking.Role.ORDER) is None
+
+    def test_besseli_has_an_order_and_bessely_besselk_a_value(self, bessel_engine: SimpliPyEngine) -> None:
+        """I's order controls its domain as J's does (a non-integer order is NaN at x < 0, an
+        integer order's parity is the function's); Y and K are defined on x > 0 alone at every
+        order, smooth in it, so their order is a value the fittable kind masks."""
+        def sites(tokens: list[str]) -> list[tuple[str, masking.Role]]:
+            return [(v, r) for _, v, r in masking.literal_sites(tokens, bessel_engine)]
+        assert sites(["besseli", "2", "x0"]) == [("2", masking.Role.ORDER)]
+        for name in ("bessely", "besselk"):
+            assert sites([name, "2", "x0"]) == [("2", masking.Role.VALUE)], name
+            assert masking.mask([name, "2", "*", "3", "x0"], bessel_engine, masking.mask_fittable,
+                                collect=False) == [name, "<constant>", "*", "<constant>", "x0"], name
+        assert masking.mask(["besseli", "2", "*", "3", "x0"], bessel_engine, masking.mask_fittable,
+                            collect=False) == ["besseli", "2", "*", "<constant>", "x0"]

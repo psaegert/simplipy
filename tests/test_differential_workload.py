@@ -74,6 +74,22 @@ def engine() -> SimpliPyEngine:
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
+#: The operators the probe table reads beyond acj2-4's: every operator the package realizes.
+PROBE_ONLY = {'erfc': 1, 'bessely': 2, 'besseli': 2, 'besselk': 2}
+
+
+@functools.lru_cache(maxsize=1)
+def probe_engine() -> SimpliPyEngine:
+    """acj2-4's operators and `PROBE_ONLY`: the probe table's vocabulary (the scan's workload
+    stays on acj2-4's, as the specification fixes it)."""
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    for name, arity in PROBE_ONLY.items():
+        ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,
+                     'precedence': 2, 'commutative': False}
+    return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
+
+
 @functools.lru_cache(maxsize=1)
 def matrix() -> tuple:
     """The mine's rows and confirmation rows, drawn as a mine of `SEED` draws them."""
@@ -440,16 +456,43 @@ BINARY_ARGS = ['0', '-0.0', '1', '(-1)', '2', '0.5', '-2', 'float("inf")', 'floa
                'float("nan")', '5e-324', '1.7976931348623157e308', '3']
 
 
+def _pairs(orders: list, args: list) -> list:
+    return [[a, b] for a in orders for b in args]
+
+
+#: Each operator's own range thresholds and boundaries, beside the shared arguments: erfc's
+#: plateau at 2 and its cut to 0 (subnormal from about 26.55); Y's and I's orders where the
+#: limit at 0 changes (the negative half-integers, where the reals' value is not decided),
+#: the order thresholds of the kernels (50 for I, 85.9 for K), and the arguments where float64
+#: overflows (I past 713.99, Y near 0), cuts to 0 (K past 697.87 and 710 (1 + |nu|)) or turns NaN
+#: (I below 5.6e-309).
+OWN_PROBES = {
+    'erfc': [[a] for a in ['-5.863584748755168', '-5.8635847487551676', '-6', '-1e300', '0.999',
+                           '8', '26.55', '26.641747557046326', '26.64174755704633', '27',
+                           '1e-300']],
+    'bessely': _pairs(['-0.5', '-1.5', '-2.5', '0.25', '-0.25', '2.5', '50.5', '86', '1000',
+                       '-1000'],
+                      ['0', '-0.0', '5e-324', '1e-300', '1e-10', '700', '1e5', '1e10']),
+    'besseli': _pairs(['-0.5', '-1.5', '-2.5', '50.5', '-50.5', '51', '-51', '1000'],
+                      ['-0.0', '1e-310', '-1e-310', '1e-300', '700', '713.98', '714', '-714',
+                       '1e160']),
+    'besselk': _pairs(['0.25', '-0.5', '85.5', '86', '1000'],
+                      ['1e-310', '1e-300', '697.87', '697.88', '698', '710', '711', '1e6']),
+}
+
+
 def probes() -> list:
     """Each operator at the probe arguments (`UNARY_ARGS`; a binary one at every pair of
-    `BINARY_ARGS`): its poles and boundaries (0, +-1, pi/2, the negative integers), +-0, +-inf,
-    NaN, exp's overflow and underflow thresholds, the subnormals and the largest double."""
+    `BINARY_ARGS`, and its own thresholds, `OWN_PROBES`): its poles and boundaries (0, +-1,
+    pi/2, the negative integers), +-0, +-inf, NaN, exp's overflow and underflow thresholds, the
+    subnormals and the largest double. Every operator the package realizes (`probe_engine`)."""
     out = []
-    for op, arity in sorted(engine().operator_arity.items()):
+    for op, arity in sorted(probe_engine().operator_arity.items()):
         if arity == 1:
             out += [[op] + a.split() for a in UNARY_ARGS]
         else:
             out += [[op] + a.split() + b.split() for a in BINARY_ARGS for b in BINARY_ARGS]
+        out += [[op] + [t for a in args for t in a.split()] for args in OWN_PROBES.get(op, [])]
     return out
 
 
@@ -570,8 +613,8 @@ def disagreements() -> tuple:
     arity = dict(_contract.ARITY)
     readers = {
         'f64 judge': lambda t: float(_contract.d_eval(_contract.parse(list(t)), {})),
-        'f64 mint': lambda t: engine()._core.evaluate_batch(list(t), [], [], 1, [])[0],
-        'f64 fold': lambda t: _literal(engine().simplify(list(t), mode='f64'))}
+        'f64 mint': lambda t: probe_engine()._core.evaluate_batch(list(t), [], [], 1, [])[0],
+        'f64 fold': lambda t: _literal(probe_engine().simplify(list(t), mode='f64'))}
     out = []
     for tokens, real, (f64, in_range) in probe_table():
         for name, read in readers.items():
@@ -594,7 +637,7 @@ def disagreements() -> tuple:
             out.append(('f64 enclosure', tokens, box, f64))
         if real is None:
             continue
-        folded = _literal(engine().simplify(list(tokens), mode='permissive'))
+        folded = _literal(probe_engine().simplify(list(tokens), mode='permissive'))
         if folded is not None and _class(folded) != _class(real):
             out.append(('permissive fold', tokens, folded, _class(real)))
         box = _core.table_value_set(list(tokens), arity, False)

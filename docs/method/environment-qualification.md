@@ -22,12 +22,13 @@ The exact-rational core is unaffected (rational arithmetic has no libm); the
 qualification is about the fold path and the numeric confirmation/judging
 stages.
 
-## Complex arithmetic in `besselj`, by platform
+## Complex arithmetic in the Bessel functions, by platform
 
-`besselj` evaluates in float64 as the C++ it ports, and part of that
-computation is complex. C leaves the product and quotient of two complex
-numbers to runtime routines, `__muldc3` and `__divdc3`, and the engine calls
-the platform's:
+`besselj`, `bessely` and `besselk` evaluate in float64 as the C++ they port
+(scipy's AMOS code), and part of that computation is complex. C leaves the
+product and quotient of two complex numbers to runtime routines, `__muldc3` and
+`__divdc3`, and the engine calls the platform's (`erfc` and `besseli`, scipy's
+Cephes code, compute in real arithmetic):
 
 | Platform | The engine calls | scipy's compiled kernels call |
 |---|---|---|
@@ -40,8 +41,9 @@ LLVM's routines, `besselj` differs from Linux at about 9% of a million points
 spanning orders and arguments from tiny to huge, by 4.5e-16 relative at the
 median and at most 1e-10, and never in class (a finite value stays finite, an
 infinity or NaN stays one). So macOS and Windows differ from Linux in the last
-bits, and on Windows the engine also differs from scipy. A mine that folds
-`besselj` inherits its platform like any other fold, and its sidecar's
+bits, and on Windows the engine also differs from scipy. `bessely` and
+`besselk` call the same routines and are measured on Linux only. A mine that
+folds one of them inherits its platform like any other fold, and its sidecar's
 platform record says which.
 
 ## What the sidecar records

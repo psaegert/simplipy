@@ -4,8 +4,8 @@ Masking is DOWNSTREAM POLICY, not engine behavior: the engine simplifies and del
 full expression with explicit constants; consumers decide what to abstract. This module is
 the MECHANISM. It walks the engine's output (the native tagged form or the explicit binary
 form) and tells a policy the structural ROLE of every literal it meets -- a multiplicative
-coefficient, an additive constant, a ``pow`` exponent, a ``rootn`` index, a ``besselj``
-order -- so a policy
+coefficient, an additive constant, a ``pow`` exponent, a ``rootn`` index, a ``besselj`` or
+``besseli`` order -- so a policy
 like "mask constants, but keep in-vocabulary integer exponents" is a single conditional,
 and position-blind accidents (masking a ``rootn`` index into a skeleton that is NaN almost
 everywhere) are impossible to write by accident.
@@ -16,8 +16,8 @@ modes, so the kinds live here rather than being re-invented by every consumer:
 * :func:`mask_all` -- every number, including either half of a fraction and the special
   constants. For structural comparison.
 * :func:`mask_fittable` -- every number a constant optimizer can actually fit, KEEPING the
-  ones it cannot (``pow`` exponents, ``rootn`` indices, ``besselj`` orders). For training
-  data.
+  ones it cannot (``pow`` exponents, ``rootn`` indices, ``besselj`` and ``besseli``
+  orders). For training data.
 
 TWO KINDS, TWO NAMES -- and they are the SAME kind. ``mask_values_keep_structure`` was
 this module's original name for :func:`mask_fittable` and has been a bare alias since the
@@ -117,7 +117,7 @@ class Role(enum.Enum):
     ADDEND = "addend"            # a term in an additive context (incl. - operands)
     EXPONENT = "exponent"        # the second operand of ``pow``
     ROOT_INDEX = "root_index"    # the second operand of ``rootn``
-    ORDER = "order"              # the first operand of ``besselj`` (the order nu of J_nu(x))
+    ORDER = "order"              # the first operand of ``besselj``/``besseli`` (nu of J_nu(x))
     VALUE = "value"              # everything else: function argument, pow base, lone literal
 
 
@@ -197,7 +197,7 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         if t == "rootn":
             i = walk(i + 1, Role.VALUE)
             return walk(i, Role.ROOT_INDEX)
-        if t == "besselj" and arity.get(t) == 2:
+        if t in ("besselj", "besseli") and arity.get(t) == 2:
             i = walk(i + 1, Role.ORDER)
             return walk(i, Role.VALUE)
         if t in ("*", "/"):
@@ -284,12 +284,13 @@ def mask_fittable(value: str, role: Role) -> Optional[str]:
       the integers, so a continuous optimizer has no gradient anywhere to descend.
     * ``pow`` EXPONENT -- ``pow(x, 2.5)`` is ``nan`` wherever ``x < 0``. The exponent's
       integrality decides the domain, so masking it silently deletes half the data.
-    * ``besselj`` ORDER -- ``besselj(2.5, x)`` is ``nan`` wherever ``x < 0``, and an integer
-      order's parity decides the function's: the order controls the domain as an exponent
-      does.
+    * ``besselj`` and ``besseli`` ORDER -- ``besselj(2.5, x)`` is ``nan`` wherever ``x < 0``,
+      and an integer order's parity decides the function's: the order controls the domain as
+      an exponent does.
 
     Everything else is smooth in its literal (``c*x``, ``x+c``, ``log(c*x)``) and is
-    masked. This is the policy for training-data preparation.
+    masked, the orders of ``bessely`` and ``besselk`` among them: both are defined on
+    ``x > 0`` alone at every order. This is the policy for training-data preparation.
 
     Formerly ``mask_values_keep_structure`` -- the same policy under the name that says
     what it keeps rather than why. That spelling is removed in 0.14.0.

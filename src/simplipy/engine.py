@@ -2565,6 +2565,15 @@ class SimpliPyEngine:
         # argument expansion, a non-integer order, and the rotation through Y of a negative one
         ('besselj', '0', '1'), ('besselj', '1', '1000'), ('besselj', '2.5', '30'),
         ('besselj', '-1.5', '2'),
+        # erfc and the other Bessel functions, ported as scipy ships them, in each regime:
+        # erfc's `1 - erf` and its two rational tails; Y and K through AMOS (small and large
+        # arguments, a large order's uniform expansion, Y's rotation of a negative order); I
+        # through Temme's method, its asymptotic expansion and the uniform one above order 50
+        ('erfc', '0.5'), ('erfc', '2'), ('erfc', '10'),
+        ('bessely', '0', '1'), ('bessely', '1', '1000'), ('bessely', '-1.5', '2'),
+        ('bessely', '100', '30'),
+        ('besseli', '0.5', '1'), ('besseli', '1', '1000'), ('besseli', '60', '10'),
+        ('besselk', '0', '1'), ('besselk', '2.5', '30'), ('besselk', '100', '30'),
     )
 
     def libm_fingerprint(self) -> str:

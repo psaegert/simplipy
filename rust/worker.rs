@@ -101,8 +101,9 @@ const POLE_GRID: [f64; 26] = [
 /// rounds are appended for off-grid decorrelation and joint coverage.
 /// The magnitudes swept, beside `POLE_GRID`, on each constant of a source holding a 0.15 head
 /// (`battery::holds_new_head`): zero and the integers, where the step heads
-/// jump, `harmonic` has its poles (with the negative sign combos) and `mod` divides exactly, and a
-/// half-integer, `besselj`'s order and the floor/ceil midpoint.
+/// jump, `harmonic` has its poles (with the negative sign combos), `mod` divides exactly and the
+/// Bessel heads have their integer orders, and a half-integer, a Bessel order of elementary
+/// functions and the floor/ceil midpoint.
 const POLE_GRID_STEP: [f64; 6] = [0.0, 1.0, 1.5, 2.0, 3.0, 4.0];
 
 fn source_const_magnitudes(

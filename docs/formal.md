@@ -478,8 +478,9 @@ directions), and it is not done.
 **A sum keeps a `+0` term where its other terms may all be -0 on a region, in `f64`.** float64's
 sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`, and a cancellation is `+0`), and
 some terms are -0 on a whole region: `ceil(x1)` on (-1, 0), `-floor(x1)` on [0, 1),
-`min(x1, -0.0)` on x1 ≥ 0, `mod(floor(x1), -1)` everywhere, `x2*ceil(x1)` wherever x2 > 0 there.
-A zero term (literals that sum to zero) and two like terms of opposite signs make a sum `+0`
+`min(x1, -0.0)` on x1 ≥ 0, `mod(floor(x1), -1)` everywhere, `x2*ceil(x1)` wherever x2 > 0 there,
+and scipy's `besseli(3, x1)` where it underflows at x1 < 0, `bessely(100, x1)` on stretches of
+7.2e8 ≤ x1 ≤ 2^51. A zero term (literals that sum to zero) and two like terms of opposite signs make a sum `+0`
 wherever its other terms vanish, so the constructor drops the zero term, or collects the pair,
 only where one remaining term is shown not to be -0 on a region: its zero set is null (the region
 test), or its sign at zero is `+0` (a step, lattice, `mod`, `atan2`, root, power or odd function

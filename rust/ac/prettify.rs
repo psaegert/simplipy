@@ -1636,7 +1636,12 @@ fn numbers_inside(e: &Ex, cx: &Cx, out: &mut Vec<Rat>) {
                 numbers_inside(x, cx, out);
             }
         }
-        Ex::Fun(f, v) if v.len() == 2 && cx.view.tok_is(*f, "besselj") => {
+        Ex::Fun(f, v)
+            if v.len() == 2
+                && ["besselj", "bessely", "besseli", "besselk"]
+                    .iter()
+                    .any(|b| cx.view.tok_is(*f, b)) =>
+        {
             numbers_inside(&v[1], cx, out);
         }
         Ex::Fun(_, v) => v.iter().for_each(|x| numbers_inside(x, cx, out)),

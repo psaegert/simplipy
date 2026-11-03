@@ -8,7 +8,8 @@ vocabulary, a fitter's parameter budget), not on the algebra. `simplipy.masking`
 mechanism for exactly that decision. It walks the engine's
 output (the native tagged form or the explicit binary form) and tells a policy
 the structural role of every literal it meets: a multiplicative
-coefficient, an additive constant, a `pow` exponent, a `rootn` index. A
+coefficient, an additive constant, a `pow` exponent, a `rootn` index, a
+`besselj` or `besseli` order. A
 policy like "mask constants, but keep in-vocabulary integer exponents" is a
 single conditional, and position-blind accidents (masking a `rootn` index into
 a skeleton that is NaN almost everywhere) are impossible to write by accident.
@@ -39,10 +40,12 @@ kinds ship in the module rather than being re-invented by every consumer:
 - **`mask_all`** — every number, including either half of a fraction and the
   special constants. For structural comparison.
 - **`mask_fittable`** — every number a constant optimizer can actually fit,
-  *keeping* the ones it cannot (`pow` exponents, `rootn` indices). For
+  *keeping* the ones it cannot (`pow` exponents, `rootn` indices, the orders of
+  `besselj` and `besseli`, which decide where the function has a value). For
   training data. The special constants are masked too wherever they are
   fittable: `x1 * pi` becomes `<constant> * x1`, while `pow(x1, np.pi)` keeps
-  its exponent.
+  its exponent. The orders of `bessely` and `besselk` are masked: both
+  functions are defined on `x > 0` alone, at every order.
 
 A custom `(value, role) -> str | None` policy remains the primitive
 (`masking.Role` is the role enum, `masking.literal_sites` enumerates the

@@ -313,6 +313,8 @@ compute the same bits. Where they differ from numpy, they differ by name:
 | `rootn` | the package's own kernel, IEEE 754 `rootn` | numpy has none |
 | `harmonic` | the package's own kernel, within 0.53 ulp on x > -1 | numpy has none |
 | `besselj` | the package's own kernel, scipy 1.18.1's `jv` code | numpy has none; against `scipy.special.jv`, measured on the development host (Linux, glibc 2.43): 0 of the 167,361 points of the repository grid differ, and another host measured 65 of them apart, by at most 30 ulp |
+| `erfc`, `besseli` | the package's own kernels, scipy 1.18.1's `erfc` and `iv` code (Cephes) | numpy has none; against `scipy.special.erfc` and `scipy.special.iv`, measured on the development host (Linux, glibc 2.43): 0 of 1,594,018 and 0 of 1,318,385 points differ |
+| `bessely`, `besselk` | the package's own kernels, scipy 1.18.1's `yv` and `kv` code (AMOS, and Cephes for `yv` where AMOS gives up) | numpy has none; against `scipy.special.yv` and `scipy.special.kv`, measured on the development host: 0 of 1,258,385 and 0 of 1,318,385 points differ. Their complex arithmetic is `besselj`'s, and so is its platform dependence ([environment qualification](../method/environment-qualification.md)) |
 
 It does **not** promise to preserve your evaluation order. The canonical form flattens sums
 and products into bags and re-emits them, and IEEE-754 addition commutes but does not

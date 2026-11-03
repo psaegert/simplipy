@@ -310,9 +310,8 @@ fn mu_fun_bits(name: &str) -> u64 {
             MU_BITS_TRANSCENDENTAL
         }
         // The 0.15 heads, priced at the transcendental tier by ruling (no census yet).
-        "floor" | "ceil" | "max" | "min" | "mod" | "harmonic" | "erf" | "atan2" | "besselj" => {
-            MU_BITS_TRANSCENDENTAL
-        }
+        "floor" | "ceil" | "max" | "min" | "mod" | "harmonic" | "erf" | "erfc" | "atan2"
+        | "besselj" | "bessely" | "besseli" | "besselk" => MU_BITS_TRANSCENDENTAL,
         _ => 8,
     }
 }
@@ -4610,13 +4609,18 @@ fn signed_zero_of(f: &Ex, cx: &Cx, sums: bool) -> bool {
         }
         // The 0.15 heads. A step or lattice head vanishes on whole intervals with a sign of its
         // own (`ceil` is -0 on (-1, 0), `mod` takes the divisor's, `max(x, -0)` and `min(x, 0)`
-        // hold a zero on a half-line), wherever it has a region to vanish on. `harmonic` is odd at
-        // its zero, `atan2` in its first argument and `besselj` (under an odd order) in its
-        // second, so each keeps its argument's.
+        // hold a zero on a half-line), wherever it has a region to vanish on, and so do the scipy
+        // heads in float64: `erfc` is +0 from x = 26.6 and `besselk` from 697.9, `besseli`
+        // underflows to a zero of its order's parity near 0 (-0 at x < 0 under an odd order),
+        // and `bessely` is +-0 on 7.2e8 <= x <= 2^51 from order 86. `harmonic` is odd at its
+        // zero, `atan2` in its first argument and `besselj` (under an odd order) in its second,
+        // so each keeps its argument's.
         Ex::Fun(op, _)
-            if ["floor", "ceil", "max", "min", "mod"]
-                .iter()
-                .any(|h| cx.view.tok_is(*op, h)) =>
+            if [
+                "floor", "ceil", "max", "min", "mod", "erfc", "bessely", "besseli", "besselk",
+            ]
+            .iter()
+            .any(|h| cx.view.tok_is(*op, h)) =>
         {
             cx.f64_semantics() && f.has_measure_space(cx.view)
         }

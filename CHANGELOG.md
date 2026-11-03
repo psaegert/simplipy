@@ -2174,6 +2174,49 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     negative axis is NaN alone and its pole at 0 has its sign, so ground cases fold in every
     mode: `besselj(1/2, -1)` is `nan`, `besselj(sin(-1), 0)` is `inf`, `besselj(tan(-1), 0)`
     is `-inf`.
+- **`erfc`, `bessely`, `besseli` and `besselk` are operators**: the complementary error
+  function and the Bessel functions of the second kind and the modified ones, binary with the
+  order first as `besselj` is. A config declares them with the realizations
+  `simplipy.operators.erfc`, `bessely`, `besseli` and `besselk`.
+  - *The kernels* are scipy 1.18.1's `erfc`, `yv`, `iv` and `kv` code (Cephes and AMOS),
+    carried in the core with no departure: bit for bit `scipy.special`'s on the development host
+    over 1.3 to 1.6 million points each, scipy's cells included. So float64's values are
+    scipy's where scipy leaves the function: `yv` and `kv` are `-inf` and `+inf` below
+    x = 2.2e-305 (AMOS's cut; the true values at order 0 are about -447 and 702), `yv` is `+-0`
+    on 7.2e8 <= x <= 2^51 at orders from 86, `iv` is 0 near 0 below order 50 wherever its
+    Wronskian overflows (`iv(0.5, 1e-250)`; the true value is 1.3e-125) and NaN at a subnormal
+    argument, `kv` is 0 from x = 697.9 at order 0 and NaN at an infinite order, `iv(-1.5, 0)`
+    is `+inf` (the limit is `-inf`). Torch tensors are evaluated on the host, as for `besselj`.
+  - *The reals* (the judge's table, `permissive`'s folds): Y and K have no value at x < 0, I at
+    x < 0 only at an integer order (`I_n(-x) = (-1)^n I_n(x)`); at x = 0 the limit rule gives
+    `Y_nu(0) = -inf` for nu >= 0 and `-sign(cos(nu pi)) inf` below, `K_nu(0) = inf`, and
+    `I_nu(0)` its series' value (1 at order 0, 0 above and at a negative integer, the pole's
+    one-sided limit at a negative non-integer); at infinite operands the joint limits (`Y` and
+    `K` tend to 0 as x grows, `I` to `inf`, `Y_inf = -inf`, `K_+-inf = inf`, `I_inf = 0`).
+    `bessely` at x = 0 under a negative half-integer order, and `besseli(-inf, x)` at x < 0,
+    are not decided (the judge skips them, `permissive` leaves them written). Values come from
+    the power series, the integer-order series of DLMF 10.8.1 and 10.31.1 and the Hankel
+    expansions, within the last place of mpmath's.
+  - *Enclosures.* `erfc` is decreasing within (0, 2), exactly 0 and 2 on float64's plateaus;
+    K is decreasing in x and increasing in |nu|, I increasing in x and decreasing in the order,
+    and |Y| is bounded by Nicholson's `sqrt(J^2 + Y^2)`, decreasing in x and increasing in
+    |nu|. Every enclosure holds float64's value and the reals' at every point of the box,
+    scipy's cuts and overflows included.
+  - *Elsewhere.* The libm fingerprint probes each kernel in each of its regimes. `besseli`'s
+    order is a `masking.Role.ORDER`, as `besselj`'s, and kept by `mask_fittable`; the orders of
+    `bessely` and `besselk` are values (both functions are defined on x > 0 at every order).
+    `prettify` writes a Bessel order exactly, as an exponent. In `f64` the four may vanish on a
+    whole region with a sign of their own, so a sum keeps a `+0` term beside one, as beside
+    `ceil` (`bessely(2, x1) + 0`). Rules spelled with them answer to the deployed bar, as the
+    other 0.15 heads' do.
+- **Every Bessel function reads its order's distance to the nearest integer.** Near a negative
+  integer J and I swing by hundreds of digits with it (`besselj(-300 - 1e-58, 1.7)` is about
+  1.5e575, `besselj(-300, 1.7)` is 2.2e-636), and Y and K divide by `sin(nu pi)`. The table read
+  an order at the working precision, so it gave `besselj` and `besseli` the integer order's
+  value there. An exact order is now read at the precision its distance to the integer needs,
+  `sin(nu pi)`, `cos(nu pi)` and Gamma's reflection read that distance exactly, and an
+  approximate order within the working band of an integer leaves J and I undecided where they
+  swing (a negative order, or x < 0).
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and
