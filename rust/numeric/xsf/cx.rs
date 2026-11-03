@@ -1,4 +1,4 @@
-//! Complex double arithmetic exactly as the C++ the besselj port transliterates computes it:
+//! Complex double arithmetic exactly as the C++ the xsf ports transliterate computes it:
 //! libstdc++'s `std::complex<double>` compiled by GCC without fast-math.
 //!
 //! * `z * w` is `(ac - bd) + (ad + bc)i`, with the C runtime's `__muldc3` recovering the

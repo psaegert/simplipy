@@ -41,15 +41,15 @@ pub(crate) const NU_CAP: f64 = 1e3;
 /// The largest argument evaluated, the contract's trig cap (`ct_unary`'s `sin`/`cos`).
 pub(crate) const X_CAP: f64 = 1e12;
 /// The largest working precision and the most series terms one evaluation may use.
-const BITS_CAP: usize = 80_000;
-const TERM_CAP: usize = 200_000;
+pub(crate) const BITS_CAP: usize = 80_000;
+pub(super) const TERM_CAP: usize = 200_000;
 
-fn small(n: u64, p: usize) -> BigFloat {
+pub(super) fn small(n: u64, p: usize) -> BigFloat {
     BigFloat::from_u64(n, p)
 }
 
 /// `x` as the nearest-ish f64 (the top word of the mantissa): for planning only.
-fn approx(x: &BigFloat) -> f64 {
+pub(super) fn approx(x: &BigFloat) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -82,7 +82,7 @@ fn approx(x: &BigFloat) -> f64 {
 }
 
 /// `log2 |x|`, roughly (`None` for a zero or a non-finite value).
-fn log2_abs(x: &BigFloat) -> Option<i64> {
+pub(super) fn log2_abs(x: &BigFloat) -> Option<i64> {
     if x.is_zero() || x.is_nan() || x.is_inf() {
         return None;
     }
@@ -90,7 +90,7 @@ fn log2_abs(x: &BigFloat) -> Option<i64> {
 }
 
 /// Is the integer `n` (an integer-valued BigFloat) odd?
-fn is_odd(n: &BigFloat) -> bool {
+pub(super) fn is_odd(n: &BigFloat) -> bool {
     let h = n.div(&small(2, 64), n.precision().unwrap_or(64) + 64, RM);
     !h.is_int()
 }
@@ -133,26 +133,38 @@ pub(crate) fn besselj(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) ->
 }
 
 /// `J_nu(x)` for `x > 0` and `nu >= 0` or a negative non-integer `nu`, both finite and capped.
-fn besselj_positive(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
+pub(super) fn besselj_positive(
+    nu: &BigFloat,
+    x: &BigFloat,
+    p: usize,
+    cc: &mut Consts,
+) -> Option<BigFloat> {
     let (nuf, xf) = (approx(nu), approx(x));
-    // The Hankel expansion reaches 2^-p only where its smallest term, about e^-2x, does; its
-    // terms first grow to about e^(nu^2 / 2x), which the working precision carries.
-    let growth = (nuf * nuf / (2.0 * xf) * std::f64::consts::LOG2_E).ceil() as usize;
-    if xf > 0.35 * (p as f64 + 48.0) && growth <= 4 * p {
-        if let Some(v) = hankel(nu, x, p, growth, cc) {
+    if let Some(growth) = hankel_growth(nuf, xf, p) {
+        if let Some(v) = hankel(nu, x, p, growth, false, cc) {
             return Some(v);
         }
     }
-    series(nu, x, nuf, xf, p, cc)
+    series(nu, x, nuf, xf, p, false, cc)
 }
 
-/// The Hankel expansion (module documentation); `None` where its bound does not reach the
-/// target before the terms turn.
-fn hankel(
+/// Where the Hankel expansion is worth trying, the bits its terms first grow by: it reaches
+/// 2^-p only where its smallest term, about e^-2x, does, and its terms first grow to about
+/// e^(nu^2 / 2x), which the working precision carries.
+pub(super) fn hankel_growth(nuf: f64, xf: f64, p: usize) -> Option<usize> {
+    let growth = (nuf * nuf / (2.0 * xf) * std::f64::consts::LOG2_E).ceil() as usize;
+    (xf > 0.35 * (p as f64 + 48.0) && growth <= 4 * p).then_some(growth)
+}
+
+/// The Hankel expansion (module documentation) of J, or with `second` of Y,
+/// `Y = sqrt(2/(pi x)) (P sin w + Q cos w)`; `None` where its bound does not reach the target
+/// before the terms turn.
+pub(super) fn hankel(
     nu: &BigFloat,
     x: &BigFloat,
     p: usize,
     growth: usize,
+    second: bool,
     cc: &mut Consts,
 ) -> Option<BigFloat> {
     let mag = |v: &BigFloat| log2_abs(v).unwrap_or(0).max(0) as usize;
@@ -211,7 +223,11 @@ fn hankel(
     let half_nu = nu.div(&small(2, wp), wp, RM);
     let w = x.sub(&half_nu.add(&quarter, wp, RM).mul(&pi, wp, RM), wp, RM);
     let (c, s) = (w.cos(wp, RM, cc), w.sin(wp, RM, cc));
-    let comb = pp.mul(&c, wp, RM).sub(&qq.mul(&s, wp, RM), wp, RM);
+    let comb = if second {
+        pp.mul(&s, wp, RM).add(&qq.mul(&c, wp, RM), wp, RM)
+    } else {
+        pp.mul(&c, wp, RM).sub(&qq.mul(&s, wp, RM), wp, RM)
+    };
     // The truncation error (both first neglected terms) and the rounding of w, cos and sin,
     // against the value: refuse unless the bound clears 2^-(p+16) of it.
     let lc = log2_abs(&comb)?;
@@ -233,41 +249,61 @@ fn next_term(term: &BigFloat, mu: &BigFloat, k: u64, x: &BigFloat, wp: usize) ->
     term.mul(&f, wp, RM).div(&d, wp, RM)
 }
 
-/// The power series (module documentation).
-fn series(
+/// The power series (module documentation) of J, or with `modified` of I,
+/// `I = (x/2)^nu / Gamma(nu + 1) sum_k (x^2/4)^k / (k! (nu + 1)_k)`, whose terms past the first
+/// `-nu - 1` all have one sign: it starts at a working precision without the peak's guard bits
+/// and is redone where it measures a cancellation.
+pub(super) fn series(
     nu: &BigFloat,
     x: &BigFloat,
     nuf: f64,
     xf: f64,
     p: usize,
+    modified: bool,
     cc: &mut Consts,
 ) -> Option<BigFloat> {
     // The largest term, log2, from the ratio x^2/4 / ((k+1)(nu+k+1)), in floats: the peak is
-    // where the ratio crosses 1 for good (past -nu - 1, where nu + k + 1 turns positive).
-    let q = xf * xf / 4.0;
+    // where the ratio crosses 1 for good (past -nu - 1, where nu + k + 1 turns positive). Where
+    // nu + k + 1 is within a unit of 0 (an order near a negative integer), its size is read off
+    // the order itself, which carries it (`table::bessel_order`).
+    let log_q = 2.0 * xf.log2() - 2.0;
     let mut lt = 0.0f64;
     let mut peak = 0.0f64;
     let mut k = 0usize;
     loop {
-        let den = (k as f64 + 1.0) * (nuf + k as f64 + 1.0);
-        let r = q / den.abs();
-        if r < 1.0 && nuf + k as f64 + 1.0 > 0.0 {
+        let shifted = nuf + k as f64 + 1.0;
+        let log_shift = if shifted.abs() < 1.0 {
+            let fp = nu.precision().unwrap_or(p) + 64;
+            let s = nu.add(&small(k as u64 + 1, fp), fp, RM);
+            log2_abs(&s).map_or(f64::NEG_INFINITY, |l| l as f64)
+        } else {
+            shifted.abs().log2()
+        };
+        let log_r = log_q - (k as f64 + 1.0).log2() - log_shift;
+        if log_r < 0.0 && shifted > 0.0 {
             break;
         }
-        lt += r.log2();
+        if log_r.is_nan() || log_r == f64::INFINITY {
+            return None;
+        }
+        lt += log_r;
         peak = peak.max(lt);
         k += 1;
         if k > TERM_CAP {
             return None;
         }
     }
-    let mut extra = peak.ceil() as usize + 64;
+    let mut extra = if modified {
+        64 + (64 - (k as u64).leading_zeros() as usize)
+    } else {
+        peak.ceil() as usize + 64
+    };
     for _attempt in 0..2 {
         let wp = p + extra;
         if wp > BITS_CAP {
             return None;
         }
-        let (sum, biggest) = series_sum(nu, x, wp)?;
+        let (sum, biggest) = series_sum(nu, x, wp, modified)?;
         let (Some(ls), Some(lb)) = (log2_abs(&sum), log2_abs(&biggest)) else {
             return None;
         };
@@ -281,17 +317,27 @@ fn series(
     None
 }
 
-/// `sum_k (-x^2/4)^k / (k! (nu + 1)_k)` at `wp` bits, and its largest term.
-fn series_sum(nu: &BigFloat, x: &BigFloat, wp: usize) -> Option<(BigFloat, BigFloat)> {
-    let q = x.mul(x, wp, RM).div(&small(4, wp), wp, RM).neg();
-    let nu1 = nu.add(&small(1, wp), wp, RM);
+/// `sum_k (-x^2/4)^k / (k! (nu + 1)_k)` at `wp` bits (`(x^2/4)^k` with `modified`), and its
+/// largest term.
+fn series_sum(
+    nu: &BigFloat,
+    x: &BigFloat,
+    wp: usize,
+    modified: bool,
+) -> Option<(BigFloat, BigFloat)> {
+    let q = x.mul(x, wp, RM).div(&small(4, wp), wp, RM);
+    let q = if modified { q } else { q.neg() };
+    // the shifts nu + k + 1 exact: near a negative integer one of them is the order's distance
+    // to it, which only the order's own bits carry (`order_bits`)
+    let nwp = order_bits(nu, wp);
+    let nu1 = nu.add(&small(1, nwp), nwp, RM);
     let mut term = small(1, wp);
     let mut sum = small(1, wp);
     let mut biggest = small(1, wp);
     let mut k: u64 = 0;
     loop {
         let kk = small(k + 1, wp);
-        let den = kk.mul(&nu1.add(&small(k, wp), wp, RM), wp, RM);
+        let den = kk.mul(&nu1.add(&small(k, nwp), nwp, RM), wp, RM);
         term = term.mul(&q, wp, RM).div(&den, wp, RM);
         sum = sum.add(&term, wp, RM);
         k += 1;
@@ -323,9 +369,18 @@ fn prefactor(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<B
     let guard = log2_abs(&e).unwrap_or(0).max(0) as usize;
     let wp = p + 64 + guard;
     let pw = nu.mul(&half.ln(wp, RM, cc), wp, RM).exp(wp, RM, cc);
-    let z = nu.add(&small(1, wp), wp, RM);
+    let zp = order_bits(nu, wp);
+    let z = nu.add(&small(1, zp), zp, RM);
     let g = gamma(&z, wp, cc)?;
     Some(pw.div(&g, p, RM))
+}
+
+/// The precision at which an order shifted by an integer (to `2^32`) stays exact, and at least
+/// `wp`: the order's own bits and 32 more. An order near a negative integer carries its
+/// distance to it in those bits (`table::bessel_order`), and `nu + k + 1` and `Gamma(nu + 1)`'s
+/// reflection read it.
+pub(super) fn order_bits(nu: &BigFloat, wp: usize) -> usize {
+    wp.max(nu.precision().unwrap_or(wp) + 32)
 }
 
 /// `Gamma(z)` for a real `z` that is no pole, at `p` bits (cached per thread: the contract
@@ -373,11 +428,14 @@ fn gamma_uncached(z: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
     let half = small(1, p + 64).div(&small(2, p + 64), p + 64, RM);
     if z.cmp(&half).is_some_and(|o| o < 0) {
         // Euler's reflection, Gamma(z) = pi / (sin(pi z) Gamma(1 - z)), with sin(pi z) read
-        // off the fractional part f = z - floor(z) exactly: sin(pi z) = (-1)^floor(z) sin(pi f).
+        // off z's distance f to the nearest integer n, exactly (at z's own bits, which carry
+        // it): sin(pi z) = (-1)^n sin(pi f), f in [-1/2, 1/2], to the working precision however
+        // near z lies to n.
         let wp = p + 64 + log2_abs(z).unwrap_or(0).max(0) as usize;
         let pi = cc.pi(wp, RM);
-        let n = z.floor();
-        let f = z.sub(&n, wp + log2_abs(z).unwrap_or(0).max(0) as usize + 8, RM);
+        let fp = order_bits(z, wp) + 8;
+        let n = z.add(&half, fp, RM).floor();
+        let f = z.sub(&n, fp, RM);
         let mut s = pi.mul(&f, wp, RM).sin(wp, RM, cc);
         if is_odd(&n) {
             s = s.neg();

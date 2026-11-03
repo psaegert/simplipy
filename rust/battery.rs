@@ -604,8 +604,9 @@ pub struct DeployedExact {
 /// realisation (`f64_bar`): a step head's jump (`floor(x + 1) = floor(x) + 1` fails at
 /// x = -1e-17), a zero's sign that `atan2` reads, a pole of `harmonic` -- float64 parts from
 /// the reals there, at points the contract's battery does not reach.
-pub const NEW_HEADS: [&str; 9] = [
-    "floor", "ceil", "erf", "harmonic", "max", "min", "mod", "atan2", "besselj",
+pub const NEW_HEADS: [&str; 13] = [
+    "floor", "ceil", "erf", "harmonic", "max", "min", "mod", "atan2", "besselj", "erfc", "bessely",
+    "besseli", "besselk",
 ];
 
 /// The heads whose value at a zero operand depends on the zero's sign (F7): `1/(-0)` is -inf,

@@ -9,13 +9,13 @@
 //! transcendentals come from `numeric::elementary`, the one elementary-function source.
 //!
 //! The operators added in 0.15 (`floor`, `ceil`, `max`, `min`, `mod`, `harmonic`, `erf`,
-//! `atan2`, `besselj`) are in the evaluator's dispatch too. They have interval enclosures;
-//! `besselj` also has its high-precision and contract kernel (`hiprec::besselj`), and every
-//! certificate that needs one refuses the others.
+//! `erfc`, `atan2`, `besselj`, `bessely`, `besseli`, `besselk`) are in the evaluator's dispatch
+//! too, with interval enclosures and high-precision kernels (`hiprec`). `erfc` and the Bessel
+//! functions are scipy's code (`numeric::xsf`).
 
-pub use super::besselj::besselj;
 use super::elementary;
 pub use super::harmonic::harmonic;
+pub use super::xsf::{besseli, besselj, besselk, bessely, erfc};
 
 // ------------------------------------------------------------------- the existing vocabulary
 
@@ -186,7 +186,8 @@ macro_rules! unary_table {
             "neg" => neg, "inv" => inv, "abs" => abs, "sin" => sin, "cos" => cos, "tan" => tan,
             "asin" => asin, "acos" => acos, "atan" => atan, "sinh" => sinh, "cosh" => cosh,
             "tanh" => tanh, "asinh" => asinh, "acosh" => acosh, "atanh" => atanh, "exp" => exp,
-            "log" => log, "floor" => floor, "ceil" => ceil, "harmonic" => harmonic, "erf" => erf
+            "log" => log, "floor" => floor, "ceil" => ceil, "harmonic" => harmonic, "erf" => erf,
+            "erfc" => erfc
         )
     };
 }
@@ -197,7 +198,8 @@ macro_rules! binary_table {
         $m!(
             "+" => add, "-" => sub, "*" => mul, "/" => div, "pow" => pow, "rootn" => rootn,
             "max" => max, "min" => min, "mod" => modulo, "atan2" => atan2,
-            "besselj" => besselj
+            "besselj" => besselj, "bessely" => bessely, "besseli" => besseli,
+            "besselk" => besselk
         )
     };
 }
@@ -584,6 +586,7 @@ mod tests {
         let unary = [
             "neg", "inv", "abs", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh",
             "tanh", "asinh", "acosh", "atanh", "exp", "log", "floor", "ceil", "harmonic", "erf",
+            "erfc",
         ];
         let g = grid();
         for name in unary {
@@ -596,7 +599,8 @@ mod tests {
             }
         }
         for name in [
-            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj", "bessely",
+            "besseli", "besselk",
         ] {
             let (e, k) = (
                 crate::numeric::binary_fn(name).unwrap(),

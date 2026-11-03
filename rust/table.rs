@@ -50,7 +50,8 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 
 use crate::ac::rat::{number_domain, token_rational, Rat};
 use crate::hiprec::{
-    besselj, cmp_gt, cmp_lt, dps_to_prec, is_pos, one, pow_finite_pos, small_int, special, RM,
+    bessel, besselj, cmp_gt, cmp_lt, dps_to_prec, is_pos, one, pow_finite_pos, small_int, special,
+    RM,
 };
 
 // ------------------------------------------------------------------------------- values
@@ -1134,6 +1135,28 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                 }
             }
         },
+        // erfc's limits are 0 and 2 (the limit rule); toward +inf it is a tiny value read to its
+        // last place (Unresolved past `ERFC_X_CAP`), toward -inf it nears 2 from below, erf's -1
+        // seen from `erfc = 1 - erf`, and inside the band of 2 the value is lost
+        "erfc" => match inf_sign(a) {
+            Some(up) => Some(int(if up { 0 } else { 2 })),
+            None if is_zero(a) => Some(int(1)),
+            None => {
+                let x = ctx.bf(a);
+                let two = small_int(2, p);
+                if x.is_negative()
+                    && (cmp_gt(&x.abs(), &crate::hiprec::bf(special::ERFC_X_CAP, p))
+                        || special::erfc_below(&x.abs(), &ctx.floor, p, &mut ctx.cc))
+                {
+                    ctx.saturate.then(|| approx(two))
+                } else {
+                    match special::erfc(&x, p, &mut ctx.cc) {
+                        Some(v) if !in_band(&v, &two, ctx) || ctx.saturate => Some(approx(v)),
+                        _ => None,
+                    }
+                }
+            }
+        },
         "harmonic" => harmonic(a, ctx),
         _ => return None,
     };
@@ -1376,6 +1399,7 @@ fn binary(name: &str, a: &Val, b: &Val, ctx: &mut Ctx) -> Option<Out> {
         "mod" => modulo(a, b, ctx),
         "atan2" => atan2(a, b, ctx),
         "besselj" => besselj_val(a, b, ctx),
+        "bessely" | "besseli" | "besselk" => bessel_val(name, a, b, ctx),
         _ => return None,
     };
     Some(out)
@@ -1491,8 +1515,91 @@ fn besselj_val(nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
     if let Some(nu_up) = inf_sign(nu) {
         return Some(if nu_up { zero() } else { undef() });
     }
-    let (n, xb) = (ctx.bf(nu), ctx.bf(x));
+    let n = bessel_order(nu, sign(nu) < 0 || sign(x) < 0, ctx)?;
+    let xb = ctx.bf(x);
     besselj::besselj(&n, &xb, ctx.p, &mut ctx.cc).map(approx)
+}
+
+/// A Bessel order read at the precision its distance `e` to the nearest integer needs: every
+/// kernel reads `e`. Near a negative integer -n, J and I swing between the size of `J_n` and
+/// that of the term `e` carries (`J_-(n+e)(x)` is about `(-1)^n (J_n(x) + e pi Y_n(x))`, and
+/// `Y_n(x)` may exceed `J_n(x)` by hundreds of digits); Y and K at a non-integer order divide by
+/// `sin(nu pi)`. So an exact order is read at the working precision plus the bits `e` lies
+/// below it (Unresolved past the kernels' `BITS_CAP`), and an approximate one as it stands,
+/// except where `fragile` (J and I at a negative order, or at x < 0, where only the integer
+/// orders have a value) and it lies within the working band of an integer, where the order's own
+/// error decides the value: Unresolved.
+fn bessel_order(nu: &Val, fragile: bool, ctx: &mut Ctx) -> Option<BigFloat> {
+    match nu {
+        Val::Exact(Exact::Rat(r)) if !r.is_integer() => {
+            let (p, q) = r.big_parts();
+            let two = BigInt::from(2);
+            let n = num_integer::Integer::div_floor(&(&p * &two + &q), &(&q * &two));
+            let e = &p - &n * &q;
+            let below = (p.bits() as usize).saturating_sub(e.bits() as usize);
+            let g = ctx.p + 64 + below;
+            if g > besselj::BITS_CAP {
+                return None;
+            }
+            let (a, b) = (ctx.big_at(&p, g), ctx.big_at(&q, g));
+            Some(a.div(&b, g, RM))
+        }
+        Val::Approx(b) if fragile => {
+            let half = one(64).div(&small_int(2, 64), 64, RM);
+            let n = b.add(&half, ctx.p + 64, RM).floor();
+            (!in_band(b, &n, ctx)).then(|| b.clone())
+        }
+        _ => Some(ctx.bf(nu)),
+    }
+}
+
+/// `bessely`, `besseli`, `besselk` at the reals: the limit rule at an infinite operand, in all
+/// arguments together (undefined where both are infinite: the limit depends on the path), the
+/// kernels' cells and values at finite ones (`hiprec::bessel`).
+///
+/// * At `x = +inf`: Y and K tend to 0, I to +inf; at `x = -inf` Y and K have no value, nor I at a
+///   non-integer order, and `I_n(-inf) = (-1)^n inf` (the domain near it is the line of that
+///   order, as `pow(-inf, 0)`).
+/// * At an infinite order and finite x: `Y_+inf = -inf` and `K_+-inf = +inf` where x >= 0 (no
+///   value at x < 0); `I_+inf = 0`; `Y_-inf` has no value (it oscillates without bound), nor
+///   `I_-inf` at x >= 0. `I_-inf` at x < 0, where the domain holds only the integer orders
+///   (along which `I_-n = I_n` tends to 0), is not decided: Unresolved.
+fn bessel_val(name: &str, nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
+    if is_undef(nu) || is_undef(x) {
+        return Some(undef());
+    }
+    match (inf_sign(nu), inf_sign(x)) {
+        (Some(_), Some(_)) => return Some(undef()),
+        (None, Some(x_up)) => {
+            return match name {
+                "besseli" if x_up => Some(inf(true)),
+                "besseli" if is_integer(nu) => odd(nu, ctx).map(|o| inf(!o)),
+                _ if x_up && name != "besseli" => Some(zero()),
+                _ => Some(undef()),
+            }
+        }
+        (Some(nu_up), None) => {
+            let nonneg = sign(x) >= 0;
+            return match name {
+                "bessely" => Some(if nu_up && nonneg { inf(false) } else { undef() }),
+                "besselk" => Some(if nonneg { inf(true) } else { undef() }),
+                _ if nu_up => Some(zero()),
+                _ if nonneg => Some(undef()),
+                _ => None,
+            };
+        }
+        (None, None) => {}
+    }
+    let fragile = name == "besseli" && (sign(nu) < 0 || sign(x) < 0);
+    let n = bessel_order(nu, fragile, ctx)?;
+    let xb = ctx.bf(x);
+    let p = ctx.p;
+    match name {
+        "bessely" => bessel::bessely(&n, &xb, p, &mut ctx.cc),
+        "besseli" => bessel::besseli(&n, &xb, p, &mut ctx.cc),
+        _ => bessel::besselk(&n, &xb, p, &mut ctx.cc),
+    }
+    .map(approx)
 }
 
 // ---------------------------------------------------------------- compiled expressions
@@ -2203,12 +2310,13 @@ mod tests {
         let mut m = std::collections::HashMap::new();
         for u in [
             "neg", "abs", "inv", "exp", "log", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
-            "cosh", "tanh", "asinh", "acosh", "atanh", "floor", "ceil", "erf", "harmonic",
+            "cosh", "tanh", "asinh", "acosh", "atanh", "floor", "ceil", "erf", "erfc", "harmonic",
         ] {
             m.insert(u.to_string(), 1);
         }
         for b in [
-            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj", "bessely",
+            "besseli", "besselk",
         ] {
             m.insert(b.to_string(), 2);
         }
@@ -2291,6 +2399,86 @@ mod tests {
                 _ => panic!("{expr}: {got:?}"),
             }
         }
+    }
+
+    /// The cells of `erfc` and the Bessel functions of the second kind and the modified ones:
+    /// outside the domain undefined, the limit rule at x = 0 and at infinite operands, the
+    /// formula's value where it has one, and no value where the limit is not decided.
+    #[test]
+    fn the_scipy_heads_cells() {
+        let (inf, ninf, nan) = ("float(\"inf\")", "float(\"-inf\")", "float(\"nan\")");
+        for (expr, want) in [
+            (format!("erfc {nan}"), "nan"),
+            ("bessely 1 -1".into(), "nan"),
+            ("besselk 1 -1".into(), "nan"),
+            ("besseli 0.5 -1".into(), "nan"),
+            ("besseli 3 -1".into(), "fin"),
+            ("bessely 0 0".into(), "-inf"),
+            ("bessely 2.5 0".into(), "-inf"),
+            ("bessely -1 0".into(), "+inf"),
+            ("bessely -2 0".into(), "-inf"),
+            ("bessely -1.25 0".into(), "+inf"),
+            ("bessely -0.25 0".into(), "-inf"),
+            ("bessely -0.5 0".into(), "unresolved"),
+            ("bessely -1.5 0".into(), "unresolved"),
+            ("besselk 0 0".into(), "+inf"),
+            ("besselk -2.5 0".into(), "+inf"),
+            ("besseli -0.5 0".into(), "+inf"),
+            ("besseli -1.5 0".into(), "-inf"),
+            ("besseli -2.5 0".into(), "+inf"),
+            (format!("bessely 1 {ninf}"), "nan"),
+            (format!("bessely {inf} 1"), "-inf"),
+            (format!("bessely {inf} 0"), "-inf"),
+            (format!("bessely {ninf} 1"), "nan"),
+            (format!("bessely {inf} {inf}"), "nan"),
+            (format!("besseli 1 {inf}"), "+inf"),
+            (format!("besseli 2 {ninf}"), "+inf"),
+            (format!("besseli 3 {ninf}"), "-inf"),
+            (format!("besseli 0.5 {ninf}"), "nan"),
+            (format!("besseli {ninf} 1"), "nan"),
+            (format!("besseli {ninf} -1"), "unresolved"),
+            (format!("besseli {inf} {inf}"), "nan"),
+            (format!("besselk 1 {ninf}"), "nan"),
+            (format!("besselk {inf} 1"), "+inf"),
+            (format!("besselk {ninf} 1"), "+inf"),
+            (format!("besselk {inf} 0"), "+inf"),
+            (format!("besselk {inf} -1"), "nan"),
+            (format!("besselk {inf} {inf}"), "nan"),
+            (format!("bessely {nan} 1"), "nan"),
+            (format!("besselk {nan} 0"), "nan"),
+        ] {
+            assert_eq!(class(&real(&expr, &[])), want, "{expr}");
+        }
+        for (expr, want) in [
+            (format!("erfc {inf}"), int(0)),
+            (format!("erfc {ninf}"), int(2)),
+            ("erfc 0".into(), int(1)),
+            ("besseli 1 0".into(), int(0)),
+            ("besseli -1 0".into(), int(0)),
+            ("besseli 2.5 0".into(), int(0)),
+            (format!("bessely 1 {inf}"), int(0)),
+            (format!("besseli {inf} 1"), int(0)),
+            (format!("besseli {inf} -1"), int(0)),
+            (format!("besselk 1 {inf}"), int(0)),
+        ] {
+            let got = real(&expr, &[]);
+            match (&got, &want) {
+                (Some(Val::Exact(a)), Val::Exact(b)) => assert_eq!(a, b, "{expr}"),
+                _ => panic!("{expr}: {got:?}"),
+            }
+        }
+        // I_0(0) = 1 by the series, and the parity of an integer order at x < 0
+        let mut ctx = Ctx::new(50).unwrap();
+        let mut read = |expr: &str| ctx.bf(&real(expr, &[]).expect(expr));
+        let (i00, even, odd) = (
+            read("besseli 0 0"),
+            read("besseli 2 -1"),
+            read("besseli 3 -1"),
+        );
+        let (e2, o3) = (read("besseli 2 1"), read("besseli 3 1"));
+        let p = ctx.p;
+        assert!(i00.sub(&one(p), p, RM).is_zero(), "{i00}");
+        assert!(even.sub(&e2, p, RM).is_zero() && odd.add(&o3, p, RM).is_zero());
     }
 
     /// A point the table decides is decided, through a variable: `tan(asin(ceil x))` at x = 0.5

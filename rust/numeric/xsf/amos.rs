@@ -1,19 +1,21 @@
-//! A transliteration of the AMOS routines scipy 1.18.1 reaches for a Bessel function of the
-//! first kind of a real argument (`xsf/amos/amos.h`, the SciPy developers' C++ translation of
-//! D. E. Amos's Fortran, ACM TOMS Algorithm 644): `besj`, `besy`, `besh`, `binu`, `seri`,
-//! `asyi`, `mlri`, `uoik`, `buni`, `uni2`, `unhj`, `bknu`, `rati`, `wrsk`, `bunk`,
-//! `unk2`, `airy`, `acai`, `s1s2`, `uchk`, `gamln`. Statement for statement, with every complex
-//! operation computed as the C++ computes it (`cx`), the C++'s own quirks kept (they decide
-//! bits): `seri`'s shadowed loop index, `buni`'s and `unk2`'s scaling bounds, `uoik`'s real
-//! `exp`, and the C++'s left-to-right sums: where it writes `fnu + n - 1` (`binu`, `rati`,
-//! `uni2`, `uoik`) the sum is `(fnu + n) - 1`, which drops `fnu`'s last bit when `fnu + n`
-//! crosses a power of two, and where it writes `fnu + (n - 1)` it is exact.
+//! A transliteration of the AMOS routines scipy 1.18.1 reaches for the Bessel functions J, Y and
+//! K of a real argument (`xsf/amos/amos.h`, the SciPy developers' C++ translation of
+//! D. E. Amos's Fortran, ACM TOMS Algorithm 644): `besj`, `besy`, `besk`, `besh`, `binu`,
+//! `seri`, `asyi`, `mlri`, `uoik`, `buni`, `uni2`, `unhj`, `unik`, `bknu`, `rati`, `wrsk`,
+//! `bunk`, `unk1`, `unk2`, `airy`, `acai`, `s1s2`, `uchk`, `gamln`. Statement for statement,
+//! with every complex operation computed as the C++ computes it (`cx`), the C++'s own quirks
+//! kept (they decide bits): `seri`'s shadowed loop index, `buni`'s and `unk2`'s scaling bounds,
+//! `uoik`'s real `exp`, `unik`'s small-argument assignments it does not return after, and the
+//! C++'s left-to-right sums: where it writes `fnu + n - 1` (`binu`, `rati`, `uni2`, `uoik`) the
+//! sum is `(fnu + n) - 1`, which drops `fnu`'s last bit when `fnu + n` crosses a power of two,
+//! and where it writes `fnu + (n - 1)` it is exact.
 //!
-//! A real argument reaches these routines rotated onto the imaginary axis (`z = (0, -x)` or
-//! `(0, x)`), never in the right or left half plane, so the branches the C++ takes only off
-//! that axis (`uni1`, `unik`, `unk1`, `acon`, and `unk2`'s continuation to the left half plane)
-//! are not ported: each such branch is marked, and returns the routine's overflow code, so the
-//! value becomes NaN (and `cyl_bessel_j` falls back to Cephes) rather than anything unported.
+//! J and Y of a real argument reach these routines rotated onto the imaginary axis
+//! (`z = (0, -x)` or `(0, x)`), and K at the argument itself, on the positive real axis. The
+//! branches the C++ takes only elsewhere (`uni1`, `acon`, and `unk1`'s and `unk2`'s
+//! continuation to the left half plane) are not ported: each such branch is marked, and returns
+//! the routine's overflow code, so the value becomes NaN (and `cyl_bessel_j` and
+//! `cyl_bessel_y` fall back to Cephes) rather than anything unported.
 //!
 //! Copyright (C) 2024 SciPy developers (BSD-3-Clause); the Fortran is Sandia's, approved for
 //! unlimited release. Notices in `LICENSES_bundled.txt`.
@@ -638,7 +640,7 @@ fn bknu(z: C64, fnu: f64, kode: i32, n: i32, y: &mut [C64], tol: f64, elim: f64,
     let css = [C64::real(cscl), C64::real(1.0), C64::real(crsc)];
     let csr = [C64::real(crsc), C64::real(1.0), C64::real(cscl)];
     let bry = [1e3 * D1MACH[0] / tol, tol / (1e3 * D1MACH[0]), D1MACH[1]];
-    let nz = 0;
+    let mut nz = 0;
     let mut iflag = 0;
     let mut koded = kode;
     let rz = 2.0 / z;
@@ -1054,18 +1056,132 @@ fn bknu(z: C64, fnu: f64, kode: i32, n: i32, y: &mut [C64], tol: f64, elim: f64,
                 label = L::L190;
             }
             L::L190 => {
-                // AMOS rescales an underflowing recurrence here (`kscl`). No real argument of
-                // J reaches it (measured over the whole coverage grid of the real entry), so
-                // the port carries no `kscl`: the value is NaN, which the real entry answers
-                // from Cephes (`besselj`).
-                let _ = (i_l160_exit, s1, s2);
-                for v in y.iter_mut().take(n as usize) {
-                    *v = C64::new(f64::NAN, f64::NAN);
+                // the recurrence underflowed (`koded = 2` past `alim`): rescale (`kscl`)
+                let _ = i_l160_exit;
+                y[0] = s1;
+                if n != 1 {
+                    y[1] = s2;
                 }
-                return 0;
+                ascle = bry[0];
+                nz = kscl(zd, fnu, n, y, rz, ascle, tol, elim);
+                inu = n - nz;
+                if inu <= 0 {
+                    return nz;
+                }
+                kk = nz + 1;
+                s1 = y[(kk - 1) as usize];
+                y[(kk - 1) as usize] = s1 * csr[0];
+                if inu == 1 {
+                    return nz;
+                }
+                kk = nz + 2;
+                s2 = y[(kk - 1) as usize];
+                y[(kk - 1) as usize] = s2 * csr[0];
+                if inu == 2 {
+                    return nz;
+                }
+                let t2 = fnu + (kk - 1) as f64;
+                ck = t2 * rz;
+                kflag = 1;
+                label = L::L140;
             }
         }
     }
+}
+
+/// `kscl`: sets the K values that underflow (on the scale `exp(-zr)` of `bknu`'s `koded = 2`
+/// recurrence) to zero and rescales the rest, returning their count.
+#[allow(clippy::too_many_arguments)]
+fn kscl(zr: C64, fnu: f64, n: i32, y: &mut [C64], rz: C64, ascle: f64, tol: f64, elim: f64) -> i32 {
+    let mut cy = [C64::ZERO; 2];
+    let mut nz = 0;
+    let mut ic = 0;
+    let nn = if n > 2 { 2 } else { n };
+    let mut kk;
+    let elm = e::exp(-elim);
+    let mut xx = zr.re;
+    for i in 1..(nn + 1) {
+        let s1 = y[(i - 1) as usize];
+        cy[(i - 1) as usize] = s1;
+        let as_ = s1.abs();
+        let acs = -zr.re + e::log(as_);
+        nz += 1;
+        y[(i - 1) as usize] = C64::real(0.);
+        if acs < -elim {
+            continue;
+        }
+        let mut cs = -zr + s1.ln();
+        cs = (e::exp(cs.re) / tol) * C64::new(e::cos(cs.im), e::sin(cs.im));
+        if !uchk(cs, ascle, tol) {
+            y[(i - 1) as usize] = cs;
+            nz -= 1;
+            ic = i;
+        }
+    }
+    if n == 1 {
+        return nz;
+    }
+    if ic <= 1 {
+        y[0] = C64::real(0.);
+        nz = 2;
+    }
+    if n == 2 {
+        return nz;
+    }
+    if nz == 0 {
+        return nz;
+    }
+    let fn_ = fnu + 1.;
+    let mut ck = fn_ * rz;
+    let mut s1 = cy[0];
+    let mut s2 = cy[1];
+    let zri = zr.im;
+    let mut zd = zr;
+    for i in 3..(n + 1) {
+        kk = i;
+        let cs = s2;
+        s2 *= ck;
+        s2 += s1;
+        s1 = cs;
+        ck += rz;
+        let as_ = s2.abs();
+        let alas = e::log(as_);
+        let acs = alas - xx;
+        nz += 1;
+        y[(i - 1) as usize] = C64::real(0.);
+        if acs >= -elim {
+            let mut cs = s2.ln();
+            cs -= zd;
+            cs = (e::exp(cs.re) / tol) * C64::new(e::cos(cs.im), e::sin(cs.im));
+            if !uchk(cs, ascle, tol) {
+                y[(i - 1) as usize] = cs;
+                nz -= 1;
+                if ic == kk - 1 {
+                    nz = kk - 2;
+                    for v in y.iter_mut().take(nz as usize) {
+                        *v = C64::real(0.);
+                    }
+                    return nz;
+                }
+                ic = kk;
+                continue;
+            }
+        }
+        if alas >= 0.5 * elim {
+            xx -= elim;
+            zd = C64::new(xx, zri);
+            s1 *= elm;
+            s2 *= elm;
+        }
+    }
+    nz = n;
+    if ic == n {
+        nz = n - 1;
+    }
+    for v in y.iter_mut().take(nz as usize) {
+        *v = C64::real(0.);
+    }
+    nz
 }
 
 /// `rati`: ratios of I functions by backward recurrence.
@@ -1473,6 +1589,99 @@ fn unhj(z: C64, fnu: f64, ipmtr: i32, tol: f64) -> (C64, C64, C64, C64, C64, C64
     }
 }
 
+/// `unik`: the parameters of the uniform expansions for I (`ikflg = 1`) and K (`ikflg = 2`) in
+/// `|arg z| <= pi/3`, `phi`, `zeta1`, `zeta2` and, with `ipmtr = 0`, the sum `total`; the
+/// coefficients are kept in `cwrk` and `init` for a second call at the same order. The C++ does
+/// not return after its small-argument assignments, which the general case then overwrites;
+/// the port keeps that.
+#[allow(clippy::too_many_arguments)]
+fn unik(
+    zr: C64,
+    fnu: f64,
+    ikflg: i32,
+    ipmtr: i32,
+    tol: f64,
+    init: &mut i32,
+    phi: &mut C64,
+    zeta1: &mut C64,
+    zeta2: &mut C64,
+    total: &mut C64,
+    cwrk: &mut [C64; 16],
+) {
+    // (1/sqrt(2 pi), sqrt(pi/2))
+    let con = [3.98942280401432678e-01, 1.25331413731550025];
+    if *init == 0 {
+        let rfn = 1. / fnu;
+        let mut crfn = C64::real(rfn);
+        let mut tstr = zr.re;
+        let mut tsti = zr.im;
+        let mut test = D1MACH[0] * 1e3;
+        let mut ac = fnu * test;
+        if (tstr.abs() <= ac) && (tsti.abs() <= ac) {
+            ac = 2.0 * e::log(test).abs() + fnu;
+            *zeta1 = C64::real(ac);
+            *zeta2 = C64::real(fnu);
+            *phi = C64::real(1.0);
+        }
+        let mut t = zr * crfn;
+        let mut s = 1.0 + t * t;
+        let mut sr = s.sqrt();
+        let cfn = C64::real(fnu);
+        let zn = (1. + sr) / t;
+        *zeta1 = cfn * zn.ln();
+        *zeta2 = cfn * sr;
+        t = 1.0 / sr;
+        sr = t * crfn;
+        cwrk[15] = sr.sqrt();
+        *phi = cwrk[15] * con[(ikflg - 1) as usize];
+        if ipmtr != 0 {
+            return;
+        }
+        let t2 = 1. / s;
+        cwrk[0] = C64::real(1.);
+        crfn = C64::real(1.);
+        ac = 1.;
+        let mut l: usize = 1;
+        let mut k: usize = 2;
+        while k < 16 {
+            s = C64::real(0.0);
+            for _j in 1..(k + 1) {
+                l += 1;
+                s = s * t2 + t::ZUNIK_C[l - 1];
+            }
+            crfn *= sr;
+            cwrk[k - 1] = crfn * s;
+            ac *= rfn;
+            tstr = cwrk[k - 1].re;
+            tsti = cwrk[k - 1].im;
+            test = tstr.abs() + tsti.abs();
+            if (ac < tol) && (test < tol) {
+                break;
+            }
+            k += 1;
+        }
+        // guard against an exhausted loop
+        if k == 16 {
+            k -= 1;
+        }
+        *init = k as i32;
+    }
+    *total = C64::real(0.0);
+    let mut t = C64::real(1.0);
+    if ikflg != 2 {
+        for c in cwrk.iter().take(*init as usize) {
+            *total += *c;
+        }
+        *phi = cwrk[15] * con[0];
+    } else {
+        for c in cwrk.iter().take(*init as usize) {
+            *total += t * *c;
+            t = -t;
+        }
+        *phi = cwrk[15] * con[1];
+    }
+}
+
 /// `uoik`: the leading terms of the uniform expansions, tested against `alim`/`elim` for
 /// overflow and underflow.
 #[allow(clippy::too_many_arguments)]
@@ -1500,23 +1709,34 @@ fn uoik(
     let ax = x.abs() * 3.0f64.sqrt();
     let ay = yy.abs();
     let iform = if ay > ax { 2 } else { 1 };
-    if iform != 2 {
-        // `unik` (the expansion for I and K in |arg z| <= pi/3): off the imaginary axis only.
-        return -1;
-    }
     let mut gnu = fmax(fnu, 1.0);
     if ikflg != 1 {
         let fnn = nn as f64;
         let gnn = fnu + fnn - 1.0;
         gnu = fmax(gnn, fnn);
     }
-    let mut zn = -zr * C64::new(0.0, 1.0);
-    if yy <= 0.0 {
-        zn.re = -zn.re;
+    let mut cwrk = [C64::ZERO; 16];
+    let mut zn = C64::ZERO;
+    let (mut phi, mut arg, mut zeta1, mut zeta2) = (C64::ZERO, C64::ZERO, C64::ZERO, C64::ZERO);
+    let mut sum = C64::ZERO;
+    let mut aarg = 0.0;
+    let mut cz;
+    if iform != 2 {
+        let mut init = 0;
+        unik(
+            zr, gnu, ikflg, 1, tol, &mut init, &mut phi, &mut zeta1, &mut zeta2, &mut sum,
+            &mut cwrk,
+        );
+        cz = -zeta1 + zeta2;
+    } else {
+        zn = -zr * C64::new(0.0, 1.0);
+        if yy <= 0.0 {
+            zn.re = -zn.re;
+        }
+        (phi, arg, zeta1, zeta2, _, _) = unhj(zn, gnu, 1, tol);
+        cz = zeta2 - zeta1;
+        aarg = arg.abs();
     }
-    let (mut phi, mut arg, mut zeta1, mut zeta2, _, _) = unhj(zn, gnu, 1, tol);
-    let mut cz = zeta2 - zeta1;
-    let mut aarg = arg.abs();
     if kode == 2 {
         cz -= zb;
     }
@@ -1531,7 +1751,9 @@ fn uoik(
     }
     if rcz >= alim {
         rcz += e::log(aphi);
-        rcz -= 0.25 * e::log(aarg) + aic;
+        if iform == 2 {
+            rcz -= 0.25 * e::log(aarg) + aic;
+        }
         if rcz > elim {
             return -1;
         }
@@ -1542,11 +1764,15 @@ fn uoik(
                 // pass
             } else {
                 rcz += e::log(aphi);
-                rcz -= 0.25 * e::log(aarg) + aic;
+                if iform == 2 {
+                    rcz -= 0.25 * e::log(aarg) + aic;
+                }
                 if rcz > -elim {
                     let ascle = 1e3 * D1MACH[0] / tol;
                     cz += phi.ln();
-                    cz -= 0.25 * arg.ln() + aic;
+                    if iform != 1 {
+                        cz -= 0.25 * arg.ln() + aic;
+                    }
                     let ax = e::exp(rcz) / tol;
                     let ay = cz.im;
                     cz = C64::real(ax * e::exp(ay));
@@ -1575,9 +1801,18 @@ fn uoik(
     }
     loop {
         gnu = fnu + (nn - 1) as f64;
-        (phi, arg, zeta1, zeta2, _, _) = unhj(zn, gnu, 1, tol);
-        cz = zeta2 - zeta1;
-        aarg = phi.abs();
+        if iform != 2 {
+            let mut init = 0;
+            unik(
+                zr, gnu, ikflg, 1, tol, &mut init, &mut phi, &mut zeta1, &mut zeta2, &mut sum,
+                &mut cwrk,
+            );
+            cz = zeta2 - zeta1;
+        } else {
+            (phi, arg, zeta1, zeta2, _, _) = unhj(zn, gnu, 1, tol);
+            cz = zeta2 - zeta1;
+            aarg = phi.abs();
+        }
         if kode == 2 {
             cz -= zb;
         }
@@ -1588,11 +1823,15 @@ fn uoik(
                 return nuf;
             }
             rcz += e::log(aphi);
-            rcz -= 0.25 * e::log(aarg) + aic;
+            if iform == 2 {
+                rcz -= 0.25 * e::log(aarg) + aic;
+            }
             if rcz > -elim {
                 let ascle = 1e3 * D1MACH[0] / tol;
                 cz += phi.ln();
-                cz -= 0.25 * arg.ln() + aic;
+                if iform != 1 {
+                    cz -= 0.25 * arg.ln() + aic;
+                }
                 let ax = e::exp(rcz) / tol;
                 let ay = cz.im;
                 cz = ax * (e::cos(ay) + e::sin(ay) * C64::new(0.0, 1.0));
@@ -2450,7 +2689,215 @@ fn unk2(
     nz
 }
 
-/// `bunk`: K(fnu, z) for fnu > fnul by the uniform expansion.
+/// `unk1`: K(fnu, z) by the uniform expansion for K in `|arg z| <= pi/3`, here only for `mr = 0`
+/// (the right half plane, where a real argument lies; the continuation to the left one is not
+/// ported and returns the overflow code).
+#[allow(clippy::too_many_arguments)]
+fn unk1(
+    z: C64,
+    fnu: f64,
+    kode: i32,
+    mr: i32,
+    n: i32,
+    y: &mut [C64],
+    tol: f64,
+    elim: f64,
+    alim: f64,
+) -> i32 {
+    if mr != 0 {
+        return -1;
+    }
+    let cscl = C64::real(1.0 / tol);
+    let crsc = C64::real(tol);
+    let css = [cscl, C64::real(1.0), crsc];
+    let csr = [crsc, C64::real(1.0), cscl];
+    let mut cwrk = [[C64::ZERO; 16]; 3];
+    let mut phi = [C64::ZERO; 2];
+    let mut sum = [C64::ZERO; 2];
+    let mut zeta1 = [C64::ZERO; 2];
+    let mut zeta2 = [C64::ZERO; 2];
+    let mut cy = [C64::ZERO; 2];
+    let bry = [1e3 * D1MACH[0] / tol, tol / 1e3 * D1MACH[0], D1MACH[1]];
+    let mut init = [0i32; 2];
+    let mut kdflg = 1;
+    let mut kflag = 1;
+    let mut fn_ = fnu;
+    let mut nz = 0;
+    let x = z.re;
+    let mut zr = z;
+    if x < 0.0 {
+        zr = -z;
+    }
+    let mut j = 2;
+    let mut i = 1;
+    while i < (n + 1) {
+        j = 3 - j; // j flip flops between 1, 2
+        let jc = (j - 1) as usize;
+        fn_ = fnu + (i - 1) as f64;
+        init[jc] = 0;
+        unik(
+            zr,
+            fn_,
+            2,
+            0,
+            tol,
+            &mut init[jc],
+            &mut phi[jc],
+            &mut zeta1[jc],
+            &mut zeta2[jc],
+            &mut sum[jc],
+            &mut cwrk[jc],
+        );
+        let mut s1 = if kode != 1 {
+            let cfn = C64::real(fn_);
+            zeta1[jc] - cfn * (cfn / (zr + zeta2[jc]))
+        } else {
+            zeta1[jc] - zeta2[jc]
+        };
+        let mut rs1 = s1.re;
+        if rs1.abs() <= elim {
+            if kdflg == 1 {
+                kflag = 2;
+            }
+            let mut to_l10 = false;
+            if rs1.abs() >= alim {
+                let aphi = phi[jc].abs();
+                rs1 += e::log(aphi);
+                if rs1.abs() > elim {
+                    to_l10 = true;
+                } else {
+                    if kdflg == 1 {
+                        kflag = 1;
+                    }
+                    if rs1 >= 0.0 && kdflg == 1 {
+                        kflag = 3;
+                    }
+                }
+            }
+            if !to_l10 {
+                let mut s2 = phi[jc] * sum[jc];
+                let c2r = s1.re;
+                let c2i = s1.im;
+                let c2m = e::exp(c2r) * css[(kflag - 1) as usize].re;
+                s1 = c2m * C64::new(e::cos(c2i), e::sin(c2i));
+                s2 *= s1;
+                if !((kflag == 1) && (uchk(s2, bry[0], tol))) {
+                    cy[(kdflg - 1) as usize] = s2;
+                    y[(i - 1) as usize] = s2 * csr[(kflag - 1) as usize];
+                    if kdflg == 2 {
+                        break;
+                    }
+                    kdflg = 2;
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        // L10
+        if rs1 > 0.0 {
+            return -1;
+        }
+        if x < 0.0 {
+            return -1;
+        }
+        kdflg = 1;
+        y[(i - 1) as usize] = C64::ZERO;
+        nz += 1;
+        if i > 1 && y[(i - 2) as usize] != C64::ZERO {
+            y[(i - 2) as usize] = C64::ZERO;
+            nz += 1;
+        }
+        i += 1;
+    }
+    // check for an exhausted loop
+    if i == (n + 1) {
+        i = n;
+    }
+    let rz = 2.0 / zr;
+    let mut ck = fn_ * rz;
+    let ib = i + 1;
+    if n >= ib {
+        fn_ = fnu + (n - 1) as f64;
+        let ipard = if mr != 0 { 0 } else { 1 };
+        let mut initd = 0;
+        let (mut phid, mut zeta1d, mut zeta2d, mut sumd) =
+            (C64::ZERO, C64::ZERO, C64::ZERO, C64::ZERO);
+        unik(
+            zr,
+            fn_,
+            2,
+            ipard,
+            tol,
+            &mut initd,
+            &mut phid,
+            &mut zeta1d,
+            &mut zeta2d,
+            &mut sumd,
+            &mut cwrk[2],
+        );
+        let s1 = if kode != 1 {
+            let cfn = C64::real(fn_);
+            zeta1d - cfn * (cfn / (zr + zeta2d))
+        } else {
+            zeta1d - zeta2d
+        };
+        let mut rs1 = s1.re;
+        let mut to_l50 = false;
+        if rs1.abs() <= elim {
+            if rs1.abs() < alim {
+                to_l50 = true;
+            } else {
+                let aphi = phid.abs();
+                rs1 += e::log(aphi);
+                if rs1.abs() < elim {
+                    to_l50 = true;
+                }
+            }
+        }
+        if !to_l50 {
+            if rs1 > 0.0 {
+                return -1;
+            }
+            if x < 0.0 {
+                return -1;
+            }
+            nz = n;
+            for v in y.iter_mut().take((n + 1) as usize) {
+                *v = C64::ZERO;
+            }
+            return nz;
+        }
+        // L50: scaled forward recurrence for the remainder of the sequence
+        let mut s1 = cy[0];
+        let mut s2 = cy[1];
+        let mut c1 = csr[(kflag - 1) as usize];
+        let mut ascle = bry[(kflag - 1) as usize];
+        for i in ib..(n + 1) {
+            let c2 = s2;
+            s2 = ck * s2 + s1;
+            s1 = c2;
+            ck += rz;
+            let c2 = s2 * c1;
+            y[(i - 1) as usize] = c2;
+            if kflag < 3 {
+                let c2m = fmax(c2.re.abs(), c2.im.abs());
+                if c2m > ascle {
+                    kflag += 1;
+                    ascle = bry[(kflag - 1) as usize];
+                    s1 *= c1;
+                    s2 = c2;
+                    s1 *= css[(kflag - 1) as usize];
+                    s2 *= css[(kflag - 1) as usize];
+                    c1 = csr[(kflag - 1) as usize];
+                }
+            }
+        }
+    }
+    nz
+}
+
+/// `bunk`: K(fnu, z) for fnu > fnul by the uniform expansion: `unk1` in `|arg z| <= pi/3`
+/// (where a real argument lies), `unk2` beyond it.
 #[allow(clippy::too_many_arguments)]
 fn bunk(
     z: C64,
@@ -2466,8 +2913,7 @@ fn bunk(
     let ax = z.re.abs() * 1.7321;
     let ay = z.im.abs();
     if ay <= ax {
-        // `unk1` (the expansion for K in |arg z| <= pi/3): off the imaginary axis only.
-        return -1;
+        return unk1(z, fnu, kode, mr, n, y, tol, elim, alim);
     }
     unk2(z, fnu, kode, mr, n, y, tol, elim, alim)
 }
@@ -2646,6 +3092,100 @@ pub(super) fn besj(z: C64, fnu: f64, kode: i32, n: i32, cy: &mut [C64]) -> (i32,
         *v = atol * (zn * csgn);
         csgn = csgn * ci;
     }
+    (nz, ierr)
+}
+
+/// `besk`: the modified Bessel function of the second kind K(fnu, z), `bknu` up to `fnul` (after
+/// `uoik`'s overflow and underflow test), `bunk` above. Returns `(nz, ierr)`. The continuation
+/// to the left half plane (`acon`) is not ported: a real argument lies on the positive axis.
+pub(super) fn besk(z: C64, fnu: f64, kode: i32, n: i32, cy: &mut [C64]) -> (i32, i32) {
+    let xx = z.re;
+    let yy = z.im;
+    let mut ierr = 0;
+    let mut nz = 0;
+    if (yy == 0.0) && (xx == 0.0) {
+        ierr = 1;
+    }
+    if fnu < 0.0 {
+        ierr = 1;
+    }
+    if !(1..=2).contains(&kode) {
+        ierr = 1;
+    }
+    if n < 1 {
+        ierr = 1;
+    }
+    if ierr != 0 {
+        return (nz, ierr);
+    }
+    let mut nn = n;
+    let (tol, elim, alim, _dig, fnul, _rl) = machine();
+    let az = z.abs();
+    let fn_ = fnu + (nn - 1) as f64;
+    let mut aa = 0.5 / tol;
+    let bb = I1MACH[8] * 0.5;
+    aa = fmin(aa, bb);
+    if (az > aa) || (fn_ > aa) {
+        return (0, 4);
+    }
+    aa = aa.sqrt();
+    if az > aa {
+        ierr = 3;
+    }
+    if fn_ > aa {
+        ierr = 3;
+    }
+    let ufl = D1MACH[0] * 1.0E+3;
+    if az < ufl {
+        return (0, 2);
+    }
+    if fnu <= fnul {
+        if fn_ > 1.0 {
+            if fn_ <= 2.0 {
+                if az <= tol {
+                    let arg = 0.5 * az;
+                    let aln = -fn_ * e::log(arg);
+                    if aln > elim {
+                        return (0, 2);
+                    }
+                }
+            } else {
+                let nuf = uoik(z, fnu, kode, 2, nn, cy, tol, elim, alim);
+                if nuf < 0 {
+                    return (0, 2);
+                }
+                nz += nuf;
+                nn -= nuf;
+                if nn == 0 {
+                    if xx < 0.0 {
+                        return (0, 2);
+                    }
+                    return (nz, ierr);
+                }
+            }
+        }
+        if xx >= 0.0 {
+            let nw = bknu(z, fnu, kode, nn, cy, tol, elim, alim);
+            if nw < 0 {
+                return (0, if nw == -1 { 2 } else { 5 });
+            }
+            return (nw, ierr);
+        }
+        // `acon` (the continuation to the left half plane): not reached by a real argument.
+        return (0, 2);
+    }
+    let mut mr = 0;
+    if xx < 0.0 {
+        mr = 1;
+        if yy < 0.0 {
+            mr = -1;
+        }
+    }
+    let nw = bunk(z, fnu, kode, mr, nn, cy, tol, elim, alim);
+    if nw < 0 {
+        return (0, if nw == -1 { 2 } else { 5 });
+    }
+    nz += nw;
     (nz, ierr)
 }
 

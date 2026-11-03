@@ -323,8 +323,9 @@ type Level<'a> = (&'a [String], Vec<(i64, i64)>);
 /// `log X` at X=0, with the vanishing subtree AFFINE in exactly one variable. This is
 /// the entire sign-trade orbit surface; transcendental locations (tan) are another lane.
 /// The 0.15 heads' discontinuities join it (`floor`/`ceil` at the integers, `harmonic` at
-/// its poles, `mod` at a zero divisor and at the multiples of a constant one): a rule true off
-/// a jump and false on it is the pole-mirror family with a jump for a pole.
+/// its poles, `mod` at a zero divisor and at the multiples of a constant one, the Bessel
+/// functions at a zero argument): a rule true off a jump and false on it is the pole-mirror
+/// family with a jump for a pole.
 fn exceptional_points(
     tokens: &[String],
     var_names: &[String],
@@ -366,6 +367,13 @@ fn exceptional_points(
         }
         ("floor" | "ceil", Some(1)) => {
             levels.push((&tokens[1..], JUMP_LEVELS.iter().map(|&k| (k, 1)).collect()))
+        }
+        // the Bessel heads' pole (and boundary) at a zero argument: Y and K at every order, I and
+        // J under a negative non-integer one
+        ("besselj" | "bessely" | "besseli" | "besselk", Some(2)) => {
+            if let Some(lo) = subtree_len(&tokens[1..], ops) {
+                levels.push((&tokens[1 + lo..], zero.clone()));
+            }
         }
         ("harmonic", Some(1)) => levels.push((
             &tokens[1..],
@@ -743,6 +751,15 @@ mod tests {
             pts,
             vec![("x0".to_string(), (-3, 1)), ("x0".to_string(), (-2, 1))]
         );
+        // a Bessel function's zero argument: J_-1/2(2x - 3) has its pole at x = 3/2
+        pts.clear();
+        exceptional_points(
+            &s(&["besselj", "-0.5", "-", "*", "2", "x0", "3"]),
+            &vars,
+            &e.operators,
+            &mut pts,
+        );
+        assert_eq!(pts, vec![("x0".to_string(), (3, 2))]);
         let refused = |l: &[&str], r: &[&str]| pole_refusal(&s(l), &s(r), &e.operators, &vars);
         // ceil(3x) = floor(3x) + 1 off the jumps, and not at x = 1/3
         assert_eq!(

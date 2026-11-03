@@ -2,20 +2,22 @@
 
 Provides the element-wise functions that back the engine's operator tokens: the unary maps
 (``neg``, ``inv``, ``abs``, the trig/hyperbolic families, ``exp``, ``log``, ``floor``,
-``ceil``, ``erf``, ``harmonic``), the arithmetic (``add``, ``sub``, ``mul``, ``div``) and the
-binary functions ``pow`` (``x ** y``, NaN for a negative base under a non-integer exponent),
-``rootn`` (the real n-th root: finite nonzero integer index, odd signed / even principal),
-``max``, ``min``, ``mod`` and ``atan2``. The retired hyper-operator families (``mult2``..
-``div5``, ``pow2``..``pow5``, ``pow1_2``..``pow1_5``) were deleted with the 0.12 clean
-vocabulary -- their spellings are handled at the conversion boundary, never realized.
+``ceil``, ``erf``, ``erfc``, ``harmonic``), the arithmetic (``add``, ``sub``, ``mul``,
+``div``) and the binary functions ``pow`` (``x ** y``, NaN for a negative base under a
+non-integer exponent), ``rootn`` (the real n-th root: finite nonzero integer index, odd signed /
+even principal), ``max``, ``min``, ``mod``, ``atan2`` and the Bessel functions ``besselj``,
+``bessely``, ``besseli`` and ``besselk`` (order first). The retired hyper-operator families
+(``mult2``..``div5``, ``pow2``..``pow5``, ``pow1_2``..``pow1_5``) were deleted with the 0.12
+clean vocabulary -- their spellings are handled at the conversion boundary, never realized.
 
 EVERY REALIZATION IS THE ENGINE'S OWN KERNEL. On real operands each function evaluates the
 float64 kernel the engine's evaluator uses for its token (``simplipy._core``, through
 ``kernel_unary``/``kernel_binary``), so the deployed value, the constant fold, the miner's
 evaluator and the rule judge compute the same bits on every host. The transcendentals come
 from the platform's libm (as Python's ``math`` module does), the exact operations are
-IEEE-754's, and ``harmonic`` is the core's own kernel. Singular inputs give signed
-infinities or NaN rather than raising.
+IEEE-754's, ``harmonic`` is the core's own kernel, and ``erfc`` and the Bessel functions are
+scipy 1.18.1's code (``scipy.special.erfc``, ``jv``, ``yv``, ``iv``, ``kv``), carried in the
+core. Singular inputs give signed infinities or NaN rather than raising.
 
 Scalars give numpy float64 scalars and array-likes arrays, broadcast like numpy. A torch
 tensor takes torch's own functions (the torch branch is torch's arithmetic, not the core's);
@@ -36,7 +38,8 @@ __all__ = [
     'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
     'exp', 'log', 'rootn', 'pow',
     'add', 'sub', 'mul',
-    'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'atan2', 'besselj',
+    'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'erfc', 'atan2',
+    'besselj', 'bessely', 'besseli', 'besselk',
 ]
 
 _torch_module: ModuleType | None = None
@@ -436,6 +439,15 @@ def erf(x: Any) -> Any:
     return _unary('erf', x, 'erf')
 
 
+def erfc(x: Any) -> Any:
+    """The complementary error function ``1 - erf(x)``, element-wise: scipy 1.18.1's
+    ``scipy.special.erfc`` (Cephes), carried in the core, its bits scipy's where measured.
+    ``erfc(+-0) = 1``, ``erfc(+inf) = 0``, ``erfc(-inf) = 2``; exactly 2.0 in float64 at and below
+    x = -5.863584748755168, and 0.0 at and above x = 26.64174755704633 (subnormal from about
+    x = 26.55, where the true value is still positive)."""
+    return _unary('erfc', x, 'erfc')
+
+
 def atan2(y: Any, x: Any) -> Any:
     """The angle of the point (x, y) in (-pi, pi], element-wise, argument order as numpy's
     ``arctan2(y, x)`` (from the platform's libm, with C99's cells: ``atan2(+-0, +0) = +-0``,
@@ -465,3 +477,54 @@ def besselj(nu: Any, x: Any) -> Any:
         host = lambda t: t.detach().to('cpu', torch.float64).numpy()  # noqa: E731
         return torch.as_tensor(besselj(host(at), host(bt)), dtype=at.dtype, device=at.device)
     return _binary('besselj', nu, x, torch_besselj)
+
+
+def _on_host(fn: Any) -> Any:
+    """A torch branch for a function torch has no real-order kernel of: the operands evaluated
+    by the core's kernel on the host, the result a tensor of their dtype and device (not
+    differentiable)."""
+    def branch(torch: ModuleType, a: Any, b: Any) -> Any:
+        at, bt = _torch_pair(torch, a, b)
+        host = lambda t: t.detach().to('cpu', torch.float64).numpy()  # noqa: E731
+        return torch.as_tensor(fn(host(at), host(bt)), dtype=at.dtype, device=at.device)
+    return branch
+
+
+def bessely(nu: Any, x: Any) -> Any:
+    """The Bessel function of the second kind Y_nu(x) of real order nu, element-wise: scipy
+    1.18.1's ``scipy.special.yv`` (AMOS, through the Hankel functions, with the reflection or the
+    rotation through J for a negative order and Cephes where AMOS fails), carried in the core, its
+    bits scipy's where measured. NaN at x < 0 (Y has no real value there, at any order) and at an
+    infinite argument or order; at x = 0, -inf for nu >= 0 and the reflection or rotation of it
+    below (``yv(-1, 0) = inf``, ``yv(-0.5, 0) = -inf``); -inf where the value passes the doubles
+    near 0 and below x = 2.2e-305 (AMOS's cut: the true value of Y_0 there is about -447);
+    +-0 on 7.2e8 <= x <= 2^51 at orders from 86 and integer orders to -86 (the true magnitude is
+    about sqrt(2/(pi x))). Torch has no Bessel function of real order, so a tensor is evaluated
+    by the same kernel on the host and returned as a tensor of its dtype and device (not
+    differentiable)."""
+    return _binary('bessely', nu, x, _on_host(bessely))
+
+
+def besseli(nu: Any, x: Any) -> Any:
+    """The modified Bessel function of the first kind I_nu(x) of real order nu, element-wise:
+    scipy 1.18.1's ``scipy.special.iv`` (Cephes: Temme's method, the uniform expansion above
+    order 50), carried in the core, its bits scipy's where measured. ``I_-n = I_n`` and
+    ``I_n(-x) = (-1)^n I_n(x)`` at an integer order; NaN for a non-integer order at x < 0 (the
+    value is complex there) and at an infinite argument; ``I_0(0) = 1``, ``I_nu(0) = 0`` for
+    nu > 0 and for a negative integer nu, +inf for a negative non-integer nu (scipy's cell,
+    whatever the sign of the pole); +inf past the doubles (from about x = 714 at order 0); 0 at
+    an infinite order; NaN at a subnormal argument, and 0 near 0 below order 50 wherever the
+    Wronskian's K_nu+1(x) overflows (``iv(0.5, 1e-250)`` is 0, the true value 1.3e-125). Torch: on
+    the host, as ``bessely``."""
+    return _binary('besseli', nu, x, _on_host(besseli))
+
+
+def besselk(nu: Any, x: Any) -> Any:
+    """The modified Bessel function of the second kind K_nu(x) = K_-nu(x) of real order nu,
+    element-wise: scipy 1.18.1's ``scipy.special.kv`` (AMOS), carried in the core, its bits
+    scipy's where measured. +inf at x = 0 (at every order, NaN included) and below x = 2.2e-305
+    (AMOS's cut: the true value of K_0 there is about 702), NaN at x < 0 and at an infinite
+    order, 0 past x = 710 (1 + |nu|) and wherever AMOS's value underflows (from about x = 697.9 at
+    order 0, where the true value is about 4e-305); at x = +inf, 0, and NaN past order 2.5e305.
+    Torch: on the host, as ``bessely``."""
+    return _binary('besselk', nu, x, _on_host(besselk))

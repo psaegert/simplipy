@@ -29,6 +29,7 @@
 use crate::operators::Operators;
 use astro_float::{BigFloat, Consts, RoundingMode, INF_NEG, INF_POS, NAN};
 
+pub(crate) mod bessel;
 pub(crate) mod besselj;
 pub(crate) mod special;
 
@@ -1269,11 +1270,23 @@ fn powi_sr_at(x: &BigFloat, k: u64, g: usize) -> BigFloat {
 /// The operators both high-precision evaluators (the rescue `apply_unary`/`apply_binary` and the
 /// contract `ct_unary`/`ct_binary`) know. Any other head is unevaluable, at a NaN operand too,
 /// so every verdict that needs one refuses it. A head joins this table together with its arms in
-/// all four evaluators (`special` and `besselj` hold the 0.15 heads' kernels).
+/// all four evaluators (`special`, `besselj` and `bessel` hold the 0.15 heads' kernels).
 pub(crate) fn knows_operator(name: &str) -> bool {
     matches!(
         name,
-        "floor" | "ceil" | "erf" | "harmonic" | "max" | "min" | "mod" | "atan2" | "besselj"
+        "floor"
+            | "ceil"
+            | "erf"
+            | "erfc"
+            | "harmonic"
+            | "max"
+            | "min"
+            | "mod"
+            | "atan2"
+            | "besselj"
+            | "bessely"
+            | "besseli"
+            | "besselk"
     ) || matches!(
         name,
         "neg"
@@ -1527,6 +1540,20 @@ fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat
             }
         }
         "floor" | "ceil" => ct_step(x, name == "floor", ctx),
+        // erfc's 2 is an asymptote, erf's -1 seen from erfc = 1 - erf: inside the band of it the
+        // value is lost; toward +inf erfc is a tiny value read to its last place
+        "erfc" => {
+            if x.is_inf() {
+                Some(small_int(if is_pos(x) { 0 } else { 2 }, p))
+            } else if x.is_zero() {
+                Some(one(p))
+            } else if x.is_negative() && special::erfc_below(&x.abs(), &ctx.floor, p, &mut ctx.cc) {
+                None
+            } else {
+                special::erfc(x, p, &mut ctx.cc)
+                    .filter(|v| !cmp_lt(&v.sub(&small_int(2, p), p, RM).abs(), &ctx.floor))
+            }
+        }
         // erf's +-1 is an asymptote, tanh's class: inside the band of it the value is lost
         "erf" => {
             if x.is_inf() {
@@ -1687,9 +1714,31 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         "atan2" => ct_atan2(a, b, ctx),
         // `besselj(nu, x)`: the contract's cells, the value or Unresolved (`besselj`).
         "besselj" => besselj::besselj(a, b, p, &mut ctx.cc),
+        // Y, I, K: float64's cells at an infinite operand, the real value or Unresolved at
+        // finite ones (`bessel`), as `besselj`'s
+        "bessely" | "besseli" | "besselk" => bessel_value(name, a, b, p, &mut ctx.cc),
         _ => return None,
     };
     Some(v)
+}
+
+/// `bessely`, `besseli` or `besselk` at the high-precision evaluators' cells: float64's where an
+/// operand is not finite (`bessel::scipy_cell`), the real value at finite operands (`bessel`).
+fn bessel_value(
+    name: &str,
+    nu: &BigFloat,
+    x: &BigFloat,
+    p: usize,
+    cc: &mut Consts,
+) -> Option<BigFloat> {
+    if let Some(v) = bessel::scipy_cell(name, nu, x, p) {
+        return Some(v);
+    }
+    match name {
+        "bessely" => bessel::bessely(nu, x, p, cc),
+        "besseli" => bessel::besseli(nu, x, p, cc),
+        _ => bessel::besselk(nu, x, p, cc),
+    }
 }
 
 /// Exact integer extraction from a BigFloat index by BINARY SEARCH over integer BigFloats
@@ -1924,6 +1973,7 @@ fn saturating_bounds(op: &str) -> Option<&'static [f64]> {
         "exp" => Some(&[0.0]),        // exp a > 0 strictly, for every finite a
         "inv" => Some(&[0.0]),        // 1/a reaches 0 only in the limit
         "erf" => Some(&[-1.0, 1.0]),  // |erf a| < 1 strictly, for every finite a
+        "erfc" => Some(&[0.0, 2.0]),  // 0 < erfc a < 2 strictly, for every finite a
         _ => None,
     }
 }
@@ -2459,6 +2509,13 @@ fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<Bi
                 special::erf(x, p, cc)?
             }
         }
+        "erfc" => {
+            if x.is_inf() {
+                small_int(if x.is_negative() { 2 } else { 0 }, p)
+            } else {
+                special::erfc(x, p, cc)?
+            }
+        }
         "harmonic" => {
             if x.is_zero() {
                 x.clone() // H(+-0) = +-0
@@ -2560,6 +2617,7 @@ fn apply_binary(
         "mod" => special::modulo(a, b, p),
         "atan2" => special::atan2(a, b, p, cc),
         "besselj" => return besselj::besselj(a, b, p, cc),
+        "bessely" | "besseli" | "besselk" => return bessel_value(name, a, b, p, cc),
         _ => return None,
     };
     Some(v)
@@ -3589,5 +3647,33 @@ mod new_head_tests {
             (j - 0.44005058574493355).abs() <= 2.5e-16 * j,
             "J_1(1) = {j}"
         );
+        // erfc and the other Bessel functions (`special`, `bessel`) against scipy's kernels,
+        // within the kernels' own error (2^-41, measured)
+        for (name, x) in [("erfc", 0.7), ("erfc", 3.25), ("erfc", -1.5)] {
+            let f = crate::numeric::unary_fn(name).expect("kernel");
+            let v = apply_unary(name, &BigFloat::from_f64(x, p), p, &mut cc).expect("evaluable");
+            let (got, want) = (read(&v), f(x));
+            assert!(
+                (got - want).abs() <= want.abs() * 4.6e-13,
+                "{name}({x}): {got} vs {want}"
+            );
+        }
+        for (name, a, b) in [
+            ("bessely", 1.0, 2.5),
+            ("bessely", -1.5, 3.0),
+            ("besseli", 2.5, 3.0),
+            ("besseli", 3.0, -2.0),
+            ("besselk", 0.5, 1.5),
+            ("besselk", 7.0, 30.0),
+        ] {
+            let f = crate::numeric::binary_fn(name).expect("kernel");
+            let (ba, bb) = (BigFloat::from_f64(a, p), BigFloat::from_f64(b, p));
+            let v = apply_binary(name, &ba, &bb, p, &mut cc).expect("evaluable");
+            let (got, want) = (read(&v), f(a, b));
+            assert!(
+                (got - want).abs() <= want.abs() * 4.6e-13,
+                "{name}({a}, {b}): {got} vs {want}"
+            );
+        }
     }
 }

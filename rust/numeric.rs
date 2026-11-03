@@ -14,13 +14,13 @@
 
 use crate::operators::Operators;
 
-mod besselj;
 mod dd;
 pub(crate) mod elementary;
 mod harmonic;
 #[rustfmt::skip]
 mod harmonic_tables;
 pub mod kernels;
+mod xsf;
 
 /// The libm `atanh`, for the ONE consumer outside this module's own kernels: the interval
 /// arm (`interval.rs::u_atanh`) must evaluate endpoint images with the SAME function the
@@ -298,6 +298,7 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
         "ceil" => kernels::ceil,
         "harmonic" => kernels::harmonic,
         "erf" => kernels::erf,
+        "erfc" => kernels::erfc,
         // The retired hyper-operator vocabulary (input support for configs that declare it).
         "mult2" => |x| 2.0 * x,
         "mult3" => |x| 3.0 * x,
@@ -349,13 +350,16 @@ pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
         "pow" => kernels::pow,
         // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index.
         "rootn" => kernels::rootn,
-        // The 0.15 heads. `besselj(nu, x)`: the order is the first operand, a literal or
-        // any expression.
+        // The 0.15 heads. The Bessel functions take the order as the first operand, a literal
+        // or any expression.
         "max" => kernels::max,
         "min" => kernels::min,
         "mod" => kernels::modulo,
         "atan2" => kernels::atan2,
         "besselj" => kernels::besselj,
+        "bessely" => kernels::bessely,
+        "besseli" => kernels::besseli,
+        "besselk" => kernels::besselk,
         _ => return None,
     })
 }
@@ -380,7 +384,7 @@ pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
 pub(crate) enum RangeKind {
     /// `+ - neg abs mult2..mult5`: a result below the normal range is always exact.
     ExactWhenTiny,
-    /// `exp cos cosh`: neither a pole nor an exact zero.
+    /// `exp cos cosh erfc`: neither a pole nor an exact zero.
     Plain,
     /// `*`: an exact zero when an operand is zero.
     Mul,
@@ -403,9 +407,13 @@ pub(crate) enum RangeKind {
     ZeroAtZero,
     /// `atan2(y, x)`: an exact zero at `y = 0` with `x` positive or `+0`; no pole.
     Atan2,
-    /// `besselj(nu, x)`: a pole at `x = 0` under a negative non-integer order, an exact zero
-    /// at `x = 0` under any other nonzero order.
+    /// `besselj(nu, x)`, `besseli(nu, x)`: a pole at `x = 0` under a negative non-integer order,
+    /// an exact zero at `x = 0` under any other nonzero order.
     Besselj,
+    /// `bessely(nu, x)`, `besselk(nu, x)`: a pole at `x = 0` under every order, no exact zero.
+    /// (`besselk`'s zero past AMOS's reach, about x = 697.87 at order 0, is an underflow: the
+    /// true value is about 4e-305.)
+    BesselSecondKind,
 }
 
 impl RangeKind {
@@ -419,8 +427,9 @@ impl RangeKind {
             "floor" | "ceil" | "max" | "min" | "mod" => ExactWhenTiny,
             "erf" | "harmonic" => ZeroAtZero,
             "atan2" => Atan2,
-            "besselj" => Besselj,
-            "exp" | "cos" | "cosh" => Plain,
+            "besselj" | "besseli" => Besselj,
+            "bessely" | "besselk" => BesselSecondKind,
+            "exp" | "cos" | "cosh" | "erfc" => Plain,
             "*" => Mul,
             "/" => Div,
             "inv" => Inv,
@@ -443,6 +452,7 @@ impl RangeKind {
             RangeKind::Atanh => args[0] == 1.0 || args[0] == -1.0,
             RangeKind::PowLike => args[0] == 0.0 && args[1] < 0.0,
             RangeKind::Besselj => args[1] == 0.0 && args[0] < 0.0 && args[0].fract() != 0.0,
+            RangeKind::BesselSecondKind => args[1] == 0.0,
             _ => false,
         }
     }
@@ -461,7 +471,10 @@ impl RangeKind {
             RangeKind::Besselj => {
                 args[1] == 0.0 && args[0] != 0.0 && (args[0] > 0.0 || args[0].fract() == 0.0)
             }
-            RangeKind::ExactWhenTiny | RangeKind::Plain | RangeKind::Inv => false,
+            RangeKind::ExactWhenTiny
+            | RangeKind::Plain
+            | RangeKind::Inv
+            | RangeKind::BesselSecondKind => false,
         }
     }
 
@@ -685,7 +698,7 @@ mod aligned_pow_tests {
             "neg", "inv", "abs", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4",
             "div5", "pow2", "pow3", "pow4", "pow5", "pow1_2", "pow1_3", "pow1_4", "pow1_5", "sin",
             "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
-            "atanh", "exp", "log", "floor", "ceil", "harmonic", "erf",
+            "atanh", "exp", "log", "floor", "ceil", "harmonic", "erf", "erfc",
         ];
         for op in unary {
             assert!(
@@ -694,7 +707,8 @@ mod aligned_pow_tests {
             );
         }
         for op in [
-            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj", "bessely",
+            "besseli", "besselk",
         ] {
             assert!(
                 binary_fn(op).is_some() && RangeKind::of(op).is_some(),
@@ -721,6 +735,12 @@ mod aligned_pow_tests {
             ("erf", vec![5e-324]),
             ("atan2", vec![1e-300, 1e300]),
             ("besselj", vec![200.0, 1e-3]),
+            ("erfc", vec![30.0]),
+            ("bessely", vec![200.0, 1e-3]),
+            ("besseli", vec![200.0, 1e-3]),
+            ("besseli", vec![1.0, 800.0]),
+            ("besselk", vec![0.0, 800.0]),
+            ("besselk", vec![200.0, 1e-3]),
         ] {
             assert!(ev(op, &args), "{op}{args:?} must be a range event");
         }
@@ -751,6 +771,13 @@ mod aligned_pow_tests {
             ("besselj", vec![1.0, 0.0]),
             ("besselj", vec![-2.0, 0.0]),
             ("besselj", vec![-0.5, 0.0]),
+            ("erfc", vec![-30.0]),
+            ("bessely", vec![0.0, 0.0]),
+            ("bessely", vec![-1.5, 0.0]),
+            ("besseli", vec![1.0, 0.0]),
+            ("besseli", vec![-0.5, 0.0]),
+            ("besseli", vec![0.0, 0.0]),
+            ("besselk", vec![1.0, 0.0]),
         ] {
             assert!(!ev(op, &args), "{op}{args:?} must not be a range event");
         }

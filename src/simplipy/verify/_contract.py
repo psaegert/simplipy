@@ -152,16 +152,17 @@ ARITY = {**_CORE_ARITY,
          'div2': 1, 'div3': 1, 'div4': 1, 'div5': 1,
          'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1,
          # the 0.15 heads
-         'floor': 1, 'ceil': 1, 'erf': 1, 'harmonic': 1,
-         'max': 2, 'min': 2, 'mod': 2, 'atan2': 2, 'besselj': 2}
+         'floor': 1, 'ceil': 1, 'erf': 1, 'erfc': 1, 'harmonic': 1,
+         'max': 2, 'min': 2, 'mod': 2, 'atan2': 2,
+         'besselj': 2, 'bessely': 2, 'besseli': 2, 'besselk': 2}
 SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 
 #: The 0.15 heads. A rule spelled with one answers to the core's f64 bar for its float64
 #: realisation (`_core.f64_bar`, ANDed into `realised` by `judge_rule`): float64 parts from the
 #: reals at a step head's jump (`floor(x + 1)` at x = -1e-17), at a zero's sign `atan2` reads,
 #: and at a pole of `harmonic`, points the battery and the grid below do not reach.
-NEW_HEADS = frozenset({'floor', 'ceil', 'erf', 'harmonic', 'max', 'min', 'mod', 'atan2',
-                       'besselj'})
+NEW_HEADS = frozenset({'floor', 'ceil', 'erf', 'erfc', 'harmonic', 'max', 'min', 'mod', 'atan2',
+                       'besselj', 'bessely', 'besseli', 'besselk'})
 
 
 class Unresolved(Exception):
@@ -710,6 +711,7 @@ SATURATING = {
     'exp': (0.0,),         # exp a > 0 strictly, for every finite a
     'inv': (0.0,),         # 1/a reaches 0 only in the limit
     'erf': (-1.0, 1.0),    # |erf a| < 1 strictly, for every finite a
+    'erfc': (0.0, 2.0),    # 0 < erfc a < 2 strictly, for every finite a
 }
 
 

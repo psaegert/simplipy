@@ -1,10 +1,13 @@
-//! A transliteration of the Cephes routines scipy 1.18.1 falls back to for a real-order Bessel
-//! function of the first kind (`xsf::cephes::jv` and what it calls: `j0`, `j1`, `Gamma`,
-//! `rgamma`, `lgam_sgn`, `airy`, `cbrt`, `sinpi`, `cospi`, `polevl`, `chbevl`), statement for
+//! A transliteration of the Cephes routines scipy 1.18.1 computes `jv` (where AMOS fails), `yv`
+//! (likewise), `iv` and `erfc` with (`xsf::cephes::jv` and what it calls: `j0`, `j1`, `Gamma`,
+//! `rgamma`, `lgam_sgn`, `airy`, `cbrt`, `sinpi`, `cospi`, `polevl`, `chbevl`; `y0`, `y1`, `yn`,
+//! `yv`; `iv` with Temme's method and the uniform expansion; `erfc` and `erf`), statement for
 //! statement, so that every operation rounds as the C++ does.
 //!
 //! Cephes Math Library Release 2.8, Copyright 1984, 1987, 1989, 1992, 2000 by Stephen L.
-//! Moshier, as translated into C++ by the SciPy developers (xsf, BSD-3-Clause); notices in
+//! Moshier, as translated into C++ by the SciPy developers (xsf, BSD-3-Clause). The `iv`
+//! section holds code Copyright (c) 2006 Xiaogang Zhang under the Boost Software License,
+//! Version 1.0, and code Copyright (C) 2009 Pauli Virtanen under SciPy's license. Notices in
 //! `LICENSES_bundled.txt`.
 
 use super::cx::c_int;
@@ -939,4 +942,519 @@ pub(super) fn jv(mut n: f64, mut x: f64) -> f64 {
         }
     }
     sign as f64 * y
+}
+
+// ------------------------------------------------------- Y of integer order (`j0.h`, `j1.h`, `yn.h`)
+
+const M_2_PI: f64 = 0.636619772367581343076;
+
+/// `xsf::cephes::y0`: the Bessel function of the second kind, order zero.
+fn y0(x: f64) -> f64 {
+    if x <= 5.0 {
+        if x == 0.0 {
+            return f64::NEG_INFINITY;
+        } else if x < 0.0 {
+            return f64::NAN;
+        }
+        let z = x * x;
+        let mut w = polevl(z, &t::J0_YP, 7) / p1evl(z, &t::J0_YQ, 7);
+        w += M_2_PI * e::log(x) * j0(x);
+        return w;
+    }
+    let w = 5.0 / x;
+    let z = 25.0 / (x * x);
+    let mut p = polevl(z, &t::J0_PP, 6) / polevl(z, &t::J0_PQ, 6);
+    let q = polevl(z, &t::J0_QP, 7) / p1evl(z, &t::J0_QQ, 7);
+    if x < 10.0 {
+        let xn = x - M_PI_4;
+        p = p * e::sin(xn) + w * q * e::cos(xn);
+        return p * SQRT2OPI / x.sqrt();
+    }
+    p = (w * q - p) * e::cos(x) + (p + w * q) * e::sin(x);
+    p * SQRT1OPI / x.sqrt()
+}
+
+/// `xsf::cephes::y1`: the Bessel function of the second kind, order one.
+fn y1(x: f64) -> f64 {
+    if x <= 5.0 {
+        if x == 0.0 {
+            return f64::NEG_INFINITY;
+        } else if x <= 0.0 {
+            return f64::NAN;
+        }
+        let z = x * x;
+        let mut w = x * (polevl(z, &t::J1_YP, 5) / p1evl(z, &t::J1_YQ, 8));
+        w += M_2_PI * (j1(x) * e::log(x) - 1.0 / x);
+        return w;
+    }
+    let w = 5.0 / x;
+    let z = w * w;
+    let mut p = polevl(z, &t::J1_PP, 6) / polevl(z, &t::J1_PQ, 6);
+    let q = polevl(z, &t::J1_QP, 7) / p1evl(z, &t::J1_QQ, 7);
+    let xn = x - THPIO4;
+    p = p * e::sin(xn) + w * q * e::cos(xn);
+    p * SQRT2OPI / x.sqrt()
+}
+
+/// `xsf::cephes::yn`: Y of an integer order by forward recurrence from `y0` and `y1`. The C
+/// negation of `n` wraps at `INT_MIN`, as x86-64 computes it.
+fn yn(mut n: i32, x: f64) -> f64 {
+    let sign: i32 = if n < 0 {
+        n = n.wrapping_neg();
+        if (n & 1) == 0 {
+            1
+        } else {
+            -1
+        }
+    } else {
+        1
+    };
+    if n == 0 {
+        return sign as f64 * y0(x);
+    }
+    if n == 1 {
+        return sign as f64 * y1(x);
+    }
+    // test for overflow
+    if x == 0.0 {
+        return f64::NEG_INFINITY * sign as f64;
+    } else if x < 0.0 {
+        return f64::NAN;
+    }
+    // forward recurrence on n
+    let mut anm2 = y0(x);
+    let mut anm1 = y1(x);
+    let mut k: i32 = 1;
+    let mut r = (2 * k) as f64;
+    let mut an;
+    loop {
+        an = r * anm1 / x - anm2;
+        anm2 = anm1;
+        anm1 = an;
+        r += 2.0;
+        k += 1;
+        if !(k < n && an.is_finite()) {
+            break;
+        }
+    }
+    sign as f64 * an
+}
+
+/// `xsf::cephes::yv`: Y of a real order, `yn` at an integer order and the rotation of `jv`
+/// elsewhere.
+pub(super) fn yv(v: f64, x: f64) -> f64 {
+    let n = c_int(v);
+    if n as f64 == v {
+        return yn(n, x);
+    } else if v == v.floor() {
+        // zero in denominator
+        return f64::NAN;
+    }
+    let t = M_PI * v;
+    let y = (e::cos(t) * jv(v, x) - jv(-v, x)) / e::sin(t);
+    if y.is_infinite() {
+        if v > 0.0 {
+            return f64::NEG_INFINITY;
+        } else if v < -1e10 {
+            // whether it is +inf or -inf is numerically ill-defined
+            return f64::NAN;
+        }
+    }
+    y
+}
+
+// ----------------------------------------------------------------- erfc (`ndtr.h`)
+
+/// `xsf::cephes::erfc`: the complementary error function, `1 - erf` below 1 and the rational
+/// approximations of `exp(-x^2) P/Q` above.
+pub(super) fn erfc(a: f64) -> f64 {
+    if a.is_nan() {
+        return f64::NAN;
+    }
+    let x = if a < 0.0 { -a } else { a };
+    if x < 1.0 {
+        return 1.0 - erf(a);
+    }
+    let under = || if a < 0.0 { 2.0 } else { 0.0 };
+    let mut z = -a * a;
+    if z < -MAXLOG {
+        return under();
+    }
+    z = e::exp(z);
+    let (p, q) = if x < 8.0 {
+        (polevl(x, &t::NDTR_P, 8), p1evl(x, &t::NDTR_Q, 8))
+    } else {
+        (polevl(x, &t::NDTR_R, 5), p1evl(x, &t::NDTR_S, 6))
+    };
+    let mut y = (z * p) / q;
+    if a < 0.0 {
+        y = 2.0 - y;
+    }
+    if y != 0.0 {
+        return y;
+    }
+    under()
+}
+
+/// `xsf::cephes::erf`, which `erfc` calls below 1 (the deployed `erf` operator is the
+/// platform's libm, not this).
+fn erf(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 {
+        return -erf(-x);
+    }
+    if x.abs() > 1.0 {
+        return 1.0 - erfc(x);
+    }
+    let z = x * x;
+    x * polevl(z, &t::NDTR_T, 4) / p1evl(z, &t::NDTR_U, 5)
+}
+
+// ------------------------------------------------------------------ iv (`scipy_iv.h`)
+//
+// Parts of the code are copyright:
+//
+//     Cephes Math Library Release 2.8:  June, 2000
+//     Copyright 1984, 1987, 1988, 2000 by Stephen L. Moshier
+//
+// And other parts:
+//
+//     Copyright (c) 2006 Xiaogang Zhang
+//     Use, modification and distribution are subject to the
+//     Boost Software License, Version 1.0.
+//
+//     Boost Software License - Version 1.0 - August 17th, 2003
+//
+//     Permission is hereby granted, free of charge, to any person or
+//     organization obtaining a copy of the software and accompanying
+//     documentation covered by this license (the "Software") to use, reproduce,
+//     display, distribute, execute, and transmit the Software, and to prepare
+//     derivative works of the Software, and to permit third-parties to whom the
+//     Software is furnished to do so, all subject to the following:
+//
+//     The copyright notices in the Software and this entire statement,
+//     including the above license grant, this restriction and the following
+//     disclaimer, must be included in all copies of the Software, in whole or
+//     in part, and all derivative works of the Software, unless such copies or
+//     derivative works are solely in the form of machine-executable object code
+//     generated by a source language processor.
+//
+//     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//     OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//     MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE AND
+//     NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR ANYONE
+//     DISTRIBUTING THE SOFTWARE BE LIABLE FOR ANY DAMAGES OR OTHER LIABILITY,
+//     WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+//     CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+//     SOFTWARE.
+//
+// And the rest are:
+//
+//     Copyright (C) 2009 Pauli Virtanen
+//     Distributed under the same license as Scipy.
+
+const SCIPY_EULER: f64 = 0.577215664901532860606512090082402431;
+const MAXITER: u64 = 500;
+const IV_N_UFACTORS: i32 = 11;
+const IV_N_UFACTOR_TERMS: i32 = 31;
+
+/// `iv_asymptotic`: I for large `x` (AMS55 9.7.1).
+fn iv_asymptotic(v: f64, x: f64) -> f64 {
+    let prefactor = e::exp(x) / (2.0 * M_PI * x).sqrt();
+    if prefactor == f64::INFINITY {
+        return prefactor;
+    }
+    let mu = 4.0 * v * v;
+    let mut sum = 1.0;
+    let mut term = 1.0;
+    let mut k: i32 = 1;
+    loop {
+        let factor = (mu - ((2 * k - 1) * (2 * k - 1)) as f64) / (8.0 * x) / k as f64;
+        if k > 100 {
+            // did not converge
+            break;
+        }
+        term *= -factor;
+        sum += term;
+        k += 1;
+        if !(term.abs() > MACHEP * sum.abs()) {
+            break;
+        }
+    }
+    sum * prefactor
+}
+
+/// `ikv_asymptotic_uniform`'s I: the uniform expansion for large order (AMS55 9.7.7), with
+/// the reflection (AMS55 9.6.2) for a negative order.
+fn ikv_asymptotic_uniform_i(mut v: f64, x: f64) -> f64 {
+    let mut sign = 1;
+    if v < 0.0 {
+        // negative v: compute I_{-v} and K_{-v} and use AMS55 9.6.2
+        sign = -1;
+        v = -v;
+    }
+    let z = x / v;
+    let t = 1.0 / (1.0 + z * z).sqrt();
+    let t2 = t * t;
+    let eta = (1.0 + z * z).sqrt() + e::log(z / (1.0 + 1.0 / t));
+    let i_prefactor = (t / (2.0 * M_PI * v)).sqrt() * e::exp(v * eta);
+    let mut i_sum = 1.0;
+    let k_prefactor = (M_PI * t / (2.0 * v)).sqrt() * e::exp(-v * eta);
+    let mut k_sum = 1.0;
+    let mut divisor = v;
+    for n in 1..IV_N_UFACTORS {
+        // u_k(t) by Horner's scheme, over the coefficients that are not zero
+        let mut term = 0.0;
+        let mut k = IV_N_UFACTOR_TERMS - 1 - 3 * n;
+        while k < IV_N_UFACTOR_TERMS - n {
+            term *= t2;
+            term += t::IV_ASYMPTOTIC_UFACTORS[(n * IV_N_UFACTOR_TERMS + k) as usize];
+            k += 2;
+        }
+        let mut k = 1;
+        while k < n {
+            term *= t2;
+            k += 2;
+        }
+        if n % 2 == 1 {
+            term *= t;
+        }
+        term /= divisor;
+        i_sum += term;
+        k_sum += if n % 2 == 0 { term } else { -term };
+        if term.abs() < MACHEP {
+            break;
+        }
+        divisor *= v;
+    }
+    if sign == 1 {
+        i_prefactor * i_sum
+    } else {
+        i_prefactor * i_sum + (2.0 / M_PI) * sinpi(v) * k_prefactor * k_sum
+    }
+}
+
+/// `temme_ik_series`: K(v, x) and K(v + 1, x) for `|x| <= 2`, `|v| <= 1/2` (Temme's series).
+fn temme_ik_series(v: f64, x: f64) -> (f64, f64) {
+    let gp = Gamma(v + 1.0) - 1.0;
+    let gm = Gamma(-v + 1.0) - 1.0;
+    let a = e::log(x / 2.0);
+    let b = e::exp(v * a);
+    let sigma = -a * v;
+    let c = if v.abs() < MACHEP {
+        1.0
+    } else {
+        sinpi(v) / (v * M_PI)
+    };
+    let d = if sigma.abs() < MACHEP {
+        1.0
+    } else {
+        e::sinh(sigma) / sigma
+    };
+    let gamma1 = if v.abs() < MACHEP {
+        -SCIPY_EULER
+    } else {
+        (0.5 / v) * (gp - gm) * c
+    };
+    let gamma2 = (2.0 + gp + gm) * c / 2.0;
+    // initial values
+    let mut p = (gp + 1.0) / (2.0 * b);
+    let mut q = (1.0 + gm) * b / 2.0;
+    let mut f = (e::cosh(sigma) * gamma1 + d * (-a) * gamma2) / c;
+    let mut h;
+    let mut coef = 1.0;
+    let mut sum = coef * f;
+    let mut sum1 = coef * p;
+    // series summation
+    let tolerance = MACHEP;
+    let mut k: u64 = 1;
+    while k < MAXITER {
+        let kf = k as f64;
+        f = (kf * f + p + q) / ((k * k) as f64 - v * v);
+        p /= kf - v;
+        q /= kf + v;
+        h = p - kf * f;
+        coef *= x * x / (4 * k) as f64;
+        sum += coef * f;
+        sum1 += coef * h;
+        if (coef * f).abs() < sum.abs() * tolerance {
+            break;
+        }
+        k += 1;
+    }
+    (sum, 2.0 * sum1 / x)
+}
+
+/// `CF1_ik`: the continued fraction `I_(v+1) / I_v` (AMS55 9.1.73), by Lentz's method.
+fn cf1_ik(v: f64, x: f64) -> f64 {
+    let tolerance = 2.0 * MACHEP;
+    let tiny = 1.0 / f64::MAX.sqrt();
+    let mut c = tiny;
+    let mut f = tiny; // b0 = 0, replaced with tiny
+    let mut d = 0.0;
+    let mut k: u64 = 1;
+    while k < MAXITER {
+        let a = 1.0;
+        let b = 2.0 * (v + k as f64) / x;
+        c = b + a / c;
+        d = b + a * d;
+        if c == 0.0 {
+            c = tiny;
+        }
+        if d == 0.0 {
+            d = tiny;
+        }
+        d = 1.0 / d;
+        let delta = c * d;
+        f *= delta;
+        if (delta - 1.0).abs() <= tolerance {
+            break;
+        }
+        k += 1;
+    }
+    f
+}
+
+/// `CF2_ik`: K(v, x) and K(v + 1, x) for `|x| > 1` by Steed's algorithm (Thompson and Barnett).
+fn cf2_ik(v: f64, x: f64) -> (f64, f64) {
+    let tolerance = MACHEP;
+    let mut a = v * v - 0.25;
+    let mut b = 2.0 * (x + 1.0); // b1
+    let mut d = 1.0 / b; // D1 = 1 / b1
+    let mut f = d; // f1 = delta1 = D1, coincidence
+    let mut delta = d;
+    let mut prev = 0.0; // q0
+    let mut current = 1.0; // q1
+    let mut q_sum = -a; // Q1 = C1 because q1 = 1
+    let mut c = -a;
+    let mut s = 1.0 + q_sum * delta; // S1
+    let mut k: u64 = 2;
+    while k < MAXITER {
+        // continued fraction f = z1 / z0
+        a -= (2 * (k - 1)) as f64;
+        b += 2.0;
+        d = 1.0 / (b + a * d);
+        delta *= b * d - 1.0;
+        f += delta;
+        // series summation S = 1 + sum_n C_n z_n / z_0
+        let q = (prev - (b - 2.0) * current) / a;
+        prev = current;
+        current = q; // forward recurrence for q
+        c *= -a / k as f64;
+        q_sum += c * q;
+        s += q_sum * delta;
+        // S converges slower than f
+        if (q_sum * delta).abs() < s.abs() * tolerance {
+            break;
+        }
+        k += 1;
+    }
+    let kv = (M_PI / (2.0 * x)).sqrt() * e::exp(-x) / s;
+    let kv1 = kv * (0.5 + v + x + (v * v - 0.25) * f) / x;
+    (kv, kv1)
+}
+
+/// `ikv_temme`'s I: I(v, x) by Temme's method (Temme 1975), K computed beside it where the
+/// reflection of a negative order needs it.
+fn ikv_temme_i(mut v: f64, x: f64) -> f64 {
+    let mut reflect = false;
+    if v < 0.0 {
+        reflect = true;
+        v = -v; // v is non-negative from here
+    }
+    let n = v.round() as u32;
+    let u = v - n as f64; // -1/2 <= u < 1/2
+    if x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        let mut iv = if v == 0.0 { 1.0 } else { 0.0 };
+        if reflect {
+            let z = u + (n % 2) as f64;
+            iv = if sinpi(z) == 0.0 { iv } else { f64::INFINITY };
+        }
+        return iv;
+    }
+    // x is positive until reflection
+    let w = 1.0 / x; // Wronskian
+    let (ku, ku1) = if x <= 2.0 {
+        temme_ik_series(u, x) // Temme series
+    } else {
+        cf2_ik(u, x) // continued fraction CF2_ik
+    };
+    let mut prev = ku;
+    let mut current = ku1;
+    for k in 1..=n {
+        // forward recurrence for K
+        let next = 2.0 * (u + k as f64) * current / x + prev;
+        prev = current;
+        current = next;
+    }
+    let kv = prev;
+    let kv1 = current;
+    let mut lim = (4.0 * v * v + 10.0) / (8.0 * x);
+    lim *= lim;
+    lim *= lim;
+    lim /= 24.0;
+    let iv = if (lim < MACHEP * 10.0) && (x > 100.0) {
+        // x is huge compared to v: CF1 may be very slow to converge, so the asymptotic
+        // expansion for large x is used instead
+        iv_asymptotic(v, x)
+    } else {
+        let fv = cf1_ik(v, x); // continued fraction CF1_ik
+        w / (kv * fv + kv1) // Wronskian relation
+    };
+    if reflect {
+        let z = u + (n % 2) as f64;
+        iv + (2.0 / M_PI) * sinpi(z) * kv // reflection formula
+    } else {
+        iv
+    }
+}
+
+/// `xsf::cephes::iv`: the modified Bessel function of the first kind of real order (the
+/// uniform expansion above order 50, Temme's method below), a negative integer order by
+/// symmetry, an integer order at a negative argument by its parity.
+pub(super) fn iv(mut v: f64, x: f64) -> f64 {
+    if v.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    // a negative integer order by symmetry
+    let mut t = v.floor();
+    if v < 0.0 && t == v {
+        v = -v;
+        t = -t;
+    }
+    // a negative argument requires an integer order
+    let mut sign = 1;
+    if x < 0.0 {
+        if t != v {
+            return f64::NAN;
+        }
+        if v != 2.0 * (v / 2.0).floor() {
+            sign = -1;
+        }
+    }
+    // the logarithm's singularity
+    if x == 0.0 {
+        if v == 0.0 {
+            return 1.0;
+        }
+        if v < 0.0 {
+            return f64::INFINITY;
+        }
+        return 0.0;
+    }
+    let ax = x.abs();
+    let mut res = if v.abs() > 50.0 {
+        // the uniform asymptotic expansion for large orders
+        ikv_asymptotic_uniform_i(v, ax)
+    } else {
+        // otherwise Temme's method
+        ikv_temme_i(v, ax)
+    };
+    res *= sign as f64;
+    res
 }

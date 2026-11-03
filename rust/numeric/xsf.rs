@@ -1,3 +1,26 @@
+//! The special functions the package realizes as scipy 1.18.1 computes them: a transliteration of
+//! the code `scipy.special` runs on real doubles (xsf, the C++ library scipy vendors), its AMOS
+//! and Cephes routines in `amos` and `cephes`, its constant tables in `tables`.
+//!
+//! * `besselj(nu, x)`, `scipy.special.jv`: `xsf::cyl_bessel_j(double, double)`, below.
+//! * `bessely(nu, x)`, `scipy.special.yv`: `xsf::cyl_bessel_y(double, double)`, AMOS's `besy`
+//!   (through `besh`), a negative order by reflection (integer) or rotation through J
+//!   (non-integer), and Cephes's `yv` wherever AMOS gives NaN.
+//! * `besseli(nu, x)`, `scipy.special.iv`: Cephes's `iv` (Temme's method; the uniform expansion
+//!   above order 50).
+//! * `besselk(nu, x)`, `scipy.special.kv`: `xsf::cyl_bessel_k(double, double)`, AMOS's `besk`
+//!   (`bknu`, `uoik`, and `bunk`/`unk1` above order 85.9), with xsf's cells at a zero and a
+//!   negative argument and its cut to 0 past `x = 710 (1 + |nu|)`.
+//! * `erfc(x)`, `scipy.special.erfc`: Cephes's `erfc` (`ndtr.h`), with its own `erf` below 1.
+//!
+//! The four beside `besselj` carry no departure from scipy: on the development host (Linux,
+//! glibc 2.43) their bits are scipy's at every point measured, `erfc` on 1,594,018 arguments,
+//! `yv` on 1,258,385 and `iv` and `kv` on 1,318,385 (order, argument) pairs, spanning every
+//! regime and special cell, scipy's cells where it leaves the function included (they are listed
+//! at the realizations, `simplipy.operators`).
+//!
+//! # besselj
+//!
 //! besselj(nu, x): the Bessel function of the first kind J_nu(x) of a real order and a real
 //! argument, as scipy 1.18.1's `scipy.special.jv` computes it (bit for bit where measured, see
 //! below) at every argument `x >= 0` (`-0.0` included) and at a non-integer order everywhere:
@@ -160,6 +183,108 @@ pub fn besselj(v: f64, x: f64) -> f64 {
 fn underflows(nu: f64, x: f64) -> bool {
     let t = super::elementary::log(x) - super::elementary::log(2.0 * nu) + 1.0;
     nu >= 1.0 && t < -1e-9 && nu * t < -800.0
+}
+
+/// `xsf::cyl_bessel_y(v, complex z)` for a real `z`: AMOS's Y (`-inf` at a zero argument and at
+/// AMOS's overflow), a negative order by reflection (integer) or rotation through J
+/// (non-integer, `Y_-v = cos(pi v) Y_v + sin(pi v) J_v`).
+fn cyl_bessel_y_complex(mut v: f64, z: C64) -> C64 {
+    let n = 1;
+    let kode = 1;
+    let mut cy_y = [C64::new(f64::NAN, f64::NAN)];
+    let mut cy_j = [C64::new(f64::NAN, f64::NAN)];
+    if v.is_nan() || z.re.is_nan() || z.im.is_nan() {
+        return cy_y[0];
+    }
+    let mut sign = 1;
+    if v < 0.0 {
+        v = -v;
+        sign = -1;
+    }
+    if z.re == 0.0 && z.im == 0.0 {
+        // overflow
+        cy_y[0] = C64::new(f64::NEG_INFINITY, 0.0);
+    } else {
+        let (nz, ierr) = amos::besy(z, v, kode, n, &mut cy_y);
+        set_error_and_nan(nz, ierr, &mut cy_y[0]);
+        if ierr == 2 && z.re >= 0.0 && z.im == 0.0 {
+            // overflow
+            cy_y[0] = C64::new(f64::NEG_INFINITY, 0.0);
+        }
+    }
+    if sign == -1 && !reflect_jy(&mut cy_y[0], v) {
+        let (nz, ierr) = amos::besj(z, v, kode, n, &mut cy_j);
+        set_error_and_nan(nz, ierr, &mut cy_j[0]);
+        cy_y[0] = rotate_jy(cy_y[0], cy_j[0], -v);
+    }
+    cy_y[0]
+}
+
+/// Y_nu(x): `scipy.special.yv(nu, x)` (scipy 1.18.1)'s code, `xsf::cyl_bessel_y(double,
+/// double)`: NaN at a negative argument, AMOS's value at `x >= 0` (`-0.0` included), and
+/// Cephes's `yv` wherever AMOS gives NaN (an infinite argument, an order past AMOS's range).
+pub fn bessely(v: f64, x: f64) -> f64 {
+    if x < 0.0 {
+        return f64::NAN;
+    }
+    let res = cyl_bessel_y_complex(v, C64::real(x));
+    if res.re.is_nan() {
+        return cephes::yv(v, x);
+    }
+    res.re
+}
+
+/// I_nu(x): `scipy.special.iv(nu, x)` (scipy 1.18.1)'s code, Cephes's `iv`: a negative integer
+/// order by `I_-n = I_n`, an integer order at a negative argument by its parity, NaN for a
+/// non-integer order at a negative argument; `I_0(0) = 1`, `I_nu(0) = 0` for `nu > 0`, `+inf` for
+/// a negative non-integer order.
+pub fn besseli(v: f64, x: f64) -> f64 {
+    cephes::iv(v, x)
+}
+
+/// `xsf::cyl_bessel_k(v, complex z)` for a real `z`: AMOS's K of the order's absolute value
+/// (`K_-v = K_v`), `+inf` at AMOS's overflow.
+fn cyl_bessel_k_complex(mut v: f64, z: C64) -> C64 {
+    let mut cy = [C64::new(f64::NAN, f64::NAN)];
+    if v.is_nan() || z.re.is_nan() || z.im.is_nan() {
+        return cy[0];
+    }
+    if v < 0.0 {
+        // K_v == K_{-v} even for non-integer v
+        v = -v;
+    }
+    let n = 1;
+    let kode = 1;
+    let (nz, ierr) = amos::besk(z, v, kode, n, &mut cy);
+    set_error_and_nan(nz, ierr, &mut cy[0]);
+    if ierr == 2 && z.re >= 0.0 && z.im == 0.0 {
+        // overflow
+        cy[0] = C64::real(f64::INFINITY);
+    }
+    cy[0]
+}
+
+/// K_nu(x): `scipy.special.kv(nu, x)` (scipy 1.18.1)'s code, `xsf::cyl_bessel_k(double,
+/// double)`: NaN at a negative argument, `+inf` at a zero one (whatever the order, NaN
+/// included), 0 past `x = 710 (1 + |nu|)` (xsf's cut, where AMOS cannot go), AMOS's value
+/// elsewhere.
+pub fn besselk(v: f64, z: f64) -> f64 {
+    if z < 0.0 {
+        return f64::NAN;
+    }
+    if z == 0.0 {
+        return f64::INFINITY;
+    }
+    if z > 710.0 * (1.0 + v.abs()) {
+        // underflow; not a strict bound, a workaround of a restriction in AMOS
+        return 0.0;
+    }
+    cyl_bessel_k_complex(v, C64::real(z)).re
+}
+
+/// erfc(x): `scipy.special.erfc(x)` (scipy 1.18.1)'s code, Cephes's `erfc`.
+pub fn erfc(x: f64) -> f64 {
+    cephes::erfc(x)
 }
 
 #[cfg(test)]

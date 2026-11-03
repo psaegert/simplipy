@@ -4,8 +4,9 @@
 floor, ceil, max, min, mod and harmonic are the core's own; erf and atan2 are the platform's
 libm through the core's elementary-function source, as every other transcendental is;
 besselj is scipy 1.18.1's jv, carried in the core and gated bit for bit against scipy (an
-integer order's parity read on the negative axis, where scipy loses a zero's sign). Two
-gates per kernel:
+integer order's parity read on the negative axis, where scipy loses a zero's sign); erfc,
+bessely, besseli and besselk are scipy 1.18.1's erfc, yv, iv and kv, carried in the core and
+gated bit for bit against scipy everywhere. Two gates per kernel:
 
 * BIT IDENTITY with numpy where numpy's own operation is the deployed one: floor and ceil
   are `np.floor`/`np.ceil`, mod is `np.mod` on float64, and max/min are `np.maximum`/
@@ -420,3 +421,92 @@ def test_besselj_cells() -> None:
     xs = RNG.uniform(0, 40, 200)
     for n in (1, 2, 5):
         assert np.allclose(core2('besselj', -n, xs), (-1) ** n * core2('besselj', n, xs), rtol=1e-13, atol=1e-15)
+
+
+# ------------------------------------------------------------ erfc, bessely, besseli, besselk
+
+#: scipy's realization of each kernel the core carries without a departure.
+SCIPY = {'erfc': 'erfc', 'bessely': 'yv', 'besseli': 'iv', 'besselk': 'kv'}
+ERFC_ZERO_AT, ERFC_TWO_AT = 26.64174755704633, -5.863584748755168
+
+
+def scipy_value(name: str, *args):
+    special = pytest.importorskip('scipy.special')
+    with np.errstate(all='ignore'):
+        return getattr(special, SCIPY[name])(*args)
+
+
+def erfc_grid() -> np.ndarray:
+    """The dense grid, and where erfc changes regime: its `1 - erf` below 1, its plateau at 2,
+    its subnormal tail and its cut to 0."""
+    rng = np.random.default_rng(20261103)
+    return np.concatenate([dense_unary_grid(), rng.uniform(0.98, 1.02, 20_000), rng.uniform(-6.5, -5.5, 20_000),
+                           rng.uniform(26.4, 26.8, 20_000), rng.uniform(7.9, 8.1, 5_000),
+                           np.nextafter([ERFC_ZERO_AT, ERFC_ZERO_AT, ERFC_TWO_AT, ERFC_TWO_AT], [0, np.inf, 0, -np.inf])])
+
+
+def scipy_bessel_grid() -> tuple[np.ndarray, np.ndarray]:
+    """`besselj`'s grid, and where Y, I and K change regime or leave the function: subnormal and
+    tiny orders and arguments, the uniform expansions from orders 50 (I) and 85.9 (AMOS), AMOS's
+    cuts (below x = 2.2e-305, K past x = 697.9), I's overflow, Y's zeros from x = 7.2e8, integer
+    and half-integer orders of both signs, and every infinite and NaN operand."""
+    rng = np.random.default_rng(20261104)
+    orders = np.array([0.0, 5e-324, 1e-310, 1e-300, 1e-100, 1e-10, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 7.3, 49.9, 50.0,
+                       50.1, 85.9, 86.0, 86.1, 100.0, 1000.0, 1e17, np.inf, np.nan])
+    xs = np.concatenate([[0.0, -0.0, TINY, 1e-320, 1e-310, 2.2250738585072014e-308, 1e-306, 2.2250738585072014e-305,
+                          3e-305, 1e-300, 1e-200, 1e-100, 1e-10, 0.5, 2.0, 697.0, 697.87, 698.0, 712.0, 740.0,
+                          7.158e8, 7.16e8, 1e9, 2.0 ** 51, 2.0 ** 51 + 1, 1e300, -1.0, -1e-300, -30.0,
+                          np.inf, -np.inf, np.nan], 10.0 ** rng.uniform(-320, 3.3, 1_000)])
+    a, b = np.meshgrid(np.concatenate([orders, -orders]), xs)
+    nu, x = besselj_grid()
+    return (np.concatenate([nu, a.ravel(), rng.uniform(-100, 100, 20_000), np.round(rng.uniform(-60, 60, 10_000))]),
+            np.concatenate([x, b.ravel(), 10.0 ** rng.uniform(-8, 3.2, 20_000), -(10.0 ** rng.uniform(-8, 2.8, 10_000))]))
+
+
+def test_erfc_is_scipy_bit_for_bit() -> None:
+    """The core carries scipy 1.18.1's erfc (Cephes), so its value is scipy's, bit for bit."""
+    x = erfc_grid()
+    same = bits_equal(core1('erfc', x), scipy_value('erfc', x))
+    assert same.all(), x[~same][:5]
+
+
+@pytest.mark.parametrize('name', ['bessely', 'besseli', 'besselk'])
+def test_scipy_bessels_are_scipy_bit_for_bit(name) -> None:
+    """The core carries scipy 1.18.1's yv (AMOS, Cephes where AMOS gives NaN), iv (Cephes) and kv
+    (AMOS), so each value is scipy's, bit for bit, the cells where scipy leaves the function
+    included (`test_scipy_bessel_cells`); a scipy release that changed one would show here."""
+    nu, x = scipy_bessel_grid()
+    same = bits_equal(core2(name, nu, x), scipy_value(name, nu, x))
+    assert same.all(), list(zip(nu[~same][:5], x[~same][:5]))
+
+
+def test_scipy_bessel_cells() -> None:
+    """float64's cells of erfc, Y, I and K, scipy's: the poles and their signs at x = 0, the
+    plateaus and cuts, the infinite and NaN operands, and where scipy leaves the function (Y and K
+    infinite below x = 2.2e-305, Y zero from x = 7.2e8 at order 86 and above, I zero where its
+    Wronskian overflows and NaN at a subnormal argument, `yv(-0.5, x)` far off near 0)."""
+    inf, nan = np.inf, np.nan
+    cells = [
+        ('erfc', (0.0,), 1.0), ('erfc', (-0.0,), 1.0), ('erfc', (inf,), 0.0), ('erfc', (-inf,), 2.0),
+        ('erfc', (nan,), nan), ('erfc', (ERFC_ZERO_AT,), 0.0), ('erfc', (np.nextafter(ERFC_ZERO_AT, 0),), 1.1771759939871e-310),
+        ('erfc', (ERFC_TWO_AT,), 2.0), ('erfc', (np.nextafter(ERFC_TWO_AT, 0),), 1.9999999999999998),
+        ('bessely', (0.0, 0.0), -inf), ('bessely', (2.5, -0.0), -inf), ('bessely', (-1.0, 0.0), inf),
+        ('bessely', (-2.0, 0.0), -inf), ('bessely', (-0.5, 0.0), -inf), ('bessely', (-1.5, 0.0), inf),
+        ('bessely', (-2.5, 0.0), -inf), ('bessely', (1.0, -1.0), nan), ('bessely', (0.0, inf), nan),
+        ('bessely', (inf, 1.0), nan), ('bessely', (100.0, 1e9), -0.0), ('bessely', (150.0, 1e9), 0.0),
+        ('bessely', (0.0, 1e-306), -inf), ('bessely', (-1.5, 1e-300), inf),
+        ('bessely', (-0.5, 1e-305), -1.544973083458289e+136),
+        ('besseli', (0.0, 0.0), 1.0), ('besseli', (1.0, -0.0), 0.0), ('besseli', (-0.5, 0.0), inf),
+        ('besseli', (-1.5, 0.0), inf), ('besseli', (0.5, -1.0), nan), ('besseli', (0.0, inf), nan),
+        ('besseli', (2.0, -inf), nan), ('besseli', (inf, 1.0), 0.0), ('besseli', (-inf, 1.0), 0.0),
+        ('besseli', (0.0, 1e-310), nan), ('besseli', (0.5, 1e-250), 0.0), ('besseli', (51.0, -1e-10), -0.0),
+        ('besseli', (0.0, 1e300), inf), ('besseli', (50.5, 1e300), nan), ('besseli', (60.0, 720.0), inf),
+        ('besselk', (0.0, 0.0), inf), ('besselk', (nan, 0.0), inf), ('besselk', (1.0, -1.0), nan),
+        ('besselk', (0.0, inf), 0.0), ('besselk', (inf, 1.0), nan), ('besselk', (0.0, 698.0), 0.0),
+        ('besselk', (0.0, 1e-306), inf), ('besselk', (1.5, 1e-203), inf), ('besselk', (2.5e305, inf), 0.0),
+        ('besselk', (2.54e305, inf), nan),
+    ]
+    for name, args, want in cells:
+        got = core1(name, [args[0]]) if len(args) == 1 else core2(name, *args)
+        assert bits_equal(got, want).all(), (name, args, got)
+        assert bits_equal(got, scipy_value(name, *args)).all(), (name, args)

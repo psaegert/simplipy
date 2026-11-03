@@ -50,6 +50,12 @@ const EXP_UNDERFLOW: f64 = -745.1332191019412;
 const ATAN_SAT: f64 = 5805358775541310.0;
 /// Smallest x with `erf(x) == 1.0` exactly; just below it erf gives 0.9999999999999999.
 const ERF_SAT: f64 = 5.921587195794507;
+/// Largest x with `erfc(x) == 2.0` exactly (scipy's Cephes kernel); just above it erfc gives
+/// 1.9999999999999998.
+const ERFC_TWO_AT: f64 = -5.863584748755168;
+/// Smallest x with `erfc(x) == 0.0` exactly (an underflow: the true value is about 1e-310);
+/// erfc is subnormal from about 26.55.
+const ERFC_ZERO_AT: f64 = 26.64174755704633;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
@@ -1529,6 +1535,125 @@ fn u_erf(v: &Vs) -> Vs {
     r
 }
 
+/// The relative margin the arms of the scipy kernels (`erfc`, `bessely`, `besseli`,
+/// `besselk`) widen their kernel images by, in both readings: off their range events the kernels
+/// are within 2^-41 of the true value where measured (`erfc` 2^-44, I and K 2^-42, the Nicholson
+/// bound of Y 2^-41.7), so an image read where the function is extremal holds the function's
+/// values and the kernel's.
+const SCIPY_KERNEL_MARGIN: f64 = 9.313225746154785e-10; // 2^-30
+
+/// The ulps the arms of the scipy kernels step their images out by: the kernels are monotone
+/// within 8 ulps where measured (`erfc` between adjacent doubles near x = 1, where its
+/// `1 - erf` reads erf's last bit; I within 2 near x = 0), one `ULP_LIBM` short of a margin.
+const ULP_SCIPY: u32 = 16;
+
+/// The magnitude below which a scipy kernel's value is no reading of the function in the real
+/// reading: `erfc`, `bessely` and `besselk` cut to 0 or turn subnormal only where the true
+/// value is far below it (`besselk` cuts at about 4e-305, `erfc` is subnormal from 1.6e-308;
+/// `besseli`'s early cut is bounded by its arm), and their relative error
+/// (`SCIPY_KERNEL_MARGIN`) holds only above it. A real-reading bound below it is moved to it,
+/// away from the value.
+const SCIPY_TINY: f64 = 1e-290;
+
+/// A real-reading image `[lo, hi]` of a scipy kernel with every bound below `SCIPY_TINY` in
+/// magnitude moved out to it (a lower bound of a `positive` function to 0).
+fn real_tiny_bounds(lo: f64, hi: f64, positive: bool) -> (f64, f64) {
+    let lo = if lo.abs() < SCIPY_TINY {
+        if positive {
+            0.0
+        } else {
+            -SCIPY_TINY
+        }
+    } else {
+        lo
+    };
+    let hi = if hi.abs() < SCIPY_TINY {
+        SCIPY_TINY
+    } else {
+        hi
+    };
+    (lo, hi)
+}
+
+/// `[lo, hi]` widened by `SCIPY_KERNEL_MARGIN` of each bound, outward.
+fn widen_relative(lo: f64, hi: f64) -> (f64, f64) {
+    let m = SCIPY_KERNEL_MARGIN;
+    (
+        if lo > 0.0 {
+            lo * (1.0 - m)
+        } else {
+            lo * (1.0 + m)
+        },
+        if hi > 0.0 {
+            hi * (1.0 + m)
+        } else {
+            hi * (1.0 - m)
+        },
+    )
+}
+
+/// `erfc`: decreasing, within (0, 2), 0 at +inf and 2 at -inf; float64 attains 2 at and below
+/// `ERFC_TWO_AT` and 0 at and above `ERFC_ZERO_AT`. The images are the kernel's own (scipy's
+/// Cephes code), widened by `SCIPY_KERNEL_MARGIN` and stepped out by `ULP_SCIPY` in both readings
+/// (the kernel is within 2^-44 of the function, monotone to 8 ulps), a bound the kernel puts
+/// below the normal range opening to 0 in the real reading (the true value is positive there).
+fn u_erfc(v: &Vs) -> Vs {
+    let mut r = domain_op(
+        v,
+        -INF,
+        INF,
+        crate::numeric::kernels::erfc,
+        false,
+        Some(2.0),
+        Some(0.0),
+        false,
+        false,
+        None,
+        None,
+    );
+    let real = real_reading();
+    if r.has_fin {
+        (r.lo, r.hi) = widen_relative(r.lo, r.hi);
+        if r.lo > 0.0 {
+            r.lo = out_lo(r.lo, ULP_SCIPY);
+        }
+        if r.hi < 2.0 {
+            r.hi = out_hi(r.hi, ULP_SCIPY);
+        }
+        r.sat_lo = false;
+        r.sat_hi = false;
+        if real {
+            (r.lo, r.hi) = real_tiny_bounds(r.lo, r.hi, true);
+            if r.lo == 0.0 {
+                r.lo_open = true;
+            }
+        }
+        if r.lo <= 0.0 {
+            r.lo = 0.0;
+            r.lo_open = true;
+        }
+        if r.hi >= 2.0 {
+            r.hi = 2.0;
+            r.hi_open = true;
+        }
+    }
+    if v.pinf {
+        r.include_pt(0.0);
+    }
+    if v.ninf {
+        r.include_pt(2.0);
+    }
+    if !real {
+        if v.reaches_up_to(ERFC_ZERO_AT) {
+            r.attain_pt(0.0);
+        }
+        if v.reaches_down_to(ERFC_TWO_AT) {
+            r.attain_pt(2.0);
+        }
+    }
+    r
+}
+
 /// `harmonic`: increasing on (-1, inf) and between any two of its poles, +inf at +inf, NaN at
 /// -inf and at every negative integer. A finite operand on (-1, inf), the point of a
 /// negative integer, or a box strictly between two poles is enclosed; one that may reach a pole
@@ -1928,6 +2053,411 @@ fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
     })
 }
 
+/// The order magnitudes up to which the arms of `bessely`, `besseli` and `besselk` read the
+/// kernels: Y and K are NaN-free at every finite x >= 0 there (measured to order 1e4), I's NaNs
+/// are float64's own (`IV_TINY`, `IV_HUGE`).
+const SCIPY_BESSEL_NU: f64 = 1e3;
+/// Below this argument scipy's I is NaN in float64 (its Wronskian `1/x` overflows below about
+/// 5.6e-309), and its corner is read here instead.
+const IV_TINY: f64 = 1e-300;
+/// Past this argument scipy's I may be NaN in float64 above order 50 (the uniform expansion's
+/// `(x/nu)^2` overflows past about 1.3e154 nu).
+const IV_HUGE: f64 = 1e150;
+
+/// A set of every value: what an arm holds where it cannot tell (the real reading's fallback at
+/// a point the table leaves Unresolved).
+fn every_value() -> Vs {
+    let mut r = Vs::reals();
+    r.pinf = true;
+    r.ninf = true;
+    r.nan = true;
+    r
+}
+
+/// A scipy Bessel kernel's value at a POINT of both operands: float64's own value exactly; in the
+/// real reading (reached only where the table leaves the point Unresolved) the kernel's finite
+/// value past `SCIPY_TINY` widened by `SCIPY_KERNEL_MARGIN`, else every value.
+fn bessel_point(f: fn(f64, f64) -> f64, nu: f64, x: f64) -> Vs {
+    let y = f(nu, x);
+    if !real_reading() {
+        return Vs::constant(y);
+    }
+    if y.is_finite() && y.abs() >= SCIPY_TINY && (nu == 0.0 || nu.abs() >= BESSEL_NU_FLOOR) {
+        let (lo, hi) = widen_relative(y, y);
+        return Vs::interval(lo, hi, false, false);
+    }
+    every_value()
+}
+
+/// The least and the most `|nu|` over an order's finite part; `None` past `SCIPY_BESSEL_NU`.
+fn order_magnitudes(nu: &Vs) -> Option<(f64, f64)> {
+    let least = if nu.lo <= 0.0 && 0.0 <= nu.hi {
+        0.0
+    } else {
+        nu.lo.abs().min(nu.hi.abs())
+    };
+    let most = nu.lo.abs().max(nu.hi.abs());
+    (most <= SCIPY_BESSEL_NU).then_some((least, most))
+}
+
+/// The least order magnitude at which the arms read a scipy Bessel kernel: at a subnormal order
+/// scipy's Y is far off (its rotation divides by `sin(pi nu)`, itself subnormal: `yv(5e-324, 2)`
+/// is -1.9e306) and its K is NaN at some arguments; from 1e-300 on both are within their error
+/// (measured). A corner order below it is read at it, or at 0, on the side the function's
+/// monotonicity in |nu| makes the bound hold.
+const BESSEL_NU_FLOOR: f64 = 1e-300;
+
+/// Does the order's finite part reach a subnormal nonzero magnitude, where float64's Y and K
+/// leave the function (`BESSEL_NU_FLOOR`)?
+fn reaches_subnormal_order(nu: &Vs) -> bool {
+    let point_zero = nu.fin_is_point() && nu.lo == 0.0;
+    nu.has_fin && !point_zero && nu.lo < f64::MIN_POSITIVE && nu.hi > -f64::MIN_POSITIVE
+}
+
+/// The argument past which the arm of `bessely` bounds `J^2 + Y^2` without the kernels: AMOS
+/// is accurate to |x| = 32768, and past it its phase, not its magnitude, is lost.
+const NICHOLSON_KERNEL_X: f64 = 1e4;
+
+/// A monotone image `[lo, hi]` of a scipy kernel as a finite part on `r`, the kernel's values at
+/// the corners where the FUNCTION is extremal: widened by `SCIPY_KERNEL_MARGIN` and stepped out by
+/// `ULP_SCIPY` in both readings, since the kernel is within 2^-41 of the function but not
+/// monotone to the ulp (its error jumps where its algorithm does: `besselk` by 56 ulps across
+/// the order 0.5, where AMOS takes a closed form), a lower bound below the normal range opening
+/// to 0 (`positive`: the true value is positive there) and, in the real reading, every bound
+/// below `SCIPY_TINY` moved out to it. An infinite upper bound is an unbounded hull, and in
+/// float64 also the kernel's overflow, +inf, a value.
+fn monotone_image(mut r: Vs, lo: f64, hi: f64, positive: bool) -> Vs {
+    let real = real_reading();
+    let (lo, hi) = widen_relative(lo, hi);
+    let mut lo = if lo.is_finite() && lo != 0.0 {
+        out_lo(lo, ULP_SCIPY)
+    } else {
+        lo
+    };
+    let mut hi = if hi.is_finite() && hi != 0.0 {
+        out_hi(hi, ULP_SCIPY)
+    } else {
+        hi
+    };
+    if real {
+        (lo, hi) = real_tiny_bounds(lo, hi, positive);
+    }
+    if positive && lo < f64::MIN_POSITIVE {
+        lo = 0.0;
+    }
+    if hi == INF && !real {
+        r.pinf = true;
+    }
+    r.has_fin = true;
+    r.lo = lo;
+    r.hi = hi;
+    r.lo_open = lo.is_infinite() || (positive && lo == 0.0 && real);
+    r.hi_open = hi.is_infinite();
+    r
+}
+
+/// `besselk(nu, x)`: K_nu = K_-nu is positive on x > 0, decreasing in x and increasing in |nu|
+/// (the kernel measured monotone in both), so over a box its image lies between the kernel's
+/// values at two corners, `[K_least(x_hi), K_most(x_lo)]` (`monotone_image`; the kernel cuts to
+/// 0 from about x = 697.9, where the true value is about 4e-305, and overflows to +inf near 0),
+/// the corner orders read at `BESSEL_NU_FLOOR` or 0. +inf at the point x = 0 at every order (in
+/// float64 at a NaN order too), and where a hull's edge 0 is attained on positive measure; an
+/// unbounded edge elsewhere. NaN at x < 0 and at -inf; 0 at +inf under a finite order (in
+/// float64 NaN instead past order 2.5e305, where xsf's cut `710 (1 + |nu|)` overflows). An
+/// infinite order: +inf on x >= 0 in the reals, NaN at x > 0 in float64 (the kernel's cell), as
+/// at a subnormal order (`BESSEL_NU_FLOOR`). Orders past `SCIPY_BESSEL_NU` are refused.
+fn b_besselk(nu: &Vs, x: &Vs) -> Option<Vs> {
+    use crate::numeric::kernels::besselk;
+    let real = real_reading();
+    if nu.is_const() && x.is_const() {
+        return Some(bessel_point(besselk, nu.lo, x.lo));
+    }
+    let mut r = Vs::empty();
+    r.nan = nu.nan || x.nan || x.ninf || (x.has_fin && x.lo < 0.0);
+    let inf_order = nu.pinf || nu.ninf;
+    let zero_point = x.fin_is_point() && x.lo == 0.0;
+    let zero_pm = x.has_fin && x.lo == 0.0 && !x.lo_open && x.sat_lo;
+    if zero_point || zero_pm {
+        r.pinf |= nu.has_fin || inf_order || (!real && nu.nan);
+    }
+    if x.pinf {
+        if nu.has_fin {
+            r.merge_pt(0.0);
+            let most = nu.lo.abs().max(nu.hi.abs());
+            r.nan |= !real && (710.0 * (1.0 + most)).is_infinite();
+        }
+        r.nan |= inf_order;
+    }
+    if !real && reaches_subnormal_order(nu) && x.has_fin && x.hi > 0.0 {
+        r.nan = true;
+    }
+    if !(x.has_fin && x.hi > 0.0 && !zero_point) {
+        return Some(r);
+    }
+    if inf_order {
+        if real {
+            r.pinf = true;
+        } else {
+            r.nan = true;
+        }
+    }
+    if !nu.has_fin {
+        return Some(r);
+    }
+    let (least, most) = order_magnitudes(nu)?;
+    let least = if least < BESSEL_NU_FLOOR { 0.0 } else { least };
+    let most = most.max(BESSEL_NU_FLOOR);
+    let (c, d) = (x.lo.max(0.0), x.hi);
+    let lo = if d.is_infinite() {
+        0.0
+    } else {
+        besselk(least, d)
+    };
+    // float64's +inf at a corner is no reading of the reals: AMOS overflows below x = 2.2e-305
+    // (true values from 702) and up to 1e4 short of the largest double; K's sure bound is 0
+    let lo = if real && lo == INF { 0.0 } else { lo };
+    let hi = if c == 0.0 { INF } else { besselk(most, c) };
+    if lo.is_nan() || hi.is_nan() {
+        return None;
+    }
+    let mut r = monotone_image(r, lo, hi, true);
+    if c == 0.0 {
+        r.hi_open = true; // the pole at the hull's edge: unbounded, its value on a null set
+    }
+    Some(r)
+}
+
+/// `besseli(nu, x)`: at an order range within [0, `SCIPY_BESSEL_NU`] and x >= 0, I is non-negative,
+/// increasing in x and decreasing in the order (the kernel measured so, within 2 ulps), so its
+/// image is `[I_most(x_lo), I_least(x_hi)]` (`monotone_image`; past the doubles, float64's +inf).
+/// A negative integer point order reads `I_-n = I_n`; an integer point order reads its parity on
+/// x < 0, `I_n(-x) = (-1)^n I_n(x)`; any other order range is NaN on x < 0 (its integer orders lie
+/// on a null set), and one reaching below 0 is read only at a point of both operands. float64's
+/// NaNs: below `IV_TINY` and past `IV_HUGE` (above order 50). Infinite operands: float64 NaN at
+/// x = +-inf and 0 at an infinite order; the reals +inf at x = +inf, `(-1)^n inf` at -inf under an
+/// integer point order (NaN otherwise), 0 at order +inf, and at order -inf no value (and at
+/// x < 0, where it is not decided, 0 besides).
+fn b_besseli(nu: &Vs, x: &Vs) -> Option<Vs> {
+    use crate::numeric::kernels::besseli;
+    let real = real_reading();
+    if nu.is_const() && x.is_const() {
+        return Some(bessel_point(besseli, nu.lo, x.lo));
+    }
+    let mut r = Vs::empty();
+    r.nan = nu.nan || x.nan;
+    let int_point = nu.is_const() && nu.lo.fract() == 0.0;
+    if (nu.pinf || nu.ninf) && x.has_fin {
+        if real {
+            if nu.pinf {
+                r.merge_pt(0.0);
+            }
+            if nu.ninf {
+                r.nan = true;
+                if x.lo < 0.0 {
+                    r.merge_pt(0.0);
+                }
+            }
+        } else {
+            r.merge_pt(0.0);
+        }
+    }
+    if nu.pinf || nu.ninf {
+        r.nan |= x.pinf || x.ninf;
+    }
+    if nu.has_fin && (x.pinf || x.ninf) {
+        if !real {
+            r.nan = true;
+        } else {
+            r.pinf |= x.pinf;
+            if x.ninf {
+                if int_point {
+                    if nu.lo.abs() % 2.0 == 1.0 {
+                        r.ninf = true;
+                    } else {
+                        r.pinf = true;
+                    }
+                } else {
+                    r.nan = true;
+                }
+            }
+        }
+    }
+    if !(nu.has_fin && x.has_fin) {
+        return Some(r);
+    }
+    let (nlo, nhi) = if int_point {
+        (nu.lo.abs(), nu.lo.abs())
+    } else {
+        (nu.lo, nu.hi)
+    };
+    if nlo < 0.0 || nhi > SCIPY_BESSEL_NU {
+        return None;
+    }
+    // corner orders read at 0 or `BESSEL_NU_FLOOR`, on the side I's decrease in the order keeps
+    let (nlo, nhi) = if int_point {
+        (nlo, nhi)
+    } else {
+        (
+            if nlo < BESSEL_NU_FLOOR { 0.0 } else { nlo },
+            nhi.max(BESSEL_NU_FLOOR),
+        )
+    };
+    let near_zero = x.lo < IV_TINY && x.hi > -IV_TINY;
+    let huge = nhi > 50.0 && x.lo.abs().max(x.hi.abs()) > IV_HUGE;
+    if !real && (near_zero || huge) {
+        r.nan = true;
+    }
+    // the image over |x| in [c, d] (c >= 0): [I_nhi(c), I_nlo(d)], the corner below `IV_TINY` read
+    // as its limit at 0 (I is non-negative there), an unbounded hull unbounded above; in the real
+    // reading float64's overflow at the lower corner reads I's sure bound 0, and its cut to 0 at
+    // the upper corner reads the Wronskian's bound: scipy's I is 0 at x > 0 below order 50
+    // exactly where `K_nu+1(x)` overflows in `I_nu = (1/x) / (K_nu I_nu+1/I_nu + K_nu+1)`, so
+    // there `I_nu(x) < 1 / (x MAX)` (true values to 1e-103 at order 1/2)
+    let image = |c: f64, d: f64| -> Option<(f64, f64)> {
+        let lo = if c < IV_TINY { 0.0 } else { besseli(nhi, c) };
+        let lo = if real && lo == INF { 0.0 } else { lo };
+        let hi = if d.is_infinite() {
+            INF
+        } else {
+            let d = d.max(IV_TINY);
+            let hi = besseli(nlo, d);
+            if real && hi == 0.0 {
+                1.0 / (d * f64::MAX)
+            } else {
+                hi
+            }
+        };
+        (!lo.is_nan() && !hi.is_nan()).then_some((lo, hi))
+    };
+    let mut parts: Vec<(f64, f64)> = Vec::new();
+    if x.hi >= 0.0 {
+        parts.push(image(x.lo.max(0.0), x.hi)?);
+    }
+    if x.lo < 0.0 {
+        if int_point {
+            let (a, b) = image(x.hi.min(0.0).abs(), x.lo.abs())?;
+            parts.push(if nlo % 2.0 == 1.0 { (-b, -a) } else { (a, b) });
+        } else {
+            r.nan = true;
+        }
+    }
+    if parts.is_empty() {
+        return Some(r);
+    }
+    let lo = parts.iter().map(|p| p.0).fold(INF, f64::min);
+    let hi = parts.iter().map(|p| p.1).fold(-INF, f64::max);
+    let ninf = parts.iter().any(|p| p.0 == -INF);
+    let mut out = monotone_image(r, lo, hi, false);
+    if ninf && !real {
+        out.ninf = true; // an odd order's parity of float64's +inf
+    }
+    Some(out)
+}
+
+/// `bessely(nu, x)`: Nicholson's formula, `J_nu(x)^2 + Y_nu(x)^2 = (8/pi^2) int_0^inf
+/// K_0(2x sinh t) cosh(2 nu t) dt`, decreasing in x and increasing in |nu|, bounds |Y| over
+/// a box with x >= x_lo > 0 by `sqrt(J^2 + Y^2)` at (most |nu|, x_lo), the kernels' values
+/// widened by `SCIPY_KERNEL_MARGIN` (within 2^-41 of the true bound, measured) and stepped out.
+/// A hull reaching 0, or a bound past the doubles, is unbounded both ways, and in float64 holds
+/// the kernel's overflows, +-inf. At the point x = 0: -inf at every order >= 0 in both readings;
+/// any other order range there holds +-inf and NaN (the reals' value at a negative half-integer
+/// order is not decided). NaN at x < 0 and -inf; at +inf, NaN in float64 and 0 in the reals under
+/// a finite order. An infinite order: float64 NaN at x > 0 and -inf at 0; the reals -inf on
+/// x >= 0 at +inf and no value at -inf. Orders past `SCIPY_BESSEL_NU` are refused.
+fn b_bessely(nu: &Vs, x: &Vs) -> Option<Vs> {
+    use crate::numeric::kernels::{besselj, bessely};
+    let real = real_reading();
+    if nu.is_const() && x.is_const() {
+        return Some(bessel_point(bessely, nu.lo, x.lo));
+    }
+    let mut r = Vs::empty();
+    r.nan = nu.nan || x.nan || x.ninf || (x.has_fin && x.lo < 0.0);
+    let zero_point = x.fin_is_point() && x.lo == 0.0;
+    let zero_pm = x.has_fin && x.lo == 0.0 && !x.lo_open && x.sat_lo;
+    if (zero_point || zero_pm) && nu.has_fin {
+        if nu.lo >= 0.0 {
+            r.ninf = true;
+        } else {
+            r.ninf = true;
+            r.pinf = true;
+            r.nan = true;
+        }
+    }
+    if nu.pinf || nu.ninf {
+        if x.has_fin && x.hi >= 0.0 {
+            if real {
+                r.ninf |= nu.pinf;
+                r.nan |= nu.ninf;
+            } else {
+                r.ninf |= zero_point || x.lo <= 0.0;
+                r.nan |= x.hi > 0.0;
+            }
+        }
+        r.nan |= x.pinf;
+    }
+    if x.pinf && nu.has_fin {
+        if real {
+            r.merge_pt(0.0);
+        } else {
+            r.nan = true;
+        }
+    }
+    if !(nu.has_fin && x.has_fin && x.hi > 0.0 && !zero_point) {
+        return Some(r);
+    }
+    if !real && reaches_subnormal_order(nu) {
+        let mut every = every_value();
+        every.nan = true;
+        return Some(every);
+    }
+    let (_, most) = order_magnitudes(nu)?;
+    let most = most.max(BESSEL_NU_FLOOR);
+    let c = x.lo.max(0.0);
+    // the bound sqrt(J^2 + Y^2) at (most, c): the kernels' to NICHOLSON_KERNEL_X; past it, at an
+    // order to 1/2 the bound `2/(pi x)` of J^2 + Y^2, and above 1/2 the decrease of
+    // x (J^2 + Y^2) from NICHOLSON_KERNEL_X (Watson 13.74), doubled in float64 (where the
+    // kernels' phase, not their magnitude, is lost)
+    let nicholson = |x: f64| -> Option<f64> {
+        let (j, y) = (besselj(most, x), bessely(most, x));
+        (!j.is_nan() && !y.is_nan()).then(|| j.hypot(y))
+    };
+    let b = if c == 0.0 {
+        INF
+    } else if c <= NICHOLSON_KERNEL_X {
+        nicholson(c)?
+    } else {
+        let at = if most <= 0.5 {
+            2.0 / std::f64::consts::PI
+        } else {
+            let m = nicholson(NICHOLSON_KERNEL_X)? * (1.0 + SCIPY_KERNEL_MARGIN);
+            m * m * NICHOLSON_KERNEL_X * (1.0 + SCIPY_KERNEL_MARGIN)
+        };
+        let b = (at / c).sqrt();
+        if real {
+            b
+        } else {
+            2.0 * b
+        }
+    };
+    if b.is_finite() {
+        let b = out_hi(b * (1.0 + SCIPY_KERNEL_MARGIN), ULP_SCIPY);
+        r.has_fin = true;
+        r.lo = -b;
+        r.hi = b;
+    } else {
+        r.has_fin = true;
+        r.lo = -INF;
+        r.hi = INF;
+        r.lo_open = true;
+        r.hi_open = true;
+        if !real {
+            r.pinf = true;
+            r.ninf = true;
+        }
+    }
+    Some(r)
+}
+
 /// A FINITE PART PAST THE LARGEST DOUBLE. An arm computes its bounds in float64, and a bound whose
 /// computation overflowed reads +-inf; a finite part's lower bound at +inf (or upper bound at
 /// -inf) is such an overflow, every value of it a finite real beyond the largest double: `2 *
@@ -2008,6 +2538,7 @@ fn apply_unary_arm(op: &str, v: &Vs, zero_null: ZeroNull) -> Option<Vs> {
         "floor" => u_step(v, f64::floor),
         "ceil" => u_step(v, f64::ceil),
         "erf" => u_erf(v),
+        "erfc" => u_erfc(v),
         "harmonic" => return u_harmonic(v),
         "neg" => u_neg(v),
         "abs" => u_abs(v),
@@ -2850,6 +3381,9 @@ fn apply_binary_arm(op: &str, a: &Vs, b: &Vs, zero_null: &dyn Fn(Operand) -> boo
         "atan2" => b_atan2(a, b),
         "mod" => return b_mod(a, b),
         "besselj" => return b_besselj(a, b),
+        "bessely" => return b_bessely(a, b),
+        "besseli" => return b_besseli(a, b),
+        "besselk" => return b_besselk(a, b),
         "+" => b_add(a, b),
         "-" => b_add(a, &u_neg(b)),
         "*" => b_mul(a, b, &|| zero_null(Operand::First), &|| {
@@ -2906,15 +3440,16 @@ fn apply_binary_arm(op: &str, a: &Vs, b: &Vs, zero_null: &dyn Fn(Operand) -> boo
 }
 
 /// Does `tokens` hold an operator the interval layer may not analyze: one whose arm can refuse
-/// (`harmonic`, `besselj`, `mod`) or one with no arm at all? The vocabulary before 0.15 and the
-/// total 0.15 arms are not such heads, so a consumer that fails closed on them changes nothing
-/// for an engine without them.
+/// (`harmonic`, the Bessel functions, `mod`) or one with no arm at all? The vocabulary before
+/// 0.15 and the total 0.15 arms are not such heads, so a consumer that fails closed on them
+/// changes nothing for an engine without them.
 pub(crate) fn holds_partial_head(tokens: &[String], ops: &Operators) -> bool {
-    const TOTAL: [&str; 45] = [
+    const TOTAL: [&str; 46] = [
         "neg", "abs", "inv", "exp", "log", "sin", "cos", "tan", "tanh", "atanh", "asin", "acos",
         "acosh", "cosh", "sinh", "asinh", "atan", "pow2", "pow3", "pow4", "pow5", "pow1_2",
         "pow1_3", "pow1_4", "pow1_5", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4",
-        "div5", "+", "-", "*", "/", "pow", "rootn", "floor", "ceil", "erf", "max", "min", "atan2",
+        "div5", "+", "-", "*", "/", "pow", "rootn", "floor", "ceil", "erf", "erfc", "max", "min",
+        "atan2",
     ];
     tokens
         .iter()
@@ -4321,14 +4856,14 @@ fn finite_ae_in_reading(tokens: &[String], ops: &Operators, f64: bool) -> bool {
 /// trees).
 fn tail_finite_ae(tokens: &[String], ops: &Operators) -> bool {
     // Keyed the SAFE way round: the operators known to map no finite input to +-inf. Any
-    // other operator (`inv`, `/`, `tan`, `log`, `atanh`, `rootn`, `pow`, `harmonic`,
-    // `besselj`, and every head this table does not name) makes the tree pole-bearing, which
-    // only asks for a bounded slab.
-    const POLE_FREE: [&str; 39] = [
+    // other operator (`inv`, `/`, `tan`, `log`, `atanh`, `rootn`, `pow`, `harmonic`, the
+    // Bessel functions, and every head this table does not name) makes the tree pole-bearing,
+    // which only asks for a bounded slab.
+    const POLE_FREE: [&str; 40] = [
         "+", "-", "*", "neg", "abs", "exp", "sin", "cos", "sinh", "cosh", "tanh", "asinh", "atan",
         "asin", "acos", "acosh", "pow2", "pow3", "pow4", "pow5", "pow1_2", "pow1_3", "pow1_4",
         "pow1_5", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4", "div5", "floor",
-        "ceil", "erf", "max", "min", "mod", "atan2",
+        "ceil", "erf", "erfc", "max", "min", "mod", "atan2",
     ];
     let (r, _d, decidable) = horizon(&[tokens], &[&[]], ops);
     if !decidable {
@@ -4514,6 +5049,7 @@ fn op_total_finite(op: &str) -> bool {
             | "floor"
             | "ceil"
             | "erf"
+            | "erfc"
     )
 }
 
@@ -6578,7 +7114,7 @@ fn isn_e(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     match (tok, ops.arity_of(tok)) {
         // Bounded real range: never ±inf anywhere (sin/cos/asin/acos are NaN
         // outside their domains resp. at infinite arguments -- NaN, not ±inf).
-        ("sin" | "cos" | "tanh" | "atan" | "asin" | "acos" | "erf", Some(1)) => true,
+        ("sin" | "cos" | "tanh" | "atan" | "asin" | "acos" | "erf" | "erfc", Some(1)) => true,
         // `atan2` lies in [-pi, pi] at every pair of operands it is defined at.
         ("atan2", Some(2)) => true,
         // {op(u) = ±inf} ⊆ {u = ±inf}: every op here maps finite reals to

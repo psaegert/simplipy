@@ -18,9 +18,10 @@ from test_operator_kernels import bits_equal, core1, core2, dense_binary_grid, d
 F = np.float64
 RNG = np.random.default_rng(1021)
 UNARY = ['neg', 'inv', 'abs', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
-         'asinh', 'acosh', 'atanh', 'exp', 'log', 'floor', 'ceil', 'harmonic', 'erf']
+         'asinh', 'acosh', 'atanh', 'exp', 'log', 'floor', 'ceil', 'harmonic', 'erf', 'erfc']
 BINARY = {'add': '+', 'sub': '-', 'mul': '*', 'div': '/', 'pow': 'pow', 'rootn': 'rootn',
-          'max': 'max', 'min': 'min', 'mod': 'mod', 'atan2': 'atan2', 'besselj': 'besselj'}
+          'max': 'max', 'min': 'min', 'mod': 'mod', 'atan2': 'atan2', 'besselj': 'besselj',
+          'bessely': 'bessely', 'besseli': 'besseli', 'besselk': 'besselk'}
 
 
 def unary_grid() -> np.ndarray:
@@ -157,7 +158,8 @@ def test_complex_operands() -> None:
     assert np.array_equal(ops.add(z, 1.0), z + 1.0) and np.array_equal(ops.neg(z), -z)
     for f, args in [(ops.harmonic, (1j,)), (ops.floor, (np.array([1 + 1j]),)), (ops.max, (1.0, 2j)),
                     (ops.mod, (1j, 2.0)), (ops.erf, (1j,)), (ops.atan2, (1j, 1.0)),
-                    (ops.besselj, (1.0, 1j))]:
+                    (ops.besselj, (1.0, 1j)), (ops.erfc, (1j,)), (ops.bessely, (1.0, 1j)),
+                    (ops.besseli, (1j, 1.0)), (ops.besselk, (1.0, 1j))]:
         with pytest.raises(TypeError, match='real numbers'):
             f(*args)
 
@@ -180,6 +182,13 @@ def test_torch_branches() -> None:
     assert isinstance(j, torch.Tensor) and j.dtype == torch.get_default_dtype()
     assert torch.equal(j, torch.as_tensor(ops.besselj(np.array([0.0, 1.0, 2.5]), np.array([1.5, -2.0, 3.0])),
                                           dtype=j.dtype))
+    assert math.isclose(float(ops.erfc(torch.tensor(0.5, dtype=torch.float64))), float(ops.erfc(0.5)),
+                        rel_tol=1e-15)
+    nu64, x64 = torch.tensor([0.0, 1.0, 2.5], dtype=torch.float64), torch.tensor([1.5, 2.0, 3.0], dtype=torch.float64)
+    for f in (ops.bessely, ops.besseli, ops.besselk):
+        t = f(nu64, x64)
+        assert isinstance(t, torch.Tensor) and t.dtype == torch.float64, f.__name__
+        assert bits_equal(t.numpy(), f(nu64.numpy(), x64.numpy())).all(), f.__name__
 
 
 def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:

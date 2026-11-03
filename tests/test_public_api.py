@@ -50,7 +50,8 @@ MODULE_ALLS = {
         'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
         'exp', 'log', 'rootn', 'pow',
         'add', 'sub', 'mul',
-        'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'atan2', 'besselj',
+        'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'erfc', 'atan2', 'besselj',
+        'bessely', 'besseli', 'besselk',
     },
     'simplipy.promotion': {'promote'},
 }

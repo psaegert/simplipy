@@ -226,6 +226,76 @@ pub(crate) fn erfc_below(a: &BigFloat, bound: &BigFloat, p: usize, cc: &mut Cons
     lt(&up, bound)
 }
 
+/// The largest |x| `erfc` reads: past it `e^(-x^2)` leaves the float's exponent range long
+/// before it matters (`erfc(1e4)` is about `10^-43429449`).
+pub(crate) const ERFC_X_CAP: f64 = 1e4;
+
+/// `erfc(x)` for a finite `x` at `p` bits (the caller owns the infinities), or `None` past
+/// `ERFC_X_CAP` and `MAX_BITS`:
+///
+/// * x <= 0: `1 + erf(-x)`, two positive parts, no cancellation;
+/// * 0 < x, `x^2 < (p + 40) ln 2`: `1 - erf(x)` at the precision its cancellation needs. Since
+///   `erfc(x) > e^(-x^2) (2/sqrt(pi)) / (x + sqrt(x^2 + 2))`, reading erf to `2^-q` with
+///   `q = p + 32 + x^2 log2(e) + log2(x + 2) + 2` reads erfc within `2^-(p+30)` of itself;
+/// * past that, the asymptotic series `e^(-x^2)/(x sqrt(pi)) sum_k (-1)^k (2k-1)!!/(2x^2)^k`,
+///   stopped before a term below `2^-(p+32)`: for real x > 0 its remainder is bounded by the
+///   first neglected term (DLMF 7.12(i)), and its smallest term, about `sqrt(2) e^(-x^2)`, lies
+///   below `2^-(p+38)` there.
+pub(crate) fn erfc(x: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
+    if p > MAX_BITS {
+        return None;
+    }
+    if x.is_zero() {
+        return Some(int(1, p));
+    }
+    let xa = x.abs();
+    if !lt(&xa, &BigFloat::from_f64(ERFC_X_CAP, 64)) {
+        return None;
+    }
+    if x.is_negative() {
+        let e = erf(&xa, p + 8, cc)?;
+        return Some(round(&int(1, p + 8).add(&e, p + 8, RM), p));
+    }
+    let x2f = super::besselj::approx(&x.mul(x, 64, RM));
+    if x2f < (p + 40) as f64 * std::f64::consts::LN_2 {
+        let lx = exponent(&xa).max(0) as usize + 2;
+        let q = p + 34 + (x2f * std::f64::consts::LOG2_E).ceil() as usize + lx;
+        if q > MAX_BITS {
+            return None;
+        }
+        let e = erf(x, q, cc)?;
+        return Some(round(&int(1, q).sub(&e, q, RM), p));
+    }
+    let q = p + 64;
+    let x2 = x.mul(x, q, RM);
+    let two_x2 = x2.mul(&int(2, q), q, RM);
+    let mut term = int(1, q);
+    let mut sum = int(1, q);
+    let target = -(p as i64) - 32;
+    let mut k: u64 = 1;
+    loop {
+        let next = term
+            .mul(&int(2 * k - 1, q), q, RM)
+            .div(&two_x2, q, RM)
+            .neg();
+        if next.is_zero() || exponent(&next) < target {
+            break; // the first neglected term bounds the remainder
+        }
+        if !lt(&next.abs(), &term.abs()) {
+            return None; // the terms turned before the target (not reached past the regime)
+        }
+        sum = sum.add(&next, q, RM);
+        term = next;
+        k += 1;
+        if k > 64 * q as u64 {
+            return None;
+        }
+    }
+    let sqrt_pi = cc.pi(q, RM).sqrt(q, RM);
+    let pre = x2.neg().exp(q, RM, cc).div(&x.mul(&sqrt_pi, q, RM), q, RM);
+    Some(round(&pre.mul(&sum, q, RM), p))
+}
+
 // ------------------------------------------------------------------------- harmonic
 
 /// The tangent numbers T_1, T_2, ... (1, 2, 16, 272, ...), exact, grown on demand.
