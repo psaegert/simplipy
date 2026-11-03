@@ -733,19 +733,27 @@ fn reaches_zero(v: &Vs) -> bool {
 }
 
 /// THE VALUE AT A ZERO DIVISOR, kept beside the hull of a reciprocal (`inv`, `/`, a negative
-/// power): no value in the reals (a division by zero, the table's V8) and +inf in float64 (the
-/// one zero). A value set holds every value its cell reaches on a set of positive measure. The
-/// hull cannot tell whether the divisor's zero set is a null set (`1/x` at 0) or an interval of
-/// the input (`1/floor(x)` on [0, 1)); the input space can (`zero_set_certified`): where the
-/// divisor's zero set is certified null, the pole's value is held on a null set only and is left
-/// out, and everywhere else it is kept.
-fn mark_zero_divisor(r: &mut Vs) {
+/// power): no value in the reals (a division by zero, the table's V8), and in float64 the
+/// infinities `(negative, positive)` the divisor's zero gives. A hull's zero (an interval that
+/// holds 0, not a point) carries no sign: the layer writes a zero endpoint of a hull as +0.0, and a
+/// node may give either zero there (`atan2(-0.0, 0)` and `mod(1, -1)` are -0.0, `mod(1, 1)` is
+/// +0.0), so its reciprocal is both infinities (`HULL_ZERO`), and an even power's +inf alone (both
+/// zeros square to +0). A value set holds every value its cell reaches on a set of positive
+/// measure. The hull cannot tell whether the divisor's zero set is a null set (`1/x` at 0) or an
+/// interval of the input (`1/floor(x)` on [0, 1)); the input space can (`zero_set_certified`):
+/// where the divisor's zero set is certified null, the pole's value is held on a null set only and
+/// is left out, and everywhere else it is kept.
+fn mark_zero_divisor(r: &mut Vs, (negative, positive): (bool, bool)) {
     if real_reading() {
         r.nan = true;
     } else {
-        r.pinf = true;
+        r.ninf |= negative;
+        r.pinf |= positive;
     }
 }
+
+/// The signs a hull's zero may carry in float64's reading: either (`mark_zero_divisor`).
+const HULL_ZERO: (bool, bool) = (true, true);
 
 /// Asks, lazily, whether an operand's ZERO SET is a null set of the input (`zero_set_certified`):
 /// the reciprocal arms ask only where the operand's hull reaches 0.
@@ -938,7 +946,7 @@ fn u_inv(v: &Vs, zero_null: ZeroNull) -> Vs {
             r.fin_null = v.fin_null && !(v.pinf || v.ninf);
         }
         if !v.fin_is_point() && reaches_zero(v) && !zero_null() {
-            mark_zero_divisor(&mut r);
+            mark_zero_divisor(&mut r, HULL_ZERO);
         }
     }
     r
@@ -2698,9 +2706,17 @@ fn b_pow(a: &Vs, b: &Vs, a_zero_null: ZeroNull) -> Vs {
                 }
                 // ...and the pole's own value where the base reaches 0: a negative power of
                 // zero is a division by zero (held on a null set where the base's zero set is
-                // certified null)
+                // certified null). An odd power keeps the zero's sign: a point's as the layer
+                // signs it, a hull's either (`HULL_ZERO`); an even one is +inf.
                 if reaches_zero(a) && (a.fin_is_point() || !a_zero_null()) {
-                    mark_zero_divisor(&mut z);
+                    let signs = if k % 2 == 0 {
+                        (false, true)
+                    } else if a.fin_is_point() {
+                        zero_signs(a)
+                    } else {
+                        HULL_ZERO
+                    };
+                    mark_zero_divisor(&mut z, signs);
                 }
             }
         }

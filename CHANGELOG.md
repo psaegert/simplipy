@@ -1339,7 +1339,8 @@ model predictions.
   search reaches no answer (`pow(exp(9), C) -> C`, the constant's own value).
 - **The interval layer keeps the value at a zero divisor.** A value set holds every value its
   cell reaches: a reciprocal (`inv`, `/`, a negative power) of a hull that reaches 0 now holds,
-  beside its finite part, the value there (none in the reals, +inf in float64), and an infinity
+  beside its finite part, the value there (none in the reals, the infinity of each sign the zero
+  may carry in float64), and an infinity
   times a hull that reaches 0 holds NaN. Whether that value is taken on a null set is decided in
   the input space, by the zero-set certificate of the divisor, its constants bound: a divisor
   whose zero set is null (`x0`, `x1*x2`, `x3 - exp(x10)`) holds it on a null set only, which the
@@ -1522,7 +1523,10 @@ model predictions.
   product of two points, the reciprocal of an infinity) and may carry either sign elsewhere, and
   its reciprocal, or a negative power of it, is the infinity of each sign it may carry:
   `1/(-0.0)` and `1/(0*(-1))` are -inf, `1/atan2(-0.0, 1)` is either (it was +inf); in the reals
-  it has no value. A negative base under exponents past 2^53, each an even integer in float64,
+  it has no value. A zero the layer encloses as a hull (an interval that holds 0, not a point)
+  carries no sign, so its reciprocal and its negative odd powers are both infinities in `f64`
+  (`1/atan2(-0.0, 0)` and `1/mod(1, -1)` are -inf in float64; they were enclosed with +inf
+  alone), and its negative even powers +inf. A negative base under exponents past 2^53, each an even integer in float64,
   is the even power (`(-2)^1.8e308` is +inf; it was NaN). `besselj` at an infinite order holds
   the kernel's NaN past x = 2 in `f64` (it was 0), and in the reals takes the limit (0 for +inf
   at every finite argument, no value for -inf), as at an infinite argument (0 at +inf, and at

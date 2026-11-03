@@ -646,6 +646,39 @@ def test_the_f64_enclosure_holds_the_sign_of_a_zero(expr, infinities) -> None:
     assert ('+' if box[1] else '') + ('-' if box[2] else '') == infinities, box
 
 
+@pytest.mark.parametrize('expr', [
+    'inv atan2 -0.0 0', 'inv atan2 -0.0 5e-324', 'inv harmonic -0.0', '/ -1 harmonic -0.0',
+    'inv mod -0.0 -1', 'inv mod -0.0 -0.5', 'inv mod 0 -1', 'inv mod 0 -0.5', 'inv mod -1 -1',
+    'inv mod -1 -0.5', 'inv mod 1 -1', 'inv mod 1 -0.5', 'inv mod -0.5 -0.5', 'inv mod 2 -1',
+    'inv mod 2 -0.5', 'inv mod 1.7976931348623157e308 -1', 'inv mod 1.7976931348623157e308 -0.5',
+])
+def test_the_f64_enclosure_holds_either_sign_of_a_hulls_zero(expr) -> None:
+    """A zero the layer encloses as a hull (an interval that holds 0, not a point) carries no
+    sign: the layer writes a hull's zero endpoint as +0.0. Float64 reads either sign there, so the
+    reciprocal of such a zero holds both infinities, and the enclosure holds float64's -inf at
+    `1/atan2(-0.0, 0)` and `1/mod(1, -1)`."""
+    from simplipy import _core
+    tokens = expr.split()
+    value, _ = _core.TableExpr(tokens, [], dict(_contract.ARITY)).eval_f64([])
+    box = _core.table_value_set(tokens, dict(_contract.ARITY), True)
+    assert _contains(box, value), (box, value)
+    assert box[1] and box[2], box
+
+
+@pytest.mark.parametrize('expr, infinities', [
+    # an even power of either zero is +0, so its negative power is +inf alone
+    ('pow mod 1 -1 -2', '+'), ('pow mod 1 -1 -3', '+-'), ('pow atan2 -0.0 0 -1', '+-'),
+])
+def test_a_negative_power_of_a_hulls_zero_reads_its_parity(expr, infinities) -> None:
+    """A negative integer power of a hull's zero: an odd one reads either sign, an even one +inf."""
+    from simplipy import _core
+    tokens = expr.split()
+    value, _ = _core.TableExpr(tokens, [], dict(_contract.ARITY)).eval_f64([])
+    box = _core.table_value_set(tokens, dict(_contract.ARITY), True)
+    assert _contains(box, value), (box, value)
+    assert ('+' if box[1] else '') + ('-' if box[2] else '') == infinities, box
+
+
 # ------------------------------------------------------------------------------------------
 # Assertion 5: the examples of section 1, each with the value the specification gives it
 # (`test_differential` holds those of sections 2 to 4).
