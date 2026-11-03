@@ -998,7 +998,13 @@ fn deployed_exact_over(
         .iter()
         .chain(rhs)
         .any(|t| ops.arity_of(t).is_some() && ZERO_SIGN_READERS.contains(&t.as_str()));
+    // a pair without variables is a fully numeric rewrite, bit-exact in f64 (F8): the same
+    // double, a zero's sign included, and no range standard (`table::f64_same`)
+    let ground = used.is_empty();
     let same = |a: f64, b: f64| {
+        if ground {
+            return crate::table::f64_same(a, b);
+        }
         if a == 0.0 && b == 0.0 {
             return !reads_zero_sign || a.to_bits() == b.to_bits();
         }
@@ -1051,7 +1057,7 @@ fn deployed_exact_over(
         if same(yl[i], yr[i]) || (yl[i].is_nan() && !yr[i].is_nan() && isolated_nan(&rows[i])) {
             continue;
         }
-        if out_of_range(&rows[i]) {
+        if !ground && out_of_range(&rows[i]) {
             range_rows.push(used.iter().map(|&v| rows[i][v]).collect());
             continue;
         }
@@ -1147,8 +1153,10 @@ mod deployed_bar_tests {
             assert!(d.ok, "{l} -> {r} at {:?}", d.first);
             assert!(d.probes > 300);
         }
-        // ceil(asinh(-1)) is -0, one value with 0
-        assert!(deployed_exact_over(&s("ceil asinh -1"), &s("0"), &v, 0, &[], false, ops).ok);
+        // a fully numeric rewrite is bit-exact (F8): ceil(asinh(-1)) is -0, not the double 0
+        let ground =
+            |r: &str| deployed_exact_over(&s("ceil asinh -1"), &s(r), &v, 0, &[], false, ops);
+        assert!(!ground("0").ok && ground("-0.0").ok);
     }
 
     /// An isolated NaN of the left side, where the right side has a value, is excused at a data

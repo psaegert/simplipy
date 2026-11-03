@@ -391,6 +391,23 @@ def test_the_covers_f64_gate(tmp_path, mine) -> None:
     assert [e[:2] for e in found['covers_f64']['examples']] == [planted]
 
 
+def test_the_ground_bit_exact_gate(tmp_path, mine) -> None:
+    """A fully numeric rewrite is bit-exact in f64: an f64 file's ground rule must leave the
+    double unchanged, read off the realizations. `exp(log(3)) -> 3` is 3.0000000000000004
+    against 3.0 and fails; `log(exp(2)) -> 2` is the same double and passes. A permissive file
+    has no such gate (its ground values are the reals')."""
+    off, on = (('exp', 'log', '3'), ('3',)), (('log', 'exp', '2'), ('2',))
+    path = _plant(tmp_path, mine, 'f64', [off, on])
+    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'ground_bit_exact')
+    assert not gate['ok'] and gate['examples'] == [
+        [list(off[0]), list(off[1]), '3.0000000000000004', '3.0']], gate
+    clean = verify_mine(str(mine / FILES['f64']), 'f64', _OPERATORS, judge=core_judge)
+    assert _gate(clean, 'ground_bit_exact')['ok'], clean['gates']
+    path = _plant(tmp_path, mine, 'permissive', [off, on])
+    assert 'ground_bit_exact' not in verify_mine(path, 'permissive', _OPERATORS,
+                                                 judge=core_judge)['gates']
+
+
 def _acj_operators():
     from conftest import acj_config_path, require_or_skip
     require_or_skip(acj_config_path(), 'needs the acj vocabulary')

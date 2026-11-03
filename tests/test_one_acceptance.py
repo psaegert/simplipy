@@ -130,10 +130,14 @@ class TestJudgePair:
         """Stage 2 used to re-run `find_rule`, whose ground short-circuit answered with the
         source's own f64 evaluation (`tan atan 7` -> `7.000000000000001`) instead of judging
         the target, so every inexactly-evaluating ground identity was refused. Measured on
-        the acj-3-2c reference: 46 such picks. The pair judgment accepts the true one."""
+        the acj-3-2c reference: 46 such picks. The pair judgment accepts the true one in
+        permissive, whose values are the reals'; in f64 a fully numeric rewrite is bit-exact,
+        and `7.000000000000001 -> 7` changes the double."""
         core = eng._core
         assert core.evaluate_constant_subtree(['tan', 'atan', '7']) != '7'
-        assert _judge(eng, rows[1], ('tan', 'atan', '7'), ('7',)) == (True, 'accepted')
+        assert _judge(eng, rows[1], ('tan', 'atan', '7'), ('7',), mode='permissive') \
+            == (True, 'accepted')
+        assert _judge(eng, rows[1], ('tan', 'atan', '7'), ('7',)) == (False, 'uncertified')
 
 
 class TestZeroIsZero:

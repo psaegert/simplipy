@@ -2122,6 +2122,14 @@ pub fn f64_structural(a: f64, b: f64) -> Cmp {
 /// four library calls of at most one unit of error, which can oppose: 2 x 4 x 1.
 pub const REALISED_ULP: u64 = 8;
 
+/// THE f64 AGREEMENT OF A FULLY NUMERIC REWRITE (F8, the semantics' 3.3): the same double, the
+/// sign of a zero included, both undefined agreeing; no tolerance, and no range standard, since a
+/// ground rule's one point is its whole domain and a fully numeric rewrite is bit-exact.
+/// `exp(sin(np.pi)) -> 1` is refused: the left side is 1.0000000000000002.
+pub fn f64_same(a: f64, b: f64) -> bool {
+    a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
+}
+
 /// The ordinary working precision of a reading of the reals, in decimal digits
 /// (`_contract.BASE_DPS`).
 pub const BASE_DPS: i32 = 50;
@@ -2589,6 +2597,14 @@ mod tests {
         let back = val_from_spec(&k, &a, &b, &mut ctx).unwrap();
         let (x, y) = (ctx.bf(&v), ctx.bf(&back));
         assert!(x.sub(&y, ctx.p, RM).is_zero());
+    }
+
+    #[test]
+    fn f64_sameness() {
+        assert!(f64_same(1.0, 1.0) && f64_same(f64::NAN, -f64::NAN));
+        assert!(!f64_same(1.0000000000000002, 1.0));
+        assert!(!f64_same(-0.0, 0.0));
+        assert!(f64_same(f64::INFINITY, f64::INFINITY) && !f64_same(f64::INFINITY, f64::MAX));
     }
 
     #[test]

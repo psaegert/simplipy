@@ -2529,7 +2529,8 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         return r
     agree = _table.table_f64_agree
     ex = (_exact.piecewise_affine(tl, tr, d_eval, agree)
-          or _exact.ground(tl, tr, _real_spec, lambda t, rng: d_eval(t, {}, rng), agree)
+          or _exact.ground(tl, tr, _real_spec, lambda t, rng: d_eval(t, {}, rng), agree,
+                           _table.table_f64_same)
           or _exact.own_value(tl, tr))
     sorts = dict(slots_of(rhs, '<C_R>', number=True), **slots_of(lhs, '<C_L>', number=True))
     variables = sorted(n for n in sorts if not n.startswith('<C'))
@@ -2928,13 +2929,19 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             out['finite_f64'] = out['finite_f64'] or bool(np.isfinite(_dl))
             _dcl, _dcr = cls_np(_dl), cls_np(_dr)
             dv = compare_deployed_realised(_dcl, _dcr)
-            if not in_range[0] and not snapped and v == 'eq':
+            # A FULLY NUMERIC REWRITE IS BIT-EXACT (F8, 3.3): a ground rule's one point agrees
+            # only where the two sides are the same double, a zero's sign included, and no range
+            # standard applies there
+            exact_point = ground and not has_cl
+            if exact_point and dv == 'eq' and not _table.table_f64_same(float(_dl), float(_dr)):
+                dv = 'REAL-CHANGE'
+            if not exact_point and not in_range[0] and not snapped and v == 'eq':
                 # THE f64 STANDARD: an operation of either side overflowed or underflowed,
                 # and the rewrite gives the true value -- an agreeing observation
                 out['oor'] += 1
                 out['read'] += 1
                 return
-            if not in_range[0] and dv != 'eq' and (v is None or snapped):
+            if not exact_point and not in_range[0] and dv != 'eq' and (v is None or snapped):
                 out['unread'] += 1
                 if owed:
                     out['owed_unread'].append(point)

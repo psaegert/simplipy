@@ -1321,6 +1321,12 @@ fn candidate_matches(
     lane: Lane,
 ) -> Result<Option<Vec<f64>>, &'static str> {
     let rescue = lane.rescue();
+    // A FULLY NUMERIC SOURCE (no variable, no constant) is rewritten bit-exactly in f64 (F8, the
+    // semantics' 3.3): its candidate is the same double, the sign of a zero included, and no range
+    // standard applies (`table::f64_same`).
+    let ground = !source
+        .iter()
+        .any(|t| t == "<constant>" || var_names.iter().any(|v| v == t));
     // Fast NECESSARY-condition gate, const-free arm (the candidate is a fixed function): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
@@ -1365,6 +1371,10 @@ fn candidate_matches(
             let y_cand: &[f64] = cand_rows.y.as_deref().unwrap();
             let hit = if rescue {
                 allclose_extends(y, y_cand, rtol, 0.0)
+            } else if ground {
+                y.iter()
+                    .zip(y_cand)
+                    .all(|(&s, &c)| crate::table::f64_same(s, c))
             } else {
                 f64_agree_extends(y, y_cand)
             } || if rescue {
@@ -1382,6 +1392,8 @@ fn candidate_matches(
                     0.0,
                     lane.excuses_isolated_infinity(),
                 )
+            } else if ground {
+                false
             } else {
                 f64_range_rescue(
                     y,

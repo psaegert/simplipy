@@ -201,7 +201,10 @@ The exact routes (`verdict['exact']`):
   sides are exact (a rational, a rational multiple of pi, an infinity, no value) the comparison
   is exact (`cos(pi) -> -1`); float64's values are always exact. A ground rule has no tolerance in
   any mode: `log(-1) -> 0` is refused in `permissive` too, where a fully numeric expression
-  takes its table value.
+  takes its table value. In `f64` a fully numeric rewrite is bit-exact, so the rule holds only
+  where its two sides are the same double, the sign of a zero included, and no range standard
+  applies: `exp(sin(pi)) -> 1` is refused there (the left side is 1.0000000000000002), and held
+  in `permissive`, whose values are the reals'.
 - **`L(C) -> C` without variables** holds in every mode: the witness is the left side's own
   value wherever it is finite (`acos(C) -> C`).
 

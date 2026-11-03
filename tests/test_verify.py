@@ -702,14 +702,10 @@ class TestTheF64RangeStandard:
         """`rootn(exp(x), 2) -> exp(x/2)` and `exp(x)/exp(x) -> 1` are true on R and
         computed by f64 at every point where exp stays in range; they differed only past
         exp's overflow (709.78) and underflow (-745.13), which made them ENGINE-MISALIGN,
-        tier `permissive`, and kept them out of the f64 set. Their ground instances, which the
-        constructors perform (`rootn(exp(800.5), 2) -> exp(1601/4)`), are f64 too."""
+        tier `permissive`, and kept them out of the f64 set."""
         for lhs, rhs in ((['rootn', 'exp', '?0', '2'], ['exp', '/', '?0', '2']),
                          (['rootn', 'exp', '?0', '2'], ['exp', '*', '0.5', '?0']),
-                         (['/', 'exp', '?0', 'exp', '?0'], ['1']),
-                         (['rootn', 'exp', '800.5', '2'], ['exp', '400.25']),
-                         (['/', 'exp', '800', 'exp', '800'], ['1']),
-                         (['log', 'exp', '1000'], ['1000'])):
+                         (['/', 'exp', '?0', 'exp', '?0'], ['1'])):
             got = judge_rule(lhs, rhs)
             assert (got['verdict'], got['realised'], got['tier']) \
                 == ('CERTIFIED', True, 'core'), (lhs, rhs, got)
@@ -717,6 +713,19 @@ class TestTheF64RangeStandard:
         assert v.verify_ruleset([[['rootn', 'exp', 'x0', '2'], ['exp', '/', 'x0', '2']],
                                  [['/', '1', 'exp', 'x0'], ['exp', 'neg', 'x0']]],
                                 mode='f64')['is_clean'] is True
+
+    def test_a_ground_rule_has_no_range_standard(self) -> None:
+        """A fully numeric rewrite is bit-exact in f64 (F8): a ground rule's one point is its
+        whole domain, and no true value stands in for float64's there. `rootn(exp(800.5), 2) ->
+        exp(1601/4)`, `exp(800)/exp(800) -> 1` and `log(exp(1000)) -> 1000` hold in the reals,
+        and in permissive, and change float64's value (inf, NaN and inf against a finite
+        double): refused in f64."""
+        for lhs, rhs in ((['rootn', 'exp', '800.5', '2'], ['exp', '400.25']),
+                         (['/', 'exp', '800', 'exp', '800'], ['1']),
+                         (['log', 'exp', '1000'], ['1000'])):
+            got = judge_rule(lhs, rhs)
+            assert (got['realised'], got['tier'], got['out_of_range']) \
+                == (False, 'permissive', 0), (lhs, rhs, got)
 
     def test_at_a_range_event_only_the_two_values_are_accepted(self) -> None:
         """The special case admits the true value beside the evaluator's, nothing else.
@@ -916,11 +925,15 @@ class TestCleanlinessIsPerMode:
         # inf` and kin at `_0 = +-1`, `tanh sinh atanh _0 -> tanh tan asin _0`, `exp(-inf * ?0)
         # -> pow 0 ?0` and its `!0` twin, `pow(-1, +-inf) -> 1` and four ground rules at a pole
         # of tan, `tanh tan asin 1 -> 1` and kin, where float64 reads a finite value).
+        # A fully numeric rewrite is bit-exact in f64: f64 128 (+100 ground rules that change
+        # the double, 80 the sign of a zero, `* 0 asin (-1) -> 0` and kin, whose left side is
+        # -0.0, and 20 a rounding of 1 to 6 units in the last place, `tan atan np.e -> np.e` and
+        # kin; one of them, `exp(2)/np.e -> np.e`, the load refuses as well: policy alone 17).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 28 and len(policy_only['f64']) == 18
+        assert len(tier['f64'] - {126}) == 128 and len(policy_only['f64']) == 17
         assert len(tier['permissive']) == 31 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
@@ -1252,17 +1265,19 @@ class TestAnExactZeroIsNotAnUndecayableGap:
         cover the rows above. `exp(sinh(-10))` is exactly 1.03e-4783 at EVERY working
         precision -- tiny, but FIXED, and false. Flooring a nonzero separation at an
         absolute `10^-dps` swamps it and manufactures a decay it does not have, so
-        nothing nonzero is floored. These must stay kills held in f64 (and, within float
-        resolution, in permissive), never true."""
+        nothing nonzero is floored. These must stay kills in the reals, never true; held in
+        f64 where float64's value is the right side's double (`tanh(20)` is 1.0), and within
+        float resolution in permissive (`tanh(-19)` is -0.9999999999999999 in float64, a double
+        a fully numeric rewrite may not change)."""
         from simplipy.verify._contract import judge_rule
-        for lhs, rhs in ((['exp', 'sinh', '(-10)'], ['0']),
-                         (['exp', 'sinh', '(-8)'], ['0']),
-                         (['tanh', '(-19)'], ['(-1)']),
-                         (['tanh', '20'], ['1'])):
+        for lhs, rhs, tier in ((['exp', 'sinh', '(-10)'], ['0'], 'core'),
+                               (['exp', 'sinh', '(-8)'], ['0'], 'core'),
+                               (['tanh', '(-19)'], ['(-1)'], 'permissive'),
+                               (['tanh', '20'], ['1'], 'core')):
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') == 'KILL', (lhs, got)
             assert got.get('clause') == 'a-real-change', (lhs, got)
-            assert got.get('tier') == 'core', (lhs, got)
+            assert got.get('tier') == tier, (lhs, got)
 
     def test_the_reading_is_absolute_so_no_scale_can_normalise_it_away(self) -> None:
         """The unit underneath. A separation reported as a QUOTIENT of its own scale is

@@ -282,6 +282,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
 | `offered` | (`permissive` only) the sidecar pins the f64 file the mine was offered, and it lies beside the file with the pinned sha256 |
 | `covers_f64` | (`permissive` only) the file covers the pinned f64 file, as permissive includes f64: on each f64 rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
+| `ground_bit_exact` | (`f64` only) every ground rule's two sides, evaluated with the operators' realizations in float64, are the same double, the sign of a zero included: a fully numeric rewrite is bit-exact in `f64`, so `exp(sin(np.pi)) -> 1` (1.0000000000000002 against 1.0) fails |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.

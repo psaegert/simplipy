@@ -352,28 +352,25 @@ def _double(v):
     return as_double(v[1])
 
 
-def ground(tl, tr, real_spec, f64_value, f64_agree):
+def ground(tl, tr, real_spec, f64_value, f64_agree, f64_same):
     """The ground-point route: `None` where the rule has a variable or a constant, else
     `{'route', 'reals', 'permissive', 'f64'}`. `real_spec(tree)` is the table's `(spec,
     snapped)` at the working precision, or None where the table cannot read it;
-    `f64_value(tree, in_range)` is float64's value, `in_range[0]` cleared where an operation
-    overflowed or underflowed. The reals and permissive are decided where both table values are
-    exact and no snap read them (permissive where they round to doubles exactly: no multiple of
-    pi); f64 wherever its doubles agree, and where they differ with no operation leaving the
-    range (at a range event the true value stands, which the table decides)."""
+    `f64_value(tree, in_range)` is float64's value. The reals and permissive are decided where
+    both table values are exact and no snap read them (permissive where they round to doubles
+    exactly: no multiple of pi); f64 always, by `f64_same`: a fully numeric rewrite is bit-exact
+    (F8), so the rule holds in f64 exactly where its two sides are the same double, the sign of a
+    zero included, with no range standard (`exp(sin(np.pi)) -> 1` is refused, the left side
+    being 1.0000000000000002)."""
     slots = set()
     for t in (tl, tr):
         _ops_and_slots(t, set(), slots)
     if slots:
         return None
     out = {'route': 'ground', 'reals': None, 'permissive': None, 'f64': None}
-    in_range = [True]
     with np.errstate(all='ignore'):
-        dl, dr = float(f64_value(tl, in_range)), float(f64_value(tr, in_range))
-    if f64_agree(dl, dr) == 'eq':
-        out['f64'] = 'proved'
-    elif in_range[0]:
-        out['f64'] = 'refuted'
+        dl, dr = float(f64_value(tl, None)), float(f64_value(tr, None))
+    out['f64'] = 'proved' if f64_same(dl, dr) else 'refuted'
     read = [real_spec(t) for t in (tl, tr)]
     if all(r is not None and not r[1] and r[0][0] in _EXACT_KINDS for r in read):
         lv, rv = (_exact_value(r[0]) for r in read)

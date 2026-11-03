@@ -81,6 +81,14 @@ organised by who you are, then the highlights, then every change in detail.
   overflows or underflows. Where one does, a rewrite may give the true value instead, as the
   constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads f64 rules by
   the same standard.
+- **A fully numeric rule changes no double.** Every fully numeric simplification in `f64` is
+  bit-exact, so a ground rule holds in `f64` only where its two sides are the same double, the
+  sign of a zero included, with no range standard. The judge read such a rule within 8 units in
+  the last place, and the f64 files shipped rules that changed the double: `exp(sin(np.pi)) ->
+  1` (1.0000000000000002) and `tan(atan(1)) -> 1` (0.9999999999999999) among them. The judge's
+  ground route and its battery, and the mint, now refuse them, and `verify-mine` checks every
+  ground rule of an f64 file against the realizations (`ground_bit_exact`). `permissive` keeps
+  them: its ground values are the reals'.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of

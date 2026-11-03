@@ -2570,6 +2570,13 @@ fn table_f64_agree(a: f64, b: f64) -> &'static str {
     table::f64_agree(a, b).name()
 }
 
+/// THE TABLE's f64 agreement of a fully numeric rewrite (F8): the same double, the sign of a zero
+/// included, both NaN agreeing (`table::f64_same`).
+#[pyfunction]
+fn table_f64_same(a: f64, b: f64) -> bool {
+    table::f64_same(a, b)
+}
+
 /// The structural f64 comparison (has the deployed algebra diverged?).
 #[pyfunction]
 fn table_f64_structural(a: f64, b: f64) -> &'static str {
@@ -2604,6 +2611,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_sort_atoms, m)?)?;
     m.add_function(wrap_pyfunction!(table_compare_classes, m)?)?;
     m.add_function(wrap_pyfunction!(table_f64_agree, m)?)?;
+    m.add_function(wrap_pyfunction!(table_f64_same, m)?)?;
     m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
     m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
     m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;
