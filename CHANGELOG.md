@@ -2217,6 +2217,27 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   `sin(nu pi)`, `cos(nu pi)` and Gamma's reflection read that distance exactly, and an
   approximate order within the working band of an integer leaves J and I undecided where they
   swing (a negative order, or x < 0).
+- **A Bessel head at a zero argument is exact.** `J_0(0)` and `I_0(0)` are 1 by their series,
+  and the table carried them as approximations, so `atanh(besseli(0, 0))`, atanh at its pole,
+  had no reading: the judge skipped the point, and `atanh(besselj(_0, 0)) -> 0` and
+  `atanh(besseli(_0, 0)) -> 0` held in `permissive`, although at `_0 = 0` the left side is
+  `inf`. The engine then rewrote `atanh(besseli(floor(x1), 0))` to 0, where it is `inf` on
+  [0, 1). The table now gives the formula's values at a zero argument exactly, whether the order
+  is written or bound: both rules are refused, and `atanh(besseli(0, 0))` is `inf` in every
+  mode.
+- **An exceptional point the judge cannot read refuses the rule.** The judge takes each slot's
+  exact atoms (zero, the units, the infinities, pi/2 and the rest of its sort's values), at the
+  generic and special constant values, and a ground rule's one point because rules fail there.
+  A mode whose reading leaves one of them unread now refuses the rule, with uncertainty, and the
+  verdict names the point (`unread_owed`); before, the point counted neither way, and the rule
+  held on the points that were read. The grid, the mine's rows, the preimages of jumps, the
+  slots' magnitude ladder and the constants' span and saturation magnitudes are samples and
+  still count neither way. So that an owed point is read where it can be, a bounded
+  function (`tanh`, `erf`, `erfc`) left inside the band of its bound tells the reading its
+  distance to the bound, and the next rung at an owed point is sized to resolve it:
+  `floor(erf(exp(_0))) -> 0` is read at `_0 = 3`, where `erf(exp(3))` is 1 - 1.7e-177, at about
+  400 digits. The f64 bar of the 0.15 heads no longer turns an `f64` reading that reached no
+  answer into a pass.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

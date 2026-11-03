@@ -57,14 +57,25 @@ resolution. The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) a
 outcome, a diagnostic that decides no mode by itself. A mode whose reading reaches no answer
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side
 is finite (`NO-WITNESS`), a token the judge cannot read (`UNSUPPORTED-SHAPE`), a judgment past its
-time (`JUDGE-TIMEOUT`). `f64` reads float64's values: `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in
+time (`JUDGE-TIMEOUT`), or a point the mode owes a reading at and leaves unread. The owed points
+are the ones the judge takes because they are exceptional: every slot at each of its sort's
+exact atoms (zero, the units, the infinities, pi/2 and the rest), at each generic or special
+constant value the mode owes a witness at, and a ground rule's one point; the verdict names an
+unread one (`unread_owed`). The grid, the mine's rows, the preimages of jumps, the slots'
+magnitude ladder and the constants' span and saturation magnitudes (`|c|` from 0.001 to 0.1
+and from 10 to 1e4, and 19 to 1e17) are samples: a point among them that cannot be read counts neither way. A rule with
+constants and no slots reads one point per constant value, and at least a quarter of them must
+be read.
+`f64` reads float64's values: `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in
 `f64`, where `1e-3000` is the double 0.0 and the two sides are bit-identical. `permissive`'s
 own criterion, agreement at float resolution, needs no exact equality: where the reals' readings
 run out of precision (`UNRESOLVED-COVERAGE`, the 6,050 digits `1e-3000` beside 1 demands), the
 interval layer's enclosure of both sides at the point decides that every double either side can
-round to is the same, so the rule holds there too. Running out of precision never reads as
-equality: `((x + 1e-3000) - x) * 1e3000 -> 0`, whose left side is 1, encloses unbounded and is
-refused. A measure the cells cannot decide is refused where it is owed: `f64`
+round to is the same, so `x + 1e-3000 -> x` holds by it too. (At the atom e, an approximation,
+the enclosure of `x^2 + 1` is wider than that, so `permissive`'s own reading of the first rule
+leaves an owed point unread; `permissive` holds it through `f64`.) Running out of precision
+never reads as equality: `((x + 1e-3000) - x) * 1e3000 -> 0`, whose left side is 1, encloses
+unbounded and is refused. A measure the cells cannot decide is refused where it is owed: `f64`
 owes it in float64's values, so an undecided float64 measure refuses `f64`;
 `UNDECIDED-MEASURE` labels the reals' measure, which `permissive` does not owe. An undecided
 check never reads as a pass.

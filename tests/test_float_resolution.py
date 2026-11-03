@@ -47,13 +47,25 @@ def test_a_reading_is_made_at_the_precision_the_point_demands() -> None:
                    _0=Fraction(1, 2)) == ('doubles', 1.0, 0.0)
 
 
-@pytest.mark.parametrize('lhs, rhs', [('+ + pow ?0 2 1 1e-3000', '+ pow ?0 2 1'),
-                                      ('+ ?0 1e-3000', '?0'),
-                                      ('+ + pow _0 2 1 1e-3000', '+ pow _0 2 1')])
+@pytest.mark.parametrize('lhs, rhs', [('+ ?0 1e-3000', '?0'), ('+ _0 1e-3000', '_0')])
 def test_a_summand_below_float_resolution_holds_by_permissives_own_criterion(lhs, rhs) -> None:
     d = verify_rule(lhs.split(), rhs.split())
     assert d['permissive'] is True and d['realised'] is True, d
     assert d['verdict'] == 'UNRESOLVED-COVERAGE', d   # the reals' diagnostic stays undecided
+
+
+@pytest.mark.parametrize('lhs, rhs', [('+ + pow ?0 2 1 1e-3000', '+ pow ?0 2 1'),
+                                      ('+ + pow _0 2 1 1e-3000', '+ pow _0 2 1')])
+def test_an_atom_the_enclosure_cannot_read_leaves_permissives_own_criterion_no_answer(
+        lhs, rhs) -> None:
+    """At the atom e, which enters the enclosure as an approximation, `x^2 + 1` encloses wider
+    than float resolution, and the summand demands 6,050 digits: permissive's own reading leaves
+    an owed point unread and reaches no answer. The rule holds in permissive through f64, whose
+    two sides are bit-identical."""
+    d = verify_rule(lhs.split(), rhs.split())
+    assert d['realised'] is True and d['tier'] == 'core' and d['permissive'] is None, d
+    slot = lhs.split()[3]
+    assert d['unread_owed'] == {'permissive': [{slot: 2.718281828459045}]}, d
 
 
 @pytest.mark.parametrize('lhs', ['+ ?0 1e-20', '* - + ?0 1e-3000 ?0 1e3000'])

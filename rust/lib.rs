@@ -2398,8 +2398,9 @@ fn kernel_binary(
 type TableSpec = (String, String, String);
 
 /// What `TableExpr.eval_real` returns: the value's spec, then Unresolved, snapped, an infinite
-/// intermediate, and the largest and smallest nonzero finite intermediates' specs.
-type TableReal = (TableSpec, bool, bool, bool, TableSpec, TableSpec);
+/// intermediate, the largest and smallest nonzero finite intermediates' specs, and the smallest
+/// distance to its bound of a bounded function left inside its band (`table::Ctx::band`).
+type TableReal = (TableSpec, bool, bool, bool, TableSpec, TableSpec, TableSpec);
 
 /// An expression compiled against THE TABLE (`table`): each mode's values, defined once in the
 /// core. The contract judge evaluates every point through it.
@@ -2457,6 +2458,7 @@ impl PyTableExpr {
                 out.inf_node,
                 table::bf_spec(&out.max_mag),
                 table::bf_spec(&out.min_mag),
+                table::bf_spec(&out.band),
             ))
         })
         .map_err(PyValueError::new_err)

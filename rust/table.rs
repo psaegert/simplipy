@@ -195,6 +195,9 @@ pub struct Ctx {
     pub max_mag: BigFloat,
     /// the smallest nonzero finite intermediate (sums and remainders excluded)
     pub min_mag: BigFloat,
+    /// the smallest distance to its bound of a bounded function left inside its band
+    /// (`note_distance`), zero where none was
+    pub band: BigFloat,
     /// THE FLOAT-RESOLUTION READING (P3): a bounded function inside its boundary band
     /// (`tanh` within 1e-40 of +-1 at 50 digits) reads as the working float's value there,
     /// whose nearest double is the limit's, where the exact reading is Unresolved (it cannot
@@ -267,6 +270,7 @@ impl Ctx {
             inf_node: false,
             max_mag: small_int(0, p),
             min_mag: small_int(0, p),
+            band: small_int(0, p),
             saturate: false,
             cc: PooledConsts::take()?,
         })
@@ -360,6 +364,31 @@ impl Ctx {
         }
         if !additive && !a.is_zero() && (self.min_mag.is_zero() || cmp_lt(&a, &self.min_mag)) {
             self.min_mag = a;
+        }
+    }
+
+    /// A bounded function (`tanh`, `erf`, `erfc`) whose value lies inside the band of its bound
+    /// is unresolved at this precision, and it is its distance `d > 0` to the bound that a
+    /// reading must carry: recorded (`band`), so the judge's ladder can size a rung that
+    /// resolves it where it owes the point a reading. `floor(erf(exp(3)))` is 0, read at about
+    /// 400 digits (`erf(exp(3))` is 1 - 1.7e-177). The float-resolution reading, which reads such
+    /// a value as its bound (`saturate`), records nothing.
+    fn note_distance(&mut self, d: &BigFloat) {
+        if self.saturate || d.is_zero() || d.is_nan() || d.is_inf() {
+            return;
+        }
+        let a = d.abs();
+        if self.band.is_zero() || cmp_lt(&a, &self.band) {
+            self.band = a;
+        }
+    }
+
+    /// `note_distance` of `erf(x)` to +-1, and of `erfc(x)` to 2 at x < 0: `erfc(|x|)`, read by
+    /// its bound (`special::erfc_bound`).
+    fn note_erfc_distance(&mut self, x: &BigFloat) {
+        if !self.saturate {
+            let d = special::erfc_bound(&x.abs(), 64, &mut self.cc);
+            self.note_distance(&d);
         }
     }
 
@@ -1050,6 +1079,11 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                 let x = ctx.bf(a);
                 let t = x.tanh(p, RM, &mut ctx.cc);
                 if in_band(&t.abs(), &one(p), ctx) && !ctx.saturate {
+                    // 1 - |tanh x| = 2 / (e^(2|x|) + 1)
+                    let w = 64;
+                    let e = x.abs().mul(&small_int(2, w), w, RM).exp(w, RM, &mut ctx.cc);
+                    let d = small_int(2, w).div(&e.add(&one(w), w, RM), w, RM);
+                    ctx.note_distance(&d);
                     None
                 } else {
                     Some(approx(t))
@@ -1120,7 +1154,9 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                 if cmp_gt(&x.abs(), &crate::hiprec::bf(1e5, p))
                     || special::erfc_below(&x.abs(), &ctx.floor, p, &mut ctx.cc)
                 {
-                    // past the band erf is +-1 to every digit the reading carries
+                    // past the band erf is +-1 to every digit the reading carries; its distance
+                    // to the bound is erfc(|x|)
+                    ctx.note_erfc_distance(&x);
                     ctx.saturate.then(|| {
                         let l = one(p);
                         approx(if x.is_negative() { l.neg() } else { l })
@@ -1130,7 +1166,11 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                         Some(v) if !in_band(&v.abs(), &one(p), ctx) || ctx.saturate => {
                             Some(approx(v))
                         }
-                        _ => None,
+                        Some(_) => {
+                            ctx.note_erfc_distance(&x);
+                            None
+                        }
+                        None => None,
                     }
                 }
             }
@@ -1148,11 +1188,17 @@ fn unary(name: &str, a: &Val, ctx: &mut Ctx) -> Option<Out> {
                     && (cmp_gt(&x.abs(), &crate::hiprec::bf(special::ERFC_X_CAP, p))
                         || special::erfc_below(&x.abs(), &ctx.floor, p, &mut ctx.cc))
                 {
+                    // its distance to 2 is erfc(|x|)
+                    ctx.note_erfc_distance(&x);
                     ctx.saturate.then(|| approx(two))
                 } else {
                     match special::erfc(&x, p, &mut ctx.cc) {
                         Some(v) if !in_band(&v, &two, ctx) || ctx.saturate => Some(approx(v)),
-                        _ => None,
+                        Some(_) => {
+                            ctx.note_erfc_distance(&x);
+                            None
+                        }
+                        None => None,
                     }
                 }
             }
@@ -1517,7 +1563,21 @@ fn besselj_val(nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
     }
     let n = bessel_order(nu, sign(nu) < 0 || sign(x) < 0, ctx)?;
     let xb = ctx.bf(x);
-    besselj::besselj(&n, &xb, ctx.p, &mut ctx.cc).map(approx)
+    besselj::besselj(&n, &xb, ctx.p, &mut ctx.cc).map(|v| bessel_value(v, x))
+}
+
+/// A Bessel kernel's value as the table carries it. At a zero argument the kernels give the
+/// formula's values (`J_0(0) = I_0(0) = 1`, else 0, a pole's infinity or none), which are exact,
+/// as `pow(0, 0) = 1` is: `atanh(besseli(0, 0))` is atanh(1) = +inf, whether the order is written
+/// or bound. Elsewhere the value is the kernel's approximation.
+fn bessel_value(v: BigFloat, x: &Val) -> Val {
+    if is_zero(x) && v.is_int() && !v.is_zero() && !v.is_inf() {
+        let p = v.precision().unwrap_or(64);
+        if !cmp_gt(&v, &one(p)) && !cmp_lt(&v, &one(p)) {
+            return int(1);
+        }
+    }
+    approx(v)
 }
 
 /// A Bessel order read at the precision its distance `e` to the nearest integer needs: every
@@ -1599,7 +1659,7 @@ fn bessel_val(name: &str, nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
         "besseli" => bessel::besseli(&n, &xb, p, &mut ctx.cc),
         _ => bessel::besselk(&n, &xb, p, &mut ctx.cc),
     }
-    .map(approx)
+    .map(|v| bessel_value(v, x))
 }
 
 // ---------------------------------------------------------------- compiled expressions
@@ -1626,6 +1686,9 @@ pub struct RealOutcome {
     pub inf_node: bool,
     pub max_mag: BigFloat,
     pub min_mag: BigFloat,
+    /// the smallest distance to its bound of a bounded function left inside its band, zero where
+    /// none was (`Ctx::note_distance`)
+    pub band: BigFloat,
 }
 
 impl Expr {
@@ -1698,6 +1761,7 @@ impl Expr {
             inf_node: ctx.inf_node,
             max_mag: ctx.max_mag,
             min_mag: ctx.min_mag,
+            band: ctx.band,
         })
     }
 
@@ -2479,6 +2543,30 @@ mod tests {
         let p = ctx.p;
         assert!(i00.sub(&one(p), p, RM).is_zero(), "{i00}");
         assert!(even.sub(&e2, p, RM).is_zero() && odd.add(&o3, p, RM).is_zero());
+    }
+
+    /// At a zero argument a Bessel head's value is the formula's, exact, whether the order is
+    /// written or bound: `J_0(0) = I_0(0) = 1`, so `atanh` of it is +inf, not a value inside
+    /// atanh's pole band.
+    #[test]
+    fn a_bessel_head_at_a_zero_argument_is_exact() {
+        let zero = [int(0)];
+        for head in ["besselj", "besseli"] {
+            for (expr, env) in [
+                (format!("{head} 0 0"), &[][..]),
+                (format!("{head} x0 0"), &zero[..]),
+            ] {
+                match real(&expr, env) {
+                    Some(Val::Exact(Exact::Rat(r))) => assert!(r == Rat::int(1), "{expr}"),
+                    got => panic!("{expr}: {got:?}"),
+                }
+            }
+            assert_eq!(class(&real(&format!("atanh {head} 0 0"), &[])), "+inf");
+            assert_eq!(class(&real(&format!("atanh {head} x0 0"), &zero)), "+inf");
+            // a nonzero order at a zero argument is 0, exactly
+            assert!(matches!(real(&format!("{head} 2 0"), &[]),
+                             Some(Val::Exact(Exact::Rat(r))) if r.is_zero()));
+        }
     }
 
     /// A point the table decides is decided, through a variable: `tan(asin(ceil x))` at x = 0.5

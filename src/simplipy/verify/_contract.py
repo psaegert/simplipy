@@ -55,7 +55,8 @@ class _Registers(threading.local):
     other's: the mpmath context a judgment computes in (`context`, None outside one), this
     thread's context, built once (`owned`), and the scratch registers of one judgment -- the
     snaps a table reading met (`snaps`), the intermediates' magnitudes a ladder sizes its rungs
-    by (`mag_sink`), the left side's kind at the last point resolved (`lhs_kind`) and the
+    by and the least distance of a bounded function inside its band to its bound (`mag_sink`),
+    the left side's kind at the last point resolved (`lhs_kind`) and the
     precision the last polished witness is good to (`polish_dps`)."""
 
     def __init__(self) -> None:
@@ -475,15 +476,17 @@ def c_eval(tree, env):
     (`_LOCAL.snaps`) and the intermediates' magnitudes (`_LOCAL.mag_sink`) for the ladder."""
     expr, names, extra = _compiled(tree)
     args = [_spec(extra[n] if n in extra else env[n]) for n in names]
-    spec, unresolved, snapped, inf_node, mag, small = expr.eval_real(args, mp.dps)
+    spec, unresolved, snapped, inf_node, mag, small, band = expr.eval_real(args, mp.dps)
     if snapped:
         _LOCAL.snaps += 1
     if _LOCAL.mag_sink:
-        m, sm = _from_spec(mag), _from_spec(small)
+        m, sm, bd = _from_spec(mag), _from_spec(small), _from_spec(band)
         if m > _LOCAL.mag_sink[-1][0]:
             _LOCAL.mag_sink[-1][0] = m
         if sm != 0 and (_LOCAL.mag_sink[-1][1] == 0 or sm < _LOCAL.mag_sink[-1][1]):
             _LOCAL.mag_sink[-1][1] = sm
+        if bd != 0 and (_LOCAL.mag_sink[-1][2] == 0 or bd < _LOCAL.mag_sink[-1][2]):
+            _LOCAL.mag_sink[-1][2] = bd
     if unresolved:
         raise Unresolved()
     return _from_spec(spec)
@@ -862,6 +865,12 @@ SATURATION_CONSTS = [c * s for c in (19., 20., 50., 750., 1e17) for s in (1., -1
 #: those fixes: 0 convictions, 0 unresolved.
 WIDE_CONSTS = [c * s for c in (10., 30., 100., 300., 1e3, 3e3, 1e4, 0.1, 0.01, 0.001)
                for s in (1., -1.)]
+
+
+#: The constants' magnitude samples, span and saturation: the constant battery reads a rule there
+#: as the slots' magnitude ladder reads it, sampled, where the battery's own values (`CONSTS` and
+#: the special points) are the ones a mode owes a reading at (4.10).
+MAGNITUDE_CONSTS = frozenset(WIDE_CONSTS) | frozenset(SATURATION_CONSTS)
 
 
 def judge_cl_battery(saturation=True):
@@ -1803,7 +1812,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
         # clause-(a) KILL of a rule that is true by construction. Costs nothing for an
         # ordinary rule: small intermediates give back exactly the old 300.
         mp.dps = GAP_RUNGS[-1] + 50
-        _LOCAL.mag_sink.append([mpf(0), mpf(0)])
+        _LOCAL.mag_sink.append([mpf(0), mpf(0), mpf(0)])
         try:
             c_eval(tl, build_env())
         except Unresolved:
@@ -1816,7 +1825,7 @@ def mp_polish(tl, tr, nvars, clb, c0, env0=None, rname='<C_R>'):
             # already falls back for real if the deeper rung refuses too.
             pass
         finally:
-            _mag, _small = _LOCAL.mag_sink.pop()
+            _mag, _small, _ = _LOCAL.mag_sink.pop()
         mp.dps = max(mp.dps,
                      max(GAP_RUNGS[2],
                          2 * max(GAP_RUNGS[1], _required_dps(_mag, _small))) + 50)
@@ -2111,8 +2120,13 @@ def _solve_preimage(f, lo, hi):
 
 
 # ---------------------------------------------------------------- the judge
-def _point_verdict(tl, tr, env_mp):
+def _point_verdict(tl, tr, env_mp, owed=False):
     """confirmed contract verdict at one point -> (verdict|None, snapped)
+
+    At a point the judge `owed` a reading (4.10), rung 2 is sized to resolve a bounded function
+    left inside its band at rung 1 too, from its distance to the bound (`floor(erf(exp(3)))`
+    is 0, read at about 400 digits; `erf(exp(3))` is 1 - 1.7e-177). A sampled point keeps the
+    rung its intermediates size, and where it stays unread it counts neither way.
 
     Rung agreement alone is necessary and NOT sufficient, and this is where that used to
     bite. Confirming the CLASS of a verdict ('REAL-CHANGE' at both rungs) says nothing
@@ -2157,7 +2171,7 @@ def _point_verdict(tl, tr, env_mp):
         sizes a cancellation."""
         mp.dps = dps
         if track:
-            _LOCAL.mag_sink.append([mpf(0), mpf(0)])
+            _LOCAL.mag_sink.append([mpf(0), mpf(0), mpf(0)])
         try:
             cl = cls_mp(c_eval(tl, env_mp()))
             cr = cls_mp(c_eval(tr, env_mp()))
@@ -2165,7 +2179,7 @@ def _point_verdict(tl, tr, env_mp):
             return None
         finally:
             if track:
-                once.mag, once.small = _LOCAL.mag_sink.pop()
+                once.mag, once.small, once.band = _LOCAL.mag_sink.pop()
         _LOCAL.lhs_kind = _kind(cl)
         v = compare_classes(cl, cr)
         return (v, None) if v is not None else (None, gap_reading(cl, cr))
@@ -2174,16 +2188,19 @@ def _point_verdict(tl, tr, env_mp):
     snap0 = _LOCAL.snaps
     _LOCAL.lhs_kind = None
     try:
-        once.mag = once.small = None
+        once.mag = once.small = once.band = None
         r1 = once(BASE_DPS, track=True)
         snapped1 = _LOCAL.snaps > snap0
+        small = getattr(once, 'small', None)
+        band = getattr(once, 'band', None)
+        if owed and band:
+            small = band if not small else min(small, band)
         # RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates
         # are 10^217: both rungs are swamped alike, agree on a manufactured verdict, and
         # the class comparison reads that agreement as evidence. The precision now comes
         # from the operands that were actually seen, so rung 2 is a second opinion rather
         # than a second copy of the first.
-        dps2 = max(GAP_RUNGS[1], _required_dps(getattr(once, 'mag', None),
-                                              getattr(once, 'small', None)))
+        dps2 = max(GAP_RUNGS[1], _required_dps(getattr(once, 'mag', None), small))
         dps3 = max(GAP_RUNGS[2], 2 * dps2)
 
         # CLIMB PAST AN UNRESOLVED RUNG. A rung refuses when an intermediate lands inside
@@ -2602,7 +2619,9 @@ def _with_f64_bar(lhs, rhs, r):
         if len(range_rows) > RANGE_ROWS_CAP:
             range_ok = False          # more than the judge reads: undecided, fail closed
     ok = ok and range_ok
-    realised = r.get('realised') is not False and ok
+    # three readings ANDed: the bar refuses where it fails, and a reading that reached no
+    # answer stays without one (4.10)
+    realised = False if not ok else r.get('realised')
     return dict(r, realised=realised,
                 tier=_tier(realised, r.get('permissive')),
                 f64_bar={'ok': ok, 'probes': probes, 'range_probes': len(range_rows),
@@ -2891,13 +2910,14 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 return True
         return False
 
-    def deployed(tl_env, v, point, all_real, snapped, out):
+    def deployed(tl_env, v, point, all_real, snapped, out, owed=False):
         """The f64 lane at one point, on float64's own values: append `(kind, point)` to
         `out['bad']` / `out['div']`; an extension on a lower-dimensional cell is clause (b)'s,
         and is counted apart. The reals' reading `v` (and whether a snap read it) is asked only
         at a range event, where the true value is accepted (F5): where an operation of either
         side overflowed or underflowed and float64's sides differ, a true value the reals
-        resolved decides, and one they did not leaves the point unread (`out['unread']`)."""
+        resolved decides, and one they did not leaves the point unread (`out['unread']`; an
+        `owed` point so left is recorded, `out['owed_unread']`)."""
         if not deployed_check:
             return
         try:
@@ -2916,6 +2936,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 return
             if not in_range[0] and dv != 'eq' and (v is None or snapped):
                 out['unread'] += 1
+                if owed:
+                    out['owed_unread'].append(point)
                 return
             out['read'] += 1
             if dv != 'eq':
@@ -2938,21 +2960,24 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0, 'fr': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
-                'kinds': set(), 'null': 0, 'read': 0, 'unread': 0}
+                'kinds': set(), 'null': 0, 'read': 0, 'unread': 0,
+                'perm_unread': [], 'owed_unread': []}
 
     def unread_at_float_resolution(acc, v, point, where, env, count):
         """A point the reals' ladder left unread (`v` None, precision run out): permissive's
         float-resolution reading needs no exact equality (P3), and a rigorous bound or the
         precision the point demands may decide it (`_float_resolution`). A disagreement is
         permissive's counterexample; an agreement, with `count`, a point permissive read. A
-        ground rule's one point owes its value (3.3): no extension there."""
+        ground rule's one point owes its value (3.3): no extension there. Returns whether
+        permissive's reading read the point."""
         if v is not None:
-            return
+            return True
         agreed = _float_resolution(tl, tr, env, extends=not (ground and not has_cl))
         if agreed is False:
             acc['perm'].append(('REAL-CHANGE', point, where))
         elif agreed and count:
             acc['fr'] += 1
+        return agreed is not None
 
     def judge_point(acc, v, point, kind, real_valued, where):
         """File one resolved comparison: `kind` is 'real' (every binding a real number) or
@@ -2990,6 +3015,17 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     ext_where = []
     f64_owed, f64_null_keys = set(), set()
     f64_read = [0, 0]           # f64's battery points read, and left unread at a range event
+    # THE OWED POINTS (4.10). The battery takes each slot's atoms because they are exceptional
+    # (`battery_for`: zero, the units, the infinities and the rest of each sort's exact values),
+    # and a ground rule has its one point: at every constant tuple of the battery's own values
+    # (the generic and the special constants) where the mode owes a witness, the mode owes a
+    # reading at each such point. One that its reading leaves unread refuses the rule in that
+    # mode, with uncertainty, and is named in the verdict (`unread_owed`). The constants' span
+    # and saturation magnitudes (`MAGNITUDE_CONSTS`), the grid, the diagonal, the mine's rows,
+    # the jump preimages and the slots' magnitude ladder are sampled, and a constant-only rule's
+    # points keep the quota.
+    owed_point = bool(names) or not has_cl
+    unread_owed = {'f64': [], 'permissive': []}
 
     def merge(acc, key, builders):
         nonlocal resolved_pts, attempted_pts
@@ -3006,6 +3042,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             f64_owed.add(key)
             f64_read[0] += acc['read']
             f64_read[1] += acc['unread']
+            unread_owed['f64'].extend(acc['owed_unread'])
             if acc['null']:
                 f64_null_keys.add(key)
         dep_seen[0] = dep_seen[0] or acc['seen']
@@ -3016,6 +3053,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             vacuous.append(key)
             return
         owed_keys.add(key)
+        unread_owed['permissive'].extend(acc['perm_unread'])
         a_kills.extend(acc['a'])
         atom_kills.extend(acc['atom'])
         perm_kills.extend(acc['perm'])
@@ -3028,6 +3066,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         cr_mp = witness.get(key, {}) if has_cr else {}
         cr_f64 = witness_f64.get(key, {}) if has_cr else {}
         acc = lane()
+        owed_here = owed_point and not MAGNITUDE_CONSTS.intersection(key)
         for combo in combos:
             tags = {n: t for n, (b, t) in combo.items()}
             values = {n: b() for n, (b, t) in combo.items()}
@@ -3043,13 +3082,13 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
 
             if skip_real and not real_valued:
                 continue          # owed nothing in real, outside permissive's guarantee
-            v, snapped = _point_verdict(tl, tr, env_mp)
+            v, snapped = _point_verdict(tl, tr, env_mp, owed=owed_here)
             point = {n: float(x) for n, x in values.items()}
             point.update(dict(zip(lnames, key)))
             point.update({n: float(w) for n, w in cr_mp.items()})
-            if real_valued:
-                unread_at_float_resolution(acc, v, point, (key, values), env_mp,
-                                           count=not skip_real)
+            if real_valued and not unread_at_float_resolution(
+                    acc, v, point, (key, values), env_mp, count=not skip_real) and owed_here:
+                acc['perm_unread'].append(point)
             if skip_real:
                 # a `$` slot at 0: owed nothing in real (its certificate), a real-valued
                 # binding permissive's guarantee covers
@@ -3071,7 +3110,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             ed = {n: F(float(x)) for n, x in values.items()}
             ed.update({n: F(c) for n, c in zip(lnames, key)})
             ed.update({n: F(w) for n, w in cr_f64.items()})   # each algebra its OWN constant
-            deployed(ed, v, point, kind == 'real', snapped, acc)
+            deployed(ed, v, point, kind == 'real', snapped, acc, owed=owed_here)
         merge(acc, key, builders)
 
     def magnitudes(acc, lanes, cr_f64):
@@ -3474,6 +3513,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         _realised = False
     if unwitnessed['f64'] and _realised is not False:
         _realised = None       # owed a witness at a constant, and none found: no answer
+    if unread_owed['f64'] and _realised is not False:
+        _realised = None       # an owed point left unread: no answer (4.10)
     # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
@@ -3525,13 +3566,17 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             perm_left.append(event)
             break
     # permissive's reading: a counterexample refuses it; a battery mostly unread at float
-    # resolution, or a constant owed a witness in the reals and none found, reaches no answer
+    # resolution, an owed point left unread (4.10), or a constant owed a witness in the reals
+    # and none found, reaches no answer
     permissive = False if perm_left else (
-        True if perm_covered and not unwitnessed['reals'] else None)
+        True if perm_covered and not unwitnessed['reals'] and not unread_owed['permissive']
+        else None)
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised': _realised, 'out_of_range': dep_out_of_range[0],
             'permissive': permissive, 'resolved_points': resolved_pts,
             'f64_measure': None if f64_undecided else f64_width}
+    if unread_owed['f64'] or unread_owed['permissive']:
+        base['unread_owed'] = {m: pts[:3] for m, pts in unread_owed.items() if pts}
     if perm_left:
         base['permissive_points'] = [p for _, p, _ in perm_left[:3]]
     if correlated_f64 is not None:

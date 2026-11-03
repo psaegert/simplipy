@@ -217,13 +217,17 @@ pub(crate) fn erfc_below(a: &BigFloat, bound: &BigFloat, p: usize, cc: &mut Cons
     if a.is_zero() || a.is_negative() {
         return false;
     }
+    lt(&erfc_bound(a, p, cc), bound)
+}
+
+/// The bound `e^(-a^2) / (a sqrt(pi))` above `erfc(a)` for `a > 0`, within a factor
+/// `1 + 1/(2 a^2)` of it: `erfc(a)`'s magnitude, read without computing erf.
+pub(crate) fn erfc_bound(a: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
     let q = p + 32;
-    let up =
-        a.mul(a, q, RM)
-            .neg()
-            .exp(q, RM, cc)
-            .div(&a.mul(&cc.pi(q, RM).sqrt(q, RM), q, RM), q, RM);
-    lt(&up, bound)
+    a.mul(a, q, RM)
+        .neg()
+        .exp(q, RM, cc)
+        .div(&a.mul(&cc.pi(q, RM).sqrt(q, RM), q, RM), q, RM)
 }
 
 /// The largest |x| `erfc` reads: past it `e^(-x^2)` leaves the float's exponent range long
