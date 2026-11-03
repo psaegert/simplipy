@@ -51,8 +51,13 @@ def table(text: str, name: str, per_row: int) -> str:
 def table2(text: str, name: str, rows: str, cols: str, per_row: int) -> str:
     """A two-dimensional `constexpr double name[rows][cols]`, flattened row by row; every row
     must hold exactly `cols` initializers."""
-    nr = int(re.search(r'constexpr int ' + rows + r' = (\d+);', text).group(1))
-    nc = int(re.search(r'constexpr int ' + cols + r' = (\d+);', text).group(1))
+    def size(const: str) -> int:
+        found = re.search(r'constexpr int ' + const + r' = (\d+);', text)
+        if found is None:
+            raise SystemExit(f'{const}: not found')
+        return int(found.group(1))
+
+    nr, nc = size(rows), size(cols)
     m = re.search(r'constexpr double ' + name + r'\[' + rows + r'\]\[' + cols + r'\] = \{(.*?)\};',
                   text, re.S)
     if m is None:
