@@ -9,7 +9,8 @@
 //!   `I_n(-x) = (-1)^n I_n(x)`, and none otherwise;
 //! * a zero argument: `K_nu(0) = +inf`; `Y_nu(0) = -inf` for `nu >= 0`, and at a negative order
 //!   the limit `-sign(cos(nu pi)) inf` (`Y_-1(0) = +inf`); at a negative half-integer order,
-//!   where `cos(nu pi)` changes sign, the value is not decided (`None`); `I_0(0) = 1`,
+//!   where `cos(nu pi)` changes sign, the limit taken in the order and the argument together does
+//!   not exist: no value (NaN); `I_0(0) = 1`,
 //!   `I_nu(0) = 0` for `nu > 0` and for a negative integer `nu`, and at a negative non-integer
 //!   order the pole's one-sided limit, the infinity of the sign of `1/Gamma(nu + 1)`;
 //! * an integer order reads its reflection (`Y_-n = (-1)^n Y_n`, `I_-n = I_n`), and K is even in
@@ -105,7 +106,9 @@ pub(crate) fn bessely(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) ->
         }
         let (_, c) = sincos_pi(nu, 64, cc);
         if c.is_zero() {
-            return None; // a negative half-integer order: not decided
+            // a negative half-integer order: the orders beside it tend to infinities of both
+            // signs, so the joint limit does not exist
+            return Some(NAN);
         }
         return Some(if c.is_negative() { INF_POS } else { INF_NEG });
     }

@@ -194,3 +194,48 @@ def test_the_judge_decides_rules_over_them() -> None:
     # false
     r = j('bessely 0.5 _0'.split(), ['_0'])
     assert r['verdict'] == 'KILL' and r['tier'] == 'reject', r
+
+
+#: Where the joint limit does not exist: Y at x = 0 under a negative half-integer order (the
+#: orders beside it tend to infinities of both signs), and I at an infinite negative order (no
+#: value at any argument, as for besselj); float64 keeps scipy's cells there.
+NO_VALUE = [('bessely(-0.5, 0)', ('bessely', -0.5, 0.0), -math.inf),
+            ('bessely(-1.5, 0)', ('bessely', -1.5, 0.0), math.inf),
+            ('bessely(-2.5, 0)', ('bessely', -2.5, 0.0), -math.inf),
+            ('besseli(-inf, -1)', ('besseli', -math.inf, -1.0), 0.0),
+            ('besseli(-inf, -2.5)', ('besseli', -math.inf, -2.5), 0.0)]
+
+
+@pytest.mark.parametrize('expr, call, f64', NO_VALUE)
+def test_where_the_joint_limit_does_not_exist_there_is_no_value(engine, expr, call, f64) -> None:
+    """Permissive's fold reads the table: no value, written NaN. f64's value is scipy's cell."""
+    import simplipy.operators as ops
+    assert engine.simplify(expr, mode='permissive') == 'nan', expr
+    assert float(getattr(ops, call[0])(*call[1:])) == f64, expr
+    assert engine.simplify(expr, mode='f64') != 'nan', expr
+
+
+@pytest.mark.parametrize('order', [Fraction(-1, 2), Fraction(-3, 2), Fraction(-5, 2)])
+def test_the_table_has_no_value_for_y_at_zero_under_a_negative_half_integer_order(order) -> None:
+    spec, unresolved, *_ = _core.TableExpr(['bessely', 'x0', 'x1'], ['x0', 'x1'], ARITY).eval_real(
+        [exact(order), exact(0)], 50)
+    assert not unresolved and spec[0] == 'nan', spec
+    # an approximate order within the working band of -1/2 cannot be told from it
+    spec, unresolved, *_ = _core.TableExpr('bessely neg log rootn np.e 2 0'.split(), [], ARITY) \
+        .eval_real([], 50)
+    assert unresolved
+
+
+def test_the_table_has_no_value_at_an_infinite_negative_order() -> None:
+    for x in ('-1', '-2.5', '0', '1'):
+        spec, unresolved, *_ = _core.TableExpr(['besseli', 'float("-inf")', x], [], ARITY) \
+            .eval_real([], 50)
+        assert not unresolved and spec[0] == 'nan', (x, spec)
+
+
+def test_a_rule_whose_points_had_no_reading_there_holds_in_permissive() -> None:
+    """`1/bessely(_0, 0) -> 0`: Y_nu(0) is an infinity at every order but the negative
+    half-integers, where it has no value and the right side extends it (permissive's own
+    criterion is agreement where the left side has a value). Read there, the rule holds."""
+    r = _contract.judge_rule('inv bessely _0 0'.split(), ['0'])
+    assert r['permissive'] is True and 'unread_owed' not in r, r

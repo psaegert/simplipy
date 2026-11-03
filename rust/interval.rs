@@ -2235,8 +2235,7 @@ fn b_besselk(nu: &Vs, x: &Vs) -> Option<Vs> {
 /// on a null set), and one reaching below 0 is read only at a point of both operands. float64's
 /// NaNs: below `IV_TINY` and past `IV_HUGE` (above order 50). Infinite operands: float64 NaN at
 /// x = +-inf and 0 at an infinite order; the reals +inf at x = +inf, `(-1)^n inf` at -inf under an
-/// integer point order (NaN otherwise), 0 at order +inf, and at order -inf no value (and at
-/// x < 0, where it is not decided, 0 besides).
+/// integer point order (NaN otherwise), 0 at order +inf, and at order -inf no value.
 fn b_besseli(nu: &Vs, x: &Vs) -> Option<Vs> {
     use crate::numeric::kernels::besseli;
     let real = real_reading();
@@ -2253,9 +2252,6 @@ fn b_besseli(nu: &Vs, x: &Vs) -> Option<Vs> {
             }
             if nu.ninf {
                 r.nan = true;
-                if x.lo < 0.0 {
-                    r.merge_pt(0.0);
-                }
             }
         } else {
             r.merge_pt(0.0);
@@ -2360,8 +2356,8 @@ fn b_besseli(nu: &Vs, x: &Vs) -> Option<Vs> {
 /// widened by `SCIPY_KERNEL_MARGIN` (within 2^-41 of the true bound, measured) and stepped out.
 /// A hull reaching 0, or a bound past the doubles, is unbounded both ways, and in float64 holds
 /// the kernel's overflows, +-inf. At the point x = 0: -inf at every order >= 0 in both readings;
-/// any other order range there holds +-inf and NaN (the reals' value at a negative half-integer
-/// order is not decided). NaN at x < 0 and -inf; at +inf, NaN in float64 and 0 in the reals under
+/// any other order range there holds +-inf and NaN (the reals have no value at a negative
+/// half-integer order). NaN at x < 0 and -inf; at +inf, NaN in float64 and 0 in the reals under
 /// a finite order. An infinite order: float64 NaN at x > 0 and -inf at 0; the reals -inf on
 /// x >= 0 at +inf and no value at -inf. Orders past `SCIPY_BESSEL_NU` are refused.
 fn b_bessely(nu: &Vs, x: &Vs) -> Option<Vs> {

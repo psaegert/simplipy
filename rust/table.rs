@@ -1621,9 +1621,10 @@ fn bessel_order(nu: &Val, fragile: bool, ctx: &mut Ctx) -> Option<BigFloat> {
 ///   non-integer order, and `I_n(-inf) = (-1)^n inf` (the domain near it is the line of that
 ///   order, as `pow(-inf, 0)`).
 /// * At an infinite order and finite x: `Y_+inf = -inf` and `K_+-inf = +inf` where x >= 0 (no
-///   value at x < 0); `I_+inf = 0`; `Y_-inf` has no value (it oscillates without bound), nor
-///   `I_-inf` at x >= 0. `I_-inf` at x < 0, where the domain holds only the integer orders
-///   (along which `I_-n = I_n` tends to 0), is not decided: Unresolved.
+///   value at x < 0); `I_+inf = 0`; `Y_-inf` and `I_-inf` have no value (they oscillate without
+///   bound), and an infinite negative order has none at x < 0 either, as for `besselj`.
+/// * At x = 0, Y under a negative half-integer order has no value (the kernel's cell), and an
+///   approximate order within the working band of one cannot be told from it: Unresolved.
 fn bessel_val(name: &str, nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
     if is_undef(nu) || is_undef(x) {
         return Some(undef());
@@ -1644,11 +1645,20 @@ fn bessel_val(name: &str, nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
                 "bessely" => Some(if nu_up && nonneg { inf(false) } else { undef() }),
                 "besselk" => Some(if nonneg { inf(true) } else { undef() }),
                 _ if nu_up => Some(zero()),
-                _ if nonneg => Some(undef()),
-                _ => None,
+                _ => Some(undef()),
             };
         }
         (None, None) => {}
+    }
+    // Y at a zero argument has no value at a negative half-integer order and an infinity of either
+    // sign beside it: an approximate order within the working band of one is undecided
+    if name == "bessely" && is_zero(x) && sign(nu) < 0 {
+        if let Val::Approx(b) = nu {
+            let half = one(64).div(&small_int(2, 64), 64, RM);
+            if in_band(b, &b.floor().add(&half, ctx.p + 64, RM), ctx) {
+                return None;
+            }
+        }
     }
     let fragile = name == "besseli" && (sign(nu) < 0 || sign(x) < 0);
     let n = bessel_order(nu, fragile, ctx)?;
@@ -2475,7 +2485,8 @@ mod tests {
 
     /// The cells of `erfc` and the Bessel functions of the second kind and the modified ones:
     /// outside the domain undefined, the limit rule at x = 0 and at infinite operands, the
-    /// formula's value where it has one, and no value where the limit is not decided.
+    /// formula's value where it has one, and no value where the joint limit does not exist (Y at
+    /// x = 0 under a negative half-integer order, an infinite negative order).
     #[test]
     fn the_scipy_heads_cells() {
         let (inf, ninf, nan) = ("float(\"inf\")", "float(\"-inf\")", "float(\"nan\")");
@@ -2491,8 +2502,11 @@ mod tests {
             ("bessely -2 0".into(), "-inf"),
             ("bessely -1.25 0".into(), "+inf"),
             ("bessely -0.25 0".into(), "-inf"),
-            ("bessely -0.5 0".into(), "unresolved"),
-            ("bessely -1.5 0".into(), "unresolved"),
+            ("bessely -0.5 0".into(), "nan"),
+            ("bessely -1.5 0".into(), "nan"),
+            ("bessely -2.5 0".into(), "nan"),
+            // an approximate order within the band of -1/2 cannot be told from it
+            ("bessely neg log rootn np.e 2 0".into(), "unresolved"),
             ("besselk 0 0".into(), "+inf"),
             ("besselk -2.5 0".into(), "+inf"),
             ("besseli -0.5 0".into(), "+inf"),
@@ -2508,7 +2522,8 @@ mod tests {
             (format!("besseli 3 {ninf}"), "-inf"),
             (format!("besseli 0.5 {ninf}"), "nan"),
             (format!("besseli {ninf} 1"), "nan"),
-            (format!("besseli {ninf} -1"), "unresolved"),
+            (format!("besseli {ninf} -1"), "nan"),
+            (format!("besseli {ninf} -2.5"), "nan"),
             (format!("besseli {inf} {inf}"), "nan"),
             (format!("besselk 1 {ninf}"), "nan"),
             (format!("besselk {inf} 1"), "+inf"),

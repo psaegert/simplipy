@@ -462,7 +462,7 @@ def _pairs(orders: list, args: list) -> list:
 
 #: Each operator's own range thresholds and boundaries, beside the shared arguments: erfc's
 #: plateau at 2 and its cut to 0 (subnormal from about 26.55); Y's and I's orders where the
-#: limit at 0 changes (the negative half-integers, where the reals' value is not decided),
+#: limit at 0 changes (the negative half-integers, where Y has no value in the reals),
 #: the order thresholds of the kernels (50 for I, 85.9 for K), and the arguments where float64
 #: overflows (I past 713.99, Y near 0), cuts to 0 (K past 697.87 and 710 (1 + |nu|)) or turns NaN
 #: (I below 5.6e-309).

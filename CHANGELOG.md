@@ -2201,8 +2201,12 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `I_nu(0)` its series' value (1 at order 0, 0 above and at a negative integer, the pole's
     one-sided limit at a negative non-integer); at infinite operands the joint limits (`Y` and
     `K` tend to 0 as x grows, `I` to `inf`, `Y_inf = -inf`, `K_+-inf = inf`, `I_inf = 0`).
-    `bessely` at x = 0 under a negative half-integer order, and `besseli(-inf, x)` at x < 0,
-    are not decided (the judge skips them, `permissive` leaves them written). Values come from
+    `bessely` at x = 0 under a negative half-integer order has no value (the orders beside it
+    tend to infinities of both signs, so the joint limit does not exist), nor has `besseli` at an
+    infinite negative order at any argument, as for `besselj`; `permissive` folds them to `nan`,
+    and `f64` keeps scipy's cells (`yv(-0.5, 0)` is `-inf`, `iv(-inf, -1)` is 0). An
+    approximate order within the working band of a negative half-integer leaves `bessely` at 0
+    undecided. Values come from
     the power series, the integer-order series of DLMF 10.8.1 and 10.31.1 and the Hankel
     expansions, within the last place of mpmath's.
   - *Enclosures.* `erfc` is decreasing within (0, 2), exactly 0 and 2 on float64's plateaus;
