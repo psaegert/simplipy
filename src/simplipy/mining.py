@@ -603,6 +603,35 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     return dead
 
 
+def _permissive_reading(engine: Any, source: tuple[str, ...],
+                        target: tuple[str, ...]) -> tuple[str, ...]:
+    """Permissive's canonical form of an offered f64 rule's left side ``source``: the state
+    permissive's walk starts from (its parse and canon, no pass), where its rules are first
+    tried. Permissive reads a ground pole as its infinity there (`atan2(C, atanh(-1))` is
+    `atan2(C, -inf)`), while the load reads a rule's spelling without that fold, so an f64 rule
+    spelled with the pole would never match; adopted at the walk's reading, it fires.
+
+    The spelling stays where nothing needs adopting: where the load reads the spelling as it
+    reads the walk's state (the rule fires as written), where that state already costs no more
+    than ``target`` in permissive's price (permissive's own reading covers the rule:
+    `tan(atan(sin(x)))` reads as `sin(x)`), and where the reading is atomic or unreadable. The
+    lane then reads the rule as covered, or refuses it. Whether an adopted rule holds is the
+    acceptance's question, as for any proposal: it holds in permissive, or f64 holds it at that
+    form."""
+    core = engine._core
+    try:
+        reading = [str(t) for t in core.ac_simplify_in_mode(list(source), 0, 'explicit', 0,
+                                                            rule_mode='permissive')]
+        if len(reading) <= 1 or (core.mine_sources([list(source)], rule_mode='permissive')
+                                 == core.mine_sources([reading], rule_mode='permissive')):
+            return tuple(source)
+        covered = (core.ac_complexity_certified(reading, 'mode', rule_mode='permissive')
+                   <= core.ac_complexity_certified(list(target), 'mode', rule_mode='permissive'))
+    except ValueError:
+        return tuple(source)
+    return tuple(source) if covered else tuple(reading)
+
+
 def _uncovered_f64_rules(engine: Any, f64_rules: Any) -> list:
     """THE COVERAGE GATE: permissive includes f64, so the permissive file covers the f64 file.
     On each f64 rule's generic instance (each slot a fresh variable, ``<constant>`` kept), the
@@ -1384,8 +1413,10 @@ class RuleMiner:
             # rule holds in permissive; each is certified by permissive's own acceptance (its
             # mint certifies what f64's lane certifies, its judge licenses what f64 holds) and
             # enters as any proposal does, under permissive's own ordering and liveness (a source
-            # the engine already takes at least as low reads `already_covered`). The coverage
-            # gate checks the result. The sidecar pins the file by its sha256.
+            # the engine already takes at least as low reads `already_covered`). Each rule is
+            # offered at permissive's reading of its left side (`_permissive_reading`), the state
+            # its walk starts from, so the adopted rule fires where permissive's rules are tried.
+            # The coverage gate checks the result. The sidecar pins the file by its sha256.
             if offer_final_rules and rule_mode == 'permissive' and not interrupted():
                 files: dict = {}
                 entries: list = []
@@ -1399,9 +1430,11 @@ class RuleMiner:
                         'file': (None if out_path is None
                                  else os.path.basename(_mode_paths(out_path)[file_key])),
                         'sha256': _rules_sha256(other_rules), 'count': len(other_rules)}
-                    entries += [(_slots_to_variables(lhs, dummy_variables),
-                                 _slots_to_variables(rhs, dummy_variables))
-                                for lhs, rhs in other_rules]
+                    for lhs, rhs in other_rules:
+                        target = _slots_to_variables(rhs, dummy_variables)
+                        entries.append((_permissive_reading(
+                            self.engine, _slots_to_variables(lhs, dummy_variables), target),
+                            target))
                 entries = list(dict.fromkeys(entries))  # file order
                 outcomes, _offered_trail, judge_loop = _lane(entries)
                 if prov is not None:

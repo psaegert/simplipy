@@ -259,6 +259,37 @@ def test_the_offer_can_be_declined(tmp_path):
     assert 'offered' not in side and side['params']['offer_final_rules'] is False
 
 
+_GROUND_OPERATORS = {
+    "atan2": {"realization": "simplipy.operators.atan2", "alias": [], "arity": 2, "precedence": 2,
+              "commutative": False},
+    "atanh": {"realization": "simplipy.operators.atanh", "alias": [], "arity": 1, "precedence": 2,
+              "commutative": False},
+}
+# True in f64 (atan2(c, -inf) is +-pi) and live there, where the rule fires before the pass
+# folds `atanh(-1)`; permissive reads `atanh(-1)` as -inf before any rule can fire.
+GROUND_OFFERED = (('atan2', '<constant>', 'atanh', '-1'), ('<constant>',))
+
+
+def test_an_f64_rule_is_offered_at_permissives_reading_of_its_left_side(tmp_path):
+    """Permissive reads a ground pole in a left side as its infinity before any rule can fire,
+    so the f64 rule `atan2(C, atanh(-1)) -> C` would never match there. The offered lane adopts
+    each f64 rule at permissive's reading of its left side, where the rule fires, and the
+    permissive file covers the f64 file."""
+    engine = SimpliPyEngine(operators=_GROUND_OPERATORS, rules=[GROUND_OFFERED],
+                            rules_permissive=[])
+    engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2,
+                      dummy_variables=1, X=128, seed=3, reset_rules=False, promote_sorts=False,
+                      symbolic_gate=False, judge=lambda pairs: ['core'] * len(pairs),
+                      offer_final_rules=True, output_file=str(tmp_path / 'rules_f64.json'))
+    side = json.load(open(tmp_path / 'rules_permissive.json.provenance.json'))
+    assert GROUND_OFFERED in engine.simplification_rules
+    reading = ['atan2', '<constant>', 'float("-inf")']
+    entry, = [e for e in side['offered']['trail'] if e['source'] == reading]
+    assert entry['verdict'] == 'certified' and entry['target'] == ['<constant>'], entry
+    assert (tuple(reading), ('<constant>',)) in engine.permissive_simplification_rules
+    assert side['gates']['covers_f64'] == []
+
+
 def test_the_f64_scan_reads_the_range_standard(eng):
     """The scan's f64 check applies the judge's standard (`numeric::RangeKind`, one
     definition): on a row where an operation of either side overflows or underflows, the

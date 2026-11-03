@@ -1088,14 +1088,17 @@ model predictions.
   rule the mode's constructor performs) before it is written. In `permissive` the covered
   prune also asks the non-finite instances every slot binds there, so the file keeps
   `$0 / $0 → 1` (`inf/inf` is `1`, not `nan`).
-- **The permissive mine is offered the f64 and real files.** Permissive promises less than
-  either mode, so their rules hold there too, and its answer must never cost more than theirs;
-  a per-mode mine finds only what its own scan reaches. The permissive file is mined last, and
-  every rule of the finished f64 and real files runs through its proposal lane: certified by
-  permissive's own acceptance, it enters only where permissive's answer is not already as
-  low. The permissive sidecar pins both files (`offered`: name, sha256 and count, the lane's
-  outcomes, and every offered rule that did not read `already_covered`), and `verify-mine`
-  checks the pins (gate `offered`). `find_rules(offer_final_rules=False)` (config key
+- **The permissive mine is offered the f64 file.** Permissive includes f64, so every f64 rule
+  holds there too, and its answer must never cost more than f64's; a per-mode mine finds only
+  what its own scan reaches. The permissive file is mined last, and every rule of the finished
+  f64 file runs through its proposal lane: certified by permissive's own acceptance, it enters
+  only where permissive's answer is not already as low. A rule is offered at permissive's
+  reading of its left side wherever its spelling would not match there: permissive reads a
+  ground pole as its infinity before any rule fires, so `atan2(C, atanh(-1)) -> C` is offered
+  as `atan2(C, -inf) -> C`. The permissive sidecar pins the file (`offered`: name, sha256 and
+  count, the lane's outcomes, and every offered rule that did not read `already_covered`), and
+  `verify-mine` checks the pin (gate `offered`) and that the permissive file covers the f64
+  file (gate `covers_f64`). `find_rules(offer_final_rules=False)` (config key
   `offer_final_rules`) declines the offer.
 - **A mine resumes from its checkpoint.** `find_rules` writes `<file>.checkpoint.json` after
   every completed length and a rerun of the same mine resumes after the last one; a

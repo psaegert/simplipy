@@ -85,8 +85,11 @@ holds in permissive, so permissive's answer must never cost more than f64's, whi
 mine finds only what its own scan reaches. Every rule of the f64 file runs through the proposal
 lane right after the proposals, certified by permissive's own acceptance (its mint certifies
 what f64's certifies, its judge licenses what f64 holds), and enters where permissive's answer
-is not already as low, under permissive's own ordering and liveness. The gate `covers_f64`
-checks that the permissive file covers the f64 file.
+is not already as low, under permissive's own ordering and liveness. A rule is offered at
+permissive's reading of its left side wherever its spelling would not match there: permissive
+reads a ground pole as its infinity before any rule fires, so the f64 rule
+`atan2(C, atanh(-1)) -> C` is offered as `atan2(C, -inf) -> C`. The gate `covers_f64` checks
+that the permissive file covers the f64 file.
 
 The procedure is **deterministic**: a fixed `seed` reproduces the two files byte-for-byte,
 independent of process, hash randomization, thread count or the judge's process count. One
