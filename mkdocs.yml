@@ -52,6 +52,7 @@ nav:
   - Getting started: getting-started.md
   - Guides:
     - Simplifying expressions: guides/simplify.md
+    - Displaying expressions: guides/prettify.md
     - Artifacts and assets: guides/artifacts.md
     - Masking: guides/masking.md
     - Trust and deployment: guides/trust.md

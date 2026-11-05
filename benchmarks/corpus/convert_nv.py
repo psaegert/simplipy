@@ -65,7 +65,9 @@ def main() -> None:
         r, j = respell(list(expr))
         assert j == len(expr), expr
         out.append(r)
-    json.dump(out, open(os.path.join(here, "raw_skeletons_nv.json"), "w"))
+    # the release gate's corpus ships with the package: simplipy.verify.default_corpus()
+    target = os.path.join(here, "..", "..", "src", "simplipy", "verify", "data", "raw_skeletons_nv.json")
+    json.dump(out, open(target, "w"))
     legacy = set(MULT) | set(DIV) | set(POWK) | set(EVEN_ROOT) | set(ODD_ROOT)
     assert not any(legacy & set(e) for e in out)
     print(f"{len(out)} expressions respelled; tokens {sum(map(len, corpus))} -> "

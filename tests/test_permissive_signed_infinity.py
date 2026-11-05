@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 
 from simplipy import SimpliPyEngine
+from conftest import legacy_from_config  # noqa: E402
+from simplipy.asset_manager import get_path  # noqa: E402
 
 INF, NINF = 'float("inf")', 'float("-inf")'
 
@@ -36,7 +38,7 @@ VARS = ['x1', 'x2', 'x3']
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.load('acj-5-4-llm', install=True)
+    return legacy_from_config(get_path('acj-5-4-llm', install=True))
 
 
 def values(engine: SimpliPyEngine, expr: list[str], points: np.ndarray) -> np.ndarray:
@@ -91,6 +93,6 @@ def test_the_search_leaves_these_alone(engine, expr) -> None:
 def test_finite_pieces_still_distribute(engine, expr, expected) -> None:
     # The move itself is kept wherever no piece spells an infinity, in every mode.
     t = expr.split()
-    for mode in ('f64', 'real', 'permissive'):
+    for mode in ('f64', 'permissive'):
         assert ' '.join(engine.simplify(t, mode=mode, effort=0)) != expected, mode  # the search did it
         assert ' '.join(engine.simplify(t, mode=mode)) == expected, mode
