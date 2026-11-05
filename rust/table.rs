@@ -227,11 +227,14 @@ thread_local! {
     static CONSTS: std::cell::RefCell<Vec<Consts>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// A constant cache borrowed from the thread's pool, returned to it on drop.
-struct PooledConsts(Option<Consts>);
+/// A constant cache borrowed from the thread's pool, returned to it on drop. A cache gives every
+/// constant correctly rounded at the precision asked, whatever it already holds (astro-float
+/// extends its series until the rounding is decided), so no value read with one depends on which
+/// cache it borrowed or what that cache read before.
+pub(crate) struct PooledConsts(Option<Consts>);
 
 impl PooledConsts {
-    fn take() -> Option<PooledConsts> {
+    pub(crate) fn take() -> Option<PooledConsts> {
         let cached = CONSTS.with(|c| c.borrow_mut().pop());
         Some(PooledConsts(Some(match cached {
             Some(cc) => cc,

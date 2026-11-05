@@ -263,9 +263,10 @@ fn table_row(
 const ROW_CLIMB: i32 = GAP_RUNGS[2];
 
 /// The four rungs of `table_row` from the two sides' first readings: the precision their
-/// intermediates demand (`demanded_dps`), a finer one, and the two past it.
+/// intermediates demand (`demanded_dps`), a finer one, and the two past it. The decades are read
+/// with the thread's constant cache (`table::PooledConsts`), as the readings are.
 fn row_rungs(os: &crate::table::RealOutcome, oc: &crate::table::RealOutcome) -> Option<[i32; 4]> {
-    let mut cc = Consts::new().ok()?;
+    let mut cc = crate::table::PooledConsts::take()?;
     let p0 = dps_to_prec(BASE_DPS);
     let start = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc)
         .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc))
@@ -2764,6 +2765,46 @@ mod tests {
                     )
                 };
                 assert_eq!(read((0, 0)), read(unread), "{src} -> {cand} at {lo}, {hi}");
+            }
+        }
+    }
+
+    /// THE ROW JUDGMENT'S CONSTANTS (`row_rungs` on the thread's cache): the decades that size the
+    /// rungs, and the logarithms under them, are bit for bit the same with a fresh constant cache
+    /// and with one that read every constant far past their precision before, at the exact powers
+    /// of ten (where the logarithm is an integer and its last bit decides the decade) and on a
+    /// grid.
+    #[test]
+    fn the_rungs_read_the_same_with_any_constant_cache() {
+        let p0 = dps_to_prec(BASE_DPS);
+        let mut warm = Consts::new().unwrap();
+        for q in [256usize, 4096, 20_000] {
+            let _ = (
+                warm.pi(q, RM),
+                warm.e(q, RM),
+                warm.ln_2(q, RM),
+                warm.ln_10(q, RM),
+            );
+        }
+        let mut mags: Vec<BigFloat> = (0..=50)
+            .map(|k| small_int(10, p0).powi(k, p0, RM))
+            .collect();
+        for k in -300..=300 {
+            for m in [1.0, 1.5, std::f64::consts::PI, 9.99] {
+                mags.push(BigFloat::from_f64(m * 10f64.powi(k), p0));
+            }
+        }
+        let zero = small_int(0, p0);
+        for mag in &mags {
+            let fresh = mag.log10(p0, RM, &mut Consts::new().unwrap());
+            let warmed = mag.log10(p0, RM, &mut warm);
+            assert!(cmp_eq(&fresh, &warmed), "log10 {mag}: {fresh} vs {warmed}");
+            for (big, small) in [(mag, &zero), (&zero, mag)] {
+                assert_eq!(
+                    demanded_dps(big, small, p0, &mut Consts::new().unwrap()),
+                    demanded_dps(big, small, p0, &mut warm),
+                    "{mag}"
+                );
             }
         }
     }
