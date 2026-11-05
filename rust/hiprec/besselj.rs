@@ -457,10 +457,31 @@ fn gamma_uncached(z: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
         prod = prod.mul(&w, wp, RM);
         w = w.add(&small(1, wp), wp, RM);
     }
-    let lg = ln_gamma_large(&w, wp, cc)?;
-    let guard = log2_abs(&lg).unwrap_or(0).max(0) as usize;
+    let guard = match ln_gamma_bits(approx(&w)) {
+        Some(bits) => bits,
+        None => log2_abs(&ln_gamma_large(&w, wp, cc)?).unwrap_or(0).max(0) as usize,
+    };
     let g = ln_gamma_large(&w, wp + guard, cc)?.exp(wp + guard, RM, cc);
     Some(g.div(&prod, p, RM))
+}
+
+/// The binary exponent of `ln Gamma(w)` for `w >= 32`, from a double reading of Stirling's
+/// series to its fourth term, `(w - 1/2) ln w - w + ln(2 pi)/2 + 1/(12 w) - 1/(360 w^3) +
+/// 1/(1260 w^5)`, within 1e-14 of it (the first neglected term is below 2e-14 at w = 32): the
+/// guard bits `gamma_uncached` reads `exp` at. `None` where the reading lies within 1e-11 of a
+/// power of two, where only the series at full precision tells the exponent. Past the shift
+/// `w >= p` the series reaches its target at every precision it is read at (its smallest term is
+/// about 2^(-9 w)), so reading it once more only to learn this exponent was a second full series.
+fn ln_gamma_bits(w: f64) -> Option<usize> {
+    if !w.is_finite() || w < 32.0 {
+        return None;
+    }
+    let lg = (w - 0.5) * w.ln() - w + (2.0 * std::f64::consts::PI).ln() / 2.0 + 1.0 / (12.0 * w)
+        - 1.0 / (360.0 * w.powi(3))
+        + 1.0 / (1260.0 * w.powi(5));
+    let e = lg.log2().floor();
+    let m = lg / 2f64.powf(e); // in [1, 2)
+    (m > 1.0 + 1e-11 && m < 2.0 - 1e-11 && e >= 0.0).then_some(e as usize + 1)
 }
 
 /// Stirling's series for `ln Gamma(w)`, `w` large and positive, to an absolute error below
@@ -495,11 +516,12 @@ fn ln_gamma_large(w: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
 }
 
 /// `B_2k / (2k (2k - 1))` at `p` bits, from the tangent number `T_k`:
-/// `B_2k = (-1)^(k-1) 2k T_k / (2^2k (2^2k - 1))`.
+/// `B_2k = (-1)^(k-1) 2k T_k / (2^2k (2^2k - 1))`. `T_k` is read off its binary digits, rounded
+/// once to the working precision (its decimal digits gave the same float at a quadratic cost).
 fn stirling_coefficient(k: usize, p: usize, cc: &mut Consts) -> Option<BigFloat> {
     let t = tangent_number(k)?;
     let wp = p.max(2 * k + 64) + 64;
-    let tk = BigFloat::parse(&t.to_string(), Radix::Dec, wp, RM, cc);
+    let tk = BigFloat::parse(&t.to_str_radix(2), Radix::Bin, wp, RM, cc);
     let pow = small(1, wp).mul(&small(2, wp).powi(2 * k, wp, RM), wp, RM);
     let den =
         pow.sub(&small(1, wp), wp, RM)
@@ -546,6 +568,106 @@ mod tests {
         for (k, w) in want.iter().enumerate() {
             assert_eq!(tangent_number(k + 1).unwrap(), BigInt::from(*w));
         }
+    }
+
+    /// GAMMA WITHOUT ITS RE-READINGS: the Stirling coefficients read off the tangent numbers'
+    /// binary digits are bit for bit the ones their decimal digits give, and Gamma with its guard
+    /// read off the double reading of ln Gamma (`ln_gamma_bits`) is bit for bit Gamma with the
+    /// guard read off a full series first, at the orders of the slow Bessel readings (pi from
+    /// acos(-1), the data's orders) and on a grid, at the precisions they are read at.
+    #[test]
+    fn gamma_reads_the_same_without_its_rereadings() {
+        let mut cc = Consts::new().unwrap();
+        let decimal = |k: usize, p: usize, cc: &mut Consts| {
+            let wp = p.max(2 * k + 64) + 64;
+            let tk = BigFloat::parse(
+                &tangent_number(k).unwrap().to_string(),
+                Radix::Dec,
+                wp,
+                RM,
+                cc,
+            );
+            let pow = small(1, wp).mul(&small(2, wp).powi(2 * k, wp, RM), wp, RM);
+            let den = pow.sub(&small(1, wp), wp, RM).mul(&pow, wp, RM).mul(
+                &small(2 * k as u64 - 1, wp),
+                wp,
+                RM,
+            );
+            let c = tk.div(&den, p, RM);
+            if k % 2 == 0 {
+                c.neg()
+            } else {
+                c
+            }
+        };
+        let same = |a: &BigFloat, b: &BigFloat| {
+            a.cmp(b) == Some(0)
+                && a.precision() == b.precision()
+                && a.is_negative() == b.is_negative()
+        };
+        for p in [233usize, 1_024, 6_700] {
+            for k in (1..=420).chain([600, 900]) {
+                let (new, old) = (
+                    stirling_coefficient(k, p, &mut cc).unwrap(),
+                    decimal(k, p, &mut cc),
+                );
+                assert!(same(&new, &old), "B_{} at {p} bits: {new} vs {old}", 2 * k);
+            }
+        }
+        // Gamma as it read its guard: a full series first
+        let reread = |z: &BigFloat, p: usize, cc: &mut Consts| {
+            let target = (p as f64).max(32.0);
+            let zf = approx(z);
+            let m = if zf < target {
+                (target - zf).ceil() as u64
+            } else {
+                0
+            };
+            let wp = p + 64 + (64 - m.leading_zeros() as usize);
+            let mut prod = small(1, wp);
+            let mut w = z.clone();
+            for _ in 0..m {
+                prod = prod.mul(&w, wp, RM);
+                w = w.add(&small(1, wp), wp, RM);
+            }
+            let lg = ln_gamma_large(&w, wp, cc)?;
+            let guard = log2_abs(&lg).unwrap_or(0).max(0) as usize;
+            let g = ln_gamma_large(&w, wp + guard, cc)?.exp(wp + guard, RM, cc);
+            Some(g.div(&prod, p, RM))
+        };
+        let pi = cc.pi(14_000, RM);
+        let mut zs: Vec<BigFloat> = vec![
+            pi.add(&small(1, 64), 14_000, RM),
+            pi.clone(),
+            bf("1.9749173", 200, &mut cc),
+            bf("2.25", 200, &mut cc),
+            bf("0.5000000000000001", 200, &mut cc),
+            bf("31.7", 200, &mut cc),
+            bf("40", 200, &mut cc).add(&bf("1e-30", 200, &mut cc), 200, RM),
+            bf("7000.5", 200, &mut cc),
+        ];
+        zs.extend((1..=12).map(|i| {
+            bf(
+                &format!("{}.{}", i * 37 % 61, i * 7919 % 1000),
+                200,
+                &mut cc,
+            )
+        }));
+        for z in &zs {
+            for p in [169usize, 402, 1_024, 2_400] {
+                let (new, old) = (gamma_uncached(z, p, &mut cc), reread(z, p, &mut cc));
+                assert!(
+                    matches!((&new, &old), (Some(a), Some(b)) if same(a, b)),
+                    "Gamma({z}) at {p} bits: {new:?} vs {old:?}"
+                );
+            }
+        }
+        let z = pi.add(&small(1, 64), 14_000, RM);
+        let (new, old) = (
+            gamma_uncached(&z, 13_400, &mut cc),
+            reread(&z, 13_400, &mut cc),
+        );
+        assert!(matches!((&new, &old), (Some(a), Some(b)) if same(a, b)));
     }
 
     #[test]
