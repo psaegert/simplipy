@@ -1840,6 +1840,12 @@ model predictions.
   `_0 = -inf` the left side is `1/0`), `atan2(0, 1/_0) -> atan2(0, _0)`, `pow(0, f(_0)) ->
   pow(0, _0)` for five odd functions f, and ground facts through `tan(pi/2)`
   (`tanh(tan(asin(1))) -> 1`) or `pow(-1, inf)` (`pow(-1, log(0)) -> 1`).
+- **The core asks the loader for no static TLS.** The wheel's allocator, mimalloc, is built
+  with local-dynamic thread-local storage, so the extension module no longer carries
+  `DF_STATIC_TLS`. A module with that flag must fit its whole thread-local block into the small
+  reserve glibc keeps for libraries loaded after startup; with this release's larger block,
+  `import simplipy` followed by `import sklearn` or `import torch` failed with "cannot allocate
+  memory in static TLS block" in their OpenMP runtime. Answers and simplify times are unchanged.
 
 ### Removed
 

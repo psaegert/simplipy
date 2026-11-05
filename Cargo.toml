@@ -84,8 +84,14 @@ num-traits = { version = "0.2", default-features = false, features = ["std"] }
 # -Wdate-time", publish run 2026-08-31), so the dependency is scoped away from that
 # one target -- linux-aarch64 wheels keep glibc malloc, every other platform gets the
 # allocator. The feature name stays valid everywhere; it just has no effect there.
+# `local_dynamic_tls`: the module is always loaded after startup (Python dlopens it), so its
+# thread-local storage must not use the initial-exec model. mimalloc's default build does, which
+# marks the module DF_STATIC_TLS: glibc must then place the module's whole thread-local block in
+# the small reserve it keeps for late loads, and a library loaded after it that needs the same
+# reserve (the OpenMP runtime of scikit-learn and torch) fails with "cannot allocate memory in
+# static TLS block". tests/test_extension_module.py checks the built module.
 [target.'cfg(not(all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
-mimalloc = { version = "0.1", default-features = false, optional = true }
+mimalloc = { version = "0.1", default-features = false, optional = true, features = ["local_dynamic_tls"] }
 
 [features]
 default = []

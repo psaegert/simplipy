@@ -143,7 +143,7 @@ jobs:
           "$RUNNER_TEMP/wheelenv/bin/python" -c "import simplipy, sys; print(simplipy.__file__); sys.exit('wheelenv' not in simplipy.__file__)"
           "$RUNNER_TEMP/wheelenv/bin/python" -m pytest -p no:cacheprovider \
             tests/test_verify.py tests/test_artifact_compat.py tests/test_mode_rulesets.py \
-            tests/test_rules_less_warning.py
+            tests/test_rules_less_warning.py tests/test_extension_module.py
         env:
           SIMPLIPY_TEST_REQUIRE_ASSETS: "1"
 
