@@ -531,27 +531,44 @@ fn stirling_coefficient(k: usize, p: usize, cc: &mut Consts) -> Option<BigFloat>
     Some(if k % 2 == 0 { c.neg() } else { c })
 }
 
-/// The tangent numbers `T_1 = 1, T_2 = 2, T_3 = 16, T_4 = 272, ...`, exact (Brent and
-/// Harvey's integer recurrence), cached for every thread.
+/// The tangent numbers read so far, and the last row of the Seidel-Entringer triangle that
+/// extends them (`tangent_number`).
+struct Tangents {
+    /// `T_1, T_2, ...`
+    t: Vec<BigInt>,
+    /// row `n` of the triangle, `E(n, 0..=n)`, whose last entry is the zigzag number `E_n`
+    row: Vec<BigInt>,
+}
+
+/// The tangent numbers `T_1 = 1, T_2 = 2, T_3 = 16, T_4 = 272, ...`, exact, cached for every
+/// thread and extended as far as asked, one row at a time: `T_k` is the zigzag number
+/// `E_(2k-1)`, the last entry of row `2k - 1` of the Seidel-Entringer triangle, `E(0, 0) = 1`,
+/// `E(n, 0) = 0` and `E(n, j) = E(n, j - 1) + E(n - 1, n - j)` (each row the running sums of the
+/// one before, read backwards). Extending to `T_k` costs the additions of the rows not yet read;
+/// nothing is read twice.
 fn tangent_number(k: usize) -> Option<BigInt> {
-    static CACHE: Mutex<Vec<BigInt>> = Mutex::new(Vec::new());
+    static CACHE: Mutex<Tangents> = Mutex::new(Tangents {
+        t: Vec::new(),
+        row: Vec::new(),
+    });
     let mut c = CACHE.lock().ok()?;
-    if c.len() < k {
-        let n = (2 * k).max(64);
-        let mut t: Vec<BigInt> = vec![BigInt::from(0); n + 1];
-        t[1] = BigInt::from(1);
-        for j in 2..=n {
-            t[j] = &t[j - 1] * BigInt::from(j - 1);
-        }
-        for i in 2..=n {
-            for j in i..=n {
-                t[j] = &t[j - 1] * BigInt::from(j - i) + &t[j] * BigInt::from(j - i + 2);
-            }
-        }
-        t.remove(0);
-        *c = t;
+    let Tangents { t, row } = &mut *c;
+    if row.is_empty() {
+        row.push(BigInt::from(1));
     }
-    c.get(k - 1).cloned()
+    while t.len() < k {
+        row.reverse();
+        for j in 1..row.len() {
+            let (done, rest) = row.split_at_mut(j);
+            rest[0] += &done[j - 1];
+        }
+        row.insert(0, BigInt::from(0));
+        if row.len() % 2 == 0 {
+            // row 2k - 1, of 2k entries: its last is T_k
+            t.push(row.last()?.clone());
+        }
+    }
+    t.get(k - 1).cloned()
 }
 
 #[cfg(test)]
@@ -567,6 +584,26 @@ mod tests {
         let want = [1u64, 2, 16, 272, 7936, 353792, 22368256];
         for (k, w) in want.iter().enumerate() {
             assert_eq!(tangent_number(k + 1).unwrap(), BigInt::from(*w));
+        }
+    }
+
+    /// THE TANGENT NUMBERS EXTENDED ROW BY ROW are Brent and Harvey's in-place recurrence's, the
+    /// integers themselves, to `T_600` (an 8,600-bit integer), asked in any order.
+    #[test]
+    fn tangent_numbers_extend_to_brent_and_harvey() {
+        let n = 600;
+        let mut bh: Vec<BigInt> = vec![BigInt::from(0); n + 1];
+        bh[1] = BigInt::from(1);
+        for j in 2..=n {
+            bh[j] = &bh[j - 1] * BigInt::from(j - 1);
+        }
+        for i in 2..=n {
+            for j in i..=n {
+                bh[j] = &bh[j - 1] * BigInt::from(j - i) + &bh[j] * BigInt::from(j - i + 2);
+            }
+        }
+        for k in [n, 1, 300, 37].into_iter().chain(1..=n) {
+            assert_eq!(tangent_number(k).unwrap(), bh[k], "T_{k}");
         }
     }
 
