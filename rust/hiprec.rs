@@ -147,8 +147,9 @@ pub(crate) const ZERO_PROXIMITY: f64 = 1.0 / POLE_PROXIMITY;
 /// value in the reals) is read by the table at its row and takes the table's class -- NaN where
 /// the table gives no value, the infinity it gives, 0 where it is exactly zero -- and keeps its
 /// double where the table reads it finite (an overflow, a genuinely small value) or cannot read
-/// it. A finite row climbs the ladder (`TABLE_ROW_DPS`); an infinite one is read at its first
-/// rung, where an exact pole resolves. Once per source instance.
+/// it. A finite row climbs the ladder (`TABLE_ROW_DPS`), past the rungs a reading shows Unresolved
+/// too (`RealOutcome::unread_through`); an infinite one is read at its first rung, where an exact
+/// pole resolves. Once per source instance.
 pub(crate) fn table_classes(
     y: &mut [f64],
     source: &[String],
@@ -170,10 +171,15 @@ pub(crate) fn table_classes(
         let Some((e, env)) = table_side(source, src_params, ops, var_names, x_cols, r) else {
             return;
         };
-        if let Some(v) = rungs
-            .iter()
-            .find_map(|&dps| e.eval_real(&env, dps).and_then(|o| o.value))
-        {
+        let mut unread = 0;
+        if let Some(v) = rungs.iter().find_map(|&dps| {
+            if dps <= unread {
+                return None; // Unresolved at this rung too
+            }
+            let o = e.eval_real(&env, dps)?;
+            unread = o.unread_through;
+            o.value
+        }) {
             match crate::table::class_of(&v) {
                 (true, _) => *yr = f64::NAN,
                 (_, Some(up)) => *yr = if up { f64::INFINITY } else { f64::NEG_INFINITY },
@@ -205,6 +211,10 @@ pub(crate) fn table_classes(
 /// `None` where a side does not compile for the table or neither decides the row
 /// (`erf(sinh(-100))` is -1 + e^-(1.7e86)): the row says nothing about the true values, and the
 /// caller skips it, as the judge skips a point it cannot resolve.
+///
+/// A side whose first reading shows it Unresolved through a rung (`RealOutcome::unread_through`:
+/// `erf(besseli(x, 5709))` is erf of about 1e2477, inside erf's band at every precision a rung
+/// asks) is not read again there: its reading at that rung is Unresolved without being computed.
 #[allow(clippy::too_many_arguments)]
 fn table_row(
     source: &[String],
@@ -221,23 +231,16 @@ fn table_row(
 ) -> Option<RowVerdict> {
     let (se, senv) = table_side(source, src_params, ops, var_names, x_cols, row)?;
     let (ce, cenv) = table_side(candidate, cand_params, ops, var_names, x_cols, row)?;
-    let mut cc = Consts::new().ok()?;
-    let p0 = dps_to_prec(BASE_DPS);
     let (os, oc) = (
         se.eval_real(&senv, BASE_DPS)?,
         ce.eval_real(&cenv, BASE_DPS)?,
     );
-    let demanded = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc)
-        .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc))
-        .clamp(BASE_DPS, MAX_DPS);
-    let start = demanded;
-    let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
-    let higher = (2 * fine).clamp(ROW_CLIMB, 2 * MAX_DPS);
-    let highest = higher + higher / 2;
+    let [start, fine, higher, highest] = row_rungs(&os, &oc)?;
+    let unread = (os.unread_through, oc.unread_through);
     let first = (os.value, oc.value);
     for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
         if let Some(v) = table_rungs(
-            &se, &senv, &ce, &cenv, &first, lo, hi, rtol, atol, with_vars,
+            &se, &senv, &ce, &cenv, &first, unread, lo, hi, rtol, atol, with_vars,
         ) {
             return Some(v);
         }
@@ -259,8 +262,22 @@ fn table_row(
 /// (`_contract.GAP_RUNGS`).
 const ROW_CLIMB: i32 = GAP_RUNGS[2];
 
+/// The four rungs of `table_row` from the two sides' first readings: the precision their
+/// intermediates demand (`demanded_dps`), a finer one, and the two past it.
+fn row_rungs(os: &crate::table::RealOutcome, oc: &crate::table::RealOutcome) -> Option<[i32; 4]> {
+    let mut cc = Consts::new().ok()?;
+    let p0 = dps_to_prec(BASE_DPS);
+    let start = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc)
+        .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc))
+        .clamp(BASE_DPS, MAX_DPS);
+    let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
+    let higher = (2 * fine).clamp(ROW_CLIMB, 2 * MAX_DPS);
+    Some([start, fine, higher, higher + higher / 2])
+}
+
 /// `table_row` at the rungs `start` and `fine`: the verdict, or `None` where a reading at either
-/// is Unresolved. `first` holds the two sides' readings at `BASE_DPS`, which serve a rung there.
+/// is Unresolved. `first` holds the two sides' readings at `BASE_DPS`, which serve a rung there;
+/// `unread` the precisions through which they show each side Unresolved, where it is not read.
 #[allow(clippy::too_many_arguments)]
 fn table_rungs(
     se: &crate::table::Expr,
@@ -268,6 +285,7 @@ fn table_rungs(
     ce: &crate::table::Expr,
     cenv: &[crate::table::Val],
     first: &(Option<crate::table::Val>, Option<crate::table::Val>),
+    unread: (i32, i32),
     start: i32,
     fine: i32,
     rtol: f64,
@@ -280,6 +298,8 @@ fn table_rungs(
         // the first readings serve the first rung where it is theirs
         let s = if dps == BASE_DPS {
             first.0.clone()?
+        } else if dps <= unread.0 {
+            return None;
         } else {
             se.eval_real(senv, dps)?.value?
         };
@@ -289,6 +309,8 @@ fn table_rungs(
         }
         let c = if dps == BASE_DPS {
             first.1.clone()?
+        } else if dps <= unread.1 {
+            return None;
         } else {
             ce.eval_real(cenv, dps)?.value?
         };
@@ -2626,6 +2648,125 @@ fn apply_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE ROW JUDGMENT'S REACH (`table_rungs`' `unread`): a side its first reading shows
+    /// Unresolved through a rung is not read there, and every rung pair gives the verdict the full
+    /// reading gives, at the mint's slow rows (the slow pairs' fitted constants) and on a grid.
+    #[test]
+    fn a_side_unread_through_a_rung_gives_the_verdict_read_there() {
+        use crate::table::{val_of_f64, Expr};
+        let arity: std::collections::HashMap<String, u8> = [
+            ("neg", 1),
+            ("atan", 1),
+            ("floor", 1),
+            ("tanh", 1),
+            ("erf", 1),
+            ("erfc", 1),
+            ("exp", 1),
+            ("+", 2),
+            ("max", 2),
+            ("mod", 2),
+            ("pow", 2),
+            ("besseli", 2),
+            ("besselj", 2),
+            ("besselk", 2),
+        ]
+        .into_iter()
+        .map(|(k, a)| (k.to_string(), a))
+        .collect();
+        let names: Vec<String> = ["x0", "x1", "x2", "k"]
+            .iter()
+            .map(|n| n.to_string())
+            .collect();
+        let side = |tokens: &str, xs: &[f64; 4]| {
+            let toks: Vec<String> = tokens.split(' ').map(String::from).collect();
+            let e = Expr::compile(&toks, &names, &arity).unwrap();
+            (e, xs.iter().map(|&x| val_of_f64(x)).collect::<Vec<_>>())
+        };
+        // (source, its row and constant; candidate, its row and fitted constant; skips a rung)
+        type Case<'a> = (&'a str, [f64; 4], &'a str, [f64; 4], bool);
+        let cases: [Case; 8] = [
+            (
+                "pow x1 atan floor -5",
+                [0.0, 0.9749173, 0.0, 0.0],
+                "erf besseli x1 k",
+                [0.0, 0.9749173, 0.0, 5708.894316829238],
+                true,
+            ),
+            (
+                "mod neg + x0 4 k",
+                [1.25, 0.0, 0.0, 3.7],
+                "erfc besseli x0 k",
+                [1.25, 0.0, 0.0, 1941.590139079494],
+                true,
+            ),
+            (
+                "max -9 + x2 k",
+                [0.0, 0.0, 36.6, 0.5],
+                "besseli k erfc x2",
+                [0.0, 0.0, 36.6, 2085.337582239102],
+                true,
+            ),
+            (
+                "mod neg + x0 4 k",
+                [0.3, 0.0, 0.0, 2.5],
+                "besselk x0 exp k",
+                [0.3, 0.0, 0.0, 25.0],
+                true,
+            ),
+            (
+                "neg x0",
+                [400.0, 0.0, 0.0, 0.0],
+                "floor tanh x0",
+                [400.0, 0.0, 0.0, 0.0],
+                true,
+            ),
+            (
+                "neg x0",
+                [47.0, 0.0, 0.0, 0.0],
+                "floor tanh x0",
+                [47.0, 0.0, 0.0, 0.0],
+                false,
+            ),
+            (
+                "x0",
+                [-30.0, 0.0, 0.0, 0.0],
+                "erfc x0",
+                [-30.0, 0.0, 0.0, 0.0],
+                true,
+            ),
+            (
+                "x0",
+                [3.0, 0.0, 0.0, 0.0],
+                "erf exp x0",
+                [3.0, 0.0, 0.0, 0.0],
+                true,
+            ),
+        ];
+        for (src, sx, cand, cx, skips) in cases {
+            let ((se, senv), (ce, cenv)) = (side(src, &sx), side(cand, &cx));
+            let (os, oc) = (
+                se.eval_real(&senv, BASE_DPS).unwrap(),
+                ce.eval_real(&cenv, BASE_DPS).unwrap(),
+            );
+            let [start, fine, higher, highest] = row_rungs(&os, &oc).unwrap();
+            let unread = (os.unread_through, oc.unread_through);
+            assert_eq!(
+                unread.0.max(unread.1) > start,
+                skips,
+                "{src} -> {cand}: {unread:?}"
+            );
+            let first = (os.value, oc.value);
+            for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
+                let read = |u| {
+                    table_rungs(
+                        &se, &senv, &ce, &cenv, &first, u, lo, hi, 1e-11, 1e-12, true,
+                    )
+                };
+                assert_eq!(read((0, 0)), read(unread), "{src} -> {cand} at {lo}, {hi}");
+            }
+        }
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

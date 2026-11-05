@@ -119,7 +119,7 @@ pub(crate) fn besselj(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) ->
         let positive = !z.is_negative() || !is_odd(&z.neg().ceil());
         return Some(if positive { INF_POS } else { INF_NEG });
     }
-    if approx(nu).abs() > NU_CAP || approx(x).abs() > X_CAP {
+    if super::bessel::beyond_caps("besselj", approx(nu), approx(x).abs()) {
         return None;
     }
     if integer {

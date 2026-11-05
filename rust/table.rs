@@ -204,6 +204,9 @@ pub struct Ctx {
     /// tell the value from the limit). For a double's worth of digits only, never for an exact
     /// comparison.
     pub saturate: bool,
+    /// How far an Unresolved reading reaches (`unread_through`): every precision up to this many
+    /// digits leaves the expression Unresolved at its point; 0 where that is not known.
+    pub unread_through: i32,
     cc: PooledConsts,
 }
 
@@ -272,6 +275,7 @@ impl Ctx {
             min_mag: small_int(0, p),
             band: small_int(0, p),
             saturate: false,
+            unread_through: 0,
             cc: PooledConsts::take()?,
         })
     }
@@ -1672,6 +1676,108 @@ fn bessel_val(name: &str, nu: &Val, x: &Val, ctx: &mut Ctx) -> Out {
     .map(|v| bessel_value(v, x))
 }
 
+// ------------------------------------------------------------ how far Unresolved reaches
+
+/// The heads `Expr::stable` admits over stable operands: each is undefined, an infinity, exactly
+/// zero, or finite and nonzero of one sign by its operand's class alone, and otherwise
+/// Unresolved or the real value at the working precision.
+const STABLE_HEADS: [&str; 9] = [
+    "neg", "exp", "sinh", "cosh", "tanh", "atan", "asinh", "erf", "erfc",
+];
+
+/// The Bessel heads (`Expr::stable` admits them over exact leaves).
+const BESSEL_HEADS: [&str; 4] = ["besselj", "bessely", "besseli", "besselk"];
+
+/// The relative slack the bounds of `unread_through` leave an operand: its readings at any two
+/// precisions lie within their last places of one real value (2^-160 at the least), far inside.
+const UNREAD_SLACK: f64 = 1e-12;
+
+/// HOW FAR AN UNRESOLVED NODE REACHES: the most digits at which the head `name` stays
+/// Unresolved at every operand within `UNREAD_SLACK` of `a` (and `b`), each operand STABLE
+/// (`Expr::stable`). Then every reading of the expression up to that precision is Unresolved
+/// too: the node is read at every precision unless an earlier node is Unresolved there, and an
+/// Unresolved node leaves the whole reading Unresolved. 0 where no bound is known; `i32::MAX`
+/// where no precision reads the node. Each rule is a sufficient condition of the head's own test,
+/// with room for the rounding of the working float and of the band (`Ctx::floor`, `Ctx::ceil`):
+///
+/// * a bounded head inside the band of its bound at every precision to D digits, its distance
+///   at most a quarter of `10^-(D-10)`: `tanh` (`1 - tanh t < 2 e^(-2t)`), `atan`
+///   (`pi/2 - atan t < 1/t`), `erf`, and `erfc` towards 2 (`erfc t < e^(-t^2)/(t sqrt(pi))`
+///   for t >= 1);
+/// * an operand past a cap that holds at every precision: `exp`, `sinh` and `cosh` at
+///   |x| >= 1e5, `erf` at |x| > 1e5, `erfc` at |x| >= `special::ERFC_X_CAP`, and a Bessel head at
+///   a positive argument past its kernel's caps (`bessel::beyond_caps`; a non-positive argument
+///   is a cell, read before the caps);
+/// * a trig head at an argument past its resolution limit `10^(D-10)` (`trig_approx`).
+fn unread_through(name: &str, a: &Val, b: Option<&Val>) -> i32 {
+    let finite = |v: &Val| match v {
+        Val::Approx(x) => {
+            let m = bf_to_f64(x);
+            (!m.is_nan()).then_some(if x.is_negative() { -m } else { m })
+        }
+        Val::Exact(Exact::Rat(r)) => Some(r.to_f64()).filter(|f| !f.is_nan()),
+        _ => None,
+    };
+    let shrunk = |t: f64| t.abs() * (1.0 - UNREAD_SLACK);
+    // the most digits D whose band `10^-(D-10)` is at least four times the distance
+    let band_digits = |ln_distance: f64| -> i32 {
+        let d = 10.0 + (-ln_distance - 4f64.ln()) / std::f64::consts::LN_10;
+        if d >= f64::from(i32::MAX) {
+            i32::MAX
+        } else {
+            d.max(0.0).floor() as i32
+        }
+    };
+    // ln of the bound e^(-t^2)/(t sqrt(pi)) on erfc(t), for t >= 1
+    let ln_erfc_bound = |t: f64| -(t * t) - (t * std::f64::consts::PI.sqrt()).ln();
+    match (name, b) {
+        ("tanh", None) => match finite(a).map(shrunk) {
+            Some(t) if t > 0.0 => band_digits(2f64.ln() - 2.0 * t),
+            _ => 0,
+        },
+        ("atan", None) => match finite(a).map(shrunk) {
+            Some(t) if t > 0.0 => band_digits(-t.ln()),
+            _ => 0,
+        },
+        ("erf", None) => match finite(a).map(shrunk) {
+            Some(t) if t > 1e5 => i32::MAX,
+            Some(t) if t >= 1.0 => band_digits(ln_erfc_bound(t)),
+            _ => 0,
+        },
+        ("erfc", None) => match finite(a) {
+            Some(x) if shrunk(x) >= special::ERFC_X_CAP => i32::MAX,
+            Some(x) if x < 0.0 && shrunk(x) >= 1.0 => band_digits(ln_erfc_bound(shrunk(x))),
+            _ => 0,
+        },
+        ("exp" | "sinh" | "cosh", None) => match finite(a).map(shrunk) {
+            Some(t) if t >= 1e5 => i32::MAX,
+            _ => 0,
+        },
+        ("sin" | "cos" | "tan", None) => match finite(a).map(shrunk) {
+            Some(t) if t > 0.0 => {
+                let d = 10.0 + (t.log10() - 1e-9).floor();
+                if d >= f64::from(i32::MAX) {
+                    i32::MAX
+                } else {
+                    d.max(0.0) as i32
+                }
+            }
+            _ => 0,
+        },
+        // the argument's sign is read off the value: a positive argument below the doubles' range
+        // (`erfc(388)` is about 1e-65326) is 0 as a double
+        (head, Some(x)) if BESSEL_HEADS.contains(&head) => match (finite(a), finite(x)) {
+            (Some(nu), Some(xf))
+                if sign(x) > 0 && bessel::beyond_caps(head, shrunk(nu), shrunk(xf)) =>
+            {
+                i32::MAX
+            }
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
 // ---------------------------------------------------------------- compiled expressions
 
 #[derive(Clone, Debug)]
@@ -1699,6 +1805,9 @@ pub struct RealOutcome {
     /// the smallest distance to its bound of a bounded function left inside its band, zero where
     /// none was (`Ctx::note_distance`)
     pub band: BigFloat,
+    /// with `value` None: every precision up to this many digits leaves the point Unresolved, 0
+    /// where that is not known (`unread_through`)
+    pub unread_through: i32,
 }
 
 impl Expr {
@@ -1766,6 +1875,11 @@ impl Expr {
         let _exact = number_domain(false);
         let value = self.node_real(self.root, env, &mut ctx);
         Some(RealOutcome {
+            unread_through: if value.is_none() {
+                ctx.unread_through
+            } else {
+                0
+            },
             value,
             snapped: ctx.snapped,
             inf_node: ctx.inf_node,
@@ -1798,16 +1912,51 @@ impl Expr {
             Node::Op(name, kids) => {
                 let a = self.node_real(kids[0], env, ctx)?;
                 let v = if kids.len() == 1 {
-                    unary(name, &a, ctx)??
+                    let out = unary(name, &a, ctx)?;
+                    if out.is_none() && !ctx.saturate && self.stable(kids[0]) {
+                        ctx.unread_through = unread_through(name, &a, None);
+                    }
+                    out?
                 } else {
                     let b = self.node_real(kids[1], env, ctx)?;
-                    binary(name, &a, &b, ctx)??
+                    let out = binary(name, &a, &b, ctx)?;
+                    if out.is_none()
+                        && !ctx.saturate
+                        && self.stable(kids[0])
+                        && self.stable(kids[1])
+                    {
+                        ctx.unread_through = unread_through(name, &a, Some(&b));
+                    }
+                    out?
                 };
                 if is_inf(&v) {
                     ctx.inf_node = true;
                 }
                 ctx.note_mag(&v, matches!(name.as_str(), "+" | "-" | "mod"));
                 Some(v)
+            }
+        }
+    }
+
+    /// Is node `i` STABLE: is its reading, at every precision, Unresolved or a value of one class
+    /// (undefined, an infinity of one sign, exactly zero, or finite and nonzero of one sign) within
+    /// its last place of one real value? A leaf is; so is a head of `STABLE_HEADS` over stable
+    /// operands, each of which takes its class from its operand's class alone; and a Bessel head
+    /// over leaves whose value is exact (a variable's double, an exact literal, e), whose cells
+    /// and integer orders it reads exactly. A sum is not (an exact zero at one precision can be a
+    /// residue at another), nor is a trig head (its snaps move with the precision).
+    fn stable(&self, i: usize) -> bool {
+        match &self.nodes[i] {
+            Node::Var(_) | Node::Lit(..) => true,
+            Node::Op(name, kids) if BESSEL_HEADS.contains(&name.as_str()) => {
+                kids.iter().all(|&k| match &self.nodes[k] {
+                    Node::Var(_) => true,
+                    Node::Lit(leaf, _) => matches!(leaf, Leaf::Exact(_) | Leaf::E),
+                    Node::Op(..) => false,
+                })
+            }
+            Node::Op(name, kids) => {
+                STABLE_HEADS.contains(&name.as_str()) && kids.iter().all(|&k| self.stable(k))
             }
         }
     }
@@ -2645,5 +2794,88 @@ mod tests {
         // an exact value is exact, and one off every integer's band is decided
         assert_eq!(class(&real("floor 2.5", &[])), "fin");
         assert_eq!(class(&real("floor tanh 1", &[])), "fin");
+    }
+
+    /// HOW FAR UNRESOLVED REACHES (`RealOutcome::unread_through`): at the mint's slow readings and
+    /// on a grid across each rule's threshold, every precision a rung asks up to the recorded
+    /// bound leaves the reading Unresolved; a resolved reading records none.
+    #[test]
+    fn an_unresolved_reading_is_unresolved_as_far_as_it_says() {
+        const RUNGS: [i32; 18] = [
+            52, 58, 60, 88, 120, 250, 356, 375, 400, 704, 1056, 1200, 1734, 2000, 2601, 3000, 4000,
+            6000,
+        ];
+        let reach = |expr: &str, xs: &[f64], top: i32| -> i32 {
+            let toks: Vec<String> = expr.split(' ').map(String::from).collect();
+            let names: Vec<String> = (0..xs.len()).map(|i| format!("x{i}")).collect();
+            let e = Expr::compile(&toks, &names, &arity()).unwrap();
+            let env: Vec<Val> = xs.iter().map(|&x| val_of_f64(x)).collect();
+            let o = e.eval_real(&env, BASE_DPS).unwrap();
+            if o.value.is_some() {
+                assert_eq!(
+                    o.unread_through, 0,
+                    "{expr} at {xs:?}: read, and a reach recorded"
+                );
+            }
+            for &dps in RUNGS.iter().filter(|&&d| d <= o.unread_through.min(top)) {
+                assert!(
+                    e.eval_real(&env, dps).unwrap().value.is_none(),
+                    "{expr} at {xs:?}: read at {dps} digits, unread through {}",
+                    o.unread_through
+                );
+            }
+            o.unread_through
+        };
+        // the mint's slow pairs (order, argument at the fitted constant): every rung of the row
+        // judgment, to the clamped 2,000 digits it starts at
+        for (expr, xs) in [
+            ("erf besseli x0 x1", vec![0.9749173, 5708.894316829238]),
+            ("erfc besseli x0 x1", vec![1.25, 1941.590139079494]),
+            ("tanh besseli x0 x1", vec![0.5, 300.0]),
+            ("besseli x1 erfc x0", vec![36.6, 2085.337582239102]),
+            ("besseli x1 erfc x0", vec![387.8, 2085.337582239102]),
+            ("besselj x1 erfc x0", vec![3.0, 1500.5]),
+            ("besselk x0 exp x1", vec![0.3, 25.0]),
+        ] {
+            assert_eq!(reach(expr, &xs, 2000), i32::MAX, "{expr} at {xs:?}");
+        }
+        // a grid across each rule: the bound is sound wherever one is recorded, and the readings
+        // the bound leaves to the rungs are left (`floor(tanh(400))` is read at 400 digits)
+        let grid: [(&str, &[f64]); 12] = [
+            (
+                "tanh x0",
+                &[20.0, 46.0, 47.0, 60.0, 100.0, 300.0, 400.0, 1e3, 7e3, 1e6],
+            ),
+            ("floor tanh x0", &[47.0, 300.0, 400.0, 3e3]),
+            ("atan x0", &[1e39, 1e40, 1e41, 1e100, 1e300]),
+            (
+                "erf x0",
+                &[9.0, 9.6, 10.0, 30.0, -30.0, 118.0, 200.0, 1e5, 2e5],
+            ),
+            (
+                "erfc x0",
+                &[-9.6, -30.0, -1e4, -2e4, 30.0, 9999.0, 1e4, 2e4],
+            ),
+            ("exp x0", &[99999.0, 1e5, 2e5, -2e5]),
+            ("cosh neg x0", &[1e5, 3e5]),
+            ("sin x0", &[1e39, 1e40, 1e41, 1e60, 1e300]),
+            ("cos exp x0", &[90.0, 92.0, 100.0, 150.0, 700.0]),
+            ("tanh exp x0", &[3.8, 3.9, 5.0, 8.0]),
+            ("erf sinh x0", &[2.0, 3.0, 5.0, 12.0]),
+            ("besselk x0 2", &[1500.0, -1500.0, 0.5]),
+        ];
+        for (expr, xs) in grid {
+            for &x in xs {
+                reach(expr, &[x], 6000);
+            }
+        }
+        // a sum is not stable (an exact zero at one precision can be a residue at another), nor
+        // is a trig head (its snaps move with the precision): no reach is claimed through them
+        assert_eq!(reach("tanh + exp x0 x0", &[300.0], 6000), 0);
+        assert_eq!(
+            reach("tanh neg tan x0", &[std::f64::consts::FRAC_PI_2], 6000),
+            0
+        );
+        assert_eq!(reach("besseli x1 + x0 x0", &[2.0, 1500.0], 6000), 0);
     }
 }

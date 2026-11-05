@@ -51,6 +51,20 @@ pub(crate) const I_X_CAP: f64 = 1e4;
 /// it.
 pub(crate) const K_X_CAP: f64 = 1e8;
 
+/// THE KERNELS' CAPS: is the Bessel head `name` (`besselj`, `bessely`, `besseli`, `besselk`) at
+/// the order `nuf` and the positive argument `xf` past them, where it is Unresolved at every
+/// precision? The order to `NU_CAP`; the argument to `X_CAP` (J, Y), `I_X_CAP` (I), `K_X_CAP`
+/// (K). The kernels test their caps here, after their cells (a non-positive argument, an
+/// infinite operand).
+pub(crate) fn beyond_caps(name: &str, nuf: f64, xf: f64) -> bool {
+    let x_cap = match name {
+        "besseli" => I_X_CAP,
+        "besselk" => K_X_CAP,
+        _ => X_CAP,
+    };
+    nuf.abs() > NU_CAP || xf > x_cap
+}
+
 /// `(sin(pi nu), cos(pi nu))` at `wp` bits, each read off `nu`'s distance to the nearest of its
 /// zeros, exactly (at the order's own bits, which carry it: `table::bessel_order`):
 /// `sin(pi nu) = (-1)^n sin(pi (nu - n))` with `n` the nearest integer and
@@ -112,7 +126,7 @@ pub(crate) fn bessely(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) ->
         }
         return Some(if c.is_negative() { INF_POS } else { INF_NEG });
     }
-    if approx(nu).abs() > NU_CAP || approx(x) > X_CAP {
+    if beyond_caps("bessely", approx(nu), approx(x)) {
         return None;
     }
     if nu.is_int() {
@@ -204,7 +218,7 @@ pub(crate) fn besseli(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) ->
             INF_NEG
         });
     }
-    if approx(nu).abs() > NU_CAP || approx(x) > I_X_CAP {
+    if beyond_caps("besseli", approx(nu), approx(x)) {
         return None;
     }
     let nu = if integer { nu.abs() } else { nu.clone() };
@@ -222,7 +236,7 @@ pub(crate) fn besselk(nu: &BigFloat, x: &BigFloat, p: usize, cc: &mut Consts) ->
         return Some(INF_POS);
     }
     let nu = nu.abs();
-    if approx(&nu) > NU_CAP || approx(x) > K_X_CAP {
+    if beyond_caps("besselk", approx(&nu), approx(x)) {
         return None;
     }
     if let Some(v) = k_expansion(&nu, x, p, cc) {
