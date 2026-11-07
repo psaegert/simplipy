@@ -132,6 +132,111 @@ fn table_side(
     Some((expr, env))
 }
 
+/// A side of a row as the thread's memo of readings keys it: its tokens, its constants, the
+/// variables it binds and their values at the row (each double by its bits).
+type SideKey = (Vec<String>, Vec<u64>, Vec<String>, Vec<u64>);
+
+/// The most readings `SIDE_READINGS` keeps of each kind; past it the memo starts afresh.
+const SIDE_READINGS_MAX: usize = 8192;
+
+/// Empties the thread's memo of side readings (`SIDE_READINGS`).
+#[cfg(test)]
+fn clear_side_readings() {
+    SIDE_READINGS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.0.clear();
+        m.1.clear();
+    });
+}
+
+thread_local! {
+    /// The row judgments' readings on this thread: each side's first reading (`BASE_DPS`) and its
+    /// values at the higher rungs. A reading is a function of the compiled side, its environment
+    /// and the precision alone (the constant caches give every constant correctly rounded,
+    /// whatever they hold), so a side read again at a row and a rung -- a scan's source, at the
+    /// rows the rescue of every candidate reads -- is taken from here, as it was read.
+    #[allow(clippy::type_complexity)]
+    static SIDE_READINGS: std::cell::RefCell<(
+        rustc_hash::FxHashMap<SideKey, Option<crate::table::RealOutcome>>,
+        rustc_hash::FxHashMap<(SideKey, i32), Option<crate::table::Val>>,
+    )> = std::cell::RefCell::new(Default::default());
+}
+
+/// One side of a row judgment: compiled for the table (`table_side`), with the key its readings
+/// are memoized under on the thread (`SIDE_READINGS`; none: read afresh every time).
+struct RowSide {
+    e: crate::table::Expr,
+    env: Vec<crate::table::Val>,
+    key: Option<SideKey>,
+}
+
+impl RowSide {
+    fn new(
+        tokens: &[String],
+        params: &[f64],
+        ops: &Operators,
+        var_names: &[String],
+        x_cols: &[Vec<f64>],
+        row: usize,
+    ) -> Option<RowSide> {
+        let (e, env) = table_side(tokens, params, ops, var_names, x_cols, row)?;
+        let key = (
+            tokens.to_vec(),
+            params.iter().map(|p| p.to_bits()).collect(),
+            var_names.to_vec(),
+            (0..var_names.len())
+                .map(|i| x_cols.get(i).map_or(f64::NAN, |c| c[row]).to_bits())
+                .collect(),
+        );
+        Some(RowSide {
+            e,
+            env,
+            key: Some(key),
+        })
+    }
+
+    /// The first reading, at `BASE_DPS`.
+    fn first(&self) -> Option<crate::table::RealOutcome> {
+        let read = || self.e.eval_real(&self.env, BASE_DPS);
+        let Some(key) = &self.key else {
+            return read();
+        };
+        if let Some(hit) = SIDE_READINGS.with(|m| m.borrow().0.get(key).cloned()) {
+            return hit;
+        }
+        let o = read();
+        SIDE_READINGS.with(|m| {
+            let firsts = &mut m.borrow_mut().0;
+            if firsts.len() >= SIDE_READINGS_MAX {
+                firsts.clear();
+            }
+            firsts.insert(key.clone(), o.clone());
+        });
+        o
+    }
+
+    /// The value at `dps` digits; `None` where the reading is Unresolved there.
+    fn at(&self, dps: i32) -> Option<crate::table::Val> {
+        let read = || self.e.eval_real(&self.env, dps).and_then(|o| o.value);
+        let Some(key) = &self.key else {
+            return read();
+        };
+        let key = (key.clone(), dps);
+        if let Some(hit) = SIDE_READINGS.with(|m| m.borrow().1.get(&key).cloned()) {
+            return hit;
+        }
+        let v = read();
+        SIDE_READINGS.with(|m| {
+            let values = &mut m.borrow_mut().1;
+            if values.len() >= SIDE_READINGS_MAX {
+                values.clear();
+            }
+            values.insert(key, v.clone());
+        });
+        v
+    }
+}
+
 /// The magnitude past which a finite double may be a rounded pole (`tan(asin(1.0))` is
 /// 1.633e16 in float64, `tan(pi/2)` undefined in the reals), so that a row of the source there
 /// is read by the table (`table_classes`).
@@ -218,6 +323,11 @@ pub(crate) fn table_classes(
 /// not read again there: its reading at that rung is Unresolved without being computed. Where
 /// the source cannot be undefined at any rung (`Reach::defined`), a rung the candidate cannot
 /// read is unread whatever the source reads there, and the source is not read.
+///
+/// `fail_only`: the caller asks only whether the row fails (it reads `Extend` as it reads an
+/// unread row). A row whose candidate is Unresolved at every rung left to read, where the
+/// saturation rule cannot apply (`saturation_may_refute`), cannot fail whatever the source reads
+/// there, and is left unread without reading it.
 #[allow(clippy::too_many_arguments)]
 fn table_row(
     source: &[String],
@@ -231,20 +341,32 @@ fn table_row(
     rtol: f64,
     atol: f64,
     with_vars: bool,
+    fail_only: bool,
 ) -> Option<RowVerdict> {
-    let (se, senv) = table_side(source, src_params, ops, var_names, x_cols, row)?;
-    let (ce, cenv) = table_side(candidate, cand_params, ops, var_names, x_cols, row)?;
-    let (os, oc) = (
-        se.eval_real(&senv, BASE_DPS)?,
-        ce.eval_real(&cenv, BASE_DPS)?,
-    );
+    let s = RowSide::new(source, src_params, ops, var_names, x_cols, row)?;
+    let c = RowSide::new(candidate, cand_params, ops, var_names, x_cols, row)?;
+    let (os, oc) = (s.first()?, c.first()?);
     let [start, fine, higher, highest] = row_rungs(&os, &oc)?;
-    let reach = (Reach::of(&se, &os), Reach::of(&ce, &oc));
+    let reach = (Reach::of(&s.e, &os), Reach::of(&c.e, &oc));
     let first = (os.value, oc.value);
-    for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
-        if let Some(v) = table_rungs(
-            &se, &senv, &ce, &cenv, &first, reach, lo, hi, rtol, atol, with_vars,
-        ) {
+    // each rung pair's verdict is decided at its first rung where the candidate cannot be read
+    let c_unread = |d: i32| {
+        if d == BASE_DPS {
+            first.1.is_none()
+        } else {
+            reach.1.unread_at(d)
+        }
+    };
+    let cannot_fail = fail_only && !saturation_may_refute(source, candidate);
+    let los = [start, fine, higher];
+    for (k, (lo, hi)) in [(start, fine), (fine, higher), (higher, highest)]
+        .into_iter()
+        .enumerate()
+    {
+        if cannot_fail && los[k..].iter().all(|&d| c_unread(d)) {
+            return None;
+        }
+        if let Some(v) = table_rungs(&s, &c, &first, reach, lo, hi, rtol, atol, with_vars) {
             return Some(v);
         }
     }
@@ -325,10 +447,8 @@ impl Reach {
 /// `defined`, the candidate is read first, and an Unresolved candidate leaves the source unread.
 #[allow(clippy::too_many_arguments)]
 fn table_rungs(
-    se: &crate::table::Expr,
-    senv: &[crate::table::Val],
-    ce: &crate::table::Expr,
-    cenv: &[crate::table::Val],
+    src: &RowSide,
+    cand: &RowSide,
     first: &(Option<crate::table::Val>, Option<crate::table::Val>),
     reach: (Reach, Reach),
     start: i32,
@@ -347,14 +467,14 @@ fn table_rungs(
             if base {
                 first.0.clone()
             } else {
-                se.eval_real(senv, dps)?.value
+                src.at(dps)
             }
         };
         let read_c = || -> Option<Val> {
             if base {
                 first.1.clone()
             } else {
-                ce.eval_real(cenv, dps)?.value
+                cand.at(dps)
             }
         };
         if !base && rs.unread_at(dps) {
@@ -454,12 +574,9 @@ fn saturation_refutes(
         (source, src_params, candidate),
         (candidate, cand_params, source),
     ] {
-        let Some(bounds) = side.first().and_then(|o| saturating_bounds(o)) else {
+        let Some(bounds) = saturating_against(side, other) else {
             continue;
         };
-        if side.len() < 2 || other.len() != 1 || other[0] == "<constant>" {
-            continue; // a computed side is no written bound
-        }
         let read = |tokens: &[String], params: &[f64]| {
             let (e, env) = table_side(tokens, params, ops, var_names, x_cols, row)?;
             e.eval_real(&env, BASE_DPS)?.value
@@ -483,6 +600,21 @@ fn saturation_refutes(
         }
     }
     false
+}
+
+/// The bounds `side` saturates to where the saturation rule may read it against `other`: a
+/// saturating head (`saturating_bounds`) over an operand, against one token that is no fitted
+/// `<constant>` (a computed side is no written bound).
+fn saturating_against(side: &[String], other: &[String]) -> Option<&'static [f64]> {
+    let bounds = side.first().and_then(|o| saturating_bounds(o))?;
+    (side.len() >= 2 && other.len() == 1 && other[0] != "<constant>").then_some(bounds)
+}
+
+/// May the saturation rule (`saturation_refutes`) refute a row of this pair? Only where one side
+/// saturates against the other (`saturating_against`), whatever the row.
+fn saturation_may_refute(source: &[String], candidate: &[String]) -> bool {
+    saturating_against(source, candidate).is_some()
+        || saturating_against(candidate, source).is_some()
 }
 
 /// The binding rows `source_faithful` reads, spread evenly over them.
@@ -668,6 +800,8 @@ pub fn rescue(
             rtol,
             atol,
             !one_point && isolated_infinity,
+            // a narrow miss asks only whether a row fails; a wide one counts the rows read
+            !wide,
         ) {
             // a confirmed disagreement: keep the f64 verdict. Permissive excuses none at a point
             // (it binds every slot to any subexpression, so no point is isolated in every
@@ -756,6 +890,7 @@ pub fn range_rescue(
                 rtol,
                 atol,
                 with_vars,
+                true,
             ),
             Some(RowVerdict::Fail)
         )
@@ -2810,12 +2945,19 @@ mod tests {
         ];
         for (src, sx, cand, cx, skips) in cases {
             let ((se, senv), (ce, cenv)) = (side(src, &sx), side(cand, &cx));
-            let (os, oc) = (
-                se.eval_real(&senv, BASE_DPS).unwrap(),
-                ce.eval_real(&cenv, BASE_DPS).unwrap(),
-            );
+            let s = RowSide {
+                e: se,
+                env: senv,
+                key: None,
+            };
+            let c = RowSide {
+                e: ce,
+                env: cenv,
+                key: None,
+            };
+            let (os, oc) = (s.first().unwrap(), c.first().unwrap());
             let [start, fine, higher, highest] = row_rungs(&os, &oc).unwrap();
-            let reach = (Reach::of(&se, &os), Reach::of(&ce, &oc));
+            let reach = (Reach::of(&s.e, &os), Reach::of(&c.e, &oc));
             assert_eq!(
                 reach.0.through.max(reach.1.through) > start,
                 skips,
@@ -2823,11 +2965,7 @@ mod tests {
             );
             let first = (os.value, oc.value);
             for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
-                let read = |u| {
-                    table_rungs(
-                        &se, &senv, &ce, &cenv, &first, u, lo, hi, 1e-11, 1e-12, true,
-                    )
-                };
+                let read = |u| table_rungs(&s, &c, &first, u, lo, hi, 1e-11, 1e-12, true);
                 assert_eq!(
                     read((Reach::NONE, Reach::NONE)),
                     read(reach),
@@ -2862,6 +3000,7 @@ mod tests {
             ("mod", 2),
             ("besseli", 2),
             ("bessely", 2),
+            ("besselk", 2),
         ]
         .into_iter()
         .map(|(k, a)| (k.to_string(), a))
@@ -2876,12 +3015,19 @@ mod tests {
         // whether a higher rung leaves a side unread on what they tell
         let judge = |src: &str, cand: &str, x: [f64; 3]| {
             let ((se, senv), (ce, cenv)) = (side(src, x), side(cand, x));
-            let (os, oc) = (
-                se.eval_real(&senv, BASE_DPS).unwrap(),
-                ce.eval_real(&cenv, BASE_DPS).unwrap(),
-            );
+            let s = RowSide {
+                e: se,
+                env: senv,
+                key: None,
+            };
+            let c = RowSide {
+                e: ce,
+                env: cenv,
+                key: None,
+            };
+            let (os, oc) = (s.first().unwrap(), c.first().unwrap());
             let [start, fine, higher, highest] = row_rungs(&os, &oc).unwrap();
-            let reach = (Reach::of(&se, &os), Reach::of(&ce, &oc));
+            let reach = (Reach::of(&s.e, &os), Reach::of(&c.e, &oc));
             let first = (os.value, oc.value);
             // a side left uncomputed at a rung: one known Unresolved there (and with it the
             // source, where the candidate is and the source is `defined`)
@@ -2889,11 +3035,7 @@ mod tests {
                 .iter()
                 .any(|&d| d > BASE_DPS && (reach.0.unread_at(d) || reach.1.unread_at(d)));
             for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
-                let read = |u| {
-                    table_rungs(
-                        &se, &senv, &ce, &cenv, &first, u, lo, hi, 1e-11, 1e-12, true,
-                    )
-                };
+                let read = |u| table_rungs(&s, &c, &first, u, lo, hi, 1e-11, 1e-12, true);
                 assert_eq!(
                     read((Reach::NONE, Reach::NONE)),
                     read(reach),
@@ -2929,6 +3071,16 @@ mod tests {
                 "- erfc k x1",
                 [0.0, -46.87590210093502, 46.101413620559136],
             ),
+            (
+                "besselk 6 exp x1",
+                "tanh besseli x1 k",
+                [0.0, -46.87590210093502, 3774.2969341454814],
+            ),
+            (
+                "besselk exp x0 10",
+                "- x0 tanh k",
+                [-0.2522240682547621, 0.0, -440889.35692954605],
+            ),
         ] {
             assert!(
                 judge(src, cand, x),
@@ -2958,6 +3110,221 @@ mod tests {
             }
         }
         assert!(skipped > 100, "{skipped}");
+    }
+
+    /// acj2-4 with the four heads of the release vocabulary (`erfc` and the Bessel heads past J).
+    fn engine_with_the_four() -> crate::engine::Engine {
+        let base = include_str!("../assets/engines/acj2-4/config.yaml");
+        let at = base
+            .find("engine_generation:")
+            .expect("acj2-4 ends its operators there");
+        let four: String = [("erfc", 1), ("bessely", 2), ("besseli", 2), ("besselk", 2)]
+            .iter()
+            .map(|(name, arity)| {
+                format!(
+                    "  {name}:\n    realization: simplipy.operators.{name}\n    alias: []\n    \
+                     arity: {arity}\n    precedence: 2\n    commutative: false\n"
+                )
+            })
+            .collect();
+        crate::engine::Engine::from_strs(&format!("{}{four}{}", &base[..at], &base[at..]), "[]")
+            .expect("acj2-4 with the four builds")
+    }
+
+    /// A ROW ITS CANDIDATE CANNOT READ CANNOT FAIL (`table_row`'s `fail_only`): where the caller
+    /// asks only whether a row fails, a row whose candidate is Unresolved at every rung left is
+    /// left unread without reading the source, and fails exactly where the full reading fails;
+    /// at the slow rows of the length-4 tier (their fitted constants) and on a grid.
+    #[test]
+    fn a_row_its_candidate_cannot_read_cannot_fail() {
+        let e = engine_with_the_four();
+        let ops = e.operators_ref();
+        let vars = s(&["x0", "x1"]);
+        let mut compared = 0usize;
+        let mut lean_only = 0usize;
+        let mut judge = |src: &str, sp: &[f64], cand: &str, cp: &[f64], xs: &[(f64, f64)]| {
+            let (src, cand) = (
+                src.split(' ').map(String::from).collect::<Vec<_>>(),
+                cand.split(' ').map(String::from).collect::<Vec<_>>(),
+            );
+            let cols = vec![
+                xs.iter().map(|x| x.0).collect::<Vec<_>>(),
+                xs.iter().map(|x| x.1).collect::<Vec<_>>(),
+            ];
+            for (row, x) in xs.iter().enumerate() {
+                let read = |fail_only| {
+                    table_row(
+                        &src, sp, &cand, cp, ops, &vars, &cols, row, 1e-11, 1e-12, true, fail_only,
+                    )
+                };
+                clear_side_readings();
+                let full = read(false);
+                clear_side_readings();
+                let lean = read(true);
+                let fails = |v: Option<RowVerdict>| v == Some(RowVerdict::Fail);
+                assert_eq!(fails(full), fails(lean), "{src:?} -> {cand:?} at {x:?}");
+                if full != lean {
+                    assert!(lean.is_none() && matches!(full, None | Some(RowVerdict::Extend)));
+                }
+                // the rows the lean reading leaves unread from the first rung on
+                let first = |tokens: &[String], params: &[f64]| {
+                    let side = RowSide::new(tokens, params, ops, &vars, &cols, row).unwrap();
+                    let o = side.first().unwrap();
+                    (Reach::of(&side.e, &o), o)
+                };
+                let ((_, os), (rc, oc)) = (first(&src, sp), first(&cand, cp));
+                let [start, fine, higher, _] = row_rungs(&os, &oc).unwrap();
+                let unread_from_start = [start, fine, higher].iter().all(|&d| {
+                    if d == BASE_DPS {
+                        oc.value.is_none()
+                    } else {
+                        rc.unread_at(d)
+                    }
+                });
+                lean_only += usize::from(unread_from_start && !saturation_may_refute(&src, &cand));
+                compared += 1;
+            }
+        };
+        // the slow pairs of the length-4 tier, at their rows and fitted constants
+        for (src, cand, c, xs) in [
+            (
+                "atanh besseli x1 3",
+                "* erfc <constant> x1",
+                62.64346379992211,
+                vec![
+                    (-5.554655476078603, -std::f64::consts::PI),
+                    (8.885914201288621, 8.087134843638196),
+                ],
+            ),
+            (
+                "erf bessely 3 x1",
+                "besselj x1 erfc <constant>",
+                54.46281806143509,
+                vec![
+                    (-0.08112587298346234, 32.92556938526987),
+                    (2.0, 0.42996740373812503),
+                ],
+            ),
+            (
+                "besselk 6 exp x1",
+                "tanh besseli x1 <constant>",
+                3774.2969341454814,
+                vec![
+                    (-0.2522240682547621, -46.87590210093502),
+                    (11.689225595860826, -28.839741854631605),
+                ],
+            ),
+            (
+                "besselk exp x0 10",
+                "- x0 tanh <constant>",
+                -440889.35692954605,
+                vec![
+                    (-0.2522240682547621, -46.87590210093502),
+                    (1.6204461116002353, -2.0),
+                ],
+            ),
+            (
+                "asinh bessely x1 7",
+                "max erfc <constant> x1",
+                61.22972274973992,
+                vec![(0.0, -46.87590210093502), (0.0, 32.92556938526987)],
+            ),
+        ] {
+            judge(src, &[], cand, &[c], &xs);
+        }
+        // a grid: candidates through erf, erfc and tanh at constants they cannot be read past
+        let xs: Vec<(f64, f64)> = [-30.0, -2.5, -0.3, 0.7, 4.0, 47.0]
+            .iter()
+            .flat_map(|&a| [0.5, 3.0].map(|b| (a, b)))
+            .collect();
+        for src in [
+            "x0",
+            "tanh x0",
+            "log x0",
+            "atan asin sinh x0",
+            "* x0 x1",
+            "erf x0",
+        ] {
+            for cand in [
+                "* erfc <constant> x0",
+                "- x0 tanh <constant>",
+                "+ x0 erf <constant>",
+                "max erfc <constant> x1",
+                "tanh <constant>",
+            ] {
+                for c in [-61.2, 3.0, 46.1, 61.2, 1e6] {
+                    judge(src, &[], cand, &[c], &xs);
+                }
+            }
+        }
+        assert!(compared > 1000 && lean_only > 50, "{compared} {lean_only}");
+    }
+
+    /// A SIDE READ AGAIN IS READ AS IT WAS (`RowSide`, `SIDE_READINGS`): a row judgment from the
+    /// thread's memo is the one read afresh, and every reading the memo gives back is the fresh
+    /// reading at its precision, at rows of large magnitudes (high rungs) and of small ones.
+    #[test]
+    fn a_side_read_again_is_read_as_it_was() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let vars = s(&["x0", "x1"]);
+        let cols = vec![
+            vec![0.3, 3.0, 47.0, 300.0, 700.0, -700.0, 1e5, -2.5],
+            vec![1.0, -0.5, 2.0, 7.0, 0.01, 30.0, -4.0, 1e-300],
+        ];
+        // (source, its constants, candidate, its constants)
+        type Case<'a> = (&'a str, &'a [f64], &'a str, &'a [f64]);
+        let cases: [Case; 6] = [
+            ("tanh exp x0", &[], "1", &[]),
+            ("* x0 exp x1", &[], "* x0 exp <constant>", &[2.0]),
+            ("erf sinh x0", &[], "tanh x0", &[]),
+            ("besselj x1 x0", &[], "besselj <constant> x0", &[7.0]),
+            ("- cosh x0 sinh x0", &[], "exp neg x0", &[]),
+            (
+                "pow x0 <constant>",
+                &[3.5],
+                "exp * <constant> log x0",
+                &[3.5],
+            ),
+        ];
+        let split = |t: &str| t.split(' ').map(String::from).collect::<Vec<_>>();
+        for (src, sp, cand, cp) in cases {
+            let (src, cand) = (split(src), split(cand));
+            for row in 0..cols[0].len() {
+                let judge = || {
+                    table_row(
+                        &src, sp, &cand, cp, ops, &vars, &cols, row, 1e-11, 1e-12, true, false,
+                    )
+                };
+                clear_side_readings();
+                let fresh = judge();
+                let again = judge();
+                assert_eq!(fresh, again, "{src:?} -> {cand:?} at row {row}");
+                for (tokens, params) in [(&src, sp), (&cand, cp)] {
+                    let side = RowSide::new(tokens, params, ops, &vars, &cols, row).unwrap();
+                    for dps in [120, 400, 2000, 3000] {
+                        let read = format!(
+                            "{:?}",
+                            side.e.eval_real(&side.env, dps).and_then(|o| o.value)
+                        );
+                        assert_eq!(
+                            format!("{:?}", side.at(dps)),
+                            read,
+                            "{tokens:?} at {row}, {dps}"
+                        );
+                        assert_eq!(
+                            format!("{:?}", side.at(dps)),
+                            read,
+                            "{tokens:?} at {row}, {dps}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// THE ROW JUDGMENT'S CONSTANTS (`row_rungs` on the thread's cache): the decades that size the
@@ -3242,6 +3609,7 @@ mod tests {
                 1e-11,
                 1e-12,
                 true,
+                false,
             )
         };
         assert_eq!(
