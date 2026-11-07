@@ -228,6 +228,27 @@ thread_local! {
     /// Constant caches kept across evaluations: pi, e and ln 2 at a working precision are
     /// computed once per thread, not once per point.
     static CONSTS: std::cell::RefCell<Vec<Consts>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The bands of the precisions read on this thread (`Ctx::new`): `10^(-dps+10)` and
+    /// `10^(dps-10)` at the precision's bits, computed once per precision, not once per reading.
+    static BANDS: std::cell::RefCell<rustc_hash::FxHashMap<i32, (BigFloat, BigFloat)>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// The floor and ceiling bands of `dps` digits at `p` bits (`Ctx::floor`, `Ctx::ceil`), from the
+/// thread's `BANDS`: `ten_to` of the same exponents at the same bits.
+fn bands(dps: i32, p: usize) -> (BigFloat, BigFloat) {
+    BANDS.with(|b| {
+        if let Some(hit) = b.borrow().get(&dps) {
+            return hit.clone();
+        }
+        let bands = (ten_to(-dps + 10, p), ten_to(dps - 10, p));
+        let mut b = b.borrow_mut();
+        if b.len() >= 4096 {
+            b.clear();
+        }
+        b.insert(dps, bands.clone());
+        bands
+    })
 }
 
 /// A constant cache borrowed from the thread's pool, returned to it on drop. A cache gives every
@@ -270,11 +291,12 @@ impl std::ops::DerefMut for PooledConsts {
 impl Ctx {
     pub fn new(dps: i32) -> Option<Ctx> {
         let p = dps_to_prec(dps);
+        let (floor, ceil) = bands(dps, p);
         Some(Ctx {
             p,
             dps,
-            floor: ten_to(-dps + 10, p),
-            ceil: ten_to(dps - 10, p),
+            floor,
+            ceil,
             snapped: false,
             inf_node: false,
             max_mag: small_int(0, p),
@@ -1817,6 +1839,7 @@ pub struct Expr {
 }
 
 /// What a real evaluation found.
+#[derive(Clone)]
 pub struct RealOutcome {
     /// `None`: Unresolved at this precision
     pub value: Option<Val>,
@@ -2918,6 +2941,33 @@ mod tests {
             0
         );
         assert_eq!(reach("besseli x1 + x0 x0", &[2.0, 1500.0], 6000), 0);
+    }
+
+    /// THE BANDS FROM THE THREAD'S CACHE (`bands`): every context's floor and ceiling are
+    /// `ten_to` of their exponents at the precision's bits, read cold and from the cache.
+    #[test]
+    fn the_bands_read_the_same_from_the_cache() {
+        let digits: Vec<i32> = (1..=80)
+            .chain([120, 250, 400, 1200, 2000, 2466, 4000, 6000])
+            .collect();
+        for _ in 0..2 {
+            for &d in &digits {
+                let c = Ctx::new(d).unwrap();
+                let p = dps_to_prec(d);
+                let (floor, ceil) = (ten_to(-d + 10, p), ten_to(d - 10, p));
+                // (below 19 digits the float's 64-bit floor reads NaN, as it did)
+                let same = |a: &BigFloat, b: &BigFloat| a == b || (a.is_nan() && b.is_nan());
+                assert!(same(&c.floor, &floor) && same(&c.ceil, &ceil), "{d} digits");
+                assert_eq!(
+                    (
+                        c.floor.mantissa_max_bit_len(),
+                        c.ceil.mantissa_max_bit_len()
+                    ),
+                    (floor.mantissa_max_bit_len(), ceil.mantissa_max_bit_len()),
+                    "{d} digits"
+                );
+            }
+        }
     }
 
     /// WHERE AN UNRESOLVED READING BEGINS (`RealOutcome::unread_above`): `erf` and `erfc` past
