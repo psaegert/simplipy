@@ -3346,7 +3346,18 @@ pub(super) fn besy(z: C64, fnu: f64, kode: i32, n: i32, cy: &mut [C64]) -> (i32,
         return (0, ierr1);
     }
     let mut cwrk = vec![C64::ZERO; n as usize];
-    let (nz2, ierr2) = besh(z, fnu, kode, 2, n, &mut cwrk);
+    // At a positive real argument H(2) is the conjugate of H(1) where neither part of H(1) is
+    // zero: `besh` rotates the argument to two conjugate points, its kernels give a conjugate
+    // point the conjugate value (the fourth quadrant by conjugation; the right half plane in
+    // arithmetic that commutes with conjugation), and the phases it applies are conjugates. (A
+    // zero part, an underflow, may carry either sign; H(2) is read there.) So Y is read from one
+    // call, with its codes.
+    let (nz2, ierr2) = if n == 1 && yy == 0.0 && xx > 0.0 && cy[0].re != 0.0 && cy[0].im != 0.0 {
+        cwrk[0] = cy[0].conj();
+        (nz1, ierr1)
+    } else {
+        besh(z, fnu, kode, 2, n, &mut cwrk)
+    };
     ierr = ierr2;
     if (ierr != 0) && (ierr != 3) {
         return (0, ierr);
@@ -3399,4 +3410,78 @@ pub(super) fn besy(z: C64, fnu: f64, kode: i32, n: i32, cy: &mut [C64]) -> (i32,
         }
     }
     (nz, ierr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE CONJUGATE HANKEL FUNCTION (`besy`): at a positive real argument, Y read from `H(1)`
+    /// and its conjugate is Y read from both Hankel functions, to the last bit of both parts and
+    /// with the same codes; on the orders and arguments of every branch of `besh` (series,
+    /// Miller, the uniform expansions past `fnul`, the overflow and underflow tests) and on a
+    /// log-uniform sample.
+    #[test]
+    fn y_of_a_real_argument_reads_one_hankel_function() {
+        // `besy` as it read both Hankel functions, at kode 1 and one member
+        let both = |x: f64, fnu: f64| {
+            let z = C64::real(x);
+            let hci = C64::new(0.0, 0.5);
+            let mut cy = [C64::new(f64::NAN, f64::NAN)];
+            let (nz1, ierr1) = besh(z, fnu, 1, 1, 1, &mut cy);
+            if (ierr1 != 0) && (ierr1 != 3) {
+                return ((0, ierr1), cy[0]);
+            }
+            let mut cwrk = [C64::ZERO];
+            let (nz2, ierr2) = besh(z, fnu, 1, 2, 1, &mut cwrk);
+            if (ierr2 != 0) && (ierr2 != 3) {
+                return ((0, ierr2), cy[0]);
+            }
+            ((nz1.min(nz2), ierr2), hci * (cwrk[0] - cy[0]))
+        };
+        let one = |x: f64, fnu: f64| {
+            let mut cy = [C64::new(f64::NAN, f64::NAN)];
+            let codes = besy(C64::real(x), fnu, 1, 1, &mut cy);
+            (codes, cy[0])
+        };
+        let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        let mut orders = vec![
+            0.0, 1e-300, 1e-10, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 7.3, 10.0, 30.7,
+            50.0, 84.9, 85.0, 89.9, 100.0, 500.5, 1000.0, 1e4, 1e5, 1e7, 1e9,
+        ];
+        let mut args = vec![
+            1e-300, 1e-100, 1e-10, 1e-3, 0.1, 0.5, 1.0, 2.0, 3.7, 7.0, 10.0, 17.0, 30.0, 100.0,
+            700.0, 1e3, 1e4, 1e5, 1e8, 1e15, 1e17, 1e300,
+        ];
+        let mut rng = crate::fit::Rng::new(0xC0_4E5A);
+        for k in 0..1200 {
+            // most of them where a fit drives the order and the argument, the rest past them
+            let wide = k % 4 == 0;
+            orders.push(10f64.powf(if wide {
+                -3.0 + 12.0 * rng.next_f64()
+            } else {
+                -3.0 + 6.0 * rng.next_f64()
+            }));
+            args.push(10f64.powf(if wide {
+                -8.0 + 20.0 * rng.next_f64()
+            } else {
+                -6.0 + 12.0 * rng.next_f64()
+            }));
+        }
+        // integer and half-integer orders, where the kernels take their closed forms
+        orders.extend((0..60).map(|k| k as f64 * 0.5));
+        let mut checked = 0usize;
+        for &fnu in &orders {
+            for &x in &args {
+                let ((codes, y), (codes1, y1)) = (both(x, fnu), one(x, fnu));
+                assert_eq!(codes, codes1, "codes at order {fnu}, argument {x}");
+                assert!(
+                    same(y.re, y1.re) && same(y.im, y1.im),
+                    "order {fnu}, argument {x}: {y:?} {y1:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 100_000, "{checked}");
+    }
 }
