@@ -2005,13 +2005,17 @@ impl Expr {
     /// Is node `i` STABLE: is its reading, at every precision, Unresolved or a value of one class
     /// (undefined, an infinity of one sign, exactly zero, or finite and nonzero of one sign) within
     /// its last place of one real value? A leaf is; so is a head of `STABLE_HEADS` over stable
-    /// operands, each of which takes its class from its operand's class alone; and a Bessel head
-    /// over leaves whose value is exact (a variable's double, an exact literal, e), whose cells
-    /// and integer orders it reads exactly. A sum is not (an exact zero at one precision can be a
-    /// residue at another), nor is a trig head (its snaps move with the precision).
+    /// operands, each of which takes its class from its operand's class alone; `besselk` over
+    /// stable operands, which does too (undefined at an undefined operand or a negative argument,
+    /// +inf at a zero argument or an infinite order, 0 at +inf, positive elsewhere, whatever the
+    /// order's integrality); and the other Bessel heads over leaves whose value is exact (a
+    /// variable's double, an exact literal, e), whose cells and integer orders they read exactly.
+    /// A sum is not (an exact zero at one precision can be a residue at another), nor is a trig
+    /// head (its snaps move with the precision).
     fn stable(&self, i: usize) -> bool {
         match &self.nodes[i] {
             Node::Var(_) | Node::Lit(..) => true,
+            Node::Op(name, kids) if name == "besselk" => kids.iter().all(|&k| self.stable(k)),
             Node::Op(name, kids) if BESSEL_HEADS.contains(&name.as_str()) => {
                 kids.iter().all(|&k| match &self.nodes[k] {
                     Node::Var(_) => true,
@@ -3047,6 +3051,13 @@ mod tests {
             ("erfc besseli x0 6", vec![-0.25]),
             ("exp neg x0", vec![700.0]),
             ("besselk x0 2", vec![0.5]),
+            ("besselk 6 exp x0", vec![-46.87590210093502]),
+            ("besselk 6 exp x0", vec![5.0]),
+            ("besselk exp x0 10", vec![-0.2522240682547621]),
+            ("besselk exp x0 10", vec![6.5]),
+            ("besselk sinh x0 erfc x0", vec![-3.0]),
+            ("besselk sinh x0 erfc x0", vec![2.5]),
+            ("tanh besselk 0.3 cosh x0", vec![1.5]),
         ] {
             let e = compile(expr, xs.len());
             assert!(e.stable_value(), "{expr}");
