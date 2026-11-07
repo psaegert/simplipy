@@ -393,8 +393,9 @@ const ROW_CLIMB: i32 = GAP_RUNGS[2];
 fn row_rungs(os: &crate::table::RealOutcome, oc: &crate::table::RealOutcome) -> Option<[i32; 4]> {
     let mut cc = crate::table::PooledConsts::take()?;
     let p0 = dps_to_prec(BASE_DPS);
-    let start = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc)
-        .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc))
+    let cap = Some(MAX_DPS);
+    let start = demanded_dps(&os.max_mag, &os.min_mag, p0, &mut cc, cap)
+        .max(demanded_dps(&oc.max_mag, &oc.min_mag, p0, &mut cc, cap))
         .clamp(BASE_DPS, MAX_DPS);
     let fine = (start + start / 2).clamp(start + 30, MAX_DPS + MAX_DPS / 2);
     let higher = (2 * fine).clamp(ROW_CLIMB, 2 * MAX_DPS);
@@ -1141,7 +1142,16 @@ fn floor_nonneg(x: &BigFloat, p: usize) -> Option<u64> {
 /// difference is the whole finding -- a rung clamped to `MAX_DPS` is not the rung that was
 /// asked for, and reading it as though it were is how the judge convicted past its own
 /// evidence.
-fn demanded_dps(mag: &BigFloat, small: &BigFloat, p: usize, cc: &mut Consts) -> i32 {
+///
+/// With `cap`, the caller clamps the demand to it: a smallest intermediate whose decades already
+/// demand the cap is not read to the last decade (every reading of it demands the cap).
+fn demanded_dps(
+    mag: &BigFloat,
+    small: &BigFloat,
+    p: usize,
+    cc: &mut Consts,
+    cap: Option<i32>,
+) -> i32 {
     let mut k: i32 = 0;
     if !mag.is_nan() && !mag.is_inf() && cmp_gt(mag, &one(p)) {
         match floor_nonneg(&mag.log10(p, RM, cc), p) {
@@ -1156,7 +1166,13 @@ fn demanded_dps(mag: &BigFloat, small: &BigFloat, p: usize, cc: &mut Consts) -> 
         match floor_nonneg(&r.log10(p, RM, cc), p) {
             Some(f) => {
                 let f = i32::try_from(f).unwrap_or(MAX_DPS);
-                let ks = if cmp_lt(&pow10(f, p), &r) { f + 1 } else { f };
+                let ks = if cap.is_some_and(|cap| BASE_DPS + 2 * f >= cap) {
+                    f // f and f + 1 both demand the cap
+                } else if cmp_lt(&pow10(f, p), &r) {
+                    f + 1
+                } else {
+                    f
+                };
                 k = k.max(ks);
             }
             None => return BASE_DPS,
@@ -1256,7 +1272,37 @@ struct CtCtx {
     cc: Consts,
 }
 
+thread_local! {
+    /// The powers of ten read on this thread past `POW10_KEPT` (`pow10`), by exponent and bits:
+    /// the product is computed once for each, not once per row a rung is sized at.
+    static POW10: std::cell::RefCell<rustc_hash::FxHashMap<(i32, usize), BigFloat>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// The exponents from which `pow10` keeps its products on the thread.
+const POW10_KEPT: u32 = 32;
+
+/// `10^k` at `p` bits: the product of `|k|` tens, each rounded to `p` bits (and its reciprocal
+/// for a negative `k`), from the thread's `POW10` where it was computed before.
 pub(crate) fn pow10(k: i32, p: usize) -> BigFloat {
+    if k.unsigned_abs() < POW10_KEPT {
+        return pow10_product(k, p);
+    }
+    if let Some(hit) = POW10.with(|m| m.borrow().get(&(k, p)).cloned()) {
+        return hit;
+    }
+    let v = pow10_product(k, p);
+    POW10.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 4096 {
+            m.clear();
+        }
+        m.insert((k, p), v.clone());
+    });
+    v
+}
+
+fn pow10_product(k: i32, p: usize) -> BigFloat {
     let ten = small_int(10, p);
     let mut acc = one(p);
     for _ in 0..k.unsigned_abs() {
@@ -2349,7 +2395,7 @@ pub fn contract_point_verdict(
             let mag = ctx.max_mag.clone();
             let small = ctx.min_mag.clone();
             // one logarithm, read twice: the rung the point ASKED for, and the rung it gets
-            let dem = demanded_dps(&mag, &small, p, &mut ctx.cc);
+            let dem = demanded_dps(&mag, &small, p, &mut ctx.cc, None);
             (MAX_DPS.min(dem), mag, dem)
         } else {
             (BASE_DPS, small_int(0, p), BASE_DPS)
@@ -3112,6 +3158,48 @@ mod tests {
         assert!(skipped > 100, "{skipped}");
     }
 
+    /// THE POWERS OF TEN FROM THE THREAD'S CACHE (`pow10`): every power is the product of its
+    /// tens at its bits, read cold and from the cache, on both sides of the cache's threshold and
+    /// at the exponents the rungs of the length-4 tier's slow rows are sized at.
+    #[test]
+    fn the_powers_of_ten_read_the_same_from_the_cache() {
+        let exps: Vec<i32> = [0, 1, 7, 31, 32, 33, 50, 120, 997, 1630, 2477, 9000, 43429]
+            .iter()
+            .flat_map(|&k| [k, -k])
+            .collect();
+        for p in [64, 169, 402, 834, 6646, 13290] {
+            for _ in 0..2 {
+                for &k in &exps {
+                    let (cached, product) = (pow10(k, p), pow10_product(k, p));
+                    assert!(cached == product, "10^{k} at {p} bits");
+                    assert_eq!(
+                        cached.mantissa_max_bit_len(),
+                        product.mantissa_max_bit_len(),
+                        "10^{k} at {p} bits"
+                    );
+                }
+            }
+        }
+        // a demand read up to the cap the rungs clamp it to is the full demand, clamped: at the
+        // decades about the cap, at exact powers of ten and between them, and far past it
+        let p0 = dps_to_prec(BASE_DPS);
+        let mut cc = Consts::new().unwrap();
+        let zero = small_int(0, p0);
+        for k in (960..=1000).chain([1500, 2477, 43429, 1_400_000]) {
+            for m in [1.0, 1.5, 9.99] {
+                let small = pow10_product(-k, p0).mul(&BigFloat::from_f64(m, p0), p0, RM);
+                for (big, small) in [(&zero, &small), (&small_int(10, p0), &small)] {
+                    let clamp = |d: i32| d.clamp(BASE_DPS, MAX_DPS);
+                    assert_eq!(
+                        clamp(demanded_dps(big, small, p0, &mut cc, Some(MAX_DPS))),
+                        clamp(demanded_dps(big, small, p0, &mut cc, None)),
+                        "{m}e-{k}"
+                    );
+                }
+            }
+        }
+    }
+
     /// acj2-4 with the four heads of the release vocabulary (`erfc` and the Bessel heads past J).
     fn engine_with_the_four() -> crate::engine::Engine {
         let base = include_str!("../assets/engines/acj2-4/config.yaml");
@@ -3359,8 +3447,8 @@ mod tests {
             assert!(cmp_eq(&fresh, &warmed), "log10 {mag}: {fresh} vs {warmed}");
             for (big, small) in [(mag, &zero), (&zero, mag)] {
                 assert_eq!(
-                    demanded_dps(big, small, p0, &mut Consts::new().unwrap()),
-                    demanded_dps(big, small, p0, &mut warm),
+                    demanded_dps(big, small, p0, &mut Consts::new().unwrap(), None),
+                    demanded_dps(big, small, p0, &mut warm, None),
                     "{mag}"
                 );
             }
