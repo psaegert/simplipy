@@ -3941,8 +3941,28 @@ fn exact_integer_literal(t: &str, v: f64) -> bool {
 /// the diagonal C == x). The domain gate therefore always passes the FITTED constants.
 pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f64]) -> Option<Vs> {
     if real_reading() {
-        return value_set_table_points(tokens, ops, doms, params);
+        return value_set_table_points(tokens, ops, doms, params, None);
     }
+    value_set_f64(tokens, ops, doms, params)
+}
+
+/// `value_set_p` at one cell of a search over many (`finite_cells`): in the real reading, the
+/// expression's cell-free subtrees are read once for every cell (`PointMemo`).
+fn value_set_p_cells(
+    tokens: &[String],
+    ops: &Operators,
+    doms: &[Vs],
+    params: &[f64],
+    memo: &mut PointMemo,
+) -> Option<Vs> {
+    if real_reading() {
+        return value_set_table_points(tokens, ops, doms, params, Some(memo));
+    }
+    value_set_f64(tokens, ops, doms, params)
+}
+
+/// `value_set_p` in float64's reading.
+fn value_set_f64(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f64]) -> Option<Vs> {
     fn go(
         t: &[String],
         i: usize,
@@ -4088,12 +4108,20 @@ fn vs_of_table(v: &crate::table::Val, ctx: &mut crate::table::Ctx) -> Option<Vs>
     Some(Vs::interval(lo, hi, lo_open, hi_open))
 }
 
+/// The readings of one expression's CELL-FREE subtrees at its bound constants, for the cells of
+/// one search (`finite_cells`): a subtree with no variable and no free `<constant>` reads the same
+/// at every cell (its literals and constants are points, and nothing in it reads the cell), so it
+/// is read at the first cell and taken from here at the others. Keyed by the subtree's first
+/// token: its value set, its table point, its end, and the constants read through it.
+type PointMemo = rustc_hash::FxHashMap<usize, (Vs, Option<crate::table::Val>, usize, usize)>;
+
 /// `value_set_p` in the real reading (`with_real_reading`).
 fn value_set_table_points(
     tokens: &[String],
     ops: &Operators,
     doms: &[Vs],
     params: &[f64],
+    memo: Option<&mut PointMemo>,
 ) -> Option<Vs> {
     use crate::table::{Ctx, Val};
     fn ctx_of(c: &mut Option<Ctx>) -> Option<&mut Ctx> {
@@ -4102,6 +4130,7 @@ fn value_set_table_points(
         }
         c.as_mut()
     }
+    // the subtree at `i`, from the memo where it is cell-free and was read before
     #[allow(clippy::too_many_arguments)]
     fn go(
         t: &[String],
@@ -4111,6 +4140,30 @@ fn value_set_table_points(
         p: &[f64],
         k: &mut usize,
         ctx: &mut Option<Ctx>,
+        memo: &mut Option<&mut PointMemo>,
+    ) -> Option<(Vs, Option<Val>, usize)> {
+        if let Some((v, pt, j, kk)) = memo.as_deref().and_then(|m| m.get(&i)) {
+            *k = *kk;
+            return Some((*v, pt.clone(), *j));
+        }
+        let out = node(t, i, ops, doms, p, k, ctx, memo)?;
+        if let Some(m) = memo.as_deref_mut() {
+            if *k <= p.len() && t[i..out.2].iter().all(|x| var_index(x).is_none()) {
+                m.insert(i, (out.0, out.1.clone(), out.2, *k));
+            }
+        }
+        Some(out)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn node(
+        t: &[String],
+        i: usize,
+        ops: &Operators,
+        doms: &[Vs],
+        p: &[f64],
+        k: &mut usize,
+        ctx: &mut Option<Ctx>,
+        memo: &mut Option<&mut PointMemo>,
     ) -> Option<(Vs, Option<Val>, usize)> {
         let tok = t.get(i)?.as_str();
         if var_index(tok).is_some() {
@@ -4138,7 +4191,7 @@ fn value_set_table_points(
         let mut j = i + 1;
         for _ in 0..ar {
             let k0 = *k;
-            let (v, pt, next) = go(t, j, ops, doms, p, k, ctx)?;
+            let (v, pt, next) = go(t, j, ops, doms, p, k, ctx, memo)?;
             kids.push((v, pt));
             spans.push((j..next, k0..*k));
             j = next;
@@ -4174,7 +4227,8 @@ fn value_set_table_points(
     }
     let mut k = 0usize;
     let mut ctx = None;
-    go(tokens, 0, ops, doms, params, &mut k, &mut ctx).map(|(v, _, _)| v)
+    let mut memo = memo;
+    go(tokens, 0, ops, doms, params, &mut k, &mut ctx, &mut memo).map(|(v, _, _)| v)
 }
 
 /// The real reading's value set of `tokens` at ONE POINT, each variable `x<i>` bound to `env[i]`
@@ -7891,16 +7945,33 @@ pub fn finite_cells(
     f64: bool,
 ) -> Option<FiniteCells> {
     with_reading(!f64, || {
-        finite_cells_in_reading(expr, params, ops, want, f64)
+        finite_cells_in_reading(expr, params, ops, want, f64, true)
     })
 }
 
+/// `finite_cells` with every cell read whole (no `PointMemo`): the reference its cells equal.
+#[cfg(test)]
+fn finite_cells_read_whole(
+    expr: &[String],
+    params: &[f64],
+    ops: &Operators,
+    want: usize,
+    f64: bool,
+) -> Option<FiniteCells> {
+    with_reading(!f64, || {
+        finite_cells_in_reading(expr, params, ops, want, f64, false)
+    })
+}
+
+/// `finite_cells` in the reading set; `memoized`: the cell-free subtrees are read once for every
+/// cell (`PointMemo`), else at each.
 fn finite_cells_in_reading(
     expr: &[String],
     params: &[f64],
     ops: &Operators,
     want: usize,
     f64: bool,
+    memoized: bool,
 ) -> Option<FiniteCells> {
     let respelled = dummy_spelling(&[expr], ops);
     let e: &[String] = respelled.as_ref().map_or(expr, |d| &d[0]);
@@ -7937,6 +8008,7 @@ fn finite_cells_in_reading(
     let mut cells: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut level: Vec<Vec<(f64, f64)>> = vec![vec![(-r, r); n]];
     let mut d = 0u32;
+    let mut memo = PointMemo::default();
     while !level.is_empty() && cells.len() < want && budget > 0 {
         let mut next: Vec<Vec<(f64, f64)>> = Vec::new();
         for bx in level {
@@ -7947,7 +8019,10 @@ fn finite_cells_in_reading(
             let doms = doms_from_box(&bx, &used, width, (-r, r));
             // An unanalyzable cell is split like a mixed one: its parts may be analyzable
             // (`harmonic(c)` is refused over a box holding its poles and enclosed on [0, r]).
-            let v = value_set_p(e, ops, &doms, params);
+            if !memoized {
+                memo.clear();
+            }
+            let v = value_set_p_cells(e, ops, &doms, params, &mut memo);
             undecided |= v.is_none();
             if let Some(v) = v {
                 if !v.fin_pm() {
@@ -10537,5 +10612,58 @@ mod new_head_tests {
         assert!(!kernels::harmonic(-4503599627370495.5).is_nan());
         assert!(kernels::besselj(1.5, -1e-300).is_nan() && kernels::besselj(-1.5, -2.0).is_nan());
         assert_eq!(kernels::modulo(9007199254740993.0 * 2.0 + 2.0, 2.0), 0.0);
+    }
+
+    /// THE CELL-FREE SUBTREES READ ONCE (`PointMemo`): the evidence certificate's cells, in each
+    /// reading and at each count asked, are the cells read with every subtree read at every
+    /// cell, over sources with points under their constants and literals, on a grid of the
+    /// constants.
+    #[test]
+    fn the_cells_read_the_same_with_their_cell_free_subtrees_read_once() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let sources = [
+            "* x0 exp <constant>",
+            "+ x0 erf <constant>",
+            "pow x0 tanh <constant>",
+            "atan2 exp <constant> x0",
+            "besselj <constant> x0",
+            "besselj x0 sin <constant>",
+            "asin * <constant> x0",
+            "log + x0 <constant>",
+            "mod x0 <constant>",
+            "floor * <constant> x0",
+            "tan * x0 sin <constant>",
+            "acosh / x0 cosh <constant>",
+            "atanh erf * x0 <constant>",
+            "* x0 + 1 np.pi",
+            "asin * x0 * x1 <constant>",
+        ];
+        let mut compared = 0usize;
+        for src in sources {
+            let t: Vec<String> = src.split(' ').map(String::from).collect();
+            let n_const = t.iter().filter(|x| *x == "<constant>").count();
+            let grid: &[f64] = if n_const == 0 {
+                &[0.0]
+            } else {
+                &[-61.2, -5.0, -0.3, 0.0, 0.7, 3.0, 27.5, 1e3]
+            };
+            for &c in grid {
+                let params = vec![c; n_const];
+                for f64 in [false, true] {
+                    for want in [1, EVIDENCE_CELLS] {
+                        let cells =
+                            |fc: Option<FiniteCells>| fc.map(|fc| (fc.vars, fc.cells, fc.r));
+                        assert_eq!(
+                            cells(finite_cells(&t, &params, ops, want, f64)),
+                            cells(finite_cells_read_whole(&t, &params, ops, want, f64)),
+                            "{src} at {c}, f64 {f64}, {want} cells"
+                        );
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        assert!(compared > 400, "{compared}");
     }
 }
