@@ -214,7 +214,10 @@ pub(crate) fn table_classes(
 ///
 /// A side whose first reading shows it Unresolved through a rung (`RealOutcome::unread_through`:
 /// `erf(besseli(x, 5709))` is erf of about 1e2477, inside erf's band at every precision a rung
-/// asks) is not read again there: its reading at that rung is Unresolved without being computed.
+/// asks) or from a rung on (`RealOutcome::unread_above`: `erfc(61.2)` past the kernels' bits) is
+/// not read again there: its reading at that rung is Unresolved without being computed. Where
+/// the source cannot be undefined at any rung (`Reach::defined`), a rung the candidate cannot
+/// read is unread whatever the source reads there, and the source is not read.
 #[allow(clippy::too_many_arguments)]
 fn table_row(
     source: &[String],
@@ -236,11 +239,11 @@ fn table_row(
         ce.eval_real(&cenv, BASE_DPS)?,
     );
     let [start, fine, higher, highest] = row_rungs(&os, &oc)?;
-    let unread = (os.unread_through, oc.unread_through);
+    let reach = (Reach::of(&se, &os), Reach::of(&ce, &oc));
     let first = (os.value, oc.value);
     for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
         if let Some(v) = table_rungs(
-            &se, &senv, &ce, &cenv, &first, unread, lo, hi, rtol, atol, with_vars,
+            &se, &senv, &ce, &cenv, &first, reach, lo, hi, rtol, atol, with_vars,
         ) {
             return Some(v);
         }
@@ -276,9 +279,50 @@ fn row_rungs(os: &crate::table::RealOutcome, oc: &crate::table::RealOutcome) -> 
     Some([start, fine, higher, higher + higher / 2])
 }
 
+/// What a side's first reading tells of its readings at the higher rungs: Unresolved through
+/// `through` digits and from `above` on (`RealOutcome::unread_through`, `unread_above`), and
+/// whether no rung reads it undefined (`defined`: a STABLE expression, `table::Expr::stable_value`,
+/// whose first reading is a value other than undefined is, at every precision, Unresolved or a
+/// value of that class).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Reach {
+    through: i32,
+    above: i32,
+    defined: bool,
+}
+
+impl Reach {
+    /// Nothing known: every rung reads both sides, the source first.
+    #[cfg(test)]
+    const NONE: Reach = Reach {
+        through: 0,
+        above: i32::MAX,
+        defined: false,
+    };
+
+    fn of(e: &crate::table::Expr, o: &crate::table::RealOutcome) -> Reach {
+        Reach {
+            through: o.unread_through,
+            above: o.unread_above,
+            defined: e.stable_value()
+                && o.value
+                    .as_ref()
+                    .is_some_and(|v| !crate::table::class_of(v).0),
+        }
+    }
+
+    /// Is the side's reading at `dps`, a rung past the first reading, Unresolved?
+    fn unread_at(self, dps: i32) -> bool {
+        dps <= self.through || dps >= self.above
+    }
+}
+
 /// `table_row` at the rungs `start` and `fine`: the verdict, or `None` where a reading at either
 /// is Unresolved. `first` holds the two sides' readings at `BASE_DPS`, which serve a rung there;
-/// `unread` the precisions through which they show each side Unresolved, where it is not read.
+/// `reach` what they tell of the higher rungs (`Reach`). A side known Unresolved at a rung is
+/// not read there. A rung's verdict is the source's (`Extend`) where the source is undefined,
+/// else `None` where either side is Unresolved, else the comparison; so where the source is
+/// `defined`, the candidate is read first, and an Unresolved candidate leaves the source unread.
 #[allow(clippy::too_many_arguments)]
 fn table_rungs(
     se: &crate::table::Expr,
@@ -286,35 +330,55 @@ fn table_rungs(
     ce: &crate::table::Expr,
     cenv: &[crate::table::Val],
     first: &(Option<crate::table::Val>, Option<crate::table::Val>),
-    unread: (i32, i32),
+    reach: (Reach, Reach),
     start: i32,
     fine: i32,
     rtol: f64,
     atol: f64,
     with_vars: bool,
 ) -> Option<RowVerdict> {
-    use crate::table::{class_of, Ctx};
+    use crate::table::{class_of, Ctx, Val};
+    let (rs, rc) = reach;
     let mut seen: Vec<(BigFloat, BigFloat, BigFloat, usize)> = Vec::new();
     for dps in [start, fine] {
         // the first readings serve the first rung where it is theirs
-        let s = if dps == BASE_DPS {
-            first.0.clone()?
-        } else if dps <= unread.0 {
+        let base = dps == BASE_DPS;
+        let read_s = || -> Option<Val> {
+            if base {
+                first.0.clone()
+            } else {
+                se.eval_real(senv, dps)?.value
+            }
+        };
+        let read_c = || -> Option<Val> {
+            if base {
+                first.1.clone()
+            } else {
+                ce.eval_real(cenv, dps)?.value
+            }
+        };
+        if !base && rs.unread_at(dps) {
             return None;
+        }
+        let (s, c) = if !base && rc.unread_at(dps) {
+            if rs.defined {
+                return None;
+            }
+            return class_of(&read_s()?).0.then_some(RowVerdict::Extend);
+        } else if !base && rs.defined {
+            let c = read_c()?;
+            (read_s()?, c)
         } else {
-            se.eval_real(senv, dps)?.value?
+            let s = read_s()?;
+            if class_of(&s).0 {
+                return Some(RowVerdict::Extend);
+            }
+            (s, read_c()?)
         };
         let (s_undef, s_inf) = class_of(&s);
         if s_undef {
             return Some(RowVerdict::Extend);
         }
-        let c = if dps == BASE_DPS {
-            first.1.clone()?
-        } else if dps <= unread.1 {
-            return None;
-        } else {
-            ce.eval_real(cenv, dps)?.value?
-        };
         let (c_undef, c_inf) = class_of(&c);
         if let Some(up) = s_inf {
             return Some(if !c_undef && c_inf == Some(up) {
@@ -2751,11 +2815,11 @@ mod tests {
                 ce.eval_real(&cenv, BASE_DPS).unwrap(),
             );
             let [start, fine, higher, highest] = row_rungs(&os, &oc).unwrap();
-            let unread = (os.unread_through, oc.unread_through);
+            let reach = (Reach::of(&se, &os), Reach::of(&ce, &oc));
             assert_eq!(
-                unread.0.max(unread.1) > start,
+                reach.0.through.max(reach.1.through) > start,
                 skips,
-                "{src} -> {cand}: {unread:?}"
+                "{src} -> {cand}: {reach:?}"
             );
             let first = (os.value, oc.value);
             for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
@@ -2764,9 +2828,136 @@ mod tests {
                         &se, &senv, &ce, &cenv, &first, u, lo, hi, 1e-11, 1e-12, true,
                     )
                 };
-                assert_eq!(read((0, 0)), read(unread), "{src} -> {cand} at {lo}, {hi}");
+                assert_eq!(
+                    read((Reach::NONE, Reach::NONE)),
+                    read(reach),
+                    "{src} -> {cand} at {lo}, {hi}"
+                );
             }
         }
+    }
+
+    /// THE ROW JUDGMENT'S REACH FROM ABOVE (`Reach::above`, `Reach::defined`): a side Unresolved
+    /// from a rung on is not read there, and where the source cannot be undefined an Unresolved
+    /// candidate leaves the source unread; every rung pair gives the verdict the full reading
+    /// gives, at the slow rows of the length-4 tier (their fitted constants) and on a grid.
+    #[test]
+    fn a_rung_a_side_cannot_read_gives_the_verdict_read_there() {
+        use crate::table::{val_of_f64, Expr};
+        let arity: std::collections::HashMap<String, u8> = [
+            ("neg", 1),
+            ("tanh", 1),
+            ("asinh", 1),
+            ("asin", 1),
+            ("atan", 1),
+            ("sinh", 1),
+            ("sin", 1),
+            ("exp", 1),
+            ("erf", 1),
+            ("erfc", 1),
+            ("+", 2),
+            ("-", 2),
+            ("*", 2),
+            ("max", 2),
+            ("mod", 2),
+            ("besseli", 2),
+            ("bessely", 2),
+        ]
+        .into_iter()
+        .map(|(k, a)| (k.to_string(), a))
+        .collect();
+        let names: Vec<String> = ["x0", "x1", "k"].iter().map(|n| n.to_string()).collect();
+        let side = |tokens: &str, xs: [f64; 3]| {
+            let toks: Vec<String> = tokens.split(' ').map(String::from).collect();
+            let e = Expr::compile(&toks, &names, &arity).unwrap();
+            (e, xs.iter().map(|&x| val_of_f64(x)).collect::<Vec<_>>())
+        };
+        // the verdicts of every rung pair, read with what the first readings tell and without;
+        // whether a higher rung leaves a side unread on what they tell
+        let judge = |src: &str, cand: &str, x: [f64; 3]| {
+            let ((se, senv), (ce, cenv)) = (side(src, x), side(cand, x));
+            let (os, oc) = (
+                se.eval_real(&senv, BASE_DPS).unwrap(),
+                ce.eval_real(&cenv, BASE_DPS).unwrap(),
+            );
+            let [start, fine, higher, highest] = row_rungs(&os, &oc).unwrap();
+            let reach = (Reach::of(&se, &os), Reach::of(&ce, &oc));
+            let first = (os.value, oc.value);
+            // a side left uncomputed at a rung: one known Unresolved there (and with it the
+            // source, where the candidate is and the source is `defined`)
+            let skips = [start, fine, higher]
+                .iter()
+                .any(|&d| d > BASE_DPS && (reach.0.unread_at(d) || reach.1.unread_at(d)));
+            for (lo, hi) in [(start, fine), (fine, higher), (higher, highest)] {
+                let read = |u| {
+                    table_rungs(
+                        &se, &senv, &ce, &cenv, &first, u, lo, hi, 1e-11, 1e-12, true,
+                    )
+                };
+                assert_eq!(
+                    read((Reach::NONE, Reach::NONE)),
+                    read(reach),
+                    "{src} -> {cand} at {x:?}, rungs {lo}, {hi}"
+                );
+            }
+            skips
+        };
+        // the slow pairs of the length-4 tier, at their rows and fitted constants
+        for (src, cand, x) in [
+            (
+                "asinh bessely x1 7",
+                "max erfc k x1",
+                [0.0, -46.87590210093502, 61.22972274973992],
+            ),
+            (
+                "asinh bessely x1 7",
+                "max erfc k x1",
+                [0.0, 32.92556938526987, 61.22972274973992],
+            ),
+            (
+                "asinh bessely x1 7",
+                "* exp k x1",
+                [0.0, 32.92556938526987, -2406767403.1636643],
+            ),
+            (
+                "atan asin sinh x0",
+                "erfc besseli x0 6",
+                [-0.2522240682547621, 0.0, 0.0],
+            ),
+            (
+                "mod sin x1 float(\"inf\")",
+                "- erfc k x1",
+                [0.0, -46.87590210093502, 46.101413620559136],
+            ),
+        ] {
+            assert!(
+                judge(src, cand, x),
+                "{src} -> {cand} at {x:?} reads every rung"
+            );
+        }
+        // a grid: stable and unstable sources, candidates through erf and erfc
+        let sources = [
+            "x0", "neg x0", "tanh x0", "asinh x0", "erf x0", "+ x0 1", "asin x0", "exp x0",
+        ];
+        let candidates = [
+            "erfc k",
+            "max erfc k x0",
+            "- erfc k x0",
+            "erf * k x0",
+            "+ x0 erfc k",
+            "* exp k x0",
+        ];
+        let mut skipped = 0;
+        for src in sources {
+            for cand in candidates {
+                for x0 in [-50.0, -0.25, 1.0, 2.5, 30.0] {
+                    for k in [-61.2, -5.0, 3.0, 27.5, 61.2, 1e6] {
+                        skipped += usize::from(judge(src, cand, [x0, 0.0, k]));
+                    }
+                }
+            }
+        }
+        assert!(skipped > 100, "{skipped}");
     }
 
     /// THE ROW JUDGMENT'S CONSTANTS (`row_rungs` on the thread's cache): the decades that size the

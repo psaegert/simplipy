@@ -207,6 +207,9 @@ pub struct Ctx {
     /// How far an Unresolved reading reaches (`unread_through`): every precision up to this many
     /// digits leaves the expression Unresolved at its point; 0 where that is not known.
     pub unread_through: i32,
+    /// Where Unresolved begins (`unread_above`): every precision of at least this many digits
+    /// leaves the expression Unresolved at its point; `i32::MAX` where that is not known.
+    pub unread_above: i32,
     cc: PooledConsts,
 }
 
@@ -279,6 +282,7 @@ impl Ctx {
             band: small_int(0, p),
             saturate: false,
             unread_through: 0,
+            unread_above: i32::MAX,
             cc: PooledConsts::take()?,
         })
     }
@@ -1781,6 +1785,21 @@ fn unread_through(name: &str, a: &Val, b: Option<&Val>) -> i32 {
     }
 }
 
+/// WHERE AN UNRESOLVED NODE BEGINS for `erf` and `erfc`: the least precision, in digits, whose
+/// bits pass the kernels' cap (`special::MAX_BITS`). At a finite nonzero operand both heads are
+/// Unresolved there and at every precision above it (the cells, an infinite or zero operand,
+/// are read before the cap; a saturating reading is another reading). So a reading that meets
+/// either head over a STABLE operand (`Expr::stable`) of that class is Unresolved from it on:
+/// the operand is Unresolved there or of the same class, and an Unresolved node leaves the whole
+/// reading Unresolved.
+fn erf_unread_above() -> i32 {
+    let mut d = (special::MAX_BITS as f64 / std::f64::consts::LOG2_10) as i32 - 2;
+    while dps_to_prec(d) <= special::MAX_BITS {
+        d += 1;
+    }
+    d
+}
+
 // ---------------------------------------------------------------- compiled expressions
 
 #[derive(Clone, Debug)]
@@ -1811,6 +1830,9 @@ pub struct RealOutcome {
     /// with `value` None: every precision up to this many digits leaves the point Unresolved, 0
     /// where that is not known (`unread_through`)
     pub unread_through: i32,
+    /// every precision of at least this many digits leaves the point Unresolved, whatever this
+    /// reading gave; `i32::MAX` where that is not known (`erf_unread_above`)
+    pub unread_above: i32,
 }
 
 impl Expr {
@@ -1883,6 +1905,7 @@ impl Expr {
             } else {
                 0
             },
+            unread_above: ctx.unread_above,
             value,
             snapped: ctx.snapped,
             inf_node: ctx.inf_node,
@@ -1915,6 +1938,15 @@ impl Expr {
             Node::Op(name, kids) => {
                 let a = self.node_real(kids[0], env, ctx)?;
                 let v = if kids.len() == 1 {
+                    if matches!(name.as_str(), "erf" | "erfc")
+                        && !ctx.saturate
+                        && !is_undef(&a)
+                        && inf_sign(&a).is_none()
+                        && !is_zero(&a)
+                        && self.stable(kids[0])
+                    {
+                        ctx.unread_above = ctx.unread_above.min(erf_unread_above());
+                    }
                     let out = unary(name, &a, ctx)?;
                     if out.is_none() && !ctx.saturate && self.stable(kids[0]) {
                         ctx.unread_through = unread_through(name, &a, None);
@@ -1939,6 +1971,12 @@ impl Expr {
                 Some(v)
             }
         }
+    }
+
+    /// Is the whole expression STABLE (`stable` at its root): at every precision Unresolved or a
+    /// value of the class any other reading of it gives?
+    pub fn stable_value(&self) -> bool {
+        self.stable(self.root)
     }
 
     /// Is node `i` STABLE: is its reading, at every precision, Unresolved or a value of one class
@@ -2880,5 +2918,98 @@ mod tests {
             0
         );
         assert_eq!(reach("besseli x1 + x0 x0", &[2.0, 1500.0], 6000), 0);
+    }
+
+    /// WHERE AN UNRESOLVED READING BEGINS (`RealOutcome::unread_above`): `erf` and `erfc` past
+    /// the kernels' bits over a stable operand of a finite nonzero class leave every reading from
+    /// the bound on Unresolved, whatever the first reading gave; no bound is claimed over an
+    /// unstable operand or at an operand the cells read. And the premise of `hiprec::Reach`: a
+    /// stable expression read as a value other than undefined is never undefined at another rung.
+    #[test]
+    fn an_unresolved_reading_is_unresolved_from_where_it_says() {
+        const RUNGS: [i32; 12] = [
+            52, 120, 400, 1200, 2000, 2465, 2466, 2467, 2601, 3000, 4000, 6000,
+        ];
+        let above = erf_unread_above();
+        assert!(
+            dps_to_prec(above - 1) <= special::MAX_BITS && dps_to_prec(above) > special::MAX_BITS
+        );
+        let compile = |expr: &str, n: usize| {
+            let toks: Vec<String> = expr.split(' ').map(String::from).collect();
+            let names: Vec<String> = (0..n).map(|i| format!("x{i}")).collect();
+            Expr::compile(&toks, &names, &arity()).unwrap()
+        };
+        let from = |expr: &str, xs: &[f64]| -> i32 {
+            let e = compile(expr, xs.len());
+            let env: Vec<Val> = xs.iter().map(|&x| val_of_f64(x)).collect();
+            let o = e.eval_real(&env, BASE_DPS).unwrap();
+            for &dps in RUNGS.iter().filter(|&&d| d >= o.unread_above) {
+                assert!(
+                    e.eval_real(&env, dps).unwrap().value.is_none(),
+                    "{expr} at {xs:?}: read at {dps} digits, unread from {}",
+                    o.unread_above
+                );
+            }
+            o.unread_above
+        };
+        // the slow pairs' candidates at their fitted constants
+        for (expr, xs) in [
+            (
+                "max erfc x0 x1",
+                vec![61.22972274973992, -46.87590210093502],
+            ),
+            ("- erfc x0 x1", vec![46.101413620559136, -46.87590210093502]),
+            ("erfc besseli x0 6", vec![-0.2522240682547621]),
+        ] {
+            assert_eq!(from(expr, &xs), above, "{expr} at {xs:?}");
+        }
+        // a grid of operands: a bound wherever the stable operand reads finite and nonzero
+        for (expr, operand) in [
+            ("erf x0", "x0"),
+            ("erfc x0", "x0"),
+            ("neg erfc x0", "x0"),
+            ("erfc tanh x0", "tanh x0"),
+            ("erf besselk 2 x0", "besselk 2 x0"),
+        ] {
+            for x in [-1e6, -61.2, -5.0, -0.3, 0.7, 3.0, 27.5, 61.2, 9999.0, 1e5] {
+                let a = compile(operand, 1)
+                    .eval_real(&[val_of_f64(x)], BASE_DPS)
+                    .unwrap()
+                    .value;
+                let want = match a {
+                    Some(a) if !is_undef(&a) && inf_sign(&a).is_none() && !is_zero(&a) => above,
+                    _ => i32::MAX,
+                };
+                assert_eq!(from(expr, &[x]), want, "{expr} at {x}");
+            }
+        }
+        // the cells and an unstable operand claim nothing
+        assert_eq!(from("erfc x0", &[0.0]), i32::MAX);
+        assert_eq!(from("erf x0", &[f64::INFINITY]), i32::MAX);
+        assert_eq!(from("erfc + x0 1", &[61.2]), i32::MAX);
+        assert_eq!(from("erf * x0 x0", &[3.0]), i32::MAX);
+        // a stable expression's class at every rung where it reads
+        for (expr, xs) in [
+            ("asinh bessely x0 7", vec![-46.87590210093502]),
+            ("asinh bessely x0 7", vec![32.92556938526987]),
+            ("asinh bessely x0 7", vec![-std::f64::consts::PI]),
+            ("tanh x0", vec![30.0]),
+            ("erfc besseli x0 6", vec![-0.25]),
+            ("exp neg x0", vec![700.0]),
+            ("besselk x0 2", vec![0.5]),
+        ] {
+            let e = compile(expr, xs.len());
+            assert!(e.stable_value(), "{expr}");
+            let env: Vec<Val> = xs.iter().map(|&x| val_of_f64(x)).collect();
+            let first = e.eval_real(&env, BASE_DPS).unwrap().value.unwrap();
+            let want = class(&Some(first));
+            for dps in [120, 400, 2000, 3000] {
+                let v = e.eval_real(&env, dps).unwrap().value;
+                assert!(
+                    v.is_none() || class(&v) == want,
+                    "{expr} at {xs:?}, {dps} digits"
+                );
+            }
+        }
     }
 }
