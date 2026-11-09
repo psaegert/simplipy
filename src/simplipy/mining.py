@@ -1375,6 +1375,19 @@ class RuleMiner:
                 return set(self._refusals([(tuple(lhs), tuple(rhs)) for lhs, rhs in pairs],
                                           rule_mode, judge, judged, context))
 
+            def _deshadow_installed(stage: str) -> None:
+                """TWIN-SHADOW REMOVAL where rules join the set outside a length (a lane of the
+                proposal channel, a promotion): the test the per-length loop applies to each
+                length's picks (`_deshadow`), so the final gate finds no twin-shadow owner to
+                report. Each row it drops is recorded under ``stage``."""
+                kept, gone = self._deshadow(rule_mode, self._mode_rules(rule_mode))
+                self._install(rule_mode, kept)
+                if gone:
+                    _note_drops(stage, lambda _identity: 'twin-shadowed')
+                    if prov is not None:
+                        prov.setdefault('twin_shadowed', {}).setdefault(stage, []).extend(
+                            [list(lhs), list(rhs)] for lhs, rhs in gone)
+
             def _lane(entries: list, lane_judge: Callable | None = None,
                       prog: Any = None) -> tuple[dict, list, dict]:
                 """Certify one batch through the proposal channel and merge it."""
@@ -1393,6 +1406,9 @@ class RuleMiner:
                     _rule_identity(e['source'], e['target'], dummy_variables): i
                     for i, e in enumerate(trail) if e['verdict'] == 'certified'}))
                 _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
+                # The batch joins the set as a length's picks do: through the merge, then the
+                # twin-shadow removal.
+                _deshadow_installed('merge_twin_shadow')
                 return outcomes, trail, judge_loop
             # Proposal channel: certify externally proposed rules against the just-mined
             # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
@@ -1484,6 +1500,8 @@ class RuleMiner:
                     for item in items if len(item) >= 2}
                 _note_drops('sort_promotion',
                             lambda identity: _promo_reason.get(identity, 'derivable-refund'))
+                # A promoted spelling joins the set as a length's picks do.
+                _deshadow_installed('sort_promotion_twin_shadow')
                 if verbose:
                     print(f'Sort promotion: {promotion_report.get("stage_counts")}')
                 if prov is not None:
@@ -1592,6 +1610,7 @@ class RuleMiner:
                                      if (tuple(lhs), tuple(rhs)) not in _seeded])
                     _note_drops('sort_promotion_completion',
                                 lambda _identity: 'derivable-refund')
+                    _deshadow_installed('sort_promotion_completion_twin_shadow')
                     if prune == 'covered':
                         self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                         _note_drops('prune_covered_completion',

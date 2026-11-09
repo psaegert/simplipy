@@ -1854,6 +1854,13 @@ model predictions.
   product, and an even function moves its argument only to a cheaper spelling or to one it does
   not move again. Every spelling of length 5 or less over the operators around `nan`, `inf`,
   `-inf`, `0`, `-0.0` and `x0` builds in both modes.
+- **A mine with proposals finalizes.** Rules that join a mine through the proposal channel
+  (the proposals, the f64 file offered to permissive, the overlap completions) or through
+  sort promotion pass the twin-shadow removal where they join, as a length's picks do: of two
+  rows that are each other's orientation twin, the one whose rewrite the other's twin already
+  serves is dropped there and recorded in the sidecar (`twin_shadowed`). The final gate found
+  such a pair (`sin(x0)*inv(cos(x0)) -> tan(x0)` beside `sin(-x0)/cos(x0) -> -tan(x0)`) and
+  failed every mine with proposals.
 
 ### Removed
 

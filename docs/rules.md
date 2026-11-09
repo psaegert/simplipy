@@ -109,7 +109,8 @@ Each file has a **provenance sidecar** (`<file>.provenance.json`) recording ever
 the universe coverage, the mode, how the mode accepted (`acceptance`: tolerances, whether
 and at which gate a near miss is re-judged, the licensed tiers, the judge's digest), per
 length the classes, picks, judge rounds, exclusions and twin-shadowed rows (`per_length`),
-the file gates (`gates`), the digests of the code that mined it (`code_digest`), in the
+the twin-shadowed rows of the proposal channel's lanes and of sort promotion, by the stage
+they joined at (`twin_shadowed`), the file gates (`gates`), the digests of the code that mined it (`code_digest`), in the
 permissive sidecar the f64 file it was offered, pinned by name and sha256, with the
 lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
