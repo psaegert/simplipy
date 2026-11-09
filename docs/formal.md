@@ -246,12 +246,16 @@ certificate reads these as the real functions.
 
 **Lemma L1 (nf is well-defined and terminating)** [BY CONSTRUCTION — audited per call
 site]. Every recursive constructor call is on arguments of strictly smaller size, with
-exactly two audited exceptions carrying their own strictly decreasing measures:
+exactly three audited exceptions carrying their own strictly decreasing measures:
 
 - *power composition* $(t^{r})^{s} \to t^{r \cdot s}$ recurses on the strict subterm $t$;
 - *rootn index normalization* $\mathrm{rootn}(t, -n) \to \mathrm{Pow}(\mathrm{rootn}(t, n), -1)$
   makes one self-call that lands in the non-negative-index branch and cannot re-enter the
-  negative branch (a non-negatable index refuses the fold and stays symbolic).
+  negative branch (a non-negatable index refuses the fold and stays symbolic);
+- *the even arm* $g(a) \to g(\bar a)$, for an even $g$ (`abs`, `cos`, `cosh`, and `besselj` of
+  an even integer order in its argument) and $\bar a$ the sign-blind representative of $a$,
+  re-enters $\mathrm{nf}$ only on a strictly cheaper argument or on one it does not move again
+  (`even_move`), so the argument's price $\mu$ falls at every re-entry but the last.
 
 **Determinism** [BY CONSTRUCTION]: $\mathrm{nf}$ makes no random or order-of-arrival
 choices; bag merges fold in sorted order (I3).
@@ -1013,7 +1017,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | Property | Code site (enforcement) | Test / gate (evidence) |
 |---|---|---|
 | I1–I4 canonical invariants | constructors in `ac/expr.rs` | `no_nested_bags` + `stable()` debug asserts; property tests in `tests/test_ac_core.py` |
-| L1 nf termination | structural recursion; the two audited self-calls (`pow`, `fun`/rootn) | full suites exercise both self-call sites |
+| L1 nf termination | structural recursion; the three audited self-calls (`pow`, `fun`/rootn, the even arm's `even_move`) | full suites exercise every self-call site; every spelling to length 5 around the special leaves builds (`test_even_arm_terminates.py`) |
 | G1–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
 | L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle; a value f64 holds in pieces prices as its one number |

@@ -1846,6 +1846,14 @@ model predictions.
   reserve glibc keeps for libraries loaded after startup; with this release's larger block,
   `import simplipy` followed by `import sklearn` or `import torch` failed with "cannot allocate
   memory in static TLS block" in their OpenMP runtime. Answers and simplify times are unchanged.
+- **An even function over an odd function of NaN no longer crashes.** `abs(sin(nan)/(-inf))`
+  and 26 more spellings of that shape (`abs`, `cos` or `cosh` over `asin`, `asinh`, `atan`,
+  `atanh`, `erf`, `sin`, `sinh`, `tan` or `tanh` of NaN, divided by `-inf`) recursed without
+  end in the canon and killed the process, in `simplify` and in the miner. NaN is no negatable
+  argument (a negation leaves it as it is), so an odd function of NaN trades no sign with its
+  product, and an even function moves its argument only to a cheaper spelling or to one it does
+  not move again. Every spelling of length 5 or less over the operators around `nan`, `inf`,
+  `-inf`, `0`, `-0.0` and `x0` builds in both modes.
 
 ### Removed
 

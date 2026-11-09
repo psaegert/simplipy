@@ -6092,9 +6092,11 @@ pub(crate) fn tie_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
 }
 
 /// The literal of a literal multiple `c u`: `c`, 1 for a bare `u`; `None` for a sum, a zero, and an
-/// argument holding a `Const` or an infinity, whose signs have their own owners.
+/// argument holding a `Const` or an infinity, whose signs have their own owners, and for NaN, which
+/// a negation leaves as it is (`-NaN` is NaN), as it leaves a zero: an odd head of either has no
+/// other member in its class, so no sign can trade into it.
 fn multiple_literal(m: &Ex) -> Option<Rat> {
-    if matches!(m, Ex::Add(_)) || m.contains_const() || m.contains_infinity() {
+    if matches!(m, Ex::Add(_) | Ex::NaN) || m.contains_const() || m.contains_infinity() {
         return None;
     }
     let c = match m {
@@ -10439,6 +10441,18 @@ fn even_argument(a: &Ex, cx: &Cx) -> Option<Ex> {
     Some(Ex::Add(flipped))
 }
 
+/// The argument an even function's arm moves `a` to (`even_argument`), where it may move: a
+/// strictly cheaper argument, or one the arm does not move again (the class's spelling at an equal
+/// price: a mirror orientation, an infinity's sign). So the arms that rebuild the call on the moved
+/// argument (`fun`'s even arm, `besselj`'s even orders) re-enter `fun` on an argument whose price
+/// falls at every re-entry but the last, and the price is well founded (`rules::ordered_below`):
+/// they terminate. `None` where `a` stays as it is.
+fn even_move(a: &Ex, cx: &Cx) -> Option<Ex> {
+    let moved = even_argument(a, cx)?;
+    (complexity(&moved, cx.view) < complexity(a, cx.view) || even_argument(&moved, cx).is_none())
+        .then_some(moved)
+}
+
 /// `besselj(+-inf, x)` at a literal `x`: 0 at `x >= 0`, NaN below (scipy's cells). And
 /// `besselj(nu, 0)` at a literal order, exactly: `J_0(0) = 1`, `J_nu(0) = 0` for `nu > 0` and for
 /// a negative integer `nu`, and at a negative non-integer order the pole's one-sided limit (the
@@ -10523,7 +10537,7 @@ fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
         return Some(if n.is_odd_integer() { negated(j) } else { j });
     }
     if n.is_even_integer() {
-        let t = even_argument(&args[1], cx)?;
+        let t = even_move(&args[1], cx)?;
         return Some(fun(op, vec![args[0].clone(), t], cx));
     }
     // An odd order is an odd head (`odd_head`): the class owners place its sign.
@@ -10633,9 +10647,10 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // `abs asinh -3` --(here)--> `abs asinh 3` --(nonneg licence)--> `asinh 3`.
     //
     // TOTAL, no licence needed: evenness is a pointwise identity on the whole extension,
-    // and `is_even_fun` is a certified table, not a config field.
+    // and `is_even_fun` is a certified table, not a config field. It terminates by the price of
+    // its argument (`even_move`).
     if args.len() == 1 && cx.is_even_fun(op) {
-        if let Some(arg) = even_argument(&args[0], cx) {
+        if let Some(arg) = even_move(&args[0], cx) {
             return fun(op, vec![arg], cx);
         }
     }
@@ -12550,6 +12565,38 @@ mod tests {
                 .map(|f| complexity(f, view))
                 .sum();
             assert_eq!(complexity(&p, view), mu_mul() + mu_rat(&literal) + rest);
+        });
+    }
+
+    #[test]
+    fn an_odd_head_of_nan_trades_no_sign_and_an_even_head_over_it_terminates() {
+        with_view(|view| {
+            let cx = Cx::bare(view);
+            let sin_nan = fun(view.intern("sin"), vec![Ex::NaN], &cx);
+            // NaN is no negatable argument: a negation leaves it as it is, so the odd head has
+            // no other member in its class and no sign trades into it.
+            assert_eq!(multiple_literal(&Ex::NaN), None);
+            assert_eq!(sign_trade_flip(&sin_nan, &cx), None);
+            assert_eq!(
+                mul(vec![Ex::int(-2), sin_nan.clone()], &cx),
+                Ex::Mul(vec![Ex::int(-2), sin_nan.clone()])
+            );
+            // `sin(nan) / -inf` beside the written negative zero, under each even head: the arm
+            // drops the sign and does not move again.
+            let neg_zero = Ex::Leaf(view.intern(NEG_ZERO));
+            for even in ["abs", "cos", "cosh"] {
+                for coefficient in [1, -1] {
+                    let arg = mul(
+                        vec![Ex::int(coefficient), neg_zero.clone(), sin_nan.clone()],
+                        &cx,
+                    );
+                    let built = fun(view.intern(even), vec![arg], &cx);
+                    let Ex::Fun(_, a) = &built else {
+                        panic!("not a call: {built:?}")
+                    };
+                    assert_eq!(even_argument(&a[0], &cx), None, "{built:?}");
+                }
+            }
         });
     }
 }
