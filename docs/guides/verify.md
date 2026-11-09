@@ -51,17 +51,26 @@ The second rule is the classic trap this package exists to catch:
 `exp(log(x0))` equals `x0` only on `x0 > 0` — rewriting it changes the
 function on a positive-measure set, so the judge kills it.
 
-Each mode is judged on its own values: `f64` on float64's, reading the reals only for the true
-value where an operation overflows or underflows; `permissive` on the reals' values at float
-resolution. The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals'
-outcome, a diagnostic that decides no mode by itself. A mode whose reading reaches no answer
+Each mode is judged on its own values. `f64` holds a rule with variables where float64's two
+sides agree (to 8 ULP, the true value accepted where an operation overflows or underflows), or
+where the rule is true in the reals and float64's two sides agree in kind at every point the
+judge reads: both finite, the same infinity, or both undefined. The second admits the identities
+float64 only rounds, however far a jump or a pole magnifies the rounding, and nothing false in
+the reals: `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `x0 + 1 - x0 -> 1`,
+`floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`
+hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06) and `exp(log(x0)) -> x0` (NaN
+against x0 for x0 < 0) do not. `permissive` is judged on the reals' values at float resolution.
+The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals' outcome, a
+diagnostic that decides no mode by itself; `f64` reads it for its second reading. A mode whose reading reaches no answer
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side
-is finite (`NO-WITNESS`), a token the judge cannot read (`UNSUPPORTED-SHAPE`), a judgment past its
+is finite (`NO-WITNESS`), a token the judge cannot read (`UNSUPPORTED-SHAPE`; a variable is read
+whatever it is called, `v1`, `x7` or `alpha`, as a data slot), a judgment past its
 time (`JUDGE-TIMEOUT`), or a point the mode owes a reading at and leaves unread. The owed points
 are the ones the judge takes because they are exceptional: every slot at each of its sort's
 exact atoms (zero, the units, the infinities, pi/2 and the rest), at each generic or special
 constant value the mode owes a witness at, and a ground rule's one point; the verdict names an
-unread one (`unread_owed`). The grid, the mine's rows, the preimages of jumps, the slots'
+unread one (`unread_owed`). The grid, the rows of the shipped mines' matrix (one matrix, the
+same for every caller, so a verdict is the rule's), the preimages of jumps, the slots'
 magnitude ladder and the constants' span and saturation magnitudes (`|c|` from 0.001 to 0.1
 and from 10 to 1e4, and 19 to 1e17) are samples: a point among them that cannot be read counts neither way. A rule with
 constants and no slots reads one point per constant value, and at least a quarter of them must
@@ -81,8 +90,9 @@ owes it in float64's values, so an undecided float64 measure refuses `f64`;
 check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
-Each rule gets a **tier**: the modes it holds in, from two questions. Does the deployed f64
-evaluator reproduce it? Does it hold by `permissive`'s own criterion, the reals' values up to
+Each rule gets a **tier**: the modes it holds in, from two questions. Does it hold in `f64`
+(the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every
+value's kind)? Does it hold by `permissive`'s own criterion, the reals' values up to
 float resolution, and agreement alone where the input has no value (a permissive rule may give
 a value where its input has none, over real-valued bindings)? `permissive` binds every slot to
 any subexpression, so its own question is asked at the `_` sort: no disagreement at an isolated
@@ -91,21 +101,27 @@ in `f64` or by permissive's own criterion, and a step permissive takes by an f64
 what `f64` promises (float64's values agree wherever the left side has one). So
 `floor(tanh(40)) -> 1`, float64's own value and off the reals, and `ceil(abs(cos(x0))) -> 1`,
 false at pi/2 in the reals and true at every double, hold in both modes; `ceil(x0) - floor(x0)
--> 1` holds in neither. The tiers are one registry, `simplipy.verify.TIERS`, and this table is
-rendered from it (`simplipy.verify.tier_table()`):
+-> 1` holds in neither. A verdict carries each mode's reading: `realised` for `f64` (from its two
+readings of float64, `realised_f6` and `realised_kinds`, and the reals' outcome) and `permissive`
+for `permissive`, which includes `f64`'s: `permissive_own` is its own criterion's reading alone
+(`2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` holds in `f64`, float64's `1/0` being
+`inf`, and so in `permissive`, though its own criterion, which reads `1/0` as no value, refuses
+it at x0 = 0). The tiers are one registry, `simplipy.verify.TIERS`, and this table is rendered
+from it (`simplipy.verify.tier_table()`):
 
 <!-- tier-table: begin (rendered by simplipy.verify.tier_table(); a test checks it) -->
 | tier | `f64` | `permissive` | meaning |
 |---|---|---|---|
-| `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it), and so in permissive, which includes every rule f64 holds |
-| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and not reproduced by float64 (`atanh(tanh(x0)) -> x0`), or an extension (`exp(log(x0)) -> x0`) |
+| `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every value's kind: `sin(x0 + pi) -> -sin(x0)`), and so in permissive, which includes every rule f64 holds |
+| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), or an extension (`exp(log(x0)) -> x0`) |
 | `reject` | no | no | holds in no mode; recorded in the drop census |
 <!-- tier-table: end -->
 
-"f64-realised" means the deployed evaluator computes the rewrite, to within 8 ULP, at every
-battery and grid point, and at every slot magnitude from the smallest normal double to the
-largest, where no operation of either side overflows or underflows (`sinh(asinh(x0)) → x0` is
-66 ULP off at 1e100 and stays `permissive`). At a point
+`f64`'s first reading means the deployed evaluator computes the rewrite, to within 8 ULP, at
+every battery and grid point, and at every slot magnitude from the smallest normal double to the
+largest, where no operation of either side overflows or underflows; its second, that the rule is
+true in the reals and both sides have one kind at all those points (`sinh(asinh(x0)) → x0` is 66
+ULP off at 1e100 and holds by the second). At a point
 where one does, the rewrite may give the true value instead, as the canonical constructors do,
 so `rootn(exp(x0), 2) → exp(x0/2)` is `core` although `exp` overflows past 709.78. A pole
 (`atanh(1)`, `log(0)`) is not an overflow and saturation inside the range is not one either,

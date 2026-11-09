@@ -109,10 +109,11 @@ class TestMonitorFailsClosed:
 class TestRootnSemantics:
     def test_monitor_judges_rootn(self):
         # the cube root of a cube is exact in the reals; float64's kernels are 101 units in the
-        # last place off at 1e-100, so as a rewrite it holds in permissive and not in f64
+        # last place off at 1e-100, and its two sides finite at every point (the reals' value
+        # past the cube's overflow, by the range standard), so as a rewrite it holds in both
         assert judge_pair(['rootn', 'pow', 'x0', '3', '3'], ['x0'], rng(),
                           mode='permissive')[0] == 'OK'
-        assert judge_pair(['rootn', 'pow', 'x0', '3', '3'], ['x0'], rng())[0] == 'VIOLATION'
+        assert judge_pair(['rootn', 'pow', 'x0', '3', '3'], ['x0'], rng())[0] == 'OK'
         assert judge_pair(['rootn', 'pow', 'x0', '2', '2'], ['x0'], rng())[0] == 'VIOLATION'
 
     def test_gate_judges_rootn(self):
@@ -627,15 +628,17 @@ class TestTheRealisationBound:
         assert got['tier'] == 'reject'
 
     def test_rounding_is_realised_but_divergence_is_not(self) -> None:
-        """The bound has to separate two things bit-exactness cannot. `1/exp(x)` and
-        `exp(-x)` differ by ONE ulp -- libm doing its job, and still what f64 computes.
-        `acos(cos(cos x))` and `|cos x|` differ by 2377 ULP at x=300, where cos's
-        argument reduction genuinely falls apart."""
+        """The bound (F6, strict's first reading) has to separate two things bit-exactness
+        cannot. `1/exp(x)` and `exp(-x)` differ by ONE ulp -- libm doing its job, and still
+        what f64 computes. `acos(cos(cos x))` and `|cos x|` differ by 2377 ULP at x=300, where
+        cos's argument reduction genuinely falls apart; true in the reals, its two sides
+        finite at every point, it holds in strict by the second reading."""
         from simplipy.verify._contract import judge_rule
         rounding = judge_rule(['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'])
-        assert rounding['realised'] is True and rounding['tier'] == 'core'
+        assert rounding['realised_f6'] is True and rounding['tier'] == 'core'
         divergent = judge_rule(['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'])
-        assert divergent['realised'] is False and divergent['tier'] == 'permissive'
+        assert divergent['realised_f6'] is False and divergent['realised_kinds'] is True
+        assert divergent['realised'] is True and divergent['tier'] == 'core'
 
     def test_the_bound_is_the_tables_and_sits_in_an_empty_region(self) -> None:
         """WHY 8 AND NOT 4 OR 16. Over the rules bit-exactness moves, the gap distribution
@@ -644,13 +647,14 @@ class TestTheRealisationBound:
         bound is THE TABLE's f64 agreement (F6), defined once in the core
         (`_core.TABLE_REALISED_ULP`), and the judge's mirror is the same number.
 
-        The 1-ULP rounding of `1/exp(x)` is `core`, and the 2377-ULP divergence is not. (The
-        6-ULP straddler of the old probe set, `abs(sin(acos x)) -> cos(asin x)`, is `permissive` now
-        for another reason: at x = 1 the table reads cos(pi/2) as exactly 0, no longer
-        snapping, so the f64 lane compares 0 against float64's cos(fl(pi/2)) = 6.1e-17. And
-        `pi - acos(x) -> acos(-x)`, whose worst gap on the judge's grid was 7 ULP, is `permissive`
+        The 1-ULP rounding of `1/exp(x)` is within F6, and the 2377-ULP divergence is not. (The
+        6-ULP straddler of the old probe set, `abs(sin(acos x)) -> cos(asin x)`, is past F6 for
+        another reason: at x = 1 the table reads cos(pi/2) as exactly 0, no longer snapping, so
+        the f64 lane compares 0 against float64's cos(fl(pi/2)) = 6.1e-17. And
+        `pi - acos(x) -> acos(-x)`, whose worst gap on the judge's grid was 7 ULP, is past it
         since the f64 lane reads the mint's rows too: near x = -1 the subtraction cancels, 77
-        ULP at x = -0.99971.)"""
+        ULP at x = -0.99971.) Each of the four is true in the reals with float64's two sides
+        finite at every point, so strict holds it by its second reading."""
         from simplipy import _core
         from simplipy.verify import _contract as C
         assert C.REALISED_ULP == _core.TABLE_REALISED_ULP == 8
@@ -659,12 +663,13 @@ class TestTheRealisationBound:
             eight = float(np.nextafter(eight, np.inf))
         assert _core.table_f64_agree(1.0, eight) == 'eq'
         assert _core.table_f64_agree(1.0, float(np.nextafter(eight, np.inf))) == 'REAL-CHANGE'
-        probes = [(['-', 'np.pi', 'acos', '_0'], ['acos', 'neg', '_0'], 'permissive'),  # 77 ULP
-                  (['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'], 'core'),              # 1 ULP
-                  (['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'], 'permissive'),   # 2377 ULP
-                  (['abs', 'sin', 'acos', '_0'], ['cos', 'asin', '_0'], 'permissive'),
-                  (['pow', 'np.e', 'sinh', '(-5)'], ['0'], 'reject')]                # gross
-        assert [C.judge_rule(a, b)['tier'] for a, b, _ in probes] == [t for _, _, t in probes]
+        probes = [(['-', 'np.pi', 'acos', '_0'], ['acos', 'neg', '_0'], False, 'core'),  # 77 ULP
+                  (['/', '1', 'exp', '?0'], ['exp', 'neg', '?0'], True, 'core'),             # 1 ULP
+                  (['acos', 'cos', 'cos', '_0'], ['abs', 'cos', '_0'], False, 'core'),       # 2377
+                  (['abs', 'sin', 'acos', '_0'], ['cos', 'asin', '_0'], False, 'core'),
+                  (['pow', 'np.e', 'sinh', '(-5)'], ['0'], False, 'reject')]             # gross
+        got = [C.judge_rule(a, b) for a, b, _, _ in probes]
+        assert [(d['realised_f6'], d['tier']) for d in got] == [(f, t) for _, _, f, t in probes]
 
 
 class TestTheF64MagnitudeLadder:
@@ -676,11 +681,13 @@ class TestTheF64MagnitudeLadder:
         ('sinh asinh ?0', '?0'),
         ('tan atan asinh !0', 'asinh !0'),      # tan near pi/2 magnifies atan's rounding
     ])
-    def test_a_rule_false_in_float64_at_a_large_magnitude_is_refused(self, lhs, rhs) -> None:
+    def test_a_rounding_at_a_large_magnitude_is_past_f6_and_of_one_kind(self, lhs, rhs) -> None:
+        """F6 refuses the rounding the ladder finds; the two sides stay finite, so strict
+        holds the rule by its second reading."""
         from simplipy.verify._contract import judge_rule
         got = judge_rule(lhs.split(), rhs.split())
         assert got['verdict'] in ('CERTIFIED', 'ENGINE-MISALIGN') and \
-            got['tier'] == 'permissive', got
+            got['realised_f6'] is False and got['tier'] == 'core', got
 
     def test_a_range_event_at_a_large_magnitude_takes_the_true_value(self) -> None:
         """`asinh(sinh(x)) -> x`: sinh overflows past 710.48, where the true value stands."""
@@ -750,14 +757,14 @@ class TestTheF64RangeStandard:
     def test_a_difference_at_an_ordinary_point_still_refuses(self) -> None:
         """Accepting the true value at a range event removes none of the bar elsewhere.
         `log(exp(x)) -> x` gives the true value past exp's overflow and underflow, and is
-        still refused in f64: exp rounds a small argument into the neighbourhood of 1, so
-        at the grid point 0.0137421 the deployed sides differ by 34 ULP, with nothing out
-        of range."""
+        still refused by F6: exp rounds a small argument into the neighbourhood of 1, so at
+        the grid point 0.0137421 the deployed sides differ by 34 ULP, with nothing out of
+        range. Its two sides are finite there, so strict holds it by its second reading."""
         from simplipy.verify import _contract as C
         got = judge_rule(['log', 'exp', '?0'], ['?0'])
         assert got['out_of_range'] > 0
-        assert (got['verdict'], got['realised'], got['tier']) == \
-            ('CERTIFIED', False, 'permissive')
+        assert (got['verdict'], got['realised_f6'], got['realised_kinds'], got['tier']) == \
+            ('CERTIFIED', False, True, 'core')
         x = C.F(0.0137421)
         in_range = [True]
         with np.errstate(all='ignore'):
@@ -929,11 +936,17 @@ class TestCleanlinessIsPerMode:
         # the double, 80 the sign of a zero, `* 0 asin (-1) -> 0` and kin, whose left side is
         # -0.0, and 20 a rounding of 1 to 6 units in the last place, `tan atan np.e -> np.e` and
         # kin; one of them, `exp(2)/np.e -> np.e`, the load refuses as well: policy alone 17).
+        # Strict holds a rule true in the reals whose float64 sides are of one kind at every
+        # point: f64 103 (-25 past F6 alone: `sin acos _0 -> cos asin _0` and kin, `sinh asinh
+        # _0 -> _0`, `pi - acos(_0) -> acos(-_0)` and kin, `exp(log(asin(_0))) ->
+        # asin(exp(log(_0)))` and kin, `pow(_0, log(2)) -> pow(2, log(_0))` and kin,
+        # `sinh(atanh(atan(_0))) -> tan(asin(atan(_0)))` and kin, `tan atan acosh !0 -> acosh
+        # !0`).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 128 and len(policy_only['f64']) == 17
+        assert len(tier['f64'] - {126}) == 103 and len(policy_only['f64']) == 17
         assert len(tier['permissive']) == 31 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
@@ -1357,11 +1370,14 @@ class TestABoundedFunctionNeverAttainsItsLimit:
         assert judge_rule(['tanh', '30'], ['1'])['clause'] == 'a-real-change'
         # the slot-dropping identity is spelled `?`: its `_` spelling
         # correctly dies `a-nonfinite-binding`, which is sort doctrine, not the ladder's.
+        # true in the reals, float64's two sides finite at every point (past F6 where tanh
+        # saturates, and where exp overflows, the reals' value by the range standard): strict
+        # holds both by its second reading
         for lhs, rhs in ((['cos', 'asin', 'tanh', '_0'], ['inv', 'cosh', '_0']),
                          (['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0'])):
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') != 'KILL', (lhs, got)
-            assert got.get('tier') == 'permissive', (lhs, got)
+            assert got.get('tier') == 'core' and got['realised_f6'] is False, (lhs, got)
 
 
 class TestTheQuantifierWidensWithoutConvictingTheTrue:
@@ -1797,8 +1813,9 @@ def test_a_multi_constant_identity_is_certified(lhs, rhs) -> None:
     # The fit at <C_L0> = 0 returned the noise -2.5e-17 for an exact 0 (a coordinate snap built
     # from the unsnapped fit undid the joint snap on a tie), and the polish took it to ~1e-557:
     # a nonzero right side at x = 0, where the left side is exactly 0, convicted the identity.
+    # Its two sides are finite at every point, so strict holds it by its second reading.
     got = v.verify_rule(lhs.split(), rhs.split())
-    assert got['verdict'] == 'CERTIFIED' and v.effective_tier(got) == 'permissive', got
+    assert got['verdict'] == 'CERTIFIED' and v.effective_tier(got) == 'core', got
 
 
 def test_the_multi_constant_fit_is_the_same_on_every_blas_kernel() -> None:
@@ -1829,13 +1846,14 @@ def test_the_monitor_holds_each_rule_step_to_the_mode() -> None:
     import yaml
     ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
                                            'config.yaml')))['operators']
-    eng = SimpliPyEngine(operators=ops, rules=[(('sin', 'acos', '?0'), ('cos', 'asin', '?0'))])
-    out, fires = eng._core.ac_simplify_fires(['sin', 'acos', 'x0'], rule_mode='default')
-    assert fires == [(['sin', 'acos', 'x0'], ['cos', 'asin', 'x0'])], fires
-    # true in the reals, and not in f64 (at 1: 0 against cos(fl(pi/2)) = 6.1e-17): the step
-    verdict, detail = judge_pair(['sin', 'acos', 'x0'], out, engine=eng)
+    eng = SimpliPyEngine(operators=ops, rules=[(('atanh', 'tanh', '?0'), ('?0',))])
+    out, fires = eng._core.ac_simplify_fires(['atanh', 'tanh', 'x0'], rule_mode='default')
+    assert fires == [(['atanh', 'tanh', 'x0'], ['x0'])], fires
+    # true in the reals, and not in f64 (past 19.06 float64's left side is +inf against x): the
+    # step
+    verdict, detail = judge_pair(['atanh', 'tanh', 'x0'], out, engine=eng)
     assert verdict == 'VIOLATION' and 'the step' in detail, detail
-    assert judge_pair(['sin', 'acos', 'x0'], out, engine=eng, mode='permissive')[0] == 'OK'
+    assert judge_pair(['atanh', 'tanh', 'x0'], out, engine=eng, mode='permissive')[0] == 'OK'
 
 
 def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
@@ -1932,8 +1950,10 @@ def test_the_monitor_attributes_to_the_baseline_engines_own_answer() -> None:
     expr = ['*', 'x0', '+', 'x1', '+', 'x2', '0']
     baseline = _monitor.build_engine([], ACJ_CONFIG)
     assert baseline.simplify(list(expr)) not in (list(expr),), 'the baseline must rewrite it'
+    # a rewrite over three variables is judged with its coincidences, about 9 s, beside the
+    # sweep's 10 s default: the attribution is the subject here, not the timeout
     viol, native, _, changed = _monitor.sweep(poison, [expr], np.random.default_rng(0),
-                                              baseline, ACJ_CONFIG)
+                                              baseline, ACJ_CONFIG, judge_timeout_s=120)
     assert changed == 1 and len(viol) == 1 and not native, (viol, native)
 
 

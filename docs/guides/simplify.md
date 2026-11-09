@@ -267,12 +267,18 @@ engine.simplify('atanh(tanh(30))', mode=Mode.permissive)  # -> '30'    what is t
 
 ### What `f64` mode does and does not promise
 
-It promises the deployed evaluator's value **wherever no operation overflows or
-underflows**, and **every rule it applies** has been checked against that evaluator itself.
-Both sides of the rewrite are evaluated in floating point across the verifier's battery and
-grid, and a rule enters the `f64` set only where they agree to within 8 ULP. That bound is
-derived rather than chosen: a rewrite has two sides, each a composition of up to four
-implementation-defined library calls whose errors are independent and can oppose.
+**Every rule it applies** has been checked against the deployed evaluator itself. Both sides
+of the rewrite are evaluated in floating point across the verifier's battery and grid, and a
+rule enters the `f64` set where they agree to within 8 ULP, or where the rule is true in the
+reals and they agree in kind at every point: both finite, the same infinity, or both
+undefined. The 8 ULP are derived rather than chosen: a rewrite has two sides, each a
+composition of up to four implementation-defined library calls whose errors are independent
+and can oppose. The second reading admits the identities float64 only rounds: `sin(x0 + pi)`
+is `-sin(x0)` in the reals, and float64's two sides differ by its rounding of `x0 + pi` (at
+x0 = 0, 1.2e-16 against -0), as `floor(x0 + 1)` and `floor(x0) + 1` differ at x0 = -1e-17
+(1 against 0). So a rewrite keeps float64's kind of every value, and agrees with float64's
+evaluation of its input within rounding, except where a jump or a pole lies between float64's
+argument and the real one.
 
 Overflow and underflow are a special case. An operation overflows when its operands and its
 exact value are finite but its float is `±inf` (`exp(800)`), and underflows when its exact

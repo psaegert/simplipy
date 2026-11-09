@@ -36,6 +36,7 @@ Precision honesty:
     Unresolved (the point is skipped, never convicted).
 """
 import contextlib
+import functools
 import itertools
 import math
 import re
@@ -158,6 +159,59 @@ ARITY = {**_CORE_ARITY,
          'besselj': 2, 'bessely': 2, 'besseli': 2, 'besselk': 2}
 SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 
+#: A dummy variable `x<k>`, which the judge reads as the data slot `?<k>`.
+DUMMY_RE = re.compile(r'^x(\d+)$')
+
+#: A variable's name as the judge reads one: a letter, then letters, digits or underscores.
+_NAME_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*$')
+
+
+def slot_key(t):
+    """The slot a token reads as: a slot (`?0`, `_1`, ...) is itself, a dummy variable `x<k>` is
+    the data slot `?<k>`; None for any other token."""
+    if SLOT_RE.match(t):
+        return t
+    m = DUMMY_RE.match(t)
+    return f'?{m.group(1)}' if m else None
+
+
+def _well_formed(tokens):
+    """Is `tokens` one prefix expression, every token that is no operator a leaf?"""
+    need = 1
+    for t in tokens:
+        if need == 0:
+            return False
+        need += ARITY.get(t, 0) - 1
+    return need == 0
+
+
+def variables_as_dummies(lhs, rhs):
+    """The rule `lhs -> rhs` with every variable spelled as a dummy `x<k>`, so that what a variable
+    is called decides nothing, as in the engine: a variable is a name that is no operator, no
+    literal, no `<constant>` and no slot (`v1`, `x_1`, `alpha`), and each that is no dummy takes, in
+    order of first appearance over both sides, the dummy past every dummy the rule holds. A name
+    the judge reads as nothing else is a variable; any other token stays as it is (and is refused
+    as a shape where it is read). A side that is no expression with its names read as variables
+    keeps its names, so its refusal names the token the judge cannot read (`frobnicate x0`)."""
+    if not (_well_formed(lhs) and _well_formed(rhs)):
+        return list(lhs), list(rhs)
+    taken = [int(m.group(1)) for t in list(lhs) + list(rhs) if (m := DUMMY_RE.match(t))]
+    nxt = max(taken) + 1 if taken else 0
+    rename = {}
+    for t in list(lhs) + list(rhs):
+        if t in rename or t in ARITY or slot_key(t) is not None or not _NAME_RE.match(t):
+            continue
+        try:
+            literal_value(t)
+            continue
+        except UnsupportedToken:
+            pass
+        rename[t] = f'x{nxt}'
+        nxt += 1
+    if not rename:
+        return list(lhs), list(rhs)
+    return [rename.get(t, t) for t in lhs], [rename.get(t, t) for t in rhs]
+
 #: The 0.15 heads. A rule spelled with one answers to the core's f64 bar for its float64
 #: realisation (`_core.f64_bar`, ANDed into `realised` by `judge_rule`): float64 parts from the
 #: reals at a step head's jump (`floor(x + 1)` at x = -1e-17), at a zero's sign `atan2` reads,
@@ -268,8 +322,8 @@ def parse(tokens, cname='<C>', arity=None, number=False):
             return (t,) + tuple(rec() for _ in range(arity[t]))
         if SLOT_RE.match(t) or t.startswith('<C'):
             return ('slot', t)
-        if t in ('x0', 'x1', 'x2'):
-            return ('slot', '?' + t[1:])
+        if DUMMY_RE.match(t):
+            return ('slot', slot_key(t))
         return ('lit', literal_value(t), t)
 
     tree = rec()
@@ -285,8 +339,8 @@ def slots_of(tokens, cname='<C>', number=False):
         m = SLOT_RE.match(t)
         if m:
             out[t] = m.group(1)
-        elif t in ('x0', 'x1', 'x2'):
-            out['?' + t[1:]] = '?'
+        elif DUMMY_RE.match(t):
+            out[slot_key(t)] = '?'
         elif t == '<constant>':
             out[next(consts)] = 'c'
     return out
@@ -963,8 +1017,8 @@ def _cl_env(cl_val, cl_name='<C_L>'):
 def mine_rows(n_rows, n_vars, rng):
     """THE MINE'S ROWS: the evaluation matrix its mint reads, `(n_rows, n_vars)`, drawn from
     `rng`. One sampler, read by the mine (`RuleMiner._mining_sample_x`) and by the judge's
-    f64 lane (`judge_rows`), so a counterexample the mint finds on its rows is one the judge
-    reads too.
+    f64 lane (`judge_rows`, the shipped artifacts' mine's), so a counterexample the mint of such
+    a mine finds on its rows is one the judge reads too.
 
     Heavy-tailed MIXTURE instead of the historical pure N(0, 5): a mined pattern's
     wildcards bind arbitrary SUBTREE values at application time, so equivalence
@@ -1011,24 +1065,20 @@ def mine_matrix(seed, n_rows, n_vars, confirm=True):
     return np.vstack([data, mine_rows(2 * n_rows, n_vars, rng)]) if confirm else data
 
 
-#: The rows the judge's f64 lane reads (`judge_rows`): set by a mine to its own (`set_rows`),
-#: else the shipped artifacts' mine (seed 42, 1,024 rows over two variables, confirmed).
+#: The rows the judge's f64 lane reads (`judge_rows`): the shipped artifacts' mine's (seed 42,
+#: 1,024 rows over two variables, confirmed), in every process. They are part of the judge's
+#: battery, so they are a function of nothing else: a verdict is the rule's, whichever mine, test
+#: or caller asks (a mine of other rows refutes on its own rows only as a prefilter, in recall).
 DEFAULT_ROWS = (42, 1024, 2)
-_ROWS = [None]
 
 
-def set_rows(rows):
-    """Set the rows the judge's f64 lane reads (an `(n, k)` array, slot `k` reading column `k`),
-    or restore the default with None; returns the rows set before."""
-    before = _ROWS[0]
-    _ROWS[0] = None if rows is None else np.asarray(rows, dtype=float)
-    return before
-
-
+@functools.lru_cache(maxsize=1)
 def judge_rows():
-    if _ROWS[0] is None:
-        _ROWS[0] = mine_matrix(*DEFAULT_ROWS)
-    return _ROWS[0]
+    """The rows the judge's f64 lane reads (`DEFAULT_ROWS`), an `(n, k)` array, slot `k` reading
+    column `k`; read-only."""
+    rows = mine_matrix(*DEFAULT_ROWS)
+    rows.setflags(write=False)
+    return rows
 
 
 #: The rows of the mint's matrix the judge reads at a point, where the float64 sides disagree.
@@ -2324,8 +2374,17 @@ def _point_verdict(tl, tr, env_mp, owed=False):
         # `s_lo ~ pi/2` -- the coarse rung SAW the value, so the value sets the
         # floor and the fixed 3.5e-65 gap stands. `_LOCAL.mag_sink` keeps its other
         # consumer, the precision-demand estimator, either way.
+        #
+        # THE COARSE RUNG SAW THE VALUE only where its value did not fall away as residue does.
+        # Where both sides cancel (`atan2(y, |x|) - atan(y/|x|)`, zero for every x > 0, its two
+        # spellings `y/|x|` and `y*|1/x|` alike), each rung reads the sides as residue of the
+        # cancelled intermediates: identical at dps 50 (7.97e-59 both, no separation), and at the
+        # finer rung exactly 0 against 6.9e-136. A value that falls by more than half the added
+        # precision between the rungs, the decay test's own bar, was residue at the coarse rung,
+        # as one that vanished there is, and the intermediates set the scale.
         mag = getattr(once, 'mag', None) or mpf(0)
-        scale = max(s_lo, s_hi) if s_lo != 0 else max(s_hi, abs(mag))
+        vanished = s_lo == 0 or mp.log10(s_lo / s_hi) > (hi_dps - lo_dps) / 2
+        scale = max(s_hi, abs(mag)) if vanished else max(s_lo, s_hi)
         # A separation of exactly zero is still not a special VERDICT -- it enters as
         # the rung's own resolution, "closer than this rung can see", which is what
         # keeps `log np.e -> 1` and 31 other exact identities resolvable when their
@@ -2400,11 +2459,12 @@ TIERS = {
 
 #: What each tier of `TIERS` means, as the documentation's tier table states it.
 TIER_MEANINGS = {
-    'core': ('holds in f64 (the deployed evaluator reproduces it), and so in permissive, which '
-             'includes every rule f64 holds'),
-    'permissive': ("holds in permissive alone: true in the reals at float resolution and not "
-                   "reproduced by float64 (`atanh(tanh(x0)) -> x0`), or an extension "
-                   "(`exp(log(x0)) -> x0`)"),
+    'core': ('holds in f64 (the deployed evaluator reproduces it, or it is true in the reals and '
+             'float64 keeps every value\'s kind: `sin(x0 + pi) -> -sin(x0)`), and so in '
+             'permissive, which includes every rule f64 holds'),
+    'permissive': ("holds in permissive alone: true in the reals at float resolution and refused "
+                   "by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), or an "
+                   "extension (`exp(log(x0)) -> x0`)"),
     'reject': 'holds in no mode; recorded in the drop census',
 }
 
@@ -2414,12 +2474,52 @@ TIER_MEANINGS = {
 HOLDS_IN_THE_REALS = frozenset({'CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'})
 
 
+#: The float64 disagreements that keep the kind (strict's (b), `strict_reading`): both sides
+#: finite, apart by more than F6's units in the last place.
+KIND_AGREEMENTS = frozenset({'REAL-CHANGE'})
+
+
+def strict_reading(f6, kinds, verdict):
+    """THE STRICT READING, the one place the judge decides `f64` (strict): a rule holds there where
+    (a) float64's two sides agree (F6, with the range standard at an overflow) at every point
+    read, or (b) the rule holds in the reals (`HOLDS_IN_THE_REALS`) and float64's two sides agree
+    in kind at every point read: both finite, the same infinity or both undefined, an extension
+    only on a null set, a zero's sign where a head reads it, the range standard at an overflow.
+    (b) has no error bound: where the two sides have one real value, their float64 difference is
+    rounding. `sin(x0 + pi) -> -sin(x0)` holds by (b) (1.2e-16 against -0 at x0 = 0), and so do
+    `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`;
+    `atanh(tanh(x0)) -> x0` does not (+inf against x0 from x0 = 19.06), nor `exp(log(x0)) -> x0`
+    (NaN against x0 for x0 < 0), nor any rule false in the reals.
+
+    `f6` and `kinds` are float64's two readings, each True, False or None (no answer reached), and
+    `verdict` is the reals' outcome. -> True; False where (a) is refused and so is (b), by a change
+    of kind or a counterexample in the reals; None otherwise (refused with uncertainty)."""
+    if f6 is True or (kinds is True and verdict in HOLDS_IN_THE_REALS):
+        return True
+    if f6 is False and (kinds is False or verdict == 'KILL'):
+        return False
+    return None
+
+
+def _settle(r):
+    """The modes' readings of the judged rule `r` from its parts, in place: strict's
+    (`strict_reading` of `realised_f6`, `realised_kinds` and the reals' `verdict`, kept as
+    `realised`), permissive's, which includes strict's (`mode_reading` of `realised` and
+    permissive's own criterion's reading `permissive_own`, kept as `permissive`), and the tier
+    they give. -> `r`."""
+    r['realised'] = strict_reading(r.get('realised_f6'), r.get('realised_kinds'),
+                                   r.get('verdict'))
+    r['permissive'] = mode_reading(r['realised'], r.get('permissive_own'), 'permissive')
+    r['tier'] = _tier(r['realised'], r['permissive'])
+    return r
+
+
 def mode_reading(realised, permissive, mode):
     """A mode's reading of a judged rule: True (holds), False (refused on a counterexample) or
-    None (no answer reached). `realised` is f64's own reading (float64's values, the reals read
-    only for the true value at a range event), `permissive` permissive's own criterion's (the
-    reals' values at float resolution). Permissive includes f64: it holds where either holds,
-    is refused where both are, and reaches no answer otherwise."""
+    None (no answer reached). `realised` is strict's reading (`strict_reading`), `permissive`
+    permissive's own criterion's (the reals' values at float resolution) or its reading, which
+    includes strict's. Permissive includes f64: it holds where either holds, is refused where
+    both are, and reaches no answer otherwise."""
     if mode == 'f64':
         return realised
     if realised is True or permissive is True:
@@ -2441,23 +2541,29 @@ def _tier(realised, permissive):
 
 
 def judge_rule(lhs, rhs, deployed_check=True):
-    """-> dict: the verdict per mode -- each mode judged on its own values: f64's reading
-    (`realised`), permissive's (`permissive`), the tier they give (`_tier`) and what each rests
-    on (`basis`) -- with the reals' outcome beside them as a diagnostic (`verdict`: CERTIFIED |
-    TOLERATED | KILL | ENGINE-MISALIGN | NO-WITNESS | UNRESOLVED-COVERAGE | UNDECIDED-MEASURE |
-    UNSUPPORTED-SHAPE, with clause/class, points and the certified measure, `_judge_contract`).
-    The reals' outcome decides no mode by itself.
+    """-> dict: the verdict per mode -- f64's (strict's) reading (`realised`, `strict_reading`
+    of float64's two readings `realised_f6` and `realised_kinds` and the reals' outcome),
+    permissive's (`permissive`, which includes strict's; its own criterion's reading is
+    `permissive_own`), the tier they give (`_tier`) and what each rests on (`basis`) -- with the
+    reals' outcome beside them as a diagnostic (`verdict`: CERTIFIED | TOLERATED | KILL |
+    ENGINE-MISALIGN | NO-WITNESS | UNRESOLVED-COVERAGE | UNDECIDED-MEASURE | UNSUPPORTED-SHAPE,
+    with clause/class, points and the certified measure, `_judge_contract`). The reals' outcome
+    decides no mode by itself; strict reads it for its (b).
 
-    A rule spelled with a 0.15 head (`NEW_HEADS`) is realised in float64 only where the core's
-    f64 bar agrees too (`_core.f64_bar_sorted`: by F6's agreement at the jumps and the poles
-    float64 parts from the reals at, which the battery and the grid do not reach, a zero's sign
-    told apart where a head of the rule reads it, and an isolated NaN of the left side excused:
-    `ceil(atan(x)/x) -> 1` is realised, though the left side has no value at x = +-0), so
-    `floor(x + 1) -> floor(x) + 1` is CERTIFIED and not realised (float64 breaks it at
-    x = -1e-17): tier `permissive`. The bar probes each slot over its sort's values (a `?` slot
+    What a variable is called decides nothing: every variable is read as a dummy `x<k>`
+    (`variables_as_dummies`), a data slot.
+
+    A rule spelled with a 0.15 head (`NEW_HEADS`) answers to the core's f64 bar too
+    (`_core.f64_bar_sorted`, at the jumps and the poles float64 parts from the reals at, which
+    the battery and the grid do not reach, a zero's sign told apart where a head of the rule
+    reads it, and an isolated NaN of the left side excused: `ceil(atan(x)/x) -> 1` holds, though
+    the left side has no value at x = +-0), read both ways strict reads float64: by F6 for
+    `realised_f6` and in kind for `realised_kinds`. So `floor(x + 1) -> floor(x) + 1` fails F6
+    (float64 breaks it at x = -1e-17, 1 against 0) and holds in strict by (b): it is true in the
+    reals and both sides are finite. The bar probes each slot over its sort's values (a `?` slot
     over finite doubles only: +-inf is no data), and a probe where an operation overflowed or
-    underflowed agrees where the rewrite gives the true value (the range standard), judged
-    here by the contract.
+    underflowed agrees where the rewrite gives the true value (the range standard), judged here
+    by the contract.
 
     Where a rule lies in a fragment the judge decides exactly (`_exact`: one variable and
     piecewise-affine sides, a ground point read exactly, a constant's own value, or a left side
@@ -2471,6 +2577,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
     A judgment's precision and scratch state are its own (`_own_precision`): the caller's
     `mpmath.mp` is never touched, and judgments on other threads give the verdicts they give
     alone."""
+    lhs, rhs = variables_as_dummies(lhs, rhs)
     with _own_precision():
         r = _judge_contract(lhs, rhs, deployed_check)
         if 'tier' in r and deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
@@ -2563,8 +2670,8 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         # the route covers every finite binding, and the battery read the reals apart at one
         # (a `_` slot's non-finite atoms are the battery's alone): the proof is doubted
         doubted = True
-    readings = {'f64': r.get('realised') if deployed_check else None,
-                'permissive': r.get('permissive')}
+    readings = {'f64': r.get('realised_f6') if deployed_check else None,
+                'permissive': r.get('permissive_own')}
     conflict = []
     for mode in MODES:
         if mode == 'f64' and not deployed_check:
@@ -2576,57 +2683,64 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
                 conflict.append(mode)
             elif readings[mode] is None:
                 readings[mode] = True
-    r.update(realised=readings['f64'], permissive=readings['permissive'],
-             tier=_tier(readings['f64'], readings['permissive']))
+    r.update(realised_f6=readings['f64'], permissive_own=readings['permissive'])
+    if not variables and '<constant>' not in list(lhs) + list(rhs):
+        # a fully numeric rule has no (b): its one point is bit-exact (3.3)
+        r['realised_kinds'] = r['realised_f6']
     if conflict:
         r['exact_conflict'] = conflict
-    return r
+    return _settle(r)
 
 
 def _with_f64_bar(lhs, rhs, r):
     """The judged rule `r` with the core's f64 bar for a rule spelled with a 0.15 head ANDed into
-    its `realised` (`judge_rule`)."""
+    strict's two readings (`judge_rule`), each read its way: F6's agreement into `realised_f6`, the
+    agreement in kind into `realised_kinds` (`strict_reading`)."""
     from simplipy._core import f64_bar_sorted  # type: ignore[attr-defined]
     slot = {}
     for t in list(lhs) + list(rhs):
-        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+        key = slot_key(t) or t
         if SLOT_RE.match(key) and key not in slot:
             slot[key] = None
     keys = sorted(slot)
     names = {key: f'x{i}' for i, key in enumerate(keys)}
-    spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
-                        for t in ts]
-    bar = f64_bar_sorted(spell(lhs), spell(rhs), list(names.values()),
-                         ''.join(k[0] for k in keys), ARITY)
-    if bar is None:
-        return r
-    ok, probes, first, range_rows = bar
-    range_ok = True
-    if ok and range_rows:
-        # the range standard: the rewrite gives the true value where an operation overflowed
-        # or underflowed -- the contract's agreement there, at each such probe
-        tl = parse(lhs, '<C_L>', number=True)
-        tr = parse(rhs, '<C_R>', number=True)
-        lnames = _constant_names(lhs, '<C_L>', True)
-        for row in range_rows[:RANGE_ROWS_CAP]:
-            env = {k: mpf(v) for k, v in zip(keys + lnames, row)}
-            v, _ = _point_verdict(tl, tr, lambda env=env: {k: +x for k, x in env.items()})
-            # a probe the contract cannot resolve says nothing about the true value, and is
-            # skipped as the deployed lane skips an unresolved grid point (`cosh(1e17)` is
-            # beyond every rung); one it resolves to a disagreement fails the bar
-            if v is not None and v != 'eq':
-                range_ok, first = False, list(row)
-                break
-        if len(range_rows) > RANGE_ROWS_CAP:
-            range_ok = False          # more than the judge reads: undecided, fail closed
-    ok = ok and range_ok
-    # three readings ANDed: the bar refuses where it fails, and a reading that reached no
-    # answer stays without one (4.10)
-    realised = False if not ok else r.get('realised')
-    return dict(r, realised=realised,
-                tier=_tier(realised, r.get('permissive')),
-                f64_bar={'ok': ok, 'probes': probes, 'range_probes': len(range_rows),
-                         'first': None if first is None else dict(zip(keys, first))})
+    spell = lambda ts: [names.get(slot_key(t) or t, t) for t in ts]  # noqa: E731
+    readings = {}
+    for kinds in (False, True):
+        bar = f64_bar_sorted(spell(lhs), spell(rhs), list(names.values()),
+                             ''.join(k[0] for k in keys), ARITY, kinds=kinds)
+        if bar is None:
+            return r
+        ok, probes, first, range_rows = bar
+        range_ok = True
+        if ok and range_rows:
+            # the range standard: the rewrite gives the true value where an operation overflowed
+            # or underflowed -- the contract's agreement there, at each such probe
+            tl = parse(lhs, '<C_L>', number=True)
+            tr = parse(rhs, '<C_R>', number=True)
+            lnames = _constant_names(lhs, '<C_L>', True)
+            for row in range_rows[:RANGE_ROWS_CAP]:
+                env = {k: mpf(v) for k, v in zip(keys + lnames, row)}
+                v, _ = _point_verdict(tl, tr, lambda env=env: {k: +x for k, x in env.items()})
+                # a probe the contract cannot resolve says nothing about the true value, and is
+                # skipped as the deployed lane skips an unresolved grid point (`cosh(1e17)` is
+                # beyond every rung); one it resolves to a disagreement fails the bar
+                if v is not None and v != 'eq':
+                    range_ok, first = False, list(row)
+                    break
+            if len(range_rows) > RANGE_ROWS_CAP:
+                range_ok = False          # more than the judge reads: undecided, fail closed
+        readings[kinds] = (ok and range_ok, probes, first, len(range_rows))
+    (f6_ok, probes, first, n_range), (kinds_ok, _, kind_first, _) = readings[False], readings[True]
+    # the readings ANDed: the bar refuses where it fails, and a reading that reached no answer
+    # stays without one (4.10)
+    r = dict(r, realised_f6=False if not f6_ok else r.get('realised_f6'),
+             realised_kinds=False if not kinds_ok else r.get('realised_kinds'),
+             f64_bar={'ok': f6_ok, 'kinds_ok': kinds_ok, 'probes': probes,
+                      'range_probes': n_range,
+                      'first': None if first is None else dict(zip(keys, first)),
+                      'kind_first': None if kind_first is None else dict(zip(keys, kind_first))})
+    return _settle(r)
 
 
 #: The most range-event probes of the f64 bar the judge reads by the contract (each is a
@@ -2674,7 +2788,7 @@ def _generic_key(lnames):
 
 def _spelled(tokens, names):
     """`tokens` with each slot spelled as the interval layer's dummy (`names`)."""
-    return [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t) for t in tokens]
+    return [names.get(slot_key(t) or t, t) for t in tokens]
 
 
 def _set_partitions(items):
@@ -2693,8 +2807,7 @@ def _renamed(tokens, rename):
     """`tokens` with each slot (a dummy `x<k>` read as `?<k>`) renamed by `rename`."""
     out = []
     for t in tokens:
-        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
-        out.append(rename.get(key, t))
+        out.append(rename.get(slot_key(t) or t, t))
     return out
 
 
@@ -2731,11 +2844,13 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
       ENGINE-MISALIGN    the contract holds, the deployed algebra diverges structurally;
       TOLERATED          the contract holds with extensions on a null set only;
       CERTIFIED          the contract holds with no event at all.
-    permissive: clause (a) alone at the real-valued bindings, every slot judged as the `_` the
-    permissive matcher binds it as (any subexpression), so with no measure-zero allowance: a
-    disagreement at an isolated point is one on positive measure in some instance; up to float
-    resolution (P3).
-    f64: the deployed lane (`realised`), each side's own fitted constant, the range standard.
+    permissive's own criterion (`permissive_own`): clause (a) alone at the real-valued
+    bindings, every slot judged as the `_` the permissive matcher binds it as (any
+    subexpression), so with no measure-zero allowance: a disagreement at an isolated point is one
+    on positive measure in some instance; up to float resolution (P3).
+    f64: the deployed lane, each side's own fitted constant, the range standard, read by F6
+    (`realised_f6`) and in kind (`realised_kinds`), which `strict_reading` joins with the reals'
+    outcome; `_settle` gives each mode's reading and the tier.
 
     The one measure-zero allowance, an extension on a null set (clause (b)), holds only where a
     slot guards it (the owner's rulings, specification 3.1): a `?` slot, which binds a variable,
@@ -2748,9 +2863,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     try:
         tl = parse(lhs, '<C_L>', number=True)
         tr = parse(rhs, '<C_R>', number=True)
-    except UnsupportedToken as ex:
-        # a token outside the numeric grammar: refuse the SHAPE, do not evaluate it
-        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
+    except (ValueError, IndexError) as ex:
+        # a token outside the numeric grammar, or a side that is no expression: refuse the
+        # SHAPE, do not evaluate it
+        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex) or type(ex).__name__}
     sl = slots_of(lhs, '<C_L>', number=True)
     sr = slots_of(rhs, '<C_R>', number=True)
     slots = dict(sl)
@@ -2789,8 +2905,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
 
     def no_witness(detail, **extra):
         # no witness where both modes owe one: neither holds, with uncertainty
-        return {'verdict': 'NO-WITNESS', 'realised': None, 'permissive': None, 'tier': 'reject',
-                'detail': detail, **extra}
+        return _settle({'verdict': 'NO-WITNESS', 'realised_f6': None, 'realised_kinds': None,
+                        'permissive_own': None, 'detail': detail, **extra})
 
     def fitted(key):
         """The polished witness at `key`, re-rounded at the current rung -- Unresolved at a
@@ -3159,8 +3275,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     deployed(ed, v, point, True, snapped, acc)
 
     def mint_rows(acc, cr_f64):
-        """THE MINT'S ROWS (`judge_rows`), at the generic constants: the deployed sides at every
-        row the mine's mint reads, slot k reading column k (a slot past the columns the grid's
+        """THE MINT'S ROWS (`judge_rows`, the shipped artifacts' mine's), at the generic
+        constants: the deployed sides at every row such a mine's mint reads, slot k reading column
+        k (a slot past the columns the grid's
         1.7). Where float64's sides disagree (F6), the row is judged as a grid point, in the
         reals and in float64, the first `ROWS_JUDGED` of them; a `$` slot at 0 owes nothing."""
         X = judge_rows()
@@ -3514,14 +3631,28 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # range events whose true value no rung resolved reaches no answer.
     f64_total = f64_read[0] + f64_read[1]
     f64_covered = f64_total == 0 or f64_read[0] >= 0.25 * f64_total
-    _realised = (not dep_bad and not f64_undecided and f64_width == 0) \
-        if dep_seen[0] and f64_covered else None
-    if dep_bad or correlated_f64 is not None:
-        _realised = False
-    if unwitnessed['f64'] and _realised is not False:
-        _realised = None       # owed a witness at a constant, and none found: no answer
-    if unread_owed['f64'] and _realised is not False:
-        _realised = None       # an owed point left unread: no answer (4.10)
+
+    def f64_reading(bad):
+        """A float64 reading from the disagreements `bad` it counts: none, no cell of positive
+        measure where float64 extends, and a battery read; every coincidence held in strict; the
+        witnesses owed found and the owed points read."""
+        held = (not bad and not f64_undecided and f64_width == 0) \
+            if dep_seen[0] and f64_covered else None
+        if bad or correlated_f64 is not None:
+            held = False
+        if unwitnessed['f64'] and held is not False:
+            held = None        # owed a witness at a constant, and none found: no answer
+        if unread_owed['f64'] and held is not False:
+            held = None        # an owed point left unread: no answer (4.10)
+        return held
+
+    # (a) float64's two sides agree (F6) at every point read; (b)'s half in float64: they agree
+    # in kind, both finite, the same infinity or both undefined (a finite disagreement, ROUNDING
+    # or SIGN, is no change of kind). A fully numeric rule has no (b): its one point is bit-exact
+    # (3.3).
+    _f6 = f64_reading(dep_bad)
+    _kinds = _f6 if ground and not has_cl else \
+        f64_reading([b for b in dep_bad if b[0] not in KIND_AGREEMENTS])
     # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
@@ -3579,8 +3710,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         True if perm_covered and not unwitnessed['reals'] and not unread_owed['permissive']
         else None)
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
-            'realised': _realised, 'out_of_range': dep_out_of_range[0],
-            'permissive': permissive, 'resolved_points': resolved_pts,
+            'realised_f6': _f6, 'realised_kinds': _kinds, 'out_of_range': dep_out_of_range[0],
+            'permissive_own': permissive, 'resolved_points': resolved_pts,
             'f64_measure': None if f64_undecided else f64_width}
     if unread_owed['f64'] or unread_owed['permissive']:
         base['unread_owed'] = {m: pts[:3] for m, pts in unread_owed.items() if pts}
@@ -3597,9 +3728,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         base['f64_kinds'] = sorted(dep_kinds)
 
     def verdict(name, **extra):
-        out = dict(base, verdict=name, **extra)
-        out['tier'] = _tier(out['realised'], out['permissive'])
-        return out
+        return _settle(dict(base, verdict=name, **extra))
 
     # THE REALS' NAME FOR THE OUTCOME, a diagnostic beside the modes' readings above
     if unwitnessed['reals']:

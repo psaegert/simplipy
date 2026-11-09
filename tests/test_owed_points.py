@@ -90,13 +90,14 @@ def unread_at(monkeypatch, value) -> None:
 
 def test_an_owed_point_left_unread_refuses_permissives_own_reading(monkeypatch) -> None:
     """`sin(_0)*1 -> sin(_0)` holds at every point; left unread at the atom 1/2 alone, permissive's
-    own reading reaches no answer (4.10) and names the point. It still holds through f64."""
+    own reading reaches no answer (4.10, `permissive_own`) and names the point. It still holds
+    in permissive through f64."""
     lhs, rhs = '* 1 sin _0'.split(), 'sin _0'.split()
     assert verify_rule(lhs, rhs)['permissive'] is True
     unread_at(monkeypatch, 0.5)
     d = verify_rule(lhs, rhs)
-    assert d['permissive'] is None and {'_0': 0.5} in d['unread_owed']['permissive'], d
-    assert d['realised'] is True and d['tier'] == 'core', d
+    assert d['permissive_own'] is None and {'_0': 0.5} in d['unread_owed']['permissive'], d
+    assert d['realised'] is True and d['permissive'] is True and d['tier'] == 'core', d
 
 
 def test_a_sampled_point_left_unread_keeps_the_quota(monkeypatch) -> None:
@@ -141,13 +142,19 @@ def test_an_owed_point_left_unread_refuses_f64(monkeypatch) -> None:
 
 
 def test_the_f64_bar_keeps_a_reading_without_an_answer(monkeypatch) -> None:
-    """The bar is ANDed into f64's reading: it refuses where it fails, and a reading that reached
-    no answer stays without one (it read as a pass)."""
-    monkeypatch.setattr(_core, 'f64_bar_sorted', lambda *a: (True, 10, None, []))
+    """The bar is ANDed into each of strict's readings (F6's and the agreement in kind): it
+    refuses where it fails, and a reading that reached no answer stays without one (it read as a
+    pass)."""
+    monkeypatch.setattr(_core, 'f64_bar_sorted', lambda *a, **k: (True, 10, None, []))
     lhs, rhs = 'erfc _0'.split(), 'erfc _0'.split()
+
+    def judged(before) -> dict:
+        return {'realised_f6': before, 'realised_kinds': before, 'verdict': 'CERTIFIED',
+                'permissive_own': True}
+
     for before, after in ((None, None), (True, True), (False, False)):
-        r = _contract._with_f64_bar(lhs, rhs, {'realised': before, 'permissive': True})
+        r = _contract._with_f64_bar(lhs, rhs, judged(before))
         assert r['realised'] is after, (before, r)
-    monkeypatch.setattr(_core, 'f64_bar_sorted', lambda *a: (False, 10, [0.5], []))
-    r = _contract._with_f64_bar(lhs, rhs, {'realised': None, 'permissive': True})
+    monkeypatch.setattr(_core, 'f64_bar_sorted', lambda *a, **k: (False, 10, [0.5], []))
+    r = _contract._with_f64_bar(lhs, rhs, judged(None))
     assert r['realised'] is False, r

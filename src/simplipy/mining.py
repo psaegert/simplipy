@@ -361,9 +361,7 @@ def judge_tiers(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
     import multiprocessing
     size = -(-len(pairs) // processes)
     chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
-    from .verify._contract import judge_rows, set_rows
-    with multiprocessing.get_context('spawn').Pool(
-            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
+    with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
         parts = pool.map(functools.partial(_judge_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
     return [tier for part in parts for tier in part]
 
@@ -384,9 +382,7 @@ def judge_verdicts(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S
     import multiprocessing
     size = -(-len(pairs) // processes)
     chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
-    from .verify._contract import judge_rows, set_rows
-    with multiprocessing.get_context('spawn').Pool(
-            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
+    with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
         parts = pool.map(functools.partial(_verdict_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
     return [verdict for part in parts for verdict in part]
 
@@ -409,9 +405,7 @@ def judge_bases(pairs: list, mode: str, processes: int = 4, warn_s: float = JUDG
     import multiprocessing
     size = -(-len(pairs) // processes)
     chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
-    from .verify._contract import judge_rows, set_rows
-    with multiprocessing.get_context('spawn').Pool(
-            len(chunks), initializer=set_rows, initargs=(judge_rows(),)) as pool:
+    with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
         parts = pool.map(functools.partial(_basis_chunk, mode=mode, warn_s=warn_s,
                                            fail_s=fail_s), chunks)
     return [basis for part in parts for basis in part]
@@ -2467,13 +2461,7 @@ class RuleMiner:
         if not certified:
             return []
         from .verify import effective_tier, verify_ruleset
-        from .verify._contract import set_rows
-        # the judge reads the rows this certification's mint read
-        previous_rows = set_rows(np.vstack([X_data, X_confirm]))
-        try:
-            _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
-        finally:
-            set_rows(previous_rows)
+        _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
         # detail entries carry lhs/rhs as SPACE-JOINED strings
         judged = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d for d in _rep['detail']}
         mode = _file_mode(rule_mode)
@@ -3058,12 +3046,6 @@ class RuleMiner:
             handler_installed = True
         from simplipy import _core as _core_module
         previous_budget = _core_module.set_interval_node_budget(interval_node_budget)
-        # THE JUDGE READS THE MINT'S ROWS: its f64 lane evaluates the rows this mine's mint
-        # reads (its sample and its confirmation rows), so the mint refutes nothing on them the
-        # judge does not; restored when the mine ends
-        from .verify._contract import set_rows
-        mint_rows = [X_data] if X_confirm is None else [X_data, X_confirm]
-        previous_rows = set_rows(np.vstack(mint_rows))
         try:
             if reset_rules:
                 # every mode's set starts empty: each file is mined from nothing
@@ -3145,7 +3127,6 @@ class RuleMiner:
                 self.engine._replace_rules(finals['default'])
         finally:
             _core_module.set_interval_node_budget(previous_budget)
-            set_rows(previous_rows)
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)
             _MINE_LOCK.release()
@@ -3204,26 +3185,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}, 'basis'}``,
     ``basis`` the number of rules proved and held on evidence alone.
 
-    The judge reads the rows the mine's mint read, drawn again from the sidecar's seed and
-    shape (``verify._contract.mine_matrix``), as it did in the mine.
+    The judge reads its own battery, the one every caller's judgment reads.
     """
-    from .verify._contract import mine_matrix, set_rows
-    sidecar_path = rules_path + '.provenance.json'
-    rows = None
-    if os.path.exists(sidecar_path):
-        with open(sidecar_path) as file:
-            recorded = json.load(file)
-        params, shape = recorded.get('params') or {}, recorded.get('X') or {}
-        if isinstance(params.get('seed'), int) and isinstance(shape.get('rows'), int) \
-                and isinstance(shape.get('cols'), int) and 'seeded' in str(shape.get('source')):
-            rows = mine_matrix(params['seed'], shape['rows'], shape['cols'],
-                               bool(params.get('confirm', True)))
-    previous_rows = set_rows(rows)
-    try:
-        return _verify_mine(rules_path, mode, operators, judge=judge,
-                            judge_processes=judge_processes)
-    finally:
-        set_rows(previous_rows)
+    return _verify_mine(rules_path, mode, operators, judge=judge, judge_processes=judge_processes)
 
 
 def _verify_mine(rules_path: str, mode: Any, operators: dict, *,

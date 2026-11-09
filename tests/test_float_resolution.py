@@ -60,10 +60,11 @@ def test_an_atom_the_enclosure_cannot_read_leaves_permissives_own_criterion_no_a
         lhs, rhs) -> None:
     """At the atom e, which enters the enclosure as an approximation, `x^2 + 1` encloses wider
     than float resolution, and the summand demands 6,050 digits: permissive's own reading leaves
-    an owed point unread and reaches no answer. The rule holds in permissive through f64, whose
-    two sides are bit-identical."""
+    an owed point unread and reaches no answer (`permissive_own`). The rule holds in permissive
+    through f64, whose two sides are bit-identical."""
     d = verify_rule(lhs.split(), rhs.split())
-    assert d['realised'] is True and d['tier'] == 'core' and d['permissive'] is None, d
+    assert d['realised'] is True and d['tier'] == 'core' and d['permissive_own'] is None, d
+    assert d['permissive'] is True, d
     slot = lhs.split()[3]
     assert d['unread_owed'] == {'permissive': [{slot: 2.718281828459045}]}, d
 

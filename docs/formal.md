@@ -553,8 +553,10 @@ $\mathrm{simplify}_m(s)$ under the rules of the shorter lengths, and a candidate
 *accepted* iff it passes, in order: the licences (no `<constant>` introduced into a
 determined source, no special constant absorbed, $\mathrm{nf}_m(t) <_o$ the mark in $m$'s
 serve ordering, no instance of an engine-owned law — G8's predicate — and no defined
-extended-real value changed at a pole), the numeric agreement on the mine's matrix (f64
-values in `f64`; a near miss re-judged at high precision in `permissive`), and
+extended-real value changed at a pole), the numeric agreement on the mine's matrix (in `f64`
+float64's values, of one kind and within F6 or the mine's tolerances, and at the special
+points and the Dirac witnesses by strict's two readings, the judge deciding what lies between;
+in `permissive` a near miss re-judged at high precision), and
 the same agreement on an independent confirm matrix. The scan visits candidates in a fixed
 order (μ tiers ascending, library order inside a tier) with per-source seeds that depend
 only on the source's global index, so it is a deterministic function $\mathrm{pick}(s, E)$

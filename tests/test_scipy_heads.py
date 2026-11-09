@@ -188,9 +188,11 @@ def test_the_judge_decides_rules_over_them() -> None:
                      ('besseli 3 neg _0', 'neg besseli 3 _0'), ('+ erfc ?0 erf ?0', '1')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] == 'CERTIFIED' and r['tier'] == 'core', (lhs, rhs, r)
-    # true over the reals, not bit for bit in float64
+    # true over the reals, not within F6 in float64, and its two sides finite at every point:
+    # strict holds it by its second reading
     r = j('erfc neg _0'.split(), '- 2 erfc _0'.split())
-    assert r['verdict'] == 'CERTIFIED' and r['tier'] == 'permissive', r
+    assert r['verdict'] == 'CERTIFIED' and r['tier'] == 'core', r
+    assert r['realised_f6'] is False and r['realised_kinds'] is True, r
     # false
     r = j('bessely 0.5 _0'.split(), ['_0'])
     assert r['verdict'] == 'KILL' and r['tier'] == 'reject', r

@@ -773,18 +773,14 @@ class TestCertifyRules:
         assert by_src[tuple(proposals[0])] == (("exp", "neg", "x0"), "minimal")
         assert tuple(proposals[1]) not in by_src
         assert by_src[tuple(proposals[2])] == (("*", "exp", "x0", "+", "1", "exp", "x1"), "verified")
-        # `log((e^a)^2) -> a+a` is exactly true on R and NOT realised by the shipped f64
-        # engine -- near a = 0 the log of a rounded square of exp loses the low digits, so
-        # at a = 1e-3 the two sides are 83 ulps apart -- which the deployed lane convicts as
-        # ENGINE-MISALIGN.
-        #
-        # That verdict is no death sentence: ENGINE-MISALIGN is the `permissive` tier, so
-        # the pair SURVIVES certification and is routed into rules_permissive.json and out
-        # of rules.json. Deleting it here would break the parity `certify_rules` promises
-        # with the mine, which keeps it.
+        # `log((e^a)^2) -> a+a` is exactly true on R, and float64 does not read it within 8
+        # units in the last place -- near a = 0 the log of a rounded square of exp loses the low
+        # digits, so at a = 1e-3 the two sides are 83 ulps apart. Its two sides are of one kind
+        # at every point (past exp's square's overflow, the reals' value by the range
+        # standard), so it holds in strict and serves in both files.
         assert by_src[tuple(proposals[3])][0] == ('+', 'x0', 'x0')
         from simplipy.verify._contract import judge_rule
-        assert judge_rule(list(proposals[3]), ['+', 'x0', 'x0'])['tier'] == 'permissive'
+        assert judge_rule(list(proposals[3]), ['+', 'x0', 'x0'])['tier'] == 'core'
 
     @pytest.mark.parametrize('mode', ['f64', 'permissive'])
     def test_each_rule_is_certified_in_the_mode_it_is_licensed_for(self, engine, mode) -> None:
@@ -1046,23 +1042,24 @@ class TestSpecialPointCertification:
             ['x0'], x_flat, n, rule_mode='permissive') == ['pow', 'x0', '0.3333333333333333']
 
     def test_contract_point_families_rejected(self, dev, dev_x1) -> None:
-        """Deployed-value consistency at the battery points (f64):
-        pow(sin x, inf) = 1 at x = pi/2 (f64 sin(pi/2) is EXACTLY 1.0);
-        pow(cos c, inf) = 1 at the special source constant c = 0;
+        """Deployed-value consistency at the battery points (f64), by strict's two readings:
+        pow(sin x, inf) = 1 at x = pi/2 (f64 sin(pi/2) is EXACTLY 1.0), of one kind with 0,
+        where the reals' left side is 0 (sin of pi/2's double is below 1);
+        pow(cos c, inf) = 1 at the special source constant c = 0, where the reals owe nothing;
         atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in deployed f64
         (a live (4,3) family), which f64 refuses and permissive, whose values are the reals'
         (atanh(tanh(y)) is y), certifies: the battery checks float64's divergence in f64
         only. The flagship rescue identity atanh(tanh(x)) -> x
         must keep certifying (the battery box never reaches its saturation zone)."""
         x_flat, n = dev_x1
-        # f64 refuses both at its battery points; permissive excuses a disagreement at an
-        # isolated point (P3), and the reals give pow(1, inf) no value
+        # f64 holds both by strict's second reading at its battery points; permissive excuses
+        # a disagreement at an isolated point (P3), and the reals give pow(1, inf) no value
         assert dev._core.find_rule(
             ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n,
-            rule_mode='default') is None
+            rule_mode='default') == ['0']
         assert dev._core.find_rule(
             ['pow', 'cos', '<constant>', 'float("inf")'], 4, 1, [['0']],
-            ['x0'], x_flat, n, rule_mode='default') is None
+            ['x0'], x_flat, n, rule_mode='default') == ['0']
         assert dev._core.find_rule(
             ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n,
             rule_mode='permissive') == ['0']
@@ -2338,12 +2335,11 @@ class TestTheFinalGateJudgesTheFileSpelling:
     """The constant-fold offender family. Mined spelling
     `op(hyperbolic(log n), slot)` with an exact-rational decimal respelling on the RHS:
     true on R (the fold IS an exact rational -- tanh(log 9) = 40/41 = 1/1.025), 1-6 ulp
-    drift in deployed f64, so the file-level gate says `permissive`. The served canon folds the
-    ground subterm (`+ tanh log 9 ?0` serves as `+ ?0 / 40 41`) and judging THAT spelling
-    licensed f64 -- which put 13 such rules into a rules_f64.json that release
-    verification then rejected. Through the fixed router every one must land in
-    rules_permissive and stay out of rules_f64: the final gate judges the file spelling,
-    end-to-end with the contract judge on an engine -- no mine required.
+    drift in deployed f64. The served canon folds the ground subterm (`+ tanh log 9 ?0` serves
+    as `+ ?0 / 40 41`), and the final gate judges the file spelling, which release verification
+    reads, end-to-end with the contract judge on an engine -- no mine required. Both spellings
+    hold in strict (true in the reals, float64's values of one kind at every point), so every
+    one serves in both files.
     """
 
     #: The two named exemplars verbatim, plus the measured divergent family: the family
@@ -2360,7 +2356,7 @@ class TestTheFinalGateJudgesTheFileSpelling:
         (['pow', '?0', 'tanh', 'log', '9'], ['pow', '?0', 'inv', '1.025']),
     ]
 
-    def test_the_offender_family_is_licensed_in_permissive_not_f64(self) -> None:
+    def test_the_final_gate_judges_the_offender_familys_file_spelling(self) -> None:
         import yaml
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import RuleMiner, judge_tiers
@@ -2375,9 +2371,8 @@ class TestTheFinalGateJudgesTheFileSpelling:
         permissive = set(miner._final_gate('permissive', judge_tiers, judged)[0])
         for lhs, rhs in self.OFFENDERS:
             key = (tuple(lhs), tuple(rhs))
-            assert key in permissive, f'{lhs} -> {rhs} must serve in rules_permissive'
-            assert key not in f64, \
-                f'{lhs} -> {rhs} is permissive-tier at the file level: rules_f64 must not carry it'
+            assert judged.get(key) == 'core', (key, judged.get(key))
+            assert key in permissive and key in f64, f'{lhs} -> {rhs} must serve in both files'
 
 
 class TestThePerModePrune:

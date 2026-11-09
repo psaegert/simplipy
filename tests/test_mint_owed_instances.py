@@ -39,8 +39,6 @@ def _scan(engine: SimpliPyEngine, source: str, target: str, mode: str):
 @pytest.mark.parametrize('source, target', [
     # at C = 0 float64's left side is 0 wherever x < 0 (1/inf), and no finite C' gives C'^x = 0
     ('inv pow <constant> x0', 'pow <constant> x0'),
-    # at C = 0 float64's left side is 0 everywhere, and 0*exp(x) is NaN where exp overflows
-    ('exp + x0 log <constant>', '* <constant> exp x0'),
 ])
 def test_f64_refuses_where_an_owed_special_constant_has_no_witness(engine, source, target):
     """The f64 mint refuses the pair at the special constant, as the judge refuses it in f64;
@@ -48,6 +46,18 @@ def test_f64_refuses_where_an_owed_special_constant_has_no_witness(engine, sourc
     pick, verdicts = _scan(engine, source, target, 'default')
     assert pick is None and verdicts == ['special_constants'], verdicts
     assert verify_rule(source.split(), target.split())['basis']['f64'] == 'refused'
+
+
+def test_f64s_fit_at_a_special_constant_reads_float64(engine) -> None:
+    """At C = 0 float64's `exp(x + log(C))` is 0 everywhere, and `0*exp(x)` is NaN where exp
+    overflows, where the reals' value is 0 (the range standard). The f64 mint's fit at the
+    special constant reads float64's NaN and refuses the pair, within the mine's tolerances;
+    strict holds it by its second reading (true in the reals, float64's two sides of one kind)."""
+    source, target = 'exp + x0 log <constant>', '* <constant> exp x0'
+    pick, verdicts = _scan(engine, source, target, 'default')
+    assert pick is None and verdicts == ['special_constants'], verdicts
+    d = verify_rule(source.split(), target.split())
+    assert d['basis']['f64'] == 'evidence' and d['realised_kinds'] is True, d
 
 
 @pytest.mark.parametrize('source, target', [

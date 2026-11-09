@@ -49,10 +49,14 @@ def _load(rules: list | str) -> list:
 
 def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> dict:
     """Judge a single ``lhs -> rhs`` rule at its symbolic trigger points, each mode on its own
-    values: ``f64`` on float64's (the reals read only for the true value at a range event),
-    ``permissive`` on the reals' values at float resolution.
+    values: ``f64`` on float64's, where its two sides agree (F6, the true value accepted at a
+    range event) or the rule is true in the reals and they agree in kind at every point
+    (``_contract.strict_reading``); ``permissive`` on the reals' values at float resolution, and
+    wherever ``f64`` holds. Variables are read whatever they are called.
 
-    Returns a dict with the verdict per mode -- its ``tier`` (the modes it holds in) and its
+    Returns a dict with the verdict per mode -- ``realised`` (``f64``'s reading), ``permissive``
+    (``permissive``'s, which includes ``f64``'s; ``permissive_own`` is its own criterion's alone),
+    its ``tier`` (the modes it holds in) and its
     ``basis`` per mode: ``'proved'`` (an exact route decides the rule over its whole domain,
     ``exact``), ``'evidence'`` (it holds at every point the judge read) or ``'refused'`` -- and,
     as a diagnostic that decides no mode, the reals' outcome ``verdict`` (CERTIFIED / TOLERATED
@@ -168,11 +172,11 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
 
 
 def _evidence_spelling(lhs: list[str], rhs: list[str]) -> list[str]:
-    """The left side as the evidence function reads it: each slot (a dummy `x<k>` read as `?<k>`)
-    spelled as the interval layer's dummy, numbered over both sides."""
-    slots = sorted({'?' + t[1:] if t in ('x0', 'x1', 'x2') else t
-                    for t in list(lhs) + list(rhs)
-                    if _contract.SLOT_RE.match(t) or t in ('x0', 'x1', 'x2')})
+    """The left side as the evidence function reads it: each slot (a variable read as a dummy
+    `x<k>`, and that as `?<k>`, as the judge reads it) spelled as the interval layer's dummy,
+    numbered over both sides."""
+    lhs, rhs = _contract.variables_as_dummies(lhs, rhs)
+    slots = sorted({key for t in list(lhs) + list(rhs) if (key := _contract.slot_key(t))})
     return _contract._spelled(list(lhs), {s: f'x{i}' for i, s in enumerate(slots)})
 
 
@@ -187,7 +191,7 @@ def _held_with_evidence(lhs: list[str], rhs: list[str], detail: dict, tier: str)
     as not holding (fail closed)."""
     from .. import _core  # type: ignore[attr-defined]
     held_f64 = (detail['realised'] is True) if 'realised' in detail else tier == 'core'
-    held_own = (detail['permissive'] is True) if 'permissive' in detail \
+    held_own = (detail['permissive_own'] is True) if 'permissive_own' in detail \
         else tier == 'permissive'
     spelled, arity = _evidence_spelling(lhs, rhs), dict(_contract.ARITY)
     return (held_f64 and _core.table_evidence(spelled, arity, True) is True) or \

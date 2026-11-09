@@ -64,14 +64,16 @@ def test_the_judge_reads_the_new_heads_on_both_axes():
                      ('mod _0 1', '- _0 floor _0'), ('atan2 neg _0 1', 'neg atan2 _0 1')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] in ('CERTIFIED', 'TOLERATED') and r['tier'] == 'core', (lhs, rhs, r)
-    # true over the reals, broken by float64 at x = -1e-17: permissive's tier, never f64's (the
-    # doubles next to a jump's preimage show the deployed lane the break: ENGINE-MISALIGN)
+    # true over the reals, broken by float64 at x = -1e-17 by a step of one kind (1 against 0): F6
+    # refuses them (the doubles next to a jump's preimage show the deployed lane the break:
+    # ENGINE-MISALIGN), and strict holds them by its second reading, the kinds agreeing
     for lhs, rhs in (('floor + _0 1', '+ floor _0 1'), ('mod + _0 1 1', 'mod _0 1'),
                      ('floor mod ?0 1', '0')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN') \
-            and r['tier'] == 'permissive', (lhs, rhs, r)
-        assert r['f64_bar']['ok'] is False
+            and r['tier'] == 'core', (lhs, rhs, r)
+        assert r['f64_bar']['ok'] is False and r['f64_bar']['kinds_ok'] is True
+        assert r['realised_f6'] is False and r['realised'] is True
     # false over the reals at a jump, and in float64: no tier
     for lhs, rhs in (('+ floor _0 1', 'ceil _0'), ('mod _0 1', '_0'), ('harmonic _0', 'log _0')):
         r = j(lhs.split(), rhs.split())
@@ -349,11 +351,13 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
         assert e.simplify(src.split(), mode='f64') == want
 
 
-def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
-    """A law of the reals float64 breaks at a jump is minted in permissive and refused in f64;
-    a rule false at a jump over the reals too is refused in every mode, permissive
-    included, which excuses no isolated point (`floor(x) + 1 -> ceil(x)` differs at the integers
-    alone, and everywhere at `x = floor(x1)`: permissive binds any subexpression)."""
+def test_the_mint_reads_laws_float64_breaks_at_a_jump_as_the_judge_reads_them(bare):
+    """A law of the reals float64 breaks at a jump by a step of one kind (`floor(x + 1)` against
+    `floor(x) + 1` at x = -1e-17, 1 against 0) is minted in both modes: strict holds it by its
+    second reading, and the mint's rows and bar read kinds; a rule false at a jump over the reals
+    too is refused in every mode, permissive included, which excuses no isolated point
+    (`floor(x) + 1 -> ceil(x)` differs at the integers alone, and everywhere at `x = floor(x1)`:
+    permissive binds any subexpression)."""
     from simplipy.mining import RuleMiner
     X = RuleMiner(bare)._mining_sample_x(256, 2, np.random.default_rng(0))
 
@@ -362,7 +366,7 @@ def test_the_mint_refuses_laws_float64_breaks_at_a_jump_in_f64_alone(bare):
                                      X.shape[0], rtol=1e-11, atol=1e-12, rule_mode=mode)[0]
     for src, tgt in (('floor + x0 1', '+ floor x0 1'), ('mod + x0 1 1', 'mod x0 1'),
                      ('floor mod x0 1', '0')):
-        assert not certified(src, tgt, 'default'), (src, tgt)
+        assert certified(src, tgt, 'default'), (src, tgt)
         assert certified(src, tgt, 'permissive'), (src, tgt)
     for mode in ('default', 'permissive'):
         assert not certified('+ floor x0 1', 'ceil x0', mode), mode

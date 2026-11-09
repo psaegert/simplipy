@@ -2065,8 +2065,11 @@ type SortedBar = (bool, usize, Option<Vec<f64>>, Vec<Vec<f64>>);
 
 /// The f64 bar as the contract judge reads it (`battery::f64_bar_sorted`): each variable probed
 /// over its slot sort's values (`sorts[i]` one of `?!$_`), and the probes that differ where an
-/// operation overflowed or underflowed returned for the judge to read by the true value.
+/// operation overflowed or underflowed returned for the judge to read by the true value. With
+/// `kinds`, a probe's two sides are read in kind (`battery::Agreement::Kind`, strict's (b)), else
+/// by F6.
 #[pyfunction]
+#[pyo3(signature = (lhs, rhs, var_names, sorts, arity, *, kinds = false))]
 fn f64_bar_sorted(
     py: Python<'_>,
     lhs: Vec<String>,
@@ -2074,11 +2077,19 @@ fn f64_bar_sorted(
     var_names: Vec<String>,
     sorts: String,
     arity: std::collections::BTreeMap<String, u8>,
+    kinds: bool,
 ) -> Option<SortedBar> {
     let ops = arity_table(arity);
     let sorts: Vec<char> = sorts.chars().collect();
-    py.detach(|| crate::battery::f64_bar_sorted(&lhs, &rhs, &var_names, &sorts, true, &ops))
-        .map(|d| (d.ok, d.probes, d.first, d.range_rows))
+    let agreement = if kinds {
+        crate::battery::Agreement::Kind
+    } else {
+        crate::battery::Agreement::F6
+    };
+    py.detach(|| {
+        crate::battery::f64_bar_sorted(&lhs, &rhs, &var_names, &sorts, true, agreement, &ops)
+    })
+    .map(|d| (d.ok, d.probes, d.first, d.range_rows))
 }
 
 /// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite_rule`) on a rule's right

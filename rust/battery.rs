@@ -288,12 +288,15 @@ fn ulp_at(x: f64) -> f64 {
 /// Row semantics at the special points, each mode on its own values, refusing only at a
 /// counterexample there.
 ///
-/// - **f64** reads float64's values at the points' doubles, as the judge's f64 lane does. A row
-///   where the two sides agree (F6; a fitted constant within its band, `dep_realised`) passes.
-///   Where an operation of either side overflowed or underflowed (`events`), the true value at
-///   the doubles is accepted (the range standard, `hiprec::range_rescue`; a row the table
-///   cannot read passes, as the judge skips it). The left side without a value against a value
-///   is an extension at a point, measured by the domain gate, and passes. Any other
+/// - **f64** reads float64's values at the points' doubles, as the judge's f64 lane does, and
+///   both of strict's readings there (`verify._contract.strict_reading`). A row where the two
+///   sides agree (F6; a fitted constant within its band, `dep_realised`) passes. Where an
+///   operation of either side overflowed or underflowed (`events`), the true value at the doubles
+///   is accepted (the range standard, `hiprec::range_rescue`; a row the table cannot read passes,
+///   as the judge skips it). The left side without a value against a value is an extension at a
+///   point, measured by the domain gate, and passes. Two values of one kind that differ pass
+///   where the reals agree at the point (strict's second reading: `pow(sin(x), inf) -> 0` at
+///   pi/2's double, 1 against 0, where the reals' left side has no value). Any other
 ///   disagreement refuses.
 /// - **permissive** reads the reals' values at the points themselves (pi/2 is pi/2), each side
 ///   as the double nearest to it (P3, `point_doubles`), at every point, as the judge's permissive
@@ -328,25 +331,30 @@ pub fn rows_consistent(
             dep_realised(s, c, rtol, atol) == P::Eq
         }
     };
+    // the reals' reading at a point, each side as the double nearest to it (P3): a counterexample
+    // there, or none
+    let reals_refute = |r: usize| {
+        use crate::interval::FloatReading;
+        match point_reading(
+            source,
+            src_params,
+            cand,
+            cand_params,
+            ops,
+            var_names,
+            &battery.atoms[r],
+        ) {
+            FloatReading::Agree | FloatReading::Unread => false,
+            // a fitted constant agrees within its band, which the enclosure does not read
+            FloatReading::Differ => cand_params.is_empty(),
+            FloatReading::Doubles(a, b) => !(agree(a, b) || (a.is_nan() && !b.is_nan())),
+        }
+    };
     for r in 0..battery.n_rows {
         let (s, c) = (y_src[r], y_cand[r]);
         let reject = if !lane_f64 {
-            use crate::interval::FloatReading;
-            match point_reading(
-                source,
-                src_params,
-                cand,
-                cand_params,
-                ops,
-                var_names,
-                &battery.atoms[r],
-            ) {
-                FloatReading::Agree | FloatReading::Unread => false,
-                // a fitted constant agrees within its band, which the enclosure does not read
-                FloatReading::Differ => cand_params.is_empty(),
-                FloatReading::Doubles(a, b) => !(agree(a, b) || (a.is_nan() && !b.is_nan())),
-            }
-        } else if agree(s, c) {
+            reals_refute(r)
+        } else if agree(s, c) || (same_kind(s, c) && !reals_refute(r)) {
             false
         } else if events.is_some_and(|e| e[r]) {
             let cols1: Vec<Vec<f64>> = battery.cols.iter().map(|col| vec![col[r]]).collect();
@@ -625,6 +633,24 @@ pub fn holds_new_head(tokens: &[String], ops: &Operators) -> bool {
         .any(|t| ops.arity_of(t).is_some() && NEW_HEADS.contains(&t.as_str()))
 }
 
+/// How the deployed bar reads float64's two sides at a probe: strict's two readings
+/// (`verify._contract.strict_reading`). `F6`: they agree (`table::f64_agree`). `Kind`: they agree
+/// in kind -- both finite, the same infinity, or both undefined -- which strict's (b) asks of a
+/// rule true in the reals: there their float64 difference is rounding, however far a jump or a
+/// pole between float64's argument and the real one magnifies it (`floor(x + 1) -> floor(x) + 1`
+/// is 1 against 0 at x = -1e-17). In both, a zero's sign counts where a head of the rule reads it
+/// (`ZERO_SIGN_READERS`), and a fully numeric pair is bit-exact (`table::f64_same`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Agreement {
+    F6,
+    Kind,
+}
+
+/// Do two float64 values agree in kind: both finite, the same infinity, or both undefined?
+pub fn same_kind(a: f64, b: f64) -> bool {
+    (a.is_nan() && b.is_nan()) || (a.is_finite() && b.is_finite()) || (a.is_infinite() && a == b)
+}
+
 /// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary
 /// realisation axis decides (no 0.15 head; a bare `<constant>` target, whose witness is the
 /// source's own value; a fitted target constant beside heads without jumps), else the deployed
@@ -639,7 +665,7 @@ pub fn f64_bar(
     var_names: &[String],
     ops: &Operators,
 ) -> Option<DeployedExact> {
-    f64_bar_sorted(lhs, rhs, var_names, &[], false, ops)
+    f64_bar_sorted(lhs, rhs, var_names, &[], false, Agreement::F6, ops)
 }
 
 /// `f64_bar` over each variable's SORT, the contract judge's reading of it: `sorts[i]` is the
@@ -649,13 +675,15 @@ pub fn f64_bar(
 /// operation overflowed or underflowed is returned in `range_rows` instead of failing the bar
 /// (the range standard: there the true value is accepted, which only the caller can judge).
 /// `ceil(1/cosh(x)) -> 1` holds in f64 so: x = +-inf is no data, and past |x| = 710.48 `cosh`
-/// overflows and the rewrite gives the true value 1.
+/// overflows and the rewrite gives the true value 1. `agreement`: how a probe's two sides are read
+/// (`Agreement`).
 pub fn f64_bar_sorted(
     lhs: &[String],
     rhs: &[String],
     var_names: &[String],
     sorts: &[char],
     defer_range: bool,
+    agreement: Agreement,
     ops: &Operators,
 ) -> Option<DeployedExact> {
     if !holds_new_head(lhs, ops) && !holds_new_head(rhs, ops) {
@@ -698,6 +726,7 @@ pub fn f64_bar_sorted(
         n_c,
         sorts,
         defer_range,
+        agreement,
         ops,
     ))
 }
@@ -711,10 +740,13 @@ const MINT_RANGE_ROWS_CAP: usize = 256;
 /// sides differ and an operation overflowed or underflowed the rewrite may give the true value
 /// (the range standard), which the table decides (`range_row_true`). `true` where no 0.15 head
 /// asks the bar. `ceil(1/cosh(x)) -> 1` passes: x = +-inf is no data, and past |x| = 710.48
-/// `cosh` overflows and the true value is 1.
+/// `cosh` overflows and the true value is 1. A pre-filter of strict's judgment, it reads the
+/// probes in kind (`Agreement::Kind`): a change of kind refuses the rule in both of strict's
+/// readings, while a finite difference is the judge's to decide (strict's (b) admits it where the
+/// rule is true in the reals).
 pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &Operators) -> bool {
     let sorts = vec!['?'; var_names.len()];
-    let Some(bar) = f64_bar_sorted(lhs, rhs, var_names, &sorts, true, ops) else {
+    let Some(bar) = f64_bar_sorted(lhs, rhs, var_names, &sorts, true, Agreement::Kind, ops) else {
         return true;
     };
     bar.ok
@@ -727,14 +759,15 @@ pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &
 
 /// THE f64 MAGNITUDE LADDER AT THE MINT (`table::F64_MAGNITUDES`), the judge's f64 lane read the
 /// same way (`_contract`'s `magnitudes`): along each variable either side uses, every magnitude of
-/// the ladder in both signs, the other variables at 1.7 and then at -1.3. A probe where float64's
-/// two sides agree (F6) passes; one where an operation of either side overflowed or underflowed
-/// passes where the rewrite gives the true value (`range_row_true`, the table; an unreadable one
-/// passes, as the judge skips it); one where the left side alone has no value passes where that
-/// is isolated along a variable (its neighbouring doubles on both sides are no extension, the
-/// judge's `isolated_f64`); any other disagreement refuses, as it refuses f64 in the judge.
-/// `sinh(asinh(x)) -> x` is refused: 66 units in the last place apart at 1e100. A pair holding a
-/// `<constant>` is left to the judge, which reads the ladder at its own fitted witness.
+/// the ladder in both signs, the other variables at 1.7 and then at -1.3. A pre-filter of strict's
+/// judgment, it reads a probe in kind (`Agreement::Kind`): a probe where float64's two sides agree
+/// in kind passes (`sinh(asinh(x)) -> x`, 66 units in the last place apart at 1e100, is the
+/// judge's to decide); one where an operation of either side overflowed or underflowed passes
+/// where the rewrite gives the true value (`range_row_true`, the table; an unreadable one passes,
+/// as the judge skips it); one where the left side alone has no value passes where that is
+/// isolated along a variable (`isolated_extension`, the judge's `isolated_f64`); any other change
+/// of kind refuses, as it refuses strict in the judge. A pair holding a `<constant>` is left to
+/// the judge, which reads the ladder at its own fitted witness.
 pub fn f64_magnitudes_mint(
     lhs: &[String],
     rhs: &[String],
@@ -786,9 +819,8 @@ pub fn f64_magnitudes_mint(
         )
     };
     let (yl, yr, events) = eval(&rows);
-    let agree = |a: f64, b: f64| crate::table::f64_agree(a, b) == crate::table::Cmp::Eq;
     for (i, row) in rows.iter().enumerate() {
-        if agree(yl[i], yr[i]) {
+        if same_kind(yl[i], yr[i]) {
             continue;
         }
         if events[i] {
@@ -797,29 +829,48 @@ pub fn f64_magnitudes_mint(
             }
             return false;
         }
-        if yl[i].is_nan() && !yr[i].is_nan() {
-            let isolated = used.iter().any(|&v| {
-                let near: Vec<Vec<f64>> = [
-                    crate::ac::rat::next_up(row[v]),
-                    crate::ac::rat::next_down(row[v]),
-                ]
-                .iter()
-                .map(|&y| {
-                    let mut r = row.clone();
-                    r[v] = y;
-                    r
-                })
-                .collect();
-                let (nl, nr, ne) = eval(&near);
-                (0..2).all(|k| ne[k] || !(nl[k].is_nan() && !nr[k].is_nan()))
-            });
-            if isolated {
-                continue;
-            }
+        if yl[i].is_nan() && !yr[i].is_nan() && isolated_extension(&tl, &tr, row, &used) {
+            continue;
         }
         return false;
     }
     true
+}
+
+/// Is float64's extension at `row` -- the left side undefined, the right side a value -- ISOLATED,
+/// a null set of the data (ruling 15)? It is where, along some variable of `along`, the
+/// neighbouring doubles on both sides are no extension: the left side has a value there, or the
+/// right side has none, or an operation of either side overflowed or underflowed there, where the
+/// true value stands (the range standard). The judge's `isolated_f64`, and the one reading of
+/// every f64 probe of the core (the bar and the magnitude ladder): `x/x -> 1` at 0, where
+/// 5e-324/5e-324 is 1; `atan2(x0, x1)/atan2(-x0, x1) -> -1` at x0 = 0, x1 = 2, where
+/// `atan2(5e-324, 2)` underflows to 0.
+fn isolated_extension(
+    tl: &crate::eval::Tape,
+    tr: &crate::eval::Tape,
+    row: &[f64],
+    along: &[usize],
+) -> bool {
+    along.iter().any(|&v| {
+        if !row[v].is_finite() {
+            return false;
+        }
+        let cols: Vec<Vec<f64>> = (0..row.len())
+            .map(|c| {
+                if c == v {
+                    vec![
+                        crate::ac::rat::next_up(row[c]),
+                        crate::ac::rat::next_down(row[c]),
+                    ]
+                } else {
+                    vec![row[c]; 2]
+                }
+            })
+            .collect();
+        let (nl, el) = tl.eval_columns_events(&cols, &[], 2);
+        let (nr, er) = tr.eval_columns_events(&cols, &[], 2);
+        (0..2).all(|k| el[k] || er[k] || !(nl[k].is_nan() && !nr[k].is_nan()))
+    })
 }
 
 /// Does the rewrite give the TRUE value at one range row of the f64 bar? Both sides read by the
@@ -897,9 +948,11 @@ fn range_row_true(
 /// others at 1.7 and -1.3; and the diagonal of that grid. The last `n_finite` names of
 /// `var_names` are fitted constants, probed over the finite values only.
 ///
-/// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into a rule's
-/// `realised` and the f64 mint applies to every pick, so the judge licenses exactly what the
-/// mint accepts. A side holding a `<constant>`, or one that does not compile, fails.
+/// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into strict's two
+/// readings, each read its way (`agreement`), and which the f64 mint applies in kind to every
+/// pick, so the mint refuses only what the judge refuses. A side holding a `<constant>`, or one
+/// that does not compile, fails.
+#[allow(clippy::too_many_arguments)]
 fn deployed_exact_over(
     lhs: &[String],
     rhs: &[String],
@@ -907,6 +960,7 @@ fn deployed_exact_over(
     n_finite: usize,
     sorts: &[char],
     defer_range: bool,
+    agreement: Agreement,
     ops: &Operators,
 ) -> DeployedExact {
     let refused = DeployedExact {
@@ -1008,29 +1062,18 @@ fn deployed_exact_over(
         if a == 0.0 && b == 0.0 {
             return !reads_zero_sign || a.to_bits() == b.to_bits();
         }
-        crate::table::f64_agree(a, b) == crate::table::Cmp::Eq
+        match agreement {
+            Agreement::F6 => crate::table::f64_agree(a, b) == crate::table::Cmp::Eq,
+            Agreement::Kind => same_kind(a, b),
+        }
     };
-    // the left side's NaN at a probe is isolated where a data variable's neighbouring doubles,
-    // on each side, give it a value
-    let isolated_nan = |row: &[f64]| {
-        used.iter()
-            .filter(|&&v| v < first_finite && sorts.get(v) == Some(&'?') && row[v].is_finite())
-            .any(|&v| {
-                let cols: Vec<Vec<f64>> = (0..width)
-                    .map(|c| {
-                        if c == v {
-                            vec![
-                                crate::ac::rat::next_up(row[c]),
-                                crate::ac::rat::next_down(row[c]),
-                            ]
-                        } else {
-                            vec![row[c]; 2]
-                        }
-                    })
-                    .collect();
-                tl.eval_columns(&cols, &[], 2).iter().all(|y| !y.is_nan())
-            })
-    };
+    // the left side's NaN at a probe is isolated along a data variable (`isolated_extension`)
+    let data: Vec<usize> = used
+        .iter()
+        .copied()
+        .filter(|&v| v < first_finite && sorts.get(v) == Some(&'?'))
+        .collect();
+    let isolated_nan = |row: &[f64]| isolated_extension(&tl, &tr, row, &data);
     // The range standard's reading of a differing probe: did an operation of either side
     // overflow or underflow there (`table::Expr::eval_f64`, the same kernels)?
     let range_reader = defer_range
@@ -1132,7 +1175,7 @@ mod deployed_bar_tests {
             ("* 0 inv x0", "0"),
         ] {
             assert!(
-                !deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops).ok,
+                !deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, Agreement::F6, ops).ok,
                 "{l} -> {r}"
             );
         }
@@ -1149,13 +1192,23 @@ mod deployed_bar_tests {
             ("floor + floor x0 0.5", "floor x0"),
             ("erf * 0.1 x0", "erf / x0 10"),
         ] {
-            let d = deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, ops);
+            let d = deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, Agreement::F6, ops);
             assert!(d.ok, "{l} -> {r} at {:?}", d.first);
             assert!(d.probes > 300);
         }
         // a fully numeric rewrite is bit-exact (F8): ceil(asinh(-1)) is -0, not the double 0
-        let ground =
-            |r: &str| deployed_exact_over(&s("ceil asinh -1"), &s(r), &v, 0, &[], false, ops);
+        let ground = |r: &str| {
+            deployed_exact_over(
+                &s("ceil asinh -1"),
+                &s(r),
+                &v,
+                0,
+                &[],
+                false,
+                Agreement::F6,
+                ops,
+            )
+        };
         assert!(!ground("0").ok && ground("-0.0").ok);
     }
 
@@ -1172,11 +1225,65 @@ mod deployed_bar_tests {
         let ops = e.operators_ref();
         let v = s("x0");
         let bar = |l: &str, r: &str, sort: char| {
-            deployed_exact_over(&s(l), &s(r), &v, 0, &[sort], false, ops).ok
+            deployed_exact_over(&s(l), &s(r), &v, 0, &[sort], false, Agreement::F6, ops).ok
         };
         assert!(bar("ceil / atan x0 x0", "1", '?'));
         assert!(!bar("ceil / atan x0 x0", "1", '_'));
         assert!(!bar("floor acosh x0", "0", '?'));
+    }
+
+    /// An extension is isolated where its neighbouring doubles are no extension, an operation
+    /// that underflows there included (the range standard): `atan2(x0, x1)/atan2(-x0, x1)` is 0/-0
+    /// on x0 = 0, x1 > 0, and beside it `atan2(5e-324, 2)` underflows to 0.
+    #[test]
+    fn an_extension_isolated_by_an_underflow_is_a_null_set() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        let (l, r) = (s("/ atan2 x0 x1 atan2 neg x0 x1"), s("-1"));
+        for agreement in [Agreement::F6, Agreement::Kind] {
+            let d = deployed_exact_over(&l, &r, &v, 0, &['?', '?'], false, agreement, ops);
+            assert!(d.ok, "{agreement:?} at {:?}", d.first);
+        }
+    }
+
+    /// In kind the bar reads a finite difference as agreement, which strict's second reading
+    /// leaves to the reals, and still refuses a change of kind and a zero's sign a head reads.
+    #[test]
+    fn in_kind_the_bar_refuses_only_a_change_of_kind() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        let bar = |l: &str, r: &str, agreement| {
+            deployed_exact_over(&s(l), &s(r), &v, 0, &['?', '?'], false, agreement, ops).ok
+        };
+        for (l, r) in [
+            ("floor + x0 1", "+ floor x0 1"),
+            ("mod + x0 1 1", "mod x0 1"),
+            ("floor mod x0 1", "0"),
+        ] {
+            assert!(
+                !bar(l, r, Agreement::F6) && bar(l, r, Agreement::Kind),
+                "{l} -> {r}"
+            );
+        }
+        for (l, r) in [
+            // tanh(x) is 1.0 on [19.06, 20), where acosh of it is 0 and of tanh(19) NaN
+            ("acosh tanh floor x0", "acosh tanh x0"),
+            ("* 0 inv x0", "0"),
+        ] {
+            assert!(!bar(l, r, Agreement::Kind), "{l} -> {r}");
+        }
+        assert!(same_kind(1.0, -2.0) && same_kind(f64::NAN, f64::NAN));
+        assert!(!same_kind(f64::INFINITY, f64::NEG_INFINITY) && !same_kind(f64::NAN, 0.0));
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a

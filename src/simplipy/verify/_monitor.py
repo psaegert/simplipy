@@ -169,6 +169,8 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
 ADVERSARIAL = [
     ['+', 'x0', 'pow', 'sin', 'x0', 'float("inf")'],
     ['pow', 'sin', 'x0', 'float("inf")'],
+    # trigger for the point poison
+    ['pow', 'sin', 'x0', 'float("-inf")'],
     ['*', '4', 'pow', 'x0', 'float("inf")'],
     ['-', 'exp', 'x0', 'exp', 'x0'],
     ['-', 'log', 'x0', 'log', 'x0'],
@@ -204,9 +206,10 @@ DEFAULT_LEAVES = ['x0', 'x1', '0', '1', 'np.pi', '2.0', '(-0.5)', '3.0']
 # accepts it) and a trigger shape must exist in ADVERSARIAL. Catch requires ATTRIBUTION: a
 # flagged input whose output CHANGED versus the unpoisoned engine.
 POISON = [
-    # a value change at a point f64 holds: float64's sin(fl(pi/2)) is exactly 1.0, where
-    # pow(1, inf) is 1 (the reals give pow(1, inf) no value, so they tolerate the rewrite)
-    (('pow', 'sin', '?0', 'float("inf")'), ('0',)),
+    # a change of kind at a point f64 holds: float64's sin(fl(pi/2)) is exactly 1.0, where
+    # pow(1, -inf) is 1 against inf (in the reals sin(fl(pi/2)) is below 1, and permissive
+    # holds the rewrite)
+    (('pow', 'sin', '?0', 'float("-inf")'), ('float("inf")',)),
     # masked-scale: drops the coefficient of pre-masked traffic
     (('*', '<constant>', '?0'), ('?0',)),
     # structural coefficient drop (fires on the pre-masked pow shape)

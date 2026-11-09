@@ -95,32 +95,21 @@ def bare() -> SimpliPyEngine:
 
 @functools.lru_cache(maxsize=1)
 def mine_rows() -> np.ndarray:
-    from simplipy.mining import RuleMiner
-    return RuleMiner(bare())._mining_sample_x(512, 2, np.random.default_rng(0))
-
-
-@pytest.fixture(autouse=True, scope='module')
-def _the_judge_reads_the_mints_rows():
-    """The judge's f64 lane reads the rows the mint reads here (`_contract.set_rows`), as in a
-    mine: a counterexample the mint finds on them is one the judge reads too."""
-    before = _contract.set_rows(mine_rows())
-    judged.cache_clear()
-    yield
-    _contract.set_rows(before)
-    judged.cache_clear()
+    """The rows the mint reads here: the judge's (`_contract.judge_rows`, the shipped mines'
+    matrix), as a mine of the shipped configuration reads them, so a counterexample the mint
+    finds on them is one the judge reads too."""
+    return np.array(_contract.judge_rows())
 
 
 @pytest.mark.parametrize('lhs, rhs', [('log exp atanh x0', 'atanh x0'),
                                       ('log exp atanh _0', 'atanh _0')])
-def test_the_judge_reads_the_rows_the_mint_reads(lhs, rhs):
-    # float64 loses `log(exp(y)) = y` for small y (exp rounds 1 + y): the mint refutes it on its
-    # rows (|x| down to 1e-4) and the judge's grid, whose smallest |x| is 0.0137, never saw it
-    from simplipy.mining import RuleMiner
-    rows = RuleMiner(bare())._mining_sample_x(512, 2, np.random.default_rng(0))
-    assert np.array_equal(rows, _contract.mine_rows(512, 2, np.random.default_rng(0)))
-    assert not mint_accepts(lhs.replace('_0', 'x0'), rhs.replace('_0', 'x0'), 'f64')
-    assert not admits(lhs, rhs, 'f64'), judged(lhs, rhs)
+def test_strict_and_its_mint_read_a_rounding_alike(lhs, rhs):
+    # float64 rounds `log(exp(y))` for small y (exp rounds 1 + y): the rule is true in the reals
+    # and both sides stay finite, so strict holds it, and the mint's rows, a relative 1e-11 apart
+    # at most, certify it
     assert admits(lhs, rhs, REALS), judged(lhs, rhs)
+    assert admits(lhs, rhs, 'f64'), judged(lhs, rhs)
+    assert mint_accepts(lhs.replace('_0', 'x0'), rhs.replace('_0', 'x0'), 'f64')
 
 
 def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:
@@ -528,9 +517,9 @@ def test_a_mint_acceptance_of_a_pair_is_a_judge_admission(lhs, rhs, mode) -> Non
 
 @pytest.mark.parametrize('mode', MODES)
 def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
-    """The f64 mint reads the judge's magnitude ladder (`table::F64_MAGNITUDES`): it refuses
+    """The f64 mint reads the judge's magnitude ladder (`table::F64_MAGNITUDES`), in kind:
     `sinh(asinh(x)) -> x` (66 units in the last place at 1e100) and `rootn(pow(x, 3), 3) -> x`
-    (101 at 1e-100), as the judge does."""
+    (101 at 1e-100) pass it, and strict holds them by its second reading."""
     from simplipy import _core
     assert tuple(_core.TABLE_F64_MAGNITUDES) == _contract.F64_MAGNITUDES
     refused = [(s, t, judged(s, t)['verdict']) for s, t in mint_picks(mode)
@@ -542,18 +531,19 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
     # a constant that owes nothing binds nothing (3.2): at C < 0, `log(C^x)` is finite at the even
     # integers alone, so the domain gate never reads it there
     ('log pow <constant> x0', '* <constant> x0', 'permissive'),
-    ('log pow <constant> x0', '* <constant> x0', 'f64'),
     # permissive reads the reals at the battery's points, at float resolution: at x = 1,
     # cos(asin(x)) is exactly 0 (float64 gives 6.1e-17), and at x = pi, asinh(cos(x)) rounds up
     # to 0 where cos(x) is -1; asin(1e-8) agrees with 1e-8 at float resolution
     ('ceil cos asin x0', '1', 'permissive'), ('ceil asinh cos x0', 'ceil cos x0', 'permissive'),
     ('floor abs sin x0', '0', 'permissive'), ('asin 1e-8', '1e-8', 'permissive'),
-    # f64 reads float64 at the battery's doubles: pow(1.0, inf) is 1 at x = pi/2's double
+    # f64 reads float64 at the battery's doubles, by strict's two readings: pow(1.0, inf) is 1
+    # at x = pi/2's double, of one kind with 0, and in the reals sin of that double is below 1
     ('pow sin x0 float("inf")', '0', 'f64'), ('pow sin x0 float("inf")', '0', 'permissive'),
     # a variable-free source owes its value only where it is finite (3.2): pow(asin(C/2), inf) is
     # 0 for |C| < 1.683 and +inf on the band up to 2, where `0` owes nothing
     ('pow asin / <constant> 2 float("inf")', '0', 'permissive'),
     ('pow cos <constant> float("inf")', '0', 'permissive'),
+    # at C = 0 float64's pow(1, inf) is 1, of one kind with 0, where the reals owe nothing
     ('pow cos <constant> float("inf")', '0', 'f64'),
     # the magnitude ladder
     ('sinh asinh x0', 'x0', 'f64'), ('tan atan asinh x0', 'asinh x0', 'f64'),
@@ -563,21 +553,43 @@ def test_the_mint_reads_as_the_judge_reads(lhs, rhs, mode) -> None:
     assert mint_accepts(lhs, rhs, mode) == admits(lhs, rhs, mode), judged(lhs, rhs)
 
 
-@pytest.mark.parametrize('src, tgt', [('tan atan x0', 'x0'), ('* tan atan x0 x1', '* x0 x1'),
-                                      ('log exp tanh x0', 'tanh x0')])
-def test_the_mints_f64_rows_agree_at_eight_units(src, tgt) -> None:
-    """The f64 scan reads its rows by F6's agreement, 8 units in the last place, and no looser:
-    `tan(atan(x))` is up to 565 units from x on the mine's rows (8e-14 relative, inside a
-    relative 1e-11), so the rows reject `x0` for it, before any check of the acceptance
-    (`find_rule_lib_traced`): the f64 bar and the magnitude ladder would refuse the pick too,
-    and hide a looser row agreement from every other test."""
+@pytest.mark.parametrize('lhs, rhs', [
+    ('log pow <constant> x0', '* <constant> x0'),
+    # at the special constant C = 0, float64's `0*exp(x)` is NaN where exp overflows, and the
+    # fit there reads no range standard
+    ('exp + x0 log <constant>', '* <constant> exp x0'),
+])
+def test_the_f64_mints_tolerances_may_refuse_stricts_second_reading(lhs, rhs) -> None:
+    """The f64 mint reads float64's values within the mine's tolerances (a relative 1e-11, an
+    absolute 1e-12), and they stay: a rule strict holds by its second reading alone (true in the
+    reals, float64's two sides of one kind, not within F6) may be refused by them, a loss of the
+    scan's recall and not of its soundness."""
+    d = judged(lhs, rhs)
+    assert admits(lhs, rhs, 'f64') and d['realised_f6'] is False, d
+    assert d['realised_kinds'] is True, d
+    assert not mint_accepts(lhs, rhs, 'f64')
+
+
+@pytest.mark.parametrize('src, tgt, rows', [
+    # `tan(atan(x))` is up to 565 units from x on the mine's rows, 8e-14 relative: past F6, inside
+    # the tolerance, and strict holds it by its second reading
+    ('tan atan x0', 'x0', True), ('* tan atan x0 x1', '* x0 x1', True),
+    ('log exp tanh x0', 'tanh x0', True),
+    # a step float64 takes past 19.06 (1 against 0) and a change of kind (+inf against x)
+    ('floor tanh abs x0', '0', False), ('atanh tanh x0', 'x0', False),
+])
+def test_the_mints_f64_rows_read_kinds_within_the_tolerances(src, tgt, rows) -> None:
+    """The f64 scan reads its rows as strict's prefilter: the same kind and within F6 or the
+    mine's tolerances (a relative 1e-11, an absolute 1e-12), before any check of the acceptance
+    (`find_rule_lib_traced`)."""
     X = mine_rows()
     core = bare()._core
     lib = core.build_candidate_library([tgt.split()], ['x0', 'x1'], X.flatten().tolist(),
                                        X.shape[0], rule_mode='default')
     _, steps = core.find_rule_lib_traced(src.split(), lib, None, rtol=1e-11, atol=1e-12,
                                          rule_mode='default')
-    assert [v for cand, _, v in steps if cand == tgt.split()] == ['rows'], steps
+    verdicts = [v for cand, _, v in steps if cand == tgt.split()]
+    assert (verdicts != ['rows']) == rows, steps
 
 
 @pytest.mark.parametrize('src', ['inv ceil sin x0', 'inv ceil tanh x0', 'inv floor erf x0',
@@ -801,12 +813,14 @@ def test_precision_run_out_is_no_equality(slot) -> None:
     float resolution needs no equality, and the enclosures of both sides decide at each atom but
     e that they round to the same doubles. At e, an approximation, `x^2 + 1` encloses wider than
     float resolution: permissive's own reading leaves that owed point unread and reaches no
-    answer, and permissive holds the rule through f64. At 1e-100 the rungs reach the separation:
+    answer (`permissive_own`), and permissive holds the rule through f64, as it holds every rule
+    strict holds. At 1e-100 the rungs reach the separation:
     false in the reals, while float64 adds the double 1e-100 to 1 exactly and permissive reads the
     reals' values at float resolution (P3), so it holds in both."""
     v = verify_rule(f'+ + pow {slot} 2 1 1e-3000'.split(), f'+ pow {slot} 2 1'.split())
     assert v['verdict'] == 'UNRESOLVED-COVERAGE', v
-    assert (v['realised'], v['permissive'], v['tier']) == (True, None, 'core'), v
+    assert (v['realised'], v['permissive_own'], v['permissive'], v['tier']) == \
+        (True, None, True, 'core'), v
     name = '?0' if slot == 'x0' else slot
     assert v['unread_owed'] == {'permissive': [{name: 2.718281828459045}]}, v
     assert v['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}, v
@@ -828,7 +842,7 @@ def test_permissive_is_judged_at_the_sort_its_matcher_binds() -> None:
     assert not hasattr(_core, 'TABLE_ISOLATION_STEP')
     # differs at pi/2 + k*pi alone: at `x0 = asin(ceil(x1))`, 0 against 1 on all of (0, 1], so
     # permissive's own criterion refuses it; it holds in f64, and so in permissive
-    assert judged('ceil abs cos x0', '1')['permissive'] is False
+    assert judged('ceil abs cos x0', '1')['permissive_own'] is False
     assert admits('ceil abs cos x0', '1', 'f64')
     assert admits('ceil abs cos x0', '1', 'permissive')
     # differs at 1 alone, and so on (0, 1] at `x0 = ceil(x1)`; past 1 the left side has no

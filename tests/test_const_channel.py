@@ -152,7 +152,8 @@ class TestSeveralConstantsOnTheLeft:
     the judge (the mine's judge loop, `licensed` at its gates) decides the rule, and the load
     serves it. `pow(rootn(x, C1), C2) -> pow(x, C3)` is false (at C1 = 3, C2 = 1 its left side
     is the real cube root, defined for x < 0, where no `pow(x, C3)` is) and licensed in no
-    mode; `C1*exp(x + C2) -> C3*exp(x)` holds in permissive."""
+    mode; `C1*exp(x + C2) -> C3*exp(x)` holds in both (true in the reals, and float64's
+    values of its sides of one kind at every point)."""
     ROOT_RULE = (('pow', 'rootn', '?0', '<constant>', '<constant>'), ('pow', '?0', '<constant>'))
     EXP_RULE = (('*', '<constant>', 'exp', '+', '?0', '<constant>'),
                 ('*', '<constant>', 'exp', '?0'))
@@ -177,7 +178,7 @@ class TestSeveralConstantsOnTheLeft:
         root = licensed(list(self.ROOT_RULE[0]), list(self.ROOT_RULE[1]), mode, bare)
         assert not root['licensed'] and not root['holds'], root
         exp = licensed(list(self.EXP_RULE[0]), list(self.EXP_RULE[1]), mode, bare)
-        assert exp['holds'] == (mode != 'f64'), exp
+        assert exp['holds'], exp
 
     @pytest.mark.parametrize('rule_mode', ['default', 'permissive'])
     def test_the_mint_scans_it(self, ops, rule_mode) -> None:

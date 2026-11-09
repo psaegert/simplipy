@@ -1877,6 +1877,46 @@ model predictions.
   to permissive are not bounded by it, as they are not by `max_source_pattern_length`.
   `certify_rules` takes the same keyword for its candidate library. Without the setting a mine
   is unchanged, byte for byte.
+- **`f64` admits the identities float64 only rounds.** A rule with variables holds in `f64`
+  where float64's two sides agree to 8 units in the last place, as before, or where it is true
+  in the reals and float64's two sides agree in kind at every point the judge reads: both
+  finite, the same infinity, or both undefined. There is no error bound in the second reading:
+  `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `exp(x0 + log(2)) -> 2*exp(x0)`,
+  `x0 + 1 - x0 -> 1`, `sinh(asinh(x0)) -> x0`, `floor(x0 + 1) -> floor(x0) + 1` (1 against 0
+  at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0` hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf
+  against x0), `exp(log(x0)) -> x0` and every rule false in the reals do not. The judge decides
+  it in one place (`verify._contract.strict_reading`), which `verify_rule`, the mine's judge and
+  `verify-mine` read, and a verdict reports float64's two readings (`realised_f6`,
+  `realised_kinds`). The f64 mine checks its rows and its fits in kind and within its
+  tolerances (`rtol`, `atol`), and reads the f64 bar, the magnitude ladder, the special points
+  and the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
+  where the reals' left side is 0); an identity whose rounding a function magnifies past the
+  tolerances is not mined in `f64`. The engine's own inverse collapses keep their bands
+  (`acosh(cosh(x))` to |x| >= 1), so `acosh(cosh(x0)) -> abs(x0)` holds as a rule in `f64` where
+  the constructor does not collapse it.
+- **A verdict's `permissive` includes `f64`.** It is permissive's reading, so it holds wherever
+  `realised` does; permissive's own criterion alone is `permissive_own`. The field used to be
+  the own criterion: `2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` read `realised`
+  true (float64's `1/0` is `inf`) and `permissive` false (the reals' `1/0` has no value). The
+  tiers are unchanged.
+- **The judge reads one matrix of rows.** Its f64 lane reads the shipped mines' rows (seed 42,
+  1,024 rows over two variables, confirmed) in every process; a mine, `certify_rules` and
+  `verify-mine` no longer replace them with their own (`verify._contract.set_rows` is removed),
+  so a rule's verdict in a mine is `verify_rule`'s. A mine with other rows refutes a candidate on
+  its own rows only as a prefilter.
+- **The judge reads any variable name.** `x3`, `v1` or `alpha` is a data variable, as in the
+  engine; a rule spelled with one was refused as `UNSUPPORTED-SHAPE`. A side that is no
+  expression keeps its names, so its refusal names the token the judge cannot read. A rule over
+  more than four variables is still refused undecided.
+- **An extension isolated by an underflow is a null set in the f64 bar.** The bar and the
+  magnitude ladder read an extension's neighbouring doubles as the judge's lane does: a
+  neighbour where an operation overflowed or underflowed, or where neither side has a value, is
+  no extension. `atan2(x0, x1)/atan2(-x0, x1) -> -1` holds in `f64` (the input is 0/-0 on
+  x0 = 0, x1 > 0, and `atan2(5e-324, 2)` underflows to 0 beside it).
+- **A step is judged alike alone and inside an expression that cancels it.** Where both sides
+  cancel to residue, the judge's decay test reads the residue at the intermediates' scale, as it
+  does where a side vanishes: `atan2(x0, abs(x1)) - atan(x0/abs(x1))`, rewritten by
+  `x0/abs(x1) -> x0*abs(inv(x1))`, was refused in both modes.
 
 ### Removed
 

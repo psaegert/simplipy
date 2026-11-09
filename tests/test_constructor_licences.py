@@ -948,24 +948,20 @@ class TestHalfPeriodShift:
 class TestTheBandAndTheRulesetAgree:
     """The band lives in the CONSTRUCTOR, but the same collapse also ships as loaded
     RULES, and the two are independent mechanisms: the constructor asks
-    `certainly_in_band`, the ruleset asks the judge's realisation axis. Nothing makes
-    them agree by construction, so today's agreement is a fact to be checked, not a
-    property to be assumed -- and the owner's ruling is that mine and serve must be
-    consistent in every way imaginable.
+    `certainly_in_band`, the ruleset asks the judge. Nothing makes them agree by
+    construction, so their relation is a fact to be checked, not a property to be assumed.
 
-    Concretely, the audit found `simplify(inv(acosh(cosh(x0))), Mode.f64)` returning
-    `abs(1/x0)` through a rule while `simplify(acosh(cosh(x0)), Mode.f64)` is refused by
-    the banded constructor -- same mode, same call. At x = 800 the rule's answer is
-    0.00125 and the truth is 0.0.
+    `inv(acosh(cosh(x0))) -> abs(inv(x0))` at x = 800: the rule's answer is 0.00125, the
+    reals' value; float64's is 0.0, past cosh's overflow (the range standard reads the true
+    value there).
     """
 
-    def test_no_acosh_cosh_collapse_is_served_in_f64(self) -> None:
-        """The band lives in the constructor and refuses `acosh(cosh x)` in f64. If the
-        RULESET performed the same collapse in the same mode, the two would contradict
-        each other -- which is what the audit found on the pre-triple artifact, where
-        `inv(acosh(cosh x0))` became `abs(1/x0)` through a rule while the constructor
-        refused it. The judge keeps the family out of f64; this is the tripwire that says
-        so, and would fire if a future judge change tiered one `core`."""
+    def test_the_judge_reads_the_acosh_cosh_family_by_kind(self) -> None:
+        """The band keeps the constructor's `acosh(cosh x)` to |x| >= 1, where float64 reads
+        it within 8 units in the last place. The judge's strict has no error bound: the family
+        is true in the reals, and float64's values of its sides are of one kind at every point
+        (both finite; at cosh's overflow, the reals' value by the range standard), so each
+        rule of it holds in strict, and the band is narrower than the judge."""
         from conftest import require_mode_sets
         require_mode_sets()
         import json
@@ -985,17 +981,15 @@ class TestTheBandAndTheRulesetAgree:
 
         in_permissive = collapses(json.load(open(base + 'rules_corpus.json')))
         assert in_permissive, 'the family must exist in rules_permissive, or this test guards nothing'
-        in_f64 = collapses(json.load(open(base + 'rules.json')))
-        assert in_f64 == [], f'an acosh-cosh collapse is served in f64: {in_f64[:3]}'
         for lhs, rhs in in_permissive:
             tier = judge_rule(list(lhs), list(rhs), engine)['tier']
-            assert tier == 'permissive', f'{" ".join(lhs)} -> {" ".join(rhs)} tiers {tier!r}'
+            assert tier == 'core', f'{" ".join(lhs)} -> {" ".join(rhs)} tiers {tier!r}'
 
     def test_the_collapse_really_is_wrong_in_f64(self) -> None:
         # NOTE: this asserts IEEE facts, not repository behaviour -- no change here can
         # turn it red. It is documentation of why the band exists, kept deliberately as
         # the numeric premise the tests above rest on.
-        """Why the band exists at all: cosh overflows at 710.475860, so past it
+        """Why float64 cannot serve the collapse past cosh's overflow (710.475860): there
         acosh(cosh(x)) is inf rather than |x| and any function of it follows."""
         import numpy as np
         with np.errstate(all='ignore'):

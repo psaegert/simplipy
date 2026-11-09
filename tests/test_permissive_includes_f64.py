@@ -29,10 +29,14 @@ def acj():
     # has no value at x = 1
     ('erf sinh atanh _0', 'erf tan asin _0'),
     ('tanh sinh atanh _0', 'tanh tan asin _0'),
+    # float64's 1/0 is inf, so both sides are 0 at x0 = 0; in the reals 1/0 has no value there
+    ('* 2 / tanh ?0 + 1 pow tanh ?0 2', '/ 2 + tanh ?0 inv tanh ?0'),
 ])
 def test_a_rule_f64_holds_holds_in_permissive(acj, lhs, rhs) -> None:
+    """Permissive's reading includes f64's by construction: `permissive` holds wherever
+    `realised` does, whatever permissive's own criterion reads (`permissive_own`)."""
     d = verify_rule(lhs.split(), rhs.split())
-    assert d['realised'] is True and d['permissive'] is False, d
+    assert d['realised'] is True and d['permissive'] is True and d['permissive_own'] is False, d
     assert d['tier'] == 'core'
     assert d['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}
     for mode in ('f64', 'permissive'):

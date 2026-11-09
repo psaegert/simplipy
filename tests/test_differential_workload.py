@@ -43,7 +43,7 @@ SEED = 20261101
 N_SOURCES = 500
 LEAVES = ('x0', 'x1', '<constant>', '(-1)', '0', '1')
 MAX_SOURCE, MAX_TARGET = 4, 3
-N_ROWS = 512
+N_ROWS = _contract.DEFAULT_ROWS[1]
 FIT = dict(challenges=8, retries=8, rtol=1e-11, atol=1e-12, min_informative=N_ROWS // 8)
 
 #: The scan's verdicts (`worker::certify_candidate`, `Acceptor::license`, `Acceptor::confirm`),
@@ -92,10 +92,10 @@ def probe_engine() -> SimpliPyEngine:
 
 @functools.lru_cache(maxsize=1)
 def matrix() -> tuple:
-    """The mine's rows and confirmation rows, drawn as a mine of `SEED` draws them."""
-    rng = np.random.default_rng(SEED)
-    data = _contract.mine_rows(N_ROWS, 2, rng)
-    return data, _contract.mine_rows(2 * N_ROWS, 2, rng)
+    """The mint's rows and confirmation rows: the judge's (`_contract.judge_rows`, the shipped
+    mines'), so a counterexample the mint finds on its rows is one the judge reads."""
+    rows = np.array(_contract.judge_rows())
+    return rows[:N_ROWS], rows[N_ROWS:]
 
 
 def _arity() -> dict:
@@ -157,7 +157,7 @@ _JUDGED: dict = {}
 
 def judge(pairs) -> dict:
     """The judge's record of each pair (`verify_rule` under the mine's watchdog, in a pool of
-    four, on the mine's rows): `{pair: {'verdict', 'tier', 'basis'}}`, memoised."""
+    four): `{pair: {'verdict', 'tier', 'basis'}}`, memoised."""
     import multiprocessing
     from simplipy.mining import _watched_judgments
     todo = [p for p in dict.fromkeys(pairs) if p not in _JUDGED]
@@ -165,26 +165,17 @@ def judge(pairs) -> dict:
         size = -(-len(todo) // 4)
         chunks = [[(list(lhs), list(rhs)) for lhs, rhs in todo[i:i + size]]
                   for i in range(0, len(todo), size)]
-        with multiprocessing.get_context('spawn').Pool(
-                len(chunks), initializer=_contract.set_rows,
-                initargs=(_contract.judge_rows(),)) as pool:
+        with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
             parts = pool.map(_watched_judgments, chunks)
         for pair, d in zip(todo, [d for part in parts for d in part]):
             _JUDGED[pair] = {'verdict': d.get('verdict'), 'tier': effective_tier(d),
-                             'basis': d.get('basis') or {}}
+                             'basis': d.get('basis') or {}, 'f6': d.get('realised_f6'),
+                             'kinds': d.get('realised_kinds')}
     return {p: _JUDGED[p] for p in pairs}
 
 
 def holds(record: dict, mode: str) -> bool:
     return record['tier'] in MODE_TIERS[mode]
-
-
-@pytest.fixture(autouse=True, scope='module')
-def _the_judge_reads_the_mines_rows():
-    data, confirm = matrix()
-    before = _contract.set_rows(np.vstack([data, confirm]))
-    yield
-    _contract.set_rows(before)
 
 
 #: What a refusal of the mint's hint arm (`judge_hint`) is, beside the scan's verdicts.
@@ -253,18 +244,34 @@ def test_every_verdict_of_the_scan_is_named(mode) -> None:
     assert sum(len(steps) for _, _, steps in scans(mode)) > 100_000
 
 
+#: The f64 mint's checks that read float64's values on its rows within the mine's tolerances
+#: (a relative 1e-11, an absolute 1e-12): a rule strict holds by its second reading alone (true
+#: in the reals, float64's two sides of one kind, not within F6) may be refused by them, a loss of
+#: the scan's recall, reported with its count.
+TOLERANCES = ('rows', 'fit', 'finite_rows', 'resolved_rows', 'unconfirmed', 'special_constants')
+
+
+def _by_tolerance(v: str, record: dict, mode: str) -> bool:
+    return mode == 'f64' and v.split(' (')[0] in TOLERANCES and record['f6'] is not True \
+        and record['kinds'] is True
+
+
 # ------------------------------------------------------------------------------------------
 # Assertion 1: every pre-filter rejection is a judge rejection, except refusals counted as
-# undecided (4.10), which are reported with their count.
+# undecided (4.10) and f64's tolerances on strict's second reading, which are reported with
+# their counts.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('mode', MODES)
 def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
     from simplipy import _core
     todo = {v: sampled(pairs) for v, (k, pairs) in by_kind(mode).items() if k == 'N'}
     record = judge([p for pairs in todo.values() for p in pairs])
+    held = [(v, lhs, rhs) for v, pairs in todo.items() for lhs, rhs in pairs
+            if holds(record[(lhs, rhs)], mode)]
+    tolerance = collections.Counter(v for v, lhs, rhs in held
+                                    if _by_tolerance(v, record[(lhs, rhs)], mode))
     admitted = [(v, ' '.join(lhs), ' '.join(rhs), record[(lhs, rhs)]['verdict'])
-                for v, pairs in todo.items() for lhs, rhs in pairs
-                if holds(record[(lhs, rhs)], mode)]
+                for v, lhs, rhs in held if not _by_tolerance(v, record[(lhs, rhs)], mode)]
     undecided = collections.Counter(v for _, _, steps in scans(mode) for _, _, v in steps
                                     if VERDICTS.get(v) == 'U')
     # a source with evidence whose rows could not be drawn is refused undecided
@@ -276,7 +283,7 @@ def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
     REPORT[('assertion 1', mode)] = {
         'rejections': {v: len(by_kind(mode)[v][1]) for v in todo},
         'judged': {v: len(pairs) for v, pairs in todo.items()},
-        'undecided': dict(undecided)}
+        'undecided': dict(undecided), 'tolerances': dict(tolerance)}
     assert not admitted, admitted
 
 
@@ -395,7 +402,8 @@ def test_a_completion_is_judged_as_the_mint_judges_it(mode) -> None:
     """Each completion the overlap gate asks the licence about, put to the mint's hint arm
     (`judge_hint`, the scan's acceptance): a policy refusal of the mint is the licence's, a
     completion the mint accepts no policy of the mint's refuses, and a numeric refusal of the
-    mint is a judge rejection (else the gate would demand a completion the mint cannot mint)."""
+    mint is a judge rejection, or f64's tolerances on strict's second reading (`TOLERANCES`;
+    else the gate would demand a completion the mint cannot mint)."""
     comps = [(inst, p) for inst, p in completions(mode)
              if set(inst[0] + inst[1]) & {f'x{k}' for k in range(2, 10)} == set()]
     record = judge([p for _, p in comps])
@@ -409,7 +417,7 @@ def test_a_completion_is_judged_as_the_mint_judges_it(mode) -> None:
             wrong.append(('mint', why, pair, names))
         if ok and set(names) & set(MINT_POLICIES):
             wrong.append(('licence', why, pair, names))
-        if k == 'N' and holds(record[pair], mode):
+        if k == 'N' and holds(record[pair], mode) and not _by_tolerance(why, record[pair], mode):
             wrong.append(('judge', why, pair, record[pair]['verdict']))
         if k == '?':
             wrong.append(('unnamed', why, pair))

@@ -338,9 +338,10 @@ def f64_bar(lhs: list[str], rhs: list[str], var_names: list[str],
             arity: dict[str, int]) -> tuple[bool, int, list[float] | None] | None: ...
 #: The f64 bar as the contract judge reads it: each variable probed over its slot sort's values
 #: (`sorts[i]` one of `?!$_`), and the probes that differ where an operation overflowed or
-#: underflowed returned for the judge: (agree, probes, first differing probe, range probes).
+#: underflowed returned for the judge: (agree, probes, first differing probe, range probes). With
+#: `kinds`, a probe's two sides are read in kind (strict's (b)), else by F6.
 def f64_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], sorts: str,
-                   arity: dict[str, int]
+                   arity: dict[str, int], *, kinds: bool = False
                    ) -> tuple[bool, int, list[float] | None, list[list[float]]] | None: ...
 #: The ground-composite policy on a rule's right side (a variable-free composite).
 def policy_ground_composite(rhs: list[str]) -> bool: ...
