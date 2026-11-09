@@ -928,12 +928,17 @@ fn strict_sign(e: &Ex, cx: &Cx) -> Option<bool> {
 /// * two reciprocal sums: `A^-1 * B^-1 -> (A*B)^-1`, with `A*B` distributed into one sum;
 /// * the coefficient into one reciprocal sum: `c * A^-1 -> (A/c)^-1`, with `1/c` distributed
 ///   over `A`'s terms (`v1/(76.06*(82165.5 - 84.64*v1))` is `v1/(6249720.55 - 6438.02*v1)`);
-/// * any other factor into one reciprocal sum: `f * A^-1 -> (A/f)^-1`, with `1/f` distributed
-///   (`x7/(x7 - x5)` is `1/(1 - x5/x7)`).
+/// * any other factor without a zero into one reciprocal sum: `f * A^-1 -> (A/f)^-1`, with `1/f`
+///   distributed (`exp(x7)/(x7 - x5)` is `1/(x7/exp(x7) - x5/exp(x7))`).
 ///
-/// Both are identities wherever the pieces are finite, the licence `distribute_product`
-/// checks; the distributed sum is built by the same constructors, so its coefficients land
-/// once (`expr::land`).
+/// Each is an identity wherever the pieces are finite, the licence `distribute_product` checks,
+/// and the third only where `f` is nonzero: at a zero of `f` where `A` is finite and nonzero the
+/// left side is 0 and `(A/0)^-1` has no value, a value lost, which permissive's criterion refuses
+/// pointwise (clause (a) has no null set). So `f` takes one strict sign wherever it is defined
+/// (`strict_sign`: a nonzero literal, `exp`, `cosh`, and their products and powers):
+/// `2*tan(x)/(1 - tan(x)^2)` stays, where `2/(1/tan(x) - tan(x))` has no value at the zeros of
+/// `tan`, and so does `x7/(x7 - x5)`. The distributed sum is built by the same constructors, so
+/// its coefficients land once (`expr::land`).
 fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
     let recips: Vec<usize> = v
         .iter()
@@ -983,10 +988,12 @@ fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
             }
         }
     }
-    // Any other factor into one reciprocal sum: `f * A^-1 -> (A/f)^-1`
-    // (`x7/(x7 - x5)` is `1/(1 - x5/x7)`).
+    // Any other factor without a zero into one reciprocal sum: `f * A^-1 -> (A/f)^-1`.
     for (fi, f) in v.iter().enumerate() {
-        if matches!(f, Ex::Num(_) | Ex::Add(_)) || recips.contains(&fi) {
+        if matches!(f, Ex::Num(_) | Ex::Add(_))
+            || recips.contains(&fi)
+            || strict_sign(f, cx).is_none()
+        {
             continue;
         }
         let f_inv = pow(f.clone(), Ex::Num(Rat::NEG_ONE), cx);

@@ -1917,6 +1917,10 @@ model predictions.
   cancel to residue, the judge's decay test reads the residue at the intermediates' scale, as it
   does where a side vanishes: `atan2(x0, abs(x1)) - atan(x0/abs(x1))`, rewritten by
   `x0/abs(x1) -> x0*abs(inv(x1))`, was refused in both modes.
+- **`permissive` no longer joins a factor with a zero into a reciprocal sum.** The search's
+  `f * A^-1 -> (A/f)^-1` needs `f` without a zero, where the left side is 0 and the right side
+  has no value: `2*tan(x0)/(1 - tan(x0)^2)` stays (it became `2/(1/tan(x0) - tan(x0))`), as do
+  `x0/(1 - x0^2)` and `x7/(x7 - x5)`.
 
 ### Removed
 
