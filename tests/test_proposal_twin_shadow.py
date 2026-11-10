@@ -45,6 +45,15 @@ def test_twins_from_the_proposal_channel_and_promotion_ship_once(tmp_path) -> No
     # it joined, under its stage
     dropped = [row for rows in provenance.get("twin_shadowed", {}).values() for row in rows]
     assert dropped, provenance.get("twin_shadowed")
+    # THE DROP LEDGER: every rule that left the set records its stage and why, so a diff of two
+    # mines is explained from their sidecars alone; each length records its folded picks
+    ledger = provenance["dropped"]
+    assert all(set(e) == {"rule", "stage", "reason"} for e in ledger), ledger
+    shadowed = {(tuple(e["rule"][0]), tuple(e["rule"][1])) for e in ledger
+                if e["reason"] == "twin-shadowed" and e["stage"].endswith("twin_shadow")}
+    for lhs, rhs in dropped:
+        assert (tuple(lhs), tuple(rhs)) in shadowed, (lhs, rhs, ledger)
+    assert all("folded" in record for record in provenance["per_length"].values())
     tan = [r for r in rules if r[1] in (["tan", "_0"], ["neg", "tan", "_0"], ["tan", "?0"],
                                         ["neg", "tan", "?0"])]
     assert tan, rules

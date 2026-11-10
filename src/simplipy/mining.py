@@ -1443,6 +1443,24 @@ class RuleMiner:
                     if identity not in _drops and identity not in alive:
                         _drops[identity] = (stage, reason_of(identity))
 
+            def _ids() -> dict:
+                """The set's rules by identity (`_rule_identity`: one key for every spelling a
+                rule wears between the scan and the artifact)."""
+                return {_rule_identity(lhs, rhs, dummy_variables): (lhs, rhs)
+                        for lhs, rhs in self._mode_rules(rule_mode)}
+
+            def _ledger(stage: str, before: dict, reason_of: Callable[[Any], str]) -> None:
+                """THE DROP LEDGER: every rule of `before` (`_ids`) whose identity left the set
+                during `stage`, recorded in the sidecar (`dropped`) with the stage and why, so a
+                diff of two mines explains every rule from their sidecars alone."""
+                if prov is None:
+                    return
+                now = _ids()
+                prov.setdefault('dropped', []).extend(
+                    {'rule': [list(lhs), list(rhs)], 'stage': stage,
+                     'reason': reason_of(identity)}
+                    for identity, (lhs, rhs) in before.items() if identity not in now)
+
             def _accept(pairs: list, context: list) -> set:
                 """The mine's acceptance (`_refusals`) for promotion's rungs and seeds."""
                 return set(self._refusals([(tuple(lhs), tuple(rhs)) for lhs, rhs in pairs],
@@ -1453,8 +1471,10 @@ class RuleMiner:
                 proposal channel, a promotion): the test the per-length loop applies to each
                 length's picks (`_deshadow`), so the final gate finds no twin-shadow owner to
                 report. Each row it drops is recorded under ``stage``."""
+                _held = _ids()
                 kept, gone = self._deshadow(rule_mode, self._mode_rules(rule_mode))
                 self._install(rule_mode, kept)
+                _ledger(stage, _held, lambda _identity: 'twin-shadowed')
                 if gone:
                     _note_drops(stage, lambda _identity: 'twin-shadowed')
                     if prov is not None:
@@ -1464,6 +1484,7 @@ class RuleMiner:
             def _lane(entries: list, lane_judge: Callable | None = None,
                       prog: Any = None) -> tuple[dict, list, dict]:
                 """Certify one batch through the proposal channel and merge it."""
+                _held = _ids()
                 outcomes, trail, judge_loop = self._certify_proposals(
                     entries, library,
                     leaf_nodes if leaf_nodes is not None else list(dummy_variables),
@@ -1479,6 +1500,7 @@ class RuleMiner:
                     _rule_identity(e['source'], e['target'], dummy_variables): i
                     for i, e in enumerate(trail) if e['verdict'] == 'certified'}))
                 _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
+                _ledger('merge', _held, lambda _identity: 'folded-by-deduplicate')
                 # The batch joins the set as a length's picks do: through the merge, then the
                 # twin-shadow removal.
                 _deshadow_installed('merge_twin_shadow')
@@ -1542,7 +1564,10 @@ class RuleMiner:
                     return
                 gate['unlicensed'] = self._final_gate(rule_mode, judge, judged)[1]
             if prune == 'covered':
+                _held = _ids()
                 self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                _ledger('prune_covered', _held,
+                        lambda _identity: 'behaviourally-covered-by-remaining-rules')
                 # The prune removes only rules the REMAINING set already reaches,
                 # so a certified proposal dropped here is still served compositionally
                 # -- a harmless drop, but one the census must still name.
@@ -1560,6 +1585,7 @@ class RuleMiner:
             # covers). Emits the deployment-strength ruleset directly.
             if promote_sorts and not interrupted():
                 from .promotion import promote
+                _held = _ids()
                 kept, promotion_report = promote(self._mode_rules(rule_mode), self.engine,
                                                  verbose=verbose, rule_mode=rule_mode,
                                                  judge=judge, accept=_accept)
@@ -1573,6 +1599,8 @@ class RuleMiner:
                     for item in items if len(item) >= 2}
                 _note_drops('sort_promotion',
                             lambda identity: _promo_reason.get(identity, 'derivable-refund'))
+                _ledger('sort_promotion', _held,
+                        lambda identity: _promo_reason.get(identity, 'derivable-refund'))
                 # A promoted spelling joins the set as a length's picks do.
                 _deshadow_installed('sort_promotion_twin_shadow')
                 if verbose:
@@ -1588,7 +1616,10 @@ class RuleMiner:
                 # redundant instances; genuinely novel ground rules (`cos 0 -> 1`)
                 # have no wildcard cover and survive.
                 if prune == 'covered':
+                    _held = _ids()
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                    _ledger('prune_covered_post_promotion', _held,
+                            lambda _identity: 'behaviourally-covered-by-remaining-rules')
                     _note_drops('prune_covered_post_promotion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
             # OVERLAP COMPLETION: where two rules overlap at an instance and the two paths end
@@ -1649,8 +1680,10 @@ class RuleMiner:
                 if not _entries:
                     break
                 _before = set(self._mode_rules(rule_mode))
-                outcomes, _, judge_loop = _lane(_entries, _timed_judge, _cprog)
+                outcomes, _ctrail, judge_loop = _lane(_entries, _timed_judge, _cprog)
+                # every completion offered, with the verdict that kept it out or let it in
                 _completion.append({'offered': len(_entries), 'outcomes': dict(outcomes),
+                                    'trail': _ctrail,
                                     'judge_rounds': judge_loop['judge_rounds'],
                                     'seconds': round(time.monotonic() - _t_round, 1)})
                 _cprog.stage(f'round {_round + 1} certified', **dict(outcomes),
@@ -1658,7 +1691,10 @@ class RuleMiner:
                 if not outcomes['certified']:
                     break
                 if prune == 'covered':
+                    _held = _ids()
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                    _ledger('prune_covered_completion', _held,
+                            lambda _identity: 'behaviourally-covered-by-remaining-rules')
                     _note_drops('prune_covered_completion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
                 # Promotion takes `?`-sorted rules: the set is promoted already, so the
@@ -1668,6 +1704,7 @@ class RuleMiner:
                 if promote_sorts and _added:
                     from .promotion import promote
                     _rest = [r for r in self._mode_rules(rule_mode) if r not in set(_added)]
+                    _held = _ids()
                     kept, _report = promote(
                         _added, self.engine, verbose=verbose, rule_mode=rule_mode, judge=judge,
                         accept=lambda pairs, context: _accept(pairs, _rest + list(context)))
@@ -1685,9 +1722,14 @@ class RuleMiner:
                                      if (tuple(lhs), tuple(rhs)) not in _seeded])
                     _note_drops('sort_promotion_completion',
                                 lambda _identity: 'derivable-refund')
+                    _ledger('sort_promotion_completion', _held,
+                            lambda _identity: 'derivable-refund')
                     _deshadow_installed('sort_promotion_completion_twin_shadow')
                     if prune == 'covered':
+                        _held = _ids()
                         self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
+                        _ledger('prune_covered_completion', _held,
+                                lambda _identity: 'behaviourally-covered-by-remaining-rules')
                         _note_drops('prune_covered_completion',
                                     lambda _identity: 'behaviourally-covered-by-remaining-rules')
             if prov is not None:
@@ -2034,16 +2076,25 @@ class RuleMiner:
             # length's marks are computed against, so a rule the judge refuses never prunes a
             # longer source.
             _shadowed: list = []
+            _folded: list = []
             if found:
-                rules = deduplicate_rules(
-                    rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
-                    dummy_variables, verbose=verbose, engine=self.engine, rule_mode=rule_mode)
+                _offered = rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found]
+                rules = deduplicate_rules(_offered, dummy_variables, verbose=verbose,
+                                          engine=self.engine, rule_mode=rule_mode)
+                # THE LENGTH'S MERGE: a pick whose identity the fold left out (a canonical twin
+                # of a kept rule) is recorded, as every stage's drop is
+                _kept = {_rule_identity(lhs, rhs, dummy_variables) for lhs, rhs in rules}
+                _folded = list({_rule_identity(lhs, rhs, dummy_variables): [list(lhs), list(rhs)]
+                                for lhs, rhs in _offered
+                                if _rule_identity(lhs, rhs, dummy_variables)
+                                not in _kept}.values())
                 rules, _shadowed = self._deshadow(rule_mode, rules)
             per_length[length] = {**ac_classes_per_length[length], 'picks': len(found),
                                   'judge_rounds': _loop['judge_rounds'],
                                   'excluded': _loop['excluded'],
                                   'twin_shadowed': [[list(lhs), list(rhs)]
                                                     for lhs, rhs in _shadowed],
+                                  'folded': _folded,
                                   'total': len(rules),
                                   'wall_s': round(time.monotonic() - _t0, 3)}
             if provenance is not None:

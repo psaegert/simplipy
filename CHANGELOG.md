@@ -1933,6 +1933,12 @@ model predictions.
   themselves, `x1/2.99792458e8 -> x1/299792458` and `log(cos(x2)) + cos(x1) -> cos(x1) +
   log(cos(x2))` hold in both modes; they were undecided where the interval cells ran past their
   horizon or budget.
+- **A mine's sidecar records every rule a stage drops.** `dropped` names each rule that left the
+  set after the scan (the merge, the twin-shadow removal, the covered prunes, sort promotion and
+  the completion rounds) with its stage and why, each length records the picks its merge folded
+  (`per_length.folded`), and each completion round every completion offered with the verdict that
+  kept it out or let it in (`completion.trail`): a diff of two mines is explained from their
+  sidecars alone.
 
 ### Removed
 
