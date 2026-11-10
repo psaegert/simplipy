@@ -8,8 +8,9 @@ integer order's parity read on the negative axis, where scipy loses a zero's sig
 bessely, besseli and besselk are scipy 1.18.1's erfc, yv, iv and kv, carried in the core and
 gated bit for bit against scipy. The AMOS kernels (jv, yv, kv) divide complex numbers, which
 the core does itself and scipy does through the platform's runtime, so they meet scipy bit
-for bit where the platform divides as the core does; on every machine they meet values pinned
-on such a machine (`fixtures/kernels/scipy_reference.npz`). Two gates per kernel:
+for bit where the platform divides as the core does (elsewhere, as on Ubuntu 26.04, the two
+differ by design; the core's elementary functions are the platform's libm on every machine, so
+its values are not the same everywhere either). Two gates per kernel:
 
 * BIT IDENTITY with numpy where numpy's own operation is the deployed one: floor and ceil
   are `np.floor`/`np.ceil`, mod is `np.mod` on float64, and max/min are `np.maximum`/
@@ -24,7 +25,6 @@ import ctypes
 import ctypes.util
 import functools
 import math
-import pathlib
 from fractions import Fraction
 
 import mpmath as mp
@@ -100,7 +100,7 @@ def needs_the_cores_division(name: str) -> None:
     """Skip a comparison with scipy that this platform's complex division makes differ."""
     if name in AMOS and not platform_divides_as_the_core():
         pytest.skip(f"this platform divides complex numbers otherwise than the core, so scipy's {name} "
-                    'differs by design; test_kernels_keep_their_pinned_values gates the core here')
+                    'differs from the core by design')
 
 
 SPECIAL = np.array([0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1.5, -1.5, 2.0, -3.0, TINY, -TINY,
@@ -530,25 +530,6 @@ def test_scipy_bessels_are_scipy_bit_for_bit(name) -> None:
     nu, x = scipy_bessel_grid()
     same = bits_equal(core2(name, nu, x), scipy_value(name, nu, x))
     assert same.all(), list(zip(nu[~same][:5], x[~same][:5]))
-
-
-#: The core's erfc, besselj, bessely, besseli and besselk at about 3,000 points of each grid
-#: above, read on a machine whose runtime divides complex numbers as the core does (there they
-#: are scipy's, bit for bit), with the points where Ubuntu 26.04's scipy differs.
-PINNED = pathlib.Path(__file__).parent / 'fixtures' / 'kernels' / 'scipy_reference.npz'
-
-
-@pytest.mark.parametrize('name', ['erfc', 'besselj', 'bessely', 'besseli', 'besselk'])
-def test_kernels_keep_their_pinned_values(name) -> None:
-    """The core's values are the same on every machine, whatever its runtime and its scipy."""
-    pinned = np.load(PINNED)
-    want = pinned[f'{name}_bits'].view(F)
-    if name == 'erfc':
-        got = core1(name, pinned['erfc_x'])
-    else:
-        got = core2(name, pinned[f'{name}_nu'], pinned[f'{name}_x'])
-    same = bits_equal(got, want)
-    assert same.all(), np.flatnonzero(~same)[:5]
 
 
 def test_scipy_bessel_cells() -> None:
