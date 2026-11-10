@@ -131,7 +131,7 @@ def main(argv: str = None) -> None:
                 'min_informative', 'seed', 'confirm',
                 'relaxed_kruskal', 'prune', 'proposals',
                 'promote_sorts', 'symbolic_gate', 'snapshot_at', 'interval_node_budget',
-                'offer_final_rules'}
+                'offer_final_rules', 'operator_max_length'}
             unknown_keys = sorted(set(rule_finding_config) - known_keys)
             if unknown_keys:
                 print(f'Error: unknown key(s) in {args.config}: {", ".join(unknown_keys)}. '
@@ -167,6 +167,7 @@ def main(argv: str = None) -> None:
                 symbolic_gate=rule_finding_config.get('symbolic_gate', True),
                 interval_node_budget=rule_finding_config.get('interval_node_budget', None),
                 offer_final_rules=rule_finding_config.get('offer_final_rules', True),
+                operator_max_length=rule_finding_config.get('operator_max_length', None),
                 # Ladder re-use: {source_length: path} emits the shorter cells of the same
                 # `j` as the climb passes through them. Paths are resolved relative to the
                 # output file's directory so a config stays portable across boxes.

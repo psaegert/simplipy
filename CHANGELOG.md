@@ -204,7 +204,8 @@ organised by who you are, then the highlights, then every change in detail.
   length, which a rerun of the same mine resumes from; the rerun takes a mode whose file is
   already final as it is.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
-  `find_rules(judge=, judge_processes=)` and `find_rules(offer_final_rules=)`. `save_every=`
+  `find_rules(judge=, judge_processes=)`, `find_rules(offer_final_rules=)` and
+  `find_rules(operator_max_length=)` (also `certify_rules`). `save_every=`
   (CLI `-s/--save-every`) is removed: the rule file is written once, when the mode's mine ends
   (see Removed).
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
@@ -1866,6 +1867,16 @@ model predictions.
   serves is dropped there and recorded in the sidecar (`twin_shadowed`). The final gate found
   such a pair (`sin(x0)*inv(cos(x0)) -> tan(x0)` beside `sin(-x0)/cos(x0) -> -tan(x0)`) and
   failed every mine with proposals.
+- **A mine can bound an operator's length.** `find_rules(operator_max_length={'besseli': 4})`
+  (config key `operator_max_length`) keeps each named operator out of every source and every
+  candidate longer than its bound, so it is mined through that length and not beyond; the
+  other operators appear at every length. The mine's cell is the universe this gives: the
+  overlap completion offers, and the overlap gate and `verify-mine` demand, only completions
+  whose source lies in it. The sidecar records the setting among the parameters, and a
+  checkpoint written under another setting is not resumed. Proposals and the f64 file offered
+  to permissive are not bounded by it, as they are not by `max_source_pattern_length`.
+  `certify_rules` takes the same keyword for its candidate library. Without the setting a mine
+  is unchanged, byte for byte.
 
 ### Removed
 

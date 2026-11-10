@@ -245,6 +245,14 @@ promote_sorts: true
 # default); its sidecar pins the file.
 offer_final_rules: true
 
+# Optional: the per-length operator set. An operator named here appears only in
+# sources and candidates of at most that many tokens (here: the four mined
+# through length 4 and not at length 5); the others appear at every length. The
+# mine's cell, where overlaps are completed and demanded, is the universe this
+# gives. Recorded in the sidecar's parameters; a checkpoint written under another
+# setting is not resumed.
+# operator_max_length: {erfc: 4, bessely: 4, besseli: 4, besselk: 4}
+
 # Optional: LLM/human-proposed rules, certified against the mined state at the
 # end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
 # resolved relative to this config file. The published artifact's LLM lane is
@@ -277,7 +285,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
 | `preempted` | no ground rule is one the rule-less engine already performs, such as a ground fact it folds (`log (-3) → nan`) |
 | `dead` | every rule is live: on each generic instance of its left side (each placeholder a fresh variable, a wide one also `1/(x + x')`, with a variable of its own), the engine holding the file reaches the right side or below, so no rule is shadowed by another that takes its instance and ends dearer |
-| `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file, within the mine's cell (a completion source no longer than the mine's sources); the overlaps whose completion the judge refuses are listed with its tier and verdict, those beyond the cell are counted, and neither fails |
+| `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file, within the mine's cell (a completion source no longer than the mine's sources, holding no operator its `operator_max_length` keeps out of that length); the overlaps whose completion the judge refuses are listed with its tier and verdict, those beyond the cell are counted, and neither fails |
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |

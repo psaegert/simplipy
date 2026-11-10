@@ -838,12 +838,84 @@ def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any, prog: Any = None
     return out
 
 
-def _in_cell(overlap: dict, max_source: int | None) -> bool:
-    """Is the overlap's completion a rule of the mine's cell: its source no longer than the
-    mine's sources (``max_source``, None for no bound)? A longer source lies outside the
-    universe the mine enumerates, and completing there breeds without end: each completion
-    overlaps the rules again at a longer instance."""
-    return max_source is None or len(overlap['completion'][0]) <= max_source
+def _operator_max_length(setting: Any, operators: Any) -> dict[str, int]:
+    """THE PER-LENGTH OPERATOR SET of a mine, normalized: ``{operator: n}`` keeps ``operator``
+    out of every source and candidate longer than ``n`` tokens; an operator it does not name
+    appears at every length (``None`` and ``{}`` name none). Each key must be one of
+    ``operators`` and each bound a positive integer. Sorted by operator, as the sidecar's
+    parameters and the checkpoint's key record it."""
+    if setting is None:
+        return {}
+    if not isinstance(setting, dict):
+        raise ValueError(f'operator_max_length must map operators to lengths, '
+                         f'got {type(setting).__name__}')
+    unknown = sorted(str(op) for op in setting if op not in operators)
+    if unknown:
+        raise ValueError(f'operator_max_length names operators the engine does not have: '
+                         f'{", ".join(unknown)}')
+    for op, bound in setting.items():
+        if isinstance(bound, bool) or not isinstance(bound, int) or bound < 1:
+            raise ValueError(f'operator_max_length[{op!r}] must be a positive integer, '
+                             f'got {bound!r}')
+    return {str(op): int(setting[op]) for op in sorted(setting)}
+
+
+def _excluded_at_length(length: int, operator_max_length: dict | None) -> set[str]:
+    """The operators an expression of ``length`` tokens may not hold under the mine's
+    per-length operator set (``_operator_max_length``): those bounded below ``length``. The
+    one reading of the setting: the universe (``_universe``) and the cell test (``_in_cell``)
+    both ask it."""
+    return {op for op, bound in (operator_max_length or {}).items() if bound < length}
+
+
+_Universe = tuple[dict[int, set[tuple[str, ...]]], dict[int, int]]
+
+
+def _universe(leaf_nodes: list[str], non_leaf_nodes: dict[str, int], max_length: int,
+              operator_max_length: dict | None = None) -> _Universe:
+    """THE MINE'S UNIVERSE, its sources and its candidates alike: every expression of
+    ``1..max_length`` tokens over ``leaf_nodes`` and the operators ``non_leaf_nodes``, each
+    operator only in expressions as long as the per-length operator set allows
+    (``_excluded_at_length``). Lengths that allow the same operators are enumerated together,
+    completely and bottom-up (:func:`~simplipy.utils.enumerate_expressions`), and every length is
+    checked against the counting recurrence over the same operators
+    (:func:`~simplipy.utils.count_expressions`): two paths, one truth.
+    -> ``(expressions_of_length, counts)``."""
+    groups: list[tuple[dict[str, int], list[int]]] = []
+    for length in range(1, max_length + 1):
+        excluded = _excluded_at_length(length, operator_max_length)
+        allowed = {op: arity for op, arity in non_leaf_nodes.items() if op not in excluded}
+        if groups and groups[-1][0] == allowed:
+            groups[-1][1].append(length)
+        else:
+            groups.append((allowed, [length]))
+    expressions: dict[int, set[tuple[str, ...]]] = {}
+    counts: dict[int, int] = {}
+    for allowed, lengths in groups:
+        group_counts = count_expressions(len(leaf_nodes), allowed, lengths[-1])
+        enumerated = enumerate_expressions(leaf_nodes, allowed, lengths[-1])
+        for length in lengths:
+            if len(enumerated[length]) != group_counts[length]:
+                raise AssertionError(
+                    f'enumeration incomplete at length {length}: '
+                    f'{len(enumerated[length]):,} != {group_counts[length]:,}')
+            expressions[length] = enumerated[length]
+            counts[length] = group_counts[length]
+    return expressions, counts
+
+
+def _in_cell(overlap: dict, max_source: int | None,
+             operator_max_length: dict | None = None) -> bool:
+    """Is the overlap's completion a rule of the mine's cell: its source a source of the
+    mine's universe, no longer than the mine's sources (``max_source``, None for no bound) and
+    holding no operator the per-length operator set (``operator_max_length``) keeps out of its
+    length? A source outside the universe is one the mine does not enumerate, and completing
+    there breeds without end: each completion overlaps the rules again at a longer instance."""
+    source = overlap['completion'][0]
+    if max_source is not None and len(source) > max_source:
+        return False
+    excluded = _excluded_at_length(len(source), operator_max_length)
+    return not any(str(token) in excluded for token in source)
 
 
 def _completion_pattern(overlap: dict) -> tuple:
@@ -855,7 +927,8 @@ def _completion_pattern(overlap: dict) -> tuple:
 
 
 def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
-              judged: dict | None = None, max_source: int | None = None) -> dict:
+              judged: dict | None = None, max_source: int | None = None,
+              operator_max_length: dict | None = None) -> dict:
     """``verify.licensed`` of each distinct pair in the file of ``rule_mode``: the judge's tier
     holds in the mode and no named policy refuses it (evidence, the constant count, ground
     composites, the cell, the ordering, the specials, duplication, what the engine does
@@ -869,13 +942,15 @@ def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
         judged[pair] = tier
     mode = _file_mode(rule_mode)
     return {pair: licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
+                           operator_max_length=operator_max_length,
                            detail={'tier': judged[pair]})
             for pair in distinct}
 
 
 def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
                   verdicts: Callable | None = None, max_source: int | None = None,
-                  prog: Any = None) -> tuple[list, list, list]:
+                  prog: Any = None,
+                  operator_max_length: dict | None = None) -> tuple[list, list, list]:
     """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) within the
     mine's cell (``_in_cell``) is asked about as the rule completion would add:
     ``verify.licensed`` in the mode, the judge's tier and the named policies. -> ``(missing,
@@ -885,10 +960,11 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
     tier does not hold, and the overlaps whose completion lies beyond the cell, unjudged."""
     started = time.monotonic()
     unjoined = _unjoined_overlaps(engine, rule_mode, rules)
-    beyond = [o for o in unjoined if not _in_cell(o, max_source)]
-    unjoined = [o for o in unjoined if _in_cell(o, max_source)]
+    beyond = [o for o in unjoined if not _in_cell(o, max_source, operator_max_length)]
+    unjoined = [o for o in unjoined if _in_cell(o, max_source, operator_max_length)]
     pairs = [_completion_pattern(o) for o in unjoined]
-    licence = _licences(engine, rule_mode, pairs, judge, max_source=max_source)
+    licence = _licences(engine, rule_mode, pairs, judge, max_source=max_source,
+                        operator_max_length=operator_max_length)
     if prog is not None:
         prog.stage('overlap gate', unjoined=len(unjoined), beyond_the_cell=len(beyond),
                    judged=len(licence), seconds=round(time.monotonic() - started, 1))
@@ -1267,14 +1343,17 @@ class RuleMiner:
             judge_fail_s: float = JUDGE_FAIL_S,
             cells: dict[tuple[str, str | None], list] | None = None,
             offer_final_rules: bool = False,
-            judge_processes: int = 4) -> None:
+            judge_processes: int = 4,
+            operator_max_length: dict | None = None) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
         ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
         throughout (marks, sources, library, acceptance, the rules installed so far). The
         file's rules are written and recorded in ``finals[rule_mode]``, and every cell it
         finishes (a ladder snapshot or the file) in ``cells[(rule_mode, cell path)]``. With
         ``offer_final_rules``, the permissive mine is offered the f64 cell of the same path
-        through its proposal lane (see :meth:`find_rules`).
+        through its proposal lane (see :meth:`find_rules`). ``expressions_of_length`` is the
+        universe the cell enumerates (``_universe``) and ``operator_max_length`` its per-length
+        operator set, which the cell test of the completion step and the overlap gate reads.
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
@@ -1551,7 +1630,8 @@ class RuleMiner:
                 _entries = []
                 _unjoined = _unjoined_overlaps(self.engine, rule_mode,
                                                self._mode_rules(rule_mode), prog=_cprog)
-                _within = [o for o in _unjoined if _in_cell(o, cell_source_length)]
+                _within = [o for o in _unjoined
+                           if _in_cell(o, cell_source_length, operator_max_length)]
                 # only a completion the mode licenses is offered (the overlap gate's question):
                 # one the judge refuses or a named policy refuses is no rule to mine
                 # a completion is offered again once the set it was mined against has moved:
@@ -1562,7 +1642,8 @@ class RuleMiner:
                                          tuple(o['completion'][1]))) != _set]
                 _licence = _licences(self.engine, rule_mode,
                                      [_completion_pattern(o) for o in _fresh], _timed_judge,
-                                     judged, max_source=cell_source_length)
+                                     judged, max_source=cell_source_length,
+                                     operator_max_length=operator_max_length)
                 for o in _fresh:
                     pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
                     if _tried.get(pair) != _set and _licence[_completion_pattern(o)]['licensed']:
@@ -1655,7 +1736,8 @@ class RuleMiner:
                 functools.partial(judge_verdicts, processes=judge_processes,
                                   warn_s=judge_warn_s, fail_s=judge_fail_s),
                 max_source=cell_source_length,
-                prog=Progress(verbose, prefix='  [gate] '))
+                prog=Progress(verbose, prefix='  [gate] '),
+                operator_max_length=operator_max_length)
             gate['overlaps_beyond_cell'] = len(_beyond)
             # THE COVERAGE GATE on what ships (permissive includes f64, expected empty): every
             # rule of the f64 cell the file was offered is covered by permissive's answer,
@@ -2067,8 +2149,10 @@ class RuleMiner:
             leaf_nodes: list[str],
             non_leaf_nodes: dict[str, int],
             max_source_pattern_length: int,
-            verbose: bool) -> tuple[dict[int, set[tuple[str, ...]]], dict[int, int]]:
-        """Phase 1 of :meth:`find_rules`: build the per-length source/candidate universe.
+            verbose: bool,
+            operator_max_length: dict | None = None) -> _Universe:
+        """Phase 1 of :meth:`find_rules`: build the per-length source/candidate universe
+        (``_universe``, under the per-length operator set ``operator_max_length``).
 
         COMPLETE bottom-up DP enumeration per length: enumeration must SATURATE each
         length, not merely reach it (a pass-based closure that stops once
@@ -2076,20 +2160,13 @@ class RuleMiner:
         families).
 
         Returns ``(expressions_of_length, counts)``: the enumerated universe per
-        length, and the complete-universe count DP.
+        length, and the complete-universe count DP (two paths, one truth: they agree at every
+        length, or the build raises).
         """
-        counts = count_expressions(len(leaf_nodes), non_leaf_nodes, max_source_pattern_length)
         if verbose:
             print(f"Phase 1: enumerating all expressions up to length {max_source_pattern_length}")
-
-        expressions_of_length = enumerate_expressions(leaf_nodes, non_leaf_nodes, max_source_pattern_length)
-        # Two paths, one truth: the enumerated universe must match the count DP exactly.
-        for length, expressions in expressions_of_length.items():
-            if len(expressions) != counts[length]:
-                raise AssertionError(
-                    f'enumeration incomplete at length {length}: {len(expressions):,} != {counts[length]:,}')
-
-        return expressions_of_length, counts
+        return _universe(leaf_nodes, non_leaf_nodes, max_source_pattern_length,
+                         operator_max_length)
 
     def _build_mine_provenance(
             self, *,
@@ -2116,7 +2193,8 @@ class RuleMiner:
             interval_node_budget: int | None,
             judge_warn_s: float = JUDGE_WARN_S,
             judge_fail_s: float = JUDGE_FAIL_S,
-            offer_final_rules: bool = True) -> dict:
+            offer_final_rules: bool = True,
+            operator_max_length: dict | None = None) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
         be reproducible from its sidecar alone. Everything that determines the mine is
         recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
@@ -2192,6 +2270,9 @@ class RuleMiner:
                 'interval_node_budget': interval_node_budget,
                 'judge_warn_s': judge_warn_s, 'judge_fail_s': judge_fail_s,
                 'offer_final_rules': offer_final_rules,
+                # the per-length operator set, normalized ({} for none): part of the
+                # checkpoint's key through these parameters
+                'operator_max_length': dict(operator_max_length or {}),
             },
             'X': x_spec,
             'universe': {
@@ -2241,7 +2322,8 @@ class RuleMiner:
             atol: float = 1e-12,
             min_informative: int | None = None,
             seed: int | None = 42,
-            verbose: bool = False) -> list[CertifiedRule]:
+            verbose: bool = False,
+            operator_max_length: dict | None = None) -> list[CertifiedRule]:
         """Certify externally proposed simplification rules with the mining gates, in ``mode``.
 
         For each proposed ``source`` expression this runs the exact certification chain
@@ -2267,7 +2349,8 @@ class RuleMiner:
         is the mode the chain runs in -- its serve answer is the mark, its canon reads the
         sources, its numerics accept -- and the mode whose tiers the symbolic gate keeps
         (``MODE_TIERS``): every returned rule is licensed there. Other parameters mirror
-        :meth:`find_rules`. The engine is not modified; returns a list of
+        :meth:`find_rules` (``operator_max_length`` bounds the candidate library as it bounds a
+        mine's). The engine is not modified; returns a list of
         :class:`CertifiedRule` ``(source, target, certificate, mode, basis)``. Merge accepted
         rules into the set of the mode they were certified in, e.g.::
 
@@ -2279,6 +2362,7 @@ class RuleMiner:
         """
         from .engine import _coerce_mode
         rule_mode = {file_mode: rm for rm, file_mode in _MINE_MODES}[_coerce_mode(mode).name]
+        operator_max_length = _operator_max_length(operator_max_length, self.engine.operator_arity)
         sources = [tuple(str(t) for t in s) for s in sources]
         hint_list: list = list(targets) if targets is not None else [None] * len(sources)
         if len(hint_list) != len(sources):
@@ -2297,7 +2381,8 @@ class RuleMiner:
             return self._certify_rules_locked(
                 sources, hint_list, rule_mode, max_target_pattern_length, dummy_variables,
                 extra_internal_terms, X, constants_fit_challenges,
-                constants_fit_retries, rtol, atol, min_informative, seed, verbose)
+                constants_fit_retries, rtol, atol, min_informative, seed, verbose,
+                operator_max_length)
         finally:
             _MINE_LOCK.release()
 
@@ -2307,7 +2392,7 @@ class RuleMiner:
             dummy_variables: int | list[str] | None, extra_internal_terms: list[str] | None,
             X: int | None, constants_fit_challenges: int, constants_fit_retries: int,
             rtol: float, atol: float, min_informative: int | None, seed: int | None,
-            verbose: bool) -> list[CertifiedRule]:
+            verbose: bool, operator_max_length: dict) -> list[CertifiedRule]:
         dummy_variables = self._resolve_dummy_variables(
             dummy_variables,
             default=lambda: (sorted({t for s in sources for t in s
@@ -2331,7 +2416,8 @@ class RuleMiner:
         if '<constant>' not in leaf_nodes:
             leaf_nodes.append('<constant>')
         non_leaf_nodes = dict(sorted(self.engine.operator_arity.items(), key=lambda x: x[1]))
-        expressions = enumerate_expressions(leaf_nodes, non_leaf_nodes, max_target_pattern_length)
+        expressions, _ = _universe(leaf_nodes, non_leaf_nodes, max_target_pattern_length,
+                                   operator_max_length)
         candidates = [list(expression)
                       for length in sorted(expressions)
                       for expression in sorted(expressions[length])]
@@ -2648,7 +2734,8 @@ class RuleMiner:
             judge_warn_s: float = JUDGE_WARN_S,
             judge_fail_s: float = JUDGE_FAIL_S,
             offer_final_rules: bool = True,
-            modes: Any = None) -> None:
+            modes: Any = None,
+            operator_max_length: dict[str, int] | None = None) -> None:
         """Systematically discovers new simplification rules.
 
         This method automates the discovery of simplification rules, one file per mode
@@ -2807,6 +2894,17 @@ class RuleMiner:
             ``f64`` file at the output path in the default slot, and is offered it
             (``offer_final_rules``), which must then exist. Each mined file's sidecar and
             final-gate line are its own, as in a full mine.
+        operator_max_length : dict[str, int] or None, optional
+            The per-length operator set: ``{operator: n}`` keeps ``operator`` out of every
+            source and every candidate longer than ``n`` tokens, so it is mined through length
+            ``n`` and not beyond (``{'besseli': 4}`` mines ``besseli`` in sources and targets of
+            at most 4 tokens). An operator the mapping does not name appears at every length;
+            ``None`` (the default) and ``{}`` name none. The mine's cell is the universe this
+            gives: the overlap completion offers, and the overlap gate demands, only
+            completions whose source lies in it. Proposals and the offered f64 file are not
+            bounded by it, as they are not by ``max_source_pattern_length``. Recorded in the
+            sidecar's parameters, so a checkpoint of another setting is not resumed. Config key
+            ``operator_max_length``.
 
         Notes
         -----
@@ -2820,6 +2918,7 @@ class RuleMiner:
         if not isinstance(prune, bool) and prune != 'covered':
             raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
         mined_modes = _mine_modes(modes)
+        operator_max_length = _operator_max_length(operator_max_length, self.engine.operator_arity)
         if prune is True:
             # Fail HERE, not after the length loop: the old late raise fired at the END
             # of a potentially week-scale mine.
@@ -2901,7 +3000,7 @@ class RuleMiner:
 
         # --- Phase 1: build the source/candidate universe (see _build_source_universe) ---
         expressions_of_length, counts = self._build_source_universe(
-            leaf_nodes, non_leaf_nodes, max_source_pattern_length, verbose)
+            leaf_nodes, non_leaf_nodes, max_source_pattern_length, verbose, operator_max_length)
 
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
@@ -2926,7 +3025,8 @@ class RuleMiner:
             relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules,
             interval_node_budget=interval_node_budget,
             judge_warn_s=judge_warn_s, judge_fail_s=judge_fail_s,
-            offer_final_rules=offer_final_rules)
+            offer_final_rules=offer_final_rules,
+            operator_max_length=operator_max_length)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).
@@ -3036,6 +3136,7 @@ class RuleMiner:
                     cells=cells,
                     offer_final_rules=offer_final_rules,
                     judge_processes=judge_processes,
+                    operator_max_length=operator_max_length,
                 )
             # The engine ends holding the files it wrote, as it would load them.
             if 'default' in finals:
@@ -3078,7 +3179,8 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       shadows on its own instance ships and never decides an answer;
     - ``overlaps``: where two rules overlap and the paths do not join, the completion the
       mode licenses is in the file (``_overlap_gate``), within the mine's cell (a completion
-      source no longer than the sidecar's ``max_source_pattern_length``); the completions it
+      source no longer than the sidecar's ``max_source_pattern_length``, holding no operator
+      its ``operator_max_length`` keeps out of that length); the completions it
       does not license are listed under ``overlaps_refused`` with the judge's tier, the policies
       that refuse it and the judge's verdict, those beyond the cell are counted under
       ``overlaps_beyond_cell``, and neither fails;
@@ -3161,7 +3263,8 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         engine, rule_mode, rules,
         judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
         functools.partial(judge_verdicts, processes=judge_processes),
-        max_source=(sidecar.get('params') or {}).get('max_source_pattern_length'))
+        max_source=(sidecar.get('params') or {}).get('max_source_pattern_length'),
+        operator_max_length=(sidecar.get('params') or {}).get('operator_max_length'))
     gates['translation'] = load_gates['translation']
     recorded = sidecar.get('measure')
     if isinstance(recorded, dict):
