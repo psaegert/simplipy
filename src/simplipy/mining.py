@@ -997,6 +997,132 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
     return missing, refused, beyond, prefiltered
 
 
+def _split_run_checks(shard: Any, merge: Any, stop_after_length: Any, checkpoint_file: Any,
+                      output_file: str | None, max_source: int) -> None:
+    """Refuse an inconsistent split of a mine across runs before anything is mined (see
+    :meth:`RuleMiner.find_rules`: ``shard``, ``merge``, ``stop_after_length``,
+    ``checkpoint_file``)."""
+    if (shard is not None or merge is not None or stop_after_length is not None) \
+            and output_file is None:
+        raise ValueError('a split mine (shard, merge, stop_after_length) needs an output_file')
+    if shard is not None and not (
+            isinstance(shard, tuple) and len(shard) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in shard)
+            and 0 <= shard[0] < shard[1]):
+        raise ValueError(f'shard must be (i, n) with 0 <= i < n, got {shard!r}')
+    if shard is not None and (merge is not None or stop_after_length is not None):
+        raise ValueError('a shard only scans: it takes neither merge nor stop_after_length')
+    if merge is not None and (isinstance(merge, str) or not all(isinstance(p, str)
+                                                                for p in merge)):
+        raise ValueError('merge takes a list of shard files ([] for those beside the output)')
+    if stop_after_length is not None and not (
+            isinstance(stop_after_length, int) and not isinstance(stop_after_length, bool)
+            and 1 <= stop_after_length < max_source):
+        raise ValueError(f'stop_after_length must lie in 1..{max_source - 1}, '
+                         f'got {stop_after_length!r}')
+    if checkpoint_file is not None and shard is None:
+        raise ValueError('checkpoint_file is the checkpoint a shard reads')
+
+
+def _undecided(core: Any) -> tuple[int, int, int, int]:
+    """The fail-closed miss counters the sidecar records (``soundness.interval_undecided``):
+    the interval layer's horizon, node budget and unanalyzable misses and the mint's undecided
+    sources, process-wide totals."""
+    return (core.interval_horizon_misses(), core.interval_node_budget_misses(),
+            core.interval_unanalyzable_misses(), core.mint_undecided_misses())
+
+
+# A SHARDED LENGTH (`find_rules(shard=, merge=)`): the first scan of a length's sources, the
+# part of a mine that grows with the universe, runs in shards, one per machine or task, each
+# from the checkpoint of the length before; the merge reads every shard and runs the rest of
+# the length -- the judge loop from the shards' picks, the dedupe, the twin-shadow removal --
+# and the rest of the mine, as one machine does after its own scan. A source's first pick is a
+# function of the source, its global index and the rules of the shorter lengths, so the merged
+# picks are the single scan's, and the files are a single machine's.
+_SHARD_FORMAT = 'simplipy-mine-shard/1'
+
+
+def _shard_indices(n_sources: int, shard: int, shards: int) -> range:
+    """The global indices of shard ``shard`` of ``shards`` among a length's ``n_sources`` sources
+    in the miner's class order: every ``shards``-th, from ``shard``. Interleaved, each shard holds
+    its share of every stretch of the order, so the stretches that are dear to scan (the classes
+    of one operator lie together) spread over the shards."""
+    return range(shard, n_sources, shards)
+
+
+def _shard_path(mode_file: str, length: int, shard: int, shards: int) -> str:
+    """The file shard ``shard`` of ``shards`` of length ``length`` writes beside its mode's file."""
+    return f'{mode_file}.shard-{length}-{shard}-of-{shards}.json'
+
+
+def _read_shards(paths: list[str], mode_file: str, length: int, fingerprint: str,
+                 file_mode: str, n_sources: int) -> tuple[dict, dict, tuple, int]:
+    """Read the shards of a sharded length for the merge: ``paths``, or every
+    ``<mode file>.shard-<length>-*`` file beside the mode's file when none are given. Each must be
+    a shard of this mine (its checkpoint's key), mode and length over the same sources, of one
+    split, and every shard of the split must be there exactly once with every index of its part;
+    otherwise nothing is merged. -> ``(picks in global order, the shards' judged tiers, the miss
+    counters of their scans, the number of shards)``."""
+    import glob
+    paths = list(paths) or sorted(glob.glob(f'{glob.escape(mode_file)}.shard-{length}-*-of-*.json'))
+    if not paths:
+        raise RuntimeError(f'no shard of length {length} beside {mode_file!r} to merge')
+    found: dict[int, tuple[str, dict]] = {}
+    shards = None
+    for path in paths:
+        with open(path) as file:
+            data = json.load(file)
+        foreign = [what for what, same in (
+            ('format', data.get('format') == _SHARD_FORMAT),
+            ('mine', data.get('fingerprint') == fingerprint),
+            ('mode', data.get('mode') == file_mode),
+            ('length', data.get('length') == length),
+            ('sources', data.get('sources') == n_sources)) if not same]
+        if foreign:
+            raise RuntimeError(f'{path!r} is not a shard of this mine: its {", ".join(foreign)} '
+                               f'differ')
+        shards = data['shards'] if shards is None else shards
+        if data['shards'] != shards:
+            raise RuntimeError(f'{path!r} is a shard of a {data["shards"]}-way split, the others '
+                               f'of a {shards}-way one')
+        if data['shard'] in found:
+            raise RuntimeError(f'shard {data["shard"]} of {shards} is there twice: '
+                               f'{found[data["shard"]][0]!r} and {path!r}')
+        part = _shard_indices(n_sources, data['shard'], shards)
+        if not 0 <= data['shard'] < shards or data['scanned'] != len(part) \
+                or any(idx not in part for idx, _, _ in data['picks']):
+            raise RuntimeError(f'{path!r} does not hold the scan of its part of the sources')
+        found[data['shard']] = (path, data)
+    assert shards is not None
+    missing = sorted(set(range(shards)) - set(found))
+    if missing:
+        raise RuntimeError(f'shard(s) {missing} of the {shards}-way split of length {length} '
+                           f'are missing; run them and merge again')
+    picks: dict[int, tuple[list, list]] = {}
+    tiers: dict = {}
+    scanned = [0, 0, 0, 0]
+    for shard in range(shards):
+        data = found[shard][1]
+        picks.update({idx: (list(src), list(tgt)) for idx, src, tgt in data['picks']})
+        tiers.update({(tuple(lhs), tuple(rhs)): tier for lhs, rhs, tier in data['judged']})
+        scanned = [a + b for a, b in zip(scanned, data['interval_undecided'])]
+    return dict(sorted(picks.items())), tiers, tuple(scanned), shards
+
+
+def _judge_from_shards(judge: Callable, tiers: dict, processes: int) -> Callable:
+    """The merge's judge: a batch the mine's judge sends to its worker pool (``judge_tiers``:
+    more than one process and at least ``_JUDGE_POOL_MIN`` pairs) takes the tiers the shards
+    judged when they hold every pair of it; every other batch is judged. The judge is a
+    function of the pair, so the tiers are the judge's; and a batch the judge reads in this
+    process is read here too, so the process's miss counters move as a single machine's do."""
+    def judge_(pairs: list) -> list:
+        keys = [(tuple(lhs), tuple(rhs)) for lhs, rhs in pairs]
+        if processes > 1 and len(keys) >= _JUDGE_POOL_MIN and all(k in tiers for k in keys):
+            return [tiers[k] for k in keys]
+        return judge(pairs)
+    return judge_
+
+
 class RuleMiner:
     """The rule miner of one engine: :meth:`find_rules` and :meth:`certify_rules`.
 
@@ -1172,8 +1298,56 @@ class RuleMiner:
 
         A source whose pick the judge refuses ``_JUDGE_ROUNDS_MAX`` times is given up on --
         it is not re-scanned again -- and listed in ``stats['stubborn']`` with the targets it
-        excluded; the loop runs on for the others. The caller fails the mine on it."""
-        picks = {idx: (list(src), list(tgt)) for idx, src, tgt in mine(sources, None, None)}
+        excluded; the loop runs on for the others. The caller fails the mine on it.
+
+        It is the first scan of every source (``_scan_length``) and then the loop from its
+        picks (``_judge_loop``); a sharded length runs the same two, the scan in the shards
+        and the loop in the merge."""
+        return self._judge_loop(self._scan_length(sources, mine), sources, mine, rule_mode,
+                                judge, judged, dummy_variables)
+
+    @staticmethod
+    def _scan_length(sources: list, mine: Callable, indices: list[int] | None = None) -> dict:
+        """THE FIRST SCAN of a length: the pick of each source (of the sources at the global
+        ``indices``, or of all) without exclusions, under the rules of the shorter lengths.
+        A source's pick is a function of the source, its global index and the rules alone,
+        so a scan of a part of the sources gives that part's picks of a scan of all.
+        -> ``{global index: (source, target)}`` for the sources that have a pick."""
+        batch = sources if indices is None else [sources[i] for i in indices]
+        return {idx: (list(src), list(tgt)) for idx, src, tgt in mine(batch, indices, None)}
+
+    def _mine_shard(self, sources: list, mine: Callable, shard: tuple[int, int], length: int,
+                    rule_mode: str, judge: Callable, judged: dict, dummy_variables: list[str],
+                    verbose: bool) -> dict:
+        """One shard of a sharded length: the first scan (``_scan_length``) of the sources of
+        its part (``_shard_indices``), and the judge's tiers of what the merge's first judge
+        round asks of its picks (their patterns and the entries the mode serves from them, as
+        :meth:`_unlicensed` reads them), so the merge need not judge them again. -> the shard
+        record: its picks in global order, the tiers it judged, the miss counters of its scan
+        and the scan's wall time."""
+        indices = _shard_indices(len(sources), *shard)
+        known = set(judged)
+        before = _undecided(self.engine._core)
+        started = time.monotonic()
+        picks = self._mine_tier_with_progress(
+            length, len(indices), lambda: self._scan_length(sources, mine, list(indices)),
+            verbose)
+        scanned = [now - then for now, then in zip(_undecided(self.engine._core), before)]
+        scan_s = round(time.monotonic() - started, 3)
+        self._unlicensed(picks, rule_mode, judge, judged, dummy_variables)
+        return {'scanned': len(indices),
+                'picks': [[idx, src, tgt] for idx, (src, tgt) in sorted(picks.items())],
+                'judged': [[list(lhs), list(rhs), tier] for (lhs, rhs), tier in judged.items()
+                           if (lhs, rhs) not in known],
+                'interval_undecided': scanned, 'scan_s': scan_s}
+
+    def _judge_loop(self, picks: dict, sources: list, mine: Callable, rule_mode: str,
+                    judge: Callable, judged: dict,
+                    dummy_variables: list[str]) -> tuple[list, dict]:
+        """The loop of :meth:`_mine_length` from the length's first picks (``_scan_length``):
+        judge the picks, re-scan the refused sources with their picks excluded, until every
+        pick is licensed or a source is given up on. -> ``(licensed picks in global order,
+        stats)``."""
         exclusions: dict[int, list] = {}
         refusals: dict[int, int] = {}
         stubborn: list[int] = []
@@ -1363,7 +1537,11 @@ class RuleMiner:
             cells: dict[tuple[str, str | None], list] | None = None,
             offer_final_rules: bool = False,
             judge_processes: int = 4,
-            operator_max_length: dict | None = None) -> None:
+            operator_max_length: dict | None = None,
+            shard: tuple[int, int] | None = None,
+            merge: list[str] | None = None,
+            stop_after_length: int | None = None,
+            checkpoint_file: str | None = None) -> str:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
         ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
         throughout (marks, sources, library, acceptance, the rules installed so far). The
@@ -1373,6 +1551,10 @@ class RuleMiner:
         through its proposal lane (see :meth:`find_rules`). ``expressions_of_length`` is the
         universe the cell enumerates (``_universe``) and ``operator_max_length`` its per-length
         operator set, which the cell test of the completion step and the overlap gate reads.
+        ``shard``, ``merge``, ``stop_after_length`` and ``checkpoint_file`` split a length
+        across runs (see :meth:`find_rules`). Returns how the mode ended: ``'final'`` (its file
+        written), ``'reused'`` (its file was finished) or ``'stopped'`` (a shard written, or the
+        length ``stop_after_length`` checkpointed).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
@@ -1903,10 +2085,7 @@ class RuleMiner:
 
         # SOUNDNESS PROVENANCE, first half: every set switch (`env_overrides`; the node
         # budget is a parameter). Recorded up front so interrupted mines carry it.
-        _ivl_baseline = (self.engine._core.interval_horizon_misses(),
-                         self.engine._core.interval_node_budget_misses(),
-                         self.engine._core.interval_unanalyzable_misses(),
-                         self.engine._core.mint_undecided_misses())
+        _ivl_baseline: tuple[int, ...] = _undecided(self.engine._core)
         if provenance is not None:
             provenance['soundness'] = {
                 # EVERY set non-inert SIMPLIPY_* variable, raw: a default run
@@ -1970,21 +2149,27 @@ class RuleMiner:
                         cells[(rule_mode, cell)] = found_rules
                 if verbose:
                     print(f'=== the {file_mode} file is finished: reusing {out_file}')
-                return
+                return 'reused'
         resumed_at = 0
-        if out_file is not None and os.path.exists(out_file + '.checkpoint.json'):
-            with open(out_file + '.checkpoint.json') as file:
+        # A shard may read its checkpoint from elsewhere (`checkpoint_file`); it writes none.
+        ckpt_path = (checkpoint_file if shard is not None and checkpoint_file is not None
+                     else None if out_file is None else out_file + '.checkpoint.json')
+        if ckpt_path is not None and os.path.exists(ckpt_path):
+            with open(ckpt_path) as file:
                 ckpt = json.load(file)
             if ckpt.get('fingerprint') != checkpoint_fp:
                 # A checkpoint of ANOTHER mine -- other parameters, mode, operators, data,
                 # numeric environment, universe, starting sets, or code (the compiled core or
                 # the package's sources) -- is never resumed and never silently overwritten.
                 raise RuntimeError(
-                    f"'{out_file}.checkpoint.json' was written by a different mine (its "
+                    f"'{ckpt_path}' was written by a different mine (its "
                     f"parameters, mode, operators, data, numeric environment, universe, "
                     f"starting rules or code differ); remove it to mine from the start")
             else:
                 resumed_at = ckpt['completed_length']
+                # the miss counters of the lengths before count in this mine's record
+                _ivl_baseline = tuple(base - before for base, before in zip(
+                    _ivl_baseline, ckpt.get('interval_undecided') or (0, 0, 0, 0)))
                 rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in ckpt['rules']]
                 per_length = {int(k): v for k, v in ckpt['per_length'].items()}
                 ac_classes_per_length.update({k: {'enumerated': v['enumerated'],
@@ -2014,6 +2199,8 @@ class RuleMiner:
                            'per_length': {str(k): v for k, v in per_length.items()},
                            'judged': [[list(lhs), list(rhs), tier]
                                       for (lhs, rhs), tier in judged.items()],
+                           'interval_undecided': [now - base for now, base in zip(
+                               _undecided(self.engine._core), _ivl_baseline)],
                            'provenance': provenance},
                           file, default=str)
 
@@ -2035,6 +2222,17 @@ class RuleMiner:
                     'given': len(given),
                     'refused': [[list(given[k][0]), list(given[k][1]), why]
                                 for k, why in sorted(refused.items())]}
+        # A SHARDED LENGTH is the one after the checkpoint: its shards scan from it, and its
+        # merge resumes from it.
+        split_length = resumed_at + 1
+        if (shard is not None or merge is not None) and not (
+                resumed_at and split_length <= max_source_pattern_length):
+            raise RuntimeError(
+                f'a shard or a merge continues a mine from the checkpoint of the length before '
+                f'the split, and the {file_mode} mine has '
+                + (f'none at {ckpt_path!r}' if not resumed_at else
+                   f'completed every length ({resumed_at})')
+                + '; mine to the length before with stop_after_length first')
         completed = resumed_at
         for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
             if interrupted():
@@ -2090,11 +2288,46 @@ class RuleMiner:
                     exclusions=exclusions, **confirm_kwargs)
 
             _t0 = time.monotonic()
-            found, _loop = self._mine_tier_with_progress(
-                length, len(sources),
-                lambda: self._mine_length(sources, mine, rule_mode, judge, judged,
-                                          dummy_variables),
-                verbose)
+            if shard is not None and length == split_length:
+                # this shard's scan, written beside the mode's file; the mine goes on in the merge
+                record = self._mine_shard(sources, mine, shard, length, rule_mode, judge, judged,
+                                          dummy_variables, verbose)
+                assert out_file is not None
+                path = _shard_path(out_file, length, *shard)
+                with open(path + '.tmp', 'w') as file:
+                    json.dump({'format': _SHARD_FORMAT, 'fingerprint': checkpoint_fp,
+                               'mode': file_mode, 'length': length, 'shard': shard[0],
+                               'shards': shard[1], 'sources': n_sources, **record}, file)
+                os.replace(path + '.tmp', path)
+                if verbose:
+                    print(f'=== shard {shard[0]} of {shard[1]} of length {length} ({file_mode}): '
+                          f'{record["scanned"]:,} sources scanned in {record["scan_s"]} s, '
+                          f'{len(record["picks"]):,} picks -> {path}')
+                return 'stopped'
+            if merge is not None and length == split_length:
+                # the merge: the shards' picks are this length's first scan, and the judge loop
+                # runs from them as it does after a scan of every source
+                assert out_file is not None
+                _picks, _tiers, _scanned, _n_shards = _read_shards(
+                    merge, out_file, length, checkpoint_fp, file_mode, n_sources)
+                _ivl_baseline = tuple(base - scan for base, scan in zip(_ivl_baseline, _scanned))
+                if provenance is not None and provenance.get('resumed'):
+                    provenance['resumed'][-1]['merged'] = {'length': length, 'shards': _n_shards}
+                if verbose:
+                    print(f'=== merging {_n_shards} shards of length {length} ({file_mode}): '
+                          f'{len(_picks):,} picks')
+                _merge_judge = _judge_from_shards(judge, _tiers, judge_processes)
+                found, _loop = self._mine_tier_with_progress(
+                    length, len(sources),
+                    lambda: self._judge_loop(_picks, sources, mine, rule_mode, _merge_judge,
+                                             judged, dummy_variables),
+                    verbose)
+            else:
+                found, _loop = self._mine_tier_with_progress(
+                    length, len(sources),
+                    lambda: self._mine_length(sources, mine, rule_mode, judge, judged,
+                                              dummy_variables),
+                    verbose)
             if _loop['stubborn']:
                 # Every verdict this length reached is kept for the resume; the length itself
                 # is not complete, so the checkpoint stays at the last one that is.
@@ -2156,8 +2389,14 @@ class RuleMiner:
                           cell_source_length=length)
                 # `_finalize` prunes/promotes the engine's own rule state; put the raw mine back.
                 self._install(rule_mode, rules)
+            if length == stop_after_length:
+                if verbose:
+                    print(f'=== the {file_mode} mine stops after length {length}: its checkpoint '
+                          f'is the resume point (a split of the next length starts from it)')
+                return 'stopped'
 
         _finalize(rules, output_file, provenance)
+        return 'final'
 
     @staticmethod
     def _snapshot_provenance(provenance: dict | None, length: int, climb_max: int) -> dict | None:
@@ -2810,7 +3049,11 @@ class RuleMiner:
             judge_fail_s: float = JUDGE_FAIL_S,
             offer_final_rules: bool = True,
             modes: Any = None,
-            operator_max_length: dict[str, int] | None = None) -> None:
+            operator_max_length: dict[str, int] | None = None,
+            stop_after_length: int | None = None,
+            shard: tuple[int, int] | None = None,
+            merge: list[str] | None = None,
+            checkpoint_file: str | None = None) -> None:
         """Systematically discovers new simplification rules.
 
         This method automates the discovery of simplification rules, one file per mode
@@ -2980,6 +3223,29 @@ class RuleMiner:
             bounded by it, as they are not by ``max_source_pattern_length``. Recorded in the
             sidecar's parameters, so a checkpoint of another setting is not resumed. Config key
             ``operator_max_length``.
+        stop_after_length : int or None, optional
+            End the run once a mode completes this length, leaving its checkpoint (the mode's
+            file is not written and the later modes are not started); the same mine run again
+            resumes there. Must lie below ``max_source_pattern_length``. The modes before it,
+            if finished, are reused.
+        shard : tuple[int, int] or None, optional
+            ``(i, n)``: SCAN SHARD ``i`` of ``n`` of the length after the checkpoint of the
+            first mode not yet finished, and end the run. The shard scans the sources of that
+            length at every ``n``-th global index from ``i``, as the single-machine mine's
+            first scan does (without exclusions, under the rules of the shorter lengths),
+            judges what the first judge round asks of its picks, and writes
+            ``<mode file>.shard-<length>-<i>-of-<n>.json``. Shards are independent runs, on
+            any machine with the same environment; one that dies is run again alone.
+        merge : list[str] or None, optional
+            The MERGE of a split length: the files of every shard of the split (``[]``: those
+            beside the mode's file). A file of another mine, mode, length or split, a missing
+            shard and a shard given twice refuse the merge. The shards' picks are the length's
+            first scan; the judge loop runs from them, re-scanning what it refuses, and the
+            mine goes on as the single-machine mine does after its scan, to its files. The
+            files and their sidecars equal a single-machine mine's, save the timings and the
+            ``resumed`` record of the runs.
+        checkpoint_file : str or None, optional
+            The checkpoint a shard reads (default ``<mode file>.checkpoint.json``).
 
         Notes
         -----
@@ -2994,6 +3260,8 @@ class RuleMiner:
             raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
         mined_modes = _mine_modes(modes)
         operator_max_length = _operator_max_length(operator_max_length, self.engine.operator_arity)
+        _split_run_checks(shard, merge, stop_after_length, checkpoint_file, output_file,
+                          max_source_pattern_length)
         if prune is True:
             # Fail HERE, not after the length loop: the old late raise fired at the END
             # of a potentially week-scale mine.
@@ -3169,7 +3437,7 @@ class RuleMiner:
                 # Permissive mines against the finished f64 set in the default slot, as its
                 # file is served beside it.
                 self.engine._replace_rules(finals.get('default', initial['default']))
-                self._find_rules_native(
+                ended = self._find_rules_native(
                     dict(expressions_of_length),
                     max_source_pattern_length,
                     max_target_pattern_length,
@@ -3206,7 +3474,13 @@ class RuleMiner:
                     offer_final_rules=offer_final_rules,
                     judge_processes=judge_processes,
                     operator_max_length=operator_max_length,
+                    shard=shard, merge=merge, stop_after_length=stop_after_length,
+                    checkpoint_file=checkpoint_file,
                 )
+                if ended == 'stopped':
+                    break  # a shard written, or a checkpoint to split the next length from
+                if ended == 'final':
+                    merge = None  # the first mode not yet finished took the merge
             # The engine ends holding the files it wrote, as it would load them.
             if 'default' in finals:
                 self.engine.permissive_simplification_rules = finals.get('permissive')

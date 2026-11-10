@@ -274,6 +274,31 @@ source is judged against.
 Progress, per-length rule counts, judge rounds and universe coverage are printed as
 the mine advances, and the checkpoint is updated after every completed length.
 
+### A length mined across machines
+
+The first scan of a length, the part of a mine that grows with the universe, can run in
+shards on several machines. A source's first pick is a function of the source, its index in
+the miner's class order and the rules of the shorter lengths, so the shards' picks together
+are the single machine's scan, and the merge runs the rest of the length (the judge loop from
+those picks, re-scanning what it refuses) and of the mine as one machine does. The files and
+their sidecars equal a single-machine mine's, save the timings and the `resumed` record of the
+runs. Every run is the same command with one more option:
+
+```sh
+simplipy find-rules -e config.yaml -c mine.yaml -o rules.json --reset-rules --stop-after-length 4
+simplipy find-rules -e config.yaml -c mine.yaml -o rules.json --reset-rules --shard 0/200   # ... to 199/200
+simplipy find-rules -e config.yaml -c mine.yaml -o rules.json --reset-rules --merge --stop-after-length 4
+```
+
+The first run mines the first mode not yet finished through length 4 and leaves its
+checkpoint. Shard `i/n` scans every `n`-th source of length 5 from `i`, judges what the first
+judge round asks of its picks, and writes `rules.json.shard-5-<i>-of-<n>.json`; it reads the
+checkpoint (or `--from-checkpoint FILE`) and the finished files of the modes before it, on
+any machine with the environment the checkpoint records. The merge refuses a missing shard, a
+shard given twice and a shard of another mine, mode, length or split; a shard that died is run
+again alone. Run with `--stop-after-length 4`, the merge then mines the next mode to the same
+point, and the same three steps split its length 5.
+
 ## Verifying a mine
 
 `simplipy verify-mine` checks one mined file against the re-mine gates in its own mode:

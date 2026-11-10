@@ -25,6 +25,17 @@ def _mode_names(value: str) -> list[str]:
     return [_mode_name(name) for name in value.split(',')]
 
 
+def _shard_spec(value: str) -> tuple[int, int]:
+    """``I/N`` (``--shard``): shard I of N, 0 <= I < N."""
+    try:
+        index, count = (int(part) for part in value.split('/'))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'a shard is I/N, got {value!r}') from None
+    if not 0 <= index < count:
+        raise argparse.ArgumentTypeError(f'a shard I/N has 0 <= I < N, got {value!r}')
+    return index, count
+
+
 def main(argv: str = None) -> None:
     parser = argparse.ArgumentParser(description='SimpliPy CLI Tool')
     subparsers = parser.add_subparsers(dest='command_name', required=True)
@@ -48,6 +59,21 @@ def main(argv: str = None) -> None:
         help='The modes to mine, comma-separated (default: f64,permissive). The other '
              'file is left as it is, and permissive mines beside the f64 file and is offered it')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
+    # A length split across runs: stop before it, scan its shards anywhere, merge them.
+    find_simplifications_parser.add_argument(
+        '--stop-after-length', type=int, default=None, metavar='K',
+        help='End once a mode completes length K, leaving its checkpoint to split length K+1 from')
+    find_simplifications_parser.add_argument(
+        '--shard', type=_shard_spec, default=None, metavar='I/N',
+        help='Scan shard I of N of the length after the checkpoint, write '
+             '<mode file>.shard-<length>-<I>-of-<N>.json and end')
+    find_simplifications_parser.add_argument(
+        '--from-checkpoint', type=str, default=None, metavar='FILE',
+        help='The checkpoint a shard reads (default: <mode file>.checkpoint.json)')
+    find_simplifications_parser.add_argument(
+        '--merge', type=str, nargs='*', default=None, metavar='SHARD',
+        help='Merge the shards of the split length (default: those beside the mode file) and '
+             'mine on as one machine does after its scan')
 
     # Prune-rules command
     prune_covered_rules_parser = subparsers.add_parser(
@@ -179,6 +205,10 @@ def main(argv: str = None) -> None:
                 modes=args.modes,
                 reset_rules=args.reset_rules,
                 prune=rule_finding_config.get('prune', False),
+                stop_after_length=args.stop_after_length,
+                shard=args.shard,
+                merge=args.merge,
+                checkpoint_file=args.from_checkpoint,
                 verbose=args.verbose)
 
         case 'verify-mine':

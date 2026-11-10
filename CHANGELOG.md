@@ -205,7 +205,8 @@ organised by who you are, then the highlights, then every change in detail.
   already final as it is.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
   `find_rules(judge=, judge_processes=)`, `find_rules(offer_final_rules=)` and
-  `find_rules(operator_max_length=)` (also `certify_rules`). `save_every=`
+  `find_rules(operator_max_length=)` (also `certify_rules`), and for a length mined across
+  machines `find_rules(stop_after_length=, shard=, merge=, checkpoint_file=)`. `save_every=`
   (CLI `-s/--save-every`) is removed: the rule file is written once, when the mode's mine ends
   (see Removed).
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
@@ -1960,6 +1961,15 @@ model predictions.
   a rule at a point or a cell and float64's two readings and permissive's own criterion refuse
   it too, the instances where its `?` slots coincide can refute it no further and are not
   judged: `x0*(x1 + x2) -> x1 + x2` is refused in a fifth of the time.
+- **A length can be mined across machines.** `find-rules --stop-after-length K` ends a mine
+  at the checkpoint of length K; `--shard i/n` scans every `n`-th source of length K+1 from
+  `i` (the first scan, which grows with the universe) on any machine with the recorded
+  environment and writes a shard file; `--merge` reads every shard, refusing a missing,
+  doubled or foreign one, and mines on from the shards' picks as one machine does after its
+  scan (`find_rules(stop_after_length=, shard=, merge=, checkpoint_file=)`). The rule files and
+  sidecars equal a single-machine mine's, save the timings and the `resumed` record of the
+  runs. A resumed mine's sidecar now counts the fail-closed misses of the lengths before the
+  resume (`soundness.interval_undecided`), which the checkpoint carries.
 
 ### Removed
 
