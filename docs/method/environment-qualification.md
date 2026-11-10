@@ -22,29 +22,35 @@ The exact-rational core is unaffected (rational arithmetic has no libm); the
 qualification is about the fold path and the numeric confirmation/judging
 stages.
 
-## Complex arithmetic in the Bessel functions, by platform
+## Complex arithmetic in the Bessel functions
 
 `besselj`, `bessely` and `besselk` evaluate in float64 as the C++ they port
 (scipy's AMOS code), and part of that computation is complex. C leaves the
 product and quotient of two complex numbers to runtime routines, `__muldc3` and
-`__divdc3`, and the engine calls the platform's (`erfc` and `besseli`, scipy's
-Cephes code, compute in real arithmetic):
+`__divdc3`, and runtimes differ between machines in the last bits of a
+quotient. The engine calls none of them: the core computes both itself, with
+the algorithms of GCC's runtime (C99 Annex G's product, Smith's quotient with
+the scaling of Baudin and Smith, 2012), so these three functions give the same
+bits on every platform. Against GCC's runtime on Linux, 29 million operand sets
+per function, drawn to reach every branch (ordinary, subnormal and huge parts,
+zero divisors, infinite and NaN parts, both orientations), give the same values;
+a NaN may carry another operand's sign and payload, which no value reads.
+(`erfc` and `besseli`, scipy's Cephes code, compute in real arithmetic.)
 
-| Platform | The engine calls | scipy's compiled kernels call |
+scipy's compiled kernels call the platform's routines, so where those compute
+otherwise, the engine's Bessel values differ from that platform's scipy in the
+last bits:
+
+| Platform | scipy's compiled kernels call | The engine against that scipy |
 |---|---|---|
-| Linux (x86_64, aarch64) | libgcc's | libgcc's, the same routines |
-| macOS (x86_64, arm64) | LLVM's | LLVM's on x86_64 (the system's); none on arm64 |
-| Windows (x64) | LLVM's | libgcc's, linked into scipy's build |
+| Linux (x86_64, aarch64) | the system's libgcc | the same values where libgcc computes as GCC 15.2's and 16's do; Ubuntu 26.04's rounds some quotients of the scaling branches (subnormal and huge parts) one unit in the last place apart, `(1e-310 + 3i)/(1e-300 + 7e-301i)` to a real part of 1.4093959731543626e300 against 1.4093959731543623e300 |
+| macOS (x86_64, arm64) | LLVM's on x86_64 (the system's); none on arm64 | LLVM's quotient rounds differently (its product is the same): `besselj` differs at about 9% of a million points spanning orders and arguments from tiny to huge, by 4.5e-16 relative at the median and at most 1e-10, and never in class (a finite value stays finite, an infinity or NaN stays one) |
+| Windows (x64) | libgcc's, linked into scipy's build | as on Linux, by the runtime scipy's build links |
 
-The products are the same everywhere; the quotients round differently. With
-LLVM's routines, `besselj` differs from Linux at about 9% of a million points
-spanning orders and arguments from tiny to huge, by 4.5e-16 relative at the
-median and at most 1e-10, and never in class (a finite value stays finite, an
-infinity or NaN stays one). So macOS and Windows differ from Linux in the last
-bits, and on Windows the engine also differs from scipy. `bessely` and
-`besselk` call the same routines and are measured on Linux only. A mine that
-folds one of them inherits its platform like any other fold, and its sidecar's
-platform record says which.
+`bessely` and `besselk` call the same product and quotient as `besselj`; their
+identity with scipy is measured on Linux. A fold of one of these functions no
+longer depends on the platform's runtime; it depends on the platform through
+the libm, as every fold does (above).
 
 ## What the sidecar records
 

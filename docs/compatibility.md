@@ -130,10 +130,11 @@ provenance sidecar records the engine build, the numeric environment
 (including the libm fingerprint), and every `SIMPLIPY_*` variable set during the
 mine. Byte-identical re-mines are promised only on an environment matching that
 record — see [environment qualification](method/environment-qualification.md).
-Evaluation depends on the platform in the last bits: besides the system libm,
-`besselj`, `bessely` and `besselk` divide complex numbers with libgcc's routine
-on Linux and LLVM's on macOS and Windows, which for `besselj` differ at about 9%
-of points by at most 1e-10 relative (the same page has the details).
+Evaluation depends on the platform in the last bits through the system libm.
+The complex products and quotients inside `besselj`, `bessely` and `besselk`
+are the core's own, the same on every platform; where a platform's scipy
+divides complex numbers with another routine (LLVM's on macOS), these functions
+differ from that scipy in the last bits (the same page has the details).
 
 ## Environment variables
 

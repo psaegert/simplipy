@@ -1295,14 +1295,19 @@ model predictions.
   grouped display now writes each number exactly, as the tokens do,
   `sin(3.1415926535897e37*(x1*x2)/3313)^2`, and reads back bit for bit. The default display
   still writes the float.
-- **`besselj` multiplies and divides complex numbers with the C runtime's own routines.** The
-  f64 kernel computes as the C++ it ports, whose complex product and quotient are the runtime's
-  `__muldc3` and `__divdc3`; it carried a transcription of libgcc's, and now calls them:
-  libgcc's on Linux, bound by version as scipy's compiled kernels bind them, and LLVM's on
-  macOS and Windows. On Linux nothing changes: 40 million random and edge-case operand sets
-  give the same values, and `besselj` the same bits on a million points. LLVM's quotient
-  rounds differently (its product is the same), so on macOS and Windows `besselj` differs
-  from Linux at about 9% of points, by 4.5e-16 relative at the median and 1e-10 at most.
+- **The Bessel kernels multiply and divide complex numbers the same way on every platform.**
+  The f64 kernels of `besselj`, `bessely` and `besselk` compute as the C++ they port, whose
+  complex product and quotient a C compiler leaves to its runtime (`__muldc3`, `__divdc3`),
+  and runtimes differ between machines in the last bits of a quotient. The core computes both
+  itself, with the algorithms of GCC's runtime: C99 Annex G's product, and Smith's quotient
+  with the scaling of Baudin and Smith (2012). Against GCC's runtime on Linux, 29 million
+  operand sets per function, drawn to reach every branch, give the same values, and the
+  kernels keep their bits: `besselj` on a million points, `bessely`, `besseli`, `besselk` and
+  `erfc` on 1.3 to 1.6 million each, all bit for bit scipy's on the development host. Where a
+  platform's scipy divides with another routine, the Bessel functions differ from that scipy
+  in the last bits: LLVM's quotient (macOS) makes `besselj` differ at about 9% of points, by
+  4.5e-16 relative at the median and 1e-10 at most, and Ubuntu 26.04's runtime rounds some
+  quotients of the scaling branches one unit in the last place apart.
 - **A rule with more than one `<constant>` on its left side is judged.** The matcher binds
   each `<constant>` of a left side to a value of its own, and the mine used to let such rules
   through, unjudged, in every mode. One was false: `pow(rootn(x, C1), C2) -> pow(x, C3)` at

@@ -46,9 +46,10 @@
 //! orders beyond 3e17, and negative non-integer orders below about -590 where the value nears
 //! the float range's end (`J_-593.09(133.3) = -4.8e306`, scipy NaN).
 //!
-//! The elementary functions, complex ones included, come from `numeric::elementary`: the
-//! platform's libm, and the complex product and quotient as GCC's runtime computes them, as
-//! for scipy's own build. On the development host (Linux, glibc 2.43) the bits equal scipy's:
+//! The elementary functions, complex ones included, come from `numeric::elementary`, the
+//! platform's libm; the complex product and quotient from `numeric::complex`, the core's own
+//! computation of GCC's runtime's algorithms, which scipy's Linux build calls in the runtime.
+//! On the development host (Linux, glibc 2.43) the bits equal scipy's:
 //! measured identical on 914,361 (order, argument) pairs spanning every regime above and every
 //! special cell, and on 2.5 million pairs with orders to 1e308 once the two departures are
 //! read. That is a measurement of one platform, not a promise for every one: on another host

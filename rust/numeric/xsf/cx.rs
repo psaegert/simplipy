@@ -1,13 +1,14 @@
 //! Complex double arithmetic exactly as the C++ the xsf ports transliterate computes it:
 //! libstdc++'s `std::complex<double>` compiled by GCC without fast-math.
 //!
-//! * `z * w` is `(ac - bd) + (ad + bc)i`, with the C runtime's `__muldc3` recovering the
-//!   infinities only when both parts are NaN; `z / w` and `x / w` are the runtime's `__divdc3`
-//!   (both through `numeric::elementary`).
+//! * `z * w` and `z / w`, `x / w` are the core's own complex product and quotient
+//!   (`numeric::complex`): the algorithms of GCC's runtime (`__muldc3`, `__divdc3`), computed
+//!   in the core, so they are the same on every machine.
 //! * Mixed operations with a real scalar act componentwise (`x * z`, `z / x`), `x + z` and
 //!   `z - x` touch the real part only, and `x - z` is `(-z) + x`, as libstdc++ writes them.
 //! * `abs`, `exp`, `ln` and `sqrt` are the C library's `cabs`, `cexp`, `clog` and `csqrt`.
 
+use crate::numeric::complex;
 use crate::numeric::elementary::{self, Complex};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
@@ -126,7 +127,8 @@ impl Mul for C64 {
     type Output = C64;
     #[inline]
     fn mul(self, w: C64) -> C64 {
-        C64::from_c(elementary::cmul(self.re, self.im, w.re, w.im))
+        let (re, im) = complex::product(self.re, self.im, w.re, w.im);
+        C64 { re, im }
     }
 }
 
@@ -134,7 +136,8 @@ impl Div for C64 {
     type Output = C64;
     #[inline]
     fn div(self, w: C64) -> C64 {
-        C64::from_c(elementary::cdiv(self.re, self.im, w.re, w.im))
+        let (re, im) = complex::quotient(self.re, self.im, w.re, w.im);
+        C64 { re, im }
     }
 }
 
