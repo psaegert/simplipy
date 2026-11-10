@@ -6,7 +6,10 @@ libm through the core's elementary-function source, as every other transcendenta
 besselj is scipy 1.18.1's jv, carried in the core and gated bit for bit against scipy (an
 integer order's parity read on the negative axis, where scipy loses a zero's sign); erfc,
 bessely, besseli and besselk are scipy 1.18.1's erfc, yv, iv and kv, carried in the core and
-gated bit for bit against scipy everywhere. Two gates per kernel:
+gated bit for bit against scipy. The AMOS kernels (jv, yv, kv) divide complex numbers, which
+the core does itself and scipy does through the platform's runtime, so they meet scipy bit
+for bit where the platform divides as the core does; on every machine they meet values pinned
+on such a machine (`fixtures/kernels/scipy_reference.npz`). Two gates per kernel:
 
 * BIT IDENTITY with numpy where numpy's own operation is the deployed one: floor and ceil
   are `np.floor`/`np.ceil`, mod is `np.mod` on float64, and max/min are `np.maximum`/
@@ -17,7 +20,11 @@ gated bit for bit against scipy everywhere. Two gates per kernel:
   on the negative axis, and within a stated absolute bound near them; erf and atan2 meet the
   two-ulp bar (glibc measures 0.5 and 1.0).
 """
+import ctypes
+import ctypes.util
+import functools
 import math
+import pathlib
 from fractions import Fraction
 
 import mpmath as mp
@@ -52,6 +59,48 @@ def core2(name: str, a, b) -> np.ndarray:
     out = np.empty_like(a)
     _core.kernel_binary(name, a, b, out)
     return out
+
+
+class _Complex(ctypes.Structure):
+    _fields_ = [('re', ctypes.c_double), ('im', ctypes.c_double)]
+
+
+#: Quotients the core's own division gives (its table in `rust/numeric/complex.rs`), at a
+#: Smith step and at the scaled branches, where platform runtimes are known to differ.
+_QUOTIENTS = [((1.0, 2.0, 3.0, 4.0), (0.44, 0.08)),
+              ((1.0, 2.0, 3.0, 5.0), (0.3823529411764706, 0.029411764705882346)),
+              ((1e-310, 3.0, 1e-300, 7e-301), (1.4093959731543623e300, 2.0134228187919463e300)),
+              ((1e-200, 1e-200, 1e-200, 3e-200), (0.39999999999999997, -0.20000000000000004)),
+              ((1e-310, 1e-311, 3.0, 4.0), (1.36e-311, -1.48e-311)),
+              ((1.5e308, -1e308, 1e308, 1.7e308), (-0.05141388174807196, -0.9125964010282777))]
+
+
+@functools.cache
+def platform_divides_as_the_core() -> bool:
+    """Whether this platform's runtime (libgcc_s's `__divdc3`, which scipy's AMOS kernels call)
+    divides complex numbers as the core does. Where it does not (Ubuntu 26.04's runtime, LLVM's
+    on macOS) scipy's jv, yv and kv differ from the core by design, a named difference."""
+    path = ctypes.util.find_library('gcc_s')
+    if path is None:
+        return False
+    try:
+        divide = ctypes.CDLL(path)['__divdc3']
+    except (OSError, AttributeError):
+        return False
+    divide.restype, divide.argtypes = _Complex, [ctypes.c_double] * 4
+    return all(bits_equal([z.re, z.im], want).all()
+               for z, want in ((divide(*args), want) for args, want in _QUOTIENTS))
+
+
+#: The kernels that divide complex numbers (AMOS).
+AMOS = ('besselj', 'bessely', 'besselk')
+
+
+def needs_the_cores_division(name: str) -> None:
+    """Skip a comparison with scipy that this platform's complex division makes differ."""
+    if name in AMOS and not platform_divides_as_the_core():
+        pytest.skip(f"this platform divides complex numbers otherwise than the core, so scipy's {name} "
+                    'differs by design; test_kernels_keep_their_pinned_values gates the core here')
 
 
 SPECIAL = np.array([0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1.5, -1.5, 2.0, -3.0, TINY, -TINY,
@@ -378,6 +427,7 @@ def test_besselj_is_scipy_bit_for_bit() -> None:
     """The core carries scipy 1.18.1's jv (AMOS, the reflection through Y, the Cephes
     fallback), so its value is scipy's, bit for bit, with an integer order's parity read on
     the negative axis; a scipy release that changed jv would show here first."""
+    needs_the_cores_division('besselj')
     nu, x = besselj_grid()
     got, want = core2('besselj', nu, x), scipy_besselj(nu, x)
     # where scipy gives up under an order beyond 1e17, the core's value may be a proven
@@ -403,12 +453,13 @@ def test_besselj_has_every_order() -> None:
     assert bits_equal(minus, np.where(odd, -plus, plus)).all()                  # parity
     assert bits_equal(core2('besselj', -nu, x), np.where(odd, -plus, plus)).all()  # reflection
     assert bits_equal(core2('besselj', 1.0, -0.0), -0.0).all()
+    assert bits_equal(core2('besselj', [3.2e17, 1e300, -1e300], [3.2, 100.0, 100.0]), 0.0).all()
+    needs_the_cores_division('besselj')
     raw = scipy_besselj(nu, x)
     kept = ~np.isnan(raw)
     assert bits_equal(plus[kept], raw[kept]).all()
     filled = np.isnan(plus) != np.isnan(raw)
     assert (plus[filled] == 0).all() and (np.abs(nu[filled]) >= 1e17).all()
-    assert bits_equal(core2('besselj', [3.2e17, 1e300, -1e300], [3.2, 100.0, 100.0]), 0.0).all()
 
 
 def test_besselj_cells() -> None:
@@ -475,9 +526,29 @@ def test_scipy_bessels_are_scipy_bit_for_bit(name) -> None:
     """The core carries scipy 1.18.1's yv (AMOS, Cephes where AMOS gives NaN), iv (Cephes) and kv
     (AMOS), so each value is scipy's, bit for bit, the cells where scipy leaves the function
     included (`test_scipy_bessel_cells`); a scipy release that changed one would show here."""
+    needs_the_cores_division(name)
     nu, x = scipy_bessel_grid()
     same = bits_equal(core2(name, nu, x), scipy_value(name, nu, x))
     assert same.all(), list(zip(nu[~same][:5], x[~same][:5]))
+
+
+#: The core's erfc, besselj, bessely, besseli and besselk at about 3,000 points of each grid
+#: above, read on a machine whose runtime divides complex numbers as the core does (there they
+#: are scipy's, bit for bit), with the points where Ubuntu 26.04's scipy differs.
+PINNED = pathlib.Path(__file__).parent / 'fixtures' / 'kernels' / 'scipy_reference.npz'
+
+
+@pytest.mark.parametrize('name', ['erfc', 'besselj', 'bessely', 'besseli', 'besselk'])
+def test_kernels_keep_their_pinned_values(name) -> None:
+    """The core's values are the same on every machine, whatever its runtime and its scipy."""
+    pinned = np.load(PINNED)
+    want = pinned[f'{name}_bits'].view(F)
+    if name == 'erfc':
+        got = core1(name, pinned['erfc_x'])
+    else:
+        got = core2(name, pinned[f'{name}_nu'], pinned[f'{name}_x'])
+    same = bits_equal(got, want)
+    assert same.all(), np.flatnonzero(~same)[:5]
 
 
 def test_scipy_bessel_cells() -> None:
