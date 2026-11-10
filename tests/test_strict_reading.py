@@ -1,8 +1,10 @@
 """Strict (`f64`) holds a rule with variables where float64's two sides agree (F6), or where the rule
-is true in the reals and float64's two sides agree in kind at every point: both finite, the same
-infinity or both undefined. The second admits the identities float64 only rounds, however far a
-jump or a pole magnifies the rounding; it admits nothing false in the reals. The judge decides it
-in one place (`_contract.strict_reading`), which every reader of the verdict reads."""
+is true in the reals and float64's two sides agree in kind -- both finite -- at every point where
+the reals give both sides a value, and as F6 asks at every other point. The second admits the
+identities float64 only rounds, however far a jump or a pole magnifies the rounding; it admits
+nothing false in the reals, and no difference where the reals have no value to round. The judge
+decides it in one place (`_contract.strict_reading`, `kind_holds`), which every reader of the
+verdict reads."""
 import pytest
 
 from simplipy.verify import MODE_TIERS, _contract, effective_tier, verify_rule
@@ -26,6 +28,8 @@ REFUSED = [
     # false in the reals
     ('sin + x0 1', 'sin x0'),
     ('- pow + x0 1 2 pow x0 2', '* 2 x0'),
+    # 1 against -1 on x0 > 0, where the reals give neither side a value (1/0): F6 there
+    ('tanh / 1 - abs x0 x0', 'tanh neg / 1 - x0 abs x0'),
 ]
 
 
@@ -52,6 +56,16 @@ def test_the_two_readings_and_the_reals_decide_strict() -> None:
     assert read(False, False, 'CERTIFIED') is False       # a change of kind
     assert read(False, True, 'UNRESOLVED-COVERAGE') is None
     assert read(None, None, 'CERTIFIED') is None
+
+
+def test_the_second_reading_reads_kind_only_where_the_reals_give_both_sides_a_value() -> None:
+    r = verify_rule('tanh / 1 - abs x0 x0'.split(), 'tanh neg / 1 - x0 abs x0'.split())
+    assert r['verdict'] in _contract.HOLDS_IN_THE_REALS, r
+    assert (r['realised_f6'], r['realised_kinds'], r['tier']) == (False, False, 'permissive'), r
+    assert _contract.kind_holds('REAL-CHANGE', lambda: True) is True
+    assert _contract.kind_holds('REAL-CHANGE', lambda: False) is False
+    assert _contract.kind_holds('REAL-CHANGE', lambda: None) is None
+    assert _contract.kind_holds('INF-CHANGE', lambda: True) is False
 
 
 def test_a_ground_rule_has_no_second_reading() -> None:

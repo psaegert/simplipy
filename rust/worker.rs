@@ -475,14 +475,15 @@ fn dirac_refutes_literal(
             continue;
         };
         // Owed only where the source is finite there (3.2), and by the mode's agreement (F6, P3).
-        // f64's second reading (`verify._contract.strict_reading`) passes two values of one kind
-        // where the reals agree at the witness, or owe nothing there.
+        // f64's second reading (`battery::kind_holds`) passes two finite values where the reals
+        // give the source a value at the witness (the target is a literal) and agree there.
         let second = || {
             matches!(mode, crate::engine::RuleMode::Default)
-                && crate::battery::same_kind(got, want)
-                && constant_value(&toks, ops, crate::engine::RuleMode::Permissive).is_some_and(
-                    |r| r.is_nan() || crate::table::f64_agree(r, want) == crate::table::Cmp::Eq,
-                )
+                && crate::battery::kind_holds(got, want, || {
+                    constant_value(&toks, ops, crate::engine::RuleMode::Permissive).map(|r| {
+                        !r.is_nan() && crate::table::f64_agree(r, want) == crate::table::Cmp::Eq
+                    })
+                })
         };
         if got.is_finite()
             && crate::table::f64_agree(got, want) != crate::table::Cmp::Eq
@@ -1365,23 +1366,24 @@ fn candidate_matches(
             // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
             // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
             //
-            // A CONST-FREE PAIR AGREES RELATIVELY: `|s - c| <= rtol*|c|`, so zero agrees only
-            // with zero. There is no absolute band here: the pair has no fitted constant
-            // whose solve error it would absorb, and a band lets any value smaller than it
-            // equal 0 (`exp(sinh(-5)) -> 0` is false by 5.9e-33 and passed `atol` = 1e-12).
-            // - f64 (no rescue): the deployed evaluator's values decide, read as strict's
-            //   judgment reads them (`strict_rows_agree`): both sides of the same kind, and
-            //   within F6 or the mine's tolerances, past which a difference is refused here
-            //   (an identity whose rounding a function magnifies past them stays permissive's).
-            //   A fully numeric source is bit-exact: `exp(sinh(-10))` is exactly 0.0 in f64,
-            //   so `-> 0` holds there; `sin(np.pi)` is 1.2e-16, so `-> 0` does not. At a row
-            //   where an operation of either side overflows or underflows, the true value is
-            //   accepted beside the evaluator's (the f64 range standard, `f64_range_rescue`):
-            //   `rootn(exp(x), 2) -> exp(x/2)` certifies past exp's overflow,
-            //   `atanh(tanh(x)) -> x` does not (tanh saturates in range: +inf against x).
-            // - permissive (rescue): f64 is a PRE-FILTER, and a near-miss reject is
-            //   re-judged at high precision on exactly the failing rows (`hiprec::rescue`),
-            //   where a zero is a residual that collapses as the precision doubles. True
+            // - f64 (no rescue): the deployed evaluator's values decide, read by strict's row
+            //   agreement (`strict_rows_agree`, `battery::strict_row_agrees`): both sides of the
+            //   same kind, and within F6 or the mine's tolerances, past which a difference is
+            //   refused here (an identity whose rounding a function magnifies past them stays
+            //   permissive's; the judge decides what the tolerances pass). A fully numeric
+            //   source is bit-exact: `exp(sinh(-10))` is exactly 0.0 in f64, so `-> 0` holds
+            //   there; `sin(np.pi)` is 1.2e-16, so `-> 0` does not. At a row where an operation
+            //   of either side overflows or underflows, the true value is accepted beside the
+            //   evaluator's (the f64 range standard, `f64_range_rescue`), every other row read
+            //   by the same row agreement: `rootn(exp(x), 2) -> exp(x/2)` and `log(exp(x)) -> x`
+            //   certify past exp's overflow, `atanh(tanh(x)) -> x` does not (tanh saturates in
+            //   range: +inf against x).
+            // - permissive (rescue): A CONST-FREE PAIR AGREES RELATIVELY, `|s - c| <= rtol*|c|`,
+            //   so zero agrees only with zero: a band would let any value smaller than it equal
+            //   0 (`exp(sinh(-5)) -> 0` is false by 5.9e-33). f64 is a PRE-FILTER, and a
+            //   near-miss reject is re-judged at high precision on exactly the failing rows
+            //   (`hiprec::rescue`), where a zero is a residual that collapses as the precision
+            //   doubles. True
             //   identities whose f64 evaluation loses precision -- atanh(tanh(x)) -> x,
             //   sin(np.pi) -> 0 -- certify; a value that only looks like zero does not.
             let y_cand: &[f64] = cand_rows.y.as_deref().unwrap();
@@ -1392,7 +1394,18 @@ fn candidate_matches(
                     .zip(y_cand)
                     .all(|(&s, &c)| crate::table::f64_same(s, c))
             } else {
-                strict_rows_agree(y, y_cand, rtol, atol)
+                strict_rows_agree(y, y_cand, rtol, atol, |r| {
+                    crate::hiprec::reals_both_valued(
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &[],
+                        ops,
+                        var_names,
+                        cols,
+                        r,
+                    )
+                })
             } || if rescue {
                 crate::hiprec::rescue(
                     y,
@@ -1424,7 +1437,7 @@ fn candidate_matches(
                     var_names,
                     cols,
                     rtol,
-                    0.0,
+                    atol,
                 )
             };
             // A const-free candidate binds nothing, so even a vacuous match has a determined
@@ -1765,20 +1778,31 @@ impl Lane {
 }
 
 /// STRICT'S ROW CHECK of a constant-free pair (`candidate_matches`), a prefilter of its judgment
-/// (`verify._contract.strict_reading`): a row where the source is undefined may be extended; at
-/// every other row the candidate has the source's kind (both finite or the same infinity) and
-/// agrees within F6 (`table::f64_agree`) or within the mine's tolerances (`atol + rtol*|c|`).
-/// Strict's judgment has no error bound for a rule true in the reals (its (b)), so the tolerance is
-/// the prefilter's alone: `sin(x + pi) -> -sin(x)` passes at x = 0 (1.2e-16 against -0), and an
-/// identity whose rounding a function magnifies past it (`acos(log(exp(x)))` near -1) is refused
-/// here and stays permissive's.
-fn strict_rows_agree(y_src: &[f64], y_cand: &[f64], rtol: f64, atol: f64) -> bool {
+/// (`verify._contract.strict_reading`): every row by the mint's one row agreement
+/// (`battery::strict_row_agrees`), which the range standard's re-reading shares
+/// (`hiprec::range_rescue`). Strict's judgment has no error bound for a rule true in the reals
+/// (its (b)), so the tolerance is the prefilter's alone: `sin(x + pi) -> -sin(x)` passes at x = 0
+/// (1.2e-16 against -0), and an identity whose rounding a function magnifies past it
+/// (`acos(log(exp(x)))` near -1) is refused here and stays permissive's.
+fn strict_rows_agree(
+    y_src: &[f64],
+    y_cand: &[f64],
+    rtol: f64,
+    atol: f64,
+    valued: impl Fn(usize) -> Option<bool>,
+) -> bool {
+    use crate::battery::strict_row_agrees;
+    // the rows' values first, the reals only where a row's agreement rests on them
     y_src.len() == y_cand.len()
-        && y_src.iter().zip(y_cand).all(|(&s, &c)| {
-            s.is_nan()
-                || crate::table::f64_agree(s, c) == crate::table::Cmp::Eq
-                || (s.is_finite() && c.is_finite() && (s - c).abs() <= atol + rtol * c.abs())
-        })
+        && y_src
+            .iter()
+            .zip(y_cand)
+            .all(|(&s, &c)| strict_row_agrees(s, c, rtol, atol, || Some(true)))
+        && y_src
+            .iter()
+            .zip(y_cand)
+            .enumerate()
+            .all(|(r, (&s, &c))| strict_row_agrees(s, c, rtol, atol, || valued(r)))
 }
 
 /// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every
@@ -3199,23 +3223,69 @@ mod tests {
     #[test]
     fn strict_rows_read_kinds_within_the_tolerances() {
         let (rtol, atol) = (1e-11, 1e-12);
+        let valued = |_: usize| Some(true);
         assert!(strict_rows_agree(
             &[1.2246467991473532e-16, 1.0],
             &[-0.0, 1.0 + 1e-15],
             rtol,
-            atol
+            atol,
+            valued
         ));
-        assert!(strict_rows_agree(&[f64::NAN, 2.0], &[3.0, 2.0], rtol, atol));
+        assert!(strict_rows_agree(
+            &[f64::NAN, 2.0],
+            &[3.0, 2.0],
+            rtol,
+            atol,
+            valued
+        ));
         assert!(strict_rows_agree(
             &[f64::INFINITY],
             &[f64::INFINITY],
             rtol,
-            atol
+            atol,
+            valued
         ));
-        assert!(!strict_rows_agree(&[1.0], &[0.0], rtol, atol));
-        assert!(!strict_rows_agree(&[1.0], &[1.0 + 1e-9], rtol, atol));
-        assert!(!strict_rows_agree(&[f64::INFINITY], &[1e300], rtol, atol));
-        assert!(!strict_rows_agree(&[1.0], &[f64::NAN], rtol, atol));
+        assert!(!strict_rows_agree(&[1.0], &[0.0], rtol, atol, valued));
+        assert!(!strict_rows_agree(
+            &[1.0],
+            &[1.0 + 1e-9],
+            rtol,
+            atol,
+            valued
+        ));
+        assert!(!strict_rows_agree(
+            &[f64::INFINITY],
+            &[1e300],
+            rtol,
+            atol,
+            valued
+        ));
+        assert!(!strict_rows_agree(&[1.0], &[f64::NAN], rtol, atol, valued));
+        // strict's second reading holds a row only where the reals give both sides a value; at
+        // any other row the two agree as F6 asks
+        let unvalued = |_: usize| Some(false);
+        let unread = |_: usize| None;
+        assert!(!strict_rows_agree(
+            &[1.2246467991473532e-16],
+            &[-0.0],
+            rtol,
+            atol,
+            unvalued
+        ));
+        assert!(!strict_rows_agree(
+            &[1.2246467991473532e-16],
+            &[-0.0],
+            rtol,
+            atol,
+            unread
+        ));
+        assert!(strict_rows_agree(
+            &[1.0, 2.0],
+            &[1.0, 2.0],
+            rtol,
+            atol,
+            unvalued
+        ));
     }
 
     fn s(v: &[&str]) -> Vec<String> {
@@ -4018,11 +4088,13 @@ mod tests {
             );
             // 5. pow-of-cos in CONSTANT space: in float64 pow(cos c, inf) = 1 at c = 0 -- the
             //    special source-constant battery reaches what no random draw does. In the reals
-            //    pow(1, inf) has no value, so nothing is owed at c = 0 and the left side is 0
-            //    wherever it has one: both modes mint it, as their judge admits (f64 by strict's
-            //    second reading, 1 against 0 being one kind).
-            assert!(
+            //    pow(1, inf) has no value, so f64 owes F6 there (strict's second reading reads
+            //    kind only where the reals give both sides a value) and refuses 1 against 0;
+            //    nothing is owed in the reals at c = 0 and the left side is 0 wherever it has
+            //    one: permissive mints it, as its judge admits.
+            assert_eq!(
                 fr(&["pow", "cos", "<constant>", "float(\"inf\")"], &["0"]).is_some(),
+                !f64,
                 "{mode:?}"
             );
             // 6. atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in f64 (a live

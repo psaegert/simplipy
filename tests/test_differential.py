@@ -543,7 +543,8 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
     # 0 for |C| < 1.683 and +inf on the band up to 2, where `0` owes nothing
     ('pow asin / <constant> 2 float("inf")', '0', 'permissive'),
     ('pow cos <constant> float("inf")', '0', 'permissive'),
-    # at C = 0 float64's pow(1, inf) is 1, of one kind with 0, where the reals owe nothing
+    # at C = 0 float64's pow(1, inf) is 1 against 0, where the reals give the left side no value:
+    # F6 there, and both refuse
     ('pow cos <constant> float("inf")', '0', 'f64'),
     # the magnitude ladder
     ('sinh asinh x0', 'x0', 'f64'), ('tan atan asinh x0', 'asinh x0', 'f64'),
@@ -590,6 +591,18 @@ def test_the_mints_f64_rows_read_kinds_within_the_tolerances(src, tgt, rows) -> 
                                          rule_mode='default')
     verdicts = [v for cand, _, v in steps if cand == tgt.split()]
     assert (verdicts != ['rows']) == rows, steps
+
+
+@pytest.mark.parametrize('lhs, rhs', [('log exp x0', 'x0'), ('acosh cosh x0', 'abs x0')])
+def test_an_overflow_row_and_a_rounding_row_are_read_by_one_agreement(lhs, rhs) -> None:
+    """The f64 mint has one row agreement (`battery::strict_row_agrees`): the range standard,
+    which takes the true value where an operation overflowed, reads every other row by it too.
+    On the judge's rows these pairs have both an overflow row (|x0| > 710) and a rounding row
+    past F6 within the tolerances, and each set of rows alone was always accepted: the pair is
+    accepted, as the judge holds it."""
+    X = mine_rows()
+    assert (np.abs(X[:, 0]) > 710).any()
+    assert mint_accepts(lhs, rhs, 'f64') and admits(lhs, rhs, 'f64'), judged(lhs, rhs)
 
 
 @pytest.mark.parametrize('src', ['inv ceil sin x0', 'inv ceil tanh x0', 'inv floor erf x0',

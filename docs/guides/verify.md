@@ -53,13 +53,15 @@ function on a positive-measure set, so the judge kills it.
 
 Each mode is judged on its own values. `f64` holds a rule with variables where float64's two
 sides agree (to 8 ULP, the true value accepted where an operation overflows or underflows), or
-where the rule is true in the reals and float64's two sides agree in kind at every point the
-judge reads: both finite, the same infinity, or both undefined. The second admits the identities
-float64 only rounds, however far a jump or a pole magnifies the rounding, and nothing false in
-the reals: `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `x0 + 1 - x0 -> 1`,
+where the rule is true in the reals and float64's two sides agree in kind -- both finite -- at
+every point the judge reads where the reals give both sides a value (there their difference is
+rounding), and to 8 ULP at every other point. The second admits the identities float64 only
+rounds, however far a jump or a pole magnifies the rounding, and nothing false in the reals:
+`sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `x0 + 1 - x0 -> 1`,
 `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`
-hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06) and `exp(log(x0)) -> x0` (NaN
-against x0 for x0 < 0) do not. `permissive` is judged on the reals' values at float resolution.
+hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06), `exp(log(x0)) -> x0` (NaN
+against x0 for x0 < 0) and `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1 against -1 on
+x0 > 0, where the reals give neither side a value) do not. `permissive` is judged on the reals' values at float resolution.
 The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals' outcome, a
 diagnostic that decides no mode by itself; `f64` reads it for its second reading. A mode whose reading reaches no answer
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side

@@ -290,14 +290,16 @@ fn ulp_at(x: f64) -> f64 {
 ///
 /// - **f64** reads float64's values at the points' doubles, as the judge's f64 lane does, and
 ///   both of strict's readings there (`verify._contract.strict_reading`). A row where the two
-///   sides agree (F6; a fitted constant within its band, `dep_realised`) passes. Where an
-///   operation of either side overflowed or underflowed (`events`), the true value at the doubles
-///   is accepted (the range standard, `hiprec::range_rescue`; a row the table cannot read passes,
-///   as the judge skips it). The left side without a value against a value is an extension at a
-///   point, measured by the domain gate, and passes. Two values of one kind that differ pass
-///   where the reals agree at the point (strict's second reading: `pow(sin(x), inf) -> 0` at
-///   pi/2's double, 1 against 0, where the reals' left side has no value). Any other
-///   disagreement refuses.
+///   sides agree by the mint's row agreement (`strict_row_agrees`: F6, or both finite within the
+///   tolerances where the reals give both sides a value) passes. Where an operation of either
+///   side overflowed or underflowed (`events`),
+///   the true value at the doubles is accepted (the range standard, `hiprec::range_rescue`; a row
+///   the table cannot read passes, as the judge skips it). The left side without a value against
+///   a value is an extension at a point, measured by the domain gate, and passes. Two finite
+///   values that differ pass where the reals give both sides a value at the doubles and agree at
+///   the point, which a point can read and a row cannot (strict's second reading, `kind_holds`:
+///   `pow(sin(x), inf) -> 0` at pi/2's double, 1 against 0, where the reals' left side is 0).
+///   Any other disagreement refuses.
 /// - **permissive** reads the reals' values at the points themselves (pi/2 is pi/2), each side
 ///   as the double nearest to it (P3, `point_doubles`), at every point, as the judge's permissive
 ///   lane does: float64 agreeing at a point is no reading of the reals there (`asin(1.0)` is
@@ -350,11 +352,27 @@ pub fn rows_consistent(
             FloatReading::Doubles(a, b) => !(agree(a, b) || (a.is_nan() && !b.is_nan())),
         }
     };
+    // do the reals give both sides a value at the point's doubles (`kind_holds`)?
+    let valued = |r: usize| {
+        let cols1: Vec<Vec<f64>> = battery.cols.iter().map(|col| vec![col[r]]).collect();
+        crate::hiprec::reals_both_valued(
+            source,
+            src_params,
+            cand,
+            cand_params,
+            ops,
+            var_names,
+            &cols1,
+            0,
+        )
+    };
     for r in 0..battery.n_rows {
         let (s, c) = (y_src[r], y_cand[r]);
         let reject = if !lane_f64 {
             reals_refute(r)
-        } else if agree(s, c) || (same_kind(s, c) && !reals_refute(r)) {
+        } else if strict_row_agrees(s, c, rtol, atol, || valued(r))
+            || (kind_holds(s, c, || valued(r)) && !reals_refute(r))
+        {
             false
         } else if events.is_some_and(|e| e[r]) {
             let cols1: Vec<Vec<f64>> = battery.cols.iter().map(|col| vec![col[r]]).collect();
@@ -646,9 +664,34 @@ pub enum Agreement {
     Kind,
 }
 
-/// Do two float64 values agree in kind: both finite, the same infinity, or both undefined?
-pub fn same_kind(a: f64, b: f64) -> bool {
-    (a.is_nan() && b.is_nan()) || (a.is_finite() && b.is_finite()) || (a.is_infinite() && a == b)
+/// STRICT'S SECOND READING AT ONE PROBE of float64's two sides `a` and `b`, the core's one
+/// definition (`verify._contract.kind_holds`): both finite, at a point where the reals give both
+/// sides a value (`valued()`, `hiprec::reals_both_valued` at the probe's doubles), where their
+/// difference is rounding. At any other point they agree only as F6 asks
+/// (`tanh(1/(abs(x) - x))` is 1 against `tanh(-1/(x - abs(x)))`'s -1 on x > 0, where the reals
+/// give neither side a value).
+pub fn kind_holds(a: f64, b: f64, valued: impl FnOnce() -> Option<bool>) -> bool {
+    a.is_finite() && b.is_finite() && valued() == Some(true)
+}
+
+/// THE MINT'S ROW AGREEMENT in f64, strict's reading at a row of the mine's matrix, its one
+/// definition: the source `s` without a value (an extension at the row, which the domain gate
+/// measures), or (a) F6 (`table::f64_agree`: the same infinity included), or (b) the two within
+/// the mine's tolerances (`atol + rtol*|c|`, the prefilter's bound on strict's unbounded (b)) and
+/// of one kind where the reals give both sides a value (`kind_holds`, `valued` read only here).
+/// The constant-free rows (`worker::strict_rows_agree`), the fit's acceptance in f64, the range
+/// standard's re-reading of the rows where nothing left the range (`hiprec::range_rescue`) and the
+/// special points (`rows_consistent`) read it.
+pub fn strict_row_agrees(
+    s: f64,
+    c: f64,
+    rtol: f64,
+    atol: f64,
+    valued: impl FnOnce() -> Option<bool>,
+) -> bool {
+    s.is_nan()
+        || crate::table::f64_agree(s, c) == crate::table::Cmp::Eq
+        || ((s - c).abs() <= atol + rtol * c.abs() && kind_holds(s, c, valued))
 }
 
 /// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary
@@ -760,9 +803,10 @@ pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &
 /// THE f64 MAGNITUDE LADDER AT THE MINT (`table::F64_MAGNITUDES`), the judge's f64 lane read the
 /// same way (`_contract`'s `magnitudes`): along each variable either side uses, every magnitude of
 /// the ladder in both signs, the other variables at 1.7 and then at -1.3. A pre-filter of strict's
-/// judgment, it reads a probe in kind (`Agreement::Kind`): a probe where float64's two sides agree
-/// in kind passes (`sinh(asinh(x)) -> x`, 66 units in the last place apart at 1e100, is the
-/// judge's to decide); one where an operation of either side overflowed or underflowed passes
+/// judgment, it reads a probe by strict's two readings: a probe where float64's two sides agree
+/// (F6), or agree in kind where the reals give both a value (`kind_holds`), passes
+/// (`sinh(asinh(x)) -> x`, 66 units in the last place apart at 1e100, is the judge's to decide);
+/// one where an operation of either side overflowed or underflowed passes
 /// where the rewrite gives the true value (`range_row_true`, the table; an unreadable one passes,
 /// as the judge skips it); one where the left side alone has no value passes where that is
 /// isolated along a variable (`isolated_extension`, the judge's `isolated_f64`); any other change
@@ -819,8 +863,14 @@ pub fn f64_magnitudes_mint(
         )
     };
     let (yl, yr, events) = eval(&rows);
+    let valued = |row: &[f64]| {
+        let cols1: Vec<Vec<f64>> = row.iter().map(|&x| vec![x]).collect();
+        crate::hiprec::reals_both_valued(lhs, &[], rhs, &[], ops, var_names, &cols1, 0)
+    };
     for (i, row) in rows.iter().enumerate() {
-        if same_kind(yl[i], yr[i]) {
+        if crate::table::f64_agree(yl[i], yr[i]) == crate::table::Cmp::Eq
+            || kind_holds(yl[i], yr[i], || valued(row))
+        {
             continue;
         }
         if events[i] {
@@ -1055,17 +1105,20 @@ fn deployed_exact_over(
     // a pair without variables is a fully numeric rewrite, bit-exact in f64 (F8): the same
     // double, a zero's sign included, and no range standard (`table::f64_same`)
     let ground = used.is_empty();
-    let same = |a: f64, b: f64| {
+    // do the reals give both sides a value at a probe's doubles (`kind_holds`)?
+    let valued = |row: &[f64]| {
+        let cols1: Vec<Vec<f64>> = row.iter().map(|&x| vec![x]).collect();
+        crate::hiprec::reals_both_valued(lhs, &[], rhs, &[], ops, var_names, &cols1, 0)
+    };
+    let same = |a: f64, b: f64, row: &[f64]| {
         if ground {
             return crate::table::f64_same(a, b);
         }
         if a == 0.0 && b == 0.0 {
             return !reads_zero_sign || a.to_bits() == b.to_bits();
         }
-        match agreement {
-            Agreement::F6 => crate::table::f64_agree(a, b) == crate::table::Cmp::Eq,
-            Agreement::Kind => same_kind(a, b),
-        }
+        crate::table::f64_agree(a, b) == crate::table::Cmp::Eq
+            || (agreement == Agreement::Kind && kind_holds(a, b, || valued(row)))
     };
     // the left side's NaN at a probe is isolated along a data variable (`isolated_extension`)
     let data: Vec<usize> = used
@@ -1097,7 +1150,9 @@ fn deployed_exact_over(
     };
     let mut range_rows: Vec<Vec<f64>> = Vec::new();
     for i in 0..n {
-        if same(yl[i], yr[i]) || (yl[i].is_nan() && !yr[i].is_nan() && isolated_nan(&rows[i])) {
+        if same(yl[i], yr[i], &rows[i])
+            || (yl[i].is_nan() && !yr[i].is_nan() && isolated_nan(&rows[i]))
+        {
             continue;
         }
         if !ground && out_of_range(&rows[i]) {
@@ -1251,8 +1306,10 @@ mod deployed_bar_tests {
         }
     }
 
-    /// In kind the bar reads a finite difference as agreement, which strict's second reading
-    /// leaves to the reals, and still refuses a change of kind and a zero's sign a head reads.
+    /// In kind the bar reads a finite difference as agreement where the reals give both sides a
+    /// value at the probe (strict's second reading, `kind_holds`), and still refuses a change of
+    /// kind, a zero's sign a head reads, and a finite difference where the reals give a side no
+    /// value (`tanh(1/(abs(x) - x))` is 1 against -1 on x > 0, where 1/0 has none).
     #[test]
     fn in_kind_the_bar_refuses_only_a_change_of_kind() {
         let e = crate::engine::Engine::from_strs(
@@ -1279,11 +1336,13 @@ mod deployed_bar_tests {
             // tanh(x) is 1.0 on [19.06, 20), where acosh of it is 0 and of tanh(19) NaN
             ("acosh tanh floor x0", "acosh tanh x0"),
             ("* 0 inv x0", "0"),
+            ("tanh inv - abs x0 x0", "tanh neg inv - x0 abs x0"),
         ] {
             assert!(!bar(l, r, Agreement::Kind), "{l} -> {r}");
         }
-        assert!(same_kind(1.0, -2.0) && same_kind(f64::NAN, f64::NAN));
-        assert!(!same_kind(f64::INFINITY, f64::NEG_INFINITY) && !same_kind(f64::NAN, 0.0));
+        assert!(kind_holds(1.0, -2.0, || Some(true)));
+        assert!(!kind_holds(1.0, -2.0, || Some(false)) && !kind_holds(1.0, -2.0, || None));
+        assert!(!kind_holds(f64::INFINITY, 1.0, || Some(true)));
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a

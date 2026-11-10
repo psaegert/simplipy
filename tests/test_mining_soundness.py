@@ -1045,21 +1045,23 @@ class TestSpecialPointCertification:
         """Deployed-value consistency at the battery points (f64), by strict's two readings:
         pow(sin x, inf) = 1 at x = pi/2 (f64 sin(pi/2) is EXACTLY 1.0), of one kind with 0,
         where the reals' left side is 0 (sin of pi/2's double is below 1);
-        pow(cos c, inf) = 1 at the special source constant c = 0, where the reals owe nothing;
+        pow(cos c, inf) = 1 at the special source constant c = 0, where the reals give the left
+        side no value (pow(1, inf)), so f64 owes F6 there and refuses 1 against 0;
         atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in deployed f64
         (a live (4,3) family), which f64 refuses and permissive, whose values are the reals'
         (atanh(tanh(y)) is y), certifies: the battery checks float64's divergence in f64
         only. The flagship rescue identity atanh(tanh(x)) -> x
         must keep certifying (the battery box never reaches its saturation zone)."""
         x_flat, n = dev_x1
-        # f64 holds both by strict's second reading at its battery points; permissive excuses
-        # a disagreement at an isolated point (P3), and the reals give pow(1, inf) no value
+        # f64 holds the first by strict's second reading at its battery points and refuses the
+        # second; permissive excuses a disagreement at an isolated point (P3), and the reals give
+        # pow(1, inf) no value
         assert dev._core.find_rule(
             ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n,
             rule_mode='default') == ['0']
         assert dev._core.find_rule(
             ['pow', 'cos', '<constant>', 'float("inf")'], 4, 1, [['0']],
-            ['x0'], x_flat, n, rule_mode='default') == ['0']
+            ['x0'], x_flat, n, rule_mode='default') is None
         assert dev._core.find_rule(
             ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n,
             rule_mode='permissive') == ['0']
@@ -2207,26 +2209,30 @@ class TestTheGateRoutesInsteadOfDeleting:
         # there is no set identity to assert here. What the files must show is the routing
         # itself, checked below.
 
-        # The inverse-pair family is true on R. Three of them are not f64-realised: tanh
-        # attains 1.0 from 19.061547465398498, and exp and cosh round a small argument into
-        # the neighbourhood of 1, so `log(exp(x))` and `acosh(cosh(x))` lose the argument's
-        # digits there. They are `permissive`: absent from f64. `asinh(sinh(x))` stays within 2 ULP
-        # wherever sinh stays in range, and past its overflow at 710.48 f64 accepts the true
-        # value, so it is f64's too. Before the gate fix all four were simply deleted.
+        # The inverse-pair family is true on R. `atanh(tanh(x))` is not f64's: tanh attains
+        # 1.0 from 19.061547465398498, +inf against x, a change of kind. exp and cosh round a
+        # small argument into the neighbourhood of 1, so `log(exp(x))` and `acosh(cosh(x))` lose
+        # the argument's digits there, both sides finite where the reals give them a value:
+        # f64 holds them by strict's second reading, and past exp's and cosh's overflow accepts
+        # the true value. `asinh(sinh(x))` stays within 2 ULP wherever sinh stays in range.
+        # Before the gate fix all four were simply deleted.
         pairs = [(['atanh', 'tanh', '?0'], ['?0']), (['log', 'exp', '?0'], ['?0']),
                  (['asinh', 'sinh', '?0'], ['?0']), (['acosh', 'cosh', '?0'], ['abs', '?0'])]
-        realised = {('asinh', 'sinh', '?0')}
+        realised = {('asinh', 'sinh', '?0'), ('log', 'exp', '?0'), ('acosh', 'cosh', '?0')}
         # ONE MINE PER FILE: permissive's constructor cancels each inverse pair to its
         # argument (`acosh(cosh(x0))` included), so its mine mints none of them. f64's
-        # constructor performs the one its mode realises (an overflow cuts no collapse band),
-        # so the f64 file carries none of them either.
+        # constructor performs `asinh(sinh(x))` (an overflow cuts no collapse band) and keeps
+        # its bands on the other two, which the f64 file carries as rules.
+        f64_rules = {tuple(lhs) for lhs, _ in keys(f64)}
         for lhs, rhs in pairs:
             spelled = [('x0' if t == '?0' else t) for t in lhs]
             target = [('x0' if t == '?0' else t) for t in rhs]
             assert engine._core.mine_mark(spelled, rule_mode='permissive') == ['x0'], lhs
             assert (engine._core.mine_mark(spelled, rule_mode='default') == target) \
                 is (tuple(lhs) in realised), f'{" ".join(lhs)}: f64 performs it iff it realises it'
-            assert (tuple(lhs), tuple(rhs)) not in keys(f64), lhs
+            carried = {sort for sort in ('?0', '_0', '!0')
+                       if tuple(t if t != '?0' else sort for t in lhs) in f64_rules}
+            assert bool(carried) is (lhs[0] in ('log', 'acosh')), (lhs, carried)
             assert (tuple(lhs), tuple(rhs)) not in keys(permissive), lhs
         # each file's sidecar records its own mine
         for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_permissive.json'), 'permissive')):

@@ -1879,17 +1879,22 @@ model predictions.
   is unchanged, byte for byte.
 - **`f64` admits the identities float64 only rounds.** A rule with variables holds in `f64`
   where float64's two sides agree to 8 units in the last place, as before, or where it is true
-  in the reals and float64's two sides agree in kind at every point the judge reads: both
-  finite, the same infinity, or both undefined. There is no error bound in the second reading:
+  in the reals and float64's two sides agree in kind -- both finite -- at every point the judge
+  reads where the reals give both sides a value, and to 8 units in the last place at every
+  other point. There is no error bound in the second reading:
   `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `exp(x0 + log(2)) -> 2*exp(x0)`,
   `x0 + 1 - x0 -> 1`, `sinh(asinh(x0)) -> x0`, `floor(x0 + 1) -> floor(x0) + 1` (1 against 0
   at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0` hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf
-  against x0), `exp(log(x0)) -> x0` and every rule false in the reals do not. The judge decides
+  against x0), `exp(log(x0)) -> x0`, `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1
+  against -1 on x0 > 0, where the reals give neither side a value), `pow(cos(C), inf) -> 0` (1
+  against 0 at C = 0) and every rule false in the reals do not. The judge decides
   it in one place (`verify._contract.strict_reading`), which `verify_rule`, the mine's judge and
   `verify-mine` read, and a verdict reports float64's two readings (`realised_f6`,
-  `realised_kinds`). The f64 mine checks its rows and its fits in kind and within its
-  tolerances (`rtol`, `atol`), and reads the f64 bar, the magnitude ladder, the special points
-  and the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
+  `realised_kinds`). The f64 mine reads its rows by one agreement, strict's within its
+  tolerances (`rtol`, `atol`), at every row it reads, the rows where an operation overflowed
+  aside (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an overflow row and a
+  rounding row, are mined), and reads the f64 bar, the magnitude ladder, the special points and
+  the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
   where the reals' left side is 0); an identity whose rounding a function magnifies past the
   tolerances is not mined in `f64`. The engine's own inverse collapses keep their bands
   (`acosh(cosh(x))` to |x| >= 1), so `acosh(cosh(x0)) -> abs(x0)` holds as a rule in `f64` where
@@ -1921,6 +1926,13 @@ model predictions.
   `f * A^-1 -> (A/f)^-1` needs `f` without a zero, where the left side is 0 and the right side
   has no value: `2*tan(x0)/(1 - tan(x0)^2)` stays (it became `2/(1/tan(x0) - tan(x0))`), as do
   `x0/(1 - x0^2)` and `x7/(x7 - x5)`.
+- **Clause (b) holds without cells where the right side has no value wherever the left side has
+  none.** Every node of the left side that can be the first undefined one occurs on the right
+  side under heads that keep it undefined, so no cell can hold an extension
+  (`verify._contract._no_extension`). `x0/299792458` and `cos(x0) + log(cos(x1))` against
+  themselves, `x1/2.99792458e8 -> x1/299792458` and `log(cos(x2)) + cos(x1) -> cos(x1) +
+  log(cos(x2))` hold in both modes; they were undecided where the interval cells ran past their
+  horizon or budget.
 
 ### Removed
 

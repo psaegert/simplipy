@@ -818,13 +818,16 @@ pub fn rescue(
 /// THE f64 RANGE STANDARD on one instance (`numeric::RangeKind`): f64 promises the evaluator's
 /// value wherever nothing overflows or underflows, and at a row where an operation of either
 /// side does (`src_events`, `cand_events`; `None` marks no row), a rewrite may give the true
-/// value instead. So every row that fails
-/// the f64 predicate of `eval::allclose_extends` must be such a row, and must pass when read
-/// by the table (`table_row`, the rescue's own row judgment: both sides' true values agree). A failing row with no event refuses, exactly as f64 always did; a row whose true
-/// values disagree refuses too, so a rewrite gives the evaluator's value or the true one there
-/// and nothing else. No near-miss gate: a range event is the special case of the f64 promise,
-/// not a near miss, and the high-precision work stays on the failing event rows. `y_src`,
-/// `y_cand`, the parameters and `atol` are as in `rescue`.
+/// value instead. So every row that fails the mint's row agreement
+/// (`battery::strict_row_agrees`, strict's reading at a row, its one definition) must be such a
+/// row, and must pass when read by the table (`table_row`, the rescue's own row judgment: both
+/// sides' true values agree). A failing row with no event refuses, exactly as f64 always did; a
+/// row whose true values disagree refuses too, so a rewrite gives the evaluator's value or the
+/// true one there and nothing else: `log(exp(x)) -> x` passes with an overflow row past 709.78
+/// and a rounding row near 0 (34 units in the last place, within the tolerances). No near-miss
+/// gate: a range event is the special case of the f64 promise, not a near miss, and the
+/// high-precision work stays on the failing event rows. `y_src`, `y_cand`, the parameters,
+/// `rtol` and `atol` are as in `rescue`.
 #[allow(clippy::too_many_arguments)]
 pub fn range_rescue(
     y_src: &[f64],
@@ -841,29 +844,40 @@ pub fn range_rescue(
     rtol: f64,
     atol: f64,
 ) -> bool {
-    // A const-free pair (no fitted constant, no absolute band) agrees at float resolution
-    // (F6), as the judge's deployed lane reads it; a fitted constant keeps its band.
-    let exact = cand_params.is_empty() && atol == 0.0;
+    let event = |r: usize| src_events.is_some_and(|e| e[r]) || cand_events.is_some_and(|e| e[r]);
     let mut failing: Vec<usize> = Vec::new();
+    let mut read = vec![false; y_src.len()];
+    // the rows' values first, the reals only where a row's agreement rests on them
     for (r, &s) in y_src.iter().enumerate() {
-        let c = y_cand[r];
-        if s.is_nan() {
-            continue; // undefined -> extendable
-        }
-        let fails = if exact {
-            crate::table::f64_agree(s, c) != crate::table::Cmp::Eq
-        } else if s.is_infinite() {
-            c != s
-        } else {
-            !c.is_finite() || (s - c).abs() > atol + rtol * c.abs()
-        };
-        if fails {
-            if !(src_events.is_some_and(|e| e[r]) || cand_events.is_some_and(|e| e[r])) {
+        if !crate::battery::strict_row_agrees(s, y_cand[r], rtol, atol, || Some(true)) {
+            if !event(r) {
                 return false; // a failing row where nothing left the range: f64 refuses
+            }
+            failing.push(r);
+            read[r] = true;
+        }
+    }
+    for (r, &s) in y_src.iter().enumerate() {
+        let valued = || {
+            reals_both_valued(
+                source,
+                src_params,
+                candidate,
+                cand_params,
+                ops,
+                var_names,
+                x_cols,
+                r,
+            )
+        };
+        if !read[r] && !crate::battery::strict_row_agrees(s, y_cand[r], rtol, atol, valued) {
+            if !event(r) {
+                return false;
             }
             failing.push(r);
         }
     }
+    failing.sort_unstable();
     // A pair with no variable evaluates to the same value on every row: one point.
     let with_vars = source
         .iter()
@@ -896,6 +910,129 @@ pub fn range_rescue(
             Some(RowVerdict::Fail)
         )
     })
+}
+
+/// Heads that give a value wherever their operand has one, an infinity included: never the first
+/// undefined node of an expression (`verify._contract._TOTAL_HEADS`).
+const TOTAL_HEADS: [&str; 14] = [
+    "neg", "abs", "exp", "sinh", "cosh", "tanh", "atan", "asinh", "erf", "erfc", "floor", "ceil",
+    "max", "min",
+];
+/// Heads whose value is finite wherever it is defined (`verify._contract._BOUNDED_HEADS`).
+const BOUNDED_HEADS: [&str; 8] = ["sin", "cos", "tanh", "atan", "erf", "erfc", "asin", "acos"];
+
+/// One node of `tokens` from `pos` on, read in the reals: `(finite wherever defined, within
+/// [-1, 1] wherever defined, some node below or at it can be the first undefined one)`
+/// (`verify._contract._finite`, `_unit_range`, `_origin`).
+fn scan_origins(
+    tokens: &[String],
+    pos: &mut usize,
+    ops: &Operators,
+    var_names: &[String],
+) -> Option<(bool, bool, bool)> {
+    let t = tokens.get(*pos)?;
+    *pos += 1;
+    let arity = ops.arity_of(t).map_or(0, usize::from);
+    if arity == 0 {
+        if t == "<constant>" {
+            return Some((false, false, false));
+        }
+        if var_names.contains(t) {
+            return Some((true, false, false));
+        }
+        return Some(match crate::numeric::leaf_value(t) {
+            Some(v) if v.is_nan() => (false, false, true),
+            Some(v) => (v.is_finite(), false, false),
+            None => (false, false, true),
+        });
+    }
+    let kids: Vec<(bool, bool, bool)> = (0..arity)
+        .map(|_| scan_origins(tokens, pos, ops, var_names))
+        .collect::<Option<_>>()?;
+    let h = t.as_str();
+    let all_finite = kids.iter().all(|k| k.0);
+    let finite = BOUNDED_HEADS.contains(&h)
+        || (matches!(
+            h,
+            "neg"
+                | "abs"
+                | "floor"
+                | "ceil"
+                | "max"
+                | "min"
+                | "+"
+                | "-"
+                | "*"
+                | "/"
+                | "exp"
+                | "sinh"
+                | "cosh"
+        ) && all_finite);
+    let unit =
+        matches!(h, "sin" | "cos" | "tanh" | "erf") || (matches!(h, "neg" | "abs") && kids[0].1);
+    let origin = if TOTAL_HEADS.contains(&h) {
+        false
+    } else if matches!(h, "+" | "-") {
+        !kids.iter().any(|k| k.0)
+    } else if h == "*" {
+        !all_finite
+    } else if matches!(h, "sin" | "cos") {
+        !kids[0].0
+    } else if matches!(h, "asin" | "acos") {
+        !kids[0].1
+    } else {
+        true
+    };
+    Some((finite, unit, origin || kids.iter().any(|k| k.2)))
+}
+
+/// Does `tokens` have a value in the reals wherever its variables have real values -- no node of
+/// it can be the first undefined one (`verify._contract._always_valued`)? False where that is not
+/// shown.
+pub fn always_valued(tokens: &[String], ops: &Operators, var_names: &[String]) -> bool {
+    let mut pos = 0;
+    matches!(
+        scan_origins(tokens, &mut pos, ops, var_names),
+        Some((_, _, false))
+    ) && pos == tokens.len()
+}
+
+/// Do the reals give both sides a value at row `row` of `x_cols`, the doubles float64 reads there?
+/// A side that has one wherever its variables do (`always_valued`: `sin(x + pi)`,
+/// `floor(tanh(abs(x)))`) has one without a reading; another is read by the table at `BASE_DPS`
+/// and at the precision its operands demand (`row_rungs`). `None` where a side reads no answer.
+/// The condition of strict's second reading at a point (`battery::kind_holds`,
+/// `verify._contract.reals_valued_at`).
+#[allow(clippy::too_many_arguments)]
+pub fn reals_both_valued(
+    source: &[String],
+    src_params: &[f64],
+    candidate: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    row: usize,
+) -> Option<bool> {
+    let valued = |tokens: &[String], params: &[f64]| -> Option<bool> {
+        if always_valued(tokens, ops, var_names) {
+            return Some(true);
+        }
+        let side = RowSide::new(tokens, params, ops, var_names, x_cols, row)?;
+        let o = side.first()?;
+        if let Some(v) = &o.value {
+            return Some(!crate::table::class_of(v).0);
+        }
+        row_rungs(&o, &o)?
+            .into_iter()
+            .find_map(|d| side.at(d))
+            .map(|v| !crate::table::class_of(&v).0)
+    };
+    match (valued(source, src_params), valued(candidate, cand_params)) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
 }
 
 /// The literal-resolution arbiter (worker's `resolve_const_slots`):
@@ -3508,6 +3645,62 @@ mod tests {
         assert!(!judge(&["log", "exp", "x0"], &["+", "x0", "1"], 1..2));
         // saturation inside the range is no event: f64's verdict stands
         assert!(!judge(&["atanh", "tanh", "x0"], &["x0"], 3..4));
+    }
+
+    /// The range standard re-reads every row where nothing left the range by the mint's one row
+    /// agreement (`battery::strict_row_agrees`), as the constant-free check reads it: a pair with
+    /// an overflow row and a rounding row is accepted. `log(exp(x))` is x past exp's overflow in
+    /// the reals, and 34 units in the last place from x at 0.0137421 (past F6, within the
+    /// tolerances); `atanh(tanh(x))` saturates to +inf inside the range at 20, no event.
+    #[test]
+    fn range_rescue_reads_the_other_rows_by_the_mints_row_agreement() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let cols = vec![vec![800.0, 0.0137421, 20.0]];
+        let n = cols[0].len();
+        let eval = |t: &[&str]| {
+            crate::eval::Tape::compile(&s(t), ops, &vars)
+                .unwrap()
+                .eval_columns_events(&cols, &[], n)
+        };
+        let judge = |src: &[&str], cand: &[&str], rows: std::ops::Range<usize>| {
+            let ((ys, es), (yc, ec)) = (eval(src), eval(cand));
+            let pick = |v: &[f64]| v[rows.clone()].to_vec();
+            let (es, ec) = (es[rows.clone()].to_vec(), ec[rows.clone()].to_vec());
+            let cols_r = vec![cols[0][rows.clone()].to_vec()];
+            range_rescue(
+                &pick(&ys),
+                &pick(&yc),
+                Some(&es),
+                Some(&ec),
+                &s(src),
+                &[],
+                &s(cand),
+                &[],
+                ops,
+                &vars,
+                &cols_r,
+                1e-11,
+                1e-12,
+            )
+        };
+        let (y, _) = eval(&["log", "exp", "x0"]);
+        assert_ne!(
+            crate::table::f64_agree(y[1], 0.0137421),
+            crate::table::Cmp::Eq
+        );
+        assert!(crate::battery::strict_row_agrees(
+            y[1],
+            0.0137421,
+            1e-11,
+            1e-12,
+            || Some(true)
+        ));
+        assert!(judge(&["log", "exp", "x0"], &["x0"], 0..2));
+        assert!(!judge(&["atanh", "tanh", "x0"], &["x0"], 1..3));
     }
 
     /// `np.pi` denotes PI, not its f64 rendering. Lifting the

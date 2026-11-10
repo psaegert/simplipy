@@ -429,14 +429,14 @@ class TestScreenSensitivity:
     def test_bounded_wrapper_keeps_signed_inf_screenable(self, eng, X):
         # the 1M campaign's 2-ppm class in the form the OLD screen first saw it: tanh
         # maps the +inf/-inf disagreement on the fat zero set to a finite +/-1
-        # disagreement -- still flagged under the sharpened clause. The judge holds it in f64
-        # by strict's second reading: true in the reals (neither side has a value on x > 0),
-        # and float64's two sides finite at every point, 1 against -1 on x > 0
+        # disagreement -- still flagged under the sharpened clause. The judge refuses it in f64:
+        # strict's second reading reads kind only where the reals give both sides a value, and
+        # on x > 0 they give neither one (1/0), so float64's 1 against -1 there owes F6
         src = 'tanh / 1 - abs x0 x0'.split()
         dst = 'tanh neg / 1 - x0 abs x0'.split()
         assert flags(screen_disagreements(eng, src, dst, X))
         v, _ = judge_pair(list(src), list(dst), np.random.default_rng(0))
-        assert v == 'OK'
+        assert v == 'VIOLATION'
 
     def test_top_level_signed_inf_flags_directly(self, eng, X):
         # the sign-aware correction's own pin: at the TOP level a pole-sign flip used

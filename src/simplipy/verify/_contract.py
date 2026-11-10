@@ -2479,17 +2479,66 @@ HOLDS_IN_THE_REALS = frozenset({'CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'})
 KIND_AGREEMENTS = frozenset({'REAL-CHANGE'})
 
 
+def reals_valued_at(tl, tr, env, valued=(False, False)):
+    """Do the reals give both sides a value at float64's point `env` (its doubles, read exactly)?
+    A side `valued` shows to have one everywhere (`_always_valued`: `sin(x0 + pi)`,
+    `floor(tanh(abs(x0)))`) has one without a reading; another is read at the gap ladder's rungs
+    and at the precision its operands' magnitudes demand. True, False, or None where a side reads
+    no answer. Read at the doubles float64 reads, each the exact rational it is (so `floor` at an
+    integer double reads it), not at the battery's exact atoms: at pi/2's double the reals' `sin`
+    is below 1, so `pow(sin(x), inf)` has the value 0 there."""
+    old = mp.dps
+    mags = [abs(math.log10(abs(float(v)))) for v in env.values()
+            if math.isfinite(float(v)) and float(v) != 0]
+    demanded = min(MAX_DPS, BASE_DPS + 30 + int(max(mags, default=0)))
+    e = {k: Fraction(float(v)) if math.isfinite(float(v)) else mpf(float(v))
+         for k, v in env.items()}
+    try:
+        sides = [True if valued[0] else None, True if valued[1] else None]
+        if None not in sides:
+            return True
+        for dps in sorted({*GAP_RUNGS, demanded, min(MAX_DPS, 2 * demanded)}):
+            mp.dps = dps
+            for i, t in enumerate((tl, tr)):
+                if sides[i] is None:
+                    try:
+                        sides[i] = cls_mp(c_eval(t, e))[0] != 'nan'
+                    except Unresolved:
+                        pass
+            if False in sides:
+                return False
+            if None not in sides:
+                return True
+        return None
+    finally:
+        mp.dps = old
+
+
+def kind_holds(dv, valued):
+    """STRICT'S SECOND READING AT ONE POINT, its one definition: float64's two sides that disagree
+    there (`dv`, `compare_deployed_realised`) agree in kind -- both finite, `KIND_AGREEMENTS` --
+    at a point where the reals give both sides a value (`valued()`, `reals_valued_at`), where
+    their difference is rounding; at any other point they agree only as F6 asks.
+    -> True, False, or None where the reals' reading of the point reached no answer."""
+    if dv not in KIND_AGREEMENTS:
+        return False
+    return valued()
+
+
 def strict_reading(f6, kinds, verdict):
     """THE STRICT READING, the one place the judge decides `f64` (strict): a rule holds there where
     (a) float64's two sides agree (F6, with the range standard at an overflow) at every point
     read, or (b) the rule holds in the reals (`HOLDS_IN_THE_REALS`) and float64's two sides agree
     in kind at every point read: both finite, the same infinity or both undefined, an extension
     only on a null set, a zero's sign where a head reads it, the range standard at an overflow.
-    (b) has no error bound: where the two sides have one real value, their float64 difference is
-    rounding. `sin(x0 + pi) -> -sin(x0)` holds by (b) (1.2e-16 against -0 at x0 = 0), and so do
-    `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`;
-    `atanh(tanh(x0)) -> x0` does not (+inf against x0 from x0 = 19.06), nor `exp(log(x0)) -> x0`
-    (NaN against x0 for x0 < 0), nor any rule false in the reals.
+    (b) has no error bound, and reads kind only at a point where the reals give both sides a
+    value (`kind_holds`): there their float64 difference is rounding. At every other point
+    float64's two sides agree as F6 asks. `sin(x0 + pi) -> -sin(x0)` holds by (b) (1.2e-16
+    against -0 at x0 = 0), and so do `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at
+    x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`; `atanh(tanh(x0)) -> x0` does not (+inf against
+    x0 from x0 = 19.06), nor `exp(log(x0)) -> x0` (NaN against x0 for x0 < 0), nor
+    `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1 against -1 on x0 > 0, where the reals
+    give neither side a value), nor any rule false in the reals.
 
     `f6` and `kinds` are float64's two readings, each True, False or None (no answer reached), and
     `verdict` is the reals' outcome. -> True; False where (a) is refused and so is (b), by a change
@@ -2816,12 +2865,161 @@ def _renamed(tokens, rename):
 MAX_COINCIDENT_SLOTS = 4
 
 
+#: Heads that give a value wherever their operand has one, an infinity included, in the reals and
+#: in float64: never the first undefined node of an expression (`_origin`).
+_TOTAL_HEADS = frozenset({'neg', 'abs', 'exp', 'sinh', 'cosh', 'tanh', 'atan', 'asinh', 'erf',
+                          'erfc', 'floor', 'ceil', 'max', 'min'})
+#: Heads whose value is finite wherever it is defined, whatever the operand.
+_BOUNDED_HEADS = frozenset({'sin', 'cos', 'tanh', 'atan', 'erf', 'erfc', 'asin', 'acos'})
+#: The float64 kernels that keep an undefined (NaN) operand undefined. `pow(NaN, 0)` is 1 and
+#: `max` drops a NaN: such heads are left out.
+_F64_PROPAGATING = frozenset({'+', '-', '*', '/', 'neg', 'abs', 'inv', 'exp', 'log', 'sin', 'cos',
+                              'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh',
+                              'acosh', 'atanh', 'erf', 'erfc', 'floor', 'ceil'})
+
+
+def _term(tokens):
+    """`tokens` (prefix) as a tree of `(token, children)`; ValueError or IndexError where they are
+    no one expression."""
+    tokens = list(tokens)
+    pos = [0]
+
+    def build():
+        t = tokens[pos[0]]
+        pos[0] += 1
+        return (t, tuple(build() for _ in range(ARITY.get(t, 0))))
+    tree = build()
+    if pos[0] != len(tokens):
+        raise ValueError('trailing tokens')
+    return tree
+
+
+def _leaf(t):
+    """A leaf's key (None for a `<constant>`, whose two sides bind different constants, or a token
+    the judge cannot read) and whether it is finite wherever defined (a variable ranges over the
+    reals)."""
+    if t == '<constant>':
+        return None, False
+    if slot_key(t) is not None or (t not in ARITY and _NAME_RE.match(t)):
+        return ('var', slot_key(t) or t), True
+    try:
+        v = literal_value(t)
+    except Exception:
+        return None, False
+    if isinstance(v, float) and math.isnan(v):
+        return ('nan',), False
+    return ('lit', type(v).__name__, v), not (isinstance(v, float) and math.isinf(v))
+
+
+def _node_key(node):
+    """A node's structural key, literals read as their values; None where it holds a
+    `<constant>`."""
+    head, kids = node
+    if not kids:
+        return _leaf(head)[0]
+    ks = tuple(_node_key(k) for k in kids)
+    return None if any(k is None for k in ks) else (head, ks)
+
+
+def _finite(node, f64):
+    """Is `node` finite wherever it is defined (in float64 with `f64`, where sums and products
+    overflow and a quotient by 0 is infinite)?"""
+    head, kids = node
+    if not kids:
+        return _leaf(head)[1]
+    if head in _BOUNDED_HEADS:
+        return True
+    if head in ('neg', 'abs', 'floor', 'ceil', 'max', 'min'):
+        return all(_finite(k, f64) for k in kids)
+    if not f64 and head in ('+', '-', '*', '/', 'exp', 'sinh', 'cosh'):
+        return all(_finite(k, f64) for k in kids)
+    return False
+
+
+def _unit_range(node):
+    """Does `node` lie in [-1, 1] wherever it is defined (`sin`, `cos`, `tanh`, `erf`, their
+    negations and absolute values), in the reals and in float64?"""
+    head, kids = node
+    if head in ('sin', 'cos', 'tanh', 'erf'):
+        return True
+    return head in ('neg', 'abs') and _unit_range(kids[0])
+
+
+def _origin(node, f64):
+    """Can `node` be the first undefined node of an expression -- undefined where its operands
+    have values? Not a head total on the extended reals (`_TOTAL_HEADS`), not a sum with an
+    operand finite wherever defined (no inf - inf), not a product of such operands (no 0 * inf),
+    not `sin` or `cos` of one, not `asin` or `acos` of one within [-1, 1] (`_unit_range`); a NaN
+    literal is."""
+    head, kids = node
+    if not kids:
+        return _leaf(head)[0] == ('nan',)
+    if head in _TOTAL_HEADS:
+        return False
+    if head in ('+', '-'):
+        return not any(_finite(k, f64) for k in kids)
+    if head == '*':
+        return not all(_finite(k, f64) for k in kids)
+    if head in ('sin', 'cos'):
+        return not _finite(kids[0], f64)
+    if head in ('asin', 'acos'):
+        return not _unit_range(kids[0])
+    return True
+
+
+def _nodes(node):
+    yield node
+    for k in node[1]:
+        yield from _nodes(k)
+
+
+def _always_valued(tokens):
+    """Does the expression have a value in the reals wherever its variables have real values (no
+    node of it can be the first undefined one, `_origin`)? False where that is not shown."""
+    try:
+        tree = _term(tokens)
+    except (IndexError, ValueError):
+        return False
+    return not any(_origin(n, False) for n in _nodes(tree))
+
+
+def _no_extension(lhs, rhs, f64=False):
+    """A STRUCTURAL CERTIFICATE THAT CLAUSE (b) HAS NOTHING TO MEASURE: the right side has no value
+    wherever the left side has none, so no cell can hold an extension. An undefined operand makes
+    an operation undefined in the reals (THE TABLE), and in float64 at the heads that keep a NaN
+    (`_F64_PROPAGATING`). So where the left side has no value at a point, some node of it is the
+    first undefined one there (`_origin`). If every node of the left side that can be one occurs
+    on the right side (the same slots, literals read as their values, no `<constant>`), under
+    heads that keep it undefined, the right side has no value there either. Linear in the sides'
+    sizes: `x0/299792458` and `cos(x0) + log(cos(x1))` against themselves, and `log(cos(x2)) +
+    cos(x1) -> cos(x1) + log(cos(x2))`, measure 0, where the cells run past the interval layer's
+    horizon or budget. -> True where it shows that, else False (the cells decide)."""
+    try:
+        tl, tr = _term(lhs), _term(rhs)
+    except (IndexError, ValueError):
+        return False
+    kept = set()        # the right side's nodes reached through heads that keep them undefined
+
+    def walk(node, keeps):
+        k = _node_key(node)
+        if k is not None and keeps:
+            kept.add(k)
+        for c in node[1]:
+            walk(c, keeps and (not f64 or node[0] in _F64_PROPAGATING))
+
+    walk(tr, True)
+    return all(not _origin(n, f64) or _node_key(n) in kept for n in _nodes(tl))
+
+
 def _extension_width(lhs, lp, rhs, rp, names, f64=False):
     """Clause (b)'s measure: the volume of the largest certified cell where the left side is
     undefined and the right side has a value (`None`: undecided). The cells partition the real
     input space; each is read in the table's real values, or with `f64` in float64's, where a
     saturation plateau (`tanh(x)` is 1.0 past 19.06) is a cell like any other: full-dimensional,
-    never of measure zero."""
+    never of measure zero. A rule whose right side has no value wherever its left side has none
+    measures 0 by structure (`_no_extension`), whatever the cells could read."""
+    if _no_extension(lhs, rhs, f64):
+        return 0.0
     return _table.table_extension_width(_spelled(lhs, names), [float(c) for c in lp],
                                         _spelled(rhs, names), [float(c) for c in rp],
                                         dict(ARITY), f64)
@@ -2998,6 +3196,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # The REALISATION axis, recorded with no gate (`dep_bad`), and ENGINE-MISALIGN's
     # structural divergence where the contract agrees (`dep_div`).
     dep_bad, dep_div, dep_seen, dep_out_of_range = [], [], [False], [0]
+    # strict's second reading's refusals and the points it could not read (`kind_holds`), and
+    # the sides that have a value wherever their variables do (`_always_valued`)
+    dep_kind_bad, dep_kind_unread = [], []
+    always_valued = (_always_valued(lhs), _always_valued(rhs))
     dep_kinds = set()
     resolved_pts = attempted_pts = 0
     float_read = [0]       # battery points only permissive's float-resolution reading decided
@@ -3069,6 +3271,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     out['null'] += 1
                     return
                 out['bad'].append((dv, point))
+                # strict's second reading at this point (`kind_holds`)
+                held = kind_holds(dv, lambda: reals_valued_at(tl, tr, tl_env, always_valued))
+                if held is None:
+                    out['kind_unread'].append(point)
+                elif not held:
+                    out['kind_bad'].append((dv, point))
             elif _dl == 0 and _dr == 0 and math.copysign(1.0, _dl) != math.copysign(1.0, _dr):
                 out['kinds'].add('ZERO-SIGN')
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
@@ -3083,6 +3291,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return {'a': [], 'atom': [], 'ext': [], 'perm': [], 'finite': False, 'known': 0,
                 'resolved': 0, 'attempted': 0, 'fr': 0,
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
+                'kind_bad': [], 'kind_unread': [],
                 'kinds': set(), 'null': 0, 'read': 0, 'unread': 0,
                 'perm_unread': [], 'owed_unread': []}
 
@@ -3160,6 +3369,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         # = 1 in float64, though undefined at the exact pi/2), whatever real owes there
         if owes['f64']:
             dep_bad.extend(acc['bad'])
+            dep_kind_bad.extend(acc['kind_bad'])
+            dep_kind_unread.extend(acc['kind_unread'])
             dep_div.extend(acc['div'])
             dep_kinds.update(acc['kinds'])
             f64_owed.add(key)
@@ -3647,12 +3858,17 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return held
 
     # (a) float64's two sides agree (F6) at every point read; (b)'s half in float64: they agree
-    # in kind, both finite, the same infinity or both undefined (a finite disagreement, ROUNDING
-    # or SIGN, is no change of kind). A fully numeric rule has no (b): its one point is bit-exact
-    # (3.3).
+    # in kind, both finite, at every point where the reals give both sides a value, and as F6
+    # asks at every other (`kind_holds`). A fully numeric rule has no (b): its one point is
+    # bit-exact (3.3).
     _f6 = f64_reading(dep_bad)
-    _kinds = _f6 if ground and not has_cl else \
-        f64_reading([b for b in dep_bad if b[0] not in KIND_AGREEMENTS])
+    if ground and not has_cl:
+        _kinds = _f6
+    else:
+        _kinds = f64_reading(dep_kind_bad)
+        if dep_kind_unread and _kinds is True:
+            _kinds = None      # a disagreement where the reals reached no answer
+
     # nothing owed at any constant (the left side finite nowhere the judge read it): the rule
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
