@@ -2411,6 +2411,14 @@ fn kernel_binary_scalar(name: &str, a: f64, b: f64) -> PyResult<f64> {
         .ok_or_else(|| PyValueError::new_err(format!("no kernel named {name:?} of this arity")))
 }
 
+/// The base-10 logarithm from the elementary-function source (`numeric::elementary`), whose
+/// functions the evaluator's transcendentals are: the judge reads the decades a value spans,
+/// which set its working precision, from it.
+#[pyfunction]
+fn elementary_log10(x: f64) -> f64 {
+    numeric::elementary::log10(x)
+}
+
 /// `out[i] = name(a[i], b[i])` for a binary operator kernel, as `kernel_unary`.
 #[pyfunction]
 fn kernel_binary(
@@ -2665,6 +2673,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(kernel_binary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary_scalar, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_binary_scalar, m)?)?;
+    m.add_function(wrap_pyfunction!(elementary_log10, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
     // The near-miss gate of the high-precision re-judgement (permissive): the
     // fraction of a pair's points that may fail f64 for it to escalate. Recorded per mine.

@@ -1,9 +1,10 @@
 //! THE ELEMENTARY-FUNCTION SOURCE: every transcendental the float64 evaluator, the kernels and
 //! the deployed realizations compute comes from here, and nowhere else in the `numeric` module.
 //! Today that is the SYSTEM libm, bound through its C symbols; replacing it (with correctly
-//! rounded implementations, say) is a change to this file alone. The complex product and
-//! quotient are arithmetic, not the platform's: the core computes them itself
-//! (`numeric::complex`), the same on every machine.
+//! rounded implementations, say) is a change to this file alone. The judge reads `log10` from
+//! here too, for the decades that set its working precision. The complex product and quotient
+//! are arithmetic, not the platform's: the core computes them itself (`numeric::complex`), the
+//! same on every machine.
 //!
 //! Why the C symbols and not Rust's `f64::*` methods: Rust's std calls the platform libm for
 //! most of them (so they match it at 0 ULP), but `f64::atanh` is Rust's OWN composition
@@ -33,6 +34,7 @@ mod c {
         pub fn atanh(x: f64) -> f64;
         pub fn exp(x: f64) -> f64;
         pub fn log(x: f64) -> f64;
+        pub fn log10(x: f64) -> f64;
         pub fn pow(x: f64, y: f64) -> f64;
         pub fn erf(x: f64) -> f64;
         pub fn atan2(y: f64, x: f64) -> f64;
@@ -60,7 +62,9 @@ macro_rules! unary {
     )*};
 }
 
-unary!(sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh, exp, log, erf);
+unary!(
+    sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh, exp, log, log10, erf
+);
 
 /// `x ** y`, the C `pow` (see the module documentation for the `black_box`).
 #[inline]

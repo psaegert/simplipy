@@ -1328,6 +1328,13 @@ model predictions.
   well, and the high-precision polish took that noise to about 1e-557 instead of 0, a nonzero
   right side where both sides are exactly 0. `(x0 - C)^2 -> x0^2 - C1*x0 + C2` and
   `(x0 + C)/C -> C1*x0 + C2`, refused on every machine before, hold in `real`.
+- **A mine's rows are the core's arithmetic.** The rows a mine samples and confirms on, and the
+  rows the judge's `float64` lane reads, drew their log-uniform tier as `10.0 ** u` by numpy,
+  whose float64 `power` on a machine with AVX-512 is numpy's own vectorized code, not the
+  platform's libm, so the same seed drew other rows there. The tier is now the core's `pow`
+  kernel, as are the judge's witness search grid and the decades that set its working precision:
+  a seed draws the same rows wherever the core computes the same `pow`. On a machine without
+  AVX-512, where numpy's `power` is the libm's, the rows keep their bits.
 - **The fit of several constants reaches every constant the judge asks about.** The float64
   fit reads only environments where the left side is moderate (zero or within [1e-6, 1e6]),
   shrinking the variables toward 0 where the generic values are not, and where float64 cannot

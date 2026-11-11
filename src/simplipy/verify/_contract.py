@@ -49,6 +49,7 @@ from mpmath import isnan as misnan, isinf as misinf
 from mpmath.libmp import from_rational as _from_rational
 
 from . import _exact
+from .. import operators as _operators
 
 
 class _Registers(threading.local):
@@ -977,6 +978,21 @@ GRID = list(dict.fromkeys(GRID))
 F64_MAGNITUDES = tuple(_table.TABLE_F64_MAGNITUDES) if _TABLE_OK else ()
 
 # ---------------------------------------------------------------- witness fitting
+def _powers_of_ten(exponents):
+    """`10 ** exponents`, element-wise, by the core's `pow` kernel (`simplipy.operators.pow`).
+    Every value the mine and the judge read is a draw, an exact operation or the core's
+    arithmetic, never numpy's vectorized transcendentals, which on a machine with AVX-512 are
+    numpy's own code, not the platform's math library, and give other bits."""
+    return _operators.pow(10.0, exponents)
+
+
+def _log10(v):
+    """The base-10 logarithm of a positive double, from the core's elementary-function source
+    (`_core.elementary_log10`), as the evaluator's transcendentals are: the decades a value
+    spans set a working precision."""
+    return _table.elementary_log10(v)
+
+
 GEN = [1.7, -1.3, 0.6, 2.3, -0.8]
 
 
@@ -996,11 +1012,11 @@ def _gen_env(names, k):
 #: decades short has no bracket for `cosh(-3)^300 = 7.6e300`, and a rule whose witness
 #: cannot be bracketed is reported NO-WITNESS -- a conviction, for a row true by
 #: construction.
-_XS_TAIL = np.logspace(12, 308, 49)[1:]
+_XS_TAIL = _powers_of_ten(np.linspace(12, 308, 49))[1:]
 
 #: The dense body is the shipped grid, unchanged -- the tail only adds reach.
-_XS = np.concatenate([-_XS_TAIL[::-1], -np.logspace(12, -3, 120),
-                      np.linspace(-3, 3, 81), np.logspace(-3, 12, 120), _XS_TAIL])
+_XS = np.concatenate([-_XS_TAIL[::-1], -_powers_of_ten(np.linspace(12, -3, 120)),
+                      np.linspace(-3, 3, 81), _powers_of_ten(np.linspace(-3, 12, 120)), _XS_TAIL])
 
 
 def _cl_env(cl_val, cl_name='<C_L>'):
@@ -1043,12 +1059,17 @@ def mine_rows(n_rows, n_vars, rng):
     pushes the constant-fit conditioning to cond(A) ~ 1e6 and the fit cannot
     recover an intercept to rtol at an exact-zero-crossing row -- silently
     rejecting the entire ``C0*f(x)+C1`` affine family.
+
+    Every value is a draw of numpy's bit generator, an exact operation on draws, or the core's
+    ``pow`` kernel (the log-uniform tier's ``10 ** u``): a seed draws the rows the core's
+    arithmetic gives, whichever vectorized code numpy dispatches on the machine.
     """
     shape = (n_rows, n_vars)
     choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
     normal = rng.normal(0.0, 5.0, size=shape)
     uniform = rng.uniform(-50.0, 50.0, size=shape)
-    magnitudes = 10.0 ** rng.uniform(-4.0, 3.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
+    magnitudes = (_powers_of_ten(rng.uniform(-4.0, 3.0, size=shape))
+                  * rng.choice((-1.0, 1.0), size=shape))
     specials = np.array([0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0,
                          2.0, -2.0, np.e, -np.e, np.pi, -np.pi, 10.0, -10.0])
     special = rng.choice(specials, size=shape)
@@ -1383,7 +1404,7 @@ def _extremity(tl, envs, cl_env):
                 v = abs(float(d_eval(tl, {**env, **cl_env})))
         except Exception:
             continue
-        out = max(out, abs(math.log10(v)) if 0 < v < math.inf else 400.0)
+        out = max(out, abs(_log10(v)) if 0 < v < math.inf else 400.0)
     return out
 
 
@@ -1495,7 +1516,7 @@ def _fit_multi_mp(tl, tr, generic, cl_env, rnames, strict=False):
         if math.isinf(v):
             decades.append(_real_decades(tl, {**env, **cl_env}))
         elif v > 1:
-            decades.append(math.log10(v))
+            decades.append(_log10(v))
     decades = [k for k in decades if k is not None]
     old = mp.dps
     try:
@@ -2488,7 +2509,7 @@ def reals_valued_at(tl, tr, env, valued=(False, False)):
     integer double reads it), not at the battery's exact atoms: at pi/2's double the reals' `sin`
     is below 1, so `pow(sin(x), inf)` has the value 0 there."""
     old = mp.dps
-    mags = [abs(math.log10(abs(float(v)))) for v in env.values()
+    mags = [abs(_log10(abs(float(v)))) for v in env.values()
             if math.isfinite(float(v)) and float(v) != 0]
     demanded = min(MAX_DPS, BASE_DPS + 30 + int(max(mags, default=0)))
     e = {k: Fraction(float(v)) if math.isfinite(float(v)) else mpf(float(v))
