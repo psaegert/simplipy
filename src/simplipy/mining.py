@@ -2127,6 +2127,10 @@ class RuleMiner:
                                   'twin_shadowed': [[list(lhs), list(rhs)]
                                                     for lhs, rhs in _shadowed],
                                   'folded': _folded,
+                                  # THE SCAN'S OWN OUTCOME: every source it picked a target for,
+                                  # after the judge loop; a source of the length absent here had
+                                  # no candidate below its mark that the mint accepted
+                                  'picked': [[list(src), list(tgt)] for src, tgt in found],
                                   'total': len(rules),
                                   'wall_s': round(time.monotonic() - _t0, 3)}
             if provenance is not None:

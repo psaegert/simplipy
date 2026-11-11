@@ -54,6 +54,10 @@ def test_twins_from_the_proposal_channel_and_promotion_ship_once(tmp_path) -> No
     for lhs, rhs in dropped:
         assert (tuple(lhs), tuple(rhs)) in shadowed, (lhs, rhs, ledger)
     assert all("folded" in record for record in provenance["per_length"].values())
+    # THE SCAN'S OWN OUTCOME: every source it picked a target for, by length; a source absent
+    # there had no candidate the mint accepted below its mark
+    assert all(len(record["picked"]) == record["picks"]
+               for record in provenance["per_length"].values()), provenance["per_length"]
     tan = [r for r in rules if r[1] in (["tan", "_0"], ["neg", "tan", "_0"], ["tan", "?0"],
                                         ["neg", "tan", "?0"])]
     assert tan, rules
