@@ -605,6 +605,16 @@ def test_an_overflow_row_and_a_rounding_row_are_read_by_one_agreement(lhs, rhs) 
     assert mint_accepts(lhs, rhs, 'f64') and admits(lhs, rhs, 'f64'), judged(lhs, rhs)
 
 
+@pytest.mark.parametrize('lhs, rhs', [('besselj cos 1 <constant>', '<constant>')])
+def test_a_fitted_constant_agrees_within_the_fits_band(lhs, rhs) -> None:
+    """The mint's one row agreement reads a value by where it came from: an evaluated side by
+    rounding (the mine's tolerances), a fitted constant by the fit's witness band. At the special
+    constant C = 0.1 the fitted witness of `besselj(cos(1), C) -> C'` is 3.2e-12 from the
+    source's value, inside the fit's band and past the tolerances of a rounding: the pair is
+    minted, as the judge holds it."""
+    assert mint_accepts(lhs, rhs, 'f64') and admits(lhs, rhs, 'f64'), judged(lhs, rhs)
+
+
 @pytest.mark.parametrize('src', ['inv ceil sin x0', 'inv ceil tanh x0', 'inv floor erf x0',
                                  'inv max 0 x0', 'inv floor tanh x0', 'asin cosh x0',
                                  'tan atan2 x0 0', 'acosh tanh x0', 'atanh floor x0'])
@@ -636,8 +646,45 @@ def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs
     monkeypatch.setattr(mining, '_unjoined_overlaps', lambda *a, **k: [
         {'rule': completion, 'instance': completion[0], 'other_path': completion[0],
          'rhs_path': completion[1], 'completion': completion}])
-    missing, _, _ = mining._overlap_gate(bare(), RULE_MODE[mode], [], mining.judge_tiers)
+    missing, _, _, _ = mining._overlap_gate(bare(), RULE_MODE[mode], [], mining.judge_tiers)
     assert bool(missing) == mint_accepts(lhs, rhs, mode), (missing, judged(lhs, rhs))
+
+
+@pytest.mark.parametrize('completion, left', [
+    # licensed core; the f64 mint's row agreement refuses it on the mine's rows: acos near 1
+    # magnifies the rounding past the tolerances (3.80e-8 against 3.94e-8 at x0 = 17.8)
+    (('abs atan sinh x0', 'acos inv cosh x0'), True),
+    # licensed, and the agreement passes it: still demanded, and the gate fails without it
+    (('log exp x0', 'x0'), False),
+])
+def test_the_overlap_gate_leaves_to_the_prefilter_only_what_it_refuses(monkeypatch, completion,
+                                                                       left) -> None:
+    """The f64 mine's prefilter stays, and strict has no high-precision rescue: an identity
+    whose rounding a function magnifies past it stays permissive's. So the overlap gate does not
+    demand in the f64 file a completion the mint's row agreement refuses (`_prefilter_reading`,
+    the scan's own reading through `_core.prefilter_agrees`); it records it as left unjoined by
+    the prefilter, with the instance and both paths. A missing completion that passes the
+    agreement still fails the gate."""
+    import simplipy.mining as mining
+    lhs, rhs = (side.split() for side in completion)
+    overlap = {'rule': [['acos', 'cos', 'atan', '_0'], ['abs', 'atan', '_0']],
+               'instance': ['acos', 'cos', 'atan', 'sinh', 'x0'], 'other_path': rhs,
+               'rhs_path': lhs, 'completion': [lhs, rhs]}
+    monkeypatch.setattr(mining, '_unjoined_overlaps', lambda *a, **k: [overlap])
+    X = mine_rows()
+    prefilter = mining._prefilter_reading(bare(), X, ['x0', 'x1'], 1e-11, 1e-12)
+    assert admits(' '.join(lhs), ' '.join(rhs), 'f64'), judged(' '.join(lhs), ' '.join(rhs))
+    missing, _, _, prefiltered = mining._overlap_gate(bare(), 'default', [], mining.judge_tiers,
+                                                      prefilter=prefilter)
+    want = (1, 0) if left else (0, 1)
+    assert (len(prefiltered), len(missing)) == want, (missing, prefiltered)
+    if left:
+        assert prefiltered[0]['instance'] == overlap['instance']
+        assert {'other_path', 'rhs_path', 'completion'} <= set(prefiltered[0])
+        # permissive's file joins it: no prefilter reads its gate
+        missing, _, _, prefiltered = mining._overlap_gate(bare(), 'permissive', [],
+                                                          mining.judge_tiers)
+        assert missing and not prefiltered
 
 
 @pytest.mark.parametrize('expr, mode', [

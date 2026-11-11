@@ -845,11 +845,12 @@ pub fn range_rescue(
     atol: f64,
 ) -> bool {
     let event = |r: usize| src_events.is_some_and(|e| e[r]) || cand_events.is_some_and(|e| e[r]);
+    let fitted = !cand_params.is_empty();
     let mut failing: Vec<usize> = Vec::new();
     let mut read = vec![false; y_src.len()];
     // the rows' values first, the reals only where a row's agreement rests on them
     for (r, &s) in y_src.iter().enumerate() {
-        if !crate::battery::strict_row_agrees(s, y_cand[r], rtol, atol, || Some(true)) {
+        if !crate::battery::strict_row_agrees(s, y_cand[r], rtol, atol, fitted, || Some(true)) {
             if !event(r) {
                 return false; // a failing row where nothing left the range: f64 refuses
             }
@@ -870,7 +871,8 @@ pub fn range_rescue(
                 r,
             )
         };
-        if !read[r] && !crate::battery::strict_row_agrees(s, y_cand[r], rtol, atol, valued) {
+        if !read[r] && !crate::battery::strict_row_agrees(s, y_cand[r], rtol, atol, fitted, valued)
+        {
             if !event(r) {
                 return false;
             }
@@ -3697,6 +3699,7 @@ mod tests {
             0.0137421,
             1e-11,
             1e-12,
+            false,
             || Some(true)
         ));
         assert!(judge(&["log", "exp", "x0"], &["x0"], 0..2));

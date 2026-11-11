@@ -200,7 +200,8 @@ def main(argv: str = None) -> None:
                     by_policy[policy] = by_policy.get(policy, 0) + 1
             print(f'     overlaps not licensed: {len(refused)} '
                   f'({", ".join(f"{k} {v}" for k, v in sorted(by_policy.items())) or "none"}); '
-                  f'beyond the cell: {report["overlaps_beyond_cell"]}')
+                  f'beyond the cell: {report["overlaps_beyond_cell"]}; '
+                  f'left unjoined by the prefilter: {len(report["overlaps_prefilter"])}')
             if report['basis']:
                 print(f'     basis: {report["basis"]["proved"]} proved, '
                       f'{report["basis"]["evidence"]} on evidence alone')

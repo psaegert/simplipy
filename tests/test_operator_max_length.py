@@ -119,7 +119,7 @@ def test_a_mine_reads_the_setting_wherever_it_builds_the_universe(tmp_path, monk
 
     cells: list = []
     monkeypatch.setattr(mining, '_overlap_gate',
-                        lambda *args, **kwargs: cells.append(kwargs) or ([], [], []))
+                        lambda *args, **kwargs: cells.append(kwargs) or ([], [], [], []))
     mining.verify_mine(str(out), 'f64', _OPERATORS,
                        judge=lambda pairs: ['core'] * len(pairs))
     assert cells and cells[0]['max_source'] == 3

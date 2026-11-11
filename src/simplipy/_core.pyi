@@ -254,6 +254,17 @@ class Engine:
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
     ) -> tuple[bool, str]: ...
+    def prefilter_agrees(
+        self,
+        source: list[str],
+        target: list[str],
+        var_names: list[str],
+        x_flat: list[float],
+        n_rows: int,
+        *,
+        rtol: float,
+        atol: float,
+    ) -> bool | None: ...
     def judge_pair(
         self,
         source: list[str],

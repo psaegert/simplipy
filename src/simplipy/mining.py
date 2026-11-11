@@ -941,17 +941,37 @@ def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
             for pair in distinct}
 
 
+def _prefilter_reading(engine: Any, X: Any, var_names: Any, rtol: float,
+                       atol: float) -> Callable:
+    """THE f64 MINT'S ROW AGREEMENT on the mine's rows `X` (its sample and confirmation rows),
+    as the overlap gate reads it (``_core.prefilter_agrees``, the scan's own reading): a
+    function of a completion ``[lhs, rhs]`` (the mine's variables) -> True, False, or None for a
+    completion holding a ``<constant>``, which a fit decides."""
+    X = np.asarray(X, dtype=np.float64)
+    flat, n = X.flatten(order='C').tolist(), X.shape[0]
+    names = list(var_names)
+    return lambda completion: engine._core.prefilter_agrees(
+        list(completion[0]), list(completion[1]), names, flat, n, rtol=rtol, atol=atol)
+
+
 def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
                   verdicts: Callable | None = None, max_source: int | None = None,
                   prog: Any = None,
-                  operator_max_length: dict | None = None) -> tuple[list, list, list]:
+                  operator_max_length: dict | None = None,
+                  prefilter: Callable | None = None) -> tuple[list, list, list, list]:
     """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) within the
     mine's cell (``_in_cell``) is asked about as the rule completion would add:
     ``verify.licensed`` in the mode, the judge's tier and the named policies. -> ``(missing,
-    refused, beyond)``: the completions the mode licenses, which the file lacks (expected
-    empty), those it does not, each with the judge's tier, the policies that refuse it
+    refused, beyond, prefiltered)``: the completions the mode licenses, which the file lacks
+    (expected empty), those it does not, each with the judge's tier, the policies that refuse it
     (``refused_by``) and, with ``verdicts`` (``judge_verdicts``), the judge's verdict where the
-    tier does not hold, and the overlaps whose completion lies beyond the cell, unjudged."""
+    tier does not hold, the overlaps whose completion lies beyond the cell, unjudged, and the
+    licensed completions the f64 mint's row agreement refuses on the mine's rows (``prefilter``,
+    ``_prefilter_reading``), left unjoined by the prefilter. The prefilter stays, and strict has
+    no high-precision rescue: an identity whose rounding a function magnifies past it is no rule
+    the f64 file holds, and stays permissive's, whose file joins it (``abs(atan(sinh(x0))) ->
+    acos(1/cosh(x0))``, 3.80e-8 against 3.94e-8 at x0 = 17.8). Each keeps its instance and both
+    paths."""
     started = time.monotonic()
     unjoined = _unjoined_overlaps(engine, rule_mode, rules)
     beyond = [o for o in unjoined if not _in_cell(o, max_source, operator_max_length)]
@@ -964,15 +984,17 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
                    judged=len(licence), seconds=round(time.monotonic() - started, 1))
     off = [pair for pair, lic in licence.items() if not lic['holds']]
     verdict_of = dict(zip(off, verdicts(off))) if verdicts is not None and off else {}
-    missing, refused = [], []
+    missing, refused, prefiltered = [], [], []
     for o, pair in zip(unjoined, pairs):
         lic = licence[pair]
-        if lic['licensed']:
+        if lic['licensed'] and prefilter is not None and prefilter(o['completion']) is False:
+            prefiltered.append({**o, 'tier': lic['tier']})
+        elif lic['licensed']:
             missing.append({**o, 'tier': lic['tier']})
         else:
             refused.append({**o, 'tier': lic['tier'], 'refused_by': lic['refused_by'],
                             'verdict': verdict_of.get(pair)})
-    return missing, refused, beyond
+    return missing, refused, beyond, prefiltered
 
 
 class RuleMiner:
@@ -1767,13 +1789,18 @@ class RuleMiner:
             # overlaps that do not join, the judge-licensed completions the file lacks and the
             # refused ones with the judge's reason, recorded, not dropped.
             from .progress import Progress
-            gate['overlaps'], gate['overlaps_refused'], _beyond = _overlap_gate(
-                self.engine, rule_mode, final, judge,
-                functools.partial(judge_verdicts, processes=judge_processes,
-                                  warn_s=judge_warn_s, fail_s=judge_fail_s),
-                max_source=cell_source_length,
-                prog=Progress(verbose, prefix='  [gate] '),
-                operator_max_length=operator_max_length)
+            gate['overlaps'], gate['overlaps_refused'], _beyond, \
+                gate['overlaps_prefilter'] = _overlap_gate(
+                    self.engine, rule_mode, final, judge,
+                    functools.partial(judge_verdicts, processes=judge_processes,
+                                      warn_s=judge_warn_s, fail_s=judge_fail_s),
+                    max_source=cell_source_length,
+                    prog=Progress(verbose, prefix='  [gate] '),
+                    operator_max_length=operator_max_length,
+                    prefilter=(_prefilter_reading(
+                        self.engine, X_data if X_confirm is None
+                        else np.vstack([X_data, X_confirm]), dummy_variables, rtol, atol)
+                        if rule_mode == 'default' else None))
             gate['overlaps_beyond_cell'] = len(_beyond)
             # THE COVERAGE GATE on what ships (permissive includes f64, expected empty): every
             # rule of the f64 cell the file was offered is covered by permissive's answer,
@@ -1796,6 +1823,7 @@ class RuleMiner:
                       f'{len(gate["preempted"])} preempted, {len(gate["dead"])} dead, '
                       f'{len(gate["overlaps"])} unjoined overlaps '
                       f'({len(gate["overlaps_refused"])} more not licensed, '
+                      f'{len(gate["overlaps_prefilter"])} left by the prefilter, '
                       f'{gate["overlaps_beyond_cell"]} beyond the cell), '
                       + (f'{len(gate["covers_f64"])} f64 rules not covered, '
                          if 'covers_f64' in gate else '')
@@ -1836,6 +1864,7 @@ class RuleMiner:
                                      'dead': gate['dead'],
                                      'overlaps': gate['overlaps'],
                                      'overlaps_refused': gate['overlaps_refused'],
+                                     'overlaps_prefilter': gate['overlaps_prefilter'],
                                      'overlaps_beyond_cell': gate['overlaps_beyond_cell'],
                                      **({'covers_f64': gate['covers_f64']}
                                         if 'covers_f64' in gate else {}),
@@ -3274,12 +3303,14 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
     gates['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
                           if _preempted_by(engine, lhs, rhs, mode)]
     gates['dead'] = _dead_rules(engine, rule_mode, rules)
-    gates['overlaps'], overlaps_refused, beyond = _overlap_gate(
+    params = sidecar.get('params') or {}
+    gates['overlaps'], overlaps_refused, beyond, overlaps_prefilter = _overlap_gate(
         engine, rule_mode, rules,
         judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
         functools.partial(judge_verdicts, processes=judge_processes),
-        max_source=(sidecar.get('params') or {}).get('max_source_pattern_length'),
-        operator_max_length=(sidecar.get('params') or {}).get('operator_max_length'))
+        max_source=params.get('max_source_pattern_length'),
+        operator_max_length=params.get('operator_max_length'),
+        prefilter=_sidecar_prefilter(engine, sidecar) if rule_mode == 'default' else None)
     gates['translation'] = load_gates['translation']
     recorded = sidecar.get('measure')
     if isinstance(recorded, dict):
@@ -3319,9 +3350,25 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
               for name, found in gates.items()}
     return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
             'gates': report, 'overlaps_refused': overlaps_refused,
+            'overlaps_prefilter': overlaps_prefilter,
             'overlaps_beyond_cell': len(beyond),
             'basis': ({b: labels.count(b) for b in ('proved', 'evidence')}
                       if isinstance(labels, list) else None)}
+
+
+def _sidecar_prefilter(engine: Any, sidecar: dict) -> Callable | None:
+    """The f64 mint's row agreement on the rows the sidecar's mine read (`_prefilter_reading`),
+    where the sidecar records rows drawn from its seed (`X.source`); None where it does not, and
+    the overlap gate then demands every licensed completion."""
+    from .verify._contract import mine_matrix
+    params, rows = sidecar.get('params') or {}, sidecar.get('X') or {}
+    if not str(rows.get('source', '')).startswith('seeded_mixture') or 'seed' not in params:
+        return None
+    n_vars = int(rows['cols'])
+    X = mine_matrix(int(params['seed']), int(rows['rows']), n_vars,
+                    bool(params.get('confirm', True)))
+    return _prefilter_reading(engine, X, [f'x{i}' for i in range(n_vars)],
+                              float(params['rtol']), float(params['atol']))
 
 
 def _ground_rules_off_the_double(engine: Any, rules: list) -> list:

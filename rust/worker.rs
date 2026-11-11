@@ -1389,13 +1389,9 @@ fn candidate_matches(
             let y_cand: &[f64] = cand_rows.y.as_deref().unwrap();
             let hit = if rescue {
                 allclose_extends(y, y_cand, rtol, 0.0)
-            } else if ground {
-                y.iter()
-                    .zip(y_cand)
-                    .all(|(&s, &c)| crate::table::f64_same(s, c))
-            } else {
-                strict_rows_agree(y, y_cand, rtol, atol, |r| {
-                    crate::hiprec::reals_both_valued(
+                    || crate::hiprec::rescue(
+                        y,
+                        y_cand,
                         source,
                         inst_params,
                         &cand.tokens,
@@ -1403,28 +1399,12 @@ fn candidate_matches(
                         ops,
                         var_names,
                         cols,
-                        r,
+                        rtol,
+                        0.0,
+                        lane.excuses_isolated_infinity(),
                     )
-                })
-            } || if rescue {
-                crate::hiprec::rescue(
-                    y,
-                    y_cand,
-                    source,
-                    inst_params,
-                    &cand.tokens,
-                    &[],
-                    ops,
-                    var_names,
-                    cols,
-                    rtol,
-                    0.0,
-                    lane.excuses_isolated_infinity(),
-                )
-            } else if ground {
-                false
             } else {
-                f64_range_rescue(
+                strict_rows_hold(
                     y,
                     y_cand,
                     ev_src,
@@ -1432,12 +1412,12 @@ fn candidate_matches(
                     source,
                     inst_params,
                     &cand.tokens,
-                    &[],
                     ops,
                     var_names,
                     cols,
                     rtol,
                     atol,
+                    ground,
                 )
             };
             // A const-free candidate binds nothing, so even a vacuous match has a determined
@@ -1797,12 +1777,108 @@ fn strict_rows_agree(
         && y_src
             .iter()
             .zip(y_cand)
-            .all(|(&s, &c)| strict_row_agrees(s, c, rtol, atol, || Some(true)))
+            .all(|(&s, &c)| strict_row_agrees(s, c, rtol, atol, false, || Some(true)))
         && y_src
             .iter()
             .zip(y_cand)
             .enumerate()
-            .all(|(r, (&s, &c))| strict_row_agrees(s, c, rtol, atol, || valued(r)))
+            .all(|(r, (&s, &c))| strict_row_agrees(s, c, rtol, atol, false, || valued(r)))
+}
+
+/// STRICT'S ROWS OF A CONSTANT-FREE PAIR in f64, the scan's acceptance of its rows: a fully
+/// numeric pair bit-exact (`table::f64_same`), any other by the mint's row agreement at every row
+/// (`strict_rows_agree`), the true value accepted where an operation of either side overflowed or
+/// underflowed and every other row read by the same agreement (`f64_range_rescue`). The scan
+/// (`candidate_matches`) and the overlap gate's prefilter reading (`prefilter_agrees`) read it.
+#[allow(clippy::too_many_arguments)]
+fn strict_rows_hold(
+    y: &[f64],
+    y_cand: &[f64],
+    ev_src: Option<&[bool]>,
+    ev_cand: Option<&[bool]>,
+    source: &[String],
+    src_params: &[f64],
+    candidate: &[String],
+    ops: &Operators,
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    rtol: f64,
+    atol: f64,
+    ground: bool,
+) -> bool {
+    if ground {
+        return y
+            .iter()
+            .zip(y_cand)
+            .all(|(&s, &c)| crate::table::f64_same(s, c));
+    }
+    strict_rows_agree(y, y_cand, rtol, atol, |r| {
+        crate::hiprec::reals_both_valued(
+            source,
+            src_params,
+            candidate,
+            &[],
+            ops,
+            var_names,
+            cols,
+            r,
+        )
+    }) || f64_range_rescue(
+        y,
+        y_cand,
+        ev_src,
+        ev_cand,
+        source,
+        src_params,
+        candidate,
+        &[],
+        ops,
+        var_names,
+        cols,
+        rtol,
+        atol,
+    )
+}
+
+/// THE OVERLAP GATE'S PREFILTER READING of a constant-free pair `source -> target` on the mine's
+/// rows `cols`: does the f64 mint's row agreement accept it (`strict_rows_hold`)? An identity
+/// whose rounding a function magnifies past the mine's tolerances is refused there, and stays
+/// permissive's (`acos(cos(atan(sinh(x))))` against `acos(1/cosh(x))`). `None` for a pair the
+/// tapes cannot read or one holding a `<constant>`, which a fit decides.
+#[allow(clippy::too_many_arguments)]
+pub fn prefilter_agrees(
+    source: &[String],
+    target: &[String],
+    ops: &Operators,
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    rtol: f64,
+    atol: f64,
+) -> Option<bool> {
+    if source.iter().chain(target).any(|t| t == "<constant>") {
+        return None;
+    }
+    let ts = Tape::compile(source, ops, var_names).ok()?;
+    let tc = Tape::compile(target, ops, var_names).ok()?;
+    let (ys, es) = events_if_any(ts.eval_columns_events(cols, &[], n_rows));
+    let (yc, ec) = events_if_any(tc.eval_columns_events(cols, &[], n_rows));
+    let ground = !source.iter().any(|t| var_names.contains(t));
+    Some(strict_rows_hold(
+        &ys,
+        &yc,
+        es.as_deref(),
+        ec.as_deref(),
+        source,
+        &[],
+        target,
+        ops,
+        var_names,
+        cols,
+        rtol,
+        atol,
+        ground,
+    ))
 }
 
 /// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every

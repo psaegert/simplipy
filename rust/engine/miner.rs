@@ -556,6 +556,32 @@ impl Engine {
         Ok(acc.confirm(hint).err().map(MineRefusal::name))
     }
 
+    /// The overlap gate's prefilter reading of a constant-free pair on the mine's rows
+    /// (`worker::prefilter_agrees`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn prefilter_agrees(
+        &self,
+        src: &[String],
+        tgt: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        rtol: f64,
+        atol: f64,
+    ) -> Result<Option<bool>, String> {
+        let cols = crate::worker::x_columns(x_flat, n_rows, var_names.len())?;
+        Ok(crate::worker::prefilter_agrees(
+            src,
+            tgt,
+            &self.operators,
+            var_names,
+            &cols,
+            n_rows,
+            rtol,
+            atol,
+        ))
+    }
+
     /// The pair judgment on caller rows (`worker::judge_pair`) under `spec`'s tolerances.
     #[allow(clippy::too_many_arguments)]
     pub fn judge_pair(

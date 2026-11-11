@@ -370,7 +370,7 @@ pub fn rows_consistent(
         let (s, c) = (y_src[r], y_cand[r]);
         let reject = if !lane_f64 {
             reals_refute(r)
-        } else if strict_row_agrees(s, c, rtol, atol, || valued(r))
+        } else if strict_row_agrees(s, c, rtol, atol, !cand_params.is_empty(), || valued(r))
             || (kind_holds(s, c, || valued(r)) && !reals_refute(r))
         {
             false
@@ -677,21 +677,30 @@ pub fn kind_holds(a: f64, b: f64, valued: impl FnOnce() -> Option<bool>) -> bool
 /// THE MINT'S ROW AGREEMENT in f64, strict's reading at a row of the mine's matrix, its one
 /// definition: the source `s` without a value (an extension at the row, which the domain gate
 /// measures), or (a) F6 (`table::f64_agree`: the same infinity included), or (b) the two within
-/// the mine's tolerances (`atol + rtol*|c|`, the prefilter's bound on strict's unbounded (b)) and
-/// of one kind where the reals give both sides a value (`kind_holds`, `valued` read only here).
-/// The constant-free rows (`worker::strict_rows_agree`), the fit's acceptance in f64, the range
-/// standard's re-reading of the rows where nothing left the range (`hiprec::range_rescue`) and the
-/// special points (`rows_consistent`) read it.
+/// the tolerance of where the candidate's value `c` came from. An evaluated side (`fitted`
+/// false) is off by rounding: within the mine's tolerances (`atol + rtol*|c|`, the prefilter's
+/// bound on strict's unbounded (b)) and of one kind where the reals give both sides a value
+/// (`kind_holds`, `valued` read only here). A side holding a fitted constant (`fitted`) is off by
+/// the fit: within its witness band (`dep_realised`; `besselj(cos(1), C) -> C'` at C = 0.1, a
+/// witness 3.2e-12 off). The constant-free rows (`worker::strict_rows_agree`), the range
+/// standard's re-reading of the rows where nothing left the range (`hiprec::range_rescue`), the
+/// special points (`rows_consistent`) and the overlap gate's prefilter reading
+/// (`worker::prefilter_agrees`) read it.
 pub fn strict_row_agrees(
     s: f64,
     c: f64,
     rtol: f64,
     atol: f64,
+    fitted: bool,
     valued: impl FnOnce() -> Option<bool>,
 ) -> bool {
-    s.is_nan()
-        || crate::table::f64_agree(s, c) == crate::table::Cmp::Eq
-        || ((s - c).abs() <= atol + rtol * c.abs() && kind_holds(s, c, valued))
+    if s.is_nan() || crate::table::f64_agree(s, c) == crate::table::Cmp::Eq {
+        return true;
+    }
+    if fitted {
+        return dep_realised(s, c, rtol, atol) == crate::hiprec::PointCmp::Eq;
+    }
+    (s - c).abs() <= atol + rtol * c.abs() && kind_holds(s, c, valued)
 }
 
 /// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary

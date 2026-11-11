@@ -1731,6 +1731,32 @@ impl PyEngine {
         })
     }
 
+    /// THE OVERLAP GATE'S PREFILTER READING (`worker::prefilter_agrees`): does the f64 mint's
+    /// row agreement accept the constant-free pair `source -> target` on the rows `x_flat`
+    /// (`n_rows` rows over `var_names`)? `None` for a pair holding a `<constant>` or one the
+    /// evaluator cannot read.
+    #[pyo3(signature = (source, target, var_names, x_flat, n_rows, *, rtol, atol))]
+    #[allow(clippy::too_many_arguments)]
+    fn prefilter_agrees(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        target: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        rtol: f64,
+        atol: f64,
+    ) -> PyResult<Option<bool>> {
+        ensure_tokens_are_tokens(&source)?;
+        ensure_tokens_are_tokens(&target)?;
+        py.detach(|| {
+            self.inner()
+                .prefilter_agrees(&source, &target, &var_names, &x_flat, n_rows, rtol, atol)
+        })
+        .map_err(PyValueError::new_err)
+    }
+
     /// OFFLINE miner: THE PAIR JUDGMENT -- one (source, target) pair through the scan's
     /// per-candidate certification on the given rows (no library, no token bound, no
     /// short-circuit), then the selection guards. It answers exactly the question asked:

@@ -65,10 +65,10 @@ def test_the_gate_judges_the_cell_and_counts_the_rest():
         return ['core'] * len(pairs)
 
     engine = _engine('default', rules)
-    missing, refused, beyond = _overlap_gate(engine, 'default', rules, judge, max_source=4)
+    missing, refused, beyond, _ = _overlap_gate(engine, 'default', rules, judge, max_source=4)
     assert [' '.join(o['completion'][0]) for o in missing] == ['cos asin tanh x0'], missing
     assert refused == [] and beyond == [] and len(asked) == 1
     asked.clear()
-    missing, refused, beyond = _overlap_gate(engine, 'default', rules, judge, max_source=3)
+    missing, refused, beyond, _ = _overlap_gate(engine, 'default', rules, judge, max_source=3)
     assert missing == [] and refused == [] and asked == []
     assert [' '.join(o['completion'][0]) for o in beyond] == ['cos asin tanh x0'], beyond
