@@ -108,9 +108,13 @@ Each file has a **provenance sidecar** (`<file>.provenance.json`) recording ever
 (`interval_node_budget` included), the derived seeds, the evaluation-matrix specification,
 the universe coverage, the mode, how the mode accepted (`acceptance`: tolerances, whether
 and at which gate a near miss is re-judged, the licensed tiers, the judge's digest), per
-length the classes, picks, judge rounds, exclusions and twin-shadowed rows (`per_length`),
-the twin-shadowed rows of the proposal channel's lanes and of sort promotion, by the stage
-they joined at (`twin_shadowed`), the file gates (`gates`), the digests of the code that mined it (`code_digest`), in the
+length the classes, picks (every source the scan picked a target for, `picked`), judge rounds,
+exclusions, twin-shadowed rows and the picks the merge folded (`per_length`), the
+twin-shadowed rows of the proposal channel's lanes and of sort promotion, by the stage they
+joined at (`twin_shadowed`), every rule a later stage dropped with its stage and why
+(`dropped`), every completion each completion round offered with its verdict (`completion`),
+the file gates (`gates`, with the overlaps left unjoined by the f64 prefilter), the digests of
+the code that mined it (`code_digest`), in the
 permissive sidecar the f64 file it was offered, pinned by name and sha256, with the
 lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
@@ -285,7 +289,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
 | `preempted` | no ground rule is one the rule-less engine already performs, such as a ground fact it folds (`log (-3) → nan`) |
 | `dead` | every rule is live: on each generic instance of its left side (each placeholder a fresh variable, a wide one also `1/(x + x')`, with a variable of its own), the engine holding the file reaches the right side or below, so no rule is shadowed by another that takes its instance and ends dearer |
-| `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file, within the mine's cell (a completion source no longer than the mine's sources, holding no operator its `operator_max_length` keeps out of that length); the overlaps whose completion the judge refuses are listed with its tier and verdict, those beyond the cell are counted, and neither fails |
+| `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file, within the mine's cell (a completion source no longer than the mine's sources, holding no operator its `operator_max_length` keeps out of that length); the overlaps whose completion the judge refuses are listed with its tier and verdict, those beyond the cell are counted, and in `f64` those whose licensed completion the mine's row agreement refuses on the mine's rows (an identity whose rounding a function magnifies past the mine's tolerances, which stays permissive's) are listed as left unjoined by the prefilter (`overlaps_prefilter`); none of these fails |
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |

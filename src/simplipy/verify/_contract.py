@@ -3808,13 +3808,73 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         if slot is not None:
             b_unguarded.append(dict(point, unguarded=slot))
 
+    # permissive's reading: the reals' resolved points and the points its float-resolution
+    # reading decided where the ladder ran out of precision (`_float_resolution`)
+    read_pts = resolved_pts + float_read[0]
+    perm_covered = read_pts > 0 and read_pts / max(1, attempted_pts) >= 0.25
+
+    # PERMISSIVE IS JUDGED AT THE SORT ITS MATCHER BINDS (the owner's ruling, 2026-10-31): every
+    # permissive slot matches any subexpression, so a disagreement at a real-valued binding is
+    # one on positive measure in the instance where the slot is bound to a subexpression constant
+    # at that value (`ceil(abs(cos(_0))) -> 1` at `_0 = asin(ceil(x0))`, 0 against 1 on (0, 1]),
+    # and no measure-zero allowance holds without a match-time guard, which permissive has none
+    # of. P3 excuses a disagreement only where the two real values round to doubles at most
+    # REALISED_ULP apart (F6): a pointwise reading, no measure, decided by a rigorous bound or
+    # read at the precision the point demands (`_float_resolution`), never by readings that ran
+    # out of precision.
+    def float_close(env, trees=None):
+        sl, sr = trees or (tl, tr)
+        agreed = _float_resolution(sl, sr, env)
+        if agreed is not None:
+            return agreed
+        # Past the table's reach (a value beyond the doubles' range, `exp(sinh(-50))` at
+        # 10^(-1.1e21)): the range standard. Where an operation overflowed or underflowed,
+        # the double nearest to the true value is float64's, 0 or an infinity.
+        try:
+            ed = {n: F(float(x.mpf() if hasattr(x, 'mpf') else x)) for n, x in env().items()}
+            in_range = [True]
+            with np.errstate(all='ignore'):
+                sl, sr = trees or (tl, tr)
+                dl, dr = d_eval(sl, ed, in_range), d_eval(sr, ed, in_range)
+        except Exception:
+            return False
+        return not in_range[0] and compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq'
+
+    def excused(event):
+        # a preimage's values are its substituted sides' (the heads at their level)
+        _, _, (key, values, *trees) = event
+        return float_close(event_env(key, values), trees[0] if trees else None)
+
+    perm_left, seen_perm = [], set()
+    for event in perm_kills:
+        sig = repr(sorted(event[1].items()))
+        if sig in seen_perm:
+            continue
+        seen_perm.add(sig)
+        if not excused(event):
+            perm_left.append(event)
+            break
+    # permissive's reading: a counterexample refuses it; a battery mostly unread at float
+    # resolution, an owed point left unread (4.10), or a constant owed a witness in the reals
+    # and none found, reaches no answer
+    permissive = False if perm_left else (
+        True if perm_covered and not unwitnessed['reals'] and not unread_owed['permissive']
+        else None)
+
     # COINCIDENT `?` SLOTS: two `?` slots bound to one variable are an instance the engine
     # rewrites, on which a set that is null in the slots' joint space can have positive
     # measure (`(?0 - ?1)/(?1 - ?0) -> -1` is undefined everywhere at ?0 = ?1). Every way the
     # `?` slots can coincide is judged as its own rule; real and f64 owe it.
+    # A RULE ALREADY REFUSED IN EVERY READING needs none of them: an instance the engine rewrites
+    # can only refute a rule further, and this one is refused in the reals (a counterexample at
+    # a point or a cell), in both of float64's readings and in permissive's own criterion. A
+    # false rule falls at its counterexamples (`x*(y + z) -> y + z`, without its four
+    # coincidences).
+    refuted = (bool(a_kills or atom_kills or b_unguarded) or b_kill is not None) \
+        and bool(dep_bad) and bool(dep_kind_bad) and bool(perm_left)
     correlated, correlated_f64 = None, None
     q_slots = [n for n in names if nvars[n] == '?']
-    if coincide and len(q_slots) >= 2:
+    if coincide and len(q_slots) >= 2 and not refuted:
         if len(q_slots) > MAX_COINCIDENT_SLOTS:
             undecided.append(('coincidences',))
         else:
@@ -3873,58 +3933,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # holds vacuously (3.2), which is no coverage failure; evidence (4.1) refuses it
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
     covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
-    # permissive's reading: the reals' resolved points and the points its float-resolution
-    # reading decided where the ladder ran out of precision (`_float_resolution`)
-    read_pts = resolved_pts + float_read[0]
-    perm_covered = read_pts > 0 and read_pts / max(1, attempted_pts) >= 0.25
 
-    # PERMISSIVE IS JUDGED AT THE SORT ITS MATCHER BINDS (the owner's ruling, 2026-10-31): every
-    # permissive slot matches any subexpression, so a disagreement at a real-valued binding is
-    # one on positive measure in the instance where the slot is bound to a subexpression constant
-    # at that value (`ceil(abs(cos(_0))) -> 1` at `_0 = asin(ceil(x0))`, 0 against 1 on (0, 1]),
-    # and no measure-zero allowance holds without a match-time guard, which permissive has none
-    # of. P3 excuses a disagreement only where the two real values round to doubles at most
-    # REALISED_ULP apart (F6): a pointwise reading, no measure, decided by a rigorous bound or
-    # read at the precision the point demands (`_float_resolution`), never by readings that ran
-    # out of precision.
-    def float_close(env, trees=None):
-        sl, sr = trees or (tl, tr)
-        agreed = _float_resolution(sl, sr, env)
-        if agreed is not None:
-            return agreed
-        # Past the table's reach (a value beyond the doubles' range, `exp(sinh(-50))` at
-        # 10^(-1.1e21)): the range standard. Where an operation overflowed or underflowed,
-        # the double nearest to the true value is float64's, 0 or an infinity.
-        try:
-            ed = {n: F(float(x.mpf() if hasattr(x, 'mpf') else x)) for n, x in env().items()}
-            in_range = [True]
-            with np.errstate(all='ignore'):
-                sl, sr = trees or (tl, tr)
-                dl, dr = d_eval(sl, ed, in_range), d_eval(sr, ed, in_range)
-        except Exception:
-            return False
-        return not in_range[0] and compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq'
-
-    def excused(event):
-        # a preimage's values are its substituted sides' (the heads at their level)
-        _, _, (key, values, *trees) = event
-        return float_close(event_env(key, values), trees[0] if trees else None)
-
-    perm_left, seen_perm = [], set()
-    for event in perm_kills:
-        sig = repr(sorted(event[1].items()))
-        if sig in seen_perm:
-            continue
-        seen_perm.add(sig)
-        if not excused(event):
-            perm_left.append(event)
-            break
-    # permissive's reading: a counterexample refuses it; a battery mostly unread at float
-    # resolution, an owed point left unread (4.10), or a constant owed a witness in the reals
-    # and none found, reaches no answer
-    permissive = False if perm_left else (
-        True if perm_covered and not unwitnessed['reals'] and not unread_owed['permissive']
-        else None)
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised_f6': _f6, 'realised_kinds': _kinds, 'out_of_range': dep_out_of_range[0],
             'permissive_own': permissive, 'resolved_points': resolved_pts,

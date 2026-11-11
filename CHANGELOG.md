@@ -1890,10 +1890,15 @@ model predictions.
   against 0 at C = 0) and every rule false in the reals do not. The judge decides
   it in one place (`verify._contract.strict_reading`), which `verify_rule`, the mine's judge and
   `verify-mine` read, and a verdict reports float64's two readings (`realised_f6`,
-  `realised_kinds`). The f64 mine reads its rows by one agreement, strict's within its
-  tolerances (`rtol`, `atol`), at every row it reads, the rows where an operation overflowed
-  aside (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an overflow row and a
-  rounding row, are mined), and reads the f64 bar, the magnitude ladder, the special points and
+  `realised_kinds`). The f64 mine reads its rows by one agreement at every row it reads, the
+  rows where an operation overflowed aside: strict's, where a value is off by where it came
+  from -- an evaluated side by rounding, within the mine's tolerances (`rtol`, `atol`), a fitted
+  constant by the fit's band (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an
+  overflow row and a rounding row, and `besselj(cos(1), C) -> C'` are mined). The overlap gate
+  reads the same agreement: a completion the judge licenses and the f64 mine's agreement refuses
+  is no rule of the f64 file, recorded in the sidecar as left unjoined by the prefilter
+  (`overlaps_prefilter`, counted by `verify-mine`); the permissive file joins it. The f64 mine
+  reads the f64 bar, the magnitude ladder, the special points and
   the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
   where the reals' left side is 0); an identity whose rounding a function magnifies past the
   tolerances is not mined in `f64`. The engine's own inverse collapses keep their bands
@@ -1937,8 +1942,17 @@ model predictions.
   set after the scan (the merge, the twin-shadow removal, the covered prunes, sort promotion and
   the completion rounds) with its stage and why, each length records the picks its merge folded
   (`per_length.folded`), and each completion round every completion offered with the verdict that
-  kept it out or let it in (`completion.trail`): a diff of two mines is explained from their
-  sidecars alone.
+  kept it out or let it in (`completion.trail`), and each length every source its scan picked a
+  target for (`per_length.picked`; a source absent there had no candidate below its mark the mint
+  accepted): a diff of two mines is explained from their sidecars alone.
+- **The judge loop's re-scans read the rules the mine holds.** The mine installs every rule set
+  through one function, so the acceptance, which installs its picks beside the mode's set to
+  read their liveness, puts back the set the core held: a source re-scanned after its pick was
+  refused reads the rules of the shorter lengths, where it read the mine's starting set.
+- **A rule refused in every reading is judged without its coincidences.** Where the reals refute
+  a rule at a point or a cell and float64's two readings and permissive's own criterion refuse
+  it too, the instances where its `?` slots coincide can refute it no further and are not
+  judged: `x0*(x1 + x2) -> x1 + x2` is refused in a fifth of the time.
 
 ### Removed
 
