@@ -700,3 +700,40 @@ def test_every_policy_refuses_where_the_mine_first_considers_a_pick() -> None:
     assert 'evidence' in policy_refusals(*picks[0], 'f64', miner.engine)
     assert 'ground_composite' in policy_refusals(*picks[1], 'f64', miner.engine)
     assert miner._unlicensed(dict(picks), 'default', core, {}, ['x0']) == {0, 1}
+
+
+def test_a_re_scan_reads_the_rules_the_mine_holds(tmp_path, monkeypatch) -> None:
+    """The judge loop's acceptance installs its picks beside the mode's set to read their
+    liveness, and puts the set back; the mine installs every set through one function
+    (`RuleMiner._install`), so what it puts back is the set the core held -- the rules of the
+    shorter lengths -- and the re-scan of a refused source reads them, not the mine's starting
+    set."""
+    import simplipy.mining
+    monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 2)
+    held: list = []
+    real = RuleMiner._unlicensed
+
+    def watched(self, picks, rule_mode, *args, **kwargs):
+        before = len(self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode))
+        out = real(self, picks, rule_mode, *args, **kwargs)
+        after = len(self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode))
+        held.append((max(len(src) for src, _ in picks.values()) if picks else 0, before, after,
+                     len(self._mode_rules(rule_mode))))
+        return out
+
+    monkeypatch.setattr(RuleMiner, '_unlicensed', watched)
+
+    def judge(pairs):        # every length-4 pick refused: each such source is scanned again
+        return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
+
+    ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    with pytest.raises(RuntimeError, match='gave up'):
+        SimpliPyEngine(operators=ops, rules=[]).find_rules(
+            max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
+            X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
+            symbolic_gate=False, output_file=str(tmp_path / 'mined.json'), judge=judge)
+    rounds = [h for h in held if h[0] == 4]
+    assert len(rounds) >= 2, held                  # a first round and a re-scan
+    for _, before, after, view in rounds:
+        assert before > 0 and after == before, held     # the shorter lengths' rules, kept
+        assert view > 0, held                            # and the engine's view of them

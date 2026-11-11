@@ -1018,7 +1018,11 @@ class RuleMiner:
 
     def _install(self, rule_mode: str, rules: list) -> None:
         """Install ``rules`` as ``rule_mode``'s own set, keeping the other modes' sets. The
-        mine reads and judges the set in ``rule_mode``'s canon, so it is read in that one."""
+        mine reads and judges the set in ``rule_mode``'s canon, so it is read in that one.
+        THE ONE WAY THE MINE INSTALLS A SET: the core and the engine's view of it
+        (``_mode_rules``) change together, so a check that installs a set beside the current
+        one and puts the current one back (``_refusals``) puts back what the core held, and the
+        judge loop's re-scans read the rules the mine holds."""
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
         self.engine._rule_canons.pop(rule_mode, None)
         if rule_mode == 'default':
@@ -1148,8 +1152,7 @@ class RuleMiner:
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
         dropped: list = []
         while True:
-            self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs))
-                                                         for lhs, rhs in rules])
+            self._install(rule_mode, rules)
             gone = _twin_shadow_owners(self.engine._core.ac_shadow_census(rule_mode=rule_mode))
             if not gone:
                 return rules, dropped
@@ -1374,7 +1377,7 @@ class RuleMiner:
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
         far and searched for an equivalent shorter candidate; the growing rule set is
-        pushed into the core between lengths (``set_mode_rules``), which the Python pool cannot
+        installed in the core between lengths (``_install``), which the Python pool cannot
         do (the core is immutable from forked workers, so it would mine nothing).
         Parallelism is rayon over all cores; cap it with ``RAYON_NUM_THREADS``.
 
@@ -2039,7 +2042,7 @@ class RuleMiner:
             if length <= resumed_at:
                 continue
             # The mark is this mode's serve answer under ITS rules so far.
-            self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs)) for lhs, rhs in rules])
+            self._install(rule_mode, rules)
             # CERTIFY THE CANONICAL REPRESENTATIVE ONLY.
             #
             # Certification runs in f64 on whichever spelling was enumerated, and AC says all
