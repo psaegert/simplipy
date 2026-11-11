@@ -1947,12 +1947,10 @@ class RuleMiner:
             # check not decide?") is a recorded number, never assumed zero. The counters mark
             # UNDECIDED verdicts whose callers rejected (lost recall, not lost soundness).
             if prov is not None:
-                prov['soundness']['interval_undecided'] = {
-                    'horizon': self.engine._core.interval_horizon_misses() - _ivl_baseline[0],
-                    'node_budget': self.engine._core.interval_node_budget_misses() - _ivl_baseline[1],
-                    'unanalyzable': self.engine._core.interval_unanalyzable_misses() - _ivl_baseline[2],
-                    'mint': self.engine._core.mint_undecided_misses() - _ivl_baseline[3],
-                }
+                prov['soundness']['interval_undecided'] = dict(zip(
+                    ('horizon', 'node_budget', 'unanalyzable', 'mint'),
+                    (now - base for now, base in zip(_undecided(self.engine._core),
+                                                     _ivl_baseline))))
             # The census must describe the ARTIFACT, not the moment of
             # certification. Runs before ANY of it is written (artifact and sidecar
             # alike) and fails closed on a certified pair that is neither present nor
@@ -2374,7 +2372,6 @@ class RuleMiner:
                       f'{len(_shadowed)} twin-shadowed), {len(rules):,} total')
             self._write_provenance(None, provenance, rules, completed_length=length)
             completed = length
-            _checkpoint(completed, rules)
             # LADDER SNAPSHOT: finishing this length also finishes the shorter cell
             # (length, max_target_pattern_length) of the same ladder. Emit it as a completed
             # artifact, then restore the RAW state and keep climbing -- the taller cell must
@@ -2389,6 +2386,10 @@ class RuleMiner:
                           cell_source_length=length)
                 # `_finalize` prunes/promotes the engine's own rule state; put the raw mine back.
                 self._install(rule_mode, rules)
+            # THE RESUME POINT is after the length's snapshot: a resume then carries the miss
+            # counters and the judge's memo of the snapshot's finalization, as the run that goes
+            # on holds them, and a crash inside the snapshot mines the length and its cell again.
+            _checkpoint(completed, rules)
             if length == stop_after_length:
                 if verbose:
                     print(f'=== the {file_mode} mine stops after length {length}: its checkpoint '

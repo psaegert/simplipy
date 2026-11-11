@@ -113,3 +113,55 @@ def test_the_merge_refuses_a_missing_doubled_or_foreign_shard(single, tmp_path) 
     _mine(tmp_path, shard=(1, 3))
     _mine(tmp_path, merge=paths)
     assert (tmp_path / 'mined.json').read_bytes() == (single / 'mined.json').read_bytes()
+
+
+def test_a_resumed_mine_counts_the_misses_of_the_runs_before(tmp_path, monkeypatch) -> None:
+    """The sidecar's fail-closed miss counters cover the whole mine, however many runs it took:
+    the checkpoint carries those of the lengths before it, a ladder snapshot's finalization
+    included. A stand-in counter moves at every scan and every final gate (the snapshot's
+    and the file's)."""
+    import simplipy.mining as mining
+    from simplipy.mining import RuleMiner
+    tally = [0]
+    monkeypatch.setattr(mining, '_undecided', lambda core: (tally[0], 0, 0, 0))
+    real_gate, real_scan, real_length = (RuleMiner._final_gate, RuleMiner._scan_length,
+                                         RuleMiner._mine_length)
+
+    def gate(self, *args, **kwargs):
+        tally[0] += 1
+        return real_gate(self, *args, **kwargs)
+
+    def scan(*args, **kwargs):
+        tally[0] += 10
+        return real_scan(*args, **kwargs)
+
+    monkeypatch.setattr(RuleMiner, '_final_gate', gate)
+    monkeypatch.setattr(RuleMiner, '_scan_length', staticmethod(scan))
+
+    def mine(directory, crash_at=None):
+        calls: list = []
+
+        def length(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+            calls.append(1)
+            if len(calls) == crash_at:
+                raise KeyboardInterrupt('simulated crash')
+            return real_length(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+        monkeypatch.setattr(RuleMiner, '_mine_length', length)
+        _mine(directory, modes=['f64'], snapshot_at={3: str(directory / 'snap.json')})
+
+    def counted(directory):
+        return [json.load(open(directory / f'{name}.provenance.json'))['soundness']
+                ['interval_undecided']['horizon'] for name in ('snap.json', 'mined.json')]
+
+    mine(tmp_path / 'once')
+    with pytest.raises(KeyboardInterrupt):
+        mine(tmp_path / 'resumed', crash_at=4)
+    assert json.load(open(tmp_path / 'resumed' / 'mined.json.checkpoint.json'))[
+        'completed_length'] == 3
+    mine(tmp_path / 'resumed')
+    once = counted(tmp_path / 'once')
+    assert once[0] >= 1 and once[1] > once[0], 'vacuous: the snapshot moved no counter'
+    assert counted(tmp_path / 'resumed') == once
+    assert (tmp_path / 'resumed' / 'mined.json').read_bytes() == \
+        (tmp_path / 'once' / 'mined.json').read_bytes()

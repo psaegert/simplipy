@@ -1968,8 +1968,10 @@ model predictions.
   doubled or foreign one, and mines on from the shards' picks as one machine does after its
   scan (`find_rules(stop_after_length=, shard=, merge=, checkpoint_file=)`). The rule files and
   sidecars equal a single-machine mine's, save the timings and the `resumed` record of the
-  runs. A resumed mine's sidecar now counts the fail-closed misses of the lengths before the
-  resume (`soundness.interval_undecided`), which the checkpoint carries.
+  runs. A resumed mine's sidecar now counts the fail-closed misses of the runs before the
+  resume (`soundness.interval_undecided`), which the checkpoint carries; a length's checkpoint
+  is written after its ladder snapshot, so a resume counts the snapshot's finalization too, and
+  a crash inside the snapshot mines the length and its cell again.
 
 ### Removed
 
