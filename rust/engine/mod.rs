@@ -106,7 +106,14 @@ pub struct Engine {
     /// `permissive`'s translated set, lazily built by the same `translate_rules` as the
     /// default cell. Untouched by a consumer that never asks for `permissive`.
     ac_permissive_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
+    /// Memo of the engine's reading of a ground part (`Engine::ground_part_written`), by mode
+    /// (`true`: `permissive`) and the part's tokens. The reading consults no rule, so it
+    /// holds whatever set the engine serves.
+    written_ground_parts: std::sync::Mutex<WrittenGroundParts>,
 }
+
+/// The memo of [`Engine::ground_part_written`]: (`permissive`?, the part) -> its writing.
+type WrittenGroundParts = rustc_hash::FxHashMap<(bool, Vec<String>), Option<Vec<String>>>;
 
 impl Engine {
     /// Syntactic PREFIX -> TAGGED regrouping (`crate::forms`): NOTATION only -- no AC
@@ -248,6 +255,7 @@ impl Engine {
             // file is a no-op" true by construction rather than by argument.
             permissive_rules: None,
             ac_permissive_rules_cell: std::sync::OnceLock::new(),
+            written_ground_parts: std::sync::Mutex::new(WrittenGroundParts::default()),
         })
     }
 

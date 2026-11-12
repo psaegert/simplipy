@@ -789,6 +789,21 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
+    /// OFFLINE miner: the CLASS of a candidate target in `rule_mode` and the candidate as the
+    /// library writes it: each ground part written as the engine reads it, and the canonical
+    /// key of the result (`Engine::candidate_class`). `None` where it has no key.
+    #[pyo3(signature = (candidate, *, rule_mode))]
+    fn mine_candidate_class(
+        &self,
+        py: Python<'_>,
+        candidate: Vec<String>,
+        rule_mode: &str,
+    ) -> PyResult<Option<(Vec<String>, Vec<String>)>> {
+        ensure_tokens_are_tokens(&candidate)?;
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner().candidate_class(&candidate, mode)))
+    }
+
     /// OFFLINE miner: one length's SOURCES in `rule_mode` -- each enumerated spelling's
     /// canonical projection as the mode reads it, one per class, atomic ones dropped
     /// (`Engine::mine_sources`).

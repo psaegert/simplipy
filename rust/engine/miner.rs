@@ -685,14 +685,23 @@ impl Engine {
         n_rows: usize,
         mode: RuleMode,
     ) -> Result<crate::worker::CandidateLibrary, String> {
+        // EACH CANDIDATE AS ITS CLASS WRITES IT (`candidate_class`): a ground part reads as
+        // the value the engine writes for it, so `bessely(log(1), x1)` is the candidate
+        // `bessely(0, x1)`, one class with the spelling that is already that reading.
+        let classes: Vec<Option<(Vec<String>, Vec<String>)>> = candidates
+            .iter()
+            .map(|c| self.candidate_class(c, mode))
+            .collect();
+        let written: Vec<&[String]> = candidates
+            .iter()
+            .zip(&classes)
+            .map(|(c, class)| class.as_ref().map_or(c.as_slice(), |(w, _)| w.as_slice()))
+            .collect();
         // mu is scored HERE because it is an engine-level measure, and the library builder
         // only has the operator table. It is the measure the marks are priced in
         // (`mine_price`), so the scan bound compares like with like; it depends on no mined
         // rule, so scoring once at build time is stable for the whole mine.
-        let mus: Vec<Option<u64>> = candidates
-            .iter()
-            .map(|c| self.mine_price(c, mode))
-            .collect();
+        let mus: Vec<Option<u64>> = written.iter().map(|c| self.mine_price(c, mode)).collect();
         // THE AC-CLASS QUOTIENT. The enumeration spells one
         // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
         // pairs -- and the scan judged every spelling: 31.6% of the variable-carrying
@@ -706,7 +715,7 @@ impl Engine {
         // `<constant>` count differ (`* x0 x0` vs `pow2 x0`) are NEVER dropped: their
         // guard behaviour is not interchangeable, and the byte-identity gate only
         // certifies the dominated class.
-        // (canonical key, sorted variables, `<constant>` count) -> (mu, library index)
+        // (class key, sorted variables, `<constant>` count) -> (mu, library index)
         type ClassKey = (Vec<String>, Vec<String>, usize);
         let mut keeper: std::collections::HashMap<ClassKey, (u64, usize)> =
             std::collections::HashMap::new();
@@ -720,14 +729,18 @@ impl Engine {
             let n_const = c.iter().filter(|t| t.as_str() == "<constant>").count();
             (vars, n_const)
         };
-        for (i, c) in candidates.iter().enumerate() {
-            let Some(k) = self.ac_canonical_key(c, mode) else {
+        let class_key = |i: usize| -> Option<ClassKey> {
+            let (_, key) = classes[i].as_ref()?;
+            let (vars, n_const) = sig(written[i]);
+            Some((key.clone(), vars, n_const))
+        };
+        for (i, mu) in mus.iter().enumerate() {
+            let Some(k) = class_key(i) else {
                 continue; // unkeyed spellings are never quotiented
             };
-            let (vars, n_const) = sig(c);
-            let mu_i = mus[i].unwrap_or(u64::MAX);
+            let mu_i = mu.unwrap_or(u64::MAX);
             keeper
-                .entry((k, vars, n_const))
+                .entry(k)
                 .and_modify(|best| {
                     if (mu_i, i) < *best {
                         *best = (mu_i, i);
@@ -737,16 +750,10 @@ impl Engine {
         }
         let mut cands_q: Vec<Vec<String>> = Vec::with_capacity(candidates.len());
         let mut mus_q: Vec<Option<u64>> = Vec::with_capacity(candidates.len());
-        for (i, c) in candidates.iter().enumerate() {
-            let keep = match self.ac_canonical_key(c, mode) {
-                None => true,
-                Some(k) => {
-                    let (vars, n_const) = sig(c);
-                    keeper.get(&(k, vars, n_const)).is_none_or(|&(_, j)| j == i)
-                }
-            };
+        for (i, c) in written.iter().enumerate() {
+            let keep = class_key(i).is_none_or(|k| keeper.get(&k).is_none_or(|&(_, j)| j == i));
             if keep {
-                cands_q.push(c.clone());
+                cands_q.push(c.to_vec());
                 mus_q.push(mus[i]);
             }
         }
@@ -850,10 +857,114 @@ impl Engine {
     /// never enumerates). Strict mode still loses one-step shortcuts relative to relaxed
     /// where the walk genuinely descends part-way (degenerate constant collapses like
     /// `C * acos(np.e) -> <constant>`).
-    /// The class an excluded target stands for: its canonical key in `mode` (the dedup
-    /// key), or its spelling when it has none.
+    /// The class an excluded target stands for: its class key in `mode` (`candidate_class`,
+    /// the library's dedup key), or its spelling when it has none. A refused value so
+    /// excludes every spelling that reads as it.
     fn excluded_key(&self, t: &[String], mode: RuleMode) -> Vec<String> {
-        self.ac_canonical_key(t, mode).unwrap_or_else(|| t.to_vec())
+        self.candidate_class(t, mode)
+            .map_or_else(|| t.to_vec(), |(_, key)| key)
+    }
+
+    /// THE CLASS OF A CANDIDATE TARGET in `mode`, and the candidate as the library writes it:
+    /// the candidate with each ground part -- a composite whose leaves are all numbers or
+    /// named constants, inside an expression that is not itself ground -- written as the
+    /// engine reads that part (`ground_part_written`), and the canonical key of the result. So
+    /// `bessely(log(1), x1)` is written `bessely(0, x1)`, one class with that spelling;
+    /// `besselj(inv(2), x0)` reads its order as 1/2 and `besselj(harmonic(2), x0)` as 3/2,
+    /// while `sin(1)` and `erfc(10)` stay, their values being dearer as literals. A candidate
+    /// with no ground part that reads otherwise is written as it is spelled. One function for
+    /// the library's quotient (`build_candidate_library`) and the judge loop's exclusion
+    /// (`excluded_key`). `None` where the result has no canonical key.
+    pub(crate) fn candidate_class(
+        &self,
+        c: &[String],
+        mode: RuleMode,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let mut parts = self.ground_parts(c).unwrap_or_default();
+        parts.sort_unstable();
+        let mut written: Vec<String> = Vec::with_capacity(c.len());
+        let mut at = 0;
+        for (start, end) in parts {
+            written.extend_from_slice(&c[at..start]);
+            match self.ground_part_written(&c[start..end], mode) {
+                Some(reading) => written.extend(reading),
+                None => written.extend_from_slice(&c[start..end]),
+            }
+            at = end;
+        }
+        written.extend_from_slice(&c[at..]);
+        let key = self.ac_canonical_key(&written, mode)?;
+        Some((written, key))
+    }
+
+    /// The maximal ground parts of the prefix expression `t` (`candidate_class`): the token
+    /// spans of its composite subexpressions whose leaves are all numbers or named constants
+    /// (`numeric::leaf_value`) and whose parent's are not. A ground `t` has none: its value is
+    /// the engine's own fold, not a part of a candidate. `None` for a malformed `t`.
+    fn ground_parts(&self, t: &[String]) -> Option<Vec<(usize, usize)>> {
+        let mut parts = Vec::new();
+        let (end, _) = self.ground_walk(t, 0, &mut parts)?;
+        (end == t.len()).then_some(parts)
+    }
+
+    /// The subexpression of `t` at `at`: its end and whether it is ground; the ground
+    /// composite children of a node that is not ground are pushed to `parts`.
+    fn ground_walk(
+        &self,
+        t: &[String],
+        at: usize,
+        parts: &mut Vec<(usize, usize)>,
+    ) -> Option<(usize, bool)> {
+        let token = t.get(at)?;
+        let arity = usize::from(self.operators.arity_of(token).unwrap_or(0));
+        if arity == 0 {
+            return Some((at + 1, crate::numeric::leaf_value(token).is_some()));
+        }
+        let mut end = at + 1;
+        let mut children = Vec::with_capacity(arity);
+        for _ in 0..arity {
+            let (child_end, ground) = self.ground_walk(t, end, parts)?;
+            children.push((end, child_end, ground));
+            end = child_end;
+        }
+        let ground = children.iter().all(|&(_, _, g)| g);
+        if !ground {
+            parts.extend(
+                children
+                    .iter()
+                    .filter(|&&(start, child_end, g)| g && child_end - start > 1)
+                    .map(|&(start, child_end, _)| (start, child_end)),
+            );
+        }
+        Some((end, ground))
+    }
+
+    /// THE ENGINE'S READING OF A GROUND PART in `mode`: its own answer for the part, the
+    /// value it writes for a fully numeric expression, with no rule consulted (every rule
+    /// of the mode suppressed), so the reading does not move with the set being mined.
+    /// Memoised per engine. `None` where the part does not parse.
+    fn ground_part_written(&self, part: &[String], mode: RuleMode) -> Option<Vec<String>> {
+        let key = (matches!(mode, RuleMode::Permissive), part.to_vec());
+        let memo = || {
+            self.written_ground_parts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        if let Some(hit) = memo().get(&key) {
+            return hit.clone();
+        }
+        let every_rule: rustc_hash::FxHashSet<usize> =
+            self.ac_rules_for(mode).src.iter().copied().collect();
+        let reading = self.ac_simplify_proj_suppressed(
+            part,
+            48,
+            crate::engine::AcForm::Explicit,
+            usize::MAX,
+            &every_rule,
+            mode,
+        );
+        memo().insert(key, reading.clone());
+        reading
     }
 
     /// [`Engine::excluded_key`] of each excluded target.

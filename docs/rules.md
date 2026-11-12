@@ -26,7 +26,10 @@ against an exact counting recurrence.
 2. **Mark**: the mode's answer for the source (`simplify` in that mode, with the rules of
    the shorter lengths installed). A target must lie strictly below it in the mode's serve
    ordering, the ordering the rewrite pass fires under. An atomic mark mints nothing.
-3. **Scan**: the candidates are tried cheapest μ first. Acceptance is decided by the serve
+3. **Scan**: the candidates are tried cheapest μ first. A candidate's class is the mode's
+   reading of it with each ground part written as the engine reads it (`min(log(1), x0)` and
+   `min(sin(0), x0)` are `min(0, x0)`); the library holds one candidate per class, written as
+   that reading. Acceptance is decided by the serve
    ordering, so a target may carry more tokens than its source and still certify. A
    candidate passes the licences (no constant introduced into a determined source, no
    special constant absorbed, no instance of a law the engine owns, no defined value
@@ -48,7 +51,8 @@ against an exact counting recurrence.
    pattern the file will carry and as every entry the mode serves from it. A pick whose
    judged tier the mode does not license (`simplipy.verify.MODE_TIERS`, read off the one tier
    registry; see the [tier table](guides/verify.md)), or that the mode does not serve, is
-   excluded by class and only its source is scanned again. The scan is deterministic, so the result is the
+   excluded by class (every spelling of its value at once) and only its source is scanned
+   again. The scan is deterministic, so the result is the
    scan that consults the judge per candidate: a target another mode would keep never
    hides one this mode licenses. A source whose pick is refused 8 times is given up on: it
    gets no rule, the mine goes on, and the sidecar records the incident (`given_up`: the

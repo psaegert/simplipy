@@ -2464,6 +2464,14 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   it, the log has one warning line for it, and the length's summary line counts it
   (`per_length.given_up`). The proposal channel gives up on a proposal the same way (the
   proposal reads `rejected` at stage `judge`).
+- **A candidate's class is its value's reading.** The mine reads each ground part of a
+  candidate target as the engine reads its value (`min(log(1), x0)`, `min(sin(0), x0)` and
+  `min(0, x0)` are one class), in the candidate library's deduplication and in the judge
+  loop's exclusion alike, and writes the candidate as that reading. A refused value costs the
+  judge loop one round instead of one per spelling, so the sources and proposals that
+  exhausted its eight rounds on spellings of one value (`bessely(erfc(10), x1)`,
+  `(x0 - abs(x0))/2 -> min(x0, 0)`) are refused that value once and go on to the next
+  candidate. The library is smaller by the spellings it no longer holds.
 - **The final gate checks, once.** Every pick is licensed where the mine first considers it
   and promotion licenses every rung, so the final gate runs once, on the set that ships, and
   drops nothing; a prune leans only on licensed rules by construction.

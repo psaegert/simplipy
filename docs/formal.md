@@ -563,7 +563,10 @@ the same agreement on an independent confirm matrix. The scan visits candidates 
 order (μ tiers ascending, library order inside a tier) with per-source seeds that depend
 only on the source's global index, so it is a deterministic function $\mathrm{pick}(s, E)$
 of the source and a set $E$ of excluded canonical classes, returning the first accepted
-candidate whose class is not in $E$.
+candidate whose class is not in $E$. A candidate's class is the mode's canonical key of its
+reading, each maximal ground part written as the engine's own ground-value reading of it
+(`min(log(1), x0)` and `min(sin(0), x0)` are one class, `min(0, x0)`); the library holds one
+candidate per class, written as that reading.
 
 **The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
 licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$
