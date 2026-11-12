@@ -1,13 +1,16 @@
 """Integer-over-decimal spelling of a fraction -- in the INFIX text only.
 
-Every literal is its exact rational value, so ``3.141592653589793`` is 3141592653589793/10^15
-and ``1/(2*3.141592653589793)`` folds to 500000000000000/3141592653589793. That value has no
+Every literal is its exact rational value, so ``3141.592653`` is 3141592653/10^6 and
+``1/(2*3141.592653)`` folds to 500000/3141592653, cheaper than its double. That value has no
 finite decimal, so the printers spelled it as the division of those two integers -- exact,
-but nothing a reader recognizes. The same value is also exactly ``1 / 6.283185307179586``:
+but nothing a reader recognizes. The same value is also exactly ``1 / 6283.185306``:
 a decimal is an exact rational, so a division by one is as exact as a division by an
 integer. Taking the factors 2 and 5 out of the numerator always leaves a terminating
 decimal in the denominator; the infix text uses that spelling wherever it is strictly
-shorter.
+shorter. (``3.141592653589793``, pi's double, is read as pi, and a value whose double is
+cheaper than its exact spellings is written as that double, so neither shows the spelling. A
+value whose reciprocal is a terminating decimal, ``1/(2*3141.592653)`` among them, is written
+``1/d`` in every dialect: that divisor is the measure's codeword for it.)
 
 The token answers keep ``p/q`` (test_spelling_invariance.py): tokens are
 what the engine and its callers read back, and a spelling chosen for a reader must not move
@@ -28,7 +31,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
-PI = '3.141592653589793'
+PI = '3141.592653'
 
 
 @pytest.fixture(scope='module')
@@ -59,22 +62,30 @@ def quotient(text):
 
 
 class TestStandaloneValue:
-    def test_one_over_two_pi(self, eng):
+    def test_one_over_two_p(self, eng):
         out = infix(eng, f'1/(2*{PI})')
-        assert out == '1/6.283185307179586'
+        assert out == '1/6283.185306'
         assert quotient(out) == 1 / (2 * Fraction(PI))
 
     def test_the_token_answer_keeps_the_exact_fraction(self, eng):
-        assert tokens(eng, f'1/(2*{PI})') == ['/', '500000000000000', '3141592653589793']
+        assert tokens(eng, f'7/(2*{PI})') == ['/', '3500000', '3141592653']
+        assert infix(eng, f'7/(2*{PI})') == '7/6283.185306'
+        # a unit numerator: the reciprocal codeword, the divisor, in the tokens too
+        assert tokens(eng, f'1/(2*{PI})') == ['/', '1', '6283.185306']
+
+    def test_pis_double_is_pi(self, eng):
+        # the recognition list reads 3.141592653589793, pi's double, as pi
+        assert tokens(eng, '1/(2*3.141592653589793)') == ['inv', '*', '2', 'np.pi']
+        assert infix(eng, '1/(2*3.141592653589793)') == '1/2/pi'
 
     def test_a_decimal_divisor_keeps_its_spelling(self, eng):
-        # 1/3.142 is the fraction 500/1571; `1/3.142` is the same value, one character shorter
+        # 1/3.142 is the fraction 500/1571; `1/3.142` is the same value, priced as its divisor
         assert infix(eng, '1/3.142') == '1/3.142'
-        assert tokens(eng, '1/3.142') == ['/', '500', '1571']
+        assert tokens(eng, '1/3.142') == ['/', '1', '3.142']
 
     def test_a_negative_value_keeps_its_sign_on_the_integer(self, eng):
         out = infix(eng, f'-1/(2*{PI})')
-        assert out == '-1/6.283185307179586'
+        assert out == '-1/6283.185306'
         assert quotient(out) == -1 / (2 * Fraction(PI))
 
     @pytest.mark.parametrize('text', ['1/2', '2/3', '5/8', '1/3'])
@@ -86,23 +97,23 @@ class TestInsideExpressions:
     def test_under_a_root(self, eng):
         # (a root of a constant alone folds to its float, `1/sqrt(2 pi)` to 0.3989422804014327)
         out = infix(eng, f'rootn(x1/(2*{PI}), 2)')
-        assert out == 'rootn(x1/6.283185307179586, 2)'
+        assert out == 'rootn(x1/6283.185306, 2)'
 
     def test_a_coefficient_with_a_numerator(self, eng):
-        # Feynman 58: (3/5) * q^2 / (4 pi eps r) -- the coefficient 3/(20 pi) has an odd numerator,
-        # so no reciprocal decimal exists; integer over decimal: 3 / 62.83185307179586
-        out = infix(eng, f'(3/5)*x1^2/(4*{PI}*x2*x3)')
-        assert out == '3*x1^2/62.83185307179586/x2/x3'
+        # Feynman 58's shape: (7/5) * q^2 / (4 p eps r) -- the coefficient 7/(20 p) has an odd
+        # numerator, so no reciprocal decimal exists; integer over decimal: 7 / 62831.85306
+        out = infix(eng, f'(7/5)*x1^2/(4*{PI}*x2*x3)')
+        assert out == '7*x1^2/62831.85306/x2/x3'
 
     def test_a_token_answer_converts_to_the_readers_spelling(self, eng):
-        out = tokens(eng, f'x1 + 1/(2*{PI})')
-        assert out == ['+', 'x1', '/', '500000000000000', '3141592653589793']
-        assert eng.simplify(eng.to_infix(out)) == 'x1 + 1/6.283185307179586'
+        out = tokens(eng, f'x1 + 7/(2*{PI})')
+        assert out == ['+', 'x1', '/', '3500000', '3141592653']
+        assert eng.simplify(eng.to_infix(out)) == 'x1 + 7/6283.185306'
 
     def test_the_measure_does_not_see_the_spelling(self, eng):
         a = eng.complexity(['/', '1', '*', '2', PI])
-        b = eng.complexity(['/', '500000000000000', '3141592653589793'])
-        c = eng.complexity(['/', '1', '6.283185307179586'])
+        b = eng.complexity(['/', '500000', '3141592653'])
+        c = eng.complexity(['/', '1', '6283.185306'])
         assert a == b == c
 
 
@@ -116,9 +127,15 @@ class TestRandomValues:
             den = rng.choice([3, 7, 9, 11, 13, 3141592653589793, 271828182845905])
             value = Fraction(num, den)
             alone = infix(eng, f'{value.numerator}/{value.denominator}')
-            if '/' in alone:
-                assert quotient(alone) == value, (value, alone)
-            # the integer-over-decimal spelling fires only when strictly shorter than p/q
-            if '.' in alone:
-                assert len(alone) < len(f'{value.numerator}/{value.denominator}'), (value, alone)
+            # the exact value, or (strict) float64's double of it where that is cheaper: its
+            # shortest decimal, or the double's exact value as a fraction over a power of two
+            written = quotient(alone) if '/' in alone else Fraction(alone)
+            assert written == value or written == Fraction(float(value)) \
+                or ('/' not in alone and float(alone) == float(value)), (value, alone)
+            # the integer-over-decimal spelling fires only when strictly shorter than p/q; `1/d`
+            # is the reciprocal codeword, written where it is the price
+            if '/' in alone and '.' in alone:
+                assert written == value, (value, alone)
+                if not alone.startswith('1/'):
+                    assert len(alone) < len(f'{value.numerator}/{value.denominator}'), (value, alone)
             infix(eng, f'x1*{value.numerator}/{value.denominator}')

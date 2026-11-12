@@ -18,6 +18,30 @@ organised by who you are, then the highlights, then every change in detail.
   to float resolution, or gives a value where its input has none, or holds in `f64` (float64's
   values agree); a whole answer carries no such bound, since `floor`, `ceil` and cancellations
   magnify a rounding-sized difference.
+- **A fully numeric part takes its value first.** Each mode reads a fully numeric part by one
+  ground evaluator, the one the rule judge and `verify-mine` read too, before any law reaches it,
+  and writes it as the cheapest value the mode admits (see the `f64` and `permissive` notes
+  below). `floor(tanh(100))` and `sin(np.pi)` are 0 and `exp(sin(np.pi))` is 1 in both modes.
+- **Literals on the recognition list.** A decimal literal that float64 reads as exactly the
+  double of a short symbolic number is read as that number, in every mode: `3.141592653589793`
+  is `np.pi`, `0.3333333333333333` is `1/3`, `0.6931471805599453` is `log(2)`, and
+  `1/(3.141592653589793*(1 + x1**2))` is `1/(np.pi*(x1**2 + 1))`. The list is k*pi/m and k*e/m
+  for coprime k, m <= 24, k/m for coprime m <= 24 whose decimal does not terminate and
+  |k/m| <= 100, log 2, log 3, log 10, sqrt 2, sqrt 3 and sqrt 5; the answer spells a fully
+  numeric value from the same list.
+- **Numbers are priced as written.** A literal costs its own exact spelling, so a long exact
+  number costs its digits. A reciprocal whose divisor is a terminating decimal is priced as that
+  divisor and written as it was priced, in every dialect: `x1/0.225147640565301` and
+  `x1/6.674e-11` stay as written, and `1/3.142` is `/ 1 3.142` (it was `500/1571`). A value whose
+  reduced denominator is at most 24 keeps its fraction or decimal (`25*x1/2`, `0.05*x1`); past
+  that bound the divisor can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`). `f64` writes float64's value of a number where that is cheaper: a
+  literal at the double float64 reads it as (`0.1234567890123456789*x0` is
+  `0.12345678901234568*x0`), and a number made from two literals at float64's value of the
+  operation on their doubles (`x0*0.7234567890123457*1.3821548250604163` is
+  `0.9999292916561291*x0`, `x0*0.30000000000000004*0.30000000000000004` is
+  `0.09000000000000002*x0`); `permissive` writes the shorter of the two doubles around the exact
+  value (`0.9999292916561292*x0`). An exact number stays where it is the cheaper spelling
+  (`0.1 + 0.2` is `0.3`, `x0/3`).
 - **Masking removes the redundant constants it recognises.** It does not find every
   redundancy: `(a*x + b)/(c*y + d)` keeps four constants, among them a common scale.
 - **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
@@ -29,7 +53,7 @@ organised by who you are, then the highlights, then every change in detail.
   raises.
 - **Answers and prices change.** The search owns the distributive law, poles are read by their
   limits, numbers stay exact beyond 128 bits, and `complexity` prices each mode in its own
-  reading, a literal costing at most what its float costs. Regenerate every test, cache or
+  reading, every number as it is written. Regenerate every test, cache or
   dataset that pins answers or prices.
 - **What a variable is called no longer matters.** Over names other than `x<k>` (`x_1`, `v1`,
   `alpha`) every certificate failed, so collections and orientations the certificates license
@@ -81,14 +105,25 @@ organised by who you are, then the highlights, then every change in detail.
   overflows or underflows. Where one does, a rewrite may give the true value instead, as the
   constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads f64 rules by
   the same standard.
-- **A fully numeric rule changes no double.** Every fully numeric simplification in `f64` is
-  bit-exact, so a ground rule holds in `f64` only where its two sides are the same double, the
-  sign of a zero included, with no range standard. The judge read such a rule within 8 units in
-  the last place, and the f64 files shipped rules that changed the double: `exp(sin(np.pi)) ->
-  1` (1.0000000000000002) and `tan(atan(1)) -> 1` (0.9999999999999999) among them. The judge's
-  ground route and its battery, and the mint, now refuse them, and `verify-mine` checks every
-  ground rule of an f64 file against the realizations (`ground_bit_exact`). `permissive` keeps
-  them: its ground values are the reals'.
+- **A fully numeric part is float64's value, or the reals' where float64's kind agrees.**
+  `f64` writes a fully numeric part as its double, or as its value in the reals where float64's
+  two values agree in kind (both finite, two zeros of one sign, the same infinity, both NaN, or
+  a range event's true value), whichever is cheaper: `floor(tanh(100))` is 0 (it was 1, float64
+  flooring its 1.0), `sin(np.pi)` and `x0*sin(np.pi)` are 0 and `exp(sin(np.pi))` is 1, while
+  `tanh(100)` is 1. Where the reals give a part no value it keeps float64's: `tan(asin(1))` is
+  1.633e16, `1/sin(np.pi)` 8.2e15. A part whose only value is float64's NaN or infinity is that
+  value before any law reaches it: `exp(t)/exp(t)` with `t = tan(asin(1))` is NaN (it was 1),
+  and `x0 - 1e309` is `-inf`; `x0*exp(1000)/exp(1000)` stays `x0`, the reals giving the part 1
+  beside float64's overflow. Where a whole fully numeric part overflows, float64's infinity is
+  written where it is the cheaper of the two values the range standard accepts
+  (`3^5000*x1` and `exp(1905)*x1` are `inf*x1`, `log(1e-400)` is `-inf`). A ground rule holds in `f64` where its two sides are one double, or
+  have one value in the reals with float64's kinds kept (`exp(sin(np.pi)) -> 1` holds); the
+  judge, the mint and `verify-mine`'s gate (`ground_exact`, which replaces `ground_bit_exact` and
+  checks both files) read the same evaluator.
+- **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
+  decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
+- **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`
+  in every spelling (its tagged spelling gave `inf`).
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
@@ -122,10 +157,10 @@ organised by who you are, then the highlights, then every change in detail.
   zero: `ceil(x1) + 0` and `2*ceil(x1) - ceil(x1)` are `ceil(x1) + 0`, since `ceil(x1)` is -0 on
   all of (-1, 0). `x + -0.0` is `x` exactly, since float64's `x + -0` is `x` at every `x`, -0
   included.
-- **Long exact coefficients.** An answer carries every digit of an exact number
-  (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
-  long, because a literal costs at most what its float costs. Show answers to a reader with
-  `engine.prettify(expr)`, which prints shortest floats.
+- **Exact coefficients where they are cheaper.** An answer carries an exact number where its
+  spelling is cheaper than float64's value of it (`x0/3`, `0.3*x0`), and float64's value
+  elsewhere. Show answers to a reader with `engine.prettify(expr)`, which prints shortest
+  floats.
 - **Float notation.** Numbers print positionally from 0.0001 up to 10^16 and as
   `<mantissa>e<exponent>` outside that range where that is shorter (`1e-5*x1`, was
   `0.00001*x1`).
@@ -150,6 +185,13 @@ organised by who you are, then the highlights, then every change in detail.
   value: `pow(0, -2)` and `rootn(0, -2)` are NaN (they were inf), `mod(0, atanh(1))` is NaN (it
   was 0), `pow(-inf, 0)` is 1 (it was NaN). The rule judge reads the same values; `f64` follows
   the evaluator and does not change.
+- **A fully numeric part takes the table's value first.** A part without a value is NaN and
+  absorbs the expression around it: `0*tan(asin(1))`, `pow(tan(asin(1)), 0)` and
+  `tan(asin(1))/tan(asin(1))` are NaN (they were 0, 1 and 1). The table reads as many digits as a
+  value needs, so `floor(tanh(100))` is 0 (it was 1) and `tanh(100) - 1` is -2.7e-87.
+  Permissive's own simplifications never act on a fully numeric operand: `asin(sin(4))` keeps its
+  value, pi - 4 (it was 4), while `asin(sin(x0))` is `x0`. A ground rule holds in `permissive`
+  where the table's two values agree at float resolution.
 - **One walk.** `permissive` runs its chain and then the search, like every mode, so its answer
   never prices above the input and a second call returns it unchanged. Its answers change
   accordingly.
@@ -180,7 +222,12 @@ organised by who you are, then the highlights, then every change in detail.
   tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
   `UNDECIDED-MEASURE`, and the tiers are `core` (holds in f64, and so in permissive),
   `permissive` (holds in permissive alone) and `reject`, read off one registry
-  (`simplipy.verify.TIERS`).
+  (`simplipy.verify.TIERS`). A fully numeric rule is read by each mode's own value of it: `core`
+  where both modes hold it, `permissive` where only permissive does, and `reject` where only
+  `f64` does, since `f64`'s ground fold writes every fully numeric part as the cheapest value it
+  admits and no file needs such a rule (`floor(tanh(100)) -> 1` holds in `f64` and is
+  `reject`). Where two `?` slots that coincide make an instance the judge cannot read (its
+  literals past the table's reach), the rule is `UNRESOLVED-COVERAGE` there, never `KILL`.
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - The load refuses a rule whose right side has no variable and is not one leaf (drop reason
   `ground-composite`): `asin(1) -> acos(0)` holds and is not served. The load's gates are
@@ -232,7 +279,8 @@ organised by who you are, then the highlights, then every change in detail.
   side, printed in Python's float notation.
 - **Poles are read by their limits**, and a sum and its negation are one class in every mode.
 - **The search owns the distributive law**, in every mode alike, with whole-state acceptance.
-- **One complexity measure per mode**, with a literal costing at most what its float costs.
+- **One complexity measure per mode**, every number priced as it is written.
+- **A fully numeric part takes its value first**, read by one ground evaluator per mode.
 - **`permissive` is one walk**, like every mode: never above its input, and idempotent.
 - **Rule files per mode.** Each file is mined in its own mode, `verify-mine` checks it, and an
   artifact names the simplipy versions that serve it.
@@ -858,9 +906,8 @@ model predictions.
   internal caller that passes no `effort` (normalization, masking, mining, the verification
   monitor, the promotion refund) follows the default. `effort=k` caps the search at `k`
   candidates (a cap beyond 2^63 - 1 is none), the first `k` of that one walk; `effort=0` never enters the search, so the search change
-  leaves its answers byte-identical (the float cap below changes some: 269 of srbf's 125,127
-  predictions in `f64`<!-- TO BE RE-MEASURED: the permissive count, measured against the
-  removed three-arm selection -->; so do permissive's one walk, the canonical-form fixes above
+  leaves its answers byte-identical (pricing every number as written, below, changes some;
+  so do permissive's one walk, the canonical-form fixes above
   and, in `real` and `permissive`, the refused common-factor rules). Code that
   compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every
@@ -872,30 +919,23 @@ model predictions.
   srbf's predictions `simplify` takes 40-45% less time than without this in `f64`.
   <!-- TO BE RE-MEASURED: the permissive speed-up (about half the time, the slowest inputs about
        5 times faster), measured against the removed three-arm selection. -->
-- **A literal costs at most what its float costs.** The evaluator reads every literal as its
-  nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
-  caps a literal's price at the price of that float's shortest decimal (at most 17 significant
-  digits), however a form holds the literal: `f64` and `permissive` admit a number only where its
+- **Every number is priced as it is written.** The measure (`complexity`, and the ordering every
+  simplification follows) prices a literal by its own exact spelling, the one the answer prints:
+  a long exact number costs its digits. `f64` and `permissive` admit a number only where its
   numerator and denominator are at most 2^1022 and hold any other value in pieces
   (`1.2345678901234567e-305` as written, its quotient by `9.876543210987654e-10` as that literal
-  times a number), which cost at most what `real` prices the one number at (59,436 milli-bits
-  for that quotient, its float's price, where its pieces cost 122,955; no answer on srbf's ground
-  truths or a tenth of the training-data inputs changes with it); only a literal beyond the
-  1,100-bit cap keeps its own price. A number carrying more digits than its float needs -- a product or power of
-  long constants folded exactly, or a constant printed with 17 digits where 16 suffice -- now
-  costs that decimal, not its exact digits; every literal that is its own float's shortest decimal
-  keeps its price (every constant drawn for flash-ansr's training data among them), and no price
-  rises. The cap is a decimal, never a fraction that reads as the same float: `0.3333333333333333`
-  keeps its price, `1/3` costs less. Answers still carry and print the exact value. Because long
-  exact numbers no longer count against a form, the search accepts more expansions in `f64` and
-  `real`: on srbf's model predictions 21% of the `f64` answers change (26,440 of 125,127; 0.2% of
-  the simplify inputs of flash-ansr's training-data generator), almost all (98%) to expanded forms (a product of sums
-  multiplied out, a constant distributed over a sum) with about as many tokens (0.7% fewer) but
-  long exact coefficients, so they print 25% longer (all answers 7%).
+  times a number), which cost at most what the one number costs; only a literal beyond the
+  1,100-bit cap keeps its print's price. Each mode writes such a value as its double where that
+  is cheaper, as it writes every number (the quotient is `1.2499999886093752e-296` in `f64`,
+  float64's quotient of the two doubles). A mode that may write a cheaper value of a number
+  writes it where the number lands: `f64` float64's value (a literal at the double float64
+  reads it as, a number made from two literals at float64's value of that operation on their
+  doubles), `permissive` the shorter of the two doubles around the exact value, each only where
+  that is the cheaper spelling. `0.3333333333333333` costs its 16 digits and `1/3` less.
   <!-- TO BE RE-MEASURED: the permissive share of changed answers and their printed length
        (34% of the predictions, 7% shorter; 2.6% of the training-data inputs, 4% shorter),
-       measured against the removed three-arm selection. --> The measure fingerprint gains two probes for the cap, and compound probes priced in each mode's own
-  reading. Every rule file gets its own provenance sidecar, and loading compares each sidecar
+       measured against the removed three-arm selection. --> The measure fingerprint gains two probes, a long literal and a value held in pieces, and
+  compound probes priced in each mode's own reading. Every rule file gets its own provenance sidecar, and loading compares each sidecar
   present probe by probe: it warns, naming the probes, when a recorded probe now prices
   differently, and a probe the sidecar does not record is not a mismatch. The published
   rulesets record no probe that moved, so they load without a warning.

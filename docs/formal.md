@@ -586,17 +586,53 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   (Peterson–Stickel extension behavior); the candidate is
   $u' = \mathrm{nf}(\mathrm{bag}(\mathrm{rem} \cup \{\rho\sigma\}))$, and the step is
   **accepted only if** $u' <_o u$;
-- **(fold)** at a node $u$ that is *ground with a certified non-finite value class*,
-  $\diamond$-collapsible, or (in `permissive` only) ground with a finite value: $u' =$ the
-  class literal (`nan`/$\pm$`inf`), $\diamond$, resp. the literal of that value,
-  **accepted only if** $u' <_o u$. Exact rational arithmetic lives in the constructors (bag
-  coefficient merging, integer/rational `pow`, exact roots, the two determined reciprocal arms
-  $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$ in `f64`, as float64 computes them; in
-  `permissive` an operation on literals takes the table's value, where a division by zero has
-  none however it is written, so $0^{-k}$ is NaN there), and a ground composite whose rigorous
-  interval *class* is non-finite folds to that class literal in every mode (a class is an
-  exact fact — no finite value is read, so no rounding can occur). Two shapes beside it fold to
-  `nan` the same way: a `rootn` whose index is ground and whose rigorous value set reaches no
+- **(fold)** at a node $u$ that is *fully numeric* (no variable, no $\diamond$) or
+  $\diamond$-collapsible: $u' =$ the cheapest expression the mode admits for $u$'s value
+  (below), resp. $\diamond$, **accepted only if** $u' <_o u$. Exact rational arithmetic lives in
+  the constructors (bag coefficient merging, integer/rational `pow`, exact roots, the two
+  determined reciprocal arms $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$ in `f64`, as
+  float64 computes them; in `permissive` an operation on literals takes the table's value, where
+  a division by zero has none however it is written, so $0^{-k}$ is NaN there).
+
+  *One ground evaluator per mode.* A fully numeric node's value is read once, by the evaluator
+  the parse, every rule step on a fully numeric subject, the mint, the judge's ground check and
+  `verify-mine`'s ground gate also read. It has two readings: float64's (the shipped
+  realizations in written order, each literal at its nearest double, every range event noted;
+  its elementary functions are `numeric::elementary`'s, the one place their float64 value is
+  decided) and the reals' (the table, read at the judge's precision ladder: as many digits as
+  the reading asks for, so `floor(tanh(100))` is read at 140 digits and is 0). In `f64` an
+  expression $R$ may stand for $u$ where float64 gives $R$ the double it gives $u$, or the reals
+  give $R$ $u$'s value and float64's two values agree in kind: both finite (two zeros of one
+  sign), the same infinity, both NaN, or a range event on either side whose true value is of
+  the other's kind. In `permissive` $R$ may stand for $u$ where the table's two values agree at
+  float resolution. The fold offers float64's value (its shortest decimal, $-0.0$, NaN or an
+  infinity), a member of $u$ with that value, the exact rational or multiple of $\pi$ the reals
+  give, and the recognition list's entry for either double; of those the evaluator admits, the
+  cheapest is kept, the reals' value at an equal price. So `floor(tanh(100))` and `sin(np.pi)`
+  are 0 and `exp(sin(np.pi))` is 1 in both modes, `tanh(100)` is 1, and `tan(asin(1))` keeps
+  float64's 1.633e16 in `f64`, the reals giving it no value, and is NaN in `permissive`.
+
+  *A fully numeric part is read first.* The parse reads every maximal fully numeric part, as
+  written, before any constructor builds it: where the part's only value is an atom (in `f64`
+  float64's NaN or infinity, unless the reals give the part a finite value that float64 reached
+  through a range event; in `permissive` no value, or an infinity, in the table) the part is
+  that atom, so no law reaches it: `0*tan(asin(1))` and `tan(asin(1))/tan(asin(1))` are NaN in
+  `permissive`, `exp(t)/exp(t)` with `t = tan(asin(1))` is NaN in both modes, while
+  `x*exp(1000)/exp(1000)` is `x`. A step inside a fully numeric part is admitted for the whole
+  part, not only for the operand it rewrites (`1/sin(np.pi)` keeps float64's 8.2e15 in `f64`:
+  `sin(np.pi)` alone is 0, but `1/0` is no value of the whole), and `permissive`'s own
+  simplifications never act on a fully numeric operand (`asin(sin(4))` keeps its value,
+  $\pi - 4$).
+
+  *A literal on the recognition list.* A decimal literal that float64 reads as exactly the
+  double of a short symbolic number is read as that number, its sign outside it: the list is
+  $k\pi/m$ and $ke/m$ for coprime $1 \le k, m \le 24$, $k/m$ for coprime $m \le 24$ whose
+  decimal does not terminate and $|k/m| \le 100$, $\log 2$, $\log 3$, $\log 10$, $\sqrt 2$,
+  $\sqrt 3$, $\sqrt 5$ (`3.141592653589793` is `np.pi`, `0.3333333333333333` is `1/3`). In
+  `f64` float64 reads the same double, so the step changes no value; in `permissive` it moves
+  by less than a unit in the last place. The fold spells a value from the same list.
+
+  Two further shapes fold to `nan`: a `rootn` whose index is ground and whose rigorous value set reaches no
   nonzero integer is `nan` at every radicand (`rootn(x1, asinh(tanh(4)))`, the ground form of
   the constructor's literal arm `rootn(x1, 2.5)`; an index whose enclosure holds an integer
   stays, so `rootn(x1, acos(cos(1)))` is kept even in `f64`, whose evaluator rounds that index
@@ -604,25 +640,15 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   constants is `nan` (`acosh(acos(cosh(c)))`, the class dropping a finite part on a null set of
   the constants as for any family). The interval layer reads a positive base under a
   non-integer exponent by its four corner powers, so `acosh(1/pi^(1/6))` classifies as `nan`.
-  Where a finite value would
-  be read, *`f64` and `permissive` fold in this step*, each in its own values, and no
-  constructor folds a transcendental in any mode. In `f64` a ground node no rule rewrote is
-  evaluated by the deployed f64 evaluator (the system libm, each literal at its nearest float);
-  in `permissive` it takes THE TABLE's value in the reals, each literal the rational it spells,
-  written as the double nearest to that value (a value the table carries exactly, `cos(0)`,
-  `exp(-inf)`, `sin(pi)`, is that number). Either is offered as the shortest decimal that reads
-  back as the double, kept only where it descends. The pass reaches an enclosing node before
+  No constructor folds a transcendental in any mode. The pass reaches an enclosing node before
   its children, so `rootn(exp(19.11787581094798), 2)` is `14170.787488305119` in `f64` and
   `14170.787488305128` in `permissive` (the root of e^19.11787581094798, the decimal read
   exactly, is 14170.7874883051273...); `asin(1e-8)` is `1e-8` in both;
   `sin(91618929858.17857)` is `-0.9807991153359534` in `f64` and `-0.9807984116169761` in
   `permissive`, whose argument is the decimal itself and not its nearest double; `sin(1)`
-  stays in both (its float costs more), and `sin(np.pi)` stays in `f64` and is `0` in
-  `permissive`.
-  `atanh(tanh(30))` is `30` in `permissive`, whose constructor identity reads the shape first,
-  and `inf` in `f64`, where the identity does not hold (`tanh` saturates): the whole node's float
-  is no number, so the fold moves on to `tanh(30)`, whose float is `1`, as the evaluator computes
-  it. `complexity` prices the reading, so a ground constant is priced as written in every mode. Respelling one exact symbol as another is
+  stays in both (its float costs more). `atanh(tanh(30))` is `30` in `permissive`, the table's
+  value, and `inf` in `f64`, where `tanh` saturates to 1.0 within the range and `atanh(1.0)` is
+  a pole: float64's `inf` is the part's only value there. `complexity` prices the reading, so a ground constant is priced as written in every mode. Respelling one exact symbol as another is
   a constructor's job in every mode: `exp(1)` $\to$ `e` chooses between two exact names for
   one value and nothing is rounded;
 - **(rebuild)** at a node $u$ whose children were rewritten: $u' = \mathrm{nf}(u[\text{new
@@ -745,28 +771,27 @@ via its scientific codeword — and nothing rests on outpricing those). An exact
 to the sign key $\sigma$ (§3: the number of signs, then the sum of their depths, compared as a
 pair: fewest signs, then outermost), and a tie in both to the canonical total order `cmp_ex`
 (rank, then structural lexicographic comparison, with *exact* rational comparison — the 256-bit
-`cmp_exact`). There is no separate literal-size tier: $\mu$'s literal component carries its
-content up to float precision (the float cap below), and the 1,100-bit cap keeps the literals
-finite (L5).
+`cmp_exact`). There is no separate literal-size tier: $\mu$'s literal component prices a
+literal as it is written, and the 1,100-bit cap keeps the literals finite (L5).
 
-**The float cap.** The evaluator reads every literal as its nearest float64, so a literal's
-price is capped at that float's shortest round-trip decimal $d(v)$ (at most 17 significant
-digits), priced by the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a
-finite nonzero nearest float, $\mu(v)$ otherwise. The cap holds however a term holds a
-literal: f64 mode admits a number only where its numerator and denominator are at most
-$2^{1022}$ and holds any other value in *pieces* -- a numeric string as written, or a sum,
-product or integer power of numbers that would leave the domain. Pieces whose exact value
-is a number within the 1,100-bit cap price as $\min(\text{their own prices}, \mu'(v))$, the
-price of the one number, never below one bit per node (`piece_price`); a
-numeric string beyond the cap keeps its print's price (`mu_numeric_str`). Every literal that
-is its own float's
-shortest decimal keeps its price (every constant drawn for flash-ansr's training data among
-them), and no price rises; a literal carrying more digits than its float needs (the 64-digit
-fourth power of a 16-digit constant, or a fitted constant printed with 17 digits where 16
-suffice) costs its float's shortest decimal. The cap is a decimal, never a fraction: a fraction that reads as the same
-float is no candidate unless it is the literal itself, so `0.3333333333333333` keeps its
-16-digit price while `1/3` costs 4 bits. Below, $\mu$ denotes the capped price wherever it
-prices a term.
+**Priced as written.** Every literal is priced by its own exact codeword, as it is written:
+the 34-digit exact product `0.0900000000000000240000000000000016` costs its 34 digits. A mode
+that may write a cheaper value of the same number writes it, once, where the literal lands (a
+sum's constant term, a coefficient, a power's literal operand beside a non-literal one, a
+function's argument in `permissive`, the root of a state). `f64` writes float64's own value:
+a literal at the double float64 reads it as (`0.1234567890123456789` is
+`0.12345678901234568`), and a number the constructors make from two literals at float64's value
+of that operation on their doubles (`x*0.30000000000000004*0.30000000000000004` is
+`0.09000000000000002*x`, `x*0.7234567890123457*1.3821548250604163` is `0.9999292916561291*x`),
+each where that decimal is cheaper than the exact value (`0.1 + 0.2` is `0.3`). `permissive`
+writes whichever of the two doubles around the exact value prints shorter
+(`0.9999292916561292*x`). An integer keeps its exact spelling in both. f64 mode admits a number
+only where its numerator and denominator are at most $2^{1022}$ and holds any other value in
+*pieces* -- a numeric string as written, or a sum, product or integer power of numbers that
+would leave the domain. Pieces whose exact value is a number within the 1,100-bit cap price as
+$\min(\text{their own prices}, \mu(v))$, the price of the one number, never below one bit per
+node (`piece_price`); a numeric string beyond the cap keeps its print's price
+(`mu_numeric_str`).
 
 **Two codewords, one value.** The minimum is over *codes for the same exact value*,
 never over values — $\mu$ stays spelling-free, and the symmetry the codebook buys is
@@ -776,13 +801,22 @@ asymmetry with no informational content, since fitted constants arrive as
 decimal-printed f64s and a fraction-only code forces them through "two arbitrary
 integers" at $\log_2 10 \approx 3.32$ bits per decimal shift.
 
-**The emitted spelling is the priced spelling, up to the float cap** [BY CONSTRUCTION]. The serializer
-chooses each literal's print by the argmin over the *same* two codeword totals the
-measure minimizes (`decimal_spelling_wins`), so $\mu(t)$ is the description length
-of the representation actually emitted, not of a hypothetical one — except where the float
-cap applies: the state is exact and prints its exact value, which then costs more than its
-price; the capped price is that of the float's shortest decimal (what Python's `repr`
-prints for it, up to the last digit on an exact tie). An exact codeword
+**The reciprocal codeword.** A non-integer $v$ whose reciprocal $c = 1/|v|$ has a terminating
+decimal $m' \cdot 10^{k'}$, and whose reduced denominator exceeds 24 (the bound of the recognition
+list), has a third code, its divisor-side spelling $1/c$: the rational
+codeword with its denominator written as that decimal, $1 + \max(1, L(m')) + L(|k'|) + [v < 0]$
+(the $1$ is $L(1)$, the numerator). The minimum runs over all three, so the reciprocal of a
+long decimal costs what its divisor costs: `x1/0.225147640565301` is priced and written as that
+division (its fraction, $10^{15}/225147640565301$, costs two long integers), and so are
+`x1/6.674e-11` and `1/3.142`. Where it is the cheapest, it is written in every dialect: as the
+divisor of a product, and alone as `1/c` (`/ 1 c`, `<mul> 1 <div> c </mul>`). A short fraction
+keeps its own two codewords (`25*x1/2`, `x2 + 10/3`, `0.05*x1`); past the bound the reciprocal
+can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`).
+
+**The emitted spelling is the priced spelling** [BY CONSTRUCTION]. The serializer
+chooses each literal's print by the argmin over the *same* codeword totals the
+measure minimizes (`decimal_spelling_wins`, `reciprocal_spelling_wins`), so $\mu(t)$ is the description length
+of the representation actually emitted, not of a hypothetical one. An exact codeword
 tie goes to the fraction — the structurally distinguished caller-dialect member,
 mirroring tier 2 of the sign-placement convention (§3); states carry no spelling, so
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
@@ -808,9 +842,8 @@ least one bit per node, so $\#\mathrm{nodes} \leq \mu_0$ in bits — the carrier
 being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
 vocabulary are finite; and there are finitely many numbers at all: a number's numerator
-and denominator have at most 1,100 bits each. $\mu_0$ does not bound a number's codeword
-components (the float cap prices every literal at most at its float's shortest decimal), so
-the finiteness of the literals comes from the 1,100-bit cap, not from the price. A numeric-string
+and denominator have at most 1,100 bits each ($\mu_0$ bounds a literal's codeword
+components too, since a literal is priced as written). A numeric-string
 leaf not admissible in f64 mode but within the cap denotes one of those numbers; one beyond the
 cap pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
@@ -823,15 +856,11 @@ $<_o$-descending sequence. *Proof.* Along such a sequence $\mu$ is non-increasin
 eventually constant; the tail then lives in one finite level set (L5) and descends the
 strict total order $(\sigma, \texttt{cmp\_ex})$ on it, so it is finite. $\square$
 
-A dense-literal chain ascends while its literals carry no more than float precision: the
-chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to $k = 55$; at $k = 56$
-and for $58 \le k \le 1022$ in f64 mode, $3/2^k$'s exact
-spelling costs more than its float's shortest decimal, so the literal costs that decimal's
-price (the term 64–72 bits up to $k = 200$), which no longer ascends strictly. It stays finite all the same — $k$ is
-bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot walk it
-anyway: every step preserves the term's value, and changing one literal alone changes it
-(pinned in `tests/test_unified_measure.py`: the chain ascends up to the float cap's onset, and
-simplifying the chain's members settles and re-reads to itself). A pure re-sort or re-orientation preserves
+The dense-literal chain $\mathrm{Mul}[3/2^k, x]$ ascends strictly in $\mu$ with $k$, each
+member priced as written, and stays finite: $k$ is bounded by the 1,100-bit cap. A rewrite
+cannot walk it anyway: every step preserves the term's value, and changing one literal alone
+changes it (pinned in `tests/test_unified_measure.py`: simplifying the chain's members settles
+and re-reads to itself). A pure re-sort or re-orientation preserves
 $\mu$ (the leaf multiset and shape are unchanged) and is decided by the sign key, then
 `cmp_ex`, exactly as before.
 
@@ -983,9 +1012,9 @@ rules at a node, kept only when the result descends, so L3 holds; `f64` takes th
 the
 landing rounding ρ moves a literal to one of the two floats around it, the one whose shortest
 spelling is cheaper (permissive promises float precision, not the nearest float), and only where
-that spelling is cheaper as an exact codeword than the literal: the float cap prices the literal
-at its nearest float's spelling, so ρ never raises a price and the descent arguments and T6 are
-unchanged (idempotent, since a float's shortest spelling is never moved). Its
+that spelling is cheaper as an exact codeword than the literal, so ρ never raises a price and the
+descent arguments and T6 are unchanged (idempotent, since a float's shortest spelling is never
+moved). `f64` lands a literal the same way, on the double float64 reads it as. Its
 search move that joins reciprocal sums is a candidate like the others, accepted only strictly
 below. A literal rounded where it lands is exact from then on, so a later step that combines it
 rounds again: an answer's literal can sit an ulp or more from the correctly rounded value of the
@@ -1025,7 +1054,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | L1 nf termination | structural recursion; the three audited self-calls (`pow`, `fun`/rootn, the even arm's `even_move`) | full suites exercise every self-call site; every spelling to length 5 around the special leaves builds (`test_even_arm_terminates.py`) |
 | G1–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
-| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle; a value f64 holds in pieces prices as its one number |
+| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends and its members settle; a value f64 holds in pieces prices as its one number |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
 | T6 resource limits | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | a binding cap is a resource limit (a terminating descent can need more steps), not proof of a bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 |

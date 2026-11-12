@@ -4,11 +4,11 @@
 The exact rational core prices a literal with the two-codeword mu' codebook and prints the
 cheaper EXACT codeword; a value with no finite decimal expansion has only the rational
 codeword, so the quotient of two 16-digit decimals became a 60-digit fraction, three tokens
-for one degree of freedom. The strict tiers cannot do better: a spelling denotes the state's
-exact value. The permissive tier is licensed to move values, so there an exact literal folds
-to the shorter-spelled of the two floats around it WHEN mu' prices that spelling strictly
-cheaper -- and only then: `1/2`, `15/37`, `4366/8875` keep their fractions, drawn constants
-(already shortest f64 spellings) never move.
+for one degree of freedom. Strict writes float64's double of that one number where it is
+cheaper (its nearest double). The permissive tier is licensed to move values, so there an exact
+literal folds to the shorter-spelled of the two floats around it WHEN mu' prices that spelling
+strictly cheaper -- and only then: `1/2`, `15/37`, `4366/8875` keep their fractions, drawn
+constants (already shortest f64 spellings) never move.
 """
 import math
 import re
@@ -64,14 +64,12 @@ def test_permissive_folds_the_monster_to_its_float(engine):
     assert repr(float(exact_value(MONSTER))) == "0.46867105279529636"
 
 
-def test_f64_keeps_the_exact_fraction(engine):
-    # the fold is gated on the permissive mode alone
+def test_f64_writes_the_double_of_the_exact_value(engine):
+    # f64 builds the EXACT value, 2e29/426738538271436458205631863649, and writes float64's
+    # double of that one number, cheaper than the 60-digit fraction: the double nearest it,
+    # where permissive takes the shorter-spelled of the two floats around it.
     out = prefix(engine, MONSTER, Mode.f64)
-    # f64 keeps the EXACT value, 2e29/426738538271436458205631863649, in the token printer's own
-    # spelling (the reader's integer-over-decimal spelling is the infix text's,
-    # test_ratio_spelling.py) -- not permissive's float.
-    assert out == ["/", "2e29", "426738538271436458205631863649"], out
-    assert Fraction(out[1]) / Fraction(out[2]) == exact_value(MONSTER)
+    assert out == [repr(float(exact_value(MONSTER)))] == ["0.46867105279529636"], out
 
 
 @pytest.mark.parametrize("expr,expected", [
@@ -116,13 +114,48 @@ def test_huge_integer_folds_to_its_float_value(engine):
     assert Fraction(out[0]) != 757269634452864785310003246961
 
 
+def test_one_thirds_double_is_one_third(engine):
+    # the recognition list reads 0.3333333333333333, 1/3's double, as 1/3, in both modes
+    for mode in (Mode.f64, Mode.permissive):
+        assert prefix(engine, "0.3333333333333333 * 0.3333333333333333", mode) == ["/", "1", "9"]
+
+
+@pytest.mark.parametrize("expr", [
+    MONSTER,
+    "1 / (2.7167019109484434 * 3.1415926535897 * 1.0000000000000002)",
+    "1e-7 / 3.0000000000000004",
+    "0.3333333333333335 * 0.3333333333333335",
+])
+def test_f64_writes_a_double_where_cheaper(engine, expr):
+    """Strict writes float64's value of the one exact number the literals make where that double
+    is cheaper than the exact value: one of the two doubles around it, priced below it."""
+    out = prefix(engine, expr, Mode.f64)
+    exact = exact_value(expr)
+    assert len(out) == 1 and "/" not in out[0], out
+    assert float(out[0]) in floats_around(exact), (out, exact)
+    assert exact_price(Fraction(out[0])) < exact_price(exact)
+
+
+@pytest.mark.parametrize("expr,expected", [
+    ("2.5 / 5", ["/", "1", "2"]),
+    ("1.5 / 3.7", ["/", "15", "37"]),
+    ("123456789.123456789 / 987654321.987654321", None),
+])
+def test_f64_keeps_an_exact_value_cheaper_than_its_double(engine, expr, expected):
+    out = prefix(engine, expr, Mode.f64)
+    if expected is not None:
+        assert out == expected, out
+    value = Fraction(out[0]) if len(out) == 1 else Fraction(out[1]) / Fraction(out[2])
+    assert value == exact_value(expr), out
+
+
 @pytest.mark.parametrize("expr", [
     MONSTER,
     "1 / (2.7167019109484434 * 3.1415926535897 * 1.0000000000000002)",   # beyond 128 bits (a partition before 2c)
     "757269634452864785310003246961 / 7",
     "1e-7 / 3.0000000000000004",
     "123456789.123456789 / 987654321.987654321",                          # reduces to a CHEAP fraction: stays
-    "0.3333333333333333 * 0.3333333333333333",
+    "0.3333333333333335 * 0.3333333333333335",
     "74.22110491129965 - 92.12760331603121 * pow(9.440764872280846, 4)",  # beyond 128 bits: the strict tier kept all four operators before 2c
     "2.7167019109484434 * 3.1415926535897 * 1.4142135623730951 * 1.7320508075688772",
 ])

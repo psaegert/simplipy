@@ -677,6 +677,9 @@ impl AcRules {
     }
 }
 
+/// A step's admission on a fully numeric node (`PassCtx::ground_step`): `(node, result)`.
+pub type GroundStep<'a> = &'a dyn Fn(&Ex, &Ex) -> bool;
+
 /// Per-pass context for the rewrite walk.
 pub struct PassCtx<'a> {
     pub rules: &'a AcRules,
@@ -713,6 +716,14 @@ pub struct PassCtx<'a> {
     /// pre-existing entry point) is byte-identical to the field not existing. Consumer:
     /// the promotion refund's per-candidate "engine WITHOUT this rule" probes.
     pub suppressed: Option<&'a FxHashSet<usize>>,
+    /// THE GROUND EVALUATOR's admission of a step on a FULLY NUMERIC node (`ground`): may the
+    /// step's result stand for the node in the mode? A rule changes no ground value, so a rule
+    /// fires on a ground node only where the evaluator admits its result (a ground rule of a file
+    /// verify-mine passed always is); and a ground node rebuilt after its operands moved is
+    /// judged whole, so a step inside a fully numeric part is admitted for the part, not only for
+    /// the operand (`1/sin(np.pi)` keeps float64's 8.2e15: `sin(np.pi)` is 0 alone, but `1/0` is
+    /// no value of the whole). `None`: every oriented step is taken.
+    pub ground_step: Option<GroundStep<'a>>,
 }
 
 /// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic order
@@ -724,18 +735,17 @@ pub struct PassCtx<'a> {
 ///
 /// Stage 2 (design/UNIFIED_SIMPLICITY_MEASURE.md): the first component is the unified
 /// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size
-/// middle tier -- mu's literal component carries a literal's content up to float
-/// precision (the float cap), so the ordering loses a layer. The dense-literal chain its
-/// own tier existed for (`Mul[3/2^k, x]`) ascends in k up to k = 55 and then sits at
-/// 64-72 bits up to k = 200; it stays finite through the 1,100-bit cap (below).
+/// middle tier -- mu's literal component prices a literal as it is written, so the ordering
+/// loses a layer. The dense-literal chain its own tier existed for (`Mul[3/2^k, x]`) ascends
+/// in k; it stays finite through the 1,100-bit cap (below).
 ///
 /// The pair is a strict total order (mu is a u64; cmp_ex is total by construction
 /// with EXACT literal comparison) that is WELL-FOUNDED: mu can strictly drop only
 /// finitely often, and at a FIXED mu value only finitely many terms exist -- mu
 /// bounds the node count (every structural node and leaf costs >= 8 except zero-cost
 /// magnitude-1 coefficient/exponent slots, of which each bag and pow carries at most
-/// one), literals are finitely many under the 1,100-bit cap (a literal's price is
-/// capped at its float's shortest decimal, so mu no longer bounds its bit length), and the
+/// one), literals are finitely many under the 1,100-bit cap (and a literal's price, its
+/// written spelling, bounds its digits), and the
 /// vocabulary of `Leaf`/`Fun` tokens is finite -- so the total cmp_ex admits no
 /// infinite descent within a level. Hence EVERY descending chain is finite:
 /// termination of the pass and of the outer loop are theorems (T6, docs/formal.md),
@@ -757,10 +767,25 @@ fn oriented(next: &Ex, node: &Ex, p: &PassCtx) -> bool {
 /// candidate attempt at a visit, so `try_rules_at` prices it once (lazily) instead of
 /// per candidate. Pure caching of a pure function -- behavior-identical.
 fn oriented_mu(next: &Ex, node_mu: u64, node: &Ex, p: &PassCtx) -> bool {
-    match complexity(next, p.cx.view).cmp(&node_mu) {
+    let below = match complexity(next, p.cx.view).cmp(&node_mu) {
         std::cmp::Ordering::Less => true,
         std::cmp::Ordering::Greater => false,
         std::cmp::Ordering::Equal => tie_cmp(next, node, p.cx.view) == std::cmp::Ordering::Less,
+    };
+    below && ground_step_admitted(node, next, p)
+}
+
+/// Is a rule step from `node` to `next` admitted where `node` is fully numeric (no variable, no
+/// `<constant>`, no wildcard)? The ground evaluator decides (`PassCtx::ground_step`); a step on a
+/// subject with a variable or a constant is no ground step.
+fn ground_step_admitted(node: &Ex, next: &Ex, p: &PassCtx) -> bool {
+    match p.ground_step {
+        Some(admits)
+            if !node.has_measure_space(p.cx.view) && !node.contains_wildcard(p.cx.view) =>
+        {
+            admits(node, next)
+        }
+        _ => true,
     }
 }
 
@@ -1146,6 +1171,7 @@ pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
         normal: RefCell::new(FxHashSet::default()),
         explore: p.explore,
         suppressed: p.suppressed,
+        ground_step: p.ground_step,
     };
     rewrite_pass_opt(e, &fresh).is_none()
 }
@@ -1170,9 +1196,22 @@ enum Visit {
 fn visit(node: &Ex, p: &PassCtx) -> Visit {
     if matches!(
         node,
-        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
+        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
     ) {
         return Visit::Normal; // literal leaves: nothing to do
+    }
+    if matches!(node, Ex::Num(_)) {
+        // a number the fold spells otherwise (the recognition list), where that descends
+        return match (p.fold)(node) {
+            Some(folded) if oriented(&folded, node, p) => {
+                if matches!(folded, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)) {
+                    Visit::Step(folded)
+                } else {
+                    Visit::Folded(folded)
+                }
+            }
+            _ => Visit::Normal,
+        };
     }
     if p.normal.borrow().contains(node) {
         if trace_memo() {
@@ -1261,7 +1300,10 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
         // fire (a disoriented rebuild is REFUSED), with the composite step as its one
         // second chance.
         Some(rebuilt) if rebuilt != *node => {
-            if oriented(&rebuilt, node, p) && step_allowed(p) {
+            if oriented(&rebuilt, node, p)
+                && ground_step_admitted(node, &rebuilt, p)
+                && step_allowed(p)
+            {
                 p.fires.set(p.fires.get() + 1);
                 return Visit::Step(rebuilt);
             }
@@ -1297,10 +1339,11 @@ fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
         normal: RefCell::new(FxHashSet::default()),
         explore: false,
         suppressed: p.suppressed,
+        ground_step: p.ground_step,
     };
     let endpoint = rewrite_pass(rebuilt, &sub);
     p.fires.set(sub.fires.get());
-    if oriented(&endpoint, node, p) && step_allowed(p) {
+    if oriented(&endpoint, node, p) && ground_step_admitted(node, &endpoint, p) && step_allowed(p) {
         p.fires.set(p.fires.get() + 1);
         if trace_fires() {
             eprintln!("AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}");

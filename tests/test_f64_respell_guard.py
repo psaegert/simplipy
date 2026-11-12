@@ -171,14 +171,20 @@ class TestMuEraResolutionRespell:
     def test_long_literal_mark_is_not_respelled(self, mined_acj):
         import numpy as np
         core = mined_acj._core
-        src = ['*', '*', '0.3333333333333333', '0.3333333333333333', 'x0']
-        mark = mined_acj.simplify(list(src))
-        assert mark[1].startswith('0.111111111111111088'), mark  # exact square stands
+        # `simplify` now writes the product of two literals as float64's product where that is
+        # cheaper than the exact one (0.11111111111111122 against the 32-digit exact square), and
+        # reads 0.3333333333333333, 1/3's double, as 1/3; the resolution channel still mints no
+        # respelling of either source.
+        src = ['*', '*', '0.3333333333333335', '0.3333333333333335', 'x0']
+        assert mined_acj.simplify(list(src)) == ['*', '0.11111111111111122', 'x0']
+        third = ['*', '*', '0.3333333333333333', '0.3333333333333333', 'x0']
+        assert mined_acj.simplify(list(third)) == ['/', 'x0', '9']
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
         lib = core.build_candidate_library(
             [['*', '<constant>', 'x0'], ['x0'], ['<constant>']], ['x0'], x, 256, rule_mode='default')
-        res = core.find_rule_lib(src, lib, 4, rule_mode='default')
-        assert res is None, res
+        for source in (src, third):
+            res = core.find_rule_lib(source, lib, 4, rule_mode='default')
+            assert res is None, res
 
     def test_structural_resolution_still_lives(self, mined_acj):
         # POSITIVE CONTROL: the crown-jewel exact-quotient family must keep

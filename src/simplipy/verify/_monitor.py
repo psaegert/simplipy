@@ -70,10 +70,10 @@ def _as_rule(inp, out, engine):
 
 
 def _reading(detail, mode):
-    """The mode's reading of a judgment (`_contract.mode_reading`, permissive including f64): True
-    (holds), False (refused on a counterexample) or None (no answer: neither passed nor
-    convicted)."""
-    return _contract.mode_reading(detail.get('realised'), detail.get('permissive'), mode)
+    """The mode's reading of a judgment (`_contract.judged_reading`: permissive including f64,
+    and a fully numeric rule read on each mode's own value): True (holds), False (refused on a
+    counterexample) or None (no answer: neither passed nor convicted)."""
+    return _contract.judged_reading(detail, mode)
 
 #: The reals' verdicts that are no answer: under F8 they leave open whether the engine's own
 #: algebra was exact.
@@ -104,7 +104,8 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     mode) as the rule judge judges the rule ``inp -> out``.
 
     Returns ``(verdict, detail)``, by the mode's own reading of the judgment: ``OK`` where the
-    judged tier is one the mode licenses (``verify.MODE_TIERS``), ``VIOLATION`` where the mode
+    judged tier is one the mode licenses (``verify.MODE_TIERS``) or, for a fully numeric rewrite,
+    where the mode's own value of it holds, ``VIOLATION`` where the mode
     refuses it, and ``UNSCORED`` where the judge cannot read the rewrite or the mode reaches no
     answer on it (fail closed: the sweep counts it). The reals' verdict, a diagnostic, is no
     mode's label: `(x - x)/(x - x) -> 1` is a VIOLATION in f64, which refuses it on its own
@@ -131,14 +132,15 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
         for lhs, rhs in steps:
             step = _contract.judge_rule(list(lhs), list(rhs))
             step_tier = effective_tier(step)
-            if step_tier not in MODE_TIERS[name]:
+            if step_tier not in MODE_TIERS[name] and _reading(step, name) is not True:
                 if _reading(step, name) is None:
                     return 'UNSCORED', f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)}: ' \
                                        f'{name} reaches no answer ({step.get("verdict")})'
                 return 'VIOLATION', (f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)} is '
                                      f'{step_tier}, not {name}\'s')
             exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
-    if tier in MODE_TIERS[name]:
+    if tier in MODE_TIERS[name] or _reading(detail, name) is True:
+        # a fully numeric rewrite holds where the mode's own reading of its value holds
         return 'OK', f'{verdict} ({tier})'
     if _reading(detail, name) is None:
         return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '

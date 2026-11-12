@@ -209,14 +209,19 @@ def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
     verdict on the rule when the caller has it. Returns ``{'licensed', 'holds', 'tier',
     'refused_by'}``: ``asin(1) -> acos(0)`` holds in every mode and is refused by
     ``ground_composite``; ``exp(tan(asin(1))) -> inf`` holds in f64 and is refused by
-    ``evidence``."""
+    ``evidence``. ``holds`` is the mode's own reading of the rule; a fully numeric rule that
+    holds in f64 alone is refused by ``engine_owned`` there, since f64's fold writes every fully
+    numeric part as the cheapest value it admits (its tier is ``reject``)."""
     if mode not in MODE_TIERS:
         from ..engine import _coerce_mode
         mode = _coerce_mode(mode).name
     detail = detail if detail is not None else verify_rule(lhs, rhs)
     tier = effective_tier(detail)
-    holds = tier in MODE_TIERS[mode]
+    holds = tier in MODE_TIERS[mode] or (bool(detail.get('ground'))
+                                          and _contract.judged_reading(detail, mode) is True)
     refused = policy_refusals(lhs, rhs, mode, engine, max_source, operator_max_length)
+    if holds and tier not in MODE_TIERS[mode] and 'engine_owned' not in refused:
+        refused = [p for p in POLICIES if p in refused or p == 'engine_owned']
     if mode == 'permissive' and holds and 'evidence' not in refused \
             and not _held_with_evidence(lhs, rhs, detail, tier):
         refused = [p for p in POLICIES if p in refused or p == 'evidence']

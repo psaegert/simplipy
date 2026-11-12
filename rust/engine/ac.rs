@@ -100,11 +100,6 @@ fn variable_free(e: &Ex, view: &TokenView) -> bool {
     }
 }
 
-/// A literal: a number, or a numeric leaf the engine holds as written.
-fn is_literal(e: &Ex, view: &TokenView) -> bool {
-    matches!(e, Ex::Num(_)) || (matches!(e, Ex::Leaf(_)) && is_ground(e, view))
-}
-
 fn is_ground(e: &Ex, view: &TokenView) -> bool {
     match e {
         Ex::Const => false,
@@ -126,9 +121,6 @@ pub type RuleStep = (Vec<String>, Vec<String>);
 
 /// One SERVED rule: `(lhs, rhs, artifact index)` -- see [`Engine::ac_served_rules`].
 pub type ServedRule = (Vec<String>, Vec<String>, usize);
-
-/// The working precision of the table's reading of a ground node: past a double's, and cheap.
-const TABLE_GROUND_DPS: i32 = 50;
 
 impl Engine {
     /// The DEFAULT mode's translated rule set (`rules.json`), built once on first use and
@@ -308,6 +300,7 @@ impl Engine {
             mode,
             fold_f64,
             sentinels_expired: false,
+            ground_first: None,
         };
         f(&law)
     }
@@ -598,250 +591,265 @@ impl Engine {
         crate::interval::nonconstant_entire(&strs, &self.operators, f64)
     }
 
-    /// The `<constant>` value-set fold: a node of `<constant>` and literals (numbers and special
-    /// constants) collapses to `<constant>` under the ratified value-set licence (unconditionally
-    /// under LOSSY): `pow(2, C)`, `pow(np.pi, C)` and `exp(C)` alike.
-    ///
-    /// FOLD UNIFICATION: the engine folds ONLY what it
-    /// computes EXACTLY -- rational arithmetic, which lives in the constructors (bag
-    /// coefficient merging, integer/rational pow, exact roots) -- and this fallback's
-    /// former all-literal arm, the ONE remaining f64-evaluation path at serve, is
-    /// DELETED. Every transcendental identity, special-bearing or not, is a MINED rule
-    /// certified by the symbolic judge (`simplipy.verify`, precision-stable residuals):
-    /// `cos 0 -> 1` and `cos np.pi -> -1` now arrive the same way. This removes the
-    /// special/special-free asymmetry (the old `has_special` exactness guard goes with
-    /// the arm it guarded) and closes the residual accidental-short-hit hole: an f64
-    /// evaluation landing exactly on a cheap literal while truly differing at 1e-17
-    /// can no longer fold at serve, because nothing transcendental folds at serve.
-    ///
-    /// The `<constant>` arm admits `<constant>` and literals: a special constant is a fixed real
-    /// like a number, and the value set decides (`pow(np.pi, C)` ranges over `(0, inf)` as
-    /// `pow(2, C)` does); an infinity is no literal here (`C/0` keeps its pole). Structural exact
-    /// symbol algebra (bag cancellation `pi/pi -> 1`) is outside the fold and deliberately
-    /// unaffected.
-    /// Exact-parity classification for
-    /// `pow(<negative ground>, <beyond-certification integer literal>)`. Returns
-    /// `Some(verdict)` when this arm DECIDES -- `Some(Some(lit))` folds, `Some(None)`
-    /// refuses (the true class is Finite, which this fold never materializes) --
-    /// and `None` to fall through to the interval class. Doctrine at the call site.
-    ///
-    /// The arm also reads `Ex::Num`
-    /// exponents -- an i128-parseable integer literal beyond 2^53 (e.g.
-    /// `10000000000000000001`) parses to `Num`, whose f64 image differs from the
-    /// denoted integer, so the interval layer brackets it and the continuum
-    /// convention asserted Nan for a genuinely finite value
-    /// (`pow(-9007199254740994, 10^19+1) -> nan` live, fuzz-extreme row 1756). The
-    /// rational IS exact: integrality, sign, and parity come straight off it, at
-    /// every magnitude. This is the "constructor parity fold on Num exponents"
-    /// direction.
-    fn h045_exact_pow_class(&self, e: &Ex, bare: &Cx, ctx: &SimplifyCtx) -> Option<Option<Ex>> {
-        let Ex::Pow(b, ex) = e else { return None };
-        let view = bare.view;
-        // The exponent: an exact rational, a bare numeric-string Leaf, or the Leaf's
-        // `Mul[-1, Leaf]` negation (the only spellings the emitters produce for `pow`
-        // second arguments; every other shape falls through and keeps today's
-        // behavior). A non-integer Num falls through: the interval class's Nan for a
-        // negative base at a non-integer exponent is CORRECT.
-        let (neg, odd) = match &**ex {
-            Ex::Num(r) => {
-                if !r.is_integer() {
-                    return None;
-                }
-                // the parity, or fall through where the f64 domain does not know it
-                (r.is_negative(), r.parity()?)
-            }
-            Ex::Leaf(t) => view.with_str(*t, crate::numeric::integer_literal_parity)?,
-            Ex::Mul(v) if v.len() == 2 => match (&v[0], &v[1]) {
-                (Ex::Num(r), Ex::Leaf(t)) if *r == crate::ac::rat::Rat::NEG_ONE => {
-                    let (n, o) = view.with_str(*t, crate::numeric::integer_literal_parity)?;
-                    (!n, o)
-                }
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let exp_negative = neg;
-        // The base's certified disposition, from its own rigorous value set.
-        let flat_b = to_prefix(b, bare);
-        let strs_b = self.resolve_seq(&flat_b, ctx);
-        let vs =
-            crate::interval::value_set(&strs_b, &self.operators, &crate::interval::Vs::reals())?;
-        if vs.ninf && !vs.has_fin && !vs.pinf && !vs.nan {
-            if exp_negative {
-                return Some(None); // (-inf)^{-int} = 0: FINITE -- refuse here
-            }
-            // (-inf)^{+int} is +-inf by parity: extended-real exact arithmetic.
-            return Some(Some(if odd { Ex::NegInf } else { Ex::PosInf }));
-        }
-        if vs.has_fin && vs.hi < 0.0 && !vs.pinf && !vs.ninf && !vs.nan {
-            // A finite negative real to ANY integer power is a finite real (however
-            // astronomic): class Finite -- refuse; never the a.e. arms' asserted Nan.
-            return Some(None);
-        }
-        None
+    /// The ground evaluator's reading of a fully numeric node (`ground::read`), spelled with every
+    /// literal one token (`to_prefix_literal_tokens`), so float64 reads each at its nearest
+    /// double and the table reads it exactly.
+    fn ground_reading(
+        &self,
+        x: &Ex,
+        ctx: &SimplifyCtx,
+        view: &TokenView,
+    ) -> Option<std::rc::Rc<crate::ground::Reading>> {
+        let bare = Cx::bare(view);
+        let toks = crate::ac::convert::to_prefix_literal_tokens(x, &bare);
+        crate::ground::read(&self.resolve_seq(&toks, ctx), &self.operators)
     }
 
-    /// THE TABLE'S CLASS FOLD (`permissive`): a ground node whose real value THE TABLE reads as
-    /// an infinity folds to it, and one the table gives no value folds to NaN. `None` for a
-    /// finite value (written as its float by `table_float_fold`) or a point Unresolved at the
-    /// working precision.
-    fn table_class_fold(v: &crate::table::Val) -> Option<Ex> {
+    /// The ground evaluator's mode of an engine mode.
+    fn ground_mode(mode: RuleMode) -> crate::ground::Mode {
+        match mode {
+            RuleMode::Default => crate::ground::Mode::Strict,
+            RuleMode::Permissive => crate::ground::Mode::Permissive,
+        }
+    }
+
+    /// The atom of a float64 value that is no finite number: NaN or an infinity.
+    fn nonfinite_atom(d: f64) -> Ex {
+        if d.is_nan() {
+            Ex::NaN
+        } else if d > 0.0 {
+            Ex::PosInf
+        } else {
+            Ex::NegInf
+        }
+    }
+
+    /// Is a real value finite (a value, no infinity)?
+    fn real_is_finite(v: &crate::table::Val) -> bool {
+        let (undefined, inf) = crate::table::class_of(v);
+        !undefined && inf.is_none()
+    }
+
+    /// GROUND FIRST (`Cx::ground_first`): the parse's verdict on a fully numeric part as
+    /// written. The part becomes an atom where that atom is its only value in the mode, so no law
+    /// reaches it; elsewhere it is built as written and read for its value by the fold.
+    ///
+    /// - strict: where float64's value is NaN or an infinity, that value, unless the reals give
+    ///   the part a finite value float64 reached through a range event, which strict admits
+    ///   beside float64's (`exp(1000)/exp(1000)` is built, and is 1; `exp(t)/exp(t)` with
+    ///   `t = tan(asin(1))` is NaN, the reals giving it no value; `1/0` is +inf).
+    /// - permissive: where the table gives the part no value, NaN (`tan(asin(1))`, `inf/inf`); an
+    ///   infinity, that infinity (`log(0)`); a finite value or an unread one keeps the part.
+    fn ground_first_atom(
+        &self,
+        span: &[crate::tokens::Tok],
+        ctx: &SimplifyCtx,
+        mode: RuleMode,
+    ) -> Option<Ex> {
+        let r = crate::ground::read(&self.resolve_seq(span, ctx), &self.operators)?;
+        match mode {
+            RuleMode::Default => {
+                let d = r.float?;
+                if d.is_finite() {
+                    return None;
+                }
+                if r.range_event
+                    && r.real(&self.operators)
+                        .is_some_and(|(v, _)| Self::real_is_finite(&v))
+                {
+                    return None;
+                }
+                Some(Self::nonfinite_atom(d))
+            }
+            RuleMode::Permissive => {
+                let (v, _) = r.real(&self.operators)?;
+                match crate::table::class_of(&v) {
+                    (true, _) => Some(Ex::NaN),
+                    (_, Some(true)) => Some(Ex::PosInf),
+                    (_, Some(false)) => Some(Ex::NegInf),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// A RULE STEP ON A GROUND SUBJECT (`PassCtx::ground_step`): may `next` stand for `node` in
+    /// the mode (`ground::admits`)? A rule changes no ground value.
+    fn ground_step_admits(&self, node: &Ex, next: &Ex, ctx: &SimplifyCtx, mode: RuleMode) -> bool {
+        let view = self.view(ctx);
+        match (
+            self.ground_reading(node, ctx, &view),
+            self.ground_reading(next, ctx, &view),
+        ) {
+            (Some(p), Some(c)) => {
+                crate::ground::admits(Self::ground_mode(mode), &p, &c, &self.operators)
+            }
+            _ => false,
+        }
+    }
+
+    /// The literal of a finite float64 value, as the walk holds it: the shortest decimal that
+    /// reads back as the value, a number of the f64 number domain, or, for a normal double whose
+    /// decimal leaves the domain (its exact fraction passes 2^1022: `1.249999988609375e-296`),
+    /// that decimal held as written, as a written literal is; and in `strict` the written
+    /// negative zero for -0. A subnormal has none.
+    fn float_literal(d: f64, signed: bool, view: &TokenView) -> Option<Ex> {
+        if !d.is_finite() {
+            return None;
+        }
+        if signed && d == 0.0 && d.is_sign_negative() {
+            return Some(Ex::Leaf(view.intern(crate::ac::expr::NEG_ZERO)));
+        }
+        let spelled = format!("{d:?}");
+        let _f64 = crate::ac::rat::number_domain(true);
+        match crate::ac::rat::Rat::parse_decimal(&spelled) {
+            Some(r) => Some(Ex::Num(r)),
+            None if d.is_normal() => Some(Ex::Leaf(view.intern(&spelled))),
+            None => None,
+        }
+    }
+
+    /// A real value the table carries exactly, as an expression: a rational (in the f64 number
+    /// domain), a rational multiple of pi, an infinity. `None` for an approximation.
+    fn exact_real_expr(v: &crate::table::Val, bare: &Cx) -> Option<Ex> {
         use crate::table::{Exact, Val};
         match v {
-            Val::Exact(Exact::Undef) => Some(Ex::NaN),
+            Val::Exact(Exact::Rat(r)) => {
+                let (p, q) = r.small_parts()?;
+                let _f64 = crate::ac::rat::number_domain(true);
+                crate::ac::rat::Rat::new(p, q).map(Ex::Num)
+            }
+            Val::Exact(Exact::Pi(q)) => {
+                let (p, d) = q.small_parts()?;
+                let _f64 = crate::ac::rat::number_domain(true);
+                let q = crate::ac::rat::Rat::new(p, d)?;
+                Some(crate::ac::expr::mul(vec![Ex::Num(q), Ex::Pi], bare))
+            }
             Val::Exact(Exact::PosInf) => Some(Ex::PosInf),
             Val::Exact(Exact::NegInf) => Some(Ex::NegInf),
             _ => None,
         }
     }
 
-    /// The table's float-resolution reading of a ground node (`table::ground_value_float`), the
-    /// value permissive writes as a double: `tanh(cosh(-10))` reads within 1e-40 of 1.
-    fn table_value_float(&self, strs: &[String]) -> Option<crate::table::Val> {
-        crate::table::ground_value_float(strs, &self.operators, TABLE_GROUND_DPS)
-    }
-
-    /// The double nearest to a table value (`table::nearest_f64`): finite and normal, or zero
-    /// for the value zero. A nonzero value below the normal doubles (`exp(-800)`, 3.7e-348,
-    /// whose nearest double is 0) has no faithful float and reads `None`, as a written
-    /// subnormal decimal stays symbolic.
-    fn table_f64(v: &crate::table::Val) -> Option<f64> {
-        let mut ctx = crate::table::Ctx::new(TABLE_GROUND_DPS)?;
-        let y = crate::table::nearest_f64(v, &mut ctx)?;
-        let zero =
-            matches!(v, crate::table::Val::Exact(crate::table::Exact::Rat(r)) if r.is_zero());
-        (y.is_finite() && (y.is_normal() || (y == 0.0 && zero))).then_some(y)
-    }
-
-    /// PERMISSIVE'S GROUND FOLD (P3): a ground node's value is THE TABLE's (`table_value_float`),
-    /// written as the shortest decimal of the double nearest to it, in the f64 number domain
-    /// (as `ground_fold` writes the evaluator's float): `floor(tanh(40))` is 0, where float64
-    /// rounds tanh(40) to 1.0 and floors it to 1.
-    fn table_float_fold(v: &crate::table::Val) -> Option<Ex> {
-        let y = Self::table_f64(v)?;
-        let _f64 = crate::ac::rat::number_domain(true);
-        crate::ac::rat::Rat::parse_decimal(&format!("{y:?}")).map(Ex::Num)
-    }
-
-    /// THE MEMBER FOLD in `permissive`: `member_fold` with each value THE TABLE's, as the double
-    /// nearest to it -- `mod(sin(1), 2)` is `sin(1)`, and `floor(tanh(40))` is no `tanh(40)`
-    /// (the table reads 0 against 1.0). `node` is the node's own reading.
-    fn member_fold_table(
+    /// THE GROUND FOLD: a fully numeric node is written as the cheapest expression
+    /// its mode admits for it (`ground::admits`), where that is cheaper than the node (the pass
+    /// keeps the fold only where it descends). The candidates, each admitted by the evaluator:
+    ///
+    /// - strict: float64's value (its shortest decimal, -0.0, NaN or an infinity), a member of
+    ///   the node with float64's value bit for bit (`max(sin(1), 0.8414709848078965)` is
+    ///   `sin(1)`), the recognition list's entry for that double (`2*asin(1)` is `np.pi`), and
+    ///   the reals' value where float64's kind agrees (the exact rational, the
+    ///   multiple of pi, the entry of the real value's double): `floor(tanh(100))` is 0,
+    ///   `exp(sin(np.pi))` is 1. At an equal price, (b)'s. With `fold_tr` off (the miner's
+    ///   unfolded canon) only an atom that is the node's only value: NaN or an infinity.
+    /// - permissive: the table's value at its nearest double, a member of the same value
+    ///   at float resolution (`mod(sin(1), 2)` is `sin(1)`), the exact rational, the multiple of
+    ///   pi, the recognition list's entry: `floor(tanh(100))` is 0, `tan(asin(1))` is NaN.
+    fn ground_value_fold(
         &self,
         e: &Ex,
-        node: Option<&crate::table::Val>,
         ctx: &SimplifyCtx,
         view: &TokenView,
+        lossy: bool,
+        fold_tr: bool,
     ) -> Option<Ex> {
-        let members: Vec<&Ex> = match e {
-            Ex::Fun(_, v) | Ex::Add(v) | Ex::Mul(v) => v.iter().collect(),
-            Ex::Pow(b, x) => vec![&**b, &**x],
-            _ => return None,
-        };
-        let node = Self::table_f64(node?)?;
-        let bare = Cx::bare(view);
-        let value = |x: &Ex| {
-            let toks = to_prefix(x, &bare);
-            self.table_value_float(&self.resolve_seq(&toks, ctx))
-                .as_ref()
-                .and_then(Self::table_f64)
-        };
-        members
-            .into_iter()
-            .filter(|m| value(m).is_some_and(|v| v.to_bits() == node.to_bits()))
-            .min_by(|a, b| {
-                complexity(a, view)
-                    .cmp(&complexity(b, view))
-                    .then_with(|| crate::ac::expr::cmp_ex(a, b, view))
-            })
-            .cloned()
+        let part = self.ground_reading(e, ctx, view)?;
+        self.ground_value_fold_of(&part, e, ctx, view, lossy, fold_tr)
     }
 
-    /// THE GROUND FOLD (G, `f64`): a ground composite (no variable, no
-    /// `<constant>`) whose class is not decided above is evaluated by the deployed f64
-    /// evaluator (`numeric::evaluate_constant_subtree`: libm kernels, every literal at the float
-    /// nearest to it, `np.pi` and `np.e` as their floats, the bag in its printed order;
-    /// `to_prefix_literal_tokens`) and offered as the literal of the shortest decimal
-    /// that reads back as that float, read as the walk reads that decimal written: in the f64
-    /// number domain (`rat::number_domain`). So a float whose shortest decimal leaves the domain
-    /// stays symbolic, as the written decimal does -- a subnormal, a value beyond 2^1022, and a
-    /// normal value whose decimal does not fit it (`2.781342323134002e-308`, whose denominator
-    /// is 5e322) -- and the state holds the number its print reads back as.
-    ///
-    /// It is the pass's fold, so it is tried at a node only after no rule fired there, the pass
-    /// visits an enclosing node before its children, and the result is accepted only when it
-    /// descends (`oriented`): no fold destroys a rule redex or a constructor identity (no
-    /// constructor folds a transcendental, so `atanh(tanh 30)` reads as `30` in permissive),
-    /// and a literal dearer than its expression is refused (`sin 1` stays). A whole ground node
-    /// folds before its children, so `rootn(exp(19.11787581094798), 2)` is
-    /// `14170.787488305119` and not the root of a 9-digit literal.
-    fn ground_fold(&self, strs: &[String], signed: bool, view: &TokenView) -> Option<Ex> {
-        let tok = crate::numeric::evaluate_constant_subtree(strs, &self.operators)?;
-        let y = crate::numeric::leaf_value(&tok)?;
-        if !y.is_finite() {
-            return None;
-        }
-        // In `f64` the fold writes the float64 value exactly: a -0 is the written negative
-        // zero (`ceil(-0.5)` is `-0.0`, which an inverse reads as -inf), and the floats of the
-        // named constants are those constants (`atan2(0, -0.0)` is `np.pi`).
-        if signed {
-            if y == 0.0
-                && crate::numeric::evaluate_constant_value(strs, &self.operators)
-                    .is_some_and(|v| v.is_sign_negative())
-            {
-                return Some(Ex::Leaf(view.intern(crate::ac::expr::NEG_ZERO)));
-            }
-            if y == std::f64::consts::PI {
-                return Some(Ex::Pi);
-            }
-            if y == std::f64::consts::E {
-                return Some(Ex::E);
-            }
-        }
-        let _f64 = crate::ac::rat::number_domain(true);
-        crate::ac::rat::Rat::parse_decimal(&format!("{y:?}")).map(Ex::Num)
-    }
-
-    /// THE MEMBER FOLD (`f64` and `permissive`): a ground node whose float64 value is, bit for
-    /// bit, the value of one of its own arguments (or bag members) folds to that MEMBER, never to
-    /// a newly written float. Float64 evaluates the node and the member to the same bits, so
-    /// writing the member keeps the deployed value exactly, and it is cheaper than the node. `max`
-    /// and `min` return one of their members (IEEE 754-2019 `maximum`/`minimum`):
-    /// `max(sin(1), 0.8414709848078965)` is `sin(1)`, where the float would be the dearer
-    /// spelling of the same value; `mod(a, b)` is `a` wherever `0 <= a < b`
-    /// (`mod(sin(1), 123456.78912345678)` is `sin(1)`), `abs(a)` is `a` at a positive `a`
-    /// (`abs(sin(1))`), `floor(a)` and `ceil(a)` are `a` at an integer `a`. Members that tie
-    /// (one float64 value, the same bits: `+0` and `-0` are no tie) are decided by price under
-    /// the mode's measure, the canonical order breaking an equal price. `None` where no member
-    /// carries the node's bits, or the node is NaN (the class fold decides it): the float fold
-    /// then reads it.
-    fn member_fold(&self, e: &Ex, ctx: &SimplifyCtx, view: &TokenView) -> Option<Ex> {
-        let members: Vec<&Ex> = match e {
-            Ex::Fun(_, v) | Ex::Add(v) | Ex::Mul(v) => v.iter().collect(),
-            Ex::Pow(b, x) => vec![&**b, &**x],
-            _ => return None,
-        };
+    /// [`Engine::ground_value_fold`] against a given reading of the node's value (`part`): the
+    /// node's own, or the reading of the fully numeric part it was built from.
+    fn ground_value_fold_of(
+        &self,
+        part: &crate::ground::Reading,
+        e: &Ex,
+        ctx: &SimplifyCtx,
+        view: &TokenView,
+        lossy: bool,
+        fold_tr: bool,
+    ) -> Option<Ex> {
+        let ops = &self.operators;
         let bare = Cx::bare(view);
-        let value = |x: &Ex| {
-            let literal = crate::ac::convert::to_prefix_literal_tokens(x, &bare);
-            crate::numeric::evaluate_constant_value(
-                &self.resolve_seq(&literal, ctx),
-                &self.operators,
-            )
+        let mode = if lossy {
+            crate::ground::Mode::Permissive
+        } else {
+            crate::ground::Mode::Strict
         };
-        let node = value(e)?;
-        if node.is_nan() {
-            return None;
+        // (expression, read by the reals' value)
+        let mut cands: Vec<(Ex, bool)> = Vec::new();
+        let recognised = |d: f64| crate::ac::convert::recognised_double(d, &bare);
+        if lossy {
+            let (v, dps) = part.permissive_value(ops)?;
+            let (undefined, inf) = crate::table::class_of(&v);
+            if undefined {
+                cands.push((Ex::NaN, true));
+            } else if let Some(up) = inf {
+                cands.push((if up { Ex::PosInf } else { Ex::NegInf }, true));
+            } else {
+                let y = crate::ground::nearest_double(&v, dps).filter(|y| {
+                    y.is_finite()
+                        && (y.is_normal() || (*y == 0.0 && crate::table::is_exact_zero(&v)))
+                });
+                // A value with no faithful float (below the normal doubles, or past them) is
+                // written by nothing but its exact value: float resolution there is coarser than
+                // the value itself (`5e-324*5e-324` is no `5e-324`, one unit from its zero).
+                if let Some(y) = y {
+                    cands.extend(Self::float_literal(y, false, view).map(|l| (l, true)));
+                    cands.extend(recognised(y).map(|r| (r, true)));
+                    cands.extend(Self::members(e).into_iter().map(|m| (m.clone(), true)));
+                }
+                cands.extend(Self::exact_real_expr(&v, &bare).map(|x| (x, true)));
+            }
+        } else {
+            let d = part.float?;
+            let finite_beside = part.range_event
+                && part
+                    .real(ops)
+                    .is_some_and(|(v, _)| Self::real_is_finite(&v));
+            if !d.is_finite() {
+                if fold_tr || !finite_beside {
+                    cands.push((Self::nonfinite_atom(d), false));
+                }
+            } else if fold_tr {
+                cands.extend(Self::float_literal(d, true, view).map(|l| (l, false)));
+                cands.extend(recognised(d).map(|r| (r, false)));
+                cands.extend(Self::members(e).into_iter().map(|m| (m.clone(), false)));
+            }
+            if fold_tr {
+                if let Some((v, dps)) = part.real(ops) {
+                    cands.extend(Self::exact_real_expr(&v, &bare).map(|x| (x, true)));
+                    if let Some(y) = crate::ground::nearest_double(&v, dps) {
+                        if y.to_bits() != d.to_bits() {
+                            cands.extend(recognised(y).map(|r| (r, true)));
+                        }
+                    }
+                }
+            }
         }
-        members
+        cands
             .into_iter()
-            .filter(|m| value(m).is_some_and(|v| v.to_bits() == node.to_bits()))
-            .min_by(|a, b| {
+            .filter(|(c, _)| c != e)
+            .filter(|(c, _)| {
+                self.ground_reading(c, ctx, view)
+                    .is_some_and(|r| crate::ground::admits(mode, part, &r, ops))
+            })
+            .min_by(|(a, ab), (b, bb)| {
                 complexity(a, view)
                     .cmp(&complexity(b, view))
+                    .then_with(|| bb.cmp(ab))
                     .then_with(|| crate::ac::expr::cmp_ex(a, b, view))
             })
-            .cloned()
+            .map(|(c, _)| c)
+    }
+
+    /// The operands of a node: a function's arguments, a bag's members, a power's base and
+    /// exponent.
+    fn members(e: &Ex) -> Vec<&Ex> {
+        match e {
+            Ex::Fun(_, v) | Ex::Add(v) | Ex::Mul(v) => v.iter().collect(),
+            Ex::Pow(b, x) => vec![&**b, &**x],
+            _ => Vec::new(),
+        }
     }
 
     fn ac_fold(
@@ -852,6 +860,35 @@ impl Engine {
         fold_f64: bool,
         class_memo: &RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>>,
     ) -> Option<Ex> {
+        // A NUMBER ON THE RECOGNITION LIST is spelled as its entry, as the input reads it: a
+        // number float64 reads as exactly the double of a short symbolic number, checked by
+        // evaluation (`convert::recognised_double`), is that number (`2/3 - 1e-40` lands on
+        // `0.6666666666666666`, which is `2/3`). So an answer's numbers read back as themselves.
+        if let Ex::Num(r) = e {
+            let d = r.to_f64_nearest();
+            crate::ground::recognise(d)?;
+            let view = self.view(ctx);
+            let bare = Cx::bare(&view);
+            return crate::ac::convert::recognised_double(d, &bare).filter(|x| x != e);
+        }
+        // A LITERAL HELD AS WRITTEN (a numeric leaf: its exact fraction passes the number
+        // domain's 2^1022) is written as its double where that is cheaper, in both modes: float64
+        // reads it as that double, which is also the double nearest its value
+        // (`1.23456789012345678901234567e-305` is `1.2345678901234568e-305`). Only a normal
+        // double: a value below them has no faithful float. The written negative zero stays.
+        if let Ex::Leaf(t) = e {
+            let view = self.view(ctx);
+            let d = view.with_str(*t, |s| {
+                (s != crate::ac::expr::NEG_ZERO && crate::ac::expr::numeric_leaf(s))
+                    .then(|| s.parse::<f64>().ok())
+                    .flatten()
+            })?;
+            if !d.is_normal() {
+                return None;
+            }
+            let written = Self::float_literal(d, true, &view)?;
+            return (complexity(&written, &view) < complexity(e, &view)).then_some(written);
+        }
         let children: Vec<&Ex> = match e {
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().collect(),
             Ex::Pow(b, ex) => vec![b, ex],
@@ -864,144 +901,17 @@ impl Engine {
         } else {
             RuleMode::Default
         };
-        // EXTENDED-REAL GROUND CLASSIFICATION (generalized from bag absorption):
-        // exact arithmetic BY CERTIFICATION, never
-        // by evaluation. A GROUND composite (no variables, no Const anywhere) whose
-        // rigorous interval CLASS is Nan / +inf / -inf folds to that literal: the
-        // class of a ground expression is an exact fact (no finite value is read, so
-        // no rounding can occur -- the fold-unification principle stands), and the
-        // interval layer already carries every operator's domain and limit behavior
-        // (`atanh(e*e)` classifies Nan from atanh's domain; `cosh(-inf)` classifies
-        // +inf). Finite classes NEVER fold here -- finite ground transcendentals are
-        // exactly where rounding lives, and they stay symbolic (mined, symbolically
-        // certified rules carry the exact hits). Uncertifiable cases (Mixed, or a
-        // pole reachable only through symbolic exactness like tan(acos 0)) stay
-        // symbolic; the miner's hiprec channel still mints those rows as rules.
+        // GROUND VALUES FIRST: a fully numeric composite is read by the ground evaluator
+        // and written as the cheapest expression its mode admits for it (`ground_value_fold`),
+        // where that descends. Memoized per call: a ground node that survives is re-visited by
+        // the fold on every pass.
         let is_composite = matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..));
         if is_composite && is_ground(e, &view) {
-            // PER-CALL MEMO: a ground composite that survives (Finite/
-            // Mixed class) is re-visited by the fold on EVERY pass, and interval
-            // classification is the expensive step -- without the memo the arm cost
-            // ~24us of the 74us corpus-walk mean. Keyed on the interned
-            // serialization (per-call ctx, so Tok values are call-consistent); a
-            // ground node's class fold is independent of `lossy`. The None verdict
-            // is memoized too -- the common, repeated case is exactly the miss.
             let flat = to_prefix(e, &bare);
             if let Some(hit) = class_memo.borrow().get(&flat) {
-                // Ground nodes carry no Const, so the Const arm below is a no-op
-                // for them and returning the memoized None early is equivalent.
                 return hit.clone();
             }
-            let strs = self.resolve_seq(&flat, ctx);
-            // EXACT-PARITY OVERRIDE: `pow` with a NEGATIVE
-            // ground base and a beyond-certification INTEGER literal exponent (an
-            // overlay Leaf: the spelling's denoted integer exceeds `i128`, so it is
-            // neither a `Num` nor an interval-certifiable point -- the bracket spans
-            // many integers and the a.e. arms would ASSERT Nan). The spelling itself
-            // carries the exact facts: sign and parity (`integer_literal_parity`).
-            //   * base = pure -inf:  (-inf)^{+int} IS +-inf by parity (extended-real
-            //     exact arithmetic); a negative exponent gives 0 -- FINITE, so it
-            //     REFUSES here (finite classes never fold in this arm).
-            //   * base = certified negative FINITE: the true value is a finite real
-            //     at every integer exponent (astronomic, but finite) -- class
-            //     Finite, so the honest verdict is REFUSE, never the old Nan.
-            //   * anything else (non-integer spelling, positive/mixed/nan base)
-            //     falls through to `value_class` unchanged.
-            // The interval layer keeps its documented continuum convention; this
-            // arm reads the one thing the interval cannot see: the token. (Vs
-            // point-support provenance is the RECORDED design direction if more
-            // point-derived-enclosure consumers appear.)
-            // `permissive`'s values are THE TABLE's real values (`table::ground_value_float`):
-            // its classes (an infinity, NaN where the table gives no value -- `1/0` and
-            // `pow(0, -1)`) are the table's, and a finite value is its float (below).
-            let reading = if lossy {
-                self.table_value_float(&strs)
-            } else {
-                None
-            };
-            let from_table = if lossy {
-                Some(reading.as_ref().and_then(Self::table_class_fold))
-            } else {
-                None
-            };
-            let verdict = match from_table {
-                Some(v) => v,
-                None => match self.h045_exact_pow_class(e, &bare, ctx) {
-                    Some(decided) => decided,
-                    None => match crate::interval::value_class(&strs, &self.operators) {
-                        // A Nan verdict on a composite
-                        // CONTAINING a bracket-poisoned pow exponent (a Num or literal
-                        // spelling whose exact integer the interval can only bracket) is
-                        // untrustworthy -- the pow-node arm above cannot help once the
-                        // poisoned node sits INSIDE the classified composite (the
-                        // interval walk re-brackets it internally and its continuum
-                        // convention asserts Nan for what is truly a parity-decided
-                        // finite/inf value; fuzz-extreme row 1756's div chain). REFUSE
-                        // the fold. Inf verdicts stay trusted: a poisoned pow can only
-                        // leak Nan (never a definite infinity) through the walk, so a
-                        // pure-inf class cannot have come from the bracket.
-                        Some(crate::interval::Class::Nan) => {
-                            if contains_bracket_poisoned_pow(e, &view) {
-                                None
-                            } else {
-                                Some(Ex::NaN)
-                            }
-                        }
-                        Some(crate::interval::Class::PosInf) => Some(Ex::PosInf),
-                        Some(crate::interval::Class::NegInf) => Some(Ex::NegInf),
-                        _ => None,
-                    },
-                },
-            };
-            // THE GROUND FOLD (G): a finite ground node folds to its float, in `f64` and in
-            // `permissive` -- permissive's value the table's (P3), written as a float.
-            let signed = fold_f64 && !lossy;
-            let verdict = match verdict {
-                None if lossy => {
-                    let float = reading.as_ref().and_then(Self::table_float_fold);
-                    let member = self
-                        .member_fold_table(e, reading.as_ref(), ctx, &view)
-                        .filter(|m| float.is_none() || !is_literal(m, &view));
-                    [member, float].into_iter().flatten().min_by(|a, b| {
-                        complexity(a, &view)
-                            .cmp(&complexity(b, &view))
-                            .then_with(|| crate::ac::expr::cmp_ex(a, b, &view))
-                    })
-                }
-                None if fold_f64 => {
-                    // The member of the node's value or its float, whichever is cheaper, the
-                    // canonical order breaking an equal price: `mod(sin(1), 2)` is `sin(1)`. A
-                    // member that is itself a literal is that float written another way, and
-                    // the float is its spelling (`floor(0.99999999999999999)` in `f64` is `1`).
-                    let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
-                    let float = self.ground_fold(&self.resolve_seq(&literal, ctx), signed, &view);
-                    let member = self
-                        .member_fold(e, ctx, &view)
-                        .filter(|m| float.is_none() || !is_literal(m, &view));
-                    [member, float].into_iter().flatten().min_by(|a, b| {
-                        complexity(a, &view)
-                            .cmp(&complexity(b, &view))
-                            .then_with(|| crate::ac::expr::cmp_ex(a, b, &view))
-                    })
-                }
-                // In `f64` an infinity takes the sign float64 gives it, which a signed zero
-                // decides (`1/ceil(-0.5)` is -inf, where the interval layer's one zero reads
-                // +inf): a class the evaluator contradicts does not fold.
-                Some(inf @ (Ex::PosInf | Ex::NegInf)) if signed => {
-                    let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
-                    let y = crate::numeric::evaluate_constant_value(
-                        &self.resolve_seq(&literal, ctx),
-                        &self.operators,
-                    );
-                    match y {
-                        Some(v) if v == f64::INFINITY => Some(Ex::PosInf),
-                        Some(v) if v == f64::NEG_INFINITY => Some(Ex::NegInf),
-                        None => Some(inf),
-                        _ => None,
-                    }
-                }
-                v => v,
-            };
+            let verdict = self.ground_value_fold(e, ctx, &view, lossy, fold_f64);
             class_memo.borrow_mut().insert(flat, verdict.clone());
             return verdict;
         }
@@ -1712,6 +1622,7 @@ impl Engine {
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
+            ground_first: None,
         };
         // The whole call runs in the mode's number domain: the
         // certificates and folds below build numbers too.
@@ -1868,6 +1779,7 @@ impl Engine {
             mode,
             fold_f64: fold_tr,
             sentinels_expired: false,
+            ground_first: None,
         };
         // The whole call runs in the mode's number domain: the
         // certificates and folds below build numbers too.
@@ -1884,6 +1796,12 @@ impl Engine {
         let mut pbare = Cx::bare(&view);
         pbare.mode = mode;
         pbare.fold_f64 = fold_tr;
+        // GROUND FIRST: the parse reads every fully numeric part, as written, by the ground
+        // evaluator before any constructor builds it (`Cx::ground_first`), and a rule step on a
+        // ground subject is taken only where the evaluator admits its result (`ground_step`).
+        let ground_first = |span: &[crate::tokens::Tok]| self.ground_first_atom(span, &ctx, mode);
+        let ground_step = |node: &Ex, next: &Ex| self.ground_step_admits(node, next, &ctx, mode);
+        pbare.ground_first = Some(&ground_first);
         // Except the region certificate in f64 (`Cx::cert_region`): where a sum whose zero set may
         // hold a region is inverted, f64 distributes the inverse at the parse
         // (`inverts_a_signed_zero`), a decision the canon cannot undo, so the parse reads that
@@ -1917,6 +1835,7 @@ impl Engine {
             normal: RefCell::new(FxHashSet::default()),
             explore: true,
             suppressed,
+            ground_step: Some(&ground_step),
         };
 
         let stable_in = |e: &Ex, pb: &Cx, cxx: &Cx| {
@@ -2058,11 +1977,13 @@ impl Engine {
                 mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
+                ground_first: None,
             };
             let mut pbare2 = Cx::bare(&view);
             pbare2.mode = RuleMode::Permissive;
             pbare2.fold_f64 = fold_tr;
             pbare2.sentinels_expired = true;
+            pbare2.ground_first = Some(&ground_first);
             let pass2 = PassCtx {
                 // MODE SELECTION, the phase-2 twin. Phase 2 is reached only under
                 // `wildcard_all`, i.e. only in `Corpus` today -- but it is stated as the
@@ -2076,6 +1997,7 @@ impl Engine {
                 normal: RefCell::new(FxHashSet::default()),
                 explore: true,
                 suppressed,
+                ground_step: Some(&ground_step),
             };
             let stable2 = |e: &Ex| stable_in(e, &pbare2, &cx2);
             current = land_root(canon(current, &cx2), &cx2);
@@ -2239,11 +2161,12 @@ mod tests {
                 "{mode:?}"
             );
         }
-        // f64 reads a literal at its float; permissive's ground value is the table's, where a
-        // literal is the rational it spells
+        // a literal is the rational it spells: permissive's ground value is the table's, and
+        // strict writes the reals' value where float64's kind agrees (float64 floors its 1.0 to
+        // 1, both finite), at an equal price the reals'
         assert_eq!(
             run(&["floor", "0.99999999999999999"], RuleMode::Default),
-            "1"
+            "0"
         );
         assert_eq!(
             run(&["floor", "0.99999999999999999"], RuleMode::Permissive),
@@ -3910,11 +3833,12 @@ mod tests {
         let l = e.ac_simplify(&sentinel, 48, RuleMode::Permissive).unwrap();
         assert_eq!(l, s, "expired sentinel must reach the sound endpoint");
         assert_eq!(l, t(&["sin", "cos", "x2"]));
-        // The mask doctrine survives: a PARTNERED sentinel cancels in phase 1.
+        // A fully numeric `inf/inf` has no value, read before any law reaches it: NaN, which
+        // absorbs the product.
         let mask = t(&["*", "/", "float(\"inf\")", "float(\"inf\")", "x0"]);
         assert_eq!(
             e.ac_simplify(&mask, 48, RuleMode::Permissive).unwrap(),
-            t(&["x0"])
+            t(&["float(\"nan\")"])
         );
         // Coefficient completion: the rational coefficient rides inside the joined
         // base, reciprocated -- the outer Mul unwraps.
@@ -4104,23 +4028,18 @@ mod tests {
             let want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
             assert_eq!(out, want, "healed fold regressed: {src:?}");
         }
-        // Exactness-beyond-instruments: symbolic, never a false literal.
-        // `acosh atanh tanh 1` was once a third specimen here. The
-        // inverse-pair table gives the engine an EXACT route to it -- `atanh(tanh 1)`
-        // collapses to `1` by a judge-CERTIFIED total identity, and `acosh 1 -> 0` is a
-        // certified rule -- so the answer 0 is exact algebra, not an instrument-derived
-        // literal, and the specimen no longer exercises this wall's subject. Removed
-        // rather than re-pinned: the two that remain still have no exact route.
-        for src in [
-            vec!["acosh", "acos", "cos", "1"],
-            vec!["cosh", "tan", "acos", "0"],
+        // Where float64's kind differs from the reals', a fully numeric part keeps float64's
+        // value: `acosh(acos(cos(1)))` is NaN (float64's acos reads just below 1, the reals give
+        // 0, a finite value of another kind), and `cosh(tan(acos(0)))` is +inf (the reals give it
+        // no value, tan(pi/2)); and a part whose float64 value is NaN or an infinity without a
+        // finite value of the reals' beside it is that atom.
+        for (src, want) in [
+            (vec!["acosh", "acos", "cos", "1"], "float(\"nan\")"),
+            (vec!["cosh", "tan", "acos", "0"], "float(\"inf\")"),
         ] {
             let toks: Vec<String> = src.iter().map(|s| s.to_string()).collect();
             let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
-            assert!(
-                out.len() > 1,
-                "exactness-beyond-instruments ground must stay symbolic: {src:?} -> {out:?}"
-            );
+            assert_eq!(out, vec![want.to_string()], "{src:?}");
         }
     }
 

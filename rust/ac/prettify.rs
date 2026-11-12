@@ -2294,7 +2294,9 @@ mod tests {
         assert_eq!(fit(&rat(3, 10), 3, beside).as_deref(), Some("0.3"));
         assert_eq!(fit(&rat(1, 5), 3, beside).as_deref(), Some("0.2"));
         assert_eq!(fit(&rat(1, 20), 3, beside).as_deref(), Some("0.05"));
-        assert_eq!(fit(&rat(1, 200), 1, beside).as_deref(), Some("0.005"));
+        assert_eq!(fit(&rat(3, 200), 2, beside).as_deref(), Some("0.015"));
+        // past the recognition bound the reciprocal codeword can be the cheaper: 1/200 is `/200`
+        assert_eq!(fit(&rat(1, 200), 4, beside).as_deref(), Some("1/200"));
         // significant digits: neither the zeros around them nor an exponent count
         assert_eq!(fit(&rat(2500, 1), 4, alone).as_deref(), Some("2500"));
         assert_eq!(fit(&rat(2500, 1), 3, alone), None);
@@ -2304,8 +2306,8 @@ mod tests {
         );
         assert_eq!(fit(&rat(1, 10_000), 1, alone).as_deref(), Some("1e-4"));
         assert_eq!(
-            fit(&rat(25, 10_000_000), 2, alone).as_deref(),
-            Some("2.5e-6")
+            fit(&rat(35, 10_000_000), 2, alone).as_deref(),
+            Some("3.5e-6")
         );
         assert_eq!(fit(&rat(1_234_567, 1), 6, alone), None);
         // a fraction where it is the cheaper, and beside a factor the reciprocal that spells
@@ -2314,7 +2316,8 @@ mod tests {
         assert_eq!(fit(&rat(5, 21), 3, beside).as_deref(), Some("1/4.2"));
         assert_eq!(fit(&rat(5, 21), 3, alone).as_deref(), Some("5/21"));
         assert_eq!(fit(&rat(10, 37), 3, beside).as_deref(), Some("1/3.7"));
-        assert_eq!(fit(&rat(10, 37), 3, alone), None);
+        // past the recognition bound, alone too: the reciprocal codeword `1/3.7`
+        assert_eq!(fit(&rat(10, 37), 3, alone).as_deref(), Some("1/3.7"));
         assert_eq!(fit(&rat(22, 7), 3, beside).as_deref(), Some("22/7"));
         assert_eq!(fit(&rat(1, 12), 3, beside).as_deref(), Some("1/12"));
         assert_eq!(fit(&rat(1, 12), 2, beside), None);

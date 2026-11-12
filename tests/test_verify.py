@@ -533,8 +533,10 @@ class TestTheRealisationAxis:
             # so the deployed engine answers inf where the rule answers the argument
             (['atanh', 'neg', 'tanh', '!0'], ['neg', '!0'], 'permissive'),
             # realised, NOT true beyond float resolution: float64's tanh(40) is 1.0, the
-            # true one below 1; it holds in f64, and so in permissive
-            (['floor', 'tanh', '40'], ['1'], 'core'),
+            # true one below 1. A fully numeric rule is read on each mode's own value: f64 holds
+            # it, permissive (the table's 0) does not, and a rule strict alone holds is `reject`
+            # (strict's fold writes the part itself, here the reals' 0)
+            (['floor', 'tanh', '40'], ['1'], 'reject'),
             # NEITHER -- constructed, not drawn from the artifact. `sin t -> t` is false on R
             # and not reproduced by f64, unconditionally.
             (['sin', '_0'], ['_0'], 'reject'),
@@ -565,19 +567,21 @@ class TestTheRealisationAxis:
             'core', 'core', 'core', 'permissive', 'reject', 'reject',
             'permissive', 'reject', 'reject']
 
-    def test_a_ground_rule_is_decided_in_float64_exactly(self):
-        """A ground rule has one point, and float64's value there is the realizations' value at
-        the literals' doubles (F2, F3): decided exactly, whatever the reals' reading met on the
-        way (`exp(log(pi))` is pi there, a snap). float64's sin(exp(log(pi))) is not 0.
-        (`sin(np.pi)`: the table reads pi exactly, sin(pi) = 0, and float64's
-        1.2246467991473532e-16 is simply not 0 -- `permissive`, not realised.)"""
+    def test_a_ground_rule_is_decided_on_each_modes_value(self):
+        """A ground rule has one point. f64 holds it where float64 gives both sides one double,
+        or where the reals give both one value and float64's two values are of one kind:
+        float64's sin(exp(log(pi))) is 4.4e-16 and its sin(np.pi) 1.2246467991473532e-16, both
+        finite as 0 is, and the reals give 0 (`exp(log(pi))` is pi there, a snap), so both
+        hold in f64 and in permissive. Where float64's kind differs from the reals', only
+        float64's own double holds: `tan(asin(1)) -> 0` is refused in f64 (1.6e16, the reals
+        no value)."""
         from simplipy.verify._contract import judge_rule
         got = judge_rule(['sin', 'exp', 'log', 'np.pi'], ['0'])
         assert got['verdict'] == 'CERTIFIED'
-        assert got['realised'] is False and got['basis']['f64'] == 'refused'
+        assert got['realised'] is True and got['basis']['f64'] == 'proved'
         exact = judge_rule(['sin', 'np.pi'], ['0'])
-        assert (exact['verdict'], exact['realised'], exact['tier']) == \
-            ('CERTIFIED', False, 'permissive')
+        assert (exact['verdict'], exact['realised'], exact['tier']) == ('CERTIFIED', True, 'core')
+        assert judge_rule(['tan', 'asin', '1'], ['0'])['realised'] is False
 
     def test_the_axis_is_additive_engine_misalign_keeps_its_gate(self):
         """The realisation accumulator runs unconditionally; ENGINE-MISALIGN keeps its
@@ -721,18 +725,18 @@ class TestTheF64RangeStandard:
                                  [['/', '1', 'exp', 'x0'], ['exp', 'neg', 'x0']]],
                                 mode='f64')['is_clean'] is True
 
-    def test_a_ground_rule_has_no_range_standard(self) -> None:
-        """A fully numeric rewrite is bit-exact in f64 (F8): a ground rule's one point is its
-        whole domain, and no true value stands in for float64's there. `rootn(exp(800.5), 2) ->
-        exp(1601/4)`, `exp(800)/exp(800) -> 1` and `log(exp(1000)) -> 1000` hold in the reals,
-        and in permissive, and change float64's value (inf, NaN and inf against a finite
-        double): refused in f64."""
+    def test_a_ground_rule_takes_the_range_standard(self) -> None:
+        """A ground rule's one point is read as a rule's points are: where the reals give both
+        sides one value, float64's kinds are compared with the range standard, so at an overflow
+        the true value stands beside float64's. `rootn(exp(800.5), 2) -> exp(1601/4)`,
+        `exp(800)/exp(800) -> 1` and `log(exp(1000)) -> 1000` hold in the reals, change
+        float64's value (inf, NaN and inf against a finite double) only through an overflow,
+        and hold in both modes."""
         for lhs, rhs in ((['rootn', 'exp', '800.5', '2'], ['exp', '400.25']),
                          (['/', 'exp', '800', 'exp', '800'], ['1']),
                          (['log', 'exp', '1000'], ['1000'])):
             got = judge_rule(lhs, rhs)
-            assert (got['realised'], got['tier'], got['out_of_range']) \
-                == (False, 'permissive', 0), (lhs, rhs, got)
+            assert (got['realised'], got['tier']) == (True, 'core'), (lhs, rhs, got)
 
     def test_at_a_range_event_only_the_two_values_are_accepted(self) -> None:
         """The special case admits the true value beside the evaluator's, nothing else.
@@ -741,7 +745,10 @@ class TestTheF64RangeStandard:
         (`exp(sinh(-10))` is 1e-4783, and f64 computes 0.0)."""
         got = judge_rule(['exp', '1000'], ['5'])
         assert (got['tier'], got['out_of_range']) == ('reject', 0), got
-        assert judge_rule(['exp', '1000'], ['float("inf")'])['tier'] in self.F64
+        # float64's own value holds in f64; permissive's own value of exp(1000) is finite, so
+        # only strict holds it, and the tier of a rule strict alone holds is `reject`
+        got = judge_rule(['exp', '1000'], ['float("inf")'])
+        assert (got['realised'], got['permissive'], got['tier']) == (True, False, 'reject'), got
         got = judge_rule(['exp', 'sinh', '(-10)'], ['0'])
         assert (got['verdict'], got['realised'], got['tier']) == ('KILL', True, 'core'), got
 
@@ -942,12 +949,20 @@ class TestCleanlinessIsPerMode:
         # asin(exp(log(_0)))` and kin, `pow(_0, log(2)) -> pow(2, log(_0))` and kin,
         # `sinh(atanh(atan(_0))) -> tan(asin(atan(_0)))` and kin, `tan atan acosh !0 -> acosh
         # !0`).
+        # A fully numeric rule is read on each mode's own value, and one only f64 holds is
+        # `reject`: f64 115 (-16 that f64 now holds, the reals' value with float64's kind kept,
+        # `tan atan np.e -> np.e` and kin; +28 that only f64 holds: `pow (-1) +-inf -> 1`, which
+        # has no value in the reals, and 26 underflows past what the table reads,
+        # `exp sinh sinh (-10) -> 0` and kin), policy alone 18 (+1, `exp(2)/np.e -> np.e`, now
+        # held by its tier); permissive 65 (+34: those 28, two more such underflows, and four
+        # rules whose left side has a value only in float64, `exp tan asin (-1) -> 0` and
+        # `tanh tan asin 1 -> 1` and kin, at a pole of tan).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 103 and len(policy_only['f64']) == 17
-        assert len(tier['permissive']) == 31 and len(policy_only['permissive']) == 27
+        assert len(tier['f64'] - {126}) == 115 and len(policy_only['f64']) == 18
+        assert len(tier['permissive']) == 65 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {
@@ -1280,8 +1295,8 @@ class TestAnExactZeroIsNotAnUndecayableGap:
         absolute `10^-dps` swamps it and manufactures a decay it does not have, so
         nothing nonzero is floored. These must stay kills in the reals, never true; held in
         f64 where float64's value is the right side's double (`tanh(20)` is 1.0), and within
-        float resolution in permissive (`tanh(-19)` is -0.9999999999999999 in float64, a double
-        a fully numeric rewrite may not change)."""
+        float resolution in permissive (`tanh(-19)` is -0.9999999999999999 in float64, another
+        double, and the reals' value is not -1, so f64 refuses it)."""
         from simplipy.verify._contract import judge_rule
         for lhs, rhs, tier in ((['exp', 'sinh', '(-10)'], ['0'], 'core'),
                                (['exp', 'sinh', '(-8)'], ['0'], 'core'),
@@ -1318,17 +1333,21 @@ class TestABoundedFunctionNeverAttainsItsLimit:
         """These are rows of the shipped sets. They are f64-REALISED (the deployed
         `tanh(cosh(-10))` is exactly 1.0) and within float resolution of the true value, so
         conviction keeps them in a tier f64 licenses -- the file they ship in. The gate
-        confirms them instead of abstaining."""
+        confirms them instead of abstaining. Permissive reads each on its own value: the
+        bounded roots at their bound, within float resolution; `exp(sinh(-50))` (e^-2.6e21)
+        and `1/cosh(exp(10))` (e^-22026) are past what the table reads, so permissive reaches
+        no answer and only strict holds them: `reject` (strict's fold writes both as 0)."""
         from simplipy.verify._contract import judge_rule
-        for lhs, rhs in ((['tanh', 'cosh', '(-10)'], ['1']),
-                         (['tanh', 'cosh', 'cosh', '(-3)'], ['1']),
-                         (['tanh', 'exp', '10'], ['1']),
-                         (['tanh', '400'], ['1']),
-                         (['exp', 'sinh', '(-50)'], ['0']),
-                         (['inv', 'cosh', 'exp', '10'], ['0'])):
+        for lhs, rhs, tier in ((['tanh', 'cosh', '(-10)'], ['1'], 'core'),
+                               (['tanh', 'cosh', 'cosh', '(-3)'], ['1'], 'core'),
+                               (['tanh', 'exp', '10'], ['1'], 'core'),
+                               (['tanh', '400'], ['1'], 'core'),
+                               (['exp', 'sinh', '(-50)'], ['0'], 'reject'),
+                               (['inv', 'cosh', 'exp', '10'], ['0'], 'reject')):
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') == 'KILL', (lhs, got)
-            assert got.get('tier') == 'core', (lhs, got)
+            assert got.get('realised') is True, (lhs, got)
+            assert got.get('tier') == tier, (lhs, got)
 
     def test_an_infinite_argument_does_attain_the_limit(self) -> None:
         """The condition that keeps this sound. `tanh(inf)` IS exactly 1 and `exp(-inf)`

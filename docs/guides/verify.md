@@ -101,7 +101,8 @@ any subexpression, so its own question is asked at the `_` sort: no disagreement
 point is excused there. **Permissive includes f64**: a rule holds in `permissive` where it holds
 in `f64` or by permissive's own criterion, and a step permissive takes by an f64 rule promises
 what `f64` promises (float64's values agree wherever the left side has one). So
-`floor(tanh(40)) -> 1`, float64's own value and off the reals, and `ceil(abs(cos(x0))) -> 1`,
+`floor(tanh(40 + abs(x0))) -> 1`, float64's own value and off the reals, and
+`ceil(abs(cos(x0))) -> 1`,
 false at pi/2 in the reals and true at every double, hold in both modes; `ceil(x0) - floor(x0)
 -> 1` holds in neither. A verdict carries each mode's reading: `realised` for `f64` (from its two
 readings of float64, `realised_f6` and `realised_kinds`, and the reals' outcome) and `permissive`
@@ -215,14 +216,18 @@ The exact routes (`verdict['exact']`):
 - **A left side that is one literal everywhere.** Where the interval layer encloses the left
   side, over every finite binding of its variables and constants, by the right side's literal
   and nothing else, the rule is proved (`0*exp(x0) -> 0`).
-- **A rule without variables or constants** has one point. Where the table's values of both
-  sides are exact (a rational, a rational multiple of pi, an infinity, no value) the comparison
-  is exact (`cos(pi) -> -1`); float64's values are always exact. A ground rule has no tolerance in
-  any mode: `log(-1) -> 0` is refused in `permissive` too, where a fully numeric expression
-  takes its table value. In `f64` a fully numeric rewrite is bit-exact, so the rule holds only
-  where its two sides are the same double, the sign of a zero included, and no range standard
-  applies: `exp(sin(pi)) -> 1` is refused there (the left side is 1.0000000000000002), and held
-  in `permissive`, whose values are the reals'.
+- **A rule without variables or constants** has one point, read by the ground evaluator the
+  engine's fold and `verify-mine` read too. In `f64` it holds where its two sides are the same
+  double, or the reals give them one value and float64's two values agree in kind (both finite,
+  two zeros of one sign, the same infinity, both undefined, or a range event's true value):
+  `exp(sin(pi)) -> 1` holds (the left side is 1.0000000000000002), `cos(pi) -> -1` and
+  `floor(tanh(100)) -> 0` too, while `sin(-0.0) -> 0` does not (the zero's sign). In
+  `permissive` it holds where the table's two values agree at float resolution, each read to as
+  many digits as it needs: `log(-1) -> 0` is refused, the left side having no value. Each mode
+  reads its own value of a fully numeric expression, so here permissive does not include
+  `f64`: `0*tan(asin(1)) -> 0` holds in `f64` (float64's 1.633e16 times 0) and not in
+  `permissive` (tan(pi/2) has no value), and its tier is `reject`, since `f64`'s fold writes
+  every fully numeric part as the cheapest value it admits and no file needs such a rule.
 - **`L(C) -> C` without variables** holds in every mode: the witness is the left side's own
   value wherever it is finite (`acos(C) -> C`).
 

@@ -327,57 +327,32 @@ def whole_domain_literal(lhs_spelled, tr, value_set, literal_f64):
     return out if any(out[m] for m in ('reals', 'permissive', 'f64')) else None
 
 
-#: The table's exact value kinds (`table::val_spec`); `m` is an approximation.
-_EXACT_KINDS = frozenset({'q', 'pi', 'inf', 'nan'})
-
-
-def _exact_value(spec):
-    """A table spec as a comparable exact value: `('q', Fraction)`, `('pi', Fraction)` (a multiple
-    of pi), `('inf', sign)`, `('nan',)`; zero as `('q', 0)` whatever its kind."""
-    kind, a, b = spec
-    if kind == 'nan':
-        return ('nan',)
-    if kind == 'inf':
-        return ('inf', a)
-    q = Fraction(int(a), int(b))
-    return ('q', q) if kind == 'q' or q == 0 else ('pi', q)
-
-
-def _double(v):
-    """The double nearest to an exact value that is no multiple of pi (`as_double`)."""
-    if v[0] == 'nan':
-        return math.nan
-    if v[0] == 'inf':
-        return math.inf if v[1] == '+' else -math.inf
-    return as_double(v[1])
-
-
-def ground(tl, tr, real_spec, f64_value, f64_agree, f64_same):
+def ground(tl, tr, verdict):
     """The ground-point route: `None` where the rule has a variable or a constant, else
-    `{'route', 'reals', 'permissive', 'f64'}`. `real_spec(tree)` is the table's `(spec,
-    snapped)` at the working precision, or None where the table cannot read it;
-    `f64_value(tree, in_range)` is float64's value. The reals and permissive are decided where
-    both table values are exact and no snap read them (permissive where they round to doubles
-    exactly: no multiple of pi); f64 always, by `f64_same`: a fully numeric rewrite is bit-exact
-    (F8), so the rule holds in f64 exactly where its two sides are the same double, the sign of a
-    zero included, with no range standard (`exp(sin(np.pi)) -> 1` is refused, the left side
-    being 1.0000000000000002)."""
+    `{'route', 'reals', 'permissive', 'f64', 'readings'}`. A fully numeric rule has one point,
+    and the core's ground evaluator reads it (`verdict()`, `_core.ground_rule_verdict`: the one
+    definition the engine's parse and fold and verify-mine's gate read). It holds in strict where
+    float64 gives both sides one double (a), or the reals give both one value and float64's two
+    values agree in kind (b): `exp(sin(np.pi)) -> 1` and `0.1 + 0.2 -> 0.3` hold by (b),
+    `floor(tanh(100)) -> 1` by (a). It holds in permissive where the table's two values agree
+    at float resolution, permissive's own value of a fully numeric part:
+    `0 * tan(asin(1)) -> 0` holds in strict and not in permissive, whose left side has no value.
+    `readings` keeps strict's (a) and (b) apart; every answer is None where a side cannot be
+    read."""
     slots = set()
     for t in (tl, tr):
         _ops_and_slots(t, set(), slots)
     if slots:
         return None
-    out = {'route': 'ground', 'reals': None, 'permissive': None, 'f64': None}
-    with np.errstate(all='ignore'):
-        dl, dr = float(f64_value(tl, None)), float(f64_value(tr, None))
-    out['f64'] = 'proved' if f64_same(dl, dr) else 'refuted'
-    read = [real_spec(t) for t in (tl, tr)]
-    if all(r is not None and not r[1] and r[0][0] in _EXACT_KINDS for r in read):
-        lv, rv = (_exact_value(r[0]) for r in read)
-        out['reals'] = 'proved' if lv == rv else 'refuted'
-        dl, dr = (_double(v) if v[0] != 'pi' else None for v in (lv, rv))
-        if None not in (dl, dr):
-            out['permissive'] = 'proved' if f64_agree(dl, dr) == 'eq' else 'refuted'
+    out = {'route': 'ground', 'reals': None, 'permissive': None, 'f64': None, 'readings': None}
+    v = verdict()
+    if v is None:
+        return out
+    same_double, same_real_in_kind, reals, permissive = v
+    out['f64'] = 'proved' if same_double or same_real_in_kind else 'refuted'
+    out['permissive'] = 'proved' if permissive else 'refuted'
+    out['reals'] = None if reals is None else ('proved' if reals else 'refuted')
+    out['readings'] = {'same_double': same_double, 'same_real_in_kind': same_real_in_kind}
     return out
 
 

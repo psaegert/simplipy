@@ -142,8 +142,8 @@ root of `200811218.03870487`). Its literals are exact and rounded once, where
 they land: a literal that becomes a constant term, a coefficient, a function's argument or a
 power's operand beside a non-literal moves to whichever of the two floats around it prints
 shorter, when that spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
-`0.07665412684716773*x1`, and `4/3*3.141592653589793` is `4.188790204786391`, not the nearest
-float's `4.1887902047863905`). Its search has one move of its own, joining reciprocal sums
+`0.07665412684716773*x1`, and `4/(2.7167019109484434*3.1415926535897)` is `0.4686710527952964`,
+not the nearest float's `0.46867105279529636`, which `f64` writes). Its search has one move of its own, joining reciprocal sums
 (`c/(A*B)` is held as `c * A^-1 * B^-1`, and the move proposes `(A*B)^-1` and `(A/c)^-1` with the
 inside distributed). So, as in every mode, its answer never prices above the input or above its
 answer at a smaller `effort`, and a second call returns it unchanged.
@@ -211,28 +211,50 @@ reals at float resolution and its own simplifications.
 
 ### How numbers are printed
 
-Every literal is its exact rational value: `3.141592653589793` is 3141592653589793 / 10^15,
-and folding is exact arithmetic. A value whose denominator has a prime factor other than 2
-and 5 has no finite decimal, so `1/(2*3.141592653589793)` is the fraction
-500000000000000 / 3141592653589793. A decimal is just as exact as an integer, though, so
-the infix answer prints such a value with its numerator's factors 2 and 5 moved into the
-denominator, which then terminates. That spelling needs a factor 2 or 5 in the numerator and
-is used where it is shorter than the two integers, outside exponents: short fractions such as
-`1/3` keep theirs, and an exponent keeps the fraction
-(`x0^(500000000000000/3141592653589793)`). It is the same value either way, so the state,
+Every literal is its exact rational value (`0.1` is 1/10), and arithmetic between numbers is
+exact. A number is then written as the cheapest value its mode admits, and costs what its
+written spelling costs: `f64` writes float64's double where that is cheaper than the exact
+value, and the exact value where it is not; `permissive` writes the exact value or one of the
+two doubles around it.
+
+```python
+engine.simplify('x0*0.30000000000000004*0.30000000000000004')  # -> '0.09000000000000002*x0'
+engine.simplify('0.1 + 0.2')                                   # -> '0.3'
+```
+
+A literal that float64 reads as exactly the double of a short symbolic number is that number:
+`k*pi/m` and `k*e/m` (k and m coprime, m at most 24), a fraction `k/m` with no finite decimal
+(m at most 24, at most 100 in size), `log(2)`, `log(3)`, `log(10)`, `sqrt(2)`, `sqrt(3)` and
+`sqrt(5)`, with either sign. The same list spells an answer's numbers, so an answer reads back
+as itself:
+
+```python
+engine.simplify('6.283185307179586*x0')       # -> '2*pi*x0'
+engine.simplify('0.3333333333333333*x0')      # -> 'x0/3'
+engine.simplify('x0 + 0.6931471805599453')    # -> 'x0 + log(2)'
+engine.simplify('1/(2*3.141592653589793)')    # -> '1/2/pi'
+```
+
+A value whose denominator has a prime factor other than 2 and 5 has no finite decimal, so
+`1/(2*3141.592653)` is the fraction 500000 / 3141592653, which is cheaper than its double. A
+decimal is just as exact as an integer, though, so the infix answer prints such a value with
+its numerator's factors 2 and 5 moved into the denominator, which then terminates. That
+spelling needs a factor 2 or 5 in the numerator and is used where it is shorter than the two
+integers, outside exponents: short fractions such as `1/3` keep theirs, and an exponent keeps
+the fraction (`x0^(500000/3141592653)`). It is the same value either way, so the state,
 `complexity()` and every rewrite are unaffected:
 
 ```python
-engine.simplify('1/(2*3.141592653589793)')               # -> '1/6.283185307179586'
-engine.simplify('3*x0/(20*3.141592653589793)')           # -> '3*x0/62.83185307179586'
-engine.simplify('x0*rootn(x1/(2*3.141592653589793), 2)') # -> 'x0*rootn(x1/6.283185307179586, 2)'
-engine.simplify('5/8')                                   # -> '5/8'
+engine.simplify('1/(2*3141.592653)')                # -> '1/6283.185306'
+engine.simplify('7*x0/(20*3141.592653)')            # -> '7*x0/62831.85306'
+engine.simplify('x0*rootn(x1/(2*3141.592653), 2)')  # -> 'x0*rootn(x1/6283.185306, 2)'
+engine.simplify('5/8')                              # -> '5/8'
 ```
 
-The token answers keep the fraction (explicit `['/', '500000000000000', '3141592653589793']`,
-tagged `['<mul>', '500000000000000', '<div>', '3141592653589793', '</mul>']`): the engine prints
-states as tokens and reads them back, and callers mask and compare token answers, so one fixed
-spelling serves them.
+The token answers keep the fraction (explicit `['/', '500000', '3141592653']`, tagged
+`['<mul>', '500000', '<div>', '3141592653', '</mul>']`): the engine prints states as tokens and
+reads them back, and callers mask and compare token answers, so one fixed spelling serves
+them.
 
 Each mode names one **distinct, complete** rule set — `rules_f64.json` /
 `rules_permissive.json` (a config may name the f64 file `rules.json`, as artifacts before 0.15

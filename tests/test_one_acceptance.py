@@ -130,14 +130,15 @@ class TestJudgePair:
         """Stage 2 used to re-run `find_rule`, whose ground short-circuit answered with the
         source's own f64 evaluation (`tan atan 7` -> `7.000000000000001`) instead of judging
         the target, so every inexactly-evaluating ground identity was refused. Measured on
-        the acj-3-2c reference: 46 such picks. The pair judgment accepts the true one in
-        permissive, whose values are the reals'; in f64 a fully numeric rewrite is bit-exact,
-        and `7.000000000000001 -> 7` changes the double."""
+        the acj-3-2c reference: 46 such picks. The pair judgment accepts the true one in both
+        modes: permissive's values are the reals', and f64 reads a fully numeric rewrite by the
+        reals' value where float64's kind agrees (both finite here), though float64's double
+        is 7.000000000000001."""
         core = eng._core
         assert core.evaluate_constant_subtree(['tan', 'atan', '7']) != '7'
         assert _judge(eng, rows[1], ('tan', 'atan', '7'), ('7',), mode='permissive') \
             == (True, 'accepted')
-        assert _judge(eng, rows[1], ('tan', 'atan', '7'), ('7',)) == (False, 'uncertified')
+        assert _judge(eng, rows[1], ('tan', 'atan', '7'), ('7',)) == (True, 'accepted')
 
 
 class TestZeroIsZero:
@@ -156,9 +157,10 @@ class TestZeroIsZero:
         assert _judge(eng, rows[1], ('exp', 'sinh', '(-10)'), ('0',)) == (True, 'accepted')
 
     def test_an_exact_zero_is_zero_at_high_precision(self, eng, rows):
-        # sin(pi) is 0 exactly; f64 computes 1.2e-16 from the rounded pi.
+        # sin(pi) is 0 exactly; float64 computes 1.2e-16 from the rounded pi, a finite value as
+        # 0 is, so f64 reads the reals' value too
         pair = (('sin', 'np.pi'), ('0',))
-        assert _judge(eng, rows[1], *pair, mode='default') == (False, 'uncertified')
+        assert _judge(eng, rows[1], *pair, mode='default') == (True, 'accepted')
         assert _judge(eng, rows[1], *pair, mode='permissive') == (True, 'accepted')
 
 

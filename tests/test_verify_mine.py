@@ -391,21 +391,21 @@ def test_the_covers_f64_gate(tmp_path, mine) -> None:
     assert [e[:2] for e in found['covers_f64']['examples']] == [planted]
 
 
-def test_the_ground_bit_exact_gate(tmp_path, mine) -> None:
-    """A fully numeric rewrite is bit-exact in f64: an f64 file's ground rule must leave the
-    double unchanged, read off the realizations. `exp(log(3)) -> 3` is 3.0000000000000004
-    against 3.0 and fails; `log(exp(2)) -> 2` is the same double and passes. A permissive file
-    has no such gate (its ground values are the reals')."""
-    off, on = (('exp', 'log', '3'), ('3',)), (('log', 'exp', '2'), ('2',))
-    path = _plant(tmp_path, mine, 'f64', [off, on])
-    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'ground_bit_exact')
-    assert not gate['ok'] and gate['examples'] == [
-        [list(off[0]), list(off[1]), '3.0000000000000004', '3.0']], gate
-    clean = verify_mine(str(mine / FILES['f64']), 'f64', _OPERATORS, judge=core_judge)
-    assert _gate(clean, 'ground_bit_exact')['ok'], clean['gates']
-    path = _plant(tmp_path, mine, 'permissive', [off, on])
-    assert 'ground_bit_exact' not in verify_mine(path, 'permissive', _OPERATORS,
-                                                 judge=core_judge)['gates']
+def test_the_ground_exact_gate(tmp_path, mine) -> None:
+    """A file's ground rule holds in its mode where the core's ground evaluator admits it, the one
+    the engine's fold and the judge read. `exp(log(3)) -> 3` holds in f64 although float64 gives
+    3.0000000000000004 against 3.0: the reals give both sides 3, and both doubles are finite;
+    `log(exp(2)) -> 2` is one double; `exp(log(3)) -> 2` holds in no mode. In permissive the
+    table decides, at float resolution."""
+    held, same, false = ((('exp', 'log', '3'), ('3',)), (('log', 'exp', '2'), ('2',)),
+                         (('exp', 'log', '3'), ('2',)))
+    for mode in ('f64', 'permissive'):
+        path = _plant(tmp_path, mine, mode, [held, same, false])
+        gate = _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'ground_exact')
+        assert not gate['ok'] and [e[:2] for e in gate['examples']] == [
+            [list(false[0]), list(false[1])]], (mode, gate)
+        clean = verify_mine(str(mine / FILES[mode]), mode, _OPERATORS, judge=core_judge)
+        assert _gate(clean, 'ground_exact')['ok'], clean['gates']
 
 
 def _acj_operators():

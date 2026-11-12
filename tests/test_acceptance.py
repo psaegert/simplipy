@@ -67,14 +67,15 @@ def acj() -> SimpliPyEngine:
                           rules_permissive=[])
 
 
-@pytest.mark.parametrize('src, hint, mode, policy', [
+@pytest.mark.parametrize('src, hint, mode, policy, mint', [
     # below the mark in permissive's reading (the inverse pair cancels), not ordered below as
     # written: the load's ordering refuses it
-    ('abs x0', 'acosh cosh x0', 'permissive', 'ordering'),
-    # a ground left side without a value has no evidence (4.1)
-    ('cos acos acos -1', 'float("nan")', 'permissive', 'evidence'),
+    ('abs x0', 'acosh cosh x0', 'permissive', 'ordering', 'ordering'),
+    # a ground left side without a value has no evidence (4.1); the engine reads a fully numeric
+    # source's value first, so the mint meets it as an atom (NaN) and owes it no rule
+    ('cos acos acos -1', 'float("nan")', 'permissive', 'evidence', 'atomic_mark'),
 ])
-def test_the_mint_refuses_what_the_licence_refuses(acj, src, hint, mode, policy) -> None:
+def test_the_mint_refuses_what_the_licence_refuses(acj, src, hint, mode, policy, mint) -> None:
     """The mint's acceptance reads the licence's policies on the pick's written pattern -- the
     load's predicate and evidence -- so a pick the licence refuses is never proposed."""
     import numpy as np
@@ -83,7 +84,7 @@ def test_the_mint_refuses_what_the_licence_refuses(acj, src, hint, mode, policy)
     lib = acj._core.build_candidate_library([['x0']], ['x0'], x.flatten().tolist(), x.shape[0],
                                             rule_mode=mode)
     ok, why = acj._core.judge_hint(src.split(), hint.split(), lib, rule_mode=mode)
-    assert (ok, why) == (False, policy)
+    assert (ok, why) == (False, mint)
     pattern = [t.replace('x0', '?0') for t in src.split()]
     target = [t.replace('x0', '?0') for t in hint.split()]
     got = licensed(pattern, target, 'f64' if mode == 'default' else mode, acj)

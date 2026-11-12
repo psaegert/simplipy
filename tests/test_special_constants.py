@@ -85,12 +85,11 @@ class TestGroundFoldLicence:
         require_mode_sets()
         check(eng, ['cos', 'np.e'], ['cos', 'np.e'])
         check(eng, ['exp', 'np.pi'], ['exp', 'np.pi'])
-        # `sin(np.pi) -> 0` is exactly true and NOT f64-realised: f64 computes
-        # 1.2246467991473532e-16 there, so the rewrite changes what the deployed
-        # evaluator returns. It holds in permissive alone, declined by the default mode, which
-        # is the point of the split.
+        # `sin(np.pi) -> 0` is exactly true; float64 computes 1.2246467991473532e-16 there, a
+        # finite value as 0 is, so f64 writes the reals' value too: the cheaper spelling the
+        # fold may write in both modes.
         from simplipy import Mode
-        assert eng.simplify(['sin', 'np.pi'], mode=Mode.f64) == ['sin', 'np.pi']
+        assert eng.simplify(['sin', 'np.pi'], mode=Mode.f64) == ['0']
         assert eng.simplify(['sin', 'np.pi'], mode=Mode.permissive) == ['0']
 
     def test_pow_with_special_stays(self, eng):
@@ -210,15 +209,15 @@ class TestExactCollapsesMint:
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
         assert mined.simplify(['cos', 'np.pi']) == ['-1']
         assert mined.simplify(['log', 'np.e']) == ['1']
-        # `sin(np.pi)` is the one of the three f64 does not realise (f64 computes
-        # 1.2246467991473532e-16), so the f64 mine leaves it out: the mined engine serves the
-        # collapse in `permissive` and keeps f64's own value in the default mode.
+        # `sin(np.pi)`: float64 computes 1.2246467991473532e-16, a finite value as 0 is, so
+        # both modes write the reals' 0 by their own ground values (no mined rule needed), and
+        # the judge files the ground rule in both modes.
         # Where the ROUTED artifact serves it is pinned in `TestGroundFoldLicence` against
         # the shipped cell.
         assert mined.simplify(['sin', 'np.pi'], mode='permissive') == ['0']
-        assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
+        assert mined.simplify(['sin', 'np.pi']) == ['0']
         from simplipy.verify._contract import judge_rule
-        assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'permissive'
+        assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'core'
 
     def test_ground_rules_bypass_sort_promotion(self, eng):
         # The promotion sorts classify WILDCARD instantiation domains; a ground rule has

@@ -638,7 +638,7 @@ pub const NEW_HEADS: [&str; 13] = [
 /// The heads whose value at a zero operand depends on the zero's sign (F7): `1/(-0)` is -inf,
 /// `atan2(-0, -1)` is -pi, `pow(-0, -3)` and `rootn(-0, -3)` are -inf. Where a rule holds one,
 /// the deployed bar tells the two zeros apart.
-const ZERO_SIGN_READERS: [&str; 5] = ["/", "inv", "pow", "rootn", "atan2"];
+pub(crate) const ZERO_SIGN_READERS: [&str; 5] = ["/", "inv", "pow", "rootn", "atan2"];
 
 /// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
 /// constant cannot be judged bit for bit beside them.
@@ -1111,9 +1111,13 @@ fn deployed_exact_over(
         .iter()
         .chain(rhs)
         .any(|t| ops.arity_of(t).is_some() && ZERO_SIGN_READERS.contains(&t.as_str()));
-    // a pair without variables is a fully numeric rewrite, bit-exact in f64 (F8): the same
-    // double, a zero's sign included, and no range standard (`table::f64_same`)
+    // a pair without variables is a fully numeric rewrite, read by the ground evaluator
+    // (`ground::rule_verdict`): float64's reading is the same double, a zero's sign included; the
+    // reading in kind is the same real value with float64's kinds kept
     let ground = used.is_empty();
+    let ground_kind = ground
+        && agreement == Agreement::Kind
+        && crate::ground::rule_verdict(lhs, rhs, ops).is_some_and(|v| v.same_real_in_kind);
     // do the reals give both sides a value at a probe's doubles (`kind_holds`)?
     let valued = |row: &[f64]| {
         let cols1: Vec<Vec<f64>> = row.iter().map(|&x| vec![x]).collect();
@@ -1121,7 +1125,7 @@ fn deployed_exact_over(
     };
     let same = |a: f64, b: f64, row: &[f64]| {
         if ground {
-            return crate::table::f64_same(a, b);
+            return crate::table::f64_same(a, b) || ground_kind;
         }
         if a == 0.0 && b == 0.0 {
             return !reads_zero_sign || a.to_bits() == b.to_bits();

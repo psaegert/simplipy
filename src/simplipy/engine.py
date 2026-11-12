@@ -2348,16 +2348,15 @@ class SimpliPyEngine:
         free and an exponent -1 is division, literals pay their description length on the
         exact value, symbols pay their entry of the symbol table.
 
-        A literal costs at most what its float costs: the evaluator reads every literal as
-        its nearest float64, so a literal's price is capped at the price of that float's
-        shortest decimal (at most 17 significant digits). A number carrying more digits
-        than its float needs therefore costs that decimal, while :meth:`simplify` keeps and
-        prints the exact value. The cap holds however a form holds a literal: ``f64`` and
-        ``permissive`` admit a number only where its numerator and denominator are at most
-        2^1022, and hold any other value in pieces (``1.2345678901234567e-305`` as written,
-        and its quotient by ``9.876543210987654e-10`` as that literal times a number), which
-        cost at most what the exact number is priced at. A literal beyond the 1,100-bit
-        cap keeps its own price. The price is an integer in milli-bits.
+        Every number is priced as it is written: a number carrying more digits than its
+        float needs costs those digits, and :meth:`simplify` writes the cheaper value its
+        mode admits (``strict``: float64's double; ``permissive``: the double nearest the
+        value). ``f64`` and ``permissive`` admit a number only where its numerator and
+        denominator are at most 2^1022, and hold any other value in pieces
+        (``1.2345678901234567e-305`` as written, and its quotient by ``9.876543210987654e-10``
+        as that literal times a number), which cost at most what the exact number is priced
+        at. A literal beyond the 1,100-bit cap keeps its own price. The price is an integer
+        in milli-bits.
         """
         _, tokens = self._read_input(expression)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
@@ -2411,14 +2410,14 @@ class SimpliPyEngine:
         # (the numeric-string pricer -- its clamp once stayed
         # at two bits after the floor moved and NO probe noticed), and `<constant>`.
         ('1000',), ('1/2',), ('355/113',), ('0.2',), ('1e-40',), ('<constant>',),
-        # the FLOAT CAP: a literal costs at most the shortest decimal of the float64
-        # it reads as, so a decimal carrying more than float precision costs that decimal. Every
-        # probe above is its own float's shortest decimal (or cheaper), so none of them moved.
+        # a LONG LITERAL, which the f64 reading writes as float64's double of it (cheaper than
+        # its 64 digits): the probe moves with the reading of numbers
         ('0.0766541268471677307861497420516056347394916180597539647375669841',),
-        # ... on every path: a value f64's number domain holds in pieces (here a literal whose
-        # denominator passes 2^1022 times a number) costs at most what its float costs, as the
-        # one exact number does.
+        # a value f64's number domain holds in pieces (here a literal whose denominator passes
+        # 2^1022 times the exact reciprocal of a number), each piece priced as its number
         ('/', '1.2345678901234567e-305', '9.876543210987654e-10'),
+        # the RECIPROCAL codeword: 1/c, c a terminating decimal, priced as the divisor `/c`
+        ('/', '1', '0.225147640565301'),
         # the SYMBOL TABLE, one probe per entry. Without these, six of the nine entries
         # were invisible to the fingerprint: changing `Pow` from 4 bits to 3 moved no probe.
         ('x0',),                    # leaf

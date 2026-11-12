@@ -1,9 +1,10 @@
 """Divisor-side coefficient spelling -- a user-facing aesthetics mechanism, EMISSION ONLY.
 
 Every f64-born literal is a dyadic rational with a finite decimal spelling, but its
-exact reciprocal generally is not: canon of ``x0 / 0.3333333333333333`` takes the exact
-reciprocal coefficient 10^16/3333333333333333 (a genuine descent -- one node fewer),
-whose only exact one-token spelling is that monster fraction. The emitters therefore
+exact reciprocal generally is not: canon of ``x0 / 0.333`` takes the exact reciprocal
+coefficient 1000/333 (a genuine descent -- one node fewer), whose only exact one-token
+spelling is that fraction. A long divisor keeps its spelling too: the measure prices a
+reciprocal whose divisor is a terminating decimal as that divisor (`x1/0.225147640565301`). The emitters therefore
 spell a Mul coefficient on WHICHEVER SIDE has the shorter exact spelling: a coefficient
 with NO exact decimal whose reciprocal spells strictly shorter as one literal token
 moves behind the bag's ``<div>`` (tagged) / the ``/`` chain (explicit) as the
@@ -56,12 +57,13 @@ def check(eng, tokens, expected):
 
 class TestDivisorSideSpelling:
     def test_the_owner_example(self, eng):
-        # x0 / 0.3333333333333333: the reciprocal coefficient has no finite decimal;
-        # the original divisor is the exact value's shortest spelling.
-        check(eng, ['/', 'x0', '0.3333333333333333'],
-              ['<mul>', 'x0', '<div>', '0.3333333333333333', '</mul>'])
-        check(eng, ['/', 'x0', '0.3333333333333333'],
-              ['/', 'x0', '0.3333333333333333'])
+        # x0 / 0.333: the reciprocal coefficient 1000/333 has no finite decimal (and is cheaper
+        # exact than as its float); the original divisor is the exact value's shortest spelling.
+        check(eng, ['/', 'x0', '0.333'], ['<mul>', 'x0', '<div>', '0.333', '</mul>'])
+        check(eng, ['/', 'x0', '0.333'], ['/', 'x0', '0.333'])
+        # The owner's example was x0 / 0.3333333333333333: float64 reads that literal as exactly
+        # 1/3's double, so it is read as 1/3, and the answer is 3*x0.
+        check(eng, ['/', 'x0', '0.3333333333333333'], ['*', '3', 'x0'])
 
     def test_unit_fraction_coefficient(self, eng):
         # (1/3)*x0 == x0/3: the integer reciprocal is the shorter exact spelling
@@ -95,8 +97,7 @@ class TestDivisorSideSpelling:
         # may absorb it into a Const-bearing sum (a different parking than the state's
         # outer coefficient). The pure sign splits out as a `-1` bag literal; the den
         # token stays positive.
-        check(eng, ['/', 'x0', '-0.3333333333333333'],
-              ['<mul>', '-1', 'x0', '<div>', '0.3333333333333333', '</mul>'])
+        check(eng, ['/', 'x0', '-0.333'], ['<mul>', '-1', 'x0', '<div>', '0.333', '</mul>'])
 
     def test_coefficient_split_fires_without_plain_factor(self, eng):
         # The spelling law: the split is UNCONDITIONAL for
@@ -116,11 +117,28 @@ class TestDivisorSideSpelling:
         # TestLossyReciprocalRejoinProjection::test_certified_pair_stays_distributed).
 
     def test_joins_existing_divisor_section(self, eng):
-        # x0 / (0.3333333333333333 * x1): reciprocal token leads the den members.
-        check(eng, ['/', 'x0', '*', '0.3333333333333333', 'x1'],
-              ['<mul>', 'x0', '<div>', '0.3333333333333333', 'x1', '</mul>'])
+        # x0 / (0.333 * x1): reciprocal token leads the den members.
+        check(eng, ['/', 'x0', '*', '0.333', 'x1'],
+              ['<mul>', 'x0', '<div>', '0.333', 'x1', '</mul>'])
 
     def test_masking_sees_the_divisor_side_coefficient(self, eng):
-        out = eng.simplify(eng.to_tagged(['/', 'x0', '0.3333333333333333']))
+        out = eng.simplify(eng.to_tagged(['/', 'x0', '0.333']))
         sites = masking.literal_sites(out, eng)
-        assert sites == [(3, '0.3333333333333333', masking.Role.COEFFICIENT)]
+        assert sites == [(3, '0.333', masking.Role.COEFFICIENT)]
+
+
+@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('divisor', ['6.674e-11', '1.380649e-23', '8.854187817e-12',
+                                     '0.225147640565301', '3.7', '9.81'])
+def test_a_reciprocal_is_priced_as_its_divisor(eng, mode, divisor):
+    """The reciprocal of a terminating decimal is priced as that divisor (the measure's
+    reciprocal codeword) and printed as it was priced: `x1/c` stays as written in both modes and
+    in every dialect, at the price of its print, and `1/c` alone is written `/ 1 c` (or `c`'s
+    reciprocal as one literal where that is cheaper)."""
+    for src in (['/', 'x1', divisor], ['<mul>', 'x1', '<div>', divisor, '</mul>']):
+        out = list(eng.simplify(list(src), mode=mode))
+        assert out == src, (src, out)
+        assert eng.complexity(out, mode=mode) == eng.complexity(src, mode=mode)
+    assert eng.simplify(f'x1/{divisor}', mode=mode) == f'x1/{divisor}'
+    lone = list(eng.simplify(['/', '1', divisor], mode=mode))
+    assert lone == ['/', '1', divisor] or len(lone) == 1, lone

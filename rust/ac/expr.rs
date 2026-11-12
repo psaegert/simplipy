@@ -473,11 +473,15 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
 
 /// Description length of the exact VALUE p/q (lowest terms), in MILLI-BITS and
 /// spelling-free -- **mu': the numeric codebook carries TWO
-/// codewords, chosen by a one-bit selector.**
+/// codewords, chosen by a one-bit selector**, the fraction codeword with a second form whose
+/// denominator is written as a decimal (the reciprocal codeword, below).
 ///
 /// ```text
-/// mu'(value) = 1 selector bit + min( L(p) + L(q),  L(m) + L(k) ) + sign bit
+/// mu'(value) = 1 selector bit + min( L(p) + L(q),  L(m) + L(k),  L(1) + L(m') + L(k') ) + sign bit
 /// ```
+///
+/// with `(m', k')` the decimal code of `1/value` where that decimal terminates and the value's
+/// reduced denominator passes the recognition list's bound.
 ///
 /// where `(p, q)` is the reduced rational spelling (an integer's denominator is
 /// implicit and free) and `(m, k)` the decimal-scientific spelling of the SHORTEST
@@ -503,6 +507,15 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
 /// codeword level: `mu'(1000) == mu'(0.001)` (both are the codeword `(1, 3)`), where
 /// fraction-only code had `9.967` against `10.967`.
 ///
+/// THE RECIPROCAL CODEWORD. A non-integer whose reciprocal `c` has a terminating decimal, and
+/// whose reduced denominator passes the recognition list's bound (`ground::RECOGNISED_K`), is
+/// also written `1/c`, the divisor-side spelling (`x1/0.225147640565301`): its codeword is
+/// `L(1)`, the numerator of the fraction codeword, plus `c`'s decimal codeword, so `mu(1/c)` is
+/// one bit above `c`'s decimal codeword, as `mu(1/n)` is one bit above `mu(n)`. Where it is the
+/// cheapest of the three, the serializer prints it (`reciprocal_spelling_wins`): the reciprocal
+/// of a long decimal costs what its divisor costs, not its fraction's two long integers. A short
+/// fraction keeps its own codewords (`25/2`, `10/3`).
+///
 /// WHY `L` AND NOT A BIT COUNT. `bits()` quantises exactly where it hurts: it cannot
 /// separate 100 from 1000 once a scale is involved (both scales cost 2 bits), it priced
 /// two spellings of one value up to a bit apart for no reason but rounding, and it made
@@ -514,61 +527,22 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
 /// `q > 0` with the sign on the numerator, so the bit is unambiguous and charged once,
 /// inside EACH codeword total (it cancels in the min).
 pub fn mu_rat_exact(r: &Rat) -> u64 {
-    let (fraction, decimal) = mu_rat_codeword_totals(r);
+    let (fraction, decimal, reciprocal) = mu_rat_codeword_totals(r);
     MU_MILLI
-        + match decimal {
-            Some(d) => fraction.min(d),
-            None => fraction,
-        }
+        + fraction
+            .min(decimal.unwrap_or(u64::MAX))
+            .min(reciprocal.unwrap_or(u64::MAX))
 }
 
-/// THE PRICE OF A LITERAL: the lesser of the literal's own exact spelling ([`mu_rat_exact`])
-/// and the shortest decimal of the float64 it reads as, priced by the same codewords. The
-/// evaluator reads every literal as its nearest float64, so digits beyond float precision are
-/// not information: the 64-digit fourth power of a 16-digit constant costs what its float's
-/// shortest decimal (at most 17 significant digits) costs. A literal that is its own float's
-/// shortest decimal keeps its price, and no price rises. The cap is that decimal (Rust's `{:?}`
-/// spelling; on rare exact ties it can differ from Python's `repr` in the last digit), never a
-/// fraction that reads as the same float: `0.3333333333333333` keeps its 16-digit price although
-/// `1/3` reads as the same float. A literal beyond float64's range (or below its smallest
-/// subnormal) keeps its exact price. The cap reaches every literal the exact domain holds as a
-/// number, however a state holds it (`is_piece`, `piece_price`): a numeric-string leaf not
-/// admissible in f64 mode, and a product, sum or power the f64 domain keeps in pieces, cost at
-/// most what this function prices their value at; a leaf beyond the 1,100-bit cap keeps its
-/// print's price (`mu_numeric_str`), so no ordering cliff opens between the two. The state keeps
-/// the exact value and prints it: only the measure reads the float. The price is a function of the
-/// value alone (the decimal is built in the exact number domain), so each thread remembers the
-/// prices it computed, emptying the table at 65,536 entries.
+/// THE PRICE OF A LITERAL: its own exact spelling ([`mu_rat_exact`]), the codeword the
+/// serializer prints. Every number is priced as it is written, so the printed spelling is the
+/// priced one everywhere: the 34-digit exact product `0.0900000000000000240000000000000016` costs
+/// its 34 digits, and a mode that may write a cheaper value writes it (permissive the double
+/// around it, [`land`]; strict float64's value of the operation that made it,
+/// [`strict_number`]). A literal held in pieces (`is_piece`, `piece_price`) costs at most what
+/// this function prices the value they denote at.
 pub fn mu_rat(r: &Rat) -> u64 {
-    thread_local! {
-        static FLOAT_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Rat, u64>> =
-            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
-    }
-    if let Some(v) = FLOAT_PRICES.with(|m| m.borrow().get(r).copied()) {
-        return v;
-    }
-    let v = mu_rat_float(r);
-    FLOAT_PRICES.with(|m| {
-        let mut m = m.borrow_mut();
-        if m.len() >= 1 << 16 {
-            m.clear();
-        }
-        m.insert(r.clone(), v);
-    });
-    v
-}
-
-/// [`mu_rat`] without the table.
-fn mu_rat_float(r: &Rat) -> u64 {
-    let exact = mu_rat_exact(r);
-    let y = r.to_f64_nearest();
-    if !y.is_finite() || y == 0.0 {
-        return exact;
-    }
-    match Rat::shortest_reading_as(y) {
-        Some(d) => exact.min(mu_rat_exact(&d)),
-        None => exact,
-    }
+    mu_rat_exact(r)
 }
 
 /// The two codewords' TOTAL prices, in milli-bits, each carrying its own floor and the
@@ -598,7 +572,10 @@ fn mu_rat_float(r: &Rat) -> u64 {
 /// what matters is the SYMMETRY, `mu(1000) == mu(0.001)`, and that holds at 4.
 const MU_RAT_FLOOR: u64 = MU_MILLI;
 
-fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
+/// The codeword totals of a literal: (fraction, decimal, reciprocal), each without the selector.
+type CodewordTotals = (u64, Option<u64>, Option<u64>);
+
+fn mu_rat_codeword_totals(r: &Rat) -> CodewordTotals {
     // A big-form literal's codewords cost big-integer divisions and logarithms, and the same
     // values are priced again and again while candidates are compared (the sign placement in
     // `mul` alone prices whole factors per orientation). The price is a function of the value,
@@ -608,7 +585,7 @@ fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
         return mu_rat_codeword_totals_uncached(r);
     }
     thread_local! {
-        static BIG_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Rat, (u64, Option<u64>)>> =
+        static BIG_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Rat, CodewordTotals>> =
             std::cell::RefCell::new(rustc_hash::FxHashMap::default());
     }
     if let Some(v) = BIG_PRICES.with(|m| m.borrow().get(r).copied()) {
@@ -625,7 +602,7 @@ fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     v
 }
 
-fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
+fn mu_rat_codeword_totals_uncached(r: &Rat) -> CodewordTotals {
     let sign = if r.is_negative() { MU_SIGN } else { 0 };
     let (pb, qb) = match r.small_parts() {
         Some((p, q)) => (l_millibits(p.unsigned_abs()), l_millibits(q as u128)),
@@ -641,14 +618,33 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
     let floor = MU_RAT_FLOOR;
     let fraction = (fraction_raw + sign).max(floor);
     let decimal = decimal_code(r).map(|(m, k)| m.max(floor) + k + sign);
-    (fraction, decimal)
+    // The reciprocal codeword: `1/c`, `c` a terminating decimal, priced by `c`'s decimal code
+    // (an integer `c` with trailing zeros by its scientific code, `1/30` as `/3e1`; one without
+    // has no decimal code, and its reciprocal is the fraction codeword `1/n` itself). A value
+    // whose reduced denominator is within the recognition list's bound keeps its fraction and
+    // decimal codewords alone: `25/2`, `10/3` and `1/20` are short fractions or decimals, not
+    // reciprocals.
+    let bound = crate::ground::RECOGNISED_K;
+    let short_denominator = match r.small_parts() {
+        Some((_, q)) => q <= i128::from(bound),
+        None => r.big_parts().1 <= BigInt::from(bound),
+    };
+    let reciprocal = if r.is_integer() || short_denominator {
+        None
+    } else {
+        r.abs()
+            .checked_inv()
+            .and_then(|c| decimal_code(&c))
+            .map(|(m, k)| MU_MILLI + m.max(floor) + k + sign)
+    };
+    (fraction, decimal, reciprocal)
 }
 
 /// Whether the DECIMAL spelling is the canonical PRINT for this value: the serializer
 /// argmin over the SAME two codeword totals `mu_rat_exact` mins over, so the print costs
-/// the exact price; the measure (`mu_rat`) can be lower, by the float cap (the state/serializer factoring:
-/// states carry one exact rational per value and no spelling; the emitter realizes the
-/// best codeword at print time, locally and closed-form).
+/// the price the measure (`mu_rat`) charges (the state/serializer factoring: states carry one
+/// exact rational per value and no spelling; the emitter realizes the best codeword at print
+/// time, locally and closed-form).
 ///
 /// TIES GO TO THE FRACTION -- the structurally distinguished caller-dialect member,
 /// mirroring the sign-trade tier-2 rule ("what you typed survives"; states carry no
@@ -664,8 +660,17 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
 /// (`Rat::exact_decimal`, the rendering of BOTH an integer's codewords), positional in the
 /// ordinary range (`1000`, never `1e3`) and scientific beyond it where shorter (`1e300`).
 pub fn decimal_spelling_wins(r: &Rat) -> bool {
-    let (fraction, decimal) = mu_rat_codeword_totals(r);
-    decimal.is_some_and(|d| d < fraction)
+    let (fraction, decimal, reciprocal) = mu_rat_codeword_totals(r);
+    decimal.is_some_and(|d| d < fraction && reciprocal.is_none_or(|c| d <= c))
+}
+
+/// Whether the RECIPROCAL spelling `1/c` is the canonical print for this value: its codeword is
+/// strictly the cheapest of the three (`mu_rat_exact`), so the serializer writes the divisor
+/// `c`, a terminating decimal, wherever it writes the value (`x1/0.225147640565301`, alone
+/// `1/0.225147640565301`). Ties go to the fraction and the decimal.
+pub fn reciprocal_spelling_wins(r: &Rat) -> bool {
+    let (fraction, decimal, reciprocal) = mu_rat_codeword_totals(r);
+    reciprocal.is_some_and(|c| c < fraction && decimal.is_none_or(|d| c < d))
 }
 
 /// `L(n)` in MILLI-BITS for an integer written as a decimal DIGIT STRING of any length:
@@ -998,7 +1003,7 @@ pub(crate) fn is_neg_zero(e: &Ex, view: &TokenView) -> bool {
 /// skips the full numeric parse for ordinary vocabulary leaves (`x0`, function names), which
 /// never start with a digit, dot, or sign.
 #[inline]
-fn numeric_leaf(s: &str) -> bool {
+pub(crate) fn numeric_leaf(s: &str) -> bool {
     s.as_bytes()
         .first()
         .is_some_and(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.' || *b == b'+')
@@ -1009,7 +1014,7 @@ fn numeric_leaf(s: &str) -> bool {
 /// or product of pieces -- variable-free arithmetic that denotes one rational value.
 ///
 /// The exact number domain holds every such value within the 1,100-bit cap as one
-/// `Rat`, which [`mu_rat`] prices at most at its float's price. The f64 domain admits only
+/// `Rat`, which [`mu_rat`] prices as its spelling. The f64 domain admits only
 /// numbers whose components are at most 2^1022 (`rat::number_domain`) and holds the rest in
 /// pieces: a literal whose exact fraction leaves it stays a leaf as written
 /// (`1.2345678901234567e-305`, whose denominator is 10^321), and a product, sum or power that
@@ -1090,9 +1095,9 @@ fn bag_literal_value(members: &[Ex], sum: bool, view: &TokenView) -> Option<Rat>
     pieces_value(members.iter().filter(|f| is_piece(f, view)), sum, view)
 }
 
-/// THE FLOAT CAP ON EVERY PATH. The price of a literal held in pieces ([`is_piece`]):
-/// `structural`, its pieces priced one by one, at most what the exact domain prices the value
-/// they denote ([`mu_rat`], so at most what its float costs), and never below one bit per node,
+/// THE PRICE OF A LITERAL HELD IN PIECES ([`is_piece`]): `structural`, its pieces priced one
+/// by one, at most what the exact domain prices the value they denote ([`mu_rat`]), and never
+/// below one bit per node,
 /// so that the price still bounds the node count (L5, docs/formal.md). `None`, a value the exact
 /// domain holds no number for (beyond the 1,100-bit cap), keeps the structural price.
 fn piece_price(structural: u64, value: Option<&Rat>, nodes: u64) -> u64 {
@@ -1104,7 +1109,7 @@ fn piece_price(structural: u64, value: Option<&Rat>, nodes: u64) -> u64 {
 
 /// The price of a NUMERIC-STRING leaf: the price of its print ([`mu_numeric_str`]), at most what
 /// the exact domain prices its value ([`piece_price`]): a literal not admissible in the f64
-/// domain costs at most its float's price, as a `Num` does; one beyond the 1,100-bit cap keeps its
+/// domain costs what the same value costs as a `Num`; one beyond the 1,100-bit cap keeps its
 /// print's price. A function of the string, so each thread remembers the prices it computed,
 /// emptying the table at 65,536 entries.
 fn mu_numeric_leaf(s: &str) -> u64 {
@@ -1331,6 +1336,10 @@ fn cmp_vec(a: &[Ex], b: &[Ex], view: &TokenView) -> Ordering {
 /// The enclosure certificate's type ([`Cx::cert_encl`]): a ground composite's closed float64 box.
 pub type EnclosureCert<'a> = &'a dyn Fn(&Ex) -> Option<(f64, f64)>;
 
+/// The parse's ground evaluator (`Cx::ground_first`): a fully numeric part's token span to the
+/// atom it is, or `None` to build it as written.
+pub type GroundFirst<'a> = &'a dyn Fn(&[Tok]) -> Option<Ex>;
+
 /// The canonicalization context: the token view (leaf classification, string order) plus the two
 /// OPTIONAL soundness certificates. With a certificate absent the corresponding gated collection
 /// simply does not happen -- fail-closed, exactly like the old matcher's certifier plumbing.
@@ -1388,6 +1397,15 @@ pub struct Cx<'a> {
     /// the fixpoint with this flag set -- `pow`'s determined fold fires again -- and
     /// keeps descending. Only meaningful with `lossy`; sound mode always folds.
     pub sentinels_expired: bool,
+    /// GROUND FIRST, at the parse: the ground evaluator's verdict on a fully numeric part as
+    /// written (its token span), before any constructor builds it. `Some(atom)` where the part's
+    /// value is only that atom (NaN or an infinity: a part the reals give no value, or one whose
+    /// float64 value is the only one admitted), which the parse takes in place of the part, so no
+    /// law ever reaches it; `None` keeps the part, which is then built as written: exact
+    /// arithmetic between its numbers keeps its value in the reals, and the fold reads the built
+    /// node's value. Absent (no evaluator): the parse builds every part (conversions, patterns,
+    /// the measure's canon).
+    pub ground_first: Option<GroundFirst<'a>>,
 }
 
 /// PERMISSIVE'S OWN SIMPLIFICATIONS (the specification's 4.9), the one list, named here and
@@ -1491,6 +1509,16 @@ impl<'a> Cx<'a> {
     pub fn permits(&self, entry: Permissive) -> bool {
         entry.applies_in(self.mode)
     }
+
+    /// May this construction take the step [`Permissive`] names on `operand`? A simplification
+    /// of permissive's own acts on a part with a variable or a constant (or a pattern's
+    /// wildcard); a fully numeric operand is read for its value first, and no simplification
+    /// changes that value: `asin(sin(x0))` is `x0`, `asin(sin(4))` keeps pi - 4.
+    #[inline]
+    pub fn permits_on(&self, entry: Permissive, operand: &Ex) -> bool {
+        self.permits(entry)
+            && (operand.has_measure_space(self.view) || operand.contains_wildcard(self.view))
+    }
 }
 
 impl<'a> Cx<'a> {
@@ -1559,6 +1587,7 @@ impl<'a> Cx<'a> {
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
+            ground_first: None,
         }
     }
 
@@ -2103,7 +2132,7 @@ impl<'a> Cx<'a> {
     fn inverse_pair_collapse(&self, outer: Tok, inner: Tok, t: &Ex) -> Option<Ex> {
         let o = self.view.resolve_owned(outer);
         let i = self.view.resolve_owned(inner);
-        if self.permits(Permissive::InversePairs) && cancels_its_inverse(&o, &i) {
+        if self.permits_on(Permissive::InversePairs, t) && cancels_its_inverse(&o, &i) {
             return Some(t.clone());
         }
         match (o.as_str(), i.as_str()) {
@@ -3541,6 +3570,8 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // a fully numeric sum is valued whole: its literals combine exactly
+    let ground_bag = in_ground(&items, cx);
     // `x + (-0)` is `x` bit for bit in float64, the sign of a zero and NaN included: the written
     // negative zero leaves a sum that holds anything else.
     let items = if cx.f64_semantics()
@@ -3630,7 +3661,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     // remains may be `-0` on a region, the sum keeps a `+0` term.
     let mut owes_zero = f64_zero_signs(cx) && !lits.is_empty();
     let mut acc = Rat::ZERO;
-    let mut lits = Rat::partition_sum(lits);
+    let mut lits = literal_partition_sum(lits, ground_bag, cx);
     if lits.len() == 1 {
         acc = lits.pop().unwrap();
     } else {
@@ -4851,6 +4882,8 @@ fn host_partition_sign(e: Ex) -> Ex {
 
 fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // a fully numeric product is valued whole: its literals combine exactly
+    let ground_bag = in_ground(&items, cx);
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
     let mut inf_sign: Option<bool> = None; // Some(true) = +inf so far, Some(false) = -inf
@@ -4958,7 +4991,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     // multiplied as far as the products stay representable, as a fixed point a re-read
     // reproduces; the sign stays on the coefficient slot below.
     let mut coeff = Rat::ONE;
-    let mut nums = Rat::partition_product(nums);
+    let mut nums = literal_partition_product(nums, ground_bag, cx);
     if nums.len() == 1 {
         coeff = nums.pop().unwrap();
     } else {
@@ -9564,7 +9597,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Some((inner_base, r)), Ex::Num(s)) = (as_rational_power(&base, cx), &exp) {
         {
             let r = &r;
-            let licence = if cx.permits(Permissive::PowersCompose) {
+            let licence = if cx.permits_on(Permissive::PowersCompose, inner_base) {
                 true
             } else if r.is_integer() {
                 s.is_integer()
@@ -9902,9 +9935,8 @@ fn lone_site(node: Ex, cx: &Cx) -> Ex {
 /// value (`decimal_spelling_wins` chooses among exact codewords only). On the permissive
 /// tier the value is allowed to move -- that tier's licence -- so the literal folds to the
 /// f64 nearest to it (as that float's shortest decimal) WHEN the exact codewords
-/// ([`mu_rat_exact`]) price that spelling strictly cheaper -- the float price ([`mu_rat`]) of the
-/// two is equal by construction, the fold changes what is PRINTED:
-/// `2e29/426738538271436458205631863649` (196.8 bits) becomes `0.46867105279529636`
+/// ([`mu_rat_exact`]) price that spelling strictly cheaper, and every number is priced as it is
+/// printed: `2e29/426738538271436458205631863649` (196.8 bits) becomes `0.46867105279529636`
 /// (57.1 bits); `1/2`, `15/37` and `4366/8875` stay, their fractions being cheaper than
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
 /// and never moves, so the drawn constants of a training stream are untouched, and the fold
@@ -9917,7 +9949,7 @@ fn lone_site(node: Ex, cx: &Cx) -> Ex {
 /// on the float whose shortest spelling carries a digit more (`0.016213652755841255` where the
 /// sources give `0.01621365275584125`); the shorter neighbour is that rounding wherever it is
 /// one of the two, and no worse a float anywhere. Values whose shortest
-/// spelling is no number of the f64 domain refuse (fail-closed, as the ground fold does);
+/// spelling is no number of the f64 domain refuse (fail-closed);
 /// non-finite values
 /// never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
@@ -9935,7 +9967,7 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     (mu_rat_exact(&snapped) < mu_rat_exact(r)).then_some(snapped)
 }
 
-/// ρ, PERMISSIVE'S ONE ROUNDING: a literal is rounded once, when it becomes part of the
+/// ρ, A LITERAL'S ONE ROUNDING: a literal is rounded once, when it becomes part of the
 /// expression, not at every operation. Arithmetic BETWEEN
 /// literals stays exact -- an all-literal node folds exactly, as in every mode -- and a literal
 /// is moved by [`lossy_literal`] at the one place it LANDS as an operand of a composite node:
@@ -9945,21 +9977,27 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
 /// `3*(1/3 + 1e-20)` folds exactly to `1 + 3e-20` and rounds once, to `1`; rounding inside
 /// each operation would give `0.9999999999999999`.
 ///
-/// ρ is the identity outside permissive, idempotent (a moved literal is a shortest float
-/// spelling, which [`lossy_literal`] never moves), and never raises a price: the float cap prices
-/// a literal and its nearest float alike ([`mu_rat`]), and the shorter neighbour costs less, so
-/// the reduction ordering, termination and every descent argument are unchanged, and every state
-/// the walk holds prints the codeword it is priced at. It moves a value to one of the two floats
-/// around it, less than an ulp, inside permissive's licence; it never creates an infinity or a
-/// zero (non-finite values refuse, and both floats around a nonzero value are nonzero).
+/// In `strict` a literal lands on float64's own reading of it where that is cheaper
+/// ([`strict_literal`]): float64 reads a literal as its nearest double, so writing that double's
+/// shortest decimal keeps float64's value bit for bit (`x0*0.1234567890123456789` is
+/// `0.12345678901234568*x0`); an integer and a literal no dearer than that decimal stay.
 ///
-/// NO LITERAL LANDS INSIDE A GROUND NODE ([`in_ground`]): a ground subtree is valued whole by the
-/// table and written as one float, rounded once (P3, the engine's ground fold), so
-/// `14.81 - cos(c)` with `c` a product of ten literals reads the cosine of the exact product.
+/// ρ is idempotent (a moved literal is a shortest float spelling, which neither mode moves
+/// again), and never raises a price: it moves a literal only to a strictly cheaper spelling
+/// ([`mu_rat`]), so the reduction ordering, termination and every descent argument are
+/// unchanged, and every state the walk holds prints the codeword it is priced at. In permissive
+/// it moves a value to one of the two floats around it, less than an ulp, inside permissive's
+/// licence; it never creates an infinity or a zero (non-finite values refuse, and both floats
+/// around a nonzero value are nonzero).
+///
+/// NO LITERAL LANDS INSIDE A GROUND NODE in permissive ([`in_ground`]): a ground subtree is
+/// valued whole by the table and written as one float, rounded once (P3, the engine's ground
+/// fold), so `14.81 - cos(c)` with `c` a product of ten literals reads the cosine of the exact
+/// product.
 #[inline]
 pub fn land(r: Rat, cx: &Cx) -> Rat {
     if !cx.permits(Permissive::LiteralToFloat) {
-        return r;
+        return strict_literal(r, cx);
     }
     match lossy_literal(&r) {
         Some(s) => s,
@@ -9968,12 +10006,12 @@ pub fn land(r: Rat, cx: &Cx) -> Rat {
 }
 
 /// Does a literal land among `others` inside a GROUND node: are they all ground (no variable,
-/// wildcard or `<constant>`)? Then it does not land ([`land`]). Asked in permissive only.
+/// wildcard or `<constant>`)? Then it does not land ([`land`]): the fully numeric part is valued
+/// whole, by the ground evaluator.
 fn in_ground<'a>(others: impl IntoIterator<Item = &'a Ex>, cx: &Cx) -> bool {
-    cx.permits(Permissive::LiteralToFloat)
-        && others
-            .into_iter()
-            .all(|e| !e.has_measure_space(cx.view) && !e.contains_wildcard(cx.view))
+    others
+        .into_iter()
+        .all(|e| !e.has_measure_space(cx.view) && !e.contains_wildcard(cx.view))
 }
 
 /// [`land`] on a literal operand; any other operand is returned as it is.
@@ -9988,6 +10026,94 @@ fn land_operand(e: Ex, cx: &Cx) -> Ex {
 /// [`land`] at the root of a state: a state that is one literal is that literal landed.
 pub fn land_root(e: Ex, cx: &Cx) -> Ex {
     land_operand(e, cx)
+}
+
+/// STRICT'S NUMBERS, written as the cheapest value strict admits for them: a number the
+/// constructors make from literals is either its exact value (the reals' value, which float64's
+/// kind keeps: both finite) or float64's value of the same operation on the literals' doubles,
+/// written as its shortest decimal (float64 reads it as that double), whichever is cheaper, and
+/// the exact value at an equal price. `x0*0.30000000000000004*0.30000000000000004` is
+/// `0.09000000000000002*x0` (the exact product has 34 digits), `0.1 + 0.2` is `0.3` (the exact
+/// sum is cheaper than float64's `0.30000000000000004`). Float64's value is taken only where it
+/// is a normal double, or an exact zero the exact value also is: an overflow or an underflow
+/// keeps the exact value. An integer stays exact (`3^40` is `12157665459056928801`): its parity
+/// and its exactness are the point of it. The decimal must be a number of the f64 number domain,
+/// as a written literal is (`rat::number_domain`): `3.3333333333333334e-301`, whose denominator
+/// passes 2^1022, is no number there, and the exact value stays.
+pub(crate) fn strict_number(exact: Rat, float: f64) -> Rat {
+    if exact.is_integer() || !(float.is_normal() || (float == 0.0 && exact.is_zero())) {
+        return exact;
+    }
+    let decimal = {
+        let _f64 = super::rat::number_domain(true);
+        Rat::parse_decimal(&format!("{float:?}"))
+    };
+    match decimal {
+        Some(d) if mu_rat_exact(&d) < mu_rat_exact(&exact) => d,
+        _ => exact,
+    }
+}
+
+/// The literal partition of a sum (`Rat::partition_sum`), exact in every mode; in `strict`, where
+/// the literals combine into one number, that number is written as the cheaper of its exact value
+/// and float64's sum of the literals' doubles ([`strict_number`]). Rounding only the combined
+/// number keeps every exact cancellation a later fold of the partition reaches. Inside a fully
+/// numeric sum (`ground`) the partition stays exact: the part is valued whole.
+fn literal_partition_sum(lits: Vec<Rat>, ground: bool, cx: &Cx) -> Vec<Rat> {
+    let float = || {
+        lits.iter()
+            .filter(|m| !m.is_zero())
+            .fold(0.0, |acc, m| acc + m.to_f64_nearest())
+    };
+    let combined = lits.iter().filter(|m| !m.is_zero()).count() >= 2;
+    let y = if cx.f64_semantics() && cx.fold_f64 && combined && !ground {
+        Some(float())
+    } else {
+        None
+    };
+    let mut out = Rat::partition_sum(lits);
+    if let (Some(y), [one]) = (y, out.as_mut_slice()) {
+        *one = strict_number(one.clone(), y);
+    }
+    out
+}
+
+/// The coefficient partition of a product (`Rat::partition_product`), exact in every mode; in
+/// `strict`, where the literals combine into one number, that number is written as the cheaper
+/// of its exact value and float64's product of the literals' doubles ([`strict_number`]):
+/// `0.30000000000000004*0.30000000000000004` is `0.09000000000000002`, `1/3*1e300*1e-300` is
+/// `1/3`. Inside a fully numeric product (`ground`) the partition stays exact: the part is
+/// valued whole.
+fn literal_partition_product(nums: Vec<Rat>, ground: bool, cx: &Cx) -> Vec<Rat> {
+    let combined = nums.iter().filter(|m| !m.is_one()).count() >= 2;
+    let y = if cx.f64_semantics() && cx.fold_f64 && combined && !ground {
+        Some(
+            nums.iter()
+                .filter(|m| !m.is_one())
+                .fold(1.0, |acc, m| acc * m.to_f64_nearest()),
+        )
+    } else {
+        None
+    };
+    let mut out = Rat::partition_product(nums);
+    if let (Some(y), [one]) = (y, out.as_mut_slice()) {
+        *one = strict_number(one.clone(), y);
+    }
+    out
+}
+
+/// A WRITTEN LITERAL in `strict`: float64 reads it as its nearest double, so a decimal of more
+/// digits than that double needs is written as the double's shortest decimal
+/// (`0.1234567890123456789` is `0.12345678901234568`); an integer keeps its exact spelling
+/// (its parity and its exact arithmetic are the point of it), and so does a literal whose own
+/// spelling is no dearer. In the simplify walk only (`Cx::fold_f64`): a conversion, a pattern
+/// and the measure's canon keep every number as written.
+pub(crate) fn strict_literal(r: Rat, cx: &Cx) -> Rat {
+    if !cx.f64_semantics() || !cx.fold_f64 || r.is_integer() {
+        return r;
+    }
+    let y = r.to_f64_nearest();
+    strict_number(r, y)
 }
 
 /// `atan2(y, x)` built from the product members of its arguments, as float64 reads them: it
@@ -10553,8 +10679,8 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         let (b, e) = (it.next().expect("base"), it.next().expect("exponent"));
         return pow_spelled(b, e, cx);
     }
-    // A literal argument LANDS here (permissive's ρ, [`land`]), unless the call is ground.
-    let args: Vec<Ex> = if cx.permits(Permissive::LiteralToFloat) && !in_ground(&args, cx) {
+    // A literal argument LANDS here (ρ, [`land`]), unless the call is ground.
+    let args: Vec<Ex> = if !in_ground(&args, cx) {
         args.into_iter().map(|a| land_operand(a, cx)).collect()
     } else {
         args
@@ -10852,7 +10978,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                             match &**ex {
                                 Ex::Num(k) => {
                                     n.checked_inv().and_then(|s| k.checked_mul(&s)).filter(|p| {
-                                        cx.permits(Permissive::PowersCompose)
+                                        cx.permits_on(Permissive::PowersCompose, inner)
                                             || cx.certainly_nonneg(inner)
                                             || if k.is_integer() {
                                                 k.is_odd_integer()
@@ -11178,6 +11304,7 @@ mod tests {
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,
+                ground_first: None,
             };
             assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));
             // Same-sign merging never needs the licence: log(x) + log(x) -> 2 log(x).
@@ -12426,40 +12553,109 @@ mod tests {
         }
     }
 
-    /// The float cap: a literal costs at most what its float's shortest decimal costs.
+    /// Every number is priced as it is written: the long exact product costs its digits, and the
+    /// 16-digit decimal of 1/3 costs its 16 digits.
     #[test]
-    fn float_cap_a_literal_costs_at_most_its_float() {
+    fn a_literal_is_priced_as_it_is_written() {
         let long = {
             let _exact = crate::ac::rat::number_domain(false);
             Rat::parse_decimal("0.0766541268471677307861497420516056347394916180597539647375669841")
                 .unwrap()
         };
         let short = Rat::shortest_reading_as(long.to_f64_nearest()).unwrap();
-        assert_eq!(mu_rat(&long), mu_rat_exact(&short));
-        assert!(mu_rat(&long) < mu_rat_exact(&long));
-        // a fraction is never the cap: the 16-digit decimal keeps its price
+        assert_eq!(mu_rat(&long), mu_rat_exact(&long));
+        assert!(mu_rat(&short) < mu_rat(&long));
         let third = Rat::parse_decimal("0.3333333333333333").unwrap();
         assert_eq!(mu_rat(&third), mu_rat_exact(&third));
         assert!(mu_rat(&Rat::new(1, 3).unwrap()) < mu_rat(&third));
-        for t in [
-            "1000",
-            "0.2",
-            "2",
-            "-7.5",
-            "1e-40",
-            "0.5",
-            "3",
-            "0.001",
-            "2.177697277405848",
-        ] {
+        for t in ["1000", "0.2", "-7.5", "1e-40", "2.177697277405848"] {
             let r = Rat::parse_decimal(t).unwrap();
             assert_eq!(mu_rat(&r), mu_rat_exact(&r), "{t}");
         }
     }
 
+    /// Strict writes a number two literals make as the cheaper of its exact value and float64's
+    /// value of the operation, the exact one at an equal price.
+    #[test]
+    fn strict_writes_the_cheaper_of_the_exact_and_the_float64_number() {
+        let d = |t: &str| Rat::parse_decimal(t).unwrap();
+        with_view(|view| {
+            // the simplify walk's context
+            let mut cx = Cx::bare(view);
+            cx.fold_f64 = true;
+            let prod = |v: Vec<Rat>| literal_partition_product(v, false, &cx);
+            let sum = |v: Vec<Rat>| literal_partition_sum(v, false, &cx);
+            let a = d("0.30000000000000004");
+            assert_eq!(prod(vec![a.clone(), a]), vec![d("0.09000000000000002")]);
+            assert_eq!(
+                prod(vec![d("0.7234567890123457"), d("1.3821548250604163")]),
+                vec![d("0.9999292916561291")],
+                "float64's product of the two doubles, not the double nearest the exact product"
+            );
+            assert_eq!(sum(vec![d("0.1"), d("0.2")]), vec![d("0.3")]);
+            assert_eq!(prod(vec![d("0.1"), d("3")]), vec![d("0.3")]);
+            // the partition is exact, and only its one combined number is rounded
+            assert_eq!(
+                prod(vec![Rat::new(1, 3).unwrap(), d("1e300"), d("1e-300")]),
+                vec![Rat::new(1, 3).unwrap()]
+            );
+            // a fully numeric product stays exact: the part is valued whole
+            let a = d("0.30000000000000004");
+            assert_eq!(
+                literal_partition_product(vec![a.clone(), a], true, &cx),
+                vec![d("0.0900000000000000240000000000000016")]
+            );
+            // a conversion keeps the exact product
+            let bare = Cx::bare(view);
+            let a = d("0.30000000000000004");
+            assert_eq!(
+                literal_partition_product(vec![a.clone(), a], false, &bare),
+                vec![d("0.0900000000000000240000000000000016")]
+            );
+            let mut p = Cx::bare(view);
+            p.mode = RuleMode::Permissive;
+            let a = d("0.30000000000000004");
+            assert_eq!(
+                literal_partition_product(vec![a.clone(), a], false, &p),
+                vec![d("0.0900000000000000240000000000000016")],
+                "permissive rounds where the number lands (`land`)"
+            );
+        });
+        // no float64 value replaces an exact one past the range of the normal doubles
+        let third = Rat::new(1, 3).unwrap();
+        assert_eq!(strict_number(third.clone(), f64::INFINITY), third);
+        assert_eq!(strict_number(third.clone(), 0.0), third);
+        assert_eq!(strict_number(third.clone(), 1e-310), third);
+        // an integer stays exact
+        let big = Rat::int(12157665459056928801);
+        assert_eq!(strict_number(big.clone(), 1.2157665459056929e19), big);
+        // a written literal of more digits than its double needs, in the simplify walk
+        with_view(|view| {
+            let mut cx = Cx::bare(view);
+            cx.fold_f64 = true;
+            assert_eq!(
+                strict_literal(d("0.1234567890123456789"), &cx),
+                d("0.12345678901234568")
+            );
+            assert_eq!(
+                strict_literal(d("0.1234567890123456789"), &Cx::bare(view)),
+                d("0.1234567890123456789"),
+                "a conversion keeps the literal as written"
+            );
+            assert_eq!(strict_literal(d("0.1"), &cx), d("0.1"));
+            let mut p = Cx::bare(view);
+            p.mode = RuleMode::Permissive;
+            assert_eq!(
+                strict_literal(d("0.1234567890123456789"), &p),
+                d("0.1234567890123456789"),
+                "permissive rounds where a literal lands (`land`)"
+            );
+        });
+    }
+
     /// The shortest decimal reads back as the float.
     #[test]
-    fn float_cap_shortest_decimal_reads_back() {
+    fn the_shortest_decimal_reads_back_as_its_double() {
         for y in [
             0.1,
             1.0 / 3.0,
@@ -12477,56 +12673,23 @@ mod tests {
         assert_eq!(Rat::shortest_reading_as(f64::INFINITY), None);
     }
 
-    /// The price is a function of the value alone: the same in the f64 and the exact domain,
-    /// and never above the exact price.
+    /// A literal held in pieces costs at most what its value costs as one number, alone or
+    /// beside other factors.
     #[test]
-    fn float_cap_price_is_mode_free_and_never_rises() {
-        let values: Vec<Rat> = {
-            let _exact = crate::ac::rat::number_domain(false);
-            [
-                "0.3333333333333333",
-                "1e-310",
-                "123456789012345678901234567890",
-                "0.1",
-                "2.718281828459045235360287471352662497757",
-                "-4.2e17",
-            ]
-            .iter()
-            .map(|t| Rat::parse_decimal(t).unwrap())
-            .chain([Rat::new(355, 113).unwrap(), Rat::new(-22, 7).unwrap()])
-            .collect()
-        };
-        for r in &values {
-            let in_f64 = {
-                let _d = crate::ac::rat::number_domain(true);
-                mu_rat_float(r)
-            };
-            let in_exact = {
-                let _d = crate::ac::rat::number_domain(false);
-                mu_rat_float(r)
-            };
-            assert_eq!(in_f64, in_exact, "{r:?}");
-            assert!(in_f64 <= mu_rat_exact(r), "{r:?}");
-        }
-    }
-
-    /// The float cap on every path: a value the f64 domain holds in pieces costs what the exact
-    /// domain prices the one number at, alone or beside other factors.
-    #[test]
-    fn float_cap_reaches_a_literal_held_in_pieces() {
+    fn a_literal_held_in_pieces_costs_at_most_its_value() {
         with_view(|view| {
             let cx = Cx::bare(view); // f64's number domain
-            let (a, b) = {
-                let _exact = crate::ac::rat::number_domain(false);
-                (
-                    Rat::parse_decimal("1.2345678901234567e-305").unwrap(),
-                    Rat::parse_decimal("9.876543210987654e-10").unwrap(),
-                )
+            let b = Rat::parse_decimal("9.876543210987654e-10").unwrap();
+            let inv_b = match pow(Ex::Num(b.clone()), Ex::int(-1), &cx) {
+                Ex::Num(r) => r,
+                other => panic!("not a number: {other:?}"),
             };
-            let inv_b = b.checked_inv().unwrap();
             let exact = {
                 let _exact = crate::ac::rat::number_domain(false);
-                a.checked_mul(&inv_b).unwrap()
+                Rat::parse_decimal("1.2345678901234567e-305")
+                    .unwrap()
+                    .checked_mul(&inv_b)
+                    .unwrap()
             };
             // a's denominator, 10^321, passes 2^1022: a stays a leaf as written, beside 1/b
             let leaf = Ex::Leaf(view.intern("1.2345678901234567e-305"));
@@ -12538,14 +12701,11 @@ mod tests {
                 quotient,
                 Ex::Mul(vec![Ex::Num(inv_b.clone()), leaf.clone()])
             );
-            let pieces = mu_numeric_str("1.2345678901234567e-305") + mu_rat(&inv_b);
-            assert!(mu_rat(&exact) < pieces);
-            assert_eq!(complexity(&quotient, view), mu_rat(&exact));
-            let beside = mul(vec![quotient, x(view)], &cx);
-            assert_eq!(
-                complexity(&beside, view),
-                mu_mul() + mu_rat(&exact) + mu_leaf()
-            );
+            // the product's head and its pieces: the leaf as written and 1/b, priced as its
+            // divisor (the reciprocal codeword), below the one exact number
+            let pieces = mu_mul() + mu_numeric_str("1.2345678901234567e-305") + mu_rat(&inv_b);
+            assert!(pieces < mu_rat(&exact));
+            assert_eq!(complexity(&quotient, view), pieces);
             // A product deciding opposite sums beside a piece prices its candidates against
             // bounds below their prices (`decide_opposite_sums`' debug assertion).
             let s = add(
@@ -12564,7 +12724,15 @@ mod tests {
                 .filter(|f| !is_piece(f, view))
                 .map(|f| complexity(f, view))
                 .sum();
-            assert_eq!(complexity(&p, view), mu_mul() + mu_rat(&literal) + rest);
+            let structural: u64 = v
+                .iter()
+                .filter(|f| is_piece(f, view))
+                .map(|f| complexity(f, view))
+                .sum();
+            assert_eq!(
+                complexity(&p, view),
+                mu_mul() + structural.min(mu_rat(&literal)) + rest
+            );
         });
     }
 

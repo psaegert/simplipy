@@ -45,8 +45,16 @@ def eng():
 
 
 def show(eng, text, **kw):
-    """The display of the canonical state of an infix text."""
+    """The display of the answer of `simplify` to an infix text."""
     return eng.prettify(eng.simplify(text), **kw)
+
+
+def given(eng, text, **kw):
+    """The display of an infix text's canonical form as given: its numbers as written. (`simplify`
+    writes each number as its mode's cheapest value: a literal longer than a float as its double,
+    `3.141592653589793` as pi. The display's rules for long exact numbers and for the literal pi
+    are pinned on forms that hold them.)"""
+    return eng.prettify(text, **kw)
 
 
 # The plan's table (NUMBER_SPELLING_PLAN.md section 1, D = 3), row by row.
@@ -54,7 +62,9 @@ TABLE = [
     (f'1/(2*{PI})', '1/(2*pi)'),
     (f'3/(2*{PI})', '3/(2*pi)'),
     (f'x0/(2*{PI})', 'x0/(2*pi)'),
-    (f'exp(-x0^2/2)/rootn(2*{PI}, 2)', '0.3989422804014327*exp(-x0^2/2)'),  # Feynman I.6.2a
+    # Feynman I.6.2a: `simplify` reads pi's double as pi and keeps the symbolic number
+    # sqrt(2*pi), cheaper than its double
+    (f'exp(-x0^2/2)/rootn(2*{PI}, 2)', 'exp(-x0^2/2)/rootn(2*pi, 2)'),
     # Feynman 58: the rest beside pi is written as `simplify` writes 3/20
     (f'3*x0^2/(20*{PI}*x1*x2)', '0.15*x0^2/(pi*x1*x2)'),
     ('x1/2', 'x1/2'),
@@ -76,10 +86,6 @@ TABLE = [
     ('x1*1e200*1e200', '1e200*1e200*x1'),
     ('x1^(-1/2)', '1/rootn(x1, 2)'),
     ('x1/0.225147640565301', '4.441529999999994*x1'),
-    # rule 5: a divisor float64 holds as written stays a divisor beside another divisor (the
-    # sign moves out: the zero set of `rootn(x1, 2) + sin(x2)` is null on its domain)
-    ('(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(-0.225147640565301*(rootn(x1, 2) + sin(x2)))',
-     '-(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(0.225147640565301*(rootn(x1, 2) + sin(x2)))'),
 ]
 
 
@@ -88,13 +94,21 @@ def test_the_plans_table(eng, text, expected):
     assert show(eng, text) == expected
 
 
+def test_a_divisor_float64_holds_as_written_stays_beside_another_divisor(eng):
+    # rule 5, on the form as given (the sign moves out: the zero set of `rootn(x1, 2) + sin(x2)`
+    # is null on its domain)
+    text = '(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(-0.225147640565301*(rootn(x1, 2) + sin(x2)))'
+    assert given(eng, text) == \
+        '-(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(0.225147640565301*(rootn(x1, 2) + sin(x2)))'
+
+
 # The digit budget decides only whether a number is written exactly or as its float; an exact
 # number is written as `simplify` writes it.
 @pytest.mark.parametrize('text,expected', [
     ('x1*3/10', '0.3*x1'),
     ('x2 + 0.5', 'x2 + 1/2'),
     ('x1/5', '0.2*x1'),
-    ('x1/20', '0.05*x1'),
+    ('x1/20', '0.05*x1'),  # a denominator within 24 has no reciprocal codeword
     ('22*x1/7', '22*x1/7'),
     ('x1*5/21', 'x1/4.2'),
     ('355/113*x1', '3.1415929203539825*x1'),
@@ -122,7 +136,9 @@ def test_within_the_budget_the_display_is_simplifys_text(eng):
                 if digits + answer.startswith('x1/') <= 3:
                     assert eng.prettify(answer) == answer, (text, answer)
                     compared += 1
-    assert compared == 596, compared
+    # (598: `x2 + 10/27` and `x2 + 10/29` are written by their reciprocal codeword, `x2 + 1/2.7`,
+    # within the budget)
+    assert compared == 598, compared
 
 
 @pytest.mark.parametrize('text,explicit,tagged', [
@@ -175,24 +191,26 @@ NO_REST = [
 
 @pytest.mark.parametrize('text,expected', REST_FITS, ids=[t for t, _ in REST_FITS])
 def test_a_number_that_would_show_as_a_short_number_it_is_not_gets_its_rest(eng, text, expected):
-    assert show(eng, text) == expected
+    assert given(eng, text) == expected
     assert eng.prettify(expected) == expected
-    assert structure(eng, eng.simplify(text)) == (expected, True)
+    assert structure(eng, text) == (expected, True)
     # the display reads back to the state's own numbers
     assert eng.simplify(expected) == eng.simplify(text)
 
 
 # A number is written in the first form that fits the budget of significant digits: exactly, as a
 # short exact sum (its first digits and the rest), or as its float. Exponents count no digits.
+# (`mode` None: the form as given, whose number `simplify` writes as its double, 1.)
 SHORT_SUMS = [
     ('x1*(2.5e307 + 1e170)', 'f64', '(2.5e307 + 1e170)*x1'),
     ('x1*(2.5e30 + 1e10)', 'f64', '(2.5e30 + 1e10)*x1'),
     ('x1*(2.5e30 + 1e15)', 'f64', '(2.5e30 + 1e15)*x1'),
     ('x1*(1e20 + 1)', 'f64', '(1e20 + 1)*x1'),
-    ('x1 + 1.000000000000000000003', 'f64', 'x1 + 1 + 3e-21'),
+    ('x1 + 1.000000000000000000003', None, 'x1 + 1 + 3e-21'),
     ('0.30000000000000004*x1', 'f64', '(0.3 + 4e-17)*x1'),
     # a decimal float64 writes exactly in 15 digits is written as its float, not as a sum
-    ('x1*exp(1905)', 'f64', 'x1*exp(1905)'),
+    # (permissive keeps exp(1905), which has no float; f64 writes float64's inf)
+    ('x1*exp(1905)', 'permissive', 'x1*exp(1905)'),
     ('1.0001*x1', 'f64', '1.0001*x1'),
     ('x1*1e10', 'f64', '1e10*x1'),
 ]
@@ -200,11 +218,12 @@ SHORT_SUMS = [
 
 @pytest.mark.parametrize('text,mode,expected', SHORT_SUMS, ids=[t for t, _, _ in SHORT_SUMS])
 def test_a_number_is_written_exactly_as_a_short_sum_or_as_its_float(eng, text, mode, expected):
-    answer = eng.simplify(text, mode=mode)
+    answer = text if mode is None else eng.simplify(text, mode=mode)
     assert eng.prettify(answer) == expected
     assert eng.prettify(expected) == expected
     # every display here is exact: it reads back to the answer itself
-    assert eng.simplify(expected, mode=mode) == answer
+    if mode is not None:
+        assert eng.simplify(expected, mode=mode) == answer
 
 
 def test_a_precision_writes_a_float_of_its_digits_not_a_short_sum(eng):
@@ -245,8 +264,8 @@ def test_a_float_a_rest_beyond_the_budget_and_a_precision_write_no_rest(eng, tex
 ])
 def test_precision(eng, text, precision, expected):
     """`precision=k` shows a number written as a float with k significant digits; `None` keeps
-    the shortest decimal that reads back as the same float64."""
-    assert show(eng, text, precision=precision) == expected
+    the shortest decimal that reads back as the same float64 (on the form as given)."""
+    assert given(eng, text, precision=precision) == expected
 
 
 @pytest.mark.parametrize('text', ['x1*5/21', 'x1/12', '22/7*x1', 'x1^(5/21)', '3*x0^2/(20*x1*x2)'])
@@ -279,9 +298,9 @@ PI_ROWS = [
 @pytest.mark.parametrize('precision', [None, 3, 1])
 @pytest.mark.parametrize('text,expected', PI_ROWS, ids=[t for t, _ in PI_ROWS])
 def test_pi_stays_pi_at_every_precision(eng, text, expected, precision):
-    assert show(eng, text, precision=precision) == expected
+    assert given(eng, text, precision=precision) == expected
     assert eng.prettify(expected, precision=precision) == expected
-    assert structure(eng, eng.simplify(text), precision) == (expected, True)
+    assert structure(eng, text, precision) == (expected, True)
 
 
 def test_a_precision_shortens_the_numbers_beside_pi(eng):
@@ -336,9 +355,9 @@ MIXED = [
 @pytest.mark.parametrize('precision', [None, 3])
 @pytest.mark.parametrize('text,expected', MIXED, ids=[t for t, _ in MIXED])
 def test_beside_the_symbol_pi_the_literal_stays(eng, text, expected, precision):
-    assert show(eng, text, precision=precision) == expected
+    assert given(eng, text, precision=precision) == expected
     assert eng.prettify(expected, precision=precision) == expected
-    assert structure(eng, eng.simplify(text), precision) == (expected, True)
+    assert structure(eng, text, precision) == (expected, True)
 
 
 def test_digit_budget(eng):
@@ -361,8 +380,9 @@ def test_digit_budget(eng):
     ('x1*0.12345670000000000001^40', '4.577059556136647e-37*x1'),
 ])
 def test_a_function_of_floats_is_one_float(eng, text, expected):
-    """A function of numbers that are all shown as floats is the float the evaluator computes."""
-    assert show(eng, text) == expected
+    """A function of numbers that are all shown as floats is the float the evaluator computes
+    (on the form as given)."""
+    assert given(eng, text) == expected
 
 
 # The fold is judged on the parts as the display writes them: the inner function folds and
@@ -376,8 +396,8 @@ def test_a_function_of_floats_is_one_float(eng, text, expected):
     ('x1*0.12345670000000000001^40', '4.577059556136647e-37*x1'),
 ])
 def test_a_fold_is_its_own_display(eng, text, expected):
-    assert show(eng, text) == expected
-    c = eng._core.parse(eng.simplify(text), True, False)
+    assert given(eng, text) == expected
+    c = eng._core.parse(text, True, False)
     for form in ('infix', 'explicit', 'tagged'):
         p = eng.prettify(in_form(eng, c, form))
         assert eng.prettify(p) == p, (form, p)
@@ -399,7 +419,8 @@ def test_a_fold_is_its_own_display(eng, text, expected):
     ('x1*exp(-1441/2)', 'x1*exp(-720.5)'),
 ])
 def test_any_other_function_of_numbers_stays(eng, text, expected):
-    assert show(eng, text) == expected
+    # on the form as given: `simplify` writes 3^5000 and exp(1905) as float64's inf in f64
+    assert given(eng, text) == expected
 
 
 # A fold reads back as a number, which the canonical constructors can build into a sum otherwise
@@ -484,14 +505,14 @@ SPLITS = [
 @pytest.mark.parametrize('text,precision,expected', SPLITS, ids=[f'{t}-{p}' for t, p, _ in SPLITS])
 def test_a_number_that_would_change_the_structure_is_written_with_its_rest(
         eng, text, precision, expected):
-    assert show(eng, text, precision=precision) == expected
+    assert given(eng, text, precision=precision) == expected
     assert eng.prettify(expected, precision=precision) == expected
-    shown, kept = structure(eng, eng.simplify(text), precision)
+    shown, kept = structure(eng, text, precision)
     assert (shown, kept) == (expected, True)
 
 
 def test_the_rest_in_the_token_forms(eng):
-    c = eng._core.parse(eng.simplify('sin(1.00000000000000000001*x1) - sin(x1)'), True, False, True)
+    c = eng._core.parse('sin(1.00000000000000000001*x1) - sin(x1)', True, False, True)
     assert eng.prettify(c) == ['-', 'sin', '*', '+', '1', '1e-20', 'x1', 'sin', 'x1']
     assert eng.prettify(eng.to_tagged(c)) == [
         '<add>', 'sin', '<mul>', '<add>', '1', '1e-20', '</add>', 'x1', '</mul>', '<sub>', 'sin', 'x1',
@@ -553,12 +574,13 @@ def in_form(eng, c, form):
     return eng.to_infix(c) if form == 'infix' else eng.to_tagged(c) if form == 'tagged' else c
 
 
-def displays_that_move(eng, rows, form, display=None):
-    """The rows whose display is not its own display: `display(p) != p`."""
+def displays_that_move(eng, rows, form, display=None, as_given=False):
+    """The rows whose display is not its own display: `display(p) != p` (of `simplify`'s answer,
+    or of the row as given)."""
     display = display or eng.prettify
     moved = []
     for row in rows:
-        p = display(in_form(eng, eng.simplify(row), form))
+        p = display(in_form(eng, row if as_given else eng.simplify(row), form))
         if display(p) != p:
             moved.append((row, p, display(p)))
     return moved
@@ -658,8 +680,9 @@ def test_p1_check_catches_a_display_that_moves(eng):
     def short(expression):
         return eng.prettify(expression).replace('(1 + 1e-20)*', '')
 
-    assert displays_that_move(eng, [row], 'infix', short) == [(row, 'sin(x1) - sin(x1)', '0')]
-    assert displays_that_move(eng, [row], 'infix') == []
+    assert displays_that_move(eng, [row], 'infix', short, as_given=True) == \
+        [(row, 'sin(x1) - sin(x1)', '0')]
+    assert displays_that_move(eng, [row], 'infix', as_given=True) == []
 
 
 @pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
@@ -782,7 +805,7 @@ GROUPED = [
     ('x1*x2/(x3*x4*x5)', 'x1*x2/(x3*x4*x5)', 'x1*x2/(x3*(x4*x5))'),
     ('sin(x1 + x2 + x3)*x4*x5', 'x4*x5*sin(x1 + x2 + x3)', 'x4*(x5*sin(x1 + (x2 + x3)))'),
     # a number written with its rest is one term
-    ('x1 + 1.000000000000000000003', 'x1 + 1 + 3e-21', 'x1 + (1 + 3e-21)'),
+    ('x1 + 0.30000000000000004', 'x1 + 0.3 + 4e-17', 'x1 + (0.3 + 4e-17)'),
 ]
 
 
@@ -966,7 +989,7 @@ def test_api(eng):
 
 def test_prettify_never_changes_the_state(eng):
     """Display only: the canonical answer is the same before and after a display."""
-    text = '2.14583142772210003669120562399025*x1'
+    text = '0.30000000000000004*x1'
     before = eng.simplify(text)
-    eng.prettify(before)
-    assert eng.simplify(text) == before == '2.14583142772210003669120562399025*x1'
+    assert eng.prettify(before) == '(0.3 + 4e-17)*x1'
+    assert eng.simplify(text) == before == '0.30000000000000004*x1'

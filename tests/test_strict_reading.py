@@ -68,10 +68,14 @@ def test_the_second_reading_reads_kind_only_where_the_reals_give_both_sides_a_va
     assert _contract.kind_holds('INF-CHANGE', lambda: True) is False
 
 
-def test_a_ground_rule_has_no_second_reading() -> None:
-    # one point, bit-exact (3.3): the double 1.0000000000000002 is no 1
+def test_a_ground_rule_is_read_on_each_modes_value() -> None:
+    # one point: float64's 1.0000000000000002 is no 1, but the reals give both sides the value 1
+    # and float64's two values are both finite, so f64 holds it too
     r = verify_rule('exp sin np.pi'.split(), ['1'])
-    assert r['realised'] is False and r['tier'] == 'permissive', r
+    assert r['realised'] is True and r['tier'] == 'core', r
+    # where float64's kind differs from the reals', only float64's own double holds in f64
+    r = verify_rule('tan asin 1'.split(), ['0'])
+    assert r['realised'] is False, r
 
 
 @pytest.mark.parametrize('lhs, rhs', [ADMITTED[0], ADMITTED[5]])

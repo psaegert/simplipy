@@ -1,10 +1,12 @@
 # Displaying expressions
 
-`simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
-it was given, and a coefficient that combines several literals is their exact product.
-`prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is: it changes how a number is written, never the
-structure, and applies no rules.
+`simplify` returns the canonical form and writes each number as the cheapest value its mode
+admits: in `f64` float64's double where that is cheaper than the exact value, so a literal
+longer than a float becomes its double. A canonical form can still hold numbers longer than a
+float: a fraction cheaper than its double stays exact, and an expression given to `prettify` as
+it is keeps every digit it was given. `prettify` is the display of a canonical form. It decides
+how each number is written for a reader and leaves the expression's structure as it is: it
+changes how a number is written, never the structure, and applies no rules.
 
 ```python
 import simplipy as sp
@@ -13,8 +15,8 @@ engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
 
 answer = engine.simplify("2.14583142772210003669120562399025*x1")
 answer
-# -> '2.14583142772210003669120562399025*x1'
-engine.prettify(answer)
+# -> '2.1458314277221002*x1'
+engine.prettify("2.14583142772210003669120562399025*x1")
 # -> '2.1458314277221002*x1'
 ```
 
@@ -48,11 +50,12 @@ engine.prettify(engine.simplify("x2 + 0.5"))
 
 **Else a short exact sum**, `s + r` or `s - r`: `s` the number's first significant digits and
 `r` the rest to its value, each written exactly as one number, within the budget in total. It
-keeps the value, so `1.000000000000000000003` is not 1. A number float64 writes exactly in 15 digits (`1905`,
-`1.0001`) is written as its float instead, never as a sum.
+keeps the value, so `1.000000000000000000003` is not 1 (`simplify` writes it as its double, 1,
+in both modes; the display keeps the value of the form it is given). A number float64 writes
+exactly in 15 digits (`1905`, `1.0001`) is written as its float instead, never as a sum.
 
 ```python
-engine.prettify(engine.simplify("x1 + 1.000000000000000000003"))
+engine.prettify("x1 + 1.000000000000000000003")
 # -> 'x1 + 1 + 3e-21'
 engine.prettify(engine.simplify("x1*(2.5e30 + 1e15)"))
 # -> '(2.5e30 + 1e15)*x1'
@@ -79,7 +82,7 @@ is written as that spelling and the rest to its value, `s + r` or `s - r`, the r
 the same rules. Of two numbers that would be equal, the one written first keeps its spelling.
 
 ```python
-engine.prettify(engine.simplify("1.0000000000000000000031*x1"))
+engine.prettify("1.0000000000000000000031*x1")
 # -> '(1 + 3.1e-21)*x1'
 engine.prettify(engine.simplify("sin(1.0001*x1) - sin(x1)"), precision=3)
 # -> 'sin((1 + 1e-4)*x1) - sin(x1)'
@@ -107,7 +110,8 @@ engine.prettify(engine.simplify("x0/(2*3.141592653589793)"), precision=3)
 **pi.** A value that is a number written exactly times the literal `3.141592653589793`, or over
 it, is written with pi factored out as the symbol `pi` (`np.pi` in the token forms), at every
 precision: pi is never shortened, and a precision applies to the other numbers only. In `f64`
-the symbol is that float, so the display evaluates as the literal does.
+the symbol is that float, so the display evaluates as the literal does. (`simplify` reads that
+literal as pi itself, as it reads every literal on its recognition list.)
 
 ```python
 engine.prettify(engine.simplify("x0/(2*3.141592653589793)"))
@@ -116,14 +120,15 @@ engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
 # -> '0.15*x0^2/(pi*x1*x2)'
 ```
 
-The literal stays where the symbol would read back as another expression: reading
-`sin(x1 + pi)` builds `-sin(x1)`. It also stays where the expression holds the symbol pi
-itself, so the two are not read back as one.
+In a form that holds the literal (one given to `prettify` as it is), the literal stays where
+the symbol would read back as another expression: reading `sin(x1 + pi)` builds `-sin(x1)`. It
+also stays where the expression holds the symbol pi itself, so the two are not read back as one.
+(`simplify` reads the literal as pi, so its answers are `-sin(x1)` and `0`.)
 
 ```python
-engine.prettify(engine.simplify("sin(x1 + 3.141592653589793)"))
+engine.prettify("sin(x1 + 3.141592653589793)")
 # -> 'sin(x1 + 3.141592653589793)'
-engine.prettify(engine.simplify("sin(pi*x1) - sin(3.141592653589793*x1)"))
+engine.prettify("sin(pi*x1) - sin(3.141592653589793*x1)")
 # -> 'sin(pi*x1) - sin(3.141592653589793*x1)'
 ```
 
@@ -228,7 +233,7 @@ engine.prettify(grouped, keep_grouping=True)
 # -> '2*x2 + (2*x3 + exp(x2 + x3)) - x1'
 engine.prettify(engine.simplify("2*x1*x2/(x3*x4*x5)"), keep_grouping=True)
 # -> '2*(x1*x2)/(x3*(x4*x5))'
-engine.prettify(engine.simplify("x1 + 1.000000000000000000003"), keep_grouping=True)
+engine.prettify("x1 + 1.000000000000000000003", keep_grouping=True)
 # -> 'x1 + (1 + 3e-21)'
 ```
 

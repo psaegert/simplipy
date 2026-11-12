@@ -1334,9 +1334,9 @@ fn candidate_matches(
     lane: Lane,
 ) -> Result<Option<Vec<f64>>, &'static str> {
     let rescue = lane.rescue();
-    // A FULLY NUMERIC SOURCE (no variable, no constant) is rewritten bit-exactly in f64 (F8, the
-    // semantics' 3.3): its candidate is the same double, the sign of a zero included, and no range
-    // standard applies (`table::f64_same`).
+    // A FULLY NUMERIC SOURCE (no variable, no constant) has one point, read by the ground
+    // evaluator (`ground::rule_verdict`): in f64 its candidate is the same double, or the same real
+    // value with float64's kinds kept (`exp(sin(np.pi)) -> 1`; `sin(np.pi) -> 0`).
     let ground = !source
         .iter()
         .any(|t| t == "<constant>" || var_names.iter().any(|v| v == t));
@@ -1371,8 +1371,9 @@ fn candidate_matches(
             //   same kind, and within F6 or the mine's tolerances, past which a difference is
             //   refused here (an identity whose rounding a function magnifies past them stays
             //   permissive's; the judge decides what the tolerances pass). A fully numeric
-            //   source is bit-exact: `exp(sinh(-10))` is exactly 0.0 in f64, so `-> 0` holds
-            //   there; `sin(np.pi)` is 1.2e-16, so `-> 0` does not. At a row where an operation
+            //   source is read by the ground evaluator: `sin(np.pi) -> 0` holds (the reals
+            //   give both sides 0, float64's 1.2e-16 and 0 are both finite), `sin(np.pi) -> 0.1`
+            //   does not. At a row where an operation
             //   of either side overflows or underflows, the true value is accepted beside the
             //   evaluator's (the f64 range standard, `f64_range_rescue`), every other row read
             //   by the same row agreement: `rootn(exp(x), 2) -> exp(x/2)` and `log(exp(x)) -> x`
@@ -1786,7 +1787,8 @@ fn strict_rows_agree(
 }
 
 /// STRICT'S ROWS OF A CONSTANT-FREE PAIR in f64, the scan's acceptance of its rows: a fully
-/// numeric pair bit-exact (`table::f64_same`), any other by the mint's row agreement at every row
+/// numeric pair by the ground evaluator (`ground::rule_verdict`: the same double, or the same real
+/// value with float64's kinds kept), any other by the mint's row agreement at every row
 /// (`strict_rows_agree`), the true value accepted where an operation of either side overflowed or
 /// underflowed and every other row read by the same agreement (`f64_range_rescue`). The scan
 /// (`candidate_matches`) and the overlap gate's prefilter reading (`prefilter_agrees`) read it.
@@ -1807,10 +1809,8 @@ fn strict_rows_hold(
     ground: bool,
 ) -> bool {
     if ground {
-        return y
-            .iter()
-            .zip(y_cand)
-            .all(|(&s, &c)| crate::table::f64_same(s, c));
+        return crate::ground::rule_verdict(source, candidate, ops)
+            .is_some_and(|v| v.same_double || v.same_real_in_kind);
     }
     strict_rows_agree(y, y_cand, rtol, atol, |r| {
         crate::hiprec::reals_both_valued(

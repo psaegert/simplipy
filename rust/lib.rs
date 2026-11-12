@@ -324,6 +324,7 @@ mod env_switches;
 mod eval;
 mod fit;
 mod forms;
+mod ground;
 mod hiprec;
 mod interval;
 mod numeric;
@@ -2622,6 +2623,22 @@ fn table_f64_same(a: f64, b: f64) -> bool {
     table::f64_same(a, b)
 }
 
+/// THE GROUND CHECK of a fully numeric rule (`ground::rule_verdict`), the one the engine's fold
+/// and verify-mine's gate read: `(same_double, same_real_in_kind, reals, permissive)` -- strict's
+/// (a), strict's (b), the reals' comparison (`None`: unread), permissive's reading of the table at
+/// float resolution. `None` where a side is no ground expression the evaluator reads.
+#[pyfunction]
+fn ground_rule_verdict(
+    py: Python<'_>,
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<(bool, bool, Option<bool>, bool)> {
+    let ops = arity_table(arity);
+    py.detach(|| ground::rule_verdict(&lhs, &rhs, &ops))
+        .map(|v| (v.same_double, v.same_real_in_kind, v.reals, v.permissive))
+}
+
 /// The structural f64 comparison (has the deployed algebra diverged?).
 #[pyfunction]
 fn table_f64_structural(a: f64, b: f64) -> &'static str {
@@ -2657,6 +2674,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_compare_classes, m)?)?;
     m.add_function(wrap_pyfunction!(table_f64_agree, m)?)?;
     m.add_function(wrap_pyfunction!(table_f64_same, m)?)?;
+    m.add_function(wrap_pyfunction!(ground_rule_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(table_f64_structural, m)?)?;
     m.add_function(wrap_pyfunction!(table_ulp_gap, m)?)?;
     m.add("TABLE_REALISED_ULP", table::REALISED_ULP)?;

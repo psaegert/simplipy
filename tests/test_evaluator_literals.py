@@ -138,19 +138,27 @@ class TestKernelLiterals:
     forms that move because of it, each checked against the exact value."""
 
     # Since phase 2c a fraction token within the cap is an exact number, so the last three
-    # print reduced; what they pin is that none of them folds to nan.
+    # print reduced; what they pin is that none of them folds to nan. Where the two modes' values
+    # differ, `out` gives each mode's: float64 reads -1/10^400 as -0.0, so strict's log of it is
+    # float64's -inf (the reals give it no value, so float64's value is the only one strict
+    # admits), and permissive's is undefined; (-2)^(2^128) is finite (real: 2^(2^128)), a range
+    # event in float64, where strict writes float64's +inf, the cheaper of the two values the
+    # range standard accepts, and permissive, which has no float for it, keeps it.
     @pytest.mark.parametrize('prefix, out', [
         (['rootn', '-1', str(2 ** 128)], ['float("nan")']),       # an even root of -1
         (['rootn', 'rootn', 'x1', '0', str(2 ** 127)], ['float("nan")']),
-        (['log', '-1/' + Q], ['float("nan")']),                   # log of a negative number
-        (['pow', '-2', f'{2 ** 256}/{2 ** 128}'], ['pow', '-2', str(2 ** 128)]),  # finite
-        (['pow', '-2', f'{3 * 2 ** 200}/3'], ['pow', '-2', str(2 ** 200)]),  # main: nan
+        (['log', '-1/' + Q], {'f64': ['float("-inf")'], 'permissive': ['float("nan")']}),
+        (['pow', '-2', f'{2 ** 256}/{2 ** 128}'],
+         {'f64': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 128)]}),  # finite
+        (['pow', '-2', f'{3 * 2 ** 200}/3'],
+         {'f64': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 200)]}),  # main: nan
         (['log', f'{Q}/{Q[:-1]}'], ['log', '10']),                # log(10), no nan
     ])
     def test_beyond_i128_literals_fold_only_when_certain(self, engine: SimpliPyEngine,
-                                                         prefix: list[str], out: list[str] | None) -> None:
+                                                         prefix: list[str], out) -> None:
         for mode in ('f64', 'permissive'):
-            assert list(engine.simplify(prefix, mode=mode)) == (prefix if out is None else out)
+            want = out[mode] if isinstance(out, dict) else out
+            assert list(engine.simplify(prefix, mode=mode)) == want, mode
 
     @pytest.mark.parametrize('zero', ['+0/5', '(+0/5)', '+00/7', '-0/5'])
     def test_every_spelling_of_a_zero_fraction_is_zero(self, engine: SimpliPyEngine, zero: str) -> None:

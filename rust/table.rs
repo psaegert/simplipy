@@ -210,6 +210,11 @@ pub struct Ctx {
     /// Where Unresolved begins (`unread_above`): every precision of at least this many digits
     /// leaves the expression Unresolved at its point; `i32::MAX` where that is not known.
     pub unread_above: i32,
+    /// THE VALUE ITSELF IS NO INTERMEDIATE (`Expr::eval_real_ground`): the magnitude of the
+    /// expression's own value is not noted, so it demands no digits: `exp(sinh(-10))` is
+    /// e^-11013, read at the ordinary precision to its last place, while an intermediate that
+    /// small would ask for the digits a later cancellation against it costs.
+    pub root_unnoted: bool,
     cc: PooledConsts,
 }
 
@@ -305,6 +310,7 @@ impl Ctx {
             saturate: false,
             unread_through: 0,
             unread_above: i32::MAX,
+            root_unnoted: false,
             cc: PooledConsts::take()?,
         })
     }
@@ -1917,9 +1923,21 @@ impl Expr {
         self.eval_real_reading(env, dps, true)
     }
 
+    /// `eval_real` of a ground expression's own value: the magnitudes it reports are its
+    /// intermediates' (`Ctx::root_unnoted`).
+    pub fn eval_real_ground(&self, dps: i32) -> Option<RealOutcome> {
+        let mut ctx = Ctx::new(dps)?;
+        ctx.root_unnoted = true;
+        self.eval_real_with(&[], ctx)
+    }
+
     fn eval_real_reading(&self, env: &[Val], dps: i32, saturate: bool) -> Option<RealOutcome> {
         let mut ctx = Ctx::new(dps)?;
         ctx.saturate = saturate;
+        self.eval_real_with(env, ctx)
+    }
+
+    fn eval_real_with(&self, env: &[Val], mut ctx: Ctx) -> Option<RealOutcome> {
         let _exact = number_domain(false);
         let value = self.node_real(self.root, env, &mut ctx);
         Some(RealOutcome {
@@ -1945,7 +1963,9 @@ impl Expr {
             // the 1e-3000 is spelled.
             Node::Var(k) => {
                 let v = env.get(*k)?.clone();
-                ctx.note_mag(&v, false);
+                if !(ctx.root_unnoted && i == self.root) {
+                    ctx.note_mag(&v, false);
+                }
                 Some(v)
             }
             Node::Lit(leaf, _) => {
@@ -1955,7 +1975,9 @@ impl Expr {
                     Leaf::Dec(m, k) => approx(ctx.decimal(m, *k)),
                     Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
                 };
-                ctx.note_mag(&v, false);
+                if !(ctx.root_unnoted && i == self.root) {
+                    ctx.note_mag(&v, false);
+                }
                 Some(v)
             }
             Node::Op(name, kids) => {
@@ -1990,7 +2012,9 @@ impl Expr {
                 if is_inf(&v) {
                     ctx.inf_node = true;
                 }
-                ctx.note_mag(&v, matches!(name.as_str(), "+" | "-" | "mod"));
+                if !(ctx.root_unnoted && i == self.root) {
+                    ctx.note_mag(&v, matches!(name.as_str(), "+" | "-" | "mod"));
+                }
                 Some(v)
             }
         }
@@ -2035,6 +2059,49 @@ impl Expr {
         let mut in_range = true;
         let v = self.node_f64(self.root, env, &mut in_range)?;
         Some((v, in_range))
+    }
+
+    /// Does float64's evaluation at `env` hand a negative zero to an operation that reads a
+    /// zero's sign (`battery::ZERO_SIGN_READERS`: `1/(-0)` is -inf, `atan2(-0, -1)` is -pi), so
+    /// that float64's value there rests on a sign the reals' one zero does not carry?
+    pub fn reads_a_negative_zero(&self, env: &[f64]) -> bool {
+        let mut found = false;
+        self.node_zero_sign(self.root, env, &mut found);
+        found
+    }
+
+    fn node_zero_sign(&self, i: usize, env: &[f64], found: &mut bool) -> Option<f64> {
+        match &self.nodes[i] {
+            Node::Var(k) => env.get(*k).copied(),
+            Node::Lit(_, tok) => literal_f64(tok),
+            Node::Op(name, kids) => {
+                let mut args = Vec::with_capacity(kids.len());
+                for &k in kids {
+                    args.push(self.node_zero_sign(k, env, found)?);
+                }
+                if crate::battery::ZERO_SIGN_READERS.contains(&name.as_str())
+                    && args.iter().any(|a| *a == 0.0 && a.is_sign_negative())
+                {
+                    *found = true;
+                }
+                crate::numeric::apply_op(name, &args)
+            }
+        }
+    }
+
+    /// The real value of a ground expression whose root is a bounded function at float resolution
+    /// (`Ctx::saturate`): its bound where it lies within the band of it. The double nearest to
+    /// the value only, never an exact comparison: `tanh(cosh(-10))` is 1 - 2e-9566, which no
+    /// affordable precision tells from 1 and whose nearest double is 1.0. `None` where the root
+    /// is no bounded function (`tanh`, `erf`, `erfc`): below any other head a bound read for its
+    /// value could be magnified (`floor(tanh(cosh(-10)))` is 0, not 1).
+    pub fn float_resolution_at_a_bounded_root(&self) -> Option<Val> {
+        match &self.nodes[self.root] {
+            Node::Op(name, _) if matches!(name.as_str(), "tanh" | "erf" | "erfc") => {
+                self.eval_real_reading(&[], BASE_DPS, true)?.value
+            }
+            _ => None,
+        }
     }
 
     fn node_f64(&self, i: usize, env: &[f64], in_range: &mut bool) -> Option<f64> {
@@ -2247,21 +2314,95 @@ fn bf_to_f64(b: &BigFloat) -> f64 {
     y
 }
 
-/// THE TABLE's real value of a ground expression (no free name) at `dps` digits, in the
-/// float-resolution reading (`Ctx::saturate`): permissive's ground fold, which writes the double
-/// nearest to the value (P3). `None` where it holds a token the table cannot read or the point
-/// is Unresolved at that precision.
-pub fn ground_value_float(
-    tokens: &[String],
-    ops: &crate::operators::Operators,
-    dps: i32,
-) -> Option<Val> {
-    let arity: std::collections::HashMap<String, u8> = tokens
-        .iter()
-        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
-        .collect();
-    let e = Expr::compile(tokens, &[], &arity).ok()?;
-    e.eval_real_reading(&[], dps, true)?.value
+/// THE TABLE's real value of a ground expression (no free name), read at the judge's precision
+/// LADDER: the ordinary precision first, then as many digits as the reading asks for, up to
+/// `MAX_DPS`. A reading asks for more where the magnitudes it combined demand them
+/// (`demanded_dps`: `1 + 1e-200` needs 450 digits before a sum of them means anything), where a
+/// bounded function sits inside the band of its bound (`band`: `tanh(100)` is 1 - 2.7e-87, which
+/// 50 digits cannot tell from 1, so `floor(tanh(100))` is read at 140 and is 0), where it is
+/// Unresolved through a known precision (`unread_through`), and where a symbolic-cancellation snap
+/// read it (confirmed at a second rung). An exact value is a fact at any rung. `Some((value,
+/// dps))` with the digits it was read at; `None` where no rung up to `MAX_DPS` reads it.
+pub fn ground_value(e: &Expr) -> Option<(Val, i32)> {
+    let mut dps = BASE_DPS;
+    let mut snapped: Option<Val> = None;
+    for _ in 0..6 {
+        let out = e.eval_real_ground(dps)?;
+        let demand = demanded_dps(&out.max_mag, &out.min_mag);
+        let next: i64 = match out.value {
+            Some(v) if out.snapped => match snapped.take() {
+                // a snap confirmed at a higher rung: the same exact value, or values the
+                // working precision cannot separate
+                Some(prev) => {
+                    let mut ctx = Ctx::new(dps)?;
+                    let same = match (&prev, &v) {
+                        (Val::Exact(a), Val::Exact(b)) => a == b,
+                        (a, b) => {
+                            class_of(a) == class_of(b)
+                                && (class_of(a).0
+                                    || class_of(a).1.is_some()
+                                    || indistinct(a, b, &mut ctx))
+                        }
+                    };
+                    return same.then_some((v, dps));
+                }
+                None => {
+                    snapped = Some(v);
+                    i64::from(dps.max(60)) * 2
+                }
+            },
+            // a reading no snap made (a snap below it that this rung does not repeat was the
+            // coarser rung's artefact)
+            Some(v) if matches!(v, Val::Exact(_)) || demand <= i64::from(dps) => {
+                return Some((v, dps));
+            }
+            Some(_) => demand,
+            None => {
+                // the digits the bounded function's distance to its bound asks for
+                let small = if out.band.is_zero() {
+                    out.min_mag.clone()
+                } else if out.min_mag.is_zero() || cmp_lt(&out.band, &out.min_mag) {
+                    out.band.clone()
+                } else {
+                    out.min_mag.clone()
+                };
+                let mut need = demanded_dps(&out.max_mag, &small);
+                if out.unread_through > 0 {
+                    need = need.max(i64::from(out.unread_through) + 10);
+                }
+                need.max(i64::from(dps) * 2)
+            }
+        };
+        if next > i64::from(MAX_DPS) || next <= i64::from(dps) {
+            return None;
+        }
+        dps = next as i32;
+    }
+    None
+}
+
+/// Do two values of the table hold ONE real value, as far as the table can tell? Exact values
+/// are compared exactly (a rational, a rational multiple of pi, an infinity); undefined is no
+/// value and equals nothing. Where one is an approximation they are one value when the working
+/// precision of the coarser reading (`dps`) cannot separate them (`exp(log(3))` and 3).
+pub fn same_real_value(a: &Val, b: &Val, dps: i32) -> bool {
+    match (a, b) {
+        (Val::Exact(Exact::Undef), _) | (_, Val::Exact(Exact::Undef)) => false,
+        (Val::Exact(x), Val::Exact(y)) => x == y,
+        // an approximation is no exact zero: a nonzero one is not zero (`exp(sinh(-10))` is
+        // e^-11013), and one computed as zero may be a value below the working precision
+        _ if is_zero(a) || is_zero(b) => false,
+        _ => {
+            let (ca, cb) = (class_of(a), class_of(b));
+            if ca.1.is_some() || cb.1.is_some() {
+                return ca.1 == cb.1;
+            }
+            match Ctx::new(dps.max(BASE_DPS)) {
+                Some(mut ctx) => indistinct(a, b, &mut ctx),
+                None => false,
+            }
+        }
+    }
 }
 
 // -------------------------------------------------------------------------- comparison

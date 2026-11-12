@@ -230,10 +230,11 @@ class TestPruneProbesWhatTheSlotBinds:
         takes `inf/inf` to `nan` without the rule: `$0 / $0 -> 1` is not covered there
         (the mask-sentinel doctrine), whatever its generic instance says."""
         engine = self._engine()
+        # a fully numeric `inf/inf` has no value, read before any rule: NaN, which absorbs
         inf_mask = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
-        assert engine.simplify(inf_mask, mode='permissive') == ['x0']
+        assert engine.simplify(inf_mask, mode='permissive') == ['float("nan")']
         assert engine.prune_covered_rules(rule_mode='permissive') == 0
-        assert engine.simplify(inf_mask, mode='permissive') == ['x0']
+        assert engine.simplify(inf_mask, mode='permissive') == ['float("nan")']
 
     def test_a_dollar_slot_is_instantiated(self) -> None:
         """In f64 the `$` slot binds a variable and a certified composite, and the

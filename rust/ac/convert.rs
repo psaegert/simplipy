@@ -40,12 +40,23 @@ pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // One scope for the whole parse: a product met again is decided once (`FlipScope`).
     let _memo = FlipScope::open();
-    // A ground expression: every token an operator or a value the evaluator reads.
+    // A ground expression: every atom a value. Groundness belongs to the tree, not to its
+    // spelling: an operator and a tagged bag's delimiter are structure, and every other token
+    // is an atom, ground where it is a value the evaluator reads (a number, `np.pi`, an
+    // infinity, NaN), so a tagged spelling of a ground tree is ground too.
     let view = cx.view;
     let ground = tokens.iter().all(|&t| {
-        view.arity(t).is_some() || view.with_str(t, |s| crate::numeric::leaf_value(s).is_some())
+        view.arity(t).is_some()
+            || view.with_str(t, |s| {
+                crate::forms::TAG_TOKENS.contains(&s)
+                    || crate::numeric::leaf_value(s).is_some()
+                    || crate::utils::is_numeric_string(s)
+            })
     });
     let _ground = GroundParse::open(ground);
+    // GROUND FIRST: the fully numeric parts, found on the tokens as written, are valued before
+    // any constructor builds them (`Cx::ground_first`).
+    let _parts = GroundParts::open(cx.ground_first.map(|_| ground_parts(tokens, view)));
     let (e, next) = parse_one(tokens, 0, cx)?;
     if next != tokens.len() {
         return None;
@@ -53,7 +64,187 @@ pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     Some(e)
 }
 
+thread_local! {
+    /// The maximal fully numeric parts of the sequence `from_prefix` reads: at a part's first
+    /// token, the index after its last, 0 elsewhere. Empty where no evaluator reads the parse.
+    static GROUND_PARTS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The scope of one parse's ground parts (`GROUND_PARTS`), restoring the enclosing parse's.
+struct GroundParts(Vec<u32>);
+
+impl GroundParts {
+    fn open(parts: Option<Vec<u32>>) -> GroundParts {
+        GroundParts(GROUND_PARTS.with(|g| g.replace(parts.unwrap_or_default())))
+    }
+}
+
+impl Drop for GroundParts {
+    fn drop(&mut self) {
+        let prev = std::mem::take(&mut self.0);
+        GROUND_PARTS.with(|g| *g.borrow_mut() = prev);
+    }
+}
+
+/// Is `s` an atom with a value (a number, `np.pi`, `np.e`, an infinity, NaN, the written -0.0)?
+fn value_atom(s: &str) -> bool {
+    crate::numeric::leaf_value(s).is_some() || crate::utils::is_numeric_string(s)
+}
+
+/// The MAXIMAL FULLY NUMERIC PARTS of a token sequence as written: every composite subtree all
+/// of whose atoms are values (`value_atom`), and which no larger such subtree holds. At a part's
+/// first token, the index after its last; 0 elsewhere. A tagged bag is a subtree of its
+/// children, its section markers structure. An unreadable sequence has no parts.
+fn ground_parts(tokens: &[Tok], view: &TokenView) -> Vec<u32> {
+    // the span (end, ground) of the node starting at each index
+    fn walk(
+        tokens: &[Tok],
+        i: usize,
+        view: &TokenView,
+        spans: &mut [(u32, bool)],
+        depth: usize,
+    ) -> Option<usize> {
+        if depth > 10_000 {
+            return None;
+        }
+        let t = *tokens.get(i)?;
+        let s = view.resolve_owned(t);
+        let closer = match s.as_str() {
+            "<add>" => Some("</add>"),
+            "<mul>" => Some("</mul>"),
+            "<max>" => Some("</max>"),
+            "<min>" => Some("</min>"),
+            _ => None,
+        };
+        let (end, ground) = if let Some(c) = closer {
+            let (mut at, mut ground) = (i + 1, true);
+            loop {
+                let nt = *tokens.get(at)?;
+                if view.tok_is(nt, c) {
+                    break (at + 1, ground);
+                }
+                if view.tok_is(nt, "<sub>") || view.tok_is(nt, "<div>") {
+                    at += 1;
+                    continue;
+                }
+                let next = walk(tokens, at, view, spans, depth + 1)?;
+                ground &= spans[at].1;
+                at = next;
+            }
+        } else {
+            match view.arity(t).or_else(|| (s == "rootn").then_some(2)) {
+                Some(n) => {
+                    let (mut at, mut ground) = (i + 1, true);
+                    for _ in 0..n {
+                        let next = walk(tokens, at, view, spans, depth + 1)?;
+                        ground &= spans[at].1;
+                        at = next;
+                    }
+                    (at, ground)
+                }
+                None => (i + 1, value_atom(&s)),
+            }
+        };
+        spans[i] = (end as u32, ground);
+        Some(end)
+    }
+    let mut spans = vec![(0u32, false); tokens.len()];
+    if walk(tokens, 0, view, &mut spans, 0) != Some(tokens.len()) {
+        return Vec::new();
+    }
+    // In prefix order a part's first token precedes every token it holds, so the first ground
+    // composite met outside a marked part is a maximal one.
+    let mut out = vec![0u32; tokens.len()];
+    let mut covered = 0usize;
+    for (i, &(end, ground)) in spans.iter().enumerate() {
+        if i < covered || end == 0 {
+            continue;
+        }
+        if ground && end as usize > i + 1 {
+            out[i] = end;
+            covered = end as usize;
+        }
+    }
+    out
+}
+
+/// The ground evaluator's verdict on the maximal fully numeric part starting at `idx`, where one
+/// does (`ground_parts`): the atom the parse takes in its place, with the index after it, or
+/// `None` to build the part as written.
+fn ground_part_atom(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
+    let value = cx.ground_first?;
+    let end = GROUND_PARTS.with(|g| g.borrow().get(idx).copied())? as usize;
+    if end <= idx + 1 {
+        return None;
+    }
+    value(&tokens[idx..end]).map(|atom| (atom, end))
+}
+
+/// THE RECOGNITION LIST AT THE INPUT: a decimal literal that float64 reads as exactly the double
+/// of a short symbolic number (`ground::recognise`: k*pi/m, k*e/m, k/m, log 2, log 3, log 10,
+/// sqrt 2, sqrt 3, sqrt 5) is read as that number, its sign outside it:
+/// `3.141592653589793` is pi, `0.3333333333333333` is 1/3, `-1.4142135623730951` is
+/// -sqrt(2). Both modes: strict reads the same double, so the step is float64's identity, and
+/// permissive moves by less than a unit in the last place (float resolution). A literal that
+/// already spells its entry's value (`0.5`) is no recognition; a fraction token (`1/3`) is exact
+/// and stays.
+fn recognised_literal(s: &str, cx: &Cx) -> Option<Ex> {
+    if !crate::utils::looks_numeric(s) || s.contains('/') {
+        return None;
+    }
+    let d = crate::numeric::leaf_value(s)?;
+    recognised_double(d, cx)
+}
+
+/// The list's entry float64 gives exactly the double `d`, checked by evaluation: the entry is
+/// built, spelled with every literal one token, and float64's value of that spelling must be `d`
+/// bit for bit (`ground::spelled_double`); else `None`.
+pub(crate) fn recognised_double(d: f64, cx: &Cx) -> Option<Ex> {
+    let (entry, negative) = crate::ground::recognise(d)?;
+    let e = recognised_number(entry, negative, cx)?;
+    let bare = Cx::bare(cx.view);
+    let toks: Vec<String> = to_prefix_literal_tokens(&e, &bare)
+        .iter()
+        .map(|t| cx.view.resolve_owned(*t))
+        .collect();
+    let y = crate::ground::spelled_double(&toks)?;
+    (y.to_bits() == d.to_bits()).then_some(e)
+}
+
+/// The expression of a recognised number, built by the constructors: `k*pi/m` and `k*e/m` a
+/// product of the fraction and the constant, `k/m` the number, `log(n)` the call (where the
+/// configuration declares `log`), `sqrt(n)` the power `n^(1/2)`. `negative` puts -1 outside it.
+pub(crate) fn recognised_number(
+    entry: crate::ground::Entry,
+    negative: bool,
+    cx: &Cx,
+) -> Option<Ex> {
+    use crate::ground::Entry;
+    let q = |k: i64, m: i64| Rat::new(i128::from(k), i128::from(m));
+    let e = match entry {
+        Entry::Pi(k, m) => mul(vec![Ex::Num(q(k, m)?), Ex::Pi], cx),
+        Entry::E(k, m) => mul(vec![Ex::Num(q(k, m)?), Ex::E], cx),
+        Entry::Fraction(k, m) => Ex::Num(q(k, m)?),
+        Entry::Log(n) => {
+            let log = cx.view.intern("log");
+            if cx.view.arity(log) != Some(1) {
+                return None;
+            }
+            fun(log, vec![Ex::int(i128::from(n))], cx)
+        }
+        Entry::Sqrt(n) => pow(Ex::int(i128::from(n)), Ex::Num(q(1, 2)?), cx),
+    };
+    Some(if negative {
+        mul(vec![Ex::Num(Rat::NEG_ONE), e], cx)
+    } else {
+        e
+    })
+}
+
 fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
+    if let Some(found) = ground_part_atom(tokens, idx, cx) {
+        return Some(found);
+    }
     let view = cx.view;
     let t = *tokens.get(idx)?;
     let s = view.resolve_owned(t);
@@ -178,7 +369,14 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
             };
             Some((Ex::Leaf(leaf), idx + 1))
         }
-        None => Some((parse_leaf_token(t, &s, view), idx + 1)),
+        // the simplify walk's parse (the one the ground evaluator reads) reads a literal on the
+        // recognition list as its entry; a conversion keeps every literal as written
+        None => Some((
+            cx.ground_first
+                .and_then(|_| recognised_literal(&s, cx))
+                .unwrap_or_else(|| parse_leaf_token(t, &s, view)),
+            idx + 1,
+        )),
         Some(n) => {
             let mut args = Vec::with_capacity(n as usize);
             let mut at = idx + 1;
@@ -221,6 +419,10 @@ fn product_head(s: &str, arity: Option<u8>) -> bool {
 /// its own. Every other spelling is one member. A `<mul>` bag still needs two children and its
 /// closer.
 fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Option<usize> {
+    if let Some((atom, at)) = ground_part_atom(tokens, idx, cx) {
+        out.push(atom);
+        return Some(at);
+    }
     let view = cx.view;
     let t = *tokens.get(idx)?;
     let s = view.resolve_owned(t);
@@ -252,7 +454,10 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             // its members stay apart for an inverse to read (`zero_over_literal`).
             match (num.as_slice(), den.as_slice()) {
                 ([Ex::Num(n)], [Ex::Num(_)]) if !zero_over_literal(n, cx) => {
-                    out.push(desugar("/", t, vec![num.remove(0), den.remove(0)], cx))
+                    let (p, q) = (num.remove(0), den.remove(0));
+                    out.push(
+                        literal_quotient(&p, &q).unwrap_or_else(|| desugar("/", t, vec![p, q], cx)),
+                    )
                 }
                 _ => {
                     out.extend(num);
@@ -297,11 +502,11 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                 ([Ex::Num(n)], [d])
                     if matches!(d.as_slice(), [Ex::Num(_)]) && !zero_over_literal(n, cx) =>
                 {
-                    let q = den.remove(0).remove(0);
-                    out.push(mul(
-                        vec![num.remove(0), pow(q, Ex::Num(Rat::NEG_ONE), cx)],
-                        cx,
-                    ));
+                    let (p, q) = (num.remove(0), den.remove(0).remove(0));
+                    out.push(
+                        literal_quotient(&p, &q)
+                            .unwrap_or_else(|| mul(vec![p, pow(q, Ex::Num(Rat::NEG_ONE), cx)], cx)),
+                    );
                 }
                 _ => {
                     out.extend(num);
@@ -315,6 +520,16 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             (children >= 2).then_some(at)
         }
     }
+}
+
+/// A LITERAL OVER A LITERAL, the spelling of one number: its exact value (`p/q`), the same number
+/// however it is spelled -- one fraction token, `/ p q`, or a tagged `<mul> p <div> q </mul>`.
+/// `None` where the divisor is zero or the quotient leaves the number domain.
+fn literal_quotient(p: &Ex, q: &Ex) -> Option<Ex> {
+    let (Ex::Num(p), Ex::Num(q)) = (p, q) else {
+        return None;
+    };
+    p.checked_mul(&q.checked_inv()?).map(Ex::Num)
 }
 
 /// Is the numerator `n` of a literal fraction a zero the float64 modes read as a signed zero
@@ -672,6 +887,11 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     if inv_token.contains('/') {
         return None;
     }
+    // Where the reciprocal codeword is the price (`reciprocal_spelling_wins`), the divisor is the
+    // print: `x1/0.225147640565301` costs its divisor, not the fraction's two long integers.
+    if crate::ac::expr::reciprocal_spelling_wins(r) {
+        return Some(inv);
+    }
     if inv_token.len() < num_token(r).len() {
         Some(inv)
     } else {
@@ -793,11 +1013,16 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                 // test outright (rather than re-basing it on the argmin) also broke the
                 // setup of the long-literal respell guard, so its assertion stopped
                 // executing -- a silently unreached safety check.
+                // the reciprocal codeword is printed as the divisor with or without a plain
+                // factor beside it: it is the price
+                let priced_reciprocal = mag
+                    .as_ref()
+                    .is_some_and(crate::ac::expr::reciprocal_spelling_wins);
                 if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
                     num.push(Ex::Num(r.clone()));
                 } else if let Some(inv) = mag
                     .and_then(|m| divisor_side(&m))
-                    .filter(|_| has_plain_mul_factor(v))
+                    .filter(|_| priced_reciprocal || has_plain_mul_factor(v))
                 {
                     // One reciprocal token beats the p-and-q integer split; re-parses to
                     // the exact original coefficient (division by a literal reciprocates
@@ -1062,6 +1287,19 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
             return;
         }
     }
+    // The reciprocal codeword: `/ 1 c`, the divisor a terminating decimal.
+    if crate::ac::expr::reciprocal_spelling_wins(r) {
+        let slash = view.intern("/");
+        if let (Some(c), Some(_)) = (
+            r.abs().checked_inv().and_then(|c| c.exact_decimal()),
+            view.arity(slash),
+        ) {
+            out.push(slash);
+            out.push(view.intern(if r.is_negative() { "-1" } else { "1" }));
+            out.push(view.intern(&c));
+            return;
+        }
+    }
     // The structural division needs `/` to BE an operator of this config. A degenerate
     // vocabulary without it cannot render or re-parse the emission: the infix layer gives
     // an unknown binary token a fallback precedence, so `pow(1/2, x)` printed `1/2^(x)`,
@@ -1151,6 +1389,17 @@ fn divisor_member(b: &Ex, ex: &Ex) -> Option<Ex> {
 /// `mu`, `cmp_ex` and the reduction ordering are untouched.
 fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
+    // The reciprocal codeword outside the vocabulary bound: `<mul> 1 <div> c </mul>`.
+    if !within_tagged_bound(r) && crate::ac::expr::reciprocal_spelling_wins(r) {
+        if let Some(c) = r.abs().checked_inv().and_then(|c| c.exact_decimal()) {
+            out.push(view.intern("<mul>"));
+            out.push(view.intern(if r.is_negative() { "-1" } else { "1" }));
+            out.push(view.intern("<div>"));
+            out.push(view.intern(&c));
+            out.push(view.intern("</mul>"));
+            return;
+        }
+    }
     if !fraction_spells_structurally(r) {
         // Integer, or a decimal beyond the bound: one token.
         out.push(view.intern(&num_token(r)));
@@ -1321,11 +1570,14 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         // coefficient it does not move splits too when its one token would be a
                         // fraction (the tagged form writes none), and stays one token when it is
                         // a decimal.
+                        let priced_reciprocal = mag
+                            .as_ref()
+                            .is_some_and(crate::ac::expr::reciprocal_spelling_wins);
                         let inv = mag
                             .as_ref()
                             .filter(|m| !within_tagged_bound(m))
                             .and_then(divisor_side)
-                            .filter(|_| has_plain_mul_factor(v));
+                            .filter(|_| priced_reciprocal || has_plain_mul_factor(v));
                         let split = mag.clone().filter(|m| {
                             within_tagged_bound(m)
                                 || (inv.is_none()
@@ -1369,6 +1621,9 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                                 match inv {
                                     Some(inv) => {
                                         neg_one = r.is_negative();
+                                        // no plain factor: the `1` numerator member, as for
+                                        // a unit fraction's split
+                                        unit_coeff_split |= !has_plain_mul_factor(v);
                                         den.push(Ex::Num(inv));
                                     }
                                     None => num.push(f),
@@ -1555,13 +1810,19 @@ pub(crate) fn infix_number_parts(r: &Rat, place: NumberPlace) -> (Option<String>
     if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
         return (Some(num_token(r)), None);
     }
+    let priced_reciprocal = crate::ac::expr::reciprocal_spelling_wins(r);
     if let NumberPlace::Coefficient { plain } = place {
-        if let Some(inv) = divisor_side(r).filter(|_| plain) {
+        if let Some(inv) = divisor_side(r).filter(|_| plain || priced_reciprocal) {
             return (None, Some(num_token(&inv)));
         }
         if r.small_parts().is_none() {
             // beyond 128 bits: one numeral, never split across the product (see `mul_div_split`)
             return (Some(num_token(r)), None);
+        }
+    }
+    if place == NumberPlace::Alone && priced_reciprocal {
+        if let Some(c) = r.checked_inv().and_then(|c| c.exact_decimal()) {
+            return (None, Some(c));
         }
     }
     if place != NumberPlace::Exponent {

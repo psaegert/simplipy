@@ -3,12 +3,14 @@
 A printed token form is not only an answer. The interval certificates, the folds, the served
 rules, the mining judge and the promotion refund print a state and read the tokens back, and
 callers mask and compare token answers. So the reader's spelling (integer over decimal) lives
-in the infix text alone, which nothing reads back, and every token form keeps the 0.14.7
-spelling. Readable token forms are the job of a display function, not of the token printer.
+in the infix text alone, which nothing reads back, and every token form keeps the token
+printer's spelling. Readable token forms are the job of a display function, not of the token
+printer.
 
 Pinned here: the infix text and the token answer are one state at one price on the whole
-corpus; the token answers and the mining judge keep the 0.14.7 spellings; and the source keeps
-the reader's rule inside the infix printer.
+corpus; the token answers and the mining judge keep the token printer's spellings; and the
+source keeps the reader's rule inside the infix printer. The examples use the constant
+3141.592653, whose fractions stay cheaper than their doubles (pi's own double is read as pi).
 """
 import os
 import re
@@ -21,7 +23,7 @@ from conftest import legacy_from_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-PI = '3.141592653589793'
+PI = '3141.592653'
 
 
 @pytest.fixture(scope='module')
@@ -46,8 +48,9 @@ class TestOneStateTwoSpellings:
         assert len(rows) == 400
 
     def test_the_reader_spelling_reads_back_to_the_token_answer_at_the_same_price(self, eng):
-        # the corpus has no value the reader's spelling touches; these do (19 of 44: the six
-        # roots of a constant fold to their floats, which carry no long integer)
+        # the corpus has no value the reader's spelling touches; these do (11 of 44: the
+        # others' coefficients are written as their doubles, or have a terminating reciprocal,
+        # or carry no long integer)
         sources = [f'{c}*x1/({k}*{PI})' for c in (1, 3, 7) for k in range(1, 13)]
         sources += [f'x1*rootn(1/({k}*{PI}), 2)' for k in range(1, 7)]
         sources += ['100/101*x1', f'sin(x1/(2*{PI}))']
@@ -59,19 +62,21 @@ class TestOneStateTwoSpellings:
             assert tokens(eng, text) == answer, (src, text, answer)
             assert eng.complexity(text) == eng.complexity(answer), (src, text, answer)
             respelled += any(t.isdigit() and len(t) >= 10 for t in answer) and not long_integer.search(text)
-        assert respelled == 19, respelled
+        assert respelled == 11, respelled
 
 
 class TestTheTokenSpellingDoesNotMove:
-    # (input, token answer = the 0.14.7 answer, infix answer)
+    # (input, token answer, infix answer)
+    # (1/(2*3141.592653) is written `/ 1 6283.185306` in every dialect: its reciprocal codeword,
+    # the divisor, is its price. A numerator other than 1 has no such codeword.)
     CASES = [
-        (['/', '1', '*', '2', PI], ['/', '500000000000000', '3141592653589793'], '1/6.283185307179586'),
-        (['/', '*', '/', '3', '5', 'pow', 'x1', '2', '*', '*', '*', '4', PI, 'x2', 'x3'],
-         ['/', '*', '150000000000000', 'pow', 'x1', '2', '*', '3141592653589793', '*', 'x2', 'x3'],
-         '3*x1^2/62.83185307179586/x2/x3'),
-        (['+', 'x1', '/', '1', '*', '2', PI],
-         ['+', 'x1', '/', '500000000000000', '3141592653589793'],
-         'x1 + 1/6.283185307179586'),
+        (['/', '7', '*', '2', PI], ['/', '3500000', '3141592653'], '7/6283.185306'),
+        (['/', '*', '/', '7', '5', 'pow', 'x1', '2', '*', '*', '*', '4', PI, 'x2', 'x3'],
+         ['/', '*', '350000', 'pow', 'x1', '2', '*', '3141592653', '*', 'x2', 'x3'],
+         '7*x1^2/62831.85306/x2/x3'),
+        (['+', 'x1', '/', '7', '*', '2', PI],
+         ['+', 'x1', '/', '3500000', '3141592653'],
+         'x1 + 7/6283.185306'),
     ]
 
     @pytest.mark.parametrize('expr, answer, text', CASES)
@@ -87,7 +92,7 @@ class TestTheTokenSpellingDoesNotMove:
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_tagged_answer_has_no_reader_spelling(self, eng, expr, answer, _):
         tagged = list(eng.simplify(eng.to_tagged(expr)))
-        assert not any('6.283185307179586' in t or '62.83185307179586' in t for t in tagged), tagged
+        assert not any('6283.185306' in t or '62831.85306' in t for t in tagged), tagged
 
 
 class TestReaderRuleStaysInTheInfixPrinter:

@@ -60,8 +60,12 @@ pub struct MCx<'a> {
 
 pub type Binds = FxHashMap<Tok, Ex>;
 
+/// Is `e` a DATA VARIABLE? An atom's kind comes from what it is, never from how the core stores
+/// it: a numeric literal the exact domain keeps as a written leaf (`1e400`, a decimal of more
+/// digits than the domain holds) is a literal, so it binds no `?` slot, and no slot of any sort
+/// binds it as a variable.
 fn is_variable_leaf(e: &Ex, view: &TokenView) -> bool {
-    matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0)
+    matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0 && !view.with_str(*t, super::expr::numeric_leaf))
 }
 
 /// May a wildcard of this sort bind this subject? (The certificates run EAGERLY at bind time --

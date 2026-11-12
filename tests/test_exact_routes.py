@@ -108,7 +108,8 @@ def test_a_left_side_one_literal_over_its_whole_domain_is_proved() -> None:
 
 @pytest.mark.parametrize('lhs, rhs, f64, permissive', [
     ('cos np.pi', '-1', 'proved', 'proved'),                # one point, read exactly
-    ('sin np.pi', '0', 'refused', 'proved'),                # float64's sin(pi) is 1.2e-16
+    ('sin np.pi', '0', 'proved', 'proved'),                 # the reals' 0, float64's finite
+    ('tan asin 1', '0', 'refused', 'refused'),              # float64's 1.6e16, the reals' none
     ('log -1', '0', 'refused', 'refused'),                  # no tolerance at one point
     ('acos <constant>', '<constant>', 'proved', 'proved'),  # the constant's own value
     ('abs neg x0', 'abs x0', 'proved', 'proved'),           # exact in float64 too

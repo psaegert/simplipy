@@ -60,14 +60,19 @@ class TestPlanConsequences:
     # f64 alone: permissive writes a literal as its float (its own simplification)
     @pytest.mark.parametrize('mode', ('f64',))
     def test_the_larmor_denominator_is_one_number(self, engine: SimpliPyEngine, mode: str) -> None:
+        # the denominator is one number, its exact value; as a coefficient its reciprocal is
+        # written as its double, float64's value of it, which is cheaper than the exact fraction
         out = simplify(
             engine, '/ * pow x1 2 pow x2 2 * 6 * 3.1415926535897 * 8.854e-12 pow 2.99792458e8 3', mode)
         exact = 6 * Fraction('3.1415926535897') * Fraction('8.854e-12') * Fraction('2.99792458e8') ** 3
-        assert numbers(out) == [Fraction(2), Fraction(2), exact]
+        assert numbers(out) == [Fraction(repr(float(1 / exact))), Fraction(2), Fraction(2)]
 
-    def test_a_sum_beyond_float64_is_collected_as_a_symbol(self, engine: SimpliPyEngine) -> None:
-        # 1e308 is beyond 2^1022: an f64 leaf as written, collected like any symbol (as in main)
-        assert simplify(engine, '+ x1 + 1e308 1e308', 'f64') == ['+', '*', '2', '1e308', 'x1']
+    def test_a_sum_beyond_float64_is_a_range_event(self, engine: SimpliPyEngine) -> None:
+        # 1e308 + 1e308 is past the doubles' range: float64's value is +inf, which strict writes
+        # (the range standard accepts it beside the true value, and it is cheaper), and x1 + inf
+        # is inf (as in main). Permissive has no float for 2e308 and collects it like a symbol.
+        assert simplify(engine, '+ x1 + 1e308 1e308', 'f64') == ['float("inf")']
+        assert simplify(engine, '+ x1 + 1e308 1e308', 'permissive') == ['+', '*', '2', '1e308', 'x1']
 
     @pytest.mark.parametrize('mode', MODES)
     def test_a_product_beyond_the_cap_keeps_its_members(self, engine: SimpliPyEngine, mode: str) -> None:
@@ -90,12 +95,14 @@ class TestAdmissibleInF64Mode:
 
 
 class TestF64SeesWhatTheEvaluatorSees:
-    def test_a_literal_read_as_inf_is_not_certainly_finite(self, engine: SimpliPyEngine) -> None:
-        assert simplify(engine, '* 0 1e400', 'f64') == ['*', '0', '1e400']
-        # float64's exp of the infinity 1e400 reads as is that infinity: the member 1e400 (the
-        # member fold), and the difference stays the NaN it is
-        assert simplify(engine, '- exp 1e400 exp 1e400', 'f64') == ['-', '1e400', '1e400']
+    def test_a_literal_read_as_inf_is_a_range_event(self, engine: SimpliPyEngine) -> None:
+        # float64 reads 1e400 as inf, so its 0*1e400 is NaN; the literal is past the doubles'
+        # range, where the range standard accepts its true value too, and 0*10^400 is 0
+        assert simplify(engine, '* 0 1e400', 'f64') == ['0']
         assert np.isnan(constant(engine, ['*', '0', '1e400']))
+        # the reals' value of exp(10^400) is past what the table reads, so only float64's value
+        # of the difference, inf - inf, is certain: NaN
+        assert simplify(engine, '- exp 1e400 exp 1e400', 'f64') == ['float("nan")']
 
     def test_parity_beyond_2_53_is_unknown(self, engine: SimpliPyEngine) -> None:
         odd = 'pow -1 9007199254740993'
@@ -113,9 +120,11 @@ class TestCap:
     def test_a_power_within_the_cap_folds(self, engine: SimpliPyEngine, mode: str) -> None:
         assert numbers(simplify(engine, '* pow 2 1000 x1', mode)) == [2 ** 1000]
 
-    @pytest.mark.parametrize('mode', MODES)
-    def test_a_power_beyond_the_cap_stays_a_power(self, engine: SimpliPyEngine, mode: str) -> None:
-        assert simplify(engine, '* pow 2 1100 x1', mode) == ['*', 'pow', '2', '1100', 'x1']
+    def test_a_power_beyond_the_doubles_is_a_range_event(self, engine: SimpliPyEngine) -> None:
+        # 2^1100 is past the doubles' range: strict writes float64's +inf, the cheaper of the two
+        # values the range standard accepts; permissive has no float for it and keeps the power
+        assert simplify(engine, '* pow 2 1100 x1', 'f64') == ['*', 'float("inf")', 'x1']
+        assert simplify(engine, '* pow 2 1100 x1', 'permissive') == ['*', 'pow', '2', '1100', 'x1']
 
 
 IDEMPOTENCE_ROWS = [

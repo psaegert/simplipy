@@ -536,10 +536,13 @@ class TestContracts:
         # `pow` distributes the square over the product, so 2*c^2 materialises as one
         # 34-digit coefficient -- dearer under mu than the factored power was.
         # 142374 -> 82142 under the float cap: the 34-digit coefficient costs what its
-        # float's shortest decimal costs. The endpoint shape is unmoved.
+        # float's shortest decimal costs. The endpoint shape is unmoved. Every number now costs
+        # its written spelling, and strict writes the 34-digit coefficient as float64's value
+        # of it, which costs the same 82142.
         assert engine.complexity(out_a) == 82142
         coeff = 2 * Fraction('6.4495375319922606e-18') ** 2
-        assert out_a[0] == '*' and Fraction(out_a[1]) == coeff, out_a
+        assert out_a[0] == '*' and float(out_a[1]) == float(coeff), out_a
+        assert out_a[1] == repr(float(coeff)), out_a
         assert out_a[2:] == ['pow', 'sinh', 'x2', '2'], out_a
         assert engine.simplify(out_a) == out_a  # and the healed form is a fixpoint
 
@@ -967,10 +970,12 @@ class TestTranscendentalAtomEnclosures:
     certified rules then fold the zero first and absorption wins."""
 
     def test_zero_times_cofactor_is_the_positive_pole(self, engine: SimpliPyEngine) -> None:
-        # These rest on `sin(np.pi) = 0`, which is exactly true and NOT f64-realised
-        # (f64 gives 1.2246467991473532e-16): permissive reads it from the table. The pole is
-        # therefore reached in `permissive`, where 1/0 has no value, and the default mode keeps
-        # the expression -- the two readings disagreeing, on one row.
+        # These rest on `sin(np.pi) = 0`, exactly true, which float64 computes as
+        # 1.2246467991473532e-16. Each mode reads the fully numeric part first: permissive from
+        # the table, and strict as the reals' value where float64's kind agrees (both finite).
+        # The pole is reached in both: `permissive`, where 1/0 has no value, gives NaN, and
+        # strict gives float64's 1/(+0) = inf, a change of kind inside a further operation that
+        # strict's per-step guarantee allows.
         from conftest import require_mode_sets
         require_mode_sets()
         from simplipy import Mode
@@ -978,7 +983,7 @@ class TestTranscendentalAtomEnclosures:
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'tan', 'np.pi', 'x1']):
             assert engine.simplify(list(tokens), mode=Mode.permissive) == ['float("nan")'], tokens
-            assert engine.simplify(list(tokens), mode=Mode.f64) != ['float("inf")'], tokens
+            assert engine.simplify(list(tokens), mode=Mode.f64) == ['float("inf")'], tokens
 
     def test_fuzz_row_172346(self, engine: SimpliPyEngine) -> None:
         # inv( abs(sin(np.pi)) / inv(x4 - x1 + 2*x2) ): the reciprocal cofactor
@@ -1366,11 +1371,13 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
             engine.simplify(list(x)) == ['sin', 'cos', 'x2']
 
     def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
-        # A PARTNERED sentinel cancels in phase 1, before the licence expires.
+        # A fully numeric `inf/inf` is no partnered sentinel: its value comes first.
         from conftest import require_mode_sets
         require_mode_sets()
+        # a fully numeric `inf/inf` has no value: it is read first, NaN, and absorbs the
+        # product (a mask is a part with a variable, never a fully numeric one)
         x = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
-        assert engine.simplify(list(x), mode=Mode.permissive) == ['x0']
+        assert engine.simplify(list(x), mode=Mode.permissive) == ['float("nan")']
 
     def test_coefficient_reciprocates_into_joined_base(self, engine: SimpliPyEngine) -> None:
         x = engine.to_tagged(

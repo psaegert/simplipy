@@ -3601,10 +3601,12 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``covers_f64`` (``permissive`` only): permissive includes f64, so the file covers the
       pinned f64 file -- on each f64 rule's generic instance, permissive's answer costs no more,
       in permissive's price, than the rule's right side (``_uncovered_f64_rules``);
-    - ``ground_bit_exact`` (``f64`` only): every ground rule's two sides, evaluated with the
-      operators' realizations in float64, are the same double, the sign of a zero included: a
-      fully numeric rewrite is bit-exact in f64 (``_ground_rules_off_the_double``, which reads
-      the realizations and not the judge);
+    - ``ground_exact``: every ground rule holds in the file's mode by the core's ground evaluator,
+      the one the engine's fold and the judge read (``_ground_rules_refused``): in ``f64`` where
+      float64 gives both sides one double, or the reals give both one value and float64's kinds
+      agree (``exp(sin(np.pi)) -> 1`` holds, ``sin(np.pi) -> 0.1`` does not); in ``permissive``
+      where the table's two values agree at float resolution (``0*tan(asin(1)) -> 0`` does not:
+      the left side has no value);
     - ``basis``: the sidecar records what every rule's verdict rests on in the mode, proved or
       evidence (``judge_bases``), one entry per rule of the file.
 
@@ -3675,8 +3677,7 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         [['the sidecar records no env_overrides', None]] if recorded_env is None else
         [[key, value] for key, value in sorted(recorded_env.items())]
         + [[key, value] for key, value in env_overrides().items()])
-    if mode == 'f64':
-        gates['ground_bit_exact'] = _ground_rules_off_the_double(engine, rules)
+    gates['ground_exact'] = _ground_rules_refused(engine, rules, mode)
     if mode == 'permissive':
         gates['offered'] = _offered_pins_broken(rules_path, sidecar.get('offered'))
         # permissive includes f64: the file covers every rule of the f64 file it was offered
@@ -3717,26 +3718,29 @@ def _sidecar_prefilter(engine: Any, sidecar: dict) -> Callable | None:
                               float(params['rtol']), float(params['atol']))
 
 
-def _ground_rules_off_the_double(engine: Any, rules: list) -> list:
-    """The ground rules of an f64 file (``_is_ground``: no slot, no constant) whose two sides are
-    not the same double, each with its two doubles. Each side is evaluated with the operators'
-    realizations in float64 (``engine.as_callable``, each literal the double nearest to it); the
-    sign of a zero counts and both NaN agree. A fully numeric rewrite is bit-exact in f64 (F8):
-    ``exp(sin(np.pi)) -> 1`` is off by one unit in the last place, and fails. The check reads the
-    realizations, not the judge; a side it cannot evaluate fails it too."""
-    off: list = []
+def _ground_rules_refused(engine: Any, rules: list, mode: str) -> list:
+    """The ground rules of a file (``_is_ground``: no slot, no constant) the core's ground
+    evaluator does not admit in ``mode`` (``_core.ground_rule_verdict``), each with the
+    evaluator's readings ``(same_double, same_real_in_kind, reals, permissive)``. In ``f64`` a
+    fully numeric rewrite holds where float64 gives both sides one double or the reals give both
+    one value and float64's kinds agree; in ``permissive`` where the table's values agree at
+    float resolution. A side the evaluator cannot read fails the gate."""
+    from simplipy import _core
+    from .engine import _CORE_SERIALIZATION_ARITIES
+    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    refused: list = []
     for lhs, rhs in rules:
         if not (_is_ground(lhs) and _is_ground(rhs)):
             continue
-        try:
-            with np.errstate(all='ignore'):
-                a, b = (float(engine.as_callable(list(side), [])()) for side in (lhs, rhs))
-        except Exception as error:  # an unreadable side is no evidence of the double
-            off.append([list(lhs), list(rhs), f'{type(error).__name__}: {error}', None])
+        verdict = _core.ground_rule_verdict(list(lhs), list(rhs), arity)
+        if verdict is None:
+            refused.append([list(lhs), list(rhs), 'unreadable'])
             continue
-        if not (np.float64(a).tobytes() == np.float64(b).tobytes() or (a != a and b != b)):
-            off.append([list(lhs), list(rhs), repr(a), repr(b)])
-    return off
+        same_double, same_real_in_kind, _, permissive = verdict
+        holds = same_double or same_real_in_kind if mode == 'f64' else permissive
+        if not holds:
+            refused.append([list(lhs), list(rhs), list(verdict)])
+    return refused
 
 
 def _offered_f64_rules(rules_path: str, offered: Any) -> list | None:

@@ -266,7 +266,8 @@ class TestMode:
         # structural cancel fires.
         c = ["*", "/", 'float("inf")', 'float("inf")', "x0"]
         assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
-        assert list(engine.simplify(list(c), mode=Mode.permissive)) == ["x0"]
+        # a fully numeric `inf/inf` has no value in permissive either: read first, NaN
+        assert list(engine.simplify(list(c), mode=Mode.permissive)) == ['float("nan")']
         # (inf-inf)+x0: the AC CONSTRUCTORS compute inf + (-inf) = nan exactly (total
         # extended-real arithmetic, mode-independent) before any cancel could see it, so
         # BOTH modes return the true value -- there is no unsound step for LOSSY to relax.

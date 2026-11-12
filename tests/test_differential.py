@@ -81,9 +81,16 @@ def judged(lhs: str, rhs: str) -> dict:
 
 
 def admits(lhs: str, rhs: str, mode: str) -> bool:
+    """Does the rule hold in `mode`: the reals' verdict, or the mode's own reading of the
+    judgment (`_contract.judged_reading`), which for a rule with variables is the tier's (the
+    tier holds the modes that hold it) and for a fully numeric rule each mode's reading of its
+    own value."""
     if mode == REALS:
         return judged(lhs, rhs)['verdict'] in _contract.HOLDS_IN_THE_REALS
-    return effective_tier(judged(lhs, rhs)) in MODE_TIERS[mode]
+    d = judged(lhs, rhs)
+    if not d.get('ground'):
+        assert (effective_tier(d) in MODE_TIERS[mode]) == (_contract.judged_reading(d, mode) is True)
+    return _contract.judged_reading(d, mode) is True
 
 
 @functools.lru_cache(maxsize=1)
@@ -205,24 +212,24 @@ SPEC_EXAMPLES = [
     case('pow 0 <constant>', '<constant>', 'f64', True),
     case('pow -1 <constant>', '<constant>', REALS, True),
     case('pow -1 <constant>', '1', REALS, False), case('pow -1 <constant>', '1', 'f64', False),
-    # section 3.3: ground rules, one point and no tolerance in any mode: permissive's extension
-    # is for expressions with variables, a fully numeric one takes its table value. Permissive
-    # includes f64, so a ground rule float64 holds holds in permissive too (and has no evidence
-    # where its left side is not finite: no file holds it)
+    # section 3.3: ground rules, one point, read by each mode's own value of it: f64 by float64's
+    # double or, where float64's kind agrees, the reals' value; permissive by the table at float
+    # resolution, a fully numeric expression without a value being NaN (permissive does not
+    # include f64 here: a fully numeric part keeps each mode's value)
     case('cos np.pi', '-1', REALS, True), case('cos np.pi', '-1', 'f64', True),
-    case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'f64', False),
+    case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'f64', True),
     case('sin np.pi', '0', 'permissive', True),
     case('log -1', '0', REALS, False),
     case('log -1', '0', 'f64', False),
     case('log -1', '0', 'permissive', False),
     case('exp tan asin 1', 'float("inf")', REALS, False),
     case('exp tan asin 1', 'float("inf")', 'f64', True),
-    case('exp tan asin 1', 'float("inf")', 'permissive', True),
+    case('exp tan asin 1', 'float("inf")', 'permissive', False),
     case('asin 1', 'acos 0', REALS, True), case('asin 1', 'acos 0', 'f64', True),
     # the limit rule (V4, V5, V6)
     case('/ 1 0', 'float("inf")', REALS, False),
     case('/ 1 0', 'float("inf")', 'f64', True),
-    case('/ 1 0', 'float("inf")', 'permissive', True),
+    case('/ 1 0', 'float("inf")', 'permissive', False),
     case('pow 0 -1', 'float("inf")', REALS, False),
     case('pow 0 -2', 'float("inf")', REALS, False),
     case('pow 1 float("inf")', '1', REALS, False),
@@ -257,8 +264,6 @@ POLICY_EXAMPLES = [
     ('asin 1', 'acos 0', 'f64', 'ground_composite'),
     ('asin 1', 'acos 0', 'permissive', 'ground_composite'),
     ('exp tan asin 1', 'float("inf")', 'f64', 'evidence'),
-    ('exp tan asin 1', 'float("inf")', 'permissive', 'evidence'),
-    ('/ 1 0', 'float("inf")', 'permissive', 'evidence'),
     ('pow -1 <constant>', '<constant>', 'f64', 'evidence'),
     ('abs x0', 'rootn pow x0 2 2', 'f64', 'ordering'),
     ('exp * 2 _0', '* exp _0 exp _0', 'permissive', 'duplication'),
@@ -810,13 +815,15 @@ def test_permissive_composes_powers_ignoring_the_sign(expr, want) -> None:
 
 
 @pytest.mark.parametrize('expr, want', [
-    ('floor tanh 40', '0'), ('ceil exp -800', 'ceil exp -800'), ('tanh 20', '1'),
-    ('asin 1e-8', '1e-8'), ('mod sin 1 2', 'sin 1')])
+    ('floor tanh 40', '0'), ('floor tanh 100', '0'), ('ceil exp -800', '1'),
+    ('* x0 exp -800', '* x0 exp -800'), ('tanh 20', '1'), ('asin 1e-8', '1e-8'),
+    ('mod sin 1 2', 'sin 1')])
 def test_permissive_writes_the_tables_ground_values_as_floats(expr, want) -> None:
-    """P3 as ruled: permissive's ground values are the table's, written as floats --
-    `floor(tanh(40))` is 0 (tanh(40) is below 1, though float64 rounds it to 1.0), `tanh(20)` is
-    the float 1.0 nearest to its value. A nonzero value below the normal doubles has no
-    faithful float and stays (`exp(-800)` is no 0)."""
+    """P3 as ruled: permissive's ground values are the table's, read at as many digits as they
+    need and written as floats -- `floor(tanh(40))` and `floor(tanh(100))` are 0 (below 1, though
+    float64 rounds both to 1.0), `ceil(exp(-800))` is 1, `tanh(20)` is the float 1.0 nearest to
+    its value. A nonzero value below the normal doubles has no faithful float and stays
+    (`exp(-800)` is no 0)."""
     assert ' '.join(bare().simplify(expr.split(), mode='permissive')) == want
 
 

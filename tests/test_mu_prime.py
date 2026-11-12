@@ -56,7 +56,7 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 #: pins exactly this set, so a re-mine that records them fails there and is noticed.
 ACJ_UNRECORDED_PROBES = [
     '0.0766541268471677307861497420516056347394916180597539647375669841',
-    '/ 1.2345678901234567e-305 9.876543210987654e-10', 'atan2 x0 x1',
+    '/ 1.2345678901234567e-305 9.876543210987654e-10', '/ 1 0.225147640565301', 'atan2 x0 x1',
     '-2', 'neg x0', '* neg x0 x1',
     'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', 'atanh tanh x0', '/ x0 * x0 x1']
 
@@ -407,9 +407,12 @@ class TestSerializerArgmin:
         q_dec = 2 ** 45 * 5 ** 14           # dec beats frac by 3 milli-bits at p=54321
         v = Fraction(54321, q_dec)
         assert oracle_dec_price(v) == old_rat_price(v) - 3
+        # the measure prices the exact value at the cheaper codeword, the decimal
+        assert c(eng, ['/', '54321', str(q_dec)]) == mu_prime_expected(v) == SEL + oracle_dec_price(v)
+        # `simplify` writes float64's double of it, cheaper than both exact codewords
         out = eng.simplify(eng.to_prefix(['/', '54321', str(q_dec)]))
-        assert len(out) == 1 and '.' in out[0], out
-        assert Fraction(out[0]) == v            # never value-changing
+        assert out == [repr(float(v))], out
+        assert c(eng, out) < mu_prime_expected(v)
         q_frac = 2 ** 28 * 5 ** 9           # frac beats dec by 4 milli-bits at p=19
         v2 = Fraction(19, q_frac)
         assert oracle_dec_price(v2) == old_rat_price(v2) + 4
@@ -421,8 +424,10 @@ class TestSerializerArgmin:
         # re-prices to EXACTLY the state's mu' -- the emission realizes the min the
         # measure charged (spelling-invariance makes the reparse price the state; the
         # argmin choice makes the written form the codeword that price came from).
+        # (A number whose double is cheaper than its exact codewords is written as that double:
+        # `54321/(2^45*5^14)` becomes `2.5295186787843706e-19`, a descent, not an emission.)
         for tokens in (['/', '1', '5'], ['/', '3', '8'], ['2.177697277405848'],
-                       ['/', '54321', str(2 ** 45 * 5 ** 14)], ['0.001'], ['1000']):
+                       ['/', '19', str(2 ** 28 * 5 ** 9)], ['0.001'], ['1000']):
             # `form=` is gone (0.14.0): CONVERT first, which is the byte-identical
             # recipe the removed parameter documented.
             for pre in (eng.to_prefix, None):
@@ -553,11 +558,11 @@ class TestOneMeasurePerMode:
                 eng.complexity(['x0'], canon=canon)
 
 
-class TestTheFloatCapOnEveryPath:
-    """A literal costs at most what its float costs, however a state holds it. The f64 number
-    domain (every mode's) admits a number only where its numerator and denominator are at most
-    2^1022, and holds in pieces a value beyond it: a literal as written, a product, a sum, a
-    reciprocal. Each costs what the one exact number is priced at, alike in both modes."""
+class TestNumbersArePricedAsWritten:
+    """Every number costs its own spelling, however a state holds it, alike in both modes. The
+    f64 number domain (every mode's) admits a number only where its numerator and denominator
+    are at most 2^1022, and holds in pieces a value beyond it: a literal as written, a product,
+    a sum, a reciprocal, each piece priced as its number."""
 
     A, B = '1.2345678901234567e-305', '9.876543210987654e-10'  # A's denominator is 10^321
 
@@ -573,11 +578,27 @@ class TestTheFloatCapOnEveryPath:
     def test_both_modes_price_alike(self, eng, text):
         assert eng.complexity(text, mode='f64') == eng.complexity(text, mode='permissive')
 
-    def test_the_quotient_costs_its_float(self, eng):
-        quotient = f'{self.A} / {self.B}'
-        its_float = repr(float(Fraction(self.A) / Fraction(self.B)))
+    def test_the_quotient_is_written_as_its_double(self, eng):
+        # the quotient held in pieces costs the leaf and the reciprocal of B, priced as its divisor
+        # (the reciprocal codeword); `simplify`
+        # writes it as a double, which the f64 domain holds as written: float64's quotient of
+        # the two doubles in strict, the double nearest the exact quotient in permissive
+        quotient = ['/', self.A, self.B]
+        strict = repr(float(self.A) / float(self.B))
+        nearest = repr(float(Fraction(self.A) / Fraction(self.B)))
+        assert (strict, nearest) == ('1.2499999886093752e-296', '1.249999988609375e-296')
+        assert eng.simplify(list(quotient), mode='f64') == [strict]
+        assert eng.simplify(list(quotient), mode='permissive') == [nearest]
         for mode in ('f64', 'permissive'):
-            assert eng.complexity(quotient, mode=mode) == eng.complexity(its_float, mode=mode) == 59436
+            assert eng.complexity(quotient, mode=mode) == 125619
+            assert eng.complexity(nearest, mode=mode) == 59436
+
+    def test_a_long_literal_beyond_the_domain_is_written_as_its_double(self, eng):
+        # 1.23456789012345678901234567e-305 is held as written (its denominator passes 2^1022);
+        # both modes write it as its double, float64's reading of it and its nearest
+        for mode in ('f64', 'permissive'):
+            assert eng.simplify(['1.23456789012345678901234567e-305'], mode=mode) == \
+                ['1.2345678901234568e-305']
 
     def test_a_value_beyond_the_cap_keeps_its_price(self, eng):
         # 1e400 has no number in either domain (its 1,329 bits pass the 1,100-bit cap), so its
@@ -603,12 +624,14 @@ class TestFingerprintAndArtifactLoad:
             '0.2': 3585,              # (2, 1): selector + L(2) + L(1)
             '1e-40': 7358,            # beyond-i128 leaf: selector + max(floor, L(1)) + L(40)
             '<constant>': MU_FREE_PRIME,
-            # the float cap: 64 digits cost their float's shortest decimal,
-            # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
+            # a long literal: f64 reads it as float64's double, 0.07665412684716773
+            # (selector + L(7665412684716773) + L(17)), cheaper than its 64 digits
             '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
-            # ... on every path: f64 holds this quotient in pieces (the first literal's
-            # denominator passes 2^1022), and it costs its float's shortest decimal
-            '/ 1.2345678901234567e-305 9.876543210987654e-10': mu_prime_expected(Fraction('1.249999988609375e-296')),
+            # f64 holds this quotient in pieces (the first literal's denominator passes
+            # 2^1022): the leaf as written and the reciprocal of the second, priced as its divisor
+            '/ 1.2345678901234567e-305 9.876543210987654e-10': 125619,
+            # the reciprocal codeword: selector + L(1) + the divisor's decimal codeword
+            '/ 1 0.225147640565301': SEL + MILLI + oracle_dec_price(Fraction('0.225147640565301')),
             # the symbol table, one probe per entry. Add and Mul price the same here and
             # still need separate probes: a change to ONE of them has to move a probe.
             'x0': MU_LEAF,                    # 6

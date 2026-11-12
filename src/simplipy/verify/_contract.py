@@ -2599,6 +2599,15 @@ def mode_reading(realised, permissive, mode):
     return None
 
 
+def judged_reading(detail, mode):
+    """A mode's reading of a judgment `detail`: `mode_reading` of its strict and permissive
+    readings, permissive including strict; a fully numeric rule's modes each read their own
+    ground value (`_ground_settled`), so there each mode's reading is its own."""
+    if detail.get('ground'):
+        return detail.get('realised') if mode == 'f64' else detail.get('permissive')
+    return mode_reading(detail.get('realised'), detail.get('permissive'), mode)
+
+
 def _tier(realised, permissive):
     """The tier of a judged rule (`TIERS`): the modes it holds in, each read on its own values,
     permissive including f64 (`mode_reading`). Each reading is True (holds), False (refused) or
@@ -2665,7 +2674,10 @@ def _basis(r, mode):
     """The basis of the judged rule `r` in `mode` (`BASES`): refused where the mode does not
     hold it, proved where an exact route proves it there and the proof stands (`exact_conflict`
     names the modes where it does not), else evidence. Permissive includes f64, so a proof that
-    holds the rule in f64 proves it in permissive too."""
+    holds the rule in f64 proves it in permissive too. A fully numeric rule is read exactly in
+    each mode, on the mode's own value (`_ground_settled`): proved where the mode holds it."""
+    if r.get('ground'):
+        return 'proved' if judged_reading(r, mode) is True else 'refused'
     if mode not in TIERS[r.get('tier') or 'reject']:
         return 'refused'
     ex = r.get('exact') or {}
@@ -2677,16 +2689,6 @@ def _basis(r, mode):
     if proved(mode) or (mode == 'permissive' and r.get('realised') is True and proved('f64')):
         return 'proved'
     return 'evidence'
-
-
-def _real_spec(tree):
-    """The table's exact-or-approximate value of a ground `tree` at the working precision, with
-    whether a snap read it: `(spec, snapped)`, or None where the table cannot read it."""
-    expr, names, extra = _compiled(tree)
-    if names:
-        return None
-    spec, unresolved, snapped, *_ = expr.eval_real([], BASE_DPS)
-    return None if unresolved else (tuple(spec), snapped)
 
 
 def _with_exact_routes(lhs, rhs, r, deployed_check):
@@ -2705,9 +2707,12 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
     except (UnsupportedToken, ValueError):
         return r
     agree = _table.table_f64_agree
-    ex = (_exact.piecewise_affine(tl, tr, d_eval, agree)
-          or _exact.ground(tl, tr, _real_spec, lambda t, rng: d_eval(t, {}, rng), agree,
-                           _table.table_f64_same)
+    ex = _exact.ground(tl, tr, lambda: _table.ground_rule_verdict(list(lhs), list(rhs),
+                                                                   dict(ARITY)))
+    if ex is not None and ex['readings'] is not None:
+        return _ground_settled(r, ex, deployed_check)
+    ex = (ex
+          or _exact.piecewise_affine(tl, tr, d_eval, agree)
           or _exact.own_value(tl, tr))
     sorts = dict(slots_of(rhs, '<C_R>', number=True), **slots_of(lhs, '<C_L>', number=True))
     variables = sorted(n for n in sorts if not n.startswith('<C'))
@@ -2755,11 +2760,48 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
                 readings[mode] = True
     r.update(realised_f6=readings['f64'], permissive_own=readings['permissive'])
     if not variables and '<constant>' not in list(lhs) + list(rhs):
-        # a fully numeric rule has no (b): its one point is bit-exact (3.3)
+        # a fully numeric rule the ground evaluator cannot read: its one point is read by the
+        # battery alone, bit for bit
         r['realised_kinds'] = r['realised_f6']
     if conflict:
         r['exact_conflict'] = conflict
     return _settle(r)
+
+
+def _ground_settled(r, ex, deployed_check=True):
+    """THE READINGS OF A FULLY NUMERIC RULE, from the ground evaluator (`_exact.ground`): its one
+    point is read exactly, mode by mode, and the battery adds nothing. Strict's (a) is
+    `realised_f6`, its (b) `realised_kinds` (the reals give both sides one value and float64's
+    kinds agree), permissive's reading of the table is `permissive_own`, and the reals' name
+    follows the reals' comparison.
+
+    Each mode reads its own ground value, so here permissive does not include strict: the
+    inclusion holds for rules with variables, where the reals' reading contains float64's,
+    while a fully numeric part keeps each mode's value (`0 * tan(asin(1))` is 0 in strict and has
+    no value in permissive; `floor(tanh(100))` is 1 in float64 and 0 in the table). The per-mode
+    readings say so truthfully, and the TIER, which decides the files, is `core` where both modes
+    hold the rule, `permissive` where only the table does, and `reject` where only strict does: a
+    ground value is the engine's fold's to write, and strict's fold writes every ground part as the
+    cheapest value it admits, so no file needs a rule only strict holds."""
+    rd = ex['readings']
+    f6 = rd['same_double'] if deployed_check else None
+    kinds = rd['same_real_in_kind'] if deployed_check else None
+    r = dict(r, exact=ex, realised_f6=f6, realised_kinds=kinds,
+             permissive_own=ex['permissive'] == 'proved')
+    # the reals' name, a diagnostic: the evaluator's comparison, the battery's own conviction
+    # (its clause and points) kept where both refute
+    if ex['reals'] == 'proved':
+        if r.get('verdict') not in HOLDS_IN_THE_REALS:
+            r.update(verdict='CERTIFIED', clause=None, kinds=None, points=None)
+    elif ex['reals'] == 'refuted' and r.get('verdict') != 'KILL':
+        r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'], points=[{}])
+    r['realised'] = strict_reading(f6, kinds, r.get('verdict'))
+    r['permissive'] = r['permissive_own']
+    holds = tuple(m for m, h in (('f64', r['realised'] is True and r['permissive']),
+                                 ('permissive', r['permissive'])) if h)
+    r['tier'] = next(tier for tier, modes in TIERS.items() if modes == holds)
+    r['ground'] = True
+    return r
 
 
 def _with_f64_bar(lhs, rhs, r):
@@ -3906,7 +3948,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 sub_r = _judge_contract(_renamed(lhs, rename), _renamed(rhs, rename),
                                         deployed_check, coincide=False)
                 held = sub_r.get('verdict') in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN')
-                if not held and correlated is None:
+                # the first coincidence not held, or a refuted one over one that reached no answer
+                if not held and (correlated is None or (sub_r.get('verdict') == 'KILL'
+                                                        and correlated['verdict'] != 'KILL')):
                     correlated = {'coincide': [b for b in blocks if len(b) > 1],
                                   'verdict': sub_r.get('verdict'),
                                   'clause': sub_r.get('clause'),
@@ -3994,8 +4038,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     if b_kill is not None:
         return verdict('KILL', clause='b-positive-measure', cell=b_kill,
                        tolerated_events=len(ext_events))
-    if correlated is not None and correlated['verdict'] != 'UNDECIDED-MEASURE':
+    if correlated is not None and correlated['verdict'] == 'KILL':
         return verdict('KILL', clause='coincident-slots', coincidence=correlated)
+    if correlated is not None and correlated['verdict'] != 'UNDECIDED-MEASURE':
+        # a coincidence that reached no answer (its literals past the table's reach) is no
+        # counterexample: the rule is unresolved there, never convicted
+        return verdict('UNRESOLVED-COVERAGE', coincidence=correlated)
     if not covered:
         # "skip, never convict" must not become "skip everything, acquit": a rule whose
         # battery is almost entirely Unresolved has no evidence either way in the reals (e.g.

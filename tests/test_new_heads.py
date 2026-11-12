@@ -34,9 +34,11 @@ def test_step_and_lattice_heads_of_literals_fold(bare, mode):
     assert s('erf 1') == ['erf', '1']
 
 
-def test_f64_reads_a_literal_at_its_float_and_permissive_at_its_rational(bare):
-    # permissive's ground value is the table's, where a literal is the rational it spells
-    assert bare.simplify(['floor', '0.99999999999999999'], mode='f64') == ['1']
+def test_a_literal_is_the_rational_it_spells_in_both_modes(bare):
+    # permissive's ground value is the table's, where a literal is the rational it spells; f64
+    # reads the same real value (0), float64's value of it (floor(1.0) = 1) being finite too, so
+    # both kinds agree and the reals' value is written
+    assert bare.simplify(['floor', '0.99999999999999999'], mode='f64') == ['0']
     assert bare.simplify(['floor', '0.99999999999999999'], mode='permissive') == ['0']
     assert bare.simplify(['erf', '0'], mode='f64') == ['0']
     assert bare.simplify(['besselj', '0', '0'], mode='f64') == ['1']
@@ -282,9 +284,11 @@ def test_f64_ground_folds_keep_float64s_zero_sign(bare):
 
 def test_f64_ground_fold_is_the_evaluator_at_zero_and_small_inputs(bare):
     """Every unary and binary head at +-0 and small ground inputs, bare, negated, scaled and in
-    products of zeros: the f64 answer evaluates bit for bit as the input does. (A negative root
-    index is excluded: `rootn(x, -n)` is written `1/rootn(x, n)`, which float64 can round 1 ulp
-    apart.)"""
+    products of zeros: the f64 answer evaluates bit for bit as the input does, or, where it does
+    not, the judge reads the fully numeric rewrite as holding in f64 (the reals' value with
+    float64's kinds kept: `2*asin(0.5)` is pi/3). (A negative root index is excluded:
+    `rootn(x, -n)` is written `1/rootn(x, n)`, which float64 can round 1 ulp apart.)"""
+    from simplipy.verify import _contract
     import itertools
     import struct
     arity = dict(bare.operator_arity)
@@ -301,8 +305,10 @@ def test_f64_ground_fold_is_the_evaluator_at_zero_and_small_inputs(bare):
     zeros = [g for g in grounds if ev(g) == 0.0]
     srcs = [c + g for g in grounds for c in ([], ['neg'], ['*', '-1'], ['*', '2'], ['*', '-2'])]
     srcs += [p + g + h for g in zeros[::7] for h in zeros[::11] for p in (['*'], ['neg', '*'])]
-    bad = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
-    assert not bad, (len(bad), bad[:5])
+    moved = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
+    bad = [(s, a) for s, a in moved
+           if _contract.judged_reading(_contract.judge_rule(list(s), list(a)), 'f64') is not True]
+    assert moved and not bad, (len(bad), bad[:5])
 
 
 def test_f64_writes_the_negative_zero_and_reads_it(bare):
@@ -568,11 +574,12 @@ def test_an_odd_order_is_an_odd_head(bare, mode):
 
 def test_f64_and_permissive_fold_a_ground_step_value(bare):
     """f64 folds a ground node with the deployed kernels, float64's zero sign included;
-    permissive's ground value is the table's, written as a float: the two disagree where float64
-    rounds onto an integer (the table reads tanh(40) below 1)."""
+    permissive's ground value is the table's, written as a float. Where float64 rounds onto an
+    integer (tanh(40) is 1.0, the table reads it below 1), f64 writes the reals' value too: its
+    kind, finite, agrees with float64's."""
     f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
     perm = lambda t: ' '.join(bare.simplify(t.split(), mode='permissive'))  # noqa: E731
-    assert f64('floor tanh 40') == '1' and perm('floor tanh 40') == '0'
+    assert f64('floor tanh 40') == '0' and perm('floor tanh 40') == '0'
     assert f64('mod 0 log 0') == '-0.0'
     assert f64('besselj cosh 1 0') == '-0.0'
 
@@ -724,8 +731,9 @@ def test_a_ground_lattice_bag_folds_to_its_cheapest_equal_member(bare, mode):
     assert s('max sin 1 0.5') == 'sin 1' and s('min sin 1 0.5') == '/ 1 2'
     assert s('min sin 1 tan 1') == 'sin 1'
     # f64 reads the literal at its float, pi's; permissive values the bag exactly, the literal
-    # above pi, and writes its float once
-    assert s('max np.pi 3.1415926535897933') == ('np.pi' if mode == 'f64' else '3.141592653589793')
+    # above pi, and writes its nearest double, pi's double, which the recognition list writes as
+    # np.pi
+    assert s('max np.pi 3.1415926535897933') == 'np.pi'
     # a NaN member makes the bag NaN
     assert s('max sin 1 log -1') == 'float("nan")'
 
@@ -745,9 +753,9 @@ def test_a_ground_fold_returns_a_member_with_the_nodes_value(bare, mode):
     s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
     assert s('mod sin 1 123456.78912345678') == 'sin 1'
     assert s('mod sin 1 2') == 'sin 1'
-    # permissive reads the table, which cannot place sin(1) apart from the multiples of 1e300 at
-    # its working precision: it leaves the node as written (fail closed)
-    assert s('mod sin 1 1e300') == ('mod sin 1 1e300' if mode == 'permissive' else 'sin 1')
+    # permissive reads the table at as many digits as it needs to place sin(1) apart from the
+    # multiples of 1e300
+    assert s('mod sin 1 1e300') == 'sin 1'
     assert s('abs sin 1') == 'sin 1' and s('abs neg sin 1') == 'sin 1'
     assert s('mod neg sin 1 -123456.78912345678') == 'sin -1'
     # float64's sin(1) + 1e-30 is sin(1)'s float, bit for bit
