@@ -576,12 +576,15 @@ const MU_RAT_FLOOR: u64 = MU_MILLI;
 type CodewordTotals = (u64, Option<u64>, Option<u64>);
 
 fn mu_rat_codeword_totals(r: &Rat) -> CodewordTotals {
-    // A big-form literal's codewords cost big-integer divisions and logarithms, and the same
+    // A literal's codewords cost integer divisions and logarithms (128-bit or big), and the same
     // values are priced again and again while candidates are compared (the sign placement in
     // `mul` alone prices whole factors per orientation). The price is a function of the value,
     // so a per-thread table answers repeats; it is emptied when it reaches 65,536 entries
-    // (bounded per thread, also under the miner's thread pool).
-    if r.small_parts().is_some() {
+    // (bounded per thread, also under the miner's thread pool). A small integer is priced
+    // directly.
+    if r.small_parts()
+        .is_some_and(|(p, q)| q == 1 && p.unsigned_abs() < 1 << 20)
+    {
         return mu_rat_codeword_totals_uncached(r);
     }
     thread_local! {
@@ -629,7 +632,19 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> CodewordTotals {
         Some((_, q)) => q <= i128::from(bound),
         None => r.big_parts().1 <= BigInt::from(bound),
     };
-    let reciprocal = if r.is_integer() || short_denominator {
+    // `1/c` terminates only where the numerator has no prime factor but 2 and 5
+    let smooth_numerator = match r.small_parts() {
+        Some((p, _)) => {
+            let mut m = p.unsigned_abs();
+            m >>= m.trailing_zeros();
+            while m % 5 == 0 && m != 0 {
+                m /= 5;
+            }
+            m == 1
+        }
+        None => true,
+    };
+    let reciprocal = if r.is_integer() || short_denominator || !smooth_numerator {
         None
     } else {
         r.abs()
@@ -10044,9 +10059,29 @@ pub(crate) fn strict_number(exact: Rat, float: f64) -> Rat {
     if exact.is_integer() || !(float.is_normal() || (float == 0.0 && exact.is_zero())) {
         return exact;
     }
-    let decimal = {
-        let _f64 = super::rat::number_domain(true);
-        Rat::parse_decimal(&format!("{float:?}"))
+    // The double's shortest decimal is a function of its bits: each thread remembers it, emptying
+    // the table at 65,536 entries.
+    thread_local! {
+        static DECIMALS: std::cell::RefCell<rustc_hash::FxHashMap<u64, Option<Rat>>> =
+            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    let decimal = DECIMALS.with(|m| m.borrow().get(&float.to_bits()).cloned());
+    let decimal = match decimal {
+        Some(d) => d,
+        None => {
+            let d = {
+                let _f64 = super::rat::number_domain(true);
+                Rat::parse_decimal(&format!("{float:?}"))
+            };
+            DECIMALS.with(|m| {
+                let mut m = m.borrow_mut();
+                if m.len() >= 1 << 16 {
+                    m.clear();
+                }
+                m.insert(float.to_bits(), d.clone());
+            });
+            d
+        }
     };
     match decimal {
         Some(d) if mu_rat_exact(&d) < mu_rat_exact(&exact) => d,
