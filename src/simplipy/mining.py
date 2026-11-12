@@ -604,9 +604,8 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
     # constructor about a PATTERN answers a question about the pattern, not about the
     # instances the rule matches, and the two genuinely differ: in permissive the constructor
     # takes `/ $0 $0` to `1` -- the slot carries a nonzero-a.e. certificate -- while
-    # taking the instance `inf / inf` to `nan`. Pruning on the pattern therefore deleted
-    # `/ $0 $0 -> 1` and with it the mask-sentinel doctrine, which is exactly the rule
-    # that makes `inf/inf * x0` collapse to `x0` in permissive.
+    # taking the instance `inf / inf` to `nan`. Pruning on the pattern would delete
+    # `/ $0 $0 -> 1` for an answer about the pattern, not about the rule's instances.
     #
     # For a GROUND rule the pattern IS its only instance, so the question the constructor
     # answers is the question asked. That still retires what the prune was for: the

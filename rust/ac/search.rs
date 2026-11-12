@@ -1235,7 +1235,6 @@ mod tests {
         let view = TokenView::new(&table, &overlay);
         let mut lossy = Cx::bare(&view);
         lossy.mode = RuleMode::Permissive;
-        lossy.sentinels_expired = true;
         let sound = Cx::bare(&view);
         let x1 = Ex::Leaf(view.intern("x1"));
         let x2 = Ex::Leaf(view.intern("x2"));

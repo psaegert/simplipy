@@ -391,7 +391,10 @@ class TestCorpusGate:
         # holds `acos(cosh(c))`, 0 at c = 0, which the NaN-family fold read as nan and took
         # the whole row with it; it is a free constant now and the row rests as a sum
         # (+233,087).
-        assert walk['complexity_out'] == 54707213, walk['complexity_out']
+        # A ZERO PRODUCT KEEPS ITS SIGN (f64): 54,707,213 -> 54,701,213. A head that keeps a
+        # zero, its sign and NaN is the zero product itself: row 64's `sin(0*log(x4))` is
+        # `0*log(x4)` (-6,000), the same value at every point. No other row moves.
+        assert walk['complexity_out'] == 54701213, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

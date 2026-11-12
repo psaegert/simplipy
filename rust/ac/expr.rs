@@ -28,6 +28,7 @@ use std::cmp::Ordering;
 
 use crate::tokens::{Tok, TokenView};
 
+use super::laws::Law;
 use super::rat::{Mantissa, Rat};
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
@@ -1403,17 +1404,6 @@ pub struct Cx<'a> {
     /// sees it. The fold is a step of the pass, tried after the rules at each node and kept
     /// only where it descends; `permissive` always folds so (its lossy reading).
     pub fold_f64: bool,
-    /// SENTINEL EXPIRY: lossy parse deliberately keeps
-    /// `inv(inf)`-class reciprocals unfolded so the mul bag can find their `$`-cancel
-    /// partner (the mask-sentinel doctrine). That licence is for the SEARCH, not the
-    /// answer: at the phase-1 fixpoint every surviving sentinel is unpartnered and IS
-    /// the determined value 0 -- keeping it both inflates the endpoint and BLOCKS
-    /// downstream rules (measured: 609/750 mode-ordering rows carried an inf/nan the
-    /// sound endpoint lacked, e.g. a kept `C * inv(inf)` term whose sum never reached
-    /// the shape a parity rule needed). The engine's phase-2 chain re-canonicalizes
-    /// the fixpoint with this flag set -- `pow`'s determined fold fires again -- and
-    /// keeps descending. Only meaningful with `lossy`; sound mode always folds.
-    pub sentinels_expired: bool,
     /// GROUND FIRST, at the parse: the ground evaluator's verdict on a fully numeric part as
     /// written (its token span), before any constructor builds it. `Some(atom)` where the part's
     /// value is only that atom (NaN or an infinity: a part the reals give no value, or one whose
@@ -1444,8 +1434,10 @@ pub enum Permissive {
     /// of a root alike).
     PowersCompose,
     /// Like terms cancel without a definedness check: `log(x0) - log(x0)` is 0,
-    /// `asin(x0)/asin(x0)` is 1, `0*log(x0)` is 0, and `inf/inf` is 1 (a literal infinity keeps
-    /// its written reciprocal until the pass's fixpoint, so it can meet its partner).
+    /// `asin(x0)/asin(x0)` is 1 and `0*log(x0)` is 0. A part with a variable beside an infinity
+    /// is one term to them, and they run before the infinity absorbs it
+    /// ([`Law::InfinityAbsorbs`]): `(x0 + inf)/(x0 + inf)` is 1 and `(x0 + inf) - (x0 + inf)`
+    /// is 0. A fully numeric `inf/inf` has no value: NaN.
     LikeTerms,
     /// A constant collapses without evidence: `(-1)^C` is `C` (`interval::collapse_licence`).
     ConstantCollapse,
@@ -1603,7 +1595,6 @@ impl<'a> Cx<'a> {
             cert_encl: None,
             mode: RuleMode::Default,
             fold_f64: false,
-            sentinels_expired: false,
             ground_first: None,
         }
     }
@@ -1706,16 +1697,14 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// Finite-and-nonzero a.e. licence for a multiplicative base. Variables qualify (a variable
-    /// is zero only on a null set); `Pi`/`E` are nonzero literals; nonzero `Num` likewise;
-    /// `Const` does NOT qualify syntactically (`c = 0` is a reachable fitted value, and the
-    /// licence's job is exactly to protect `c^1 * c^-1` at `c = 0`)... but the certificate may
-    /// still pass it (the null set `{0}` in c-space is what `forall c` quantifies over -- we
-    /// stay conservative and leave `Const` to the certificate).
-    fn finnz_licensed(&self, e: &Ex) -> bool {
-        if self.permits(Permissive::LikeTerms) {
-            return true;
-        }
+    /// Is `e` CERTAINLY finite and nonzero almost everywhere (the `$`-certificate), the `f64`
+    /// premise of `mul.cancel` ([`Law::MulCancel`])? Variables qualify (a variable is zero only
+    /// on a null set); `Pi`/`E` are nonzero literals; nonzero `Num` likewise; `Const` does NOT
+    /// qualify syntactically (`c = 0` is a reachable fitted value, and the certificate's job is
+    /// exactly to protect `c^1 * c^-1` at `c = 0`)... but the certificate may still pass it (the
+    /// null set `{0}` in c-space is what `forall c` quantifies over -- we stay conservative and
+    /// leave `Const` to the certificate).
+    pub(crate) fn finnz_certified(&self, e: &Ex) -> bool {
         match e {
             Ex::Pi | Ex::E => true,
             Ex::Num(r) => !r.is_zero(),
@@ -3603,6 +3592,14 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     } else {
         items
     };
+    // Where the absorption of infinities settles (`permissive`), a part holding an infinity
+    // beside a part with a variable is one term to the like-term cancellation, which runs here,
+    // before the flatten spreads its terms (`collect_infinite_parts`).
+    let items = if items.len() > 1 && Law::InfinityAbsorbs.settles(cx) {
+        collect_infinite_parts(items, cx)
+    } else {
+        items
+    };
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
     let mut acc_overflow: Vec<Ex> = Vec::new(); // Num partials an overflowed accumulator emitted
@@ -3685,6 +3682,37 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         acc_overflow.extend(lits.into_iter().map(Ex::Num));
     }
 
+    // ZERO PRODUCTS IN `f64` (`zero_product`): a zero with a sign is a zero term, whose sign
+    // nothing reads where the rest of the sum is not -0 on a region (`add.zero`): a literal, an
+    // infinity, a `<constant>` or a term the region test clears. There it drops the factors that
+    // only gave it its sign (`unsigned_zero`), and goes where nothing else is left: `x1 + 0*x0` is
+    // `x1`, while `ceil(x1) + 0*x0` and `0*x0 + 0*x1` keep their zeros, whose signs decide the
+    // sum's.
+    let terms: Vec<Ex> = if terms.iter().any(|t| zero_product(t, cx)) {
+        let settled = pos_inf
+            || neg_inf
+            || has_const
+            || owes_zero
+            || !acc.is_zero()
+            || !acc_overflow.is_empty()
+            || terms
+                .iter()
+                .any(|t| !zero_product(t, cx) && Law::AddZero.holds(t, cx));
+        if settled {
+            terms
+                .into_iter()
+                .filter_map(|t| match unsigned_zero(&t, cx) {
+                    Some(Ex::Num(z)) if z.is_zero() => None,
+                    Some(u) => Some(u),
+                    None => Some(t),
+                })
+                .collect()
+        } else {
+            terms
+        }
+    } else {
+        terms
+    };
     // Like-term collection: (key, positive-coefficient sum, negative-coefficient sum), in
     // first-seen order for determinism (the final sort canonicalizes anyway).
     struct Bucket {
@@ -3842,7 +3870,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         let Bucket { key, coeffs } = b;
         let mixed =
             coeffs.iter().any(|c| c.is_negative()) && coeffs.iter().any(|c| !c.is_negative());
-        let pools: Vec<Vec<Coef>> = if mixed && cx.fin_licensed(&key) {
+        let pools: Vec<Vec<Coef>> = if mixed && Law::AddCancel.holds(&key, cx) {
             owes_zero |= f64_zero_signs(cx);
             vec![coeffs]
         } else {
@@ -3958,8 +3986,12 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     // bare infinities NEVER reach `primitive_sum`.
     if pos_inf || neg_inf {
         let inf = if pos_inf { Ex::PosInf } else { Ex::NegInf };
-        // Rational accumulator and Const absorb totally (finite by construction).
-        let unlicensed: Vec<Ex> = out.drain(..).filter(|t| !cx.fin_licensed(t)).collect();
+        // Rational accumulator and Const absorb totally (finite by construction). Where the
+        // absorption is a settling step (`permissive`), every other term stays for the pass.
+        let unlicensed: Vec<Ex> = out
+            .drain(..)
+            .filter(|t| !Law::InfinityAbsorbs.constructs(t, cx))
+            .collect();
         if unlicensed.is_empty() {
             return inf;
         }
@@ -3983,7 +4015,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     // because `mul` folds any scalar into the infinity, so no unanimous content
     // can arise and the pass is a no-op on them).
     if out.iter().any(is_inf_carrying) {
-        out.retain(|f| is_inf_carrying(f) || !cx.fin_licensed(f));
+        out.retain(|f| is_inf_carrying(f) || !Law::InfinityAbsorbs.constructs(f, cx));
         acc = Rat::ZERO;
         has_const = false;
         owes_zero = false;
@@ -3999,7 +4031,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             land(acc, cx)
         };
         out.push(Ex::Num(acc));
-    } else if owes_zero && !out.is_empty() && !out.iter().any(|t| signed_zero_null(t, true, cx)) {
+    } else if owes_zero && !out.is_empty() && !out.iter().any(|t| Law::AddZero.holds(t, cx)) {
         // Every remaining term may be `-0` on a region: the zero term stays (`ceil(x1) + 0`), so
         // the sum is `+0` there as float64's is. Where one term cannot be (`x1 + 0` is `x1`, -0 at
         // the one point `x1 = -0`), it goes.
@@ -4291,6 +4323,123 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
 
 /// The signed rational coefficient a term contributes to the orientation comparison
 /// (`Const` counts +1 -- sign-free; infinities carry their sign as +/-1).
+/// LIKE PARTS BEFORE THE INFINITY, where the absorption of infinities settles
+/// ([`Law::InfinityAbsorbs`], `permissive`): a sum holding an infinity beside a part with a
+/// variable is one term to the like-term cancellation (`add.cancel`), and so is a product holding
+/// such a sum. The cancellation collects such terms of one sum by their factors before the
+/// flatten spreads them and before the infinity absorbs anything: `(x0 + inf) - (x0 + inf)` is 0,
+/// where the spread terms would meet `inf - inf`, `x1*(x0 + inf) - x1*(x0 + inf)` is 0, and
+/// `2*(x0 + inf) - (x0 + inf)` is `x0 + inf`. A sum read with its infinity negative is the
+/// negation of the sum with every term negated, so `-(x0 + inf)`, built as `-x0 - inf`, is the
+/// part `x0 + inf` with the factor -1. The other items pass unchanged, in their order.
+fn collect_infinite_parts(items: Vec<Ex>, cx: &Cx) -> Vec<Ex> {
+    let infinite_sum = |t: &Ex| {
+        matches!(t, Ex::Add(v) if v.iter().any(|m| matches!(m, Ex::PosInf | Ex::NegInf))
+            && v.iter().any(|m| m.has_measure_space(cx.view)))
+    };
+    // (the factor, the part read with its infinity positive)
+    let part = |e: &Ex| -> Option<(Rat, Ex)> {
+        let (mut r, sum, mut others) = match e {
+            Ex::Add(v) if infinite_sum(e) => (Rat::ONE, v, Vec::new()),
+            Ex::Mul(m) => {
+                let mut sums = m.iter().filter(|f| infinite_sum(f));
+                let (Some(Ex::Add(v)), None) = (sums.next(), sums.next()) else {
+                    return None;
+                };
+                let mut r = Rat::ONE;
+                let mut others = Vec::with_capacity(m.len());
+                for f in m {
+                    match f {
+                        Ex::Num(q) => r = r.checked_mul(q)?,
+                        f if infinite_sum(f) => {}
+                        f => others.push(f.clone()),
+                    }
+                }
+                (r, v, others)
+            }
+            _ => return None,
+        };
+        let oriented = if sum.iter().any(|t| matches!(t, Ex::PosInf)) {
+            Ex::Add(sum.clone())
+        } else {
+            r = r.checked_neg()?;
+            let flipped: Option<Vec<Ex>> = sum.iter().map(|t| negate_term(t, cx)).collect();
+            add(flipped?, cx)
+        };
+        let key = if others.is_empty() {
+            oriented
+        } else {
+            others.push(oriented);
+            mul(others, cx)
+        };
+        Some((r, key))
+    };
+    let parts: Vec<Option<(Rat, Ex)>> = items.iter().map(part).collect();
+    if parts.iter().flatten().count() < 2 {
+        return items;
+    }
+    let mut taken = vec![false; items.len()];
+    let mut out: Vec<Ex> = Vec::with_capacity(items.len());
+    for i in 0..items.len() {
+        if taken[i] {
+            continue;
+        }
+        taken[i] = true;
+        let Some((r, key)) = &parts[i] else {
+            out.push(items[i].clone());
+            continue;
+        };
+        let group: Vec<usize> = (i + 1..items.len())
+            .filter(|&j| !taken[j] && parts[j].as_ref().is_some_and(|(_, k)| k == key))
+            .collect();
+        if group.is_empty() || !Law::AddCancel.holds(key, cx) {
+            out.push(items[i].clone());
+            continue;
+        }
+        let factor = group.iter().try_fold(r.clone(), |acc, &j| {
+            parts[j].as_ref().and_then(|(s, _)| acc.checked_add(s))
+        });
+        let Some(factor) = factor else {
+            out.push(items[i].clone());
+            continue;
+        };
+        for &j in &group {
+            taken[j] = true;
+        }
+        if !factor.is_zero() {
+            out.push(mul(vec![Ex::Num(factor), key.clone()], cx));
+        }
+    }
+    out
+}
+
+/// THE ABSORPTION OF INFINITIES as a settling step (`add.infinity_absorbs`, where
+/// [`Law::InfinityAbsorbs`] settles): a built sum holding an infinity absorbs every term the law's
+/// premise admits, as the constructor does where the law is one of its steps. The pass takes it
+/// after the constructors' like-term cancellations, so a part with a variable beside an infinity
+/// is one term to them: `(x0 + inf) - (x0 + inf)` is 0, and `x0 + inf` alone is `inf`. `None`
+/// where the sum absorbs nothing.
+pub(crate) fn absorb_infinities(e: &Ex, cx: &Cx) -> Option<Ex> {
+    let Ex::Add(v) = e else {
+        return None;
+    };
+    let infinite = |t: &Ex| matches!(t, Ex::PosInf | Ex::NegInf);
+    let kept: Vec<Ex> = if v.iter().any(infinite) {
+        v.iter()
+            .filter(|t| infinite(t) || !Law::InfinityAbsorbs.holds(t, cx))
+            .cloned()
+            .collect()
+    } else if v.iter().any(is_inf_carrying) {
+        v.iter()
+            .filter(|t| is_inf_carrying(t) || !Law::InfinityAbsorbs.holds(t, cx))
+            .cloned()
+            .collect()
+    } else {
+        return None;
+    };
+    (kept.len() < v.len()).then(|| add(kept, cx))
+}
+
 /// Is this Add term an infinity-carrying product? Such a term is never finite: its
 /// values are ±inf (infinity times a nonzero finite co-product) or NaN (times zero,
 /// or a NaN co-factor). Bare `Ex::PosInf`/`Ex::NegInf` never reach the term list
@@ -4486,7 +4635,7 @@ fn region_zero_null(e: &Ex, cx: &Cx) -> bool {
 
 /// Is `f64` the construction, in the run's float64 numbers? A construction in the exact number
 /// domain (`Cx::f64_numbers`) reads one zero.
-fn f64_zero_signs(cx: &Cx) -> bool {
+pub(crate) fn f64_zero_signs(cx: &Cx) -> bool {
     cx.f64_semantics() && cx.f64_numbers()
 }
 
@@ -4520,7 +4669,7 @@ fn vanishes_on_a_region(e: &Ex, cx: &Cx) -> bool {
 /// is `-0` only where every term is. `harmonic`, `besselj` (`besselj(1.5, 0) = -0`) and any
 /// other head are read by the region test alone. A ground term is its float64 value
 /// (`ground_value`); a pattern has no region (as in `keeps_zero_sign`).
-fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
+pub(crate) fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
     let view = cx.view;
     if e.contains_wildcard(view) {
         return true;
@@ -4697,6 +4846,7 @@ fn sqrt_parts_from_rootn(b: &Ex, cx: &Cx) -> bool {
     cx.f64_semantics()
         && (is_neg_zero(b, cx.view)
             || signed_zero_of(b, cx, false)
+            || zero_of_either_sign(b, cx)
             || matches!(b, Ex::Mul(v) if v.iter().any(|f| sqrt_parts_from_rootn(f, cx)))
             || (cx.fold_f64
                 && matches!(b, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..))
@@ -4834,8 +4984,11 @@ pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<E
 /// whose zero set may hold a region being no sign-trade site (`sign_trade_flip`).
 pub(crate) fn inverts_a_signed_zero(v: &[Ex], cx: &Cx) -> bool {
     cx.ieee_zeros()
-        && v.iter()
-            .any(|f| matches!(f, Ex::Num(r) if r.is_zero()) || region_signed_zero(f, cx))
+        && v.iter().any(|f| {
+            matches!(f, Ex::Num(r) if r.is_zero())
+                || is_neg_zero(f, cx.view)
+                || region_signed_zero(f, cx)
+        })
 }
 
 /// `mul()` without the opposite-sums decision, for a product about to be raised to a negative
@@ -4906,6 +5059,9 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let mut inf_sign: Option<bool> = None; // Some(true) = +inf so far, Some(false) = -inf
     let mut has_const = false;
     let mut factors: Vec<Ex> = Vec::new();
+    // In `f64` a written negative zero is a zero with its sign (`zero_sign`).
+    let signed_zeros = f64_zero_signs(cx);
+    let mut neg_zeros = false;
     let mut stack: Vec<Ex> = items;
     stack.reverse();
     loop {
@@ -4917,6 +5073,10 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
                 Ex::PosInf => inf_sign = Some(inf_sign.unwrap_or(true)),
                 Ex::NegInf => inf_sign = Some(!inf_sign.unwrap_or(true)),
                 Ex::Const => has_const = true,
+                e if signed_zeros && is_neg_zero(&e, cx.view) => {
+                    nums.push(Rat::ZERO);
+                    neg_zeros = !neg_zeros;
+                }
                 other => factors.push(other),
             }
         }
@@ -5094,24 +5254,33 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     }
 
     // Coefficient 0 (no infinity): collapse where licensed (see the gate doc above). A bare
-    // Const vanishes here (0 * c = 0 -- Const is certainly finite), so `has_const` is simply
-    // not consulted on this path.
+    // Const vanishes here (0 * c = 0 -- Const is certainly finite), except in `f64`, where its
+    // sign is the zero's (`0*c` is -0 for c < 0, which an inverse reads).
     if inf_sign.is_none() && coeff.is_zero() {
+        // THE ZERO'S SIGN, in `f64`: float64's product of a zero is `-0` where its members' signs
+        // are negative, and an inverse reads it, so the zero carries the literals' sign (`-0` is
+        // the written negative zero) and keeps every factor whose sign may vary (`mul.zero`).
+        let zero_sign = signed_zeros.then_some(net_neg ^ neg_zeros);
         // Each LICENSED factor drops individually (`0 * f == 0` wherever `f` is finite --
         // the same finite-a.e. licence as the full collapse, applied per-factor). Keeping
         // licensed factors would make the kept-zero form depend on ASSOCIATION order
         // (`(0 * x) * (1/D)` collapses the inner pair, `0 * (x * (1/D))` would not) and
         // break serialization stability; only the unlicensed factors stay with the 0.
-        let v: Vec<Ex> = out.into_iter().filter(|f| !cx.fin_licensed(f)).collect();
-        if v.is_empty() {
-            return Ex::Num(Rat::ZERO);
+        let mut v: Vec<Ex> = out
+            .into_iter()
+            .filter(|f| !Law::MulZero.holds(f, cx))
+            .collect();
+        if signed_zeros && has_const {
+            v.push(Ex::Const);
         }
-        // Assemble through the
-        // sign-placement owner, not raw -- the zero is a sign-eating carrier (see
-        // sign_place's carrier list), so the orbit files ONE orientation for every
-        // trade-site factor where the raw assembly froze whichever mirror arrived
-        // (direct build vs parse-of-own-rendering shipped two states; row-120 law).
-        let kept = sign_place(Rat::ZERO, v, cx);
+        if v.is_empty() {
+            return signed_zero(zero_sign, cx);
+        }
+        // Assemble through the sign-placement owner, not raw: the orbit files ONE orientation
+        // for every trade-site factor where the raw assembly froze whichever mirror arrived
+        // (direct build vs parse-of-own-rendering shipped two states; row-120 law), the zero
+        // taking the sign a flip moves (in `f64`) or eating it.
+        let kept = sign_place_zero(zero_sign, v, cx);
         // The licensed factors drop before the collection too: a collection can merge one into
         // a factor the zero cannot drop (`0 * x^4 * sqrt(x)` collects to `0 * x^(9/2)`, while
         // dropping first keeps `0 * sqrt(x)`), as it can cancel what dropping first keeps
@@ -5120,15 +5289,21 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
         if let Some(members) = zero_members {
             let w: Vec<Ex> = members
                 .into_iter()
-                .filter(|f| !cx.fin_licensed(f))
+                .filter(|f| !Law::MulZero.holds(f, cx))
                 .collect();
             let (w, spliced) = collect_like_bases(w, cx);
             if !spliced {
-                let w: Vec<Ex> = w.into_iter().filter(|f| !cx.fin_licensed(f)).collect();
-                if w.is_empty() {
-                    return Ex::Num(Rat::ZERO);
+                let mut w: Vec<Ex> = w
+                    .into_iter()
+                    .filter(|f| !Law::MulZero.holds(f, cx))
+                    .collect();
+                if signed_zeros && has_const {
+                    w.push(Ex::Const);
                 }
-                let dropped = sign_place(Rat::ZERO, w, cx);
+                if w.is_empty() {
+                    return signed_zero(zero_sign, cx);
+                }
+                let dropped = sign_place_zero(zero_sign, w, cx);
                 if complexity(&dropped, cx.view) < complexity(&kept, cx.view) {
                     return dropped;
                 }
@@ -5256,7 +5431,7 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
             }
         };
         let mixed = exps.iter().any(|r| r.is_negative()) && exps.iter().any(|r| !r.is_negative());
-        let pools: Vec<Vec<Rat>> = if mixed && sym_ok && cx.finnz_licensed(&base) {
+        let pools: Vec<Vec<Rat>> = if mixed && sym_ok && Law::MulCancel.holds(&base, cx) {
             vec![exps]
         } else {
             let (negs, poss): (Vec<Rat>, Vec<Rat>) =
@@ -7875,7 +8050,31 @@ fn site_sum_terms(f: &Ex) -> Option<&[Ex]> {
 /// spelling the orientation machinery prices (the row-120 law). With no trade site
 /// (or a negation overflow, or no configuration that keeps the product's values at its zeros)
 /// this is exactly the plain assembly: push the non-unit coefficient, sort, wrap.
-fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
+fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
+    sign_place_signed(coeff, out, None, cx)
+}
+
+/// The zero of sign `negative` in `f64` (`Some`): `+0` is the literal zero and `-0` the written
+/// negative zero. `None`: the one zero.
+fn signed_zero(negative: Option<bool>, cx: &Cx) -> Ex {
+    match negative {
+        Some(true) => Ex::Leaf(cx.view.intern(NEG_ZERO)),
+        _ => Ex::Num(Rat::ZERO),
+    }
+}
+
+/// [`sign_place`] for a product whose coefficient is a zero: in `f64` (`Some(negative)`) the zero
+/// carries the product's sign, `+0` or `-0`, and a flip of a site moves it, unless a bare `Const`
+/// is beside it (the refit eats every sign); `None`, the one zero eats it.
+fn sign_place_zero(negative: Option<bool>, out: Vec<Ex>, cx: &Cx) -> Ex {
+    if out.iter().any(|f| matches!(f, Ex::Const)) {
+        return sign_place(Rat::ZERO, out, cx);
+    }
+    sign_place_signed(Rat::ZERO, out, negative, cx)
+}
+
+/// [`sign_place`], with the zero's sign where the coefficient is a zero that carries one.
+fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &Cx) -> Ex {
     // A sum holding a `Const` takes a sign into its terms (`negate_term`: a Const term absorbs it
     // in the refit, every other term negates), so it carries the product's sign exactly, as a
     // negation-absorbing sum does; only a bare `Const` factor or a zero coefficient eats a sign.
@@ -7917,7 +8116,8 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     }
     let assemble = |factors: Vec<Ex>, c: &Rat| -> Ex {
         let mut v = factors;
-        if !c.is_one() {
+        // A unit coefficient is no member (`mul.one`, total).
+        if !(c.is_one() && Law::MulOne.total()) {
             v.push(Ex::Num(c.clone()));
         }
         match v.len() {
@@ -8047,7 +8247,9 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             // carrier list above). A Const-bearing sum comes next: it holds the signs of
             // the coefficient and the infinities (normalized above), so every toggle goes
             // into it and the orbit has one component.
-            let carrier = if coeff.is_zero() || out.iter().any(|f| matches!(f, Ex::Const)) {
+            let carrier = if let (Some(negative), true) = (zero, coeff.is_zero()) {
+                Carrier::Zero(negative)
+            } else if coeff.is_zero() || out.iter().any(|f| matches!(f, Ex::Const)) {
                 Carrier::Free
             } else if let Some(i) = const_sum {
                 Carrier::Absorb(i)
@@ -8093,7 +8295,13 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
-    assemble(out, &coeff)
+    match zero {
+        Some(negative) if coeff.is_zero() => {
+            out.push(signed_zero(Some(negative), cx));
+            assemble(out, &Rat::ONE)
+        }
+        _ => assemble(out, &coeff),
+    }
 }
 
 /// The negation of a sum that carries a product's sign (`sign_place`): a sum holding a `Const`
@@ -8122,6 +8330,8 @@ enum Carrier {
     Free,
     Absorb(usize),
     Coeff,
+    /// A zero coefficient in `f64`, of the sign given: a toggle turns `+0` into `-0`.
+    Zero(bool),
 }
 
 /// A product's sign orbit (`sign_place`): its factors and coefficient (and the coefficient's
@@ -8164,7 +8374,13 @@ impl SignOrbit<'_> {
                 toggled = !toggled;
             }
         }
+        if let Carrier::Zero(negative) = self.carrier {
+            let negative = negative ^ toggled;
+            factors.push(signed_zero(Some(negative), cx));
+            return Some(((self.assemble)(factors, &Rat::ONE), negative));
+        }
         let c = match self.carrier {
+            Carrier::Zero(_) => unreachable!("the zero carrier is assembled above"),
             Carrier::Coeff if toggled => self.nc.clone(),
             Carrier::Coeff => self.coeff.clone(),
             Carrier::Inf(i) => {
@@ -8675,10 +8891,7 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
         RuleMode::Default => 0u8,
         RuleMode::Permissive => 2,
     };
-    let bits = mode
-        | (u8::from(cx.fold_f64) << 2)
-        | (u8::from(cx.sentinels_expired) << 3)
-        | (u8::from(super::rat::f64_numbers()) << 4);
+    let bits = mode | (u8::from(cx.fold_f64) << 2) | (u8::from(super::rat::f64_numbers()) << 4);
     (
         cx.view as *const TokenView as usize,
         [
@@ -8928,8 +9141,7 @@ fn rejoin_reciprocals(settled: Ex, signed: bool, cx: &Cx) -> Ex {
         .filter_map(|(i, f)| {
             let Ex::Pow(b, e) = f else { return None };
             // A literal-infinity base never joins: `inv(inf)` is a DETERMINED zero
-            // (sound folds it at construction; lossy keeps it unfolded only as the
-            // mask-sentinel cancellation partner). Joining it hides that determined
+            // (`pow` folds it at construction). Joining it hides that determined
             // fold behind an opaque base -- measured: every net-regressed battery row
             // had `inf` as a direct member of the joined product. DEEP infinities
             // (inside function arguments, row 1414's `acos(inf * x4)`) stay eligible:
@@ -9326,34 +9538,6 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     }
 }
 
-thread_local! {
-    /// Set while the parse reads a ground expression (`GroundParse`).
-    static GROUND_PARSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Is the parse reading a GROUND expression (no variable, `<constant>` or wildcard: every leaf a
-/// value the evaluator reads)? There, as the ground fold writes a ground value's float, a
-/// constructor writes float64's signed zero where the one zero would drop its sign.
-pub(crate) fn ground_parse() -> bool {
-    GROUND_PARSE.with(|g| g.get())
-}
-
-/// Holds [`ground_parse`] for one parse and restores the caller's when it drops.
-pub(crate) struct GroundParse(bool);
-
-impl GroundParse {
-    pub(crate) fn open(ground: bool) -> Self {
-        GroundParse(GROUND_PARSE.with(|g| g.replace(ground)))
-    }
-}
-
-impl Drop for GroundParse {
-    fn drop(&mut self) {
-        let outer = self.0;
-        GROUND_PARSE.with(|g| g.set(outer));
-    }
-}
-
 /// The SPELLING `pow(b, e)`, as the parse reads it: [`pow`], except numpy's square root in `f64`.
 /// Float64's `b ** 0.5` is `sqrt(b)` (`numeric::aligned_pow`), which keeps a zero's sign
 /// (`sqrt(-0) = -0`) where `rootn(b, 2)`, the engine's reading of `b^(1/2)`, gives +0. Where `b`
@@ -9367,7 +9551,9 @@ pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         && cx.view.arity(pow_tok) == Some(2)
         && sqrt_parts_from_rootn(&base, cx)
     {
-        if is_neg_zero(&base, cx.view) {
+        // `sqrt` keeps a zero, its sign and NaN: the root of the written negative zero, or of a
+        // zero product (`mul.zero`), is that zero.
+        if is_neg_zero(&base, cx.view) || zero_product(&base, cx) {
             return base;
         }
         return Ex::Fun(pow_tok, vec![base, exp]);
@@ -9380,6 +9566,19 @@ pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 /// orientation it was built in.
 pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // A ZERO PRODUCT UNDER A POSITIVE POWER (`mul.zero`): the power 1/2 is float64's `sqrt`, which
+    // keeps a zero, its sign and NaN, so the power is the product itself; any other that is no
+    // odd integer is `+0` (or NaN) whatever the zero's sign, so the product drops the factors that
+    // only gave it one (`unsigned_zero`).
+    let base = match &exp {
+        Ex::Num(q) if *q == Rat::new(1, 2).expect("1/2") && zero_product(&base, cx) => {
+            return base;
+        }
+        Ex::Num(q) if q.signum() > 0 && !q.is_odd_integer() => {
+            unsigned_zero(&base, cx).unwrap_or(base)
+        }
+        _ => base,
+    };
     // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
     // [`land`]), where that one is not ground; a power of two literals folds exactly or stays
     // as written.
@@ -9395,26 +9594,20 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // `pow(0, -1)` and `pow(0, -2)` are NaN (a division by zero), `pow(1, inf)`, `pow(inf, 0)`
     // and `pow(nan, 0)` NaN, `pow(-inf, 0)` 1 -- before the one-zero arms and the `x^0` and `1^x`
     // identities below, which hold for every finite real.
-    // Permissive's sentinel licence comes first: until the phase-1 fixpoint `1/inf` stays
-    // written, so `inf/inf` can still cancel as like terms (see the reciprocal arm below).
-    let sentinel = cx.permits(Permissive::LikeTerms)
-        && !cx.sentinels_expired
-        && matches!(base, Ex::PosInf | Ex::NegInf)
-        && matches!(&exp, Ex::Num(q) if q.is_negative());
-    if cx.table_values() && !sentinel && table_literal(&base) && table_literal(&exp) {
+    if cx.table_values() && table_literal(&base) && table_literal(&exp) {
         if let Some(folded) = table_literal_fold("pow", &[base.clone(), exp.clone()]) {
             return folded;
         }
     }
     if let Ex::Num(e) = &exp {
-        if e.is_zero() {
+        if e.is_zero() && Law::PowZero.holds(&base, cx) {
             return Ex::Num(Rat::ONE);
         }
-        if e.is_one() {
+        if e.is_one() && Law::PowOne.holds(&base, cx) {
             return base;
         }
     }
-    if matches!(&base, Ex::Num(b) if b.is_one()) {
+    if matches!(&base, Ex::Num(b) if b.is_one()) && Law::PowBaseOne.holds(&exp, cx) {
         return Ex::Num(Rat::ONE);
     }
     // THE WRITTEN NEGATIVE ZERO under a negative integer power is float64's pole of its sign:
@@ -9485,33 +9678,23 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // base is NaN territory, which interval classification certifies instead.
     // Infinite EXPONENTS are untouched: b^inf is a limit notion, not arithmetic --
     // that family (exp(-inf) -> 0 etc.) arrives as certified rules by doctrine.
-    // LOSSY mode keeps the composite: folding `inv inf -> 0` at construction
-    // destroys the structural x * x^-1 pair the relaxed $-certificate cancels
-    // (`(inf/inf) * x0 -> x0`, the mask-sentinel doctrine) -- the reciprocal
-    // must still EXIST when the mul bag looks for its cancellation partner. The
-    // keep EXPIRES at the phase-1 fixpoint (`sentinels_expired`): a
-    // surviving reciprocal is unpartnered, IS the value 0, and blocks the rules
-    // its unfolded shape hides from.
-    // In `f64` a GROUND expression's zero keeps float64's sign, the dual of the written negative
-    // zero's pole above (`ground_parse`): `(-inf)^-1` is `1/-inf = -0` and `(-inf)^-3` is -0,
-    // `(-inf)^-2` is +0; beside a variable or a `<constant>` the zero is the one zero, as a zero
-    // the search derives is (`x1/-inf` is 0). And `+inf` under a positive exponent is `+inf`
+    // In `f64` the zero keeps float64's sign, the dual of the written negative zero's pole above:
+    // `(-inf)^-1` is `1/-inf = -0` and `(-inf)^-3` is -0, `(-inf)^-2` is +0, so `1/(x1/-inf)` is
+    // `-inf/x1` (a product's zero carries its sign, `mul.zero`). And `+inf` under a positive exponent is `+inf`
     // (`inf^(1/2)` is `sqrt(inf)`), decided here, so a product holding it inverts to the zero of
     // its sign: `1/-(inf^(1/2))` is -0.
-    if !cx.permits(Permissive::LikeTerms) || cx.sentinels_expired {
-        if let Ex::Num(e) = &exp {
-            if matches!(base, Ex::PosInf) && e.signum() > 0 {
-                return Ex::PosInf;
-            }
-            if e.is_negative() {
-                match &base {
-                    Ex::PosInf => return Ex::Num(Rat::ZERO),
-                    Ex::NegInf if e.is_odd_integer() && cx.f64_semantics() && ground_parse() => {
-                        return Ex::Leaf(cx.view.intern(NEG_ZERO))
-                    }
-                    Ex::NegInf if e.is_integer() => return Ex::Num(Rat::ZERO),
-                    _ => {}
+    if let Ex::Num(e) = &exp {
+        if matches!(base, Ex::PosInf) && e.signum() > 0 {
+            return Ex::PosInf;
+        }
+        if e.is_negative() {
+            match &base {
+                Ex::PosInf => return Ex::Num(Rat::ZERO),
+                Ex::NegInf if e.is_odd_integer() && f64_zero_signs(cx) => {
+                    return Ex::Leaf(cx.view.intern(NEG_ZERO))
                 }
+                Ex::NegInf if e.is_integer() => return Ex::Num(Rat::ZERO),
+                _ => {}
             }
         }
     }
@@ -9795,11 +9978,8 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     //     undefined to defined on positive measure. I had written `PosInf | NegInf` from
     //     symmetry WITHOUT asking, and the h045 wall caught it -- the judge-first rule exists
     //     precisely because symmetry is not an argument.
-    //   * `+inf` is judge-CERTIFIED but still refused HERE: `Pow(inf, negative)` is already
-    //     owned by the determined-reciprocal arm above, which carries a LOSSY gate this arm
-    //     does not (`inv inf` must survive as a composite in lossy mode so the $-certificate
-    //     can find its cancellation partner -- the mask-sentinel doctrine). Taking it here
-    //     preempted that gate and broke `(inf/inf)*x0 -> x0`. The rules keep the +inf case.
+    //   * `+inf` is judge-CERTIFIED but owned by the determined-reciprocal arm above, which
+    //     folds `Pow(inf, negative)` to 0 before this arm is reached.
     let literal_reciprocal = |e: &Ex| -> Option<Ex> {
         match e {
             Ex::Num(b) if b.is_zero() => Some(Ex::PosInf),
@@ -10040,9 +10220,66 @@ fn land_operand(e: Ex, cx: &Cx) -> Ex {
     }
 }
 
-/// [`land`] at the root of a state: a state that is one literal is that literal landed.
+/// [`land`] at the root of a state: a state that is one literal is that literal landed. And
+/// nothing reads the sign of the answer's zero: a zero product drops the factors that only gave
+/// it its sign (`unsigned_zero`; `0*x0` is 0 as an answer, while `1/(0*x0)` is `inf/x0`).
 pub fn land_root(e: Ex, cx: &Cx) -> Ex {
+    if let Some(u) = unsigned_zero(&e, cx) {
+        return u;
+    }
+    // ... and a sum of zero products is a zero whose sign nothing reads either.
+    if let Ex::Add(v) = &e {
+        if v.iter().all(|t| zero_product(t, cx)) {
+            let terms: Vec<Ex> = v
+                .iter()
+                .map(|t| unsigned_zero(t, cx).unwrap_or_else(|| t.clone()))
+                .collect();
+            let settled = add(terms, cx);
+            if settled != e {
+                return land_root(settled, cx);
+            }
+        }
+    }
     land_operand(e, cx)
+}
+
+/// Is `f` a zero member of a product: the literal zero, or the written negative zero?
+fn zero_member(f: &Ex, view: &TokenView) -> bool {
+    matches!(f, Ex::Num(r) if r.is_zero()) || is_neg_zero(f, view)
+}
+
+/// In `f64`, is `t` a ZERO PRODUCT: a product holding a zero, whose value is `+0`, `-0` or NaN at
+/// every point, the zero's sign the sign of its other members (`mul.zero`)?
+pub(crate) fn zero_product(t: &Ex, cx: &Cx) -> bool {
+    f64_zero_signs(cx) && matches!(t, Ex::Mul(v) if v.iter().any(|f| zero_member(f, cx.view)))
+}
+
+/// Is `t` a zero product that may be `-0`: its zero the written negative zero, or a member whose
+/// sign is not certainly positive?
+fn zero_of_either_sign(t: &Ex, cx: &Cx) -> bool {
+    zero_product(t, cx)
+        && matches!(t, Ex::Mul(v) if v.iter().any(|f| is_neg_zero(f, cx.view)
+            || (!zero_member(f, cx.view) && !cx.certainly_nonneg(f))))
+}
+
+/// A zero product whose sign nothing reads, without the factors that only gave it its sign: its
+/// members finite almost everywhere go and the zero is the literal zero, built as `mul` builds it
+/// (the zero itself where nothing is left; the NaN of `0*log(x0)` stays). `None` where `t` is no
+/// zero product, or nothing goes.
+pub(crate) fn unsigned_zero(t: &Ex, cx: &Cx) -> Option<Ex> {
+    if !zero_product(t, cx) {
+        return None;
+    }
+    let Ex::Mul(v) = t else { return None };
+    let carriers: Vec<Ex> = v
+        .iter()
+        .filter(|f| !zero_member(f, cx.view) && !cx.fin_certified(f))
+        .cloned()
+        .collect();
+    let mut items = vec![Ex::Num(Rat::ZERO)];
+    items.extend(carriers);
+    let u = mul(items, cx);
+    (u != *t).then_some(u)
 }
 
 /// STRICT'S NUMBERS, written as the cheapest value strict admits for them: a number the
@@ -10716,6 +10953,43 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         let (b, e) = (it.next().expect("base"), it.next().expect("exponent"));
         return pow_spelled(b, e, cx);
     }
+    // A ZERO PRODUCT UNDER A HEAD, in `f64` (`mul.zero`). A head that keeps a zero, its sign and
+    // NaN (`f(-0) = -0`) is the product itself: `atan(0*x0)` is `0*x0`, as float64 gives it. A
+    // head that reads no zero's sign (`f(-0) = f(+0)`) takes the product without the factors that
+    // only gave it its sign: `exp(0*x0)` is `exp(0)`. An odd root is a head that keeps a zero, an
+    // even one reads no sign.
+    let mut args = args;
+    if args.first().is_some_and(|z| zero_product(z, cx)) {
+        let keeps = |h: &&str| cx.view.tok_is(op, h);
+        let rootn_index = (args.len() == 2 && cx.view.tok_is(op, "rootn"))
+            .then(|| match &args[1] {
+                Ex::Num(n) if n.is_integer() && n.signum() > 0 => Some(n.is_odd_integer()),
+                _ => None,
+            })
+            .flatten();
+        let one = args.len() == 1;
+        if (one
+            && [
+                "sin", "tan", "asin", "atan", "sinh", "tanh", "asinh", "atanh", "erf", "floor",
+                "ceil",
+            ]
+            .iter()
+            .any(keeps))
+            || rootn_index == Some(true)
+        {
+            return args.swap_remove(0);
+        }
+        if (one
+            && ["abs", "exp", "cos", "cosh", "log", "acos", "acosh", "erfc"]
+                .iter()
+                .any(keeps))
+            || rootn_index == Some(false)
+        {
+            if let Some(u) = unsigned_zero(&args[0], cx) {
+                args[0] = u;
+            }
+        }
+    }
     // A literal argument LANDS here (ρ, [`land`]), unless the call is ground.
     let args: Vec<Ex> = if !in_ground(&args, cx) {
         args.into_iter().map(|a| land_operand(a, cx)).collect()
@@ -10933,7 +11207,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     if n.is_zero() {
                         return Ex::NaN;
                     }
-                    if n.is_one() {
+                    if n.is_one() && Law::RootnOne.holds(&args[0], cx) {
                         return args.into_iter().next().unwrap();
                     }
                     // A ROOT of `exp` is an `exp`: `rootn(exp a, n) -> exp(a/n)`, which is
@@ -11340,7 +11614,6 @@ mod tests {
                 cert_encl: None,
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
-                sentinels_expired: false,
                 ground_first: None,
             };
             assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));
@@ -11585,10 +11858,20 @@ mod tests {
             // 2 * 3 * x -> 6x; coefficient exact.
             let e = mul(vec![Ex::int(2), Ex::int(3), x(view)], &cx);
             assert_eq!(e, Ex::Mul(vec![Ex::int(6), x(view)]));
-            // Zero: 0 * x -> 0 (variable licensed); 0 * log(x) stays.
-            assert_eq!(mul(vec![Ex::int(0), x(view)], &cx), Ex::int(0));
+            // Zero: 0 * x^2 -> 0 (finite and never negative); 0 * x keeps x in `f64`, whose sign
+            // is the zero's (float64's 0*x is -0 for x < 0); 0 * log(x) stays.
+            let sq = pow(x(view), Ex::int(2), &cx);
+            assert_eq!(mul(vec![Ex::int(0), sq], &cx), Ex::int(0));
+            assert_eq!(
+                mul(vec![Ex::int(0), x(view)], &cx),
+                Ex::Mul(vec![Ex::int(0), x(view)])
+            );
             let e = mul(vec![Ex::int(0), lg.clone()], &cx);
             assert_eq!(e, Ex::Mul(vec![Ex::int(0), lg]));
+            // ... and in `permissive`, which reads one zero, 0 * x -> 0.
+            let mut lossy = Cx::bare(view);
+            lossy.mode = RuleMode::Permissive;
+            assert_eq!(mul(vec![Ex::int(0), x(view)], &lossy), Ex::int(0));
         });
     }
 
@@ -11738,10 +12021,17 @@ mod tests {
             assert_eq!(mul(vec![Ex::int(0), Ex::PosInf], &cx), Ex::NaN);
             assert_eq!(mul(vec![Ex::int(-2), Ex::PosInf], &cx), Ex::NegInf);
             assert_eq!(mul(vec![Ex::NegInf, Ex::NegInf], &cx), Ex::PosInf);
-            // C * C -> C; C * 5 -> C; C * 0 -> 0.
+            // C * C -> C; C * 5 -> C; C * 0 keeps C in `f64`, whose sign is the zero's, and is 0
+            // in `permissive`.
             assert_eq!(mul(vec![Ex::Const, Ex::Const], &cx), Ex::Const);
             assert_eq!(mul(vec![Ex::Const, Ex::int(5)], &cx), Ex::Const);
-            assert_eq!(mul(vec![Ex::Const, Ex::int(0)], &cx), Ex::int(0));
+            assert_eq!(
+                mul(vec![Ex::Const, Ex::int(0)], &cx),
+                Ex::Mul(vec![Ex::int(0), Ex::Const])
+            );
+            let mut lossy = Cx::bare(view);
+            lossy.mode = RuleMode::Permissive;
+            assert_eq!(mul(vec![Ex::Const, Ex::int(0)], &lossy), Ex::int(0));
             // inf * C: C = 0 reachable -> keep both factors.
             let e = mul(vec![Ex::PosInf, Ex::Const], &cx);
             assert_eq!(e, Ex::Mul(vec![Ex::PosInf, Ex::Const]));

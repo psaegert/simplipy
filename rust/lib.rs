@@ -398,9 +398,8 @@ pub(crate) fn test_engine() -> Option<Engine> {
     .expect("engine loads");
     // Each mode serves ITS OWN complete file (the python loader reads the config's
     // `rules_permissive:` key; the rust core is handed resolved content). Loading only
-    // rules.json here would run permissive tests against the default set -- the
-    // doctrine-bearing mode rules (e.g. the permissive `/ $0 $0 -> 1` sentinel cancel) would
-    // silently not be served. Pre-rename artifacts (acj-4 among them) ship the permissive
+    // rules.json here would run permissive tests against the default set -- the mode's own
+    // rules (e.g. permissive's `/ $0 $0 -> 1`) would silently not be served. Pre-rename artifacts (acj-4 among them) ship the permissive
     // file under its published name; a re-mined cell ships the new one.
     let text = ["rules_permissive.json", "rules_corpus.json"]
         .iter()
@@ -2225,6 +2224,16 @@ fn permissive_simplifications() -> Vec<&'static str> {
         .collect()
 }
 
+/// THE LAWS the constructors apply as named steps, each carrying its premise per mode
+/// (`ac::laws::Law`): `(name, statement)`, in the catalogue's order.
+#[pyfunction]
+fn laws() -> Vec<(&'static str, &'static str)> {
+    crate::ac::laws::Law::ALL
+        .iter()
+        .map(|l| (l.name(), l.statement()))
+        .collect()
+}
+
 /// EVIDENCE (policy 4.1): is `tokens` finite on a set of positive measure of its variables AND
 /// its `<constant>`s (each constant its own dimension), in the mode's values -- float64's with
 /// `f64`, else the reals', every point a cell holds read by THE TABLE? `None`: undecided (no
@@ -2731,6 +2740,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_value_set, m)?)?;
     m.add_function(wrap_pyfunction!(table_owes_at, m)?)?;
     m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;
+    m.add_function(wrap_pyfunction!(laws, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;
     m.add_function(wrap_pyfunction!(table_sort_atoms, m)?)?;

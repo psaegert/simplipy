@@ -136,6 +136,15 @@ organised by who you are, then the highlights, then every change in detail.
   an exact zero is inverted, `f64` keeps the sign float64 gives it: `1/(x1*(x2 - x2))` is
   `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `permissive` reads one zero, and
   `1/0` has no value there (the limit rule), so it is NaN.
+- **A product's zero keeps its sign wherever a later step reads it.** Float64's `0*t` is -0
+  wherever `t < 0`, and an inverse or `atan2` reads that sign, so `f64` keeps a factor whose sign
+  may vary beside the zero, and the zero carries the product's sign: `1/(x0/float("-inf"))` is
+  `-inf/x0` (it was `inf/x0`), `1/(0*x0 + 0*x1)` keeps its sum (it was `inf`; float64 gives
+  `-inf` wherever both are negative), `1/atan(0*x0)` is `inf/x0` (a head that keeps a zero keeps
+  its sign), and a zero built inside a longer quotient keeps its factors' signs into the inverse
+  taken later. Where nothing reads the sign the zero goes as before: as the answer (`0*x0` and
+  `0*x0 + 0*x1` are `0`), in a sum whose other terms are no zero on a region (`x1 + 0*x0` is
+  `x1`), and under a head that reads no zero's sign (`exp(0*x0)` is 1).
 - **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
   integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
   and one sign bit; `permissive` reads it as 0. An `f64` ground fold writes its float
@@ -150,9 +159,9 @@ organised by who you are, then the highlights, then every change in detail.
   `-sin(0)`, `-2*atan(0)` and `-erf(0)` are `-0.0` (they were `0`). In a ground expression the
   reciprocal of `-inf` is float64's -0 too: `1/float("-inf")`, `1/(-float("inf"))` and
   `(-inf)^-3` are `-0.0` (they were `0`), so `1/(1/float("-inf"))` is `-inf` (it was `inf`);
-  `(-inf)^-2` is `0`. A zero the search derives keeps the one zero (`x1*0` and
-  `x1/float("-inf")` are `0`). A nonzero literal that underflows to -0 stays the leaf it is
-  written as.
+  `(-inf)^-2` is `0`. A zero beside a variable carries its sign too (above); as an answer it is
+  `0` (`x1*0` and `x1/float("-inf")` are `0`). A nonzero literal that underflows to -0 stays
+  the leaf it is written as.
 - **Known `f64` limit: a zero term at -0.** `x + 0` is `x`, and `x1 + sin(0)` is `x1`: at the
   single point `x = -0` the answer is -0 where float64's sum is +0 (`-0 + 0 = +0`). A point is
   a null set, whose zero sign `f64` does not keep. A term that is -0 on a whole region keeps the
@@ -203,6 +212,12 @@ organised by who you are, then the highlights, then every change in detail.
   `1e-8`).
 - **The sign of an infinity is kept**: distributing over an infinity needs certified
   finiteness, as in `f64` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
+- **Like terms cancel before an infinity absorbs them.** A part with a variable beside an
+  infinity is one term to the like-term cancellations, which run first:
+  `(x0 + inf)/(x0 + inf)` and `(x0 + inf)*(1/(x0 + inf))` are 1, `2*(x0 + inf)/(x0 + inf)` is 2
+  and `(x0 + inf) - (x0 + inf)` is 0 (they were NaN); what is left is absorbed, so `x0 + inf`
+  is `inf`. The reciprocal of an infinity is its 0 at once, so `(0.5 - x1)/(exp(x2)/inf)`,
+  a division by zero, is NaN (it was a signed infinity).
 - **The lean profile.** A worker that needs inference only loads `modes=('f64',)`, about
   0.45 GB with `acj-5-4-llm`; `permissive` then builds on its first use.
 
@@ -230,6 +245,10 @@ organised by who you are, then the highlights, then every change in detail.
   admits and no file needs such a rule (`floor(tanh(100)) -> 1` holds in `f64` and is
   `reject`). Where two `?` slots that coincide make an instance the judge cannot read (its
   literals past the table's reach), the rule is `UNRESOLVED-COVERAGE` there, never `KILL`.
+- A fully numeric rule mints no orientation twin at the load: its negation is another fully
+  numeric part, whose value the ground evaluator reads before any rule. The served set of a
+  file holding such rules is smaller by their twins (`2*acos(0) -> pi` served
+  `-2*acos(0) -> -pi` too).
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - The load refuses a rule whose right side has no variable and is not one leaf (drop reason
   `ground-composite`): `asin(1) -> acos(0)` holds and is not served. The load's gates are

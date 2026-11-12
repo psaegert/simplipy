@@ -207,7 +207,7 @@ class TestProposalVerdictHonesty:
             "certified_then_dropped": 0}
 
 
-_SENTINEL_OPS = {
+_CANCEL_OPS = {
     "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
     "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
     "sin": {"realization": "np.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 3, "commutative": False},
@@ -217,18 +217,18 @@ _SENTINEL_OPS = {
 class TestPruneProbesWhatTheSlotBinds:
     """Coverage is asked on the instances a rule's slots bind in the mode it is pruned in."""
 
-    SENTINEL = (('/', '$0', '$0'), ('1',))
+    CANCEL = (('/', '$0', '$0'), ('1',))
 
     def _engine(self):
-        engine = SimpliPyEngine(operators=_SENTINEL_OPS, rules=[self.SENTINEL])
-        engine.permissive_simplification_rules = [self.SENTINEL]
+        engine = SimpliPyEngine(operators=_CANCEL_OPS, rules=[self.CANCEL])
+        engine.permissive_simplification_rules = [self.CANCEL]
         engine._replace_rules(engine.simplification_rules)
         return engine
 
-    def test_permissive_keeps_the_mask_sentinel(self) -> None:
+    def test_permissive_keeps_the_slotted_cancel(self) -> None:
         """Permissive binds every slot to any subtree, a non-finite literal included, and
-        takes `inf/inf` to `nan` without the rule: `$0 / $0 -> 1` is not covered there
-        (the mask-sentinel doctrine), whatever its generic instance says."""
+        takes `inf/inf` to `nan` without the rule: `$0 / $0 -> 1` is not covered there,
+        whatever its generic instance says."""
         engine = self._engine()
         # a fully numeric `inf/inf` has no value, read before any rule: NaN, which absorbs
         inf_mask = ['*', '/', 'float("inf")', 'float("inf")', 'x0']

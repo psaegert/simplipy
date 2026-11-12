@@ -299,7 +299,6 @@ impl Engine {
             cert_encl: None,
             mode,
             fold_f64,
-            sentinels_expired: false,
             ground_first: None,
         };
         f(&law)
@@ -914,6 +913,17 @@ impl Engine {
             let verdict = self.ground_value_fold(e, ctx, &view, lossy, fold_f64);
             class_memo.borrow_mut().insert(flat, verdict.clone());
             return verdict;
+        }
+        // THE ABSORPTION OF INFINITIES, `permissive`'s settling step (`Law::InfinityAbsorbs`):
+        // a sum holding an infinity absorbs its other terms once the constructors' like-term
+        // cancellations have run (`(x0 + inf) - (x0 + inf)` is 0, `x0 + inf` is `inf`).
+        if lossy && matches!(e, Ex::Add(_)) {
+            let mut settle = Cx::bare(&view);
+            settle.mode = mode;
+            settle.fold_f64 = fold_f64;
+            if let Some(absorbed) = crate::ac::expr::absorb_infinities(e, &settle) {
+                return Some(absorbed);
+            }
         }
         // A ROOT WHOSE INDEX IS NO INTEGER is the invalid operation at every radicand, so a
         // `rootn` over a ground index whose rigorous value set reaches no nonzero integer is NaN
@@ -1621,7 +1631,6 @@ impl Engine {
             cert_encl: Some(&cen),
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
-            sentinels_expired: false,
             ground_first: None,
         };
         // The whole call runs in the mode's number domain: the
@@ -1778,7 +1787,6 @@ impl Engine {
             cert_encl: Some(&cen),
             mode,
             fold_f64: fold_tr,
-            sentinels_expired: false,
             ground_first: None,
         };
         // The whole call runs in the mode's number domain: the
@@ -1786,11 +1794,9 @@ impl Engine {
         let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Each distinct base's region verdict is decided once per context in the call.
         let _regions = crate::ac::expr::RegionScope::open();
-        // Parse with the CALL's MODE: a bare (sound) parse let sound-only
-        // constructor arms destroy structure lossy passes need -- `inv
-        // float("inf")` folded to 0 AT PARSE, so the mul bag never saw the
-        // x * x^-1 pair the relaxed $-certificate cancels (`(inf/inf) * x0`).
-        // The parse Cx stays CERT-LESS: `canon(e0, &cx)` below
+        // Parse with the CALL's MODE: each constructor step is the mode's (a `permissive` sum
+        // keeps a part with a variable beside an infinity, so the like terms can cancel first:
+        // `(x0 + inf)/(x0 + inf)` is 1). The parse Cx stays CERT-LESS: `canon(e0, &cx)` below
         // immediately re-runs full cert-carrying construction, so certs at parse
         // are pure double work (measured +15us corpus-walk mean).
         let mut pbare = Cx::bare(&view);
@@ -1823,10 +1829,7 @@ impl Engine {
             RefCell::new(FxHashMap::default());
         let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, fold_tr, &class_memo);
         let pass = PassCtx {
-            // MODE SELECTION, half of it: the pass serves the mode's OWN complete set.
-            // The twin below (phase 2) is the other half and MUST agree -- leaving the
-            // default set in phase 2 would let a rule fire before sentinel expiry and not
-            // after, making the endpoint depend on which phase reached the subject.
+            // MODE SELECTION: the pass serves the mode's OWN complete set.
             rules: self.ac_rules_for(mode),
             cx: &cx,
             mcx: &mcx,
@@ -1850,10 +1853,8 @@ impl Engine {
             // real serialization round-trips.
             let spell = Cx::bare(cxx.view);
             let t = to_prefix(e, &spell);
-            // Re-parse under the PHASE's MODE (cert-less, like the entry parse):
-            // serialization stability is a PER-MODE contract -- phase 2 states must
-            // round-trip under the sentinel-expired canon, phase 1 states under the
-            // sentinel-keeping one.
+            // Re-parse under the call's MODE (cert-less, like the entry parse):
+            // serialization stability is a PER-MODE contract.
             //
             // STATE-level identity, not token-level: two
             // DISTINCT canonical states can share one serialization (the display-
@@ -1935,13 +1936,10 @@ impl Engine {
             );
             current = land_root(next, &cx);
         }
-        // EXPLORATION, sound mode (`ac::search`): the chain above ran
-        // UNCHANGED to its fixpoint -- the theorems (T6, L3/L4) are already banked --
-        // and only an explicit budget enters the phase at all. Lossy mode explores
-        // its OWN final fixpoint after sentinel expiry instead (phase 2 below):
-        // exploration is post-FIXPOINT by definition, and phase-1 lossy states are a
-        // search licence, not an answer.
-        if explore_budget > 0 && !wildcard_all {
+        // EXPLORATION (`ac::search`): the chain above ran UNCHANGED to its fixpoint -- the
+        // theorems (T6, L3/L4) are already banked -- and only an explicit budget enters the
+        // phase at all, in every mode, under the mode's own pass.
+        if explore_budget > 0 {
             current = land_root(
                 crate::ac::search::explore(current, &pass, max_passes, explore_budget),
                 &cx,
@@ -1950,92 +1948,6 @@ impl Engine {
                 stable(&current),
                 "explored endpoint is not serialization-stable: {current:?}"
             );
-        }
-        // SENTINEL EXPIRY, phase 2: the lossy parse keeps
-        // `inv(inf)`-class reciprocals unfolded so the `$`-cancel can find its partner
-        // (mask-sentinel doctrine) -- a licence for the SEARCH, not the answer. At the
-        // phase-1 fixpoint every surviving sentinel is unpartnered and IS the value 0,
-        // and keeping it both inflates the endpoint and BLOCKS the rules its unfolded
-        // shape hides from (measured: 609/750 mode-ordering rows carried an inf/nan
-        // the sound endpoint lacked -- a kept `C * inv(inf)` term froze its sum short
-        // of the shape the cos-parity rule needed). Phase 2 re-canonicalizes the
-        // fixpoint with the fold re-enabled and keeps descending under the SAME lossy
-        // licences; its states satisfy the per-mode stability contract under the
-        // expired canon. Idempotence: the output carries no foldable sentinel, so a
-        // fresh call's phase 1 reproduces it and its phase 2 is a no-op; if a phase-1
-        // rewrite ever re-mints a sentinel from sentinel-free input, phase 2 folds it
-        // again -- the pipeline, not the phase, is the projection consumers see.
-        if wildcard_all {
-            let cx2 = Cx {
-                view: &view,
-                cert_fin: Some(&cf),
-                cert_finnz: Some(&cfz),
-                cert_nzae: Some(&czn),
-                cert_nce: Some(&cnc),
-                cert_region: None,
-                cert_encl: Some(&cen),
-                mode: RuleMode::Permissive,
-                fold_f64: fold_tr,
-                sentinels_expired: true,
-                ground_first: None,
-            };
-            let mut pbare2 = Cx::bare(&view);
-            pbare2.mode = RuleMode::Permissive;
-            pbare2.fold_f64 = fold_tr;
-            pbare2.sentinels_expired = true;
-            pbare2.ground_first = Some(&ground_first);
-            let pass2 = PassCtx {
-                // MODE SELECTION, the phase-2 twin. Phase 2 is reached only under
-                // `wildcard_all`, i.e. only in `Corpus` today -- but it is stated as the
-                // mode, not hard-wired, so the `Mode` rename cannot leave the two phases
-                // serving different sets.
-                rules: self.ac_rules_for(mode),
-                cx: &cx2,
-                mcx: &mcx,
-                fold: &fold,
-                fires: Cell::new(0),
-                normal: RefCell::new(FxHashSet::default()),
-                explore: true,
-                suppressed,
-                ground_step: Some(&ground_step),
-            };
-            let stable2 = |e: &Ex| stable_in(e, &pbare2, &cx2);
-            current = land_root(canon(current, &cx2), &cx2);
-            debug_assert!(
-                stable2(&current),
-                "expired canonical state is not serialization-stable: {current:?}"
-            );
-            for _ in 0..max_passes {
-                let Some(next) = rewrite_pass_opt(&current, &pass2) else {
-                    break;
-                };
-                debug_assert!(
-                    crate::ac::rules::no_nested_bags(&next),
-                    "phase-2 pass output has nested bags: {next:?}"
-                );
-                debug_assert!(
-                    stable2(&next),
-                    "phase-2 pass output is not serialization-stable: {next:?}"
-                );
-                debug_assert!(
-                    crate::ac::rules::is_pass_fixpoint(&next, &pass2),
-                    "phase-2 pass output is not a pass fixpoint: {next:?}"
-                );
-                current = land_root(next, &cx2);
-            }
-            // EXPLORATION, lossy mode: same phase, run on the sentinel-expired
-            // final fixpoint under the phase-2 pass (blanket licences -- the shipped
-            // wildcard_all semantics apply to the moves exactly as to the chain).
-            if explore_budget > 0 {
-                current = land_root(
-                    crate::ac::search::explore(current, &pass2, max_passes, explore_budget),
-                    &cx2,
-                );
-                debug_assert!(
-                    stable2(&current),
-                    "explored phase-2 endpoint is not serialization-stable: {current:?}"
-                );
-            }
         }
         // LOSSY OUTPUT PROJECTION: the returned endpoint gets the
         // mu-cheaper reciprocal spelling (`(a*b)^-1` vs `a^-1 * b^-1`) where the joined
@@ -3686,9 +3598,9 @@ mod tests {
         assert_eq!(cl, cs, "certified pair: both modes stay distributed");
         assert!(cs.contains(&"<div>".to_string()));
 
-        // A literal-infinity member never joins: `inv(inf)` is a determined zero
-        // (the mask-sentinel cancellation partner), and hiding it inside a joined
-        // base loses the fold. The spelling keeps `float("inf")` as its own divisor.
+        // A literal-infinity member never joins: `inv(inf)` is a determined zero, and hiding
+        // it inside a joined base loses the fold. The spelling keeps `float("inf")` as its own
+        // divisor.
         let infbag = t(&[
             "inv",
             "*",
@@ -3801,12 +3713,10 @@ mod tests {
         assert_eq!(nl2, nl, "and stay idempotent: {nonconst:?}");
     }
 
-    /// The two lossy endpoint mechanisms beyond the plain
-    /// rejoin. SENTINEL EXPIRY: the `inv(inf)` keep is a search licence that expires at
-    /// the phase-1 fixpoint -- an unpartnered sentinel folds to its determined 0 and
-    /// the chain continues descending (it had BLOCKED downstream rules: a kept
-    /// `C * inv(inf)` term froze its sum short of the cos-parity shape). The mask
-    /// doctrine is untouched: partnered sentinels cancel in phase 1 BEFORE expiry.
+    /// The reciprocal of an infinity, and the lossy endpoint mechanism beyond the plain
+    /// rejoin. THE RECIPROCAL OF AN INFINITY is its determined 0 at construction, in every
+    /// mode, so a `C * inv(inf)` term vanishes and the chain reaches the rules beyond it (the
+    /// cos parity): permissive lands on f64's endpoint.
     /// COEFFICIENT COMPLETION: the rejoin candidate set includes the bag coefficient
     /// reciprocated into the joined base (`0.5 * (x4*S)^-1` IS `(2*x4*S)^-1`), which
     /// sound's licence-refusal spellings carry inside exactly like that. Measured
@@ -3814,11 +3724,11 @@ mod tests {
     /// mode-ordering rows 822 (true baseline) -> 110/200k, all remaining rows
     /// characterized (69 greedy rule-reachability + 41 inf/nan mode-semantics).
     #[test]
-    fn lossy_sentinel_expiry_and_coefficient_completion() {
+    fn lossy_reciprocal_of_infinity_and_coefficient_completion() {
         let Some(e) = engine() else { return };
-        // Unpartnered sentinel: expiry folds it and the chain CONTINUES (cos parity
-        // fires on the unfrozen sum) -- lossy lands exactly on sound's endpoint.
-        let sentinel = t(&[
+        // The reciprocal of an infinity folds to 0 and the chain CONTINUES (cos parity fires
+        // on the sum) -- lossy lands exactly on sound's endpoint.
+        let reciprocal = t(&[
             "sin",
             "cos",
             "+",
@@ -3829,9 +3739,11 @@ mod tests {
             "neg",
             "x2",
         ]);
-        let s = e.ac_simplify(&sentinel, 48, RuleMode::Default).unwrap();
-        let l = e.ac_simplify(&sentinel, 48, RuleMode::Permissive).unwrap();
-        assert_eq!(l, s, "expired sentinel must reach the sound endpoint");
+        let s = e.ac_simplify(&reciprocal, 48, RuleMode::Default).unwrap();
+        let l = e
+            .ac_simplify(&reciprocal, 48, RuleMode::Permissive)
+            .unwrap();
+        assert_eq!(l, s, "the folded reciprocal must reach the sound endpoint");
         assert_eq!(l, t(&["sin", "cos", "x2"]));
         // A fully numeric `inf/inf` has no value, read before any law reaches it: NaN, which
         // absorbs the product.
@@ -3862,7 +3774,7 @@ mod tests {
             ]),
             "coefficient must reciprocate into the joined (now distributed) base"
         );
-        for toks in [&sentinel, &mask, &coeff] {
+        for toks in [&reciprocal, &mask, &coeff] {
             let once = e.ac_simplify(toks, 48, RuleMode::Permissive).unwrap();
             let twice = e.ac_simplify(&once, 48, RuleMode::Permissive).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");

@@ -284,9 +284,9 @@ fn leaf_count(e: &Ex, tok: Tok) -> usize {
 ///
 /// A PATTERN IS NOT ITS INSTANCES. What the mode's canon does to a ground subtree it does
 /// to every instance, so folds apply. A licence that passes a gate uncertified does not:
-/// permissive cancels `/ $0 $0` on the pattern, but its instance `inf / inf` is NaN, and the
-/// rule `/ $0 $0 -> 1` is the sentinel doctrine that defines that instance. So permissive's
-/// rule sides are read with certified licences (its fold discipline is the bare one).
+/// permissive cancels `/ $0 $0` on the pattern, but its instance `inf / inf` is NaN (a fully
+/// numeric part is read for its value first). So permissive's rule sides are read with
+/// certified licences (its fold discipline is the bare one).
 pub(crate) fn rule_cx<'a>(view: &'a TokenView<'a>, mode: crate::engine::RuleMode) -> Cx<'a> {
     let mut cx = Cx::bare(view);
     if !mode.wildcard_all() {
@@ -544,6 +544,14 @@ impl AcRules {
         }
         let n_raw_kept = out.rules.len();
         for i in 0..n_raw_kept {
+            // A fully numeric rule has no orientation class to close: its one instance is
+            // itself, and the negation of it is another fully numeric part, whose value the
+            // ground evaluator reads before any rule (in `f64` the zero of `0*tan(4)` and of its
+            // negation are two values).
+            let lhs = &out.rules[i].lhs;
+            if !lhs.has_measure_space(view) && !lhs.contains_wildcard(view) {
+                continue;
+            }
             let neg = |e: &Ex| canon(mul(vec![Ex::int(-1), e.clone()], &cx), &cx);
             let tl = neg(&out.rules[i].lhs);
             let absorbed = match &tl {

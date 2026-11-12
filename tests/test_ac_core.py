@@ -966,16 +966,18 @@ class TestTranscendentalAtomEnclosures:
     rule could fold the zero -- splitting a true zero factor: the one-zero absorption
     value (+inf identically) became +-inf by the sign of u (fuzz row 172346, judge-
     convicted). Atoms are now outward-rounded enclosures inside the interval layer, so
-    exact-zero identity grounds contain 0 and every such licence fails closed; the
-    certified rules then fold the zero first and absorption wins."""
+    exact-zero identity grounds contain 0 and every such licence fails closed. In `f64` the
+    zero then carries the sign of its product (float64's `0*u` is `-0` wherever u < 0), so
+    its inverse is `inf/u`."""
 
     def test_zero_times_cofactor_is_the_positive_pole(self, engine: SimpliPyEngine) -> None:
         # These rest on `sin(np.pi) = 0`, exactly true, which float64 computes as
         # 1.2246467991473532e-16. Each mode reads the fully numeric part first: permissive from
         # the table, and strict as the reals' value where float64's kind agrees (both finite).
         # The pole is reached in both: `permissive`, where 1/0 has no value, gives NaN, and
-        # strict gives float64's 1/(+0) = inf, a change of kind inside a further operation that
-        # strict's per-step guarantee allows.
+        # strict gives float64's inverse of the zero `0*x1`, which carries x1's sign: `inf/x1`,
+        # a change of kind inside a further operation that strict's per-step guarantee allows
+        # (float64's own sign, 8.2e15/x1 for sin and abs).
         from conftest import require_mode_sets
         require_mode_sets()
         from simplipy import Mode
@@ -983,7 +985,8 @@ class TestTranscendentalAtomEnclosures:
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'tan', 'np.pi', 'x1']):
             assert engine.simplify(list(tokens), mode=Mode.permissive) == ['float("nan")'], tokens
-            assert engine.simplify(list(tokens), mode=Mode.f64) == ['float("inf")'], tokens
+            assert engine.simplify(list(tokens), mode=Mode.f64) == ['/', 'float("inf")', 'x1'], \
+                tokens
 
     def test_fuzz_row_172346(self, engine: SimpliPyEngine) -> None:
         # inv( abs(sin(np.pi)) / inv(x4 - x1 + 2*x2) ): the reciprocal cofactor
@@ -1081,8 +1084,7 @@ class TestLossyReciprocalRejoinProjection:
         assert lossy == sound == ['<mul>', '<div>', 'acos', 'x0', 'atan', 'x1', '</mul>']
 
     def test_literal_infinity_never_joins(self, engine: SimpliPyEngine) -> None:
-        # inv(inf) is a determined zero (the mask-sentinel cancellation partner);
-        # joining it into an opaque base would hide that fold.
+        # inv(inf) is a determined zero; joining it into an opaque base would hide that fold.
         x = ['inv', '*', 'float("inf")', '*', 'acos', '*', 'x4', 'x1', 'atan', 'x0']
         out = engine.simplify(list(x), mode=Mode.permissive)
         assert out[:2] != ['inv', '<mul>'], out
@@ -1142,15 +1144,25 @@ class TestF68ConstructionRouteConfluence:
         once = engine.simplify(src.split(), mode=Mode.permissive)
         assert engine.simplify(list(once), mode=Mode.permissive) == once, once
 
-    def test_kept_zero_files_one_state_for_both_mirrors(self, engine: SimpliPyEngine) -> None:
-        # 0 * (1/2 - acos x4) and 0 * (acos x4 - 1/2) are value-equal (the zero eats
-        # the sign); without the fix each arrival froze its own spelling.
+    def test_kept_zero_files_one_state_per_value(self, engine: SimpliPyEngine) -> None:
+        # In `f64` a product's zero carries its sign: 0 * (1/2 - acos x4) is -0 where
+        # acos x4 > 1/2 and 0 * (acos x4 - 1/2) is +0 there, two values an inverse tells
+        # apart. Each value files one state whatever mirror spells it (its sign on the zero,
+        # on a negation or on the sum), and each state is its own fixpoint.
         a = engine.simplify('* 0 - / 1 2 acos x4'.split())
+        for spelling in ('* -1 * 0 - acos x4 / 1 2', 'neg * 0 - acos x4 / 1 2',
+                         '* 0 neg - acos x4 / 1 2', '* -0.0 - acos x4 / 1 2'):
+            assert engine.simplify(spelling.split()) == a, spelling
         b = engine.simplify('* 0 - acos x4 / 1 2'.split())
-        assert a == b, (a, b)
+        assert a != b
+        for state in (a, b):
+            assert engine.simplify(list(state)) == state, state
         nested_a = engine.simplify('* 0 * pow x1 x0 - / 1 2 acos x4'.split())
-        nested_b = engine.simplify('* 0 * pow x1 x0 - acos x4 / 1 2'.split())
+        nested_b = engine.simplify('* -1 * 0 * pow x1 x0 - acos x4 / 1 2'.split())
         assert nested_a == nested_b, (nested_a, nested_b)
+        # permissive has one zero: both mirrors are 0
+        for spelling in ('* 0 - / 1 2 acos x4', '* 0 - acos x4 / 1 2'):
+            assert engine.simplify(spelling.split(), mode=Mode.permissive) == ['0'], spelling
 
     def test_both_mirror_classes_of_the_distributed_form_are_stable(
             self, engine: SimpliPyEngine) -> None:
@@ -1355,23 +1367,19 @@ class TestConstSumSignAbsorption:
         assert neg == pos, (neg, pos)
 
 
-class TestLossySentinelExpiryAndCoefficientCompletion:
-    """Two lossy endpoint mechanisms beyond the
-    reciprocal rejoin. SENTINEL EXPIRY: the lossy `inv(inf)` keep is a licence for the
-    SEARCH (the $-cancel needs the pair visible), not the answer -- at the phase-1
-    fixpoint an unpartnered sentinel folds to its determined 0 and the chain keeps
-    descending (the kept term had been BLOCKING rules downstream). COEFFICIENT
-    COMPLETION: the rejoin offers the bag coefficient reciprocated into the joined base
-    (0.5*(x4*S)^-1 IS (2*x4*S)^-1). Together with the narrowed Const exclusion and the
-    doctrine-exempt oracle, the mode-ordering census fell 822 -> 110/200k."""
+class TestLossyReciprocalOfInfinityAndCoefficientCompletion:
+    """The reciprocal of an infinity, and the lossy endpoint mechanism beyond the reciprocal
+    rejoin. THE RECIPROCAL OF AN INFINITY is its determined 0 at construction, in every mode,
+    so the chain reaches the rules beyond it. COEFFICIENT COMPLETION: the rejoin offers the
+    bag coefficient reciprocated into the joined base (0.5*(x4*S)^-1 IS (2*x4*S)^-1)."""
 
-    def test_unpartnered_sentinel_expires_and_chain_continues(self, engine: SimpliPyEngine) -> None:
+    def test_the_reciprocal_of_an_infinity_folds_and_the_chain_continues(
+            self, engine: SimpliPyEngine) -> None:
         x = ['sin', 'cos', '+', '*', '<constant>', 'inv', 'float("inf")', 'neg', 'x2']
         assert engine.simplify(list(x), mode=Mode.permissive) == \
             engine.simplify(list(x)) == ['sin', 'cos', 'x2']
 
-    def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
-        # A fully numeric `inf/inf` is no partnered sentinel: its value comes first.
+    def test_a_fully_numeric_quotient_of_infinities_is_nan(self, engine: SimpliPyEngine) -> None:
         from conftest import require_mode_sets
         require_mode_sets()
         # a fully numeric `inf/inf` has no value: it is read first, NaN, and absorbs the

@@ -24,8 +24,7 @@ use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
     add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pow,
-    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, GroundParse,
-    NEG_ZERO,
+    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -40,20 +39,7 @@ pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // One scope for the whole parse: a product met again is decided once (`FlipScope`).
     let _memo = FlipScope::open();
-    // A ground expression: every atom a value. Groundness belongs to the tree, not to its
-    // spelling: an operator and a tagged bag's delimiter are structure, and every other token
-    // is an atom, ground where it is a value the evaluator reads (a number, `np.pi`, an
-    // infinity, NaN), so a tagged spelling of a ground tree is ground too.
     let view = cx.view;
-    let ground = tokens.iter().all(|&t| {
-        view.arity(t).is_some()
-            || view.with_str(t, |s| {
-                crate::forms::TAG_TOKENS.contains(&s)
-                    || crate::numeric::leaf_value(s).is_some()
-                    || crate::utils::is_numeric_string(s)
-            })
-    });
-    let _ground = GroundParse::open(ground);
     // GROUND FIRST: the fully numeric parts, found on the tokens as written, are valued before
     // any constructor builds them (`Cx::ground_first`).
     let _parts = GroundParts::open(cx.ground_first.map(|_| ground_parts(tokens, view)));
@@ -2035,31 +2021,10 @@ fn render_exponent(r: &Rat) -> String {
 /// Negate every term of a sum for DISPLAY sign redistribution (`None` on the i128 edge, in
 /// which case the caller falls back to the literal `-1` rendering).
 fn flip_terms(terms: &[Ex], cx: &Cx) -> Option<Vec<Ex>> {
-    // A lossy mode's kept reciprocal of an infinity (`inv(inf)`, the mask sentinel the
-    // sentinel-keeping canon holds until phase 2) does not survive `negate_term` in a spelling
-    // context that folds it: the flipped term printed `0 * ..`, a term the re-read drops. The
-    // `neg (..)` display keeps it as it is.
-    if terms.iter().any(holds_inf_reciprocal) {
-        return None;
-    }
     terms
         .iter()
         .map(|t| super::expr::negate_term(t, cx))
         .collect()
-}
-
-/// Does `e` hold a reciprocal of an infinity anywhere?
-fn holds_inf_reciprocal(e: &Ex) -> bool {
-    match e {
-        Ex::Pow(b, x) => {
-            (matches!(**b, Ex::PosInf | Ex::NegInf)
-                && matches!(&**x, Ex::Num(r) if r.is_negative()))
-                || holds_inf_reciprocal(b)
-                || holds_inf_reciprocal(x)
-        }
-        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(holds_inf_reciprocal),
-        _ => false,
-    }
 }
 
 /// Display-only odd-literal sign hoist: inside a printed sum,

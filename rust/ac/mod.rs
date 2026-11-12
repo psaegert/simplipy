@@ -58,6 +58,7 @@
 
 pub mod convert;
 pub mod expr;
+pub mod laws;
 pub mod matcher;
 pub(crate) mod poly;
 pub mod prettify;

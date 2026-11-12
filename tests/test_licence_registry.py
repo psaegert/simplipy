@@ -88,8 +88,14 @@ class TestLoadConsumer:
         # pinned there climb; the twins go 9 -> 44 (a negation no longer pays a `Mul` head, so
         # fewer of them climb). The product constructor's collection of powers of e subsumes
         # one more pinned row (`exp(2)/e -> e`): (5364, 16, 2, 44) -> (5363, 17, 2, 44).
+        # A ZERO PRODUCT KEEPS ITS SIGN (f64), AND A FULLY NUMERIC RULE MINTS NO TWIN:
+        # (5363, 17, 2, 44) -> (5359, 17, 2, 40). The five twins of fully numeric rules go
+        # (`-2*acos(0) -> -pi`, ...: the ground evaluator reads a fully numeric part first); one
+        # twin comes, of `0*asin(_0) -> 0*acos(_0)`, whose negation is the zero of the other
+        # sign; and the eleven rules `0*tan(-k) -> 0`, `0*asin(-1) -> 0` are read with the sign
+        # they are written with, which the zero keeps.
         assert (subsumed, dropped) == (len(ACJ4_INTERIM_SUBSUMED), len(ACJ4_INTERIM_UPHILL))
-        assert (kept, subsumed, dropped, twins) == (5363, 17, 2, 44)
+        assert (kept, subsumed, dropped, twins) == (5359, 17, 2, 40)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads

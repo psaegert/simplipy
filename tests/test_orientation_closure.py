@@ -83,6 +83,23 @@ class TestSumOrientationTwins:
                   ["-", "*", "2", "pow", "sin", "x0", "2", "1"]):
             assert e.simplify(list(s)) == e2.simplify(list(s))
 
+    def test_a_fully_numeric_rule_mints_no_twin(self) -> None:
+        # Its one instance is itself, and its negation is another fully numeric part, whose
+        # value the ground evaluator reads before any rule. The shipped file holds fully
+        # numeric rules (`2*acos(0) -> pi`, `0*tan(-4) -> 0`) that are served as written.
+        e = legacy_from_config(acj_config_path())
+        served = e._core.ac_served_rules_in_mode(rule_mode='default')
+        seen: set = set()
+        twins = []
+        for lhs, rhs, src in served:
+            if src in seen:
+                twins.append((lhs, rhs))
+            seen.add(src)
+        slot = ('x', '_', '?', '!', '$', '<constant>')
+        ground = [(lhs, rhs) for lhs, rhs in twins
+                  if not any(t.startswith(slot) for t in list(lhs) + list(rhs))]
+        assert twins and not ground, ground
+
     def test_function_rooted_rules_mint_no_twin(self) -> None:
         # -f(x) keeps f(x) as an intact subtree, so the source rule fires on the child;
         # a twin would be redundant and none is minted. (The rule must genuinely orient:

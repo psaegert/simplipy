@@ -23,7 +23,6 @@ INF, NINF = 'float("inf")', 'float("-inf")'
 
 CASES = [
     f'* {NINF} - x1 / 1 2',                       # the reported second call
-    f'/ - 0.5 x1 / exp x2 {INF}',                 # the reported first call
     f'+ 1 tanh * {INF} - x1 / 1 2',               # a wrong finite value: 0 for 1 + sign
     f'* x2 + 1 tanh * {INF} - x1 1',
     f'tanh * {INF} - pow x1 2 3',
@@ -75,6 +74,17 @@ def test_the_answer_keeps_every_defined_value(engine, points, expr, effort) -> N
     again = engine.simplify(answer, mode='permissive', effort=effort)
     ok = agrees_where_defined(a, values(engine, again, points))
     assert ok.all(), (expr, effort, answer, again, points[~ok][0])
+
+
+@pytest.mark.parametrize('effort', [0, 1, 4, None])
+def test_a_quotient_by_a_vanishing_quotient_has_no_value_in_permissive(engine, points, effort) -> None:
+    # The reported first call. `exp(x2)/inf` is 0 at every x2 (the reciprocal of an infinity is
+    # its determined 0), and the reals give `(0.5 - x1)/0` no value, so permissive has none to
+    # keep: NaN. f64 keeps float64's signed infinity.
+    t = f'/ - 0.5 x1 / exp x2 {INF}'.split()
+    assert engine.simplify(t, mode='permissive', effort=effort) == ['float("nan")']
+    answer = engine.simplify(t, mode='f64', effort=effort)
+    assert agrees_where_defined(values(engine, t, points), values(engine, answer, points)).all()
 
 
 @pytest.mark.parametrize('expr', CASES)

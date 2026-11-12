@@ -269,7 +269,11 @@ idempotence and commutative-permutation invariance are pytest properties and cor
 property tests; see §7) [EMPIRICAL].
 
 **Convention (infinity-bearing sums are stored flat).** A sum carrying one unabsorbed
-infinity is returned as its flat bag without the primitive-sum orientation/content pass.
+infinity is returned as its flat bag without the primitive-sum orientation/content pass. (In
+`permissive` such a bag holds its terms with a variable until the pass absorbs them, the
+like-term cancellations having run first: a sum holding an infinity, and a product holding one
+such sum, is one term to them, so $(x_0 + \infty) - (x_0 + \infty)$ is $0$ and
+$(x_0 + \infty)/(x_0 + \infty)$ is $1$.)
 This loses nothing, by a two-part argument [BY CONSTRUCTION + EMPIRICAL]: *content*
 extraction requires a unanimous coefficient magnitude, and an infinity pins the magnitude
 multiset at 1 (it absorbs scalar magnitudes exactly), so a unanimous content $\neq 1$
@@ -448,12 +452,18 @@ In `f64` a written product or negation of numbers that is
 zero is float64's signed zero, `-0.0` where its sign is negative, which an odd function keeps:
 `1/tan(-(x1 - x1))` is `-inf` there. float64 subtracts by adding the negation, so a written zero
 subtrahend is the zero of the other sign: `-0.0 - 0` is `-0.0` and `1/(0*(-2) - 0)` is `-inf`
-in `f64`, as float64 gives it (`-0.0 + 0` is `+0`, and `x - 0` is `x`). Otherwise a zero's sign
-survives only as a member of the product that is inverted, since the canonical form holds one
-exact zero: a product of a zero and a variable collapses to that zero when it is built, so
-through an odd function, an odd power or a sum before the inverse its sign is lost
-(`1/sin(0*x1)` and `1/(0*x1 + 0*x2)` are `+inf` in every mode, where float64 gives `-inf` for
-`x1 < 0`, resp. `x1, x2 < 0`).
+in `f64`, as float64 gives it (`-0.0 + 0` is `+0`, and `x - 0` is `x`). A product of a zero
+keeps its sign in `f64` wherever a later step can read it (`mul.zero`): a factor whose sign may
+vary stays beside the zero, and the zero is `+0` or `-0` (the written negative zero) by the sign
+of the other members, the reciprocal of `-inf` being `-0` too. A head that keeps a zero, its
+sign and NaN (an odd function with $f(\pm 0) = \pm 0$, `floor`, `ceil`, an odd root, `sqrt`) is
+the product itself. So the sign reaches an inverse taken later, through such a head, an odd power
+or a sum: `1/sin(0*x1)` is `inf/x1`, `1/(0*x1 + 0*x2)` keeps its sum (`-inf` where
+`x1, x2 < 0`, as float64 gives it) and `1/(x1/(-\infty))` is `-inf/x1`. Where nothing reads the
+sign the product drops the factors that only gave it its sign: the answer itself (`0*x1` and
+`0*x1 + 0*x2` are `0`), a sum whose other terms are not -0 on a region (`x2 + 0*x1` is `x2`, as for
+the `+0` term below), a head with $f(-0) = f(+0)$ (`exp(0*x1)` is `1`) and a power that makes every
+zero `+0` (`(0*x1)^{3/2}` is `0`). `permissive` reads one zero.
 
 **A sum that vanishes on a region keeps its zero's sign where it is inverted, in `f64`.** float64
 adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` and `x1 - |x1|` are

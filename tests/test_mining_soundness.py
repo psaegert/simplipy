@@ -2511,10 +2511,9 @@ class TestThePruneIsInstanceSafe:
     the instances the rule matches -- and the two genuinely differ."""
 
     def test_a_slotted_rule_is_never_pruned(self) -> None:
-        """THE DEFECT. In corpus the constructor takes `/ $0 $0` to `1` (the slot carries
-        a nonzero-a.e. certificate) and the instance `inf / inf` to `nan`. Pruning on the
-        pattern deleted `/ $0 $0 -> 1` and with it the mask-sentinel doctrine, so
-        `inf/inf * x0` stopped collapsing to `x0` in corpus."""
+        """In permissive the constructor takes `/ $0 $0` to `1` (the slot carries a
+        nonzero-a.e. certificate) and the instance `inf / inf` to `nan`: the pattern's answer
+        is no answer about the rule's instances, so a slotted rule is never pruned on it."""
         import yaml
         from conftest import acj_config_path, require_or_skip
         from simplipy import Mode
