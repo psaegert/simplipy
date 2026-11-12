@@ -249,9 +249,10 @@ relaxed_kruskal: true
 prune: covered
 promote_sorts: true
 
-# Optional: the interval layer's subdivision node budget (default 400,000). An
-# exhausted search refuses its candidate; raise it when the sidecar's
-# interval_undecided counters flag systematic exhaustion. Recorded in the sidecar.
+# Optional: the interval layer's subdivision node budget of the mine's scan
+# (default 400,000). An exhausted search refuses its candidate; raise it when the
+# sidecar's interval_undecided counters flag systematic exhaustion. Recorded in the
+# sidecar. The judge and the engine's own answers always read the default.
 # interval_node_budget: 800000
 
 # Offer the permissive mine the finished f64 file through its proposal lane (the
@@ -307,6 +308,26 @@ any machine with the environment the checkpoint records. The merge refuses a mis
 shard given twice and a shard of another mine, mode, length or split; a shard that died is run
 again alone. Run with `--stop-after-length 4`, the merge then mines the next mode to the same
 point, and the same three steps split its length 5.
+
+The judge loop's re-scans can be split the same way. A re-scan's pick is a function of the
+source, its index, the targets excluded for it and the rules of the shorter lengths, so with
+`--split-loop` the merge ends after a judge round that leaves sources to re-scan, its
+checkpoint holding the loop, and the same two commands run the round:
+
+```sh
+simplipy find-rules -e config.yaml -c mine.yaml -o rules.json --reset-rules --merge --split-loop --stop-after-length 4
+simplipy find-rules -e config.yaml -c mine.yaml -o rules.json --reset-rules --shard 0/200   # ... to 199/200
+simplipy find-rules -e config.yaml -c mine.yaml -o rules.json --reset-rules --merge --split-loop --stop-after-length 4
+```
+
+Shard `i/n` then re-scans every `n`-th of the round's sources from `i` and writes
+`rules.json.shard-5-round-<r>-<i>-of-<n>.json`; the merge refuses a shard of another round as
+it refuses one of another mine, judges the next round, and ends again while a round leaves
+sources to re-scan. A run without `--shard` or `--merge` re-scans the round itself, so a split
+loop can be finished on one machine after any round. The files and their sidecars still equal
+a single-machine mine's. The contract judge's worker processes (`--judge-processes`, default
+4) change neither: what a worker's judgments move in the sidecar's miss counters is counted as
+the parent's.
 
 ## Verifying a mine
 

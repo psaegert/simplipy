@@ -3507,6 +3507,7 @@ mod tests {
             min_informative,
             challenges: 16,
             retries: 16,
+            node_budget: None,
         };
         e.judge_pair(src, tgt, vars, xf, n, &spec, seed)
             .unwrap()

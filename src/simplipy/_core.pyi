@@ -221,6 +221,9 @@ class Engine:
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
+        exclusions: list[list[str]] = ...,
+        # the interval node budget of the scan (the mine's; None: the process's)
+        node_budget: int | None = ...,
     ) -> list[str] | None: ...
     def find_rule_lib_traced(
         self,
@@ -240,6 +243,8 @@ class Engine:
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
         exclusions: list[list[str]] = ...,
+        # the interval node budget of the scan (the mine's; None: the process's)
+        node_budget: int | None = ...,
     ) -> tuple[list[str] | None, list[tuple[list[str], list[str], str]]]: ...
     def judge_hint(
         self,
@@ -258,6 +263,9 @@ class Engine:
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
+        exclusions: list[list[str]] = ...,
+        # the interval node budget of the scan (the mine's; None: the process's)
+        node_budget: int | None = ...,
     ) -> tuple[bool, str]: ...
     def prefilter_agrees(
         self,
@@ -314,6 +322,8 @@ class Engine:
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
+        # the interval node budget of the scan (the mine's; None: the process's)
+        node_budget: int | None = ...,
     ) -> list[tuple[int, list[str], list[str]]]: ...
     def exist_constants_fit_linear(
         self,
@@ -339,8 +349,11 @@ class Engine:
     ) -> bool: ...
 
 def core_serialization_ops() -> dict[str, dict[str, Any]]: ...
-#: Set the interval layer's node budget (None: the default); returns the previous one.
+#: Set the process's interval node budget (None: the default); returns the previous one.
+#: The judge reads the default whatever it is; a mine's scan names its own.
 def set_interval_node_budget(budget: int | None) -> int: ...
+#: This process's miss counters: (horizon, node budget, unanalyzable, mint).
+def miss_counters() -> tuple[int, int, int, int]: ...
 #: The numeral grammar (`rust/utils.rs`), the one definition `simplipy.utils` calls.
 def is_numeric_string(token: str) -> bool: ...
 #: Reserved numeric spellings (`inf`, `1_000`, `0x10`, `1/0`, `--5`): values to a standard

@@ -65,15 +65,25 @@ def main(argv: str = None) -> None:
         help='End once a mode completes length K, leaving its checkpoint to split length K+1 from')
     find_simplifications_parser.add_argument(
         '--shard', type=_shard_spec, default=None, metavar='I/N',
-        help='Scan shard I of N of the length after the checkpoint, write '
-             '<mode file>.shard-<length>-<I>-of-<N>.json and end')
+        help='Scan shard I of N of the length after the checkpoint (or, of a judge loop '
+             'stopped after a round, re-scan shard I of N of the round), write it beside the '
+             'mode file and end')
     find_simplifications_parser.add_argument(
         '--from-checkpoint', type=str, default=None, metavar='FILE',
         help='The checkpoint a shard reads (default: <mode file>.checkpoint.json)')
     find_simplifications_parser.add_argument(
         '--merge', type=str, nargs='*', default=None, metavar='SHARD',
-        help='Merge the shards of the split length (default: those beside the mode file) and '
-             'mine on as one machine does after its scan')
+        help='Merge the shards of the split length or of its pending judge round (default: '
+             'those beside the mode file) and mine on as one machine does after its scan')
+    find_simplifications_parser.add_argument(
+        '--split-loop', action='store_true',
+        help="Split the split length's judge loop too: end after a judge round that leaves "
+             'sources to re-scan, for shards of the round and a merge; a plain resume '
+             're-scans them itself')
+    find_simplifications_parser.add_argument(
+        '--judge-processes', type=int, default=4, metavar='N',
+        help='Worker processes of the contract judge (default 4); the files and sidecars do '
+             'not depend on it')
 
     # Prune-rules command
     prune_covered_rules_parser = subparsers.add_parser(
@@ -209,6 +219,8 @@ def main(argv: str = None) -> None:
                 shard=args.shard,
                 merge=args.merge,
                 checkpoint_file=args.from_checkpoint,
+                split_loop=args.split_loop,
+                judge_processes=args.judge_processes,
                 verbose=args.verbose)
 
         case 'verify-mine':

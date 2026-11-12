@@ -4553,19 +4553,51 @@ pub fn domain_extension_p(
 /// 14-deep binary tree visits <= 2^15 nodes); constant-derived horizons deepen the tree, so
 /// exhaustion is possible. FAIL-CLOSED: an exhausted search that found no witness returns
 /// `None` (undecided) and the gate REJECTS -- it never reads as "no extension". A mine raises
-/// it per stratum through `find_rules(interval_node_budget=...)`, which records the value in
-/// the artifact's parameters, when the counters flag systematic exhaustion.
+/// it for its own scan through `find_rules(interval_node_budget=...)`, which records the value
+/// in the artifact's parameters, when the counters flag systematic exhaustion; the judge always
+/// reads this default (`with_default_budget`).
 pub const DEFAULT_NODES_BUDGET: u32 = 400_000;
 
 static NODES_BUDGET: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(DEFAULT_NODES_BUDGET);
 
-fn max_nodes_budget() -> u32 {
-    NODES_BUDGET.load(std::sync::atomic::Ordering::Relaxed)
+thread_local! {
+    /// The node budget of the work running on this thread (`with_node_budget`), over the
+    /// process's (`set_max_nodes_budget`). The interval layer runs on its caller's thread.
+    static SCOPED_NODES_BUDGET: std::cell::Cell<Option<u32>> =
+        const { std::cell::Cell::new(None) };
 }
 
-/// Set the subdivision node budget (`None`: the default) and return the previous one. The
-/// miner sets it for the duration of a mine and restores it after.
+fn max_nodes_budget() -> u32 {
+    SCOPED_NODES_BUDGET
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| NODES_BUDGET.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Run `f` with the subdivision node budget `budget` on this thread, whatever the process's is,
+/// and restore the thread's own after (a panic included). A mine's scan reads its budget so
+/// (`MineSpec::node_budget`).
+pub fn with_node_budget<R>(budget: u32, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<u32>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_NODES_BUDGET.with(|b| b.set(self.0));
+        }
+    }
+    let _restore = Restore(SCOPED_NODES_BUDGET.with(|b| b.replace(Some(budget))));
+    f()
+}
+
+/// Run `f` with the default node budget on this thread: THE JUDGE'S. The judge is one function
+/// of the pair, the same in a mine (whatever budget its scan reads), in `verify-mine` and in a
+/// caller's `verify_rule`, so every entry of the table the judge reads runs under it.
+pub fn with_default_budget<R>(f: impl FnOnce() -> R) -> R {
+    with_node_budget(DEFAULT_NODES_BUDGET, f)
+}
+
+/// Set the process's subdivision node budget (`None`: the default) and return the previous
+/// one: the budget of work that sets none of its own (`with_node_budget`). The judge never
+/// reads it (`with_default_budget`), nor does a mine's scan that names its own.
 pub fn set_max_nodes_budget(budget: Option<u32>) -> u32 {
     NODES_BUDGET.swap(
         budget.unwrap_or(DEFAULT_NODES_BUDGET),
@@ -9365,6 +9397,30 @@ mod tests {
         );
         // the same shape at a small constant stays DECIDED (whichever way it decides)
         assert!(domain_extension_p(&src, &[2.0], &s(&["x0"]), &[], ops).is_some());
+    }
+
+    /// A scoped node budget holds on its own thread only, the judge's default wins inside it,
+    /// and the thread's budget is back after the scope, a panic included. The process's budget
+    /// is left alone (other tests read it concurrently).
+    #[test]
+    fn a_scoped_node_budget_holds_on_its_thread_and_is_restored() {
+        let process = max_nodes_budget();
+        assert_eq!(with_node_budget(7, max_nodes_budget), 7);
+        assert_eq!(
+            with_node_budget(7, || with_default_budget(max_nodes_budget)),
+            DEFAULT_NODES_BUDGET
+        );
+        assert_eq!(
+            with_node_budget(7, || {
+                with_default_budget(|| ());
+                max_nodes_budget()
+            }),
+            7
+        );
+        let elsewhere = with_node_budget(7, || std::thread::spawn(max_nodes_budget).join());
+        assert_eq!(elsewhere.unwrap(), process);
+        assert!(std::panic::catch_unwind(|| with_node_budget(9, || panic!("inside"))).is_err());
+        assert_eq!(max_nodes_budget(), process);
     }
 
     /// A huge INTEGER literal leaf is a

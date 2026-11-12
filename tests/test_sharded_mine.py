@@ -105,7 +105,7 @@ def test_the_merge_refuses_a_missing_doubled_or_foreign_shard(single, tmp_path) 
     foreign = json.load(open(paths[2]))
     foreign['fingerprint'] = '0' * 64
     json.dump(foreign, open(f'{base}.foreign.json', 'w'))
-    with pytest.raises(RuntimeError, match='not a shard of this mine: its mine differ'):
+    with pytest.raises(RuntimeError, match='not a shard of length 4 of this mine: its mine differ'):
         _mine(tmp_path, merge=paths[:2] + [f'{base}.foreign.json'])
     assert (tmp_path / 'mined.json.checkpoint.json').exists(), 'a refused merge keeps the checkpoint'
     # a shard that died is run again alone, and the merge goes through
@@ -215,3 +215,121 @@ def test_a_mine_resumed_after_a_ladder_snapshot_offers_the_snapshot_to_the_next_
     for name in FILES + ('snap.json', 'snap_permissive.json'):
         assert (tmp_path / 'resumed' / name).read_bytes() == \
             (tmp_path / 'once' / name).read_bytes(), name
+
+
+def _short_target_judge(pairs):
+    """Refuses every length-4 pick in both modes: each refused source is re-scanned until its
+    candidates run out or the loop gives it up, so the length takes several rounds."""
+    return ['reject' if len(lhs) >= 4 else 'core' for lhs, rhs in pairs]
+
+
+def _pending_round(directory, name):
+    """The judge round the mode's checkpoint stopped after (`split_loop`), or None."""
+    path = directory / f'{name}.checkpoint.json'
+    loop = json.load(open(path)).get('loop') if path.exists() else None
+    return None if loop is None else loop['rounds']
+
+
+def _split_loop(directory, shards: int, **kw) -> list:
+    """The mine with its last length's first scan and every judge round of it split `shards`
+    ways, mode by mode. -> the rounds the merges stopped after, per mode."""
+    _mine(directory, stop_after_length=3, **kw)
+    stopped: list = []
+    for name in FILES:
+        for i in range(shards):
+            _mine(directory, shard=(i, shards), **kw)
+        _mine(directory, merge=[], stop_after_length=3, split_loop=True, **kw)
+        rounds = []
+        while (pending := _pending_round(directory, name)) is not None:
+            rounds.append(pending)
+            for i in range(shards):
+                _mine(directory, shard=(i, shards), **kw)
+            _mine(directory, merge=[], stop_after_length=3, split_loop=True, **kw)
+        stopped.append(rounds)
+    return stopped
+
+
+def _looped(directory, monkeypatch, cap: int = 3):
+    """A single-machine mine of `_short_target_judge`, the loop giving a source up after `cap`
+    refusals: length 4 takes three judge rounds in f64 at the cap of 3, and gives a source up
+    at the cap of 2."""
+    import simplipy.mining
+    monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', cap)
+    _mine(directory, judge=_short_target_judge)
+    return directory
+
+
+@pytest.mark.parametrize('cap', [2, 3])
+def test_a_split_judge_loop_mines_the_single_machine_files(tmp_path, monkeypatch, cap) -> None:
+    """Every judge round of the split length re-scanned in shards and judged in a merge: the
+    files and sidecars of a single-machine mine, the sources given up on included."""
+    looped = _looped(tmp_path / 'single', monkeypatch, cap)
+    stopped = _split_loop(tmp_path / 'split', 3, judge=_short_target_judge)
+    for name, rounds in zip(FILES, stopped):
+        assert (tmp_path / 'split' / name).read_bytes() == (looped / name).read_bytes(), name
+        split = json.load(open(tmp_path / 'split' / f'{name}.provenance.json'))
+        one = json.load(open(looped / f'{name}.provenance.json'))
+        assert comparable(split) == comparable(one), name
+        assert rounds == list(range(1, one['per_length']['4']['judge_rounds'])), (name, rounds)
+        if rounds:
+            merged = [r['merged'] for r in split['resumed'] if 'merged' in r]
+            assert {'length': 4, 'shards': 3, 'round': 2} in merged, merged
+    if cap == 3:
+        assert any(len(rounds) >= 2 for rounds in stopped), 'vacuous: no length took 3 rounds'
+    else:
+        given_up = json.load(open(looped / 'mined.json.provenance.json')).get('given_up')
+        assert given_up and given_up[0]['length'] == 4, 'vacuous: no source given up on'
+
+
+def test_a_split_judge_loop_finishes_on_one_machine_after_any_round(tmp_path,
+                                                                    monkeypatch) -> None:
+    """A run without shard or merge re-scans the pending round itself: stopped after its first
+    round, the f64 length finishes on one machine, to the single-machine files."""
+    looped = _looped(tmp_path / 'single', monkeypatch)
+    split = tmp_path / 'split'
+    _mine(split, stop_after_length=3, judge=_short_target_judge)
+    for i in range(3):
+        _mine(split, shard=(i, 3), judge=_short_target_judge)
+    _mine(split, merge=[], stop_after_length=3, split_loop=True, judge=_short_target_judge)
+    assert _pending_round(split, 'mined.json') == 1, 'vacuous: the merge left no round'
+    _mine(split, judge=_short_target_judge)
+    for name in FILES:
+        assert (split / name).read_bytes() == (looped / name).read_bytes(), name
+        assert comparable(json.load(open(split / f'{name}.provenance.json'))) == \
+            comparable(json.load(open(looped / f'{name}.provenance.json'))), name
+
+
+def test_a_round_merge_refuses_a_missing_doubled_or_foreign_shard(tmp_path, monkeypatch) -> None:
+    """The merge of a judge round refuses as the merge of a first scan does, and refuses a shard
+    of another round or of another request; the round is merged once its shards are right."""
+    import simplipy.mining
+    monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 3)
+    kw = {'judge': _short_target_judge}
+    _mine(tmp_path, stop_after_length=3, **kw)
+    for i in range(3):
+        _mine(tmp_path, shard=(i, 3), **kw)
+    _mine(tmp_path, merge=[], stop_after_length=3, split_loop=True, **kw)
+    assert _pending_round(tmp_path, 'mined.json') == 1
+    base = str(tmp_path / 'mined.json')
+    paths = [f'{base}.shard-4-round-2-{i}-of-3.json' for i in range(3)]
+    _mine(tmp_path, shard=(0, 3), **kw)
+    _mine(tmp_path, shard=(2, 3), **kw)
+    with pytest.raises(RuntimeError, match=r'\[1\] of the 3-way split of length 4, judge round 2'):
+        _mine(tmp_path, merge=[], split_loop=True, **kw)
+    _mine(tmp_path, shard=(1, 3), **kw)
+    doubled = f'{base}.copy.json'
+    shutil.copy(paths[1], doubled)
+    with pytest.raises(RuntimeError, match='shard 1 of 3 is there twice'):
+        _mine(tmp_path, merge=paths + [doubled], split_loop=True, **kw)
+    for field, value in (('round', 3), ('request', '0' * 64)):
+        foreign = json.load(open(paths[2]))
+        foreign[field] = value
+        json.dump(foreign, open(doubled, 'w'))
+        with pytest.raises(RuntimeError, match=f'not a shard of length 4, judge round 2 of '
+                                               f'this mine: its {field} differ'):
+            _mine(tmp_path, merge=paths[:2] + [doubled], split_loop=True, **kw)
+    with pytest.raises(RuntimeError, match='its round, request differ'):
+        _mine(tmp_path, merge=paths[:2] + [f'{base}.shard-4-2-of-3.json'], split_loop=True, **kw)
+    assert _pending_round(tmp_path, 'mined.json') == 1, 'a refused merge keeps the round'
+    _mine(tmp_path, merge=paths, split_loop=True, **kw)
+    assert _pending_round(tmp_path, 'mined.json') != 1

@@ -38,9 +38,21 @@ pub struct MineSpec {
     pub min_informative: usize,
     pub challenges: usize,
     pub retries: usize,
+    /// The interval layer's node budget of this mine's scan (`find_rules(interval_node_budget=)`);
+    /// `None`: the process's. Only the scan reads it: the mark is the engine's own answer and
+    /// the judge reads the default (`interval::with_default_budget`).
+    pub node_budget: Option<u32>,
 }
 
 impl MineSpec {
+    /// Run `f`, a part of the scan, under this mine's node budget (`node_budget`).
+    pub fn scan_budget<R>(&self, f: impl FnOnce() -> R) -> R {
+        match self.node_budget {
+            Some(budget) => crate::interval::with_node_budget(budget, f),
+            None => f(),
+        }
+    }
+
     /// Whether a near miss is re-judged by the table: every mode but f64.
     pub fn rescue(&self) -> bool {
         self.lane().rescue()
@@ -502,10 +514,12 @@ impl Engine {
             .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
         let excluded = self.excluded_keys(excluded, spec.mode);
-        match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded) {
-            None => Ok(None),
-            Some(acc) => acc.scan(lib, max_target, seed),
-        }
+        spec.scan_budget(|| {
+            match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded) {
+                None => Ok(None),
+                Some(acc) => acc.scan(lib, max_target, seed),
+            }
+        })
     }
 
     /// THE HINT ARM: a proposed (source, hint) pair, judged by the same acceptance the scan
@@ -529,31 +543,34 @@ impl Engine {
             .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
         let excluded = self.excluded_keys(excluded, spec.mode);
-        let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded)
-        else {
-            return Ok(Some("atomic_mark"));
-        };
-        if let Err(r) = acc.license(hint) {
-            return Ok(Some(r.name()));
-        }
-        if let Some(why) = crate::worker::judge_pair(
-            &self.operators,
-            src,
-            hint,
-            lib.var_names(),
-            lib.cols(),
-            lib.n_rows(),
-            spec.challenges,
-            spec.retries,
-            seed,
-            spec.rtol,
-            spec.atol,
-            spec.min_informative,
-            spec.lane(),
-        )? {
-            return Ok(Some(why));
-        }
-        Ok(acc.confirm(hint).err().map(MineRefusal::name))
+        spec.scan_budget(|| {
+            let Some(acc) =
+                Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded)
+            else {
+                return Ok(Some("atomic_mark"));
+            };
+            if let Err(r) = acc.license(hint) {
+                return Ok(Some(r.name()));
+            }
+            if let Some(why) = crate::worker::judge_pair(
+                &self.operators,
+                src,
+                hint,
+                lib.var_names(),
+                lib.cols(),
+                lib.n_rows(),
+                spec.challenges,
+                spec.retries,
+                seed,
+                spec.rtol,
+                spec.atol,
+                spec.min_informative,
+                spec.lane(),
+            )? {
+                return Ok(Some(why));
+            }
+            Ok(acc.confirm(hint).err().map(MineRefusal::name))
+        })
     }
 
     /// The overlap gate's prefilter reading of a constant-free pair on the mine's rows
@@ -1052,14 +1069,24 @@ impl Engine {
                         None
                     } else {
                         // An atomic mark ends the search even under relaxed Kruskal
-                        // (`Acceptor::new`).
-                        Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded)
+                        // (`Acceptor::new`). The scan reads the mine's node budget.
+                        spec.scan_budget(|| {
+                            Acceptor::new(
+                                self,
+                                spec,
+                                src,
+                                mark,
+                                lib.var_names(),
+                                confirm,
+                                &excluded,
+                            )
                             .and_then(|acc| {
                                 match acc.scan(lib, max_target, seed.wrapping_add(idx)) {
                                     Ok(Some(target)) => Some((idx, src.clone(), target)),
                                     _ => None,
                                 }
                             })
+                        })
                     }
                 };
                 super::stats::mine_tick(); // count the source whether or not it yielded a rule

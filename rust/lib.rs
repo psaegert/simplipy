@@ -100,6 +100,7 @@ fn mine_spec(
     min_informative: Option<usize>,
     challenges: usize,
     retries: usize,
+    node_budget: Option<u32>,
 ) -> PyResult<engine::MineSpec> {
     let mode = parse_rule_mode(rule_mode)?;
     if mode != library.mode {
@@ -115,6 +116,7 @@ fn mine_spec(
         min_informative: min_informative.unwrap_or(library.inner.n_rows() / 8).max(1),
         challenges,
         retries,
+        node_budget,
     })
 }
 
@@ -1566,7 +1568,7 @@ impl PyEngine {
     /// pick must also certify on those rows (stage 2, at a per-pair seed off `confirm_seed`),
     /// and an unconfirmed pick yields to the next candidate.
     /// `exclusions`: targets the judge loop refused for this source (by class).
-    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![]))]
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![], node_budget=None))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule_lib(
         &self,
@@ -1586,6 +1588,7 @@ impl PyEngine {
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
         exclusions: Vec<Vec<String>>,
+        node_budget: Option<u32>,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
         let spec = mine_spec(
@@ -1596,6 +1599,7 @@ impl PyEngine {
             min_informative,
             challenges,
             retries,
+            node_budget,
         )?;
         let lib = &library.inner;
         let confirm = confirm_set(
@@ -1624,7 +1628,7 @@ impl PyEngine {
     /// `certified`, and every target the acceptance answered (`licensed`, `confirmed` or the
     /// refusal's name), in scan order (`worker::ScanStep`). A step on the source alone
     /// (`evidence`, `evaluable`) has neither candidate nor target.
-    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![]))]
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![], node_budget=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn find_rule_lib_traced(
         &self,
@@ -1644,6 +1648,7 @@ impl PyEngine {
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
         exclusions: Vec<Vec<String>>,
+        node_budget: Option<u32>,
     ) -> PyResult<(
         Option<Vec<String>>,
         Vec<(Vec<String>, Vec<String>, &'static str)>,
@@ -1657,6 +1662,7 @@ impl PyEngine {
             min_informative,
             challenges,
             retries,
+            node_budget,
         )?;
         let lib = &library.inner;
         let confirm = confirm_set(
@@ -1688,7 +1694,7 @@ impl PyEngine {
     /// `(accepted, reason)`; `reason` is `"accepted"` or the first refusal's name.
     /// `exclusions`: targets the judge loop refused for this source; a hint of their class
     /// reads `"excluded"`.
-    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![]))]
+    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![], node_budget=None))]
     #[allow(clippy::too_many_arguments)]
     fn judge_hint(
         &self,
@@ -1708,6 +1714,7 @@ impl PyEngine {
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
         exclusions: Vec<Vec<String>>,
+        node_budget: Option<u32>,
     ) -> PyResult<(bool, String)> {
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&hint)?;
@@ -1719,6 +1726,7 @@ impl PyEngine {
             min_informative,
             challenges,
             retries,
+            node_budget,
         )?;
         let lib = &library.inner;
         let confirm = confirm_set(
@@ -1807,6 +1815,7 @@ impl PyEngine {
             min_informative: min_informative.unwrap_or(n_rows / 8).max(1),
             challenges,
             retries,
+            node_budget: None,
         };
         let verdict = py
             .detach(|| {
@@ -1908,7 +1917,7 @@ impl PyEngine {
     /// shorten, with the bound tightened to the simplified length (targets must beat what
     /// `simplify` already reaches); `False` skips them (strict Kruskal). See
     /// `Engine::mine_one_length`.
-    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, index_offset=0, indices=None, exclusions=None, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, index_offset=0, indices=None, exclusions=None, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, node_budget=None))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -1931,6 +1940,7 @@ impl PyEngine {
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
+        node_budget: Option<u32>,
     ) -> PyResult<Vec<engine::MinedRule>> {
         if let Some(ix) = &indices {
             if ix.len() != sources.len() {
@@ -1949,6 +1959,7 @@ impl PyEngine {
             min_informative,
             challenges,
             retries,
+            node_budget,
         )?;
         let lib = &library.inner;
         let confirm = confirm_set(
@@ -2030,13 +2041,29 @@ impl PyEngine {
     }
 }
 
-/// Set the interval layer's subdivision node budget (`None`: the default, 400,000) and
-/// return the previous one. `find_rules(interval_node_budget=...)` sets it for the mine and
-/// restores it after; the value is recorded in the artifact's parameters.
+/// Set the process's interval node budget (`None`: the default, 400,000) and return the
+/// previous one: the budget of work that names none of its own. A mine's scan names its own
+/// (`find_rules(interval_node_budget=...)`, the scans' `node_budget`), and the judge reads the
+/// default wherever it runs (`interval::with_default_budget`).
 #[pyfunction]
 #[pyo3(signature = (budget))]
 fn set_interval_node_budget(budget: Option<u32>) -> u32 {
     crate::interval::set_max_nodes_budget(budget)
+}
+
+/// This process's fail-closed miss counters, as `(horizon, node budget, unanalyzable, mint)`:
+/// the totals the `Engine` methods `interval_horizon_misses`, `interval_node_budget_misses`,
+/// `interval_unanalyzable_misses` and `mint_undecided_misses` read, without an engine. The
+/// judge's workers report what each judgment moved with it.
+#[pyfunction]
+fn miss_counters() -> (u64, u64, u64, u64) {
+    let load = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
+    (
+        load(&crate::interval::HORIZON_MISSES),
+        load(&crate::interval::NODE_BUDGET_MISSES),
+        load(&crate::interval::UNANALYZABLE_MISSES),
+        load(&crate::worker::MINT_UNDECIDED),
+    )
 }
 
 /// The CORE SERIALIZATION LANGUAGE, exported so Python reads the SAME table the engine
@@ -2098,8 +2125,12 @@ fn f64_bar(
     arity: std::collections::BTreeMap<String, u8>,
 ) -> Option<(bool, usize, Option<Vec<f64>>)> {
     let ops = arity_table(arity);
-    py.detach(|| crate::battery::f64_bar(&lhs, &rhs, &var_names, &ops))
-        .map(|d| (d.ok, d.probes, d.first))
+    py.detach(|| {
+        crate::interval::with_default_budget(|| {
+            crate::battery::f64_bar(&lhs, &rhs, &var_names, &ops)
+        })
+    })
+    .map(|d| (d.ok, d.probes, d.first))
 }
 
 /// What `f64_bar_sorted` returns: `(agree, probes, first differing probe, range probes)`.
@@ -2129,7 +2160,9 @@ fn f64_bar_sorted(
         crate::battery::Agreement::F6
     };
     py.detach(|| {
-        crate::battery::f64_bar_sorted(&lhs, &rhs, &var_names, &sorts, true, agreement, &ops)
+        crate::interval::with_default_budget(|| {
+            crate::battery::f64_bar_sorted(&lhs, &rhs, &var_names, &sorts, true, agreement, &ops)
+        })
     })
     .map(|d| (d.ok, d.probes, d.first, d.range_rows))
 }
@@ -2171,11 +2204,13 @@ fn table_extension_width(
     let measure =
         || crate::interval::domain_extension_p(&source, &src_params, &target, &tgt_params, &ops);
     py.detach(|| {
-        if f64 {
-            crate::interval::with_reading(false, measure)
-        } else {
-            crate::interval::with_real_reading(measure)
-        }
+        crate::interval::with_default_budget(|| {
+            if f64 {
+                crate::interval::with_reading(false, measure)
+            } else {
+                crate::interval::with_real_reading(measure)
+            }
+        })
     })
 }
 
@@ -2202,7 +2237,9 @@ fn table_evidence(
     f64: bool,
 ) -> Option<bool> {
     let ops = arity_table(arity);
-    py.detach(|| crate::interval::evidence(&tokens, &ops, f64))
+    py.detach(|| {
+        crate::interval::with_default_budget(|| crate::interval::evidence(&tokens, &ops, f64))
+    })
 }
 
 /// EVIDENCE IN A MODE (policy 4.1, `interval::evidence_in`): float64's for `f64`; for
@@ -2217,7 +2254,9 @@ fn table_mode_evidence(
 ) -> PyResult<Option<bool>> {
     let mode = parse_rule_mode(mode)?;
     let ops = arity_table(arity);
-    Ok(py.detach(|| crate::interval::evidence_in(&tokens, &ops, mode)))
+    Ok(py.detach(|| {
+        crate::interval::with_default_budget(|| crate::interval::evidence_in(&tokens, &ops, mode))
+    }))
 }
 
 /// PERMISSIVE'S READING AT FLOAT RESOLUTION (P3) of `lhs` against `rhs` at one point, each of
@@ -2236,8 +2275,11 @@ fn table_float_resolution(
     arity: std::collections::BTreeMap<String, u8>,
 ) -> Option<(String, f64, f64)> {
     let ops = arity_table(arity);
-    let reading =
-        py.detach(|| crate::interval::float_resolution(&lhs, &rhs, &names, &values, &ops));
+    let reading = py.detach(|| {
+        crate::interval::with_default_budget(|| {
+            crate::interval::float_resolution(&lhs, &rhs, &names, &values, &ops)
+        })
+    });
     match reading {
         crate::interval::FloatReading::Agree => Some(("agree".into(), f64::NAN, f64::NAN)),
         crate::interval::FloatReading::Differ => Some(("differ".into(), f64::NAN, f64::NAN)),
@@ -2260,7 +2302,11 @@ fn table_owes_at(
     f64: bool,
 ) -> bool {
     let ops = arity_table(arity);
-    py.detach(|| crate::interval::owes_at(&tokens, &params, &ops, f64))
+    py.detach(|| {
+        crate::interval::with_default_budget(|| {
+            crate::interval::owes_at(&tokens, &params, &ops, f64)
+        })
+    })
 }
 
 /// What `table_value_set` returns: `(has_fin, pinf, ninf, nan, lo, hi)`.
@@ -2282,11 +2328,13 @@ fn table_value_set(
     let ops = arity_table(arity);
     let whole = || crate::interval::value_set(&tokens, &ops, &crate::interval::Vs::reals());
     py.detach(|| {
-        if f64 {
-            crate::interval::with_reading(false, whole)
-        } else {
-            crate::interval::with_real_reading(whole)
-        }
+        crate::interval::with_default_budget(|| {
+            if f64 {
+                crate::interval::with_reading(false, whole)
+            } else {
+                crate::interval::with_real_reading(whole)
+            }
+        })
     })
     .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi))
 }
@@ -2698,6 +2746,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("TABLE_F64_MAGNITUDES", table::F64_MAGNITUDES.to_vec())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
+    m.add_function(wrap_pyfunction!(miss_counters, m)?)?;
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;

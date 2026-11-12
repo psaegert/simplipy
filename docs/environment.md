@@ -23,7 +23,9 @@ The compiled core declares it (its read sites name their variables from the same
 list), and it is empty: no environment variable changes what the core mines,
 certifies or serves. The interval layer's node budget, the one instrument a mine may
 need to raise, is the `find_rules(interval_node_budget=...)` argument, recorded in
-the sidecar's parameters.
+the sidecar's parameters. It bounds the mine's own scan; the judge reads the default
+budget wherever it runs, so a verdict is the same in a mine, in `verify-mine` and in
+`verify_rule`.
 
 A mine still records every `SIMPLIPY_*` variable set while it runs (the diagnostics,
 the test-asset switch, the build stamp, the progress interval and the trusted-module

@@ -2475,6 +2475,20 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 - **A mine resumed after a ladder snapshot finishes.** It took the f64 snapshot it had
   finished as unfinished and failed at the permissive snapshot; it now takes it as it is, and
   every file and snapshot equals a mine run through.
+- **The judge loop of a split length splits too** (`find_rules(split_loop=True)`, CLI
+  `--split-loop`). The run that judges a round ends after one that leaves sources to re-scan,
+  its checkpoint holding the loop; `--shard i/n` then re-scans every `n`-th of the round's
+  sources, each with the targets excluded for it, and `--merge` judges the next round. A merge
+  refuses a missing, doubled or foreign shard of a round, a shard of another round included;
+  a run with neither option re-scans the round itself. The files and sidecars equal a
+  single-machine mine's, the give-ups included. A checkpoint is written whole or not at all.
+- **The judge's worker processes change no file** (`--judge-processes`, default 4). What a
+  worker's judgments, or a shard's, move in the miss counters is counted as the parent's, so
+  one process and 32 write the same sidecar.
+- **The judge reads the default node budget everywhere.** A mine's `interval_node_budget`
+  bounds its own scan only; the judge, and the engine's answers in the mine, read the default,
+  so a verdict is the one `verify-mine` and `verify_rule` reach, whatever budget the process
+  holds.
 - **The final gate checks, once.** Every pick is licensed where the mine first considers it
   and promotion licenses every rung, so the final gate runs once, on the set that ships, and
   drops nothing; a prune leans only on licensed rules by construction.

@@ -304,8 +304,10 @@ def test_a_resume_across_code_changes_refuses(tmp_path, monkeypatch) -> None:
     assert len(_crashing_mine(tmp_path / 'a')) == 1, 'the same mine resumes'
 
 
-def test_a_mine_sets_the_node_budget_for_itself(tmp_path) -> None:
-    """`interval_node_budget` is the mine's, recorded in its parameters, and restored after."""
+def test_a_mine_sets_the_node_budget_for_its_scan_only(tmp_path) -> None:
+    """`interval_node_budget` is the budget of the mine's scan, recorded in its parameters: the
+    process's budget, which the engine's answers read, stays the default throughout, and the
+    scan reads the mine's (a budget of 1 leaves searches the default decides undecided)."""
     from simplipy import _core
     seen: list = []
     original = RuleMiner._mine_length
@@ -318,13 +320,93 @@ def test_a_mine_sets_the_node_budget_for_itself(tmp_path) -> None:
 
     RuleMiner._mine_length = spy  # type: ignore[method-assign]
     try:
-        _crashing_mine(tmp_path / 'b', interval_node_budget=12345)
+        _crashing_mine(tmp_path / 'b', interval_node_budget=1)
     finally:
         RuleMiner._mine_length = original  # type: ignore[method-assign]
-    assert set(seen) == {12345}
+    assert seen and set(seen) == {400_000}
     assert _core.set_interval_node_budget(None) == 400_000
     side = json.load(open(tmp_path / 'b' / 'mined.json.provenance.json'))
-    assert side['params']['interval_node_budget'] == 12345
+    assert side['params']['interval_node_budget'] == 1
+    _crashing_mine(tmp_path / 'c')
+    default = json.load(open(tmp_path / 'c' / 'mined.json.provenance.json'))
+    assert side['soundness']['interval_undecided']['node_budget'] > \
+        default['soundness']['interval_undecided']['node_budget'], \
+        'vacuous: the budget of 1 left no search of the scan undecided'
+
+
+def test_the_judge_reads_the_default_budget_whatever_the_process_holds() -> None:
+    """The judge is one function of the pair: under a process budget of 1 it reaches the verdict
+    and moves the counters the default budget does (`exp(log(sin(x y z))) -> sin(x y z)`: its
+    measure exhausts the default budget eight times)."""
+    from simplipy import _core
+    from simplipy.mining import judge_tiers
+    pair = ('exp log sin * ?0 * ?1 ?2'.split(), 'sin * ?0 * ?1 ?2'.split())
+
+    def judged() -> tuple:
+        before = _core.miss_counters()
+        tier = judge_tiers([pair], processes=1)
+        return tier, [now - then for now, then in zip(_core.miss_counters(), before)]
+
+    at_default = judged()
+    previous = _core.set_interval_node_budget(1)
+    try:
+        at_one = judged()
+    finally:
+        _core.set_interval_node_budget(previous)
+    assert at_one == at_default
+    assert at_default[1][1] > 0, 'vacuous: the judgment exhausted no budget'
+
+
+def test_the_judge_pools_misses_count_as_the_parents(monkeypatch) -> None:
+    """What a pool worker's judgments move in the miss counters is counted as the parent's
+    (`mining._undecided`): judged in two spawned workers, the pairs move the counters a mine
+    records as they do judged here."""
+    import simplipy.mining as mining
+    from simplipy import _core
+    monkeypatch.setattr(mining, '_JUDGE_POOL_MIN', 1)
+    engine = SimpliPyEngine(operators=_OPERATORS, rules=[])
+    pairs = [('exp log sin * ?0 * ?1 ?2'.split(), 'sin * ?0 * ?1 ?2'.split()),
+             ('pow2 ?0'.split(), '* ?0 ?0'.split())]
+
+    def judged(processes: int) -> tuple:
+        before = mining._undecided(engine._core)
+        tiers = mining.judge_tiers(pairs, processes=processes)
+        return tiers, [now - then for now, then in zip(mining._undecided(engine._core), before)]
+
+    here_before = _core.miss_counters()
+    here = judged(1)
+    assert [now - then for now, then in zip(_core.miss_counters(), here_before)] == here[1]
+    pooled_before = _core.miss_counters()
+    pooled = judged(2)
+    assert _core.miss_counters() == pooled_before, 'vacuous: the pool judged nothing'
+    assert pooled == here
+    assert here[1][1] > 0, 'vacuous: no judgment moved a counter'
+
+
+def test_the_number_of_judge_processes_changes_no_file(tmp_path, monkeypatch) -> None:
+    """The same mine judged in this process and on four workers (every batch pooled) writes the
+    same files and sidecars, the miss counters included."""
+    import simplipy.mining as mining
+    _mode_mine(tmp_path / 'one', judge_processes=1)
+    counted: list = []
+    real = mining._count_misses
+    monkeypatch.setattr(mining, '_JUDGE_POOL_MIN', 1)
+    monkeypatch.setattr(mining, '_count_misses', lambda misses: counted.append(1) or real(misses))
+    _mode_mine(tmp_path / 'four', judge_processes=4)
+    assert counted, 'vacuous: no batch was judged in the pool'
+    for name in ('mined.json', 'mined_permissive.json'):
+        assert (tmp_path / 'four' / name).read_bytes() == (tmp_path / 'one' / name).read_bytes()
+        one = json.load(open(tmp_path / 'one' / f'{name}.provenance.json'))
+        four = json.load(open(tmp_path / 'four' / f'{name}.provenance.json'))
+        for side in (one, four):
+            for key in ('created', 'resumed'):
+                side.pop(key, None)
+            side['progress'].pop('updated', None)
+            for record in side['per_length'].values():
+                record.pop('wall_s', None)
+            for record in side.get('completion') or []:
+                record.pop('seconds', None)
+        assert four == one, name
 
 
 def test_a_proposal_whose_target_the_mode_refuses_reads_rejected_at_the_judge(tmp_path) -> None:
