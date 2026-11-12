@@ -632,12 +632,14 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> CodewordTotals {
         Some((_, q)) => q <= i128::from(bound),
         None => r.big_parts().1 <= BigInt::from(bound),
     };
-    // `1/c` terminates only where the numerator has no prime factor but 2 and 5
+    // `1/c` terminates only where the numerator has no prime factor but 2 and 5 (zero has no
+    // reciprocal)
     let smooth_numerator = match r.small_parts() {
+        Some((0, _)) => false,
         Some((p, _)) => {
             let mut m = p.unsigned_abs();
             m >>= m.trailing_zeros();
-            while m % 5 == 0 && m != 0 {
+            while m % 5 == 0 {
                 m /= 5;
             }
             m == 1
@@ -12586,6 +12588,17 @@ mod tests {
             );
             assert_ne!(through, wrong);
         }
+    }
+
+    /// Zero is priced by its fraction codeword alone, at the floor: it has no decimal codeword and
+    /// no reciprocal.
+    #[test]
+    fn zero_has_the_fraction_codeword_alone() {
+        assert_eq!(
+            mu_rat_codeword_totals(&Rat::ZERO),
+            (MU_RAT_FLOOR, None, None)
+        );
+        assert_eq!(mu_rat_exact(&Rat::ZERO), MU_MILLI + MU_RAT_FLOOR);
     }
 
     /// Every number is priced as it is written: the long exact product costs its digits, and the
