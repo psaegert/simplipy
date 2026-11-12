@@ -241,7 +241,37 @@ pub(crate) fn recognised_number(
     })
 }
 
+/// One node of the sequence, from `idx`, with the index after it. A part written with a variable
+/// that the constructors build fully numeric (`atanh(x1/x1)` is `atanh(1)`: the quotient
+/// cancels) is read by the ground evaluator as a written part is (`ground_part_atom`), from its
+/// print, so the parse is the state its print reads back to (`atanh(1)` is `inf` in `f64`). A
+/// part written fully numeric is read as written, whole.
 fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
+    let (e, at) = parse_node(tokens, idx, cx)?;
+    let Some(value) = cx.ground_first else {
+        return Some((e, at));
+    };
+    let view = cx.view;
+    let built_ground = matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..))
+        && !e.has_measure_space(view)
+        && !e.contains_wildcard(view);
+    let written_ground = || {
+        tokens[idx..at].iter().all(|&t| {
+            view.arity(t).is_some()
+                || view.with_str(t, |s| {
+                    crate::forms::TAG_TOKENS.contains(&s) || value_atom(s)
+                })
+        })
+    };
+    if built_ground && !written_ground() {
+        if let Some(atom) = value(&to_prefix(&e, &Cx::bare(view))) {
+            return Some((atom, at));
+        }
+    }
+    Some((e, at))
+}
+
+fn parse_node(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     if let Some(found) = ground_part_atom(tokens, idx, cx) {
         return Some(found);
     }
