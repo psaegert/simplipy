@@ -172,7 +172,7 @@ def test_a_rule_changes_no_ground_value() -> None:
     ('/ 1 sin np.pi', 'float("inf")', False, False, 'reject'),
 ])
 def test_the_judge_reads_a_fully_numeric_rule_by_each_modes_value(lhs, rhs, strict, permissive,
-                                                                   tier) -> None:
+                                                                  tier) -> None:
     d = verify_rule(lhs.split(), rhs.split())
     assert d['realised'] is strict and d['permissive'] is permissive and d['tier'] == tier, d
     assert d['basis'] == {'f64': 'proved' if strict else 'refused',
