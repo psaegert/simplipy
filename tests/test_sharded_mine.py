@@ -186,3 +186,32 @@ def test_a_split_mine_gives_up_on_what_a_single_one_does(tmp_path, monkeypatch) 
         assert comparable(split) == comparable(one), name
     given_up = json.load(open(tmp_path / 'single' / 'mined.json.provenance.json'))['given_up']
     assert 4 in {g['length'] for g in given_up}, 'vacuous: nothing given up in the merge'
+
+
+def test_a_mine_resumed_after_a_ladder_snapshot_offers_the_snapshot_to_the_next_mode(
+        tmp_path, monkeypatch) -> None:
+    """A mine stopped after its ladder snapshot takes the f64 cell it finished as it is on the
+    resume, so the permissive snapshot is offered it, and every file equals a run through."""
+    from simplipy.mining import RuleMiner
+    real_length = RuleMiner._mine_length
+
+    def mine(directory, crash_at=None):
+        calls: list = []
+
+        def length(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+            calls.append(rule_mode)
+            if crash_at is not None and calls.count('default') == crash_at:
+                raise KeyboardInterrupt('simulated crash')
+            return real_length(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+        monkeypatch.setattr(RuleMiner, '_mine_length', length)
+        _mine(directory, snapshot_at={3: str(directory / 'snap.json')})
+
+    mine(tmp_path / 'once')
+    with pytest.raises(KeyboardInterrupt):
+        mine(tmp_path / 'resumed', crash_at=4)
+    assert (tmp_path / 'resumed' / 'snap.json').exists()
+    mine(tmp_path / 'resumed')
+    for name in FILES + ('snap.json', 'snap_permissive.json'):
+        assert (tmp_path / 'resumed' / name).read_bytes() == \
+            (tmp_path / 'once' / name).read_bytes(), name

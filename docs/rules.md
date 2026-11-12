@@ -109,7 +109,8 @@ rules and code) resumes after the last completed length, any other mine refuses 
 over it, and the checkpoint is removed once the file is final. A final file is not mined
 again: its sidecar records the mine's key (`resume.key`, the checkpoint's) and the file's
 sha256 (`resume.rules_sha256`), and a rerun of the same mine takes an unchanged file as it
-is, its ladder snapshots included. So a crash in a later mode costs only that mode; another
+is, its ladder snapshots included; a mine resumed after a ladder snapshot takes that snapshot
+as it is and offers it to the next mode, as a mine run through does. So a crash in a later mode costs only that mode; another
 mine, or a file edited after the mine, mines the mode anew.
 
 Each file has a **provenance sidecar** (`<file>.provenance.json`) recording every parameter

@@ -2229,6 +2229,15 @@ class RuleMiner:
                                                   'classes': v['classes']}
                                               for k, v in per_length.items()})
                 judged = {(tuple(lhs), tuple(rhs)): tier for lhs, rhs, tier in ckpt['judged']}
+                # The ladder cells this mine finished before the checkpoint are not mined
+                # again: each is taken as it is, as a finished file is, so the next mode is
+                # offered it (`offer_final_rules`) as when the mine ran through.
+                if cells is not None:
+                    for length, cell in sorted(snapshot_at.items()):
+                        finished = (_finished_cell(_mode_paths(cell)[file_mode], checkpoint_fp)
+                                    if length <= resumed_at else None)
+                        if finished is not None:
+                            cells[(rule_mode, cell)] = finished
                 if provenance is not None:
                     # The mine began where and when the checkpoint says (its `created` and
                     # `host`); this run is recorded as a resume of it, not as its origin.

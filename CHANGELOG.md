@@ -2472,6 +2472,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   exhausted its eight rounds on spellings of one value (`bessely(erfc(10), x1)`,
   `(x0 - abs(x0))/2 -> min(x0, 0)`) are refused that value once and go on to the next
   candidate. The library is smaller by the spellings it no longer holds.
+- **A mine resumed after a ladder snapshot finishes.** It took the f64 snapshot it had
+  finished as unfinished and failed at the permissive snapshot; it now takes it as it is, and
+  every file and snapshot equals a mine run through.
 - **The final gate checks, once.** Every pick is licensed where the mine first considers it
   and promotion licenses every rung, so the final gate runs once, on the set that ships, and
   drops nothing; a prune leans only on licensed rules by construction.
