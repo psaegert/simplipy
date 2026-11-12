@@ -2175,7 +2175,7 @@ class SimpliPyEngine:
 
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
             # '2.1458314277221002*x1'
-            engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
+            engine.prettify(engine.simplify('x1*5/21'))        # '5*x1/21'
             engine.prettify(engine.simplify('1/(2*3.141592653589793)'))   # '1/(2*pi)'
             engine.prettify(engine.simplify('x1*exp(-381/2)'))
             # '1.8488479557720672e-83*x1'
@@ -2187,7 +2187,8 @@ class SimpliPyEngine:
 
         * Exactly, as one number, as :meth:`simplify` writes it, a decimal in the notation
           below (``3*x1/10`` is ``0.3*x1``, ``x2 + 0.5`` is ``x2 + 1/2``, ``5/21`` beside a
-          factor is ``x1/4.2``, ``22/7`` stays ``22*x1/7``, ``x1/2`` stays ``x1/2``).
+          factor is ``5*x1/21``, ``1000/333`` is ``x1/0.333``, ``22/7`` stays ``22*x1/7``,
+          ``x1/2`` stays ``x1/2``).
         * At full precision, as a short exact sum ``s + r`` or ``s - r``: ``s`` the number's
           first significant digits, ``r`` the rest to its value, each written exactly as one
           number, within ``D`` in total; so it keeps the value (``x1 + 1.000000000000000000003`` is ``x1 + 1 + 3e-21``,

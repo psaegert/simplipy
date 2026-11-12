@@ -32,7 +32,9 @@ organised by who you are, then the highlights, then every change in detail.
 - **Numbers are priced as written.** A literal costs its own exact spelling, so a long exact
   number costs its digits. A reciprocal whose divisor is a terminating decimal is priced as that
   divisor and written as it was priced, in every dialect: `x1/0.225147640565301` and
-  `x1/6.674e-11` stay as written, and `1/3.142` is `/ 1 3.142` (it was `500/1571`). A value whose
+  `x1/6.674e-11` stay as written, and `1/3.142` is `/ 1 3.142` (it was `500/1571`). Every
+  number is printed by the codeword it is priced at: `x1*5/21` is `5*x1/21` (it was `x1/4.2`, a
+  spelling that costs more than the fraction). A value whose
   reduced denominator is at most 24 keeps its fraction or decimal (`25*x1/2`, `0.05*x1`); past
   that bound the divisor can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`). `f64` writes float64's value of a number where that is cheaper: a
   literal at the double float64 reads it as (`0.1234567890123456789*x0` is
@@ -296,7 +298,7 @@ model predictions.
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
   explicit or tagged tokens. The budget counts significant digits, never an exponent's
   (`2.5e307` counts 2), and each number is written in the first form that fits it: exactly, as
-  `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`); as a short exact sum, its
+  `simplify` writes it (`0.3*x1`, `5*x1/21`, `22*x1/7`, `x2 + 1/2`); as a short exact sum, its
   first digits and the rest to its value (`x1 + 1 + 3e-21` for `x1 + 1.000000000000000000003`,
   `(2.5e30 + 1e15)*x1`, `(1e20 + 1)*x1`, `(0.3 + 4e-17)*x1` for `0.30000000000000004*x1`), for
   a number float64 does not write exactly in 15 digits (`1905` and `1.0001` stay as they are);

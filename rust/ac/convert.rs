@@ -835,68 +835,25 @@ fn add_sign_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
     (pos, neg)
 }
 
-/// DIVISOR-SIDE COEFFICIENT SPELLING -- user-facing aesthetics, EMISSION ONLY.
-/// Every f64-born literal is a dyadic rational with a finite decimal spelling, but its
-/// exact reciprocal generally is not: canon of `x0 / 0.3333333333333333` holds the exact
-/// coefficient 10^16/3333333333333333, whose only exact one-token spelling is that
-/// monster fraction. The emitters therefore spell a Mul coefficient on whichever side
-/// has the SHORTER exact spelling: a coefficient with no exact decimal whose reciprocal
-/// spells strictly shorter as one token moves behind the divide as the reciprocal's
-/// token (`x0 / 0.3333333333333333`; `(1/3)*x0` prints `x0/3`). Same state, same value.
+/// THE RECIPROCAL CODEWORD'S PRINT: a coefficient whose price is the reciprocal codeword
+/// (`expr::reciprocal_spelling_wins`: the reciprocal `c` of the value is a terminating decimal,
+/// the value's denominator passes the recognition list's bound, and `1/c` is the cheapest
+/// codeword) is written as the divisor `c` (`x1/0.225147640565301`). Every other coefficient is
+/// written by its own argmin codeword, a fraction split across the product (`5*x1/21`, `x1/12`)
+/// or one decimal token (`0.3*x1`), so what is printed is what was priced.
 ///
-/// Guardrails: the choice NEVER enters the measure or any mint/skip decision
-/// (spelling-dependence is the diagnosed Kruskal-skip disease -- every consumer of
-/// serialized output re-parses to the identical state); ties and both-fraction
-/// coefficients stay on the coefficient side (`22/7` beats `<div> 7/22`, and a fraction
-/// reciprocal can never win strictly -- same digits, same length -- so a firing
-/// reciprocal is always an integer or an exact decimal, safe as one den token in every
-/// dialect); exact decimals never move (`0.5 x0`); `is_integer` covers the `-1`
-/// display special-cases before they are consulted.
+/// The divisor is an integer or an exact decimal, never a fraction token: joined unparenthesized,
+/// one slash per member, a fraction divisor would change the value (`x0/400/3` re-reads as
+/// x0/1200). A negative coefficient never moves into the divisor: a signed literal inside a
+/// den/`<div>` group re-parses the sign into the divisor bag, where the Const sign-fold clause may
+/// absorb it into a Const-bearing sum; the sign stays on the numerator side, where re-parse
+/// restores the outer coefficient exactly.
 fn divisor_side(r: &Rat) -> Option<Rat> {
-    // Integers never move: their reciprocal is the fraction, not the shorter spelling.
-    //
-    // The old second clause -- "nor anything with an exact decimal" -- was STALE. It
-    // existed because `num_token` used to spell such values as decimals, so the
-    // reciprocal could not be shorter. Now that `num_token` follows mu's argmin, `1/2`
-    // spells `1/2` and its reciprocal `2` IS shorter, and keeping the clause made the
-    // same shape render two ways: `1/2 * x0` beside `x0 / 3`. The length comparison
-    // below, on argmin spellings, is the whole decision.
-    if r.is_integer() {
-        return None;
-    }
-    // A NEGATIVE coefficient never moves divisor-side: a signed literal inside a
-    // den/`<div>` group re-parses the sign INTO the divisor bag, where the Const
-    // sign-fold clause may absorb it into a Const-bearing sum -- a different (family-
-    // equal) state than the outer-coefficient parking the chain holds (caught by the
-    // state-stability battery: `-1/3 * .. * inv(x17 + C)` spelled `-3` in the den,
-    // re-parsed folded). The sign stays on the numerator side (the p/q fallback or the
-    // caller's own sign pull), where re-parse restores the outer coefficient exactly.
-    // The infix emitter negates before consulting and is unaffected.
-    if r.is_negative() {
+    if r.is_integer() || r.is_negative() || !crate::ac::expr::reciprocal_spelling_wins(r) {
         return None;
     }
     let inv = r.checked_inv()?;
-    let inv_token = num_token(&inv);
-    // The den member is joined UNPARENTHESIZED, one slash per member, so a reciprocal that
-    // itself spells as a fraction CHANGES THE VALUE: 3/400 reciprocates to 400/3 and renders
-    // `x0/400/3`, which re-reads as x0/1200 -- a 9x error. The doc invariant above ("a firing
-    // reciprocal is always an integer or an exact decimal, safe as one den token") is exactly
-    // what makes the join sound, so it has to be TESTED rather than assumed. It used to hold
-    // for free because `num_token` spelled every exact-decimal value as a decimal; under the
-    // argmin spelling it does not.
-    if inv_token.contains('/') {
-        return None;
-    }
-    // Where the reciprocal codeword is the price (`reciprocal_spelling_wins`), the divisor is the
-    // print: `x1/0.225147640565301` costs its divisor, not the fraction's two long integers.
-    if crate::ac::expr::reciprocal_spelling_wins(r) {
-        return Some(inv);
-    }
-    if inv_token.len() < num_token(r).len() {
-        Some(inv)
-    } else {
-        None
-    }
+    (!num_token(&inv).contains('/')).then_some(inv)
 }
 
 /// The INTEGER-OVER-DECIMAL spelling of a fraction, for the INFIX text only
@@ -1013,17 +970,11 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                 // test outright (rather than re-basing it on the argmin) also broke the
                 // setup of the long-literal respell guard, so its assertion stopped
                 // executing -- a silently unreached safety check.
-                // the reciprocal codeword is printed as the divisor with or without a plain
+                // the reciprocal codeword is printed as the divisor, with or without a plain
                 // factor beside it: it is the price
-                let priced_reciprocal = mag
-                    .as_ref()
-                    .is_some_and(crate::ac::expr::reciprocal_spelling_wins);
                 if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
                     num.push(Ex::Num(r.clone()));
-                } else if let Some(inv) = mag
-                    .and_then(|m| divisor_side(&m))
-                    .filter(|_| priced_reciprocal || has_plain_mul_factor(v))
-                {
+                } else if let Some(inv) = mag.and_then(|m| divisor_side(&m)) {
                     // One reciprocal token beats the p-and-q integer split; re-parses to
                     // the exact original coefficient (division by a literal reciprocates
                     // exactly). Contributes one den entry, same as the split it replaces.
@@ -1570,14 +1521,10 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         // coefficient it does not move splits too when its one token would be a
                         // fraction (the tagged form writes none), and stays one token when it is
                         // a decimal.
-                        let priced_reciprocal = mag
-                            .as_ref()
-                            .is_some_and(crate::ac::expr::reciprocal_spelling_wins);
                         let inv = mag
                             .as_ref()
                             .filter(|m| !within_tagged_bound(m))
-                            .and_then(divisor_side)
-                            .filter(|_| priced_reciprocal || has_plain_mul_factor(v));
+                            .and_then(divisor_side);
                         let split = mag.clone().filter(|m| {
                             within_tagged_bound(m)
                                 || (inv.is_none()
@@ -1786,10 +1733,9 @@ pub(crate) enum NumberPlace {
     /// On its own: a term of a sum, an argument, a base.
     Alone,
     /// The coefficient of a product. `plain`: the product has a plain factor (one that is no
-    /// number and no reciprocal), beside which a reciprocal that spells shorter is written as
-    /// the divisor (`x1/4.2`).
+    /// number and no reciprocal).
     Coefficient { plain: bool },
-    /// An exponent: one numeral, as [`num_token`] writes it.
+    /// An exponent: one numeral, as [`num_token`] writes it, or the reciprocal codeword `1/c`.
     Exponent,
 }
 
@@ -1800,19 +1746,19 @@ pub(crate) enum NumberPlace {
 ///
 /// * an integer, or the decimal where its codeword is the cheaper (`decimal_spelling_wins`:
 ///   `0.3`, `0.05`, `1.2`; `1/2` and `22/7` stay fractions);
-/// * else, as the coefficient beside a plain factor, the reciprocal where it spells shorter
-///   (`divisor_side`: `x1/4.2` for `5/21`, `x1/12`); a fraction beyond 128 bits stays one numeral
-///   of a product;
+/// * else the divisor `c` where the reciprocal codeword `1/c` is the price
+///   (`reciprocal_spelling_wins`: `x1/0.225147640565301`, alone and in an exponent `1/c`); a
+///   fraction beyond 128 bits stays one numeral of a product;
 /// * else, outside an exponent, an integer over a decimal where that is shorter
-///   (`ratio_spelling`: `1/6.283185307179586`);
-/// * else `p/q`.
+///   (`ratio_spelling`: `7/6283.185306`);
+/// * else `p/q` (`5*x1/21`, `x1/12`).
 pub(crate) fn infix_number_parts(r: &Rat, place: NumberPlace) -> (Option<String>, Option<String>) {
     if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
         return (Some(num_token(r)), None);
     }
     let priced_reciprocal = crate::ac::expr::reciprocal_spelling_wins(r);
-    if let NumberPlace::Coefficient { plain } = place {
-        if let Some(inv) = divisor_side(r).filter(|_| plain || priced_reciprocal) {
+    if let NumberPlace::Coefficient { .. } = place {
+        if let Some(inv) = divisor_side(r) {
             return (None, Some(num_token(&inv)));
         }
         if r.small_parts().is_none() {
@@ -1820,7 +1766,7 @@ pub(crate) fn infix_number_parts(r: &Rat, place: NumberPlace) -> (Option<String>
             return (Some(num_token(r)), None);
         }
     }
-    if place == NumberPlace::Alone && priced_reciprocal {
+    if matches!(place, NumberPlace::Alone | NumberPlace::Exponent) && priced_reciprocal {
         if let Some(c) = r.checked_inv().and_then(|c| c.exact_decimal()) {
             return (None, Some(c));
         }
@@ -2039,8 +1985,15 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
     }
 }
 
-/// Exponent rendering: atoms bare (`x^2`), fractions/negatives parenthesized (`x^(1/2)`).
+/// Exponent rendering: atoms bare (`x^2`), fractions/negatives parenthesized (`x^(1/2)`), and
+/// the reciprocal codeword as its divisor (`x^(1/0.225147640565301)`).
 fn render_exponent(r: &Rat) -> String {
+    if crate::ac::expr::reciprocal_spelling_wins(r) {
+        if let Some(c) = r.abs().checked_inv().and_then(|c| c.exact_decimal()) {
+            let sign = if r.is_negative() { "-" } else { "" };
+            return format!("({sign}1/{c})");
+        }
+    }
     let s = num_token(r);
     if r.is_integer() && !r.is_negative() {
         s

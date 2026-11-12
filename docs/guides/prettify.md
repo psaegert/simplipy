@@ -34,14 +34,14 @@ short exact sum; or as its float.
 A **number that fits the budget is written exactly, as `simplify` writes it**. The budget
 decides only whether a number is written exactly or as its float; how an exact number is
 written is `simplify`'s own rule: the decimal where it is the cheaper spelling (`0.3`), else a
-fraction, with the reciprocal as the divisor where that is shorter (`5/21` beside a factor is
-`x1/4.2`).
+fraction, or the divisor where the reciprocal of a decimal is the cheaper (`x1/0.333`; `5/21`
+beside a factor is `5*x1/21`).
 
 ```python
 engine.prettify(engine.simplify("x1*3/10"))
 # -> '0.3*x1'
 engine.prettify(engine.simplify("x1*5/21"))
-# -> 'x1/4.2'
+# -> '5*x1/21'
 engine.prettify(engine.simplify("22/7*x1"))
 # -> '22*x1/7'
 engine.prettify(engine.simplify("x2 + 0.5"))
@@ -102,7 +102,7 @@ written `7/40`. Pi stays pi (below). The default, `precision=None`, writes float
 engine.prettify(answer, precision=3)
 # -> '2.15*x1'
 engine.prettify(engine.simplify("x1*5/21"), precision=1)
-# -> 'x1/4.2'
+# -> '5*x1/21'
 engine.prettify(engine.simplify("x0/(2*3.141592653589793)"), precision=3)
 # -> 'x0/(2*pi)'
 ```

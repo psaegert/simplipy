@@ -15,8 +15,8 @@
 //! 2. **A number that fits is written exactly, as `simplify` writes it.** The budget decides
 //!    only whether a number is written exactly; how an exact number is written is the core's
 //!    own rule, the one `simplify`'s text follows (`convert::infix_number_parts`): an integer,
-//!    the decimal where its codeword is the cheaper (`0.3*x1`, `x2 + 1/2`), beside a factor
-//!    the reciprocal where it spells shorter (`x1/4.2` for `5/21`), else `p/q` (`22*x1/7`),
+//!    the decimal where its codeword is the cheaper (`0.3*x1`, `x2 + 1/2`), the divisor where
+//!    the reciprocal codeword is the price (`x1/0.333`), else `p/q` (`22*x1/7`, `5*x1/21`),
 //!    each decimal numeral in rule 8's notation (`1e10`). If that spelling fits `D` it is
 //!    written.
 //! 3. **Else a short exact sum, otherwise one float.** A number float64 does not write
@@ -2313,7 +2313,7 @@ mod tests {
         // a fraction where it is the cheaper, and beside a factor the reciprocal that spells
         // shorter
         assert_eq!(fit(&rat(1, 2), 3, alone).as_deref(), Some("1/2"));
-        assert_eq!(fit(&rat(5, 21), 3, beside).as_deref(), Some("1/4.2"));
+        assert_eq!(fit(&rat(5, 21), 3, beside).as_deref(), Some("5/21"));
         assert_eq!(fit(&rat(5, 21), 3, alone).as_deref(), Some("5/21"));
         assert_eq!(fit(&rat(10, 37), 3, beside).as_deref(), Some("1/3.7"));
         // past the recognition bound, alone too: the reciprocal codeword `1/3.7`

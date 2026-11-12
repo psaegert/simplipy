@@ -70,7 +70,7 @@ TABLE = [
     ('x1/2', 'x1/2'),
     ('x1/12', 'x1/12'),
     ('x1/3.7', 'x1/3.7'),
-    ('x1*5/21', 'x1/4.2'),
+    ('x1*5/21', '5*x1/21'),
     ('22/7*x1', '22*x1/7'),
     ('1/16', '1/16'),
     ('x1/1024', '9.765625e-4*x1'),
@@ -110,7 +110,7 @@ def test_a_divisor_float64_holds_as_written_stays_beside_another_divisor(eng):
     ('x1/5', '0.2*x1'),
     ('x1/20', '0.05*x1'),  # a denominator within 24 has no reciprocal codeword
     ('22*x1/7', '22*x1/7'),
-    ('x1*5/21', 'x1/4.2'),
+    ('x1*5/21', '5*x1/21'),  # the fraction is the price, not the divisor 4.2
     ('355/113*x1', '3.1415929203539825*x1'),
     ('x1/200', '0.005*x1'),
     ('x1^(3/10)', 'x1^0.3'),
@@ -136,9 +136,89 @@ def test_within_the_budget_the_display_is_simplifys_text(eng):
                 if digits + answer.startswith('x1/') <= 3:
                     assert eng.prettify(answer) == answer, (text, answer)
                     compared += 1
-    # (598: `x2 + 10/27` and `x2 + 10/29` are written by their reciprocal codeword, `x2 + 1/2.7`,
-    # within the budget)
-    assert compared == 598, compared
+    # (592: `x2 + 10/27` and `x2 + 10/29` are written by their reciprocal codeword, `x2 + 1/2.7`,
+    # within the budget, and a coefficient is written by the codeword it is priced at, `5*x1/21`
+    # rather than `x1/4.2`, some over the budget)
+    assert compared == 592, compared
+
+
+_NUMERAL = re.compile(r'^-?\d+(\.\d+)?(e-?\d+)?$')
+
+
+def _spelling_price(num, den):
+    """The codeword price, in milli-bits with the selector, of a positive literal written as `num`
+    over `den` (`None`: absent): one integer or decimal numeral, a fraction of two integers, or
+    the reciprocal codeword `1/c` with `c` a decimal."""
+    from test_mu_prime import MILLI, SEL, mu_prime_expected, old_rat_price, oracle_dec_price
+    n = Fraction(num) if num is not None else Fraction(1)
+    if den is None:
+        # an integer prints from both of its codewords; a decimal numeral is its decimal codeword
+        return mu_prime_expected(n) if n.denominator == 1 else SEL + oracle_dec_price(n)
+    d = Fraction(den)
+    if n.denominator == 1 and d.denominator == 1:
+        return SEL + old_rat_price(n / d)
+    assert n == 1, (num, den)  # a decimal divisor is only ever the reciprocal codeword
+    return SEL + MILLI + oracle_dec_price(d)
+
+
+def _explicit_parts(tokens):
+    """(numerator, denominator) numerals of the one literal in `p/q*x1` or `x2 + p/q` (explicit)."""
+    numerals = [t for t in tokens if _NUMERAL.match(t)]
+    if tokens[0] == '+':
+        rest = [t for t in tokens[1:] if t != 'x2']
+        return (rest[0], None) if len(rest) == 1 else (rest[1], rest[2])
+    if tokens[0] == '/':
+        den = tokens[-1]
+        head = [t for t in tokens[1:-1] if _NUMERAL.match(t)]
+        return (head[0] if head else None), den
+    return numerals[0], None
+
+
+def _tagged_parts(tokens):
+    """The same for the tagged form: numerals before and after `<div>`."""
+    body = [t for t in tokens if t not in ('<add>', '</add>', 'x1', 'x2')]
+    if '<div>' not in body:
+        return [t for t in body if _NUMERAL.match(t)][0], None
+    cut = body.index('<div>')
+    num = [t for t in body[:cut] if _NUMERAL.match(t)]
+    den = [t for t in body[cut:] if _NUMERAL.match(t)]
+    return (num[0] if num else None), den[0]
+
+
+def _infix_parts(text):
+    """The same for the infix text (`5*x1/21`, `x1/0.333`, `x2 + 1/2.7`)."""
+    body = text.replace('x2 + ', '').replace(' + x2', '').replace('x1', '').replace('*', '')
+    if '/' not in body:
+        return body, None
+    num, den = body.split('/')
+    return (num or None), den
+
+
+def test_every_literal_is_printed_as_it_is_priced(eng):
+    """What is printed is what was priced: for every coefficient and every term `p/q` with
+    `p, q < 30`, the spelling `simplify` prints, in each dialect, costs the value's price `mu`
+    (its cheapest codeword: the fraction `5*x1/21`, the decimal `0.3*x1`, or the reciprocal
+    `x2 + 1/2.7`). The tagged form keeps its fraction of small integers (numerator and
+    denominator at most 10) for the model's integer vocabulary, whatever the price."""
+    checked = 0
+    for p in range(1, 30):
+        for q in range(2, 30):
+            if math.gcd(p, q) != 1:
+                continue
+            mu = eng._core.ac_complexity(['/', str(p), str(q)], rule_mode='default')
+            for text in (f'{p}/{q}*x1', f'x2 + {p}/{q}'):
+                explicit = list(eng.simplify(list(eng.infix_to_prefix(text))))
+                tagged = list(eng.simplify(eng.to_tagged(list(eng.infix_to_prefix(text)))))
+                infix = eng.simplify(text)
+                spelled = {'explicit': _explicit_parts(explicit), 'infix': _infix_parts(infix)}
+                if not (p <= 10 and q <= 10):
+                    spelled['tagged'] = _tagged_parts(tagged)
+                for form, (num, den) in spelled.items():
+                    assert _spelling_price(num, den) == mu, (text, form, explicit, tagged, infix)
+                    checked += 1
+    # 510 values, each as a coefficient and as a term, in three dialects, but for the tagged
+    # form's 53 small fractions
+    assert checked == 2 * (3 * 510 - 53), checked
 
 
 @pytest.mark.parametrize('text,explicit,tagged', [
