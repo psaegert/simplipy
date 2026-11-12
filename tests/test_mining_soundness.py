@@ -2145,9 +2145,9 @@ class TestTheFinalGate:
             return ['permissive' if tuple(map(tuple, p)) == pattern else 'core' for p in pairs]
 
         judged: dict = {}
-        assert miner._unlicensed({3: pick}, 'default', judge, judged, ['x0']) == {3}
+        assert miner._unlicensed({3: pick}, 'default', judge, judged, ['x0']) == {3: 'licence'}
         assert judged[pattern] == 'permissive' and len(judged) > 1, 'vacuous: one spelling judged'
-        assert miner._unlicensed({3: pick}, 'permissive', judge, {}, ['x0']) == set()
+        assert miner._unlicensed({3: pick}, 'permissive', judge, {}, ['x0']) == {}
 
     def test_a_pick_the_mode_does_not_serve_is_licensed_nowhere(self) -> None:
         """Never infer a licence for something the matcher never saw: `1*x0 -> x0` is dead
@@ -2166,8 +2166,8 @@ class TestTheFinalGate:
             return ['core'] * len(pairs)
 
         for mode in ('default', 'permissive'):
-            assert miner._unlicensed(dead, mode, judge, {}, ['x0']) == {7}, mode
-        assert miner._unlicensed(live, 'default', judge, {}, ['x0']) == set()
+            assert set(miner._unlicensed(dead, mode, judge, {}, ['x0'])) == {7}, mode
+        assert miner._unlicensed(live, 'default', judge, {}, ['x0']) == {}
 
 
 class TestTheGateRoutesInsteadOfDeleting:

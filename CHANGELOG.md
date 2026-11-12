@@ -2414,10 +2414,14 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   content of X and of the confirm matrix, the numeric environment (python, numpy, scipy,
   mpmath, libc, the libm fingerprint) and the `SIMPLIPY_*` switches. A resumed mine keeps its
   original `created` and `host` and records each resume under `resumed`.
-- **The judge loop's rounds cap is per source.** One stubborn source no longer fails a whole
-  length after the scan with nothing saved: it is given up on after 8 refusals while the others
-  converge, the checkpoint (with every verdict reached) is written, and the mine fails naming
-  the source and its excluded targets. The proposals' loop caps per proposal.
+- **The judge loop's rounds cap is per source, and a source given up on does not fail the
+  mine.** A source whose pick the acceptance refuses 8 times is given up on while the others
+  converge: it gets no rule and the mine goes on. The sidecar records each incident
+  (`given_up`: the mode, the length, the source and its refused targets in order, each with
+  who refused it -- the judge, a named policy or liveness -- and why), the checkpoint carries
+  it, the log has one warning line for it, and the length's summary line counts it
+  (`per_length.given_up`). The proposal channel gives up on a proposal the same way (the
+  proposal reads `rejected` at stage `judge`).
 - **The final gate checks, once.** Every pick is licensed where the mine first considers it
   and promotion licenses every rung, so the final gate runs once, on the set that ships, and
   drops nothing; a prune leans only on licensed rules by construction.

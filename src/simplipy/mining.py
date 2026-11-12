@@ -11,6 +11,7 @@ every mine and certify entry point, however many miners exist.
 """
 
 import hashlib
+import logging
 import os
 import re
 import signal
@@ -247,12 +248,40 @@ _MINE_MODES = (('default', 'f64'), ('permissive', 'permissive'))
 _RULES_ATTR = {'default': 'simplification_rules',
                'permissive': 'permissive_simplification_rules'}
 
-#: The judge loop gives up on ONE SOURCE -- loudly -- when the judge has refused its pick this
-#: many times. Each refusal strictly grows a finite exclusion set, so the loop terminates; a
-#: cap that binds says the scan and the judge disagree about that source, and that must be
-#: seen, not papered over. The cap is per source, so one stubborn source neither costs the
-#: others their rounds nor hides behind them.
+#: The judge loop gives up on ONE SOURCE (or proposal) when the acceptance has refused its pick
+#: this many times. Each refusal strictly grows a finite exclusion set, so the loop terminates;
+#: a cap that binds says the scan and the acceptance disagree about that source. The source
+#: gets no rule and the mine goes on, and the incident is recorded (the sidecar's `given_up`,
+#: one warning line) to be seen, not papered over. The cap is per source, so one source given
+#: up on neither costs the others their rounds nor hides behind them.
 _JUDGE_ROUNDS_MAX = 8
+
+_LOG = logging.getLogger(__name__)
+
+
+def _pick_pattern(source: Any, target: Any, dummy_variables: list[str]) -> tuple:
+    """A pick as the rule the file would hold: its variables the slots `?<k>`, numbered over the
+    source first."""
+    p_src, mapping = remap_expression(list(source), dummy_variables=dummy_variables,
+                                      variable_prefix='?')
+    p_tgt, _ = remap_expression(list(target), dummy_variables, mapping, variable_prefix='?')
+    return tuple(p_src), tuple(p_tgt)
+
+
+def _given_up(incident: dict, provenance: dict | None) -> None:
+    """Record an incident of the judge loop giving up on a source (``RuleMiner._judge_loop``,
+    the proposal channel's loop): in the sidecar's ``given_up`` (carried by the checkpoint) and
+    as one warning line. The source gets no rule; the mine goes on."""
+    if provenance is not None:
+        provenance.setdefault('given_up', []).append(incident)
+    by: dict[str, int] = {}
+    for refusal in incident['refused']:
+        by[refusal['by']] = by.get(refusal['by'], 0) + 1
+    _LOG.warning('simplipy mine: gave up on %s (%s, length %d, %s) after %d refusals (%s); it '
+                 'gets no rule', ' '.join(incident['source']), incident['mode'],
+                 incident['length'], incident['stage'], len(incident['refused']),
+                 ', '.join(f'{name} {count}' for name, count in sorted(by.items())))
+
 
 #: Batches below this size are judged in-process: spawning workers costs more than it saves.
 _JUDGE_POOL_MIN = 64
@@ -1158,7 +1187,7 @@ class RuleMiner:
             self.engine._replace_rules(self.engine.simplification_rules)
 
     def _unlicensed(self, picks: dict, rule_mode: str, judge: Callable, judged: dict,
-                    dummy_variables: list[str]) -> set:
+                    dummy_variables: list[str]) -> dict:
         """The picks the mode may not ship: a pick whose pattern (the spelling the file will
         carry) ``verify.licensed`` refuses in the mode -- the judge's tier, or a named policy
         (evidence, the constant count, ground composites, the ordering, the specials,
@@ -1176,17 +1205,33 @@ class RuleMiner:
         (``_dead_rules``: another rule or the mode's own simplification takes the instance
         first, `abs(tan(atan(x0)))` is `abs(x0)` in permissive before
         `abs(tan(atan(_0))) -> acosh(cosh(_0))` can match). Nothing is dropped afterwards.
-        The checks are the mine's one acceptance (`_refusals`), on the picks' patterns."""
+        The checks are the mine's one acceptance (`_refusals`), on the picks' patterns.
+        -> ``{pick key: the check that refused it}`` (``_refusals``' names)."""
         order = sorted(picks)
-        patterns = []
-        for idx in order:
-            src, tgt = picks[idx]
-            p_src, mapping = remap_expression(list(src), dummy_variables=dummy_variables,
-                                              variable_prefix='?')
-            p_tgt, _ = remap_expression(list(tgt), dummy_variables, mapping, variable_prefix='?')
-            patterns.append((tuple(p_src), tuple(p_tgt)))
+        patterns = [_pick_pattern(picks[idx][0], picks[idx][1], dummy_variables)
+                    for idx in order]
         refused = self._refusals(patterns, rule_mode, judge, judged)
-        return {order[k] for k in refused}
+        return {order[k]: why for k, why in refused.items()}
+
+    def _refusal_record(self, source: Any, target: Any, why: str, rule_mode: str,
+                        judge: Callable, judged: dict, dummy_variables: list[str]) -> dict:
+        """One refusal of a source's pick, as an incident of the judge loop records it: the
+        target, who refused it -- the judge (its tier, or the tier of an entry the mode serves
+        from the rule), a named policy, or liveness -- and why. ``why`` is the check of the
+        acceptance (`_refusals`) that refused it."""
+        if why == 'licence':
+            pattern = _pick_pattern(source, target, dummy_variables)
+            licence = _licences(self.engine, rule_mode, [pattern], judge, judged)[pattern]
+            by, reason = (('judge', f'tier {licence["tier"]}') if not licence['holds'] else
+                          ('policy', ', '.join(licence['refused_by'])))
+        else:
+            by, reason = {
+                'served_entry': ('judge', 'an entry the mode serves from it has a tier the '
+                                          'mode does not hold'),
+                'not_served': ('policy', "the mode's load does not serve it"),
+                'dead': ('liveness', 'it does not fire on its own generic instances'),
+            }[why]
+        return {'target': list(target), 'by': by, 'reason': reason}
 
     def _refusals(self, patterns: list, rule_mode: str, judge: Callable, judged: dict,
                   context: list | None = None) -> dict[int, str]:
@@ -1296,9 +1341,10 @@ class RuleMiner:
         ``mine(sources, indices, exclusions)`` runs `mine_one_length` with the global source
         indices (which seed the sources and key the exclusions).
 
-        A source whose pick the judge refuses ``_JUDGE_ROUNDS_MAX`` times is given up on --
-        it is not re-scanned again -- and listed in ``stats['stubborn']`` with the targets it
-        excluded; the loop runs on for the others. The caller fails the mine on it.
+        A source whose pick the acceptance refuses ``_JUDGE_ROUNDS_MAX`` times is given up on
+        -- it is not re-scanned again and gets no rule -- and listed in ``stats['given_up']``
+        with the targets it excluded, who refused each and why; the loop runs on for the others,
+        and the caller records the incident.
 
         It is the first scan of every source (``_scan_length``) and then the loop from its
         picks (``_judge_loop``); a sharded length runs the same two, the scan in the shards
@@ -1347,9 +1393,10 @@ class RuleMiner:
         """The loop of :meth:`_mine_length` from the length's first picks (``_scan_length``):
         judge the picks, re-scan the refused sources with their picks excluded, until every
         pick is licensed or a source is given up on. -> ``(licensed picks in global order,
-        stats)``."""
+        stats)``; ``stats['given_up']`` holds each source given up on, with its refused targets
+        in order, each with who refused it and why (``_refusal_record``)."""
         exclusions: dict[int, list] = {}
-        refusals: dict[int, int] = {}
+        refused_by: dict[int, list[str]] = {}
         stubborn: list[int] = []
         rounds = 0
         while True:
@@ -1358,8 +1405,8 @@ class RuleMiner:
             again: list[int] = []
             for idx in sorted(bad):
                 exclusions.setdefault(idx, []).append(picks.pop(idx)[1])
-                refusals[idx] = refusals.get(idx, 0) + 1
-                (stubborn if refusals[idx] >= _JUDGE_ROUNDS_MAX else again).append(idx)
+                refused_by.setdefault(idx, []).append(bad[idx])
+                (stubborn if len(exclusions[idx]) >= _JUDGE_ROUNDS_MAX else again).append(idx)
             if not again:
                 break
             for idx, src, tgt in mine([sources[i] for i in again], again, exclusions):
@@ -1368,7 +1415,11 @@ class RuleMiner:
                  'excluded': sorted([list(sources[i]), tgt] for i, ts in exclusions.items()
                                     for tgt in ts),
                  'licensed': len(picks),
-                 'stubborn': [[list(sources[i]), exclusions[i]] for i in sorted(stubborn)]}
+                 'given_up': [{'source': list(sources[i]),
+                               'refused': [self._refusal_record(sources[i], tgt, why, rule_mode,
+                                                                judge, judged, dummy_variables)
+                                           for tgt, why in zip(exclusions[i], refused_by[i])]}
+                              for i in sorted(stubborn)]}
         return [picks[i] for i in sorted(picks)], stats
 
     def _mining_sample_x(self, n_rows: int, n_vars: int, rng: np.random.Generator) -> np.ndarray:
@@ -1688,9 +1739,10 @@ class RuleMiner:
                         prov.setdefault('twin_shadowed', {}).setdefault(stage, []).extend(
                             [list(lhs), list(rhs)] for lhs, rhs in gone)
 
-            def _lane(entries: list, lane_judge: Callable | None = None,
+            def _lane(entries: list, stage: str, lane_judge: Callable | None = None,
                       prog: Any = None) -> tuple[dict, list, dict]:
-                """Certify one batch through the proposal channel and merge it."""
+                """Certify one batch through the proposal channel and merge it. A proposal its
+                judge loop gives up on is recorded as an incident of ``stage``."""
                 _held = _ids()
                 outcomes, trail, judge_loop = self._certify_proposals(
                     entries, library,
@@ -1699,6 +1751,9 @@ class RuleMiner:
                     constants_fit_challenges, constants_fit_retries, rtol, atol,
                     min_informative, mine_seed, confirm_seed, verbose, rule_mode,
                     lane_judge or judge, judged, prog=prog)
+                for incident in judge_loop.pop('given_up'):
+                    _given_up({'mode': file_mode, 'length': len(incident['source']),
+                               'stage': stage, **incident}, prov)
                 # Arm the census watch on the pairs the census currently calls certified.
                 # `deduplicate_rules` has already folded the batch in, so a pair missing
                 # from the ruleset ALREADY lost the merge -- attributed here, not left to
@@ -1718,7 +1773,7 @@ class RuleMiner:
             # An explicitly-given EMPTY batch still runs (and records all-zero outcome
             # counts): the sidecar must show the channel ran, not silently omit it.
             if proposal_entries is not None and not interrupted():
-                outcomes, trail, judge_loop = _lane(proposal_entries)
+                outcomes, trail, judge_loop = _lane(proposal_entries, 'proposals')
                 if prov is not None and 'proposals' in prov:
                     prov['proposals']['outcomes'] = outcomes
                     prov['proposals']['judge_loop'] = judge_loop
@@ -1754,7 +1809,7 @@ class RuleMiner:
                             self.engine, _slots_to_variables(lhs, dummy_variables), target),
                             target))
                 entries = list(dict.fromkeys(entries))  # file order
-                outcomes, _offered_trail, judge_loop = _lane(entries)
+                outcomes, _offered_trail, judge_loop = _lane(entries, 'offered')
                 if prov is not None:
                     prov['offered'] = {'files': files, 'count': len(entries),
                                        'outcomes': outcomes, 'judge_loop': judge_loop}
@@ -1887,7 +1942,7 @@ class RuleMiner:
                 if not _entries:
                     break
                 _before = set(self._mode_rules(rule_mode))
-                outcomes, _ctrail, judge_loop = _lane(_entries, _timed_judge, _cprog)
+                outcomes, _ctrail, judge_loop = _lane(_entries, 'completion', _timed_judge, _cprog)
                 # every completion offered, with the verdict that kept it out or let it in
                 _completion.append({'offered': len(_entries), 'outcomes': dict(outcomes),
                                     'trail': _ctrail,
@@ -2326,15 +2381,10 @@ class RuleMiner:
                     lambda: self._mine_length(sources, mine, rule_mode, judge, judged,
                                               dummy_variables),
                     verbose)
-            if _loop['stubborn']:
-                # Every verdict this length reached is kept for the resume; the length itself
-                # is not complete, so the checkpoint stays at the last one that is.
-                _checkpoint(completed, rules)
-                raise RuntimeError(
-                    f'the judge loop gave up on {len(_loop["stubborn"])} source(s) of length '
-                    f'{length} in mode {rule_mode}, each refused {_JUDGE_ROUNDS_MAX} times '
-                    f'(source, excluded targets): {_loop["stubborn"]}; every other verdict is '
-                    f'checkpointed')
+            # A SOURCE GIVEN UP ON gets no rule; the incident is recorded and the mine goes on.
+            for incident in _loop['given_up']:
+                _given_up({'mode': file_mode, 'length': length, 'stage': 'scan', **incident},
+                          provenance)
             # GATED BEFORE INSTALLED (miner.md 2.7): only licensed picks join the set the next
             # length's marks are computed against, so a rule the judge refuses never prunes a
             # longer source.
@@ -2362,6 +2412,8 @@ class RuleMiner:
                                   # after the judge loop; a source of the length absent here had
                                   # no candidate below its mark that the mint accepted
                                   'picked': [[list(src), list(tgt)] for src, tgt in found],
+                                  # the sources given up on (each recorded in `given_up`)
+                                  'given_up': len(_loop['given_up']),
                                   'total': len(rules),
                                   'wall_s': round(time.monotonic() - _t0, 3)}
             if provenance is not None:
@@ -2369,7 +2421,8 @@ class RuleMiner:
             if verbose:
                 print(f'Length {length}: {n_sources:,} sources, {len(found):,} new rules '
                       f'({_loop["judge_rounds"]} judge rounds, {len(_loop["excluded"])} excluded, '
-                      f'{len(_shadowed)} twin-shadowed), {len(rules):,} total')
+                      f'{len(_shadowed)} twin-shadowed, {len(_loop["given_up"])} given up), '
+                      f'{len(rules):,} total')
             self._write_provenance(None, provenance, rules, completed_length=length)
             completed = length
             # LADDER SNAPSHOT: finishing this length also finishes the shorter cell
@@ -2934,23 +2987,25 @@ class RuleMiner:
                                   fit, mine_seed + offset, confirm, rule_mode)}
 
         excluded: dict[int, list] = {}
+        refused_by: dict[int, list[str]] = {}
         stubborn: list[int] = []
         rounds = 0
         while True:
             rounds += 1
             picks = {i: (list(proposal_entries[i][0]), list(p['result'][0]))
                      for i, p in pending.items() if p['result'][0] is not None}
-            bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables) if picks else set()
+            bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables) if picks else {}
             again: list[int] = []
             for i in sorted(bad):
                 excluded.setdefault(i, []).append(list(pending[i]['result'][0]))
-                # the cap is per proposal, as per source in the length loop
-                (stubborn if len(excluded[i]) >= _JUDGE_ROUNDS_MAX else again).append(i)
-            if stubborn:
-                raise RuntimeError(
-                    f'the proposals\' judge loop gave up on {len(stubborn)} proposal(s) in mode '
-                    f'{rule_mode}, each refused {_JUDGE_ROUNDS_MAX} times (source, excluded '
-                    f'targets): {[[list(proposal_entries[i][0]), excluded[i]] for i in stubborn]}')
+                refused_by.setdefault(i, []).append(bad[i])
+                # the cap is per proposal, as per source in the length loop: a proposal given up
+                # on gets no rule (it reads `rejected` at stage `judge`), and the lane goes on
+                if len(excluded[i]) >= _JUDGE_ROUNDS_MAX:
+                    stubborn.append(i)
+                    pending[i]['result'] = (None, None, None)
+                else:
+                    again.append(i)
             if not again:
                 break
             for i in again:
@@ -2983,9 +3038,17 @@ class RuleMiner:
             certified_pairs.append((tuple(source), tuple(target)))
             if verbose:
                 print(f'Proposal certified ({certificate}): {list(source)} -> {list(target)}')
-        judge_loop = {'judge_rounds': rounds,
-                      'excluded': [[list(proposal_entries[i][0]), target]
-                                   for i, targets in sorted(excluded.items()) for target in targets]}
+        judge_loop: dict[str, Any] = {
+            'judge_rounds': rounds,
+            'excluded': [[list(proposal_entries[i][0]), target]
+                         for i, targets in sorted(excluded.items()) for target in targets],
+            # the proposals given up on, as the length loop records its sources
+            'given_up': [{'source': list(proposal_entries[i][0]),
+                          'refused': [self._refusal_record(
+                              proposal_entries[i][0], target, why, rule_mode, judge, judged,
+                              dummy_variables)
+                              for target, why in zip(excluded[i], refused_by[i])]}
+                         for i in sorted(stubborn)]}
 
         # Per-proposal accounting that mirrors the deduplicate_rules fold EXACTLY (keep
         # first canonical source unless a target strictly below it in the mode's ordering
@@ -3017,7 +3080,8 @@ class RuleMiner:
         if verbose:
             print(f"Proposals: {len(proposal_entries)} processed -> "
                   f"{counts['certified']} certified, {counts['already_covered']} already covered, "
-                  f"{counts['rejected']} rejected, {counts['duplicate']} duplicate")
+                  f"{counts['rejected']} rejected ({len(judge_loop['given_up'])} given up), "
+                  f"{counts['duplicate']} duplicate")
         return counts, trail, judge_loop
 
     def find_rules(

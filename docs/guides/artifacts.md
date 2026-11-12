@@ -40,7 +40,8 @@ use lazily reloads them; the default f64 set is always present and refuses to un
 both, each mined in its own mode (see [How mining works](../rules.md#how-mining-works)),
 and the byte-identity promise covers both: a re-mine at the recorded environment
 reproduces them. Each file's sidecar records its own mine: the mode, how it accepted
-(`acceptance`), per length the judge loop's rounds and exclusions (`per_length`), and the
+(`acceptance`), per length the judge loop's rounds and exclusions (`per_length`), the
+sources the judge loop gave up on (`given_up`), and the
 file gates (`gates`: the rows dropped as unlicensed in the mode or as already performed by
 its constructor) — a rule the mine finds and the mode does not license is recorded there,
 never silently absent.

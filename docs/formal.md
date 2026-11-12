@@ -571,8 +571,9 @@ exists and some spelling of $p$ (its pattern, or an entry $m$ serves from it) ha
 $J \notin L_m$, add $p$'s class to $E$. Since $\mathrm{pick}$ only skips excluded classes,
 the loop ends at the first candidate in scan order that is accepted and whose spellings
 $m$ licenses — the result of a scan that asks $J$ about every candidate — or at none. The
-candidate set is finite, so the loop terminates; the implementation caps it at 8 rounds
-per length and fails the mine there. Only the loop's survivors are installed before the
+candidate set is finite, so the loop terminates; the implementation caps it at 8 refusals
+per source and gives the source up there: it gets no rule, and the sidecar records the
+incident. Only the loop's survivors are installed before the
 next length's marks, so a rule $J$ refuses in $m$ never changes a mark of $m$. The
 proposals are one more length of the same loop. The file gates then re-judge the
 post-processed file (sort promotion respells) and drop what $m$ does not license, so every

@@ -47,13 +47,13 @@ def _mine(directory, **kw):
         output_file=str(directory / 'mined.json'), **kw)
 
 
-def _split(directory, shards: int):
+def _split(directory, shards: int, **kw):
     """The mine with its last length split `shards` ways, mode by mode."""
-    _mine(directory, stop_after_length=3)
+    _mine(directory, stop_after_length=3, **kw)
     for _mode in FILES:
         for i in range(shards):
-            _mine(directory, shard=(i, shards))
-        _mine(directory, merge=[], stop_after_length=3)
+            _mine(directory, shard=(i, shards), **kw)
+        _mine(directory, merge=[], stop_after_length=3, **kw)
 
 
 @pytest.fixture(scope='module')
@@ -165,3 +165,24 @@ def test_a_resumed_mine_counts_the_misses_of_the_runs_before(tmp_path, monkeypat
     assert counted(tmp_path / 'resumed') == once
     assert (tmp_path / 'resumed' / 'mined.json').read_bytes() == \
         (tmp_path / 'once' / 'mined.json').read_bytes()
+
+
+def test_a_split_mine_gives_up_on_what_a_single_one_does(tmp_path, monkeypatch) -> None:
+    """The judge loop gives up on a source in the merge as on one machine: the same files and
+    sidecars, the incidents (`given_up`) included."""
+    import simplipy.mining
+    monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 1)
+
+    def judge(pairs):        # every length-4 pick refused in f64
+        return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
+
+    _mine(tmp_path / 'single', judge=judge)
+    _split(tmp_path / 'split', 3, judge=judge)
+    for name in FILES:
+        assert (tmp_path / 'split' / name).read_bytes() == \
+            (tmp_path / 'single' / name).read_bytes(), name
+        split = json.load(open(tmp_path / 'split' / f'{name}.provenance.json'))
+        one = json.load(open(tmp_path / 'single' / f'{name}.provenance.json'))
+        assert comparable(split) == comparable(one), name
+    given_up = json.load(open(tmp_path / 'single' / 'mined.json.provenance.json'))['given_up']
+    assert 4 in {g['length'] for g in given_up}, 'vacuous: nothing given up in the merge'

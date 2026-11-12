@@ -50,7 +50,11 @@ against an exact counting recurrence.
    registry; see the [tier table](guides/verify.md)), or that the mode does not serve, is
    excluded by class and only its source is scanned again. The scan is deterministic, so the result is the
    scan that consults the judge per candidate: a target another mode would keep never
-   hides one this mode licenses. The loop settles within 8 rounds or fails the mine.
+   hides one this mode licenses. A source whose pick is refused 8 times is given up on: it
+   gets no rule, the mine goes on, and the sidecar records the incident (`given_up`: the
+   mode, the length, the source and its refused targets in order, each with who refused it
+   -- the judge, a named policy or liveness -- and why), as the log does in one warning line.
+   The proposal channel gives up on a proposal the same way.
 7. **Install**: the licensed picks are deduplicated into wildcard patterns (of two targets
    for one canonical source, the one lower in the mode's ordering stays), rows the mode's
    load would mint anyway from another row's orientation twin are dropped, and the set is

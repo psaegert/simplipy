@@ -487,7 +487,9 @@ def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
     found, stats = RuleMiner(acj)._mine_length([WITNESS, other], _scan(acj), 'default',
                                                judge, {}, ['x0'])
     assert found == [(other, ['sin', 'x0'])], found
-    assert stats['stubborn'] == [[WITNESS, [FIRST, SECOND]]], stats
+    assert stats['given_up'] == [{'source': WITNESS, 'refused': [
+        {'target': FIRST, 'by': 'judge', 'reason': 'tier permissive'},
+        {'target': SECOND, 'by': 'judge', 'reason': 'tier permissive'}]}], stats
 
 
 def test_the_final_gate_checks_what_ships_and_drops_nothing(tmp_path, monkeypatch) -> None:
@@ -520,7 +522,12 @@ def test_the_final_gate_checks_what_ships_and_drops_nothing(tmp_path, monkeypatc
     assert {(tuple(lhs), tuple(rhs)) for lhs, rhs in f64[-1][1]} == shipped
 
 
-def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path, monkeypatch) -> None:
+def test_a_source_given_up_on_gets_no_rule_and_the_mine_goes_on(tmp_path, monkeypatch,
+                                                                caplog) -> None:
+    """A source whose pick the acceptance refuses `_JUDGE_ROUNDS_MAX` times gets no rule, and the
+    mine goes on; the incident is in the checkpoint, the sidecar and one warning line, and a
+    resume does not judge it again."""
+    import logging
     import simplipy.mining
     monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 1)
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
@@ -532,16 +539,42 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     def judge(pairs):
         return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
 
-    with pytest.raises(RuntimeError, match=r"gave up on 2 source\(s\) of length 4.*"
-                                           r"'log', 'exp', 'log', 'x0'.*"
-                                           r"'log', 'exp', 'neg', 'x0'"):
+    def mine():
         SimpliPyEngine(operators=ops, rules=[]).find_rules(
             max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
             X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
             symbolic_gate=False, output_file=out, judge=judge)
+
+    expected = [{'mode': 'f64', 'length': 4, 'stage': 'scan', 'source': source,
+                 'refused': [{'target': target, 'by': 'judge', 'reason': 'tier permissive'}]}
+                for source, target in ((['log', 'exp', 'log', 'x0'], ['log', 'x0']),
+                                       (['log', 'exp', 'neg', 'x0'], ['neg', 'x0']))]
+    # the mine stopped inside its finalization, after the checkpoint of its last length
+    real_gate = simplipy.mining._overlap_gate
+
+    def crash(*args, **kwargs):
+        raise KeyboardInterrupt('simulated crash')
+
+    monkeypatch.setattr(simplipy.mining, '_overlap_gate', crash)
+    with caplog.at_level(logging.WARNING, logger='simplipy.mining'), \
+            pytest.raises(KeyboardInterrupt):
+        mine()
+    lines = [r.getMessage() for r in caplog.records if 'gave up on' in r.getMessage()]
+    assert lines == [f'simplipy mine: gave up on {" ".join(e["source"])} (f64, length 4, scan) '
+                     f'after 1 refusals (judge 1); it gets no rule' for e in expected], lines
     ckpt = json.load(open(out + '.checkpoint.json'))
-    assert ckpt['completed_length'] == 3
-    assert [['log', 'exp', 'log', '?0'], ['log', '?0'], 'permissive'] in ckpt['judged']
+    assert ckpt['completed_length'] == 4 and ckpt['provenance']['given_up'] == expected
+    monkeypatch.setattr(simplipy.mining, '_overlap_gate', real_gate)
+    rounds: list = []
+    real_length = RuleMiner._mine_length
+    monkeypatch.setattr(RuleMiner, '_mine_length',
+                        lambda self, *args: rounds.append(args[2]) or real_length(self, *args))
+    mine()
+    assert 'default' not in rounds, 'the resume judges the f64 lengths again'
+    side = json.load(open(out + '.provenance.json'))
+    assert side['given_up'] == expected and side['per_length']['4']['given_up'] == 2
+    shipped = {tuple(lhs) for lhs, _ in json.load(open(out))}
+    assert not shipped & {('log', 'exp', 'log', '?0'), ('log', 'exp', 'neg', '?0')}, shipped
 
 
 def test_the_watchdog_fails_the_mine_from_any_thread(monkeypatch) -> None:
@@ -678,10 +711,12 @@ def test_what_the_engine_does_itself_is_refused_where_the_mine_first_considers_i
     core = lambda pairs: ['core'] * len(pairs)  # noqa: E731
     picks = {0: (['abs', 'tan', 'atan', 'x0'], ['acosh', 'cosh', 'x0']),   # permissive cancels
              2: (['log', '-3'], ['float("nan")'])}                         # the fold does it
-    assert miner._unlicensed(dict(picks), 'permissive', core, {}, ['x0']) == {0, 2}
+    # the first does not fire on its instance (liveness), the fold's is the engine's own (a policy)
+    assert miner._unlicensed(dict(picks), 'permissive', core, {}, ['x0']) == \
+        {0: 'dead', 2: 'licence'}
     # in f64 the inverse pair stays, so the rule fires on its instance
     live = {1: (['sin', 'asin', 'x0'], ['x0'])}
-    assert miner._unlicensed(live, 'default', core, {}, ['x0']) == set()
+    assert miner._unlicensed(live, 'default', core, {}, ['x0']) == {}
     # the mode's set is as it was: the picks were installed for the test and taken out again
     assert miner._mode_rules('permissive') == [] and miner._mode_rules('default') == []
 
@@ -701,7 +736,8 @@ def test_every_policy_refuses_where_the_mine_first_considers_a_pick() -> None:
              1: (['asin', '1'], ['acos', '0'])}                           # a ground composite
     assert 'evidence' in policy_refusals(*picks[0], 'f64', miner.engine)
     assert 'ground_composite' in policy_refusals(*picks[1], 'f64', miner.engine)
-    assert miner._unlicensed(dict(picks), 'default', core, {}, ['x0']) == {0, 1}
+    assert miner._unlicensed(dict(picks), 'default', core, {}, ['x0']) == \
+        {0: 'licence', 1: 'licence'}
 
 
 def test_a_re_scan_reads_the_rules_the_mine_holds(tmp_path, monkeypatch) -> None:
@@ -729,11 +765,12 @@ def test_a_re_scan_reads_the_rules_the_mine_holds(tmp_path, monkeypatch) -> None
         return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
 
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
-    with pytest.raises(RuntimeError, match='gave up'):
-        SimpliPyEngine(operators=ops, rules=[]).find_rules(
-            max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
-            X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
-            symbolic_gate=False, output_file=str(tmp_path / 'mined.json'), judge=judge)
+    SimpliPyEngine(operators=ops, rules=[]).find_rules(
+        max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
+        X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
+        symbolic_gate=False, output_file=str(tmp_path / 'mined.json'), judge=judge)
+    assert json.load(open(tmp_path / 'mined.json.provenance.json'))['given_up'], \
+        'vacuous: no source given up on'
     rounds = [h for h in held if h[0] == 4]
     assert len(rounds) >= 2, held                  # a first round and a re-scan
     for _, before, after, view in rounds:
