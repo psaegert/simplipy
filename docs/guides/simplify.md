@@ -235,24 +235,28 @@ engine.simplify('x0 + 0.6931471805599453')    # -> 'x0 + log(2)'
 engine.simplify('1/(2*3.141592653589793)')    # -> '1/2/pi'
 ```
 
-A value whose denominator has a prime factor other than 2 and 5 has no finite decimal, so
-`1/(2*3141.592653)` is the fraction 500000 / 3141592653, which is cheaper than its double. A
-decimal is just as exact as an integer, though, so the infix answer prints such a value with
-its numerator's factors 2 and 5 moved into the denominator, which then terminates. That
-spelling needs a factor 2 or 5 in the numerator and is used where it is shorter than the two
-integers, outside exponents: short fractions such as `1/3` keep theirs, and an exponent keeps
-the fraction (`x0^(500000/3141592653)`). It is the same value either way, so the state,
-`complexity()` and every rewrite are unaffected:
+A value whose denominator has a prime factor other than 2 and 5 has no finite decimal. Where
+its reciprocal terminates and its denominator is above 24, its price is that reciprocal, written
+as the divisor in every dialect: `1/(2*3141.592653)` is `1/6283.185306`. Otherwise its price is
+the fraction: `7/(2*3141.592653)` is 3500000 / 3141592653. A decimal is just as exact as an
+integer, though, so the infix answer prints such a fraction with its numerator's factors 2 and
+5 moved into the denominator, which then terminates. That spelling needs a factor 2 or 5 in the
+numerator and is used where it is shorter than the two integers, outside exponents: short
+fractions such as `1/3` keep theirs, and an exponent keeps the fraction
+(`x0^(3500000/3141592653)`). It is the one spelling written for a reader alone: every other
+number, in every dialect, is written by the codeword it is priced at. It is the same value
+either way, so the state, `complexity()` and every rewrite are unaffected:
 
 ```python
-engine.simplify('1/(2*3141.592653)')                # -> '1/6283.185306'
-engine.simplify('7*x0/(20*3141.592653)')            # -> '7*x0/62831.85306'
-engine.simplify('x0*rootn(x1/(2*3141.592653), 2)')  # -> 'x0*rootn(x1/6283.185306, 2)'
-engine.simplify('5/8')                              # -> '5/8'
+engine.simplify('7/(2*3141.592653)')                  # -> '7/6283.185306'
+engine.simplify('7*x0/(20*3141.592653)')              # -> '7*x0/62831.85306'
+engine.simplify('x0*rootn(7*x1/(2*3141.592653), 2)')  # -> 'x0*rootn(7*x1/6283.185306, 2)'
+engine.simplify('1/(2*3141.592653)')                  # -> '1/6283.185306'
+engine.simplify('5/8')                                # -> '5/8'
 ```
 
-The token answers keep the fraction (explicit `['/', '500000', '3141592653']`, tagged
-`['<mul>', '500000', '<div>', '3141592653', '</mul>']`): the engine prints states as tokens and
+The token answers keep the fraction (explicit `['/', '3500000', '3141592653']`, tagged
+`['<mul>', '3500000', '<div>', '3141592653', '</mul>']`): the engine prints states as tokens and
 reads them back, and callers mask and compare token answers, so one fixed spelling serves
 them.
 

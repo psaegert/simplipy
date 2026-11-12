@@ -819,7 +819,10 @@ can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`).
 **The emitted spelling is the priced spelling** [BY CONSTRUCTION]. The serializer
 chooses each literal's print by the argmin over the *same* codeword totals the
 measure minimizes (`decimal_spelling_wins`, `reciprocal_spelling_wins`), so $\mu(t)$ is the description length
-of the representation actually emitted, not of a hypothetical one. An exact codeword
+of the representation actually emitted, not of a hypothetical one. One spelling is written
+for a reader alone, in the infix text: a fraction with its numerator's factors 2 and 5 moved
+into the denominator, which then terminates (`7/6283.185306` for $3500000/3141592653$); the
+token forms write the codeword. An exact codeword
 tie goes to the fraction — the structurally distinguished caller-dialect member,
 mirroring tier 2 of the sign-placement convention (§3); states carry no spelling, so
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
