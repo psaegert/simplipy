@@ -1,24 +1,21 @@
-"""Divisor-side coefficient spelling -- a user-facing aesthetics mechanism, EMISSION ONLY.
+"""Divisor-side coefficient spelling: a coefficient is written as the divisor where the
+reciprocal codeword is its price.
 
-Every f64-born literal is a dyadic rational with a finite decimal spelling, but its
-exact reciprocal generally is not: canon of ``x0 / 0.333`` takes the exact reciprocal
-coefficient 1000/333 (a genuine descent -- one node fewer), whose only exact one-token
-spelling is that fraction. A long divisor keeps its spelling too: the measure prices a
-reciprocal whose divisor is a terminating decimal as that divisor (`x1/0.225147640565301`). The emitters therefore
-spell a Mul coefficient on WHICHEVER SIDE has the shorter exact spelling: a coefficient
-with NO exact decimal whose reciprocal spells strictly shorter as one literal token
-moves behind the bag's ``<div>`` (tagged) / the ``/`` chain (explicit) as the
-reciprocal's token. Same state, same value, cosmetic only.
+Every f64-born literal is a dyadic rational with a finite decimal spelling, but its exact
+reciprocal generally is not: canon of ``x0 / 0.333`` holds the exact reciprocal coefficient
+1000/333 (one node fewer). The measure prices such a value by its reciprocal codeword, the
+divisor ``0.333`` (a terminating decimal, the value's denominator past 24), and the emitters
+write it as that divisor, behind the bag's ``<div>`` (tagged) or the ``/`` chain (explicit); a
+long divisor keeps its spelling the same way (``x1/0.225147640565301``). Every other
+coefficient is written by its own cheapest codeword: a fraction split across the product
+(``22*x0/7``, ``x0/3``) or one decimal.
 
-Guardrails pinned here:
-* spelling NEVER enters the measure or any mint/skip decision (spelling-dependence is
-  the diagnosed Kruskal-skip disease) -- the internal state is identical either way,
-  so idempotence and round-trip identity hold for every output;
-* ties and both-fraction coefficients stay on the coefficient side (``22/7`` beats
-  ``<div> 7/22``); exact decimals never move (``0.5 x0``); a longer reciprocal decimal
-  never fires (``1024/3`` beats ``<div> 0.0029296875``);
-* the move needs a PLAIN numerator factor to remain (a bag of only coefficient +
-  inverse factors keeps the coefficient in the numerator).
+Pinned here:
+* the state is the same whatever the spelling, so idempotence and round-trip identity hold for
+  every output;
+* a fraction keeps its numerator in the bag (``22/7``, ``1024/3``), and a value whose decimal
+  is the price stays one numerator token;
+* the sign never enters a divisor group.
 """
 import os
 
@@ -56,39 +53,35 @@ def check(eng, tokens, expected):
 
 
 class TestDivisorSideSpelling:
-    def test_the_owner_example(self, eng):
-        # x0 / 0.333: the reciprocal coefficient 1000/333 has no finite decimal (and is cheaper
-        # exact than as its float); the original divisor is the exact value's shortest spelling.
+    def test_a_reciprocal_coefficient_keeps_its_decimal_divisor(self, eng):
+        # x0 / 0.333: the reciprocal coefficient 1000/333 has no finite decimal; its price is the
+        # reciprocal codeword, the divisor 0.333, which is how it is written.
         check(eng, ['/', 'x0', '0.333'], ['<mul>', 'x0', '<div>', '0.333', '</mul>'])
         check(eng, ['/', 'x0', '0.333'], ['/', 'x0', '0.333'])
-        # The owner's example was x0 / 0.3333333333333333: float64 reads that literal as exactly
-        # 1/3's double, so it is read as 1/3, and the answer is 3*x0.
+
+    def test_a_literal_read_as_one_thirds_double(self, eng):
+        # float64 reads 0.3333333333333333 as exactly 1/3's double, so it is read as 1/3
         check(eng, ['/', 'x0', '0.3333333333333333'], ['*', '3', 'x0'])
 
     def test_unit_fraction_coefficient(self, eng):
-        # (1/3)*x0 == x0/3: the integer reciprocal is the shorter exact spelling
-        # (and the tagged form catches up to what the explicit form already did).
+        # (1/3)*x0 == x0/3: the fraction 1/3, its numerator 1 left out of the product.
         check(eng, ['*', '1/3', 'x0'], ['<mul>', 'x0', '<div>', '3', '</mul>'])
         check(eng, ['*', '1/3', 'x0'], ['/', 'x0', '3'])
 
     def test_tie_stays_coefficient_side(self, eng):
-        # len("22/7") == len("7/22"): no move to the divisor side; the tagged form writes no
-        # one-token fraction, so the coefficient splits into the bag.
+        # 22/7 is priced as the fraction (its denominator is within 24): no divisor; the tagged
+        # form writes no one-token fraction, so the coefficient splits into the bag.
         check(eng, ['*', '22/7', 'x0'], ['<mul>', '22', 'x0', '<div>', '7', '</mul>'])
 
     def test_longer_reciprocal_decimal_stays(self, eng):
-        # 1/(1024/3) = 0.0029296875 spells LONGER than 1024/3: no move to the divisor side, and
-        # the fraction splits into the bag (no one-token fraction in the tagged form).
+        # 1024/3 is priced as the fraction, not as the divisor 0.0029296875: it splits into the
+        # bag (no one-token fraction in the tagged form).
         check(eng, ['*', '1024/3', 'x0'], ['<mul>', '1024', 'x0', '<div>', '3', '</mul>'])
 
     def test_exact_decimal_never_moves(self, eng):
-        # RENAMED IN SPIRIT (the argmin spelling):
-        # "exact decimal" is no longer the operative category. `1/2` spells as the
-        # FRACTION under argmin (2585 milli-bits against the decimal's 3585), so it is
-        # not an atomic-decimal coefficient at all and takes the divisor side like any
-        # other unit fraction -- `x0/2`, exactly as `1/3` gives `x0/3` above. What still
-        # holds, and is what this row guards, is that a coefficient whose ARGMIN token is
-        # atomic stays in the numerator; see the 22/7 and 1024/3 rows.
+        # `1/2` is priced as the fraction (2585 milli-bits against the decimal's 3585), written
+        # `x0/2` like any other unit fraction, as `1/3` gives `x0/3` above; a coefficient whose
+        # cheapest codeword is one token stays in the numerator (the 22/7 and 1024/3 rows).
         check(eng, ['*', '0.5', 'x0'], ['<mul>', 'x0', '<div>', '2', '</mul>'])
 
     def test_negative_coefficient_sign_splits_out(self, eng):
