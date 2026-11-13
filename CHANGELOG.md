@@ -251,6 +251,11 @@ organised by who you are, then the highlights, then every change in detail.
   numeric part, whose value the ground evaluator reads before any rule. The served set of a
   file holding such rules is smaller by their twins (`2*acos(0) -> pi` served
   `-2*acos(0) -> -pi` too).
+- The mint reads a constant collapse at its own witness before the fit searches: where a
+  candidate is its source with variable-free subtrees that hold a constant each replaced by a
+  constant, those subtrees' values at the source's constants are tried first.
+  `atan2(x0, atan(C)) -> atan2(x0, C)` is certified at C = -0.0, whose only witness is -0.0,
+  which the search missed.
 - Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
 - The load refuses a rule whose right side has no variable and is not one leaf (drop reason
   `ground-composite`): `asin(1) -> acos(0)` holds and is not served. The load's gates are

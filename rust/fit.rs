@@ -859,6 +859,70 @@ fn subtree_end(tokens: &[String], start: usize, ops: &Operators) -> Option<usize
     Some(i)
 }
 
+/// THE WITNESS OF A CONSTANT COLLAPSE (the specification's 3.2): where a candidate is its source
+/// with variable-free subtrees that hold a `<constant>` each replaced by a `<constant>`, and is
+/// otherwise the source token for token, the subtrees' own values at the source's constants are a
+/// witness. `atan2(x0, atan(C)) -> atan2(x0, C)` has the witness `atan(c)`, which at c = -0.0 is
+/// the -0.0 no search from a random start reaches. The fit reads it before it searches.
+pub(crate) struct CollapseWitness {
+    /// Per candidate `<constant>`, in order: the source subtree's tape and the index of its first
+    /// constant among the source's.
+    slots: Vec<(Tape, usize)>,
+}
+
+impl CollapseWitness {
+    /// The alignment of `candidate` against `source`, or `None` where the candidate is no
+    /// collapse of the source.
+    pub(crate) fn of(
+        source: &[String],
+        candidate: &[String],
+        ops: &Operators,
+        var_names: &[String],
+    ) -> Option<CollapseWitness> {
+        if !candidate.iter().any(|t| t == "<constant>") {
+            return None;
+        }
+        let (mut i, mut k, mut first_const) = (0usize, 0usize, 0usize);
+        let mut slots = Vec::new();
+        while k < candidate.len() {
+            if candidate[k] == "<constant>" {
+                let j = subtree_end(source, i, ops)?;
+                let sub = &source[i..j];
+                let n = sub.iter().filter(|t| t.as_str() == "<constant>").count();
+                if n == 0 || sub.iter().any(|t| var_names.contains(t)) {
+                    return None;
+                }
+                slots.push((Tape::compile(sub, ops, var_names).ok()?, first_const));
+                first_const += n;
+                i = j;
+            } else {
+                if source.get(i) != Some(&candidate[k]) {
+                    return None;
+                }
+                if source[i] == "<constant>" {
+                    first_const += 1;
+                }
+                i += 1;
+            }
+            k += 1;
+        }
+        (i == source.len()).then_some(CollapseWitness { slots })
+    }
+
+    /// The witness at the source's constants `params`: `None` where a subtree's value there is
+    /// not finite (no constant has it).
+    pub(crate) fn at(&self, params: &[f64]) -> Option<Vec<f64>> {
+        self.slots
+            .iter()
+            .map(|(tape, k0)| {
+                let p = params.get(*k0..*k0 + tape.n_params)?;
+                let v = *tape.eval_columns(&[], p, 1).first()?;
+                v.is_finite().then_some(v)
+            })
+            .collect()
+    }
+}
+
 /// Recognize `pow(<constant>, g)` / `pow(g, <constant>)` with a single `<constant>` and a const-free
 /// `g`. Returns (form, g_tokens) or None (-> the LM path).
 pub(crate) fn detect_log_linear(
@@ -1135,6 +1199,49 @@ mod tests {
         assert_eq!(c(&["/", "<constant>", "3"]), Linearity::Affine); // C/3 == div3(C)
         assert_eq!(c(&["/", "3", "<constant>"]), Linearity::Nonlinear); // 3/C: C in denominator
         assert_eq!(c(&["rootn", "<constant>", "2"]), Linearity::Nonlinear); // C under a root
+    }
+
+    #[test]
+    fn a_collapse_is_read_at_its_own_witness() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0", "x1"]);
+        let of = |src: &[&str], cand: &[&str]| CollapseWitness::of(&s(src), &s(cand), ops, &vars);
+        // the replaced subtree's value, its zero's sign included
+        let w = of(
+            &["atan2", "x0", "atan", "<constant>"],
+            &["atan2", "x0", "<constant>"],
+        )
+        .unwrap();
+        let d = w.at(&[-0.0]).unwrap();
+        assert!(
+            d.len() == 1 && d[0] == 0.0 && d[0].is_sign_negative(),
+            "{d:?}"
+        );
+        // the constants beside the subtree keep their places
+        let w = of(
+            &["+", "*", "<constant>", "x0", "exp", "<constant>"],
+            &["+", "*", "<constant>", "x0", "<constant>"],
+        )
+        .unwrap();
+        assert_eq!(w.at(&[3.0, 0.0]), Some(vec![3.0, 1.0]));
+        // no finite value, no witness: log(0) is -inf
+        let w = of(
+            &["+", "x0", "log", "<constant>"],
+            &["+", "x0", "<constant>"],
+        )
+        .unwrap();
+        assert_eq!(w.at(&[0.0]), None);
+        // no collapse: a replaced subtree with a variable, a ground subtree, another token
+        assert!(of(&["sin", "*", "<constant>", "x0"], &["sin", "<constant>"]).is_none());
+        assert!(of(&["+", "x0", "exp", "1"], &["+", "x0", "<constant>"]).is_none());
+        assert!(of(
+            &["atan2", "x1", "atan", "<constant>"],
+            &["atan2", "x0", "<constant>"]
+        )
+        .is_none());
     }
 
     #[test]

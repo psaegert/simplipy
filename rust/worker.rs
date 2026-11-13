@@ -908,7 +908,9 @@ fn pin_root_on_row(
 /// `cols`, its range events `ev_src`): `Some(Some(c))`, the witness the mode accepts at `c`;
 /// `Some(None)`, a vacuous fit that determined no constants; `None`, no witness found. A near
 /// miss is read as the mode reads one: f64 by its range standard, the other modes by the table
-/// at the robust refit. The drawn instances and the special constants are fitted alike.
+/// at the robust refit. The drawn instances and the special constants are fitted alike. A
+/// collapse of the source (`collapse`) is read at its own witness first, the values of the
+/// subtrees it replaces, as the search would accept a witness it found.
 #[allow(clippy::too_many_arguments)]
 fn fit_instance(
     cand: &CandEntry,
@@ -918,6 +920,7 @@ fn fit_instance(
     ev_src: Option<&[bool]>,
     source: &[String],
     inst_params: &[f64],
+    collapse: Option<&crate::fit::CollapseWitness>,
     ops: &Operators,
     var_names: &[String],
     rtol: f64,
@@ -927,6 +930,15 @@ fn fit_instance(
     lane: Lane,
 ) -> Option<Option<Vec<f64>>> {
     let rescue = lane.rescue();
+    if let Some(d) = collapse
+        .filter(|_| y.iter().any(|v| v.is_finite()))
+        .and_then(|w| w.at(inst_params))
+    {
+        let fitted = cand.tape.eval_columns(cols, &d, n_rows);
+        if crate::eval::allclose_extends(y, &fitted, rtol, atol) {
+            return Some(Some(d));
+        }
+    }
     match crate::fit::exist_constants_fit_prepared(
         &cand.tape,
         cand.linearity,
@@ -1345,6 +1357,11 @@ fn candidate_matches(
     if cand.n_const == 0 && cand_rows.finite_y < min_informative {
         return Err("finite_rows");
     }
+    let collapse = if cand.n_const > 0 {
+        crate::fit::CollapseWitness::of(source, &cand.tokens, ops, var_names)
+    } else {
+        None
+    };
     // the certified (instance, target-witness) pairs, for the special-point phase
     let mut certified: Vec<(usize, Option<Vec<f64>>)> = Vec::with_capacity(y_src.len());
     for (inst, (inst_params, y)) in y_src.iter().enumerate() {
@@ -1449,6 +1466,7 @@ fn candidate_matches(
                 ev_src,
                 source,
                 inst_params,
+                collapse.as_ref(),
                 ops,
                 var_names,
                 rtol,
@@ -1687,6 +1705,7 @@ fn candidate_matches(
                     ev_s.as_deref(),
                     source,
                     &sp,
+                    collapse.as_ref(),
                     ops,
                     var_names,
                     rtol,

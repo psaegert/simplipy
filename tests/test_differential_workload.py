@@ -262,15 +262,7 @@ def _by_tolerance(v: str, record: dict, mode: str) -> bool:
 # undecided (4.10) and f64's tolerances on strict's second reading, which are reported with
 # their counts.
 # ------------------------------------------------------------------------------------------
-#: A known false rejection of the pre-filter, which costs recall and no soundness: the mine's
-#: constant fit misses the witness of `atan2(?0, atan(<constant>)) -> atan2(?0, <constant>)`
-#: (d = atan(c)), which the judge certifies. Strict: the case fails the suite once the fit reads it.
-FIT_MISS = pytest.mark.xfail(strict=True, reason=(
-    "the 'fit' pre-filter rejects atan2(?0, atan(<constant>)) -> atan2(?0, <constant>), which "
-    "the judge certifies; the constant fit misses its witness"))
-
-
-@pytest.mark.parametrize('mode', [pytest.param('f64', marks=FIT_MISS), 'permissive'])
+@pytest.mark.parametrize('mode', ['f64', 'permissive'])
 def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
     from simplipy import _core
     todo = {v: sampled(pairs) for v, (k, pairs) in by_kind(mode).items() if k == 'N'}
