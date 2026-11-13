@@ -374,10 +374,12 @@ def f64_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], sorts: 
                    ) -> tuple[bool, int, list[float] | None, list[list[float]]] | None: ...
 #: The zero-sign bar (`rust/battery.rs`): strict's reading of a zero's sign at the deployed bar's
 #: probes, each variable over its slot sort's values: (holds, probes, first refusing probe, its
-#: event), or None for a fully numeric pair and for a right side with a `<constant>`.
+#: event, first probe where a value that turns on a zero's sign refuses it), or None for a fully
+#: numeric pair and for a right side with a `<constant>`.
 def zero_sign_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], sorts: str,
                          arity: dict[str, int]
-                         ) -> tuple[bool, int, list[float] | None, str | None] | None: ...
+                         ) -> tuple[bool, int, list[float] | None, str | None,
+                                    list[float] | None] | None: ...
 #: Strict's reading of a zero's sign at one point: the event of the two sides (compiled over one
 #: name list) at `env` that is not isolated along the names at the indices `along`, or None.
 def table_zero_sign_refusal(lhs: TableExpr, rhs: TableExpr, env: list[float],

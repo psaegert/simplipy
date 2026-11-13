@@ -891,14 +891,17 @@ pub fn f64_bar_sorted(
 /// `RANGE_ROWS_CAP`); a bar with more is undecided, and fails closed.
 const MINT_RANGE_ROWS_CAP: usize = 256;
 
-/// What the zero-sign bar found (`zero_sign_bar_sorted`): the verdict, the number of probes, and
-/// the first probe where an event refuses the rule, with the event.
+/// What the zero-sign bar found (`zero_sign_bar_sorted`): the verdict, the number of probes, the
+/// first probe where an event refuses the rule, with the event, and the first probe where a value
+/// that turns on a zero's sign refuses it (`ZeroSign::Turns`), which a step no operation reads above
+/// is still refused by (the root of an answer, `verify._contract.strict_at_the_root`).
 #[derive(Clone, Debug)]
 pub struct ZeroSignBar {
     pub ok: bool,
     pub probes: usize,
     pub first: Option<Vec<f64>>,
     pub event: Option<ZeroSign>,
+    pub turns: Option<Vec<f64>>,
 }
 
 /// THE ZERO-SIGN BAR: strict's reading of a zero's sign (`zero_sign_refusal`) at the deployed
@@ -944,6 +947,7 @@ pub fn zero_sign_bar_sorted(
         probes: 0,
         first: None,
         event: None,
+        turns: None,
     };
     let arity: std::collections::HashMap<String, u8> = lhs_v
         .iter()
@@ -976,6 +980,8 @@ pub fn zero_sign_bar_sorted(
         tl.eval_columns(&cols, &[], n),
         tr.eval_columns(&cols, &[], n),
     );
+    let mut first: Option<(Vec<f64>, ZeroSign)> = None;
+    let mut turns: Option<Vec<f64>> = None;
     // a side's value can turn on a zero's sign only through an operation that reads one
     let reads = lhs_v
         .iter()
@@ -984,7 +990,8 @@ pub fn zero_sign_bar_sorted(
     for i in 0..n {
         let (a, b) = (yl[i], yr[i]);
         let candidate = if a == 0.0 && b == 0.0 {
-            a.is_sign_negative() != b.is_sign_negative()
+            // past the first refusal only a value that turns on a zero's sign is looked for
+            first.is_none() && a.is_sign_negative() != b.is_sign_negative()
         } else {
             reads
                 && a.is_finite()
@@ -995,19 +1002,26 @@ pub fn zero_sign_bar_sorted(
             continue;
         }
         if let Some(event) = zero_sign_refusal(&el, &er, &rows[i], &along) {
-            return Some(ZeroSignBar {
-                ok: false,
-                probes: n,
-                first: Some(used.iter().map(|&v| rows[i][v]).collect()),
-                event: Some(event),
-            });
+            let at: Vec<f64> = used.iter().map(|&v| rows[i][v]).collect();
+            if first.is_none() {
+                first = Some((at.clone(), event));
+            }
+            if event == ZeroSign::Turns {
+                turns = Some(at);
+            }
+            // the first refusal decides the bar; a value that turns on a zero's sign is looked
+            // for past opposite zeros, where an operation reads a zero's sign
+            if turns.is_some() || !reads {
+                break;
+            }
         }
     }
     Some(ZeroSignBar {
-        ok: true,
+        ok: first.is_none(),
         probes: n,
-        first: None,
-        event: None,
+        event: first.as_ref().map(|(_, e)| *e),
+        first: first.map(|(at, _)| at),
+        turns,
     })
 }
 
@@ -1643,6 +1657,12 @@ mod deployed_bar_tests {
                 .is_none()
         );
         assert!(zero_sign_bar_sorted(&s("* 0 -1"), &s("0"), &v, &[], ops).is_none());
+        // a value that turns on a zero's sign is reported apart from opposite zeros
+        let turns = |l: &str, r: &str| {
+            zero_sign_bar_sorted(&s(l), &s(r), &v, &['?', '?'], ops).map(|z| z.turns.is_some())
+        };
+        assert_eq!(turns("atan2 * 0 x0 -1", "np.pi"), Some(true));
+        assert_eq!(turns("* 0 asin x0", "* 0 acos x0"), Some(false));
         // the f64 mint reads it for every pick, so it picks only what strict holds
         assert!(!f64_bar_mint(&s("ceil mod x0 -1"), &s("0"), &v, ops));
         assert!(!f64_bar_mint(&s("* 0 asin x0"), &s("* 0 acos x0"), &v, ops));

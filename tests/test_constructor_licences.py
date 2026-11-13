@@ -340,17 +340,20 @@ class TestCertificateCompletenessTowers:
     def test_zero_kills_pole_bearing_factor(self, eng):
         # 0 * sinh(0.25*x5^2*(x17+cos x17)/x6) -> 0 (row-481 shape): the argument's
         # only nonfinite points sit on the null pole {x6 = 0}; the structural
-        # finiteness recursion needed the binary-pow arm to see it.
-        tokens = '* 0 sinh / * 0.25 * pow x5 2 + x17 cos x17 x6'.split()
-        out = eng.simplify(list(tokens))
+        # finiteness recursion needed the binary-pow arm to see it. The answer is +0 where
+        # float64 gives the input -0 (sinh's argument negative, on a region): at the root no
+        # operation reads a zero's sign, so the judge reads the two zeros as one value there
+        out = check(eng, '* 0 sinh / * 0.25 * pow x5 2 + x17 cos x17 x6'.split())
         assert out == ['0'], f'kept-zero survived: {out}'
-        assert eng.simplify(list(out)) == out
-        # The answer is +0 where float64 gives the input -0 (sinh's argument negative, on a
-        # region): the constructors drop the sign of a zero at the root, which no operation of
-        # the answer reads, while the judge reads the step as a rule, which strict holds only
-        # where a zero's sign is kept on every region
-        v, d = judge_pair(list(tokens), list(out), rng(), engine=eng)
-        assert v == 'VIOLATION' and 'ZERO-SIGN' in str(d), (v, d)
+
+    def test_a_zero_dropped_under_a_reader_is_flagged(self, eng):
+        # the same step under 1/: -inf against +inf wherever sinh's argument is negative
+        tokens = '/ 1 * 0 sinh / * 0.25 * pow x5 2 + x17 cos x17 x6'.split()
+        v, d = judge_pair(list(tokens), ['/', '1', '0'], rng(), engine=eng)
+        assert v == 'VIOLATION', (v, d)
+        # and the engine keeps the zero's sign there
+        out = check(eng, tokens)
+        assert out != ['float("inf")'] and 'sinh' in out, out
 
 
 class TestInfiniteTermAbsorption:

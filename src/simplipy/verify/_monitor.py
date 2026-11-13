@@ -27,6 +27,12 @@ x = 1 keeps the two apart: it is OK. Where a step holds in the mode and not in t
 float64 holds and the reals do not), the engine's algebra around it cannot be read apart from the
 step, and a rewrite the mode does not license as a whole is UNSCORED.
 
+A WHOLE ANSWER IS READ AT ITS ROOT. A zero's sign is a value where an operation reads it (F7),
+and no operation of the answer reads its root's: there two zeros of opposite sign are one value,
+while a value that turns on a zero's sign an operation inside reads is a change
+(`_contract.strict_at_the_root`). `0*sinh(x0) -> 0` is OK in f64; the same step under `1/` is a
+change of infinity. Each rule step stays held to the rule's criterion, which reads every context.
+
 Self-test: :func:`selftest` poisons a copy of the rule set with known-unsound rules and fails
 loudly unless the monitor flags and attributes every one of them.
 
@@ -142,6 +148,10 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     if tier in MODE_TIERS[name] or _reading(detail, name) is True:
         # a fully numeric rewrite holds where the mode's own reading of its value holds
         return 'OK', f'{verdict} ({tier})'
+    if name == 'f64' and not detail.get('ground') and _contract.strict_at_the_root(detail) is True:
+        # the rewrite is the whole answer: no operation reads its root's zero's sign (F7)
+        return 'OK', (f'{verdict} ({tier}): strict at the root, two zeros of opposite sign one '
+                      f'value there')
     if _reading(detail, name) is None:
         return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '
                             f'{str(detail.get("detail"))[:200]}')

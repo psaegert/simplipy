@@ -2592,6 +2592,21 @@ def zero_sign_refusal(tl, tr, env, guards):
     return _table.table_zero_sign_refusal(lexpr, rexpr, vals, along)
 
 
+def strict_at_the_root(detail):
+    """STRICT'S READING OF A STEP NO OPERATION READS ABOVE, the root of an answer: a zero's sign is
+    a value where an operation reads it (F7), and nothing reads the root's, so two zeros of opposite
+    sign are one value there, while a value that turns on a zero's sign an operation inside the
+    step reads is still a change (`zero_sign_refusal`'s second event). `0*sinh(x0) -> 0` holds
+    there (+0 against -0 for x0 < 0), `atan2(0*x0, -1) -> pi` does not (-pi against pi), and
+    under a reader `1/(0*sinh(x0)) -> 1/0` is a step of its own, with -inf against +inf. A rule
+    can be applied under a reader, so a rule is held to `realised`; an answer, to this. -> True,
+    False, or None where float64's reading with the two zeros one value reached no answer."""
+    one_zero = detail.get('realised_one_zero', detail.get('realised'))
+    if one_zero is not True:
+        return one_zero
+    return 'turns-on-a-zero-sign' not in (detail.get('zero_sign_kinds') or ())
+
+
 def strict_reading(f6, kinds, verdict):
     """THE STRICT READING, the one place the judge decides `f64` (strict): a rule holds there where
     (a) float64's two sides agree (F6, with the range standard at an overflow) at every point
@@ -2933,12 +2948,15 @@ def _with_zero_sign_bar(lhs, rhs, r):
                                ''.join(k[0] for k in keys), ARITY)
     if bar is None or bar[0]:
         return r
-    _, probes, first, event = bar
+    _, probes, first, event, turns = bar
     # the bar's refusal refuses strict, whose reading of a zero's sign it is
     at = None if first is None else dict(zip(keys + [f'<C_L{k}>' for k in range(len(first))],
                                              first))
-    r = dict(r, zero_sign_refused=True,
-             zero_sign_bar={'ok': False, 'probes': probes, 'event': event, 'first': at})
+    kinds = set(r.get('zero_sign_kinds') or ()) | {event} | (
+        {'turns-on-a-zero-sign'} if turns is not None else set())
+    r = dict(r, zero_sign_refused=True, zero_sign_kinds=sorted(kinds),
+             zero_sign_bar={'ok': False, 'probes': probes, 'event': event, 'first': at,
+                            'turns': turns is not None})
     return _settle(r)
 
 
@@ -4185,6 +4203,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         # strict's reading of a zero's sign (`zero_sign_refusal`): where it refused, and why
         base['zero_sign'] = zero_sign_events[:3]
         base['zero_sign_refused'] = True
+        base['zero_sign_kinds'] = sorted({event for event, _ in zero_sign_events})
     if dep_kinds:
         # what float64's disagreements are (F8): ROUNDING (finite, one sign), SIGN (a zero against
         # a nonzero, or opposite signs), a class change (EXT, SHRINK, INF-CHANGE), and ZERO-SIGN

@@ -2166,8 +2166,15 @@ fn f64_bar_sorted(
     .map(|d| (d.ok, d.probes, d.first, d.range_rows))
 }
 
-/// What `zero_sign_bar_sorted` returns: `(holds, probes, first refusing probe, its event)`.
-type ZeroSignBarOut = (bool, usize, Option<Vec<f64>>, Option<String>);
+/// What `zero_sign_bar_sorted` returns: `(holds, probes, first refusing probe, its event, first
+/// probe where a value that turns on a zero's sign refuses it)`.
+type ZeroSignBarOut = (
+    bool,
+    usize,
+    Option<Vec<f64>>,
+    Option<String>,
+    Option<Vec<f64>>,
+);
 
 /// THE ZERO-SIGN BAR as the contract judge reads it (`battery::zero_sign_bar_sorted`): strict's
 /// reading of a zero's sign at the deployed bar's probes, each variable over its slot sort's
@@ -2191,6 +2198,7 @@ fn zero_sign_bar_sorted(
                 z.probes,
                 z.first,
                 z.event.map(|e| e.name().to_string()),
+                z.turns,
             )
         })
 }

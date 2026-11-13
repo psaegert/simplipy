@@ -97,6 +97,16 @@ def test_strict_admits_a_zero_sign_changed_at_an_isolated_point(lhs, rhs) -> Non
     assert not d.get('zero_sign') and not d.get('zero_sign_bar'), d
 
 
+def test_a_step_at_the_root_reads_no_zero_sign_but_a_turn() -> None:
+    """No operation reads the root's zero's sign (F7): a step there, the whole of an answer, keeps
+    float64's reading with the two zeros one value, and refuses only a value that turns on a zero's
+    sign an operation inside it reads. A rule can be applied under a reader, so a rule is refused
+    by either."""
+    assert _contract.strict_at_the_root(judge('* 0 asin x0', '* 0 acos x0')) is True
+    assert _contract.strict_at_the_root(judge('log exp _0', '_0')) is True
+    assert _contract.strict_at_the_root(judge('atan2 * 0 x0 -1', 'np.pi')) is False
+
+
 def test_a_value_turning_on_a_zero_sign_is_read_only_where_float64_differs() -> None:
     """(ii) restricts (b): where float64's two sides agree, a zero's sign one side reads is no
     change float64 can see. `1/(0*x1)` and `inf/x1` are the same value at every x1."""
