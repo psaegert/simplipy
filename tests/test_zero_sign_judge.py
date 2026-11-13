@@ -81,6 +81,29 @@ def test_permissive_keeps_a_rule_it_held_through_f64_with_float64s_evidence(lhs,
     pair = (tuple(lhs.split()), tuple(rhs.split()))
     tiers = _licences(engine, 'permissive', [pair], lambda pairs: [d['tier'] for _ in pairs])
     assert tiers[pair]['licensed'] is True, tiers
+    # promotion's licence, which reads a tier too
+    assert licensed(lhs.split(), rhs.split(), 'permissive', engine,
+                    detail={'tier': 'permissive'})['licensed'] is True
+
+
+@pytest.mark.parametrize('lhs, rhs', [('neg acosh erf x0', 'acosh erf x0'),
+                                      ('neg acosh tanh x0', 'acosh tanh x0')])
+def test_the_permissive_mint_certifies_through_f64_with_one_zero(lhs, rhs) -> None:
+    """The mint's own certification of the pair on the mine's rows: strict's refuses it (a zero's
+    sign), permissive's certifies it through f64, read with the two zeros one value, as its own
+    reading in the reals has no evidence."""
+    import numpy as np
+    from simplipy.verify import _vocabulary_engine
+    engine = _vocabulary_engine()
+    X = np.asarray(_contract.mine_rows(512, 2, np.random.default_rng(42)), dtype=np.float64)
+    flat, n = X.flatten(order='C').tolist(), X.shape[0]
+
+    def mint(mode):
+        return engine._core.judge_pair(lhs.split(), rhs.split(), ['x0', 'x1'], flat, n,
+                                       challenges=8, retries=8, seed=42, rtol=1e-11, atol=1e-12,
+                                       rule_mode=mode)
+    assert mint('default') == (False, 'not_realised')
+    assert mint('permissive') == (True, 'accepted')
 
 
 @pytest.mark.parametrize('lhs, rhs', [

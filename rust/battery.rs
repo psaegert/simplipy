@@ -1033,14 +1033,29 @@ pub fn zero_sign_bar_sorted(
 /// `cosh` overflows and the true value is 1. A pre-filter of strict's judgment, it reads the
 /// probes in kind (`Agreement::Kind`): a change of kind refuses the rule in both of strict's
 /// readings, while a finite difference is the judge's to decide (strict's (b) admits it where the
-/// rule is true in the reals). Every pick answers to the zero-sign bar too
-/// (`zero_sign_bar_sorted`), whose refusal refuses both of strict's readings: `ceil(mod(x, -1))
-/// -> 0` is -0 against +0 wherever x is no integer.
+/// rule is true in the reals). Every pick of strict answers to the zero-sign bar too
+/// (`zero_sign_bar_sorted`), whose refusal refuses strict: `ceil(mod(x, -1)) -> 0` is -0 against
+/// +0 wherever x is no integer. A mode that includes f64 reads it with the two zeros one value
+/// (`f64_bar_mint_one_zero`).
 pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &Operators) -> bool {
     let sorts = vec!['?'; var_names.len()];
     if zero_sign_bar_sorted(lhs, rhs, var_names, &sorts, ops).is_some_and(|z| !z.ok) {
         return false;
     }
+    f64_bar_mint_one_zero(lhs, rhs, var_names, ops)
+}
+
+/// THE MINT'S f64 BAR WITH THE TWO ZEROS ONE VALUE (`f64_bar_mint` without the zero-sign bar):
+/// float64 as a mode that includes f64 reads it, which a zero's sign does not refuse. Permissive
+/// certifies through f64 by it: `neg(acosh(erf(x))) -> acosh(erf(x))` is -0 against +0 past erf's
+/// saturation, refused in strict and held in permissive, as before strict read a zero's sign.
+pub fn f64_bar_mint_one_zero(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> bool {
+    let sorts = vec!['?'; var_names.len()];
     let Some(bar) = f64_bar_sorted(lhs, rhs, var_names, &sorts, true, Agreement::Kind, ops) else {
         return true;
     };
@@ -1666,6 +1681,19 @@ mod deployed_bar_tests {
         // the f64 mint reads it for every pick, so it picks only what strict holds
         assert!(!f64_bar_mint(&s("ceil mod x0 -1"), &s("0"), &v, ops));
         assert!(!f64_bar_mint(&s("* 0 asin x0"), &s("* 0 acos x0"), &v, ops));
+        // with the two zeros one value, as permissive reads float64, they hold
+        assert!(f64_bar_mint_one_zero(
+            &s("ceil mod x0 -1"),
+            &s("0"),
+            &v,
+            ops
+        ));
+        assert!(f64_bar_mint_one_zero(
+            &s("* 0 asin x0"),
+            &s("* 0 acos x0"),
+            &v,
+            ops
+        ));
         assert!(f64_bar_mint(&s("log exp x0"), &s("x0"), &v, ops));
     }
 

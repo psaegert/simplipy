@@ -2012,8 +2012,9 @@ model predictions.
   with the two zeros one value (a verdict reports that reading as `realised_one_zero`), and
   takes float64's evidence for a rule `f64` so read holds, as before
   (`neg(acosh(erf(x0))) -> acosh(erf(x0))`, whose left side has no value in the reals); where a
-  rule's tier cannot say which evidence applies, the mine's licence reads the judgment, as
-  `verify-mine` does.
+  rule's tier cannot say which evidence applies, the licence reads the judgment, as
+  `verify-mine` does, and the permissive mint certifies through `f64` with the two zeros one
+  value.
 - **A verdict's `permissive` includes `f64`.** It is permissive's reading, so it holds wherever
   `realised` does; permissive's own criterion alone is `permissive_own`. The field used to be
   the own criterion: `2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` read `realised`

@@ -191,15 +191,41 @@ def _held_with_evidence(lhs: list[str], rhs: list[str], detail: dict, tier: str)
     `tan(atan2(x0, 0)) -> nan` holds by permissive's own criterion, vacuously (the left side has
     no value in the reals off x0 = 0), and float64's evidence, where the rule is false, licenses
     nothing. Where only the tier is known (`core`), permissive's own reading is not, and is taken
-    as not holding (fail closed)."""
+    as not holding (fail closed). Where only the tier `permissive` is known, it does not say which
+    reading permissive holds the rule by: the reals' evidence licenses it, and where they give
+    none the judgment is read (`_judgment`), as `verify-mine` reads it, and float64's evidence
+    licenses a rule f64 with one zero holds -- the mine's acceptance and promotion, which read a
+    tier, so license what `verify-mine` licenses."""
     from .. import _core  # type: ignore[attr-defined]
+    tier_only = not ({'realised_one_zero', 'realised', 'permissive_own'} & set(detail))
     held_f64 = (detail['realised_one_zero'] is True) if 'realised_one_zero' in detail else \
         (detail['realised'] is True) if 'realised' in detail else tier == 'core'
     held_own = (detail['permissive_own'] is True) if 'permissive_own' in detail \
         else tier == 'permissive'
     spelled, arity = _evidence_spelling(lhs, rhs), dict(_contract.ARITY)
-    return (held_f64 and _core.table_evidence(spelled, arity, True) is True) or \
-        (held_own and _core.table_evidence(spelled, arity, False) is True)
+    if (held_f64 and _core.table_evidence(spelled, arity, True) is True) or \
+            (held_own and _core.table_evidence(spelled, arity, False) is True):
+        return True
+    if tier_only and tier == 'permissive':
+        return _judgment(lhs, rhs).get('realised_one_zero') is True and \
+            _core.table_evidence(spelled, arity, True) is True
+    return False
+
+
+#: The judge's verdicts the licence read beyond a tier (`_held_with_evidence`), by pair.
+_JUDGMENTS: dict = {}
+
+
+def _judgment(lhs: list[str], rhs: list[str]) -> dict:
+    """The contract judge's verdict on ``lhs -> rhs`` (``verify_rule``), memoised."""
+    key = (tuple(lhs), tuple(rhs))
+    hit = _JUDGMENTS.get(key)
+    if hit is None:
+        hit = verify_rule(list(lhs), list(rhs))
+        if len(_JUDGMENTS) > 100_000:
+            _JUDGMENTS.clear()
+        _JUDGMENTS[key] = hit
+    return hit
 
 
 def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,

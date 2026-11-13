@@ -2468,18 +2468,19 @@ impl<'s> SourceCtx<'s> {
 }
 
 /// F64'S ACCEPTANCE BEYOND THE ROWS, for a pair f64's lane certified on behalf of a mode that
-/// includes f64: float64 realises it (the 0.15 heads' bar and the magnitude ladder,
-/// `battery::f64_bar_mint`, `battery::f64_magnitudes_mint`) and the pole entry does not refuse it
-/// (`refusals::pole_refusal`) -- what f64's own acceptance applies to every pick
-/// (`engine::miner::Acceptor::license`). The refusal's name, as f64's acceptance names it, or
-/// `None`.
+/// includes f64: float64 realises it with the two zeros one value, as the mode reads float64 (the
+/// 0.15 heads' bar and the magnitude ladder, `battery::f64_bar_mint_one_zero`,
+/// `battery::f64_magnitudes_mint`; a zero's sign is strict's alone, `battery::f64_bar_mint`) and
+/// the pole entry does not refuse it (`refusals::pole_refusal`) -- what f64's own acceptance
+/// applies to every pick (`engine::miner::Acceptor::license`). The refusal's name, as f64's
+/// acceptance names it, or `None`.
 fn f64_refusal(
     source: &[String],
     target: &[String],
     var_names: &[String],
     ops: &Operators,
 ) -> Option<&'static str> {
-    if !(crate::battery::f64_bar_mint(source, target, var_names, ops)
+    if !(crate::battery::f64_bar_mint_one_zero(source, target, var_names, ops)
         && crate::battery::f64_magnitudes_mint(source, target, var_names, ops))
     {
         return Some("not_realised");
