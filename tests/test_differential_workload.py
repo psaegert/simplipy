@@ -54,6 +54,7 @@ VERDICTS = {
     'reach': 'N', 'finite_rows': 'N', 'rows': 'N', 'fit': 'N', 'domain_gate': 'N',
     'special_points': 'N', 'special_constants': 'N', 'dirac': 'N', 'resolved_rows': 'N',
     'evaluable': 'N', 'not_realised': 'N', 'unconfirmed': 'N', 'pole-class-change': 'N',
+    'ground_value': 'N',
     'domain_undecided': 'U', 'blind': 'U',
     'variable_mask': 'well_formed', 'constant_count': 'constant_count',
     'resolution': 'constant_count', 'ground_composite': 'ground_composite',

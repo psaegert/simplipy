@@ -121,7 +121,9 @@ organised by who you are, then the highlights, then every change in detail.
   (`3^5000*x1` and `exp(1905)*x1` are `inf*x1`, `log(1e-400)` is `-inf`). A ground rule holds in `f64` where its two sides are one double, or
   have one value in the reals with float64's kinds kept (`exp(sin(np.pi)) -> 1` holds); the
   judge, the mint and `verify-mine`'s gate (`ground_exact`, which replaces `ground_bit_exact` and
-  checks both files) read the same evaluator.
+  checks both files) read the same evaluator: the mint refuses a fully numeric pick the
+  evaluator does not hold in the mode or cannot read (`ceil(atan(tan(1))) -> 1`, whose reals
+  sit at the jump), as the judge does.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`

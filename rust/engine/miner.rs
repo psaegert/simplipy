@@ -132,6 +132,9 @@ pub enum MineRefusal {
     Unconfirmed,
     /// f64 mode: float64 does not realise the pick (`battery::f64_bar`).
     NotRealised,
+    /// A fully numeric pair the ground evaluator does not hold in the mode, or cannot read
+    /// (`ground::rule_verdict`, the judge's ground check).
+    GroundValue,
     /// A named policy of the licence refuses the pick's written pattern: the load's predicate
     /// (`Engine::load_refusal`) or evidence (`interval::evidence`), by the policy's name.
     Policy(&'static str),
@@ -149,6 +152,7 @@ impl MineRefusal {
             MineRefusal::Excluded => "excluded",
             MineRefusal::Unconfirmed => "unconfirmed",
             MineRefusal::NotRealised => "not_realised",
+            MineRefusal::GroundValue => "ground_value",
             MineRefusal::Policy(name) => name,
         }
     }
@@ -259,6 +263,29 @@ impl<'a> Acceptor<'a> {
         }
         if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
             return Err(MineRefusal::Registry(r.name()));
+        }
+        // A FULLY NUMERIC PAIR is read by the ground evaluator, as the judge reads it
+        // (`ground::rule_verdict`): each mode holds it where its own value of both sides is one,
+        // and a side the evaluator cannot read is refused (`ceil(atan(tan(1))) -> 1`: the reals
+        // leave the jump unresolved). The f64 file holds only what both modes hold, since f64's
+        // fold writes every fully numeric part as the cheapest value it admits.
+        let numeric = |e: &[String]| {
+            !e.iter()
+                .any(|tok| tok == "<constant>" || self.vars.contains(tok))
+        };
+        if numeric(self.src) && numeric(t) {
+            let Some(v) = crate::ground::rule_verdict(self.src, t, &self.eng.operators) else {
+                return Err(MineRefusal::GroundValue);
+            };
+            let strict = v.same_double || v.same_real_in_kind;
+            match self.spec.mode {
+                RuleMode::Default if !strict => return Err(MineRefusal::GroundValue),
+                RuleMode::Default if !v.permissive => {
+                    return Err(MineRefusal::Policy("engine_owned"))
+                }
+                RuleMode::Permissive if !v.permissive => return Err(MineRefusal::GroundValue),
+                _ => {}
+            }
         }
         match self
             .eng
