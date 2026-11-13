@@ -49,8 +49,9 @@ REFUSED = [
 @pytest.mark.parametrize('lhs, rhs, event', REFUSED)
 def test_strict_refuses_a_zero_sign_changed_on_a_region(lhs, rhs, event) -> None:
     d = judge(lhs, rhs)
-    assert strict(d) is False, d
-    assert d['realised_f6'] is False and d['realised_kinds'] is False, d
+    assert strict(d) is False and d['zero_sign_refused'] is True, d
+    # float64 with the two zeros one value holds it: the refusal is a zero's sign alone
+    assert d['realised_one_zero'] is True, d
     assert event in {e for e, _ in d.get('zero_sign') or []} | \
         {(d.get('zero_sign_bar') or {}).get('event')}, d
 
@@ -60,6 +61,26 @@ def test_permissive_holds_each_refused_rule(lhs, rhs, event) -> None:
     """Permissive reads one zero: each rule strict refuses here stays permissive's."""
     d = judge(lhs, rhs)
     assert permissive(d) is True and d['tier'] == 'permissive', d
+
+
+@pytest.mark.parametrize('lhs, rhs', [('neg acosh erf _0', 'acosh erf _0'),
+                                      ('neg acosh tanh _0', 'acosh tanh _0')])
+def test_permissive_keeps_a_rule_it_held_through_f64_with_float64s_evidence(lhs, rhs) -> None:
+    """Permissive includes f64 with the two zeros one value, evidence and all. Past erf's (tanh's)
+    saturation float64 gives -0 against +0, so strict refuses the rule; the reals give the left
+    side no value anywhere (erf < 1), so only float64's evidence licenses it, and permissive
+    keeps it as it held it before strict read a zero's sign: in the licence verify-mine reads
+    and in the mine's, which reads a tier."""
+    from simplipy.mining import _licences
+    from simplipy.verify import _vocabulary_engine, licensed
+    d = judge(lhs, rhs)
+    assert strict(d) is False and d['realised_one_zero'] is True, d
+    engine = _vocabulary_engine()
+    assert licensed(lhs.split(), rhs.split(), 'permissive', engine)['licensed'] is True
+    assert licensed(lhs.split(), rhs.split(), 'f64', engine)['licensed'] is False
+    pair = (tuple(lhs.split()), tuple(rhs.split()))
+    tiers = _licences(engine, 'permissive', [pair], lambda pairs: [d['tier'] for _ in pairs])
+    assert tiers[pair]['licensed'] is True, tiers
 
 
 @pytest.mark.parametrize('lhs, rhs', [

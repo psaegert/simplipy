@@ -987,10 +987,38 @@ def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
     for pair, tier in zip(new, judge(new) if new else []):
         judged[pair] = tier
     mode = _file_mode(rule_mode)
-    return {pair: licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
+    out = {}
+    for pair in distinct:
+        lic = licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
+                       operator_max_length=operator_max_length, detail={'tier': judged[pair]})
+        if mode == 'permissive' and judged[pair] == 'permissive' \
+                and lic['refused_by'] == ['evidence']:
+            # THE TIER DOES NOT SAY WHICH READING PERMISSIVE HOLDS THE RULE BY: f64's, read with
+            # one zero, whose evidence is float64's (a rule strict refuses for a zero's sign
+            # alone, `neg(acosh(erf(x0))) -> acosh(erf(x0))`), or its own criterion, whose
+            # evidence is the reals'. The judgment says (`verify.licensed`'s full reading, as
+            # verify-mine reads it); the tier stays the judge's.
+            lic = licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
                            operator_max_length=operator_max_length,
-                           detail={'tier': judged[pair]})
-            for pair in distinct}
+                           detail=dict(_judgment(pair), tier=judged[pair]))
+        out[pair] = lic
+    return out
+
+
+#: The judge's full verdicts the licence read beyond a tier (`_licences`), by pair.
+_JUDGMENTS: dict = {}
+
+
+def _judgment(pair: tuple) -> dict:
+    """The contract judge's full verdict on ``pair`` (``verify.verify_rule``), memoised."""
+    hit = _JUDGMENTS.get(pair)
+    if hit is None:
+        from .verify import verify_rule
+        hit = verify_rule(list(pair[0]), list(pair[1]))
+        if len(_JUDGMENTS) > 100_000:
+            _JUDGMENTS.clear()
+        _JUDGMENTS[pair] = hit
+    return hit
 
 
 def _prefilter_reading(engine: Any, X: Any, var_names: Any, rtol: float,

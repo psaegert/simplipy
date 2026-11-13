@@ -587,7 +587,8 @@ exactly one side's value *turns on a zero's sign*: it changes when every $-0$ th
 both sides show no such event; a slot that matches any subexpression guards no point. A rule
 holds in `f64` only if every event the judge reads is isolated: at every point of its f64 lane,
 and at the deployed bar's probes for every rule, each slot over its sort's values with $-0$
-among them. The f64 mint applies the same bar to every pick.
+among them. The f64 mint applies the same bar to every pick. A zero's sign is `f64`'s alone:
+`permissive` includes `f64` with the two zeros one value, evidence included.
 
 **The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
 licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$

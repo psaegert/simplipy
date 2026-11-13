@@ -68,7 +68,7 @@ a zero's sign (a divisor, `pow` or `rootn` at an odd negative exponent, `atan2`)
 does not, only at isolated points. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for x0 < 0) and
 `atan2(0*x0, -1) -> pi` (-pi against pi for x0 < 0) do not hold in `f64`; `log(exp(x0)) -> x0`
 (+0 against -0 at x0 = -0 alone) does, and `log(exp(_0)) -> _0` does not, since a slot that
-matches any subexpression can bind one that is -0 on a region. `permissive` is judged on the reals' values at float resolution.
+matches any subexpression can bind one that is -0 on a region. A zero's sign is `f64`'s alone: `permissive`, which reads one zero, includes `f64` with the two zeros one value, so those rules hold in `permissive`, with float64's evidence where `f64` so read holds them (`neg(acosh(erf(x0))) -> acosh(erf(x0))`). `permissive` is judged on the reals' values at float resolution.
 The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals' outcome, a
 diagnostic that decides no mode by itself; `f64` reads it for its second reading. A mode whose reading reaches no answer
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side
@@ -123,7 +123,7 @@ from it (`simplipy.verify.tier_table()`):
 | tier | `f64` | `permissive` | meaning |
 |---|---|---|---|
 | `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every value's kind: `sin(x0 + pi) -> -sin(x0)`), and so in permissive, which includes every rule f64 holds |
-| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), or an extension (`exp(log(x0)) -> x0`) |
+| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an extension (`exp(log(x0)) -> x0`), or held by f64 with the two zeros one value and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`) |
 | `reject` | no | no | holds in no mode; recorded in the drop census |
 <!-- tier-table: end -->
 

@@ -181,16 +181,20 @@ def _evidence_spelling(lhs: list[str], rhs: list[str]) -> list[str]:
 
 
 def _held_with_evidence(lhs: list[str], rhs: list[str], detail: dict, tier: str) -> bool:
-    """Does permissive hold the rule in a reading that has evidence? Permissive includes f64, so
-    a rule holds there where f64 holds it or by permissive's own criterion, and its evidence is
-    float64's or the reals' (4.1): the evidence of a reading the rule holds in. A rule f64 holds
-    needs float64's evidence, one held by permissive's own criterion the reals'.
+    """Does permissive hold the rule in a reading that has evidence? Permissive includes f64, read
+    with one zero as permissive reads float64 (`realised_one_zero`: a zero's sign is strict's
+    alone), so a rule holds there where f64 so read holds it or by permissive's own criterion, and
+    its evidence is float64's or the reals' (4.1): the evidence of a reading the rule holds in. A
+    rule f64 holds needs float64's evidence, one held by permissive's own criterion the reals'.
+    `neg(acosh(erf(x0))) -> acosh(erf(x0))` holds in f64 read with one zero (strict refuses it
+    for -0 against +0 past erf's saturation), and has float64's evidence there.
     `tan(atan2(x0, 0)) -> nan` holds by permissive's own criterion, vacuously (the left side has
     no value in the reals off x0 = 0), and float64's evidence, where the rule is false, licenses
     nothing. Where only the tier is known (`core`), permissive's own reading is not, and is taken
     as not holding (fail closed)."""
     from .. import _core  # type: ignore[attr-defined]
-    held_f64 = (detail['realised'] is True) if 'realised' in detail else tier == 'core'
+    held_f64 = (detail['realised_one_zero'] is True) if 'realised_one_zero' in detail else \
+        (detail['realised'] is True) if 'realised' in detail else tier == 'core'
     held_own = (detail['permissive_own'] is True) if 'permissive_own' in detail \
         else tier == 'permissive'
     spelled, arity = _evidence_spelling(lhs, rhs), dict(_contract.ARITY)

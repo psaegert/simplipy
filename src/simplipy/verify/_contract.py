@@ -2495,8 +2495,9 @@ TIER_MEANINGS = {
              'float64 keeps every value\'s kind: `sin(x0 + pi) -> -sin(x0)`), and so in '
              'permissive, which includes every rule f64 holds'),
     'permissive': ("holds in permissive alone: true in the reals at float resolution and refused "
-                   "by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), or an "
-                   "extension (`exp(log(x0)) -> x0`)"),
+                   "by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an "
+                   "extension (`exp(log(x0)) -> x0`), or held by f64 with the two zeros one value "
+                   "and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`)"),
     'reject': 'holds in no mode; recorded in the drop census',
 }
 
@@ -2621,14 +2622,19 @@ def strict_reading(f6, kinds, verdict):
 
 
 def _settle(r):
-    """The modes' readings of the judged rule `r` from its parts, in place: strict's
-    (`strict_reading` of `realised_f6`, `realised_kinds` and the reals' `verdict`, kept as
-    `realised`), permissive's, which includes strict's (`mode_reading` of `realised` and
-    permissive's own criterion's reading `permissive_own`, kept as `permissive`), and the tier
-    they give. -> `r`."""
-    r['realised'] = strict_reading(r.get('realised_f6'), r.get('realised_kinds'),
-                                   r.get('verdict'))
-    r['permissive'] = mode_reading(r['realised'], r.get('permissive_own'), 'permissive')
+    """The modes' readings of the judged rule `r` from its parts, in place: float64's, the two
+    zeros one value (`strict_reading` of `realised_f6`, `realised_kinds` and the reals'
+    `verdict`, kept as `realised_one_zero`); strict's, which is that reading refused where a
+    zero's sign changes on a region (`zero_sign_refused`, `zero_sign_refusal`), kept as
+    `realised`; permissive's, which includes f64 as permissive reads it, with one zero
+    (`mode_reading` of `realised_one_zero` and permissive's own criterion's reading
+    `permissive_own`, kept as `permissive`): a zero's sign is strict's alone, so
+    `0*asin(x0) -> 0*acos(x0)` holds in permissive, through f64, as before strict read it; and
+    the tier they give. -> `r`."""
+    one_zero = strict_reading(r.get('realised_f6'), r.get('realised_kinds'), r.get('verdict'))
+    r['realised_one_zero'] = one_zero
+    r['realised'] = False if r.get('zero_sign_refused') else one_zero
+    r['permissive'] = mode_reading(one_zero, r.get('permissive_own'), 'permissive')
     r['tier'] = _tier(r['realised'], r['permissive'])
     return r
 
@@ -2847,6 +2853,7 @@ def _ground_settled(r, ex, deployed_check=True):
     elif ex['reals'] == 'refuted' and r.get('verdict') != 'KILL':
         r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'], points=[{}])
     r['realised'] = strict_reading(f6, kinds, r.get('verdict'))
+    r['realised_one_zero'] = r['realised']
     r['permissive'] = r['permissive_own']
     holds = tuple(m for m, h in (('f64', r['realised'] is True and r['permissive']),
                                  ('permissive', r['permissive'])) if h)
@@ -2907,7 +2914,7 @@ def _with_f64_bar(lhs, rhs, r):
 
 
 def _with_zero_sign_bar(lhs, rhs, r):
-    """The judged rule `r` with the core's zero-sign bar ANDed into strict's two readings
+    """The judged rule `r` with the core's zero-sign bar ANDed into strict's reading
     (`_core.zero_sign_bar_sorted`: strict's reading of a zero's sign, `zero_sign_refusal`, at the
     deployed bar's probes, each slot over its sort's values, -0 included, and each left-side
     `<constant>` over the finite ones). Every rule with a slot or a left-side constant answers to
@@ -2927,10 +2934,10 @@ def _with_zero_sign_bar(lhs, rhs, r):
     if bar is None or bar[0]:
         return r
     _, probes, first, event = bar
-    # the bar's refusal refuses both of strict's readings
+    # the bar's refusal refuses strict, whose reading of a zero's sign it is
     at = None if first is None else dict(zip(keys + [f'<C_L{k}>' for k in range(len(first))],
                                              first))
-    r = dict(r, realised_f6=False, realised_kinds=False,
+    r = dict(r, zero_sign_refused=True,
              zero_sign_bar={'ok': False, 'probes': probes, 'event': event, 'first': at})
     return _settle(r)
 
@@ -3457,10 +3464,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 held = kind_holds(dv, lambda: reals_valued_at(tl, tr, tl_env, always_valued))
                 if held and not exact_point:
                     # a difference (b) admits as rounding, unless a side's value turns on a
-                    # zero's sign there and the other's does not
+                    # zero's sign there and the other's does not: strict's reading of a zero's
+                    # sign, which refuses strict alone
                     event = zero_sign_at(tl_env)
                     if event is not None:
-                        held = False
                         out['zero_sign'].append((event, point))
                 if held is None:
                     out['kind_unread'].append(point)
@@ -3472,8 +3479,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 # a region
                 event = None if exact_point else zero_sign_at(tl_env)
                 if event is not None:
-                    out['bad'].append(('ZERO-SIGN', point))
-                    out['kind_bad'].append(('ZERO-SIGN', point))
                     out['zero_sign'].append((event, point))
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
             # a few-ULP rounding is no divergence
@@ -3943,8 +3948,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                         if event is not None:
                             point = dict(vals)
                             point.update(dict(zip(lnames, grid_key)))
-                            acc['bad'].append(('ZERO-SIGN', point))
-                            acc['kind_bad'].append(('ZERO-SIGN', point))
                             acc['zero_sign'].append((event, point))
             preimages(acc, lanes, cr_f64)
             mint_rows(acc, cr_f64)
@@ -4117,10 +4120,15 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                                   'verdict': sub_r.get('verdict'),
                                   'clause': sub_r.get('clause'),
                                   'points': sub_r.get('points') or sub_r.get('cell')}
-                # f64 owes the instance in its own values: held where float64 was read on it
-                if (deployed_check and sub_r.get('realised') is not True
+                # f64 owes the instance in its own values: held where float64 was read on it,
+                # and strict reads the zero's sign there too
+                if (deployed_check and sub_r.get('realised_one_zero') is not True
                         and correlated_f64 is None):
                     correlated_f64 = [b for b in blocks if len(b) > 1]
+                if deployed_check and sub_r.get('zero_sign_refused'):
+                    event = (sub_r.get('zero_sign') or [('opposite-zeros', {})])[0][0]
+                    zero_sign_events.append(
+                        (event, {'coincide': [b for b in blocks if len(b) > 1]}))
 
     # f64 HOLDS by its own values, whatever the reals' verdict: no disagreement at a point read
     # (an extension on a lower-dimensional cell is clause (b)'s, `isolated_f64`, as the
@@ -4176,6 +4184,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     if zero_sign_events:
         # strict's reading of a zero's sign (`zero_sign_refusal`): where it refused, and why
         base['zero_sign'] = zero_sign_events[:3]
+        base['zero_sign_refused'] = True
     if dep_kinds:
         # what float64's disagreements are (F8): ROUNDING (finite, one sign), SIGN (a zero against
         # a nonzero, or opposite signs), a class change (EXT, SHRINK, INF-CHANGE), and ZERO-SIGN

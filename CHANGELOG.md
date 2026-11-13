@@ -1975,7 +1975,20 @@ model predictions.
   against 0 at C = 0) and every rule false in the reals do not. The judge decides
   it in one place (`verify._contract.strict_reading`), which `verify_rule`, the mine's judge and
   `verify-mine` read, and a verdict reports float64's two readings (`realised_f6`,
-  `realised_kinds`).
+  `realised_kinds`). The f64 mine reads its rows by one agreement at every row it reads, the
+  rows where an operation overflowed aside: strict's, where a value is off by where it came
+  from -- an evaluated side by rounding, within the mine's tolerances (`rtol`, `atol`), a fitted
+  constant by the fit's band (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an
+  overflow row and a rounding row, and `besselj(cos(1), C) -> C'` are mined). The overlap gate
+  reads the same agreement: a completion the judge licenses and the f64 mine's agreement refuses
+  is no rule of the f64 file, recorded in the sidecar as left unjoined by the prefilter
+  (`overlaps_prefilter`, counted by `verify-mine`); the permissive file joins it. The f64 mine
+  reads the f64 bar, the magnitude ladder, the special points and
+  the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
+  where the reals' left side is 0); an identity whose rounding a function magnifies past the
+  tolerances is not mined in `f64`. The engine's own inverse collapses keep their bands
+  (`acosh(cosh(x))` to |x| >= 1), so `acosh(cosh(x0)) -> abs(x0)` holds as a rule in `f64` where
+  the constructor does not collapse it.
 - **`f64` reads a zero's sign where it changes a value on a region.** Both of `f64`'s readings
   refuse a rule where float64 gives its two sides zeros of opposite sign, and the reading in
   kind refuses a difference at which exactly one side's value turns on a zero's sign: the value
@@ -1995,20 +2008,12 @@ model predictions.
   two zeros as one value; it told them apart at every probe where the rule held an operation
   that reads a zero's sign, an isolated point included. A fitted constant is a double in `f64`,
   -0.0 included: the witness of `max(C, -0.0) -> C` at C = -1.5 is -0.0 (a snap no longer moves a
-  zero's sign), so the rule holds. Permissive reads one zero and is unchanged. The f64 mine reads its rows by one agreement at every row it reads, the
-  rows where an operation overflowed aside: strict's, where a value is off by where it came
-  from -- an evaluated side by rounding, within the mine's tolerances (`rtol`, `atol`), a fitted
-  constant by the fit's band (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an
-  overflow row and a rounding row, and `besselj(cos(1), C) -> C'` are mined). The overlap gate
-  reads the same agreement: a completion the judge licenses and the f64 mine's agreement refuses
-  is no rule of the f64 file, recorded in the sidecar as left unjoined by the prefilter
-  (`overlaps_prefilter`, counted by `verify-mine`); the permissive file joins it. The f64 mine
-  reads the f64 bar, the magnitude ladder, the special points and
-  the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
-  where the reals' left side is 0); an identity whose rounding a function magnifies past the
-  tolerances is not mined in `f64`. The engine's own inverse collapses keep their bands
-  (`acosh(cosh(x))` to |x| >= 1), so `acosh(cosh(x0)) -> abs(x0)` holds as a rule in `f64` where
-  the constructor does not collapse it.
+  zero's sign), so the rule holds. Permissive reads one zero and is unchanged: it includes `f64`
+  with the two zeros one value (a verdict reports that reading as `realised_one_zero`), and
+  takes float64's evidence for a rule `f64` so read holds, as before
+  (`neg(acosh(erf(x0))) -> acosh(erf(x0))`, whose left side has no value in the reals); where a
+  rule's tier cannot say which evidence applies, the mine's licence reads the judgment, as
+  `verify-mine` does.
 - **A verdict's `permissive` includes `f64`.** It is permissive's reading, so it holds wherever
   `realised` does; permissive's own criterion alone is `permissive_own`. The field used to be
   the own criterion: `2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` read `realised`
