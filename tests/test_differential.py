@@ -723,6 +723,94 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     assert folded == (holds and (evidence is True or mode == 'permissive'))
 
 
+#: Why the judge refuses a constant collapse that holds: a fitted constant is finite, so the
+#: constant part's value is the witness wherever it has one, and a value of the constant at which
+#: it has none is no member of the family.
+MEMBER = ("the judge reads float64's infinity of the constant part (log(0) at C = 0, 1/0, "
+          "atanh(1), 0^C for C < 0) as a member of the family, owed a witness")
+SATURATION = ("the judge's witness search misses the constant part's own value where tanh is +-1 "
+              "on most of its grid (past C = 709.78 exp(C) overflows, a range event)")
+
+
+class KnownRefusal(AssertionError):
+    """The judge refuses a constant collapse that holds, for the cause the row names."""
+
+
+def collapse_case(around, node, *causes):
+    marks = [pytest.mark.xfail(strict=True, raises=KnownRefusal, reason='; '.join(causes))]
+    return pytest.param(around, node, causes, marks=marks if causes else [],
+                        id=around.format(node))
+
+
+#: A collapse in context, `around[node] -> around[<constant>]`, with the cause of the judge's
+#: refusal where it has one.
+COLLAPSES_IN_CONTEXT = [
+    collapse_case('+ x0 {}', 'log <constant>'),
+    collapse_case('* x0 {}', 'tanh log <constant>'),
+    collapse_case('+ x0 {}', 'inv <constant>'),
+    collapse_case('* x0 {}', 'exp <constant>'),
+    collapse_case('tanh + x0 {}', 'log <constant>', MEMBER),
+    collapse_case('exp + x0 {}', 'log <constant>', MEMBER),
+    collapse_case('atan + x0 {}', 'log <constant>', MEMBER),
+    collapse_case('inv + x0 {}', 'log <constant>', MEMBER),
+    collapse_case('exp * x0 {}', 'log <constant>', MEMBER),
+    collapse_case('tanh * x0 {}', 'log <constant>', MEMBER),
+    collapse_case('tanh + x0 {}', 'atanh <constant>', MEMBER),
+    collapse_case('tanh + x0 {}', 'inv <constant>', MEMBER, SATURATION),
+    collapse_case('tanh + x0 {}', 'exp <constant>', SATURATION),
+    collapse_case('tanh + x0 {}', 'pow <constant> 2', SATURATION),
+    collapse_case('tanh + x0 {}', 'cosh <constant>', SATURATION),
+    collapse_case('tanh + x0 {}', '* 5 <constant>', SATURATION),
+]
+
+
+@pytest.mark.parametrize('around, node', [p.values[:2] for p in COLLAPSES_IN_CONTEXT])
+@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+def test_a_constant_node_collapses_wherever_it_stands(around, node, mode) -> None:
+    """A fitted constant is finite: the constant part's value is the witness wherever it has
+    one, and a value of the constant at which it has none is no member, so a constant node
+    collapses in any surroundings, in both modes."""
+    engine = bare()
+    lhs, rhs = around.format(node), around.format('<constant>')
+    assert (list(engine.simplify(lhs.split(), mode=mode))
+            == list(engine.simplify(rhs.split(), mode=mode))), (lhs, mode)
+
+
+@pytest.mark.parametrize('around, node, causes', COLLAPSES_IN_CONTEXT)
+def test_the_judge_holds_a_constant_collapse_in_context(around, node, causes) -> None:
+    """The judge holds the collapse in strict, or refuses it for the cause the row names: at a
+    constant it finds no witness for, the constant part is float64's infinity where the reals
+    give it no value (`MEMBER`), or it has a value, its own witness, which the search misses
+    (`SATURATION`)."""
+    import re
+    lhs, rhs = around.format(node), around.format('<constant>')
+    d = judged(lhs, rhs)
+    if d.get('realised') is True:
+        return
+    named = [float(c) for c in re.findall(r'\(([-\d.e+]+),\)', str(d.get('detail') or ''))]
+
+    def member(c):
+        at = node.replace('<constant>', repr(c)).split()
+        with np.errstate(all='ignore'):
+            f = float(bare().as_callable(at, [])())
+        old = mp.dps
+        try:
+            mp.dps = 50
+            v = _contract.c_eval(_contract.parse(at), {})
+        finally:
+            mp.dps = old
+        return bool(np.isinf(f)) and (v != v or v in (mp.inf, -mp.inf))
+
+    assert named, (lhs, d.get('verdict'), d.get('detail'))
+    if MEMBER in causes:
+        assert any(member(c) for c in named), (lhs, named)
+    if SATURATION in causes:
+        assert not all(member(c) for c in named), (lhs, named)
+    if not causes:
+        assert False, (lhs, d.get('verdict'), d.get('detail'))
+    raise KnownRefusal(f'{lhs}: {d.get("verdict")} {d.get("detail")}')
+
+
 @pytest.mark.parametrize('lhs, rhs, policy', [
     ('/ 1 0', 'float("nan")', 'engine_owned'),
     ('- <constant> <constant>', '0', 'engine_owned'),

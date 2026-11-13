@@ -1,4 +1,5 @@
-//! THE ZERO AND ONE LAWS, each a named step that carries its own premise, per mode.
+//! THE LAWS OF THE CATALOGUE, each a named step that carries its own premise, per mode: the
+//! zero and one laws, and the absorptions of a fitted constant.
 //!
 //! A law is an identity of the reals with the mode's extended values. Where it holds at every
 //! binding it applies everywhere (a total law); where it does not, it applies only where its
@@ -25,6 +26,23 @@
 //! | `pow.base_one` | 1^t = 1 | none | none |
 //! | `rootn.one` | rootn(t, 1) = t | none | none |
 //! | `add.infinity_absorbs` | inf + t = inf | t finite almost everywhere | none, after the like terms |
+//! | `absorb.sum` | c1 + r*c2 + q = c | none | none |
+//! | `absorb.product` | r*c = c, r a nonzero rational | none | none |
+//! | `absorb.sum_sign` | -k*(s + c) = k*(-s + c) | none | none |
+//! | `absorb.refit_sign` | c*(a - b) = c*(b - a) | none | none |
+//! | `absorb.ground_shift` | c + g = c, c*g = c, g ground and finite (nonzero in a product) | none | none |
+//! | `absorb.collapse` | L(c) = c, L variable-free | none | none |
+//! | `absorb.nan_family` | L(c) = NaN, L variable-free and NaN at every c | none | none |
+//!
+//! An absorption is the specification's 3.2, a statement about families: for every value of
+//! the constants on the left there is one on the right, `d = c1 + r*c2 + q`, `d = r*c`,
+//! `d = -c`, `d = L(c)`, which is why none needs a premise. A fitted constant is finite: a real
+//! number, in `f64` a finite double (-0.0 included), so a value of the constants at which the
+//! constant part has none is no member of the family (`log(c)` at c = 0, `1/c` at 0, `atanh(c)`
+//! at 1), and an overflow at a finite constant is a range event: `tanh(x0 + log(c))` is
+//! `tanh(x0 + c)`. A collapse needs the evidence every step needs (the node is finite on a set of
+//! positive measure of its constants in the mode's values: `(-1)^c` has none in `f64`), which
+//! `permissive` does without.
 
 use super::expr::{Cx, Ex, Permissive};
 
@@ -76,11 +94,38 @@ pub enum Law {
     /// `2*(x0 + inf)/(x0 + inf)` is 2 and `(x0 + inf) - (x0 + inf)` is 0; what survives them is
     /// absorbed (`x0 + inf` is `inf`).
     InfinityAbsorbs,
+    /// A sum's fitted constants and literals are one constant: `c1 + 2*c2 + 5 = c`. Premise
+    /// none in both modes.
+    AbsorbSum,
+    /// A fitted constant absorbs a nonzero rational coefficient: `5*c = c`, a partition's
+    /// members included. An exact 0 stays outside: `0*c` is 0, never a fitted constant. Premise
+    /// none in both modes.
+    AbsorbProduct,
+    /// A negative coefficient beside a sum holding a fitted constant joins the sum:
+    /// `-2*(x0 + c) = 2*(c - x0)`. Premise none in both modes.
+    AbsorbSumSign,
+    /// Beside a fitted constant every orientation of a class is free: `c*(x0 - x1) =
+    /// c*(x1 - x0)`. Premise none in both modes.
+    AbsorbRefitSign,
+    /// A sum or product holding a fitted constant absorbs a ground member whose value is finite,
+    /// and certainly nonzero in a product: `c + cosh(1) = c`, `c*sin(1) = c`. Premise none in
+    /// both modes.
+    AbsorbGroundShift,
+    /// A variable-free node holding a fitted constant is one: `log(c) = c`, wherever it stands
+    /// (`tanh(x0 + log(c))` is `tanh(x0 + c)`): a fitted constant is finite, so the constant
+    /// part's value is the witness wherever it has one, and the values of the constants at which
+    /// it has none (`log(0)`, `1/0`, `atanh(1)`) are no members. Premise none in both modes; the
+    /// collapse licence (`interval::collapse_licence`) reads the node's evidence in `f64`
+    /// (`(-1)^c`, finite only at the integers, has none).
+    AbsorbCollapse,
+    /// A variable-free node holding a fitted constant whose value is NaN at every constant is
+    /// NaN: `acosh(acos(cosh(c)))`. Premise none in both modes.
+    AbsorbNanFamily,
 }
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 10] = [
+    pub const ALL: [Law; 17] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -91,6 +136,13 @@ impl Law {
         Law::PowBaseOne,
         Law::RootnOne,
         Law::InfinityAbsorbs,
+        Law::AbsorbSum,
+        Law::AbsorbProduct,
+        Law::AbsorbSumSign,
+        Law::AbsorbRefitSign,
+        Law::AbsorbGroundShift,
+        Law::AbsorbCollapse,
+        Law::AbsorbNanFamily,
     ];
 
     /// The law's stable name, `family.law`.
@@ -106,6 +158,13 @@ impl Law {
             Law::PowBaseOne => "pow.base_one",
             Law::RootnOne => "rootn.one",
             Law::InfinityAbsorbs => "add.infinity_absorbs",
+            Law::AbsorbSum => "absorb.sum",
+            Law::AbsorbProduct => "absorb.product",
+            Law::AbsorbSumSign => "absorb.sum_sign",
+            Law::AbsorbRefitSign => "absorb.refit_sign",
+            Law::AbsorbGroundShift => "absorb.ground_shift",
+            Law::AbsorbCollapse => "absorb.collapse",
+            Law::AbsorbNanFamily => "absorb.nan_family",
         }
     }
 
@@ -122,14 +181,33 @@ impl Law {
             Law::PowBaseOne => "1^t = 1",
             Law::RootnOne => "rootn(t, 1) = t",
             Law::InfinityAbsorbs => "inf + t = inf",
+            Law::AbsorbSum => "c1 + r*c2 + q = c",
+            Law::AbsorbProduct => "r*c = c",
+            Law::AbsorbSumSign => "-k*(s + c) = k*(-s + c)",
+            Law::AbsorbRefitSign => "c*(a - b) = c*(b - a)",
+            Law::AbsorbGroundShift => "c + g = c, c*g = c",
+            Law::AbsorbCollapse => "L(c) = c",
+            Law::AbsorbNanFamily => "L(c) = NaN",
         }
     }
 
-    /// Is the law total: an identity at every binding in both modes, so its premise is none?
+    /// Is the law's premise none in both modes: an identity at every binding, or, for the
+    /// absorptions, at every value of the constants on the left?
     pub const fn total(self) -> bool {
         matches!(
             self,
-            Law::MulOne | Law::PowZero | Law::PowOne | Law::PowBaseOne | Law::RootnOne
+            Law::MulOne
+                | Law::PowZero
+                | Law::PowOne
+                | Law::PowBaseOne
+                | Law::RootnOne
+                | Law::AbsorbSum
+                | Law::AbsorbProduct
+                | Law::AbsorbSumSign
+                | Law::AbsorbRefitSign
+                | Law::AbsorbGroundShift
+                | Law::AbsorbCollapse
+                | Law::AbsorbNanFamily
         )
     }
 

@@ -3107,7 +3107,7 @@ fn scale_term(t: &Ex, r: &Coef, cx: &Cx) -> Option<Ex> {
                 // one path around them (found by a constructor-licence sweep).
                 return Some(Ex::Num(Rat::ZERO));
             }
-            Some(Ex::Const) // r * c refits to c' (forall-exists)
+            Some(Ex::Const) // r * c refits to c' (forall-exists; `Law::AbsorbProduct`)
         }
         Ex::PosInf | Ex::NegInf => {
             if r.is_zero() {
@@ -3283,9 +3283,10 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
         // c * nan = nan for every rational c: total, fold outright.
         Ex::NaN => Ex::NaN,
         // A bare `Const` absorbs a NONZERO coefficient (the contract's forall-exists
-        // refit) -- but an exact ZERO stays OUTSIDE, mirroring `mul()`: absorbing a
-        // STRUCTURAL zero into the constant class would hand the fitter a fittable
-        // constant where mathematics has an exact 0 (the masking-soundness principle).
+        // refit, `Law::AbsorbProduct`) -- but an exact ZERO stays OUTSIDE, mirroring
+        // `mul()`: absorbing a STRUCTURAL zero into the constant class would hand the fitter
+        // a fittable constant where mathematics has an exact 0 (the masking-soundness
+        // principle).
         Ex::Const if !c.is_zero() => Ex::Const,
         Ex::Const => Ex::Mul(vec![Ex::Num(c), Ex::Const]),
         // An infinity absorbs the coefficient's magnitude and takes its sign, EXACTLY
@@ -3727,7 +3728,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     for t in terms {
         let (c, key) = term_split(t, cx.view);
         if key == Ex::Const {
-            // r*Const: joins the bare-Const pool (c1*r1 + c2*r2 = c3, forall-exists).
+            // r*Const: joins the bare-Const pool (c1*r1 + c2*r2 = c3, forall-exists;
+            // `Law::AbsorbSum`).
             const_terms = true;
             continue;
         }
@@ -8076,8 +8078,9 @@ fn sign_place_zero(negative: Option<bool>, out: Vec<Ex>, cx: &Cx) -> Ex {
 /// [`sign_place`], with the zero's sign where the coefficient is a zero that carries one.
 fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &Cx) -> Ex {
     // A sum holding a `Const` takes a sign into its terms (`negate_term`: a Const term absorbs it
-    // in the refit, every other term negates), so it carries the product's sign exactly, as a
-    // negation-absorbing sum does; only a bare `Const` factor or a zero coefficient eats a sign.
+    // in the refit, every other term negates; `Law::AbsorbSumSign`), so it carries the product's
+    // sign exactly, as a negation-absorbing sum does; only a bare `Const` factor or a zero
+    // coefficient eats a sign.
     // Beside such a sum the coefficient and the infinities are positive and the sum holds their
     // signs (the Const sign fold, extended to the infinities).
     let const_sum = if !coeff.is_zero() && !out.iter().any(|f| matches!(f, Ex::Const)) {
@@ -8163,7 +8166,8 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
         // so the product's value there is the coefficient's infinity -- the limit wherever the
         // pole is one-signed; a single member flipping alone would turn it (`1/(cbrt(u) u)`).
         // Beside a bare `Const`, which absorbs every constant factor of the product and so the
-        // orientation sign of every class, every class is a site (`refit_trade_flip`).
+        // orientation sign of every class, every class is a site (`refit_trade_flip`,
+        // `Law::AbsorbRefitSign`).
         let refit = out.iter().any(|f| matches!(f, Ex::Const));
         let site_flips: Vec<(usize, Ex)> = out
             .iter()

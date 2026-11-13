@@ -1,4 +1,4 @@
-"""The zero and one laws: each a named step of the core that carries its own premise, per mode.
+"""The laws of the catalogue: each a named step of the core that carries its own premise, per mode.
 
 A law applies where its premise holds of its operand, and each mode states its own premise:
 `f64` reads float64's values, `permissive` cancels like terms without a definedness check. A
@@ -6,6 +6,10 @@ fully numeric operand never reaches a law, since its value is read first (a part
 NaN). Each row is an input the law reaches, with the answer in each mode, on an engine without
 rules, so every answer is the constructors' and the pass's own: where the premise holds the law
 applies, and where it fails the input keeps the operand the law would have removed.
+
+The absorptions of a fitted constant hold of families (for every value of the constants on the
+left there is one on the right), so their rows have no float64 agreement to check: the rule
+judge reads them (`tests/test_differential.py`).
 """
 import os
 import warnings
@@ -106,6 +110,52 @@ ROWS = [
     ('add.infinity_absorbs', f'/ {INF} {INF}', NAN, NAN),
 ]
 
+C = '<constant>'
+#: (law, input, f64 answer, permissive answer) of the absorptions of a fitted constant
+ABSORB_ROWS = [
+    # c1 + r*c2 + q = c
+    ('absorb.sum', f'+ x0 + {C} 5', f'+ x0 {C}', f'+ x0 {C}'),
+    ('absorb.sum', f'+ x0 + {C} * 2 {C}', f'+ x0 {C}', f'+ x0 {C}'),
+    ('absorb.sum', f'+ {C} * 2 {C}', C, C),
+    # r*c = c for a nonzero rational r; 0*c is the exact 0, and an infinity is no rational
+    ('absorb.product', f'* 5 {C}', C, C),
+    ('absorb.product', f'* 5 * {C} x0', f'* {C} x0', f'* {C} x0'),
+    ('absorb.product', f'* 0 {C}', '0', '0'),
+    ('absorb.product', f'* {INF} {C}', f'* {INF} {C}', f'* {INF} {C}'),
+    # -k*(s + c) = k*(-s + c)
+    ('absorb.sum_sign', f'* -1 + x0 {C}', f'- {C} x0', f'- {C} x0'),
+    ('absorb.sum_sign', f'* x1 * -2 + x0 {C}', f'* 2 * x1 - {C} x0', f'* 2 * x1 - {C} x0'),
+    # c*(a - b) = c*(b - a): the cheaper orientation
+    ('absorb.refit_sign', f'* {C} - x1 x0', f'* {C} - x0 x1', f'* {C} - x0 x1'),
+    ('absorb.refit_sign', f'* {C} - 1 x1', f'* {C} - x1 1', f'* {C} - x1 1'),
+    # c + g = c and c*g = c for a ground g, finite (and nonzero in a product)
+    ('absorb.ground_shift', f'+ x0 + {C} cosh 1', f'+ x0 {C}', f'+ x0 {C}'),
+    ('absorb.ground_shift', f'* x0 * {C} sin 1', f'* {C} x0', f'* {C} x0'),
+    ('absorb.ground_shift', f'- {C} cosh 1', C, C),
+    # L(c) = c wherever L stands: a fitted constant is finite, so the values of c at which L has
+    # none (log(0), 1/0, atanh(1)) are no members, and an overflow is a range event. f64 reads
+    # L's evidence: (-1)^c, finite only at the integers, has none.
+    ('absorb.collapse', f'log {C}', C, C),
+    ('absorb.collapse', f'pow 2 {C}', C, C),
+    ('absorb.collapse', f'inv log {C}', C, C),
+    ('absorb.collapse', f'+ x0 log {C}', f'+ x0 {C}', f'+ x0 {C}'),
+    ('absorb.collapse', f'+ x0 inv {C}', f'+ x0 {C}', f'+ x0 {C}'),
+    ('absorb.collapse', f'exp - x0 log {C}', f'exp + x0 {C}', f'exp + x0 {C}'),
+    ('absorb.collapse', f'* x0 tanh log {C}', f'* {C} x0', f'* {C} x0'),
+    ('absorb.collapse', f'tanh + x0 tanh log {C}', f'tanh + x0 {C}', f'tanh + x0 {C}'),
+    ('absorb.collapse', f'tanh + x0 exp {C}', f'tanh + x0 {C}', f'tanh + x0 {C}'),
+    ('absorb.collapse', f'tanh + x0 log {C}', f'tanh + x0 {C}', f'tanh + x0 {C}'),
+    ('absorb.collapse', f'exp + x0 log {C}', f'exp + x0 {C}', f'exp + x0 {C}'),
+    ('absorb.collapse', f'tanh + x0 inv {C}', f'tanh + x0 {C}', f'tanh + x0 {C}'),
+    ('absorb.collapse', f'tanh + x0 atanh {C}', f'tanh + x0 {C}', f'tanh + x0 {C}'),
+    ('absorb.collapse', f'tanh + x0 pow 0 {C}', f'tanh + x0 {C}', f'tanh + x0 {C}'),
+    ('absorb.collapse', f'pow -1 {C}', f'pow -1 {C}', C),
+    ('absorb.collapse', f'pow -1 floor {C}', f'pow -1 {C}', C),
+    # L(c) = NaN where L is NaN at every c; `asin(cosh(c))` is pi/2 at c = 0
+    ('absorb.nan_family', f'acosh acos cosh {C}', NAN, NAN),
+    ('absorb.nan_family', f'asin cosh {C}', C, C),
+]
+
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
@@ -119,15 +169,19 @@ def test_the_core_names_its_laws() -> None:
         ('add.zero', 't + 0 = t'), ('mul.one', '1*t = t'), ('mul.zero', '0*t = 0'),
         ('add.cancel', 't - t = 0'), ('mul.cancel', 't/t = 1'), ('pow.zero', 't^0 = 1'),
         ('pow.one', 't^1 = t'), ('pow.base_one', '1^t = 1'), ('rootn.one', 'rootn(t, 1) = t'),
-        ('add.infinity_absorbs', 'inf + t = inf')]
+        ('add.infinity_absorbs', 'inf + t = inf'), ('absorb.sum', 'c1 + r*c2 + q = c'),
+        ('absorb.product', 'r*c = c'), ('absorb.sum_sign', '-k*(s + c) = k*(-s + c)'),
+        ('absorb.refit_sign', 'c*(a - b) = c*(b - a)'),
+        ('absorb.ground_shift', 'c + g = c, c*g = c'), ('absorb.collapse', 'L(c) = c'),
+        ('absorb.nan_family', 'L(c) = NaN')]
 
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ROWS} == {name for name, _ in _core.laws()}
+    assert {law for law, *_ in ROWS + ABSORB_ROWS} == {name for name, _ in _core.laws()}
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS])
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + ABSORB_ROWS])
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
         engine, law, expr, f64, permissive, effort) -> None:
@@ -137,7 +191,7 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS])
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + ABSORB_ROWS])
 def test_each_answer_reads_back_to_itself(engine, law, expr, f64, permissive) -> None:
     for mode, answer in (('f64', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)

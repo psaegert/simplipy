@@ -952,13 +952,13 @@ impl Engine {
                 }
             }
         }
-        // A FAMILY OF `<constant>` VALUES THAT IS NaN AT EVERY CONSTANT is NaN: a variable-free
-        // composite holding a `<constant>` whose value class over every value of its constants is
-        // NaN (`acosh(acos(cosh C))`: acos(cosh 0) = 0, and acosh(0) has no value either). A
-        // family finite at a single constant is not one (3.2 owes its value there:
-        // `asin(cosh C)` is pi/2 at C = 0), and its class is Mixed. The ground classification
-        // above, with the constants ranging over the reals. Before the absorptions below, which
-        // would read the family as a `<constant>`.
+        // A FAMILY OF `<constant>` VALUES THAT IS NaN AT EVERY CONSTANT is NaN
+        // (`Law::AbsorbNanFamily`): a variable-free composite holding a `<constant>` whose value
+        // class over every value of its constants is NaN (`acosh(acos(cosh C))`: acos(cosh 0) =
+        // 0, and acosh(0) has no value either). A family finite at a single constant is not one
+        // (3.2 owes its value there: `asin(cosh C)` is pi/2 at C = 0), and its class is Mixed.
+        // The ground classification above, with the constants ranging over the reals. Before
+        // the absorptions below, which would read the family as a `<constant>`.
         if is_composite
             && e.contains_const()
             && variable_free(e, &view)
@@ -981,7 +981,7 @@ impl Engine {
                 return verdict;
             }
         }
-        // GENERALIZED CONST-SHIFT ABSORPTION: an
+        // GENERALIZED CONST-SHIFT ABSORPTION (`Law::AbsorbGroundShift`): an
         // Add/Mul bag holding a `<constant>` absorbs any GROUND member whose
         // interval-certified value is finite (Add) resp. finite and provably
         // nonzero (Mul): `C + g -> C'` is a bijective reparametrization of the fitted
@@ -1051,9 +1051,11 @@ impl Engine {
             .all(|c| matches!(c, Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E))
             && children.iter().any(|c| matches!(c, Ex::Const));
         if const_or_fin {
-            // THE COLLAPSE LICENCE (`interval::collapse_licence`, the specification's 3.2 with
-            // 4.1), in the mode's values: `log(C)`, `acos(C)` and `pow(0, C)` are fitted
-            // constants wherever they are finite; permissive collapses without evidence.
+            // THE CONSTANT COLLAPSE (`Law::AbsorbCollapse`), read by the collapse licence
+            // (`interval::collapse_licence`, the specification's 3.2 with 4.1) in the mode's
+            // values: `log(C)`, `acos(C)` and `pow(0, C)` are fitted constants wherever they are
+            // finite, in any surroundings, since a fitted constant is finite; permissive
+            // collapses without evidence.
             // Memoized per call beside the ground classes (the key holds a `<constant>`, so it
             // never meets a ground key, and a tag past every token id keeps it apart from the
             // NaN-family verdict of the same node).
