@@ -567,8 +567,8 @@ extended-real value changed at a pole), the numeric agreement on the mine's matr
 one row agreement, `battery::strict_row_agrees`, at every row it reads: F6, or both finite
 within the mine's tolerances where the reals give both sides a value, the true value at a row
 where an operation overflowed; at the special points and the Dirac witnesses strict's two
-readings, the judge deciding what lies between; in `permissive` a near miss re-judged at high
-precision), and
+readings, the judge deciding what lies between; and strict's reading of a zero's sign at the
+deployed bar's probes, below; in `permissive` a near miss re-judged at high precision), and
 the same agreement on an independent confirm matrix. The scan visits candidates in a fixed
 order (μ tiers ascending, library order inside a tier) with per-source seeds that depend
 only on the source's global index, so it is a deterministic function $\mathrm{pick}(s, E)$
@@ -577,6 +577,17 @@ candidate whose class is not in $E$. A candidate's class is the mode's canonical
 reading, each maximal ground part written as the engine's own ground-value reading of it
 (`min(log(1), x0)` and `min(sin(0), x0)` are one class, `min(0, x0)`); the library holds one
 candidate per class, written as that reading.
+
+**A zero's sign in `f64`** [BY CONSTRUCTION — one definition, `battery::zero_sign_event`].
+At a point where no operation of either side overflows or underflows, float64 gives a rule an
+*event* where its two sides are zeros of opposite sign, or finite values that differ (F6) where
+exactly one side's value *turns on a zero's sign*: it changes when every $-0$ that a divisor,
+`inv`, `pow`, `rootn` or `atan2` receives is read as $+0$, the reals' one zero. An event is
+*isolated* where, along some data variable or left-side constant, the neighbouring doubles on
+both sides show no such event; a slot that matches any subexpression guards no point. A rule
+holds in `f64` only if every event the judge reads is isolated: at every point of its f64 lane,
+and at the deployed bar's probes for every rule, each slot over its sort's values with $-0$
+among them. The f64 mint applies the same bar to every pick.
 
 **The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
 licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$

@@ -503,10 +503,10 @@ class TestFindRules:
         # set AND for this one -- the loader's `translate` already collapsed them to
         # four served patterns. Measured across the 400-row corpus in SOUND and LOSSY:
         # 0 rows move.
-        seeds = {(('-', '!0', '!0'), ('0',)),
-                 (('*', '0', '!0'), ('0',)),
-                 (('/', '$0', '$0'), ('1',)),
-                 (('/', '0', '$0'), ('0',))}
+        # In f64 `0*!0 -> 0` and `0/$0 -> 0` do not hold: float64 gives -0 against +0 wherever
+        # the slot is negative, a zero's sign `1/` reads. Without them `- !0 !0 -> 0` is dead:
+        # the engine reads `x - x` as the zero product, which no f64 rule reduces.
+        seeds = {(('/', '$0', '$0'), ('1',))}
         got = {(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules}
         assert got == seeds, got
 
@@ -1028,13 +1028,15 @@ class TestMultSort:
         # The promotion-side twin: promotion seeds the cancellation identities where the judge
         # licenses them. At a `!` binding the subtree may be 0 on a set of positive measure,
         # where 0/0 has no value, so `/ !0 !0 -> 1` does not hold in f64; at a `$` binding
-        # (finite and nonzero a.e.) `/ $0 $0 -> 1` and `/ 0 $0 -> 0` hold.
+        # (finite and nonzero a.e.) `/ $0 $0 -> 1` holds, and `/ 0 $0 -> 0` holds in permissive
+        # only: float64's 0/x is -0 for x < 0, a zero's sign on a region.
         from simplipy.verify import MODE_TIERS, effective_tier, verify_rule
 
         def holds(lhs, rhs, mode):
             return effective_tier(verify_rule(lhs.split(), rhs.split())) in MODE_TIERS[mode]
         assert not holds('/ !0 !0', '1', 'f64')
-        assert holds('/ $0 $0', '1', 'f64') and holds('/ 0 $0', '0', 'f64')
+        assert holds('/ $0 $0', '1', 'f64') and not holds('/ 0 $0', '0', 'f64')
+        assert holds('/ 0 $0', '0', 'permissive')
 
 
 class TestB9MuGuarantee:

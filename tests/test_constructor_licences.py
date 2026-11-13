@@ -341,8 +341,16 @@ class TestCertificateCompletenessTowers:
         # 0 * sinh(0.25*x5^2*(x17+cos x17)/x6) -> 0 (row-481 shape): the argument's
         # only nonfinite points sit on the null pole {x6 = 0}; the structural
         # finiteness recursion needed the binary-pow arm to see it.
-        out = check(eng, '* 0 sinh / * 0.25 * pow x5 2 + x17 cos x17 x6'.split())
+        tokens = '* 0 sinh / * 0.25 * pow x5 2 + x17 cos x17 x6'.split()
+        out = eng.simplify(list(tokens))
         assert out == ['0'], f'kept-zero survived: {out}'
+        assert eng.simplify(list(out)) == out
+        # The answer is +0 where float64 gives the input -0 (sinh's argument negative, on a
+        # region): the constructors drop the sign of a zero at the root, which no operation of
+        # the answer reads, while the judge reads the step as a rule, which strict holds only
+        # where a zero's sign is kept on every region
+        v, d = judge_pair(list(tokens), list(out), rng(), engine=eng)
+        assert v == 'VIOLATION' and 'ZERO-SIGN' in str(d), (v, d)
 
 
 class TestInfiniteTermAbsorption:

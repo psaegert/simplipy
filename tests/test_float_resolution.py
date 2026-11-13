@@ -47,10 +47,14 @@ def test_a_reading_is_made_at_the_precision_the_point_demands() -> None:
                    _0=Fraction(1, 2)) == ('doubles', 1.0, 0.0)
 
 
-@pytest.mark.parametrize('lhs, rhs', [('+ ?0 1e-3000', '?0'), ('+ _0 1e-3000', '_0')])
-def test_a_summand_below_float_resolution_holds_by_permissives_own_criterion(lhs, rhs) -> None:
+@pytest.mark.parametrize('lhs, rhs, strict', [('+ ?0 1e-3000', '?0', True),
+                                              ('+ _0 1e-3000', '_0', False)])
+def test_a_summand_below_float_resolution_holds_by_permissives_own_criterion(
+        lhs, rhs, strict) -> None:
+    # float64 reads 1e-3000 as +0, so the left side is +0 where the slot is -0: at x0 = -0
+    # alone for a variable, on a region where `_0` binds `ceil(x1)`, which strict refuses
     d = verify_rule(lhs.split(), rhs.split())
-    assert d['permissive'] is True and d['realised'] is True, d
+    assert d['permissive'] is True and d['realised'] is strict, d
     assert d['verdict'] == 'UNRESOLVED-COVERAGE', d   # the reals' diagnostic stays undecided
 
 

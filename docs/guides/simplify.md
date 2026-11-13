@@ -302,7 +302,11 @@ composition of up to four implementation-defined library calls whose errors are 
 and can oppose. The second reading admits the identities float64 only rounds: `sin(x0 + pi)`
 is `-sin(x0)` in the reals, and float64's two sides differ by its rounding of `x0 + pi` (at
 x0 = 0, 1.2e-16 against -0), as `floor(x0 + 1)` and `floor(x0) + 1` differ at x0 = -1e-17
-(1 against 0). So a rewrite keeps float64's kind of every value, and agrees with float64's
+(1 against 0). A zero's sign counts where it changes a value on a region: a rule whose sides
+float64 makes zeros of opposite sign there (`0*asin(x0)` and `0*acos(x0)` for x0 < 0), or whose
+one side turns on a zero's sign that the other does not read (`atan2(0*x0, -1)` against `pi`),
+is not in the `f64` set; one whose sides differ at an isolated point only (`log(exp(x0))` and
+`x0` at x0 = -0) is. So a rewrite keeps float64's kind of every value, and agrees with float64's
 evaluation of its input within rounding, except where a jump or a pole lies between float64's
 argument and the real one.
 

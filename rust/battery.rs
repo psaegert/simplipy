@@ -635,10 +635,113 @@ pub const NEW_HEADS: [&str; 13] = [
     "besseli", "besselk",
 ];
 
-/// The heads whose value at a zero operand depends on the zero's sign (F7): `1/(-0)` is -inf,
-/// `atan2(-0, -1)` is -pi, `pow(-0, -3)` and `rootn(-0, -3)` are -inf. Where a rule holds one,
-/// the deployed bar tells the two zeros apart.
+/// The operations whose float64 value reads a zero's sign, beyond carrying it (F7): a divisor
+/// (`1/(-0)` is -inf), `inv`, `pow` and `rootn` at an odd negative exponent (`pow(-0, -3)` and
+/// `rootn(-0, -3)` are -inf), and `atan2` (`atan2(-0, -1)` is -pi, `atan2(0, -0)` is pi). Measured
+/// over every operator at +0 and -0 in each argument: the others carry the sign (`sin`, `*`,
+/// `floor`, ...) or ignore it (`log(-0)` is -inf as `log(+0)` is, `cos`, `exp`, `mod`, the
+/// Bessel functions). Strict's reading of a zero's sign (`zero_sign_event`) and the ground
+/// evaluator's (`table::Expr::reads_a_negative_zero`) read them.
 pub(crate) const ZERO_SIGN_READERS: [&str; 5] = ["/", "inv", "pow", "rootn", "atan2"];
+
+/// What strict reads of a zero's sign at one point (`zero_sign_event`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ZeroSign {
+    /// float64 gives the two sides zeros of opposite sign: `0*asin(x)` is -0 and `0*acos(x)` +0
+    /// for x < 0
+    Opposite,
+    /// float64's two sides are finite and differ (F6), and exactly one side's value turns on a
+    /// zero's sign (`table::Expr::turns_on_a_zero_sign`): `atan2(0*x, -1)` is -pi against pi
+    /// for x < 0, where the reals' one zero gives pi
+    Turns,
+}
+
+impl ZeroSign {
+    /// The event's name, as the judge records it.
+    pub fn name(self) -> &'static str {
+        match self {
+            ZeroSign::Opposite => "opposite-zeros",
+            ZeroSign::Turns => "turns-on-a-zero-sign",
+        }
+    }
+}
+
+/// STRICT'S READING OF A ZERO'S SIGN AT ONE POINT, the core's one definition, which the judge's
+/// f64 lane (`verify._contract`), the zero-sign bar (`zero_sign_bar_sorted`) and the f64 mint
+/// read: float64's values of the sides `l` and `r` (compiled over one name list) at `env` are
+/// zeros of opposite sign (`ZeroSign::Opposite`), or finite values that differ (F6) where exactly
+/// one side's value turns on a zero's sign (`ZeroSign::Turns`). The second is read only where F6
+/// fails: where the two sides agree, a zero's sign one side reads is no change float64 can see
+/// (`inv(0*x) -> inf/x`). `None` where neither holds, where a side cannot be evaluated, and where
+/// an operation of either side overflowed or underflowed: there the range standard reads the true
+/// value, which carries no zero's sign (`erf(x) - 1` against `-erfc(x)` past x = 27.3, where
+/// `erfc` underflows to 0). A strict rule's sides show an event only on a null set
+/// (`zero_sign_isolated`).
+pub fn zero_sign_event(
+    l: &crate::table::Expr,
+    r: &crate::table::Expr,
+    env: &[f64],
+) -> Option<ZeroSign> {
+    let (a, a_in) = l.eval_f64(env)?;
+    let (b, b_in) = r.eval_f64(env)?;
+    if !(a_in && b_in) {
+        return None;
+    }
+    if a == 0.0 && b == 0.0 {
+        return (a.is_sign_negative() != b.is_sign_negative()).then_some(ZeroSign::Opposite);
+    }
+    if a.is_finite()
+        && b.is_finite()
+        && crate::table::f64_agree(a, b) != crate::table::Cmp::Eq
+        && l.turns_on_a_zero_sign(env) != r.turns_on_a_zero_sign(env)
+    {
+        return Some(ZeroSign::Turns);
+    }
+    None
+}
+
+/// Is the zero-sign `event` at `env` ISOLATED, on a null set (ruling 15's measure for float64)?
+/// It is where, along some coordinate of `along`, the neighbouring doubles on both sides show no
+/// such event: `log(exp(x)) -> x` at x = -0, where the left side is +0, and at the neighbours
+/// 5e-324 and -5e-324 neither side is a zero. Only a data variable or a fitted constant guards a
+/// null set: a slot that matches any subexpression (`_`, `!`) can bind one that is a zero of
+/// either sign on a region (`ceil(x1)` is -0 on (-1, 0)), so the caller names none of them in
+/// `along`.
+pub fn zero_sign_isolated(
+    l: &crate::table::Expr,
+    r: &crate::table::Expr,
+    env: &[f64],
+    along: &[usize],
+    event: ZeroSign,
+) -> bool {
+    along.iter().any(|&v| {
+        let Some(&x) = env.get(v) else {
+            return false;
+        };
+        if !x.is_finite() {
+            return false;
+        }
+        [crate::ac::rat::next_up(x), crate::ac::rat::next_down(x)]
+            .iter()
+            .all(|&y| {
+                let mut e = env.to_vec();
+                e[v] = y;
+                zero_sign_event(l, r, &e) != Some(event)
+            })
+    })
+}
+
+/// Strict's reading of a zero's sign at `env`: the event there that refuses the rule, one that is
+/// not isolated along `along` (`zero_sign_event`, `zero_sign_isolated`), or `None`.
+pub fn zero_sign_refusal(
+    l: &crate::table::Expr,
+    r: &crate::table::Expr,
+    env: &[f64],
+    along: &[usize],
+) -> Option<ZeroSign> {
+    let event = zero_sign_event(l, r, env)?;
+    (!zero_sign_isolated(l, r, env, along, event)).then_some(event)
+}
 
 /// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
 /// constant cannot be judged bit for bit beside them.
@@ -656,8 +759,9 @@ pub fn holds_new_head(tokens: &[String], ops: &Operators) -> bool {
 /// in kind -- both finite, the same infinity, or both undefined -- which strict's (b) asks of a
 /// rule true in the reals: there their float64 difference is rounding, however far a jump or a
 /// pole between float64's argument and the real one magnifies it (`floor(x + 1) -> floor(x) + 1`
-/// is 1 against 0 at x = -1e-17). In both, a zero's sign counts where a head of the rule reads it
-/// (`ZERO_SIGN_READERS`), and a fully numeric pair is bit-exact (`table::f64_same`).
+/// is 1 against 0 at x = -1e-17). In both, the two zeros are one value (a zero's sign is the
+/// zero-sign bar's, `zero_sign_bar_sorted`), and a fully numeric pair is bit-exact
+/// (`table::f64_same`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Agreement {
     F6,
@@ -787,6 +891,126 @@ pub fn f64_bar_sorted(
 /// `RANGE_ROWS_CAP`); a bar with more is undecided, and fails closed.
 const MINT_RANGE_ROWS_CAP: usize = 256;
 
+/// What the zero-sign bar found (`zero_sign_bar_sorted`): the verdict, the number of probes, and
+/// the first probe where an event refuses the rule, with the event.
+#[derive(Clone, Debug)]
+pub struct ZeroSignBar {
+    pub ok: bool,
+    pub probes: usize,
+    pub first: Option<Vec<f64>>,
+    pub event: Option<ZeroSign>,
+}
+
+/// THE ZERO-SIGN BAR: strict's reading of a zero's sign (`zero_sign_refusal`) at the deployed
+/// bar's probes (`bar_probes`), for every rule with a variable or a left-side `<constant>`, each
+/// variable over its sort's values (`sorts[i]` the sort of `var_names[i]`) and each left-side
+/// `<constant>` a variable over the finite values. A probe's event refuses the rule unless it is
+/// isolated along a data (`?`) variable or a constant (`zero_sign_isolated`): `0*asin(x) ->
+/// 0*acos(x)` fails (-0 against +0 for x < 0), `log(exp(x)) -> x` holds (+0 against -0 at x = -0
+/// alone), and `log(exp(_0)) -> _0` fails at `_0` = -0, a value `_0` takes on a region where it
+/// binds `ceil(x1)`. `None` for a fully numeric pair (the ground evaluator reads its one point bit
+/// for bit) and for a right side with a `<constant>`, which the judge reads at its fitted witness;
+/// a side that does not compile fails. The contract judge ANDs it into strict's two readings, and
+/// the f64 mint applies it to every pick (`f64_bar_mint`).
+pub fn zero_sign_bar_sorted(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    sorts: &[char],
+    ops: &Operators,
+) -> Option<ZeroSignBar> {
+    if rhs.iter().any(|t| t == "<constant>") {
+        return None;
+    }
+    let mut names = var_names.to_vec();
+    let mut lhs_v = Vec::with_capacity(lhs.len());
+    for t in lhs {
+        if t == "<constant>" {
+            let name = format!("<c{}>", names.len() - var_names.len());
+            names.push(name.clone());
+            lhs_v.push(name);
+        } else {
+            lhs_v.push(t.clone());
+        }
+    }
+    let used: Vec<usize> = (0..names.len())
+        .filter(|&i| lhs_v.iter().chain(rhs).any(|t| *t == names[i]))
+        .collect();
+    if used.is_empty() {
+        return None;
+    }
+    let refused = ZeroSignBar {
+        ok: false,
+        probes: 0,
+        first: None,
+        event: None,
+    };
+    let arity: std::collections::HashMap<String, u8> = lhs_v
+        .iter()
+        .chain(rhs)
+        .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+        .collect();
+    let (Ok(el), Ok(er), Ok(tl), Ok(tr)) = (
+        crate::table::Expr::compile(&lhs_v, &names, &arity),
+        crate::table::Expr::compile(rhs, &names, &arity),
+        crate::eval::Tape::compile(&lhs_v, ops, &names),
+        crate::eval::Tape::compile(rhs, ops, &names),
+    ) else {
+        return Some(refused);
+    };
+    let first_finite = var_names.len();
+    let width = names.len();
+    // a zero's sign is guarded by a data variable or a fitted constant, never by a slot that
+    // matches any subexpression
+    let along: Vec<usize> = used
+        .iter()
+        .copied()
+        .filter(|&v| v >= first_finite || sorts.get(v).is_none_or(|s| *s == '?'))
+        .collect();
+    let rows = bar_probes(&used, width, first_finite, sorts);
+    let n = rows.len();
+    let cols: Vec<Vec<f64>> = (0..width)
+        .map(|c| rows.iter().map(|r| r[c]).collect())
+        .collect();
+    let (yl, yr) = (
+        tl.eval_columns(&cols, &[], n),
+        tr.eval_columns(&cols, &[], n),
+    );
+    // a side's value can turn on a zero's sign only through an operation that reads one
+    let reads = lhs_v
+        .iter()
+        .chain(rhs)
+        .any(|t| ops.arity_of(t).is_some() && ZERO_SIGN_READERS.contains(&t.as_str()));
+    for i in 0..n {
+        let (a, b) = (yl[i], yr[i]);
+        let candidate = if a == 0.0 && b == 0.0 {
+            a.is_sign_negative() != b.is_sign_negative()
+        } else {
+            reads
+                && a.is_finite()
+                && b.is_finite()
+                && crate::table::f64_agree(a, b) != crate::table::Cmp::Eq
+        };
+        if !candidate {
+            continue;
+        }
+        if let Some(event) = zero_sign_refusal(&el, &er, &rows[i], &along) {
+            return Some(ZeroSignBar {
+                ok: false,
+                probes: n,
+                first: Some(used.iter().map(|&v| rows[i][v]).collect()),
+                event: Some(event),
+            });
+        }
+    }
+    Some(ZeroSignBar {
+        ok: true,
+        probes: n,
+        first: None,
+        event: None,
+    })
+}
+
 /// THE MINT'S f64 BAR, the judge's reading of it (`verify._contract`'s deployed check): every
 /// mined variable is data, a `?` slot probed over finite doubles only, and at a probe where the
 /// sides differ and an operation overflowed or underflowed the rewrite may give the true value
@@ -795,9 +1019,14 @@ const MINT_RANGE_ROWS_CAP: usize = 256;
 /// `cosh` overflows and the true value is 1. A pre-filter of strict's judgment, it reads the
 /// probes in kind (`Agreement::Kind`): a change of kind refuses the rule in both of strict's
 /// readings, while a finite difference is the judge's to decide (strict's (b) admits it where the
-/// rule is true in the reals).
+/// rule is true in the reals). Every pick answers to the zero-sign bar too
+/// (`zero_sign_bar_sorted`), whose refusal refuses both of strict's readings: `ceil(mod(x, -1))
+/// -> 0` is -0 against +0 wherever x is no integer.
 pub fn f64_bar_mint(lhs: &[String], rhs: &[String], var_names: &[String], ops: &Operators) -> bool {
     let sorts = vec!['?'; var_names.len()];
+    if zero_sign_bar_sorted(lhs, rhs, var_names, &sorts, ops).is_some_and(|z| !z.ok) {
+        return false;
+    }
     let Some(bar) = f64_bar_sorted(lhs, rhs, var_names, &sorts, true, Agreement::Kind, ops) else {
         return true;
     };
@@ -996,16 +1225,12 @@ fn range_row_true(
 
 /// THE DEPLOYED BAR: do `lhs` and `rhs` AGREE in float64 (F6, `table::f64_agree`: NaN with NaN,
 /// one infinity, finite values within `REALISED_ULP`, the two zeros as one value), with the
-/// engine's own kernels, at every probe? The zeros are told apart by their sign where a head of
-/// the rule reads a zero's sign (`ZERO_SIGN_READERS`: `1/x`, `atan2`, ...), and nowhere else:
-/// `floor(floor(x) + 0.5) -> floor(x)` is +0 against -0 at x = -0, one value. A probe where the
-/// left side alone has no value is excused where it is isolated: a data (`?`) variable's move to
-/// its neighbouring double, in each direction, gives the left side a value there, a null set of
-/// the data, which float64's constructors fill as the rewrite does (`ceil(atan(x)/x) -> 1` at
-/// x = +-0). The probes are, per variable of `var_names` either side uses, the `BATTERY` points,
-/// +-inf, NaN and `DEPLOYED_EXTRA` (their full product); a generic grid per variable with the
-/// others at 1.7 and -1.3; and the diagonal of that grid. The last `n_finite` names of
-/// `var_names` are fitted constants, probed over the finite values only.
+/// engine's own kernels, at every probe (`bar_probes`)? A zero's sign is the zero-sign bar's to
+/// read (`zero_sign_bar_sorted`), for every rule. A probe where the left side alone has no value
+/// is excused where it is isolated: a data (`?`) variable's move to its neighbouring double, in
+/// each direction, gives the left side a value there, a null set of the data, which float64's
+/// constructors fill as the rewrite does (`ceil(atan(x)/x) -> 1` at x = +-0). The last
+/// `n_finite` names of `var_names` are fitted constants, probed over the finite values only.
 ///
 /// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into strict's two
 /// readings, each read its way (`agreement`), and which the f64 mint applies in kind to every
@@ -1040,65 +1265,9 @@ fn deployed_exact_over(
     let used: Vec<usize> = (0..var_names.len())
         .filter(|&i| lhs.iter().chain(rhs).any(|t| *t == var_names[i]))
         .collect();
-    let mut values: Vec<f64> = Vec::new();
-    for v in BATTERY
-        .iter()
-        .map(|a| a.value())
-        .chain([f64::INFINITY, f64::NEG_INFINITY, f64::NAN])
-        .chain(DEPLOYED_EXTRA)
-    {
-        if !values.iter().any(|w| w.to_bits() == v.to_bits()) {
-            values.push(v);
-        }
-    }
-    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
-    let nonzero: Vec<f64> = finite.iter().copied().filter(|v| *v != 0.0).collect();
     let first_finite = var_names.len().saturating_sub(n_finite);
-    let probes_of = |v: usize| {
-        if v >= first_finite {
-            return &finite;
-        }
-        match sorts.get(v) {
-            Some('?' | '!') => &finite,
-            Some('$') => &nonzero,
-            _ => &values,
-        }
-    };
     let width = var_names.len().max(1);
-    let mut rows: Vec<Vec<f64>> = Vec::new();
-    let total = used
-        .iter()
-        .fold(1usize, |acc, &v| acc.saturating_mul(probes_of(v).len()));
-    let stride = total.div_ceil(DEPLOYED_MAX_ROWS).max(1);
-    for pick in (0..total).step_by(stride) {
-        let mut row = vec![1.7f64; width];
-        let mut rem = pick;
-        for &v in &used {
-            let vals = probes_of(v);
-            row[v] = vals[rem % vals.len()];
-            rem /= vals.len();
-        }
-        rows.push(row);
-    }
-    let grid = generic_grid();
-    for cfg in [1.7f64, -1.3] {
-        for &v in &used {
-            for &g in &grid {
-                let mut row = vec![cfg; width];
-                row[v] = g;
-                rows.push(row);
-            }
-        }
-    }
-    if used.len() >= 2 {
-        for &g in &grid {
-            let mut row = vec![1.7f64; width];
-            for &v in &used {
-                row[v] = g;
-            }
-            rows.push(row);
-        }
-    }
+    let rows = bar_probes(&used, width, first_finite, sorts);
     let n = rows.len();
     let cols: Vec<Vec<f64>> = (0..width)
         .map(|c| rows.iter().map(|r| r[c]).collect())
@@ -1107,10 +1276,6 @@ fn deployed_exact_over(
         tl.eval_columns(&cols, &[], n),
         tr.eval_columns(&cols, &[], n),
     );
-    let reads_zero_sign = lhs
-        .iter()
-        .chain(rhs)
-        .any(|t| ops.arity_of(t).is_some() && ZERO_SIGN_READERS.contains(&t.as_str()));
     // a pair without variables is a fully numeric rewrite, read by the ground evaluator
     // (`ground::rule_verdict`): float64's reading is the same double, a zero's sign included; the
     // reading in kind is the same real value with float64's kinds kept
@@ -1126,9 +1291,6 @@ fn deployed_exact_over(
     let same = |a: f64, b: f64, row: &[f64]| {
         if ground {
             return crate::table::f64_same(a, b) || ground_kind;
-        }
-        if a == 0.0 && b == 0.0 {
-            return !reads_zero_sign || a.to_bits() == b.to_bits();
         }
         crate::table::f64_agree(a, b) == crate::table::Cmp::Eq
             || (agreement == Agreement::Kind && kind_holds(a, b, || valued(row)))
@@ -1187,6 +1349,73 @@ fn deployed_exact_over(
     }
 }
 
+/// THE BAR'S PROBES, one row per probe (a value per name, `width` wide), the deployed bar's and
+/// the zero-sign bar's: per variable of `used`, the `BATTERY` points, +-inf, NaN and
+/// `DEPLOYED_EXTRA` (their full product, thinned to `DEPLOYED_MAX_ROWS`), each variable over its
+/// sort's values (`?` and `!` the finite ones, -0 included; `$` the nonzero finite ones; `_` all
+/// of them; a fitted constant, a name from `first_finite` on, the finite ones); a generic grid per
+/// variable with the others at 1.7 and -1.3; and the diagonal of that grid.
+fn bar_probes(used: &[usize], width: usize, first_finite: usize, sorts: &[char]) -> Vec<Vec<f64>> {
+    let mut values: Vec<f64> = Vec::new();
+    for v in BATTERY
+        .iter()
+        .map(|a| a.value())
+        .chain([f64::INFINITY, f64::NEG_INFINITY, f64::NAN])
+        .chain(DEPLOYED_EXTRA)
+    {
+        if !values.iter().any(|w| w.to_bits() == v.to_bits()) {
+            values.push(v);
+        }
+    }
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let nonzero: Vec<f64> = finite.iter().copied().filter(|v| *v != 0.0).collect();
+    let probes_of = |v: usize| {
+        if v >= first_finite {
+            return &finite;
+        }
+        match sorts.get(v) {
+            Some('?' | '!') => &finite,
+            Some('$') => &nonzero,
+            _ => &values,
+        }
+    };
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    let total = used
+        .iter()
+        .fold(1usize, |acc, &v| acc.saturating_mul(probes_of(v).len()));
+    let stride = total.div_ceil(DEPLOYED_MAX_ROWS).max(1);
+    for pick in (0..total).step_by(stride) {
+        let mut row = vec![1.7f64; width];
+        let mut rem = pick;
+        for &v in used {
+            let vals = probes_of(v);
+            row[v] = vals[rem % vals.len()];
+            rem /= vals.len();
+        }
+        rows.push(row);
+    }
+    let grid = generic_grid();
+    for cfg in [1.7f64, -1.3] {
+        for &v in used {
+            for &g in &grid {
+                let mut row = vec![cfg; width];
+                row[v] = g;
+                rows.push(row);
+            }
+        }
+    }
+    if used.len() >= 2 {
+        for &g in &grid {
+            let mut row = vec![1.7f64; width];
+            for &v in used {
+                row[v] = g;
+            }
+            rows.push(row);
+        }
+    }
+    rows
+}
+
 /// The generic grid of the deployed bar: every 0.05 in [-25, 25] and a magnitude tail,
 /// shifted off the integers. Dense enough to land between a saturation and the next integer,
 /// where a step head and a saturating one part (`erf(floor(x))` is below 1 on [5.9216, 6) while
@@ -1239,8 +1468,6 @@ mod deployed_bar_tests {
             // a saturation and the next integer part the step head from the smooth one
             ("acosh erf floor x0", "acosh erf x0"),
             ("acosh tanh floor x0", "acosh tanh x0"),
-            // a zero's sign is a value where a head of the rule reads it: 0/x is -0 for x < 0
-            ("* 0 inv x0", "0"),
         ] {
             assert!(
                 !deployed_exact_over(&s(l), &s(r), &v, 0, &[], false, Agreement::F6, ops).ok,
@@ -1254,8 +1481,8 @@ mod deployed_bar_tests {
             ("max x0 x1", "max x1 x0"),
             ("min x0 float(\"inf\")", "x0"),
             ("erf neg x0", "neg erf x0"),
-            // F6: the two zeros are one value where no head of the rule reads a zero's sign,
-            // and values 8 units in the last place apart agree
+            // F6: the two zeros are one value (their signs are the zero-sign bar's), and values
+            // 8 units in the last place apart agree
             ("mod floor x0 1", "* 0 x0"),
             ("floor + floor x0 0.5", "floor x0"),
             ("erf * 0.1 x0", "erf / x0 10"),
@@ -1348,7 +1575,6 @@ mod deployed_bar_tests {
         for (l, r) in [
             // tanh(x) is 1.0 on [19.06, 20), where acosh of it is 0 and of tanh(19) NaN
             ("acosh tanh floor x0", "acosh tanh x0"),
-            ("* 0 inv x0", "0"),
             ("tanh inv - abs x0 x0", "tanh neg inv - x0 abs x0"),
         ] {
             assert!(!bar(l, r, Agreement::Kind), "{l} -> {r}");
@@ -1356,6 +1582,101 @@ mod deployed_bar_tests {
         assert!(kind_holds(1.0, -2.0, || Some(true)));
         assert!(!kind_holds(1.0, -2.0, || Some(false)) && !kind_holds(1.0, -2.0, || None));
         assert!(!kind_holds(f64::INFINITY, 1.0, || Some(true)));
+    }
+
+    /// Strict's reading of a zero's sign (`zero_sign_bar_sorted`): zeros of opposite sign, or a
+    /// difference at which one side's value turns on a zero's sign, refuse a rule on a region and
+    /// not at an isolated point; a slot that matches any subexpression guards no point, a data
+    /// variable and a left-side constant do.
+    #[test]
+    fn the_zero_sign_bar_reads_a_region_not_a_point() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        let bar = |l: &str, r: &str, sort: char| {
+            zero_sign_bar_sorted(&s(l), &s(r), &v, &[sort, sort], ops).map(|z| (z.ok, z.event))
+        };
+        for (l, r, event) in [
+            // -0 against +0 for x0 < 0, and for every x0 that is no integer
+            ("* 0 asin x0", "* 0 acos x0", ZeroSign::Opposite),
+            ("ceil mod x0 -1", "0", ZeroSign::Opposite),
+            ("mod floor x0 1", "* 0 x0", ZeroSign::Opposite),
+            ("* 0 inv x0", "0", ZeroSign::Opposite),
+            // -pi against pi for x0 < 0, where the reals' one zero gives pi
+            ("atan2 * 0 x0 -1", "np.pi", ZeroSign::Turns),
+        ] {
+            assert_eq!(bar(l, r, '?'), Some((false, Some(event))), "{l} -> {r}");
+        }
+        for (l, r) in [
+            // +0 against -0 at x0 = -0 alone
+            ("log exp x0", "x0"),
+            ("floor + floor x0 0.5", "floor x0"),
+            // float64 gives the two sides one value everywhere: no zero's sign to read
+            ("inv * 0 x0", "/ float(\"inf\") x0"),
+            ("sin + x0 np.pi", "neg sin x0"),
+        ] {
+            assert_eq!(bar(l, r, '?'), Some((true, None)), "{l} -> {r}");
+        }
+        // a slot that matches any subexpression is -0 on a region where it binds `ceil(x1)`
+        assert_eq!(
+            bar("log exp x0", "x0", '_'),
+            Some((false, Some(ZeroSign::Opposite)))
+        );
+        assert_eq!(
+            bar("log exp x0", "x0", '!'),
+            Some((false, Some(ZeroSign::Opposite)))
+        );
+        // a left-side constant is probed over the finite values (-0 against +0 for C < 0); a
+        // fitted target constant is the judge's, at its witness; a fully numeric pair the ground
+        // evaluator's
+        assert_eq!(
+            zero_sign_bar_sorted(&s("* 0 asin <constant>"), &s("0"), &v, &[], ops)
+                .map(|z| (z.ok, z.event)),
+            Some((false, Some(ZeroSign::Opposite))),
+        );
+        assert!(
+            zero_sign_bar_sorted(&s("max <constant> -0.0"), &s("<constant>"), &v, &[], ops)
+                .is_none()
+        );
+        assert!(zero_sign_bar_sorted(&s("* 0 -1"), &s("0"), &v, &[], ops).is_none());
+        // the f64 mint reads it for every pick, so it picks only what strict holds
+        assert!(!f64_bar_mint(&s("ceil mod x0 -1"), &s("0"), &v, ops));
+        assert!(!f64_bar_mint(&s("* 0 asin x0"), &s("* 0 acos x0"), &v, ops));
+        assert!(f64_bar_mint(&s("log exp x0"), &s("x0"), &v, ops));
+    }
+
+    /// A value turns on a zero's sign where it changes when every negative zero an operation
+    /// reading one receives is read as +0 (`table::Expr::turns_on_a_zero_sign`), and only then.
+    #[test]
+    fn a_value_turns_on_a_zero_sign_only_through_an_operation_that_reads_it() {
+        let arity: std::collections::HashMap<String, u8> = [
+            ("*", 2u8),
+            ("atan2", 2),
+            ("cos", 1),
+            ("pow", 2),
+            ("inv", 1),
+            ("sin", 1),
+        ]
+        .iter()
+        .map(|(k, a)| (k.to_string(), *a))
+        .collect();
+        let turns = |t: &str, x: f64| {
+            crate::table::Expr::compile(&s(t), &s("x0"), &arity)
+                .expect("compiles")
+                .turns_on_a_zero_sign(&[x])
+        };
+        // -pi against pi, -inf against +inf
+        assert!(turns("atan2 * 0 x0 -1", -1.0) && turns("inv * 0 x0", -1.0));
+        // +0 there: float64 reads the reals' zero
+        assert!(!turns("atan2 * 0 x0 -1", 1.0) && !turns("inv * 0 x0", 1.0));
+        // read, but no change: cos(-0) is cos(+0), an even power of either zero is +inf
+        assert!(!turns("cos atan2 * 0 x0 1", -1.0) && !turns("pow * 0 x0 -2", -1.0));
+        // carried, not read: sin(-0) is -0
+        assert!(!turns("sin * 0 x0", -1.0));
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a

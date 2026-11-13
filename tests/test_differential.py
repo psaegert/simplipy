@@ -108,15 +108,15 @@ def mine_rows() -> np.ndarray:
     return np.array(_contract.judge_rows())
 
 
-@pytest.mark.parametrize('lhs, rhs', [('log exp atanh x0', 'atanh x0'),
-                                      ('log exp atanh _0', 'atanh _0')])
+@pytest.mark.parametrize('lhs, rhs', [('log exp atanh x0', 'atanh x0')])
 def test_strict_and_its_mint_read_a_rounding_alike(lhs, rhs):
     # float64 rounds `log(exp(y))` for small y (exp rounds 1 + y): the rule is true in the reals
     # and both sides stay finite, so strict holds it, and the mint's rows, a relative 1e-11 apart
-    # at most, certify it
+    # at most, certify it. Its sides are +0 and -0 at x0 = -0 alone; with a slot that matches any
+    # subexpression they are so on a region (`test_zero_sign_judge`)
     assert admits(lhs, rhs, REALS), judged(lhs, rhs)
     assert admits(lhs, rhs, 'f64'), judged(lhs, rhs)
-    assert mint_accepts(lhs.replace('_0', 'x0'), rhs.replace('_0', 'x0'), 'f64')
+    assert mint_accepts(lhs, rhs, 'f64')
 
 
 def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:

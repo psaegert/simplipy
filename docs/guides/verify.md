@@ -61,7 +61,14 @@ rounds, however far a jump or a pole magnifies the rounding, and nothing false i
 `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`
 hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06), `exp(log(x0)) -> x0` (NaN
 against x0 for x0 < 0) and `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1 against -1 on
-x0 > 0, where the reals give neither side a value) do not. `permissive` is judged on the reals' values at float resolution.
+x0 > 0, where the reals give neither side a value) do not. In both readings `f64` reads a
+zero's sign where it changes a value on a region: float64 may give the two sides zeros of
+opposite sign, and the reading in kind may admit a difference at which one side's value turns on
+a zero's sign (a divisor, `pow` or `rootn` at an odd negative exponent, `atan2`) and the other's
+does not, only at isolated points. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for x0 < 0) and
+`atan2(0*x0, -1) -> pi` (-pi against pi for x0 < 0) do not hold in `f64`; `log(exp(x0)) -> x0`
+(+0 against -0 at x0 = -0 alone) does, and `log(exp(_0)) -> _0` does not, since a slot that
+matches any subexpression can bind one that is -0 on a region. `permissive` is judged on the reals' values at float resolution.
 The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals' outcome, a
 diagnostic that decides no mode by itself; `f64` reads it for its second reading. A mode whose reading reaches no answer
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side

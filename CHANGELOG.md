@@ -124,6 +124,15 @@ organised by who you are, then the highlights, then every change in detail.
   checks both files) read the same evaluator: the mint refuses a fully numeric pick the
   evaluator does not hold in the mode or cannot read (`ceil(atan(tan(1))) -> 1`, whose reals
   sit at the jump), as the judge does.
+- **`f64` reads a zero's sign where it changes a value on a region.** A rule holds in `f64` only
+  if float64 never gives its two sides zeros of opposite sign, and the reading in kind never
+  admits a difference at which one side's value turns on a zero's sign while the other's does
+  not, on a set of positive measure: a divisor, `inv`, `pow` and `rootn` at an odd negative
+  exponent, and `atan2` read a zero's sign. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for
+  x0 < 0), `ceil(mod(x0, -1)) -> 0` and `atan2(0*x0, -1) -> pi` (float64 gives -pi for x0 < 0)
+  hold in `permissive` only; `log(exp(x0)) -> x0`, whose sides differ at x0 = -0 alone, holds.
+  A slot that matches any subexpression guards no point: `log(exp(_0)) -> _0` is refused, since
+  `_0` can bind `ceil(x1)`, which is -0 on (-1, 0), while the rule with a variable holds.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`
@@ -1966,7 +1975,27 @@ model predictions.
   against 0 at C = 0) and every rule false in the reals do not. The judge decides
   it in one place (`verify._contract.strict_reading`), which `verify_rule`, the mine's judge and
   `verify-mine` read, and a verdict reports float64's two readings (`realised_f6`,
-  `realised_kinds`). The f64 mine reads its rows by one agreement at every row it reads, the
+  `realised_kinds`).
+- **`f64` reads a zero's sign where it changes a value on a region.** Both of `f64`'s readings
+  refuse a rule where float64 gives its two sides zeros of opposite sign, and the reading in
+  kind refuses a difference at which exactly one side's value turns on a zero's sign: the value
+  changes when every negative zero that a divisor, `inv`, `pow`, `rootn` or `atan2` receives is
+  read as +0, the reals' one zero (measured over every operator: the others carry a zero's sign
+  or ignore it; `log(-0)` is `log(+0)`). An event is excused where it is isolated: along a data
+  variable or a left-side constant, the neighbouring doubles on both sides show none
+  (`log(exp(x0)) -> x0` at x0 = -0, `log(1/x0) -> -log(x0)` at x0 = 1); a slot that matches any
+  subexpression excuses nothing, and is read at -0 as well as at +0. Where an operation of
+  either side overflowed or underflowed the true value stands and no zero's sign is read
+  (`erf(x0) - 1 -> -erfc(x0)` holds past x0 = 27.3, where `erfc` underflows to 0). Where float64's
+  two sides agree, a zero's sign one side reads is no change: `1/(0*x1) -> inf/x1` holds. The
+  definition is the core's (`battery::zero_sign_event`); the judge reads it at every point of its
+  f64 lane and at the deployed bar's probes for every rule (`_core.zero_sign_bar_sorted`; a
+  verdict reports `zero_sign` and `zero_sign_bar`), and the f64 mint applies the bar to every
+  pick, so it picks only what the judge holds. The deployed bar of a rule with a 0.15 head reads
+  two zeros as one value; it told them apart at every probe where the rule held an operation
+  that reads a zero's sign, an isolated point included. A fitted constant is a double in `f64`,
+  -0.0 included: the witness of `max(C, -0.0) -> C` at C = -1.5 is -0.0 (a snap no longer moves a
+  zero's sign), so the rule holds. Permissive reads one zero and is unchanged. The f64 mine reads its rows by one agreement at every row it reads, the
   rows where an operation overflowed aside: strict's, where a value is off by where it came
   from -- an evaluated side by rounding, within the mine's tolerances (`rtol`, `atol`), a fitted
   constant by the fit's band (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an

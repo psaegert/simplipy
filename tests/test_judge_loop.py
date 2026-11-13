@@ -847,6 +847,10 @@ def test_a_re_scan_reads_the_rules_the_mine_holds(tmp_path, monkeypatch) -> None
         return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
 
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    # `abs` gives a length-4 source a second candidate the mint accepts, which the re-scan picks:
+    # `log(exp(abs(x0)))` is `abs(x0)`, then `abs(log(exp(x0)))`
+    ops['abs'] = {'realization': 'simplipy.operators.abs', 'alias': [], 'inverse': None,
+                  'arity': 1, 'precedence': 3, 'commutative': False}
     SimpliPyEngine(operators=ops, rules=[]).find_rules(
         max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
         X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,

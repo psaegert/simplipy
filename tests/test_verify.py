@@ -957,11 +957,16 @@ class TestCleanlinessIsPerMode:
         # held by its tier); permissive 65 (+34: those 28, two more such underflows, and four
         # rules whose left side has a value only in float64, `exp tan asin (-1) -> 0` and
         # `tanh tan asin 1 -> 1` and kin, at a pole of tan).
+        # Strict reads a zero's sign where it changes a value on a region: f64 119 (+4 whose
+        # sides float64 makes zeros of opposite sign there, `0*asin(_0) -> 0*acos(_0)` for
+        # _0 < 0, `abs(log(tanh(_0))) -> -log(tanh(_0))` past 19.06, and at a value a `_` slot
+        # takes on a region, `acos(_0) - pi -> -acos(-_0)` at -1 and `abs(log(sin(_0))) ->
+        # -log(sin(_0))` at pi/2).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 115 and len(policy_only['f64']) == 18
+        assert len(tier['f64'] - {126}) == 119 and len(policy_only['f64']) == 18
         assert len(tier['permissive']) == 65 and len(policy_only['permissive']) == 27
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).

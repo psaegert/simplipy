@@ -2089,6 +2089,48 @@ impl Expr {
         }
     }
 
+    /// Does float64's value at `env` TURN ON A ZERO'S SIGN? It does where the value changes (F6,
+    /// `f64_agree`) when every negative zero an operation that reads a zero's sign receives
+    /// (`battery::ZERO_SIGN_READERS`) is read as +0, the reals' one zero: `atan2(0*x, -1)` is -pi
+    /// for x < 0 and pi so read; `cos(atan2(0*x, 1))` is 1 either way, and `pow(0*x, -2)` is +inf.
+    /// The same evaluation as `eval_f64`, the zeros so read; strict's reading of a zero's sign
+    /// (`battery::zero_sign_event`).
+    pub fn turns_on_a_zero_sign(&self, env: &[f64]) -> bool {
+        let mut read = false;
+        let Some(plus) = self.node_plus_zero(self.root, env, &mut read) else {
+            return false;
+        };
+        if !read {
+            return false;
+        }
+        self.eval_f64(env)
+            .is_some_and(|(v, _)| f64_agree(v, plus) != Cmp::Eq)
+    }
+
+    /// `node_f64` with every negative zero a sign-reading operation receives read as +0 (`read`
+    /// says whether one was).
+    fn node_plus_zero(&self, i: usize, env: &[f64], read: &mut bool) -> Option<f64> {
+        match &self.nodes[i] {
+            Node::Var(k) => env.get(*k).copied(),
+            Node::Lit(_, tok) => literal_f64(tok),
+            Node::Op(name, kids) => {
+                let mut args = Vec::with_capacity(kids.len());
+                for &k in kids {
+                    args.push(self.node_plus_zero(k, env, read)?);
+                }
+                if crate::battery::ZERO_SIGN_READERS.contains(&name.as_str()) {
+                    for a in args.iter_mut() {
+                        if *a == 0.0 && a.is_sign_negative() {
+                            *a = 0.0;
+                            *read = true;
+                        }
+                    }
+                }
+                crate::numeric::apply_op(name, &args)
+            }
+        }
+    }
+
     /// The real value of a ground expression whose root is a bounded function at float resolution
     /// (`Ctx::saturate`): its bound where it lies within the band of it. The double nearest to
     /// the value only, never an exact comparison: `tanh(cosh(-10))` is 1 - 2e-9566, which no

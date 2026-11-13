@@ -2166,6 +2166,50 @@ fn f64_bar_sorted(
     .map(|d| (d.ok, d.probes, d.first, d.range_rows))
 }
 
+/// What `zero_sign_bar_sorted` returns: `(holds, probes, first refusing probe, its event)`.
+type ZeroSignBarOut = (bool, usize, Option<Vec<f64>>, Option<String>);
+
+/// THE ZERO-SIGN BAR as the contract judge reads it (`battery::zero_sign_bar_sorted`): strict's
+/// reading of a zero's sign at the deployed bar's probes, each variable over its slot sort's
+/// values (`sorts[i]` one of `?!$_`), under an operator table of `arity`. `None` for a fully
+/// numeric pair and for a right side with a `<constant>`.
+#[pyfunction]
+fn zero_sign_bar_sorted(
+    py: Python<'_>,
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    var_names: Vec<String>,
+    sorts: String,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<ZeroSignBarOut> {
+    let ops = arity_table(arity);
+    let sorts: Vec<char> = sorts.chars().collect();
+    py.detach(|| crate::battery::zero_sign_bar_sorted(&lhs, &rhs, &var_names, &sorts, &ops))
+        .map(|z| {
+            (
+                z.ok,
+                z.probes,
+                z.first,
+                z.event.map(|e| e.name().to_string()),
+            )
+        })
+}
+
+/// STRICT'S READING OF A ZERO'S SIGN AT ONE POINT (`battery::zero_sign_refusal`): the event of
+/// the sides `lhs` and `rhs` (compiled over one name list) at `env` that refuses the rule, one not
+/// isolated along the names at the indices `along` (the data variables and fitted constants), or
+/// `None`. The contract judge's f64 lane reads it at every point it reads.
+#[pyfunction]
+fn table_zero_sign_refusal(
+    lhs: PyRef<'_, PyTableExpr>,
+    rhs: PyRef<'_, PyTableExpr>,
+    env: Vec<f64>,
+    along: Vec<usize>,
+) -> Option<String> {
+    crate::battery::zero_sign_refusal(&lhs.inner, &rhs.inner, &env, &along)
+        .map(|e| e.name().to_string())
+}
+
 /// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite_rule`) on a rule's right
 /// side, its slots and dummies the variables: the load's gate.
 #[pyfunction]
@@ -2731,6 +2775,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCandidateLibrary>()?;
     m.add_class::<PyTableExpr>()?;
     m.add_function(wrap_pyfunction!(f64_bar_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(zero_sign_bar_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(table_zero_sign_refusal, m)?)?;
     m.add_function(wrap_pyfunction!(policy_ground_composite, m)?)?;
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;

@@ -185,9 +185,13 @@ def test_every_enclosure_holds_every_value(op, engine) -> None:
 def test_the_judge_decides_rules_over_them() -> None:
     j = _contract.judge_rule
     for lhs, rhs in (('besselk neg _0 _1', 'besselk _0 _1'), ('besseli 2 neg _0', 'besseli 2 _0'),
-                     ('besseli 3 neg _0', 'neg besseli 3 _0'), ('+ erfc ?0 erf ?0', '1')):
+                     ('besseli 3 neg ?0', 'neg besseli 3 ?0'), ('+ erfc ?0 erf ?0', '1')):
         r = j(lhs.split(), rhs.split())
         assert r['verdict'] == 'CERTIFIED' and r['tier'] == 'core', (lhs, rhs, r)
+    # float64's I_3 at -0 is +0, so the odd parity gives +0 against -0 at a zero argument: at
+    # x = +-0 alone for a variable, on a region for a slot that matches any subexpression
+    r = j('besseli 3 neg _0'.split(), 'neg besseli 3 _0'.split())
+    assert r['verdict'] == 'CERTIFIED' and r['tier'] == 'permissive', r
     # true over the reals, not within F6 in float64, and its two sides finite at every point:
     # strict holds it by its second reading
     r = j('erfc neg _0'.split(), '- 2 erfc _0'.split())

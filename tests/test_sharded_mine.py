@@ -17,6 +17,9 @@ _OPERATORS = {
     "pow2": {"realization": "simplipy.operators.pow2", "alias": [], "inverse": "sqrt", "arity": 1, "precedence": 3, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+    # gives a length-4 source a chain of candidates the f64 mint accepts, so the judge loop
+    # re-scans it, takes three rounds and gives it up at a cap of 2 (`log(exp(abs(x0)))`)
+    "abs": {"realization": "simplipy.operators.abs", "alias": [], "inverse": None, "arity": 1, "precedence": 3, "commutative": False},
 }
 FILES = ('mined.json', 'mined_permissive.json')
 

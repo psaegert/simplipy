@@ -860,6 +860,13 @@ def _f64_kind(dv, a, b):
     return 'ROUNDING'
 
 
+def opposite_zeros(a, b):
+    """Are the doubles `a` and `b` zeros of opposite sign (one value to F6, two to a head that
+    reads a zero's sign)?"""
+    a, b = float(a), float(b)
+    return a == 0 and b == 0 and math.copysign(1.0, a) != math.copysign(1.0, b)
+
+
 def compare_deployed_structural(cl, cr):
     """The STRUCTURAL deployed comparison, for ENGINE-MISALIGN only (`_core.table_f64_structural`):
     has the deployed algebra DIVERGED -- an infinity where a finite value belongs, a nan where a
@@ -1308,9 +1315,13 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
         # `erf(5) -> c_t` fits 0.9999999999984626 and the relative band snapped it to 1. The
         # deployed lane then compared 0 and 1 against the source and found the true rule
         # unrealised. So a candidate is taken only where its residual is no larger.
+        #
+        # A SNAP NEVER MOVES A ZERO'S SIGN. In f64 a fitted constant is a double, -0.0 included:
+        # `max(C, -0.0) -> C` at C = -1.5 has the witness -0.0, its source's own value, and
+        # rounding it to 0 would read +0 against the source's -0.
         if abs(c - best) < max(1e-9 * max(abs(best), abs(c)), 1e-15):
             rc, rb = g(float(c)), g(best)
-            if np.isfinite(rc) and (not np.isfinite(rb) or abs(rc) <= abs(rb)):
+            if c != best and np.isfinite(rc) and (not np.isfinite(rb) or abs(rc) <= abs(rb)):
                 best = float(c)
             break
     for k in (2, 3):
@@ -2546,15 +2557,53 @@ def kind_holds(dv, valued):
     return valued()
 
 
+_PAIRS: dict = {}
+
+
+def _pair_compiled(tl, tr):
+    """Both sides compiled against the table over ONE name list (`_compiled` gives each side its
+    own): `(lhs, rhs, names, extra)`. Cached per pair."""
+    hit = _PAIRS.get((tl, tr))
+    if hit is None:
+        names, extra = {}, {}
+        lt = _tree_tokens(tl, names, extra)
+        rt = _tree_tokens(tr, names, extra)
+        hit = (_table.TableExpr(lt, list(names), dict(ARITY)),
+               _table.TableExpr(rt, list(names), dict(ARITY)), tuple(names), extra)
+        if len(_PAIRS) > 50_000:
+            _PAIRS.clear()
+        _PAIRS[(tl, tr)] = hit
+    return hit
+
+
+def zero_sign_refusal(tl, tr, env, guards):
+    """STRICT'S READING OF A ZERO'S SIGN AT float64's POINT `env`, the core's one definition
+    (`_core.table_zero_sign_refusal`): the two sides are zeros of opposite sign
+    (`'opposite-zeros'`: `0*asin(x)` is -0 and `0*acos(x)` +0 for x < 0), or finite values that
+    differ (F6) where exactly one side's value turns on a zero's sign (`'turns-on-a-zero-sign'`:
+    `atan2(0*x, -1)` is -pi against pi for x < 0), and the event is not isolated along a name of
+    `guards` (the data slots and the left side's constants: a slot matching any subexpression
+    guards no point). Where an operation of either side overflowed or underflowed, the range
+    standard reads the true value, and there is no event. -> the event's name, or None."""
+    lexpr, rexpr, names, extra = _pair_compiled(tl, tr)
+    vals = [float(extra[n] if n in extra else env[n]) for n in names]
+    along = [i for i, n in enumerate(names) if n in guards]
+    return _table.table_zero_sign_refusal(lexpr, rexpr, vals, along)
+
+
 def strict_reading(f6, kinds, verdict):
     """THE STRICT READING, the one place the judge decides `f64` (strict): a rule holds there where
     (a) float64's two sides agree (F6, with the range standard at an overflow) at every point
     read, or (b) the rule holds in the reals (`HOLDS_IN_THE_REALS`) and float64's two sides agree
     in kind at every point read: both finite, the same infinity or both undefined, an extension
-    only on a null set, a zero's sign where a head reads it, the range standard at an overflow.
-    (b) has no error bound, and reads kind only at a point where the reals give both sides a
-    value (`kind_holds`): there their float64 difference is rounding. At every other point
-    float64's two sides agree as F6 asks. `sin(x0 + pi) -> -sin(x0)` holds by (b) (1.2e-16
+    only on a null set, the range standard at an overflow. (b) has no error bound, and reads kind
+    only at a point where the reals give both sides a value (`kind_holds`): there their float64
+    difference is rounding. At every other point float64's two sides agree as F6 asks. In both,
+    a zero's sign is read (`zero_sign_refusal`): float64 may give the two sides zeros of opposite
+    sign, and (b) may admit a difference at which one side's value turns on a zero's sign and the
+    other's does not, only on a null set. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for x0 < 0)
+    and `atan2(0*x0, -1) -> pi` (-pi against pi for x0 < 0) are refused; `log(exp(x0)) -> x0`
+    holds (+0 against -0 at x0 = -0 alone). `sin(x0 + pi) -> -sin(x0)` holds by (b) (1.2e-16
     against -0 at x0 = 0), and so do `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at
     x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`; `atanh(tanh(x0)) -> x0` does not (+inf against
     x0 from x0 = 19.06), nor `exp(log(x0)) -> x0` (NaN against x0 for x0 < 0), nor
@@ -2661,6 +2710,8 @@ def judge_rule(lhs, rhs, deployed_check=True):
         r = _judge_contract(lhs, rhs, deployed_check)
         if 'tier' in r and deployed_check and NEW_HEADS & (set(lhs) | set(rhs)):
             r = _with_f64_bar(lhs, rhs, r)
+        if 'tier' in r and deployed_check:
+            r = _with_zero_sign_bar(lhs, rhs, r)
         if r.get('verdict') != 'UNSUPPORTED-SHAPE':
             r = _with_exact_routes(lhs, rhs, r, deployed_check)
         return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
@@ -2852,6 +2903,35 @@ def _with_f64_bar(lhs, rhs, r):
                       'range_probes': n_range,
                       'first': None if first is None else dict(zip(keys, first)),
                       'kind_first': None if kind_first is None else dict(zip(keys, kind_first))})
+    return _settle(r)
+
+
+def _with_zero_sign_bar(lhs, rhs, r):
+    """The judged rule `r` with the core's zero-sign bar ANDed into strict's two readings
+    (`_core.zero_sign_bar_sorted`: strict's reading of a zero's sign, `zero_sign_refusal`, at the
+    deployed bar's probes, each slot over its sort's values, -0 included, and each left-side
+    `<constant>` over the finite ones). Every rule with a slot or a left-side constant answers to
+    it; a fully numeric rule is read by the ground evaluator, and a right side with a
+    `<constant>` at the judge's fitted witness."""
+    from simplipy._core import zero_sign_bar_sorted  # type: ignore[attr-defined]
+    slot = {}
+    for t in list(lhs) + list(rhs):
+        key = slot_key(t) or t
+        if SLOT_RE.match(key) and key not in slot:
+            slot[key] = None
+    keys = sorted(slot)
+    names = {key: f'x{i}' for i, key in enumerate(keys)}
+    spell = lambda ts: [names.get(slot_key(t) or t, t) for t in ts]  # noqa: E731
+    bar = zero_sign_bar_sorted(spell(lhs), spell(rhs), list(names.values()),
+                               ''.join(k[0] for k in keys), ARITY)
+    if bar is None or bar[0]:
+        return r
+    _, probes, first, event = bar
+    # the bar's refusal refuses both of strict's readings
+    at = None if first is None else dict(zip(keys + [f'<C_L{k}>' for k in range(len(first))],
+                                             first))
+    r = dict(r, realised_f6=False, realised_kinds=False,
+             zero_sign_bar={'ok': False, 'probes': probes, 'event': event, 'first': at})
     return _settle(r)
 
 
@@ -3292,6 +3372,45 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 return True
         return False
 
+    # a zero's sign is guarded by a data slot or a left-side constant (`zero_sign_refusal`)
+    zero_sign_guards = frozenset(q_names) | (frozenset() if has_cr else frozenset(lnames))
+
+    def zero_sign_at(env):
+        """Strict's reading of a zero's sign at float64's point `env` (`zero_sign_refusal`). With
+        a fitted target constant, a left-side constant guards its point where, at each
+        neighbouring double of it, the witness fitted there shows no such event: `log(C^x) ->
+        D*x` at C = 1 has the witness 0, where `0*x` is -0 for x < 0 against the left side's +0,
+        and at 1 +- 1 unit in the last place the witness is no zero."""
+        event = zero_sign_refusal(tl, tr, env, zero_sign_guards)
+        if event is None or not has_cr:
+            return event
+        for n in lnames:
+            x = float(env[n])
+            if not math.isfinite(x):
+                continue
+            for y in (math.nextafter(x, math.inf), math.nextafter(x, -math.inf)):
+                cl = {k: float(env[k]) for k in lnames}
+                cl[n] = y
+                try:
+                    if len(rnames) == 1:
+                        w = fit_witness(tl, tr, set(nvars), cl, None, rnames[0])
+                        ws = None if w is None else {rnames[0]: w}
+                    else:
+                        found = fit_witness_multi(tl, tr, set(nvars), cl, rnames)
+                        ws = None if found is None else dict(zip(rnames, found))
+                except (ValueError, ArithmeticError):
+                    ws = None
+                if ws is None:
+                    break                 # no witness read there: the point is not shown null
+                e = dict(env)
+                e.update({k: F(c) for k, c in cl.items()})
+                e.update({k: F(w) for k, w in ws.items()})
+                if zero_sign_refusal(tl, tr, e, frozenset()) == event:
+                    break
+            else:
+                return None
+        return event
+
     def deployed(tl_env, v, point, all_real, snapped, out, owed=False):
         """The f64 lane at one point, on float64's own values: append `(kind, point)` to
         `out['bad']` / `out['div']`; an extension on a lower-dimensional cell is clause (b)'s,
@@ -3336,12 +3455,26 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 out['bad'].append((dv, point))
                 # strict's second reading at this point (`kind_holds`)
                 held = kind_holds(dv, lambda: reals_valued_at(tl, tr, tl_env, always_valued))
+                if held and not exact_point:
+                    # a difference (b) admits as rounding, unless a side's value turns on a
+                    # zero's sign there and the other's does not
+                    event = zero_sign_at(tl_env)
+                    if event is not None:
+                        held = False
+                        out['zero_sign'].append((event, point))
                 if held is None:
                     out['kind_unread'].append(point)
                 elif not held:
                     out['kind_bad'].append((dv, point))
             elif _dl == 0 and _dr == 0 and math.copysign(1.0, _dl) != math.copysign(1.0, _dr):
                 out['kinds'].add('ZERO-SIGN')
+                # F6 reads the two zeros as one; strict reads their signs where they differ on
+                # a region
+                event = None if exact_point else zero_sign_at(tl_env)
+                if event is not None:
+                    out['bad'].append(('ZERO-SIGN', point))
+                    out['kind_bad'].append(('ZERO-SIGN', point))
+                    out['zero_sign'].append((event, point))
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
             # a few-ULP rounding is no divergence
             if compare_deployed_structural(_dcl, _dcr) != 'eq' and v in (None, 'eq') \
@@ -3356,7 +3489,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
                 'kind_bad': [], 'kind_unread': [],
                 'kinds': set(), 'null': 0, 'read': 0, 'unread': 0,
-                'perm_unread': [], 'owed_unread': []}
+                'perm_unread': [], 'owed_unread': [], 'zero_sign': []}
 
     def unread_at_float_resolution(acc, v, point, where, env, count):
         """A point the reals' ladder left unread (`v` None, precision run out): permissive's
@@ -3407,6 +3540,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return owes_cache[key]
 
     vacuous, owed_keys = [], set()
+    zero_sign_events = []
     ext_where = []
     f64_owed, f64_null_keys = set(), set()
     f64_read = [0, 0]           # f64's battery points read, and left unread at a range event
@@ -3431,6 +3565,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         # f64 owes at a constant by ITS values (`pow(sin(c), inf)` at fl(pi/2) is pow(1.0, inf)
         # = 1 in float64, though undefined at the exact pi/2), whatever real owes there
         if owes['f64']:
+            zero_sign_events.extend(acc['zero_sign'])
             dep_bad.extend(acc['bad'])
             dep_kind_bad.extend(acc['kind_bad'])
             dep_kind_unread.extend(acc['kind_unread'])
@@ -3532,7 +3667,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                         dl, dr = d_eval(tl, ed, in_range), d_eval(tr, ed, in_range)
                     acc['seen'] = True
                     acc['finite_f64'] = acc['finite_f64'] or bool(np.isfinite(dl))
-                    if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq':
+                    if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq' and \
+                            not opposite_zeros(dl, dr):
                         continue
                     point = dict(vals)
                     point.update(dict(zip(lnames, grid_key)))
@@ -3579,12 +3715,14 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             except (ValueError, KeyError):
                 return
         dl, dr = sides
-        differ = keep & ~((dl == dr) | (np.isnan(dl) & np.isnan(dr)))
+        # zeros of opposite sign are equal to numpy and one value to F6: strict reads their signs
+        opposite = (dl == 0) & (dr == 0) & (np.signbit(dl) != np.signbit(dr))
+        differ = keep & (~((dl == dr) | (np.isnan(dl) & np.isnan(dr))) | opposite)
         judged = 0
         for r in np.flatnonzero(differ):
             if judged >= ROWS_JUDGED:
                 break
-            if _table.table_f64_agree(float(dl[r]), float(dr[r])) == 'eq':
+            if _table.table_f64_agree(float(dl[r]), float(dr[r])) == 'eq' and not opposite[r]:
                 continue
             judged += 1
             vals = {m: float(cols[m][r]) for m in names}
@@ -3725,7 +3863,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     dl, dr = d_eval(tl, ed), d_eval(tr, ed)
             except Exception:
                 continue
-            if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq':
+            if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq' and \
+                    not opposite_zeros(dl, dr):
                 continue
             exact = dict(values)
             exact[n] = mpf(dv)
@@ -3784,6 +3923,29 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     ed.update({k: F(w) for k, w in cr_f64.items()})
                     deployed(ed, v, point, True, snapped, acc)
             grid_ext = bool(acc['ext'])
+            if deployed_check:
+                # -0, a value a slot matching any subexpression takes on a region (`ceil(x1)` on
+                # (-1, 0)), where the battery's exact zero is +0: strict's reading of a zero's
+                # sign there, the other slots at the lanes' values
+                for cfg in (1.7, -1.3):
+                    for n in names:
+                        if nvars[n] not in '_!':
+                            continue
+                        vals = {m: cfg for m in names}
+                        vals[n] = -0.0
+                        ed = {m: F(x) for m, x in vals.items()}
+                        ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
+                        ed.update({k: F(w) for k, w in cr_f64.items()})
+                        try:
+                            event = zero_sign_at(ed)
+                        except (ValueError, KeyError):
+                            event = None
+                        if event is not None:
+                            point = dict(vals)
+                            point.update(dict(zip(lnames, grid_key)))
+                            acc['bad'].append(('ZERO-SIGN', point))
+                            acc['kind_bad'].append(('ZERO-SIGN', point))
+                            acc['zero_sign'].append((event, point))
             preimages(acc, lanes, cr_f64)
             mint_rows(acc, cr_f64)
             magnitudes(acc, lanes, cr_f64)
@@ -4011,6 +4173,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         base['unrealised_coincidence'] = correlated_f64
     if dep_bad:
         base['unrealised'] = dep_bad[:3]
+    if zero_sign_events:
+        # strict's reading of a zero's sign (`zero_sign_refusal`): where it refused, and why
+        base['zero_sign'] = zero_sign_events[:3]
     if dep_kinds:
         # what float64's disagreements are (F8): ROUNDING (finite, one sign), SIGN (a zero against
         # a nonzero, or opposite signs), a class change (EXT, SHRINK, INF-CHANGE), and ZERO-SIGN

@@ -372,6 +372,16 @@ def f64_bar(lhs: list[str], rhs: list[str], var_names: list[str],
 def f64_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], sorts: str,
                    arity: dict[str, int], *, kinds: bool = False
                    ) -> tuple[bool, int, list[float] | None, list[list[float]]] | None: ...
+#: The zero-sign bar (`rust/battery.rs`): strict's reading of a zero's sign at the deployed bar's
+#: probes, each variable over its slot sort's values: (holds, probes, first refusing probe, its
+#: event), or None for a fully numeric pair and for a right side with a `<constant>`.
+def zero_sign_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], sorts: str,
+                         arity: dict[str, int]
+                         ) -> tuple[bool, int, list[float] | None, str | None] | None: ...
+#: Strict's reading of a zero's sign at one point: the event of the two sides (compiled over one
+#: name list) at `env` that is not isolated along the names at the indices `along`, or None.
+def table_zero_sign_refusal(lhs: TableExpr, rhs: TableExpr, env: list[float],
+                            along: list[int]) -> str | None: ...
 #: The ground-composite policy on a rule's right side (a variable-free composite).
 def policy_ground_composite(rhs: list[str]) -> bool: ...
 #: The no-duplication policy: does the right side use a `_` slot more often than the left?
