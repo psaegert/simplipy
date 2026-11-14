@@ -115,8 +115,10 @@ organised by who you are, then the highlights, then every change in detail.
   `f64` writes a fully numeric part as its double, or as its value in the reals where float64's
   two values agree in kind (both finite, two zeros of one sign, the same infinity, both NaN, or
   a range event's true value), whichever is cheaper: `floor(tanh(100))` is 0 (it was 1, float64
-  flooring its 1.0), `sin(np.pi)` and `x0*sin(np.pi)` are 0 and `exp(sin(np.pi))` is 1, while
-  `tanh(100)` is 1. Where the reals give a part no value it keeps float64's: `tan(asin(1))` is
+  flooring its 1.0), `sin(np.pi)` and `x0*sin(np.pi)` are 0, `exp(sin(np.pi))` is 1 and
+  `atanh(tanh(2))` is 2, while `tanh(100)` is 1. In an exponent, a root index or a Bessel order,
+  which read a part's integrality and parity, only the part's double stands:
+  `rootn(x1, acos(cos(1)))` stays, its index 0.9999999999999999 in float64. Where the reals give a part no value it keeps float64's: `tan(asin(1))` is
   1.633e16, `1/sin(np.pi)` 8.2e15. A part whose only value is float64's NaN or infinity is that
   value before any law reaches it: `exp(t)/exp(t)` with `t = tan(asin(1))` is NaN (it was 1),
   and `x0 - 1e309` is `-inf`; `x0*exp(1000)/exp(1000)` stays `x0`, the reals giving the part 1
@@ -608,17 +610,34 @@ model predictions.
   `t >= 0` that is -0 on a region (`sqrt(ceil(x0))` on (-1, 0)). A zero's sign reads an odd
   negative power as `-0` only where its base is negative (at `-inf`, or by underflow), so `1/|t|`
   is never `-0` and `|2*|-3/|t|||` is `6/|t|` for every `t`. A fully numeric argument is read for
-  its value first, as every fully numeric part is: `atanh(tanh(20))` and `log(exp(800))` are
-  `inf`, float64's values, and `atanh(tanh(2))` and `exp(log(3))` stay as written, float64's
-  values (`1.9999999999999996`, `3.0000000000000004`) costing more. An odd function reads the
+  its value first, as every fully numeric part is: `atanh(tanh(20))` is `inf`, float64's value,
+  where the reals give 20 (saturation is no range event), and `atanh(tanh(2))`, `exp(log(3))`
+  and `log(exp(800))` are 2, 3 and 800 (next entry). An odd function reads the
   argument it keeps after pulling a sign out of it, so `sinh(min(-1, cos(1))*asinh(x0))` is `-x0`
   in one call. The laws join the catalogue: `fun.atanh_tanh`, `fun.log_exp`, `fun.asinh_sinh`,
   `fun.sinh_asinh`, `fun.acosh_cosh`, `fun.exp_log`, `fun.unit_inverses`, `perm.inverse_pairs`,
-  `fun.abs_nonnegative`, `fun.half_period`, `fun.besselj_reflection` and `lattice.absorb`. A mine
-  meets a pair over a fully numeric argument on its literal leaves as a fully numeric rule both
-  modes hold (`atanh(tanh(2)) -> 2`). srbf's ground truths, a tenth of the training-data inputs
+  `fun.abs_nonnegative`, `fun.half_period`, `fun.besselj_reflection` and `lattice.absorb`.
+  srbf's ground truths, a tenth of the training-data inputs
   and a tenth of the predictions do not change in either mode, and no answer changes on a second
   call.
+- **`f64` writes a fully numeric part's real value as its own double.** `f64`'s fold offered a
+  part's value in the reals only where the table carries it exactly (a rational, a multiple of
+  pi, an infinity) or as the recognition list's entry of its double, so `atanh(tanh(2))`, whose
+  float64 value is 1.9999999999999996, stayed as written. It now offers the real value's own
+  double too, admitted by the ground evaluator where the reals read the part as that double at
+  the ladder's precision and float64's kind agrees: `atanh(tanh(2))` is 2, `exp(log(3))` is 3,
+  `log(exp(0.0137))` is 0.0137 and `log(exp(800))` is 800, which the range standard admits beside
+  float64's overflow and which costs less than `inf`. A decimal is the rational it spells, so
+  `1e400/1e400` is 1 (float64 reads the leaves as `inf` and gives NaN, a range event). An
+  exponent, a root index and a Bessel order read more than a part's kind, its integrality and
+  parity (a negative base under an exponent that is no integer is NaN), so there `f64` writes a
+  fully numeric part only as float64's own double, by the fold and by a rule step:
+  `rootn(x1, acos(cos(1)))`, `rootn(x1, exp(log(3)))`, `x1^exp(log(3))` and
+  `besselj(exp(log(3)), x1)` stay, float64's index, exponent and order being 0.9999999999999999
+  and 3.0000000000000004, `rootn(x1, 2 + floor(tanh(100)))` is `rootn(x1, 3)` (it was
+  `rootn(x1, 2)`) and `x1^floor(tanh(100))` is `x1` (it was 1); `permissive` reads the reals there.
+  On srbf's ground truths, a tenth of the training-data inputs and a tenth of the predictions no
+  answer changes in either mode, and none changes on a second call.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and

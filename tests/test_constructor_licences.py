@@ -673,16 +673,16 @@ class TestInversePairsCollapse:
         """Where the inner function overflows or underflows (exp past 709.78 or below -708.4,
         sinh and cosh past 710.48), a rewrite may give the evaluator's value or the true one; the
         collapse gives the true one, so no pair is refused for an overflow. A fully numeric
-        argument is read for its value first: float64's infinity, where the true value costs
-        more."""
+        argument is read for its value first, and where it overflows the range standard admits
+        the true value beside float64's infinity: the cheaper is written."""
         for tokens in (['log', 'exp', 'cosh', 'x0'], ['asinh', 'sinh', 'exp', 'x0'],
                        ['sinh', 'asinh', 'exp', 'x0']):
             assert bare.simplify(list(tokens)) == tokens[2:], tokens
         assert bare.simplify(['acosh', 'cosh', '*', '2', 'cosh', 'x0']) == \
             ['*', '2', 'cosh', 'x0']
         assert bare.simplify(['atanh', 'tanh', 'exp', 'x0']) == ['atanh', 'tanh', 'exp', 'x0']
-        assert bare.simplify(['log', 'exp', '800']) == ['float("inf")']
-        assert bare.simplify(['log', 'exp', '-800']) == ['float("-inf")']
+        assert bare.simplify(['log', 'exp', '800']) == ['800']
+        assert bare.simplify(['log', 'exp', '-800']) == ['-800']
 
     def test_the_two_axes_are_INDEPENDENT_which_no_bool_could_express(self, bare) -> None:
         """`Cx` used to carry `lossy: bool`, which can only ask "may I skip
@@ -764,12 +764,12 @@ class TestInversePairsCollapse:
         assert bare.simplify(['pow', 'np.e', 'log', 'abs', 'x0']) == ['abs', 'x0']
 
     def test_a_fully_numeric_argument_is_read_for_its_value(self, bare) -> None:
-        # In f64 a fully numeric part is the fold's: float64's value, kept where it is cheaper.
-        # Float64's exp(log(3)) is 3.0000000000000004, dearer than the expression.
+        # In f64 a fully numeric part is the fold's: float64's value, or the reals' where
+        # float64's kind agrees. Float64's exp(log(3)) is 3.0000000000000004; the reals' is 3.
         assert bare.simplify(['exp', 'log', 'abs', '/', '1', '3']) == \
             bare.simplify(['/', '1', '3'])
         assert bare.simplify(['log', 'exp', '3']) == ['3']
-        assert bare.simplify(['pow', 'np.e', 'log', '3']) == ['exp', 'log', '3']
+        assert bare.simplify(['pow', 'np.e', 'log', '3']) == ['3']
 
 
 class TestReciprocalBaseAndDeterminedInfinitePower:

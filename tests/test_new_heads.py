@@ -766,11 +766,13 @@ def test_a_ground_fold_returns_a_member_with_the_nodes_value(bare, mode):
 
 def test_lattice_members_are_ordered_by_float64_bits(bare):
     """`f64` and `permissive` order two ground members by the float64 values the deployed
-    kernels compute."""
+    kernels compute, and write a fully numeric bag as its value: float64's, or the reals' where
+    float64's kind agrees."""
     f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
     # cosh(acosh(3)) is 3.0000000000000004 in float64, where the decimal 3.0000000000000001 reads
-    # as 3.0
-    assert f64('max cosh acosh 3 3.0000000000000001') == 'cosh acosh 3'
+    # as 3.0: float64's maximum is cosh(acosh(3)), and the reals' value of the bag, 3, is cheaper
+    assert f64('max cosh acosh 3 3.0000000000000001') == '3'
+    assert f64('max x0 max cosh acosh 3 3.0000000000000001') == 'max 3 x0'
     # permissive cancels the inverse pair (4.9) and rounds the decimal to its float, 3
     assert ' '.join(bare.simplify('max cosh acosh 3 3.0000000000000001'.split(),
                                   mode='permissive')) == '3'

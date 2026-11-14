@@ -914,11 +914,12 @@ class TestAtanhTanhBand:
         assert engine.simplify(['atanh', 'tanh', 'x0']) == ['atanh', 'tanh', 'x0']
 
     def test_a_fully_numeric_argument_is_read_first(self, engine: SimpliPyEngine) -> None:
-        """A fully numeric part is the fold's: float64's value, kept where it is cheaper.
-        `atanh(tanh(20))` is inf in float64; `atanh(tanh(2))` is 1.9999999999999996, dearer
-        than the expression, which stays."""
+        """A fully numeric part is the fold's: float64's value, or the reals' where float64's
+        kind agrees, whichever is cheaper. `atanh(tanh(20))` is inf in float64, where the reals
+        give 20 (saturation is no range event); `atanh(tanh(2))` is 2, where float64 gives
+        1.9999999999999996."""
         assert engine.simplify(['atanh', 'tanh', '20']) == ['float("inf")']
-        assert engine.simplify(['atanh', 'tanh', '2']) == ['atanh', 'tanh', '2']
+        assert engine.simplify(['atanh', 'tanh', '2']) == ['2']
 
 
 class TestFlatPointCollapses:
@@ -932,12 +933,13 @@ class TestFlatPointCollapses:
         assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == ['abs', 'sin', 'x0']
 
     def test_a_fully_numeric_argument_is_read_first(self, engine: SimpliPyEngine) -> None:
-        # The fold writes float64's value where it is cheaper: exactly 2 and 0.5, while 0.0137
-        # comes back 34 ULP off (0.013700000000000468), dearer than the expression.
+        # The fold writes float64's value, or the reals' where float64's kind agrees: exactly 2
+        # and 0.5 in float64, and 0.0137 in the reals, where float64 comes back 34 ULP off
+        # (0.013700000000000468).
         assert engine.simplify(['log', 'exp', '2']) == ['2']
         assert engine.simplify(['acosh', 'cosh', '3']) == ['3']
         assert engine.simplify(['log', 'exp', '0.5']) == ['/', '1', '2']
-        assert engine.simplify(['log', 'exp', '0.0137']) == ['log', 'exp', '0.0137']
+        assert engine.simplify(['log', 'exp', '0.0137']) == ['0.0137']
 
     def test_the_clean_pair_needs_no_licence(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['asinh', 'sinh', 'sin', 'x0']) == ['sin', 'x0']

@@ -50,6 +50,11 @@ def _simplify(engine, expr, mode):
     ('* x0 sin np.pi', '0', '0'),
     ('exp sin np.pi', '1', '1'),
     ('floor 0.99999999999999999', '0', '0'),
+    # the real value as its own double: float64 gives 1.9999999999999996 and 3.0000000000000004
+    ('atanh tanh 2', '2', '2'),
+    ('exp log 3', '3', '3'),
+    # saturation is no range event: float64's infinity, where the reals give 20
+    ('atanh tanh 20', 'float("inf")', '20'),
     # where the reals give no value float64's value stays (spelled as written where cheaper)
     ('tan asin 1', 'tan asin 1', 'float("nan")'),
     ('/ 1 sin np.pi', 'inv sin np.pi', 'float("nan")'),
@@ -63,8 +68,21 @@ def _simplify(engine, expr, mode):
     ('/ exp tan asin 1 exp tan asin 1', 'float("nan")', 'float("nan")'),
     ('- exp tan asin 1 exp tan asin 1', 'float("nan")', 'float("nan")'),
     ('+ x0 tan asin 1', '+ x0 tan asin 1', 'float("nan")'),
-    # a range event is no part without a value: the reals' finite value stands beside
+    # a range event is no part without a value: the reals' finite value stands beside, and the
+    # cheaper is written (800 against float64's infinity)
     ('* x0 / exp 1000 exp 1000', 'x0', 'x0'),
+    ('log exp 800', '800', '800'),
+    # in f64 an exponent, a root index and a Bessel order read more than the kind, so a fully
+    # numeric part there is written only as float64's own double: rootn's index is
+    # 0.9999999999999999 and the exponent 3.0000000000000004 in float64, 3.0 for
+    # 2 + floor(tanh(100)) and 1.0 for floor(tanh(100)); permissive reads the reals
+    ('rootn x1 acos cos 1', 'rootn x1 acos cos 1', 'x1'),
+    ('rootn x1 exp log 3', 'rootn x1 exp log 3', 'rootn x1 3'),
+    ('pow x1 exp log 3', 'pow x1 exp log 3', 'pow x1 3'),
+    ('besselj exp log 3 x1', 'besselj exp log 3 x1', 'besselj 3 x1'),
+    ('rootn x1 + 2 floor tanh 100', 'rootn x1 3', 'rootn x1 2'),
+    ('pow x1 floor tanh 100', 'x1', '1'),
+    ('+ x1 exp log 3', '+ x1 3', '+ x1 3'),
     # permissive's own simplifications never reach a fully numeric operand: pi - 4 stays
     ('asin sin 4', 'asin sin 4', 'asin sin 4'),
     ('* x0 asin sin 4', '* x0 asin sin 4', '* x0 asin sin 4'),
@@ -132,6 +150,20 @@ def test_a_literal_binds_no_variable_slot(engine) -> None:
     x = ['/', '-', s, '1', '-', s, '1']
     assert loaded.simplify(x, mode='f64') == ['float("nan")']
     assert loaded.simplify(['/', '-', 'x0', '1', '-', 'x0', '1'], mode='f64') == ['1']
+
+
+@pytest.mark.parametrize('expr, reals', [
+    ('rootn x1 acos cos 1', 'x1'),
+    ('rootn x1 exp log 3', 'rootn x1 3'),
+    ('pow x1 exp log 3', 'pow x1 3'),
+    ('rootn x1 + 2 floor tanh 100', 'rootn x1 2'),
+])
+def test_an_exact_position_takes_no_real_value_in_f64(engine, expr, reals) -> None:
+    """In context the judge refuses the part's value in the reals in an exponent or a root
+    index, which reads its integrality and parity (NaN at x1 < 0 for an index or an exponent that
+    is no integer), and f64 does not write it."""
+    assert _simplify(engine, expr, 'f64') != reals
+    assert _contract.judged_reading(verify_rule(expr.split(), reals.split()), 'f64') is not True
 
 
 def test_a_rule_changes_no_ground_value() -> None:

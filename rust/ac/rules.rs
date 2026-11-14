@@ -1261,7 +1261,7 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
         Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
         Ex::Pow(b, ex) => {
             let nb = rewrite_pass_opt(b, p);
-            let nx = rewrite_pass_opt(ex, p);
+            let nx = in_exact(|| rewrite_pass_opt(ex, p));
             if nb.is_none() && nx.is_none() {
                 None
             } else {
@@ -1293,7 +1293,24 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
         }
         Ex::Fun(f, v) => {
             let f = *f;
-            rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
+            match exact_argument(f, v.len(), p.cx.view) {
+                Some(k) => {
+                    let mut out: Option<Vec<Ex>> = None;
+                    for (i, x) in v.iter().enumerate() {
+                        let r = if i == k {
+                            in_exact(|| rewrite_pass_opt(x, p))
+                        } else {
+                            rewrite_pass_opt(x, p)
+                        };
+                        if let Some(r) = r {
+                            out.get_or_insert_with(|| v.to_vec())[i] = r;
+                        }
+                    }
+                    out
+                }
+                None => rewrite_children(v, p),
+            }
+            .map(|k| super::expr::fun(f, k, p.cx))
         }
         _ => None, // Leaf: no children
     };
@@ -1368,13 +1385,56 @@ fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
 
 /// Mark `node` a normal form of this pass (unless the step cap has bound) and report it so.
 fn mark_normal(node: &Ex, p: &PassCtx, why: &str) -> Visit {
-    if p.fires.get() < STEP_CAP {
+    // a node normal inside an exponent, a root index or a Bessel order may not be outside it
+    // (`in_exact_position`)
+    if p.fires.get() < STEP_CAP && !in_exact_position() {
         if trace_memo() {
             memo_log(why, node);
         }
         p.normal.borrow_mut().insert(node.clone());
     }
     Visit::Normal
+}
+
+thread_local! {
+    /// Whether the walk is inside an exponent or a root index (`in_exact_position`).
+    static EXACT_POSITION: Cell<bool> = const { Cell::new(false) };
+}
+
+/// IS THE WALK INSIDE AN EXPONENT, A ROOT INDEX OR A BESSEL ORDER? Those read more than a part's
+/// kind: they read its integrality and parity (a negative base raised to a non-integer power is
+/// NaN, an even root is NaN below 0), so a fully numeric part there may stand only for a value
+/// float64 gives it bit for bit, never for its value in the reals: `rootn(x1, acos(cos(1)))`
+/// stays, its index 0.9999999999999999 in float64, where the reals give 1. The ground fold and a
+/// rule step on a fully numeric node read it.
+pub(crate) fn in_exact_position() -> bool {
+    EXACT_POSITION.with(|c| c.get())
+}
+
+/// `f` with the walk inside an exponent or a root index (`in_exact_position`).
+fn in_exact<T>(f: impl FnOnce() -> T) -> T {
+    let prev = EXACT_POSITION.with(|c| c.replace(true));
+    let out = f();
+    EXACT_POSITION.with(|c| c.set(prev));
+    out
+}
+
+/// The argument of `f` (with `n` arguments) that reads its value exactly: `pow`'s exponent,
+/// `rootn`'s index and a Bessel function's order (NaN at a negative argument for an order that is
+/// no integer).
+fn exact_argument(f: Tok, n: usize, view: &TokenView) -> Option<usize> {
+    if n != 2 {
+        None
+    } else if view.tok_is(f, "pow") || view.tok_is(f, "rootn") {
+        Some(1)
+    } else if ["besselj", "bessely", "besseli", "besselk"]
+        .iter()
+        .any(|s| view.tok_is(f, s))
+    {
+        Some(0)
+    } else {
+        None
+    }
 }
 
 /// Rewrite a bag's members clone-on-change: `None` = no member moved (nothing allocated).

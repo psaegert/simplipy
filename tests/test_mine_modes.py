@@ -343,6 +343,6 @@ def test_the_f64_mine_reads_the_range_standard(tmp_path):
                       output_file=str(tmp_path / 'rules_f64.json'), promote_sorts=False)
     f64 = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(tmp_path / 'rules_f64.json'))]
     assert (('rootn', 'exp', '?0', '2'), ('exp', '/', '?0', '2')) in f64
-    assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and r[0][2][0] in '?_!$']
+    assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and len(r[0]) == 3]
     assert not [r for r in f64 if r[0][:2] == ('log', 'exp')]
     assert engine.simplify(['log', 'exp', 'x0']) == ['x0']

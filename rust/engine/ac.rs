@@ -683,9 +683,26 @@ impl Engine {
             self.ground_reading(node, ctx, &view),
             self.ground_reading(next, ctx, &view),
         ) {
+            // in `f64`, inside an exponent, a root index or a Bessel order only float64's own
+            // double stands
+            (Some(p), Some(c))
+                if matches!(mode, RuleMode::Default) && crate::ac::rules::in_exact_position() =>
+            {
+                Self::same_double(&p, &c)
+            }
             (Some(p), Some(c)) => {
                 crate::ground::admits(Self::ground_mode(mode), &p, &c, &self.operators)
             }
+            _ => false,
+        }
+    }
+
+    /// Does float64 give two readings one double (NaN for NaN)? The admission of an exponent's or
+    /// a root index's or a Bessel order's part in `f64` (`ac::rules::in_exact_position`), which
+    /// reads more than the kind.
+    fn same_double(p: &crate::ground::Reading, c: &crate::ground::Reading) -> bool {
+        match (p.float, c.float) {
+            (Some(a), Some(b)) => a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
             _ => false,
         }
     }
@@ -741,8 +758,10 @@ impl Engine {
     ///   the node with float64's value bit for bit (`max(sin(1), 0.8414709848078965)` is
     ///   `sin(1)`), the recognition list's entry for that double (`2*asin(1)` is `np.pi`), and
     ///   the reals' value where float64's kind agrees (the exact rational, the
-    ///   multiple of pi, the entry of the real value's double): `floor(tanh(100))` is 0,
-    ///   `exp(sin(np.pi))` is 1. At an equal price, (b)'s. With `fold_tr` off (the miner's
+    ///   multiple of pi, the real value's double or its entry): `floor(tanh(100))` is 0,
+    ///   `exp(sin(np.pi))` is 1, `atanh(tanh(2))` is 2 and `exp(log(3))` is 3, where float64
+    ///   computes 1.9999999999999996 and 3.0000000000000004. At an equal price, (b)'s. With
+    ///   `fold_tr` off (the miner's
     ///   unfolded canon) only an atom that is the node's only value: NaN or an infinity.
     /// - permissive: the table's value at its nearest double, a member of the same value
     ///   at float resolution (`mod(sin(1), 2)` is `sin(1)`), the exact rational, the multiple of
@@ -754,13 +773,17 @@ impl Engine {
         view: &TokenView,
         lossy: bool,
         fold_tr: bool,
+        exact: bool,
     ) -> Option<Ex> {
         let part = self.ground_reading(e, ctx, view)?;
-        self.ground_value_fold_of(&part, e, ctx, view, lossy, fold_tr)
+        self.ground_value_fold_of(&part, e, ctx, view, lossy, fold_tr, exact)
     }
 
     /// [`Engine::ground_value_fold`] against a given reading of the node's value (`part`): the
-    /// node's own, or the reading of the fully numeric part it was built from.
+    /// node's own, or the reading of the fully numeric part it was built from. With `exact` (the
+    /// node is inside an exponent or a root index) a candidate stands only where float64 gives it
+    /// the part's double.
+    #[allow(clippy::too_many_arguments)]
     fn ground_value_fold_of(
         &self,
         part: &crate::ground::Reading,
@@ -769,6 +792,7 @@ impl Engine {
         view: &TokenView,
         lossy: bool,
         fold_tr: bool,
+        exact: bool,
     ) -> Option<Ex> {
         let ops = &self.operators;
         let bare = Cx::bare(view);
@@ -823,6 +847,14 @@ impl Engine {
                     if let Some(y) = crate::ground::nearest_double(&v, dps) {
                         if y.to_bits() != d.to_bits() {
                             cands.extend(recognised(y).map(|r| (r, true)));
+                            // the real value as its own double, which the reals read as the part
+                            // where they read it at the ladder's precision (`atanh(tanh(2))` is
+                            // 2, float64's 1.9999999999999996 aside); a double below the normal
+                            // ones writes no real value faithfully
+                            if y.is_normal() {
+                                cands
+                                    .extend(Self::float_literal(y, false, view).map(|l| (l, true)));
+                            }
                         }
                     }
                 }
@@ -832,8 +864,13 @@ impl Engine {
             .into_iter()
             .filter(|(c, _)| c != e)
             .filter(|(c, _)| {
-                self.ground_reading(c, ctx, view)
-                    .is_some_and(|r| crate::ground::admits(mode, part, &r, ops))
+                self.ground_reading(c, ctx, view).is_some_and(|r| {
+                    if exact {
+                        Self::same_double(part, &r)
+                    } else {
+                        crate::ground::admits(mode, part, &r, ops)
+                    }
+                })
             })
             .min_by(|(a, ab), (b, bb)| {
                 complexity(a, view)
@@ -911,11 +948,16 @@ impl Engine {
         // the fold on every pass.
         let is_composite = matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..));
         if is_composite && is_ground(e, &view) {
+            // in `f64`, inside an exponent, a root index or a Bessel order only float64's own
+            // double stands (memoized apart: `in_exact_position`); `permissive` reads the reals
+            if !lossy && crate::ac::rules::in_exact_position() {
+                return self.ground_value_fold(e, ctx, &view, lossy, fold_f64, true);
+            }
             let flat = to_prefix(e, &bare);
             if let Some(hit) = class_memo.borrow().get(&flat) {
                 return hit.clone();
             }
-            let verdict = self.ground_value_fold(e, ctx, &view, lossy, fold_f64);
+            let verdict = self.ground_value_fold(e, ctx, &view, lossy, fold_f64, false);
             class_memo.borrow_mut().insert(flat, verdict.clone());
             return verdict;
         }

@@ -306,10 +306,12 @@ class TestReviewFindings:
         assert list(engine.simplify(once, mode='f64')) == once
         assert '2001' in once, once
 
-    def test_a_leaf_read_as_inf_or_zero_does_not_cancel_in_f64_mode(self, engine: SimpliPyEngine) -> None:
+    def test_a_leaf_past_the_doubles_is_the_rational_it_spells(self, engine: SimpliPyEngine) -> None:
+        # A decimal is the rational it spells, so 10^400/10^400 is exactly 1. Float64 reads the
+        # leaves as inf and 0 and the quotient as NaN, a range event, beside which the range
+        # standard admits the true value; f64 writes the cheaper.
         for prefix in ('/ 1e400 1e400', '/ 1e-400 1e-400'):
-            out = simplify(engine, prefix, 'f64')
-            assert out != ['1'] and np.isnan(constant(engine, out)), out
+            assert simplify(engine, prefix, 'f64') == ['1'], prefix
             assert np.isnan(constant(engine, prefix.split()))
 
     def test_exponents_do_not_merge_beyond_2_53(self, engine: SimpliPyEngine) -> None:
