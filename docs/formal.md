@@ -480,14 +480,31 @@ not factor out of such a sum a content that is not certainly positive. A ground 
 holding a `<constant>` or an infinity, are read as before. `permissive` reads a value up to the
 sign of a zero.
 
-The rule acts where an inverse meets the sum, and a sum turned around before that can still lose
-its zero's sign. `1/(-x1 - |x1|)` is `+inf` for every x1 ≤ 0, where the sum is `+0`, but the sum
-`-x1 - |x1|` is held as `-(x1 + |x1|)` when it is built, before the inverse reaches it, and the
-answer `-1/(x1 + |x1|)` is `-inf` there. Keeping every sum the zero-set test cannot clear in the
-orientation it is written in reaches it, but costs answers: with the slice reading above, on a
-tenth of srbf's predictions 594 `f64` answers rest dearer, all but 3 over sums whose zero set is
-null but which the test cannot read (univariate sums over `log`, roots, `abs` or `tan` that mix
-directions), and it is not done.
+The rule acts where an inverse meets the sum, and a sum turned around before that would lose its
+zero's sign: `1/(-x1 - |x1|)` is `+inf` for every x1 ≤ 0, where the sum is `+0`, and
+`-1/(x1 + |x1|)` is `-inf` there. So in `f64` a sum the zero-set test cannot clear holds its sign
+wherever the expression around it reads the sign of its zero: its sign does not leave it
+(`-a - b` is not `-(a + b)`), no sign trades into it (`2(-a - b)` is not `-2(a + b)`, nor is
+`sin(-a - b)` `-sin(a + b)`), and inside a sum no negative coefficient spreads over it
+(`c - 2(a + b)` keeps its product). Around the sum the sign is read as a zero product's is
+(above): an inverse, an odd negative power, `atan2` and any head not known to be blind read it; a
+product, an odd power, `sqrt`, an odd function, an odd root, `besselj` of an odd order, `floor`
+and `ceil` carry it up to what reads it;
+a sum carries it only where its other terms may all be -0 on a region; and the answer itself, an
+even power and a head blind to it (`exp`, `cos`, `cosh`, `abs`, `log`, `acos`, `acosh`, `erfc`)
+do not read it. Where nothing reads it, or the certificate shows its zero set null, the sum takes
+the orientation the constructors give any sum: `-ceil(x1) - ceil(x2)` is `-(ceil(x1) + ceil(x2))`
+as an answer and under `exp`, and `1/(-ceil(x1) - ceil(x2))` stays as written. A construction does
+not see what is around it, so it holds every sum whose form does not show its zero set null (a
+polynomial, or a sum with a variable that one term alone holds, as a function of that variable
+with null level sets and no `tanh` or `atan`, which float64 holds constant on a tail, beside
+factors whose zero sets are null: for almost every value of the other variables such a sum
+vanishes on a null set of that one), and the walk that lands each state at its root gives every
+held sum its orientation where nothing reads its zero or the certificate clears it. A held sum's
+negation is written as the negation it is (`-(a - b)`, not `b - a`), so an answer reads back to
+its state. On srbf's ground truths 5 `f64` answers change (0 cheaper, 5 dearer, 0 at an equal price), on a tenth of the training-data inputs 22 (0, 19, 3) and on a tenth of the predictions 98 (4, 73, 21); the dearer ones hold a sum under an inverse whose zero set the certificate
+cannot show null, or take another path through a sum held while the search ran. `permissive`
+reads a value up to the sign of a zero.
 
 **A sum keeps a `+0` term where its other terms may all be -0 on a region, in `f64`.** float64's
 sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`, and a cancellation is `+0`), and

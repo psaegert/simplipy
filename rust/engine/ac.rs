@@ -300,6 +300,8 @@ impl Engine {
             mode,
             fold_f64,
             ground_first: None,
+            zero_sign_unread: false,
+            sign_held: None,
         };
         f(&law)
     }
@@ -1115,7 +1117,7 @@ impl Engine {
         // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
         // does so on purpose.
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// [`Engine::ac_simplify_proj`] with the fold discipline stated rather than derived.
@@ -1130,14 +1132,20 @@ impl Engine {
         fold_tr: bool,
     ) -> Option<Vec<String>> {
         let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, mode, 0, fold_tr);
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// The shared tail of both projections: malformed input is `None` -- the AC parser is
     /// the arbiter, and the FAILURE SIGNAL propagates to the caller (the FFI raises
     /// ValueError). The old contract returned the input unchanged, which silently passed
     /// garbage through the one entry point whose inputs skip `is_valid`.
-    fn project(&self, ctx: SimplifyCtx, best: Option<Ex>, form: AcForm) -> Option<Vec<String>> {
+    fn project(
+        &self,
+        ctx: SimplifyCtx,
+        best: Option<Ex>,
+        form: AcForm,
+        mode: RuleMode,
+    ) -> Option<Vec<String>> {
         // Malformed input is `None` -- the AC parser is the arbiter, and the FAILURE
         // SIGNAL propagates to the caller (the FFI raises ValueError). The old contract
         // returned the input unchanged, which silently passed garbage through the one
@@ -1145,14 +1153,41 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         // Spelled in the run's number domain, f64's; the spelling context stays `bare` (a
-        // lossy mode's licences would change the spelling).
-        let bare = Cx::bare(&view);
+        // lossy mode's licences would change the spelling), with the answer's held sums
+        // (`held_in`).
         let _domain = crate::ac::rat::number_domain(true);
+        let held = self.held_in(&best, false, &view, &ctx, mode);
+        let is_held = |s: &Ex| held.contains(s);
+        let mut spell = Cx::bare(&view);
+        spell.sign_held = Some(&is_held);
         let toks = match form {
-            AcForm::Explicit => to_prefix(&best, &bare),
-            AcForm::Tagged => to_prefix_tagged(&best, &bare),
+            AcForm::Explicit => to_prefix(&best, &spell),
+            AcForm::Tagged => to_prefix_tagged(&best, &spell),
         };
         Some(self.resolve_seq(&toks, &ctx))
+    }
+
+    /// The sums of `e` an answer of `mode` writes as they are held (`expr::held_sums`): in `f64`
+    /// the sums at a place that reads their zero (the root too where `read`, which the region
+    /// certificate the parse reads decides beside a sum's other terms) whose form does not show
+    /// their zero set null. A held sum's negation is written as the negation it is (`neg - a b`,
+    /// never the flipped `b - a`), so the answer reads back to its state and has its value. None
+    /// in `permissive`.
+    fn held_in(
+        &self,
+        e: &Ex,
+        read: bool,
+        view: &crate::tokens::TokenView,
+        ctx: &SimplifyCtx,
+        mode: RuleMode,
+    ) -> FxHashSet<Ex> {
+        if !matches!(mode, RuleMode::Default) {
+            return FxHashSet::default();
+        }
+        let czn = |x: &Ex| self.ac_zsn(x, ctx, true);
+        let mut cx = Cx::bare(view);
+        cx.cert_region = Some(&czn);
+        crate::ac::expr::held_sums(e, read, &cx)
     }
 
     /// [`Engine::ac_simplify_proj`] with the OPT-IN post-fixpoint
@@ -1169,17 +1204,7 @@ impl Engine {
         explore_budget: usize,
     ) -> Option<Vec<String>> {
         let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
-        let best = best?;
-        let view = self.view(&ctx);
-        // Spelled in the run's number domain, f64's; the spelling context stays `bare` (a
-        // lossy mode's licences would change the spelling).
-        let bare = Cx::bare(&view);
-        let _domain = crate::ac::rat::number_domain(true);
-        let toks = match form {
-            AcForm::Explicit => to_prefix(&best, &bare),
-            AcForm::Tagged => to_prefix_tagged(&best, &bare),
-        };
-        Some(self.resolve_seq(&toks, &ctx))
+        self.project(ctx, best, form, mode)
     }
 
     /// Simplify in `mode` and return the RULE STEPS taken beside the answer: each fire's rule
@@ -1207,19 +1232,18 @@ impl Engine {
         drop(log);
         let fires = {
             let view = self.view(&ctx);
-            let bare = Cx::bare(&view);
             let _domain = crate::ac::rat::number_domain(true);
-            steps
-                .iter()
-                .map(|(l, r)| {
-                    (
-                        self.resolve_seq(&to_prefix(l, &bare), &ctx),
-                        self.resolve_seq(&to_prefix(r, &bare), &ctx),
-                    )
-                })
-                .collect()
+            // A step's sides are read as the places they stand at may read their zeros.
+            let side = |x: &Ex| {
+                let held = self.held_in(x, true, &view, &ctx, mode);
+                let is_held = |s: &Ex| held.contains(s);
+                let mut spell = Cx::bare(&view);
+                spell.sign_held = Some(&is_held);
+                self.resolve_seq(&to_prefix(x, &spell), &ctx)
+            };
+            steps.iter().map(|(l, r)| (side(l), side(r))).collect()
         };
-        Some((self.project(ctx, best, form)?, fires))
+        Some((self.project(ctx, best, form, mode)?, fires))
     }
 
     /// Simplify in `mode` with a SUPPRESSION SET of artifact rule rows (rows of `mode`'s
@@ -1243,7 +1267,7 @@ impl Engine {
             Cx::folds_for(mode),
             Some(suppressed),
         );
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// The PRETTY INFIX rendering of the simplified expression: `x8 + 1.2*x3`, `-x0/3`,
@@ -1259,9 +1283,12 @@ impl Engine {
         // `None` on malformed input, exactly as `ac_simplify_proj` (the FFI raises).
         let best = best?;
         let view = self.view(&ctx);
-        let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(true);
-        Some(to_infix_pretty(&best, &bare))
+        let held = self.held_in(&best, false, &view, &ctx, mode);
+        let is_held = |s: &Ex| held.contains(s);
+        let mut spell = Cx::bare(&view);
+        spell.sign_held = Some(&is_held);
+        Some(to_infix_pretty(&best, &spell))
     }
 
     /// The infix twin of [`Engine::ac_explore_proj`] -- `ac_simplify_infix` with the
@@ -1276,9 +1303,12 @@ impl Engine {
         let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
-        let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(true);
-        Some(to_infix_pretty(&best, &bare))
+        let held = self.held_in(&best, false, &view, &ctx, mode);
+        let is_held = |s: &Ex| held.contains(s);
+        let mut spell = Cx::bare(&view);
+        spell.sign_held = Some(&is_held);
+        Some(to_infix_pretty(&best, &spell))
     }
 
     /// The SERVE-TIME ORDERING, exposed for the miner's acceptance gate: is `a` strictly
@@ -1322,8 +1352,12 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let best_c = complexity(&best, &view);
-        let bare = Cx::bare(&view);
-        let toks = to_prefix(&best, &bare);
+        // Spelled as `project` spells an answer: with its held sums (`held_in`).
+        let held = self.held_in(&best, false, &view, &ctx, RuleMode::Default);
+        let is_held = |s: &Ex| held.contains(s);
+        let mut spell = Cx::bare(&view);
+        spell.sign_held = Some(&is_held);
+        let toks = to_prefix(&best, &spell);
         Some((src_c, best_c, self.resolve_seq(&toks, &ctx)))
     }
 
@@ -1636,6 +1670,8 @@ impl Engine {
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             ground_first: None,
+            zero_sign_unread: false,
+            sign_held: None,
         };
         // The whole call runs in the mode's number domain: the
         // certificates and folds below build numbers too.
@@ -1792,6 +1828,8 @@ impl Engine {
             mode,
             fold_f64: fold_tr,
             ground_first: None,
+            zero_sign_unread: false,
+            sign_held: None,
         };
         // The whole call runs in the mode's number domain: the
         // certificates and folds below build numbers too.
@@ -1855,7 +1893,12 @@ impl Engine {
             // the state never went through (pair sign trades, folds and merges across a
             // joined reciprocal); checking it made the instrument fail on states whose
             // real serialization round-trips.
-            let spell = Cx::bare(cxx.view);
+            // ... with the state's held sums (`expr::held_sums`), read by the run's own
+            // certificates; the re-read is landed at the root as every state of the run is.
+            let held = crate::ac::expr::held_sums(e, false, cxx);
+            let is_held = |s: &Ex| held.contains(s);
+            let mut spell = Cx::bare(cxx.view);
+            spell.sign_held = Some(&is_held);
             let t = to_prefix(e, &spell);
             // Re-parse under the call's MODE (cert-less, like the entry parse):
             // serialization stability is a PER-MODE contract.
@@ -1867,7 +1910,7 @@ impl Engine {
             // The round-trip must land on the SAME Ex.
             from_prefix(&t, pb)
                 .map(|p| {
-                    let p = canon(p, cxx);
+                    let p = land_root(canon(p, cxx), cxx);
                     if p != *e {
                         // This assert is the LIVE route-equality
                         // instrument -- every constructor-built pass state must equal its
@@ -1931,14 +1974,14 @@ impl Engine {
                 "pass output has nested bags: {next:?}"
             );
             debug_assert!(
-                stable(&next),
-                "pass output is not serialization-stable: {next:?}"
-            );
-            debug_assert!(
                 crate::ac::rules::is_pass_fixpoint(&next, &pass),
                 "pass output is not a pass fixpoint: {next:?}"
             );
             current = land_root(next, &cx);
+            debug_assert!(
+                stable(&current),
+                "pass output is not serialization-stable: {current:?}"
+            );
         }
         // EXPLORATION (`ac::search`): the chain above ran UNCHANGED to its fixpoint -- the
         // theorems (T6, L3/L4) are already banked -- and only an explicit budget enters the
@@ -1948,6 +1991,13 @@ impl Engine {
                 crate::ac::search::explore(current, &pass, max_passes, explore_budget),
                 &cx,
             );
+            // The explored endpoint, landed, descends to the pass fixpoint as the chain's does.
+            for _ in 0..max_passes {
+                let Some(next) = rewrite_pass_opt(&current, &pass) else {
+                    break;
+                };
+                current = land_root(next, &cx);
+            }
             debug_assert!(
                 stable(&current),
                 "explored endpoint is not serialization-stable: {current:?}"

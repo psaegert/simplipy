@@ -1218,9 +1218,10 @@ impl<'a, 'v> Display<'a, 'v> {
 
     /// The display of the product `v` as it stands.
     fn product(&self, v: &[Ex]) -> Node {
-        // `-(a - b)` reads as `b - a`, as in every canonical printer.
+        // `-(a - b)` reads as `b - a`, as in every canonical printer, but where the sum may
+        // vanish on a region, whose zero's sign is the negation's (`sum_holds_its_sign`).
         if let [Ex::Num(r), Ex::Add(terms)] = v {
-            if *r == Rat::NEG_ONE {
+            if *r == Rat::NEG_ONE && !crate::ac::expr::sum_holds_its_sign(&v[1], self.cx) {
                 if let Some(flipped) = terms
                     .iter()
                     .map(|t| negate_term(t, self.cx))
@@ -1546,6 +1547,16 @@ impl<'a, 'v> Display<'a, 'v> {
         if terms.len() == 1 {
             let (neg, t) = terms.pop().unwrap();
             return if neg { negate(t) } else { t };
+        }
+        // A sum whose terms are all subtracted is the negated chain, `-(n1 + n2)`, but where it
+        // may vanish on a region (`sum_holds_its_sign`): float64's `-n1 - n2` is `+0` wherever
+        // it cancels, the negation `-0`, so the first term is written negated and the rest
+        // subtracted.
+        if terms.iter().all(|(neg, _)| *neg)
+            && crate::ac::expr::sum_holds_its_sign(&Ex::Add(v.to_vec()), self.cx)
+        {
+            let (_, first) = terms.remove(0);
+            terms.insert(0, (false, Node::Neg(Box::new(first))));
         }
         // Positive terms first, each group in canonical order.
         terms.sort_by_key(|(neg, _)| *neg);

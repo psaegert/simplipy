@@ -59,7 +59,7 @@
 
 use super::expr::{
     add, atan2_of, complexity, distributes_power, fun, keeps_zero_sign, mul, orient_term_classes,
-    orientation_near_miss, pow, product_members, vanishes_with_a_sign, Cx, Ex,
+    orientation_near_miss, pow, product_members, vanishes_with_a_sign, zero_read_below, Cx, Ex,
 };
 use super::rat::Rat;
 use super::rules::{no_nested_bags, ordered_below, rewrite_pass, PassCtx};
@@ -125,7 +125,8 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
     let mut spent = 0usize;
     loop {
         let mut sites: Vec<Site> = Vec::new();
-        site_list(&best, pass.cx, None, &mut Vec::new(), &mut sites);
+        // Nothing reads the zero of the answer itself (`expr::land_root`).
+        site_list(&best, pass.cx, None, false, &mut Vec::new(), &mut sites);
         // The whole states, cheapest first; a state two moves rebuild alike is tried once, and
         // a move that rebuilds the best itself not at all.
         let mut seen: rustc_hash::FxHashSet<Ex> = rustc_hash::FxHashSet::default();
@@ -158,10 +159,18 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
 
 /// The places of `e` with a move, in deterministic pre-order (the moves at a node first, then its
 /// children in canonical bag order), each with its moved node. `power` is the integer exponent
-/// `e` is the base of, if any (FACTOR's licence, see [`factor_moves`]).
-fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &mut Vec<Site>) {
+/// `e` is the base of, if any (FACTOR's licence, see [`factor_moves`]). `read`: may the
+/// expression around `e` read the sign of its zero (`zero_read_below`)?
+fn site_list(
+    e: &Ex,
+    cx: &Cx,
+    power: Option<&Rat>,
+    read: bool,
+    path: &mut Vec<usize>,
+    out: &mut Vec<Site>,
+) {
     let mut own = Vec::new();
-    local_moves(e, cx, power, &mut own);
+    local_moves(e, cx, power, read, &mut own);
     for m in own {
         out.push((path.clone(), m));
     }
@@ -174,7 +183,7 @@ fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &
         Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
             for (i, arg) in v.iter().enumerate() {
                 let mut inner = Vec::new();
-                site_list(arg, cx, None, &mut Vec::new(), &mut inner);
+                site_list(arg, cx, None, true, &mut Vec::new(), &mut inner);
                 for (rel, moved) in inner {
                     let (old, new) = match (arg, rel.split_first()) {
                         (Ex::Mul(w), Some((&j, rest))) => {
@@ -195,7 +204,7 @@ fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                site_list(c, cx, None, path, out);
+                site_list(c, cx, None, zero_read_below(e, i, read, cx), path, out);
                 path.pop();
             }
         }
@@ -205,10 +214,10 @@ fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &
                 _ => None,
             };
             path.push(0);
-            site_list(b, cx, k, path, out);
+            site_list(b, cx, k, zero_read_below(e, 0, read, cx), path, out);
             path.pop();
             path.push(1);
-            site_list(x, cx, None, path, out);
+            site_list(x, cx, None, false, path, out);
             path.pop();
         }
         _ => {}
@@ -264,7 +273,7 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
 
 /// The move kinds at one node. THE extension point: a new move is a new arm here (with its own
 /// licences), nothing else changes.
-fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
+fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, read: bool, out: &mut Vec<Ex>) {
     match e {
         // DISTRIBUTE (the row-156 move): fully distribute a Mul bag over its Add
         // children; and on a sub-multiset, the reverse of FACTOR on some of a sum's terms: one
@@ -273,7 +282,7 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
         // one term of a sum factor, the rest of the sum left inside (`(x1 + x2 + x3)/x2` is
         // `(x1 + x3)/x2 + 1`).
         Ex::Mul(v) => {
-            if let Some(cand) = distribute_product(v, cx) {
+            if let Some(cand) = distribute_product(v, cx, read) {
                 out.push(cand);
             }
             if cx.permits(crate::ac::expr::Permissive::Agreement) {
@@ -288,7 +297,7 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
                         if matches!(f, Ex::Add(_)) {
                             continue;
                         }
-                        if let Some(inner) = distribute_product(&[f.clone(), s.clone()], cx) {
+                        if let Some(inner) = distribute_product(&[f.clone(), s.clone()], cx, read) {
                             let mut rest: Vec<Ex> = v
                                 .iter()
                                 .enumerate()
@@ -311,6 +320,7 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
                 if ts.len() > 2
                     && rest.iter().all(|f| !f.contains_const() && licensed(f, cx))
                     && ts.iter().all(|t| licensed(t, cx))
+                    && !(read && sign_moves_over(s, &rest, cx))
                 {
                     for (ti, t) in ts.iter().enumerate() {
                         let left: Vec<Ex> = ts
@@ -342,7 +352,7 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
                         let factors: Vec<Ex> = std::iter::repeat_with(|| (**b).clone())
                             .take(n as usize)
                             .collect();
-                        if let Some(cand) = distribute_product(&factors, cx) {
+                        if let Some(cand) = distribute_product(&factors, cx, read) {
                             out.push(cand);
                         }
                     }
@@ -351,7 +361,7 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
         }
         // FACTOR: the reverse of DISTRIBUTE, at a sum.
         Ex::Add(v) => {
-            out.extend(factor_moves(v, cx, power));
+            out.extend(factor_moves(v, cx, power, read));
         }
         _ => {}
     }
@@ -417,7 +427,7 @@ fn term_factors(t: &Ex) -> SplitTerm {
 /// (`1/(x1 - x1*x2)` against `-(1/(x2 - 1))/x1`), while the merges it enables across the product
 /// pay (`rootn(x1, 2)/(x1 - x1*x2)` becomes `-(1/pow(x1, 1/2))*(1/(x2 - 1))`); and a rule can fire
 /// on the factored sum alone.
-fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>) -> Vec<Ex> {
+fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>, read: bool) -> Vec<Ex> {
     // A cost bound, not a measure: the groups grow with the square of the terms. No sum on srbf's
     // ground truths, a tenth of its predictions or a tenth of the simplify inputs of flash-ansr's
     // training-data generator reaches it.
@@ -433,8 +443,26 @@ fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>) -> Vec<Ex> {
             }
             _ => true,
         })
+        // Where the expression around the sum reads its zero's sign (`read`), a content that may
+        // be negative is not joined out of a sum that holds its sign (`sign_moves_over`).
+        .filter(|(cand, c)| !(read && joins_over_a_held_sum(cand, c, cx)))
         .map(|(cand, _)| cand)
         .collect()
+}
+
+/// Does the factored candidate `cand` hold a product of the content `c` and a sum the content's
+/// sign would move the zero of (`sign_moves_over`)?
+fn joins_over_a_held_sum(cand: &Ex, c: &Ex, cx: &Cx) -> bool {
+    let holds = |p: &Ex| match p {
+        Ex::Mul(fs) => fs
+            .iter()
+            .any(|f| matches!(f, Ex::Add(_)) && sign_moves_over(f, std::slice::from_ref(c), cx)),
+        _ => false,
+    };
+    match cand {
+        Ex::Add(ts) => ts.iter().any(holds),
+        p => holds(p),
+    }
 }
 
 /// THE DISTRIBUTIVE LAW read as factoring, at the sum `terms`: each candidate is the sum with
@@ -617,7 +645,8 @@ pub(crate) fn is_factoring(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
         path: &mut Vec<usize>,
     ) -> bool {
         if let Ex::Add(v) = e {
-            for cand in factor_moves(v, cx, power) {
+            // A pattern has no region, so no zero's sign is held (`read` moot).
+            for cand in factor_moves(v, cx, power, false) {
                 if rebuild(root, path, cand, cx) == *rhs {
                     return true;
                 }
@@ -971,7 +1000,7 @@ fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
     let mut out = Vec::new();
     for (a, &i) in recips.iter().enumerate() {
         for &j in &recips[a + 1..] {
-            if let Some(inside) = distribute_product(&[base(i), base(j)], cx) {
+            if let Some(inside) = distribute_product(&[base(i), base(j)], cx, true) {
                 out.push(joined(inside, &[i, j]));
             }
         }
@@ -981,7 +1010,7 @@ fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
             if let Some(inv) = c.checked_inv() {
                 for &i in &recips {
                     let pieces = [Ex::Num(inv.clone()), base(i)];
-                    if let Some(inside) = distribute_product(&pieces, cx) {
+                    if let Some(inside) = distribute_product(&pieces, cx, true) {
                         out.push(joined(inside, &[ci, i]));
                     }
                 }
@@ -998,12 +1027,21 @@ fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
         }
         let f_inv = pow(f.clone(), Ex::Num(Rat::NEG_ONE), cx);
         for &i in &recips {
-            if let Some(inside) = distribute_product(&[f_inv.clone(), base(i)], cx) {
+            if let Some(inside) = distribute_product(&[f_inv.clone(), base(i)], cx, true) {
                 out.push(joined(inside, &[fi, i]));
             }
         }
     }
     out
+}
+
+/// Would spreading `others` over the sum `s` (or joining them out of it) move the sign of its
+/// zero, where the expression around it reads it? In `f64` a sum that may vanish on a region
+/// keeps its sign there (`expr::keeps_zero_sign`): float64's sum is `+0` wherever it cancels, so
+/// beside a co-factor that may be negative the product is `-0` there while the spread terms cancel
+/// to `+0` (`add.unfactor`'s premise; the joined product of `search.factor` the other way round).
+fn sign_moves_over(s: &Ex, others: &[Ex], cx: &Cx) -> bool {
+    keeps_zero_sign(s, cx) && !others.iter().all(|f| cx.certainly_nonneg(f))
 }
 
 /// Fully distribute a product over its Add factors: the cartesian expansion
@@ -1033,7 +1071,7 @@ fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
 ///   semantic widening no certificate covers). Any factor or term that would end up
 ///   in more than one addend must be `Const`-free.
 /// * SIZE -- the cartesian width is capped (`EXPAND_TERM_CAP`).
-fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
+fn distribute_product(factors: &[Ex], cx: &Cx, read: bool) -> Option<Ex> {
     let mut adds: Vec<&Vec<Ex>> = Vec::new();
     let mut rest: Vec<Ex> = Vec::new();
     for f in factors {
@@ -1066,6 +1104,22 @@ fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
         || !adds.iter().all(|v| v.iter().all(|f| licensed(f, cx)))
     {
         return None;
+    }
+    // Where the expression around the product reads its zero's sign (`read`), a sum that holds
+    // its sign is not spread by a co-factor that may be negative (`sign_moves_over`).
+    if read {
+        for (i, v) in adds.iter().enumerate() {
+            let mut others: Vec<Ex> = rest.clone();
+            others.extend(
+                adds.iter()
+                    .enumerate()
+                    .filter(|&(j, _)| j != i)
+                    .map(|(_, w)| Ex::Add((*w).clone())),
+            );
+            if sign_moves_over(&Ex::Add((*v).clone()), &others, cx) {
+                return None;
+            }
+        }
     }
     // The cartesian picks, in canonical bag order (deterministic).
     let rest_len = rest.len();
@@ -1244,18 +1298,18 @@ mod tests {
         for inf in [Ex::NegInf, Ex::PosInf] {
             for cx in [&lossy, &sound] {
                 assert_eq!(
-                    distribute_product(&[inf.clone(), sum.clone()], cx),
+                    distribute_product(&[inf.clone(), sum.clone()], cx, true),
                     None,
                     "{inf:?} * (x1 - 1/2) must not distribute (lossy = {})",
                     matches!(cx.mode, RuleMode::Permissive)
                 );
                 // An infinity inside a co-factor is the same piece.
                 let carrier = crate::ac::expr::mul(vec![inf.clone(), x2.clone()], cx);
-                assert_eq!(distribute_product(&[carrier, sum.clone()], cx), None);
+                assert_eq!(distribute_product(&[carrier, sum.clone()], cx, true), None);
             }
         }
         // A finite factor still distributes under the blanket (the move is kept).
-        assert!(distribute_product(&[x2.clone(), sum.clone()], &lossy).is_some());
+        assert!(distribute_product(&[x2.clone(), sum.clone()], &lossy, true).is_some());
     }
 
     /// End to end (acj-4): permissive keeps the value of an infinity times a sign-changing

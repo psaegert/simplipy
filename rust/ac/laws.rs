@@ -59,6 +59,8 @@
 //! | `mul.flatten` | (a*b)*c = a*(b*c) | none | none |
 //! | `lattice.bag` | max(max(a, b), c) = max(a, b, c), max(a, a) = a | none | none |
 //! | `add.collect` | r1*t + r2*t = (r1 + r2)*t | none | none |
+//! | `add.unfactor` | r*(a + b) + c = r*a + r*b + c | r <= 0: the sum holds no sign | none |
+//! | `add.content` | u*a + u*b = u*(a + b), -a - b = -(a + b) | a sign moves: no held sign | none |
 //! | `mul.exp_merge` | exp(a)*exp(b) = exp(a + b) | none | none |
 //! | `mul.rootn_join` | rootn(a, n)*rootn(b, n) = rootn(a*b, n) | none | none |
 //! | `mul.infinity_sign` | -k*(s + inf) = k*(-s - inf) | none | none |
@@ -231,6 +233,28 @@ pub enum Law {
     LatticeBag,
     /// Like terms of one sign merge: `2t + 3t = 5t`. Total.
     AddCollect,
+    /// A factored sum entering a sum spreads: `r*(a + b) + c = r*a + r*b + c`, `r` a literal (a
+    /// refused partition's members are one coefficient). In `f64` a coefficient that is no
+    /// positive number reads the sum's zero: float64's `a + b` is `+0` wherever it cancels, so a
+    /// negative `r` makes `r*(a + b)` `-0` there while `r*a + r*b` cancels to `+0`. A negative `r`
+    /// spreads where the sum holds no sign (`expr::sum_holds_its_sign`: its zero set is null, or
+    /// nothing reads its zero, `expr::release_unread`), or where another addend is never `-0` on
+    /// a region, which keeps the whole sum off `-0` there: under an inverse,
+    /// `ceil(x2) - 2*(ceil(x0) + floor(x1))` stays as it is and `x2 - 2*(ceil(x0) + floor(x1))`
+    /// spreads; as the answer both spread. A zero `r` gives `0*(a + b)` the sign of `a + b`, which
+    /// `0*a + 0*b` does not spell: the zero product stays whole, and spreads where its sum
+    /// settles, which reads none of its zeros (`x1 + 0*(2*x0 + sqrt(x0))` is `x1 + 0*sqrt(x0)`).
+    /// [`Law::holds`] reads the sum. In `permissive`, none: one zero.
+    AddUnfactor,
+    /// A sum carries no unanimous coefficient magnitude and takes its cheaper orientation:
+    /// `u*a + u*b = u*(a + b)`, `-a - b = -(a + b)`. In `f64` a sign leaves a sum, or enters it,
+    /// only where the sum holds no sign (`expr::sum_holds_its_sign`: its zero set is null, or
+    /// nothing reads its zero, `expr::release_unread`): float64's `-a - b` is `+0` wherever the
+    /// sum cancels and `-(a + b)` is `-0` there, a sign the expression around it may read
+    /// (`1/(-ceil(x0) - floor(x1))` is `+inf` wherever `ceil(x0) = -floor(x1)`, and stays as it
+    /// is, while the answer `-ceil(x0) - floor(x1)` is `-(ceil(x0) + floor(x1))`). A positive
+    /// content moves no sign. [`Law::holds`] reads the sum. In `permissive`, none.
+    AddContent,
     /// `exp(a)*exp(b) = exp(a + b)`, and `e = exp(1)` beside one. Total: an overflow is a range
     /// event.
     MulExpMerge,
@@ -251,7 +275,7 @@ pub enum Law {
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 48] = [
+    pub const ALL: [Law; 50] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -294,6 +318,8 @@ impl Law {
         Law::MulFlatten,
         Law::LatticeBag,
         Law::AddCollect,
+        Law::AddUnfactor,
+        Law::AddContent,
         Law::MulExpMerge,
         Law::MulRootnJoin,
         Law::MulInfinitySign,
@@ -347,6 +373,8 @@ impl Law {
             Law::MulFlatten => "mul.flatten",
             Law::LatticeBag => "lattice.bag",
             Law::AddCollect => "add.collect",
+            Law::AddUnfactor => "add.unfactor",
+            Law::AddContent => "add.content",
             Law::MulExpMerge => "mul.exp_merge",
             Law::MulRootnJoin => "mul.rootn_join",
             Law::MulInfinitySign => "mul.infinity_sign",
@@ -401,6 +429,8 @@ impl Law {
             Law::MulFlatten => "(a*b)*c = a*(b*c)",
             Law::LatticeBag => "max(max(a, b), c) = max(a, b, c), max(a, a) = a",
             Law::AddCollect => "r1*t + r2*t = (r1 + r2)*t",
+            Law::AddUnfactor => "r*(a + b) + c = r*a + r*b + c",
+            Law::AddContent => "u*a + u*b = u*(a + b), -a - b = -(a + b)",
             Law::MulExpMerge => "exp(a)*exp(b) = exp(a + b)",
             Law::MulRootnJoin => "rootn(a, n)*rootn(b, n) = rootn(a*b, n)",
             Law::MulInfinitySign => "-k*(s + inf) = k*(-s - inf)",
@@ -481,6 +511,9 @@ impl Law {
                 cx.permits(Permissive::LikeTerms) || cx.fin_certified(t)
             }
             Law::MulCancel => cx.permits(Permissive::LikeTerms) || cx.finnz_certified(t),
+            // `t` is the sum: may a coefficient that is no positive number spread over it, may a
+            // sign leave or enter it?
+            Law::AddUnfactor | Law::AddContent => !super::expr::sum_holds_its_sign(t, cx),
             _ => unreachable!("every partial law states its premise"),
         }
     }

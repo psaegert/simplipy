@@ -1413,6 +1413,14 @@ pub struct Cx<'a> {
     /// node's value. Absent (no evaluator): the parse builds every part (conversions, patterns,
     /// the measure's canon).
     pub ground_first: Option<GroundFirst<'a>>,
+    /// The construction stands where nothing reads the sign of its zero (`zero_read_below`): a
+    /// sum's sign moves there whatever its zero set (no sum holds its sign,
+    /// `sum_holds_its_sign`). Set by [`release_unread`] alone, for the nodes it rebuilds.
+    pub zero_sign_unread: bool,
+    /// A PRINTER'S held sums: the sums of the state it spells that hold their sign
+    /// ([`held_sums`]), whose negations it writes as the negations they are. `None` for a
+    /// construction, which reads a sum's form (`sum_holds_its_sign`).
+    pub sign_held: Option<&'a dyn Fn(&Ex) -> bool>,
 }
 
 /// PERMISSIVE'S OWN SIMPLIFICATIONS (the specification's 4.9), the one list, named here and
@@ -1596,6 +1604,8 @@ impl<'a> Cx<'a> {
             mode: RuleMode::Default,
             fold_f64: false,
             ground_first: None,
+            zero_sign_unread: false,
+            sign_held: None,
         }
     }
 
@@ -3578,8 +3588,8 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   terms, which all collapse into ONE `Const` absorbing the rational accumulator
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 ///
-/// The laws applied here (`ac::laws::Law`): `add.flatten`, `add.collect`, `num.literal_arith`,
-/// `num.inf_arith`.
+/// The laws applied here (`ac::laws::Law`): `add.flatten`, `add.collect`, `add.unfactor`,
+/// `num.literal_arith`, `num.inf_arith`.
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // a fully numeric sum is valued whole: its literals combine exactly
@@ -3613,6 +3623,21 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let mut neg_inf = false;
     let mut has_const = false;
     let mut terms: Vec<Ex> = Vec::new();
+    // Where another addend is never -0 on a region (`add.zero`'s test), the sum is never -0 there
+    // either: no zero of a factored sum is read through it, and a negative coefficient spreads
+    // whatever the factored sum's zero set (`unfactors`).
+    let settled_by_others = f64_zero_signs(cx)
+        && items.iter().any(|t| {
+            let negative_factored = |f: &Ex| {
+                matches!(f, Ex::Mul(v) if factored_sum(v).is_some_and(|(r, _)| r.is_negative()))
+            };
+            negative_factored(t) || matches!(t, Ex::Add(ts) if ts.iter().any(negative_factored))
+        })
+        && items.iter().any(|t| {
+            let kept = matches!(t, Ex::Mul(v) if factored_sum(v)
+                .is_some_and(|(r, inner)| !r.is_zero() && !unfactors(&r, inner, cx)));
+            !kept && signed_zero_null(t, true, cx)
+        });
     let mut stack: Vec<Ex> = items;
     stack.reverse();
     while let Some(e) = stack.pop() {
@@ -3628,9 +3653,15 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             // complete bag. Scaled terms re-enter the flatten stack so every classification
             // (literals, Const, infinities, nested sums) reruns on them.
             // The literal may be a refused partition (`Mul[1e160, 1e170, Add]`): its members are
-            // one coefficient. In `f64` a zero coefficient stays (`unfactors`): a zero product keeps
-            // its sum until the zero products settle below.
-            Ex::Mul(v) if factored_sum(&v).is_some_and(|(r, _)| unfactors(&r, cx)) => {
+            // one coefficient. In `f64` a coefficient that is no positive number unfactors only
+            // where the zero's sign stays (`unfactors`): a zero product keeps its sum until the
+            // zero products settle below, and a negative coefficient keeps a sum that may vanish
+            // on a region, unless another addend settles the sum (`settled_by_others`).
+            Ex::Mul(v)
+                if factored_sum(&v).is_some_and(|(r, inner)| {
+                    unfactors(&r, inner, cx) || (r.is_negative() && settled_by_others)
+                }) =>
+            {
                 let (r, inner) = match factored_sum(&v) {
                     Some((r, inner)) => (r, inner.to_vec()),
                     None => unreachable!("a factored sum"),
@@ -3851,6 +3882,15 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             out.push(t);
             *spliced = true;
         }
+        // A collected coefficient on a sum the flatten kept whole (a negative one beside a sum
+        // that may vanish on a region) may be one the sum unfactors: the re-run spreads it.
+        Ex::Mul(v)
+            if factored_sum(&v)
+                .is_some_and(|(r, inner)| !r.is_zero() && unfactors(&r, inner, cx)) =>
+        {
+            out.push(Ex::Mul(v));
+            *spliced = true;
+        }
         t => out.push(t),
     };
     for (b, rebuilt) in buckets.into_iter().zip(rebuilt) {
@@ -4059,6 +4099,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
 /// extended reals (`u*(x+y)` and `ux + uy` agree at every point, including infinities and
 /// NaN); `Const` terms pass through unchanged (`c / u` re-fits to `c'`, the contract's
 /// forall-exists direction).
+///
+/// The laws applied here (`ac::laws::Law`): `add.content`.
 fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // Bare infinities never arrive here: the `add()` constructor's one-infinity exit
     // returns its flat bag before this call (deliberately -- see the closure argument
@@ -4145,6 +4187,12 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
             None => return Ex::Add(terms),
         }
     };
+    // `add.content`'s premise in `f64`: the sign leaves the sum only where its zero's sign stays.
+    // Float64's `-a - b` is `+0` wherever the sum cancels, and `-(a + b)` is `-0` there, so a sum
+    // that may vanish on a region keeps its orientation (`sum_holds_its_sign`):
+    // `-ceil(x0) - floor(x1)` stays as it is, `-x0 - x1` is `-(x0 + x1)`. A positive content moves
+    // no sign.
+    let sign_neg = sign_neg && Law::AddContent.holds(&Ex::Add(terms.clone()), cx);
     let u = if sign_neg { g.negated() } else { g };
     if u.is_one() || u.is_zero() {
         return Ex::Add(terms);
@@ -4610,11 +4658,271 @@ impl Drop for RegionScope {
 /// `<constant>` (the refit), an infinity term or a term absorbing a negation
 /// -- keeps its owner. `permissive` reads a value up to the sign of a zero.
 pub(crate) fn keeps_zero_sign(s: &Ex, cx: &Cx) -> bool {
+    signed_zero_sum(s, cx) && !region_zero_null(s, cx)
+}
+
+/// A sum whose zero's sign is its own in `f64`: one over a region of the variables' space that no
+/// absorption owner takes the sign of (`keeps_zero_sign`).
+fn signed_zero_sum(s: &Ex, cx: &Cx) -> bool {
     let owned = s.contains_const()
         || matches!(s, Ex::Add(ts) if ts.iter().any(|t| {
             matches!(t, Ex::PosInf | Ex::NegInf) || term_absorbs_negation(t)
         }));
-    cx.f64_semantics() && s.has_measure_space(cx.view) && !owned && !region_zero_null(s, cx)
+    cx.f64_semantics() && s.has_measure_space(cx.view) && !owned
+}
+
+/// [`keeps_zero_sign`] read by the form alone, without the certificate: a sum the form clears
+/// (`zero_set_null_by_form`, or a separated variable, `zero_set_null_by_separation`) keeps no
+/// sign, one it does not may. The certificate is an interval analysis, dear on a long sum, and
+/// the form is read wherever a sum is built.
+fn may_keep_zero_sign(s: &Ex, cx: &Cx) -> bool {
+    signed_zero_sum(s, cx) && !zero_set_null_by_form(s, cx) && !zero_set_null_by_separation(s, cx)
+}
+
+/// A SUM HOLDS ITS SIGN where its zero's sign is a value: where it may vanish on a region
+/// (`keeps_zero_sign`) and the expression around it reads its zero (`zero_read_below`). Its sign
+/// does not leave it there (`add.content`: `-a - b` stays, it is not `-(a + b)`), no negative
+/// coefficient spreads over it (`add.unfactor`), no sign trades into it (`2*(-a - b)` is not
+/// `-2*(a + b)`), and a printer writes its negation as the negation it is (`neg - a b`, not
+/// `b - a`). Float64's sum is `+0` wherever it cancels, so each of those moves changes the zero's
+/// sign there (`1/(-ceil(x0) - floor(x1))` is `+inf` wherever `ceil(x0) = -floor(x1)`,
+/// `-1/(ceil(x0) + floor(x1))` is `-inf`).
+///
+/// A construction does not see what is around it, so it holds every sum whose form does not show
+/// its zero set null (`may_keep_zero_sign`), and the root's walk ([`release_unread`]) gives a held
+/// sum the orientation its constructors give it where nothing reads its zero or the certificate
+/// shows its zero set null. A printer reads the held sums of the state it prints
+/// (`Cx::sign_held`). A context without a zero-set certificate (a key's, a rule side's) holds
+/// none, and neither does one where nothing reads the zero (`Cx::zero_sign_unread`).
+pub(crate) fn sum_holds_its_sign(s: &Ex, cx: &Cx) -> bool {
+    if cx.zero_sign_unread {
+        return false;
+    }
+    if let Some(held) = cx.sign_held {
+        return held(s);
+    }
+    (cx.cert_region.is_some() || cx.cert_nzae.is_some()) && may_keep_zero_sign(s, cx)
+}
+
+/// Is `t` a subtracted term of a sum: a negative literal, or a product whose coefficient is one?
+/// A sign leaves a sum only where it holds one.
+fn subtracted_term(t: &Ex) -> bool {
+    match t {
+        Ex::Num(r) => r.is_negative(),
+        Ex::Mul(f) => matches!(f.first(), Some(Ex::Num(r)) if r.is_negative()),
+        _ => false,
+    }
+}
+
+/// The sums of `e` that hold their sign (`sum_holds_its_sign`), for a printer (`Cx::sign_held`):
+/// each sum holding a subtracted term at a place that reads its zero (`zero_read_below`; the root
+/// reads it where `read`) whose form does not show its zero set null (`may_keep_zero_sign`). Its
+/// negation written as it is reads back to the same sum, so the answer reads back to its state.
+pub fn held_sums(e: &Ex, read: bool, cx: &Cx) -> rustc_hash::FxHashSet<Ex> {
+    fn walk(e: &Ex, read: bool, cx: &Cx, out: &mut rustc_hash::FxHashSet<Ex>) {
+        if read
+            && matches!(e, Ex::Add(ts) if ts.iter().any(subtracted_term))
+            && !out.contains(e)
+            && may_keep_zero_sign(e, cx)
+        {
+            out.insert(e.clone());
+        }
+        match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+                for (i, c) in v.iter().enumerate() {
+                    walk(c, zero_read_below(e, i, read, cx), cx, out);
+                }
+            }
+            Ex::Pow(b, x) => {
+                walk(b, zero_read_below(e, 0, read, cx), cx, out);
+                walk(x, false, cx, out);
+            }
+            _ => {}
+        }
+    }
+    let mut out = rustc_hash::FxHashSet::default();
+    if f64_zero_signs(cx) {
+        walk(e, read, cx, &mut out);
+    }
+    out
+}
+
+/// WHERE NOTHING READS A SUM'S ZERO, ITS SIGN MOVES: `e` with every sum a construction held
+/// (`sum_holds_its_sign`) rebuilt in the orientation its constructors give it where its zero set
+/// is null, wherever nothing reads the sign of its zero (`zero_read_below`) or the certificate
+/// shows its zero set null (`keeps_zero_sign`). The root of a state reads no zero (`land_root`),
+/// and below it a sum, a product, an odd power or an odd head carries the sign up to what reads
+/// it; a head blind to it (`exp`, `cos`, `abs`, an even power) does not. So
+/// `-ceil(x0) - floor(x1)` is `-(ceil(x0) + floor(x1))` as an answer and under `exp`, and stays
+/// as it is under an inverse, where float64's `+0` and the negation's `-0` are `+inf` and `-inf`.
+/// The nodes are rebuilt from their children, the released places in a context that holds no
+/// sign (`Cx::zero_sign_unread`).
+pub(crate) fn release_unread(e: Ex, cx: &Cx) -> Ex {
+    if !f64_zero_signs(cx)
+        || cx.zero_sign_unread
+        || (cx.cert_region.is_none() && cx.cert_nzae.is_none())
+    {
+        return e;
+    }
+    let free = Cx {
+        zero_sign_unread: true,
+        ..*cx
+    };
+    released(&e, false, cx, &free).0.unwrap_or(e)
+}
+
+/// [`release_unread`] at `e`, read or not (`read`): the node where it changes (`None` where
+/// nothing does), and whether its subtree holds a sum the form does not clear
+/// (`may_keep_zero_sign`), whose sign a construction may have held.
+fn released(e: &Ex, read: bool, cx: &Cx, free: &Cx) -> (Option<Ex>, bool) {
+    let mut held = false;
+    let rebuilt = match e {
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+            let mut kids: Option<Vec<Ex>> = None;
+            for (i, c) in v.iter().enumerate() {
+                let (r, h) = released(c, zero_read_below(e, i, read, cx), cx, free);
+                held |= h;
+                if let Some(r) = r {
+                    kids.get_or_insert_with(|| v.clone())[i] = r;
+                }
+            }
+            kids.map(|k| match e {
+                Ex::Add(_) => add(k, cx),
+                Ex::Mul(_) => mul(k, cx),
+                // `atan2` is built from its arguments' members (`atan2_of`), as the parse builds it.
+                Ex::Fun(f, _) if k.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
+                    let mut members: Vec<Vec<Ex>> = k.into_iter().map(product_members).collect();
+                    let xm = members.pop().expect("two arguments");
+                    let ym = members.pop().expect("two arguments");
+                    atan2_of(*f, ym, xm, cx)
+                }
+                Ex::Fun(f, _) => fun(*f, k, cx),
+                _ => unreachable!("a node with members"),
+            })
+        }
+        Ex::Pow(b, x) => {
+            let (nb, hb) = released(b, zero_read_below(e, 0, read, cx), cx, free);
+            let (nx, hx) = released(x, false, cx, free);
+            held = hb || hx;
+            (nb.is_some() || nx.is_some()).then(|| {
+                pow(
+                    nb.unwrap_or_else(|| (**b).clone()),
+                    nx.unwrap_or_else(|| (**x).clone()),
+                    cx,
+                )
+            })
+        }
+        _ => return (None, false),
+    };
+    let node = rebuilt.as_ref().unwrap_or(e);
+    held |= matches!(node, Ex::Add(_)) && may_keep_zero_sign(node, cx);
+    if !held {
+        return (rebuilt, false);
+    }
+    // The node rebuilt where no sum holds its sign; a node is its constructors' own (they build
+    // it again), so it differs where a sum held its sign, its own or one a sign reaches through
+    // its members. Where it differs, again where only the sums read in its subtree that keep
+    // their sign by the certificate hold it (asked last).
+    let build = |free: &Cx| match node {
+        Ex::Add(v) => Some(add(v.clone(), free)),
+        Ex::Mul(v) => Some(mul(v.clone(), free)),
+        Ex::Pow(b, x) => Some(pow((**b).clone(), (**x).clone(), free)),
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
+            let mut members: Vec<Vec<Ex>> = v.iter().cloned().map(product_members).collect();
+            let xm = members.pop().expect("two arguments");
+            let ym = members.pop().expect("two arguments");
+            Some(atan2_of(*f, ym, xm, free))
+        }
+        Ex::Fun(f, v) => Some(fun(*f, v.clone(), free)),
+        _ => None,
+    };
+    let Some(freed) = build(free) else {
+        return (rebuilt, true);
+    };
+    if freed == *node {
+        return (rebuilt, true);
+    }
+    fn kept_below<'e>(e: &'e Ex, read: bool, cx: &Cx, out: &mut Vec<&'e Ex>) {
+        if read && matches!(e, Ex::Add(_)) && keeps_zero_sign(e, cx) {
+            out.push(e);
+        }
+        match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+                for (i, c) in v.iter().enumerate() {
+                    kept_below(c, zero_read_below(e, i, read, cx), cx, out);
+                }
+            }
+            Ex::Pow(b, x) => {
+                kept_below(b, zero_read_below(e, 0, read, cx), cx, out);
+                kept_below(x, false, cx, out);
+            }
+            _ => {}
+        }
+    }
+    let mut kept: Vec<&Ex> = Vec::new();
+    kept_below(node, read, cx, &mut kept);
+    if kept.is_empty() {
+        return (Some(freed), true);
+    }
+    let is_kept = |s: &Ex| kept.contains(&s);
+    let selective = Cx {
+        sign_held: Some(&is_kept),
+        ..*cx
+    };
+    match build(&selective) {
+        Some(freed) if freed != *node => (Some(freed), true),
+        _ => (rebuilt, true),
+    }
+}
+
+/// May the expression around child `i` of `e` read the sign of the child's zero, given `read` for
+/// `e`'s own (in `f64`; float64's signed zeros)? A sum reads it only where every other term may be
+/// -0 on a region (a sum is -0 only where every term is: `add.zero`'s test), a product carries it
+/// into its own, a power or a head that carries a zero's sign (an odd power, `sqrt`, an odd head
+/// in its odd argument, `floor`, `ceil`) carries it, an inverse (a negative odd power) reads it, a
+/// head blind to it (an even power, `exp`, `cos`, `abs`, `rootn` of an even index, ...) does not,
+/// and any other head is taken to read it.
+pub(crate) fn zero_read_below(e: &Ex, i: usize, read: bool, cx: &Cx) -> bool {
+    if !cx.ieee_zeros() {
+        return false;
+    }
+    match e {
+        Ex::Add(v) => {
+            read && !v
+                .iter()
+                .enumerate()
+                .any(|(j, t)| j != i && signed_zero_null(t, true, cx))
+        }
+        Ex::Mul(_) => read,
+        Ex::Pow(_, x) => match &**x {
+            Ex::Num(k) if k.is_integer() && k.is_odd_integer() => read || k.is_negative(),
+            Ex::Num(k) if k.is_integer() => false,
+            Ex::Num(k) if *k == Rat::new(1, 2).expect("1/2") => read,
+            Ex::Num(_) => false,
+            _ => true,
+        },
+        Ex::Fun(f, a) => {
+            let is = |s: &str| cx.view.tok_is(*f, s);
+            // An odd head in its odd argument (`odd_head`: an odd function, `besselj` of an odd
+            // order, `rootn` of an odd index), `floor` and `ceil` carry the sign; `rootn` of an
+            // even index is `+0` at both zeros.
+            let carries = odd_head(cx.view, *f, a).is_some_and(|(p, _)| p == i)
+                || (a.len() == 1 && (is("floor") || is("ceil")));
+            let blind = (a.len() == 1
+                && ["abs", "cos", "cosh", "exp", "log", "acos", "acosh", "erfc"]
+                    .iter()
+                    .any(|s| is(s)))
+                || (i == 0
+                    && is("rootn")
+                    && matches!(a.get(1), Some(Ex::Num(k)) if k.is_integer() && !k.is_odd_integer()));
+            if carries {
+                read
+            } else {
+                !blind
+            }
+        }
+        _ => true,
+    }
 }
 
 /// The region test of `f64`'s zero signs (`keeps_zero_sign`, `signed_zero_null`): is the zero set
@@ -4869,6 +5177,76 @@ fn zero_set_null_by_form(e: &Ex, cx: &Cx) -> bool {
         }
         _ => level_sets_null(e, cx),
     }
+}
+
+/// Is the zero set of the sum `s` null by a SEPARATED VARIABLE: a variable `v` that only one term
+/// holds, as one factor `g(v)` of no other variable whose level sets are null
+/// (`level_sets_null`), beside factors whose zero sets are null by form? For almost every value
+/// of the other variables the sum is then `a*g(v) + b` with `a` nonzero, which vanishes only where
+/// `g(v) = -b/a`, a null set of `v`; so the zero set is null (Fubini): `x2 - 2*ceil(x0)` and
+/// `0.03*x1 + 18*(0.58 - 0.48*x2)*sin(x2)` are. `g` holds no `tanh` or `atan`, which float64
+/// holds at one level on a whole tail (`tanh(20)` is 1), so that `x2 + tanh(x1) - 1` vanishes on
+/// a region. A sufficient test, which a sum's hold reads before the certificate
+/// (`may_keep_zero_sign`).
+fn zero_set_null_by_separation(s: &Ex, cx: &Cx) -> bool {
+    fn holds(e: &Ex, v: Tok) -> bool {
+        match e {
+            Ex::Leaf(t) => *t == v,
+            Ex::Add(w) | Ex::Mul(w) | Ex::Fun(_, w) => w.iter().any(|x| holds(x, v)),
+            Ex::Pow(b, x) => holds(b, v) || holds(x, v),
+            _ => false,
+        }
+    }
+    fn one_variable(e: &Ex, cx: &Cx, v: &mut Option<Tok>) -> bool {
+        match e {
+            Ex::Leaf(t) if form_variable(e, cx) => match v {
+                Some(u) => *u == *t,
+                None => {
+                    *v = Some(*t);
+                    true
+                }
+            },
+            Ex::Leaf(_) | Ex::Const => false,
+            Ex::Add(w) | Ex::Mul(w) | Ex::Fun(_, w) => w.iter().all(|x| one_variable(x, cx, v)),
+            Ex::Pow(b, x) => one_variable(b, cx, v) && one_variable(x, cx, v),
+            _ => true,
+        }
+    }
+    // A head float64 holds at one level on a whole tail.
+    fn saturates(e: &Ex, cx: &Cx) -> bool {
+        match e {
+            Ex::Fun(f, w) => {
+                cx.view.tok_is(*f, "tanh")
+                    || cx.view.tok_is(*f, "atan")
+                    || w.iter().any(|x| saturates(x, cx))
+            }
+            Ex::Add(w) | Ex::Mul(w) => w.iter().any(|x| saturates(x, cx)),
+            Ex::Pow(b, x) => saturates(b, cx) || saturates(x, cx),
+            _ => false,
+        }
+    }
+    let Ex::Add(ts) = s else { return false };
+    if !f64_zero_signs(cx) || s.contains_wildcard(cx.view) {
+        return false;
+    }
+    ts.iter().enumerate().any(|(i, t)| {
+        let factors: &[Ex] = match t {
+            Ex::Mul(w) => w,
+            f => std::slice::from_ref(f),
+        };
+        factors.iter().enumerate().any(|(j, g)| {
+            let mut v = None;
+            if !one_variable(g, cx, &mut v) || saturates(g, cx) || !level_sets_null(g, cx) {
+                return false;
+            }
+            let Some(v) = v else { return false };
+            factors
+                .iter()
+                .enumerate()
+                .all(|(k, f)| k == j || (!holds(f, v) && zero_set_null_by_form(f, cx)))
+                && ts.iter().enumerate().all(|(m, u)| m == i || !holds(u, v))
+        })
+    })
 }
 
 /// A variable of the form tests: a leaf that is no wildcard and no numeral (a literal the f64
@@ -5786,7 +6164,7 @@ fn collect_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) ->
     // Within an enclosing scope (a parse, a re-walk) each distinct product is decided once.
     let key = FLIP_MEMO
         .with(|m| m.borrow().is_some())
-        .then(|| (flip_cx_key(cx), host.key(), raw.clone()));
+        .then(|| (trade_cx_key(cx), host.key(), raw.clone()));
     if let Some(hit) = key
         .as_ref()
         .and_then(|k| OPPOSITE_MEMO.with(|m| m.borrow().get(k).cloned()))
@@ -8813,7 +9191,7 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     if !matches!(f, Ex::Add(_) | Ex::Pow(..) | Ex::Fun(..)) {
         return None;
     }
-    let key = (flip_cx_key(cx), f.clone(), refit);
+    let key = (trade_cx_key(cx), f.clone(), refit);
     let outer = FLIP_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if m.is_none() {
@@ -8840,7 +9218,7 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
 /// token view, the four certificate closures (by identity), the mode, the two fold switches and
 /// the thread's number domain. All of them outlive the outermost call, so no identity is reused
 /// within the memo's extent.
-type FlipCxKey = (usize, [usize; 5], u8);
+type FlipCxKey = (usize, [usize; 6], u8);
 type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex, bool), Option<Ex>>;
 
 /// The opposite-sums decision of a product (`collect_opposite_sums`), keyed like a flip: by the
@@ -8902,9 +9280,18 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
             id(cx.cert_nzae),
             id(cx.cert_nce),
             id(cx.cert_region),
+            id(cx.sign_held),
         ],
         bits,
     )
+}
+
+/// [`flip_cx_key`] with whether the context reads a sum's zero (`Cx::zero_sign_unread`): a sign
+/// trade and a product's opposite sums depend on it (`sum_holds_its_sign`), the region test does
+/// not.
+fn trade_cx_key(cx: &Cx) -> FlipCxKey {
+    let (view, certs, bits) = flip_cx_key(cx);
+    (view, certs, bits | (u8::from(cx.zero_sign_unread) << 5))
 }
 
 fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
@@ -8947,6 +9334,13 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
         // coefficient shows them (measured: 5 corpus rows + 4 rust pins regressed
         // under mixed-sign counting).
         if flipped_orientation_wins(&out, Wrapper::Flipped, Tie::Keep, cx) {
+            return None;
+        }
+        // A sign enters a sum only where it holds none (`Law::AddContent`, as in `primitive_sum`):
+        // float64's sum is `+0` wherever it cancels, so `-(a - b)` is `-0` there and `b - a` is
+        // `+0`, a sign the expression around it may read (`2*(-a - b)` is not `-2*(a + b)` where
+        // `a + b` cancels on a region). Asked last.
+        if !Law::AddContent.holds(&Ex::Add(ts.to_vec()), cx) {
             return None;
         }
         out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -10229,8 +10623,11 @@ fn land_operand(e: Ex, cx: &Cx) -> Ex {
 
 /// [`land`] at the root of a state: a state that is one literal is that literal landed. And
 /// nothing reads the sign of the answer's zero: a zero product drops the factors that only gave
-/// it its sign (`unsigned_zero`; `0*x0` is 0 as an answer, while `1/(0*x0)` is `inf/x0`).
+/// it its sign (`unsigned_zero`; `0*x0` is 0 as an answer, while `1/(0*x0)` is `inf/x0`), and a
+/// sum's sign moves wherever nothing reads its zero (`release_unread`; `-ceil(x0) - floor(x1)` is
+/// `-(ceil(x0) + floor(x1))` as an answer, while `1/(-ceil(x0) - floor(x1))` stays).
 pub fn land_root(e: Ex, cx: &Cx) -> Ex {
+    let e = release_unread(e, cx);
     if let Some(u) = unsigned_zero(&e, cx) {
         return u;
     }
@@ -10333,14 +10730,26 @@ fn factored_sum(v: &[Ex]) -> Option<(Coef, &[Ex])> {
     }
 }
 
-/// Does a factored sum `r * (a + b)` entering a sum unfactor into `r*a + r*b`? The two agree at
-/// every point (a finite rational distributes over extended-real sums), but in `f64` a zero `r`
-/// gives `0*(a + b)` the sign of `a + b`, which the terms' zeros do not spell (`0*(x0 - x1)` is
-/// `-0` wherever `x0 < x1`, `0*x0 + 0*x1` only where both are negative): it stays whole here, and
-/// spreads where the sum settles, which reads none of its zeros (`settle_zero_term`).
+/// `add.unfactor`'s premise: does a factored sum `r * (a + b)` entering a sum unfactor into
+/// `r*a + r*b`? The two agree at every point (a finite rational distributes over extended-real
+/// sums) but where the sum's zero is read. In `f64`, float64's `a + b` is `+0` wherever it cancels,
+/// and `-0` only where both terms are:
+///
+/// * a positive `r` keeps every zero's sign: always;
+/// * a negative `r` makes `r*(a + b)` `-0` where the sum cancels, while `r*a + r*b` cancels to
+///   `+0`: only where the sum holds no sign (`Law::AddUnfactor`; `-2*(ceil(x0) + floor(x1))`
+///   stays whole, `-2*(x0 + x1)` unfactors), unless another addend settles the sum (`add`);
+/// * a zero gives `0*(a + b)` the sign of `a + b`, which the terms' zeros do not spell
+///   (`0*(x0 - x1)` is `-0` wherever `x0 < x1`, `0*x0 + 0*x1` only where both are negative): it
+///   stays whole here, and spreads where the sum settles, which reads none of its zeros
+///   (`settle_zero_term`).
+///
 /// `permissive` reads one zero: always.
-fn unfactors(r: &Coef, cx: &Cx) -> bool {
-    !(f64_zero_signs(cx) && r.is_zero())
+fn unfactors(r: &Coef, inner: &[Ex], cx: &Cx) -> bool {
+    if !f64_zero_signs(cx) || !(r.is_zero() || r.is_negative()) {
+        return true;
+    }
+    !r.is_zero() && Law::AddUnfactor.holds(&Ex::Add(inner.to_vec()), cx)
 }
 
 /// STRICT'S NUMBERS, written as the cheapest value strict admits for them: a number the
@@ -11686,6 +12095,8 @@ mod tests {
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 ground_first: None,
+                zero_sign_unread: false,
+                sign_held: None,
             };
             assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));
             // Same-sign merging never needs the licence: log(x) + log(x) -> 2 log(x).

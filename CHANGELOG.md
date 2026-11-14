@@ -195,6 +195,13 @@ organised by who you are, then the highlights, then every change in detail.
   sum keeps the sum whole, so its zero has the sum's sign (`0*(x0 - x1)` is -0 wherever
   `x0 < x1`, which `0*x0 - 0*x1` does not spell), and spreads over it where the sum around it
   reads no zero: `x2 + 0*(2*x1 + sqrt(x1))` is `x2 + 0*sqrt(x1)`, NaN wherever the root is.
+- **A sum that may vanish on a region keeps its zero's sign wherever it is read.** Float64's sum
+  is `+0` wherever it cancels and its negation `-0`, which an inverse or `atan2` reads:
+  `1/(-ceil(x0) - floor(x1))` is `+inf` wherever `ceil(x0) = -floor(x1)` and stays as written (it
+  was `-1/(ceil(x0) + floor(x1))`, `-inf` there), and `1/(ceil(x2) - 2*(ceil(x0) + floor(x1)))`
+  keeps its product. Where nothing reads the zero (the answer, `exp`, `cos`, `abs`, an even
+  power, a sum with a term that is not -0 on a region) such a sum takes its orientation as
+  before: `-ceil(x0) - floor(x1)` is `-(ceil(x0) + floor(x1))`.
 - **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
   integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
   and one sign bit; `permissive` reads it as 0. An `f64` ground fold writes its float
@@ -766,13 +773,25 @@ model predictions.
   in `real` and `permissive` (5,986 of 5,986), and does for 5,897 in `f64`. The other 89 (44 over
   `log`, 37 over a root, 8 others) hold a sum whose zero set the certificate cannot show null, so
   there the orientation written decides which infinity the answer gives. A sum turned around
-  before it is inverted can still lose its zero's sign: `1/(-x1 - |x1|)` is `+inf` for every
-  x1 ≤ 0, but the sum is held as `-(x1 + |x1|)` when it is built, and the answer
-  `-1/(x1 + |x1|)` is `-inf` there. Keeping every sum the zero-set test cannot clear as written
-  would reach it, but even with the slice reading ("a zero set is read on a slice", above) it
-  makes 594 of the `f64` answers on a tenth of the predictions dearer, all but 3 over sums whose
-  zero set is null and unread (univariate sums over `log`, roots, `abs` or `tan` that mix
-  directions), so it is not done.
+  before it is inverted keeps its zero's sign too (next entry).
+- **In `f64` a sum that may vanish on a region holds its sign wherever its zero is read.** A sum
+  turned around before an inverse reached it lost its zero's sign: `1/(-x1 - |x1|)` is `+inf`
+  for every x1 ≤ 0, where the sum is `+0`, and its answer was `-1/(x1 + |x1|)`, `-inf` there. Now
+  a sum the zero-set test cannot clear keeps its sign wherever the expression around it reads the
+  sign of its zero (an inverse, an odd negative power, `atan2`, through products, odd powers, odd
+  functions, odd roots, `floor` and `ceil`): its sign does not leave it, no sign trades into it, and inside a
+  sum no negative coefficient spreads over it (`1/(ceil(x2) - 2*(ceil(x0) + floor(x1)))` keeps its
+  product; beside `x2`, which is not -0 on a region, the product spreads). Where nothing reads
+  its zero (the answer, `exp`, `cos`, `cosh`, `abs`, `log`, an even power) or the certificate
+  clears it, the sum takes its orientation as before, so `-ceil(x0) - floor(x1)` is
+  `-(ceil(x0) + floor(x1))`. The zero-set test also reads a variable that one term alone holds:
+  `x2 - 2*ceil(x0)` vanishes on a null set, as `a*g(x2) + b` does for almost every value of the
+  other variables, where `g` has null level sets and holds no `tanh` or `atan` (constant on a
+  tail in float64). A held sum's negation is written as it is held (`-(a - b)`, not `b - a`), in
+  every printer. On srbf's ground truths 5 `f64` answers change (0 cheaper, 5 dearer, 0 at an equal price), on a tenth of the training-data inputs 22 (0, 19, 3) and on a tenth of the predictions 98 (4, 73, 21); the dearer ones hold a sum under an inverse whose zero set the
+  certificate cannot show null (`(x2 - sin(x2))/(x1*(-2*x2 - sqrt(sin(x2))))`) or reach a
+  different factoring past a sum held while the search ran. No answer changes on a second call.
+  `permissive` does not change.
 - **In `f64` a sum keeps a `+0` term where its other terms may all be -0 on a region.** float64's
   sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`), and some terms are -0 on a
   whole region: `ceil(x1)` on (-1, 0), `-floor(x1)` on [0, 1), `min(x1, -0.0)` for x1 ≥ 0,

@@ -1134,6 +1134,11 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             let (pos, neg) = add_sign_split(v, cx);
             if neg.is_empty() {
                 emit_chain(view.intern("+"), &pos, cx, out);
+            } else if pos.is_empty() && super::expr::sum_holds_its_sign(e, cx) {
+                // `-a - b`, written as the sum it is where it holds its sign: its first term
+                // negated, the rest subtracted. Float64's `-a - b` is `+0` wherever the sum
+                // cancels, and `-(a + b)`, which `neg + a b` reads as, is `-0` there.
+                emit_sub_chain(&v[..1], &neg[1..], cx, out);
             } else if pos.is_empty() {
                 // -(a + b + ...): neg then the positive chain.
                 out.push(view.intern("neg"));
@@ -1148,10 +1153,11 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             // DISPLAY sign redistribution: the canonical `Mul[-1, Add]` (a primitive sum's
             // extracted sign) renders as the sign-flipped sum -- `-(x0 - x1)` prints as
             // `- x1 x0`, not `neg - x0 x1`. Parse + canon re-extract, so this is a pure
-            // projection choice; the internal form stays unique.
+            // projection choice; the internal form stays unique. Not where the sum may vanish on
+            // a region (`sum_holds_its_sign`): there the two differ in a zero's sign.
             if v.len() == 2 {
                 if let (Ex::Num(r), Ex::Add(terms)) = (&v[0], &v[1]) {
-                    if *r == Rat::NEG_ONE {
+                    if *r == Rat::NEG_ONE && !super::expr::sum_holds_its_sign(&v[1], cx) {
                         if let Some(flipped) = flip_terms(terms, cx) {
                             emit(&Ex::Add(flipped), cx, out);
                             return;
@@ -1477,9 +1483,13 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                 if let Ex::Num(r) = &v[0] {
                     if *r == Rat::NEG_ONE {
                         if let Ex::Add(terms) = &v[1] {
-                            if let Some(flipped) = flip_terms(terms, cx) {
-                                emit_tagged(&Ex::Add(flipped), cx, out);
-                                return;
+                            // Not where the sum may vanish on a region: its zero's sign there is
+                            // the negation's (`sum_holds_its_sign`).
+                            if !super::expr::sum_holds_its_sign(&v[1], cx) {
+                                if let Some(flipped) = flip_terms(terms, cx) {
+                                    emit_tagged(&Ex::Add(flipped), cx, out);
+                                    return;
+                                }
                             }
                         }
                         // A negated quotient keeps its bag, as under any other coefficient
@@ -1901,10 +1911,11 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             (s, 1)
         }
         Ex::Mul(v) => {
-            // Display sign redistribution (see the prefix emitters): -(a - b) prints b - a.
+            // Display sign redistribution (see the prefix emitters): -(a - b) prints b - a, but
+            // where the sum may vanish on a region (`sum_holds_its_sign`).
             if v.len() == 2 {
                 if let (Ex::Num(r), Ex::Add(terms)) = (&v[0], &v[1]) {
-                    if *r == Rat::NEG_ONE {
+                    if *r == Rat::NEG_ONE && !super::expr::sum_holds_its_sign(&v[1], cx) {
                         if let Some(flipped) = flip_terms(terms, cx) {
                             return render_prec(&Ex::Add(flipped), cx);
                         }
