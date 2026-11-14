@@ -973,12 +973,15 @@ class TestCleanlinessIsPerMode:
         # atanh !0 -> cosh tan asin !0` and kin, and seven the load refuses: policy alone 34).
         # A value at a `!` slot's +-inf is read: f64 119 (+1, `tan atan acosh !0 -> acosh !0`,
         # 1.633123935319537e16 against +inf at +inf).
+        # The constructors take `sinh(asinh(t))` at every argument, so the load refuses one more
+        # row as the engine's own in each file, `sinh asinh _0 -> _0`: f64's policy alone 20,
+        # permissive's 35.
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 119 and len(policy_only['f64']) == 19
-        assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 34
+        assert len(tier['f64'] - {126}) == 119 and len(policy_only['f64']) == 20
+        assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 35
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {

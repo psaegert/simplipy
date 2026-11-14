@@ -667,7 +667,7 @@ def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs
     # magnifies the rounding past the tolerances (3.80e-8 against 3.94e-8 at x0 = 17.8)
     (('abs atan sinh x0', 'acos inv cosh x0'), True),
     # licensed, and the agreement passes it: still demanded, and the gate fails without it
-    (('log exp x0', 'x0'), False),
+    (('* 2 log abs x0', 'log pow x0 2'), False),
 ])
 def test_the_overlap_gate_leaves_to_the_prefilter_only_what_it_refuses(monkeypatch, completion,
                                                                        left) -> None:
@@ -879,6 +879,104 @@ def test_permissive_cancels_an_inverse_pair_in_both_orders(outer, inner) -> None
     """Ignoring domain and branch: `asin(sin(x0))`, `exp(log(x0))` and `acosh(cosh(x0))` are
     `x0` in permissive."""
     assert list(bare().simplify([outer, inner, 'x0'], mode='permissive')) == ['x0']
+
+
+#: Why the engine keeps a function law the judge holds: in f64 it holds `log o exp` and
+#: `acosh o cosh` under every head that reads a zero, whatever their argument, while the judge
+#: reads the argument too (`ceil(x0)` is an integer, never inside the flat band).
+FAIL_CLOSED = ("the flat point's premise reads the context, not the argument: the pair stays "
+               "under a reader of zeros")
+
+
+class KnownDisagreement(AssertionError):
+    """The judge and the engine read a function law apart, for the cause the row names."""
+
+
+def function_case(law, lhs, rhs, mode, *causes):
+    marks = [pytest.mark.xfail(strict=True, raises=KnownDisagreement, reason='; '.join(causes))]
+    return pytest.param(law, lhs, rhs, mode, causes, marks=marks if causes else [],
+                        id=f'{law}: {lhs} -> {rhs} [{mode}]')
+
+
+#: The functions' identities, each in its band and out of it, and where its operand is -0 on a
+#: region under an inverse (`ceil(x0)` on (-1, 0)), with the cause of a disagreement where it has
+#: one.
+FUNCTION_PINS = [
+    function_case('fun.atanh_tanh', 'atanh tanh * 19 sin x0', '* 19 sin x0', 'f64'),
+    function_case('fun.atanh_tanh', 'atanh tanh * 20 sin x0', '* 20 sin x0', 'f64'),
+    function_case('fun.atanh_tanh', 'atanh tanh x0', 'x0', 'f64'),
+    function_case('fun.atanh_tanh', 'inv atanh tanh ceil sin x0', 'inv ceil sin x0', 'f64'),
+    function_case('fun.log_exp', 'log exp x0', 'x0', 'f64'),
+    function_case('fun.log_exp', 'log exp sin x0', 'sin x0', 'f64'),
+    function_case('fun.log_exp', 'floor log exp x0', 'floor x0', 'f64'),
+    function_case('fun.log_exp', 'inv log exp ceil x0', 'inv ceil x0', 'f64'),
+    function_case('fun.log_exp', 'inv log exp ceil x0', 'inv ceil x0', 'permissive'),
+    # an odd negative power: -0 where its base is -inf on a region, never -0 over a base that is
+    # never negative, and -0 by underflow only at range events
+    function_case('fun.log_exp', 'log exp pow log ceil x0 -3', 'pow log ceil x0 -3', 'f64'),
+    function_case('fun.log_exp', 'log exp pow abs log ceil x0 -3', 'pow abs log ceil x0 -3',
+                  'f64'),
+    function_case('fun.log_exp', 'log exp pow x0 -3', 'pow x0 -3', 'f64'),
+    function_case('fun.asinh_sinh', 'asinh sinh x0', 'x0', 'f64'),
+    function_case('fun.asinh_sinh', 'inv asinh sinh ceil x0', 'inv ceil x0', 'f64'),
+    function_case('fun.sinh_asinh', 'sinh asinh * 1000 sin x0', '* 1000 sin x0', 'f64'),
+    function_case('fun.sinh_asinh', 'inv sinh asinh ceil x0', 'inv ceil x0', 'f64'),
+    function_case('fun.sinh_asinh', 'sinh * min -1 cos 1 asinh x0', 'neg x0', 'f64'),
+    function_case('fun.sinh_asinh', 'sinh * min -1 cos 1 asinh x0', 'neg x0', 'permissive'),
+    function_case('fun.acosh_cosh', 'acosh cosh * 0.5 sin x0', 'abs * 0.5 sin x0', 'f64'),
+    function_case('fun.acosh_cosh', 'inv acosh cosh ceil x0', 'inv abs ceil x0', 'f64',
+                  FAIL_CLOSED),
+    function_case('fun.acosh_cosh', 'inv acosh cosh sin x0', 'inv abs sin x0', 'f64'),
+    # the flat point: held under a reader of zeros, through a carrier, and collapsed at the root,
+    # under a carrier with nothing above it and under a blind head
+    function_case('fun.log_exp', 'inv log exp x0', 'inv x0', 'f64'),
+    function_case('fun.log_exp', 'log log exp x0', 'log x0', 'f64'),
+    function_case('fun.log_exp', 'inv sin log exp x0', 'inv sin x0', 'f64'),
+    function_case('fun.log_exp', 'inv * 2 log exp x0', 'inv * 2 x0', 'f64'),
+    function_case('fun.log_exp', 'inv inv log exp x0', 'x0', 'f64'),
+    function_case('fun.log_exp', 'sin log exp x0', 'sin x0', 'f64'),
+    function_case('fun.log_exp', 'inv exp log exp x0', 'inv exp x0', 'f64'),
+    function_case('fun.acosh_cosh', 'inv acosh cosh x0', 'inv abs x0', 'f64'),
+    function_case('fun.acosh_cosh', 'floor acosh cosh x0', 'floor abs x0', 'f64'),
+    function_case('fun.acosh_cosh', 'exp acosh cosh x0', 'exp abs x0', 'f64'),
+    function_case('fun.acosh_cosh', 'acosh cosh x0', 'abs x0', 'f64'),
+    function_case('fun.exp_log', 'exp log abs x0', 'abs x0', 'f64'),
+    function_case('fun.exp_log', 'exp log x0', 'x0', 'f64'),
+    function_case('fun.exp_log', 'inv exp log pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'f64'),
+    function_case('fun.unit_inverses', 'cos acos sin x0', 'sin x0', 'f64'),
+    function_case('fun.unit_inverses', 'cos acos x0', 'x0', 'f64'),
+    function_case('fun.abs_nonnegative', 'abs exp x0', 'exp x0', 'f64'),
+    function_case('fun.abs_nonnegative', 'inv abs pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'f64'),
+    function_case('perm.inverse_pairs', 'asin sin x0', 'x0', 'permissive'),
+    function_case('perm.inverse_pairs', 'atan tan x0', 'x0', 'permissive'),
+    function_case('perm.inverse_pairs', 'acosh cosh x0', 'x0', 'permissive'),
+    function_case('perm.inverse_pairs', 'exp log x0', 'x0', 'permissive'),
+]
+
+
+@pytest.mark.parametrize('law, lhs, rhs, mode, causes', FUNCTION_PINS)
+def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs, mode,
+                                                                  causes) -> None:
+    """The engine takes the step at effort 0 exactly where the judge holds the rule in the mode,
+    or the two disagree for the cause the row names (`FAIL_CLOSED`: the engine keeps a flat pair
+    under a reader of zeros whatever its argument)."""
+    engine = bare()
+    takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
+             == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
+    d = judged(lhs, rhs)
+    holds = _contract.judged_reading(d, mode) is True
+    if takes == holds:
+        return
+    assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('tier'))
+    if FAIL_CLOSED in causes:
+        # the engine keeps the step the judge holds, never the other way, and keeps it under a
+        # reader: the same pair at the root is taken
+        assert mode == 'f64' and holds and not takes, (lhs, mode)
+        reader, pair = lhs.split()[0], lhs.split()[1:]
+        assert reader == 'inv' and pair[:2] in (['log', 'exp'], ['acosh', 'cosh']), lhs
+        assert list(engine.simplify(pair, mode=mode, effort=0)) != pair, pair
+    raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
+                            f'{d.get("verdict")} {d.get("tier")}')
 
 
 @pytest.mark.parametrize('expr, want', [

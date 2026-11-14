@@ -409,14 +409,6 @@ impl Rat {
         p.checked_add(q - 1).map(|n| n / q)
     }
 
-    /// `floor(|p/q|)`, saturated at `i128::MAX` (still a valid lower bound on `|self|`).
-    pub(crate) fn floor_abs_saturating(&self) -> i128 {
-        match &self.0 {
-            Repr::Small { p, q } => (p.unsigned_abs() / (*q as u128)) as i128,
-            Repr::Big(b) => (b.p.abs() / &b.q).to_i128().unwrap_or(i128::MAX),
-        }
-    }
-
     /// The canonical members of a product bag (units dropped; `[]` is the product 1), by
     /// [`Rat::partition_with`] with exact products admitted by the number domain (in the f64
     /// domain: the result is admissible, see [`number_domain`]).

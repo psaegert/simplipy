@@ -1,6 +1,6 @@
 //! THE LAWS OF THE CATALOGUE, each a named step that carries its own premise, per mode: the
 //! numbers and their ground values, the zero and one laws, the absorptions of a fitted constant,
-//! and the parse's and the bags' structure.
+//! the parse's and the bags' structure, and the functions' identities.
 //!
 //! A law is an identity of the reals with the mode's extended values. Where it holds at every
 //! binding it applies everywhere (a total law); where it does not, it applies only where its
@@ -67,6 +67,18 @@
 //! | `pow.exp_compose` | e^t = exp(t), exp(a)^b = exp(a*b) | none | none |
 //! | `pow.refused_power` | (a*b)^-k = ((a*b)^k)^-1 | none | none |
 //! | `fun.rootn_index` | rootn(t, -n) = 1/rootn(t, n) | none | none |
+//! | `fun.atanh_tanh` | atanh(tanh(t)) = t | abs(t) at most 19: tanh(t) is no +-1 | none |
+//! | `fun.log_exp` | log(exp(t)) = t | t is not `-0` on a region, and nothing around reads its flat point | none |
+//! | `fun.asinh_sinh` | asinh(sinh(t)) = t | none | none |
+//! | `fun.sinh_asinh` | sinh(asinh(t)) = t | none | none |
+//! | `fun.acosh_cosh` | acosh(cosh(t)) = abs(t) | nothing around reads its flat point | none |
+//! | `fun.exp_log` | exp(log(t)) = t | t >= 0, not `-0` on a region | none |
+//! | `fun.unit_inverses` | cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t | t in [-1, 1] | none |
+//! | `perm.inverse_pairs` | f(g(t)) = t, g the inverse of f | no step | none |
+//! | `fun.abs_nonnegative` | abs(t) = t | t >= 0, not `-0` on a region | t >= 0 |
+//! | `fun.half_period` | sin(t + pi) = -sin(t), cos(t + pi) = -cos(t), tan(t + pi) = tan(t) | none | none |
+//! | `fun.besselj_reflection` | J_(-n)(t) = (-1)^n J_n(t) | none | none |
+//! | `lattice.absorb` | max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a | the dropped members no NaN almost everywhere | none |
 //!
 //! An absorption is the specification's 3.2, a statement about families: for every value of
 //! the constants on the left there is one on the right, `d = c1 + r*c2 + q`, `d = r*c`,
@@ -271,11 +283,60 @@ pub enum Law {
     PowRefusedPower,
     /// `rootn(t, -n) = 1/rootn(t, n)` and `rootn(rootn(t, m), n) = rootn(t, m*n)`. Total.
     FunRootnIndex,
+    /// `atanh(tanh(t)) = t`. In `f64` where `|t|` is at most 19: float64's `tanh` is `+-1` from
+    /// `|t|` = 19.0615 on, where `atanh` gives an infinity against `t`; within the band the
+    /// rounding of `tanh` keeps the kind (`Cx::certainly_in_band`). In `permissive`, none.
+    FunAtanhTanh,
+    /// `log(exp(t)) = t`. In `f64` where `t` is not `-0` on a region: `log(exp(-0))` is `+0`
+    /// (`log(exp(ceil(x0)))` is `+0` on (-1, 0), where `ceil(x0)` is `-0`); `exp`'s overflow and
+    /// underflow are range events. And where nothing around reads its flat point
+    /// (`Cx::flat_unread`, `flat_read_below`): float64's `log(exp(t))` is `+0` wherever
+    /// 0 < |t| < 1.1e-16, so `1/log(exp(x0))` is `+inf` there, where `1/x0` is finite. In
+    /// `permissive`, none.
+    FunLogExp,
+    /// `asinh(sinh(t)) = t`. Total: `sinh`'s overflow is a range event.
+    FunAsinhSinh,
+    /// `sinh(asinh(t)) = t`. Total: `asinh`'s rounding keeps the kind, and `sinh` keeps a zero's
+    /// sign.
+    FunSinhAsinh,
+    /// `acosh(cosh(t)) = |t|`: `cosh` is even, `cosh`'s overflow is a range event, and both sides
+    /// are `+0` at a zero of either sign. In `f64` where nothing around reads its flat point
+    /// (`Cx::flat_unread`, `flat_read_below`): float64's `acosh(cosh(t))` is 0 wherever
+    /// |t| < 1.5e-8 and drifts below `|t|` elsewhere (`acosh(cosh(3))` is 2.9999999999999996).
+    /// In `permissive`, none.
+    FunAcoshCosh,
+    /// `exp(log(t)) = t` where `t >= 0` (on `t < 0` the left side has no value and the right side
+    /// has, `Cx::certainly_nonneg`), and in `f64` where `t` is not `-0` on a region:
+    /// `exp(log(-0))` is `+0`.
+    FunExpLog,
+    /// `cos(acos(t)) = t`, `sin(asin(t)) = t` and `tanh(atanh(t)) = t` where `t` is in [-1, 1]
+    /// (`sin`, `cos` or `tanh` of something; off it the left side has no value). Both sides keep a
+    /// zero's sign but `cos(acos(-0))`, which is 6e-17 against `-0`, both finite.
+    FunUnitInverses,
+    /// An operation cancels its own inverse in both orders, ignoring domain and branch:
+    /// `asin(sin(t)) = t`, `exp(log(t)) = t`, `acosh(cosh(t)) = t`. A step of `permissive` alone,
+    /// one of its own simplifications (`Permissive::InversePairs`).
+    PermInversePairs,
+    /// `|t| = t` where `t >= 0` wherever it has a value (`Cx::certainly_nonneg`), and in `f64`
+    /// where `t` is not `-0` on a region: `|-0|` is `+0` (`|sqrt(ceil(x0))|` is `+0` on (-1, 0),
+    /// where numpy's `sqrt` keeps `ceil(x0)`'s `-0`).
+    FunAbsNonnegative,
+    /// A unit half-period shift drops out: `sin(t +- pi) = -sin(t)`, `cos(t +- pi) = -cos(t)`,
+    /// `tan(t +- pi) = tan(t)`, `pi` with the coefficient 1 or -1. Total.
+    FunHalfPeriod,
+    /// `J_(-n)(t) = (-1)^n J_n(t)` for an integer order `n`. Total: the kernel reads it bit for
+    /// bit.
+    FunBesseljReflection,
+    /// The dual bag absorbs, `max(a, min(a, b)) = a`; the absorber takes, `max(inf, a) = inf`; the
+    /// identity drops, `max(-inf, a) = a` (dually for `min`). Where the members it drops are no
+    /// NaN almost everywhere (a number, an infinity, or finite almost everywhere): a NaN member
+    /// makes the bag NaN. [`Law::holds`] reads one dropped member. In `permissive`, none.
+    LatticeAbsorb,
 }
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 50] = [
+    pub const ALL: [Law; 62] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -326,6 +387,18 @@ impl Law {
         Law::PowExpCompose,
         Law::PowRefusedPower,
         Law::FunRootnIndex,
+        Law::FunAtanhTanh,
+        Law::FunLogExp,
+        Law::FunAsinhSinh,
+        Law::FunSinhAsinh,
+        Law::FunAcoshCosh,
+        Law::FunExpLog,
+        Law::FunUnitInverses,
+        Law::PermInversePairs,
+        Law::FunAbsNonnegative,
+        Law::FunHalfPeriod,
+        Law::FunBesseljReflection,
+        Law::LatticeAbsorb,
     ];
 
     /// The law's stable name, `family.law`.
@@ -381,6 +454,18 @@ impl Law {
             Law::PowExpCompose => "pow.exp_compose",
             Law::PowRefusedPower => "pow.refused_power",
             Law::FunRootnIndex => "fun.rootn_index",
+            Law::FunAtanhTanh => "fun.atanh_tanh",
+            Law::FunLogExp => "fun.log_exp",
+            Law::FunAsinhSinh => "fun.asinh_sinh",
+            Law::FunSinhAsinh => "fun.sinh_asinh",
+            Law::FunAcoshCosh => "fun.acosh_cosh",
+            Law::FunExpLog => "fun.exp_log",
+            Law::FunUnitInverses => "fun.unit_inverses",
+            Law::PermInversePairs => "perm.inverse_pairs",
+            Law::FunAbsNonnegative => "fun.abs_nonnegative",
+            Law::FunHalfPeriod => "fun.half_period",
+            Law::FunBesseljReflection => "fun.besselj_reflection",
+            Law::LatticeAbsorb => "lattice.absorb",
         }
     }
 
@@ -437,6 +522,20 @@ impl Law {
             Law::PowExpCompose => "e^t = exp(t), exp(a)^b = exp(a*b)",
             Law::PowRefusedPower => "(a*b)^-k = ((a*b)^k)^-1",
             Law::FunRootnIndex => "rootn(t, -n) = 1/rootn(t, n)",
+            Law::FunAtanhTanh => "atanh(tanh(t)) = t",
+            Law::FunLogExp => "log(exp(t)) = t",
+            Law::FunAsinhSinh => "asinh(sinh(t)) = t",
+            Law::FunSinhAsinh => "sinh(asinh(t)) = t",
+            Law::FunAcoshCosh => "acosh(cosh(t)) = abs(t)",
+            Law::FunExpLog => "exp(log(t)) = t",
+            Law::FunUnitInverses => "cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t",
+            Law::PermInversePairs => "f(g(t)) = t, g the inverse of f",
+            Law::FunAbsNonnegative => "abs(t) = t",
+            Law::FunHalfPeriod => {
+                "sin(t + pi) = -sin(t), cos(t + pi) = -cos(t), tan(t + pi) = tan(t)"
+            }
+            Law::FunBesseljReflection => "J_(-n)(t) = (-1)^n J_n(t)",
+            Law::LatticeAbsorb => "max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a",
         }
     }
 
@@ -488,6 +587,10 @@ impl Law {
                 | Law::PowExpCompose
                 | Law::PowRefusedPower
                 | Law::FunRootnIndex
+                | Law::FunAsinhSinh
+                | Law::FunSinhAsinh
+                | Law::FunHalfPeriod
+                | Law::FunBesseljReflection
         )
     }
 
@@ -514,6 +617,25 @@ impl Law {
             // `t` is the sum: may a coefficient that is no positive number spread over it, may a
             // sign leave or enter it?
             Law::AddUnfactor | Law::AddContent => !super::expr::sum_holds_its_sign(t, cx),
+            // `t` is the argument of the inner function.
+            Law::FunAtanhTanh => !cx.f64_semantics() || cx.certainly_in_band(t, 19),
+            Law::FunLogExp => {
+                !cx.f64_semantics()
+                    || (cx.flat_unread && super::expr::signed_zero_null(t, true, cx))
+            }
+            Law::FunAcoshCosh => !cx.f64_semantics() || cx.flat_unread,
+            Law::FunExpLog | Law::FunAbsNonnegative => {
+                cx.certainly_nonneg(t)
+                    && (!cx.f64_semantics() || super::expr::signed_zero_null(t, true, cx))
+            }
+            Law::FunUnitInverses => cx.certainly_in_unit(t),
+            Law::PermInversePairs => cx.permits_on(Permissive::InversePairs, t),
+            // `t` is a member the bag drops.
+            Law::LatticeAbsorb => {
+                matches!(t, Ex::PosInf | Ex::NegInf)
+                    || super::expr::lattice_numeric(t, cx)
+                    || cx.fin_licensed(t)
+            }
             _ => unreachable!("every partial law states its premise"),
         }
     }

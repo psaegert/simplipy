@@ -1417,6 +1417,12 @@ pub struct Cx<'a> {
     /// sum's sign moves there whatever its zero set (no sum holds its sign,
     /// `sum_holds_its_sign`). Set by [`release_unread`] alone, for the nodes it rebuilds.
     pub zero_sign_unread: bool,
+    /// The construction stands where nothing reads the flat point of `log o exp` or `acosh o cosh`
+    /// (`flat_read_below`): float64's `log(exp(t))` is `+0` wherever 0 < |t| < 1.1e-16 and
+    /// `acosh(cosh(t))` is 0 wherever |t| < 1.5e-8, where `t` is not, so in `f64` the pair
+    /// collapses only where nothing around reads that zero (`fun.log_exp`, `fun.acosh_cosh`). Set
+    /// by [`release_flat`] alone, for the nodes it rebuilds.
+    pub flat_unread: bool,
     /// A PRINTER'S held sums: the sums of the state it spells that hold their sign
     /// ([`held_sums`]), whose negations it writes as the negations they are. `None` for a
     /// construction, which reads a sum's form (`sum_holds_its_sign`).
@@ -1605,6 +1611,7 @@ impl<'a> Cx<'a> {
             fold_f64: false,
             ground_first: None,
             zero_sign_unread: false,
+            flat_unread: false,
             sign_held: None,
         }
     }
@@ -1975,9 +1982,6 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// Does `e` certainly take values in [-1, 1] wherever defined? Range facts only:
-    /// sin/cos/tanh land there for EVERY argument. (Literal arguments never reach this
-    /// predicate -- ground trig compounds fold numerically before licences run.)
     /// A proven CEILING on `|e|`, in exact integers, or `None` when none is known.
     ///
     /// CONSERVATIVE BY CONSTRUCTION: a bound is returned only where it is provable and
@@ -1986,12 +1990,8 @@ impl<'a> Cx<'a> {
     /// spelling-key hazard) -- the discipline `certainly_nonneg` already follows. Integer arithmetic
     /// throughout: this guard must not acquire an f64 reading of a `Rat`.
     ///
-    /// EXISTS because the f64 evaluator rounds where the extended real line does not: an
-    /// inverse pair that is a total bijection on the extended line drifts past the realised
-    /// bar under the deployed arithmetic outside a band (`tanh` compresses its argument
-    /// approaching +-1, `asinh`'s rounding returns as relative error through `sinh`), which
-    /// is precisely the gap the contract judge cannot see (it models the extended reals,
-    /// not f64). An overflow cuts no band (`inverse_pair_collapse`).
+    /// EXISTS for `fun.atanh_tanh`'s band in `f64`: float64's `tanh` is `+-1` from |t| = 19.0615
+    /// on, where `atanh` gives an infinity against `t` (`inverse_pair_collapse`).
     fn magnitude_ceiling(&self, e: &Ex) -> Option<i128> {
         match e {
             Ex::Num(r) => r.ceil_abs(),
@@ -2004,8 +2004,11 @@ impl<'a> Cx<'a> {
                     "sin" | "cos" | "tanh" => Some(1),
                     "atan" | "asin" => Some(2),
                     "acos" => Some(4),
-                    // magnitude-preserving
-                    "abs" | "neg" => a.first().and_then(|t| self.magnitude_ceiling(t)),
+                    // magnitude-preserving, and `floor` and `ceil` of a part within an integer
+                    // bound stay within it
+                    "abs" | "neg" | "floor" | "ceil" => {
+                        a.first().and_then(|t| self.magnitude_ceiling(t))
+                    }
                     _ => None,
                 }
             }
@@ -2022,42 +2025,12 @@ impl<'a> Cx<'a> {
     }
 
     /// Is `|e| <= bound` PROVEN? `false` whenever unknown -- refusal is the safe direction.
-    fn certainly_in_band(&self, e: &Ex, bound: i128) -> bool {
+    pub(crate) fn certainly_in_band(&self, e: &Ex, bound: i128) -> bool {
         self.magnitude_ceiling(e).is_some_and(|m| m <= bound)
     }
 
-    /// A PROVEN lower bound on |e| -- the mirror of `magnitude_ceiling`, for the
-    /// licences that need the argument bounded AWAY from a flat point (the
-    /// low-end collapse holes). Sound arms only: a literal's own floor, the named
-    /// constants, `cosh >= 1`, magnitude-preserving heads, and a product of floors.
-    /// A SUM abstains -- floors do not add across cancellation -- and everything
-    /// unknown abstains, so refusal stays the safe direction.
-    fn magnitude_floor(&self, e: &Ex) -> Option<i128> {
-        match e {
-            Ex::Num(r) => Some(r.floor_abs_saturating()),
-            Ex::Pi => Some(3),
-            Ex::E => Some(2),
-            Ex::Fun(f, a) => {
-                let s = self.view.resolve_owned(*f);
-                match s.as_str() {
-                    "cosh" => Some(1),
-                    "abs" | "neg" => a.first().and_then(|t| self.magnitude_floor(t)),
-                    _ => None,
-                }
-            }
-            Ex::Mul(v) => v.iter().try_fold(1i128, |acc, t| {
-                self.magnitude_floor(t).and_then(|m| acc.checked_mul(m))
-            }),
-            _ => None,
-        }
-    }
-
-    /// Is `|e| >= bound` PROVEN? `false` whenever unknown.
-    fn certainly_at_least(&self, e: &Ex, bound: i128) -> bool {
-        self.magnitude_floor(e).is_some_and(|m| m >= bound)
-    }
-
-    fn certainly_in_unit(&self, e: &Ex) -> bool {
+    /// Is `e` certainly in [-1, 1] wherever it has a value: `sin`, `cos` or `tanh` of something?
+    pub(crate) fn certainly_in_unit(&self, e: &Ex) -> bool {
         match e {
             Ex::Fun(f, _) => {
                 let s = self.view.resolve_owned(*f);
@@ -2067,32 +2040,6 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// `outer(inner(t))` collapsed, when the pair is an INVERSE pair whose licence holds --
-    /// `None` otherwise. The table and every licence in it was adjudicated by the contract
-    /// judge (`verify._contract.judge_rule`) BEFORE this was written, and the judge's answers
-    /// are what the three groups below are:
-    ///
-    ///   TOTAL, no licence (CERTIFIED unlicensed) -- the genuine bijections of the extended
-    ///   line. `acosh o cosh` is in this group but is NOT the identity: `cosh` is even, so the
-    ///   collapse is `|t|`, and the judge certifies exactly that shape.
-    ///
-    ///   LICENSED (KILL unlicensed, CERTIFIED with the licence) -- `exp o log` extends NaN to
-    ///   a defined value on `t < 0`, and the three arcsin-side pairs do the same off `[-1,1]`.
-    ///   Both licences already exist and are used verbatim: `certainly_nonneg` (which is also
-    ///   why the artifact's `exp log` rules cover exactly `abs`/`acos`/`acosh`/`cosh` -- that
-    ///   IS the lattice's true-set, enumerated by the mine one member at a time) and
-    ///   `certainly_in_unit`.
-    ///
-    ///   REFUSED ENTIRELY. `asin o sin`, `acos o cos` and `atan o tan` are NOT identities in
-    ///   any direction -- the judge convicts them under clause (a), a REAL CHANGE, because
-    ///   they fold the argument into the inverse's range (`asin(sin 4) = pi - 4`). The
-    ///   artifact's rules for these shapes always carry a range-bounded inner argument and
-    ///   say something different; none of them belongs here. `tan o atan` is left out too: it
-    ///   judges TOLERATED (the null-set pole at `atan(inf) = pi/2`), and a tolerated identity
-    ///   is a RULE-level allowance -- the shipped `tan atan !0 -> !0` keeps it under a
-    ///   finiteness certificate, which is where it stays.
-    ///
-    /// Every arm drops two operator nodes, so the descent is unconditional.
     /// Is `m` a pi member of an Add bag whose coefficient is EXACTLY +-1?
     ///
     /// The coefficient bound is the whole scope of the pi-shift arm. In a canonical bag like
@@ -2145,67 +2092,81 @@ impl<'a> Cx<'a> {
         None
     }
 
+    /// `outer(inner(t))` collapsed, when the pair is an INVERSE pair whose law holds of `t` --
+    /// `None` otherwise. Each pair is a law of the catalogue with its premise per mode, the
+    /// judge's. Float64's round trips drift by many units in the last place (`atanh o tanh` past 8
+    /// from |t| ~ 2.7, `log o exp` and `acosh o cosh` near 0) while both sides stay finite: the
+    /// rounding keeps the kind, so no pair carries a rounding band.
+    ///
+    ///   TOTAL -- the bijections of the extended line: `asinh o sinh`, `sinh o asinh` and
+    ///   `acosh o cosh` (`fun.asinh_sinh`, `fun.sinh_asinh`, `fun.acosh_cosh`). `acosh o cosh` is
+    ///   NOT the identity: `cosh` is even, so the collapse is `|t|`. Where the inner function
+    ///   overflows (`sinh` and `cosh` past 710.48) a rewrite may give the true value.
+    ///
+    ///   A BAND OR A ZERO'S SIGN in `f64` -- `atanh o tanh` where `|t|` is at most 19, short of
+    ///   float64's `tanh(19.0615) = 1` (`fun.atanh_tanh`); `log o exp` where `t` is not `-0` on a
+    ///   region, `log(exp(-0))` being `+0` (`fun.log_exp`; `exp`'s overflow and underflow are
+    ///   range events).
+    ///
+    ///   A FLAT POINT in `f64` -- `log o exp` and `acosh o cosh` are flat at 0: float64's
+    ///   `log(exp(t))` is `+0` wherever 0 < |t| < 1.1e-16 and `acosh(cosh(t))` is 0 wherever
+    ///   |t| < 1.5e-8, so a head that reads a zero above them (an inverse, `log`, ...) turns the
+    ///   rounding into a change of kind. A construction does not see what is around it, so it
+    ///   holds both pairs, and the root's walk collapses each where nothing reads its flat point
+    ///   (`release_flat`, `Cx::flat_unread`).
+    ///
+    ///   A DOMAIN -- `exp o log` where `t >= 0` (and in `f64` not `-0` on a region,
+    ///   `fun.exp_log`), and the three arcsin-side pairs where `t` is in [-1, 1]
+    ///   (`fun.unit_inverses`): elsewhere the left side has no value and the right side has.
+    ///
+    ///   REFUSED ENTIRELY. `asin o sin`, `acos o cos` and `atan o tan` are NOT identities in
+    ///   any direction -- the judge convicts them under clause (a), a REAL CHANGE, because
+    ///   they fold the argument into the inverse's range (`asin(sin 4) = pi - 4`). `tan o atan`
+    ///   is left out too: it holds but at the null-set pole `atan(inf) = pi/2`, a rule-level
+    ///   allowance under a finiteness certificate.
+    ///
+    /// In `permissive` every pair cancels in both orders, ignoring domain and branch
+    /// (`perm.inverse_pairs`, one of its own simplifications).
+    ///
+    /// The laws applied here (`ac::laws::Law`): `fun.atanh_tanh`, `fun.log_exp`,
+    /// `fun.asinh_sinh`, `fun.sinh_asinh`, `fun.acosh_cosh`, `fun.exp_log`, `fun.unit_inverses`,
+    /// `perm.inverse_pairs`.
+    ///
+    /// Every arm drops two operator nodes, so the descent is unconditional.
     fn inverse_pair_collapse(&self, outer: Tok, inner: Tok, t: &Ex) -> Option<Ex> {
         let o = self.view.resolve_owned(outer);
         let i = self.view.resolve_owned(inner);
-        if self.permits_on(Permissive::InversePairs, t) && cancels_its_inverse(&o, &i) {
+        if Law::PermInversePairs.holds(t, self) && cancels_its_inverse(&o, &i) {
             return Some(t.clone());
         }
-        match (o.as_str(), i.as_str()) {
-            // TOTAL on the extended real line -- but NOT under the deployed f64 algebra
-            // everywhere, so each carries the band where its rounding stays within the
-            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract).
-            // MODE-AWARE, and the guard asks the F64 question, not the recall one.
-            // These identities are TOTAL over the reals -- atanh(tanh x)
-            // = x for every real x. OVERFLOW and UNDERFLOW cut no band: where the inner
-            // function overflows or underflows (exp past 709.78 or below -708.4, sinh and
-            // cosh past 710.48), a rewrite may give the evaluator's value or the true one,
-            // and the collapse gives the true one. ROUNDING does cut bands. COMPRESSION near
-            // a flat point of the inner function eats the LOW end -- exp rounds a small
-            // argument into the neighbourhood of 1 and cosh is quadratically flat at 0, so
-            // `log o exp` breaches the 8-ULP bar for all |t| < ~0.0625 (worst 6.7e7 ULP at
-            // 1e-8) and `acosh o cosh` for all |t| < ~0.25 (worst ~4.5e18),
-            // while at |t| >= 1 the measured worst wherever nothing overflows or underflows
-            // is 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor.
-            // `asinh o sinh` is clean wherever sinh does not overflow, worst 2 ULP measured,
-            // and carries no band. `sinh o asinh` never overflows short of the top of the
-            // range, but asinh's ~|ln 2t| of absolute rounding returns as RELATIVE error
-            // through sinh: worst 4 ULP for |t| <= 710, first breach past 8 ULP measured at
-            // |t| ~ 4.4e6, so it keeps the 710 ceiling. `atanh o tanh` fails by COMPRESSION
-            // at the HIGH end -- tanh loses ~2|t|/ln2 bits of the argument approaching +-1,
-            // so the roundtrip drifts past 8 ULP at |t| ~ 2.7 (first breach measured 2.677
-            // audit host / 2.808 this host, libm-dependent; by |t|=18 the drift is
-            // ~0.03-0.06 ABSOLUTE), eleven-plus band-widths before saturation at 19.06 --
-            // which is what the old attainment-derived band of 18 measured, and why it was
-            // wrong; saturation is not overflow, so the band stays. Each integer bound
-            // below is the last magnitude ceiling on the SAFE side of every measured breach,
-            // with >= 2x margin on both hosts. So:
-            //   f64    -- band REQUIRED: the deployed evaluator is the authority.
-            //   real   -- band SKIPPED: mathematics has no saturation to protect against,
-            //             and requiring it here would refuse a rewrite that is simply true.
-            //   permissive -- band SKIPPED: the training corpus is generated FROM the simplified form,
-            //             so no external function exists to disagree with the collapse.
-            // A `lossy: bool` could not express the middle row, which is why `Cx` now
-            // carries the mode itself.
-            ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 2) => {
-                Some(t.clone())
-            }
-            ("log", "exp") if !self.f64_semantics() || self.certainly_at_least(t, 1) => {
-                Some(t.clone())
-            }
-            ("asinh", "sinh") => Some(t.clone()),
-            ("sinh", "asinh") if !self.f64_semantics() || self.certainly_in_band(t, 710) => {
-                Some(t.clone())
-            }
-            ("acosh", "cosh") if !self.f64_semantics() || self.certainly_at_least(t, 1) => {
-                Some(fun(self.view.intern("abs"), vec![t.clone()], self))
-            }
-            ("exp", "log") if self.certainly_nonneg(t) => Some(t.clone()),
-            ("cos", "acos") | ("sin", "asin") | ("tanh", "atanh") if self.certainly_in_unit(t) => {
-                Some(t.clone())
-            }
-            _ => None,
+        // In `f64` a fully numeric operand is read for its value first (`num.ground_first`): a
+        // pair's law speaks of parts with a variable or a constant, whose rounding keeps the kind,
+        // while a ground part's kind is its whole value's (`rootn(6, atanh(tanh(10)))` is NaN in
+        // float64, its index 10.000000000000002).
+        if self.f64_semantics()
+            && !t.has_measure_space(self.view)
+            && !t.contains_wildcard(self.view)
+        {
+            return None;
         }
+        let law = match (o.as_str(), i.as_str()) {
+            ("atanh", "tanh") => Law::FunAtanhTanh,
+            ("log", "exp") => Law::FunLogExp,
+            ("asinh", "sinh") => Law::FunAsinhSinh,
+            ("sinh", "asinh") => Law::FunSinhAsinh,
+            ("acosh", "cosh") => Law::FunAcoshCosh,
+            ("exp", "log") => Law::FunExpLog,
+            ("cos", "acos") | ("sin", "asin") | ("tanh", "atanh") => Law::FunUnitInverses,
+            _ => return None,
+        };
+        if !law.holds(t, self) {
+            return None;
+        }
+        Some(if matches!(law, Law::FunAcoshCosh) {
+            fun(self.view.intern("abs"), vec![t.clone()], self)
+        } else {
+            t.clone()
+        })
     }
 }
 
@@ -4925,6 +4886,249 @@ pub(crate) fn zero_read_below(e: &Ex, i: usize, read: bool, cx: &Cx) -> bool {
     }
 }
 
+/// The two pairs whose float64 round trip is flat at 0 (`Cx::flat_unread`): `log o exp`
+/// (`fun.log_exp`) and `acosh o cosh` (`fun.acosh_cosh`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FlatPair {
+    LogExp = 0,
+    AcoshCosh = 1,
+}
+
+/// Is `e` an inverse pair whose float64 round trip is flat at 0: `log(exp(t))` or
+/// `acosh(cosh(t))`?
+fn flat_pair(e: &Ex, view: &TokenView) -> Option<FlatPair> {
+    let Ex::Fun(o, a) = e else { return None };
+    let [Ex::Fun(i, b)] = a.as_slice() else {
+        return None;
+    };
+    if b.len() != 1 {
+        return None;
+    }
+    if view.tok_is(*o, "log") && view.tok_is(*i, "exp") {
+        Some(FlatPair::LogExp)
+    } else if view.tok_is(*o, "acosh") && view.tok_is(*i, "cosh") {
+        Some(FlatPair::AcoshCosh)
+    } else {
+        None
+    }
+}
+
+/// May the expression around child `i` of `e` read the FLAT POINT of a `pair` in that child --
+/// float64's exact 0 where the pair's argument is a nonzero number inside the flat band, `+0`
+/// where the argument may be `-0` or negative -- given `read` for `e`'s own? The readers are the
+/// judge's, measured as `C[pair(t)] -> C[t]` over the contexts `C` of the operators: refused at
+/// `C`'s root, `C` reads the zero (an inverse, a divisor, a negative power, `log`, `rootn` of a
+/// negative index, `mod`'s divisor, `bessely`, `besseli`, `besselk`, `harmonic`, ...); held at the
+/// root and refused under an inverse, `C` carries it to what reads it (an odd or bounded function
+/// that keeps a zero, `abs`, a sum, a product beside numbers, a positive integer power, ...); held
+/// in both, `C` is blind to it (`exp`, `cos`, `cosh`, `acosh`, `erfc`, an exponent over a positive
+/// base, a sum beside a nonzero number). Where the pairs differ the table is each pair's:
+/// `log o exp` turns a negative argument into `+0`, so the heads that read a zero's sign or a
+/// domain at 0 read it (`ceil`, a fractional power, `rootn` of an even index, a product or `max`
+/// beside a variable, `atan2` beside a variable), while `floor` and `atanh` carry it;
+/// `acosh o cosh` drifts below `|t|` (`acosh(cosh(3))` is 2.9999999999999996), so `floor` and
+/// `atanh` read it. A head the table does not name reads it.
+pub(crate) fn flat_read_below(e: &Ex, i: usize, read: bool, pair: FlatPair, cx: &Cx) -> bool {
+    let view = cx.view;
+    let le = pair == FlatPair::LogExp;
+    let ground = |x: &Ex| !x.has_measure_space(view) && !x.contains_wildcard(view);
+    match e {
+        // a sum carries it, but beside a nonzero number, which a zero leaves as it is
+        Ex::Add(v) => {
+            read && !v
+                .iter()
+                .enumerate()
+                .any(|(j, t)| j != i && matches!(t, Ex::Num(r) if !r.is_zero()))
+        }
+        // a product carries it beside numbers; `log o exp`'s zero meets a variable's sign
+        Ex::Mul(v) => read || (le && v.iter().enumerate().any(|(j, f)| j != i && !ground(f))),
+        Ex::Pow(_, x) if i == 0 => match &**x {
+            Ex::Num(k) if k.is_integer() && k.signum() > 0 => read,
+            Ex::Num(k) if !k.is_integer() && k.signum() > 0 && !le => read,
+            _ => true,
+        },
+        // an exponent: blind over a positive finite base, read over any other (`inf^0` is 1)
+        Ex::Pow(b, _) => match ground_value(b, cx) {
+            Some(v) if v > 0.0 && v.is_finite() => false,
+            Some(v) if v == 0.0 && !le => read,
+            _ => true,
+        },
+        Ex::Fun(f, a) => {
+            let is = |s: &str| view.tok_is(*f, s);
+            let others_ground = a.iter().enumerate().all(|(j, m)| j == i || ground(m));
+            if a.len() == 1 {
+                let blind = ["cos", "cosh", "acosh", "exp", "erfc"]
+                    .iter()
+                    .any(|s| is(s))
+                    || (le && is("acos"));
+                let carries = [
+                    "abs", "sin", "tan", "asin", "atan", "sinh", "tanh", "asinh", "erf",
+                ]
+                .iter()
+                .any(|s| is(s))
+                    || (le && (is("floor") || is("atanh")))
+                    || (!le && (is("acos") || is("ceil") || is("harmonic")));
+                return if blind {
+                    false
+                } else if carries {
+                    read
+                } else {
+                    true
+                };
+            }
+            if is("rootn") {
+                return match (i, a.get(1)) {
+                    (0, Some(Ex::Num(k)))
+                        if k.is_integer() && k.signum() > 0 && (k.is_odd_integer() || !le) =>
+                    {
+                        read
+                    }
+                    _ => true,
+                };
+            }
+            if is("min") {
+                return read;
+            }
+            if is("max") {
+                return (le && !others_ground) || read;
+            }
+            if is("mod") {
+                return i != 0 || !others_ground || read;
+            }
+            if is("atan2") && a.len() == 2 {
+                let other = &a[1 - i];
+                return match (i, ground_value(other, cx)) {
+                    (0, Some(x)) if x > 0.0 => read,
+                    (0, Some(_)) => false,
+                    (0, None) => le || read,
+                    (_, Some(_)) => false,
+                    _ => le,
+                };
+            }
+            if is("besselj") && a.len() == 2 {
+                return match (i, &a[0]) {
+                    (1, Ex::Num(n)) if n.is_zero() => false,
+                    (1, Ex::Num(n)) if n.is_integer() && n.signum() > 0 => read,
+                    (0, _) if ground(&a[1]) => false,
+                    _ => true,
+                };
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Does a reader of zeros over `e` read the flat point of a pair in `e` (`flat_read_below`, `e`'s
+/// own zero read), in `f64` where the pairs are held (`Cx::flat_unread` unset)?
+pub(crate) fn flat_reads_a_pair(e: &Ex, cx: &Cx) -> bool {
+    fn walk(e: &Ex, read: [bool; 2], cx: &Cx) -> bool {
+        if !read[0] && !read[1] {
+            return false;
+        }
+        if let Some(p) = flat_pair(e, cx.view) {
+            if read[p as usize] {
+                return true;
+            }
+        }
+        let below = |i: usize| {
+            [
+                flat_read_below(e, i, read[0], FlatPair::LogExp, cx),
+                flat_read_below(e, i, read[1], FlatPair::AcoshCosh, cx),
+            ]
+        };
+        match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+                v.iter().enumerate().any(|(i, c)| walk(c, below(i), cx))
+            }
+            Ex::Pow(b, x) => walk(b, below(0), cx) || walk(x, below(1), cx),
+            _ => false,
+        }
+    }
+    cx.f64_semantics() && !cx.flat_unread && walk(e, [true, true], cx)
+}
+
+/// WHERE NOTHING READS ITS FLAT POINT, THE PAIR COLLAPSES (`fun.log_exp`, `fun.acosh_cosh`):
+/// `e` with every `log(exp(t))` and `acosh(cosh(t))` a construction held in `f64` rebuilt where
+/// nothing around reads its flat point (`flat_read_below`). The root of a state reads none, so
+/// `log(exp(x0))` is `x0` and `sin(log(exp(x0)))` is `sin(x0)` as answers, while
+/// `1/log(exp(x0))` and `1/sin(log(exp(x0)))` stay. The nodes are rebuilt from their children,
+/// the released pairs in a context that reads no flat point (`Cx::flat_unread`).
+pub(crate) fn release_flat(e: Ex, cx: &Cx) -> Ex {
+    fn holds_a_pair(e: &Ex, view: &TokenView) -> bool {
+        flat_pair(e, view).is_some()
+            || match e {
+                Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|c| holds_a_pair(c, view)),
+                Ex::Pow(b, x) => holds_a_pair(b, view) || holds_a_pair(x, view),
+                _ => false,
+            }
+    }
+    if !cx.f64_semantics() || cx.flat_unread || !holds_a_pair(&e, cx.view) {
+        return e;
+    }
+    let free = Cx {
+        flat_unread: true,
+        ..*cx
+    };
+    flat_released(&e, [false, false], cx, &free).unwrap_or(e)
+}
+
+/// [`release_flat`] at `e`, each pair's flat point read or not (`read`, by [`FlatPair`]): the node
+/// where it changes, `None` where nothing does.
+fn flat_released(e: &Ex, read: [bool; 2], cx: &Cx, free: &Cx) -> Option<Ex> {
+    let below = |i: usize| {
+        [
+            flat_read_below(e, i, read[0], FlatPair::LogExp, cx),
+            flat_read_below(e, i, read[1], FlatPair::AcoshCosh, cx),
+        ]
+    };
+    let rebuilt = match e {
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+            let mut kids: Option<Vec<Ex>> = None;
+            for (i, c) in v.iter().enumerate() {
+                if let Some(r) = flat_released(c, below(i), cx, free) {
+                    kids.get_or_insert_with(|| v.clone())[i] = r;
+                }
+            }
+            kids.map(|k| match e {
+                Ex::Add(_) => add(k, cx),
+                Ex::Mul(_) => mul(k, cx),
+                // `atan2` is built from its arguments' members (`atan2_of`), as the parse builds it.
+                Ex::Fun(f, _) if k.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
+                    let mut members: Vec<Vec<Ex>> = k.into_iter().map(product_members).collect();
+                    let xm = members.pop().expect("two arguments");
+                    let ym = members.pop().expect("two arguments");
+                    atan2_of(*f, ym, xm, cx)
+                }
+                Ex::Fun(f, _) => fun(*f, k, cx),
+                _ => unreachable!("a node with members"),
+            })
+        }
+        Ex::Pow(b, x) => {
+            let nb = flat_released(b, below(0), cx, free);
+            let nx = flat_released(x, below(1), cx, free);
+            (nb.is_some() || nx.is_some()).then(|| {
+                pow(
+                    nb.unwrap_or_else(|| (**b).clone()),
+                    nx.unwrap_or_else(|| (**x).clone()),
+                    cx,
+                )
+            })
+        }
+        _ => return None,
+    };
+    let node = rebuilt.as_ref().unwrap_or(e);
+    if let (Some(p), Ex::Fun(f, a)) = (flat_pair(node, cx.view), node) {
+        if !read[p as usize] {
+            let freed = fun(*f, a.clone(), free);
+            if freed != *node {
+                return Some(freed);
+            }
+        }
+    }
+    rebuilt
+}
+
 /// The region test of `f64`'s zero signs (`keeps_zero_sign`, `signed_zero_null`): is the zero set
 /// of `e` null, by its form (`zero_set_null_by_form`) or by the certificate -- the context's region
 /// certificate where it has one (`Cx::cert_region`, the parse's), else `zero_set_null`?
@@ -4964,14 +5168,16 @@ fn vanishes_on_a_region(e: &Ex, cx: &Cx) -> bool {
 /// [0, 1), `ceil` the sign of its argument's (`ceil(+0) = +0`) and `-0` on (-1, 0); an odd
 /// function, an odd root or an odd power keeps its argument's sign; `abs`, `cos`, `cosh`, `exp`,
 /// `log`, `acos`, `acosh`, an even root and an even or fractional power are never `-0` (the power
-/// `1/2` is numpy's `sqrt`, `sqrt(-0) = -0`, and keeps it); `max` and `min` are one of their
-/// members; `mod` takes the sign of its divisor and `atan2` of its first argument (read where its
-/// second is finite: `atan2(y, +inf)` is `+-0`); a product's zero has the sign of its members, so
-/// a product is read through its one member that may vanish on a region where every other member
-/// is positive, and a product holding a zero is that zero everywhere, of the members' sign; a sum
-/// is `-0` only where every term is. `harmonic`, `besselj` (`besselj(1.5, 0) = -0`) and any
-/// other head are read by the region test alone. A ground term is its float64 value
-/// (`ground_value`); a pattern has no region (as in `keeps_zero_sign`).
+/// `1/2` is numpy's `sqrt`, `sqrt(-0) = -0`, and keeps it), and so is a negative power of an even
+/// or non-integer exponent, while an odd one is `-0` only where its base is negative (at `-inf`,
+/// or by underflow), so a base that is never negative keeps it from `-0`; `max` and `min` are one
+/// of their members; `mod` takes the sign of its divisor and `atan2` of its first argument
+/// (read where its second is finite: `atan2(y, +inf)` is `+-0`); a product's zero has the sign of
+/// its members, so a product is read through its one member that may vanish on a region where
+/// every other member is positive, and a product holding a zero is that zero everywhere, of the
+/// members' sign; a sum is `-0` only where every term is. `harmonic`, `besselj`
+/// (`besselj(1.5, 0) = -0`) and any other head are read by the region test alone. A ground term
+/// is its float64 value (`ground_value`); a pattern has no region (as in `keeps_zero_sign`).
 pub(crate) fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
     let view = cx.view;
     if e.contains_wildcard(view) {
@@ -4998,9 +5204,14 @@ pub(crate) fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
             }
         } else if *k == Rat::new(1, 2).expect("1/2") {
             rec(b, neg)
+        } else if k.signum() < 0 {
+            // a negative power vanishes only where `b` is infinite or the power underflows; an
+            // even or non-integer one is never -0, and an odd one is -0 only where `b` is
+            // negative (at -inf, or by underflow), so a base that is never negative keeps it from
+            // -0 (`1/abs(t)`)
+            neg && (!k.is_integer() || k.is_even_integer() || cx.certainly_nonneg(b))
         } else {
-            // a fractional power of a zero is +0; a negative power vanishes only where `b` is
-            // infinite, which the region test reads
+            // a fractional power of a zero is +0
             k.signum() > 0 && neg
         }
     };
@@ -9271,7 +9482,10 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
         RuleMode::Default => 0u8,
         RuleMode::Permissive => 2,
     };
-    let bits = mode | (u8::from(cx.fold_f64) << 2) | (u8::from(super::rat::f64_numbers()) << 4);
+    let bits = mode
+        | (u8::from(cx.fold_f64) << 2)
+        | (u8::from(super::rat::f64_numbers()) << 4)
+        | (u8::from(cx.flat_unread) << 6);
     (
         cx.view as *const TokenView as usize,
         [
@@ -10196,7 +10410,13 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Some((inner_base, r)), Ex::Num(s)) = (as_rational_power(&base, cx), &exp) {
         {
             let r = &r;
-            let licence = if cx.permits_on(Permissive::PowersCompose, inner_base) {
+            // Two negative powers undo each other's pole, but where the inner one reads a flat
+            // point (`flat_reads_a_pair`), float64's value has turned on it there:
+            // `1/(1/log(exp(x0)))` stays.
+            let flat = r.signum() < 0 && s.signum() < 0 && flat_reads_a_pair(inner_base, cx);
+            let licence = if flat {
+                false
+            } else if cx.permits_on(Permissive::PowersCompose, inner_base) {
                 true
             } else if r.is_integer() {
                 s.is_integer()
@@ -10622,11 +10842,14 @@ fn land_operand(e: Ex, cx: &Cx) -> Ex {
 }
 
 /// [`land`] at the root of a state: a state that is one literal is that literal landed. And
-/// nothing reads the sign of the answer's zero: a zero product drops the factors that only gave
-/// it its sign (`unsigned_zero`; `0*x0` is 0 as an answer, while `1/(0*x0)` is `inf/x0`), and a
-/// sum's sign moves wherever nothing reads its zero (`release_unread`; `-ceil(x0) - floor(x1)` is
+/// nothing reads the answer's zero: `log(exp(t))` and `acosh(cosh(t))` collapse wherever nothing
+/// reads their flat point (`release_flat`; `log(exp(x0))` is `x0` as an answer, while
+/// `1/log(exp(x0))` stays), a zero product drops the factors that only gave it its sign
+/// (`unsigned_zero`; `0*x0` is 0 as an answer, while `1/(0*x0)` is `inf/x0`), and a sum's sign
+/// moves wherever nothing reads its zero (`release_unread`; `-ceil(x0) - floor(x1)` is
 /// `-(ceil(x0) + floor(x1))` as an answer, while `1/(-ceil(x0) - floor(x1))` stays).
 pub fn land_root(e: Ex, cx: &Cx) -> Ex {
+    let e = release_flat(e, cx);
     let e = release_unread(e, cx);
     if let Some(u) = unsigned_zero(&e, cx) {
         return u;
@@ -11109,7 +11332,7 @@ fn lattice_ground_enclosure(e: &Ex, cx: &Cx) -> Option<(Rat, Rat)> {
 /// ([`lattice_number`]), and outside `f64` `pi`, `e` and every ground composite with a certified
 /// enclosure ([`lattice_ground_enclosure`]), which `f64`'s ground fold reads as their floats
 /// instead?
-fn lattice_numeric(e: &Ex, cx: &Cx) -> bool {
+pub(crate) fn lattice_numeric(e: &Ex, cx: &Cx) -> bool {
     lattice_number(e, cx).is_some()
         || (!cx.f64_semantics()
             && (matches!(e, Ex::Pi | Ex::E) || lattice_ground_enclosure(e, cx).is_some()))
@@ -11181,7 +11404,8 @@ fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
 ///
 /// A bag left with one member is that member.
 ///
-/// The laws applied here (`ac::laws::Law`): `lattice.bag`, `num.lattice_numbers`.
+/// The laws applied here (`ac::laws::Law`): `lattice.bag`, `lattice.absorb`,
+/// `num.lattice_numbers`.
 pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let view = cx.view;
     let is_max = view.tok_is(op, "max");
@@ -11201,9 +11425,8 @@ pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     if members.iter().any(|m| matches!(m, Ex::NaN)) {
         return Ex::NaN;
     }
-    let no_nan = |e: &Ex| {
-        matches!(e, Ex::PosInf | Ex::NegInf) || lattice_numeric(e, cx) || cx.fin_licensed(e)
-    };
+    // The members a law drops are no NaN almost everywhere (`lattice.absorb`).
+    let no_nan = |e: &Ex| Law::LatticeAbsorb.holds(e, cx);
     // `x` certainly at most `y` in a `max` bag (at least, in a `min` bag).
     let below = |x: &Ex, y: &Ex| -> bool {
         if *x == bottom {
@@ -11400,6 +11623,8 @@ fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
 /// A sign the reflection moves out of a GROUND argument under an odd order stays where it is in
 /// `f64` (the value is the ground fold's, from the kernel, and a derived zero would lose the sign
 /// the kernel writes).
+///
+/// The laws applied here (`ac::laws::Law`): `fun.besselj_reflection`.
 fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     let Ex::Num(n) = &args[0] else { return None };
     if !n.is_integer() {
@@ -11422,8 +11647,9 @@ fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     None
 }
 
-/// The laws applied here (`ac::laws::Law`): `fun.rootn_index`, `num.abs_literal`, `num.exp_one`,
-/// `num.rootn_index`.
+/// The laws applied here (`ac::laws::Law`): `fun.rootn_index`, `fun.abs_nonnegative`,
+/// `fun.half_period`, `num.abs_literal`, `num.exp_one`, `num.rootn_index`, and the inverse pairs'
+/// (`Cx::inverse_pair_collapse`).
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A `pow` call (`pow_spelled`: numpy's `sqrt` of a signed zero) is rebuilt as the spelling
@@ -11616,7 +11842,8 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     //
     // The judge was asked first, at the plain sort and at literals: all of
     // `sin|cos|tan {+,-} _0 np.pi` and the ground `tan +- 2 np.pi`, `sin + (-2) np.pi` come
-    // back CERTIFIED. tan's `!` is a miner-side sort choice, not a judge requirement.
+    // back CERTIFIED. tan's `!` is a miner-side sort choice, not a judge requirement. The law is
+    // `fun.half_period`.
     if args.len() == 1 {
         let shift = match cx.view.resolve_owned(op).as_str() {
             "sin" | "cos" | "tan" => Some(cx.view.tok_is(op, "cos")),
@@ -11836,18 +12063,18 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             _ => {}
         }
     }
-    // Constructor-level abs elimination: `abs t -> t` on a certainly-non-negative operand.
-    // A `_`-grade pointwise identity: both sides share t's domain exactly (abs(nan) = nan,
-    // abs(+inf) = +inf), t's value is >= 0 wherever defined, and the zero sign is
-    // non-normative (one-zero contract) -- and in fact unobservable, since certainly_nonneg
-    // witnesses never evaluate to -0.0 (see its doc). Living HERE rather than in the mined
+    // Constructor-level abs elimination: `abs t -> t` on a certainly-non-negative operand
+    // (`fun.abs_nonnegative`). Both sides share t's domain exactly (abs(nan) = nan,
+    // abs(+inf) = +inf) and t's value is >= 0 wherever defined; in `f64` t is not `-0` on a region
+    // too, since `|-0|` is `+0` (numpy's `sqrt` keeps `ceil(x0)`'s `-0` on (-1, 0), so
+    // `|sqrt(ceil(x0))|` stays). Living HERE rather than in the mined
     // ruleset makes the fold reachable from every entry path and structurally immune to
     // serve-order shadowing: a row diff found the old `inv abs t -> abs inv t`
     // orientation respelling |x^2| into |x^-2| before the exponent-literal abs rules could
     // match, sticking a dead abs in 9/65,536 (64k) + 25/1M outputs. The abs rules this
     // subsumes self-retire at the next mine (mint-vs-mark: the mark now carries the fold).
     // `tok_is` keeps the head dispatch allocation-free on the unary hot path.
-    if args.len() == 1 && cx.view.tok_is(op, "abs") && cx.certainly_nonneg(&args[0]) {
+    if args.len() == 1 && cx.view.tok_is(op, "abs") && Law::FunAbsNonnegative.holds(&args[0], cx) {
         return args.into_iter().next().unwrap();
     }
     // THE SIGN OF AN ODD HEAD (the one tie key, `sign_key`): `f(-u)` and `-f(u)` are one value
@@ -11865,6 +12092,14 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             && (a[pos].has_measure_space(cx.view) || a[pos].contains_wildcard(cx.view))
         {
             if let Some(p) = positive_head(&head, cx.view) {
+                // The positive head as the constructor builds it: an inverse pair inside it
+                // collapses (`sinh(-asinh(x0))` is `-x0`), and the product is that.
+                if let Ex::Fun(f, a) = &p {
+                    let built = fun(*f, a.clone(), cx);
+                    if built != p {
+                        return mul(vec![Ex::Num(Rat::NEG_ONE), built], cx);
+                    }
+                }
                 let mut v = vec![Ex::Num(Rat::NEG_ONE), p];
                 v.sort_by(|x, y| mul_factor_cmp(x, y, cx.view));
                 let outside = Ex::Mul(v);
@@ -12096,6 +12331,7 @@ mod tests {
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 ground_first: None,
                 zero_sign_unread: false,
+                flat_unread: false,
                 sign_held: None,
             };
             assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));

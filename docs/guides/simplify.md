@@ -190,8 +190,8 @@ reals at float resolution and its own simplifications.
 - **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes, wherever no
   operation overflows or underflows. Use it whenever the output will be evaluated in floating
   point. Where an operation overflows or underflows, an answer may hold the evaluator's value
-  there or the true one: `log(exp(800))` is `800`, where f64 computes `inf` (see [What `f64`
-  mode does and does not promise](#what-f64-mode-does-and-does-not-promise)).
+  there or the true one: `log(exp(x0))` is `x0`, where f64 computes `inf` past x0 = 709.78 (see
+  [What `f64` mode does and does not promise](#what-f64-mode-does-and-does-not-promise)).
 
 - **`Mode.permissive`** is for training-corpus canonicalisation ("beautification"). It
   includes `f64`: every rule that holds in `f64` holds in `permissive` too. Its promise is per
@@ -324,7 +324,8 @@ engine.simplify('rootn(exp(800.5), 2)')   # -> 'exp(1601/4)'
 
 A pole is not an overflow (`atanh(1)` and `log(0)` are infinite exactly), and saturation is
 not one either: `tanh(20)` is exactly `1.0` in float64 without leaving the range, so
-`atanh(tanh(x0))` keeps the evaluator's `inf` and `f64` does not rewrite it to `x0`.
+`atanh(tanh(x0))` keeps the evaluator's `inf` and `f64` does not rewrite it to `x0`. Where `|x|`
+is shown at most 19, short of that, it does: `atanh(tanh(19*sin(x0)))` is `19*sin(x0)`.
 
 It does **not** promise that a *sequence* of rewrites carries the same bound. Each rule
 carries it individually; simplification composes rules, and floating-point error composes

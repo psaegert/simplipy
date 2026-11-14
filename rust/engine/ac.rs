@@ -301,6 +301,7 @@ impl Engine {
             fold_f64,
             ground_first: None,
             zero_sign_unread: false,
+            flat_unread: false,
             sign_held: None,
         };
         f(&law)
@@ -1671,6 +1672,7 @@ impl Engine {
             fold_f64: Cx::folds_for(canon_mode),
             ground_first: None,
             zero_sign_unread: false,
+            flat_unread: false,
             sign_held: None,
         };
         // The whole call runs in the mode's number domain: the
@@ -1829,6 +1831,7 @@ impl Engine {
             fold_f64: fold_tr,
             ground_first: None,
             zero_sign_unread: false,
+            flat_unread: false,
             sign_held: None,
         };
         // The whole call runs in the mode's number domain: the
@@ -2204,8 +2207,8 @@ mod tests {
     /// `ac_canonical_key` must be the BARE-context canonical serialization -- literally
     /// what `AcRules::translate` builds for a rule side -- and NOT what the public
     /// `to_prefix`/`to_tagged` return: those run the rewrite pass under the LOADED
-    /// RULESET, and on this very asset `to_prefix(["sinh","asinh","_0"])` is already
-    /// `_0`, that rule's own RHS. The key must not depend on the ruleset it is
+    /// RULESET, and on this very asset `to_prefix(["asin","sin","sin","_0"])` is already
+    /// `sin _0`, that rule's own RHS. The key must not depend on the ruleset it is
     /// used to deduplicate.
     #[test]
     fn ac_canonical_key_is_the_bare_translate_form() {
@@ -2221,18 +2224,18 @@ mod tests {
         );
         // ... and it is NOT the RHS: no rule fires into the key, so the LHS survives as a
         // pattern, exactly as it does at load.
-        assert_ne!(k(&["sinh", "asinh", "_0"]), k(&["_0"]));
+        assert_ne!(k(&["asin", "sin", "sin", "_0"]), k(&["sin", "_0"]));
         // The public conversion, on this asset, DOES land on the RHS -- the wrinkle this
         // key exists to avoid (the rule fires; see the doc comment on `ac_canonical_key`).
         assert_eq!(
             e.ac_simplify_proj(
-                &t(&["sinh", "asinh", "_0"]),
+                &t(&["asin", "sin", "sin", "_0"]),
                 1,
                 RuleMode::Default,
                 super::AcForm::Explicit
             )
             .unwrap(),
-            t(&["_0"])
+            t(&["sin", "_0"])
         );
     }
 
@@ -2980,9 +2983,10 @@ mod tests {
              lags the engine -- republish, do not re-pin"
         );
         // INTERIM, until the re-mine resets the count to 0: the sign key (fewest
-        // signs, then outermost) makes the canon place a sign at an odd function itself, and the
-        // product constructor merges powers of e (`exp(2)/e` is `e`), so 17 rows of the staged
-        // asset are subsumed (G2). The suites pin them by rule (`tests/conftest.py`,
+        // signs, then outermost) makes the canon place a sign at an odd function itself, the
+        // product constructor merges powers of e (`exp(2)/e` is `e`), and the constructor
+        // collapses `sinh(asinh(t))` at every argument, so 18 rows of the staged asset are
+        // subsumed (G2). The suites pin them by rule (`tests/conftest.py`,
         // `ACJ4_INTERIM_SUBSUMED`); any other count still fails here.
         // G2 REPUBLISH: the full-lane re-mine ships (6,594 rules, x3
         // byte-identical on the reference mint host) and the pin returns
@@ -2993,7 +2997,7 @@ mod tests {
         // legacy one, `RuleCanon::Legacy`): nothing is subsumed. Read in f64's own folded
         // canon, `atanh pow (-10) (-9) -> -1e-09` was, a row nothing judged in that canon.
         assert_eq!(
-            subsumed, 17,
+            subsumed, 18,
             "published asset, read in its own canon, must translate loss-free but for the \
              interim rows; a subsumption means the canon moved past it -- republish, do not \
              re-pin"

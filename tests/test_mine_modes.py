@@ -323,11 +323,11 @@ def test_the_f64_scan_reads_the_range_standard(eng):
 def test_the_f64_mine_reads_the_range_standard(tmp_path):
     """A tiny mine: f64 mints `rootn(exp(x), 2) -> exp(x/2)`, which differs from the
     evaluator only past exp's overflow and underflow. `atanh(tanh(x)) -> x` stays out, since
-    tanh saturates inside the range (+inf against x, a change of kind). `log(exp(x)) -> x` is
-    minted: true in the reals, its sides 34 units in the last place apart at 0.0137421 and both
-    finite where the reals give them a value (strict's second reading), and past exp's overflow
-    the true value (the range standard); the mint reads every row by one agreement, so a row of
-    each kind together passes it."""
+    tanh saturates inside the range (+inf against x, a change of kind). `log(exp(x)) -> x`, true
+    in the reals, its sides 34 units in the last place apart at 0.0137421 and both finite where
+    the reals give them a value (strict's second reading), and past exp's overflow the true value
+    (the range standard), is f64's constructor's (`fun.log_exp`), so the mine needs no rule for
+    it."""
     ops = {
         "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
         "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
@@ -343,7 +343,6 @@ def test_the_f64_mine_reads_the_range_standard(tmp_path):
                       output_file=str(tmp_path / 'rules_f64.json'), promote_sorts=False)
     f64 = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(tmp_path / 'rules_f64.json'))]
     assert (('rootn', 'exp', '?0', '2'), ('exp', '/', '?0', '2')) in f64
-    assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and len(r[0]) == 3]
-    assert (('log', 'exp', '?0'), ('?0',)) in f64
-    side = json.load(open(tmp_path / 'rules_f64.json.provenance.json'))
-    assert [['log', 'exp', 'x0'], ['x0']] not in side['per_length']['3']['excluded']
+    assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and r[0][2][0] in '?_!$']
+    assert not [r for r in f64 if r[0][:2] == ('log', 'exp')]
+    assert engine.simplify(['log', 'exp', 'x0']) == ['x0']

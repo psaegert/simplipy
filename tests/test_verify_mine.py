@@ -136,12 +136,12 @@ def test_the_preempted_gate(tmp_path, mine) -> None:
 def test_the_dead_gate(tmp_path, mine) -> None:
     """A rule another rule takes from its own instance, ending dearer, never decides an answer:
     here two rows of one left side, the first ending at `2*x` where the second promises `x`."""
-    first, second = (('log', 'exp', '_0'), ('*', '2', '_0')), (('log', 'exp', '_0'), ('_0',))
+    first, second = (('exp', 'log', '_0'), ('*', '2', '_0')), (('exp', 'log', '_0'), ('_0',))
     path = _plant(tmp_path, mine, 'f64', [first, second])
     gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'dead')
     assert not gate['ok'] and [e[:2] for e in gate['examples']] == [[list(second[0]),
                                                                      list(second[1])]], gate
-    assert gate['examples'][0][2:] == [['log', 'exp', 'x0'], ['*', '2', 'x0']], gate
+    assert gate['examples'][0][2:] == [['exp', 'log', 'x0'], ['*', '2', 'x0']], gate
 
 
 def test_a_longer_rule_is_live_beside_its_prefix(tmp_path, mine) -> None:

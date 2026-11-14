@@ -91,9 +91,25 @@ mod tests {
     /// which `permissive`, reading one zero, does not ask; no step of permissive's own.
     const SUM_SIGN_LAWS: [Law; 2] = [Law::AddUnfactor, Law::AddContent];
 
+    /// The functions' partial laws and the lattice's absorption: identities of the reals wherever
+    /// their left side has a value, whose premise in `f64` is a float64 kind (`tanh`'s
+    /// saturation, a flat point, a zero's sign, a NaN on a region), which `permissive` does not
+    /// ask (`abs(t) = t` keeps the reals' own `t >= 0`); no step of permissive's own.
+    const KIND_LAWS: [Law; 7] = [
+        Law::FunAtanhTanh,
+        Law::FunLogExp,
+        Law::FunAcoshCosh,
+        Law::FunExpLog,
+        Law::FunUnitInverses,
+        Law::FunAbsNonnegative,
+        Law::LatticeAbsorb,
+    ];
+
     /// The step entries are the three the constructors take on a rule's structure, each schema
-    /// one expression a side; the partial laws are the like-term laws, each with its schema, and
-    /// the sum-sign laws, so a partial law the catalogue gains must be placed before it is read.
+    /// one expression a side; the partial laws are the like-term laws, each with its schema, the
+    /// sum-sign and kind laws, and the inverse pairs' law, which is the step `inverse pairs
+    /// cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue gains must be
+    /// placed before it is read.
     #[test]
     fn the_schemas_are_the_constructors_tables() {
         let stepped: Vec<&str> = Permissive::ALL
@@ -117,7 +133,9 @@ mod tests {
             let like = LIKE_TERM_LAWS.contains(&law);
             assert_eq!(
                 !law.total(),
-                like || SUM_SIGN_LAWS.contains(&law),
+                like || SUM_SIGN_LAWS.contains(&law)
+                    || KIND_LAWS.contains(&law)
+                    || law == Law::PermInversePairs,
                 "{}",
                 law.name()
             );

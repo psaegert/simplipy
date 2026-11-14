@@ -94,8 +94,11 @@ class TestLoadConsumer:
         # twin comes, of `0*asin(_0) -> 0*acos(_0)`, whose negation is the zero of the other
         # sign; and the eleven rules `0*tan(-k) -> 0`, `0*asin(-1) -> 0` are read with the sign
         # they are written with, which the zero keeps.
+        # THE INVERSE PAIRS' ROUNDING KEEPS THE KIND (f64): `sinh(asinh(_0)) -> _0` is the
+        # constructor's at every argument now (`log(exp(t))` is held where its flat point may be
+        # read): (5359, 17, 2, 40) -> (5358, 18, 2, 40).
         assert (subsumed, dropped) == (len(ACJ4_INTERIM_SUBSUMED), len(ACJ4_INTERIM_UPHILL))
-        assert (kept, subsumed, dropped, twins) == (5359, 17, 2, 40)
+        assert (kept, subsumed, dropped, twins) == (5358, 18, 2, 40)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads

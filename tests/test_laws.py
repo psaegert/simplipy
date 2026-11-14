@@ -239,6 +239,80 @@ GROUND_ROWS = [
     ('num.ground_first', f'/ {INF} {INF}', NAN, NAN),
 ]
 
+#: (law, input, f64 answer, permissive answer) of the functions' identities. Float64's round trip
+#: through a function and its inverse drifts by many units in the last place while both sides stay
+#: finite, so the f64 answer is checked against the input's values in kind: the same infinity, both
+#: finite, or both without a value. Under an inverse, `ceil(x0)` is -0 on (-1, 0).
+FUNCTION_ROWS = [
+    # atanh(tanh(t)) = t; f64: |t| at most 19, where float64's tanh is no +-1
+    ('fun.atanh_tanh', 'atanh tanh * 19 sin x0', '* 19 sin x0', '* 19 sin x0'),
+    ('fun.atanh_tanh', 'atanh tanh * 20 sin x0', 'atanh tanh * 20 sin x0', '* 20 sin x0'),
+    ('fun.atanh_tanh', 'atanh tanh x0', 'atanh tanh x0', 'x0'),
+    ('fun.atanh_tanh', 'inv atanh tanh ceil sin x0', 'inv ceil sin x0', 'inv ceil sin x0'),
+    # log(exp(t)) = t; f64: t is not -0 on a region, log(exp(-0)) being +0
+    ('fun.log_exp', 'log exp x0', 'x0', 'x0'),
+    ('fun.log_exp', 'floor log exp x0', 'floor x0', 'floor x0'),
+    # f64: log(exp(t)) is +0 wherever 0 < |t| < 1.1e-16, so the pair stays under a head that reads
+    # a zero (an inverse, log), through the heads that carry one (sin), and collapses under a head
+    # blind to it (exp)
+    ('fun.log_exp', 'sin log exp x0', 'sin x0', 'sin x0'),
+    ('fun.log_exp', 'inv log exp x0', 'inv log exp x0', 'inv x0'),
+    ('fun.log_exp', 'log log exp x0', 'log log exp x0', 'log x0'),
+    ('fun.log_exp', 'inv sin log exp x0', 'inv sin log exp x0', 'inv sin x0'),
+    ('fun.log_exp', 'inv exp log exp x0', 'inv exp x0', 'inv exp x0'),
+    ('fun.log_exp', 'inv inv log exp x0', 'inv inv log exp x0', 'x0'),
+    ('fun.log_exp', 'inv log exp ceil x0', 'inv log exp ceil x0', 'inv ceil x0'),
+    # an odd negative power is -0 where its base is negative: at -inf (`log(ceil(x0))` on (-1, 0])
+    # the pair stays, and a base that is never negative keeps it from -0
+    ('fun.log_exp', 'log exp pow log ceil x0 -3', 'log exp inv pow log ceil x0 3',
+     'inv pow log ceil x0 3'),
+    ('fun.log_exp', 'log exp pow abs log ceil x0 -3', 'inv pow abs log ceil x0 3',
+     'inv pow abs log ceil x0 3'),
+    ('fun.asinh_sinh', 'asinh sinh x0', 'x0', 'x0'),
+    ('fun.asinh_sinh', 'inv asinh sinh ceil x0', 'inv ceil x0', 'inv ceil x0'),
+    ('fun.sinh_asinh', 'sinh asinh * 1000 sin x0', '* 1000 sin x0', '* 1000 sin x0'),
+    ('fun.sinh_asinh', 'inv sinh asinh ceil x0', 'inv ceil x0', 'inv ceil x0'),
+    # an odd head over a negated inverse collapses at once
+    ('fun.sinh_asinh', 'sinh * min -1 cos 1 asinh x0', 'neg x0', 'neg x0'),
+    # acosh(cosh(t)) = |t|; permissive cancels the pair, ignoring the branch. In f64 the pair is
+    # flat at 0 (0 wherever |t| < 1.5e-8), and stays under a head that reads a zero
+    ('fun.acosh_cosh', 'acosh cosh * 0.5 sin x0', 'abs / sin x0 2', '/ sin x0 2'),
+    ('fun.acosh_cosh', 'inv acosh cosh ceil x0', 'inv acosh cosh ceil x0', 'inv ceil x0'),
+    ('fun.acosh_cosh', 'exp acosh cosh x0', 'exp abs x0', 'exp x0'),
+    ('fun.acosh_cosh', 'inv acosh cosh x0', 'inv acosh cosh x0', 'inv x0'),
+    # exp(log(t)) = t; t >= 0, and in f64 not -0 on a region (numpy's sqrt keeps ceil's -0)
+    ('fun.exp_log', 'exp log abs x0', 'abs x0', 'abs x0'),
+    ('fun.exp_log', 'exp log x0', 'exp log x0', 'x0'),
+    ('fun.exp_log', 'inv exp log pow ceil x0 0.5', 'inv exp log pow ceil x0 / 1 2',
+     'inv pow ceil x0 / 1 2'),
+    ('fun.unit_inverses', 'cos acos sin x0', 'sin x0', 'sin x0'),
+    ('fun.unit_inverses', 'tanh atanh cos x0', 'cos x0', 'cos x0'),
+    ('fun.unit_inverses', 'cos acos x0', 'cos acos x0', 'x0'),
+    # permissive's own: an inverse pair cancels in both orders, ignoring domain and branch
+    ('perm.inverse_pairs', 'asin sin x0', 'asin sin x0', 'x0'),
+    ('perm.inverse_pairs', 'atan tan x0', 'atan tan x0', 'x0'),
+    # |t| = t; t >= 0, and in f64 not -0 on a region
+    ('fun.abs_nonnegative', 'abs exp x0', 'exp x0', 'exp x0'),
+    ('fun.abs_nonnegative', 'abs sin x0', 'abs sin x0', 'abs sin x0'),
+    ('fun.abs_nonnegative', 'inv abs pow ceil x0 0.5', 'inv abs pow ceil x0 / 1 2',
+     'inv pow ceil x0 / 1 2'),
+    # a negative power of a base that is never negative is never -0
+    ('fun.abs_nonnegative', 'abs * 2 abs / -3 abs + x0 tan / x0 cos log - 1 * x0 x0',
+     '/ 6 abs + x0 tan / x0 cos log - 1 pow x0 2', '/ 6 abs + x0 tan / x0 cos log - 1 pow x0 2'),
+    ('fun.half_period', 'sin + x0 np.pi', 'neg sin x0', 'neg sin x0'),
+    ('fun.half_period', 'cos - x0 np.pi', 'neg cos x0', 'neg cos x0'),
+    ('fun.half_period', 'tan + x0 np.pi', 'tan x0', 'tan x0'),
+    ('fun.half_period', 'sin - np.pi x0', 'sin x0', 'sin x0'),
+    ('fun.besselj_reflection', 'besselj -3 x0', 'neg besselj 3 x0', 'neg besselj 3 x0'),
+    ('fun.besselj_reflection', 'besselj -2 x0', 'besselj 2 x0', 'besselj 2 x0'),
+    # the dual bag absorbs, the absorber takes, the identity drops; f64: the dropped members no
+    # NaN almost everywhere
+    ('lattice.absorb', 'max x0 min x0 x1', 'x0', 'x0'),
+    ('lattice.absorb', 'max x0 min x0 log x1', 'max x0 min x0 log x1', 'x0'),
+    ('lattice.absorb', 'max float("-inf") x0', 'x0', 'x0'),
+    ('lattice.absorb', 'max float("inf") log x0', 'max float("inf") log x0', 'float("inf")'),
+]
+
 C = '<constant>'
 #: (law, input, f64 answer, permissive answer) of the absorptions of a fitted constant
 ABSORB_ROWS = [
@@ -330,16 +404,26 @@ def test_the_core_names_its_laws() -> None:
         ('mul.infinity_sign', '-k*(s + inf) = k*(-s - inf)'),
         ('pow.exp_compose', 'e^t = exp(t), exp(a)^b = exp(a*b)'),
         ('pow.refused_power', '(a*b)^-k = ((a*b)^k)^-1'),
-        ('fun.rootn_index', 'rootn(t, -n) = 1/rootn(t, n)')]
+        ('fun.rootn_index', 'rootn(t, -n) = 1/rootn(t, n)'),
+        ('fun.atanh_tanh', 'atanh(tanh(t)) = t'), ('fun.log_exp', 'log(exp(t)) = t'),
+        ('fun.asinh_sinh', 'asinh(sinh(t)) = t'), ('fun.sinh_asinh', 'sinh(asinh(t)) = t'),
+        ('fun.acosh_cosh', 'acosh(cosh(t)) = abs(t)'), ('fun.exp_log', 'exp(log(t)) = t'),
+        ('fun.unit_inverses', 'cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t'),
+        ('perm.inverse_pairs', 'f(g(t)) = t, g the inverse of f'),
+        ('fun.abs_nonnegative', 'abs(t) = t'),
+        ('fun.half_period', 'sin(t + pi) = -sin(t), cos(t + pi) = -cos(t), tan(t + pi) = tan(t)'),
+        ('fun.besselj_reflection', 'J_(-n)(t) = (-1)^n J_n(t)'),
+        ('lattice.absorb', 'max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a')]
 
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ROWS + GROUND_ROWS + ABSORB_ROWS} == {
+    assert {law for law, *_ in ROWS + GROUND_ROWS + FUNCTION_ROWS + ABSORB_ROWS} == {
         name for name, _ in _core.laws()}
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + GROUND_ROWS + ABSORB_ROWS])
+    pytest.param(*row, id=f'{row[0]}: {row[1]}')
+    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + ABSORB_ROWS])
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
         engine, law, expr, f64, permissive, effort) -> None:
@@ -349,7 +433,8 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + GROUND_ROWS + ABSORB_ROWS])
+    pytest.param(*row, id=f'{row[0]}: {row[1]}')
+    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + ABSORB_ROWS])
 def test_each_answer_reads_back_to_itself(engine, law, expr, f64, permissive) -> None:
     for mode, answer in (('f64', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)
@@ -372,4 +457,24 @@ def test_the_f64_answer_keeps_float64s_values(engine, law, expr, f64, permissive
 
     a, b = values(expr), values(f64)
     same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
+    assert same.all(), (law, expr, f64, points[~same][0])
+
+
+@pytest.mark.parametrize('law, expr, f64, permissive', [
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in FUNCTION_ROWS])
+def test_the_f64_answer_keeps_float64s_kinds(engine, law, expr, f64, permissive) -> None:
+    """Float64's value of the f64 answer is the input's in kind wherever the input has one: the
+    same infinity (its sign included), or both finite."""
+    names = ['x0', 'x1', 'x2']
+    points = np.random.default_rng(0).uniform(-3, 3, size=(2000, 3))
+
+    def values(tokens):
+        f = engine.as_callable(tokens.split(), variables=names)
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            v = np.asarray(f(*points.T), dtype=np.float64)
+        return np.broadcast_to(v, (len(points),))
+
+    a, b = values(expr), values(f64)
+    same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isfinite(b))
     assert same.all(), (law, expr, f64, points[~same][0])

@@ -893,63 +893,51 @@ class TestZeroPoles:
             assert engine._core.interval_class(list(tokens)) == want, tokens
 
 
-class TestAtanhTanhBandIsPrecisionDerived:
-    """The atanh(tanh(t)) -> t collapse carried a band of 18, derived from where
-    f64 tanh ATTAINS +-1 (19.06). But tanh fails by COMPRESSION long before it
-    saturates -- it loses ~2|t|/ln2 bits of the argument approaching +-1 -- and under
-    the realised criterion (`_ulp_gap <= REALISED_ULP = 8`, the same bar the judge
-    holds every rule to) the roundtrip first breaches at |t| ~ 2.7 (2.677 audit host,
-    2.808 this host, libm-dependent; by |t| = 18 the drift is ~0.03-0.06 ABSOLUTE).
-    The band is now 2: the last integer magnitude ceiling on the safe side of every
-    measured breach. Saturation is not overflow: the band stays, where the overflow
-    cut-offs of log o exp and the sinh/cosh pairs are gone."""
+class TestAtanhTanhBand:
+    """`atanh(tanh(t)) = t` holds in f64 wherever float64's `tanh(t)` is not +-1, which it attains
+    from |t| = 19.0615: the collapse takes a `t` shown at most 19 in magnitude. Float64's round
+    trip drifts by many units in the last place well inside the band (past 8 from |t| ~ 2.7), but
+    both sides stay finite, so the drift keeps the kind and sets no band."""
 
     def test_collapses_inside_the_band(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['atanh', 'tanh', 'sin', 'x0']) == ['sin', 'x0']
-        assert engine.simplify(['atanh', 'tanh', '*', '2', 'sin', 'x0']) == \
-            ['*', '2', 'sin', 'x0']
-        assert engine.simplify(['atanh', 'tanh', '2']) == ['2']
+        assert engine.simplify(['atanh', 'tanh', '*', '3', 'sin', 'x0']) == \
+            ['*', '3', 'sin', 'x0']
+        assert engine.simplify(['atanh', 'tanh', '*', '19', 'sin', 'x0']) == \
+            ['*', '19', 'sin', 'x0']
 
     def test_refused_outside_the_band(self, engine: SimpliPyEngine) -> None:
-        """Ceiling 3 admits measured breaches (scattered from ~2.68 up), so the
-        collapse is refused -- these all collapsed under the old band of 18."""
-        assert engine.simplify(['atanh', 'tanh', '*', '3', 'sin', 'x0']) == \
-            ['atanh', 'tanh', '*', '3', 'sin', 'x0']
-        assert engine.simplify(['atanh', 'tanh', '3']) == ['atanh', 'tanh', '3']
+        assert engine.simplify(['atanh', 'tanh', '*', '20', 'sin', 'x0']) == \
+            ['atanh', 'tanh', '*', '20', 'sin', 'x0']
 
     def test_unbounded_argument_never_collapses(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['atanh', 'tanh', 'x0']) == ['atanh', 'tanh', 'x0']
 
+    def test_a_fully_numeric_argument_is_read_first(self, engine: SimpliPyEngine) -> None:
+        """A fully numeric part is the fold's: float64's value, kept where it is cheaper.
+        `atanh(tanh(20))` is inf in float64; `atanh(tanh(2))` is 1.9999999999999996, dearer
+        than the expression, which stays."""
+        assert engine.simplify(['atanh', 'tanh', '20']) == ['float("inf")']
+        assert engine.simplify(['atanh', 'tanh', '2']) == ['atanh', 'tanh', '2']
 
-class TestFlatPointCollapseFloors:
-    """Found re-deriving a collapse with the contract's own criterion: the collapse
-    bands guarded only the OVERFLOW end, but compression near a flat point of the
-    inner function eats the LOW end -- exp rounds a small argument into the
-    neighbourhood of 1, and cosh is quadratically flat at 0. Measured against
-    `_ulp_gap <= REALISED_ULP = 8`: log(exp(t)) breaches for ALL |t| < ~0.0625
-    (worst 6.7e7 ULP at 1e-8) and acosh(cosh(t)) for all |t| < ~0.25 (worst ~4.5e18),
-    while at |t| >= 1 the measured worst is 0 and 1 ULP wherever nothing overflows or
-    underflows. Both arms carry a proven magnitude floor of 1 (and no ceiling: an overflow
-    cuts no band); asinh(sinh(t)) measured clean wherever sinh does not overflow (worst
-    2 ULP) and carries none."""
 
-    def test_collapses_with_a_proven_floor(self, engine: SimpliPyEngine) -> None:
+class TestFlatPointCollapses:
+    """Near a flat point of the inner function float64's round trip loses many units in the last
+    place (`exp` rounds a small argument into the neighbourhood of 1, `cosh` is quadratically flat
+    at 0), but both sides stay finite there, so `log(exp(t))` and `acosh(cosh(t))` collapse at
+    every argument that is not fully numeric; `acosh(cosh(t))` is `|t|`."""
+
+    def test_collapses_at_the_flat_point(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['log', 'exp', 'sin', 'x0']) == ['sin', 'x0']
+        assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == ['abs', 'sin', 'x0']
+
+    def test_a_fully_numeric_argument_is_read_first(self, engine: SimpliPyEngine) -> None:
+        # The fold writes float64's value where it is cheaper: exactly 2 and 0.5, while 0.0137
+        # comes back 34 ULP off (0.013700000000000468), dearer than the expression.
         assert engine.simplify(['log', 'exp', '2']) == ['2']
         assert engine.simplify(['acosh', 'cosh', '3']) == ['3']
-
-    def test_refused_at_the_flat_point(self, engine: SimpliPyEngine) -> None:
-        """sin(x0) has ceiling 1 -- inside the old band -- but no floor: it sweeps
-        through the flat point, where these collapsed to rewrites wrong by 1e7-1e18
-        ULP. All three collapsed under the ceiling-only licence."""
-        assert engine.simplify(['log', 'exp', 'sin', 'x0']) == \
-            ['log', 'exp', 'sin', 'x0']
-        # A ground argument is the walk's to fold, to the float the evaluator computes, kept
-        # only where it is cheaper: exactly 0.5 for 0.5, while 0.0137 comes back 34 ULP off
-        # (0.013700000000000468), dearer than the expression.
         assert engine.simplify(['log', 'exp', '0.5']) == ['/', '1', '2']
         assert engine.simplify(['log', 'exp', '0.0137']) == ['log', 'exp', '0.0137']
-        assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
-            ['acosh', 'cosh', 'sin', 'x0']
 
     def test_the_clean_pair_needs_no_licence(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['asinh', 'sinh', 'sin', 'x0']) == ['sin', 'x0']

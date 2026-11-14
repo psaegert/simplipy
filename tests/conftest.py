@@ -128,9 +128,10 @@ def require_mode_sets(why: str = 'the acj-4 rule files are not staged') -> None:
 # key (fewest signs, then outermost) and the one-bit sign moved the canon and the measure past the
 # staged acj-4 asset, which was mined under the earlier ones, and the f64 load refuses exactly
 # these rows of it:
-#   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, and
-#     a product of two powers of e, which the product constructor merges (`exp(2)/e` is `e`),
-#     so both sides are one canonical state;
+#   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, a
+#     product of two powers of e, which the product constructor merges (`exp(2)/e` is `e`), and
+#     an inverse pair the constructor now collapses at every argument in f64 (`sinh(asinh(x))`,
+#     whose rounding keeps the kind), so both sides are one canonical state;
 #   * UPHILL (gate G7): two rows whose sides now climb in price. A sign costs one bit wherever it
 #     sits, so a negation standing alone pays no `Mul` head: `-exp(-x)` is cheaper than
 #     `-1/exp(x)` and `-log(acos(x))` than `log(1/acos(x))`, where the two sides cost the same
@@ -143,6 +144,7 @@ ACJ4_INTERIM_SUBSUMED = (
     ('neg atan _0', 'atan neg _0'), ('neg atanh _0', 'atanh neg _0'),
     ('neg sin _0', 'sin neg _0'), ('neg sinh _0', 'sinh neg _0'),
     ('neg tan _0', 'tan neg _0'), ('neg tanh _0', 'tanh neg _0'),
+    ('sinh asinh _0', '_0'),
     ('inv neg asin _0', 'inv asin neg _0'), ('inv neg asinh _0', 'inv asinh neg _0'),
     ('inv neg atan _0', 'inv atan neg _0'), ('inv neg atanh _0', 'inv atanh neg _0'),
     ('neg rootn _0 3', 'rootn neg _0 3'), ('neg rootn _0 5', 'rootn neg _0 5'),

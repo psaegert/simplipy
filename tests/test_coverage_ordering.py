@@ -274,11 +274,13 @@ class TestProbesReadEveryAlphabet:
         covers on the leaf and on the composite instance, keeps the twin, and the liveness
         gate finds both rules of a live set live."""
         from simplipy.mining import _dead_rules
-        short = (('log', 'exp', '_0'), ('_0',))
-        covered = (('neg', 'log', 'exp', '_0'), ('neg', '_0'))
+        # `exp(log(t)) = t` needs t >= 0, which a slot does not show: the rule is no
+        # constructor's (`log(exp(t))` is, at every argument)
+        short = (('exp', 'log', '_0'), ('_0',))
+        covered = (('neg', 'exp', 'log', '_0'), ('neg', '_0'))
         engine = SimpliPyEngine(operators=_NO_SIN_OPS, rules=[short, covered])
         assert engine.prune_covered_rules(rule_mode='default') == 1
         assert engine.simplification_rules == [short]
-        assert engine.simplify(['neg', 'log', 'exp', 'inv', '+', 'x0', 'x1']) != \
-            ['neg', 'log', 'exp', 'inv', '+', 'x0', 'x1']
+        assert engine.simplify(['neg', 'exp', 'log', 'inv', '+', 'x0', 'x1']) != \
+            ['neg', 'exp', 'log', 'inv', '+', 'x0', 'x1']
         assert _dead_rules(engine, 'default', [short]) == []

@@ -656,51 +656,33 @@ class TestInversePairsCollapse:
     def bare(self):
         return SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
 
-    def test_total_pairs_collapse_only_within_the_f64_BAND(self, bare) -> None:
-        """Genuine bijections of the EXTENDED LINE -- and not of f64, which is why most
-        carry magnitude licences, each derived from the realised 8-ULP criterion
-        wherever nothing overflows or underflows. Argument outside a band:
-        refused. Provably licensed argument: collapses, because the licence is a proof
-        obligation, not a blanket ban. The sin vehicle (range [-1, 1]) satisfies every
-        CEILING but sweeps through 0 -- so it still collapses only for the pairs without a
-        flat point there: the sinh pairs (clean, worst 4 ULP measured within |t| <= 710)
-        and atanh o tanh (compression is at the HIGH end). For log o exp and acosh o cosh,
-        0 is the flat point itself and the sin vehicle is REFUSED; their collapse needs a
-        proven floor. asinh o sinh needs nothing: worst 2 ULP wherever sinh does not
-        overflow, and where it does the collapse gives the true value."""
+    def test_the_pairs_collapse_where_their_laws_hold(self, bare) -> None:
+        """Float64's round trips drift by many units in the last place while both sides stay
+        finite, so no pair carries a rounding band. `sinh o asinh`, `asinh o sinh` and
+        `log o exp` collapse at every argument; `atanh o tanh` where |t| is at most 19, short of
+        float64's `tanh(t) = 1`; permissive cancels each pair."""
         from simplipy import Mode
-        for pair in (['log', 'exp'], ['sinh', 'asinh'], ['atanh', 'tanh']):
-            unbounded = pair + ['x0']
-            assert bare.simplify(list(unbounded)) == unbounded, unbounded
-            # LOSSY answers to no external evaluator, so it still collapses
-            assert bare.simplify(list(unbounded), mode=Mode.permissive) == ['x0'], unbounded
-        assert bare.simplify(['asinh', 'sinh', 'x0']) == ['x0']
-        for pair in (['asinh', 'sinh'], ['sinh', 'asinh'], ['atanh', 'tanh']):
-            bounded = pair + ['sin', 'x0']
-            assert bare.simplify(list(bounded)) == ['sin', 'x0'], bounded
-        # log o exp: the sin vehicle breaches (all |t| < ~0.0625, worst 6.7e7 ULP);
-        # a literal with a proven floor collapses.
-        assert bare.simplify(['log', 'exp', 'sin', 'x0']) == ['log', 'exp', 'sin', 'x0']
-        assert bare.simplify(['log', 'exp', '2']) == ['2']
+        for pair in (['log', 'exp'], ['sinh', 'asinh'], ['asinh', 'sinh']):
+            assert bare.simplify(pair + ['x0']) == ['x0'], pair
+        assert bare.simplify(['atanh', 'tanh', 'x0']) == ['atanh', 'tanh', 'x0']
+        assert bare.simplify(['atanh', 'tanh', 'x0'], mode=Mode.permissive) == ['x0']
+        for pair in (['asinh', 'sinh'], ['sinh', 'asinh'], ['atanh', 'tanh'], ['log', 'exp']):
+            assert bare.simplify(pair + ['sin', 'x0']) == ['sin', 'x0'], pair
 
     def test_an_overflow_cuts_no_band(self, bare) -> None:
-        """Where the inner function overflows or underflows (exp past 709.78 or below
-        -708.4, sinh and cosh past 710.48), a rewrite may give the evaluator's value or the
-        true one; the collapse gives the true one, so no pair is refused for an overflow.
-        The floors stay: they are rounding (compression at a flat point), not overflow."""
-        assert bare.simplify(['log', 'exp', '800']) == ['800']
-        assert bare.simplify(['log', 'exp', '-800']) == ['-800']
-        assert bare.simplify(['asinh', 'sinh', '800']) == ['800']
-        assert bare.simplify(['acosh', 'cosh', '-800']) == ['800']
-        # A proven floor with no ceiling at all: cosh(x0) >= 1.
-        assert bare.simplify(['log', 'exp', 'cosh', 'x0']) == ['cosh', 'x0']
+        """Where the inner function overflows or underflows (exp past 709.78 or below -708.4,
+        sinh and cosh past 710.48), a rewrite may give the evaluator's value or the true one; the
+        collapse gives the true one, so no pair is refused for an overflow. A fully numeric
+        argument is read for its value first: float64's infinity, where the true value costs
+        more."""
+        for tokens in (['log', 'exp', 'cosh', 'x0'], ['asinh', 'sinh', 'exp', 'x0'],
+                       ['sinh', 'asinh', 'exp', 'x0']):
+            assert bare.simplify(list(tokens)) == tokens[2:], tokens
         assert bare.simplify(['acosh', 'cosh', '*', '2', 'cosh', 'x0']) == \
             ['*', '2', 'cosh', 'x0']
-        assert bare.simplify(['asinh', 'sinh', 'exp', 'x0']) == ['exp', 'x0']
-        # sinh o asinh never overflows short of the top of the range; its 710 ceiling is
-        # rounding (first breach past 8 ULP measured at |t| ~ 4.4e6), and stays.
-        assert bare.simplify(['sinh', 'asinh', 'exp', 'x0']) == ['sinh', 'asinh', 'exp', 'x0']
         assert bare.simplify(['atanh', 'tanh', 'exp', 'x0']) == ['atanh', 'tanh', 'exp', 'x0']
+        assert bare.simplify(['log', 'exp', '800']) == ['float("inf")']
+        assert bare.simplify(['log', 'exp', '-800']) == ['float("-inf")']
 
     def test_the_two_axes_are_INDEPENDENT_which_no_bool_could_express(self, bare) -> None:
         """`Cx` used to carry `lossy: bool`, which can only ask "may I skip
@@ -727,9 +709,9 @@ class TestInversePairsCollapse:
         assert bare.simplify(list(recall), mode=Mode.f64) == ['pow', '-1', '<constant>']
         assert bare.simplify(list(recall), mode=Mode.permissive) == ['<constant>']
 
-        inside = ['atanh', 'tanh', '1']         # inside every band: both agree
+        inside = ['atanh', 'tanh', 'sin', 'x0']  # inside the band: both agree
         for mode in (Mode.f64, Mode.permissive):
-            assert bare.simplify(list(inside), mode=mode) == ['1']
+            assert bare.simplify(list(inside), mode=mode) == ['sin', 'x0']
 
     def test_a_ground_nan_is_never_answered_by_a_value(self, bare) -> None:
         """`exp(log c) = c` needs c > 0. A fitted `<constant>` owes a witness only where the
@@ -747,15 +729,11 @@ class TestInversePairsCollapse:
             assert got != ['(-3)'], mode
 
     def test_acosh_of_cosh_is_ABS_not_the_identity(self, bare) -> None:
-        # cosh is EVEN, so the collapse is |t|. The judge certifies this shape and KILLs
-        # the identity one; getting it wrong would be a real change on t < 0.
-        # TWO-SIDED licence: cosh overflows at 710.475860 (the ceiling) and is
-        # quadratically FLAT at 0, where the roundtrip is wrong by up to ~4.5e18 ULP --
-        # so sin(x0), inside every ceiling but sweeping the flat point, is refused, and
-        # the ABS assertion rides a negative literal with a proven floor.
-        assert bare.simplify(['acosh', 'cosh', 'x0']) == ['acosh', 'cosh', 'x0']
-        assert bare.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
-            ['acosh', 'cosh', 'sin', 'x0']
+        # cosh is EVEN, so the collapse is |t|. The judge certifies this shape and refutes
+        # the identity one; getting it wrong would be a real change on t < 0. Flat at 0, the
+        # round trip loses many units in the last place, and both sides stay finite.
+        assert bare.simplify(['acosh', 'cosh', 'x0']) == ['abs', 'x0']
+        assert bare.simplify(['acosh', 'cosh', 'sin', 'x0']) == ['abs', 'sin', 'x0']
         assert bare.simplify(['acosh', 'cosh', '-3']) == ['3']
 
     def test_licensed_pairs_need_their_licence(self, bare) -> None:
@@ -781,13 +759,17 @@ class TestInversePairsCollapse:
         for tokens in (['asin', 'sin', 'x0'], ['acos', 'cos', 'x0'], ['atan', 'tan', 'x0']):
             assert bare.simplify(list(tokens)) == tokens, tokens
 
-    def test_it_reaches_ground_arguments_and_through_the_e_power_arm(self, bare) -> None:
-        # the census row was blind at a ground binding; and the two arms of today compose --
-        # `pow(e, log 3)` becomes `exp(log 3)` by compose_e_power, then collapses here.
+    def test_it_composes_with_the_e_power_arm(self, bare) -> None:
+        # `pow(e, log t)` becomes `exp(log t)` by compose_e_power, then collapses here.
+        assert bare.simplify(['pow', 'np.e', 'log', 'abs', 'x0']) == ['abs', 'x0']
+
+    def test_a_fully_numeric_argument_is_read_for_its_value(self, bare) -> None:
+        # In f64 a fully numeric part is the fold's: float64's value, kept where it is cheaper.
+        # Float64's exp(log(3)) is 3.0000000000000004, dearer than the expression.
         assert bare.simplify(['exp', 'log', 'abs', '/', '1', '3']) == \
             bare.simplify(['/', '1', '3'])
         assert bare.simplify(['log', 'exp', '3']) == ['3']
-        assert bare.simplify(['pow', 'np.e', 'log', '3']) == ['3']
+        assert bare.simplify(['pow', 'np.e', 'log', '3']) == ['exp', 'log', '3']
 
 
 class TestReciprocalBaseAndDeterminedInfinitePower:

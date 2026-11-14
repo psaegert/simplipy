@@ -2215,14 +2215,13 @@ class TestTheGateRoutesInsteadOfDeleting:
         # the argument's digits there, both sides finite where the reals give them a value:
         # f64 holds them by strict's second reading, and past exp's and cosh's overflow accepts
         # the true value. `asinh(sinh(x))` stays within 2 ULP wherever sinh stays in range.
-        # Before the gate fix all four were simply deleted.
         pairs = [(['atanh', 'tanh', '?0'], ['?0']), (['log', 'exp', '?0'], ['?0']),
                  (['asinh', 'sinh', '?0'], ['?0']), (['acosh', 'cosh', '?0'], ['abs', '?0'])]
         realised = {('asinh', 'sinh', '?0'), ('log', 'exp', '?0'), ('acosh', 'cosh', '?0')}
         # ONE MINE PER FILE: permissive's constructor cancels each inverse pair to its
         # argument (`acosh(cosh(x0))` included), so its mine mints none of them. f64's
-        # constructor performs `asinh(sinh(x))` (an overflow cuts no collapse band) and keeps
-        # its bands on the other two, which the f64 file carries as rules.
+        # constructor performs the three it holds at every argument, so neither file carries
+        # a rule of the family.
         f64_rules = {tuple(lhs) for lhs, _ in keys(f64)}
         for lhs, rhs in pairs:
             spelled = [('x0' if t == '?0' else t) for t in lhs]
@@ -2232,7 +2231,7 @@ class TestTheGateRoutesInsteadOfDeleting:
                 is (tuple(lhs) in realised), f'{" ".join(lhs)}: f64 performs it iff it realises it'
             carried = {sort for sort in ('?0', '_0', '!0')
                        if tuple(t if t != '?0' else sort for t in lhs) in f64_rules}
-            assert bool(carried) is (lhs[0] in ('log', 'acosh')), (lhs, carried)
+            assert not carried, (lhs, carried)
             assert (tuple(lhs), tuple(rhs)) not in keys(permissive), lhs
         # each file's sidecar records its own mine
         for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_permissive.json'), 'permissive')):

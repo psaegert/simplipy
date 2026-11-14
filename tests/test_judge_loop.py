@@ -23,6 +23,17 @@ _OPERATORS = {
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
 }
 
+#: A small alphabet whose mine needs rules: `tan(atan(x))` is no constructor's (float64's `tan` is
+#: finite at `atan(inf) = pi/2`), so the f64 mine mints `tan atan ?0 -> ?0` at length 3 and
+#: `tan atan atan ?0 -> atan ?0` and `tan atan tan ?0 -> tan ?0` at length 4.
+_PAIR_OPERATORS = {
+    "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
+    "tan": {"realization": "np.tan", "alias": [], "inverse": "atan", "arity": 1, "precedence": 3, "commutative": False},
+    "atan": {"realization": "np.arctan", "alias": [], "inverse": "tan", "arity": 1, "precedence": 3, "commutative": False},
+}
+
 SOURCE = ['*', 'exp', 'x0', 'exp', 'x0']
 
 # A source with two accepted candidates of DIFFERENT classes (one value, exactly so in float64:
@@ -520,14 +531,14 @@ def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
     """The checkpoint key holds the operator table, the data's content and the numeric
     environment, and a resume keeps the mine's origin (`created`, `host`) and records itself."""
     import platform
-    ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    ops = _PAIR_OPERATORS
     out = str(tmp_path / 'mined.json')
     rng = np.random.default_rng(1)
     x_a, x_b = rng.normal(size=(128, 1)), rng.normal(size=(128, 1))
     kwargs = dict(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
                   seed=7, promote_sorts=False, symbolic_gate=False, output_file=out)
 
-    def crashing(pairs):  # the length-4 pick `log exp log ?0 -> log ?0`
+    def crashing(pairs):  # the length-4 pick `tan atan atan ?0 -> atan ?0`
         if any(len(lhs) >= 4 for lhs, _ in pairs):
             raise _Crash
         return ['core'] * len(pairs)
@@ -540,7 +551,7 @@ def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
     ckpt = json.load(open(out + '.checkpoint.json'))
     assert ckpt['completed_length'] == 3
     origin = (ckpt['provenance']['created'], ckpt['provenance']['host'])
-    other_ops = dict(ops, exp=dict(ops['exp'], precedence=4))
+    other_ops = dict(ops, atan=dict(ops['atan'], precedence=4))
     for engine_ops, x in ((other_ops, x_a), (ops, x_b)):
         with pytest.raises(RuntimeError, match='different mine'):
             SimpliPyEngine(operators=engine_ops, rules=[]).find_rules(X=x, judge=core, **kwargs)
@@ -591,9 +602,8 @@ def test_the_final_gate_checks_what_ships_and_drops_nothing(tmp_path, monkeypatc
     monkeypatch.setattr(RuleMiner, '_final_gate', gate)
     monkeypatch.setattr(SimpliPyEngine, 'prune_covered_rules', prune)
     # (`sin`: the prune probes a wide slot with `sin(x_i)`, so its vocabulary needs one)
-    ops = dict({k: v for k, v in _OPERATORS.items() if k != 'pow2'},
-               sin={"realization": "np.sin", "alias": [], "arity": 1, "precedence": 3,
-                    "commutative": False})
+    ops = dict(_PAIR_OPERATORS, sin={"realization": "np.sin", "alias": [], "arity": 1,
+                                     "precedence": 3, "commutative": False})
     engine = SimpliPyEngine(operators=ops, rules=[])
     engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
                       X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, prune='covered',
@@ -612,12 +622,12 @@ def test_a_source_given_up_on_gets_no_rule_and_the_mine_goes_on(tmp_path, monkey
     import logging
     import simplipy.mining
     monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 1)
-    ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    ops = _PAIR_OPERATORS
     out = str(tmp_path / 'mined.json')
 
-    # refuses the length-4 picks, `log exp log ?0 -> log ?0` and `log exp neg ?0 -> neg ?0`
+    # refuses the length-4 picks, `tan atan atan ?0 -> atan ?0` and `tan atan tan ?0 -> tan ?0`
     # (true in the reals, both sides finite where the reals give them a value: within the mine's
-    # tolerances, the f64 mint mints it)
+    # tolerances, the f64 mint mints them)
     def judge(pairs):
         return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
 
@@ -629,8 +639,8 @@ def test_a_source_given_up_on_gets_no_rule_and_the_mine_goes_on(tmp_path, monkey
 
     expected = [{'mode': 'f64', 'length': 4, 'stage': 'scan', 'source': source,
                  'refused': [{'target': target, 'by': 'judge', 'reason': 'tier permissive'}]}
-                for source, target in ((['log', 'exp', 'log', 'x0'], ['log', 'x0']),
-                                       (['log', 'exp', 'neg', 'x0'], ['neg', 'x0']))]
+                for source, target in ((['tan', 'atan', 'atan', 'x0'], ['atan', 'x0']),
+                                       (['tan', 'atan', 'tan', 'x0'], ['tan', 'x0']))]
     # the mine stopped inside its finalization, after the checkpoint of its last length
     real_gate = simplipy.mining._overlap_gate
 
@@ -656,7 +666,7 @@ def test_a_source_given_up_on_gets_no_rule_and_the_mine_goes_on(tmp_path, monkey
     side = json.load(open(out + '.provenance.json'))
     assert side['given_up'] == expected and side['per_length']['4']['given_up'] == 2
     shipped = {tuple(lhs) for lhs, _ in json.load(open(out))}
-    assert not shipped & {('log', 'exp', 'log', '?0'), ('log', 'exp', 'neg', '?0')}, shipped
+    assert not shipped & {('tan', 'atan', 'atan', '?0'), ('tan', 'atan', 'tan', '?0')}, shipped
 
 
 def test_the_watchdog_fails_the_mine_from_any_thread(monkeypatch) -> None:
@@ -846,9 +856,9 @@ def test_a_re_scan_reads_the_rules_the_mine_holds(tmp_path, monkeypatch) -> None
     def judge(pairs):        # every length-4 pick refused: each such source is scanned again
         return ['permissive' if len(p[0]) >= 4 else 'core' for p in pairs]
 
-    ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    ops = dict(_PAIR_OPERATORS)
     # `abs` gives a length-4 source a second candidate the mint accepts, which the re-scan picks:
-    # `log(exp(abs(x0)))` is `abs(x0)`, then `abs(log(exp(x0)))`
+    # `tan(atan(abs(x0)))` is `abs(x0)`, then `abs(tan(atan(x0)))`
     ops['abs'] = {'realization': 'simplipy.operators.abs', 'alias': [], 'inverse': None,
                   'arity': 1, 'precedence': 3, 'commutative': False}
     SimpliPyEngine(operators=ops, rules=[]).find_rules(

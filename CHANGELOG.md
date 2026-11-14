@@ -195,6 +195,12 @@ organised by who you are, then the highlights, then every change in detail.
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`
   in every spelling (its tagged spelling gave `inf`).
+- **The inverse pairs collapse wherever their laws hold.** `asinh(sinh(t))` and `sinh(asinh(t))`
+  are `t` for every `t` with a variable or a constant, and `atanh(tanh(t))` is `t` where `|t|` is
+  at most 19. `log(exp(t))` is `t` and `acosh(cosh(t))` is `|t|` where nothing around reads their
+  flat point at 0: `log(exp(sin(x0)))` is `sin(x0)` and `floor(log(exp(x0)))` is `floor(x0)`,
+  while `1/log(exp(x0))` stays, float64's `log(exp(t))` being `+0` wherever
+  0 < |t| < 1.1e-16.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
@@ -576,17 +582,43 @@ model predictions.
   (5,890 cheaper, 270 dearer); the dearer ones are literals combined from several landed literals,
   each landing moving less than an ulp, which can end farther from the single rounding. No answer
   changes on a second call, and `f64` and `real` do not change.
-- **An overflow cuts no `f64` collapse band.** Where an operation overflows or underflows, an `f64`
-  answer may hold the evaluator's value there or the true one, so the inverse pairs collapse past
-  the overflow too: `log(exp(800))` is `800` and `asinh(sinh(x0))` is `x0` (0.14.7 kept both),
-  and `log(exp(t))` and `acosh(cosh(t))` collapse for every `t` proven at least 1 in magnitude,
-  `log(exp(cosh(x0)))` included. The bands that rounding sets stay: `log∘exp` and `acosh∘cosh`
-  keep their floor of 1 (`log(exp(t))` is 19 ulps from `t` at `t = 0.0137`, where nothing
-  overflows), `sinh(asinh(t))` keeps its ceiling of 710 (past 8 ulps from about `t = 4.4e6`,
-  where nothing overflows either), and `atanh(tanh(t))` keeps its ceiling of 2 (saturation is not
-  overflow). On a tenth of the training-data inputs 2 `f64` answers change, each now collapsing an
-  `asinh(sinh(.))` (16,000 and 19,000 milli-bits cheaper); srbf's ground truths and predictions do
-  not change, `real` and `permissive` do not change, and no answer changes on a second call.
+- **The inverse pairs collapse wherever their laws hold.** Float64's round trip through a function
+  and its inverse drifts by many units in the last place while both sides stay finite
+  (`atanh(tanh(t))` is past 8 ulps from `t` from |t| ≈ 2.7 on), and the drift keeps float64's
+  kind of the value. `f64` held each pair to a band of the rounding it measured (a floor of 1 on
+  `log∘exp` and `acosh∘cosh`, a ceiling of 710 on `sinh∘asinh` and of 2 on `atanh∘tanh`). Each
+  pair is now a law of the catalogue with the judge's premises: `asinh(sinh(t))` and
+  `sinh(asinh(t))` are `t` for every `t`; `atanh(tanh(t))` is `t` where `|t|` is shown at most 19,
+  short of float64's `tanh(t) = ±1` from `|t| = 19.06` (`atanh(tanh(19*sin(x0)))` is
+  `19*sin(x0)`, while `atanh(tanh(20*sin(x0)))` and `atanh(tanh(x0))` stay); `exp(log(t))` and
+  `|t|` are `t` where `t >= 0`, and `cos(acos(t))`, `sin(asin(t))` and `tanh(atanh(t))` where `t`
+  is in [-1, 1]. `log(exp(t))` is `t` and `acosh(cosh(t))` is `|t|` where nothing around reads
+  their flat point: float64's `log(exp(t))` is `+0` wherever 0 < |t| < 1.1e-16 and
+  `acosh(cosh(t))` is 0 wherever |t| < 1.5e-8, where the real values are not, so a head above
+  them that reads a zero turns the rounding into a change of kind. The readers are the judge's,
+  measured over the operators' contexts: an inverse, a divisor, a negative power, `log` and the
+  Bessel functions with a pole at 0 read the zero; an odd function, `abs`, a sum and a product
+  beside numbers carry it to what reads it; `exp`, `cos`, `cosh` and `erfc` are blind to it. So
+  `log(exp(x0))` is `x0`, `sin(log(exp(x0)))` is `sin(x0)`, `floor(log(exp(x0)))` is
+  `floor(x0)` and `1/exp(log(exp(x0)))` is `1/exp(x0)`, while `1/log(exp(x0))`,
+  `log(log(exp(x0)))`, `1/sin(log(exp(x0)))` and `1/(1/log(exp(x0)))` stay as written. Where an
+  overflow or an underflow comes between, the collapse gives the true value. A zero's sign that
+  `f64` reads on a region keeps a pair whose collapse would turn it: `log(exp(ceil(x0)))` stays
+  under an inverse, `log(exp(-0))` being `+0`, and so do `1/exp(log(t))` and `1/|t|` for a
+  `t >= 0` that is -0 on a region (`sqrt(ceil(x0))` on (-1, 0)). A zero's sign reads an odd
+  negative power as `-0` only where its base is negative (at `-inf`, or by underflow), so `1/|t|`
+  is never `-0` and `|2*|-3/|t|||` is `6/|t|` for every `t`. A fully numeric argument is read for
+  its value first, as every fully numeric part is: `atanh(tanh(20))` and `log(exp(800))` are
+  `inf`, float64's values, and `atanh(tanh(2))` and `exp(log(3))` stay as written, float64's
+  values (`1.9999999999999996`, `3.0000000000000004`) costing more. An odd function reads the
+  argument it keeps after pulling a sign out of it, so `sinh(min(-1, cos(1))*asinh(x0))` is `-x0`
+  in one call. The laws join the catalogue: `fun.atanh_tanh`, `fun.log_exp`, `fun.asinh_sinh`,
+  `fun.sinh_asinh`, `fun.acosh_cosh`, `fun.exp_log`, `fun.unit_inverses`, `perm.inverse_pairs`,
+  `fun.abs_nonnegative`, `fun.half_period`, `fun.besselj_reflection` and `lattice.absorb`. A mine
+  meets a pair over a fully numeric argument on its literal leaves as a fully numeric rule both
+  modes hold (`atanh(tanh(2)) -> 2`). srbf's ground truths, a tenth of the training-data inputs
+  and a tenth of the predictions do not change in either mode, and no answer changes on a second
+  call.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and
