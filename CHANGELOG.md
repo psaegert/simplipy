@@ -926,16 +926,18 @@ model predictions.
   `real`. A pole is not an overflow (`atanh(1)` is infinite exactly) and an exact zero is not an
   underflow (`log(1)`). Every other point is compared as before, so a rule that gives neither
   value at a range event (`exp(1000) -> 5`) or disagrees where nothing leaves the range stays
-  out of f64: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range, and
-  `log(exp(x0)) -> x0`, 34 ULP apart at `x0 = 0.0137421`, where `exp` rounds its argument into
-  the neighbourhood of 1. The verdict counts the points read this way (`out_of_range`). The
-  miner's own numeric check in f64 applies the same standard: a row of its matrix where an
-  operation of either side overflows or underflows is judged at high precision, where the
-  two sides' true values must agree, and every other row is compared as before. Both read
-  one definition of the event, the core's (`simplipy._core.range_event`), so an f64 mine
-  mints `rootn(exp(x0), 2) -> exp(x0/2)`. The numeric check compares the other rows of a pair
-  without constants by the judge's agreement (8 units in the last place), so
-  `log(exp(x0)) -> x0`, 34 apart, does not pass it.
+  out of f64: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range (+inf against x0
+  from x0 = 19.06). `log(exp(x0)) -> x0`, 34 ULP apart at `x0 = 0.0137421`, where `exp` rounds
+  its argument into the neighbourhood of 1, holds in f64 by its reading in kind: it is true in
+  the reals, and float64 keeps both sides finite. The verdict counts the points read this way
+  (`out_of_range`). The miner's own numeric check in f64 applies the same standard: a row of
+  its matrix where an operation of either side overflows or underflows is judged at high
+  precision, where the two sides' true values must agree, and every other row is compared as
+  before. Both read one definition of the event, the core's (`simplipy._core.range_event`), so
+  an f64 mine mints `rootn(exp(x0), 2) -> exp(x0/2)`. The numeric check compares the other rows
+  of a pair without constants as strict reads them, within the mine's tolerances: a change of
+  kind fails it, and a rounding of two finite values passes, so `log(exp(x0)) -> x0`, 34 apart,
+  passes it and an f64 mine mints `log(exp(?0)) -> ?0`.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
