@@ -1,5 +1,6 @@
 //! THE LAWS OF THE CATALOGUE, each a named step that carries its own premise, per mode: the
-//! zero and one laws, and the absorptions of a fitted constant.
+//! numbers and their ground values, the zero and one laws, the absorptions of a fitted constant,
+//! and the parse's and the bags' structure.
 //!
 //! A law is an identity of the reals with the mode's extended values. Where it holds at every
 //! binding it applies everywhere (a total law); where it does not, it applies only where its
@@ -33,6 +34,37 @@
 //! | `absorb.ground_shift` | c + g = c, c*g = c, g ground and finite (nonzero in a product) | none | none |
 //! | `absorb.collapse` | L(c) = c, L variable-free | none | none |
 //! | `absorb.nan_family` | L(c) = NaN, L variable-free and NaN at every c | none | none |
+//! | `num.literal_arith` | r1 + r2 and r1*r2 are exact | none | none |
+//! | `num.abs_literal` | abs(r) = r or -r | none | none |
+//! | `num.exp_one` | exp(1) = e | none | none |
+//! | `num.zero_pole` | 0^q = inf, q < 0 | none | no step (no value) |
+//! | `num.inf_arith` | c*inf = sign(c)*inf, 0*inf = inf - inf = NaN | none | none |
+//! | `num.inf_power` | inf^q = inf (q > 0), inf^q = 0 (q < 0) | none | none |
+//! | `num.literal_base_inf_exponent` | b^inf = 0 (abs(b) < 1), b^-inf = 0 (abs(b) > 1) | none | none |
+//! | `num.table_fold` | f(r1, r2) = the table's value | no step (float64's values) | none |
+//! | `num.ground_class_fold` | g = NaN or g = +-inf, g ground | none | none |
+//! | `num.ground_float_fold` | g = its cheapest admitted value, g ground | none | none |
+//! | `num.rootn_index` | rootn(t, n) = NaN, n no nonzero integer | none | none |
+//! | `num.pow_parity` | (-inf)^k = (-1)^k*inf | none | none |
+//! | `num.besselj_literals` | J_nu(0), J_(+-inf)(x) at literals | none | none |
+//! | `num.lattice_numbers` | max(r1, r2) = the greater | none | none |
+//! | `num.literal_to_float` | r = its shorter float | no step | none |
+//! | `num.signed_zero` | t + (-0) = t, (-0)^-k = -inf (k odd) | none | no step (one zero) |
+//! | `num.ground_first` | a fully numeric part is its value | none | none |
+//! | `parse.sub` | a - b = a + (-1)*b | none | none |
+//! | `parse.div` | a/b = a*b^-1 | none | none |
+//! | `parse.neg_inv` | neg a = (-1)*a, inv a = a^-1 | none | none |
+//! | `parse.signed_literal` | -r = (-1)*r | none | none |
+//! | `add.flatten` | (a + b) + c = a + (b + c) | none | none |
+//! | `mul.flatten` | (a*b)*c = a*(b*c) | none | none |
+//! | `lattice.bag` | max(max(a, b), c) = max(a, b, c), max(a, a) = a | none | none |
+//! | `add.collect` | r1*t + r2*t = (r1 + r2)*t | none | none |
+//! | `mul.exp_merge` | exp(a)*exp(b) = exp(a + b) | none | none |
+//! | `mul.rootn_join` | rootn(a, n)*rootn(b, n) = rootn(a*b, n) | none | none |
+//! | `mul.infinity_sign` | -k*(s + inf) = k*(-s - inf) | none | none |
+//! | `pow.exp_compose` | e^t = exp(t), exp(a)^b = exp(a*b) | none | none |
+//! | `pow.refused_power` | (a*b)^-k = ((a*b)^k)^-1 | none | none |
+//! | `fun.rootn_index` | rootn(t, -n) = 1/rootn(t, n) | none | none |
 //!
 //! An absorption is the specification's 3.2, a statement about families: for every value of
 //! the constants on the left there is one on the right, `d = c1 + r*c2 + q`, `d = r*c`,
@@ -121,11 +153,105 @@ pub enum Law {
     /// A variable-free node holding a fitted constant whose value is NaN at every constant is
     /// NaN: `acosh(acos(cosh(c)))`. Premise none in both modes.
     AbsorbNanFamily,
+    /// A decimal is the rational it spells, and `+`, `*`, integer powers and exact roots between
+    /// numbers are exact rational arithmetic (`0.1 + 0.2` is 3/10). Total; a number is written as
+    /// the cheapest value its mode admits (`num.ground_float_fold`).
+    NumLiteralArith,
+    /// `|r|` is `r` or `-r` for a rational literal. Total.
+    NumAbsLiteral,
+    /// `exp(1) = e`. Total: float64's `exp(1.0)` is numpy's `e`.
+    NumExpOne,
+    /// `0^q = +inf` for a literal `q < 0`, IEEE's pole. A step of `f64` alone: `permissive` reads
+    /// the table, where `0^-1` has no value.
+    NumZeroPole,
+    /// IEEE's arithmetic of the infinities and NaN: `c*inf` is the infinity of `c`'s sign, `0*inf`
+    /// and `inf - inf` are NaN, and NaN absorbs. Total.
+    NumInfArith,
+    /// `inf^q` is `inf` for `q > 0` and 0 for `q < 0`, and `(-inf)^k` is 0 for a negative integer
+    /// `k` (`-0` at an odd `k` in `f64`). Total.
+    NumInfPower,
+    /// `b^inf = 0` for `|b| < 1` and `b^-inf = 0` for `|b| > 1`, `b` a nonzero literal. Total.
+    NumLiteralBaseInfExponent,
+    /// An operation on numbers (the rationals, the infinities, NaN) is the table's exact value:
+    /// `pow(0, -1)`, `pow(1, inf)` and `mod(0, inf)` have none (NaN). A step of `permissive` alone:
+    /// `f64` keeps float64's values.
+    NumTableFold,
+    /// A fully numeric part whose value is NaN or an infinity is that value: in `f64` its
+    /// float64 value's kind, the infinity's sign float64's; in `permissive` the table's. Total.
+    NumGroundClassFold,
+    /// A finite fully numeric part is written as the cheapest value its mode admits: in `f64`
+    /// float64's double, or the real value where float64's kind agrees; in `permissive` the
+    /// table's value at float resolution (the ground evaluator, `ground`). Total.
+    NumGroundFloatFold,
+    /// `rootn(t, n)` is NaN where `n` is no nonzero integer: 0, a non-integer literal, `pi`, `e`,
+    /// an infinity, NaN, or a ground index whose value holds none. Total.
+    NumRootnIndex,
+    /// `(-inf)^k` is the infinity of the parity of an integer literal `k` beyond 2^53, read
+    /// exactly. Total.
+    NumPowParity,
+    /// `besselj` at literals: `J_nu(0)` is 1 at `nu = 0`, 0 at `nu > 0` and at a negative integer,
+    /// and the pole's infinity at a negative non-integer; `J_(+-inf)(x)` is 0 for a literal
+    /// `x >= 0`. Total: the kernel's values in `f64`, the table's in `permissive`.
+    NumBesseljLiterals,
+    /// The numbers of a `max` or `min` bag fold to their extreme (`-0` below `+0` in `f64`).
+    /// Total.
+    NumLatticeNumbers,
+    /// A literal beside a non-literal lands on the shorter of the two floats around it where that
+    /// prints cheaper. A step of `permissive` alone: one of its own simplifications, within float
+    /// resolution.
+    NumLiteralToFloat,
+    /// The written `-0.0` is float64's negative zero: `t + (-0) = t`, `(-0)^k` is `-inf` at an odd
+    /// `k < 0`, and a product of numbers that is zero takes float64's sign (`-1*0 = -0.0`). A step
+    /// of `f64` alone: `permissive` reads one zero.
+    NumSignedZero,
+    /// A fully numeric part takes its value before any law, rule or simplification reaches it,
+    /// and a part without a value is NaN, which absorbs. Total: it is how every other law reads
+    /// a number.
+    NumGroundFirst,
+    /// `a - b = a + (-1)*b`, read at the parse. Total: float64 subtracts by adding the negation,
+    /// bit for bit.
+    ParseSub,
+    /// `a/b = a*b^-1`, read at the parse. Total: the quotient and the product by the reciprocal
+    /// are one value at every binding, the infinities and a zero's sign included, and a
+    /// reciprocal that overflows is a range event.
+    ParseDiv,
+    /// `neg a = (-1)*a` and `inv a = a^-1`, read at the parse. Total.
+    ParseNegInv,
+    /// A numeral with a sign beyond the exact reader (`-1e309`) is -1 times its unsigned leaf.
+    /// Total.
+    ParseSignedLiteral,
+    /// A sum is one flat bag in the canonical order: `(a + b) + c = a + (b + c)`. Total: the
+    /// reals' value is one in any order, float64's rounding is a range of its own, and a sum is
+    /// `-0` only where every term is, in any order.
+    AddFlatten,
+    /// A product is one flat bag in the canonical order: `(a*b)*c = a*(b*c)`. Total.
+    MulFlatten,
+    /// `max` and `min` are flat bags: `max(max(a, b), c) = max(a, b, c)` and `max(a, a) = a`, and
+    /// NaN absorbs. Total: IEEE's `maximum` and `minimum`, the zeros' tie included.
+    LatticeBag,
+    /// Like terms of one sign merge: `2t + 3t = 5t`. Total.
+    AddCollect,
+    /// `exp(a)*exp(b) = exp(a + b)`, and `e = exp(1)` beside one. Total: an overflow is a range
+    /// event.
+    MulExpMerge,
+    /// Odd roots of one index join: `rootn(a, n)*rootn(b, n) = rootn(a*b, n)`, `n` odd. Total.
+    MulRootnJoin,
+    /// A negative coefficient beside a sum holding an infinity joins the sum:
+    /// `-k*(s + inf) = k*(-s - inf)`. Total.
+    MulInfinitySign,
+    /// A power of `e` is an `exp`: `e^t = exp(t)`, `exp(a)^b = exp(a*b)` and
+    /// `rootn(exp(a), n) = exp(a/n)` for literals. Total: `exp` is positive.
+    PowExpCompose,
+    /// A negative odd power of a product the distribution refuses is the inverse of the positive
+    /// power: `(a*b)^-k = ((a*b)^k)^-1`. Total.
+    PowRefusedPower,
+    /// `rootn(t, -n) = 1/rootn(t, n)` and `rootn(rootn(t, m), n) = rootn(t, m*n)`. Total.
+    FunRootnIndex,
 }
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 17] = [
+    pub const ALL: [Law; 48] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -143,6 +269,37 @@ impl Law {
         Law::AbsorbGroundShift,
         Law::AbsorbCollapse,
         Law::AbsorbNanFamily,
+        Law::NumLiteralArith,
+        Law::NumAbsLiteral,
+        Law::NumExpOne,
+        Law::NumZeroPole,
+        Law::NumInfArith,
+        Law::NumInfPower,
+        Law::NumLiteralBaseInfExponent,
+        Law::NumTableFold,
+        Law::NumGroundClassFold,
+        Law::NumGroundFloatFold,
+        Law::NumRootnIndex,
+        Law::NumPowParity,
+        Law::NumBesseljLiterals,
+        Law::NumLatticeNumbers,
+        Law::NumLiteralToFloat,
+        Law::NumSignedZero,
+        Law::NumGroundFirst,
+        Law::ParseSub,
+        Law::ParseDiv,
+        Law::ParseNegInv,
+        Law::ParseSignedLiteral,
+        Law::AddFlatten,
+        Law::MulFlatten,
+        Law::LatticeBag,
+        Law::AddCollect,
+        Law::MulExpMerge,
+        Law::MulRootnJoin,
+        Law::MulInfinitySign,
+        Law::PowExpCompose,
+        Law::PowRefusedPower,
+        Law::FunRootnIndex,
     ];
 
     /// The law's stable name, `family.law`.
@@ -165,6 +322,37 @@ impl Law {
             Law::AbsorbGroundShift => "absorb.ground_shift",
             Law::AbsorbCollapse => "absorb.collapse",
             Law::AbsorbNanFamily => "absorb.nan_family",
+            Law::NumLiteralArith => "num.literal_arith",
+            Law::NumAbsLiteral => "num.abs_literal",
+            Law::NumExpOne => "num.exp_one",
+            Law::NumZeroPole => "num.zero_pole",
+            Law::NumInfArith => "num.inf_arith",
+            Law::NumInfPower => "num.inf_power",
+            Law::NumLiteralBaseInfExponent => "num.literal_base_inf_exponent",
+            Law::NumTableFold => "num.table_fold",
+            Law::NumGroundClassFold => "num.ground_class_fold",
+            Law::NumGroundFloatFold => "num.ground_float_fold",
+            Law::NumRootnIndex => "num.rootn_index",
+            Law::NumPowParity => "num.pow_parity",
+            Law::NumBesseljLiterals => "num.besselj_literals",
+            Law::NumLatticeNumbers => "num.lattice_numbers",
+            Law::NumLiteralToFloat => "num.literal_to_float",
+            Law::NumSignedZero => "num.signed_zero",
+            Law::NumGroundFirst => "num.ground_first",
+            Law::ParseSub => "parse.sub",
+            Law::ParseDiv => "parse.div",
+            Law::ParseNegInv => "parse.neg_inv",
+            Law::ParseSignedLiteral => "parse.signed_literal",
+            Law::AddFlatten => "add.flatten",
+            Law::MulFlatten => "mul.flatten",
+            Law::LatticeBag => "lattice.bag",
+            Law::AddCollect => "add.collect",
+            Law::MulExpMerge => "mul.exp_merge",
+            Law::MulRootnJoin => "mul.rootn_join",
+            Law::MulInfinitySign => "mul.infinity_sign",
+            Law::PowExpCompose => "pow.exp_compose",
+            Law::PowRefusedPower => "pow.refused_power",
+            Law::FunRootnIndex => "fun.rootn_index",
         }
     }
 
@@ -188,6 +376,37 @@ impl Law {
             Law::AbsorbGroundShift => "c + g = c, c*g = c",
             Law::AbsorbCollapse => "L(c) = c",
             Law::AbsorbNanFamily => "L(c) = NaN",
+            Law::NumLiteralArith => "r1 + r2 and r1*r2 are exact",
+            Law::NumAbsLiteral => "abs(r) = r or -r",
+            Law::NumExpOne => "exp(1) = e",
+            Law::NumZeroPole => "0^q = inf, q < 0",
+            Law::NumInfArith => "c*inf = sign(c)*inf, 0*inf = inf - inf = NaN",
+            Law::NumInfPower => "inf^q = inf (q > 0), inf^q = 0 (q < 0)",
+            Law::NumLiteralBaseInfExponent => "b^inf = 0 (abs(b) < 1), b^-inf = 0 (abs(b) > 1)",
+            Law::NumTableFold => "f(r1, r2) = the table's value",
+            Law::NumGroundClassFold => "g = NaN or g = +-inf, g ground",
+            Law::NumGroundFloatFold => "g = its cheapest admitted value, g ground",
+            Law::NumRootnIndex => "rootn(t, n) = NaN, n no nonzero integer",
+            Law::NumPowParity => "(-inf)^k = (-1)^k*inf",
+            Law::NumBesseljLiterals => "J_nu(0), J_(+-inf)(x) at literals",
+            Law::NumLatticeNumbers => "max(r1, r2) = the greater",
+            Law::NumLiteralToFloat => "r = its shorter float",
+            Law::NumSignedZero => "t + (-0) = t, (-0)^-k = -inf (k odd)",
+            Law::NumGroundFirst => "a fully numeric part is its value",
+            Law::ParseSub => "a - b = a + (-1)*b",
+            Law::ParseDiv => "a/b = a*b^-1",
+            Law::ParseNegInv => "neg a = (-1)*a, inv a = a^-1",
+            Law::ParseSignedLiteral => "-r = (-1)*r",
+            Law::AddFlatten => "(a + b) + c = a + (b + c)",
+            Law::MulFlatten => "(a*b)*c = a*(b*c)",
+            Law::LatticeBag => "max(max(a, b), c) = max(a, b, c), max(a, a) = a",
+            Law::AddCollect => "r1*t + r2*t = (r1 + r2)*t",
+            Law::MulExpMerge => "exp(a)*exp(b) = exp(a + b)",
+            Law::MulRootnJoin => "rootn(a, n)*rootn(b, n) = rootn(a*b, n)",
+            Law::MulInfinitySign => "-k*(s + inf) = k*(-s - inf)",
+            Law::PowExpCompose => "e^t = exp(t), exp(a)^b = exp(a*b)",
+            Law::PowRefusedPower => "(a*b)^-k = ((a*b)^k)^-1",
+            Law::FunRootnIndex => "rootn(t, -n) = 1/rootn(t, n)",
         }
     }
 
@@ -208,6 +427,37 @@ impl Law {
                 | Law::AbsorbGroundShift
                 | Law::AbsorbCollapse
                 | Law::AbsorbNanFamily
+                | Law::NumLiteralArith
+                | Law::NumAbsLiteral
+                | Law::NumExpOne
+                | Law::NumZeroPole
+                | Law::NumInfArith
+                | Law::NumInfPower
+                | Law::NumLiteralBaseInfExponent
+                | Law::NumTableFold
+                | Law::NumGroundClassFold
+                | Law::NumGroundFloatFold
+                | Law::NumRootnIndex
+                | Law::NumPowParity
+                | Law::NumBesseljLiterals
+                | Law::NumLatticeNumbers
+                | Law::NumLiteralToFloat
+                | Law::NumSignedZero
+                | Law::NumGroundFirst
+                | Law::ParseSub
+                | Law::ParseDiv
+                | Law::ParseNegInv
+                | Law::ParseSignedLiteral
+                | Law::AddFlatten
+                | Law::MulFlatten
+                | Law::LatticeBag
+                | Law::AddCollect
+                | Law::MulExpMerge
+                | Law::MulRootnJoin
+                | Law::MulInfinitySign
+                | Law::PowExpCompose
+                | Law::PowRefusedPower
+                | Law::FunRootnIndex
         )
     }
 

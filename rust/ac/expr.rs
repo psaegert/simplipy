@@ -3530,6 +3530,8 @@ fn as_rational_power<'a>(e: &'a Ex, cx: &Cx) -> Option<(&'a Ex, Rat)> {
 ///
 /// GATED on the config declaring `exp`: the rules this subsumes were gated for free by the
 /// config's own vocabulary, and a constructor arm is not.
+///
+/// The laws applied here (`ac::laws::Law`): `pow.exp_compose`.
 fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
     // `None` marks the bare leaf `E`, i.e. `a = 1`, where the product IS `exponent` for
     // ANY exponent -- no `Mul` node is created, so the fold condition holds unconditionally
@@ -3575,6 +3577,9 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 /// * `Const`-containing keys never merge with anything (independence), EXCEPT bare `r*Const`
 ///   terms, which all collapse into ONE `Const` absorbing the rational accumulator
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
+///
+/// The laws applied here (`ac::laws::Law`): `add.flatten`, `add.collect`, `num.literal_arith`,
+/// `num.inf_arith`.
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // a fully numeric sum is valued whole: its literals combine exactly
@@ -5040,6 +5045,7 @@ fn host_partition_sign(e: Ex) -> Ex {
     Ex::Mul(v)
 }
 
+/// The laws applied here (`ac::laws::Law`): `mul.flatten`, `mul.rootn_join`, `num.inf_arith`.
 fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // a fully numeric product is valued whole: its literals combine exactly
@@ -5484,6 +5490,8 @@ fn e_exponent(f: &Ex, cx: &Cx) -> Option<Ex> {
 /// any power of e (`compose_e_power`): `exp(x + 1)`, or `E` and `1` at the exponents 1 and 0. A
 /// single power of e stays as it stands. Returns whether the merged factor must re-enter the
 /// constructor: when it is no power of e (a number, a product, a factor over another base).
+///
+/// The laws applied here (`ac::laws::Law`): `mul.exp_merge`.
 fn merge_e_powers(out: &mut Vec<Ex>, cx: &Cx) -> bool {
     let at: Vec<(usize, Ex)> = out
         .iter()
@@ -5507,6 +5515,8 @@ fn merge_e_powers(out: &mut Vec<Ex>, cx: &Cx) -> bool {
 /// `mul()`'s last step: the sign owners, then the assembly, for a nonzero coefficient and a
 /// collected factor list (bare `Const` and infinities included). `collect_opposite_sums` prices
 /// its candidates through it, so a priced product is exactly the product built.
+///
+/// The laws applied here (`ac::laws::Law`): `mul.infinity_sign`.
 fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     // The coefficient LANDS beside the other factors here (permissive's ρ, [`land`]); a
     // product of literals alone stays exact, and a product of ground factors.
@@ -9556,6 +9566,9 @@ pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 /// [`pow`] for a member of a product, whose sign placement decides the member's orientation with
 /// the product's other members (`sign_place`): the same power, a sign-trade site left in the
 /// orientation it was built in.
+///
+/// The laws applied here (`ac::laws::Law`): `pow.refused_power`, `num.zero_pole`, `num.inf_power`,
+/// `num.literal_base_inf_exponent`, `num.table_fold`.
 pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A ZERO PRODUCT UNDER A POSITIVE POWER (`mul.zero`): the power 1/2 is float64's `sqrt`, which
@@ -10183,6 +10196,8 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
 /// valued whole by the table and written as one float, rounded once (P3, the engine's ground
 /// fold), so `14.81 - cos(c)` with `c` a product of ten literals reads the cosine of the exact
 /// product.
+///
+/// The laws applied here (`ac::laws::Law`): `num.literal_to_float`.
 #[inline]
 pub fn land(r: Rat, cx: &Cx) -> Rat {
     if !cx.permits(Permissive::LiteralToFloat) {
@@ -10537,6 +10552,8 @@ fn ground_value(e: &Ex, cx: &Cx) -> Option<f64> {
 /// any other product (a factor that is neither a number nor ground and finite, or no zero
 /// literal). The parse builds a written product through it; a zero the search derives keeps the
 /// one zero (the region rule).
+///
+/// The laws applied here (`ac::laws::Law`): `num.signed_zero`.
 pub(crate) fn signed_zero_product(items: &[Ex], cx: &Cx) -> Option<Ex> {
     if !cx.f64_semantics() {
         return None;
@@ -10598,6 +10615,8 @@ fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
 /// `pow(1, inf)`, `pow(inf, 0)`, `pow(nan, 0)` and `mod(0, inf)` are NaN, `pow(-inf, 0)` 1,
 /// `exp(-inf)` 0, `tanh(inf)` 1, `acosh(1)` 0. `None` for an approximation (a transcendental
 /// value stays symbolic) or an operator the table does not know.
+///
+/// The laws applied here (`ac::laws::Law`): `num.table_fold`.
 fn table_literal_fold(op: &str, args: &[Ex]) -> Option<Ex> {
     use crate::table::{Exact, Val};
     let vals: Option<Vec<Val>> = args
@@ -10752,6 +10771,8 @@ fn lattice_cmp(a: &Ex, b: &Ex, cx: &Cx) -> Option<Ordering> {
 ///   `<constant>` (two `<constant>`s are independent constants).
 ///
 /// A bag left with one member is that member.
+///
+/// The laws applied here (`ac::laws::Law`): `lattice.bag`, `num.lattice_numbers`.
 pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let view = cx.view;
     let is_max = view.tok_is(op, "max");
@@ -10906,6 +10927,8 @@ fn even_move(a: &Ex, cx: &Cx) -> Option<Ex> {
 /// `J_{-1/2}(0) = inf`, `J_{-3/2}(0) = -inf` (scipy's cells). In `f64` the value is the
 /// deployed kernel's, whose zero carries a sign of its own at some orders (`J_{1.5}(0)` and
 /// `J_{-1}(0)` are `-0.0`, `J_{2.5}(0)` is `0.0`), which an inverse reads as an infinity's sign.
+///
+/// The laws applied here (`ac::laws::Law`): `num.besselj_literals`.
 fn besselj_of_literals_at_zero(args: &[Ex], cx: &Cx) -> Option<Ex> {
     // An infinite order (scipy's cells): 0 at a literal x >= 0, NaN below.
     if let [Ex::PosInf | Ex::NegInf, Ex::Num(x)] = args {
@@ -10990,6 +11013,8 @@ fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     None
 }
 
+/// The laws applied here (`ac::laws::Law`): `fun.rootn_index`, `num.abs_literal`, `num.exp_one`,
+/// `num.rootn_index`.
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A `pow` call (`pow_spelled`: numpy's `sqrt` of a signed zero) is rebuilt as the spelling

@@ -7,9 +7,11 @@ NaN). Each row is an input the law reaches, with the answer in each mode, on an 
 rules, so every answer is the constructors' and the pass's own: where the premise holds the law
 applies, and where it fails the input keeps the operand the law would have removed.
 
-The absorptions of a fitted constant hold of families (for every value of the constants on the
-left there is one on the right), so their rows have no float64 agreement to check: the rule
-judge reads them (`tests/test_differential.py`).
+The numbers' laws (`num.*`) are how a fully numeric part is read and written: each mode writes
+its value as the cheapest value it admits, so their rows are not checked against float64's value
+of the input. The absorptions of a fitted constant hold of families (for every value of the
+constants on the left there is one on the right), so their rows have no float64 agreement to
+check: the rule judge reads them (`tests/test_differential.py`).
 """
 import os
 import warnings
@@ -22,6 +24,7 @@ from simplipy import SimpliPyEngine, _core
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INF = 'float("inf")'
+NINF = 'float("-inf")'
 NAN = 'float("nan")'
 
 #: (law, input, f64 answer, permissive answer)
@@ -116,6 +119,81 @@ ROWS = [
      f'+ * {INF} x1 * float("-inf") x1', '0'),
     # fully numeric: no value in either mode
     ('add.infinity_absorbs', f'/ {INF} {INF}', NAN, NAN),
+    # a - b = a + (-1)*b, a/b = a*b^-1, neg and inv, read at the parse
+    ('parse.sub', '- x0 x1', '- x0 x1', '- x0 x1'),
+    ('parse.sub', '- x0 neg x1', '+ x0 x1', '+ x0 x1'),
+    ('parse.div', '/ x0 x1', '/ x0 x1', '/ x0 x1'),
+    ('parse.div', '/ x0 / x1 x2', '/ * x0 x2 x1', '/ * x0 x2 x1'),
+    ('parse.neg_inv', 'neg neg x0', 'x0', 'x0'),
+    ('parse.neg_inv', 'inv inv x0', 'x0', 'x0'),
+    # a numeral beyond the exact reader: float64 reads `1e309` as an infinity
+    ('parse.signed_literal', '+ x0 -1e309', NINF, '- x0 1e309'),
+    # the bags: one flat sum, product or lattice bag in the canonical order
+    ('add.flatten', '+ + x0 x1 x2', '+ x0 + x1 x2', '+ x0 + x1 x2'),
+    ('add.flatten', '+ x2 + x1 x0', '+ x0 + x1 x2', '+ x0 + x1 x2'),
+    ('mul.flatten', '* x2 * x1 x0', '* x0 * x1 x2', '* x0 * x1 x2'),
+    ('lattice.bag', 'max max x0 x1 x2', 'max x0 max x1 x2', 'max x0 max x1 x2'),
+    ('lattice.bag', 'max x0 x0', 'x0', 'x0'),
+    ('lattice.bag', f'max x0 {NAN}', NAN, NAN),
+    ('add.collect', '+ * 2 sin x0 * 3 sin x0', '* 5 sin x0', '* 5 sin x0'),
+    ('add.collect', '+ x0 x0', '* 2 x0', '* 2 x0'),
+    ('mul.exp_merge', '* exp x0 exp x1', 'exp + x0 x1', 'exp + x0 x1'),
+    ('mul.exp_merge', '* exp x0 np.e', 'exp + x0 1', 'exp + x0 1'),
+    ('mul.rootn_join', '* rootn x0 3 rootn x1 3', 'rootn * x0 x1 3', 'rootn * x0 x1 3'),
+    # f64 keeps `log(x0)` beside the infinity (not finite almost everywhere)
+    ('mul.infinity_sign', f'* -2 + log x0 {INF}', f'* 2 neg + log x0 {INF}', NINF),
+    ('pow.exp_compose', 'pow np.e x0', 'exp x0', 'exp x0'),
+    ('pow.exp_compose', 'rootn exp 2 3', 'exp / 2 3', 'exp / 2 3'),
+    ('pow.refused_power', 'pow * x0 - x1 abs x1 -3', '* inv pow x0 3 inv pow - x1 abs x1 3',
+     '* inv pow x0 3 inv pow - x1 abs x1 3'),
+    ('fun.rootn_index', 'rootn x0 -3', 'inv rootn x0 3', 'inv rootn x0 3'),
+    ('fun.rootn_index', 'rootn rootn x0 3 2', 'rootn x0 6', 'rootn x0 6'),
+]
+
+#: (law, input, f64 answer, permissive answer) of the numbers: each mode's value of a fully numeric
+#: part, which f64 writes as float64's double or, where float64's kind agrees, as the real value
+#: (`floor(tanh(100))` is 0, where float64 reads 1), so their rows are not checked against
+#: float64's values of the input.
+GROUND_ROWS = [
+    ('num.literal_arith', '+ 0.1 0.2', '0.3', '0.3'),
+    ('num.literal_arith', '+ x0 + 0.1 0.2', '+ x0 0.3', '+ x0 0.3'),
+    ('num.literal_arith', 'rootn -8 3', '-2', '-2'),
+    ('num.abs_literal', 'abs -3', '3', '3'),
+    ('num.exp_one', '* x0 exp 1', '* np.e x0', '* np.e x0'),
+    # IEEE's pole in f64; no value in the reals
+    ('num.zero_pole', 'pow 0 -1', INF, NAN),
+    ('num.inf_arith', f'* -2 {INF}', NINF, NINF),
+    ('num.inf_arith', f'* 0 {INF}', NAN, NAN),
+    ('num.inf_arith', f'+ x0 + {INF} {NINF}', NAN, NAN),
+    ('num.inf_power', f'pow {INF} -1', '0', '0'),
+    ('num.inf_power', f'pow {NINF} -1', '-0.0', '0'),
+    ('num.literal_base_inf_exponent', f'pow 0.5 {INF}', '0', '0'),
+    ('num.literal_base_inf_exponent', f'* x0 pow 3 {NINF}', '0', '0'),
+    # the table's value in permissive: no value at pow(1, inf)
+    ('num.table_fold', f'pow 1 {INF}', '1', NAN),
+    ('num.table_fold', f'mod 0 {INF}', '0', NAN),
+    ('num.ground_class_fold', 'atanh 2', NAN, NAN),
+    ('num.ground_class_fold', '+ x0 log 0', NINF, NINF),
+    ('num.ground_class_fold', '/ 1 ceil -0.5', NINF, NAN),
+    ('num.ground_float_fold', 'floor tanh 100', '0', '0'),
+    ('num.ground_float_fold', 'exp sin np.pi', '1', '1'),
+    ('num.rootn_index', 'rootn x0 0', NAN, NAN),
+    ('num.rootn_index', 'rootn x0 np.pi', NAN, NAN),
+    # the parity of the written integer, read exactly in f64
+    ('num.pow_parity', f'pow {NINF} 10000000000000000001', INF, NINF),
+    ('num.besselj_literals', 'besselj 0 0', '1', '1'),
+    ('num.besselj_literals', 'besselj 1.5 0', '-0.0', '0'),
+    ('num.besselj_literals', f'besselj {INF} 2', '0', '0'),
+    ('num.lattice_numbers', 'max 2 3', '3', '3'),
+    ('num.lattice_numbers', 'max x0 max 2 3', 'max 3 x0', 'max 3 x0'),
+    ('num.literal_to_float', '* x0 / 200000000000000000000000000000 426738538271436458205631863649',
+     '* 0.46867105279529636 x0', '* 0.4686710527952964 x0'),
+    ('num.signed_zero', '+ x0 -0.0', 'x0', 'x0'),
+    ('num.signed_zero', 'pow -0.0 -1', NINF, NAN),
+    ('num.signed_zero', '* -1 0', '-0.0', '0'),
+    ('num.ground_first', '* 0 tan asin 1', '0', NAN),
+    ('num.ground_first', '/ tan asin 1 tan asin 1', '1', NAN),
+    ('num.ground_first', f'/ {INF} {INF}', NAN, NAN),
 ]
 
 C = '<constant>'
@@ -181,15 +259,42 @@ def test_the_core_names_its_laws() -> None:
         ('absorb.product', 'r*c = c'), ('absorb.sum_sign', '-k*(s + c) = k*(-s + c)'),
         ('absorb.refit_sign', 'c*(a - b) = c*(b - a)'),
         ('absorb.ground_shift', 'c + g = c, c*g = c'), ('absorb.collapse', 'L(c) = c'),
-        ('absorb.nan_family', 'L(c) = NaN')]
+        ('absorb.nan_family', 'L(c) = NaN'), ('num.literal_arith', 'r1 + r2 and r1*r2 are exact'),
+        ('num.abs_literal', 'abs(r) = r or -r'), ('num.exp_one', 'exp(1) = e'),
+        ('num.zero_pole', '0^q = inf, q < 0'),
+        ('num.inf_arith', 'c*inf = sign(c)*inf, 0*inf = inf - inf = NaN'),
+        ('num.inf_power', 'inf^q = inf (q > 0), inf^q = 0 (q < 0)'),
+        ('num.literal_base_inf_exponent', 'b^inf = 0 (abs(b) < 1), b^-inf = 0 (abs(b) > 1)'),
+        ('num.table_fold', "f(r1, r2) = the table's value"),
+        ('num.ground_class_fold', 'g = NaN or g = +-inf, g ground'),
+        ('num.ground_float_fold', 'g = its cheapest admitted value, g ground'),
+        ('num.rootn_index', 'rootn(t, n) = NaN, n no nonzero integer'),
+        ('num.pow_parity', '(-inf)^k = (-1)^k*inf'),
+        ('num.besselj_literals', 'J_nu(0), J_(+-inf)(x) at literals'),
+        ('num.lattice_numbers', 'max(r1, r2) = the greater'),
+        ('num.literal_to_float', 'r = its shorter float'),
+        ('num.signed_zero', 't + (-0) = t, (-0)^-k = -inf (k odd)'),
+        ('num.ground_first', 'a fully numeric part is its value'),
+        ('parse.sub', 'a - b = a + (-1)*b'), ('parse.div', 'a/b = a*b^-1'),
+        ('parse.neg_inv', 'neg a = (-1)*a, inv a = a^-1'), ('parse.signed_literal', '-r = (-1)*r'),
+        ('add.flatten', '(a + b) + c = a + (b + c)'), ('mul.flatten', '(a*b)*c = a*(b*c)'),
+        ('lattice.bag', 'max(max(a, b), c) = max(a, b, c), max(a, a) = a'),
+        ('add.collect', 'r1*t + r2*t = (r1 + r2)*t'),
+        ('mul.exp_merge', 'exp(a)*exp(b) = exp(a + b)'),
+        ('mul.rootn_join', 'rootn(a, n)*rootn(b, n) = rootn(a*b, n)'),
+        ('mul.infinity_sign', '-k*(s + inf) = k*(-s - inf)'),
+        ('pow.exp_compose', 'e^t = exp(t), exp(a)^b = exp(a*b)'),
+        ('pow.refused_power', '(a*b)^-k = ((a*b)^k)^-1'),
+        ('fun.rootn_index', 'rootn(t, -n) = 1/rootn(t, n)')]
 
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ROWS + ABSORB_ROWS} == {name for name, _ in _core.laws()}
+    assert {law for law, *_ in ROWS + GROUND_ROWS + ABSORB_ROWS} == {
+        name for name, _ in _core.laws()}
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + ABSORB_ROWS])
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + GROUND_ROWS + ABSORB_ROWS])
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
         engine, law, expr, f64, permissive, effort) -> None:
@@ -199,7 +304,7 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + ABSORB_ROWS])
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in ROWS + GROUND_ROWS + ABSORB_ROWS])
 def test_each_answer_reads_back_to_itself(engine, law, expr, f64, permissive) -> None:
     for mode, answer in (('f64', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)

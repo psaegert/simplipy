@@ -642,6 +642,8 @@ fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
 /// Classify a leaf token: exact-decimal numerics, the named literals, `<constant>`, else an
 /// opaque leaf (variable or wildcard). Public within the crate: the engine's numeric-fold glue
 /// parses evaluator result tokens back through the same classification.
+///
+/// The laws applied here (`ac::laws::Law`): `parse.signed_literal`, `num.literal_arith`.
 pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
     match s {
         "np.pi" => return Ex::Pi,
@@ -723,6 +725,8 @@ fn negated(b: Ex, cx: &Cx) -> Ex {
 /// powers: NaN on negatives either way), and `pow1_3`/`pow1_5 x = rootn x (3|5)` (the real
 /// odd root is a DIFFERENT function from the rational power on `x < 0`, so it desugars to
 /// the `rootn` built-in, never to `pow`).
+///
+/// The laws applied here (`ac::laws::Law`): `parse.sub`, `parse.div`, `parse.neg_inv`.
 fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
     match (name, args.len()) {
         ("+", 2) => add(args, cx),

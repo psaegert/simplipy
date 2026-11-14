@@ -126,6 +126,9 @@ thread_local! {
 
 /// THE READING of a ground expression (prefix tokens, each literal one token). `None` for a
 /// token sequence that is no ground expression of the table and the evaluator.
+///
+/// The laws applied here (`ac::laws::Law`): `num.ground_first`, `num.ground_class_fold`,
+/// `num.ground_float_fold`.
 pub fn read(tokens: &[String], ops: &Operators) -> Option<std::rc::Rc<Reading>> {
     let key: Box<str> = tokens.join("\u{1}").into_boxed_str();
     if let Some(r) = READINGS.with(|m| m.borrow().get(&key).cloned()) {

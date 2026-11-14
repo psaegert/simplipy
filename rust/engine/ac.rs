@@ -851,6 +851,8 @@ impl Engine {
         }
     }
 
+    /// The laws applied here (`ac::laws::Law`): `num.ground_class_fold`, `num.ground_float_fold`,
+    /// `num.rootn_index`, `num.pow_parity`.
     fn ac_fold(
         &self,
         e: &Ex,
