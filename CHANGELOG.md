@@ -187,6 +187,10 @@ organised by who you are, then the highlights, then every change in detail.
   refused in `f64`; `asin(sin(x0)) -> x0 + 1` is refused in both. Such a rule is the engine's
   own step, which no rule file licenses (`engine_owned`). The monitor reads an answer the same
   way: `x1 + asin(sin(x0)) -> x0 + x1` is `permissive`'s.
+- **`f64` reads a fully numeric exponent by its double.** float64 computes `1 + 2` to the double 3
+  before a power or a root reads it, and the judge's measure of `f64`'s clause (b) now reads it so:
+  `pow(x1, 1 + 2) -> pow(x1, 3)` and `rootn(x1, 2 + 1) -> rootn(x1, 3)` hold in `f64` (they were
+  refused for an extension over x1 < 0 that float64 does not make).
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`

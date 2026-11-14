@@ -3503,13 +3503,43 @@ def _no_extension(lhs, rhs, f64=False):
                for n in _nodes(tl))
 
 
+def _ground_parts_as_doubles(tokens):
+    """`tokens` with each fully numeric part that is an operation (`1 + 2`, `6/2`) spelled as
+    float64's value of it, where that is finite: float64 computes such a part to one double first,
+    and the operation that reads it (an exponent, a root's index) reads that double. A part with a
+    variable, a `<constant>` or a slot, a literal, and a part float64 gives no finite value
+    stay as they are."""
+    try:
+        tree = _term(tokens)
+    except (ValueError, IndexError):
+        return list(tokens)
+
+    def folded(node):
+        t, kids = node
+        if kids and not _holds_a_name(node):
+            try:
+                with np.errstate(all='ignore'):
+                    v = float(d_eval(parse(_tokens_of(node), number=True), {}))
+            except Exception:  # noqa: BLE001  (a part the evaluator cannot read stays)
+                v = None
+            if v is not None and math.isfinite(v):
+                return (repr(v), ())
+        return (t, tuple(folded(k) for k in kids))
+    return _tokens_of(folded(tree))
+
+
 def _extension_width(lhs, lp, rhs, rp, names, f64=False):
     """Clause (b)'s measure: the volume of the largest certified cell where the left side is
     undefined and the right side has a value (`None`: undecided). The cells partition the real
     input space; each is read in the table's real values, or with `f64` in float64's, where a
     saturation plateau (`tanh(x)` is 1.0 past 19.06) is a cell like any other: full-dimensional,
     never of measure zero. A rule whose right side has a value where its left side has none on a
-    null set at most measures 0 by structure (`_no_extension`), whatever the cells could read."""
+    null set at most measures 0 by structure (`_no_extension`), whatever the cells could read.
+    float64 reads a fully numeric operation by its double (`_ground_parts_as_doubles`): `x^(1 + 2)`
+    has a value at every x, as `x^3` has, where an enclosure of `1 + 2` wider than the double 3
+    would read the power at a non-integer exponent and leave the negative half-line undefined."""
+    if f64:
+        lhs, rhs = _ground_parts_as_doubles(lhs), _ground_parts_as_doubles(rhs)
     if _no_extension(lhs, rhs, f64):
         return 0.0
     return _table.table_extension_width(_spelled(lhs, names), [float(c) for c in lp],

@@ -60,3 +60,23 @@ def test_a_merge_on_null_level_sets_holds_and_a_fat_one_does_not() -> None:
     # x0^(floor(x1)/2) has no value on whole intervals of x1 at x0 < 0, where x0^floor(x1) has
     r = verify_rule('* pow x0 / floor x1 2 pow x0 / floor x1 2'.split(), 'pow x0 floor x1'.split())
     assert (r['verdict'], r['clause'], r['realised']) == ('KILL', 'b-positive-measure', False), r
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    ('pow x1 + 1 2', 'pow x1 3'),
+    ('rootn x1 + 2 1', 'rootn x1 3'),
+    ('pow x1 / 6 2', 'pow x1 3'),
+    ('rootn x1 * 3 1', 'rootn x1 3'),
+])
+def test_float64_reads_a_fully_numeric_exponent_by_its_double(lhs, rhs) -> None:
+    """float64 computes `1 + 2` to the double 3 before the power or the root reads it, so the two
+    sides have a value at every x1: no cell of f64's clause (b) parts them, and the rule holds in
+    both modes, as the sum is exactly 3."""
+    r = verify_rule(lhs.split(), rhs.split())
+    assert (r['tier'], r['realised'], r['f64_measure']) == ('core', True, 0.0), r
+
+
+def test_a_fully_numeric_exponent_still_reads_an_extension() -> None:
+    """`rootn(x1, 1 + 1)` is the square root, with no value for x1 < 0, where `abs(x1)` has one."""
+    r = verify_rule('rootn x1 + 1 1'.split(), 'abs x1'.split())
+    assert r['realised'] is False and r['tier'] == 'reject', r
