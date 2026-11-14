@@ -329,6 +329,7 @@ mod forms;
 mod ground;
 mod hiprec;
 mod interval;
+mod named_steps;
 mod numeric;
 mod operators;
 mod rules;
@@ -2312,6 +2313,18 @@ fn permissive_simplifications() -> Vec<&'static str> {
         .collect()
 }
 
+/// THE SCHEMAS OF PERMISSIVE'S NAMED STEPS (`named_steps::schemas`): `(name, [(lhs, rhs)])` for
+/// every entry of `ac::expr::Permissive`, in the specification's order, an entry that is a
+/// reading with none. The judge rewrites a rule's two sides by them and records the names.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn permissive_schemas() -> Vec<(&'static str, Vec<(Vec<String>, Vec<String>)>)> {
+    crate::ac::expr::Permissive::ALL
+        .iter()
+        .map(|&p| (p.name(), crate::named_steps::schemas(p)))
+        .collect()
+}
+
 /// THE LAWS the constructors apply as named steps, each carrying its premise per mode
 /// (`ac::laws::Law`): `(name, statement)`, in the catalogue's order.
 #[pyfunction]
@@ -2833,6 +2846,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_value_set, m)?)?;
     m.add_function(wrap_pyfunction!(table_owes_at, m)?)?;
     m.add_function(wrap_pyfunction!(permissive_simplifications, m)?)?;
+    m.add_function(wrap_pyfunction!(permissive_schemas, m)?)?;
     m.add_function(wrap_pyfunction!(laws, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_real, m)?)?;
     m.add_function(wrap_pyfunction!(table_literal_f64, m)?)?;

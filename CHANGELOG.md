@@ -177,6 +177,16 @@ organised by who you are, then the highlights, then every change in detail.
   against -0 at +inf) and `!0 - !0 -> 0` hold. A pattern and its instance are read alike:
   `!0*(_1 + _2) -> !0*_1 + !0*_2` is refused (at !0 = -inf, _2 = +inf the right side is
   inf - inf), as `(x1 + x2)/x0 -> x1/x0 + x2/x0` is at x0 = 0.
+- **The judge reads `permissive`'s own simplifications by name.** A rule that is an instance of
+  a step `permissive` takes inside its constructors holds in `permissive`, with the steps' names
+  as its reason (`permissive_by`). The core exports each step's schemas, built from the tables
+  the constructors read (`_core.permissive_schemas()`: the inverse pairs, the powers'
+  composition, the like-term laws); the judge rewrites both sides by them and reads the
+  rewritten rule by permissive's own criterion. `asin(sin(x0)) -> x0` (pi - 2 against 2 at
+  x0 = 2), `acosh(cosh(x0)) -> x0` and `(x0^2)^(1/4) -> x0^(1/2)` hold in `permissive` and stay
+  refused in `f64`; `asin(sin(x0)) -> x0 + 1` is refused in both. Such a rule is the engine's
+  own step, which no rule file licenses (`engine_owned`). The monitor reads an answer the same
+  way: `x1 + asin(sin(x0)) -> x0 + x1` is `permissive`'s.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`

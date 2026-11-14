@@ -2586,8 +2586,9 @@ TIER_MEANINGS = {
              'permissive, which includes every rule f64 holds'),
     'permissive': ("holds in permissive alone: true in the reals at float resolution and refused "
                    "by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an "
-                   "extension (`exp(log(x0)) -> x0`), or held by f64 with the two zeros one value "
-                   "and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`)"),
+                   "extension (`exp(log(x0)) -> x0`), held by f64 with the two zeros one value "
+                   "and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`), or an "
+                   "instance of permissive's named steps (`asin(sin(x0)) -> x0`)"),
     'reject': 'holds in no mode; recorded in the drop census',
 }
 
@@ -2839,6 +2840,10 @@ def judge_rule(lhs, rhs, deployed_check=True):
     'proved' where an exact route proves the rule in the mode, 'evidence' where the mode holds it
     on the battery's points alone, 'refused' where it does not hold in the mode.
 
+    A rule that is an instance of one of permissive's named steps holds in permissive with the
+    steps' names as its reason (`permissive_by`, `_with_named_steps`): `asin(sin(x0)) -> x0` is
+    false in the reals at x0 = 2 and holds in permissive by `inverse pairs cancel`.
+
     A judgment's precision and scratch state are its own (`_own_precision`): the caller's
     `mpmath.mp` is never touched, and judgments on other threads give the verdicts they give
     alone."""
@@ -2851,7 +2856,8 @@ def judge_rule(lhs, rhs, deployed_check=True):
             r = _with_zero_sign_bar(lhs, rhs, r)
         if r.get('verdict') != 'UNSUPPORTED-SHAPE':
             r = _with_exact_routes(lhs, rhs, r, deployed_check)
-        return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
+    r = _with_named_steps(lhs, rhs, r, deployed_check)
+    return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
 
 
 #: What a verdict rests on in a mode (the specification's 3.4).
@@ -2863,11 +2869,15 @@ def _basis(r, mode):
     hold it, proved where an exact route proves it there and the proof stands (`exact_conflict`
     names the modes where it does not), else evidence. Permissive includes f64, so a proof that
     holds the rule in f64 proves it in permissive too. A fully numeric rule is read exactly in
-    each mode, on the mode's own value (`_ground_settled`): proved where the mode holds it."""
+    each mode, on the mode's own value (`_ground_settled`): proved where the mode holds it. A rule
+    permissive holds by its named steps rests on the rewritten rule's basis there, proved where
+    the rewrite makes its two sides one (`_with_named_steps`)."""
     if r.get('ground'):
         return 'proved' if judged_reading(r, mode) is True else 'refused'
     if mode not in TIERS[r.get('tier') or 'reject']:
         return 'refused'
+    if mode == 'permissive' and r.get('permissive_by'):
+        return r['permissive_by_basis']
     ex = r.get('exact') or {}
     conflict = r.get('exact_conflict') or ()
 
@@ -2877,6 +2887,133 @@ def _basis(r, mode):
     if proved(mode) or (mode == 'permissive' and r.get('realised') is True and proved('f64')):
         return 'proved'
     return 'evidence'
+
+
+# ---------------------------------------------------------------- permissive's named steps
+#: THE SCHEMAS OF PERMISSIVE'S NAMED STEPS (the specification's 4.9), the core's
+#: (`_core.permissive_schemas`, built from the tables the constructors read), as `_term` trees:
+#: `((name, ((lhs, rhs), ...)), ...)` in the specification's order. Read once.
+_NAMED_STEPS = None
+
+
+def named_steps():
+    """-> the schemas of permissive's named steps (`_NAMED_STEPS`), read from the core once."""
+    global _NAMED_STEPS
+    if _NAMED_STEPS is None:
+        from simplipy._core import permissive_schemas  # type: ignore[attr-defined]
+        _NAMED_STEPS = tuple((name, tuple((_term(lhs), _term(rhs)) for lhs, rhs in schemas))
+                             for name, schemas in permissive_schemas())
+    return _NAMED_STEPS
+
+
+def _holds_a_name(node):
+    """Does the `_term` node hold a variable, a `<constant>` or a slot?"""
+    t, kids = node
+    return (t == '<constant>' or slot_key(t) is not None
+            or any(_holds_a_name(k) for k in kids))
+
+
+def _ordered(node):
+    """The `_term` node with the operands of every `+` and `*` in one order, so that two
+    spellings of one sum or product compare equal."""
+    t, kids = node
+    kids = tuple(_ordered(k) for k in kids)
+    return (t, tuple(sorted(kids, key=repr)) if t in ('+', '*') else kids)
+
+
+def _schema_match(pattern, node, binding):
+    """Does `node` match the schema side `pattern`, extending `binding` in place? A slot `_i`
+    matches a part that holds a name (a fully numeric part is read for its value first, and no
+    named step reaches it), `#i` a fully numeric part, the same part each time it recurs; any other
+    token matches itself, and `+` and `*` match their operands in either order."""
+    t, kids = pattern
+    if not kids and (t.startswith('#') or (SLOT_RE.match(t) and t[0] == '_')):
+        if _holds_a_name(node) != (t[0] == '_'):
+            return False
+        if t in binding:
+            return _ordered(binding[t]) == _ordered(node)
+        binding[t] = node
+        return True
+    if t != node[0] or len(kids) != len(node[1]):
+        return False
+    orders = [node[1]] + ([node[1][::-1]] if t in ('+', '*') else [])
+    for operands in orders:
+        trial = dict(binding)
+        if all(_schema_match(p, k, trial) for p, k in zip(kids, operands)):
+            binding.update(trial)
+            return True
+    return False
+
+
+def _instantiated(pattern, binding):
+    """The schema side `pattern` with its slots replaced by their bound parts."""
+    t, kids = pattern
+    if t in binding:
+        return binding[t]
+    return (t, tuple(_instantiated(k, binding) for k in kids))
+
+
+def _by_named_steps(node, used, budget):
+    """`node` rewritten by the named steps' schemas, outermost first, to a part none matches;
+    the names of the steps taken are added to `used`. Every step shortens the part or lowers a
+    power's nesting, and `budget` (a one-element list) bounds them anyway."""
+    def step(node):
+        for name, schemas in named_steps():
+            for lhs, rhs in schemas:
+                binding = {}
+                if _schema_match(lhs, node, binding):
+                    used.add(name)
+                    return _instantiated(rhs, binding)
+        return None
+
+    while budget[0] > 0:
+        hit = step(node)
+        if hit is not None:
+            budget[0] -= 1
+            node = hit
+            continue
+        t, kids = node
+        new = (t, tuple(_by_named_steps(k, used, budget) for k in kids))
+        if new == node:
+            return node
+        node = new
+    return node
+
+
+def _with_named_steps(lhs, rhs, r, deployed_check=True):
+    """PERMISSIVE'S NAMED STEPS (the specification's 4.9): the judged rule `r`, held in permissive
+    where it is an instance of the steps permissive takes inside its constructors and the sound
+    modes refuse. Both sides are rewritten by the steps' schemas (`named_steps`, the core's), and
+    where a step was taken the rewritten rule is read by permissive's own criterion: two sides
+    the rewrite makes one hold, and otherwise the rewritten rule is judged. Where it holds,
+    permissive holds the rule, the steps' names are the reason (`permissive_by`, in the
+    specification's order) and the rewritten rule is kept (`permissive_by_rule`).
+    `asin(sin(x0)) -> x0` (pi - 2 against 2 at x0 = 2), `acosh(cosh(x0)) -> x0` and
+    `(x0^2)^(1/4) -> x0^(1/2)` hold so; `asin(sin(x0)) -> x0 + 1` does not. A rule permissive
+    already holds, and a fully numeric one, which no named step reaches, are left as they are."""
+    if r.get('ground') or 'tier' not in r or judged_reading(r, 'permissive') is True:
+        return r
+    try:
+        tl, tr = _term(lhs), _term(rhs)
+    except (ValueError, IndexError):
+        return r
+    used, budget = set(), [1000]
+    nl, nr = _by_named_steps(tl, used, budget), _by_named_steps(tr, used, budget)
+    if not used:
+        return r
+    sides = [_tokens_of(nl), _tokens_of(nr)]
+    if _ordered(nl) == _ordered(nr):
+        own, basis = True, 'proved'
+    else:
+        d = judge_rule(*sides, deployed_check=deployed_check)
+        own, basis = d.get('permissive_own'), (d.get('basis') or {}).get('permissive')
+        basis = 'proved' if basis == 'proved' else 'evidence'
+    if own is not True:
+        return r
+    r = dict(r, permissive=True, permissive_by=[n for n, _ in named_steps() if n in used],
+             permissive_by_rule=sides, permissive_by_basis=basis)
+    r['tier'] = _tier(r.get('realised'), True)
+    return r
 
 
 def _with_exact_routes(lhs, rhs, r, deployed_check):

@@ -147,7 +147,8 @@ SPEC_EXAMPLES = [
     case('rootn pow x0 2 2', 'abs x0', 'f64', True),
     case('rootn pow x0 2 2', 'abs x0', 'permissive', True),
     case('rootn pow x0 2 2', 'x0', REALS, False), case('rootn pow x0 2 2', 'x0', 'f64', False),
-    case('rootn pow x0 2 2', 'x0', 'permissive', False),
+    # an instance of permissive's own step, powers compose (4.9): held there by its name
+    case('rootn pow x0 2 2', 'x0', 'permissive', True),
     case('tan asin ceil x0', 'atanh ceil x0', REALS, False),
     case('tan asin ceil x0', 'atanh ceil x0', 'f64', False),
     case('tan asin ceil x0', 'atanh ceil x0', 'permissive', True),
@@ -273,6 +274,9 @@ POLICY_EXAMPLES = [
     ('log -3', 'float("nan")', 'permissive', 'engine_owned'),
     # permissive cancels an inverse pair itself (4.9), so the rule is the engine's
     ('exp log x0', 'x0', 'permissive', 'engine_owned'),
+    # and composes powers itself: the judge holds the rule by that step's name, and the mint,
+    # which reads the rows alone, rejects what no file may hold
+    ('rootn pow x0 2 2', 'x0', 'permissive', 'engine_owned'),
     ('pow + x0 <constant> 2', '+ + pow x0 2 * <constant> x0 <constant>', 'permissive',
      'constant_count'),
 ]
@@ -431,7 +435,9 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
 
 
 # ------------------------------------------------------------------------------------------
-# Assertion 1: a pre-filter rejects only what the judge rejects.
+# Assertion 1: a pre-filter rejects only what the judge rejects, or what the judge holds by
+# permissive's named steps alone, which the engine takes itself and no file licenses
+# (`engine_owned`, below).
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
     ('tan asin ceil x0', 'atanh ceil x0', 'permissive'),
@@ -441,8 +447,7 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
     # the mint's f64 bar reads data as finite (no probe at +-inf), and permissive's mint owes no
     # clause (b)
     ('ceil inv cosh x0', '1', 'f64'),
-    ('exp log x0', 'x0', 'permissive'),
-    ('rootn pow x0 2 2', 'x0', 'permissive'), ('exp log x0', 'x0', 'f64'),
+    ('exp log x0', 'x0', 'permissive'), ('exp log x0', 'x0', 'f64'),
     # rows the table cannot read are skipped, as the judge skips them (erf(sinh(-100)) is
     # -1 + e^-(1.7e86)); the special points check float64's divergence in f64 only
     ('ceil erf sinh x0', 'ceil erf x0', 'permissive'),
@@ -908,6 +913,58 @@ def test_permissive_leaves_what_is_no_entry_as_f64_does(expr) -> None:
     the expression, and permissive gives f64's answer."""
     e = bare()
     assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='f64')
+
+
+def test_the_core_exports_the_named_steps_schemas() -> None:
+    """The judge reads permissive's named steps from the core (`_core.permissive_schemas`), one
+    entry per name of the list, in its order: the three steps the constructors take on an
+    expression's structure carry schemas, built from the tables they read, and the readings
+    none."""
+    from simplipy import _core
+    exported = _core.permissive_schemas()
+    assert [name for name, _ in exported] == _core.permissive_simplifications()
+    assert [name for name, schemas in exported if schemas] == [
+        'inverse pairs cancel', 'powers compose', 'like terms cancel']
+    inverse = dict(exported)['inverse pairs cancel']
+    assert sorted((lhs[0], lhs[1]) for lhs, _ in inverse) == sorted(
+        (o, i) for f, g in INVERSE_PAIRS for o, i in ((f, g), (g, f)))
+
+
+@pytest.mark.parametrize('lhs, rhs, name', [
+    ('asin sin x0', 'x0', 'inverse pairs cancel'),
+    ('acosh cosh x0', 'x0', 'inverse pairs cancel'),
+    ('+ x1 atan tan x0', '+ x1 x0', 'inverse pairs cancel'),
+    ('pow pow x0 2 0.25', 'pow x0 0.5', 'powers compose'),
+    ('rootn pow x0 2 2', 'x0', 'powers compose'),
+])
+def test_a_named_step_holds_in_permissive_by_its_name(lhs, rhs, name) -> None:
+    """The engine takes these steps in permissive inside its constructors, and the judge reads
+    them by name: false in the reals (`asin(sin(2))` is pi - 2, `rootn(2^2, 2)` at -2 is 2) and
+    refused in f64, they hold in permissive with the step's name as the reason. The engine
+    gives the two sides one answer."""
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['realised'] is False and r['permissive_own'] is False, r
+    assert (r['permissive'], r['tier'], r['permissive_by']) == (True, 'permissive', [name]), r
+    e = bare()
+    assert e.simplify(lhs.split(), mode='permissive') == e.simplify(rhs.split(), mode='permissive')
+
+
+def test_a_named_step_holds_no_false_rule() -> None:
+    """The rewritten rule is read by permissive's own criterion: `asin(sin(x0)) -> x0 + 1` is
+    `x0 -> x0 + 1` by the step, and refused; a fully numeric part is read for its value first,
+    which no named step changes (`asin(sin(2))` is pi - 2)."""
+    for lhs, rhs in (('asin sin x0', '+ x0 1'), ('asin sin 2', '2')):
+        r = verify_rule(lhs.split(), rhs.split())
+        assert r['permissive'] is False and 'permissive_by' not in r, (lhs, r)
+
+
+def test_the_monitor_reads_a_named_step_in_an_answer() -> None:
+    """A whole answer is judged as a rule: `x1 + asin(sin(x0)) -> x0 + x1` is permissive's,
+    and a violation in f64."""
+    from simplipy.verify._monitor import judge_pair
+    inp, out = '+ x1 asin sin x0'.split(), '+ x0 x1'.split()
+    assert judge_pair(inp, out, mode='permissive')[0] == 'OK'
+    assert judge_pair(inp, out, mode='f64')[0] == 'VIOLATION'
 
 
 # ------------------------------------------------------------------------------------------

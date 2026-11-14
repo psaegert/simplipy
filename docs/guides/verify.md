@@ -134,14 +134,21 @@ readings of float64, `realised_f6` and `realised_kinds`, and the reals' outcome)
 for `permissive`, which includes `f64`'s: `permissive_own` is its own criterion's reading alone
 (`2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` holds in `f64`, float64's `1/0` being
 `inf`, and so in `permissive`, though its own criterion, which reads `1/0` as no value, refuses
-it at x0 = 0). The tiers are one registry, `simplipy.verify.TIERS`, and this table is rendered
+it at x0 = 0). A rule that is an instance of the steps `permissive` takes inside its
+constructors, its named simplifications, holds in `permissive` with the steps' names as its reason
+(`permissive_by`): the core exports each step's schemas from the tables the constructors read
+(`_core.permissive_schemas()`: the inverse pairs, the powers' composition, the like-term laws), the
+judge rewrites both sides by them, and the rewritten rule (`permissive_by_rule`) is read by
+permissive's own criterion. `asin(sin(x0)) -> x0`, false in the reals at x0 = 2 (pi - 2 against
+2), holds so by `inverse pairs cancel`, and `(x0^2)^(1/4) -> x0^(1/2)` by `powers compose`; both
+stay refused in `f64`. The tiers are one registry, `simplipy.verify.TIERS`, and this table is rendered
 from it (`simplipy.verify.tier_table()`):
 
 <!-- tier-table: begin (rendered by simplipy.verify.tier_table(); a test checks it) -->
 | tier | `f64` | `permissive` | meaning |
 |---|---|---|---|
 | `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every value's kind: `sin(x0 + pi) -> -sin(x0)`), and so in permissive, which includes every rule f64 holds |
-| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an extension (`exp(log(x0)) -> x0`), or held by f64 with the two zeros one value and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`) |
+| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an extension (`exp(log(x0)) -> x0`), held by f64 with the two zeros one value and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`), or an instance of permissive's named steps (`asin(sin(x0)) -> x0`) |
 | `reject` | no | no | holds in no mode; recorded in the drop census |
 <!-- tier-table: end -->
 
