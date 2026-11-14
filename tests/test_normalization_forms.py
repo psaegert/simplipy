@@ -112,9 +112,21 @@ class TestAllThreeInputForms:
         assert to_expression('sin(v2)', engine) == to_expression('sin(x2)', engine)
 
     def test_a_rename_that_moves_the_canonical_order_is_re_sorted(self, engine: SimpliPyEngine) -> None:
-        """`* v9 x1` renames to `* x9 x1`, which is no longer canonically
-        ordered; the state is rebuilt from the renamed spelling."""
+        """`* v9 x1` renames to `* x9 x1`, which the state orders as `* x1 x9`: the
+        names are read first and the state is built from them."""
         assert to_expression(['*', 'v9', 'x1'], engine) == ['*', 'x1', 'x9']
+
+    def test_names_are_resolved_before_any_algebra(self, engine: SimpliPyEngine) -> None:
+        """`v1` and `x1` are one variable, so `(v1 - x1)/(v1 - x1)` is `0/0` at every binding,
+        as `(x1 - x1)/(x1 - x1)` is; and every `<c>` is a constant of its own, so
+        `x0*(<c> - <c>)` is a constant times `x0`, as with `<constant>`, never 0."""
+        same = ['/', '-', 'x1', 'x1', '-', 'x1', 'x1']
+        assert to_expression(['/', '-', 'v1', 'x1', '-', 'v1', 'x1'], engine) == to_expression(same, engine)
+        assert to_expression(same, engine) == ['float("nan")']
+        spelled = ['*', 'x0', '-', '<constant>', '<constant>']
+        assert to_expression(['*', 'x0', '-', '<c>', '<c>'], engine) == to_expression(spelled, engine)
+        assert to_expression(spelled, engine) == ['*', '<constant>', 'x0']
+        assert to_skeleton(['*', 'x0', '-', '<c>', '<c>'], engine) == to_skeleton(spelled, engine)
 
 
 class TestDialectInvariance:

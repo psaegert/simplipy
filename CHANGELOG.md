@@ -62,6 +62,10 @@ organised by who you are, then the highlights, then every change in detail.
   did not happen there: `2*sin(1/x_1) - sin(1/x_1)` stayed as written, where
   `2*sin(1/x1) - sin(1/x1)` is `sin(1/x1)`. An expression now gets the answer it gets over
   `x<k>`, renamed.
+- **`to_expression` and `to_skeleton` read the names first.** `v1` and `x1` are one variable,
+  and `<c>` and `<constant>` one placeholder for a constant of its own, before any simplification:
+  `(v1 - x1)/(v1 - x1)` is NaN, as `(x1 - x1)/(x1 - x1)` is (it was 1), and `x0*(<c> - <c>)` is
+  `<constant>*x0`, as `x0*(<constant> - <constant>)` is (it was 0).
 - **The search runs until a round finds nothing.** `simplipy.DEFAULT_EFFORT` is `None` (it was
   4), so a second call has nothing left to continue. Code that compares `DEFAULT_EFFORT` with an
   int now sees `None`; pass `effort=4` for the old cap.

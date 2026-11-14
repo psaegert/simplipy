@@ -194,13 +194,12 @@ def _canonical_expression(expression: str | list[str] | tuple[str, ...] | np.nda
     # collects and sorts. Converting first and simplifying second is the exact
     # composition: it reaches the same canonical state from all three dialects,
     # which is the dialect-invariance this module promises.
-    canonical = cast("list[str]", engine.simplify(engine.to_prefix(expression)))
-    renamed = [_canonical_leaf(token) for token in canonical]
-    if renamed == canonical:
-        return canonical
-    # A rename can move a leaf out of canonical ORDER (`* v9 x1` renames to
-    # `* x9 x1`, which no longer sorts), so the state is rebuilt from the renamed
-    # spelling rather than patched in place.
+    #
+    # The leaves are named BEFORE any algebra: `v1` and `x1` are one variable and `<c>`
+    # and `<constant>` one placeholder, so `(v1 - x1)/(v1 - x1)` is `0/0` at every
+    # binding and `x0*(<c> - <c>)` keeps two independent constants. Simplifying first
+    # would cancel what only the names tell apart, or keep apart what they join.
+    renamed = [_canonical_leaf(token) for token in engine.to_prefix(expression)]
     return cast("list[str]", engine.simplify(renamed))
 
 
