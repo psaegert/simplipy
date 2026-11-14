@@ -175,9 +175,11 @@ SPEC_EXAMPLES = [
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'permissive', True),
     # the owner's rulings: an infinity is a value (no clause (c)), the guard, coincident slots,
     # undecided. At x = pi/2 the left side is +inf and the right side meets 1/0: an enclosing
-    # atan shows the difference, so it is no excuse in any mode
+    # atan shows the difference, so it is no excuse in the reals. f64 reads float64's values,
+    # where the reals give one side no value: pi/2 is no double, and at its double float64 gives
+    # both sides 37.33, so f64 holds the rule, and permissive, which includes f64
     case('abs log cos x0', 'log inv cos x0', REALS, False),
-    case('abs log cos x0', 'log inv cos x0', 'f64', False),
+    case('abs log cos x0', 'log inv cos x0', 'f64', True),
     case('atan abs log cos x0', 'atan log inv cos x0', REALS, False),
     case('- ceil x0 floor x0', '1', REALS, False),
     case('- ceil x0 floor x0', '1', 'f64', False),
@@ -245,7 +247,7 @@ SPEC_EXAMPLES = [
     case('tanh sinh atanh x0', 'tanh tan asin x0', 'permissive', True),
     case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', True),
     case('ceil abs cos x0', '1', 'permissive', True),
-    case('abs log cos x0', 'log inv cos x0', 'permissive', False),
+    case('abs log cos x0', 'log inv cos x0', 'permissive', True),
     case('pow 0 asinh _0', 'pow 0 _0', 'f64', True),
     # a negative power of zero has no value however its exponent is spelled, so `0^asinh(x)`
     # and `0^x` agree at every binding: 0 for x > 0, 1 at 0, no value for x < 0
@@ -723,48 +725,33 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     assert folded == (holds and (evidence is True or mode == 'permissive'))
 
 
-#: Why the judge refuses a constant collapse that holds: a fitted constant is finite, so the
-#: constant part's value is the witness wherever it has one, and a value of the constant at which
-#: it has none is no member of the family.
-MEMBER = ("the judge reads float64's infinity of the constant part (log(0) at C = 0, 1/0, "
-          "atanh(1), 0^C for C < 0) as a member of the family, owed a witness")
-SATURATION = ("the judge's witness search misses the constant part's own value where tanh is +-1 "
-              "on most of its grid (past C = 709.78 exp(C) overflows, a range event)")
-
-
-class KnownRefusal(AssertionError):
-    """The judge refuses a constant collapse that holds, for the cause the row names."""
-
-
-def collapse_case(around, node, *causes):
-    marks = [pytest.mark.xfail(strict=True, raises=KnownRefusal, reason='; '.join(causes))]
-    return pytest.param(around, node, causes, marks=marks if causes else [],
-                        id=around.format(node))
-
-
-#: A collapse in context, `around[node] -> around[<constant>]`, with the cause of the judge's
-#: refusal where it has one.
+#: A collapse in context, `around[node] -> around[<constant>]`: a fitted constant is finite, so
+#: the constant part's value is the witness wherever it has one (past C = 709.78 `exp(C)`
+#: overflows, a range event, and the reals read the tuple), and a value of the constant at which
+#: it has none is no member of the family (`log(0)`, `1/0`, `atanh(1)`, `0^C` for C < 0).
 COLLAPSES_IN_CONTEXT = [
-    collapse_case('+ x0 {}', 'log <constant>'),
-    collapse_case('* x0 {}', 'tanh log <constant>'),
-    collapse_case('+ x0 {}', 'inv <constant>'),
-    collapse_case('* x0 {}', 'exp <constant>'),
-    collapse_case('tanh + x0 {}', 'log <constant>', MEMBER),
-    collapse_case('exp + x0 {}', 'log <constant>', MEMBER),
-    collapse_case('atan + x0 {}', 'log <constant>', MEMBER),
-    collapse_case('inv + x0 {}', 'log <constant>', MEMBER),
-    collapse_case('exp * x0 {}', 'log <constant>', MEMBER),
-    collapse_case('tanh * x0 {}', 'log <constant>', MEMBER),
-    collapse_case('tanh + x0 {}', 'atanh <constant>', MEMBER),
-    collapse_case('tanh + x0 {}', 'inv <constant>', MEMBER, SATURATION),
-    collapse_case('tanh + x0 {}', 'exp <constant>', SATURATION),
-    collapse_case('tanh + x0 {}', 'pow <constant> 2', SATURATION),
-    collapse_case('tanh + x0 {}', 'cosh <constant>', SATURATION),
-    collapse_case('tanh + x0 {}', '* 5 <constant>', SATURATION),
+    ('+ x0 {}', 'log <constant>'),
+    ('* x0 {}', 'tanh log <constant>'),
+    ('+ x0 {}', 'inv <constant>'),
+    ('* x0 {}', 'exp <constant>'),
+    ('tanh + x0 {}', 'log <constant>'),
+    ('exp + x0 {}', 'log <constant>'),
+    ('atan + x0 {}', 'log <constant>'),
+    ('inv + x0 {}', 'log <constant>'),
+    ('exp * x0 {}', 'log <constant>'),
+    ('tanh * x0 {}', 'log <constant>'),
+    ('tanh + x0 {}', 'atanh <constant>'),
+    ('tanh + x0 {}', 'inv <constant>'),
+    ('tanh + x0 {}', 'exp <constant>'),
+    ('tanh + x0 {}', 'pow <constant> 2'),
+    ('tanh + x0 {}', 'cosh <constant>'),
+    ('tanh + x0 {}', '* 5 <constant>'),
+    ('tanh + x0 {}', 'pow 0 <constant>'),
+    ('sin + x0 {}', 'exp <constant>'),
 ]
 
 
-@pytest.mark.parametrize('around, node', [p.values[:2] for p in COLLAPSES_IN_CONTEXT])
+@pytest.mark.parametrize('around, node', COLLAPSES_IN_CONTEXT[:16])
 @pytest.mark.parametrize('mode', ['f64', 'permissive'])
 def test_a_constant_node_collapses_wherever_it_stands(around, node, mode) -> None:
     """A fitted constant is finite: the constant part's value is the witness wherever it has
@@ -776,39 +763,34 @@ def test_a_constant_node_collapses_wherever_it_stands(around, node, mode) -> Non
             == list(engine.simplify(rhs.split(), mode=mode))), (lhs, mode)
 
 
-@pytest.mark.parametrize('around, node, causes', COLLAPSES_IN_CONTEXT)
-def test_the_judge_holds_a_constant_collapse_in_context(around, node, causes) -> None:
-    """The judge holds the collapse in strict, or refuses it for the cause the row names: at a
-    constant it finds no witness for, the constant part is float64's infinity where the reals
-    give it no value (`MEMBER`), or it has a value, its own witness, which the search misses
-    (`SATURATION`)."""
-    import re
+@pytest.mark.parametrize('around, node', COLLAPSES_IN_CONTEXT)
+def test_the_judge_holds_a_constant_collapse_in_context(around, node) -> None:
+    """The judge holds the collapse in both modes: the right constant takes the part's own value
+    at the left constant, float64's in the float64 lane and the table's in the reals, and a
+    constant at which the part has no finite value is not read."""
     lhs, rhs = around.format(node), around.format('<constant>')
     d = judged(lhs, rhs)
-    if d.get('realised') is True:
-        return
-    named = [float(c) for c in re.findall(r'\(([-\d.e+]+),\)', str(d.get('detail') or ''))]
+    assert d.get('collapse') == ['<C_R0>'], d
+    assert (d.get('realised'), d.get('permissive'), d.get('tier')) == (True, True, 'core'), d
 
-    def member(c):
-        at = node.replace('<constant>', repr(c)).split()
-        with np.errstate(all='ignore'):
-            f = float(bare().as_callable(at, [])())
-        old = mp.dps
-        try:
-            mp.dps = 50
-            v = _contract.c_eval(_contract.parse(at), {})
-        finally:
-            mp.dps = old
-        return bool(np.isinf(f)) and (v != v or v in (mp.inf, -mp.inf))
 
-    assert named, (lhs, d.get('verdict'), d.get('detail'))
-    if MEMBER in causes:
-        assert any(member(c) for c in named), (lhs, named)
-    if SATURATION in causes:
-        assert not all(member(c) for c in named), (lhs, named)
-    if not causes:
-        assert False, (lhs, d.get('verdict'), d.get('detail'))
-    raise KnownRefusal(f'{lhs}: {d.get("verdict")} {d.get("detail")}')
+@pytest.mark.parametrize('lhs, rhs', [
+    # S = <constant> itself: every right side that is its left side with a constant renamed
+    ('* <constant> - x1 x0', '* <constant> - x1 x0'),
+    # a part beside a constant that stays one
+    ('+ * <constant> x0 exp <constant>', '+ * <constant> x0 <constant>'),
+])
+def test_a_collapse_beside_its_other_constants(lhs, rhs) -> None:
+    d = judged(lhs, rhs)
+    assert d.get('collapse') and (d['realised'], d['tier']) == (True, 'core'), d
+
+
+def test_a_collapse_reads_a_tuple_only_where_its_part_is_finite() -> None:
+    """`tanh(x0 + 0^C) -> tanh(x0 + C)`: 0^C is 1 at C = 0, 0 above it, and has no finite value
+    below it (float64's +inf, the reals' division by zero), where nothing is owed."""
+    d = judged('tanh + x0 pow 0 <constant>', 'tanh + x0 <constant>')
+    assert (d['verdict'], d['realised'], d['tier']) == ('CERTIFIED', True, 'core'), d
+    assert -1.5 in [k[0] for k in d['skipped_cl']], d
 
 
 @pytest.mark.parametrize('lhs, rhs, policy', [
@@ -833,9 +815,12 @@ def test_a_left_side_the_engine_folds_to_a_leaf_is_the_engines_own(lhs, rhs, pol
     # uncertainty, and sampling proves no impossibility
     ('+ * <constant> x0 * <constant> x1', '* <constant> + x0 x1', 'NO-WITNESS'),
     ('floor * <constant> x0', '* <constant> floor x0', 'NO-WITNESS'),
-    # at C = 0 the left side is -1 at every x (log 0 is -inf), a value no tanh(x + D) gives:
-    # owed (the left side is finite there), and refused, though float64's fit saturates
-    ('tanh + x0 log <constant>', 'tanh + x0 <constant>', 'NO-WITNESS'),
+    # a collapse: D = log(c) wherever log(c) is finite; at C = 0 the left side is -1 at every x,
+    # a value of no finite constant, so the tuple is no member and owes nothing
+    ('tanh + x0 log <constant>', 'tanh + x0 <constant>', 'CERTIFIED'),
+    # at x0 = x1 the right side does not read its constant (0 for every D): every value is a
+    # witness, and the left constant's own one keeps the zero's sign; elsewhere D = -C
+    ('* <constant> - x1 x0', '* <constant> - x0 x1', 'CERTIFIED'),
     # an explicit witness exists for every (C0, C1) (D0 = C0, D1 = atan(C1^(1/101))/(12 pi)):
     # no counterexample, whatever the search finds
     ('+ * <constant> x0 <constant>', '+ * <constant> x0 pow tan * 12 * np.pi <constant> 101',

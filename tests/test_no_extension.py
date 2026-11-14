@@ -1,9 +1,10 @@
 """Clause (b) measures the cells where the left side has no value and the right side has one. Where
-the right side has no value wherever the left side has none, there is nothing to measure, and a
-structural certificate shows it (`_contract._no_extension`) where the cells would run past the
-interval layer's horizon (a literal past it, `x0/299792458`) or its budget (`log(cos(x1))` beside a
-second variable). Every node of the left side that can be the first undefined one occurs on the
-right side, under heads that keep it undefined."""
+that set is null by the sides' structure, a certificate shows it (`_contract._no_extension`) where
+the cells would run past the interval layer's horizon (a literal past it, `x0/299792458`) or its
+budget (`log(cos(x1))` beside a second variable, the level sets of an exponent). Every node of the
+left side that can be the first undefined one occurs on the right side, under heads that keep it
+undefined, or is a power `b^e` the right side holds as `b^(q*e)` for a rational q > 0, with `e`
+nonconstant entire: the extension then lies in the level sets {e in Z/q}, a null set."""
 import pytest
 
 from simplipy.verify import _contract, verify_rule
@@ -33,6 +34,15 @@ def test_a_rule_whose_right_side_is_undefined_where_its_left_side_is_holds(lhs, 
     # overflow to +inf, and inf - inf has none: that node must occur on the right side too
     ('- exp ?0 exp ?1', '- exp ?1 exp ?0', False, True),
     ('- exp ?0 exp ?1', '- exp ?1 exp ?0', True, False),
+    # a merged power: x0^x1 has no value where x0 < 0 and x1 is no integer, x0^(2*x1) none there
+    # unless 2*x1 is one, so the extension lies on the lines x1 in Z/2, in both readings
+    ('* pow ?0 ?1 pow ?0 ?1', 'pow ?0 * 2 ?1', False, True),
+    ('* pow ?0 ?1 pow ?0 ?1', 'pow ?0 * 2 ?1', True, True),
+    ('* pow ?0 ?1 * pow ?0 ?1 pow ?0 ?1', 'pow ?0 * 3 ?1', False, True),
+    # an exponent constant on whole intervals has fat level sets: the cells decide
+    ('* pow ?0 / floor ?1 2 pow ?0 / floor ?1 2', 'pow ?0 floor ?1', False, False),
+    # another base: nothing covers the left side's power
+    ('* pow ?0 ?1 pow ?0 ?1', 'pow abs ?0 * 2 ?1', False, False),
 ])
 def test_the_certificate(lhs, rhs, f64, shown) -> None:
     assert _contract._no_extension(lhs.split(), rhs.split(), f64) is shown
@@ -41,3 +51,12 @@ def test_the_certificate(lhs, rhs, f64, shown) -> None:
 def test_an_extension_is_still_measured() -> None:
     assert verify_rule('exp log x0'.split(), ['x0'])['verdict'] == 'KILL'
     assert verify_rule('/ x0 x0'.split(), ['1'])['verdict'] == 'TOLERATED'
+
+
+def test_a_merge_on_null_level_sets_holds_and_a_fat_one_does_not() -> None:
+    # float64 gives NaN against -2 at (-2, 0.5), on the null set x0 < 0, x1 in Z/2 \ Z only
+    r = verify_rule('* pow x0 x1 pow x0 x1'.split(), 'pow x0 * 2 x1'.split())
+    assert (r['realised'], r['tier']) == (True, 'core'), r
+    # x0^(floor(x1)/2) has no value on whole intervals of x1 at x0 < 0, where x0^floor(x1) has
+    r = verify_rule('* pow x0 / floor x1 2 pow x0 / floor x1 2'.split(), 'pow x0 floor x1'.split())
+    assert (r['verdict'], r['clause'], r['realised']) == ('KILL', 'b-positive-measure', False), r

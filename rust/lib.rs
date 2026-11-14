@@ -2265,6 +2265,42 @@ fn table_extension_width(
     })
 }
 
+/// THE ALIGNMENT OF A CONSTANT COLLAPSE (`fit::collapse_spans`, the one the mint's fit reads):
+/// where `rhs` is `lhs` with variable-free subtrees that hold a `<constant>` each replaced by a
+/// `<constant>`, per right-side `<constant>` in order the left subtree's span `(start, end)` and
+/// the index of its first constant among the left side's; `None` where it is no collapse.
+/// `var_names` are the tokens that are variables (data variables and slots).
+#[pyfunction]
+fn collapse_spans(
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    var_names: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> Option<Vec<(usize, usize, usize)>> {
+    let ops = arity_table(arity);
+    crate::fit::collapse_spans(&lhs, &rhs, &ops, &var_names)
+}
+
+/// THE ENGINE'S NONCONSTANT-ENTIRE CERTIFICATE (`interval::nonconstant_entire`, the one the
+/// symbolic-exponent merge reads): is `tokens` a nonconstant entire function of its variables,
+/// so that each of its level sets is null, in float64's reading with `f64` (a tail on which it is
+/// a non-integer constant refuses) or the reals'? Under the judge's default node budget.
+#[pyfunction]
+#[pyo3(signature = (tokens, arity, f64 = false))]
+fn nonconstant_entire(
+    py: Python<'_>,
+    tokens: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+    f64: bool,
+) -> bool {
+    let ops = arity_table(arity);
+    py.detach(|| {
+        crate::interval::with_default_budget(|| {
+            crate::interval::nonconstant_entire(&tokens, &ops, f64)
+        })
+    })
+}
+
 /// PERMISSIVE'S OWN SIMPLIFICATIONS (the specification's 4.9), as the core names them
 /// (`ac::expr::Permissive`): every step `permissive` takes that the sound modes refuse is one of
 /// these.
@@ -2788,6 +2824,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(policy_ground_composite, m)?)?;
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
+    m.add_function(wrap_pyfunction!(collapse_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(nonconstant_entire, m)?)?;
     m.add_function(wrap_pyfunction!(table_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_mode_evidence, m)?)?;
     m.add_function(wrap_pyfunction!(table_float_resolution, m)?)?;

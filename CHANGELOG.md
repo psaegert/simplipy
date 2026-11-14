@@ -137,6 +137,38 @@ organised by who you are, then the highlights, then every change in detail.
   hold in `permissive` only; `log(exp(x0)) -> x0`, whose sides differ at x0 = -0 alone, holds.
   A slot that matches any subexpression guards no point: `log(exp(_0)) -> _0` is refused, since
   `_0` can bind `ceil(x1)`, which is -0 on (-1, 0), while the rule with a variable holds.
+- **`f64`'s reading in kind asks the reals to hold only where they give both sides a value.** At a
+  point where the reals give one side no value, float64 decides by its own agreement:
+  `1/3^t -> (1/3)^t` holds at `_`, where at t = -inf the left side has no real value (1/0) and
+  float64 gives +inf on both sides, and so does `cos(atan(tan(_0))) -> abs(cos(_0))`. A
+  counterexample the reading at float resolution finds where the precision ladder runs out
+  counts: `ceil(atan(atan(x0))) -> ceil(erf(x0))` and its `floor` twin, false for x0 > 74.7
+  (2 against 1), are refused in both modes, though no affordable precision reads `erf(x0)` beside
+  1 there.
+- **A constant collapse holds wherever its part has a value.** Where a right side is its left
+  side with variable-free parts that hold a constant replaced by constants, each right constant
+  takes its part's own value, float64's in `f64` and the reals' in `permissive`; a constant at
+  which a part has no finite value is no member (a fitted constant is finite). So
+  `tanh(x0 + log(C)) -> tanh(x0 + C)`, `tanh(x0 + 0^C) -> tanh(x0 + C)` and
+  `tanh(x0 + exp(C)) -> tanh(x0 + C)` hold in both modes, as the engine already absorbs them. The
+  mint's fit reads the same alignment, its special-constant check leaves a collapse out (read at
+  a double witness, `besselj(x0, exp(C))` at C = 300 parted from its collapse in the reals), and
+  the f64 bar no longer refuses a collapse beside `floor`, `ceil` or `mod`.
+- **A right constant the right side does not read takes its left constant's value.**
+  `C*(x1 - x0) -> C*(x0 - x1)` holds in `f64`: where x0 = x1 every value is a witness, and the
+  left constant's own value keeps the zero's sign.
+- **A merged power holds where its exponent's level sets are null.** `x0^x1 * x0^x1 ->
+  x0^(2*x1)` holds in `f64`: the two sides differ only where x0 < 0 and x1 is a half-integer, a
+  null set by the certificate the engine reads (the exponent is nonconstant entire), while
+  `x0^(floor(x1)/2)` merged to `x0^floor(x1)` is refused.
+- **`f64` reads float64 at a pole no test point holds.** Where a divisor crosses zero, the
+  judge solves for the zero and reads float64 at the doubles nearest it, where an isolated
+  pole's infinity is a value: `-1/(x0 - 3.5) -> 1/(3.5 - x0)` (-inf against +inf at x0 = 3.5)
+  is refused in `f64`, as `-1/(x0 - 3)` was.
+- **A kernel's NaN is no range event.** At x = 800 both terms of `besseli(1, -x) +
+  besseli(1, x)` overflow, and the true value 0 is accepted. But `besseli(1, x)` is NaN for
+  0 < |x| <= 2.2e-308, where its true value is finite, so `besseli(1, -x) + besseli(1, x) -> 0`
+  gives a value where float64 gives none on an interval: it holds in `permissive` only.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`

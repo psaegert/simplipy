@@ -172,12 +172,10 @@ class TestSymbolicExponentMergeLicence:
         check(eng, '* pow x0 * 0.5 + pow sin x1 2 pow cos x1 2 '
                    'pow x0 * 0.5 + pow sin x1 2 pow cos x1 2'.split())
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "the judge refuses x0^x1 * x0^x1 -> x0^(2*x1) in f64: at x0 = 0, x1 < 0 the "
-        "left side is +inf, a value the right side owes, and 0^(2*x1) has none; and float64's "
-        "x0 < 0, x1 = 1/2 is an extension"))
     def test_generic_symbolic_exponent_still_merges(self, eng):
-        # a bare-variable exponent is certifiably nonconstant entire: levels are null
+        # a bare-variable exponent is certifiably nonconstant entire: levels are null, and the
+        # judge reads the same certificate (float64's x0 < 0, x1 = 1/2 is an extension on a null
+        # set)
         out = check(eng, eng.to_tagged('* pow x0 x1 pow x0 x1'.split()))
         assert out == 'pow x0 <mul> 2 x1 </mul>'.split()
 

@@ -1675,8 +1675,13 @@ fn candidate_matches(
     //    there an unfitted instance binds nothing, and the judge decides it. A binding instance
     //    must agree at the contract points. Scoped to single-constant sources -- multi-constant
     //    shapes have no ratified special-constant semantics beyond one constant.
+    //    A constant collapse (`fit::collapse_spans`) is left out, as the judge reads it: its
+    //    witness is the replaced parts' own values, where they are finite the two sides are one
+    //    function, and a constant at which a part has none is no member of the family. Read at a
+    //    double witness, the reals would part them where the part's double rounds a value the
+    //    context magnifies (`besselj(x0, exp(C))` at C = 300).
     let n_src_const = y_src.first().map(|(p, _)| p.len()).unwrap_or(0);
-    if n_src_const == 1 {
+    if n_src_const == 1 && collapse.is_none() {
         for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
             let sp = vec![s];
             let (y_s, ev_s) = if rescue {

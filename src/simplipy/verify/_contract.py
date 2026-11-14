@@ -25,6 +25,14 @@ The criterion, per mode:
     judge reads is a null event only where it is isolated along a `?` slot (its neighbouring
     doubles are no extension). A `_` slot bound to +-inf or NaN is a point of its sort's
     domain: nothing is excused there.
+  - the range standard (f64): at a point where an operation of a side overflows or underflows,
+    that side's value is float64's or its true value, the reals' value of the whole side there.
+    So `-I_1(x) + I_1(x)`, which float64 evaluates at x = 800 to -inf + inf = NaN, has the value
+    0 there, and `besseli(1, -x) + besseli(1, x) -> 0` agrees at that point. A range event is an
+    infinite double where the true value is finite, or a zero or subnormal one where it is
+    nonzero; a kernel's NaN is float64's value, not a range event: `besseli(1, x)` is NaN for
+    0 < |x| <= 2.2250738585072014e-308, so the same rule gives a value where float64's left side
+    has none on an interval, and it holds in permissive alone.
   - permissive: clause (a) alone, over the real-valued bindings (every slot any real number).
   - constants are independent symbols; at constants where `L` is not finite nothing is owed.
   - a ground rule has one point, and no tolerance: if `L` is undefined, `R` must be too.
@@ -1132,6 +1140,12 @@ def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
     cl is degenerate for fitting -- which is exactly what `skipped_cl` records, and why
     `judge_rule` asks THIS function rather than re-deriving "is the LHS defined" from
     finiteness alone (a saturated LHS is finite and determines nothing).
+
+    A RIGHT SIDE THAT DOES NOT READ ITS CONSTANT. Where, at every env where the left side is
+    finite, the residual is zero at every point of the grid, the right side's value there does not
+    depend on the constant, and every value is a witness: `C*(x0 - x0)` against itself is 0 for
+    every C. That is no saturation, which leaves a residual somewhere on the grid. Returned as
+    `(env0, L0, None, None, None)`, and `fit_witness` takes the left constant's own value.
     """
     cl_env = _cl_env(cl_val)
 
@@ -1141,6 +1155,7 @@ def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
     def rhs_at(env, c):
         return d_eval(tr, {**env, **cl_env, rname: F(c)})
 
+    free, saturated = None, False
     for k in (0, 1, 4):
         try:
             env0 = _gen_env(shared, k)
@@ -1159,10 +1174,28 @@ def _fit_target_env(tl, tr, shared, cl_val=None, rname='<C_R>'):
 
         vals = np.array([g(x) for x in _XS])
         ok = np.isfinite(vals)
+        if bool(ok.all()) and not np.any(vals):
+            # the right side does not read its constant at this env
+            free = free or (env0, L0)
+            continue
         if int(np.count_nonzero(ok & (vals == 0))) > 1:
+            saturated = True
             continue          # the residual vanishes on an interval: nothing to pin
         return env0, L0, g, vals, ok
+    if free is not None and not saturated:
+        return free[0], free[1], None, None, None
     return None
+
+
+def _own_value(cl_val, rname):
+    """The left constant a right constant `rname` pairs with, by position (`<C_R1>` with
+    `<C_L1>`, else the first), as its own value: the witness where every value is one
+    (`_fit_target_env`). None where the left side has no constant."""
+    cl_env = _cl_env(cl_val)
+    if not cl_env:
+        return None
+    paired = rname.replace('<C_R', '<C_L')
+    return float(cl_env.get(paired, next(iter(cl_env.values()))))
 
 
 def _owes_at(lhs, spelling, key, f64):
@@ -1222,7 +1255,10 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
     validated on two further generic envs; None if no witness exists/found. With `env_out` (a
     list), the generic env the witness was determined at is appended to it, for `mp_polish`.
     `cl_val` binds the left side's constants (a dict by name, or one value for `<C_L>`), and
-    `rname` names the right side's constant."""
+    `rname` names the right side's constant. Where the right side does not read its constant at
+    any env that determines one (`_fit_target_env`), every value is a witness, and the paired left
+    constant's own value is taken (`_own_value`), so a zero's sign agrees too:
+    `C*(x0 - x0) -> C*(x0 - x0)` has the witness c."""
     cl_env = _cl_env(cl_val)
 
     def lhs_at(env):
@@ -1238,7 +1274,11 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
     if env_out is not None:
         env_out.append(env0)
     best = None
-    if tr == ('slot', rname):
+    if g is None:
+        best = _own_value(cl_val, rname)
+        if best is None:
+            return None
+    elif tr == ('slot', rname):
         # BARE-<C_R> SHORTCUT: the whole target IS the
         # constant, so the residual is g(c) = c - L0 exactly -- linear, monotone,
         # witness c_t = L0, nothing to search. 272 of the 343 constant-carrying
@@ -1298,11 +1338,12 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None, rname='<C_R>'):
     # for a finite `best`, but `best * 2` overflows at the top of the f64 range and
     # `round(inf)` raises out of the judge -- so the half-integer candidate is only
     # offered when the doubling stays finite.
+    # (a left constant's own value, where the right side does not read its constant, is exact)
     snaps = [round(best)] if abs(best) < 2.0 ** 1023 else []
     if np.isfinite(best * 2):
         snaps.append(round(best * 2) / 2)
     for c in [1., -1., 2., -2., 3., -3., 0.5, -0.5, math.e, -math.e, math.pi, -math.pi,
-              *snaps]:
+              *snaps] if g is not None else ():
         # RELATIVE snap only (1e-15 floor = f64 fit noise around an exact zero): the old
         # absolute 1e-6 tolerance flattened every tiny TRUE witness to round(best) = 0
         # (pow(exp(-5), pi) = 1.5e-7 snapped to 0), fabricating clause-(a) kills of
@@ -2120,6 +2161,53 @@ def _jump_probes(tree, under_jump=False, out=None):
     return out
 
 
+def _pole_probes(tree, out=None):
+    """The poles of `tree`: each subtree holding a slot whose zero is a zero of a divisor -- a
+    quotient's divisor, the operand of `inv`, the base of a power or a root at a negative literal
+    exponent -- and so a pole of the expression: the divisor itself and, where it is a product, a
+    negation, or a positive power or root, the parts whose zero is its zero (a double root never
+    changes sign). A bare slot is left out: zero is a point of every battery."""
+    out = [] if out is None else out
+    head = tree[0]
+    if head in ('slot', 'lit'):
+        return out
+    args = tree[1:]
+
+    def carriers(d):
+        yield d
+        if d[0] == '*':
+            for f in d[1:]:
+                yield from carriers(f)
+        elif d[0] == 'neg':
+            yield from carriers(d[1])
+        elif d[0] in ('pow', 'rootn') and d[2][0] == 'lit' and _negative_literal(d[2][1]) is False:
+            yield from carriers(d[1])
+
+    divisor = None
+    if head == '/':
+        divisor = args[1]
+    elif head == 'inv':
+        divisor = args[0]
+    elif head in ('pow', 'rootn') and args[1][0] == 'lit' and _negative_literal(args[1][1]):
+        divisor = args[0]
+    if divisor is not None:
+        for c in carriers(divisor):
+            if c[0] != 'slot' and _has_slot(c) and c not in out:
+                out.append(c)
+    for a in args:
+        _pole_probes(a, out)
+    return out
+
+
+def _negative_literal(v):
+    """Is the literal value `v` below zero (True), at or above it (False), or no number (None)?"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return None if math.isnan(f) else f < 0
+
+
 def _levels(kind, u, w):
     """The levels of `kind` strictly between the sampled values `u` and `w`: at most the two
     nearest each end, and 0 where it lies between."""
@@ -2512,6 +2600,22 @@ HOLDS_IN_THE_REALS = frozenset({'CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'})
 KIND_AGREEMENTS = frozenset({'REAL-CHANGE'})
 
 
+#: The reals' disagreements at a point where they give both sides a value (two finite values
+#: apart, or an infinity against another value): the counterexamples strict's second reading
+#: reads (`strict_reading`). An extension (`EXT`) or a loss (`SHRINK`) leaves one side without a
+#: value, and float64 decides there.
+VALUED_DISAGREEMENTS = frozenset({'REAL-CHANGE', 'INF-CHANGE'})
+
+
+def reals_hold(verdict):
+    """The reals' reading of a rule as strict's second reading asks it, from the reals' verdict
+    alone (a fully numeric rule's one point): True where it holds, False where it is refuted,
+    None where no answer was reached."""
+    if verdict in HOLDS_IN_THE_REALS:
+        return True
+    return False if verdict == 'KILL' else None
+
+
 def reals_valued_at(tl, tr, env, valued=(False, False)):
     """Do the reals give both sides a value at float64's point `env` (its doubles, read exactly)?
     A side `valued` shows to have one everywhere (`_always_valued`: `sin(x0 + pi)`,
@@ -2607,14 +2711,21 @@ def strict_at_the_root(detail):
     return 'turns-on-a-zero-sign' not in (detail.get('zero_sign_kinds') or ())
 
 
-def strict_reading(f6, kinds, verdict):
+def strict_reading(f6, kinds, reals):
     """THE STRICT READING, the one place the judge decides `f64` (strict): a rule holds there where
     (a) float64's two sides agree (F6, with the range standard at an overflow) at every point
-    read, or (b) the rule holds in the reals (`HOLDS_IN_THE_REALS`) and float64's two sides agree
-    in kind at every point read: both finite, the same infinity or both undefined, an extension
-    only on a null set, the range standard at an overflow. (b) has no error bound, and reads kind
-    only at a point where the reals give both sides a value (`kind_holds`): there their float64
-    difference is rounding. At every other point float64's two sides agree as F6 asks. In both,
+    read, or (b) the reals hold the rule at every point where they give both sides a value, and
+    float64's two sides agree in kind at every point read: both finite, the same infinity or both
+    undefined, an extension only on a null set, the range standard at an overflow. (b) has no
+    error bound, and reads kind only at a point where the reals give both sides a value
+    (`kind_holds`): there the two sides have one real value, and their float64 difference is
+    rounding. At every other point float64's two sides agree as F6 asks, and a counterexample of
+    the reals there (an extension, a loss, a cell of clause (b)) is float64's to decide:
+    `1/3^t -> (1/3)^t` holds at `_`, where at t = -inf the reals give the left side no value (1/0)
+    and float64 gives +inf on both sides. The reals' counterexamples (b) reads are those of
+    `VALUED_DISAGREEMENTS`, from the precision ladder and from the reading at float resolution
+    alike: `ceil(atan(atan(x0))) -> ceil(erf(x0))` is refused, 2 against 1 for x0 > 74.7 in the
+    reals and in float64, though no affordable rung reads erf(x0) beside 1 there. In both,
     a zero's sign is read (`zero_sign_refusal`): float64 may give the two sides zeros of opposite
     sign, and (b) may admit a difference at which one side's value turns on a zero's sign and the
     other's does not, only on a null set. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for x0 < 0)
@@ -2626,27 +2737,30 @@ def strict_reading(f6, kinds, verdict):
     `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1 against -1 on x0 > 0, where the reals
     give neither side a value), nor any rule false in the reals.
 
-    `f6` and `kinds` are float64's two readings, each True, False or None (no answer reached), and
-    `verdict` is the reals' outcome. -> True; False where (a) is refused and so is (b), by a change
-    of kind or a counterexample in the reals; None otherwise (refused with uncertainty)."""
-    if f6 is True or (kinds is True and verdict in HOLDS_IN_THE_REALS):
+    `f6` and `kinds` are float64's two readings, and `reals` the reals' at the points where they
+    give both sides a value (`reals_valued_holds`), each True, False or None (no answer reached).
+    -> True; False where (a) is refused and so is (b), by a change of kind or a counterexample in
+    the reals; None otherwise (refused with uncertainty)."""
+    if f6 is True or (kinds is True and reals is True):
         return True
-    if f6 is False and (kinds is False or verdict == 'KILL'):
+    if f6 is False and (kinds is False or reals is False):
         return False
     return None
 
 
 def _settle(r):
     """The modes' readings of the judged rule `r` from its parts, in place: float64's, the two
-    zeros one value (`strict_reading` of `realised_f6`, `realised_kinds` and the reals'
-    `verdict`, kept as `realised_one_zero`); strict's, which is that reading refused where a
-    zero's sign changes on a region (`zero_sign_refused`, `zero_sign_refusal`), kept as
-    `realised`; permissive's, which includes f64 as permissive reads it, with one zero
+    zeros one value (`strict_reading` of `realised_f6`, `realised_kinds` and the reals' reading at
+    the points where they give both sides a value, `reals_valued_holds`, or, where the judgment
+    has none, the reals' `verdict`, kept as `realised_one_zero`); strict's, which is that reading
+    refused where a zero's sign changes on a region (`zero_sign_refused`, `zero_sign_refusal`),
+    kept as `realised`; permissive's, which includes f64 as permissive reads it, with one zero
     (`mode_reading` of `realised_one_zero` and permissive's own criterion's reading
     `permissive_own`, kept as `permissive`): a zero's sign is strict's alone, so
     `0*asin(x0) -> 0*acos(x0)` holds in permissive, through f64, as before strict read it; and
     the tier they give. -> `r`."""
-    one_zero = strict_reading(r.get('realised_f6'), r.get('realised_kinds'), r.get('verdict'))
+    reals = r['reals_valued_holds'] if 'reals_valued_holds' in r else reals_hold(r.get('verdict'))
+    one_zero = strict_reading(r.get('realised_f6'), r.get('realised_kinds'), reals)
     r['realised_one_zero'] = one_zero
     r['realised'] = False if r.get('zero_sign_refused') else one_zero
     r['permissive'] = mode_reading(one_zero, r.get('permissive_own'), 'permissive')
@@ -2817,6 +2931,13 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         # the route covers every finite binding, and the battery read the reals apart at one
         # (a `_` slot's non-finite atoms are the battery's alone): the proof is doubted
         doubted = True
+    # the reals' reading strict's second reading asks for, at the points where they give both
+    # sides a value: a refutation is one there (two finite values apart at the route's witness),
+    # and a proof that stands covers every point the battery left without an answer
+    if ex['reals'] == 'refuted':
+        r['reals_valued_holds'] = False
+    elif ex['reals'] == 'proved' and not doubted and r.get('reals_valued_holds') is None:
+        r['reals_valued_holds'] = True
     readings = {'f64': r.get('realised_f6') if deployed_check else None,
                 'permissive': r.get('permissive_own')}
     conflict = []
@@ -2867,7 +2988,9 @@ def _ground_settled(r, ex, deployed_check=True):
             r.update(verdict='CERTIFIED', clause=None, kinds=None, points=None)
     elif ex['reals'] == 'refuted' and r.get('verdict') != 'KILL':
         r.update(verdict='KILL', clause='a-exact', kinds=['REAL-CHANGE'], points=[{}])
-    r['realised'] = strict_reading(f6, kinds, r.get('verdict'))
+    # one point: the reals' reading there is the reals' verdict
+    r['reals_valued_holds'] = reals_hold(r.get('verdict'))
+    r['realised'] = strict_reading(f6, kinds, r['reals_valued_holds'])
     r['realised_one_zero'] = r['realised']
     r['permissive'] = r['permissive_own']
     holds = tuple(m for m, h in (('f64', r['realised'] is True and r['permissive']),
@@ -3099,7 +3222,9 @@ def _finite(node, f64):
         return True
     if head in ('neg', 'abs', 'floor', 'ceil', 'max', 'min'):
         return all(_finite(k, f64) for k in kids)
-    if not f64 and head in ('+', '-', '*', '/', 'exp', 'sinh', 'cosh'):
+    # in the reals a power of finite operands is finite wherever it is defined: a negative power
+    # of zero has no value (division by zero), and a negative base admits integer exponents only
+    if not f64 and head in ('+', '-', '*', '/', 'exp', 'sinh', 'cosh', 'pow'):
         return all(_finite(k, f64) for k in kids)
     return False
 
@@ -3117,8 +3242,8 @@ def _origin(node, f64):
     """Can `node` be the first undefined node of an expression -- undefined where its operands
     have values? Not a head total on the extended reals (`_TOTAL_HEADS`), not a sum with an
     operand finite wherever defined (no inf - inf), not a product of such operands (no 0 * inf),
-    not `sin` or `cos` of one, not `asin` or `acos` of one within [-1, 1] (`_unit_range`); a NaN
-    literal is."""
+    nor a product of one operand with itself (`t*t` is never 0 * inf), not `sin` or `cos` of one,
+    not `asin` or `acos` of one within [-1, 1] (`_unit_range`); a NaN literal is."""
     head, kids = node
     if not kids:
         return _leaf(head)[0] == ('nan',)
@@ -3127,6 +3252,9 @@ def _origin(node, f64):
     if head in ('+', '-'):
         return not any(_finite(k, f64) for k in kids)
     if head == '*':
+        keys = {_node_key(k) for k in kids}
+        if len(keys) == 1 and None not in keys:
+            return False
         return not all(_finite(k, f64) for k in kids)
     if head in ('sin', 'cos'):
         return not _finite(kids[0], f64)
@@ -3151,32 +3279,89 @@ def _always_valued(tokens):
     return not any(_origin(n, False) for n in _nodes(tree))
 
 
+def _rational_part(node):
+    """`node` as `q * core`: the rational factor its literal factors and divisors and negations
+    give it, and the key of what remains (`2*(3*x1)` is (6, x1), `-x1/2` is (-1/2, x1)); the
+    key is None where the core holds a `<constant>`."""
+    head, kids = node
+    lit = [_leaf(k[0])[0] if not k[1] else None for k in kids]
+    rational = [k is not None and k[0] == 'lit' and isinstance(k[2], (Fraction, int))
+                and not isinstance(k[2], bool) for k in lit]
+    if head == 'neg':
+        q, core = _rational_part(kids[0])
+        return -q, core
+    if head == '*' and any(rational):
+        i = 0 if rational[0] else 1
+        q, core = _rational_part(kids[1 - i])
+        return q * Fraction(lit[i][2]), core
+    if head == '/' and rational[1] and lit[1][2] != 0:
+        q, core = _rational_part(kids[0])
+        return q / Fraction(lit[1][2]), core
+    return Fraction(1), _node_key(node)
+
+
+def _tokens_of(node):
+    """A `_term` node back as prefix tokens."""
+    out = [node[0]]
+    for k in node[1]:
+        out += _tokens_of(k)
+    return out
+
+
 def _no_extension(lhs, rhs, f64=False):
-    """A STRUCTURAL CERTIFICATE THAT CLAUSE (b) HAS NOTHING TO MEASURE: the right side has no value
-    wherever the left side has none, so no cell can hold an extension. An undefined operand makes
-    an operation undefined in the reals (THE TABLE), and in float64 at the heads that keep a NaN
-    (`_F64_PROPAGATING`). So where the left side has no value at a point, some node of it is the
-    first undefined one there (`_origin`). If every node of the left side that can be one occurs
-    on the right side (the same slots, literals read as their values, no `<constant>`), under
-    heads that keep it undefined, the right side has no value there either. Linear in the sides'
-    sizes: `x0/299792458` and `cos(x0) + log(cos(x1))` against themselves, and `log(cos(x2)) +
-    cos(x1) -> cos(x1) + log(cos(x2))`, measure 0, where the cells run past the interval layer's
-    horizon or budget. -> True where it shows that, else False (the cells decide)."""
+    """A STRUCTURAL CERTIFICATE THAT CLAUSE (b) HAS ONLY A NULL SET TO MEASURE. An undefined
+    operand makes an operation undefined in the reals (THE TABLE), and in float64 at the heads
+    that keep a NaN (`_F64_PROPAGATING`). So where the left side has no value at a point, some
+    node of it is the first undefined one there (`_origin`), and the extension lies where that
+    node has none and the right side has a value. Each such node is covered:
+      - where it occurs on the right side (the same slots, literals read as their values, no
+        `<constant>`) under heads that keep it undefined: the right side has no value there
+        either. `x0/299792458` and `cos(x0) + log(cos(x1))` against themselves, and
+        `log(cos(x2)) + cos(x1) -> cos(x1) + log(cos(x2))`, measure 0, where the cells run past
+        the interval layer's horizon or budget;
+      - where it is a power `b^e` and the right side holds `b^(q*e)` so, for a rational q > 0:
+        `b^e` has no value where b < 0 and e is no integer, and `b^(q*e)` none there unless
+        q*e is one, so the extension lies in the level sets {e in Z/q}, null where `e` is
+        nonconstant entire, the engine's certificate (`_core.nonconstant_entire`, in the mode's
+        reading; the reals' zero of a negative power is the right side's too). `x0^x1 * x0^x1 ->
+        x0^(2*x1)` is so shown, while `x0^(floor(x1)/2)` merged to `x0^floor(x1)`, false on
+        whole intervals of x1 at x0 < 0, is left to the cells.
+    Linear in the sides' sizes, besides the certificates. -> True where it shows that, else False
+    (the cells decide)."""
     try:
         tl, tr = _term(lhs), _term(rhs)
     except (IndexError, ValueError):
         return False
     kept = set()        # the right side's nodes reached through heads that keep them undefined
+    powers = []         # the right side's powers so reached: (base key, the exponent's part)
 
     def walk(node, keeps):
         k = _node_key(node)
         if k is not None and keeps:
             kept.add(k)
+            if node[0] == 'pow':
+                powers.append((_node_key(node[1][0]), _rational_part(node[1][1])))
         for c in node[1]:
             walk(c, keeps and (not f64 or node[0] in _F64_PROPAGATING))
 
     walk(tr, True)
-    return all(not _origin(n, f64) or _node_key(n) in kept for n in _nodes(tl))
+    slots = sorted({key for t in list(lhs) + list(rhs) if (key := slot_key(t))})
+    spelling = {s: f'x{i}' for i, s in enumerate(slots)}
+
+    def level_sets_null(node):
+        if node[0] != 'pow':
+            return False
+        base, exponent = _node_key(node[1][0]), node[1][1]
+        q, core = _rational_part(exponent)
+        if base is None or core is None or q == 0:
+            return False
+        if not any(b == base and c == core and r / q > 0 for b, (r, c) in powers):
+            return False
+        return bool(_table.nonconstant_entire(_spelled(_tokens_of(exponent), spelling),
+                                              dict(ARITY), f64))
+
+    return all(not _origin(n, f64) or _node_key(n) in kept or level_sets_null(n)
+               for n in _nodes(tl))
 
 
 def _extension_width(lhs, lp, rhs, rp, names, f64=False):
@@ -3184,13 +3369,39 @@ def _extension_width(lhs, lp, rhs, rp, names, f64=False):
     undefined and the right side has a value (`None`: undecided). The cells partition the real
     input space; each is read in the table's real values, or with `f64` in float64's, where a
     saturation plateau (`tanh(x)` is 1.0 past 19.06) is a cell like any other: full-dimensional,
-    never of measure zero. A rule whose right side has no value wherever its left side has none
-    measures 0 by structure (`_no_extension`), whatever the cells could read."""
+    never of measure zero. A rule whose right side has a value where its left side has none on a
+    null set at most measures 0 by structure (`_no_extension`), whatever the cells could read."""
     if _no_extension(lhs, rhs, f64):
         return 0.0
     return _table.table_extension_width(_spelled(lhs, names), [float(c) for c in lp],
                                         _spelled(rhs, names), [float(c) for c in rp],
                                         dict(ARITY), f64)
+
+
+def collapse_parts(lhs, rhs):
+    """THE COLLAPSE, the core's alignment (`_core.collapse_spans`, the one the mint's fit reads):
+    where the right side is the left side with variable-free parts that hold a `<constant>` each
+    replaced by a `<constant>`, and is otherwise the left side token for token, `{right constant's
+    name: the left part, as a tree over the left constants' names}`; else None. Each part's own
+    value at the left constants is a witness, and where it is one the two sides are one function
+    of the variables: `tanh(x0 + log(C)) -> tanh(x0 + C)` with D = log(c)."""
+    lhs, rhs = list(lhs), list(rhs)
+    variables = sorted({t for t in lhs + rhs if slot_key(t) is not None})
+    spans = _table.collapse_spans(lhs, rhs, variables, dict(ARITY))
+    if spans is None:
+        return None
+    names = iter(_constant_names(lhs, '<C_L>', True))
+    named = [next(names) if t == '<constant>' else t for t in lhs]
+    return {f'<C_R{i}>': parse(named[a:b]) for i, (a, b, _first) in enumerate(spans)}
+
+
+def _with_parts(tree, parts):
+    """`tree` (a parsed side) with each constant named in `parts` replaced by its part."""
+    if tree[0] == 'slot':
+        return parts.get(tree[1], tree)
+    if tree[0] == 'lit':
+        return tree
+    return (tree[0],) + tuple(_with_parts(c, parts) for c in tree[1:])
 
 
 
@@ -3201,7 +3412,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     the reals' verdict (the criterion of the specification's section 3):
       KILL               a disagreement at a point where the left side has a value, finite or
                          infinite (clause (a): a real binding, a `_` slot's +-inf or NaN, any
-                         constant owed); any disagreement at a `_` slot's non-finite binding;
+                         constant owed), read by the precision ladder or, where it ran out, at
+                         float resolution; any disagreement at a `_` slot's non-finite binding;
                          or a certified cell of positive measure where the left side is
                          undefined and the right side has a value (clause (b)); a ground
                          rule's one point, no tolerance;
@@ -3253,7 +3465,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # every one diagnosed is an artifact of the exists-witness machinery at magnitudes it
     # cannot resolve, not a false rule. So the probe is put where its answer can be read
     # and withheld where it cannot; `saturation_probed` says which happened.
-    saturation_probed = not has_cr
+    # A COLLAPSE (`collapse_parts`) TAKES ITS PARTS' OWN VALUES AS ITS WITNESS, which hold at
+    # every magnitude, so the saturation probes are read there.
+    collapse = collapse_parts(lhs, rhs) if has_cr else None
+    collapse_read = {}
+    saturation_probed = not has_cr or collapse is not None
     cl_battery = _cl_combos(lnames, saturation_probed)
     core = {float(c) for c in CONSTS}
     gkey = _generic_key(lnames) if has_cl else ()
@@ -3284,7 +3500,61 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             raise Unresolved()
         return {n: +w for n, w in witness.get(key, {}).items()}
 
-    if has_cr:
+    if collapse is not None:
+        # THE COLLAPSE WITNESS: each right constant takes its left part's own value at the left
+        # constants. The part stands in the right side for its constant, so float64 reads the
+        # part's double and the table its exact value, and the two sides are one function of
+        # the variables. A fitted constant is finite, so a tuple at which a part has no finite
+        # value in a lane is not read in that lane (`log(c)` at c = 0, `1/c` at c = +-0,
+        # `atanh(c)` at c = +-1), and an overflow in float64 (`exp(c)` at c = 750) leaves the
+        # tuple to the reals.
+        kept = []
+        for builders, key in cl_battery:
+            cl_f = {n: F(c) for n, c in zip(lnames, key)}
+            try:
+                with np.errstate(all='ignore'):
+                    f64_read = all(math.isfinite(float(d_eval(t, cl_f)))
+                                   for t in collapse.values())
+            except Exception:
+                f64_read = False
+            reals_read, unread = False, True
+            old = mp.dps
+            try:
+                # the constants as the battery builds them, at the ladder's rungs, then as the
+                # exact doubles they are (the table reads `atanh(1)` there: +inf)
+                exact = {n: tv_of_float(c) for n, c in zip(lnames, key)}
+                for dps, env_of in ((BASE_DPS, None), (GAP_RUNGS[-1], None), (MAX_DPS, None),
+                                    (BASE_DPS, exact)):
+                    mp.dps = dps
+                    try:
+                        env = env_of or {n: b() for n, b in builders.items()}
+                        parts = [c_eval(t, env) for t in collapse.values()]
+                    except Unresolved:
+                        continue
+                    reals_read = all(cls_mp(v)[0] == 'fin' for v in parts)
+                    unread = False
+                    break
+            finally:
+                mp.dps = old
+            if unread and not MAGNITUDE_CONSTS.intersection(key):
+                # a part the table cannot read at one of the battery's own constants: the
+                # reals reach no answer there (4.10)
+                unwitnessed['reals'].append(key)
+            if not (f64_read or reals_read):
+                skipped_cl.append(key)
+                continue
+            collapse_read[key] = {'f64': f64_read, 'reals': reals_read}
+            kept.append((builders, key))
+        if not kept:
+            return no_witness('no constant at which the collapsed part has a finite value')
+        cl_battery = kept
+        if not all(collapse_read.get(gkey, {'f64': False}).values()):
+            # the grid reads a generic tuple both lanes read
+            gkey = next((k for _, k in kept if all(collapse_read[k].values())
+                         and all(c in core for c in k)), gkey)
+        tr = _with_parts(tr, collapse)
+        rnames, has_cr = [], False
+    elif has_cr:
         kept = []
         for builders, key in cl_battery:
             cl_env = dict(zip(lnames, key))
@@ -3512,20 +3782,48 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
                 'kind_bad': [], 'kind_unread': [],
                 'kinds': set(), 'null': 0, 'read': 0, 'unread': 0,
-                'perm_unread': [], 'owed_unread': [], 'zero_sign': []}
+                'perm_unread': [], 'owed_unread': [], 'zero_sign': [], 'float_kills': []}
 
-    def unread_at_float_resolution(acc, v, point, where, env, count):
+    def valued_at(env):
+        """Do the reals give both sides a value at the point `env()` builds? A side that has one
+        wherever its variables do (`always_valued`) has one without a reading. True, False, or
+        None where a side reads no answer."""
+        out = []
+        old = mp.dps
+        try:
+            mp.dps = BASE_DPS
+            for tree, always in zip((tl, tr), always_valued):
+                if always:
+                    out.append(True)
+                    continue
+                try:
+                    out.append(cls_mp(c_eval(tree, env()))[0] != 'nan')
+                except Unresolved:
+                    out.append(None)
+        finally:
+            mp.dps = old
+        if False in out:
+            return False
+        return None if None in out else True
+
+    def unread_at_float_resolution(acc, v, point, where, env, count, reals_owe=True):
         """A point the reals' ladder left unread (`v` None, precision run out): permissive's
         float-resolution reading needs no exact equality (P3), and a rigorous bound or the
         precision the point demands may decide it (`_float_resolution`). A disagreement is
-        permissive's counterexample; an agreement, with `count`, a point permissive read. A
-        ground rule's one point owes its value (3.3): no extension there. Returns whether
-        permissive's reading read the point."""
+        permissive's counterexample, and, where the reals give both sides a value there (or that
+        reads no answer), one of the reals that strict's second reading reads
+        (`ceil(atan(atan(x))) -> ceil(erf(x))` at x = 100, 2 against 1, where no affordable rung
+        reads erf(100) beside 1); an agreement, with `count`, a point permissive read. A ground
+        rule's one point owes its value (3.3): no extension there. A point the reals owe nothing
+        at (`reals_owe` false: a `$` slot at 0, its certificate's) is permissive's alone. Returns
+        whether permissive's reading read the point."""
         if v is not None:
             return True
         agreed = _float_resolution(tl, tr, env, extends=not (ground and not has_cl))
         if agreed is False:
             acc['perm'].append(('REAL-CHANGE', point, where))
+            if reals_owe and valued_at(env) is not False:
+                acc['float_kills'].append(point)
         elif agreed and count:
             acc['fr'] += 1
         return agreed is not None
@@ -3560,10 +3858,16 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             return {'f64': True, 'reals': True}
         if key not in owes_cache:
             owes_cache[key] = _eligible(tl, lhs, spelling, nvars, builders, key)
+            if collapse is not None:
+                # a collapse's tuple is read in the lanes where its parts have finite values
+                read = collapse_read.get(key, {'f64': False, 'reals': False})
+                owes_cache[key] = {m: owes_cache[key][m] and read[m] for m in ('f64', 'reals')}
         return owes_cache[key]
 
     vacuous, owed_keys = [], set()
     zero_sign_events = []
+    # the float-resolution reading's counterexamples where the reals give both sides a value
+    float_kills = []
     ext_where = []
     f64_owed, f64_null_keys = set(), set()
     f64_read = [0, 0]           # f64's battery points read, and left unread at a range event
@@ -3612,6 +3916,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         a_kills.extend(acc['a'])
         atom_kills.extend(acc['atom'])
         perm_kills.extend(acc['perm'])
+        float_kills.extend(acc['float_kills'])
         if acc['ext']:
             ext_events.extend(p for p, _ in acc['ext'])
             ext_where.extend(acc['ext'])
@@ -3642,7 +3947,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             point.update(dict(zip(lnames, key)))
             point.update({n: float(w) for n, w in cr_mp.items()})
             if real_valued and not unread_at_float_resolution(
-                    acc, v, point, (key, values), env_mp, count=not skip_real) and owed_here:
+                    acc, v, point, (key, values), env_mp, count=not skip_real,
+                    reals_owe=not skip_real) and owed_here:
                 acc['perm_unread'].append(point)
             if skip_real:
                 # a `$` slot at 0: owed nothing in real (its certificate), a real-valued
@@ -3900,6 +4206,93 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 break
         return True
 
+    def poles(acc, lanes, cr_f64):
+        """THE POLES (`_pole_probes`), at the generic constants: along each lane, where a
+        divisor crosses zero between two grid points, the zero is solved at `_PREIMAGE_DPS` and
+        float64 is read at the doubles nearest it. Float64 gives an isolated pole an infinity,
+        and that infinity is a value: `-1/(x0 - 3.5) -> 1/(3.5 - x0)` is -inf against +inf at
+        x0 = 3.5, which no battery point or grid point holds. Where float64 never lands on the
+        zero, there is no pole in its values, and nothing to read. The reals give a division by
+        zero no value, so the pole is float64's alone."""
+        probes = list(dict.fromkeys(_pole_probes(tl) + _pole_probes(tr)))
+        if not probes:
+            return
+        count = 0
+        xs = sorted(GRID)
+        old_dps = mp.dps
+        try:
+            for cfg, n in lanes:
+                for chain in probes:
+                    if count >= MAX_PREIMAGES:
+                        return
+                    if ('slot', n) not in _subtree_set(chain):
+                        continue
+
+                    def ed_at(x, cfg=cfg, n=n):
+                        e = {m: F(cfg) for m in names}
+                        e[n] = F(x)
+                        e.update({k: F(c) for k, c in zip(lnames, grid_key)})
+                        e.update({k: F(w) for k, w in cr_f64.items()})
+                        return e
+
+                    def sampled(x, chain=chain):
+                        try:
+                            with np.errstate(all='ignore'):
+                                return float(d_eval(chain, ed_at(x)))
+                        except Exception:
+                            return math.nan
+
+                    us = [sampled(x) for x in xs]
+                    tried = 0
+                    for i in sorted(range(len(xs) - 1),
+                                    key=lambda i: min(abs(xs[i]), abs(xs[i + 1]))):
+                        if count >= MAX_PREIMAGES or tried >= MAX_PREIMAGES // 4:
+                            break
+                        if not _levels('zero', us[i], us[i + 1]):
+                            continue
+                        tried += 1
+                        mp.dps = _PREIMAGE_DPS
+                        try:
+                            builders = {k: bb() for k, bb in gbuilders.items()}
+
+                            def f(x, cfg=cfg, n=n, builders=builders, chain=chain):
+                                e = {m: mpf(cfg) for m in names}
+                                e[n] = x
+                                e.update(builders)
+                                e.update(fitted(grid_key))
+                                return c_eval(chain, e)
+                            found = _solve_preimage(f, mpf(xs[i]), mpf(xs[i + 1]))
+                        except (Unresolved, ZeroDivisionError, ValueError):
+                            found = None
+                        finally:
+                            mp.dps = BASE_DPS
+                        if found is None:
+                            continue
+                        count += 1
+                        xf = float(found[0])
+                        for dv in [xf] + [y for k in range(1, 9)
+                                          for y in (_ulps(xf, k), _ulps(xf, -k))]:
+                            ed = ed_at(dv)
+                            try:
+                                with np.errstate(all='ignore'):
+                                    dl, dr = d_eval(tl, ed), d_eval(tr, ed)
+                            except Exception:
+                                continue
+                            if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq' and \
+                                    not opposite_zeros(dl, dr):
+                                continue
+                            exact = {m: mpf(cfg) for m in names}
+                            exact[n] = mpf(dv)
+                            v2, sn2 = _point_verdict(tl, tr, lambda exact=exact: {
+                                **{m: +y for m, y in exact.items()},
+                                **{k: bb() for k, bb in gbuilders.items()}, **fitted(grid_key)})
+                            point = {m: cfg for m in names}
+                            point[n] = dv
+                            point.update(dict(zip(lnames, grid_key)))
+                            deployed(ed, v2, point, True, sn2, acc)
+        finally:
+            mp.dps = old_dps
+
     # the GENERIC GRID: more points of clause (a) past the battery's magnitudes, and the
     # deployed lane where float64 parts from the reals (tanh saturates at 19.06, exp overflows
     # at 709.78 and underflows at -745.13); every slot real
@@ -3968,6 +4361,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                             point.update(dict(zip(lnames, grid_key)))
                             acc['zero_sign'].append((event, point))
             preimages(acc, lanes, cr_f64)
+            if deployed_check:
+                poles(acc, lanes, cr_f64)
             mint_rows(acc, cr_f64)
             magnitudes(acc, lanes, cr_f64)
             # the grid's points count toward nothing in coverage (that is the battery's)
@@ -4187,10 +4582,24 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     vacuous_rule = has_cl and bool(vacuous) and not owed_keys
     covered = resolved_pts > 0 and resolved_pts / max(1, attempted_pts) >= 0.25
 
+    # THE REALS' READING STRICT'S SECOND READING ASKS FOR (`strict_reading`): do they hold the
+    # rule at every point where they give both sides a value? Their counterexamples there, from
+    # the precision ladder or the reading at float resolution, refute it. An extension, a loss or
+    # a cell of clause (b) leaves one side without a value, and float64 decides there by F6 and
+    # its own clause (b); each coincidence of `?` slots is judged as its own rule
+    # (`correlated_f64`). No answer where a constant owed a witness in the reals has none, or
+    # where the battery was mostly left unread.
+    valued_kills = [k for k, _ in a_kills + atom_kills if k in VALUED_DISAGREEMENTS]
+    reals_valued_holds = (False if valued_kills or float_kills else
+                          None if unwitnessed['reals'] or not covered else True)
+
     base = {'measure': width, 'skipped_cl': skipped_cl, 'saturation_probed': saturation_probed,
             'realised_f6': _f6, 'realised_kinds': _kinds, 'out_of_range': dep_out_of_range[0],
             'permissive_own': permissive, 'resolved_points': resolved_pts,
-            'f64_measure': None if f64_undecided else f64_width}
+            'f64_measure': None if f64_undecided else f64_width,
+            'reals_valued_holds': reals_valued_holds}
+    if collapse is not None:
+        base['collapse'] = sorted(collapse)
     if unread_owed['f64'] or unread_owed['permissive']:
         base['unread_owed'] = {m: pts[:3] for m, pts in unread_owed.items() if pts}
     if perm_left:
@@ -4226,6 +4635,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return verdict('KILL', clause='a-nonfinite-binding',
                        points=[p for _, p in atom_kills[:3]],
                        kinds=sorted({k for k, _ in atom_kills}))
+    if float_kills:
+        # the two sides' real values apart beyond float resolution, where the ladder ran out of
+        # precision: `ceil(atan(atan(x))) -> ceil(erf(x))` at x = 100, 2 against 1
+        return verdict('KILL', clause='a-float-resolution', points=float_kills[:3],
+                       kinds=['REAL-CHANGE'])
     if b_unguarded:
         return verdict('KILL', clause='b-unguarded', points=b_unguarded[:3], kinds=['EXT'])
     if b_kill is not None:

@@ -962,12 +962,19 @@ class TestCleanlinessIsPerMode:
         # _0 < 0, `abs(log(tanh(_0))) -> -log(tanh(_0))` past 19.06, and at a value a `_` slot
         # takes on a region, `acos(_0) - pi -> -acos(-_0)` at -1 and `abs(log(sin(_0))) ->
         # -log(sin(_0))` at pi/2).
+        # Strict asks the reals to hold only where they give both sides a value, and float64
+        # decides where they give one side none: f64 118 (-1, `neg log acos _0 -> log inv acos
+        # _0`, whose right side has no real value at _0 = 1 (1/0), where float64 gives +inf on
+        # both sides; the load refuses it as well: policy alone 19); permissive 46 (-19, now held
+        # through f64: twelve leave the offenders, `/ log _0 (-2k) -> log rootn _0 (-2k)` and kin,
+        # `abs log cos _0 -> log inv cos _0`, `inv pow _0 _0 -> pow inv _0 _0`, `cosh sinh
+        # atanh !0 -> cosh tan asin !0` and kin, and seven the load refuses: policy alone 34).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 119 and len(policy_only['f64']) == 18
-        assert len(tier['permissive']) == 65 and len(policy_only['permissive']) == 27
+        assert len(tier['f64'] - {126}) == 118 and len(policy_only['f64']) == 19
+        assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 34
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {
@@ -1136,11 +1143,14 @@ class TestTheExistsWitnessIsActuallySearchedFor:
         CERTIFIED. A cl where the LHS is finite owes a witness, and one the search does not
         find refuses the rule with uncertainty, whether or not that cl is one of the core
         CONSTS -- never "nothing owed". `x + e^c` is finite at every constant, so none is
-        skipped: float64 overflows past c = 709.78, and the search goes on in the reals."""
+        skipped: float64 overflows past c = 709.78, and the search goes on in the reals. (The
+        right side is spelled in another order, so that it is no collapse, whose witness the
+        judge takes as the part's own value, without a search.)"""
         import math
 
         import simplipy.verify._contract as C
-        lhs, rhs = ['+', '?0', 'exp', '<constant>'], ['+', '?0', '<constant>']
+        lhs, rhs = ['+', '?0', 'exp', '<constant>'], ['+', '<constant>', '?0']
+        assert C.collapse_parts(lhs, rhs) is None
         assert C.judge_rule(list(lhs), list(rhs))['verdict'] == 'CERTIFIED'
 
         real_fit, real_mp = C.fit_witness, C._fit_multi_mp

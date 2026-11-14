@@ -809,12 +809,14 @@ pub fn strict_row_agrees(
 
 /// THE f64 REALISATION BAR of a rule spelled with a 0.15 head: `None` when the ordinary
 /// realisation axis decides (no 0.15 head; a bare `<constant>` target, whose witness is the
-/// source's own value; a fitted target constant beside heads without jumps), else the deployed
-/// bar's verdict (`deployed_exact_over`), each source `<constant>` probed as a variable over the
-/// finite probes (a fitted constant is a finite float). A fitted target constant beside a jump
-/// head cannot be judged bit for bit, so it is refused. The contract judge ANDs this into a
-/// rule's `realised` (`_core.f64_bar`) and the f64 mint applies it to every pick, so the two
-/// cannot disagree.
+/// source's own value; a constant collapse (`fit::collapse_spans`), whose witness is the replaced
+/// subtrees' own values, so that float64 evaluates the two sides bit for bit alike; a fitted
+/// target constant beside heads without jumps), else the deployed bar's verdict
+/// (`deployed_exact_over`), each source `<constant>` probed as a variable over the finite probes
+/// (a fitted constant is a finite float). Any other fitted target constant beside a jump head
+/// cannot be judged bit for bit, so it is refused. The contract judge ANDs this into a rule's
+/// `realised` (`_core.f64_bar`) and the f64 mint applies it to every pick, so the two cannot
+/// disagree.
 pub fn f64_bar(
     lhs: &[String],
     rhs: &[String],
@@ -851,7 +853,8 @@ pub fn f64_bar_sorted(
             .iter()
             .chain(rhs)
             .any(|t| ops.arity_of(t).is_some() && JUMP_HEADS.contains(&t.as_str()));
-        return if rhs.len() == 1 || !jumps {
+        let collapse = || crate::fit::collapse_spans(lhs, rhs, ops, var_names).is_some();
+        return if rhs.len() == 1 || !jumps || collapse() {
             None
         } else {
             Some(DeployedExact {
@@ -1728,8 +1731,9 @@ mod deployed_bar_tests {
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a
-    /// finite variable; the ordinary axis for a bare constant target or a fitted target constant
-    /// beside smooth heads; refused for a fitted target constant beside a jump head.
+    /// finite variable; the ordinary axis for a bare constant target, a constant collapse or a
+    /// fitted target constant beside smooth heads; refused for any other fitted target constant
+    /// beside a jump head.
     #[test]
     fn f64_bar_reads_constants() {
         let e = crate::engine::Engine::from_strs(
@@ -1749,10 +1753,12 @@ mod deployed_bar_tests {
             Some(true)
         );
         assert_eq!(bar("floor + <constant> 1", "+ floor x0 1"), Some(false));
-        // a fitted target constant beside a jump head is refused
+        // a collapse beside a jump head: its witness is the replaced part's own value, at which
+        // float64 evaluates the two sides alike, bit for bit
+        assert_eq!(bar("floor floor <constant>", "floor <constant>"), None);
         assert_eq!(
-            bar("floor floor <constant>", "floor <constant>"),
-            Some(false)
+            bar("floor + x0 exp <constant>", "floor + x0 <constant>"),
+            None
         );
         assert_eq!(bar("floor <constant>", "<constant>"), None);
         assert_eq!(bar("erf * x0 <constant>", "erf * <constant> x0"), None);

@@ -29,8 +29,13 @@ an extension at a double counts as measure zero only where its neighbouring doub
 extension (`x0/x0 -> 1` at 0). A rule without variables has one point and no tolerance; a `_`
 slot is checked at `+inf`, `-inf` and NaN; each `<constant>` is its own symbol, and nothing is
 owed at a constant where the left side has no finite value. Where it has one, a witness for the
-right side's constants is owed, and a search that finds none refuses the rule (`NO-WITNESS`):
-`tanh(x0 + log(C)) -> tanh(x0 + C)` is refused, its left side being -1 everywhere at C = 0.
+right side's constants is owed, and a search that finds none refuses the rule (`NO-WITNESS`:
+`floor(C*x0) -> C*floor(x0)`). A collapse, a right side that is its left side with
+variable-free parts holding a constant replaced by constants, takes each part's own value as
+its witness, and a constant at which a part has no finite value is no member of the family (a
+fitted constant is finite): `tanh(x0 + log(C)) -> tanh(x0 + C)` holds, its left side at C = 0
+(-1 everywhere) being no `tanh(x0 + D)` of a finite D. Where the right side does not read a
+constant at all, every value is a witness, and the left constant's own one is taken.
 
 ```python
 from simplipy.verify import verify_ruleset
@@ -53,10 +58,16 @@ function on a positive-measure set, so the judge kills it.
 
 Each mode is judged on its own values. `f64` holds a rule with variables where float64's two
 sides agree (to 8 ULP, the true value accepted where an operation overflows or underflows), or
-where the rule is true in the reals and float64's two sides agree in kind -- both finite -- at
-every point the judge reads where the reals give both sides a value (there their difference is
-rounding), and to 8 ULP at every other point. The second admits the identities float64 only
-rounds, however far a jump or a pole magnifies the rounding, and nothing false in the reals:
+where the rule is true in the reals at every point where they give both sides a value and
+float64's two sides agree in kind -- both finite -- at every such point the judge reads (there
+their difference is rounding), and to 8 ULP at every other point: where the reals give one side
+no value, float64 decides (`1/3^t -> (1/3)^t` holds at `_`, where at t = -inf the left side has
+no real value and float64 gives +inf on both sides). An isolated pole's infinity is a value: the
+judge solves for the zeros of a divisor and reads float64 at the doubles nearest them
+(`-1/(x0 - 3.5) -> 1/(3.5 - x0)` is -inf against +inf at x0 = 3.5). A kernel's NaN is
+float64's value, not a range event (`besseli(1, x)` is NaN for 0 < |x| <= 2.2e-308). The
+second reading admits the identities float64 only rounds, however far a jump or a pole
+magnifies the rounding, and nothing false in the reals:
 `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `x0 + 1 - x0 -> 1`,
 `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`
 hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06), `exp(log(x0)) -> x0` (NaN
@@ -70,7 +81,10 @@ does not, only at isolated points. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for
 (+0 against -0 at x0 = -0 alone) does, and `log(exp(_0)) -> _0` does not, since a slot that
 matches any subexpression can bind one that is -0 on a region. A zero's sign is `f64`'s alone: `permissive`, which reads one zero, includes `f64` with the two zeros one value, so those rules hold in `permissive`, with float64's evidence where `f64` so read holds them (`neg(acosh(erf(x0))) -> acosh(erf(x0))`). `permissive` is judged on the reals' values at float resolution.
 The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals' outcome, a
-diagnostic that decides no mode by itself; `f64` reads it for its second reading. A mode whose reading reaches no answer
+diagnostic that decides no mode by itself; `f64`'s second reading reads the reals'
+counterexamples at the points where they give both sides a value, from the precision ladder and,
+where it runs out, at float resolution (`ceil(atan(atan(x0))) -> ceil(erf(x0))`, 2 against 1 for
+x0 > 74.7, is `KILL` with clause `a-float-resolution`). A mode whose reading reaches no answer
 refuses the rule, with uncertainty: a witness search that finds none where the mode's left side
 is finite (`NO-WITNESS`), a token the judge cannot read (`UNSUPPORTED-SHAPE`; a variable is read
 whatever it is called, `v1`, `x7` or `alpha`, as a data slot), a judgment past its
