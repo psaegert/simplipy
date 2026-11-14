@@ -5,8 +5,10 @@ machine-generated expressions in symbolic-regression and ML-training
 pipelines, where per-expression cost is multiplied by the size of the dataset.
 
 One rule drives the engine. Expressions are canonicalized into flat AC bags
-with exact rational arithmetic, and a rewrite is applied only when the
-description length μ strictly drops. Termination, loop-freedom,
+with exact rational arithmetic, and a rewrite is applied only when it moves
+the expression strictly down a fixed order: first by its
+[description length](guides/description-length.md) μ, then, at equal length,
+by a fixed order on the expressions themselves. Termination, loop-freedom,
 never-worse-than-input, and idempotence follow from that rule.
 
 Tokens are parsed straight into the
@@ -29,7 +31,8 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 ## Where to go
 
 - **Use it** — [Getting started](getting-started.md), then the guides:
-  [simplifying](guides/simplify.md), [artifacts](guides/artifacts.md),
+  [simplifying](guides/simplify.md),
+  [description length](guides/description-length.md), [artifacts](guides/artifacts.md),
   [masking](guides/masking.md), [trust](guides/trust.md),
   [mining](rules.md), [verifying](guides/verify.md).
 - **Look it up** — the [API reference](api.md), the

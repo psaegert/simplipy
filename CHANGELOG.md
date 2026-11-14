@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.7.post1 (2026-11-14, documentation only)
+
+The package's code is unchanged; the documentation and the docstrings it renders change.
+
+- **A guide to the description length.** `docs/guides/description-length.md` explains what
+  `complexity()` measures and how each part of a formula is priced, with one formula for the
+  price and worked examples. A test checks every price on the page against `complexity()`.
+- **Corrected statements.**
+  - The home page said a rewrite applies only when the description length strictly drops. A
+    rewrite also applies at equal length when it moves the expression down a fixed order on
+    expressions.
+  - The `complexity()` docstring said signs are free and every symbol costs one unit. A number's
+    sign costs one bit, and each symbol costs its entry in the symbol table.
+  - The simplification guide said `simplify('rootn(x0^2, 2)')` returns the expression unchanged.
+    It returns `'abs(x0)'`.
+  - `prune_covered_rules` no longer documents an `effort` parameter it does not take.
+- The documentation's code examples now also have the outputs written at the end of a line
+  checked.
+
 ## 0.14.7 (2026-10-01)
 
 - **A floating-point warning inside an expression is a warning again.** An expression's inline

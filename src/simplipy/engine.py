@@ -945,19 +945,6 @@ class SimpliPyEngine:
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
 
-        effort : int, optional
-            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, a
-            bounded exploration phase proposes expansion moves the strict descent
-            refuses (distributing a product over its sums, expanding an integer power
-            of a sum), runs each candidate through the same certified constructors and
-            the same descent loop, and replaces the result only when the candidate's
-            endpoint lands STRICTLY below it in the serve-time reduction ordering.
-            ``effort`` counts candidate descents; ``0`` never enters the phase and is
-            byte-identical to the plain chain. Every guarantee survives any budget:
-            soundness (same certificates), never-worse (strictly-below acceptance),
-            termination (well-founded ordering, independent of the budget) and
-            deterministic, idempotent output. Defaults to ``DEFAULT_EFFORT``.
-
         Returns
         -------
         int
@@ -2117,42 +2104,41 @@ class SimpliPyEngine:
             certified: bool = True,
             mode: Mode | str = Mode.f64,
             canon: str = 'default') -> int:
-        """The SEMANTIC COMPLEXITY of an expression, measured on its canonical form.
+        """The description length of an expression, in thousandths of a bit.
 
-        This is the functional :meth:`simplify` minimizes (the unified measure mu),
-        measured by default on the CERTIFIED canonical state -- the same
-        certificate-carrying canonicalization the simplify chain runs on. The CANON is
-        pinned to the sound DEFAULT mode (owner ruling, SHIP BOTH): ``complexity()`` is
-        THE public measure, one Default-canon yardstick for every mode's output.
-        ``mode`` routes only the PARSE (the F2 route fix: the instrument prices the
-        state the requested mode's chain starts from), never the canon.
+        The expression is read into its canonical form, and every part of that form pays
+        its price: each operator, function, variable and named constant its entry of the
+        symbol table, and each number the length of its shortest exact code, its sign one
+        bit. A product's factor -1 and a power's exponent -1 cost nothing. The
+        description-length guide explains the prices with worked examples:
+        https://simplipy.readthedocs.io/en/stable/guides/description-length/
 
-        The theorem this instrument carries is therefore DEFAULT-scoped:
-        ``complexity(simplify(e)) <= complexity(e)`` is a THEOREM (chain descent,
-        docs/formal.md L3) for the default ``f64`` mode, whose chain descends this very
-        pricing. A ``real``- or ``permissive``-mode chain descends ITS OWN mode's canon
-        measure -- an INTERNAL descent -- and a fixpoint it licenses may price ABOVE
-        its input under the public Default-canon yardstick.
+        Parameters
+        ----------
+        expression : str | list[str] | tuple[str, ...] | np.ndarray
+            An infix string, or a prefix token sequence.
+        certified : bool, optional
+            Price the canonical form :meth:`simplify` starts from (the default). With
+            ``False``, the form is built without simplify's certificates, and an answer of
+            :meth:`simplify` can then price above its input.
+        mode : Mode | str, optional
+            The mode whose reading of the expression is priced: ``'f64'`` (the default),
+            ``'real'`` or ``'permissive'``.
+        canon : {'default', 'mode'}, optional
+            ``'default'`` writes every mode's reading in f64's canonical form, so prices of
+            all modes are on one scale. ``'mode'`` keeps the mode's own canonical form, the
+            one that mode's :meth:`simplify` lowers.
 
-        ``canon='mode'`` is the engine-internal DIAGNOSTIC that routes the CANON
-        through the requested ``mode`` as well, pricing in the measure that mode's
-        chain actually descends -- exactly what makes the per-mode serve guarantee
-        ``complexity(simplify(e, mode=m), mode=m, canon='mode') <=
-        complexity(e, mode=m, canon='mode')`` checkable from the outside. Each mode's
-        diagnostic is its own yardstick: not comparable across modes and NOT the public
-        measure. Quote Default-canon numbers (``canon='default'``, byte-identical to
-        the pre-0.14.1 behaviour) everywhere a complexity is reported.
+        Returns
+        -------
+        int
+            The description length in thousandths of a bit.
 
-        With ``certified=False`` the expression is priced on the bare
-        (certificate-less, fail-closed) canonicalization instead: still invariant
-        to operand order, bracketing and serialization sugar, but a certificate-licensed
-        respelling the bare context cannot re-derive keeps its own measure, so a
-        simplify output can price ABOVE its input (measured live: 0.48% of 64k corpus
-        rows, in quanta of one symbol unit; the certified default closes exactly this).
-
-        Invariant in every case: mu prices structure and information, not spelling --
-        signs and magnitude-1 coefficient/exponent slots are free, literals pay their
-        description length on the exact value, symbols pay one symbol unit.
+        Notes
+        -----
+        In the default mode, ``complexity(simplify(e)) <= complexity(e)``. In ``real`` and
+        ``permissive``, the same holds with ``canon='mode'`` on both sides; with the default
+        canon, an answer of those modes can price above its input.
         """
         if isinstance(expression, str):
             tokens = self._core.parse(expression, True, False)

@@ -87,9 +87,15 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   node itself dissolves) and $-5 \cdot \sin(2)$ as $5 \cdot \sin(-2)$ — while a
   magnitude-1 coefficient beside *other* factors keeps the sign, because it rides
   $\mu$-free where the literal's sign bit would cost ($-1 \cdot x_0 \cdot \sin(2)$ is
-  canonical as spelled). **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
-  `rootn` is the canonical spelling of a principal even root and $\mu$ ties it with
-  $\mathrm{Pow}(t, 1/k)$, so neither orientation is forced.
+  canonical as spelled). **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are
+  normal forms, not reducible ones. The `pow` constructor writes $\mathrm{Pow}(t, 1/k)$ for an
+  even $k \geq 2$ as $\mathrm{rootn}(t, k)$: at an even index the two spellings are the same
+  function, the principal root, NaN on negatives. An odd unit fraction stays a power, because
+  the odd `rootn` is the signed root, a different function. $\mu$ neither decides this
+  spelling nor ties the two: at $k = 2$ the head and index of `rootn(t, 2)` cost
+  $6 + 2.585 = 8.585$ bits, against $3 + 3.585 = 6.585$ for a power's head and exponent
+  $1/2$. Since $\mathrm{nf}$ never builds the power spelling at an even unit fraction, no step
+  of §4 compares the two.
 
 **Route invariance** [EMPIRICAL — deliberately *not* claimed as a theorem]:
 $\mathrm{nf}$ is deterministic *per route*, but a state built incrementally through
@@ -266,6 +272,9 @@ never predicted from the pattern (see §5 for why prediction is impossible).
 
 ## 5. The reduction ordering
 
+The [description-length guide](guides/description-length.md) explains the measure $\mu$ for a
+first-time reader, with worked examples; this section states it and the ordering formally.
+
 $$ a <_o b \iff \big(\mu(a), a\big) <_{\mathrm{lex}} \big(\mu(b), b\big) $$
 
 where $\mu$ is the **unified simplicity measure** (`ac::expr::complexity` — description
@@ -288,7 +297,8 @@ symbol-vs-literal *ratio* — the sensitivity axis that matters — is independe
 laws a frequency count cannot see: a **named constant costs less than the cheapest
 expression denoting it** ($\mathrm{acos}(-1) = 11$ bits, $\exp(1) = 8$, so $4$ has
 room), and a **leaf must also name which variable it is** -- the class `Leaf` carries
-$1.65$ bits of the corpus census, a specific variable among eighteen carries $5.82$, and
+$1.64$ bits of the corpus census, a specific variable among its seventeen (`x1` to `x17`)
+carries $1.64 + \log_2 17 = 5.73$, and
 it is the second number the code has to charge for Kraft's inequality to hold and for
 collection ($x + x \to 2x$) to stay a descent. A numeric literal is priced **on its
 exact value**, spelling-free, by a
