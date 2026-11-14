@@ -1,5 +1,4 @@
-"""`is_valid` accepts and verifies ALL THREE forms (ruling 2026-08-18, evening
-batch 2 item 5): "is_valid should support and verify all forms, prefix, infix and
+"""`is_valid` accepts and verifies ALL THREE forms: "is_valid should support and verify all forms, prefix, infix and
 tagged".
 
 This closes a v24 seam. The v24.0 target format is the TAGGED canonical form, so
@@ -9,7 +8,7 @@ this", but a wrong VERDICT, silently, on the exact form the training target now
 uses. An infix `str` was worse: `list('x0+x0')` walks the CHARACTERS, so a
 perfectly valid expression came back False.
 
-Form detection follows the conversion trio (D2): the TYPE decides str-vs-tokens,
+Form detection follows the conversion trio: the TYPE decides str-vs-tokens,
 and for tokens the liberal reader decides dialect. Every pre-existing call --
 explicit binary prefix, the only form callers could use -- must answer exactly as
 before, so the explicit verdicts below are the recorded pre-change answers.
@@ -19,11 +18,12 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 # Verdicts recorded on the pre-change tree; not one of them may move.

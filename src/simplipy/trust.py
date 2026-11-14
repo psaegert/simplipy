@@ -13,7 +13,7 @@ is imported, so naming a module in a config is enough to run code -- before any
 expression is evaluated and before any operator is called. Since a config can arrive
 from anywhere (a colleague, a Hugging Face asset via :meth:`SimpliPyEngine.load`, a
 cloned repository), an unrestricted scan makes every config file executable. This
-module is the allowlist that closes that (register C1.12, owner-ruled 2026-08-09).
+module is the allowlist that closes that.
 
 **One spelling per module.** The trusted roots are the canonical spellings:
 
@@ -132,8 +132,8 @@ def check_realization(realization: str, operator: str) -> str | None:
     realization that is not a dotted name was neither checked NOR refused -- it simply
     travelled on to :meth:`SimpliPyEngine.code_to_lambda`, which interpolates it into
     generated source. A realization of ``__import__("...").write_text("...") or abs``
-    is not a dotted name; it loaded without complaint and executed at first evaluation
-    (register C1.12 / audit B14).
+    is not a dotted name; without this check it would load without complaint and execute
+    at first evaluation.
 
     So the shape is decided here for EVERY realization: a dotted name (root returned,
     trust checked later at import), a bare operator symbol or an ALLOWLISTED bare builtin
@@ -219,7 +219,7 @@ def check_chain(realization: str, operator: str, root_module: ModuleType,
     :func:`check_root`, and lands on :func:`os.system`. That is not a one-off to be
     blacklisted -- within three hops ``scipy`` and ``simplipy`` both reach ``os``,
     ``shutil`` and ``importlib``, and ``np`` reaches ``builtins`` -- so the check belongs on
-    the chain, not on a list of known-bad terminals (register C1.12, audit S2).
+    the chain, not on a list of known-bad terminals.
 
     Every hop after the root must therefore stay inside the grant:
 

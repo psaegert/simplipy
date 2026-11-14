@@ -61,11 +61,11 @@ pub struct OperatorSpec {
     pub realization: String,
     #[serde(default)]
     pub alias: Vec<String>,
-    /// PARSE-ONLY at 0.12.0 (D3): shipped configs declare `inverse:` entries, so the
+    /// PARSE-ONLY at 0.12.0: shipped configs declare `inverse:` entries, so the
     /// field stays accepted for deserialization compatibility, but nothing derives from
     /// it any more -- the `operator_inverses` map and its one (dead) intern site were
     /// removed with the binary kernel's relic layer. The shipped acj configs' historic
-    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) were FIXED 2026-08-05;
+    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) are FIXED;
     /// legacy configs in the wild still carry them (the legacy fixture reproduces one
     /// verbatim), which is why `worker.rs::inverse_unary_name` keeps its own map
     /// rather than trusting the field.

@@ -15,6 +15,7 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 # (source, point, the two-sided limit there: +inf, -inf, or None where the sides disagree)
 CASES = [
@@ -33,12 +34,17 @@ CASES = [
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
+
+
+#: What `two_sided_limit` returns when a value near the point is NaN: no limit can be read
+#: there, which is a different statement from two sides that disagree (`None`).
+UNDEFINED = 'undefined'
 
 
 def two_sided_limit(engine: SimpliPyEngine, tokens: list[str], point: dict[str, float]):
-    """The limit along 24 random lines through the point (+-inf, or a finite value), or
-    None when the sides disagree."""
+    """The limit along 24 random lines through the point (+-inf, or a finite value), None
+    when the sides disagree, or `UNDEFINED` when the function is NaN near the point."""
     names = sorted(point)
     f = engine.as_callable(tokens, names)
     rng = np.random.default_rng(3)
@@ -49,6 +55,8 @@ def two_sided_limit(engine: SimpliPyEngine, tokens: list[str], point: dict[str, 
         with np.errstate(all="ignore"):
             vals.append(np.broadcast_to(np.asarray(f(*args), dtype=float), (len(dirs),)))
     v = np.concatenate(vals)
+    if np.isnan(v).any():
+        return UNDEFINED
     if (np.abs(v) > 1e5).all():
         signs = set(np.sign(v).tolist())
         return None if len(signs) > 1 else signs.pop() * np.inf
@@ -57,7 +65,7 @@ def two_sided_limit(engine: SimpliPyEngine, tokens: list[str], point: dict[str, 
     return None
 
 
-@pytest.mark.parametrize("mode", ["f64", "real", "permissive"])
+@pytest.mark.parametrize("mode", ["f64", "permissive"])
 @pytest.mark.parametrize("src,point,limit", CASES)
 def test_answer_keeps_the_two_sided_limit(engine, mode, src, point, limit) -> None:
     tokens = list(engine.read_infix(src))

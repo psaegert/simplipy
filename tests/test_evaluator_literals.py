@@ -12,11 +12,12 @@ import pytest
 from simplipy import SimpliPyEngine
 from simplipy.utils import evaluator_literal
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 class TestEvaluatorLiteral:
@@ -63,6 +64,25 @@ class TestCompiledLiterals:
         assert f(np.array([3.0]))[0] == 9.0 + 1 / 3
 
 
+class TestOneZero:
+    """The core's literal reader (`numeric::leaf_value`, which the offline evaluator, the
+    interval kernel and the permissive ground fold use) reads a zero as the deployed
+    evaluator does: an INTEGER spelling is an integer, which has one zero (+0); a float
+    spelling keeps its sign; a fraction is `int / int` (+0). Read through `x0 + token` at
+    x0 = -0.0, so the sign of the result is the sign of the literal's zero."""
+
+    @pytest.mark.parametrize('token', [
+        '0', '-0', '+0', '00', '-00', '(-0)', '0/5', '-0/5',
+        '0.0', '+0.0', '-0.0', '-.0', '-0.', '-0e0', '0e5', '(-0.0)'])
+    def test_the_core_reads_a_zero_as_the_deployed_evaluator_does(
+            self, engine: SimpliPyEngine, token: str) -> None:
+        expr = ['+', 'x0', token]
+        deployed = float(engine.as_callable(expr, ['x0'])(np.array([-0.0]))[0])
+        core = float(np.asarray(engine._core.evaluate_batch(expr, ['x0'], [-0.0], 1, [])).ravel()[0])
+        assert deployed == 0.0 and core == 0.0, (token, deployed, core)
+        assert np.copysign(1.0, core) == np.copysign(1.0, deployed), (token, deployed, core)
+
+
 class TestOracleLiterals:
     """The mining oracles read a literal as the compiled expression does."""
 
@@ -88,16 +108,6 @@ class TestOracleLiterals:
         from simplipy.utils import literal_float
         assert literal_float('x0') is None
         assert literal_float('np.pi') is None
-
-    def test_the_f64_oracle_reads_a_fraction(self) -> None:
-        from simplipy.promotion._f64_eval import _num
-        assert _num('1/3') == 1 / 3
-        assert _num('(-1/3)') == -1 / 3
-
-    def test_the_high_precision_oracle_reads_a_fraction(self) -> None:
-        from simplipy.promotion._hp_equiv import evaluate
-        assert float(evaluate(['/', '1/3', '2'], {}, [])) == 1 / 6
-        assert float(evaluate(['(-1/3)'], {}, [])) == -1 / 3   # the literal reads as its nearest double
 
     def test_the_contract_refuses_an_oversized_spelling_at_once(self) -> None:
         import time
@@ -128,19 +138,27 @@ class TestKernelLiterals:
     forms that move because of it, each checked against the exact value."""
 
     # Since phase 2c a fraction token within the cap is an exact number, so the last three
-    # print reduced; what they pin is that none of them folds to nan.
+    # print reduced; what they pin is that none of them folds to nan. Where the two modes' values
+    # differ, `out` gives each mode's: float64 reads -1/10^400 as -0.0, so strict's log of it is
+    # float64's -inf (the reals give it no value, so float64's value is the only one strict
+    # admits), and permissive's is undefined; (-2)^(2^128) is finite (real: 2^(2^128)), a range
+    # event in float64, where strict writes float64's +inf, the cheaper of the two values the
+    # range standard accepts, and permissive, which has no float for it, keeps it.
     @pytest.mark.parametrize('prefix, out', [
         (['rootn', '-1', str(2 ** 128)], ['float("nan")']),       # an even root of -1
         (['rootn', 'rootn', 'x1', '0', str(2 ** 127)], ['float("nan")']),
-        (['log', '-1/' + Q], ['float("nan")']),                   # log of a negative number
-        (['pow', '-2', f'{2 ** 256}/{2 ** 128}'], ['pow', '-2', str(2 ** 128)]),  # finite
-        (['pow', '-2', f'{3 * 2 ** 200}/3'], ['pow', '-2', str(2 ** 200)]),  # main: nan
+        (['log', '-1/' + Q], {'f64': ['float("-inf")'], 'permissive': ['float("nan")']}),
+        (['pow', '-2', f'{2 ** 256}/{2 ** 128}'],
+         {'f64': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 128)]}),  # finite
+        (['pow', '-2', f'{3 * 2 ** 200}/3'],
+         {'f64': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 200)]}),  # main: nan
         (['log', f'{Q}/{Q[:-1]}'], ['log', '10']),                # log(10), no nan
     ])
     def test_beyond_i128_literals_fold_only_when_certain(self, engine: SimpliPyEngine,
-                                                         prefix: list[str], out: list[str] | None) -> None:
-        for mode in ('f64', 'real'):
-            assert list(engine.simplify(prefix, mode=mode)) == (prefix if out is None else out)
+                                                         prefix: list[str], out) -> None:
+        for mode in ('f64', 'permissive'):
+            want = out[mode] if isinstance(out, dict) else out
+            assert list(engine.simplify(prefix, mode=mode)) == want, mode
 
     @pytest.mark.parametrize('zero', ['+0/5', '(+0/5)', '+00/7', '-0/5'])
     def test_every_spelling_of_a_zero_fraction_is_zero(self, engine: SimpliPyEngine, zero: str) -> None:

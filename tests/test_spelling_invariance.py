@@ -1,35 +1,36 @@
-"""Nothing reads the reader's spelling (owner 2026-10-02: "fix this properly"; plan v2 phase 1).
+"""Nothing reads the reader's spelling ("fix this properly").
 
 A printed token form is not only an answer. The interval certificates, the folds, the served
 rules, the mining judge and the promotion refund print a state and read the tokens back, and
 callers mask and compare token answers. So the reader's spelling (integer over decimal) lives
-in the infix text alone, which nothing reads back, and every token form keeps the 0.14.7
-spelling. Readable token forms are the job of a display function, not of the token printer.
+in the infix text alone, which nothing reads back, and every token form keeps the token
+printer's spelling. Readable token forms are the job of a display function, not of the token
+printer.
 
 Pinned here: the infix text and the token answer are one state at one price on the whole
-corpus; the token answers and the mining judge keep the 0.14.7 spellings; and the source keeps
-the reader's rule inside the infix printer.
+corpus; the token answers and the mining judge keep the token printer's spellings; and the
+source keeps the reader's rule inside the infix printer. The examples use the constant
+3141.592653, whose fractions stay cheaper than their doubles (pi's own double is read as pi).
 """
-import json
 import os
 import re
 
 import pytest
 
-from simplipy.engine import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
-PI = '3.141592653589793'
+PI = '3141.592653'
 
 
 @pytest.fixture(scope='module')
 def eng():
     from conftest import require_or_skip
     require_or_skip(CONFIG, 'acj-4-3 config not staged')
-    return SimpliPyEngine.from_config(CONFIG)
+    return legacy_from_config(CONFIG)
 
 
 def tokens(eng, text):
@@ -38,9 +39,7 @@ def tokens(eng, text):
 
 class TestOneStateTwoSpellings:
     def test_the_infix_text_reads_back_to_the_token_answer_at_the_same_price(self, eng):
-        from conftest import require_or_skip
-        require_or_skip(CORPUS, 'tracked corpus not present')
-        rows = json.load(open(CORPUS))
+        rows = default_corpus()
         for i, row in enumerate(rows):
             answer = list(eng.simplify(list(row)))
             text = eng.simplify(eng.to_infix(answer))
@@ -49,7 +48,9 @@ class TestOneStateTwoSpellings:
         assert len(rows) == 400
 
     def test_the_reader_spelling_reads_back_to_the_token_answer_at_the_same_price(self, eng):
-        # the corpus has no value the reader's spelling touches; these do (25 of 44)
+        # the corpus has no value the reader's spelling touches; these do (11 of 44: the
+        # others' coefficients are written as their doubles, or have a terminating reciprocal,
+        # or carry no long integer)
         sources = [f'{c}*x1/({k}*{PI})' for c in (1, 3, 7) for k in range(1, 13)]
         sources += [f'x1*rootn(1/({k}*{PI}), 2)' for k in range(1, 7)]
         sources += ['100/101*x1', f'sin(x1/(2*{PI}))']
@@ -61,19 +62,21 @@ class TestOneStateTwoSpellings:
             assert tokens(eng, text) == answer, (src, text, answer)
             assert eng.complexity(text) == eng.complexity(answer), (src, text, answer)
             respelled += any(t.isdigit() and len(t) >= 10 for t in answer) and not long_integer.search(text)
-        assert respelled == 25, respelled
+        assert respelled == 11, respelled
 
 
 class TestTheTokenSpellingDoesNotMove:
-    # (input, token answer = the 0.14.7 answer, infix answer)
+    # (input, token answer, infix answer)
+    # (1/(2*3141.592653) is written `/ 1 6283.185306` in every dialect: its reciprocal codeword,
+    # the divisor, is its price. A numerator other than 1 has no such codeword.)
     CASES = [
-        (['/', '1', '*', '2', PI], ['/', '500000000000000', '3141592653589793'], '1/6.283185307179586'),
-        (['/', '*', '/', '3', '5', 'pow', 'x1', '2', '*', '*', '*', '4', PI, 'x2', 'x3'],
-         ['/', '*', '150000000000000', 'pow', 'x1', '2', '*', '3141592653589793', '*', 'x2', 'x3'],
-         '3*x1^2/62.83185307179586/x2/x3'),
-        (['*', 'x1', 'rootn', '/', '1', '*', '2', PI, '2'],
-         ['*', 'x1', 'rootn', '/', '500000000000000', '3141592653589793', '2'],
-         'x1*rootn(1/6.283185307179586, 2)'),
+        (['/', '7', '*', '2', PI], ['/', '3500000', '3141592653'], '7/6283.185306'),
+        (['/', '*', '/', '7', '5', 'pow', 'x1', '2', '*', '*', '*', '4', PI, 'x2', 'x3'],
+         ['/', '*', '350000', 'pow', 'x1', '2', '*', '3141592653', '*', 'x2', 'x3'],
+         '7*x1^2/62831.85306/x2/x3'),
+        (['+', 'x1', '/', '7', '*', '2', PI],
+         ['+', 'x1', '/', '3500000', '3141592653'],
+         'x1 + 7/6283.185306'),
     ]
 
     @pytest.mark.parametrize('expr, answer, text', CASES)
@@ -84,12 +87,12 @@ class TestTheTokenSpellingDoesNotMove:
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_mining_judge_answers_in_the_token_spelling(self, eng, expr, answer, _):
         # the judge's form is the miner's "mark to beat" and coverage's comparison spelling
-        assert eng._core.ac_judge(expr, 48)[2] == answer
+        assert eng._core.mine_mark(expr, rule_mode='default') == answer
 
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_tagged_answer_has_no_reader_spelling(self, eng, expr, answer, _):
         tagged = list(eng.simplify(eng.to_tagged(expr)))
-        assert not any('6.283185307179586' in t or '62.83185307179586' in t for t in tagged), tagged
+        assert not any('6283.185306' in t or '62831.85306' in t for t in tagged), tagged
 
 
 class TestReaderRuleStaysInTheInfixPrinter:
@@ -126,5 +129,6 @@ class TestReaderRuleStaysInTheInfixPrinter:
             for f in files:
                 if f.endswith('.py'):
                     rel = os.path.relpath(os.path.join(root, f), REPO)
-                    hits += [rel for ln in self.source(rel) if '_core.ac_simplify_infix' in ln]
+                    # `simplify` asks the core it captured for the call (`_serve`): `core.`
+                    hits += [rel for ln in self.source(rel) if 'core.ac_simplify_infix' in ln]
         assert hits == ['src/simplipy/engine.py'], hits

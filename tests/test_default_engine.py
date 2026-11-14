@@ -6,13 +6,15 @@ cannot change under a user without a simplipy release.
 
 The revision is what disambiguates one NAME across simplipy versions: `acj-4` mined
 under 0.14's judge and `acj-4` mined under 0.15's are both legitimately `acj-4`, and
-only (name, revision) picks one. The measure-fingerprint check (D25/R6) stays the
+only (name, revision) picks one. The measure-fingerprint check stays the
 safety net for an artifact loaded by name across a measure change; this pin is what
 stops that happening on the path the user did not choose.
 
 These tests never touch the network: the resolver is stubbed, because what is under
 test is the ARGUMENT handling and the announcement, not the download.
 """
+
+import logging
 
 import pytest
 
@@ -41,17 +43,20 @@ class TestTheDefaultIsPinnedAndAnnounced:
         SimpliPyEngine.load()
         assert resolved['asset'] == simplipy.DEFAULT_ENGINE
 
-    def test_the_implicit_default_is_announced(self, resolved, capsys):
-        SimpliPyEngine.load()
-        out = capsys.readouterr().out
+    def test_the_implicit_default_is_announced(self, resolved, caplog):
+        with caplog.at_level(logging.WARNING, logger='simplipy'):
+            SimpliPyEngine.load()
+        out = caplog.text
         # The NAME must appear -- a default the user did not choose is one they cannot
         # reproduce unless they are told which it was.
         assert simplipy.DEFAULT_ENGINE in out
         assert 'engine=' in out, 'the announcement must say how to choose another'
 
-    def test_an_explicit_name_is_NOT_announced(self, resolved, capsys):
-        SimpliPyEngine.load('acj-4-3')
-        assert capsys.readouterr().out == '', 'only the implicit path announces'
+    def test_an_explicit_name_is_NOT_announced(self, resolved, caplog, capsys):
+        with caplog.at_level(logging.WARNING, logger='simplipy'):
+            SimpliPyEngine.load('acj-4-3')
+        assert caplog.text == '', 'only the implicit path announces'
+        assert capsys.readouterr().out == '', 'library code does not print'
 
     def test_an_explicit_name_reaches_the_resolver_unchanged(self, resolved):
         SimpliPyEngine.load('acj-4-3')

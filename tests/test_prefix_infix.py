@@ -93,19 +93,19 @@ def test_prefix_to_infix_raises_on_extra_operands(engine: SimpliPyEngine) -> Non
 
 
 def test_prefix_to_infix_names_the_tagged_dialect(engine: SimpliPyEngine) -> None:
-    # simplify's default token output is the TAGGED serialization; this converter reads
-    # the explicit binary-prefix dialect. The refusal must name the dialect and both
-    # escapes, not fail with a bare arity error (B1).
+    # This converter reads the explicit binary-prefix dialect. The refusal must name the
+    # dialect and both conversions that exist, not fail with a bare arity error, and not
+    # point at the removed `simplify(form=)`.
     tagged = ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
     with pytest.raises(ValueError, match='tagged-serialization tokens') as exc_info:
         engine.prefix_to_infix(tagged)
     message = str(exc_info.value)
-    assert "form='infix'" in message
-    assert "form='explicit'" in message
+    assert 'to_infix(expr)' in message and 'to_prefix(expr)' in message
+    assert 'form=' not in message
 
 
 def test_is_valid_accepts_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
-    # SUPERSEDED CONTRACT (ruling 2026-08-18, evening batch 2 item 5): is_valid used to
+    # SUPERSEDED CONTRACT: is_valid used to
     # answer False for every tagged sequence and merely name the dialect in its verbose
     # diagnostic. It now READS all three forms, so a well-formed tagged sequence is
     # VALID and says nothing.
@@ -115,7 +115,7 @@ def test_is_valid_accepts_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> 
 
 
 def test_is_valid_verbose_names_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
-    # The B1 diagnostic survives where it is still true: a MALFORMED tagged sequence must
+    # The dialect diagnostic survives where it is still true: a MALFORMED tagged sequence must
     # be explained as malformed tagged, never as the misleading 'Variable must be leaf
     # node' the bare-prefix walk would print for the bag delimiters.
     tagged = ['<add>', '<mul>', '2', 'x0', '</mul>', '1']  # unclosed <add>
