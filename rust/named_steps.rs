@@ -96,11 +96,12 @@ mod tests {
     /// saturation, a flat point, a zero's sign, a pole's sign, a NaN on a region), which
     /// `permissive` does not ask (`abs(t) = t` keeps the reals' own `t >= 0`); no step of
     /// permissive's own.
-    const KIND_LAWS: [Law; 15] = [
+    const KIND_LAWS: [Law; 16] = [
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAcoshCosh,
         Law::FunExpLog,
+        Law::FunLogInverse,
         Law::FunUnitInverses,
         Law::FunAbsNonnegative,
         Law::LatticeAbsorb,

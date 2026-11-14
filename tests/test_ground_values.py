@@ -166,6 +166,15 @@ def test_an_exact_position_takes_no_real_value_in_f64(engine, expr, reals) -> No
     assert _contract.judged_reading(verify_rule(expr.split(), reals.split()), 'f64') is not True
 
 
+def test_an_exact_position_takes_float64s_double_in_f64(engine) -> None:
+    """f64 writes a fully numeric root index as float64's own double, 3.0 for
+    `2 + floor(tanh(100))` (float64's `tanh(100)` is 1.0), and the judge's f64, which reads a fully
+    numeric index by its double, holds the step."""
+    expr, f64 = 'rootn x1 + 2 floor tanh 100', 'rootn x1 3'
+    assert _simplify(engine, expr, 'f64') == f64
+    assert _contract.judged_reading(verify_rule(expr.split(), f64.split()), 'f64') is True
+
+
 def test_a_rule_changes_no_ground_value() -> None:
     """A rule fires on a fully numeric subject only where the ground evaluator admits its result:
     `asin(sin(_0)) -> _0` serves `asin(sin(x0))` and leaves `asin(sin(4))`, whose value is

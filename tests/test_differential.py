@@ -940,6 +940,22 @@ FUNCTION_PINS = [
     function_case('fun.acosh_cosh', 'floor acosh cosh x0', 'floor abs x0', 'f64'),
     function_case('fun.acosh_cosh', 'exp acosh cosh x0', 'exp abs x0', 'f64'),
     function_case('fun.acosh_cosh', 'acosh cosh x0', 'abs x0', 'f64'),
+    # the log of an inverse: +0 against -0 at t = 1, held under a reader of a zero's sign, over a
+    # t float64 rounds to 1 on a region, and over a t that is -0 on a region; permissive reads one
+    # zero and takes it everywhere
+    function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'log inv + x0 x1', 'neg log + x0 x1', 'f64'),
+    function_case('fun.log_inverse', 'log inv + x0 x1', 'neg log + x0 x1', 'permissive'),
+    function_case('fun.log_inverse', 'inv log inv + x0 x1', 'inv neg log + x0 x1', 'permissive'),
+    function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'permissive'),
+    function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'permissive'),
+    function_case('fun.log_inverse', 'sin log inv x0', 'sin neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'inv inv log inv x0', 'neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'f64'),
+    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'log inv exp x0', 'neg log exp x0', 'f64'),
+    function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'f64'),
     function_case('fun.exp_log', 'exp log abs x0', 'abs x0', 'f64'),
     function_case('fun.exp_log', 'exp log x0', 'x0', 'f64'),
     function_case('fun.exp_log', 'inv exp log pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'f64'),

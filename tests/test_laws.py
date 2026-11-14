@@ -286,6 +286,24 @@ FUNCTION_ROWS = [
     ('fun.exp_log', 'exp log x0', 'exp log x0', 'x0'),
     ('fun.exp_log', 'inv exp log pow ceil x0 0.5', 'inv exp log pow ceil x0 / 1 2',
      'inv pow ceil x0 / 1 2'),
+    # log(1/t) = -log(t); f64: +0 against -0 at t = 1, so over a monomial t alone, and the pair
+    # stays under a head that reads a zero's sign (an inverse, an odd negative power), through the
+    # heads that carry it (sin), and over a t float64 rounds to 1 on a region (exp(x0), ceil(x0),
+    # a sum); two inverses read no sign. permissive reads one zero: everywhere, at the root's
+    # walk, after exp(log(1/t)) = 1/t
+    ('fun.log_inverse', 'log inv x0', 'neg log x0', 'neg log x0'),
+    ('fun.log_inverse', 'inv inv log inv x0', 'neg log x0', 'neg log x0'),
+    ('fun.log_inverse', 'log inv abs x0', 'neg log abs x0', 'neg log abs x0'),
+    ('fun.log_inverse', 'sin log inv x0', 'neg sin log x0', 'neg sin log x0'),
+    ('fun.log_inverse', 'exp log inv x0', 'exp neg log x0', 'inv x0'),
+    ('fun.log_inverse', 'exp log inv abs x0', 'inv abs x0', 'inv abs x0'),
+    ('fun.log_inverse', 'inv log inv x0', 'inv log inv x0', '/ -1 log x0'),
+    ('fun.log_inverse', 'pow log inv x0 -3', 'inv pow log inv x0 3', '/ -1 pow log x0 3'),
+    ('fun.log_inverse', 'inv sin log inv x0', 'inv sin log inv x0', '/ -1 sin log x0'),
+    ('fun.log_inverse', 'log inv exp x0', 'log inv exp x0', 'neg x0'),
+    ('fun.log_inverse', 'log inv ceil x0', 'log inv ceil x0', 'neg log ceil x0'),
+    ('fun.log_inverse', 'log inv + x0 x1', 'log inv + x0 x1', 'neg log + x0 x1'),
+    ('fun.log_inverse', 'inv log inv + x0 x1', 'inv log inv + x0 x1', '/ -1 log + x0 x1'),
     ('fun.unit_inverses', 'cos acos sin x0', 'sin x0', 'sin x0'),
     ('fun.unit_inverses', 'tanh atanh cos x0', 'cos x0', 'cos x0'),
     ('fun.unit_inverses', 'cos acos x0', 'cos acos x0', 'x0'),
@@ -538,6 +556,7 @@ def test_the_core_names_its_laws() -> None:
         ('fun.atanh_tanh', 'atanh(tanh(t)) = t'), ('fun.log_exp', 'log(exp(t)) = t'),
         ('fun.asinh_sinh', 'asinh(sinh(t)) = t'), ('fun.sinh_asinh', 'sinh(asinh(t)) = t'),
         ('fun.acosh_cosh', 'acosh(cosh(t)) = abs(t)'), ('fun.exp_log', 'exp(log(t)) = t'),
+        ('fun.log_inverse', 'log(1/t) = -log(t)'),
         ('fun.unit_inverses', 'cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t'),
         ('perm.inverse_pairs', 'f(g(t)) = t, g the inverse of f'),
         ('fun.abs_nonnegative', 'abs(t) = t'),
@@ -648,3 +667,12 @@ def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
     a, b = values(expr), values(f64)
     same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
     assert same.all(), (law, expr, f64, points[~same][0])
+
+
+@pytest.mark.parametrize('expr, f64', [
+    # srbf's ground truths #164 and #584: log(1/x1) collapses where nothing reads its zero's sign
+    ('* * -3.47355 x1 + * * x1 - x1 3.47355 log / 1 x1 * 3.47355 x1', '* -3.47355 * x1 + * 3.47355 x1 * x1 * log x1 - 3.47355 x1'),
+    ('* + neg x1 / x1 x2 + + - * x1 x2 x1 log / 1 x1 / 1 * x1 x2', '* x1 * - inv x2 1 - + * x1 - x2 1 inv * x1 x2 log x1'),
+])
+def test_the_log_of_an_inverse_collapses_in_srbfs_ground_truths(engine, expr, f64) -> None:
+    assert ' '.join(engine.simplify(expr.split(), mode='f64')) == f64

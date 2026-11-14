@@ -855,32 +855,35 @@ class TestSymbolicGateFatalBuckets:
 
     Today the mine's kernel vocabulary is fully covered by the contract, so the
     coverage gap is simulated the way it would really arise -- an operator the mine
-    evaluates but the judge does not -- by withdrawing `log` from the contract's
-    arity table: every log-bearing rule then buckets UNSUPPORTED-SHAPE, exactly as a
-    future vocabulary extension without a matching contract arm would."""
+    evaluates but the judge does not -- by withdrawing `log` (or `exp`, where the mine
+    must pick a rule bearing it) from the contract's arity table: every rule bearing it
+    then buckets UNSUPPORTED-SHAPE, exactly as a future vocabulary extension without a
+    matching contract arm would."""
 
-    def _withdraw_log(self, monkeypatch) -> None:
+    def _withdraw(self, monkeypatch, op: str = "log") -> None:
         from simplipy.verify import _contract
-        monkeypatch.delitem(_contract.ARITY, "log")
+        monkeypatch.delitem(_contract.ARITY, op)
 
     def test_the_simulated_gap_buckets_unsupported_shape(self, monkeypatch) -> None:
         """Premise pin: with `log` withdrawn the instrument refuses log-bearing rules
         as UNSUPPORTED-SHAPE (and still certifies a log-free identity)."""
         from simplipy.verify import verify_rule
-        self._withdraw_log(monkeypatch)
+        self._withdraw(monkeypatch)
         assert verify_rule(["log", "exp", "1"], ["1"])["verdict"] == "UNSUPPORTED-SHAPE"
         assert verify_rule(["+", "x0", "0"], ["x0"])["verdict"] == "CERTIFIED"
 
     def test_mine_refuses_what_the_judge_cannot_evaluate(self, tmp_path, monkeypatch) -> None:
         """The plan's acceptance: mining a config with an operator the judge cannot
         evaluate refuses the rule instead of shipping it, and the sidecar carries the
-        full bucket census alongside killed/kept. The unpatched fixture mine mints
-        five log-bearing rules (log 1 -> 0, log exp 1 -> 1, ...). The judge now acts per
+        full bucket census alongside killed/kept. The withdrawn operator is `exp`: the
+        unpatched fixture mine mints one exp-bearing rule (inv exp ?0 -> exp neg ?0) and no
+        log-bearing one, the engine's laws taking every log rule it would pick
+        (log(1/x) = -log(x) among them). The judge now acts per
         length (miner.md 2.6), so the refusal is the judge loop's: each unjudgeable pick
         is EXCLUDED and its source re-scanned, and the per-length record names it --
         an empty exclusion record here would be a vacuous pass. The judge runs
         in-process (`judge_processes=1`): a spawned worker would not see the patch."""
-        self._withdraw_log(monkeypatch)
+        self._withdraw(monkeypatch, "exp")
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
         cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
@@ -891,13 +894,13 @@ class TestSymbolicGateFatalBuckets:
                        verbose=False, output_file=out, promote_sorts=False,
                        judge_processes=1)
         mined = json.load(open(out))
-        shipped_unjudgeable = [r for r in mined if "log" in r[0] or "log" in r[1]]
+        shipped_unjudgeable = [r for r in mined if "exp" in r[0] or "exp" in r[1]]
         assert shipped_unjudgeable == [], (
             f"rules the judge cannot evaluate shipped: {shipped_unjudgeable}")
         prov = json.load(open(out + ".provenance.json"))
         excluded = [pair for row in prov["per_length"].values() for pair in row["excluded"]]
-        assert [p for p in excluded if "log" in p[0] or "log" in p[1]], \
-            "vacuous: the judge loop excluded no log rule"
+        assert [p for p in excluded if "exp" in p[0] or "exp" in p[1]], \
+            "vacuous: the judge loop excluded no exp rule"
         # the symbolic gate decides where the mine first considers a pick, and nothing is
         # dropped afterwards: the file passes the final gate as written
         assert "symbolic_gate" not in prov
@@ -907,7 +910,7 @@ class TestSymbolicGateFatalBuckets:
         """The certify_rules gate site must apply the same fatal set: a certification the judge
         cannot evaluate is refused, not returned 'minimal'. The log-free control in
         the same call proves the refusal is the gate's."""
-        self._withdraw_log(monkeypatch)
+        self._withdraw(monkeypatch)
         out = engine.certify_rules(
             [["log", "*", "exp", "x0", "exp", "x1"],
              ["inv", "exp", "x0"]],

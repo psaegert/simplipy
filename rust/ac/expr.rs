@@ -1420,8 +1420,9 @@ pub struct Cx<'a> {
     /// The construction stands where nothing reads the flat point of `log o exp` or `acosh o cosh`
     /// (`flat_read_below`): float64's `log(exp(t))` is `+0` wherever 0 < |t| < 1.1e-16 and
     /// `acosh(cosh(t))` is 0 wherever |t| < 1.5e-8, where `t` is not, so in `f64` the pair
-    /// collapses only where nothing around reads that zero (`fun.log_exp`, `fun.acosh_cosh`). Set
-    /// by [`release_flat`] alone, for the nodes it rebuilds.
+    /// collapses only where nothing around reads that zero (`fun.log_exp`, `fun.acosh_cosh`); and
+    /// the log of an inverse, which collapses at the root's walk in both modes (`fun.log_inverse`).
+    /// Set by [`release_flat`] alone, for the nodes it rebuilds.
     pub flat_unread: bool,
     /// A PRINTER'S held sums: the sums of the state it spells that hold their sign
     /// ([`held_sums`]), whose negations it writes as the negations they are. `None` for a
@@ -4903,18 +4904,45 @@ pub(crate) fn zero_read_below(e: &Ex, i: usize, read: bool, cx: &Cx) -> bool {
 }
 
 /// The two pairs whose float64 round trip is flat at 0 (`Cx::flat_unread`): `log o exp`
-/// (`fun.log_exp`) and `acosh o cosh` (`fun.acosh_cosh`).
+/// (`fun.log_exp`) and `acosh o cosh` (`fun.acosh_cosh`), and the log of an inverse, whose
+/// float64 value is `+0` where the collapse's is `-0` (`fun.log_inverse`: `log(1/t)` against
+/// `-log(t)` at t = 1), each with the context premise the root's walk reads (`Cx::flat_unread`).
+/// `permissive` reads no zero's sign, and holds the log of an inverse alone, to the root's walk:
+/// there it collapses everywhere, after the constructors have taken `exp(log(1/t)) = 1/t`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum FlatPair {
     LogExp = 0,
     AcoshCosh = 1,
+    LogInverse = 2,
 }
 
-/// Is `e` an inverse pair whose float64 round trip is flat at 0: `log(exp(t))` or
-/// `acosh(cosh(t))`?
-fn flat_pair(e: &Ex, view: &TokenView) -> Option<FlatPair> {
+/// The pairs whose collapse waits for the root's walk, in their index order.
+const FLAT_PAIRS: [FlatPair; 3] = [FlatPair::LogExp, FlatPair::AcoshCosh, FlatPair::LogInverse];
+
+/// Is `e` a pair whose collapse waits for the root's walk: in `f64` `log(exp(t))` or
+/// `acosh(cosh(t))`, flat at 0, or `log(1/t)`; in `permissive` `log(1/t)`?
+fn flat_pair(e: &Ex, cx: &Cx) -> Option<FlatPair> {
+    let view = cx.view;
     let Ex::Fun(o, a) = e else { return None };
-    let [Ex::Fun(i, b)] = a.as_slice() else {
+    if a.len() != 1 {
+        return None;
+    }
+    // the log of an inverse waits only where its law may collapse it: over a part with a
+    // variable, a slot or a fitted constant, in `f64` a monomial
+    if view.tok_is(*o, "log") {
+        if let Ex::Pow(t, k) = &a[0] {
+            if matches!(&**k, Ex::Num(r) if *r == Rat::NEG_ONE)
+                && (t.has_measure_space(view) || t.contains_wildcard(view))
+                && (!cx.f64_semantics() || log_inverse_argument(t, view))
+            {
+                return Some(FlatPair::LogInverse);
+            }
+        }
+    }
+    if !cx.f64_semantics() {
+        return None;
+    }
+    let Ex::Fun(i, b) = &a[0] else {
         return None;
     };
     if b.len() != 1 {
@@ -4926,6 +4954,90 @@ fn flat_pair(e: &Ex, view: &TokenView) -> Option<FlatPair> {
         Some(FlatPair::AcoshCosh)
     } else {
         None
+    }
+}
+
+/// [`flat_read_below`] for every pair kind at once, each with its own `read`.
+fn flat_read_below_all(e: &Ex, i: usize, read: [bool; 3], cx: &Cx) -> [bool; 3] {
+    FLAT_PAIRS.map(|p| flat_read_below(e, i, read[p as usize], p, cx))
+}
+
+/// [`flat_read_below`] for `log(1/t)` (`fun.log_inverse`), whose value parts from the collapse's
+/// only in the sign of a zero, `+0` against `-0` where `t` is 1: the readers are the judge's,
+/// measured as `C[log(1/x0)] -> C[-log(x0)]` over the contexts `C` of the operators, and they are
+/// the readers of a zero's sign: an inverse, a divisor, an odd negative power or root, `atan2`
+/// (its first argument, but over a positive second; its second beside a variable), `mod`, a power
+/// over a variable, `harmonic`, `besseli` and a Bessel order.
+/// An odd function, `log`, `floor`, `ceil`, a sum, a product, an odd power, `sqrt` and `min` and
+/// `max` carry it; `abs`, an even power, a positive fractional power other than `sqrt` and the
+/// even functions are blind to it. A root of an even index and a negative fractional power read
+/// it as `sqrt` and its inverse do, since the canon reads `pow(t, 1/2)` as `rootn(t, 2)`. A head
+/// the table does not name reads it.
+fn log_inverse_read_below(e: &Ex, i: usize, read: bool, cx: &Cx) -> bool {
+    let view = cx.view;
+    let ground = |x: &Ex| !x.has_measure_space(view) && !x.contains_wildcard(view);
+    match e {
+        Ex::Add(_) | Ex::Mul(_) => read,
+        Ex::Pow(_, x) if i == 0 => match &**x {
+            Ex::Num(k) if k.is_odd_integer() => k.signum() < 0 || read,
+            Ex::Num(k) if k.is_integer() => false,
+            // numpy's `sqrt` keeps `-0`, and an inverse of it reads it
+            Ex::Num(k) if *k == Rat::new(1, 2).expect("1/2") => read,
+            Ex::Num(k) => k.signum() < 0,
+            _ => true,
+        },
+        Ex::Pow(b, _) => !ground(b),
+        Ex::Fun(f, a) => {
+            let is = |s: &str| view.tok_is(*f, s);
+            if a.len() == 1 {
+                if ["abs", "cos", "cosh", "acos", "acosh", "exp", "erfc"]
+                    .iter()
+                    .any(|s| is(s))
+                {
+                    return false;
+                }
+                let carries = [
+                    "sin", "tan", "asin", "atan", "sinh", "tanh", "asinh", "atanh", "erf", "log",
+                    "floor", "ceil",
+                ]
+                .iter()
+                .any(|s| is(s));
+                return !carries || read;
+            }
+            let others_ground = a.iter().enumerate().all(|(j, m)| j == i || ground(m));
+            // an even root may stand for numpy's `sqrt`, which keeps `-0` (`pow(t, 1/2)` is read
+            // as `rootn(t, 2)`), so it carries the sign as an odd one does
+            if is("rootn") {
+                return match (i, a.get(1)) {
+                    (0, Some(Ex::Num(k))) if k.is_integer() => k.signum() < 0 || read,
+                    _ => true,
+                };
+            }
+            if is("min") || is("max") {
+                return read;
+            }
+            if is("mod") {
+                return i != 0 || !others_ground;
+            }
+            // `atan2` reads its first argument's zero's sign where its second may be negative
+            // (`atan2(+0, -1)` is pi, `atan2(-0, -1)` is -pi)
+            if is("atan2") && a.len() == 2 {
+                return match (i, ground_value(&a[1 - i], cx)) {
+                    (0, Some(x)) if x > 0.0 => read,
+                    (1, Some(_)) => false,
+                    _ => true,
+                };
+            }
+            if (is("besselj") || is("bessely") || is("besselk")) && a.len() == 2 && i == 1 {
+                return match &a[0] {
+                    Ex::Num(n) if n.is_odd_integer() && is("besselj") => read,
+                    Ex::Num(n) if n.is_integer() => false,
+                    _ => true,
+                };
+            }
+            true
+        }
+        _ => true,
     }
 }
 
@@ -4945,6 +5057,13 @@ fn flat_pair(e: &Ex, view: &TokenView) -> Option<FlatPair> {
 /// `acosh o cosh` drifts below `|t|` (`acosh(cosh(3))` is 2.9999999999999996), so `floor` and
 /// `atanh` read it. A head the table does not name reads it.
 pub(crate) fn flat_read_below(e: &Ex, i: usize, read: bool, pair: FlatPair, cx: &Cx) -> bool {
+    // `permissive` reads one zero
+    if !cx.f64_semantics() {
+        return false;
+    }
+    if pair == FlatPair::LogInverse {
+        return log_inverse_read_below(e, i, read, cx);
+    }
     let view = cx.view;
     let le = pair == FlatPair::LogExp;
     let ground = |x: &Ex| !x.has_measure_space(view) && !x.contains_wildcard(view);
@@ -5035,24 +5154,45 @@ pub(crate) fn flat_read_below(e: &Ex, i: usize, read: bool, pair: FlatPair, cx: 
     }
 }
 
-/// Does a reader of zeros over `e` read the flat point of a pair in `e` (`flat_read_below`, `e`'s
-/// own zero read), in `f64` where the pairs are held (`Cx::flat_unread` unset)?
-pub(crate) fn flat_reads_a_pair(e: &Ex, cx: &Cx) -> bool {
-    fn walk(e: &Ex, read: [bool; 2], cx: &Cx) -> bool {
-        if !read[0] && !read[1] {
+/// Does composing `(b^r)^s` into `b^(r*s)` hide a reader of a pair in `b` (`flat_read_below`):
+/// the two powers read a pair's zero that the one power does not, in `f64` where the pairs are
+/// held? Float64's value has turned on that zero at the inner power: `1/(1/log(exp(x0)))` and
+/// `1/sqrt(log(1/x0))` stay (`sqrt` keeps `-0`, which `1/...` reads, and `pow(-0, -1/2)` is
+/// `+inf` like `pow(+0, -1/2)`). Two integer powers hide no reader of the log of an inverse,
+/// whose two zeros differ only in sign: `((±0)^r)^s` is `(±0)^(r*s)`, sign and all, so
+/// `1/(1/log(1/x0))` is `log(1/x0)`.
+pub(crate) fn compose_hides_a_flat_read(b: &Ex, r: &Rat, s: &Rat, cx: &Cx) -> bool {
+    if !cx.f64_semantics() || cx.flat_unread {
+        return false;
+    }
+    let Some(rs) = r.checked_mul(s) else {
+        return false;
+    };
+    let power = |k: Rat| Ex::Pow(Box::new(Ex::NaN), Box::new(Ex::Num(k)));
+    let outer = Ex::Pow(Box::new(power(r.clone())), Box::new(Ex::Num(s.clone())));
+    let at_inner = flat_read_below_all(&outer, 0, [false; 3], cx);
+    let before = flat_read_below_all(&power(r.clone()), 0, at_inner, cx);
+    let after = flat_read_below_all(&power(rs), 0, [false; 3], cx);
+    let mut hidden = FLAT_PAIRS.map(|p| before[p as usize] && !after[p as usize]);
+    if r.is_integer() && s.is_integer() {
+        hidden[FlatPair::LogInverse as usize] = false;
+    }
+    flat_reads_a_pair_at(b, hidden, cx)
+}
+
+/// Does `e` hold a pair whose zero is read (`flat_read_below`), `e`'s own zero read as `read` says,
+/// pair by pair?
+fn flat_reads_a_pair_at(e: &Ex, read: [bool; 3], cx: &Cx) -> bool {
+    fn walk(e: &Ex, read: [bool; 3], cx: &Cx) -> bool {
+        if !read.iter().any(|r| *r) {
             return false;
         }
-        if let Some(p) = flat_pair(e, cx.view) {
+        if let Some(p) = flat_pair(e, cx) {
             if read[p as usize] {
                 return true;
             }
         }
-        let below = |i: usize| {
-            [
-                flat_read_below(e, i, read[0], FlatPair::LogExp, cx),
-                flat_read_below(e, i, read[1], FlatPair::AcoshCosh, cx),
-            ]
-        };
+        let below = |i: usize| flat_read_below_all(e, i, read, cx);
         match e {
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
                 v.iter().enumerate().any(|(i, c)| walk(c, below(i), cx))
@@ -5061,43 +5201,67 @@ pub(crate) fn flat_reads_a_pair(e: &Ex, cx: &Cx) -> bool {
             _ => false,
         }
     }
-    cx.f64_semantics() && !cx.flat_unread && walk(e, [true, true], cx)
+    walk(e, read, cx)
 }
 
-/// WHERE NOTHING READS ITS FLAT POINT, THE PAIR COLLAPSES (`fun.log_exp`, `fun.acosh_cosh`):
-/// `e` with every `log(exp(t))` and `acosh(cosh(t))` a construction held in `f64` rebuilt where
-/// nothing around reads its flat point (`flat_read_below`). The root of a state reads none, so
+/// Is `t` a MONOMIAL, the argument `fun.log_inverse` reads: a product of variables, fitted
+/// constants and nonzero numbers, each perhaps under an integer power or `abs`, a slot that binds
+/// a variable (`?`) among them? Float64's value of a monomial is 1 only at points, where the
+/// judge reads `log(1/t)` and `-log(t)` as one: a sum, a root and a function round to 1 on a
+/// region (`exp(x0)` is 1.0 wherever |x0| < 1.1e-16, `ceil(x0)` on (0, 1]), where `log(1/t)` is
+/// `+0` and `-log(t)` is `-0`.
+pub(crate) fn log_inverse_argument(t: &Ex, view: &TokenView) -> bool {
+    match t {
+        Ex::Const | Ex::Pi | Ex::E => true,
+        Ex::Num(r) => !r.is_zero(),
+        Ex::Leaf(tok) => {
+            if t.contains_wildcard(view) {
+                view.with_str(*tok, |s| s.starts_with('?'))
+            } else {
+                !is_neg_zero(t, view)
+            }
+        }
+        Ex::Mul(v) => v.iter().all(|f| log_inverse_argument(f, view)),
+        Ex::Pow(b, k) => {
+            matches!(&**k, Ex::Num(k) if k.is_integer()) && log_inverse_argument(b, view)
+        }
+        Ex::Fun(f, a) => {
+            a.len() == 1 && view.tok_is(*f, "abs") && log_inverse_argument(&a[0], view)
+        }
+        _ => false,
+    }
+}
+
+/// WHERE NOTHING READS ITS FLAT POINT, THE PAIR COLLAPSES (`fun.log_exp`, `fun.acosh_cosh`,
+/// `fun.log_inverse`): `e` with every pair a construction held (`flat_pair`) rebuilt where nothing
+/// around reads its flat point (`flat_read_below`). The root of a state reads none, so
 /// `log(exp(x0))` is `x0` and `sin(log(exp(x0)))` is `sin(x0)` as answers, while
-/// `1/log(exp(x0))` and `1/sin(log(exp(x0)))` stay. The nodes are rebuilt from their children,
-/// the released pairs in a context that reads no flat point (`Cx::flat_unread`).
+/// `1/log(exp(x0))` and `1/sin(log(exp(x0)))` stay; in `permissive`, which reads no zero's sign,
+/// every `log(1/t)` collapses. The nodes are rebuilt from their children, the released pairs in a
+/// context that reads no flat point (`Cx::flat_unread`).
 pub(crate) fn release_flat(e: Ex, cx: &Cx) -> Ex {
-    fn holds_a_pair(e: &Ex, view: &TokenView) -> bool {
-        flat_pair(e, view).is_some()
+    fn holds_a_pair(e: &Ex, cx: &Cx) -> bool {
+        flat_pair(e, cx).is_some()
             || match e {
-                Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|c| holds_a_pair(c, view)),
-                Ex::Pow(b, x) => holds_a_pair(b, view) || holds_a_pair(x, view),
+                Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|c| holds_a_pair(c, cx)),
+                Ex::Pow(b, x) => holds_a_pair(b, cx) || holds_a_pair(x, cx),
                 _ => false,
             }
     }
-    if !cx.f64_semantics() || cx.flat_unread || !holds_a_pair(&e, cx.view) {
+    if cx.flat_unread || !holds_a_pair(&e, cx) {
         return e;
     }
     let free = Cx {
         flat_unread: true,
         ..*cx
     };
-    flat_released(&e, [false, false], cx, &free).unwrap_or(e)
+    flat_released(&e, [false; 3], cx, &free).unwrap_or(e)
 }
 
 /// [`release_flat`] at `e`, each pair's flat point read or not (`read`, by [`FlatPair`]): the node
 /// where it changes, `None` where nothing does.
-fn flat_released(e: &Ex, read: [bool; 2], cx: &Cx, free: &Cx) -> Option<Ex> {
-    let below = |i: usize| {
-        [
-            flat_read_below(e, i, read[0], FlatPair::LogExp, cx),
-            flat_read_below(e, i, read[1], FlatPair::AcoshCosh, cx),
-        ]
-    };
+fn flat_released(e: &Ex, read: [bool; 3], cx: &Cx, free: &Cx) -> Option<Ex> {
+    let below = |i: usize| flat_read_below_all(e, i, read, cx);
     let rebuilt = match e {
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             let mut kids: Option<Vec<Ex>> = None;
@@ -5134,7 +5298,7 @@ fn flat_released(e: &Ex, read: [bool; 2], cx: &Cx, free: &Cx) -> Option<Ex> {
         _ => return None,
     };
     let node = rebuilt.as_ref().unwrap_or(e);
-    if let (Some(p), Ex::Fun(f, a)) = (flat_pair(node, cx.view), node) {
+    if let (Some(p), Ex::Fun(f, a)) = (flat_pair(node, cx), node) {
         if !read[p as usize] {
             let freed = fun(*f, a.clone(), free);
             if freed != *node {
@@ -10637,10 +10801,9 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Some((inner_base, r)), Ex::Num(s)) = (as_rational_power(&base, cx), &exp) {
         {
             let r = &r;
-            // Two negative powers undo each other's pole, but where the inner one reads a flat
-            // point (`flat_reads_a_pair`), float64's value has turned on it there:
-            // `1/(1/log(exp(x0)))` stays.
-            let flat = r.signum() < 0 && s.signum() < 0 && flat_reads_a_pair(inner_base, cx);
+            // A composition does not hide a reader of a held pair's zero
+            // (`compose_hides_a_flat_read`): `1/(1/log(exp(x0)))` stays.
+            let flat = compose_hides_a_flat_read(inner_base, r, s, cx);
             let licence = !flat
                 && Law::PowCompose.holds_powers(
                     Powers::Rational {
@@ -12166,6 +12329,22 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                 if let Some(collapsed) = cx.inverse_pair_collapse(op, *inner, &iargs[0]) {
                     return collapsed;
                 }
+            }
+        }
+    }
+    // THE LOG OF AN INVERSE (`fun.log_inverse`): `log(1/t) = -log(t)` where its law holds, at the
+    // root's walk in both modes (`release_flat`; in `f64` over a monomial `t`, where nothing reads
+    // the sign of a zero); a fully numeric `t` is read for its value first.
+    if args.len() == 1 && cx.view.tok_is(op, "log") {
+        if let Ex::Pow(t, k) = &args[0] {
+            if matches!(&**k, Ex::Num(r) if *r == Rat::NEG_ONE)
+                && (t.has_measure_space(cx.view) || t.contains_wildcard(cx.view))
+                && Law::FunLogInverse.holds(t, cx)
+            {
+                return mul(
+                    vec![Ex::Num(Rat::NEG_ONE), fun(op, vec![(**t).clone()], cx)],
+                    cx,
+                );
             }
         }
     }

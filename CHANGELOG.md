@@ -211,6 +211,11 @@ organised by who you are, then the highlights, then every change in detail.
 - **A rule with a slot in a divisor's product fires on its instances.** `1/(x1*?0) -> t` and
   `sqrt(2/(x1*?0))*sinh(?0) -> t` fire on `1/(x1*x3)` and on `sqrt(2/(x1*x3))*sinh(x3)`, whose
   products distribute where the rule's could not.
+- **The log of an inverse is minus the log.** `log(1/t)` is `-log(t)`: in `permissive` for every
+  `t`, and in `f64` where `t` is a monomial (variables, fitted constants and nonzero numbers under
+  integer powers and `abs`) and nothing around reads a zero's sign, float64's `log(1/t)` being `+0`
+  where `-log(t)` is `-0`, at t = 1. `log(1/x1)` is `-log(x1)` in both modes, while
+  `1/log(1/x0)`, `log(1/x0)^-3` and `log(1/(x0 + x1))` stay in `f64`.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
@@ -732,6 +737,31 @@ model predictions.
   on a region with a zero of no sign of its own (`1/x1*1/abs(x2 - abs(x2))`) is no instance of the
   product's inverse and keeps its value, while the product's own inverse, held whole as the pattern
   is, matches the reading as written.
+- **`log(1/t)` is `-log(t)`.** The law `fun.log_inverse` joins the catalogue beside `fun.log_exp`
+  and `fun.exp_log`. Float64's `log(1/t)` is `+0` where `-log(t)` is `-0`, wherever `t` is 1, so
+  `f64` takes it where that is no change of kind. Its argument is a monomial, a product of
+  variables, fitted constants and nonzero numbers, each perhaps under an integer power or `abs`,
+  whose float64 value is 1 only at points; an argument float64 rounds to 1 on a region is none:
+  `log(1/exp(x0))`, `log(1/ceil(x0))` and `log(1/(x0 + x1))` stay, the two sides being `+0` and `-0`
+  wherever |x0| < 1.1e-16, on (0, 1] and wherever x0 + x1 rounds to 1. And the collapse waits, as
+  `log(exp(t))`'s does, for a context that reads no zero's sign. The readers are the judge's,
+  measured as `C[log(1/x0)] -> C[-log(x0)]` over the operators' contexts: an inverse, a divisor, an
+  odd negative power or root, `atan2` (its first argument unless the second is positive, its second
+  beside a variable), `mod`, an exponent over a variable, `harmonic`, `besseli` and a Bessel order
+  read it; an odd function, `log`, `floor`, `ceil`, a sum, a product, `min`, `max`, a positive odd
+  power and `sqrt` carry it to what reads it; `abs`, `exp`, `cos`, `cosh`, `acos`, `acosh`, `erfc`,
+  an even power and a positive fractional power other than `sqrt` are blind to it. `log` and an even
+  negative power read a zero but not its sign (`log(+0)` and `log(-0)` are both `-inf`). An even
+  root and a negative fractional power read it as `sqrt` and its inverse do, and two integer powers
+  read it as their product does. So `log(1/x0)` is `-log(x0)`, `sin(log(1/x0))` is `-sin(log(x0))`
+  and `1/(1/log(1/x0))` is `-log(x0)`, while `1/log(1/x0)`, `log(1/x0)^-3` and `1/sin(log(1/x0))`
+  stay as written. `permissive` reads one zero, so there the law holds for every `t` under every
+  head, as `log(exp(t)) = t` does: `1/log(1/x0)` is `-1/log(x0)` and `log(1/(x0 + x1))` is `-log(x0
+  + x1)`. In both modes the collapse waits for the root's walk, after the constructors, so
+  `exp(log(1/x0))` is `1/x0` in `permissive`, where `exp(-log(x0))` would be no inverse pair. A
+  fully numeric `t` is read for its value first in both modes. On srbf's ground truths, a tenth of
+  the training-data inputs and a tenth of the predictions, the answers that change hold the collapse
+  or what it lets the other steps do, and none changes on a second call.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and
