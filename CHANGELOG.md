@@ -155,7 +155,10 @@ organised by who you are, then the highlights, then every change in detail.
   its sign), and a zero built inside a longer quotient keeps its factors' signs into the inverse
   taken later. Where nothing reads the sign the zero goes as before: as the answer (`0*x0` and
   `0*x0 + 0*x1` are `0`), in a sum whose other terms are no zero on a region (`x1 + 0*x0` is
-  `x1`), and under a head that reads no zero's sign (`exp(0*x0)` is 1).
+  `x1`), and under a head that reads no zero's sign (`exp(0*x0)` is 1). A zero product over a
+  sum keeps the sum whole, so its zero has the sum's sign (`0*(x0 - x1)` is -0 wherever
+  `x0 < x1`, which `0*x0 - 0*x1` does not spell), and spreads over it where the sum around it
+  reads no zero: `x2 + 0*(2*x1 + sqrt(x1))` is `x2 + 0*sqrt(x1)`, NaN wherever the root is.
 - **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
   integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
   and one sign bit; `permissive` reads it as 0. An `f64` ground fold writes its float

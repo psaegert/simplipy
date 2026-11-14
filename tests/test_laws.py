@@ -70,6 +70,14 @@ ROWS = [
     ('mul.zero', 'inv * x1 atanh * 0 x0', f'/ {INF} * x0 x1', NAN),
     ('mul.zero', '+ x1 atan * 0 x0', 'x1', 'x1'),
     ('mul.zero', 'atan2 * 0 x0 -1', 'atan2 * 0 x0 -1', 'np.pi'),
+    # a zero product over a sum keeps the sum, whose sign its zero has, and spreads where the sum
+    # around it reads no zero; one the constructors build spreads as a written one does, so the
+    # answer is its own simplification
+    ('mul.zero', 'inv + * 0 - x0 x1 * 0 x2', 'inv + * 0 x2 * 0 - x0 x1', NAN),
+    ('mul.zero', '+ * 0 + * 2 x1 rootn x1 2 x2', '+ x2 * 0 rootn x1 2', 'x2'),
+    ('mul.zero',
+     '- x1 - x1 + abs - x1 x1 / + - + pow x1 0.5 x1 x1 + x1 x1 / - x1 / x1 x1 - x1 x1',
+     '* 0 rootn x1 2', NAN),
     # t - t = 0. f64: t finite almost everywhere; `log(x0) - log(x0)` is NaN for every x0 < 0.
     ('add.cancel', '- x0 x0', '0', '0'),
     ('add.cancel', '- * 2 sin x0 sin x0', 'sin x0', 'sin x0'),

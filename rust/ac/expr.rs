@@ -3623,21 +3623,12 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             // complete bag. Scaled terms re-enter the flatten stack so every classification
             // (literals, Const, infinities, nested sums) reruns on them.
             // The literal may be a refused partition (`Mul[1e160, 1e170, Add]`): its members are
-            // one coefficient.
-            Ex::Mul(v)
-                if v.len() >= 2
-                    && matches!(v.last(), Some(Ex::Add(_)))
-                    && v[..v.len() - 1].iter().all(|f| matches!(f, Ex::Num(_))) =>
-            {
-                let (r, inner) = match v.split_last() {
-                    Some((Ex::Add(inner), lits)) => (
-                        Coef::from_members(lits.iter().map(|f| match f {
-                            Ex::Num(r) => r,
-                            _ => unreachable!("literal members"),
-                        })),
-                        inner.clone(),
-                    ),
-                    _ => unreachable!(),
+            // one coefficient. In `f64` a zero coefficient stays (`unfactors`): a zero product keeps
+            // its sum until the zero products settle below.
+            Ex::Mul(v) if factored_sum(&v).is_some_and(|(r, _)| unfactors(&r, cx)) => {
+                let (r, inner) = match factored_sum(&v) {
+                    Some((r, inner)) => (r, inner.to_vec()),
+                    None => unreachable!("a factored sum"),
                 };
                 let mut scaled: Vec<Ex> = Vec::with_capacity(inner.len());
                 let mut ok = true;
@@ -3700,14 +3691,11 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 .iter()
                 .any(|t| !zero_product(t, cx) && Law::AddZero.holds(t, cx));
         if settled {
-            terms
-                .into_iter()
-                .filter_map(|t| match unsigned_zero(&t, cx) {
-                    Some(Ex::Num(z)) if z.is_zero() => None,
-                    Some(u) => Some(u),
-                    None => Some(t),
-                })
-                .collect()
+            let mut out: Vec<Ex> = Vec::with_capacity(terms.len());
+            for t in terms {
+                settle_zero_term(t, &mut out, cx);
+            }
+            out
         } else {
             terms
         }
@@ -10284,6 +10272,60 @@ pub(crate) fn unsigned_zero(t: &Ex, cx: &Cx) -> Option<Ex> {
     items.extend(carriers);
     let u = mul(items, cx);
     (u != *t).then_some(u)
+}
+
+/// A term of a sum that nothing reads the zeros of (`add`'s settled sum), pushed to `out` as the
+/// sum takes it: a zero product without the factors that only gave it its sign (`unsigned_zero`),
+/// and a zero product over a sum spread over that sum's terms, each taken the same way
+/// (`x1 + 0*(2*x0 + sqrt(x0))` is `x1 + 0*sqrt(x0)`). Spread or whole, the zero products are NaN
+/// at the same points (`0*inf` and `0*NaN` are NaN, `0*inf + 0*(-inf)` too) and a zero of some
+/// sign elsewhere, which the sum does not read. A literal zero is no term.
+fn settle_zero_term(t: Ex, out: &mut Vec<Ex>, cx: &Cx) {
+    let u = unsigned_zero(&t, cx).unwrap_or(t);
+    if let Ex::Mul(v) = &u {
+        if let Some((r, inner)) = factored_sum(v) {
+            if r.is_zero() {
+                let scaled: Option<Vec<Ex>> = inner.iter().map(|s| scale_term(s, &r, cx)).collect();
+                if let Some(scaled) = scaled {
+                    for s in scaled {
+                        settle_zero_term(s, out, cx);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    match u {
+        Ex::Num(z) if z.is_zero() => {}
+        u => out.push(u),
+    }
+}
+
+/// A FACTORED SUM: a product of literals and one sum, `r * (a + b)`, as its coefficient (a refused
+/// partition's members are one) and the sum's terms.
+fn factored_sum(v: &[Ex]) -> Option<(Coef, &[Ex])> {
+    match v.split_last() {
+        Some((Ex::Add(inner), lits))
+            if !lits.is_empty() && lits.iter().all(|f| matches!(f, Ex::Num(_))) =>
+        {
+            let r = Coef::from_members(lits.iter().map(|f| match f {
+                Ex::Num(r) => r,
+                _ => unreachable!("literal members"),
+            }));
+            Some((r, inner.as_slice()))
+        }
+        _ => None,
+    }
+}
+
+/// Does a factored sum `r * (a + b)` entering a sum unfactor into `r*a + r*b`? The two agree at
+/// every point (a finite rational distributes over extended-real sums), but in `f64` a zero `r`
+/// gives `0*(a + b)` the sign of `a + b`, which the terms' zeros do not spell (`0*(x0 - x1)` is
+/// `-0` wherever `x0 < x1`, `0*x0 + 0*x1` only where both are negative): it stays whole here, and
+/// spreads where the sum settles, which reads none of its zeros (`settle_zero_term`).
+/// `permissive` reads one zero: always.
+fn unfactors(r: &Coef, cx: &Cx) -> bool {
+    !(f64_zero_signs(cx) && r.is_zero())
 }
 
 /// STRICT'S NUMBERS, written as the cheapest value strict admits for them: a number the
