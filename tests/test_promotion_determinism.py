@@ -34,7 +34,7 @@ def _by_rule(kept):
 RULES = [(r.split(' -> ')[0].split(), r.split(' -> ')[1].split()) for r in (
     'atan sinh ?0 -> asin tanh ?0', 'atanh tanh ?0 -> ?0', 'sin acos tanh ?0 -> inv cosh ?0',
     '+ ?0 * 0 ?1 -> ?0', 'max ?0 acos <constant> -> max <constant> ?0',
-    'acos <constant> -> <constant>', 'ceil inv cosh ?0 -> 1')]
+    'acos <constant> -> <constant>', 'ceil inv cosh ?0 -> 1', 'ceil cos sin ?0 -> 1')]
 
 
 def test_a_rules_sort_does_not_depend_on_the_rules_before_it(bare):
@@ -60,16 +60,20 @@ def _strongest(lhs, rhs, mode, engine):
 
 @pytest.mark.parametrize('mode', MODES)
 def test_each_rule_ships_at_the_strongest_sort_the_judge_licenses(bare, mode):
-    """`ceil(1/cosh(x)) -> 1` holds for every real x, and at x = +-inf the left side is
-    ceil(0) = 0: the `_` rung is refused in f64, the `!` rung (a finite subtree) holds.
-    permissive binds a slot to real values only, so the `_` rung holds there."""
+    """`ceil(cos(sin(x))) -> 1` holds for every real x, and at x = +-inf the left side has no
+    value: the `_` rung is refused in f64, the `!` rung (a finite subtree, whose +-inf is a null
+    set) holds. `ceil(1/cosh(x)) -> 1` is ceil(0) = 0 at x = +-inf, a value the left side has,
+    read at a `!` slot's +-inf as at a `_` slot's: it stays at `?` in f64. permissive binds a
+    slot to real values only, so the `_` rung holds there for both."""
     kept = _by_rule(promote(RULES, bare, rule_mode=mode)[0])
     for lhs, rhs in RULES:
         key = ' '.join(lhs)
         if key in kept and '?' in key:
             assert kept[key] == _strongest(lhs, rhs, mode, bare), (mode, key, kept[key])
-    want = 'ceil inv cosh _0 -> 1' if mode == 'permissive' else 'ceil inv cosh !0 -> 1'
+    want = 'ceil inv cosh _0 -> 1' if mode == 'permissive' else 'ceil inv cosh ?0 -> 1'
     assert kept['ceil inv cosh ?0'] == want, (mode, kept)
+    want = 'ceil cos sin _0 -> 1' if mode == 'permissive' else 'ceil cos sin !0 -> 1'
+    assert kept['ceil cos sin ?0'] == want, (mode, kept)
 
 
 def test_each_rung_is_asked_of_the_judge(bare):

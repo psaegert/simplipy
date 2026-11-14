@@ -72,7 +72,9 @@ def test_where_the_reals_give_one_side_no_value_float64_decides(lhs, rhs) -> Non
 @pytest.mark.parametrize('lhs, rhs', FALSE_PAST_THE_LADDER)
 def test_a_counterexample_at_float_resolution_refutes_the_reals(lhs, rhs) -> None:
     r = verify_rule(lhs.split(), rhs.split())
-    assert (r['verdict'], r['clause']) == ('KILL', 'a-float-resolution'), r
+    # a `!` slot reads 2 against 1 at +inf first, atan(pi/2) being 1.0038
+    clause = 'a-nonfinite-binding' if '!' in lhs else 'a-float-resolution'
+    assert (r['verdict'], r['clause']) == ('KILL', clause), r
     assert r['reals_valued_holds'] is False and r['realised'] is False, r
     assert r['tier'] == 'reject', r
 
@@ -140,3 +142,56 @@ def test_a_ground_rule_is_read_on_each_modes_value() -> None:
 def test_the_mine_licenses_what_strict_holds(lhs, rhs) -> None:
     r = verify_rule(lhs.split(), rhs.split())
     assert effective_tier(r) in MODE_TIERS['f64'] and effective_tier(r) in MODE_TIERS['permissive']
+
+
+#: A `!` binding is finite but on a null set, its +-inf; a `$` binding is finite and nonzero but on
+#: 0 and +-inf. There a value the left side has is read, while an extension and a zero's sign are
+#: not. The rules refused only there hold with a `?` slot.
+REFUSED_AT_A_SORTS_NULL_SET = [
+    # +inf against 1.633123935319537e16 at +inf
+    ('tan atan !0', '!0'),
+    # 1 against 0 at -inf: 0^0
+    ('pow 0 exp !0', '0'),
+    # 0 against 1 at -inf
+    ('ceil erf exp !0', '1'),
+]
+
+HELD_AT_A_SORTS_NULL_SET = [
+    # +0 against -0 at +inf: a zero's sign
+    ('- erf !0 1', 'neg erfc !0'),
+    # the left side has no value at +-inf, and at 0 and +-inf: an extension
+    ('- !0 !0', '0'),
+    ('/ $0 $0', '1'),
+]
+
+
+@pytest.mark.parametrize('lhs, rhs', REFUSED_AT_A_SORTS_NULL_SET)
+def test_a_value_at_a_sorts_null_set_is_read(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['realised'] is False and r['tier'] == 'permissive', r
+    assert any(abs(p['!0']) == float('inf') for _, p in r['unrealised']), r
+    q = verify_rule(lhs.replace('!', '?').split(), rhs.replace('!', '?').split())
+    assert q['realised'] is True and q['tier'] == 'core', q
+
+
+@pytest.mark.parametrize('lhs, rhs', HELD_AT_A_SORTS_NULL_SET)
+def test_an_extension_and_a_zeros_sign_at_a_sorts_null_set_are_not(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['realised'] is True and r['tier'] == 'core', r
+
+
+def test_a_dollar_slots_zero_is_read() -> None:
+    """floor(exp(-abs(x))) is 0 wherever x is nonzero, and 1 at x = 0."""
+    r = verify_rule('floor exp neg abs $0'.split(), ['0'])
+    assert r['realised'] is False and r['tier'] == 'reject', r
+
+
+def test_a_pattern_and_its_instance_are_refused_alike() -> None:
+    """`a*(b + c) -> a*b + a*c` with `a` a `!` slot: at a = -inf, b = -1.7, c = +inf the left side
+    is -inf and the right side -inf*(-1.7) + -inf*inf has no value. Its instance
+    `(x1 + x2)/x0 -> x1/x0 + x2/x0` likewise at x0 = 0, x1 + x2 nonzero."""
+    r = verify_rule('* !0 + _1 _2'.split(), '+ * !0 _1 * !0 _2'.split())
+    assert r['realised'] is False, r
+    assert any(abs(p['!0']) == float('inf') for _, p in r['unrealised']), r
+    r = verify_rule('/ + x1 x2 x0'.split(), '+ / x1 x0 / x2 x0'.split())
+    assert r['realised'] is False, r

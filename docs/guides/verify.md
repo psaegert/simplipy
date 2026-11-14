@@ -92,7 +92,11 @@ time (`JUDGE-TIMEOUT`), or a point the mode owes a reading at and leaves unread.
 are the ones the judge takes because they are exceptional: every slot at each of its sort's
 exact atoms (zero, the units, the infinities, pi/2 and the rest), at each generic or special
 constant value the mode owes a witness at, and a ground rule's one point; the verdict names an
-unread one (`unread_owed`). The grid, the rows of the shipped mines' matrix (one matrix, the
+unread one (`unread_owed`). At a `!` slot's +-inf and a `$` slot's 0 and +-inf, the null set
+the slot's certificate leaves it, a value the left side has is read, and its having none, or a
+zero's sign, is not: `tan(atan(!0)) -> !0` (1.633123935319537e16 against +inf at +inf) is
+refused in `f64` and holds at `?`, while `erf(!0) - 1 -> -erfc(!0)` (+0 against -0 at +inf) and
+`!0 - !0 -> 0` hold. The grid, the rows of the shipped mines' matrix (one matrix, the
 same for every caller, so a verdict is the rule's), the preimages of jumps, the slots'
 magnitude ladder and the constants' span and saturation magnitudes (`|c|` from 0.001 to 0.1
 and from 10 to 1e4, and 19 to 1e17) are samples: a point among them that cannot be read counts neither way. A rule with

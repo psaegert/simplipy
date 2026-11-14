@@ -827,9 +827,11 @@ pub fn f64_bar(
 }
 
 /// `f64_bar` over each variable's SORT, the contract judge's reading of it: `sorts[i]` is the
-/// slot sort of `var_names[i]` -- `?` (data) and `!` are probed over finite doubles only, `$`
-/// over nonzero finite ones, `_` (and a variable with no sort given) over every probe, the
-/// infinities and NaN included -- and with `defer_range`, a probe where the sides differ and an
+/// slot sort of `var_names[i]` -- `?` (data) is probed over finite doubles only, `!` over finite
+/// doubles and +-inf, `$` over nonzero finite ones and 0 and +-inf (at those isolated values a
+/// value is read and the left side's NaN is an extension on the sort's null set), `_` (and a
+/// variable with no sort given) over every probe, the infinities and NaN included -- and with
+/// `defer_range`, a probe where the sides differ and an
 /// operation overflowed or underflowed is returned in `range_rows` instead of failing the bar
 /// (the range standard: there the true value is accepted, which only the caller can judge).
 /// `ceil(1/cosh(x)) -> 1` holds in f64 so: x = +-inf is no data, and past |x| = 710.48 `cosh`
@@ -974,7 +976,8 @@ pub fn zero_sign_bar_sorted(
         .copied()
         .filter(|&v| v >= first_finite || sorts.get(v).is_none_or(|s| *s == '?'))
         .collect();
-    let rows = bar_probes(&used, width, first_finite, sorts);
+    // a zero's sign at a sort's isolated value is the null set's: those values are not probed
+    let rows = bar_probes(&used, width, first_finite, sorts, false);
     let n = rows.len();
     let cols: Vec<Vec<f64>> = (0..width)
         .map(|c| rows.iter().map(|r| r[c]).collect())
@@ -1299,7 +1302,7 @@ fn deployed_exact_over(
         .collect();
     let first_finite = var_names.len().saturating_sub(n_finite);
     let width = var_names.len().max(1);
-    let rows = bar_probes(&used, width, first_finite, sorts);
+    let rows = bar_probes(&used, width, first_finite, sorts, true);
     let n = rows.len();
     let cols: Vec<Vec<f64>> = (0..width)
         .map(|c| rows.iter().map(|r| r[c]).collect())
@@ -1308,6 +1311,12 @@ fn deployed_exact_over(
         tl.eval_columns(&cols, &[], n),
         tr.eval_columns(&cols, &[], n),
     );
+    // a probe where a slot sits at its sort's isolated value (`isolated_value`): a value there is
+    // read, and the left side's NaN there is an extension on the sort's null set
+    let at_isolated = |row: &[f64]| {
+        used.iter()
+            .any(|&v| v < first_finite && sorts.get(v).is_some_and(|&s| isolated_value(s, row[v])))
+    };
     // a pair without variables is a fully numeric rewrite, read by the ground evaluator
     // (`ground::rule_verdict`): float64's reading is the same double, a zero's sign included; the
     // reading in kind is the same real value with float64's kinds kept
@@ -1358,7 +1367,9 @@ fn deployed_exact_over(
     let mut range_rows: Vec<Vec<f64>> = Vec::new();
     for i in 0..n {
         if same(yl[i], yr[i], &rows[i])
-            || (yl[i].is_nan() && !yr[i].is_nan() && isolated_nan(&rows[i]))
+            || (yl[i].is_nan()
+                && !yr[i].is_nan()
+                && (isolated_nan(&rows[i]) || at_isolated(&rows[i])))
         {
             continue;
         }
@@ -1381,13 +1392,32 @@ fn deployed_exact_over(
     }
 }
 
+/// Is `x` a value the sort `sort` takes only on a null set, where its certificate leaves it (`!`
+/// at +-inf, `$` at 0 and +-inf)? There a value the left side has is read, while an extension
+/// and a zero's sign are the null set's.
+pub fn isolated_value(sort: char, x: f64) -> bool {
+    match sort {
+        '!' => x.is_infinite(),
+        '$' => x.is_infinite() || x == 0.0,
+        _ => false,
+    }
+}
+
 /// THE BAR'S PROBES, one row per probe (a value per name, `width` wide), the deployed bar's and
 /// the zero-sign bar's: per variable of `used`, the `BATTERY` points, +-inf, NaN and
 /// `DEPLOYED_EXTRA` (their full product, thinned to `DEPLOYED_MAX_ROWS`), each variable over its
 /// sort's values (`?` and `!` the finite ones, -0 included; `$` the nonzero finite ones; `_` all
-/// of them; a fitted constant, a name from `first_finite` on, the finite ones); a generic grid per
-/// variable with the others at 1.7 and -1.3; and the diagonal of that grid.
-fn bar_probes(used: &[usize], width: usize, first_finite: usize, sorts: &[char]) -> Vec<Vec<f64>> {
+/// of them; a fitted constant, a name from `first_finite` on, the finite ones); with `isolated`,
+/// a sort's isolated values too, where a value is read (`!` at +-inf, `$` at 0 and +-inf,
+/// `isolated_value`); a generic grid per variable with the others at 1.7 and -1.3; and the
+/// diagonal of that grid.
+fn bar_probes(
+    used: &[usize],
+    width: usize,
+    first_finite: usize,
+    sorts: &[char],
+    isolated: bool,
+) -> Vec<Vec<f64>> {
     let mut values: Vec<f64> = Vec::new();
     for v in BATTERY
         .iter()
@@ -1401,13 +1431,24 @@ fn bar_probes(used: &[usize], width: usize, first_finite: usize, sorts: &[char])
     }
     let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
     let nonzero: Vec<f64> = finite.iter().copied().filter(|v| *v != 0.0).collect();
+    let with_isolated = |sort: char, base: &[f64]| -> Vec<f64> {
+        let mut out = base.to_vec();
+        out.extend(values.iter().copied().filter(|&x| isolated_value(sort, x)));
+        out
+    };
+    let (bang, dollar) = if isolated {
+        (with_isolated('!', &finite), with_isolated('$', &nonzero))
+    } else {
+        (finite.clone(), nonzero.clone())
+    };
     let probes_of = |v: usize| {
         if v >= first_finite {
             return &finite;
         }
         match sorts.get(v) {
-            Some('?' | '!') => &finite,
-            Some('$') => &nonzero,
+            Some('?') => &finite,
+            Some('!') => &bang,
+            Some('$') => &dollar,
             _ => &values,
         }
     };
@@ -1557,6 +1598,35 @@ mod deployed_bar_tests {
         assert!(bar("ceil / atan x0 x0", "1", '?'));
         assert!(!bar("ceil / atan x0 x0", "1", '_'));
         assert!(!bar("floor acosh x0", "0", '?'));
+    }
+
+    /// A `!` slot is finite but on a null set, its +-inf; a `$` slot finite and nonzero but on 0
+    /// and +-inf. There the bar reads a value the left side has, and not an extension:
+    /// `tan(atan(x0))` is 1.633123935319537e16 against +inf at x0 = +inf, and
+    /// `floor(exp(-abs(x0)))` 1 against 0 at x0 = 0, while `x0 - x0` and `x0/x0` have no value
+    /// there.
+    #[test]
+    fn the_bar_reads_a_value_at_a_sorts_null_set() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0");
+        let bar = |l: &str, r: &str, sort: char, agreement| {
+            deployed_exact_over(&s(l), &s(r), &v, 0, &[sort], false, agreement, ops).ok
+        };
+        assert!(bar("tan atan x0", "x0", '?', Agreement::Kind));
+        assert!(!bar("tan atan x0", "x0", '!', Agreement::Kind));
+        assert!(!bar("floor exp neg abs x0", "0", '$', Agreement::F6));
+        for sort in ['!', '$'] {
+            assert!(bar("- x0 x0", "0", sort, Agreement::F6), "{sort}");
+        }
+        assert!(bar("/ x0 x0", "1", '$', Agreement::F6));
+        assert!(isolated_value('!', f64::INFINITY) && !isolated_value('!', 0.0));
+        assert!(isolated_value('$', -0.0) && isolated_value('$', f64::NEG_INFINITY));
+        assert!(!isolated_value('?', f64::INFINITY) && !isolated_value('_', f64::NAN));
     }
 
     /// An extension is isolated where its neighbouring doubles are no extension, an operation

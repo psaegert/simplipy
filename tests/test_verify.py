@@ -683,7 +683,9 @@ class TestTheF64MagnitudeLadder:
     @pytest.mark.parametrize('lhs, rhs', [
         ('sinh asinh _0', '_0'),                # 66 units in the last place at 1e100
         ('sinh asinh ?0', '?0'),
-        ('tan atan asinh !0', 'asinh !0'),      # tan near pi/2 magnifies atan's rounding
+        # tan near pi/2 magnifies atan's rounding (at a `!` slot's +inf, 1.633123935319537e16
+        # against +inf, a value read)
+        ('tan atan asinh ?0', 'asinh ?0'),
     ])
     def test_a_rounding_at_a_large_magnitude_is_past_f6_and_of_one_kind(self, lhs, rhs) -> None:
         """F6 refuses the rounding the ladder finds; the two sides stay finite, so strict
@@ -969,11 +971,13 @@ class TestCleanlinessIsPerMode:
         # through f64: twelve leave the offenders, `/ log _0 (-2k) -> log rootn _0 (-2k)` and kin,
         # `abs log cos _0 -> log inv cos _0`, `inv pow _0 _0 -> pow inv _0 _0`, `cosh sinh
         # atanh !0 -> cosh tan asin !0` and kin, and seven the load refuses: policy alone 34).
+        # A value at a `!` slot's +-inf is read: f64 119 (+1, `tan atan acosh !0 -> acosh !0`,
+        # 1.633123935319537e16 against +inf at +inf).
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 118 and len(policy_only['f64']) == 19
+        assert len(tier['f64'] - {126}) == 119 and len(policy_only['f64']) == 19
         assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 34
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
@@ -1732,8 +1736,9 @@ class TestNanIsInTheWidestSortsQuantifier:
 
     def test_the_data_sorts_keep_their_own_licences(self) -> None:
         """`- ?0 ?0 -> 0` stays CERTIFIED (data slots never carry nan) and so does
-        `- !0 !0 -> 0`: its +-inf atoms are the values its certificate puts on a null set,
-        owed nothing, and the nan-erasure rule deliberately does not extend to `!`."""
+        `- !0 !0 -> 0`: its +-inf atoms are the null set its certificate leaves to the slot,
+        where the left side's lack of a value is owed nothing, and the nan-erasure rule
+        deliberately does not extend to `!`."""
         r = judge_rule('- ?0 ?0'.split(), ['0'])
         assert r['verdict'] == 'CERTIFIED', r
         r = judge_rule('- !0 !0'.split(), ['0'])

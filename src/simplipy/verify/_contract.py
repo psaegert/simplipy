@@ -885,17 +885,19 @@ def compare_deployed_structural(cl, cr):
 # ---------------------------------------------------------------- batteries
 #: THE TABLE's sort tags, as the judge names them: a real binding where clause (a) applies; a
 #: non-finite binding in the sort's domain, judged with no excuse; one its certificate puts on a
-#: set of measure zero, owed nothing.
-_TAGS = {'real': 'real', 'atom': 'atom', 'null': 'nullx'}
+#: set of measure zero, where a value is read and an extension and a zero's sign are excused.
+_TAGS = {'real': 'real', 'atom': 'atom', 'isolated': 'isolated'}
 
 
 def battery_for(sort, permissive=False):
     """-> list of (builder() -> TV, tag) over THE TABLE's quantifier of `sort`
-    (`_core.table_sort_atoms`): `?` binds real data only; `!` adds +-inf, owed nothing (its
-    certificate puts them on a null set); `$` drops 0 from the reals and adds 0 and +-inf, owed
-    nothing; `_` adds +-inf and undefined, judged with no excuse, since a subexpression can be
-    infinite or undefined on a whole interval. `permissive` keeps the real-valued bindings only
-    (its guarantee)."""
+    (`_core.table_sort_atoms`): `?` binds real data only; `!` adds +-inf, `$` drops 0 from the
+    reals and adds 0 and +-inf, both 'isolated': the certificate puts them on a null set, so an
+    extension and a zero's sign there are excused, while a value the left side has there is read
+    as any other (an isolated pole's infinity is a value: `!0*(_1 + _2) -> !0*_1 + !0*_2` is inf
+    against inf + NaN at !0 = +inf, _1 = 1, _2 = 0); `_` adds +-inf and undefined, judged with no
+    excuse, since a subexpression can be infinite or undefined on a whole interval. `permissive`
+    keeps the real-valued bindings only (its guarantee)."""
     return [((lambda s=spec: TV(s)), _TAGS[tag])
             for spec, tag in _table.table_sort_atoms(sort, permissive)]
 
@@ -3433,11 +3435,12 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     The one measure-zero allowance, an extension on a null set (clause (b)), holds only where a
     slot guards it (the owner's rulings, specification 3.1): a `?` slot, which binds a variable,
     after every way the `?` slots can coincide is judged too (`coincide`); `!` and `$` slots
-    guard their certificates' null events, which they owe nothing at. An extension that depends
-    on any other slot is one on positive measure in some instance (a `_` bound to a constant
-    subexpression) and refuses the rule. Where the left side has a value, an infinity included,
-    nothing is excused: `abs(log(cos(x))) -> log(1/cos(x))` fails at pi/2, where the left side
-    is +inf and the right side meets 1/0."""
+    guard their certificates' null events (`!` at +-inf, `$` at 0 and +-inf) against an
+    extension and a zero's sign, while a value the left side has there is read. An extension
+    that depends on any other slot is one on positive measure in some instance (a `_` bound to a
+    constant subexpression) and refuses the rule. Where the left side has a value, an infinity
+    included, nothing is excused: in the reals `abs(log(cos(x))) -> log(1/cos(x))` fails at
+    pi/2, where the left side is +inf and the right side meets 1/0."""
     try:
         tl = parse(lhs, '<C_L>', number=True)
         tr = parse(rhs, '<C_R>', number=True)
@@ -3706,14 +3709,16 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 return None
         return event
 
-    def deployed(tl_env, v, point, all_real, snapped, out, owed=False):
+    def deployed(tl_env, v, point, all_real, snapped, out, owed=False, isolated=False):
         """The f64 lane at one point, on float64's own values: append `(kind, point)` to
         `out['bad']` / `out['div']`; an extension on a lower-dimensional cell is clause (b)'s,
         and is counted apart. The reals' reading `v` (and whether a snap read it) is asked only
         at a range event, where the true value is accepted (F5): where an operation of either
         side overflowed or underflowed and float64's sides differ, a true value the reals
         resolved decides, and one they did not leaves the point unread (`out['unread']`; an
-        `owed` point so left is recorded, `out['owed_unread']`)."""
+        `owed` point so left is recorded, `out['owed_unread']`). At a slot's `isolated` value
+        (`battery_for`) a value is read as anywhere, while an extension is the sort's null
+        set's and a zero's sign there is no event (a difference at an isolated point)."""
         if not deployed_check:
             return
         try:
@@ -3744,13 +3749,13 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             out['read'] += 1
             if dv != 'eq':
                 out['kinds'].add(_f64_kind(dv, _dl, _dr))
-                if dv == 'EXT' and isolated_f64(tl_env):
+                if dv == 'EXT' and (isolated or isolated_f64(tl_env)):
                     out['null'] += 1
                     return
                 out['bad'].append((dv, point))
                 # strict's second reading at this point (`kind_holds`)
                 held = kind_holds(dv, lambda: reals_valued_at(tl, tr, tl_env, always_valued))
-                if held and not exact_point:
+                if held and not exact_point and not isolated:
                     # a difference (b) admits as rounding, unless a side's value turns on a
                     # zero's sign there and the other's does not: strict's reading of a zero's
                     # sign, which refuses strict alone
@@ -3765,7 +3770,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 out['kinds'].add('ZERO-SIGN')
                 # F6 reads the two zeros as one; strict reads their signs where they differ on
                 # a region
-                event = None if exact_point else zero_sign_at(tl_env)
+                event = None if (exact_point or isolated) else zero_sign_at(tl_env)
                 if event is not None:
                     out['zero_sign'].append((event, point))
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
@@ -3806,7 +3811,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             return False
         return None if None in out else True
 
-    def unread_at_float_resolution(acc, v, point, where, env, count, reals_owe=True):
+    def unread_at_float_resolution(acc, v, point, where, env, count):
         """A point the reals' ladder left unread (`v` None, precision run out): permissive's
         float-resolution reading needs no exact equality (P3), and a rigorous bound or the
         precision the point demands may decide it (`_float_resolution`). A disagreement is
@@ -3814,30 +3819,35 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         reads no answer), one of the reals that strict's second reading reads
         (`ceil(atan(atan(x))) -> ceil(erf(x))` at x = 100, 2 against 1, where no affordable rung
         reads erf(100) beside 1); an agreement, with `count`, a point permissive read. A ground
-        rule's one point owes its value (3.3): no extension there. A point the reals owe nothing
-        at (`reals_owe` false: a `$` slot at 0, its certificate's) is permissive's alone. Returns
-        whether permissive's reading read the point."""
+        rule's one point owes its value (3.3): no extension there. Returns whether permissive's
+        reading read the point."""
         if v is not None:
             return True
         agreed = _float_resolution(tl, tr, env, extends=not (ground and not has_cl))
         if agreed is False:
             acc['perm'].append(('REAL-CHANGE', point, where))
-            if reals_owe and valued_at(env) is not False:
+            if valued_at(env) is not False:
                 acc['float_kills'].append(point)
         elif agreed and count:
             acc['fr'] += 1
         return agreed is not None
 
     def judge_point(acc, v, point, kind, real_valued, where):
-        """File one resolved comparison: `kind` is 'real' (every binding a real number) or
-        'atom' (a `_` slot at +-inf or NaN); `real_valued` says permissive's guarantee
-        reaches the point; `where` is `(constant key, slot values)`, to move a slot from."""
+        """File one resolved comparison: `kind` is 'real' (every binding a real number), 'atom'
+        (a `_` slot at +-inf or NaN) or 'isolated' (a `!` or `$` slot at its isolated value,
+        where an extension is the null set's and any other disagreement is read); `real_valued`
+        says permissive's guarantee reaches the point; `where` is `(constant key, slot values)`,
+        to move a slot from."""
         lhs_kind = _LOCAL.lhs_kind
         if kind == 'real' and lhs_kind is not None:
             acc['known'] += 1
             acc['finite'] = acc['finite'] or lhs_kind == 'fin'
         if v is None or v == 'eq':
             return
+        if kind == 'isolated':
+            if v == 'EXT':
+                return
+            kind = 'real' if real_valued else 'atom'
         if kind == 'atom':
             acc['atom'].append((v, point))
         elif v == 'EXT':
@@ -3932,7 +3942,6 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             values = {n: b() for n, (b, t) in combo.items()}
             finite = {n: math.isfinite(float(x)) for n, x in values.items()}
             real_valued = all(finite.values())
-            skip_real = any(t == 'nullx' for t in tags.values())
 
             def env_mp(combo=combo, key=key, builders=builders):
                 e = {n: b() for n, (b, t) in combo.items()}
@@ -3940,23 +3949,17 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 e.update(fitted(key))                             # re-rounded per rung
                 return e
 
-            if skip_real and not real_valued:
-                continue          # owed nothing in real, outside permissive's guarantee
             v, snapped = _point_verdict(tl, tr, env_mp, owed=owed_here)
             point = {n: float(x) for n, x in values.items()}
             point.update(dict(zip(lnames, key)))
             point.update({n: float(w) for n, w in cr_mp.items()})
             if real_valued and not unread_at_float_resolution(
-                    acc, v, point, (key, values), env_mp, count=not skip_real,
-                    reals_owe=not skip_real) and owed_here:
+                    acc, v, point, (key, values), env_mp, count=True) and owed_here:
                 acc['perm_unread'].append(point)
-            if skip_real:
-                # a `$` slot at 0: owed nothing in real (its certificate), a real-valued
-                # binding permissive's guarantee covers
-                if v not in (None, 'eq', 'EXT'):
-                    acc['perm'].append((v, point, (key, values)))
-                continue
-            kind = 'atom' if any(t == 'atom' for t in tags.values()) else 'real'
+            # a `!` or `$` slot at its isolated value (`battery_for`): its value is read, its
+            # extension and its zero's sign are the sort's null set's
+            kind = ('atom' if any(t == 'atom' for t in tags.values()) else
+                    'isolated' if any(t == 'isolated' for t in tags.values()) else 'real')
             acc['attempted'] += 1
             if v is not None:
                 acc['resolved'] += 1
@@ -3971,7 +3974,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             ed = {n: F(float(x)) for n, x in values.items()}
             ed.update({n: F(c) for n, c in zip(lnames, key)})
             ed.update({n: F(w) for n, w in cr_f64.items()})   # each algebra its OWN constant
-            deployed(ed, v, point, kind == 'real', snapped, acc, owed=owed_here)
+            deployed(ed, v, point, kind == 'real', snapped, acc, owed=owed_here,
+                     isolated=kind == 'isolated')
         merge(acc, key, builders)
 
     def magnitudes(acc, lanes, cr_f64):
@@ -4018,7 +4022,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         constants: the deployed sides at every row such a mine's mint reads, slot k reading column
         k (a slot past the columns the grid's
         1.7). Where float64's sides disagree (F6), the row is judged as a grid point, in the
-        reals and in float64, the first `ROWS_JUDGED` of them; a `$` slot at 0 owes nothing."""
+        reals and in float64, the first `ROWS_JUDGED` of them; a `$` slot's 0, its sort's
+        isolated value, is read by the battery (`battery_for`)."""
         X = judge_rows()
         cols = {}
         for m in names:

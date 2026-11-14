@@ -169,6 +169,14 @@ organised by who you are, then the highlights, then every change in detail.
   besseli(1, x)` overflow, and the true value 0 is accepted. But `besseli(1, x)` is NaN for
   0 < |x| <= 2.2e-308, where its true value is finite, so `besseli(1, -x) + besseli(1, x) -> 0`
   gives a value where float64 gives none on an interval: it holds in `permissive` only.
+- **A value at a `!` or `$` slot's null set is read.** A `!` slot is finite but at +-inf, a `$`
+  slot finite and nonzero but at 0 and +-inf. There the judge reads a value the left side has,
+  and not its having none or a zero's sign. `tan(atan(!0)) -> !0` (1.633123935319537e16 against
+  +inf at +inf), `0^exp(!0) -> 0` (1 against 0 at -inf) and `ceil(erf(exp(!0))) -> 1` (0
+  against 1 at -inf) are refused at `!` and hold at `?`, while `erf(!0) - 1 -> -erfc(!0)` (+0
+  against -0 at +inf) and `!0 - !0 -> 0` hold. A pattern and its instance are read alike:
+  `!0*(_1 + _2) -> !0*_1 + !0*_2` is refused (at !0 = -inf, _2 = +inf the right side is
+  inf - inf), as `(x1 + x2)/x0 -> x1/x0 + x2/x0` is at x0 = 0.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`

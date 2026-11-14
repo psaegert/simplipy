@@ -40,9 +40,10 @@
 //! infinity, or finite within 8 units in the last place (the two zeros as one value).
 //!
 //! **The sorts** (`sort_atoms`): `?` quantifies over real data (finite values only); `!` over
-//! finite values, its +-inf atoms excused (they occur on a null set); `$` over nonzero finite
-//! values, its 0 and +-inf excused; `_` over every value, +-inf and undefined included and none
-//! excused. Permissive's guarantee covers real-valued bindings only.
+//! finite values and its +-inf atoms, which occur on a null set: a value there is read, an
+//! extension and a zero's sign there are not; `$` over nonzero finite values and its 0 and +-inf,
+//! read alike; `_` over every value, +-inf and undefined included and none excused. Permissive's
+//! guarantee covers real-valued bindings only.
 
 use astro_float::{BigFloat, Consts, Radix, INF_NEG, INF_POS, NAN};
 use num_bigint::BigInt;
@@ -2655,8 +2656,11 @@ fn real_atoms() -> Vec<Leaf> {
 }
 
 /// What a sort's atom is to the criterion: `"real"`, a real binding where clause (a) applies;
-/// `"atom"`, a non-finite binding in the sort's domain, judged with no excuse; `"null"`, a
-/// non-finite or zero binding the sort's certificate puts on a set of measure zero, owed nothing.
+/// `"atom"`, a non-finite binding in the sort's domain, judged with no excuse; `"isolated"`, a
+/// non-finite or zero binding the sort's certificate puts on a set of measure zero: a value the
+/// left side has there is read as any other (an isolated pole's infinity is a value), while an
+/// extension and a zero's sign there are the null set's (`!0` at +inf: `!0 * (_1 + _2)` is inf at
+/// `_1 = 1, _2 = 0`, and `!0*_1 + !0*_2` is inf + NaN, so the distributive law fails).
 pub fn sort_atoms(sort: char, permissive: bool) -> Vec<(Leaf, &'static str)> {
     if permissive {
         // every slot matches any subexpression, and the guarantee covers the real-valued
@@ -2674,10 +2678,20 @@ pub fn sort_atoms(sort: char, permissive: bool) -> Vec<(Leaf, &'static str)> {
             out.extend(nonfinite.iter().cloned().map(|e| (Leaf::Exact(e), "atom")));
             out.push((Leaf::Exact(Exact::Undef), "atom"));
         }
-        '!' => out.extend(nonfinite.iter().cloned().map(|e| (Leaf::Exact(e), "null"))),
+        '!' => out.extend(
+            nonfinite
+                .iter()
+                .cloned()
+                .map(|e| (Leaf::Exact(e), "isolated")),
+        ),
         '$' => {
-            out.push((Leaf::Exact(Exact::Rat(Rat::ZERO)), "null"));
-            out.extend(nonfinite.iter().cloned().map(|e| (Leaf::Exact(e), "null")));
+            out.push((Leaf::Exact(Exact::Rat(Rat::ZERO)), "isolated"));
+            out.extend(
+                nonfinite
+                    .iter()
+                    .cloned()
+                    .map(|e| (Leaf::Exact(e), "isolated")),
+            );
         }
         _ => {}
     }

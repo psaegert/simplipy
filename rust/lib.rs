@@ -2747,7 +2747,8 @@ fn table_literal_f64(token: &str) -> Option<f64> {
 }
 
 /// THE TABLE's quantifier of a slot sort (`table::sort_atoms`): `[(spec, tag)]`, the tag `real`,
-/// `atom` (a non-finite binding judged with no excuse) or `null` (owed nothing).
+/// `atom` (a non-finite binding judged with no excuse) or `isolated` (a binding on the sort's
+/// null set: a value there is read, an extension and a zero's sign are not).
 #[pyfunction]
 fn table_sort_atoms(sort: &str, permissive: bool) -> PyResult<Vec<(TableSpec, String)>> {
     let mut chars = sort.chars();
