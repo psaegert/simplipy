@@ -2526,6 +2526,23 @@ def _point_verdict(tl, tr, env_mp, owed=False):
         drop = mp.log10(g_lo / g_hi)
         if drop > (hi_dps - lo_dps) / 2:
             return (None if exhausted and d_lo == 0 else 'eq'), snapped1
+        # A RUNG THAT SAW NO SEPARATION CANNOT DATE A DECAY EITHER. Its exact zero is "closer
+        # than this rung can see", and the floor above reads that at the value's scale; where
+        # the value comes out of a cancellation, the rung saw only as far as the cancelled
+        # operands' scale, coarser by the cancellation's depth. `log(erf(15.01))` is
+        # -4.77e-100, `log` of a value within 1e-99 of 1: at dps 120 both sides of
+        # `log(atanh(tanh(erf(x)))) -> log(erf(x))` read the same digits, the floor put their
+        # separation at 4.8e-220, and the residue of 1.9e-270 at dps 250 fell 50 decades
+        # against a bar of 65. Climb, as for a lost side, and measure between the two rungs
+        # that both saw a separation. A fixed gap the coarse rung could not see stays where it
+        # is at the finer pair and is convicted below.
+        if d_lo == 0 and hi_dps < MAX_DPS:
+            top = min(MAX_DPS, max(GAP_RUNGS[2], 2 * hi_dps))
+            r3 = once(top)
+            if r3 is not None and r3[0] is None and r3[1] is not None:
+                d_top = r3[1][0]
+                if d_top == 0 or mp.log10(d_hi / d_top) > (top - hi_dps) / 2:
+                    return (None if exhausted else 'eq'), snapped1
         # PAST THE CEILING, UNRESOLVED -- NEVER CONVICTED. That is what `MAX_DPS`
         # documents, and the ladder did not do it: it read a rung clamped to 2000 as
         # though it were the rung the point asked for. At c = -3000, `exp(c) = 1e-1303`

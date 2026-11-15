@@ -26,3 +26,18 @@ def test_a_step_holds_alone_and_in_a_cancelling_context(lhs, rhs) -> None:
 ])
 def test_a_fixed_gap_stays_a_counterexample(lhs, rhs) -> None:
     assert verify_rule(lhs.split(), rhs.split())['verdict'] == 'KILL'
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    # log(erf(15.01)) is -4.77e-100: log of a value within 1e-99 of 1, read at the scale of its
+    # argument; at dps 120 the two sides read alike, at dps 250 they part by residue
+    ('log atanh tanh erf _0', 'log erf _0'),
+    ('log - erfc _0 1', 'log erf neg _0'),
+])
+def test_a_rung_that_saw_no_separation_does_not_date_a_decay(lhs, rhs) -> None:
+    """Where the coarse rung reads the two sides as one value, the decay is measured between the
+    two finer rungs that both saw a separation: the residue falls there, and the rule holds in the
+    reals and in permissive."""
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['verdict'] in ('CERTIFIED', 'TOLERATED', 'ENGINE-MISALIGN'), r
+    assert r['permissive'] is True, r

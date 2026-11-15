@@ -202,6 +202,12 @@ organised by who you are, then the highlights, then every change in detail.
   rule `log(exp(x)) -> x`, `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is
   rounding under `1/`); `1/(0 + 0*x0) -> 1/(0*x0)` is still refused (+inf against -inf for
   x0 < 0), and the engine still writes `1/(0*x0)` as `inf/x0`.
+- **The precision ladder no longer refutes `log` of a value within 1e-99 of 1.** Where the
+  coarse rung reads the two sides as one value, the judge measures the decay between the two finer
+  rungs that both see a separation. `log(atanh(tanh(erf(x)))) -> log(erf(x))` was refuted at
+  x = 15.01, where both sides agree to 400 digits (-4.77e-100), and now holds in the reals;
+  `log(erfc(x) - 1) -> log(erf(-x))` now holds in `permissive`. A fixed gap the coarse rung cannot
+  see is still a counterexample.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`
