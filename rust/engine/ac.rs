@@ -2032,16 +2032,28 @@ impl Engine {
         // theorems (T6, L3/L4) are already banked -- and only an explicit budget enters the
         // phase at all, in every mode, under the mode's own pass.
         if explore_budget > 0 {
-            current = land_root(
-                crate::ac::search::explore(current, &pass, max_passes, explore_budget),
-                &cx,
-            );
-            // The explored endpoint, landed, descends to the pass fixpoint as the chain's does.
-            for _ in 0..max_passes {
-                let Some(next) = rewrite_pass_opt(&current, &pass) else {
+            // An unlimited search (`effort=None`) ends where its endpoint, landed and descended,
+            // offers it no move. The search compares states as the constructors build them,
+            // which hold every sum the form does not clear (`expr::sum_holds_its_sign`); the
+            // root's landing releases the ones nothing reads (`expr::release_unread`), and a
+            // released state can offer a move the held one did not, which a second call would
+            // take: so the search runs again from it. Each round descends the reduction ordering
+            // or stops; `max_passes` bounds the rounds as it bounds the chain's passes.
+            for _ in 0..max_passes.max(1) {
+                let explored =
+                    crate::ac::search::explore(current, &pass, max_passes, explore_budget);
+                current = land_root(explored.clone(), &cx);
+                // The explored endpoint, landed, descends to the pass fixpoint as the chain's
+                // does.
+                for _ in 0..max_passes {
+                    let Some(next) = rewrite_pass_opt(&current, &pass) else {
+                        break;
+                    };
+                    current = land_root(next, &cx);
+                }
+                if current == explored || explore_budget != usize::MAX {
                     break;
-                };
-                current = land_root(next, &cx);
+                }
             }
             debug_assert!(
                 stable(&current),
@@ -3919,20 +3931,30 @@ mod tests {
             "positive twin distributes"
         );
         // A sign-trade site beside the coefficient sign -- still licensed. The pole at x1 = 5
-        // is two-signed, so the inverse's orientation is the product's choice (reading A): the
-        // sign goes into the sum, a bit cheaper than `-inv(x1 - 5)/2` (`5 - x1` and `x1 - 5`
-        // cost the same, and the coefficient `1/2` a bit less than `-1/2`).
-        assert_eq!(
-            e.ac_simplify_proj(
-                &t(&["inv", "*", "-2", "-", "x1", "5"]),
-                48,
+        // is read in `f64` (`class.pole_orientation`): float64's `-2*(x1 - 5)` is `-0` there, so
+        // the inverse is `-inf`, and the sign stays out of the sum, whose zero is `+0` in either
+        // orientation; `permissive` reads no value at the pole and puts the sign into the sum, a
+        // bit cheaper than `-inv(x1 - 5)/2` (`5 - x1` and `x1 - 5` cost the same, and the
+        // coefficient `1/2` a bit less than `-1/2`).
+        for (mode, answer) in [
+            (
                 RuleMode::Default,
-                crate::engine::AcForm::Explicit
-            )
-            .unwrap(),
-            t(&["/", "inv", "-", "5", "x1", "2"]),
-            "traded sign distributes"
-        );
+                &["/", "neg", "inv", "-", "x1", "5", "2"][..],
+            ),
+            (RuleMode::Permissive, &["/", "inv", "-", "5", "x1", "2"]),
+        ] {
+            assert_eq!(
+                e.ac_simplify_proj(
+                    &t(&["inv", "*", "-2", "-", "x1", "5"]),
+                    48,
+                    mode,
+                    crate::engine::AcForm::Explicit
+                )
+                .unwrap(),
+                t(answer),
+                "traded sign distributes ({mode:?})"
+            );
+        }
         // Zero-free co-factors (exp of a finite arg) have no exceptional point. (`exp(-x1)` is two
         // bits cheaper than `1/exp(x1)`: the negation is one bit, the reciprocal a `Pow` head.)
         assert_eq!(

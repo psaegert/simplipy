@@ -2709,13 +2709,25 @@ pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
             })
             .collect()
     };
+    // Where float64 gives a class's zero a pole's value (`class.like_terms_up_to_sign`, reading B
+    // as `class.pole_orientation`), the term keeps it: `1/(3 - x0)` is `+inf` at x0 = 3 and
+    // `-1/(x0 - 3)` is `-inf`, so it stays as it stands, unlike `1/(x0 - 3)`.
+    let poles: Vec<(&Ex, Option<bool>)> = classes
+        .iter()
+        .filter(|k| !Law::ClassLikeTermsUpToSign.holds(k, cx) && may_be_infinite(&factors, k, cx))
+        .map(|k| (k, zero_turn(&factors, k, cx)))
+        .collect();
+    let leaves = |now: &[Ex], k: &Ex| match poles.iter().find(|(p, _)| *p == k) {
+        Some((_, turn)) => turn.is_none() || zero_turn(now, k, cx) != *turn,
+        None => zero_off(now, k, cx) == Some(true),
+    };
     let mut turns: Vec<(Ex, Turn)> = Vec::new();
     let mut oriented = orient(&turns);
     for _ in 0..2 * classes.len() {
         let now: Vec<Ex> = oriented.iter().map(|(g, _, _)| g.clone()).collect();
-        let off = classes.iter().find(|k| {
-            !turns.contains(&((*k).clone(), Turn::Keep)) && zero_off(&now, k, cx) == Some(true)
-        });
+        let off = classes
+            .iter()
+            .find(|k| !turns.contains(&((*k).clone(), Turn::Keep)) && leaves(&now, k));
         let Some(k) = off else {
             break;
         };
@@ -5306,7 +5318,7 @@ pub(crate) fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
 /// Does `f` vanish on a region with the sign its orientation gives it: a sum that keeps the sign
 /// of its zero (`keeps_zero_sign`), or an odd power, an odd function or an odd root of one, each
 /// odd at a signed zero as everywhere else?
-fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
+pub(crate) fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
     signed_zero_of(f, cx, true)
 }
 
@@ -6396,10 +6408,29 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         }
         classes.push(Class::new(&read));
     }
+    // What each class keeps at its zero: reading B where float64 gives it a pole's value
+    // (`class.opposite_sums`, as `class.pole_orientation`: `1/((x0 - 3)*(3 - x0))` is `+inf` at
+    // x0 = 3 and `-1/(x0 - 3)^2` is `-inf`), the value written; else the limit, where the
+    // product keeps one (`zero_limit`). A class whose value there is not read stays as written.
+    let mut unread_poles = false;
     for c in classes.iter_mut().filter(|c| !c.multiple()) {
-        c.kept = class_of(&c.sums[0], cx)
-            .map(|(k, _, _)| k)
-            .filter(|k| zero_limit(&raw, k, cx).is_some());
+        let Some((k, _, _)) = class_of(&c.sums[0], cx) else {
+            continue;
+        };
+        if !Law::ClassOppositeSums.holds(&k, cx) && may_be_infinite(&raw, &k, cx) {
+            match zero_turn(&raw, &k, cx) {
+                Some(turn) => c.kept = Some((k, Some(turn))),
+                None => {
+                    c.unread = true;
+                    unread_poles = true;
+                }
+            }
+        } else if zero_limit(&raw, &k, cx).is_some() {
+            c.kept = Some((k, None));
+        }
+    }
+    if unread_poles {
+        classes.retain(|c| !c.unread);
     }
     // A class whose factors all arrived over one sum is decided too where they hold exponents of
     // both signs, as the cancellation they meet may be cheaper over the other sum
@@ -6614,8 +6645,8 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             );
             bound(members, lb)
         };
-        // A placement that leaves the product's value at a class's zero off the limit it keeps
-        // there (`zero_limit`, as `sign_place` reads it) is priced above every other.
+        // A placement that leaves the product's value at a class's zero off the value it keeps
+        // there (`zero_check`, as `sign_place` reads it) is priced above every other.
         let off = |p: &Ex| {
             let members = match p {
                 Ex::Mul(v) => v.as_slice(),
@@ -6624,7 +6655,10 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             classes
                 .iter()
                 .filter_map(|c| c.kept.as_ref())
-                .any(|k| zero_off(members, k, cx) == Some(true))
+                .any(|(k, turn)| match turn {
+                    Some(t) => zero_turn(members, k, cx) != Some(*t),
+                    None => zero_off(members, k, cx) == Some(true),
+                })
         };
         let price = |choice: &[usize]| -> Option<(Ex, u64)> {
             let (v, odd) = bag(choice)?;
@@ -7680,6 +7714,102 @@ fn zero_limit(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, bool)> {
     (product_mag(mags) != Mag::Nan).then_some((side, off))
 }
 
+/// READING B: does `f64` read the value of the product of `factors` at the zero of the class `k`,
+/// float64's infinity there (`class.pole_orientation`)? Where the product may be infinite there
+/// (`may_be_infinite`) and the class may vanish exactly (`Law::ClassPoleOrientation`'s premise
+/// fails). Float64 gives the pole the value of the sign written, every member's sum being `+0`
+/// there in either orientation: `1/((x0 - 3)*(3 - x0))` is `+inf` at x0 = 3, though its limit is
+/// `-inf`.
+fn pole_value_read(factors: &[Ex], k: &Ex, cx: &Cx) -> bool {
+    !Law::ClassPoleOrientation.holds(k, cx) && may_be_infinite(factors, k, cx)
+}
+
+/// May the product of `factors` be infinite at the zero of the class `k`: infinite there, or of a
+/// magnitude not read with a member that may be: one infinite there (`(x1 - 3)^-1` beside
+/// `log(x1 - 3) + x2`, whose magnitude is not read), or a power of something in the class whose
+/// exponent may be negative (`(3 - x1)^x2` is a pole where `x2 < 0`). A product whose members are
+/// all finite or zero there, or not read and no such power, has no pole there.
+fn may_be_infinite(factors: &[Ex], k: &Ex, cx: &Cx) -> bool {
+    // A class over no sum (an odd head of a literal multiple) negates exactly: no zero of it
+    // cancels to `+0` in either orientation.
+    if !matches!(k, Ex::Add(_)) {
+        return false;
+    }
+    let mags: Vec<Mag> = factors.iter().map(|f| zero_mag(f, k, cx)).collect();
+    match product_mag(mags.iter().copied()) {
+        Mag::Inf => true,
+        Mag::Unknown => factors.iter().zip(&mags).any(|(f, m)| {
+            *m == Mag::Inf
+                || matches!(f, Ex::Pow(b, e)
+                    if !matches!(&**e, Ex::Num(r) if r.signum() > 0)
+                        && parity_in(b, k, cx) != Parity::Free)
+        }),
+        _ => false,
+    }
+}
+
+/// The product's sign at the zero of the class `k` against its sign beside the zero (on the side
+/// where `k` is positive): whether they differ (`ZeroRead::differs`). Two spellings of one
+/// function agree beside the zero, so they agree at it exactly where this agrees. `None` where a
+/// member is not read.
+fn zero_turn(factors: &[Ex], k: &Ex, cx: &Cx) -> Option<bool> {
+    product_read(factors.iter().map(|f| zero_read(f, k, cx))).differs
+}
+
+/// What a product's spellings must keep at the zero of the class `k`, as a count to keep even
+/// (`sign_place`'s checks): `Some(off)`, where the factors as written are off the value kept by
+/// `off`, or `None` where nothing is kept. Reading B where float64 gives the zero a pole's value
+/// (`pole_value_read`): the value written, so nothing is off; else reading A (`zero_limit`): the
+/// limit there, where the product keeps one.
+fn zero_check(factors: &[Ex], k: &Ex, cx: &Cx) -> Option<bool> {
+    if pole_value_read(factors, k, cx) {
+        return Some(false);
+    }
+    zero_off(factors, k, cx)
+}
+
+/// READING B AT A SITE: is `f` a sign-trade site over a sum that may vanish, in `f64`
+/// (`class.pole_orientation`)? Under an odd negative power its zero is a pole whose sign is the
+/// sign the site is written with: the sum cancels to `+0` in either orientation, so a sign traded
+/// between the site and a coefficient turns the infinity there (`-1/(x0 - 3)` is `-inf` at
+/// x0 = 3, `1/(3 - x0)` is `+inf`).
+pub(crate) fn pole_site(f: &Ex, cx: &Cx) -> bool {
+    site_class(f, cx).is_some_and(|(k, _)| !Law::ClassPoleOrientation.holds(&k, cx))
+}
+
+/// Is `e` never zero, at every binding: a nonzero literal, an infinity, `exp` or `cosh` of
+/// anything, or a sum of parts `>= 0` holding a positive literal (or its negation)? Fail closed.
+pub(crate) fn never_zero(e: &Ex, cx: &Cx) -> bool {
+    match e {
+        Ex::Num(r) => !r.is_zero(),
+        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf => true,
+        Ex::Fun(f, a) if a.len() == 1 => cx.view.tok_is(*f, "exp") || cx.view.tok_is(*f, "cosh"),
+        Ex::Add(ts) => {
+            let positive = ts.iter().all(|t| cx.certainly_nonneg(t))
+                && ts.iter().any(|t| matches!(t, Ex::Num(r) if r.signum() > 0));
+            let negative = ts.iter().all(|t| term_nonpositive(t, cx))
+                && ts
+                    .iter()
+                    .any(|t| matches!(t, Ex::Num(r) if r.is_negative()));
+            positive || negative
+        }
+        _ => false,
+    }
+}
+
+/// Is the term `t` certainly `<= 0`: a non-positive literal, or a negative coefficient times a part
+/// that is `>= 0`?
+fn term_nonpositive(t: &Ex, cx: &Cx) -> bool {
+    match t {
+        Ex::Num(r) => !(r.signum() > 0),
+        Ex::Mul(fs) => {
+            matches!(fs.first(), Some(Ex::Num(r)) if r.is_negative())
+                && fs[1..].iter().all(|f| cx.certainly_nonneg(f))
+        }
+        _ => false,
+    }
+}
+
 /// Whether a product's value at the zero of a class is off the limit it keeps there
 /// (`zero_limit`); `None` where it keeps none.
 fn zero_off(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<bool> {
@@ -7802,8 +7932,12 @@ struct Class<'a> {
     sums: [Vec<Ex>; 2],
     key: u64,
     flip: SumFlip,
-    /// The class's key where the product keeps a value at its zero (`zero_limit`).
-    kept: Option<Ex>,
+    /// The class's key where the product keeps a value at its zero, and what it keeps: the
+    /// limit (`None`, `zero_limit`), or the sign float64 gives the pole as written against the
+    /// one beside it (`Some`, `zero_turn`).
+    kept: Option<(Ex, Option<bool>)>,
+    /// Float64 gives the class's zero a pole's value that no member reads: it stays as written.
+    unread: bool,
 }
 
 impl<'a> Class<'a> {
@@ -7814,6 +7948,7 @@ impl<'a> Class<'a> {
             key: negation_key(read.terms),
             flip: SumFlip::new(),
             kept: None,
+            unread: false,
         }
     }
 
@@ -8795,24 +8930,40 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
         // the sites it flips whose own count changes; a member built over the sum's other
         // orientation inside a product (`sin(-(x1 (x1 - 3)))` for `sin(x1 (3 - x1))`) is counted
         // where it stands, so the product restores the limit an inner orientation moved.
-        let checks: Vec<(bool, Vec<Option<bool>>)> = groups
+        let toggles_of = |k: &Ex| -> Vec<Option<bool>> {
+            site_flips
+                .iter()
+                .map(|(pos, nf)| {
+                    let r = zero_read(&out[*pos], k, cx);
+                    if r.parity == Parity::Free {
+                        return Some(false);
+                    }
+                    Some(r.differs? != zero_read(nf, k, cx).differs?)
+                })
+                .collect()
+        };
+        let mut checks: Vec<(bool, Vec<Option<bool>>)> = groups
             .iter()
             .filter_map(|(k, _)| {
                 let k = k.as_ref()?;
-                let (_, now) = zero_limit(&out, k, cx)?;
-                let toggles: Vec<Option<bool>> = site_flips
-                    .iter()
-                    .map(|(pos, nf)| {
-                        let r = zero_read(&out[*pos], k, cx);
-                        if r.parity == Parity::Free {
-                            return Some(false);
-                        }
-                        Some(r.differs? != zero_read(nf, k, cx).differs?)
-                    })
-                    .collect();
-                Some((now, toggles))
+                Some((zero_check(&out, k, cx)?, toggles_of(k)))
             })
             .collect();
+        // A site over a sum no other member meets is a class of its own, which no limit pins; at
+        // a pole float64 still gives it a value (reading B, `zero_check`).
+        let mut read: Vec<Ex> = groups.iter().filter_map(|(k, _)| k.clone()).collect();
+        for (pos, _) in site_flips.iter() {
+            let Some((k, _)) = site_class(&out[*pos], cx) else {
+                continue;
+            };
+            if read.contains(&k) {
+                continue;
+            }
+            if pole_value_read(&out, &k, cx) {
+                checks.push((false, toggles_of(&k)));
+            }
+            read.push(k);
+        }
         let factor_price = |f: &Ex| -> u64 {
             match f {
                 Ex::Num(r) if r.is_one() => 0,
@@ -9543,11 +9694,11 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
         if flipped_orientation_wins(&out, Wrapper::Flipped, Tie::Keep, cx) {
             return None;
         }
-        // A sign enters a sum only where it holds none (`Law::AddContent`, as in `primitive_sum`):
-        // float64's sum is `+0` wherever it cancels, so `-(a - b)` is `-0` there and `b - a` is
-        // `+0`, a sign the expression around it may read (`2*(-a - b)` is not `-2*(a + b)` where
-        // `a + b` cancels on a region). Asked last.
-        if !Law::AddContent.holds(&Ex::Add(ts.to_vec()), cx) {
+        // A sign enters a sum only where it holds none (`Law::ClassSignTrade`, as `add.content` in
+        // `primitive_sum`): float64's sum is `+0` wherever it cancels, so `-(a - b)` is `-0` there
+        // and `b - a` is `+0`, a sign the expression around it may read (`2*(-a - b)` is not
+        // `-2*(a + b)` where `a + b` cancels on a region). Asked last.
+        if !Law::ClassSignTrade.holds(&Ex::Add(ts.to_vec()), cx) {
             return None;
         }
         out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -10154,11 +10305,17 @@ fn distributed_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Vec<Ex> {
     // post-distribute there is no legal trade, so entry-independence
     // requires one fixed pre-state.
     let vv: Vec<Ex>;
+    // In `f64` a site over a sum that may vanish is no place for it: the sum cancels to `+0` in
+    // either orientation, so the coefficient's sign is the sign of the pole the power gives it
+    // there (`class.pole_orientation`: `(-2 (x0 - x1))^-1` is `-inf` at x0 = x1, `(2 (x1 - x0))^-1`
+    // is `+inf`).
     let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() && !inverts_a_signed_zero(v, cx) {
         let ci = v
             .iter()
             .position(|f| matches!(f, Ex::Num(r) if r.is_negative()));
-        let si = v.iter().position(|f| is_sign_trade_site(f, cx));
+        let si = v
+            .iter()
+            .position(|f| is_sign_trade_site(f, cx) && !pole_site(f, cx));
         match (ci, si) {
             (Some(ci), Some(si)) => {
                 let nc = match &v[ci] {
@@ -10386,10 +10543,15 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // An odd negative power inverts the zero of a site that vanishes on a region with the sign
     // its orientation gives it (`region_signed_zero`): `1/-(S^3)` is `-inf` there and
     // `1/flip(S)^3` is `+inf`, so the power distributes instead (`inverts_a_signed_zero`).
-    let inverts = matches!(&exp, Ex::Num(s) if s.is_negative() && s.is_odd_integer());
+    // And where the site's sum may vanish exactly, the pole's sign is the one written
+    // (`class.pole_orientation`): `1/-(x0 - 3)` is `-inf` at x0 = 3, `1/(3 - x0)` is `+inf`.
+    let negated_site = |f: &Ex| match &exp {
+        Ex::Num(s) => Law::PowNegatedSite.holds_powers(Powers::Site { site: f, s }, cx),
+        _ => true,
+    };
     if let Ex::Mul(v) = &base {
         if let [Ex::Num(c), f] | [f, Ex::Num(c)] = v.as_slice() {
-            if *c == Rat::NEG_ONE && !(inverts && region_signed_zero(f, cx)) {
+            if *c == Rat::NEG_ONE && negated_site(f) {
                 if let Some(flipped) = sign_trade_flip(f, cx) {
                     return pow_member(flipped, exp, cx);
                 }
@@ -12534,10 +12696,14 @@ mod tests {
                     mul(vec![Ex::int(1), raw_sin.clone()], &cx),
                     "{mode:?}"
                 );
-                // a power over a lone site reads its class, whichever orientation it stands in
+                // a power over a lone site reads its class, whichever orientation it stands in;
+                // in `f64` an odd negative power reads the sign of the pole that orientation gives
+                // it (`class.pole_orientation`: the sum is `+0` at its zero in either orientation,
+                // so `1/-(x1 + x2 - x0)^3` is `-inf` there and `1/(x0 - x1 - x2)^3` is `+inf`)
+                let pole_read = mode == RuleMode::Default;
                 assert_eq!(
-                    pow(cube.clone(), Ex::int(-1), &cx),
-                    pow(s.clone(), Ex::int(-3), &cx),
+                    pow(cube.clone(), Ex::int(-1), &cx) == pow(s.clone(), Ex::int(-3), &cx),
+                    !pole_read,
                     "{mode:?}"
                 );
                 assert_eq!(
@@ -12546,8 +12712,8 @@ mod tests {
                     "{mode:?}"
                 );
                 assert_eq!(
-                    pow(sine, Ex::int(-1), &cx),
-                    pow(raw_sin, Ex::int(-1), &cx),
+                    pow(sine, Ex::int(-1), &cx) == pow(raw_sin, Ex::int(-1), &cx),
+                    !pole_read,
                     "{mode:?}"
                 );
             }

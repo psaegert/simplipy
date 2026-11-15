@@ -199,11 +199,10 @@ REDECIDED = [
     # inverses on both sides: the class is written in one orientation, the lone inverse joining the
     # even power and the root (its infinity at the zero is the one-sided limit's, -inf)
     ('* * inv pow - 3 x1 2 inv - 3 x1 pow - x1 3 0.5'.split(), '/ -1 pow - x1 3 / 5 2'),
-    # a symbolic power cannot move; the even power cancels the bare sum, and the symbolic power,
-    # defined where 3 - x1 is positive, orients the class (its infinity at the zero is the
-    # one-sided limit's; permissive keeps no value at a pole)
-    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(),
-     {'f64': '/ neg pow - 3 x1 x3 - 3 x1', 'permissive': '/ pow - 3 x1 x3 - x1 3'}),
+    # a symbolic power cannot move; the even power cancels the bare sum. The source is NaN at
+    # x1 = 3 (an infinity times a zero), so no value is kept there and the class takes its
+    # cheapest orientation in both modes
+    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(), '/ pow - 3 x1 x3 - x1 3'),
     # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
     (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'],
      '<mul> 1 <div> <add> x1 <sub> 3 </add> </mul>'),
@@ -341,15 +340,18 @@ def test_classes_are_decided_together(eng, mode):
 
 
 # THE CLASS IS WRITTEN IN ONE ORIENTATION: `(3 - x1)^-2 (3 - x1)^-3` is the total `^-5` over `3 - x1`,
-# and `1/(x1 - 3)` the total `^-1` over `x1 - 3`; the lone inverses move too, so the class meets in one
-# orientation, the sign in the coefficient: `-1/(x1 - 3)^6`, whose infinity at x1 = 3 is the limit's,
-# however the parse first reads `1/(3 - x1)^2`.
+# and `1/(x1 - 3)` the total `^-1` over `x1 - 3`. In permissive, which reads no value at a pole, the lone
+# inverses move too, so the class meets in one orientation, the sign in the coefficient: `-1/(x1 - 3)^6`,
+# however the parse first reads `1/(3 - x1)^2`. In f64 float64 gives the source `+inf` at x1 = 3 (every base
+# is `+0` there), where `-1/(x1 - 3)^6` is `-inf`: the even mass moves and one inverse keeps that value.
 @pytest.mark.parametrize('effort', (0, None))
-@pytest.mark.parametrize('mode', MODES)
-def test_an_odd_negative_total_keeps_one_inverse(eng, mode, effort):
+@pytest.mark.parametrize('mode, expected', [
+    ('f64', '<mul> <div> pow <add> x1 <sub> 3 </add> 5 <add> 3 <sub> x1 </add> </mul>'),
+    ('permissive', '<mul> -1 <div> pow <add> x1 <sub> 3 </add> 6 </mul>')])
+def test_an_odd_negative_total_keeps_one_inverse(eng, mode, expected, effort):
     src = ['<mul>', 'inv', 'pow'] + _S + ['2', 'inv', 'pow'] + _S + ['3', 'inv'] + _N + ['</mul>']
     answer = list(eng.simplify(src, mode=mode, effort=effort))
-    assert ' '.join(answer) == '<mul> -1 <div> pow <add> x1 <sub> 3 </add> 6 </mul>'
+    assert ' '.join(answer) == expected
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 
@@ -415,14 +417,15 @@ def _prod(*fs):
     return ['*'] * (len(fs) - 1) + ' '.join(fs).split()
 
 
-@pytest.mark.parametrize('mode', ('f64',))
-@pytest.mark.parametrize('pair', [
-    (_prod('- x2 x1', 'sin - x1 x2', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
-     _prod('- x1 x2', 'sin - x2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)])),
-    (_prod('neg sin * 2 x1', 'sin * -2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
-     _prod('sin * 2 x1', 'sin * -2 x1', '- x4 x3', *[f'- x{i} x{i + 1}' for i in range(5, 15, 2)])),
-    (_prod('/ log - x1 3 - 3 x1', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)]),
-     _prod('neg / log - x1 3 - x1 3', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)])),
+@pytest.mark.parametrize('mode, pair', [
+    ('f64', (_prod('- x2 x1', 'sin - x1 x2', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
+             _prod('- x1 x2', 'sin - x2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]))),
+    ('f64', (_prod('neg sin * 2 x1', 'sin * -2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
+             _prod('sin * 2 x1', 'sin * -2 x1', '- x4 x3', *[f'- x{i} x{i + 1}' for i in range(5, 15, 2)]))),
+    # in f64 the two spellings part at x1 = 3, where float64 gives them -inf and +inf: one answer
+    # in permissive, which reads no value at a pole
+    ('permissive', (_prod('/ log - x1 3 - 3 x1', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)]),
+                    _prod('neg / log - x1 3 - x1 3', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)]))),
 ])
 def test_wide_products_get_one_answer(eng, mode, pair):
     a, b = (list(eng.simplify(list(t), mode=mode)) for t in pair)
@@ -448,16 +451,24 @@ def test_a_shared_odd_function_is_read_up_to_sign(eng, mode, spellings, expected
 # ONE ORIENTATION FOR A CLASS, WHEREVER IT STANDS: a site alone takes the orientation it takes as a
 # product's one factor (two signs either way here, the outer one wins), and an inverse over it reads
 # the same class whichever orientation it stands in (srbf ground truth 6397).
-@pytest.mark.parametrize('mode', MODES)
-@pytest.mark.parametrize('spellings, expected', [
-    (['pow - * x3 - x3 x1 x2 3', '* 1 pow - * x3 - x3 x1 x2 3', 'neg pow + x2 * x3 - x1 x3 3'],
-     'neg pow + x2 * x3 - x1 x3 3'),
-    (['inv pow - * x3 - x3 x1 x2 3', '/ 1 * 1 pow - * x3 - x3 x1 x2 3', 'pow - * x3 - x3 x1 x2 -3',
-      'inv neg pow + x2 * x3 - x1 x3 3'], '/ -1 pow + x2 * x3 - x1 x3 3'),
-    (['sin - - x1 x2 x3', '* 1 sin - - x1 x2 x3', 'neg sin - + x2 x3 x1'], 'neg sin - + x2 x3 x1'),
-    (['inv sin - - x1 x2 x3', '/ 1 * 1 sin - - x1 x2 x3', 'inv neg sin - + x2 x3 x1'],
-     '/ -1 sin - + x2 x3 x1'),
-])
+@pytest.mark.parametrize('mode, spellings, expected', [
+    (mode, ['pow - * x3 - x3 x1 x2 3', '* 1 pow - * x3 - x3 x1 x2 3', 'neg pow + x2 * x3 - x1 x3 3'],
+     'neg pow + x2 * x3 - x1 x3 3') for mode in MODES] + [
+    ('permissive', ['inv pow - * x3 - x3 x1 x2 3', '/ 1 * 1 pow - * x3 - x3 x1 x2 3',
+                    'pow - * x3 - x3 x1 x2 -3', 'inv neg pow + x2 * x3 - x1 x3 3'],
+     '/ -1 pow + x2 * x3 - x1 x3 3'),
+    # in f64 the inverse reads the pole's value at the sum's exact zero, `+inf` for the cube of the
+    # orientation written and `-inf` for its negation: the power over the cube as written is the
+    # cube's negative power, and the inverse of the negation keeps its sign
+    ('f64', ['inv pow - * x3 - x3 x1 x2 3', 'pow - * x3 - x3 x1 x2 -3'], 'inv pow - * x3 - x3 x1 x2 3'),
+    ('f64', ['inv neg pow + x2 * x3 - x1 x3 3'], '/ -1 pow + x2 * x3 - x1 x3 3')] + [
+    (mode, ['sin - - x1 x2 x3', '* 1 sin - - x1 x2 x3', 'neg sin - + x2 x3 x1'], 'neg sin - + x2 x3 x1')
+    for mode in MODES] + [
+    # (in f64 the sine below the inverse is built first, at its own root, and takes the orientation
+    # with the outer sign; the inverse then reads its zero, `-inf` where `1/sin(x1 - x2 - x3)` is
+    # `+inf`: the per-step residual of a product below a reader)
+    (mode, ['inv sin - - x1 x2 x3', '/ 1 * 1 sin - - x1 x2 x3', 'inv neg sin - + x2 x3 x1'],
+     '/ -1 sin - + x2 x3 x1') for mode in MODES])
 def test_a_lone_site_is_oriented_as_a_products_one_factor(eng, mode, spellings, expected):
     answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
     assert answers == {expected}

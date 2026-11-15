@@ -227,14 +227,19 @@ class TestFactoringIsASearchMove:
 
     def test_a_repeated_wildcard_binds_a_class_up_to_sign(self) -> None:
         # `x1/(x2 - x3) + x4/(x3 - x2)`: the two inverses carry one class in its two orientations.
-        # A wildcard of a sort that binds a subtree, repeated, binds the class up to sign: the
-        # terms are read with the class in one orientation, the sign in the coefficient.
+        # A wildcard of a sort that binds a subtree, repeated, binds the class up to sign in
+        # `permissive`: the terms are read with the class in one orientation, the sign in the
+        # coefficient. `f64` reads the value float64 gives a pole at an exact zero of the class
+        # (`class.pole_orientation`): at x2 = x3 both inverses are `+inf`, so there the terms are
+        # no negations of each other, and the class binds only as it is written.
         over = [[["+", "*", "_0", "pow", "_2", "-1", "*", "_1", "pow", "_2", "-1"],
                  ["*", "+", "_0", "_1", "pow", "_2", "-1"]]]
         e = make_engine(over)
         src = ["+", "*", "x1", "pow", "-", "x2", "x3", "-1", "*", "x4", "pow", "-", "x3", "x2", "-1"]
-        want = e.simplify(["*", "-", "x1", "x4", "pow", "-", "x2", "x3", "-1"], effort=0)
-        assert e.simplify(list(src), effort=0) == want
+        joined = ["*", "-", "x1", "x4", "pow", "-", "x2", "x3", "-1"]
+        want = e.simplify(list(joined), effort=0, mode='permissive')
+        assert e.simplify(list(src), effort=0, mode='permissive') == want
+        assert e.simplify(list(src), effort=0, mode='f64') != e.simplify(list(joined), effort=0, mode='f64')
         # A `?` wildcard binds variable leaves only outside permissive, so no class is bound there.
         leaf = [[[t.replace("_", "?") for t in over[0][0]], [t.replace("_", "?") for t in over[0][1]]]]
         assert make_engine(leaf).simplify(list(src), effort=0) != want

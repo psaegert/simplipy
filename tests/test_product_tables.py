@@ -267,16 +267,12 @@ def test_the_answer_keeps_every_value_at_the_zeros(eng, mode, src):
         near = np.array([pt + h * d for d in dirs for h in (1e-12, -1e-12)])
         with np.errstate(all='ignore'):
             v = np.asarray(f_src(*near.T), dtype=float) * np.ones(len(near))
-        v = v[~np.isnan(v)]  # a side where the source is undefined has no limit to keep
-        large = len(v) > 0 and (np.abs(v) > 1e5).all()
-        poles += large
-        if large and len(set(np.sign(v))) == 1:
-            assert after[i] == np.sign(v[0]) * np.inf, (pt, before[i], after[i], answer)
-        elif large:
-            # the two sides disagree in sign: the value there is not part of the
-            # function, but the answer keeps the pole
-            assert np.isinf(after[i]), (pt, before[i], after[i], answer)
-        elif np.isinf(before[i]):
+        v = v[~np.isnan(v)]
+        poles += len(v) > 0 and (np.abs(v) > 1e5).all()
+        # At an exact zero of a sum float64 gives the pole the infinity of the sign written, which may differ
+        # from the limit (`1/((3 - x1)*(x1 - 3))` is +inf at x1 = 3, its limit -inf): f64 keeps it, and where
+        # the source has no value there (`0*inf`) the answer may have one.
+        if not np.isnan(before[i]):
             assert after[i] == before[i], (pt, before[i], after[i], answer)
     # the pole half ran: the grid reaches the case's pole
     assert poles > 0 or src == VANISHING, (src, answer)

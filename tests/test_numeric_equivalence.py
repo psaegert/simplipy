@@ -394,7 +394,13 @@ class TestCorpusGate:
         # A ZERO PRODUCT KEEPS ITS SIGN (f64): 54,707,213 -> 54,701,213. A head that keeps a
         # zero, its sign and NaN is the zero product itself: row 64's `sin(0*log(x4))` is
         # `0*log(x4)` (-6,000), the same value at every point. No other row moves.
-        assert walk['complexity_out'] == 54701213, walk['complexity_out']
+        # F64 KEEPS A POLE'S VALUE: 54,701,213 -> 54,716,628 (+15,415). Float64 gives a pole at an
+        # exact zero of a sum the infinity of the sign written, so a sign no longer moves through
+        # one whose sum may vanish exactly. 28 walk rows move: 15 at an equal price (re-oriented
+        # around such a pole), 12 dearer by one or two bits (22, 68, 83, 152, 270, 282, 288, 290,
+        # 309, 314, 329, 399 +1,000 or +2,000: the sign stays beside the pole), and row 243
+        # +415, whose search now runs again from its landed endpoint until it offers no move.
+        assert walk['complexity_out'] == 54716628, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

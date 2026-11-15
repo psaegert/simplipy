@@ -111,8 +111,8 @@ class TestLoadConsumer:
         out = poisoned.simplify(poisoned.to_tagged(list(HOSTILE_SRC)))
         assert poisoned._core.ac_registry_dropped() == 1, \
             'the load consumer must refuse the pole-mirror rule'
-        # The lone inverse's pole is two-signed, so its orientation is the product's choice (reading A): the
-        # constructors take the cheaper one themselves, with or without the rule.
+        # In f64 float64 gives the lone inverse's pole at x0 = 1 the infinity of the sign written, and the
+        # constructors keep it (`class.pole_orientation`), with or without the rule.
         (tmp_path / 'clean').mkdir()
         clean = _scratch(tmp_path / 'clean', [])
         assert out == clean.simplify(clean.to_tagged(list(HOSTILE_SRC))), out
@@ -183,10 +183,13 @@ class TestMintChannels:
         rules = [(list(lhs_), list(rhs_)) for lhs_, rhs_ in engine.simplification_rules]
         for lhs, rhs in rules:
             assert not eng_pair_is_mirror(lhs, rhs), (lhs, rhs)
-        # The two spellings are one state: the lone inverse's pole is two-signed, so the constructors place its
-        # sign (reading A), and the mine has no mirror pair to propose -- the registry's pole entry never needs to
-        # fire. Absence of the rule is then no vacuous pass: there is nothing for it to rewrite.
-        assert engine.simplify(list(HOSTILE_SRC)) == engine.simplify(list(HOSTILE_TGT))
+        # In f64 the two spellings are two states: float64 gives the pole at x0 = 1 the infinity of the sign
+        # written, -inf against +inf, and the constructors keep each (`class.pole_orientation`); the mirror pair
+        # would change that value, which the judge refuses. In permissive, which reads no value at a pole, they
+        # are one state, so there is nothing for the rule to rewrite: its absence is no vacuous pass.
+        assert engine.simplify(list(HOSTILE_SRC), mode='f64') != engine.simplify(list(HOSTILE_TGT), mode='f64')
+        assert (engine.simplify(list(HOSTILE_SRC), mode='permissive')
+                == engine.simplify(list(HOSTILE_TGT), mode='permissive'))
 
     def test_hint_channel_refuses_the_mirror(self, tmp_path):
         # The proposal/hint channel -- previously a full registry bypass.

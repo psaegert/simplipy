@@ -79,14 +79,16 @@ def test_only_f64_reads_the_tails(eng, mode, expected):
     assert ' '.join(eng.simplify('* -1 inv - * x2 tanh x1 x2'.split(), mode=mode)) == expected
 
 
-@pytest.mark.parametrize('mode', ('f64', 'permissive'))
-@pytest.mark.parametrize('expression, expected', [
-    # the tails do not cancel: x2 - x1 and -x2 - x1, fl(pi/2) - x1 are zero on null sets
-    ('* -1 inv - * x2 tanh x1 x1', 'inv - x1 * x2 tanh x1'),
-    ('* -1 inv - atan x1 x1', 'inv - x1 atan x1'),
+@pytest.mark.parametrize('expression, f64, permissive', [
+    # the tails do not cancel: x2 - x1 and -x2 - x1, fl(pi/2) - x1 are zero on null sets, so
+    # permissive moves the sign; f64 keeps the value float64 gives the pole at the sum's exact zero
+    # (x1 = 0), where the sum is +0 in either orientation
+    ('* -1 inv - * x2 tanh x1 x1', '/ -1 - * x2 tanh x1 x1', 'inv - x1 * x2 tanh x1'),
+    ('* -1 inv - atan x1 x1', '/ -1 - atan x1 x1', 'inv - x1 atan x1'),
 ])
-def test_a_sum_whose_tails_do_not_cancel_still_moves_its_sign(eng, mode, expression, expected):
-    assert ' '.join(eng.simplify(expression.split(), mode=mode)) == expected
+def test_a_sum_whose_tails_do_not_cancel_still_moves_its_sign(eng, expression, f64, permissive):
+    for mode, expected in (('f64', f64), ('permissive', permissive)):
+        assert ' '.join(eng.simplify(expression.split(), mode=mode)) == expected, mode
 
 
 @pytest.mark.parametrize('expression', [

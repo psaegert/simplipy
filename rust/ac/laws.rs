@@ -89,6 +89,15 @@
 //! | `fun.half_period` | sin(t + pi) = -sin(t), cos(t + pi) = -cos(t), tan(t + pi) = tan(t) | none | none |
 //! | `fun.besselj_reflection` | J_(-n)(t) = (-1)^n J_n(t) | none | none |
 //! | `lattice.absorb` | max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a | the dropped members no NaN almost everywhere | none |
+//! | `class.sign_trade` | f(-S) = -f(S), f an odd carrier of a sum S | a sign enters S only where S holds none (as `add.content`) | none |
+//! | `class.pole_orientation` | f(-S)^-k = -f(S)^-k, k odd | S never zero: float64 cancels a sum to `+0` in either orientation | none |
+//! | `class.opposite_sums` | S^a*(-S)^b = (-1)^b*S^(a+b) | a + b < 0: as `class.pole_orientation` | none |
+//! | `class.like_terms_up_to_sign` | u*f(S) + v*f(-S) = (u - v)*f(S), f odd | f(S) infinite at S's zero: as `class.pole_orientation` | none |
+//! | `pow.even_orientation` | (-S)^(2k) = S^(2k) | none | none |
+//! | `pow.negated_site` | (-F)^s = flip(F)^s | the flip as `class.sign_trade`'s; s odd and negative: F's zero no region with a sign of its own, and as `class.pole_orientation` | none |
+//! | `fun.even` | g(-t) = g(t), g even | none | none |
+//! | `fun.odd_sign` | f(-u) = -f(u), f odd | none | none |
+//! | `fun.atan2_sign` | atan2(-y, x) = -atan2(y, x) | none | no step (one zero) |
 //!
 //! An absorption is the specification's 3.2, a statement about families: for every value of
 //! the constants on the left there is one on the right, `d = c1 + r*c2 + q`, `d = r*c`,
@@ -114,6 +123,8 @@ pub(crate) enum Powers<'a> {
     },
     /// `base^y*base^y`: one symbolic exponent.
     Symbolic { base: &'a Ex, y: &'a Ex },
+    /// `(-site)^s`: a negated sign-trade site under a rational exponent.
+    Site { site: &'a Ex, s: &'a Rat },
     /// `(members[0]*members[1]*...)^n`: a product under an integer power.
     Product { members: &'a [Ex], n: &'a Rat },
 }
@@ -414,11 +425,72 @@ pub enum Law {
     /// NaN almost everywhere (a number, an infinity, or finite almost everywhere): a NaN member
     /// makes the bag NaN. [`Law::holds`] reads one dropped member. In `permissive`, none.
     LatticeAbsorb,
+    /// A product's sign trades between its coefficient and an odd carrier of a sum `S` (the sum
+    /// itself, an odd positive power, an odd root, an odd function or an odd `besselj` order of
+    /// one): `f(-S) = -f(S)`, the cheaper placement standing (`expr::sign_place`), the sites over
+    /// one sum flipping as a whole. Float64 negates exactly but where `S` cancels, which is `+0`
+    /// in either orientation, so `-f(S)` is `-0` there and `f(-S)` is `+0`. In `f64` a sign enters
+    /// `S` only where `S` holds no sign (`expr::sum_holds_its_sign`, as `add.content`): where it
+    /// may vanish on a region and the expression around it reads its zero, the sign stays on the
+    /// coefficient (`1/(2*(-ceil(x0) - floor(x1)))` is `+inf` wherever `ceil(x0) = -floor(x1)`,
+    /// `-1/(2*(ceil(x0) + floor(x1)))` is `-inf`). A configuration also keeps the value the product
+    /// keeps at the zero of each class (`expr::zero_limit`) and, at an odd pole, the value
+    /// float64 gives it (`class.pole_orientation`). [`Law::holds`] reads the sum. In
+    /// `permissive`, none.
+    ClassSignTrade,
+    /// The orientation of a sum `S` under an odd negative power: `f(-S)^-k = -f(S)^-k`
+    /// (`-1/(x0 - 3) = 1/(3 - x0)`), at a lone inverse, a pole that distribution splits, a negated
+    /// site and like terms through a pole alike. The two sides agree wherever `S` is nonzero. At an
+    /// exact zero float64 gives the pole a value, the infinity of the sign written: a sum cancels to
+    /// `+0` in either orientation, so `-1/(x0 - 3)` is `-inf` at x0 = 3 and `1/(3 - x0)` is `+inf`.
+    /// In `f64` a sign moves through such a pole only where `S` is never zero (`expr::never_zero`:
+    /// `1/(-x0^2 - 1)` is `-1/(x0^2 + 1)`); elsewhere a configuration keeps the count of members
+    /// whose sign there differs from the one beside it (`expr::sign_place`). [`Law::holds`] reads
+    /// the class's sum. In `permissive`, none: the reals give `1/0` no value.
+    ClassPoleOrientation,
+    /// Factors over a sum and its negation are one class, decided on the product's exponent
+    /// table: `S^a*(-S)^b = (-1)^b*S^(a+b)` (`(9.6 - x)*(x - 9.6) = -(x - 9.6)^2`,
+    /// `(x - 3)/(3 - x) = -1`). A positive total is free. In `f64` a negative total keeps the pole's
+    /// value where `S` may vanish exactly (`class.pole_orientation`): `1/((x0 - 3)*(3 - x0))` is
+    /// `+inf` at x0 = 3, where `-1/(x0 - 3)^2` is `-inf`, so the product stays as written there.
+    /// [`Law::holds`] reads the class's sum, asked of a negative total. In `permissive`, none.
+    ClassOppositeSums,
+    /// Like terms are like up to the orientation of their classes: `1/(x3 - x2)` and
+    /// `-1/(x2 - x3)` are one term. In `f64` a term with a pole at the zero of a class that may
+    /// vanish exactly keeps its orientation (`class.pole_orientation`): `1/(x0 - 3) + 1/(3 - x0)`
+    /// is `+inf` at x0 = 3 and stays. [`Law::holds`] reads the class's sum, asked of a term infinite
+    /// at its zero. In `permissive`, none.
+    ClassLikeTermsUpToSign,
+    /// An even power erases its base's orientation: `(-S)^(2k) = S^(2k)`, `f(-S)^(2k) = f(S)^(2k)`
+    /// and `f(-c*u)^(2k) = f(c*u)^(2k)` for an odd head `f`. Total: bit for bit, zeros and poles
+    /// included.
+    PowEvenOrientation,
+    /// A negated site under a power is the power of its flip: `(-F)^s = flip(F)^s`, the flip a
+    /// sign trade into `F`'s sum (`class.sign_trade`'s premise). In `f64` an odd negative `s` reads
+    /// the sign of `F`'s zero: where `F` may vanish on a region with a sign of its own
+    /// (`expr::region_signed_zero`) `1/-(S^3)` is `-inf` there and `1/flip(S)^3` is `+inf`, and
+    /// where its sum may vanish exactly the pole's sign is the one written
+    /// (`class.pole_orientation`: `1/-(x0 - 3)` is `-inf` at x0 = 3, `1/(3 - x0)` is `+inf`); the
+    /// power distributes instead. [`Law::holds_powers`] reads the site and the exponent. In
+    /// `permissive`, none.
+    PowNegatedSite,
+    /// An even function eats its argument's sign and orientation: `g(-t) = g(t)` for `g` in
+    /// {`abs`, `cos`, `cosh`} and `besselj` of an even order, through odd heads, `abs` and integer
+    /// powers (`|sin(-x)| = |sin(x)|`, `cos(y - x) = cos(x - y)`). Total: bit for bit.
+    FunEven,
+    /// An odd head of a negative literal multiple takes the cheaper spelling: `f(-u) = -f(u)`
+    /// (`sin(-2*x0)` is `-sin(2*x0)`; a ground argument keeps its sign, `sin(-2)`). Total: odd bit
+    /// for bit, a zero's sign included.
+    FunOddSign,
+    /// `atan2(-y, x) = -atan2(y, x)`: odd in `y` bit for bit, signed zeros included. A step of
+    /// `f64` alone: `permissive` reads one zero, where `atan2(0, -1)` is `pi` and `-atan2(0, -1)`
+    /// is `-pi`.
+    FunAtan2Sign,
 }
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 72] = [
+    pub const ALL: [Law; 81] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -491,6 +563,15 @@ impl Law {
         Law::FunHalfPeriod,
         Law::FunBesseljReflection,
         Law::LatticeAbsorb,
+        Law::ClassSignTrade,
+        Law::ClassPoleOrientation,
+        Law::ClassOppositeSums,
+        Law::ClassLikeTermsUpToSign,
+        Law::PowEvenOrientation,
+        Law::PowNegatedSite,
+        Law::FunEven,
+        Law::FunOddSign,
+        Law::FunAtan2Sign,
     ];
 
     /// The law's stable name, `family.law`.
@@ -568,6 +649,15 @@ impl Law {
             Law::FunHalfPeriod => "fun.half_period",
             Law::FunBesseljReflection => "fun.besselj_reflection",
             Law::LatticeAbsorb => "lattice.absorb",
+            Law::ClassSignTrade => "class.sign_trade",
+            Law::ClassPoleOrientation => "class.pole_orientation",
+            Law::ClassOppositeSums => "class.opposite_sums",
+            Law::ClassLikeTermsUpToSign => "class.like_terms_up_to_sign",
+            Law::PowEvenOrientation => "pow.even_orientation",
+            Law::PowNegatedSite => "pow.negated_site",
+            Law::FunEven => "fun.even",
+            Law::FunOddSign => "fun.odd_sign",
+            Law::FunAtan2Sign => "fun.atan2_sign",
         }
     }
 
@@ -648,6 +738,15 @@ impl Law {
             }
             Law::FunBesseljReflection => "J_(-n)(t) = (-1)^n J_n(t)",
             Law::LatticeAbsorb => "max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a",
+            Law::ClassSignTrade => "f(-S) = -f(S)",
+            Law::ClassPoleOrientation => "f(-S)^-k = -f(S)^-k, k odd",
+            Law::ClassOppositeSums => "S^a*(-S)^b = (-1)^b*S^(a+b)",
+            Law::ClassLikeTermsUpToSign => "u*f(S) + v*f(-S) = (u - v)*f(S)",
+            Law::PowEvenOrientation => "(-S)^(2*k) = S^(2*k)",
+            Law::PowNegatedSite => "(-F)^s = flip(F)^s",
+            Law::FunEven => "g(-t) = g(t)",
+            Law::FunOddSign => "f(-u) = -f(u)",
+            Law::FunAtan2Sign => "atan2(-y, x) = -atan2(y, x)",
         }
     }
 
@@ -705,6 +804,10 @@ impl Law {
                 | Law::FunSinhAsinh
                 | Law::FunHalfPeriod
                 | Law::FunBesseljReflection
+                | Law::PowEvenOrientation
+                | Law::FunEven
+                | Law::FunOddSign
+                | Law::FunAtan2Sign
         )
     }
 
@@ -730,7 +833,13 @@ impl Law {
             Law::MulCancel => cx.permits(Permissive::LikeTerms) || cx.finnz_certified(t),
             // `t` is the sum: may a coefficient that is no positive number spread over it, may a
             // sign leave or enter it?
-            Law::AddUnfactor | Law::AddContent => !super::expr::sum_holds_its_sign(t, cx),
+            Law::AddUnfactor | Law::AddContent | Law::ClassSignTrade => {
+                !super::expr::sum_holds_its_sign(t, cx)
+            }
+            // `t` is the class's sum (its key).
+            Law::ClassPoleOrientation | Law::ClassOppositeSums | Law::ClassLikeTermsUpToSign => {
+                !super::expr::f64_zero_signs(cx) || super::expr::never_zero(t, cx)
+            }
             // `t` is the argument of the inner function.
             Law::FunAtanhTanh => !cx.f64_semantics() || cx.certainly_in_band(t, 19),
             Law::FunLogExp => {
@@ -797,6 +906,12 @@ impl Law {
                     || cx.certainly_nonneg(base)
                     || r.checked_add(s)
                         .is_some_and(|q| !q.is_integer() && !q.is_zero())
+            }
+            // `site` is the negated site, `s` the exponent.
+            (Law::PowNegatedSite, Powers::Site { site, s }) => {
+                !(s.is_negative() && s.is_odd_integer())
+                    || !(super::expr::region_signed_zero(site, cx)
+                        || super::expr::pole_site(site, cx))
             }
             (Law::MulCollectSymbolic, Powers::Symbolic { base, y }) => {
                 cx.permits(Permissive::Agreement)

@@ -149,7 +149,8 @@ ROWS = [
      'exp - - ceil x2 * 2 ceil x0 * 2 floor x1', 'exp - - ceil x2 * 2 ceil x0 * 2 floor x1'),
     ('add.unfactor', 'inv + ceil x2 * -2 + ceil x0 floor x1', 'inv - ceil x2 * 2 + ceil x0 floor x1',
      '/ -1 - + * 2 ceil x0 * 2 floor x1 ceil x2'),
-    ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', '/ -1 - + * 2 ceil x0 * 2 floor x1 x2',
+    # f64: the sum may vanish exactly, where its pole keeps the sign it is written with
+    ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', 'inv - - x2 * 2 ceil x0 * 2 floor x1',
      '/ -1 - + * 2 ceil x0 * 2 floor x1 x2'),
     ('add.unfactor', 'inv + * -1 - ceil x0 ceil x1 ceil x2', 'inv - ceil x2 - ceil x0 ceil x1',
      'inv - + ceil x1 ceil x2 ceil x0'),
@@ -419,6 +420,45 @@ ABSORB_ROWS = [
     ('absorb.nan_family', f'asin cosh {C}', C, C),
 ]
 
+#: (law, input, f64 answer, permissive answer) of the laws of signs and orientation. In f64 a sum
+#: is +0 at its zero in either orientation, so a sign moved through a pole there turns the
+#: infinity float64 gives it (`-1/(x0 - 3)` is -inf at x0 = 3, `1/(3 - x0)` is +inf): the pole's
+#: value is kept wherever the sum may vanish exactly; permissive reads no value at a pole.
+SIGN_ROWS = [
+    # f(-S) = -f(S): the cheaper placement; under an inverse a sum that vanishes on a region holds
+    # its sign
+    ('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'sin - x1 x0'),
+    ('class.sign_trade', '* -2 sin - x0 3', '* 2 sin - 3 x0', '* 2 sin - 3 x0'),
+    ('class.sign_trade', 'inv * -2 sin + ceil x0 floor x1', '/ neg inv sin + ceil x0 floor x1 2',
+     '/ neg inv sin + ceil x0 floor x1 2'),
+    # f(-S)^-k = -f(S)^-k, k odd; f64: S never zero
+    ('class.pole_orientation', 'neg inv - x0 3', '/ -1 - x0 3', 'inv - 3 x0'),
+    ('class.pole_orientation', 'neg inv sin - x0 3', '/ -1 sin - x0 3', 'inv sin - 3 x0'),
+    ('class.pole_orientation', 'neg pow - x0 3 -3', '/ -1 pow - x0 3 3', 'inv pow - 3 x0 3'),
+    ('class.pole_orientation', 'neg inv - -1 pow x0 2', 'inv + pow x0 2 1', 'inv + pow x0 2 1'),
+    # S^a*(-S)^b = (-1)^b*S^(a+b); f64: a negative total keeps the pole's value
+    ('class.opposite_sums', '* - x0 3 - 3 x0', 'neg pow - x0 3 2', 'neg pow - x0 3 2'),
+    ('class.opposite_sums', 'inv * - x0 3 - 3 x0', '* inv - x0 3 inv - 3 x0', '/ -1 pow - x0 3 2'),
+    ('class.opposite_sums', '* pow - x0 3 -1 pow - 3 x0 -2', 'inv pow - x0 3 3',
+     'inv pow - x0 3 3'),
+    # like terms up to the orientation of their classes; f64: a term infinite at its class's zero
+    # keeps its orientation
+    ('class.like_terms_up_to_sign', '+ sin - x0 x1 sin - x1 x0', '0', '0'),
+    ('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '+ inv - x0 3 inv - 3 x0', '0'),
+    ('pow.even_orientation', 'pow - x1 x0 2', 'pow - x0 x1 2', 'pow - x0 x1 2'),
+    ('pow.even_orientation', 'pow sin * -2 x0 2', 'pow sin * 2 x0 2', 'pow sin * 2 x0 2'),
+    # (-F)^s = flip(F)^s; f64: an odd negative s keeps a sign of a region's zero
+    ('pow.negated_site', 'pow neg - x0 3 3', 'pow - 3 x0 3', 'pow - 3 x0 3'),
+    ('pow.negated_site', 'inv pow neg + ceil x0 floor x1 3', '/ -1 pow + ceil x0 floor x1 3',
+     '/ -1 pow + ceil x0 floor x1 3'),
+    ('fun.even', 'cos neg x0', 'cos x0', 'cos x0'),
+    ('fun.even', 'cos - x1 x0', 'cos - x0 x1', 'cos - x0 x1'),
+    ('fun.odd_sign', 'sin neg x0', 'neg sin x0', 'neg sin x0'),
+    ('fun.odd_sign', 'sin * -2 x0', 'neg sin * 2 x0', 'neg sin * 2 x0'),
+    # f64 alone: permissive's one zero gives atan2(0, -1) = pi
+    ('fun.atan2_sign', 'atan2 neg x0 x1', 'neg atan2 x0 x1', 'atan2 neg x0 x1'),
+]
+
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
@@ -481,29 +521,42 @@ def test_the_core_names_its_laws() -> None:
         ('fun.abs_nonnegative', 'abs(t) = t'),
         ('fun.half_period', 'sin(t + pi) = -sin(t), cos(t + pi) = -cos(t), tan(t + pi) = tan(t)'),
         ('fun.besselj_reflection', 'J_(-n)(t) = (-1)^n J_n(t)'),
-        ('lattice.absorb', 'max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a')]
+        ('lattice.absorb', 'max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a'),
+        ('class.sign_trade', 'f(-S) = -f(S)'),
+        ('class.pole_orientation', 'f(-S)^-k = -f(S)^-k, k odd'),
+        ('class.opposite_sums', 'S^a*(-S)^b = (-1)^b*S^(a+b)'),
+        ('class.like_terms_up_to_sign', 'u*f(S) + v*f(-S) = (u - v)*f(S)'),
+        ('pow.even_orientation', '(-S)^(2*k) = S^(2*k)'), ('pow.negated_site', '(-F)^s = flip(F)^s'),
+        ('fun.even', 'g(-t) = g(t)'), ('fun.odd_sign', 'f(-u) = -f(u)'),
+        ('fun.atan2_sign', 'atan2(-y, x) = -atan2(y, x)')]
+
+
+ALL_ROWS = ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS + SIGN_ROWS
 
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS} == {
-        name for name, _ in _core.laws()}
+    assert {law for law, *_ in ALL_ROWS} == {name for name, _ in _core.laws()}
 
 
-@pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}')
-    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS])
+def rows_on(rows, fixture):
+    return [pytest.param(fixture, *row, id=f'{row[0]}: {row[1]}') for row in rows]
+
+
+@pytest.mark.parametrize('fixture, law, expr, f64, permissive',
+                         rows_on(ALL_ROWS, 'engine'))
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
-        engine, law, expr, f64, permissive, effort) -> None:
+        request, fixture, law, expr, f64, permissive, effort) -> None:
+    engine = request.getfixturevalue(fixture)
     for mode, want in (('f64', f64), ('permissive', permissive)):
         got = ' '.join(engine.simplify(expr.split(), mode=mode, effort=effort))
         assert got == want, (law, mode, expr)
 
 
-@pytest.mark.parametrize('law, expr, f64, permissive', [
-    pytest.param(*row, id=f'{row[0]}: {row[1]}')
-    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS])
-def test_each_answer_reads_back_to_itself(engine, law, expr, f64, permissive) -> None:
+@pytest.mark.parametrize('fixture, law, expr, f64, permissive',
+                         rows_on(ALL_ROWS, 'engine'))
+def test_each_answer_reads_back_to_itself(request, fixture, law, expr, f64, permissive) -> None:
+    engine = request.getfixturevalue(fixture)
     for mode, answer in (('f64', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)
 
@@ -545,4 +598,30 @@ def test_the_f64_answer_keeps_float64s_kinds(engine, law, expr, f64, permissive)
 
     a, b = values(expr), values(f64)
     same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isfinite(b))
+    assert same.all(), (law, expr, f64, points[~same][0])
+
+
+@pytest.mark.parametrize('fixture, law, expr, f64, permissive',
+                         rows_on(SIGN_ROWS, 'engine'))
+def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
+        request, fixture, law, expr, f64, permissive) -> None:
+    """Float64's value of the f64 answer is the input's wherever the input has one, an infinity's
+    sign included, at the zeros of its sums too (the integer points of the plane, where x0 = 3,
+    x1 = 5 and x0 = x1 are met, and points in (-1, 0) and [0, 1), where `ceil` and `floor` are
+    `-0` and `+0`); the answer's own zero may be either zero, as nothing reads it."""
+    engine = request.getfixturevalue(fixture)
+    names = ['x0', 'x1', 'x2']
+    grid = np.array([(a, b, 0.0) for a in np.arange(-3.0, 7.0) for b in np.arange(-3.0, 7.0)])
+    halves = np.array([(a, b, 0.0) for a in (-0.5, 0.25) for b in (-0.5, 0.25)])
+    points = np.vstack([grid, halves, np.random.default_rng(0).uniform(-3, 3, size=(500, 3))])
+
+    def values(tokens):
+        f = engine.as_callable(tokens.split(), variables=names)
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            v = np.asarray(f(*points.T), dtype=np.float64)
+        return np.broadcast_to(v, (len(points),))
+
+    a, b = values(expr), values(f64)
+    same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
     assert same.all(), (law, expr, f64, points[~same][0])
