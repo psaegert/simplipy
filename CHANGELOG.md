@@ -194,6 +194,14 @@ organised by who you are, then the highlights, then every change in detail.
   before a power or a root reads it, and the judge's measure of `f64`'s clause (b) now reads it so:
   `pow(x1, 1 + 2) -> pow(x1, 3)` and `rootn(x1, 2 + 1) -> rootn(x1, 3)` hold in `f64` (they were
   refused for an extension over x1 < 0 that float64 does not make).
+- **The monitor reads a step in its context only for a zero's sign.** Each step of the engine is
+  held at its own points; what an operation around a step does with float64's rounding of the
+  step's input is no step's promise. Where float64's kinds alone refuse an answer that is true in
+  the reals, the monitor now reads the part of the input the answer changed as a step, and
+  around it only a value that turns on a zero's sign, an infinity included, on a region. With the
+  rule `log(exp(x)) -> x`, `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is
+  rounding under `1/`); `1/(0 + 0*x0) -> 1/(0*x0)` is still refused (+inf against -inf for
+  x0 < 0), and the engine still writes `1/(0*x0)` as `inf/x0`.
 - **A literal binds no variable slot.** A numeric literal the exact domain holds as written (a
   decimal of more digits than it holds, `1e400`) is a literal, so it binds no `?` slot of a rule.
 - **A tagged spelling of a fully numeric expression is that expression.** `1/(2/-inf)` is `-inf`

@@ -714,6 +714,12 @@ pub fn zero_sign_isolated(
     along: &[usize],
     event: ZeroSign,
 ) -> bool {
+    isolated_along(env, along, |e| zero_sign_event(l, r, e) == Some(event))
+}
+
+/// Is an event `shown` at `env` isolated along some coordinate of `along`: do the neighbouring
+/// doubles on both sides of it show none (`zero_sign_isolated`)?
+fn isolated_along(env: &[f64], along: &[usize], shown: impl Fn(&[f64]) -> bool) -> bool {
     along.iter().any(|&v| {
         let Some(&x) = env.get(v) else {
             return false;
@@ -726,9 +732,43 @@ pub fn zero_sign_isolated(
             .all(|&y| {
                 let mut e = env.to_vec();
                 e[v] = y;
-                zero_sign_event(l, r, &e) != Some(event)
+                !shown(&e)
             })
     })
+}
+
+/// A WHOLE ANSWER'S READING OF A ZERO'S SIGN, IN ITS CONTEXT: does float64's value of the answer
+/// `r` differ from the input `l`'s (F6) at `env`, an infinity included, where exactly one side's
+/// value turns on a zero's sign (`table::Expr::turns_on_a_zero_sign`)? An engine step is held at
+/// its own points, and in its context only to a zero's sign, which the engine keeps under an
+/// operation that reads it (F7): `1/(0*sinh(x))` is -inf against `1/0`'s +inf for x < 0. Any
+/// other difference of the two is float64's rounding of a step's input, magnified by an
+/// operation around the step (`1/log(exp(x))` is +inf against `1/x` at x = 1e-17). The answer's
+/// root is no reader, so two zeros of opposite sign are one value there. No event where an
+/// operation of either side overflowed or underflowed, as in `zero_sign_event`.
+pub fn answer_turns_on_a_zero_sign(
+    l: &crate::table::Expr,
+    r: &crate::table::Expr,
+    env: &[f64],
+) -> bool {
+    let (Some((a, a_in)), Some((b, b_in))) = (l.eval_f64(env), r.eval_f64(env)) else {
+        return false;
+    };
+    a_in && b_in
+        && crate::table::f64_agree(a, b) != crate::table::Cmp::Eq
+        && l.turns_on_a_zero_sign(env) != r.turns_on_a_zero_sign(env)
+}
+
+/// A whole answer's reading of a zero's sign at `env` (`answer_turns_on_a_zero_sign`) where it
+/// refuses the answer: on a region, not isolated along `along` (`zero_sign_isolated`).
+pub fn answer_zero_sign_refusal(
+    l: &crate::table::Expr,
+    r: &crate::table::Expr,
+    env: &[f64],
+    along: &[usize],
+) -> bool {
+    answer_turns_on_a_zero_sign(l, r, env)
+        && !isolated_along(env, along, |e| answer_turns_on_a_zero_sign(l, r, e))
 }
 
 /// Strict's reading of a zero's sign at `env`: the event there that refuses the rule, one that is
@@ -1798,6 +1838,47 @@ mod deployed_bar_tests {
         assert!(!turns("cos atan2 * 0 x0 1", -1.0) && !turns("pow * 0 x0 -2", -1.0));
         // carried, not read: sin(-0) is -0
         assert!(!turns("sin * 0 x0", -1.0));
+    }
+
+    /// A whole answer reads a zero's sign in its context (`answer_zero_sign_refusal`): a value
+    /// that turns on a zero's sign where the two sides differ, an infinity included, on a region;
+    /// float64's rounding of a step's input under an operation around it is no event, nor are
+    /// two zeros of opposite sign at the root.
+    #[test]
+    fn an_answer_reads_a_zero_sign_in_its_context() {
+        let arity: std::collections::HashMap<String, u8> = [
+            ("*", 2u8),
+            ("/", 2),
+            ("inv", 1),
+            ("log", 1),
+            ("exp", 1),
+            ("sinh", 1),
+        ]
+        .iter()
+        .map(|(k, a)| (k.to_string(), *a))
+        .collect();
+        let pair = |l: &str, r: &str| {
+            let compile =
+                |t: &str| crate::table::Expr::compile(&s(t), &s("x0"), &arity).expect("compiles");
+            (compile(l), compile(r))
+        };
+        let refused = |l: &str, r: &str, x: f64| {
+            let (l, r) = pair(l, r);
+            answer_zero_sign_refusal(&l, &r, &[x], &[0])
+        };
+        // -inf against +inf wherever sinh's argument is negative
+        assert!(refused("/ 1 * 0 sinh x0", "/ 1 0", -1.0));
+        assert!(!refused("/ 1 * 0 sinh x0", "/ 1 0", 1.0));
+        // +inf against 1e17: float64's rounding under the reader, no zero's sign
+        assert!(!refused("inv log exp x0", "inv x0", 1e-17));
+        assert!(!refused("inv log exp x0", "inv x0", -1e-17));
+        // +inf against -inf at x0 = -0 alone: isolated
+        let (l, r) = pair("inv log exp x0", "inv x0");
+        assert!(answer_turns_on_a_zero_sign(&l, &r, &[-0.0]));
+        assert!(!answer_zero_sign_refusal(&l, &r, &[-0.0], &[0]));
+        // one value everywhere, and two zeros of opposite sign at the root
+        assert!(!refused("inv * 0 x0", "/ float(\"inf\") x0", -1.0));
+        assert!(!refused("* 0 sinh x0", "0", -1.0));
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a

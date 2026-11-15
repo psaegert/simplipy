@@ -2684,7 +2684,7 @@ def _pair_compiled(tl, tr):
     return hit
 
 
-def zero_sign_refusal(tl, tr, env, guards):
+def zero_sign_refusal(tl, tr, env, guards, answer=False):
     """STRICT'S READING OF A ZERO'S SIGN AT float64's POINT `env`, the core's one definition
     (`_core.table_zero_sign_refusal`): the two sides are zeros of opposite sign
     (`'opposite-zeros'`: `0*asin(x)` is -0 and `0*acos(x)` +0 for x < 0), or finite values that
@@ -2692,11 +2692,13 @@ def zero_sign_refusal(tl, tr, env, guards):
     `atan2(0*x, -1)` is -pi against pi for x < 0), and the event is not isolated along a name of
     `guards` (the data slots and the left side's constants: a slot matching any subexpression
     guards no point). Where an operation of either side overflowed or underflowed, the range
-    standard reads the true value, and there is no event. -> the event's name, or None."""
+    standard reads the true value, and there is no event. With `answer`, a whole answer's reading
+    in its context (`answer_zero_sign`): the second event wherever the two sides differ, an
+    infinity included. -> the event's name, or None."""
     lexpr, rexpr, names, extra = _pair_compiled(tl, tr)
     vals = [float(extra[n] if n in extra else env[n]) for n in names]
     along = [i for i, n in enumerate(names) if n in guards]
-    return _table.table_zero_sign_refusal(lexpr, rexpr, vals, along)
+    return _table.table_zero_sign_refusal(lexpr, rexpr, vals, along, answer)
 
 
 def strict_at_the_root(detail):
@@ -2712,6 +2714,20 @@ def strict_at_the_root(detail):
     if one_zero is not True:
         return one_zero
     return 'turns-on-a-zero-sign' not in (detail.get('zero_sign_kinds') or ())
+
+
+def answer_zero_sign(detail):
+    """A WHOLE ANSWER'S READING OF A ZERO'S SIGN, IN ITS CONTEXT: an engine step is held at its
+    own points, and in its context only to a zero's sign, which the engine keeps under an
+    operation that reads it (F7). The answer is refused where, on a region, its value differs
+    from the input's and exactly one side's value turns on a zero's sign, an infinity included
+    (`zero_sign_refusal` with `answer`): `1/(0*sinh(x0)) -> 1/0` is -inf against +inf for
+    x0 < 0. Any other difference is float64's rounding of a step's input, magnified by an
+    operation around the step, which no step promises: `1/log(exp(x0)) -> 1/x0` is +inf against
+    1e17 at x0 = 1e-17. Two zeros of opposite sign are one value at the root, which no operation
+    reads. -> True (no such event) or False."""
+    return not detail.get('zero_sign_answer') and \
+        'turns-on-a-zero-sign' not in (detail.get('zero_sign_kinds') or ())
 
 
 def strict_reading(f6, kinds, reals):
@@ -3840,13 +3856,14 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # a zero's sign is guarded by a data slot or a left-side constant (`zero_sign_refusal`)
     zero_sign_guards = frozenset(q_names) | (frozenset() if has_cr else frozenset(lnames))
 
-    def zero_sign_at(env):
-        """Strict's reading of a zero's sign at float64's point `env` (`zero_sign_refusal`). With
-        a fitted target constant, a left-side constant guards its point where, at each
-        neighbouring double of it, the witness fitted there shows no such event: `log(C^x) ->
-        D*x` at C = 1 has the witness 0, where `0*x` is -0 for x < 0 against the left side's +0,
-        and at 1 +- 1 unit in the last place the witness is no zero."""
-        event = zero_sign_refusal(tl, tr, env, zero_sign_guards)
+    def zero_sign_at(env, answer=False):
+        """Strict's reading of a zero's sign at float64's point `env` (`zero_sign_refusal`; with
+        `answer`, a whole answer's in its context). With a fitted target constant, a left-side
+        constant guards its point where, at each neighbouring double of it, the witness fitted
+        there shows no such event: `log(C^x) -> D*x` at C = 1 has the witness 0, where `0*x` is
+        -0 for x < 0 against the left side's +0, and at 1 +- 1 unit in the last place the
+        witness is no zero."""
+        event = zero_sign_refusal(tl, tr, env, zero_sign_guards, answer)
         if event is None or not has_cr:
             return event
         for n in lnames:
@@ -3870,7 +3887,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 e = dict(env)
                 e.update({k: F(c) for k, c in cl.items()})
                 e.update({k: F(w) for k, w in ws.items()})
-                if zero_sign_refusal(tl, tr, e, frozenset()) == event:
+                if zero_sign_refusal(tl, tr, e, frozenset(), answer) == event:
                     break
             else:
                 return None
@@ -3929,6 +3946,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     event = zero_sign_at(tl_env)
                     if event is not None:
                         out['zero_sign'].append((event, point))
+                elif not held and not exact_point and not isolated \
+                        and zero_sign_at(tl_env, answer=True) is not None:
+                    # a whole answer's reading of a zero's sign in its context, where float64's
+                    # kinds differ too (`answer_zero_sign`)
+                    out['zero_sign_answer'].append(point)
                 if held is None:
                     out['kind_unread'].append(point)
                 elif not held:
@@ -3954,7 +3976,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
                 'kind_bad': [], 'kind_unread': [],
                 'kinds': set(), 'null': 0, 'read': 0, 'unread': 0,
-                'perm_unread': [], 'owed_unread': [], 'zero_sign': [], 'float_kills': []}
+                'perm_unread': [], 'owed_unread': [], 'zero_sign': [], 'zero_sign_answer': [],
+                'float_kills': []}
 
     def valued_at(env):
         """Do the reals give both sides a value at the point `env()` builds? A side that has one
@@ -4042,7 +4065,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return owes_cache[key]
 
     vacuous, owed_keys = [], set()
-    zero_sign_events = []
+    zero_sign_events, zero_sign_answer = [], []
     # the float-resolution reading's counterexamples where the reals give both sides a value
     float_kills = []
     ext_where = []
@@ -4070,6 +4093,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         # = 1 in float64, though undefined at the exact pi/2), whatever real owes there
         if owes['f64']:
             zero_sign_events.extend(acc['zero_sign'])
+            zero_sign_answer.extend(acc['zero_sign_answer'])
             dep_bad.extend(acc['bad'])
             dep_kind_bad.extend(acc['kind_bad'])
             dep_kind_unread.extend(acc['kind_unread'])
@@ -4714,6 +4738,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     event = (sub_r.get('zero_sign') or [('opposite-zeros', {})])[0][0]
                     zero_sign_events.append(
                         (event, {'coincide': [b for b in blocks if len(b) > 1]}))
+                if deployed_check and sub_r.get('zero_sign_answer'):
+                    zero_sign_answer.append({'coincide': [b for b in blocks if len(b) > 1]})
 
     # f64 HOLDS by its own values, whatever the reals' verdict: no disagreement at a point read
     # (an extension on a lower-dimensional cell is clause (b)'s, `isolated_f64`, as the
@@ -4780,6 +4806,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         base['unrealised_coincidence'] = correlated_f64
     if dep_bad:
         base['unrealised'] = dep_bad[:3]
+    if zero_sign_answer:
+        # a whole answer's reading of a zero's sign in its context (`answer_zero_sign`), where
+        # float64's kinds differ: the points
+        base['zero_sign_answer'] = zero_sign_answer[:3]
     if zero_sign_events:
         # strict's reading of a zero's sign (`zero_sign_refusal`): where it refused, and why
         base['zero_sign'] = zero_sign_events[:3]

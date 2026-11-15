@@ -1916,6 +1916,34 @@ def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
     assert verdict == 'VIOLATION' and 'INF-CHANGE' in detail, detail
 
 
+def test_the_monitor_reads_a_step_in_its_context_only_for_a_zeros_sign() -> None:
+    # each step is held at its own points; around the part of the input the answer changed, a
+    # change of kind is float64's rounding of the step's input magnified by an operation there,
+    # unless a value turns on a zero's sign
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    eng = SimpliPyEngine(operators=ops, rules=[(('log', 'exp', '?0'), ('?0',))])
+    # float64's 1/log(exp(x0)) is +inf against 1/x0 at x0 = 1e-17, and log(log(exp(x0))) -inf
+    # against log(x0)
+    for src, out in (('inv log exp x0', ['inv', 'x0']), ('log log exp x0', ['log', 'x0'])):
+        assert eng.simplify(src.split()) == out, src
+        verdict, detail = judge_pair(src.split(), out, engine=eng)
+        assert verdict == 'OK' and 'the changed part log exp ?0 -> ?0' in detail, detail
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    # the engine keeps 1/(0*x0)'s infinity, signed as x0 is
+    assert bare.simplify('/ 1 * 0 x0'.split()) == ['/', 'float("inf")', 'x0']
+    assert judge_pair('/ 1 * 0 x0'.split(), ['/', 'float("inf")', 'x0'], engine=bare)[0] == 'OK'
+    assert judge_pair('asin - + x0 1 x0'.split(), ['asin', '1'], engine=bare)[0] == 'OK'
+    # a zero's sign under an operation that reads it: -inf against +inf for x0 < 0
+    verdict, detail = judge_pair('inv + 0 * 0 x0'.split(), 'inv * 0 x0'.split(), engine=bare)
+    assert verdict == 'VIOLATION' and "zero's sign" in detail, detail
+    # the changed part is held at its own points: atanh(tanh(x0)) is +inf against x0 past 19.06
+    verdict, detail = judge_pair('inv inv atanh tanh x0'.split(), 'inv inv x0'.split(),
+                                 engine=bare)
+    assert verdict == 'VIOLATION' and 'the changed part atanh tanh ?0 -> ?0' in detail, detail
+
+
 # ------------------------------------------------------------------------------------------
 # The tier registry is one table: the modes' licences are read off it (the guide renders it:
 # test_doc_examples.py).

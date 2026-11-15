@@ -27,6 +27,15 @@ x = 1 keeps the two apart: it is OK. Where a step holds in the mode and not in t
 float64 holds and the reals do not), the engine's algebra around it cannot be read apart from the
 step, and a rewrite the mode does not license as a whole is UNSCORED.
 
+A STEP IS HELD AT ITS OWN POINTS, AND IN ITS CONTEXT ONLY TO A ZERO'S SIGN. Each step is true in
+the reals and keeps float64's kinds at its own points; what an operation around it does with
+float64's rounding of its input is no step's promise. Where float64's kinds alone refuse an answer
+true in the reals, the part of the input the answer changed (below every operation the two share
+with its other arguments unchanged) is read as a step, and around it only a zero's sign is read
+(`_contract.answer_zero_sign`): a value that turns on a zero's sign, an infinity included, on a
+region. `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is rounding under `1/`);
+`1/(0 + 0*x0) -> 1/(0*x0)` is not (+inf against -inf for x0 < 0).
+
 A WHOLE ANSWER IS READ AT ITS ROOT. A zero's sign is a value where an operation reads it (F7),
 and no operation of the answer reads its root's: there two zeros of opposite sign are one value,
 while a value that turns on a zero's sign an operation inside reads is a change
@@ -104,6 +113,75 @@ def _steps(inp, mode, engine):
                               for lhs, rhs in fires))
 
 
+def _arguments(tokens):
+    """The arguments of the prefix expression `tokens` (`_contract.ARITY`), each its tokens."""
+    out, i = [], 1
+    for _ in range(_contract.ARITY.get(tokens[0], 0)):
+        j, need = i, 1
+        while need:
+            need += _contract.ARITY.get(tokens[j], 0) - 1
+            j += 1
+        out.append(tokens[i:j])
+        i = j
+    return out
+
+
+def _changed_part(lhs, rhs):
+    """THE PART OF THE INPUT THE ANSWER CHANGED: below every operation the two share with all its
+    other arguments unchanged, the smallest pair of subexpressions where they differ. The engine's
+    steps all lie inside it, and what lies around it is their context: `inv(log(exp(x0))) ->
+    inv(x0)` changes `log(exp(x0)) -> x0` under `inv`."""
+    lhs, rhs = list(lhs), list(rhs)
+    try:
+        while lhs and rhs and lhs[0] == rhs[0] and _contract.ARITY.get(lhs[0], 0):
+            pairs = [(a, b) for a, b in zip(_arguments(lhs), _arguments(rhs)) if a != b]
+            if len(pairs) != 1:
+                break
+            lhs, rhs = pairs[0]
+    except IndexError:               # not one prefix expression: the whole rewrite
+        pass
+    return lhs, rhs
+
+
+def _held(detail, name, engine, exact_steps):
+    """The mode's reading of the judged rewrite `detail` (`judge_pair`, its steps' verdicts
+    `exact_steps` read already): `(verdict, why, kinds)`, where `kinds` names float64's events
+    where a change of kind beyond rounding's alone refused a rewrite true in the reals (F8), else
+    None: a refusal that names no event, or beside an undecided measure of float64's extension,
+    is read as it stands."""
+    from . import MODE_TIERS, effective_tier
+    verdict, tier = detail.get('verdict'), effective_tier(detail)
+    if tier in MODE_TIERS[name] or _reading(detail, name) is True:
+        # a fully numeric rewrite holds where the mode's own reading of its value holds
+        return 'OK', f'{verdict} ({tier})', None
+    if name == 'f64' and not detail.get('ground') and _contract.strict_at_the_root(detail) is True:
+        # no operation reads the root's zero's sign (F7)
+        return 'OK', (f'{verdict} ({tier}): strict at the root, two zeros of opposite sign one '
+                      f'value there'), None
+    if _reading(detail, name) is None:
+        return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '
+                            f'{str(detail.get("detail"))[:200]}'), None
+    if engine is not None and name == 'f64' and verdict in _REALS_UNDECIDED:
+        # F8 excuses float64's rounding where the engine's algebra is exact in the reals, and
+        # the reals reach no answer on it
+        return 'UNSCORED', (f'F8: the reals reach no answer ({verdict}): '
+                            f'{str(detail.get("detail"))[:200]}'), None
+    if engine is not None and verdict in _contract.HOLDS_IN_THE_REALS:
+        # F8: the rewrite holds in the reals; float64's own events must be kept
+        kinds = set(detail.get('f64_kinds') or ())
+        if detail.get('realised') is None:
+            return 'UNSCORED', f'F8: {verdict} ({tier}), float64 read at no point', None
+        if not kinds or not kinds <= _F8_KINDS:
+            alone = kinds and detail.get('f64_measure') is not None
+            return 'VIOLATION', (f'F8: {verdict} ({tier}), float64 {sorted(kinds - _F8_KINDS)}: '
+                                 f'{str(detail.get("unrealised"))[:160]}'), \
+                sorted(kinds) if alone else None
+        if exact_steps:
+            return 'OK', f'F8: {verdict} ({tier}), float64 rounding alone', None
+        return 'UNSCORED', f'F8: {verdict} ({tier}) through a step that holds in {name} alone', None
+    return 'VIOLATION', f'{verdict} ({tier}): {str(detail.get("detail"))[:200]}', None
+
+
 def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     """Judge one rewrite ``inp -> out`` made in ``mode`` (``'f64'``, also ``'default'``,
     ``'permissive'`` or a :class:`~simplipy.Mode` member; the default is the engine's default
@@ -119,8 +197,8 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     tagged side (`to_prefix`). ``rng`` is accepted for the callers that pass one; the judgment is
     deterministic and draws nothing. With ``engine``, the rewrite is held to F8 (above): its rule
     steps are judged too, a rewrite true in the reals whose float64 disagreements are rounding
-    alone is OK, and one f64 refuses whose exactness in the reals the judge cannot decide is
-    UNSCORED."""
+    alone is OK, a change of kind in the steps' context is read only for a zero's sign, and one
+    f64 refuses whose exactness in the reals the judge cannot decide is UNSCORED."""
     from . import MODE_TIERS, effective_tier
     name = _mode_name(mode)
     try:
@@ -128,50 +206,46 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
         detail = _contract.judge_rule(lhs, rhs)
     except Exception as error:       # an unreadable rewrite is reported, never passed
         return 'UNSCORED', f'{type(error).__name__}: {error}'
-    verdict, tier = detail.get('verdict'), effective_tier(detail)
     exact_steps = True
     if engine is not None:
         try:
             steps = _steps(inp, name, engine)
         except Exception as error:
             return 'UNSCORED', f'steps: {type(error).__name__}: {error}'
-        for lhs, rhs in steps:
-            step = _contract.judge_rule(list(lhs), list(rhs))
+        for step_lhs, step_rhs in steps:
+            step = _contract.judge_rule(list(step_lhs), list(step_rhs))
             step_tier = effective_tier(step)
+            said = f'{" ".join(step_lhs)} -> {" ".join(step_rhs)}'
             if step_tier not in MODE_TIERS[name] and _reading(step, name) is not True:
                 if _reading(step, name) is None:
-                    return 'UNSCORED', f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)}: ' \
-                                       f'{name} reaches no answer ({step.get("verdict")})'
-                return 'VIOLATION', (f'F8: the step {" ".join(lhs)} -> {" ".join(rhs)} is '
-                                     f'{step_tier}, not {name}\'s')
+                    return 'UNSCORED', f'F8: the step {said}: {name} reaches no answer ' \
+                                       f'({step.get("verdict")})'
+                return 'VIOLATION', f'F8: the step {said} is {step_tier}, not {name}\'s'
             exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
-    if tier in MODE_TIERS[name] or _reading(detail, name) is True:
-        # a fully numeric rewrite holds where the mode's own reading of its value holds
-        return 'OK', f'{verdict} ({tier})'
-    if name == 'f64' and not detail.get('ground') and _contract.strict_at_the_root(detail) is True:
-        # the rewrite is the whole answer: no operation reads its root's zero's sign (F7)
-        return 'OK', (f'{verdict} ({tier}): strict at the root, two zeros of opposite sign one '
-                      f'value there')
-    if _reading(detail, name) is None:
-        return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '
-                            f'{str(detail.get("detail"))[:200]}')
-    if engine is not None and name == 'f64' and verdict in _REALS_UNDECIDED:
-        # F8 excuses float64's rounding where the engine's algebra is exact in the reals, and
-        # the reals reach no answer on it
-        return 'UNSCORED', (f'F8: the reals reach no answer ({verdict}): '
-                            f'{str(detail.get("detail"))[:200]}')
-    if engine is not None and verdict in _contract.HOLDS_IN_THE_REALS:
-        # F8: the rewrite holds in the reals; float64's own events must be kept
-        kinds = set(detail.get('f64_kinds') or ())
-        if detail.get('realised') is None:
-            return 'UNSCORED', f'F8: {verdict} ({tier}), float64 read at no point'
-        if not kinds or not kinds <= _F8_KINDS:
-            return 'VIOLATION', (f'F8: {verdict} ({tier}), float64 {sorted(kinds - _F8_KINDS)}: '
-                                 f'{str(detail.get("unrealised"))[:160]}')
-        if exact_steps:
-            return 'OK', f'F8: {verdict} ({tier}), float64 rounding alone'
-        return 'UNSCORED', f'F8: {verdict} ({tier}) through a step that holds in {name} alone'
-    return 'VIOLATION', f'{verdict} ({tier}): {str(detail.get("detail"))[:200]}'
+    verdict, why, kinds = _held(detail, name, engine, exact_steps)
+    if kinds is None:
+        return verdict, why
+    # float64's kinds alone refuse a rewrite true in the reals: each step is held at its own
+    # points, and in its context only to a zero's sign. The part of the input the answer changed
+    # is read as a step; around it, a change of kind is float64's rounding of the step's input
+    # magnified by an operation of the context, unless a value turns on a zero's sign there
+    part_lhs, part_rhs = _changed_part(lhs, rhs)
+    if (part_lhs, part_rhs) == (lhs, rhs):
+        return verdict, why
+    said = f'{" ".join(part_lhs)} -> {" ".join(part_rhs)}'
+    try:
+        part = _contract.judge_rule(part_lhs, part_rhs)
+    except Exception as error:
+        return verdict, f'{why}; the changed part {said}: {type(error).__name__}: {error}'
+    part_verdict, part_why, _ = _held(part, name, engine, exact_steps)
+    if part_verdict != 'OK':
+        return verdict, f'{why}; the changed part {said}: {part_why}'
+    if name == 'f64' and _contract.answer_zero_sign(detail) is False:
+        return 'VIOLATION', (f'F8: a zero\'s sign under an operation that reads it, around the '
+                             f'changed part {said}: '
+                             f'{str(detail.get("zero_sign_answer") or detail.get("zero_sign"))[:160]}')
+    return 'OK', (f'F8: the changed part {said} holds ({part_why}); around it float64 {kinds} '
+                  f'from rounding')
 
 
 # ---------------------------------------------------------------------------------------

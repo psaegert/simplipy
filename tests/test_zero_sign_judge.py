@@ -130,6 +130,26 @@ def test_a_step_at_the_root_reads_no_zero_sign_but_a_turn() -> None:
     assert _contract.strict_at_the_root(judge('atan2 * 0 x0 -1', 'np.pi')) is False
 
 
+@pytest.mark.parametrize('lhs, rhs, held', [
+    # -inf against +inf wherever sinh's argument is negative, and wherever x0 < 0
+    ('/ 1 * 0 sinh x0', '/ 1 0', False),
+    ('inv + 0 * 0 x0', 'inv * 0 x0', False),
+    # float64's rounding under the reader, no zero's sign: +inf against 1e17 at x0 = 1e-17
+    ('inv log exp x0', 'inv x0', True),
+    # +inf against -inf at x0 = 1 alone, and at x0 = -0 alone
+    ('inv log inv x0', 'inv neg log x0', True),
+    ('inv + 0 neg pow x0 4', 'inv neg pow x0 4', True),
+    # one value everywhere
+    ('inv * 0 x1', f'/ {INF} x1', True),
+])
+def test_an_answer_reads_a_zero_sign_in_its_context(lhs, rhs, held) -> None:
+    """A whole answer's reading of a zero's sign in its context (`answer_zero_sign`): where its
+    value differs from the input's, an infinity included, and exactly one side's value turns on
+    a zero's sign, on a region. Any other difference is float64's rounding of a step's input,
+    magnified by an operation around the step."""
+    assert _contract.answer_zero_sign(judge(lhs, rhs)) is held
+
+
 def test_a_value_turning_on_a_zero_sign_is_read_only_where_float64_differs() -> None:
     """(ii) restricts (b): where float64's two sides agree, a zero's sign one side reads is no
     change float64 can see. `1/(0*x1)` and `inf/x1` are the same value at every x1."""

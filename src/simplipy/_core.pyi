@@ -381,9 +381,11 @@ def zero_sign_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], s
                          ) -> tuple[bool, int, list[float] | None, str | None,
                                     list[float] | None] | None: ...
 #: Strict's reading of a zero's sign at one point: the event of the two sides (compiled over one
-#: name list) at `env` that is not isolated along the names at the indices `along`, or None.
+#: name list) at `env` that is not isolated along the names at the indices `along`, or None. With
+#: `answer`, a whole answer's reading in its context: a value that turns on a zero's sign wherever
+#: the two sides differ, an infinity included.
 def table_zero_sign_refusal(lhs: TableExpr, rhs: TableExpr, env: list[float],
-                            along: list[int]) -> str | None: ...
+                            along: list[int], answer: bool = False) -> str | None: ...
 #: The ground-composite policy on a rule's right side (a variable-free composite).
 def policy_ground_composite(rhs: list[str]) -> bool: ...
 #: The no-duplication policy: does the right side use a `_` slot more often than the left?

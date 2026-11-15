@@ -2207,14 +2207,22 @@ fn zero_sign_bar_sorted(
 /// STRICT'S READING OF A ZERO'S SIGN AT ONE POINT (`battery::zero_sign_refusal`): the event of
 /// the sides `lhs` and `rhs` (compiled over one name list) at `env` that refuses the rule, one not
 /// isolated along the names at the indices `along` (the data variables and fitted constants), or
-/// `None`. The contract judge's f64 lane reads it at every point it reads.
+/// `None`. The contract judge's f64 lane reads it at every point it reads. With `answer`, a whole
+/// answer's reading in its context (`battery::answer_zero_sign_refusal`): a value that turns on a
+/// zero's sign wherever the two sides differ, an infinity included, and opposite zeros one value.
 #[pyfunction]
+#[pyo3(signature = (lhs, rhs, env, along, answer = false))]
 fn table_zero_sign_refusal(
     lhs: PyRef<'_, PyTableExpr>,
     rhs: PyRef<'_, PyTableExpr>,
     env: Vec<f64>,
     along: Vec<usize>,
+    answer: bool,
 ) -> Option<String> {
+    if answer {
+        return crate::battery::answer_zero_sign_refusal(&lhs.inner, &rhs.inner, &env, &along)
+            .then(|| crate::battery::ZeroSign::Turns.name().to_string());
+    }
     crate::battery::zero_sign_refusal(&lhs.inner, &rhs.inner, &env, &along)
         .map(|e| e.name().to_string())
 }
