@@ -207,6 +207,9 @@ organised by who you are, then the highlights, then every change in detail.
   `-0` on a region: `ceil(x0)^x1*ceil(x0)^x1` stays, `+inf` against `-inf` at x0 = -0.5, x1 = -0.5.
   A power of a non-integer exponent is read as `>= 0` wherever it has a value: `abs(x0^(1/3))` is
   `x0^(1/3)`.
+- **A rule with a slot in a divisor's product fires on its instances.** `1/(x1*?0) -> t` and
+  `sqrt(2/(x1*?0))*sinh(?0) -> t` fire on `1/(x1*x3)` and on `sqrt(2/(x1*x3))*sinh(x3)`, whose
+  products distribute where the rule's could not.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
@@ -666,6 +669,18 @@ model predictions.
   at their own root, where float64's `x ** 0.5`, numpy's `sqrt`, keeps the `-0` of an isolated point
   and `rootn(x, 2)` or `x^(3/2)` gives `+0` (`1/x0^(1/2) -> 1/rootn(x0, 2)`, `1/(rootn(x0, 2)*x0) ->
   1/x0^(3/2)` at x0 = -0); the guarantee is per step, as it is for every step.
+- **A slot in a divisor's product matches its instances.** A rule's left side is read as a pattern,
+  whose slot may bind a member that vanishes on a region, so an odd negative power of a product
+  holding a slot stays whole where the pattern's members cannot license `pow.distribute`
+  (`1/(x1*?0)`), while each instance distributes where its own members do (`1/(x1*x3)` is
+  `x1^-1*x3^-1`): the rule never met its instances. A rule is now read distributed too, beside its
+  reading as written, and the distributed reading matches where the binding's members license the
+  distribution, read at bind time: `1/(x1*?0) -> t` fires on `1/(x1*x3)`, and
+  `sqrt(2/(x1*?0))*sinh(?0)`, the half-integer Bessel functions' closed forms, fires on its
+  instances in both modes. In `f64` an instance spelled as two inverses over a member that vanishes
+  on a region with a zero of no sign of its own (`1/x1*1/abs(x2 - abs(x2))`) is no instance of the
+  product's inverse and keeps its value, while the product's own inverse, held whole as the pattern
+  is, matches the reading as written.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and

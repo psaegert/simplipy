@@ -1088,6 +1088,46 @@ def test_the_engine_takes_a_law_of_powers_where_the_judge_holds_it(law, lhs, rhs
                             f'{d.get("verdict")} {d.get("tier")}')
 
 
+def _engine_serving(rule: list, mode: str) -> SimpliPyEngine:
+    """The rule-free acj2-4 engine serving one rule, unjudged, as the mine installs a pick (the
+    matcher alone decides where it fires)."""
+    from simplipy import mining
+    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+        ops = yaml.safe_load(f)['operators']
+    e = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
+    mining.RuleMiner(e)._install('default' if mode == 'f64' else mode, [rule])
+    return e
+
+
+@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('lhs, rhs, instance, answer', [
+    ('inv * x1 ?0', '1', 'inv * x1 x3', '1'), ('/ 2 * 3 ?0', 'inv ?0', '/ 2 * 3 x3', 'inv x3'),
+    ('rootn / 2 * x1 ?0 2', '1', 'rootn / 2 * x1 x3 2', '1')])
+def test_a_slot_in_a_divisor_product_matches_its_instance(lhs, rhs, instance, answer,
+                                                          mode) -> None:
+    """A rule whose left side holds a slot in a divisor's product fires on its instance: the
+    pattern's product stays whole (a slot may bind a member whose zero set holds a region), the
+    instance's distributes, and the rule is read distributed too, matched where the binding's
+    members let `pow.distribute` distribute (the licence read at bind time)."""
+    e = _engine_serving([lhs.split(), rhs.split()], mode)
+    assert e.simplify(instance.split(), mode=mode) == answer.split()
+
+
+def test_the_distributed_reading_reads_the_binding_licence() -> None:
+    """The distributed reading matches only where the binding licenses the distribution: in f64 an
+    instance spelled as two inverses whose member vanishes on a region with a zero of no sign of
+    its own (`abs(x2 - abs(x2))`) is no instance of the product's inverse, and keeps its value,
+    while the product's own inverse, held whole as the pattern is, fires; permissive's
+    certificates license every member."""
+    held = 'inv * x1 abs - x2 abs x2'.split()
+    apart = '* inv x1 inv abs - x2 abs x2'.split()
+    e = _engine_serving([['inv', '*', 'x1', '_0'], ['1']], 'f64')
+    assert e.simplify(held, mode='f64') == ['1']
+    assert e.simplify(apart, mode='f64') == '/ inv abs - x2 abs x2 x1'.split()
+    e = _engine_serving([['inv', '*', 'x1', '_0'], ['1']], 'permissive')
+    assert e.simplify(apart, mode='permissive') == ['1']
+
+
 @pytest.mark.parametrize('expr, want', [
     ('rootn pow x0 2 2', 'x0'), ('pow rootn x0 2 2', 'x0'), ('rootn pow x0 4 4', 'x0'),
     ('pow pow x0 2 0.5', 'x0'), ('pow pow x0 6 0.5', 'pow x0 3'),

@@ -10076,6 +10076,71 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     if !Law::PowDistribute.holds_powers(Powers::Product { members: v, n: e }, cx) {
         return None;
     }
+    Some(distributed_bag(v, e, cx))
+}
+
+/// The licences a distributed reading's bindings must meet: for each product read distributed,
+/// its members and power ([`pattern_distributed`]).
+pub(crate) type Licences = Vec<(Vec<Ex>, Rat)>;
+
+/// THE DISTRIBUTED READING OF A PATTERN (`pow.distribute` at bind time). A slot may bind a member
+/// whose zero set holds a region, so a pattern's product under an odd negative power holds where
+/// its members cannot license the distribution (`distribution_licensed`), while its instances
+/// distribute wherever their members do: `1/(x1*?0)` stays one member, `1/(x1*x3)` is
+/// `x1^-1*x3^-1`. This is `e` with every such product distributed as `pow` distributes a licensed
+/// one, and, for each, its members and power: the licence a binding must meet for the reading to
+/// match (`AcRule::licences`). `None` where `e` holds no such product.
+pub(crate) fn pattern_distributed(e: &Ex, cx: &Cx) -> Option<(Ex, Licences)> {
+    fn walk(e: &Ex, cx: &Cx, out: &mut Licences) -> Option<Ex> {
+        let kids = |v: &[Ex], out: &mut Licences| -> Option<Vec<Ex>> {
+            let mut kids: Option<Vec<Ex>> = None;
+            for (i, c) in v.iter().enumerate() {
+                if let Some(r) = walk(c, cx, out) {
+                    kids.get_or_insert_with(|| v.to_vec())[i] = r;
+                }
+            }
+            kids
+        };
+        match e {
+            Ex::Pow(b, x) => {
+                if let (Ex::Mul(v), Ex::Num(n)) = (&**b, &**x) {
+                    if n.is_integer()
+                        && n.is_negative()
+                        && v.iter().any(|f| f.contains_wildcard(cx.view))
+                        && !distribution_licensed(v, n, cx)
+                    {
+                        let members = kids(v, out).unwrap_or_else(|| v.clone());
+                        out.push((members.clone(), n.clone()));
+                        let raised = distributed_bag(&members, n, cx)
+                            .into_iter()
+                            .map(|f| pow_member(f, Ex::Num(n.clone()), cx))
+                            .collect();
+                        return Some(mul(raised, cx));
+                    }
+                }
+                let nb = walk(b, cx, out);
+                let nx = walk(x, cx, out);
+                (nb.is_some() || nx.is_some()).then(|| {
+                    pow(
+                        nb.unwrap_or_else(|| (**b).clone()),
+                        nx.unwrap_or_else(|| (**x).clone()),
+                        cx,
+                    )
+                })
+            }
+            Ex::Add(v) => kids(v, out).map(|k| add(k, cx)),
+            Ex::Mul(v) => kids(v, out).map(|k| mul(k, cx)),
+            Ex::Fun(f, v) => kids(v, out).map(|k| fun(*f, k, cx)),
+            _ => None,
+        }
+    }
+    let mut licences = Vec::new();
+    walk(e, cx, &mut licences).map(|d| (d, licences))
+}
+
+/// The members `pow` raises where it distributes the integer power `e` over the product of `v`
+/// ([`power_bag`] without its licence).
+fn distributed_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Vec<Ex> {
     // For a NEGATIVE ODD exponent, fold a negative bag coefficient
     // into the first sign-trade site BEFORE distributing (exact at the
     // finite bag level: -c * S == c * (-S)). After distribution the sum
@@ -10118,7 +10183,7 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     } else {
         v
     };
-    Some(bag.to_vec())
+    bag.to_vec()
 }
 
 /// The canonical power constructor. Folds and gates:

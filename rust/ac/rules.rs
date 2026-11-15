@@ -39,7 +39,8 @@ use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
 use super::expr::{
-    add, canon, complexity, fun, lattice_head, mul, orient_term_classes, tie_cmp, Cx, Ex,
+    add, canon, complexity, distribution_licensed, fun, lattice_head, mul, orient_term_classes,
+    pattern_distributed, tie_cmp, Cx, Ex, Licences,
 };
 use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
@@ -67,6 +68,25 @@ pub struct AcRule {
     /// wildcard's sort can bind a class in every mode (`_`, `!`, `$`); `Repeat::Leaf` where only
     /// a pass that binds any subtree (permissive) lets it, `?` binding variable leaves otherwise.
     pub repeat: Repeat,
+    /// The licences a binding must meet for the rule to fire (`expr::pattern_distributed`): for
+    /// each product of the LHS read distributed, its members and power, which the bound members
+    /// must let `pow.distribute` distribute (`expr::distribution_licensed`), as the instance's
+    /// own product was. Empty for a rule read as written.
+    pub licences: Licences,
+}
+
+impl AcRule {
+    /// Do the binding's members meet the licences of the reading this rule matches
+    /// ([`AcRule::licences`])?
+    fn licensed(&self, b: &Binds, cx: &Cx) -> bool {
+        self.licences.iter().all(|(members, n)| {
+            let bound: Vec<Ex> = members
+                .iter()
+                .map(|m| canon(substitute(m, b, cx.view), cx))
+                .collect();
+            distribution_licensed(&bound, n, cx)
+        })
+    }
 }
 
 /// Whether, and through which wildcard sorts, an LHS repeats a wildcard (`AcRule::repeat`).
@@ -134,6 +154,11 @@ pub struct AcRules {
     /// sign and every admission gate passes. Counted separately so the asset-rule accounting
     /// (`n_subsumed`/`n_dropped`) keeps its meaning.
     pub n_twins: usize,
+    /// Distributed readings LOADED at translate beside the rule they read (not asset rules): a
+    /// rule whose LHS holds a product under an odd negative power that a slot keeps whole is
+    /// also read with that product distributed, matched where the binding licenses it
+    /// (`expr::pattern_distributed`). Counted apart, so the asset accounting keeps its meaning.
+    pub n_distributed: usize,
     /// Rules refused by the licence registry's load consumer (SWEEP row 3): the
     /// rule changes a DEFINED extended-real value at a constructed exceptional point.
     /// The engine pre-filters the raw rules BEFORE translate (the caller sets this
@@ -504,13 +529,40 @@ impl AcRules {
                 _ => out.leaf_idx.push(idx),
             }
             let repeat = repeated_wildcard(&lhs, view);
+            // A product under an odd negative power that a slot keeps whole is read distributed
+            // too, matched where the binding licenses the distribution (`pow.distribute` at bind
+            // time): `1/(x1*?0) -> t` fires on `1/(x1*x3)`, whose product distributes.
+            let distributed = pattern_distributed(&lhs, &cx).filter(|(d, _)| {
+                *d != lhs && *d != rhs && complexity(&rhs, view) <= complexity(d, view)
+            });
             out.rules.push(AcRule {
                 lhs,
-                rhs,
+                rhs: rhs.clone(),
                 sig,
                 is_pattern,
                 repeat,
+                licences: Vec::new(),
             });
+            if let Some((d, licences)) = distributed {
+                let idx = out.rules.len();
+                match &d {
+                    Ex::Add(_) => out.add_idx.push(idx),
+                    Ex::Mul(_) => out.mul_idx.push(idx),
+                    Ex::Pow(..) => out.pow_idx.push(idx),
+                    Ex::Fun(f, _) => out.fun_idx.entry(*f).or_default().push(idx),
+                    _ => out.leaf_idx.push(idx),
+                }
+                out.src.push(raw_idx);
+                out.rules.push(AcRule {
+                    sig: atom_sig(&d, view),
+                    is_pattern: true,
+                    repeat: repeated_wildcard(&d, view),
+                    lhs: d,
+                    rhs,
+                    licences,
+                });
+                out.n_distributed += 1;
+            }
         }
         // ORIENTATION CLOSURE (rules fire modulo the sign orientation class): an admitted
         // rule `L -> T` entails `-L -> -T` -- negation is total, so the twin inherits the
@@ -606,12 +658,14 @@ impl AcRules {
             let sig = atom_sig(&tl, view);
             let is_pattern = tl.contains_wildcard(view);
             let repeat = repeated_wildcard(&tl, view);
+            let licences = out.rules[i].licences.clone();
             out.rules.push(AcRule {
                 lhs: tl,
                 rhs: tr,
                 sig,
                 is_pattern,
                 repeat,
+                licences,
             });
             out.n_twins += 1;
         }
@@ -933,6 +987,9 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                         &mut binds,
                         p.mcx,
                         &mut |b, used| {
+                            if !rule.licensed(b, p.cx) {
+                                return false;
+                            }
                             let replacement = substitute(&rule.rhs, b, p.cx.view);
                             let mut parts: Vec<Ex> = sv
                                 .iter()
@@ -1002,6 +1059,9 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     &mut binds,
                     p.mcx,
                     &mut |b, used| {
+                        if !rule.licensed(b, p.cx) {
+                            return false;
+                        }
                         let replacement = substitute(&rule.rhs, b, p.cx.view);
                         let mut parts: Vec<Ex> = sv
                             .iter()
@@ -1036,6 +1096,9 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     &mut binds,
                     p.mcx,
                     &mut |b, used| {
+                        if !rule.licensed(b, p.cx) {
+                            return false;
+                        }
                         let replacement = substitute(&rule.rhs, b, p.cx.view);
                         let mut parts: Vec<Ex> = sv
                             .iter()
@@ -1064,6 +1127,9 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                 let mut binds = Binds::default();
                 let mut out: Option<Ex> = None;
                 matches_each(e, &rule.lhs, &mut binds, p.mcx, &mut |b| {
+                    if !rule.licensed(b, p.cx) {
+                        return false;
+                    }
                     let next = canon(substitute(&rule.rhs, b, p.cx.view), p.cx);
                     if oriented_mu(&next, node_mu(), e, p) {
                         log_fire(&rule.lhs, &rule.rhs, b, p.cx.view);
