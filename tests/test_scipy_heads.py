@@ -182,6 +182,24 @@ def test_every_enclosure_holds_every_value(op, engine) -> None:
     assert checked > 200
 
 
+@pytest.mark.parametrize('expr, f64, holds', [
+    ('log exp erfc x1', 'erfc x1', True),
+    ('+ erfc x1 0', 'erfc x1', True),
+    ('inv log exp erfc x1', 'inv log exp erfc x1', False),
+])
+def test_erfc_is_never_negative_zero(engine, expr, f64, holds) -> None:
+    """erfc is `>= +0` everywhere, its float64 zero `+0` by underflow (past x = 27.2), so f64's laws
+    whose premise is a part that is not `-0` on a region hold of it: `log(exp(erfc(x1)))` is
+    `erfc(x1)` where nothing reads its flat point, and `erfc(x1) + 0` is `erfc(x1)`; under an
+    inverse the flat point is read, and the pair stays. The judge reads each step alike."""
+    got = ' '.join(engine.simplify(expr.split(), mode='f64'))
+    assert got == f64
+    collapsed = {'log exp erfc x1': 'erfc x1', '+ erfc x1 0': 'erfc x1',
+                 'inv log exp erfc x1': 'inv erfc x1'}[expr]
+    d = _contract.judge_rule(expr.split(), collapsed.split())
+    assert (_contract.judged_reading(d, 'f64') is True) == holds, d.get('verdict')
+
+
 def test_the_judge_decides_rules_over_them() -> None:
     j = _contract.judge_rule
     for lhs, rhs in (('besselk neg _0 _1', 'besselk _0 _1'), ('besseli 2 neg _0', 'besseli 2 _0'),

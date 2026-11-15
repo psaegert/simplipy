@@ -645,6 +645,12 @@ model predictions.
   `rootn(x1, 2)`) and `x1^floor(tanh(100))` is `x1` (it was 1); `permissive` reads the reals there.
   On srbf's ground truths, a tenth of the training-data inputs and a tenth of the predictions no
   answer changes in either mode, and none changes on a second call.
+- **`erfc` is never `-0`.** Its float64 zero is `+0`, by underflow past x = 27.2, and the zero-sign
+  test (`signed_zero_null`) now knows it, as it knows `exp`'s: the `f64` laws whose premise is a
+  part that is not `-0` on a region hold of it. `log(exp(erfc(x1)))` is `erfc(x1)` where nothing
+  reads its flat point, and `erfc(x1) + 0` is `erfc(x1)`; `1/log(exp(erfc(x1)))` stays. No answer of
+  srbf's ground truths, a tenth of the training-data inputs or a tenth of the predictions changes,
+  none holding `erfc`.
 - **The laws of powers are named, each with its premise.** `pow.distribute`,
   `parse.inverse_of_product`, `pow.compose`, `pow.root_inverse`, `pow.odd_root_compose`,
   `pow.unknown_parity_root`, `pow.literal_base_sign`, `pow.half_root`, `mul.collect` and

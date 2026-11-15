@@ -5171,7 +5171,8 @@ fn vanishes_on_a_region(e: &Ex, cx: &Cx) -> bool {
 /// `region_zero_null`); `floor` is the sign of its argument's zero (`floor(-0) = -0`) and `+0` on
 /// [0, 1), `ceil` the sign of its argument's (`ceil(+0) = +0`) and `-0` on (-1, 0); an odd
 /// function, an odd root or an odd power keeps its argument's sign; `abs`, `cos`, `cosh`, `exp`,
-/// `log`, `acos`, `acosh`, an even root and an even or fractional power are never `-0` (the power
+/// `log`, `acos`, `acosh`, `erfc` (whose zero is `+0`, by underflow), an even root and an even or
+/// fractional power are never `-0` (the power
 /// `1/2` is numpy's `sqrt`, `sqrt(-0) = -0`, and keeps it), and so is a negative power of an even
 /// or non-integer exponent, while an odd one is `-0` only where its base is negative (at `-inf`,
 /// or by underflow), so a base that is never negative keeps it from `-0`; `max` and `min` are one
@@ -5265,7 +5266,7 @@ pub(crate) fn signed_zero_null(e: &Ex, neg: bool, cx: &Cx) -> bool {
             let is = |s: &str| view.tok_is(*op, s);
             match a.as_slice() {
                 [g] if odd_fun(view, *op) => rec(g, neg),
-                [_] if ["abs", "cos", "cosh", "exp", "log", "acos", "acosh"]
+                [_] if ["abs", "cos", "cosh", "exp", "log", "acos", "acosh", "erfc"]
                     .iter()
                     .any(|s| is(s)) =>
                 {
