@@ -28,7 +28,7 @@ use std::cmp::Ordering;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::laws::Law;
+use super::laws::{Law, Powers};
 use super::rat::{Mantissa, Rat};
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
@@ -1627,13 +1627,13 @@ impl<'a> Cx<'a> {
     /// analytic identity, is refused. Fail-closed. (The sibling of the
     /// pow-distribution bug, with the fat set in the exponent.)
     fn sym_merge_licensed(&self, base: &Ex, y: &Ex) -> bool {
-        if self.permits(Permissive::Agreement) || self.certainly_nonneg(base) {
-            return true;
-        }
-        match self.cert_nce {
-            Some(f) => f(y),
-            None => false,
-        }
+        Law::MulCollectSymbolic.holds_powers(Powers::Symbolic { base, y }, self)
+    }
+
+    /// The nonconstant-entire certificate (`cert_nce`): are the level sets of `y` null? Fail
+    /// closed without the certificate.
+    pub(crate) fn nonconstant_entire(&self, y: &Ex) -> bool {
+        self.cert_nce.is_some_and(|f| f(y))
     }
 
     /// Is `e` CERTAINLY defined-and-finite (a.e.) everywhere, syntactically? Variables range
@@ -1793,7 +1793,7 @@ impl<'a> Cx<'a> {
     ///
     /// Used by the power-of-power composition, whose odd-negative-exponent arm is sound exactly
     /// when the base cannot reach an infinity (see the licence comment in `pow`).
-    fn never_infinite(&self, e: &Ex) -> bool {
+    pub(crate) fn never_infinite(&self, e: &Ex) -> bool {
         matches!(e, Ex::Leaf(_) | Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E)
     }
 
@@ -1807,9 +1807,13 @@ impl<'a> Cx<'a> {
             Ex::Add(v) | Ex::Mul(v) => v.iter().all(|t| self.certainly_nonneg(t)),
             // Even integer exponents force b^n >= 0 for ANY base; a certainly-non-negative
             // base stays non-negative under EVERY real exponent (0^negative = +inf under the
-            // one-zero contract -- still non-negative).
+            // one-zero contract -- still non-negative). A power of a non-integer exponent is the
+            // principal power, `>= 0` wherever it has a value: NaN on b < 0, `+0` or `+inf` at
+            // b = -0 and `+inf` or `+0` at b = -inf (the square root numpy keeps `-0` in is the
+            // spelled call, no `Pow`).
             Ex::Pow(b, ex) => {
-                matches!(&**ex, Ex::Num(r) if r.is_even_integer()) || self.certainly_nonneg(b)
+                matches!(&**ex, Ex::Num(r) if r.is_even_integer() || !r.is_integer())
+                    || self.certainly_nonneg(b)
             }
             Ex::Fun(f, v) => {
                 let s = self.view.resolve_owned(*f);
@@ -5356,7 +5360,7 @@ fn signed_zero_of(f: &Ex, cx: &Cx, sums: bool) -> bool {
 /// A sum is not read: its orientation is canonical before a power sees it, so the sign of its
 /// zero is not the written one, and a sum whose zero set the certificate cannot show null (most
 /// quotients) would keep every square root of it as a call.
-fn sqrt_parts_from_rootn(b: &Ex, cx: &Cx) -> bool {
+pub(crate) fn sqrt_parts_from_rootn(b: &Ex, cx: &Cx) -> bool {
     cx.f64_semantics()
         && (is_neg_zero(b, cx.view)
             || signed_zero_of(b, cx, false)
@@ -5945,19 +5949,7 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     let mut buckets: Vec<FBucket> = Vec::new();
     let mut opaque: Vec<Ex> = Vec::new(); // Const-containing and merge-refused factors, verbatim
     let branch_ok = |cx: &Cx, base: &Ex, a: &Rat, b: &Rat| -> bool {
-        // Integers merge totally -- in f64 mode only while the evaluator reads them exactly
-        // (parity known, |n| <= 2^53): it reads `x^(2^53+1)` as `x^(2^53)`.
-        let exact_integers = a.parity().is_some()
-            && b.parity().is_some()
-            && a.checked_add(b).is_some_and(|s| s.parity().is_some());
-        if cx.permits(Permissive::Agreement) || exact_integers {
-            return true;
-        }
-        if cx.certainly_nonneg(base) {
-            return true;
-        }
-        a.checked_add(b)
-            .is_some_and(|s| !s.is_integer() && !s.is_zero())
+        Law::MulCollect.holds_powers(Powers::Rational { base, r: a, s: b }, cx)
     };
     for f in factors {
         let (base, fe) = factor_split(f, cx);
@@ -10064,8 +10056,12 @@ pub(crate) fn distributes_power(v: &[Ex], e: &Rat, cx: &Cx) -> bool {
     power_bag(v, e, cx).is_some()
 }
 
-fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
-    let licensed = !e.is_negative()
+/// THE PREMISE OF `pow.distribute`: may the integer power `e` distribute over the product of
+/// `v`? A non-negative or even power always; an odd negative one where every member is nonzero
+/// almost everywhere, a member is infinite, all are certainly `>= 0`, or a member's zero is one
+/// whose sign an inverse reads (`inverts_a_signed_zero`).
+pub(crate) fn distribution_licensed(v: &[Ex], e: &Rat, cx: &Cx) -> bool {
+    !e.is_negative()
         || e.is_even_integer()
         || inverts_a_signed_zero(v, cx)
         || v.iter().any(holds_infinity)
@@ -10073,8 +10069,11 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
         || (v.iter().any(|f| holds_odd_root(f, cx))
             && v.iter()
                 .all(|f| cx.nz_ae_licensed(f) || zero_set_null_by_form(f, cx)))
-        || v.iter().all(|f| cx.certainly_nonneg(f));
-    if !licensed {
+        || v.iter().all(|f| cx.certainly_nonneg(f))
+}
+
+fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
+    if !Law::PowDistribute.holds_powers(Powers::Product { members: v, n: e }, cx) {
         return None;
     }
     // For a NEGATIVE ODD exponent, fold a negative bag coefficient
@@ -10159,7 +10158,7 @@ pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let pow_tok = cx.view.intern("pow");
     if matches!(&exp, Ex::Num(h) if *h == Rat::new(1, 2).expect("1/2"))
         && cx.view.arity(pow_tok) == Some(2)
-        && sqrt_parts_from_rootn(&base, cx)
+        && !Law::PowHalfRoot.holds(&base, cx)
     {
         // `sqrt` keeps a zero, its sign and NaN: the root of the written negative zero, or of a
         // zero product (`mul.zero`), is that zero.
@@ -10243,7 +10242,7 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // (`sqrt_parts_from_rootn`), the power is `1/rootn(b, 2)`, which prints as the value it
     // is (+inf at -0). (The SPELLING `pow b 0.5` is numpy's `sqrt`: `pow_spelled`.)
     if let Ex::Num(e) = &exp {
-        if *e == Rat::new(-1, 2).expect("-1/2") && sqrt_parts_from_rootn(&base, cx) {
+        if *e == Rat::new(-1, 2).expect("-1/2") && !Law::PowHalfRoot.holds(&base, cx) {
             if is_neg_zero(&base, cx.view) {
                 return Ex::PosInf;
             }
@@ -10414,20 +10413,15 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             // point (`flat_reads_a_pair`), float64's value has turned on it there:
             // `1/(1/log(exp(x0)))` stays.
             let flat = r.signum() < 0 && s.signum() < 0 && flat_reads_a_pair(inner_base, cx);
-            let licence = if flat {
-                false
-            } else if cx.permits_on(Permissive::PowersCompose, inner_base) {
-                true
-            } else if r.is_integer() {
-                s.is_integer()
-                    || (r.is_odd_integer()
-                        && (r.signum() > 0 || cx.never_infinite(inner_base))
-                        && r.checked_mul(s).is_some_and(|p| !p.is_integer()))
-                    || cx.certainly_nonneg(inner_base)
-            } else {
-                let rs = r.checked_mul(s);
-                rs.is_some_and(|p| !p.is_integer()) || cx.certainly_nonneg(inner_base)
-            };
+            let licence = !flat
+                && Law::PowCompose.holds_powers(
+                    Powers::Rational {
+                        base: inner_base,
+                        r,
+                        s,
+                    },
+                    cx,
+                );
             if licence {
                 if let Some(p) = r.checked_mul(s) {
                     return pow_member(inner_base.clone(), Ex::Num(p), cx);
@@ -10466,7 +10460,14 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 let n = e.abs();
                 if n.cmp_int(2) != Ordering::Less
                     && *idx == n
-                    && (n.is_odd_integer() || cx.certainly_nonneg(&rargs[0]))
+                    && Law::PowRootInverse.holds_powers(
+                        Powers::Rational {
+                            base: &rargs[0],
+                            r: idx,
+                            s: e,
+                        },
+                        cx,
+                    )
                 {
                     if !e.is_negative() {
                         return rargs[0].clone();
@@ -10492,9 +10493,19 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // The INTEGER `s` case is genuinely unsound and stays excluded: `rootn(-8,3)^2 = 4` while
     // `(-8)^(2/3)` is NaN, a positive-measure disagreement.
     if let (Ex::Fun(rop, rargs), Ex::Num(s)) = (&base, &exp) {
-        if rargs.len() == 2 && cx.view.tok_is(*rop, "rootn") && !s.is_integer() {
+        if rargs.len() == 2 && cx.view.tok_is(*rop, "rootn") {
             if let Ex::Num(idx) = &rargs[1] {
-                if idx.is_odd_integer() && idx.cmp_int(3) != Ordering::Less {
+                if idx.is_odd_integer()
+                    && idx.cmp_int(3) != Ordering::Less
+                    && Law::PowOddRootCompose.holds_powers(
+                        Powers::Rational {
+                            base: &rargs[0],
+                            r: idx,
+                            s,
+                        },
+                        cx,
+                    )
+                {
                     if let Some(t) = idx.checked_inv().and_then(|inv| s.checked_mul(&inv)) {
                         return pow_member(rargs[0].clone(), Ex::Num(t), cx);
                     }
@@ -11994,19 +12005,17 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     if n.is_even_integer() {
                         let composed = if let Ex::Pow(inner, ex) = &args[0] {
                             match &**ex {
-                                Ex::Num(k) => {
-                                    n.checked_inv().and_then(|s| k.checked_mul(&s)).filter(|p| {
-                                        cx.permits_on(Permissive::PowersCompose, inner)
-                                            || cx.certainly_nonneg(inner)
-                                            || if k.is_integer() {
-                                                k.is_odd_integer()
-                                                    && (k.signum() > 0 || cx.never_infinite(inner))
-                                                    && !p.is_integer()
-                                            } else {
-                                                !p.is_integer()
-                                            }
-                                    })
-                                }
+                                Ex::Num(k) => n.checked_inv().and_then(|s| {
+                                    let licensed = Law::PowCompose.holds_powers(
+                                        Powers::Rational {
+                                            base: inner,
+                                            r: k,
+                                            s: &s,
+                                        },
+                                        cx,
+                                    );
+                                    k.checked_mul(&s).filter(|_| licensed)
+                                }),
                                 _ => None,
                             }
                         } else {
@@ -12030,9 +12039,17 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // above; with them surviving, the parity has to be tested here.
                     if n.is_odd_integer() {
                         if let Ex::Pow(b, ex) = &args[0] {
-                            let _ = b;
                             if let Ex::Num(rr) = &**ex {
-                                if *rr == n {
+                                if *rr == n
+                                    && Law::PowRootInverse.holds_powers(
+                                        Powers::Rational {
+                                            base: b,
+                                            r: &n,
+                                            s: &n,
+                                        },
+                                        cx,
+                                    )
+                                {
                                     let Ex::Pow(inner, _) = args.into_iter().next().unwrap() else {
                                         unreachable!()
                                     };

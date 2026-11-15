@@ -66,6 +66,16 @@
 //! | `mul.infinity_sign` | -k*(s + inf) = k*(-s - inf) | none | none |
 //! | `pow.exp_compose` | e^t = exp(t), exp(a)^b = exp(a*b) | none | none |
 //! | `pow.refused_power` | (a*b)^-k = ((a*b)^k)^-1 | none | none |
+//! | `pow.distribute` | (a*b)^n = a^n*b^n, n an integer | n >= 0 or even; else every member nonzero almost everywhere, or one infinite, or all >= 0, or a zero whose sign an inverse reads | as `f64` |
+//! | `parse.inverse_of_product` | 1/(a*b) = (1/a)*(1/b) as a divisor is read | as `pow.distribute` | as `pow.distribute` |
+//! | `pow.compose` | (t^r)^s = t^(r*s) | s an integer; r an odd integer (positive, or t never infinite) and r*s no integer; r and r*s no integers; or t >= 0 | none |
+//! | `pow.root_inverse` | rootn(t, n)^n = t, rootn(t, n)^-n = 1/t, rootn(t^n, n) = t | n odd, or t >= 0 | none |
+//! | `pow.odd_root_compose` | rootn(t, m)^s = t^(s/m), m odd | s no integer | s no integer: the root's class keeps one spelling |
+//! | `pow.unknown_parity_root` | rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n), n even | none | none |
+//! | `pow.literal_base_sign` | r^(-t) = (1/r)^t, 1/(r^t) = (1/r)^t, (1/t)^(+-inf) = t^(-+inf) | none | none |
+//! | `pow.half_root` | t^(1/(2k)) = rootn(t, 2k) | t^(1/2) as numpy's `sqrt`: t is no zero with a sign of its own | none |
+//! | `mul.collect` | t^a*t^b = t^(a+b) | a and b integers float64 reads exactly; or t >= 0; or a + b a nonzero non-integer | none |
+//! | `mul.collect_symbolic` | t^y*t^y = t^(2*y) | t not `-0` on a region, and t >= 0 or the level sets of y null | none |
 //! | `fun.rootn_index` | rootn(t, -n) = 1/rootn(t, n) | none | none |
 //! | `fun.atanh_tanh` | atanh(tanh(t)) = t | abs(t) at most 19: tanh(t) is no +-1 | none |
 //! | `fun.log_exp` | log(exp(t)) = t | t is not `-0` on a region, and nothing around reads its flat point | none |
@@ -91,6 +101,22 @@
 //! `permissive` does without.
 
 use super::expr::{Cx, Ex, Permissive};
+use super::rat::Rat;
+
+/// What a law of powers reads beside its base ([`Law::holds_powers`]).
+#[derive(Clone, Copy)]
+pub(crate) enum Powers<'a> {
+    /// `(base^r)^s`, `rootn(base, r)^s`, `base^r*base^s`: two rational exponents.
+    Rational {
+        base: &'a Ex,
+        r: &'a Rat,
+        s: &'a Rat,
+    },
+    /// `base^y*base^y`: one symbolic exponent.
+    Symbolic { base: &'a Ex, y: &'a Ex },
+    /// `(members[0]*members[1]*...)^n`: a product under an integer power.
+    Product { members: &'a [Ex], n: &'a Rat },
+}
 
 /// A law of the catalogue: its name, its statement and, per mode, its premise and its stage.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -283,6 +309,62 @@ pub enum Law {
     PowRefusedPower,
     /// `rootn(t, -n) = 1/rootn(t, n)` and `rootn(rootn(t, m), n) = rootn(t, m*n)`. Total.
     FunRootnIndex,
+    /// `(a*b)^n = a^n*b^n` for an integer `n`. An odd negative power of a product that vanishes
+    /// with a negative member is a pole of one sign where the members' poles give the other
+    /// (`(-1*(x0 - abs(x0)))^-1` is `+inf` on x0 >= 0, `-1*(x0 - abs(x0))^-1` is `-inf`), so it
+    /// distributes where every member is nonzero almost everywhere, a member is infinite, all are
+    /// `>= 0`, or a member's zero is one whose sign an inverse reads (`expr::power_bag`). Both
+    /// modes read the same licence; `permissive`'s certificates admit every member.
+    PowDistribute,
+    /// The divisor of a written product is read as its members' inverses where `pow.distribute`
+    /// holds: `x2/(x0*x1)` is `x2*x0^-1*x1^-1` (`convert::powered_members`); else the product
+    /// stays one member under the power.
+    ParseInverseOfProduct,
+    /// `(t^r)^s = t^(r*s)`. True where both sides agree on t < 0: an integer `s`; an odd integer
+    /// `r` with `r*s` no integer (the source is NaN on t < 0 as the target is), `r` positive or
+    /// `t` never infinite (at t = -inf a negative odd power is 0, whose non-integer power is 0,
+    /// where the target is NaN); `r` and `r*s` no integers; or `t >= 0`. `(t^2)^(1/2)` is
+    /// `abs(t)`, `(t^(1/2))^2` is `t` only on t >= 0. In `permissive`, none (powers compose).
+    PowCompose,
+    /// `rootn(t, n)^n = t`, `rootn(t, n)^-n = 1/t` and `rootn(t^n, n) = t`, where `n` is odd
+    /// (the odd root is a bijection of the extended line) or `t >= 0`: `rootn(t, 2)^2` has no
+    /// value on t < 0. In `permissive`, none (powers compose).
+    PowRootInverse,
+    /// `rootn(t, m)^s = t^(s/m)` for an odd index `m >= 3` and a non-integer `s`: both sides are
+    /// NaN on t < 0. An integer `s` keeps the root in both modes: on t < 0 it is no identity
+    /// (`rootn(-8, 3)^2` is 4, `(-8)^(2/3)` has no value), and where it is one (t >= 0, or in
+    /// `permissive`, which composes powers ignoring the sign) the root's class keeps one spelling:
+    /// `rootn(t, m)^k` collects with `rootn(t, m)` over one base, `t^(k/m)` would not.
+    PowOddRootCompose,
+    /// `rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n)` for an even `n` over an index of no known
+    /// parity (beyond 2^53, `f64`). Total: both sides are `1/R^(1/n)` on R = `rootn(t, m)` >= 0,
+    /// NaN on R < 0 and `+inf` at R = 0.
+    PowUnknownParityRoot,
+    /// A literal base absorbs the exponent's sign: `r^(-t) = (1/r)^t` (`0^(-t) = inf^t`) where
+    /// the flip removes a node, `1/(r^t) = (1/r)^t`, and `(1/t)^(+-inf) = t^(-+inf)`. Total over
+    /// the rational literals; `-inf` is no such base (`(-inf)^(-t)` has no value at a non-integer
+    /// `t`, where `0^t` is 0).
+    PowLiteralBaseSign,
+    /// An even unit fraction is a root: `t^(1/(2k)) = rootn(t, 2k)`, one principal root. In
+    /// `f64` the spelling `pow(t, 0.5)` is numpy's `sqrt`, which keeps a zero's sign
+    /// (`sqrt(-0) = -0`, `rootn(-0, 2) = +0`), so it stays a call where `t` may be a zero with a
+    /// sign of its own (`expr::sqrt_parts_from_rootn`): `1/pow(ceil(x0), 1/2)` is `-inf` on
+    /// (-1, 0), `1/rootn(ceil(x0), 2)` is `+inf`. In `permissive`, none (one zero).
+    PowHalfRoot,
+    /// Factors of one base merge their exponents: `t^a*t^b = t^(a+b)`, where both are integers
+    /// (in `f64` integers float64 reads exactly, parity known), `t >= 0`, or the sum is a nonzero
+    /// non-integer (both sides NaN on t < 0): `t^(1/2)*t^(1/2)` is `t` only on t >= 0. Exponents
+    /// of opposite signs share one pool where `mul.cancel` holds of `t`. In `permissive`, none
+    /// (powers compose by agreement).
+    MulCollect,
+    /// Occurrences of one symbolic power merge: `t^y*t^y = t^(2*y)`. The two sides part on
+    /// {t < 0} x {y in (1/2)Z \ Z}, NaN against a value, so `t >= 0` or the level sets of `y`
+    /// null (`y` nonconstant entire, `interval::nonconstant_entire`, the certificate the judge
+    /// reads too). In `f64` `t` is not `-0` on a region either: where `t` is `-0` and `2*y` an odd
+    /// integer `(-0)^y*(-0)^y` is `+0` or `+inf` and `(-0)^(2*y)` is `-0` or `-inf`
+    /// (`ceil(x0)^x1*ceil(x0)^x1` is `+inf` at x0 = -0.5, x1 = -0.5, `ceil(x0)^(2*x1)` is
+    /// `-inf`), a value where the input has one. In `permissive`, none (agreement).
+    MulCollectSymbolic,
     /// `atanh(tanh(t)) = t`. In `f64` where `|t|` is at most 19: float64's `tanh` is `+-1` from
     /// `|t|` = 19.0615 on, where `atanh` gives an infinity against `t`; within the band the
     /// rounding of `tanh` keeps the kind (`Cx::certainly_in_band`). In `permissive`, none.
@@ -336,7 +418,7 @@ pub enum Law {
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 62] = [
+    pub const ALL: [Law; 72] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -387,6 +469,16 @@ impl Law {
         Law::PowExpCompose,
         Law::PowRefusedPower,
         Law::FunRootnIndex,
+        Law::PowDistribute,
+        Law::ParseInverseOfProduct,
+        Law::PowCompose,
+        Law::PowRootInverse,
+        Law::PowOddRootCompose,
+        Law::PowUnknownParityRoot,
+        Law::PowLiteralBaseSign,
+        Law::PowHalfRoot,
+        Law::MulCollect,
+        Law::MulCollectSymbolic,
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAsinhSinh,
@@ -454,6 +546,16 @@ impl Law {
             Law::PowExpCompose => "pow.exp_compose",
             Law::PowRefusedPower => "pow.refused_power",
             Law::FunRootnIndex => "fun.rootn_index",
+            Law::PowDistribute => "pow.distribute",
+            Law::ParseInverseOfProduct => "parse.inverse_of_product",
+            Law::PowCompose => "pow.compose",
+            Law::PowRootInverse => "pow.root_inverse",
+            Law::PowOddRootCompose => "pow.odd_root_compose",
+            Law::PowUnknownParityRoot => "pow.unknown_parity_root",
+            Law::PowLiteralBaseSign => "pow.literal_base_sign",
+            Law::PowHalfRoot => "pow.half_root",
+            Law::MulCollect => "mul.collect",
+            Law::MulCollectSymbolic => "mul.collect_symbolic",
             Law::FunAtanhTanh => "fun.atanh_tanh",
             Law::FunLogExp => "fun.log_exp",
             Law::FunAsinhSinh => "fun.asinh_sinh",
@@ -522,6 +624,16 @@ impl Law {
             Law::PowExpCompose => "e^t = exp(t), exp(a)^b = exp(a*b)",
             Law::PowRefusedPower => "(a*b)^-k = ((a*b)^k)^-1",
             Law::FunRootnIndex => "rootn(t, -n) = 1/rootn(t, n)",
+            Law::PowDistribute => "(a*b)^n = a^n*b^n",
+            Law::ParseInverseOfProduct => "1/(a*b) = (1/a)*(1/b)",
+            Law::PowCompose => "(t^r)^s = t^(r*s)",
+            Law::PowRootInverse => "rootn(t, n)^n = t",
+            Law::PowOddRootCompose => "rootn(t, m)^s = t^(s/m)",
+            Law::PowUnknownParityRoot => "rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n)",
+            Law::PowLiteralBaseSign => "r^(-t) = (1/r)^t",
+            Law::PowHalfRoot => "t^(1/(2*k)) = rootn(t, 2*k)",
+            Law::MulCollect => "t^a*t^b = t^(a+b)",
+            Law::MulCollectSymbolic => "t^y*t^y = t^(2*y)",
             Law::FunAtanhTanh => "atanh(tanh(t)) = t",
             Law::FunLogExp => "log(exp(t)) = t",
             Law::FunAsinhSinh => "asinh(sinh(t)) = t",
@@ -587,6 +699,8 @@ impl Law {
                 | Law::PowExpCompose
                 | Law::PowRefusedPower
                 | Law::FunRootnIndex
+                | Law::PowUnknownParityRoot
+                | Law::PowLiteralBaseSign
                 | Law::FunAsinhSinh
                 | Law::FunSinhAsinh
                 | Law::FunHalfPeriod
@@ -629,6 +743,8 @@ impl Law {
                     && (!cx.f64_semantics() || super::expr::signed_zero_null(t, true, cx))
             }
             Law::FunUnitInverses => cx.certainly_in_unit(t),
+            // `t` is the base of the spelled square root.
+            Law::PowHalfRoot => !super::expr::sqrt_parts_from_rootn(t, cx),
             Law::PermInversePairs => cx.permits_on(Permissive::InversePairs, t),
             // `t` is a member the bag drops.
             Law::LatticeAbsorb => {
@@ -637,6 +753,57 @@ impl Law {
                     || cx.fin_licensed(t)
             }
             _ => unreachable!("every partial law states its premise"),
+        }
+    }
+
+    /// [`Law::holds`] for a law of powers, whose premise reads the exponents beside the base
+    /// ([`Powers`]).
+    pub(crate) fn holds_powers(self, p: Powers, cx: &Cx) -> bool {
+        use super::expr::{distribution_licensed, signed_zero_null};
+        let composes = |t: &Ex| cx.permits_on(Permissive::PowersCompose, t);
+        match (self, p) {
+            (Law::PowDistribute | Law::ParseInverseOfProduct, Powers::Product { members, n }) => {
+                distribution_licensed(members, n, cx)
+            }
+            (Law::PowCompose, Powers::Rational { base, r, s }) => {
+                let rs = r.checked_mul(s);
+                composes(base)
+                    || cx.certainly_nonneg(base)
+                    || if r.is_integer() {
+                        s.is_integer()
+                            || (r.is_odd_integer()
+                                && (r.signum() > 0 || cx.never_infinite(base))
+                                && rs.is_some_and(|p| !p.is_integer()))
+                    } else {
+                        rs.is_some_and(|p| !p.is_integer())
+                    }
+            }
+            // `r` is the index, `s` the exponent (`n` or `-n`).
+            (Law::PowRootInverse, Powers::Rational { base, r, .. }) => {
+                composes(base) || r.is_odd_integer() || cx.certainly_nonneg(base)
+            }
+            // `r` is the odd index, `s` the exponent.
+            // An integer `s` keeps the root, in both modes: `rootn(t, m)^k` collects with
+            // `rootn(t, m)` over one base, where `t^(k/m)` would not.
+            (Law::PowOddRootCompose, Powers::Rational { s, .. }) => !s.is_integer(),
+            (Law::MulCollect, Powers::Rational { base, r, s }) => {
+                // Integers merge totally, in `f64` only while float64 reads them exactly (parity
+                // known, |n| <= 2^53): it reads `t^(2^53+1)` as `t^(2^53)`.
+                let exact_integers = r.parity().is_some()
+                    && s.parity().is_some()
+                    && r.checked_add(s).is_some_and(|q| q.parity().is_some());
+                cx.permits(Permissive::Agreement)
+                    || exact_integers
+                    || cx.certainly_nonneg(base)
+                    || r.checked_add(s)
+                        .is_some_and(|q| !q.is_integer() && !q.is_zero())
+            }
+            (Law::MulCollectSymbolic, Powers::Symbolic { base, y }) => {
+                cx.permits(Permissive::Agreement)
+                    || ((cx.certainly_nonneg(base) || cx.nonconstant_entire(y))
+                        && (!cx.f64_semantics() || signed_zero_null(base, true, cx)))
+            }
+            (law, _) => unreachable!("{} reads no such powers", law.name()),
         }
     }
 

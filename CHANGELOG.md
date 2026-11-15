@@ -203,6 +203,10 @@ organised by who you are, then the highlights, then every change in detail.
   flat point at 0: `log(exp(sin(x0)))` is `sin(x0)` and `floor(log(exp(x0)))` is `floor(x0)`,
   while `1/log(exp(x0))` stays, float64's `log(exp(t))` being `+0` wherever
   0 < |t| < 1.1e-16.
+- **The laws of powers carry their premises.** `t^y*t^y` is `t^(2*y)` in `f64` only where `t` is not
+  `-0` on a region: `ceil(x0)^x1*ceil(x0)^x1` stays, `+inf` against `-inf` at x0 = -0.5, x1 = -0.5.
+  A power of a non-integer exponent is read as `>= 0` wherever it has a value: `abs(x0^(1/3))` is
+  `x0^(1/3)`.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
@@ -638,6 +642,30 @@ model predictions.
   `rootn(x1, 2)`) and `x1^floor(tanh(100))` is `x1` (it was 1); `permissive` reads the reals there.
   On srbf's ground truths, a tenth of the training-data inputs and a tenth of the predictions no
   answer changes in either mode, and none changes on a second call.
+- **The laws of powers are named, each with its premise.** `pow.distribute`,
+  `parse.inverse_of_product`, `pow.compose`, `pow.root_inverse`, `pow.odd_root_compose`,
+  `pow.unknown_parity_root`, `pow.literal_base_sign`, `pow.half_root`, `mul.collect` and
+  `mul.collect_symbolic` join the catalogue, each applied where its premise holds and asked by its
+  name. Each premise was measured against the judge over operands of every kind it reads (a
+  variable, `abs`, a function that is `-0` on a region, a square root that keeps `-0`, a positive
+  function, one that vanishes on a region, a log), at the root and under an inverse. One premise
+  changes: the two sides of `t^y*t^y = t^(2*y)` part where `t` is `-0` and `2*y` an odd integer,
+  `+0` or `+inf` against `-0` or `-inf`, a value where the input has one, so in `f64` a `t` that is
+  `-0` on a region keeps its occurrences apart (`ceil(x0)^x1*ceil(x0)^x1`, `+inf` against `-inf` at
+  x0 = -0.5, x1 = -0.5); where `t` is never `-0` on a region the merge stands on the level sets of
+  `y`, as before (`x0^x1*x0^x1` is `x0^(2*x1)`, `y` nonconstant entire, the certificate the judge
+  reads). And a power of a non-integer exponent is the principal power, `>= 0` wherever it has a
+  value (NaN on a negative base), which the premises that read `t >= 0` now know: `abs(x0^(1/3))` is
+  `x0^(1/3)`. The other premises are the guards as they were. Where `f64` keeps a step the judge
+  holds, the cause is named: the distribution keeps a product holding a sum that vanishes on a
+  region whole, for the sign trades that follow (`(x1*(x0 - abs(x0))^2)^-3`); a negative odd inner
+  power composes over a leaf alone (`(sin(x0)^-1)^(1/2)`); and an odd root under an integer power
+  stays a root in both modes, so its class keeps one spelling (`rootn(t, 3)^2` collects with
+  `rootn(t, 3)`, `t^(2/3)` would not), where the judge holds the composition over `t >= 0` and, by
+  `permissive`'s powers compose, for every `t`. Under an inverse the judge refuses steps that hold
+  at their own root, where float64's `x ** 0.5`, numpy's `sqrt`, keeps the `-0` of an isolated point
+  and `rootn(x, 2)` or `x^(3/2)` gives `+0` (`1/x0^(1/2) -> 1/rootn(x0, 2)`, `1/(rootn(x0, 2)*x0) ->
+  1/x0^(3/2)` at x0 = -0); the guarantee is per step, as it is for every step.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and

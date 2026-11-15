@@ -979,6 +979,115 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
                             f'{d.get("verdict")} {d.get("tier")}')
 
 
+#: Why the engine keeps a law of powers the judge holds, or takes one the judge refuses in
+#: its context. `DISTRIBUTION_HELD`: an odd negative power keeps a product with a member that
+#: vanishes on a region whole (the sign trades that follow read its orientation), where the
+#: judge reads the two spellings as one. `NEVER_INFINITE`: a negative odd inner power composes
+#: only over a leaf, the one base certain never to reach an infinity. `ONE_SPELLING`: an odd root
+#: under an integer power stays a root, so its class keeps one spelling (`rootn(t, m)^k`
+#: collects with `rootn(t, m)`, `t^(k/m)` would not), where the judge holds the composition over
+#: t >= 0 and, by permissive's powers compose, for every t. `PER_STEP`: float64's
+#: `x ** 0.5` is numpy's `sqrt`, which keeps the `-0` of an isolated point (x0 = -0), where
+#: `rootn(x0, 2)` and `x0^(3/2)` give `+0`; the step holds at its own root, and an inverse
+#: around it reads the sign (the guarantee is per step).
+DISTRIBUTION_HELD = 'the distribution keeps a product holding a sum that vanishes on a region'
+NEVER_INFINITE = 'a negative odd inner power composes over a leaf alone'
+ONE_SPELLING = "an odd root under an integer power stays a root: its class keeps one spelling"
+PER_STEP = "float64's sqrt keeps an isolated -0, which an inverse around the step reads"
+
+
+def power_case(law, lhs, rhs, mode, *causes):
+    marks = [pytest.mark.xfail(strict=True, raises=KnownDisagreement, reason='; '.join(causes))]
+    return pytest.param(law, lhs, rhs, mode, causes, marks=marks if causes else [],
+                        id=f'{law}: {lhs} -> {rhs} [{mode}]')
+
+
+#: The laws of powers where their premises hold and where they fail, in both modes, with the
+#: cause of a disagreement where one has it.
+POWER_PINS = [
+    power_case('pow.distribute', 'pow * x0 x1 -3', '* pow x0 -3 pow x1 -3', 'f64'),
+    power_case('pow.distribute', 'pow * x1 pow - x0 abs x0 2 -3',
+               '* pow x1 -3 pow pow - x0 abs x0 2 -3', 'f64', DISTRIBUTION_HELD),
+    power_case('pow.distribute', 'pow * x1 pow - x0 abs x0 2 -3',
+               '* pow x1 -3 pow pow - x0 abs x0 2 -3', 'permissive'),
+    power_case('parse.inverse_of_product', '/ x2 * x0 x1', '* x2 * inv x0 inv x1', 'f64'),
+    power_case('parse.inverse_of_product', '/ x2 * x1 pow - x0 abs x0 2',
+               '* x2 * inv x1 inv pow - x0 abs x0 2', 'f64', DISTRIBUTION_HELD),
+    power_case('parse.inverse_of_product', '/ x2 * x1 pow - x0 abs x0 2',
+               '* x2 * inv x1 inv pow - x0 abs x0 2', 'permissive'),
+    power_case('pow.compose', 'pow pow x0 2 3', 'pow x0 6', 'f64'),
+    power_case('pow.compose', 'pow pow x0 2 0.5', 'x0', 'f64'),
+    power_case('pow.compose', 'pow pow x0 2 0.5', 'x0', 'permissive'),
+    power_case('pow.compose', 'pow pow x0 3 0.5', 'pow x0 1.5', 'f64'),
+    power_case('pow.compose', 'pow pow sin x0 -1 0.5', 'pow sin x0 -0.5', 'f64', NEVER_INFINITE),
+    power_case('pow.root_inverse', 'pow rootn x0 3 3', 'x0', 'f64'),
+    power_case('pow.root_inverse', 'pow rootn x0 2 2', 'x0', 'f64'),
+    power_case('pow.root_inverse', 'pow rootn x0 2 2', 'x0', 'permissive'),
+    power_case('pow.root_inverse', 'pow rootn abs x0 2 2', 'abs x0', 'f64'),
+    power_case('pow.odd_root_compose', 'pow rootn x0 3 0.5', 'pow x0 / 1 6', 'f64'),
+    power_case('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow x0 / 2 3', 'f64'),
+    power_case('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow x0 / 2 3', 'permissive',
+               ONE_SPELLING),
+    power_case('pow.odd_root_compose', 'pow rootn abs x0 3 2', 'pow abs x0 / 2 3', 'f64',
+               ONE_SPELLING),
+    power_case('pow.odd_root_compose', 'pow rootn ceil x0 3 5', 'pow ceil x0 / 5 3', 'f64'),
+    power_case('pow.literal_base_sign', 'inv pow 3 x0', 'pow / 1 3 x0', 'f64'),
+    # at a slot that binds any part: float64 gives +inf on both sides where the reals give the
+    # left none, read pointwise
+    power_case('pow.literal_base_sign', 'inv pow 3 _0', 'pow / 1 3 _0', 'f64'),
+    power_case('pow.literal_base_sign', 'pow 2 neg x0', 'pow 0.5 x0', 'f64'),
+    power_case('pow.half_root', 'pow x0 0.5', 'rootn x0 2', 'f64'),
+    power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'f64'),
+    power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'permissive'),
+    power_case('pow.half_root', 'inv pow ceil x0 0.5', 'inv rootn ceil x0 2', 'f64'),
+    power_case('pow.half_root', 'inv pow x0 0.5', 'inv rootn x0 2', 'f64', PER_STEP),
+    power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'f64'),
+    power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'permissive'),
+    power_case('mul.collect', '* rootn x0 2 x0', 'pow x0 1.5', 'f64'),
+    power_case('mul.collect', 'inv * rootn x0 2 x0', 'inv pow x0 1.5', 'f64', PER_STEP),
+    power_case('mul.collect', '* pow abs x0 0.5 pow abs x0 0.5', 'abs x0', 'f64'),
+    # the symbolic merge: the level sets of the exponent null (nonconstant entire), and the base
+    # not -0 on a region; a fat level set, or an exponent no certificate reads, stays
+    power_case('mul.collect_symbolic', '* pow x0 x1 pow x0 x1', 'pow x0 * 2 x1', 'f64'),
+    power_case('mul.collect_symbolic', '* pow ceil x0 x1 pow ceil x0 x1', 'pow ceil x0 * 2 x1',
+               'f64'),
+    power_case('mul.collect_symbolic', '* pow ceil x0 x1 pow ceil x0 x1', 'pow ceil x0 * 2 x1',
+               'permissive'),
+    power_case('mul.collect_symbolic', '* pow abs x0 x1 pow abs x0 x1', 'pow abs x0 * 2 x1',
+               'f64'),
+    power_case('mul.collect_symbolic', '* pow x0 floor x1 pow x0 floor x1',
+               'pow x0 * 2 floor x1', 'f64'),
+    power_case('mul.collect_symbolic', '* pow x0 pow abs sin x1 0.5 pow x0 pow abs sin x1 0.5',
+               'pow x0 * 2 pow abs sin x1 0.5', 'f64'),
+]
+
+
+@pytest.mark.parametrize('law, lhs, rhs, mode, causes', POWER_PINS)
+def test_the_engine_takes_a_law_of_powers_where_the_judge_holds_it(law, lhs, rhs, mode,
+                                                                   causes) -> None:
+    """The engine takes the step at effort 0 exactly where the judge holds the rule in the mode,
+    or the two disagree for the cause the row names: the engine keeps what the judge holds
+    (`DISTRIBUTION_HELD`, `NEVER_INFINITE`, `ONE_SPELLING`), or takes, under an inverse, a step the
+    judge holds at its own root (`PER_STEP`)."""
+    engine = bare()
+    takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
+             == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
+    d = judged(lhs, rhs)
+    holds = _contract.judged_reading(d, mode) is True
+    if takes == holds:
+        return
+    assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('tier'))
+    if PER_STEP in causes:
+        reader, step = lhs.split()[0], (lhs.split()[1:], rhs.split()[1:])
+        assert mode == 'f64' and takes and not holds and reader == 'inv', (lhs, mode)
+        assert _contract.judged_reading(judged(' '.join(step[0]), ' '.join(step[1])),
+                                        mode) is True, step
+    else:
+        assert holds and not takes, (lhs, mode)
+    raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
+                            f'{d.get("verdict")} {d.get("tier")}')
+
+
 @pytest.mark.parametrize('expr, want', [
     ('rootn pow x0 2 2', 'x0'), ('pow rootn x0 2 2', 'x0'), ('rootn pow x0 4 4', 'x0'),
     ('pow pow x0 2 0.5', 'x0'), ('pow pow x0 6 0.5', 'pow x0 3'),

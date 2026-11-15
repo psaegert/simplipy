@@ -313,6 +313,66 @@ FUNCTION_ROWS = [
     ('lattice.absorb', 'max float("inf") log x0', 'max float("inf") log x0', 'float("inf")'),
 ]
 
+#: (law, input, f64 answer, permissive answer) of the laws of powers, each where its premise holds
+#: and where it fails
+POWER_ROWS = [
+    # (a*b)^n = a^n*b^n; an odd negative power keeps a product that vanishes on a region with no
+    # sign of its own (an even power of a sum) in f64
+    ('pow.distribute', 'pow * x0 x1 2', '* pow x0 2 pow x1 2', '* pow x0 2 pow x1 2'),
+    ('pow.distribute', 'pow * x0 x1 -3', '* inv pow x0 3 inv pow x1 3',
+     '* inv pow x0 3 inv pow x1 3'),
+    ('pow.distribute', 'pow * x1 pow - x0 abs x0 2 -3', 'inv * pow x1 3 pow - x0 abs x0 6',
+     '* inv pow x1 3 inv pow - x0 abs x0 6'),
+    # a divisor's product is read as its members' inverses where pow.distribute holds
+    ('parse.inverse_of_product', '/ x2 * x0 x1', '/ x2 * x0 x1', '/ x2 * x0 x1'),
+    ('parse.inverse_of_product', '/ x2 * x1 pow - x0 abs x0 2', '/ x2 * x1 pow - x0 abs x0 2',
+     '/ * x2 inv pow - x0 abs x0 2 x1'),
+    # (t^r)^s = t^(r*s) where both sides agree on t < 0
+    ('pow.compose', 'pow pow x0 2 3', 'pow x0 6', 'pow x0 6'),
+    ('pow.compose', 'pow pow x0 2 0.5', 'rootn pow x0 2 2', 'x0'),
+    ('pow.compose', 'pow pow x0 3 0.5', 'pow x0 / 3 2', 'pow x0 / 3 2'),
+    ('pow.compose', 'pow pow abs x0 2 0.5', 'abs x0', 'abs x0'),
+    # rootn(t, n)^(+-n) = t^(+-1), n odd or t >= 0
+    ('pow.root_inverse', 'pow rootn x0 3 3', 'x0', 'x0'),
+    ('pow.root_inverse', 'pow rootn x0 3 -3', 'inv x0', 'inv x0'),
+    ('pow.root_inverse', 'rootn pow x0 3 3', 'x0', 'x0'),
+    ('pow.root_inverse', 'pow rootn x0 2 2', 'pow rootn x0 2 2', 'x0'),
+    ('pow.root_inverse', 'pow rootn abs x0 2 2', 'abs x0', 'abs x0'),
+    # rootn(t, m)^s = t^(s/m) for a non-integer s; an integer s keeps the root, whose class keeps
+    # one spelling
+    ('pow.odd_root_compose', 'pow rootn x0 3 0.5', 'rootn x0 6', 'rootn x0 6'),
+    ('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow rootn x0 3 2', 'pow rootn x0 3 2'),
+    ('pow.odd_root_compose', 'pow rootn abs x0 3 2', 'pow rootn abs x0 3 2',
+     'pow rootn abs x0 3 2'),
+    # an even unit fraction over an index of no known parity
+    ('pow.unknown_parity_root', 'pow rootn x0 9007199254740993 -0.5',
+     'inv rootn x0 18014398509481986', 'inv rootn x0 18014398509481986'),
+    # a literal base absorbs the exponent's sign
+    ('pow.literal_base_sign', 'pow 2 neg x0', 'pow / 1 2 x0', 'pow / 1 2 x0'),
+    ('pow.literal_base_sign', 'inv pow 3 x0', 'pow / 1 3 x0', 'pow / 1 3 x0'),
+    ('pow.literal_base_sign', 'pow inv x0 float("inf")', 'pow x0 float("-inf")',
+     'pow x0 float("-inf")'),
+    # t^(1/2) = rootn(t, 2); f64's spelled square root keeps a zero's sign of its own
+    ('pow.half_root', 'pow x0 0.5', 'rootn x0 2', 'rootn x0 2'),
+    ('pow.half_root', 'pow ceil x0 0.5', 'pow ceil x0 / 1 2', 'rootn ceil x0 2'),
+    ('pow.half_root', 'pow ceil x0 -0.5', 'inv rootn ceil x0 2', 'inv pow ceil x0 / 1 2'),
+    # a power of a non-integer exponent is >= 0 wherever it has a value
+    ('fun.abs_nonnegative', 'abs pow x0 / 1 3', 'pow x0 / 1 3', 'pow x0 / 1 3'),
+    # t^a*t^b = t^(a+b) where the branch cut allows it
+    ('mul.collect', '* pow x0 2 pow x0 3', 'pow x0 5', 'pow x0 5'),
+    ('mul.collect', '* pow x0 0.5 pow x0 0.5', '* rootn x0 2 rootn x0 2', 'x0'),
+    ('mul.collect', '* rootn x0 2 x0', 'pow x0 / 3 2', 'pow x0 / 3 2'),
+    ('mul.collect', '* pow abs x0 0.5 pow abs x0 0.5', 'abs x0', 'abs x0'),
+    # t^y*t^y = t^(2y): t >= 0 or y's level sets null, and in f64 t not -0 on a region
+    ('mul.collect_symbolic', '* pow x0 x1 pow x0 x1', 'pow x0 * 2 x1', 'pow x0 * 2 x1'),
+    ('mul.collect_symbolic', '* pow abs x0 x1 pow abs x0 x1', 'pow abs x0 * 2 x1',
+     'pow abs x0 * 2 x1'),
+    ('mul.collect_symbolic', '* pow ceil x0 x1 pow ceil x0 x1', '* pow ceil x0 x1 pow ceil x0 x1',
+     'pow ceil x0 * 2 x1'),
+    ('mul.collect_symbolic', '* pow x0 floor x1 pow x0 floor x1',
+     '* pow x0 floor x1 pow x0 floor x1', 'pow x0 * 2 floor x1'),
+]
+
 C = '<constant>'
 #: (law, input, f64 answer, permissive answer) of the absorptions of a fitted constant
 ABSORB_ROWS = [
@@ -405,6 +465,14 @@ def test_the_core_names_its_laws() -> None:
         ('pow.exp_compose', 'e^t = exp(t), exp(a)^b = exp(a*b)'),
         ('pow.refused_power', '(a*b)^-k = ((a*b)^k)^-1'),
         ('fun.rootn_index', 'rootn(t, -n) = 1/rootn(t, n)'),
+        ('pow.distribute', '(a*b)^n = a^n*b^n'),
+        ('parse.inverse_of_product', '1/(a*b) = (1/a)*(1/b)'),
+        ('pow.compose', '(t^r)^s = t^(r*s)'), ('pow.root_inverse', 'rootn(t, n)^n = t'),
+        ('pow.odd_root_compose', 'rootn(t, m)^s = t^(s/m)'),
+        ('pow.unknown_parity_root', 'rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n)'),
+        ('pow.literal_base_sign', 'r^(-t) = (1/r)^t'),
+        ('pow.half_root', 't^(1/(2*k)) = rootn(t, 2*k)'),
+        ('mul.collect', 't^a*t^b = t^(a+b)'), ('mul.collect_symbolic', 't^y*t^y = t^(2*y)'),
         ('fun.atanh_tanh', 'atanh(tanh(t)) = t'), ('fun.log_exp', 'log(exp(t)) = t'),
         ('fun.asinh_sinh', 'asinh(sinh(t)) = t'), ('fun.sinh_asinh', 'sinh(asinh(t)) = t'),
         ('fun.acosh_cosh', 'acosh(cosh(t)) = abs(t)'), ('fun.exp_log', 'exp(log(t)) = t'),
@@ -417,13 +485,13 @@ def test_the_core_names_its_laws() -> None:
 
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ROWS + GROUND_ROWS + FUNCTION_ROWS + ABSORB_ROWS} == {
+    assert {law for law, *_ in ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS} == {
         name for name, _ in _core.laws()}
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
     pytest.param(*row, id=f'{row[0]}: {row[1]}')
-    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + ABSORB_ROWS])
+    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS])
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
         engine, law, expr, f64, permissive, effort) -> None:
@@ -434,7 +502,7 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
     pytest.param(*row, id=f'{row[0]}: {row[1]}')
-    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + ABSORB_ROWS])
+    for row in ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS])
 def test_each_answer_reads_back_to_itself(engine, law, expr, f64, permissive) -> None:
     for mode, answer in (('f64', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)

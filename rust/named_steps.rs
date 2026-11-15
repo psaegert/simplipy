@@ -95,7 +95,7 @@ mod tests {
     /// their left side has a value, whose premise in `f64` is a float64 kind (`tanh`'s
     /// saturation, a flat point, a zero's sign, a NaN on a region), which `permissive` does not
     /// ask (`abs(t) = t` keeps the reals' own `t >= 0`); no step of permissive's own.
-    const KIND_LAWS: [Law; 7] = [
+    const KIND_LAWS: [Law; 10] = [
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAcoshCosh,
@@ -103,13 +103,26 @@ mod tests {
         Law::FunUnitInverses,
         Law::FunAbsNonnegative,
         Law::LatticeAbsorb,
+        Law::PowDistribute,
+        Law::ParseInverseOfProduct,
+        Law::PowHalfRoot,
     ];
+
+    /// The compositions of powers: identities of the reals on t >= 0 whose premise is the
+    /// reals' own branch cut, which `permissive` takes by the step `powers compose` (its
+    /// schemas).
+    const COMPOSE_LAWS: [Law; 3] = [Law::PowCompose, Law::PowRootInverse, Law::PowOddRootCompose];
+
+    /// The like-base merges: identities of the reals on t >= 0 whose premise is the reals' own
+    /// branch cut, which `permissive` drops by its reading of agreement (extensions are free); a
+    /// reading, no schema.
+    const AGREEMENT_LAWS: [Law; 2] = [Law::MulCollect, Law::MulCollectSymbolic];
 
     /// The step entries are the three the constructors take on a rule's structure, each schema
     /// one expression a side; the partial laws are the like-term laws, each with its schema, the
-    /// sum-sign and kind laws, and the inverse pairs' law, which is the step `inverse pairs
-    /// cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue gains must be
-    /// placed before it is read.
+    /// sum-sign, kind, composition and agreement laws, and the inverse pairs' law, which is the
+    /// step `inverse pairs cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue
+    /// gains must be placed before it is read.
     #[test]
     fn the_schemas_are_the_constructors_tables() {
         let stepped: Vec<&str> = Permissive::ALL
@@ -135,6 +148,8 @@ mod tests {
                 !law.total(),
                 like || SUM_SIGN_LAWS.contains(&law)
                     || KIND_LAWS.contains(&law)
+                    || COMPOSE_LAWS.contains(&law)
+                    || AGREEMENT_LAWS.contains(&law)
                     || law == Law::PermInversePairs,
                 "{}",
                 law.name()

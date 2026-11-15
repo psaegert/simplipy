@@ -3026,9 +3026,10 @@ mod tests {
         );
         // INTERIM, until the re-mine resets the count to 0: the sign key (fewest
         // signs, then outermost) makes the canon place a sign at an odd function itself, the
-        // product constructor merges powers of e (`exp(2)/e` is `e`), and the constructor
-        // collapses `sinh(asinh(t))` at every argument, so 18 rows of the staged asset are
-        // subsumed (G2). The suites pin them by rule (`tests/conftest.py`,
+        // product constructor merges powers of e (`exp(2)/e` is `e`), the constructor
+        // collapses `sinh(asinh(t))` at every argument, and a power of a non-integer exponent
+        // is read as `>= 0` (`abs(rootn(x, -2))` is `rootn(x, -2)`), so 23 rows of the staged
+        // asset are subsumed (G2). The suites pin them by rule (`tests/conftest.py`,
         // `ACJ4_INTERIM_SUBSUMED`); any other count still fails here.
         // G2 REPUBLISH: the full-lane re-mine ships (6,594 rules, x3
         // byte-identical on the reference mint host) and the pin returns
@@ -3039,7 +3040,7 @@ mod tests {
         // legacy one, `RuleCanon::Legacy`): nothing is subsumed. Read in f64's own folded
         // canon, `atanh pow (-10) (-9) -> -1e-09` was, a row nothing judged in that canon.
         assert_eq!(
-            subsumed, 18,
+            subsumed, 23,
             "published asset, read in its own canon, must translate loss-free but for the \
              interim rows; a subsumption means the canon moved past it -- republish, do not \
              re-pin"
