@@ -96,7 +96,7 @@ mod tests {
     /// saturation, a flat point, a zero's sign, a pole's sign, a NaN on a region), which
     /// `permissive` does not ask (`abs(t) = t` keeps the reals' own `t >= 0`); no step of
     /// permissive's own.
-    const KIND_LAWS: [Law; 14] = [
+    const KIND_LAWS: [Law; 15] = [
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAcoshCosh,
@@ -111,6 +111,7 @@ mod tests {
         Law::ClassOppositeSums,
         Law::ClassLikeTermsUpToSign,
         Law::PowNegatedSite,
+        Law::FunBesseliParity,
     ];
 
     /// The compositions of powers: identities of the reals on t >= 0 whose premise is the

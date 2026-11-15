@@ -263,3 +263,52 @@ def test_a_rule_whose_points_had_no_reading_there_holds_in_permissive() -> None:
     criterion is agreement where the left side has a value). Read there, the rule holds."""
     r = _contract.judge_rule('inv bessely _0 0'.split(), ['0'])
     assert r['permissive'] is True and 'unread_owed' not in r, r
+
+
+#: Why the engine and the judge read besseli's parity apart. `PER_STEP`: at an odd order the kernel
+#: gives `+0` at a zero of either sign, so `besseli(1, -x0) -> -besseli(1, x0)` moves only the sign
+#: of a zero at x0 = 0, at its own root, which reads none; an inverse around the step reads it as a
+#: pole's sign (the guarantee is per step). `SLOT`: a rule's slot has no zero set in the engine's
+#: reading of a pattern (as for every zero-sign premise), where the judge reads `_` as any part,
+#: `ceil(x0)` among them.
+PER_STEP = "an odd order's kernel gives +0 at both zeros; an inverse around the step reads it"
+SLOT = "a pattern's slot has no zero set in the engine's reading"
+
+
+class KnownDisagreement(AssertionError):
+    """The judge and the engine read besseli's parity apart, for the cause the row names."""
+
+
+def parity_case(lhs, rhs, mode, *causes):
+    marks = [pytest.mark.xfail(strict=True, raises=KnownDisagreement, reason='; '.join(causes))]
+    return pytest.param(lhs, rhs, mode, causes, marks=marks if causes else [],
+                        id=f'{lhs} -> {rhs} [{mode}]')
+
+
+@pytest.mark.parametrize('lhs, rhs, mode, causes', [
+    parity_case('besseli 2 neg x0', 'besseli 2 x0', 'f64'),
+    parity_case('besseli 2 neg ceil x0', 'besseli 2 ceil x0', 'f64'),
+    parity_case('besseli 0 - x1 x0', 'besseli 0 - x0 x1', 'f64'),
+    parity_case('besseli 1 neg x0', 'neg besseli 1 x0', 'f64'),
+    parity_case('besseli 3 * -2 x0', 'neg besseli 3 * 2 x0', 'f64'),
+    parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'f64'),
+    parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'permissive'),
+    parity_case('inv besseli 1 neg x0', 'inv neg besseli 1 x0', 'f64', PER_STEP),
+    parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'f64', SLOT),
+    parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'permissive'),
+])
+def test_besselis_parity_is_taken_where_the_judge_holds_it(engine, lhs, rhs, mode, causes) -> None:
+    """`I_n(-t) = (-1)^n I_n(t)` (`fun.besseli_parity`): the engine takes the step at effort 0
+    exactly where the judge holds the rule in the mode, or the two disagree for the cause the row
+    names."""
+    takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
+             == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
+    d = _contract.judge_rule(lhs.split(), rhs.split())
+    holds = _contract.judged_reading(d, mode) is True
+    if takes == holds:
+        return
+    assert causes and mode == 'f64' and takes and not holds, (lhs, mode, takes, d.get('verdict'))
+    if PER_STEP in causes:
+        assert lhs.split()[0] == 'inv' and _contract.judged_reading(
+            _contract.judge_rule(lhs.split()[1:], rhs.split()[1:]), mode) is True, lhs
+    raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge {d.get("verdict")}')

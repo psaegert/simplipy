@@ -98,6 +98,7 @@
 //! | `fun.even` | g(-t) = g(t), g even | none | none |
 //! | `fun.odd_sign` | f(-u) = -f(u), f odd | none | none |
 //! | `fun.atan2_sign` | atan2(-y, x) = -atan2(y, x) | none | no step (one zero) |
+//! | `fun.besseli_parity` | I_n(-t) = (-1)^n I_n(t), n an integer | n odd: t vanishes on no region | none |
 //!
 //! An absorption is the specification's 3.2, a statement about families: for every value of
 //! the constants on the left there is one on the right, `d = c1 + r*c2 + q`, `d = r*c`,
@@ -486,11 +487,19 @@ pub enum Law {
     /// `f64` alone: `permissive` reads one zero, where `atan2(0, -1)` is `pi` and `-atan2(0, -1)`
     /// is `-pi`.
     FunAtan2Sign,
+    /// `I_n(-t) = (-1)^n I_n(t)` for an integer order `n >= 0`: an even order reads the argument an
+    /// even function reads (`besseli(2, -x)` is `besseli(2, x)`), an odd order moves the sign of a
+    /// negative literal multiple out (`besseli(1, -2*x)` is `-besseli(1, 2*x)`). The kernel is even
+    /// bit for bit at an even order; at an odd one it is odd but at a zero, where it gives `+0`
+    /// for either sign, so in `f64` an odd order moves the sign only where `t` vanishes on no
+    /// region (`besseli(1, -ceil(x0))` is `+0` on (-1, 0), `-besseli(1, ceil(x0))` is `-0`).
+    /// [`Law::holds`] reads the argument, asked of an odd order. In `permissive`, none.
+    FunBesseliParity,
 }
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 81] = [
+    pub const ALL: [Law; 82] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -572,6 +581,7 @@ impl Law {
         Law::FunEven,
         Law::FunOddSign,
         Law::FunAtan2Sign,
+        Law::FunBesseliParity,
     ];
 
     /// The law's stable name, `family.law`.
@@ -658,6 +668,7 @@ impl Law {
             Law::FunEven => "fun.even",
             Law::FunOddSign => "fun.odd_sign",
             Law::FunAtan2Sign => "fun.atan2_sign",
+            Law::FunBesseliParity => "fun.besseli_parity",
         }
     }
 
@@ -747,6 +758,7 @@ impl Law {
             Law::FunEven => "g(-t) = g(t)",
             Law::FunOddSign => "f(-u) = -f(u)",
             Law::FunAtan2Sign => "atan2(-y, x) = -atan2(y, x)",
+            Law::FunBesseliParity => "I_n(-t) = (-1)^n I_n(t)",
         }
     }
 
@@ -840,6 +852,8 @@ impl Law {
             Law::ClassPoleOrientation | Law::ClassOppositeSums | Law::ClassLikeTermsUpToSign => {
                 !super::expr::f64_zero_signs(cx) || super::expr::never_zero(t, cx)
             }
+            // `t` is the argument of an odd order.
+            Law::FunBesseliParity => !super::expr::vanishes_on_a_region(t, cx),
             // `t` is the argument of the inner function.
             Law::FunAtanhTanh => !cx.f64_semantics() || cx.certainly_in_band(t, 19),
             Law::FunLogExp => {

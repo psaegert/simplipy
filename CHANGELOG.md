@@ -710,6 +710,16 @@ model predictions.
   through a pole (2,187 dearer, +2,533 bits; 1,066 at an equal price; 1 cheaper), and 26 by a step
   at a pole taken or kept (14 dearer, +155 bits; 11 at an equal price; 1 cheaper). `permissive`'s
   answers do not change.
+- **`besseli` reads its argument's parity.** `I_n(-t) = (-1)^n I_n(t)` for an integer order
+  `n >= 0` joins the catalogue as `fun.besseli_parity`: `besseli(2, -x1)` is `besseli(2, x1)`,
+  `besseli(0, x2 - x1)` is `besseli(0, x1 - x2)` and `besseli(1, -2*x1)` is `-besseli(1, 2*x1)`;
+  all stayed as written. The kernel is even bit for bit at an even order; at an odd one it is odd
+  but at a zero, where it gives `+0` for either sign, so `f64` moves an odd order's sign only where
+  its argument vanishes on no region (`besseli(1, -ceil(x0))` stays, `+0` on (-1, 0) where
+  `-besseli(1, ceil(x0))` is `-0`), and under an inverse the step at the argument's isolated zero
+  is read as a pole's sign (`1/besseli(1, -x0)` is `-1/besseli(1, x0)`, `+inf` against `-inf` at
+  x0 = 0; the guarantee is per step). `besseli(1, -x1) + besseli(1, x1)` is 0 in `permissive`;
+  in `f64` its two terms stay, the kernel being NaN for 0 < |x1| <= 2.2e-308.
 - **A slot in a divisor's product matches its instances.** A rule's left side is read as a pattern,
   whose slot may bind a member that vanishes on a region, so an odd negative power of a product
   holding a slot stays whole where the pattern's members cannot license `pow.distribute`

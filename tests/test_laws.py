@@ -459,11 +459,33 @@ SIGN_ROWS = [
     ('fun.atan2_sign', 'atan2 neg x0 x1', 'neg atan2 x0 x1', 'atan2 neg x0 x1'),
 ]
 
+#: (law, input, f64 answer, permissive answer) over the scipy heads (`scipy_engine`). An odd
+#: order of besseli is odd but at a zero, where the kernel gives +0 for either sign, so in f64 it
+#: moves a sign only where its argument vanishes on no region.
+SCIPY_ROWS = [
+    ('fun.besseli_parity', 'besseli 2 neg x0', 'besseli 2 x0', 'besseli 2 x0'),
+    ('fun.besseli_parity', 'besseli 0 - x1 x0', 'besseli 0 - x0 x1', 'besseli 0 - x0 x1'),
+    ('fun.besseli_parity', 'besseli 1 * -2 x0', 'neg besseli 1 * 2 x0', 'neg besseli 1 * 2 x0'),
+    ('fun.besseli_parity', 'besseli 1 neg ceil x0', 'besseli 1 neg ceil x0',
+     'neg besseli 1 ceil x0'),
+]
+
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
     with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
+    return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
+
+
+@pytest.fixture(scope='module')
+def scipy_engine() -> SimpliPyEngine:
+    """acj2-4's operators and the scipy heads, with an empty rule set per mode."""
+    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+        ops = yaml.safe_load(f)['operators']
+    for name, arity in {'erfc': 1, 'bessely': 2, 'besseli': 2, 'besselk': 2}.items():
+        ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,
+                     'commutative': False}
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
@@ -528,14 +550,15 @@ def test_the_core_names_its_laws() -> None:
         ('class.like_terms_up_to_sign', 'u*f(S) + v*f(-S) = (u - v)*f(S)'),
         ('pow.even_orientation', '(-S)^(2*k) = S^(2*k)'), ('pow.negated_site', '(-F)^s = flip(F)^s'),
         ('fun.even', 'g(-t) = g(t)'), ('fun.odd_sign', 'f(-u) = -f(u)'),
-        ('fun.atan2_sign', 'atan2(-y, x) = -atan2(y, x)')]
+        ('fun.atan2_sign', 'atan2(-y, x) = -atan2(y, x)'),
+        ('fun.besseli_parity', 'I_n(-t) = (-1)^n I_n(t)')]
 
 
 ALL_ROWS = ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS + SIGN_ROWS
 
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ALL_ROWS} == {name for name, _ in _core.laws()}
+    assert {law for law, *_ in ALL_ROWS + SCIPY_ROWS} == {name for name, _ in _core.laws()}
 
 
 def rows_on(rows, fixture):
@@ -543,7 +566,7 @@ def rows_on(rows, fixture):
 
 
 @pytest.mark.parametrize('fixture, law, expr, f64, permissive',
-                         rows_on(ALL_ROWS, 'engine'))
+                         rows_on(ALL_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine'))
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
         request, fixture, law, expr, f64, permissive, effort) -> None:
@@ -554,7 +577,7 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
 
 
 @pytest.mark.parametrize('fixture, law, expr, f64, permissive',
-                         rows_on(ALL_ROWS, 'engine'))
+                         rows_on(ALL_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine'))
 def test_each_answer_reads_back_to_itself(request, fixture, law, expr, f64, permissive) -> None:
     engine = request.getfixturevalue(fixture)
     for mode, answer in (('f64', f64), ('permissive', permissive)):
@@ -602,7 +625,7 @@ def test_the_f64_answer_keeps_float64s_kinds(engine, law, expr, f64, permissive)
 
 
 @pytest.mark.parametrize('fixture, law, expr, f64, permissive',
-                         rows_on(SIGN_ROWS, 'engine'))
+                         rows_on(SIGN_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine'))
 def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
         request, fixture, law, expr, f64, permissive) -> None:
     """Float64's value of the f64 answer is the input's wherever the input has one, an infinity's

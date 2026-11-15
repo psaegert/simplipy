@@ -5164,7 +5164,7 @@ pub(crate) fn f64_zero_signs(cx: &Cx) -> bool {
 
 /// In `f64`, may `e` vanish on a region: its zero set not shown null by the region test? A ground
 /// expression and a pattern have no region (as in `keeps_zero_sign`).
-fn vanishes_on_a_region(e: &Ex, cx: &Cx) -> bool {
+pub(crate) fn vanishes_on_a_region(e: &Ex, cx: &Cx) -> bool {
     f64_zero_signs(cx)
         && e.has_measure_space(cx.view)
         && !e.contains_wildcard(cx.view)
@@ -11886,6 +11886,35 @@ fn besselj_integer_order(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     None
 }
 
+/// `besseli(n, t)` at an integer literal order `n >= 0`: the parity `I_n(-t) = (-1)^n I_n(t)`.
+/// An even order is an even function of `t`, bit for bit in float64 too, so it reads the argument
+/// an even function reads (`even_move`: `besseli(2, -x)` and `besseli(0, |x|)` are
+/// `besseli(2, x)` and `besseli(0, x)`, `besseli(0, y - x)` is `besseli(0, x - y)`). An odd order
+/// moves the sign of a negative literal multiple out (`besseli(1, -2 x)` is `-besseli(1, 2 x)`)
+/// where its premise holds: the kernel gives `+0` at a zero of either sign. A ground argument
+/// under an odd order keeps its sign, as an odd function's does (`besseli(1, -2)`).
+///
+/// The laws applied here (`ac::laws::Law`): `fun.besseli_parity`.
+fn besseli_parity(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
+    let Ex::Num(n) = &args[0] else { return None };
+    if !n.is_integer() || n.is_negative() {
+        return None;
+    }
+    if n.is_even_integer() {
+        let t = even_move(&args[1], cx)?;
+        return Some(fun(op, vec![args[0].clone(), t], cx));
+    }
+    if !args[1].has_measure_space(cx.view) && !args[1].contains_wildcard(cx.view) {
+        return None;
+    }
+    let u = cx.carried_negative(&args[1])?;
+    if !Law::FunBesseliParity.holds(&args[1], cx) {
+        return None;
+    }
+    let i = fun(op, vec![args[0].clone(), u], cx);
+    Some(mul(vec![Ex::Num(Rat::NEG_ONE), i], cx))
+}
+
 /// The laws applied here (`ac::laws::Law`): `fun.rootn_index`, `fun.abs_nonnegative`,
 /// `fun.half_period`, `num.abs_literal`, `num.exp_one`, `num.rootn_index`, and the inverse pairs'
 /// (`Cx::inverse_pair_collapse`).
@@ -12041,6 +12070,12 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         if let Some(e) =
             besselj_of_literals_at_zero(&args, cx).or_else(|| besselj_integer_order(op, &args, cx))
         {
+            return e;
+        }
+    }
+    // `besseli` OF AN INTEGER ORDER: its argument's parity.
+    if args.len() == 2 && cx.view.tok_is(op, "besseli") {
+        if let Some(e) = besseli_parity(op, &args, cx) {
             return e;
         }
     }
