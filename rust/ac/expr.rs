@@ -9114,9 +9114,10 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
             })
             .collect();
         // A site over a sum no other member meets is a class of its own, which no limit pins; at
-        // a pole float64 still gives it a value (reading B, `zero_check`).
+        // a pole float64 still gives it a value (reading B, `zero_check`). Only `f64` reads one
+        // (`class.pole_orientation`), so only `f64` looks.
         let mut read: Vec<Ex> = groups.iter().filter_map(|(k, _)| k.clone()).collect();
-        for (pos, _) in site_flips.iter() {
+        for (pos, _) in site_flips.iter().filter(|_| f64_zero_signs(cx)) {
             let Some((k, _)) = site_class(&out[*pos], cx) else {
                 continue;
             };
