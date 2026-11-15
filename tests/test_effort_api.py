@@ -11,7 +11,7 @@ import json
 import pytest
 import yaml
 
-from simplipy import Mode, SimpliPyEngine
+from simplipy import Mode, SimpliPyEngine, SimplifyStatus
 
 HILL = 'x2*(x2 + (x1+1)/x2)'
 BUDGET = 64
@@ -93,6 +93,45 @@ class TestEffortValidation:
     def test_a_cap_beyond_the_index_range_is_no_cap(self, engine) -> None:
         # pyo3 cannot carry it as a usize; any such cap is the uncapped search.
         assert engine.simplify(HILL, effort=2 ** 70) == engine.simplify(HILL, effort=None)
+
+
+class TestTheCallSaysWhenACapStoppedIt:
+    """A call that a resource cap stops returns the state it reached and says so
+    (``return_status=True``): the search's budget with candidates left, or ``max_passes`` before
+    a pass confirmed the fixpoint."""
+
+    TWO = 'x0*x1 + x0*x2 + x3*x4 + x3*x5'
+
+    def test_a_call_that_ends_where_its_walk_ends_is_not_interrupted(self, engine) -> None:
+        for effort in (0, None):
+            answer, status = engine.simplify(HILL, effort=effort, return_status=True)
+            assert answer == engine.simplify(HILL, effort=effort)
+            assert status == SimplifyStatus(interrupted=False, caps=())
+
+    def test_the_budget_stops_the_search_between_two_improvements(self, engine) -> None:
+        answer, status = engine.simplify(self.TWO, effort=1, return_status=True)
+        assert status == SimplifyStatus(interrupted=True, caps=('effort',))
+        # a second call continues, and the uncapped search ends where nothing is left
+        assert engine.simplify(answer, effort=1) != answer
+        assert engine.simplify(self.TWO, return_status=True)[1].interrupted is False
+
+    def test_the_status_comes_in_every_dialect(self, engine) -> None:
+        tokens = engine.to_prefix(self.TWO)
+        answer, status = engine.simplify(tokens, effort=1, return_status=True)
+        assert answer == engine.simplify(tokens, effort=1)
+        assert status.caps == ('effort',)
+
+    def test_the_passes_stop_the_chain_before_its_fixpoint_is_confirmed(self) -> None:
+        # One pass of a rule's step confirms nothing: the second pass would.
+        from conftest import acj_config_path
+        ops = yaml.safe_load(open(acj_config_path()))['operators']
+        rules = [[['+', 'pow', 'sin', '_0', '2', 'pow', 'cos', '_0', '2'], ['1']]]
+        e = SimpliPyEngine(operators=ops, rules=rules, rules_permissive=rules)
+        expr = '+ x1 + pow sin x0 2 pow cos x0 2'.split()
+        answer, status = e.simplify(expr, max_passes=1, effort=0, return_status=True)
+        assert answer == ['+', 'x1', '1']
+        assert status == SimplifyStatus(interrupted=True, caps=('max_passes',))
+        assert e.simplify(expr, effort=0, return_status=True)[1].interrupted is False
 
 
 # An srbf model prediction (f64): exact folds let the search multiply the 17-digit

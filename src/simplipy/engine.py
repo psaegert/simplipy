@@ -17,7 +17,7 @@ from itertools import product
 from types import CodeType, FunctionType
 from typing import Callable
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NamedTuple, cast
 from copy import deepcopy
 from enum import Enum
 
@@ -250,7 +250,7 @@ from .mining import (  # noqa: E402,F401
 
 # ARTIFACT_ENV_SWITCHES is the
 # documented machine-readable registry of artifact-affecting env switches.
-__all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
+__all__ = ['SimpliPyEngine', 'Mode', 'SimplifyStatus', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
 
 
 #: THE ARTIFACT THIS VERSION WAS BUILT AND TESTED AGAINST, resolved when `load()` is
@@ -279,6 +279,32 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
+
+
+class SimplifyStatus(NamedTuple):
+    """How a :meth:`SimpliPyEngine.simplify` call ended, returned with its answer when it is
+    called with ``return_status=True``.
+
+    ``interrupted`` is true where a resource cap stopped the call. Its answer is then the state
+    the walk reached by sound steps, never costlier than the input, but possibly not where the
+    walk ends: a second call may simplify it further. ``caps`` names the caps that bound:
+    ``'steps'`` (the step cap, 10^6 accepted rewrite steps per call), ``'max_passes'`` (the passes
+    ran out before one confirmed the fixpoint) and ``'effort'`` (the search budget ran out with
+    candidates left to try). Every call is finite (Theorem T6 in ``docs/formal.md``), but not
+    short: a chain of n rules can take 2^n - 1 steps, so a binding cap is a resource limit.
+    """
+
+    interrupted: bool
+    caps: tuple[str, ...]
+
+
+#: The caps the core reports (`ac_call_status`'s bits), in order.
+_CAPS = (('steps', 1), ('max_passes', 2), ('effort', 4))
+
+
+def _status(bits: int) -> SimplifyStatus:
+    caps = tuple(name for name, bit in _CAPS if bits & bit)
+    return SimplifyStatus(bool(caps), caps)
 
 
 #: Leaves that denote a VALUE rather than a free variable.
@@ -1991,7 +2017,8 @@ class SimpliPyEngine:
             *,
             max_passes: int | None = None,
             mode: Mode | str = Mode.f64,
-            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            effort: int | None = None,
+            return_status: bool = False) -> Any:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
@@ -2051,11 +2078,16 @@ class SimpliPyEngine:
             (strictly-below acceptance: never above the input, and never above the answer at a
             smaller ``effort``), termination (well-founded ordering,
             independent of the budget) and deterministic output.
+        return_status : bool, optional
+            Return ``(answer, status)``, where ``status`` is a :class:`SimplifyStatus` that says
+            whether a resource cap interrupted the call (the step cap, ``max_passes`` or the
+            ``effort`` budget). Default ``False``: the answer alone.
 
         Returns
         -------
         str | list[str] | tuple[str, ...] | np.ndarray
-            The simplified expression, in the same container and dialect as the input: a
+            The simplified expression (with ``return_status=True``, the pair ``(answer,
+            status)``), in the same container and dialect as the input: a
             ``str`` answers in infix, a token sequence carrying a bag delimiter in the tagged
             form, and any other token sequence in the explicit binary prefix.
 
@@ -2150,11 +2182,17 @@ class SimpliPyEngine:
         # default `modes='all'` that is one set-membership test.
         rule_mode = _RULE_MODE[mode]
         if form == 'infix':
-            return self._serve(mode, lambda core: core.ac_simplify_infix_in_mode(
-                tokens, max_passes, effort, rule_mode=rule_mode))
-        out = self._serve(mode, lambda core: core.ac_simplify_in_mode(
-            tokens, max_passes, form, effort, rule_mode=rule_mode))
-        return self._denormalize(out, expression)
+            answer, bits = self._serve(mode, lambda core: (core.ac_simplify_infix_in_mode(
+                tokens, max_passes, effort, rule_mode=rule_mode),
+                core.ac_call_status() if return_status else 0))
+        else:
+            out, bits = self._serve(mode, lambda core: (core.ac_simplify_in_mode(
+                tokens, max_passes, form, effort, rule_mode=rule_mode),
+                core.ac_call_status() if return_status else 0))
+            answer = self._denormalize(out, expression)
+        if return_status:
+            return answer, _status(bits)
+        return answer
 
     def prettify(
             self,

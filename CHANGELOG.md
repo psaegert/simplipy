@@ -70,6 +70,9 @@ organised by who you are, then the highlights, then every change in detail.
 - **The search runs until a round finds nothing.** `simplipy.DEFAULT_EFFORT` is `None` (it was
   4), so a second call has nothing left to continue. Code that compares `DEFAULT_EFFORT` with an
   int now sees `None`; pass `effort=4` for the old cap.
+- **A call can say whether a cap stopped it.** `simplify(..., return_status=True)` returns
+  `(answer, status)`, a `SimplifyStatus` naming the resource caps that bound (the step cap,
+  `max_passes`, the `effort` budget); a call without it returns the answer alone, as before.
 - **Loading does more up front.** Every rule set named at load is compiled before `load`
   returns, so the first call in each mode answers at once. With `acj-5-4-llm` the process peaks
   at about 0.7 GB with both sets and about 0.45 GB with `f64` alone; a set left out builds on
@@ -529,10 +532,8 @@ model predictions.
   zero's sign is no value, and takes its cheaper orientation; the inverse then reads that zero as
   its pole's sign, so `1/(-(x1 - 3))` is `1/(3 - x1)`, `+inf` at `x1 = 3` where its input is
   `-inf` (the guarantee is per step: keeping the sign there would need the step to read what is
-  around it). The search's factoring reads no pole's value, so at the default effort
-  `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` becomes `1/(x1 - 3)^2/((x1 - 3)^2 - 1)`, `-inf` at
-  `x1 = 3` where its input is `+inf`. A polynomial multiple of a class whose sum is linear in
-  none of its variables (`x1^2 - 2`) is not read.
+  around it). A polynomial multiple of a class whose sum is linear in none of its variables
+  (`x1^2 - 2`) is not read.
 - **Fewest signs, then outermost.** Where two spellings cost the same, the answer is the one with
   fewer signs, then the one whose signs stand further out, wherever such a tie is decided: the sign
   placement, the product table, a sum's orientation and the order the rules fire under (a mined
@@ -776,6 +777,55 @@ model predictions.
   fully numeric `t` is read for its value first in both modes. On srbf's ground truths, a tenth of
   the training-data inputs and a tenth of the predictions, the answers that change hold the collapse
   or what it lets the other steps do, and none changes on a second call.
+- **The search's laws are named, each with its premise.** `search.distribute`,
+  `search.pow_expand`, `search.factor` and `search.reciprocal_join` join the catalogue, each asked
+  by its name. The distributive law's two sides differ only where a piece it multiplies into two or
+  more terms, or collects out of them, is infinite, so in `f64` that piece is infinite only at
+  points and may have no value on a region (it had to be finite almost everywhere): a content with
+  no value on a region factors, `x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)` and
+  `log(x0)*x1 + log(x0)` is `log(x0)*(x1 + 1)`, as in `permissive`. A pole is read by the value
+  float64 gives it, as the laws of signs read it: `(x1 + x2)/x0` stays, `-inf` at x0 = 0, x1 = 1,
+  x2 = -2, where `x1/x0 + x2/x0` is NaN (the search could split a pole that is no limit), and
+  `(1/x0 + x1)^2 - x1^2` stays (it was `1/x0^2 + 2*x1/x0`, NaN at x0 = 0 where the input is
+  `+inf`); where an odd negative power reads the zero of the sum or the product, a content or
+  co-factor that is positive and never zero keeps its sign, so `1/(x1 + x1*x2)` stays (`+inf` at
+  x1 = 0, x2 = -2, where `1/(x1*(x2 + 1))` is `-inf`), and so does `x1/(x1*x2 - x1^2)`, whose
+  inverse reads the zero at x2 = x1. A move is checked as one rewrite, its constructors
+  included: `(1/x0)*(1 + x0)` is `1/x0 + 1` and `(x1 + x2)/x0 - x2/x0` is `x1/x0`, by one
+  factoring. `permissive` reads no value at a pole and keeps its premises. On srbf's ground
+  truths, a tenth of the training-data inputs and a tenth of the predictions, 4,100 `f64` answers
+  change, by -29,327 bits in all: 2,751 cheaper (-37,454 bits), mostly a content with no value on
+  a region factored, 1,326 dearer (+8,128 bits), mostly a pole whose value a factoring or a
+  distribution would have turned, 23 at an equal price.
+- **The settling accepts a step by the whole expression's price.** The price is not monotone in a
+  part's: a cheaper part can make the expression around it dearer, and the reverse. Every
+  ancestor of a rewritten node had to descend at its own level; a fire or a rebuild that rises at
+  its node is now taken where the whole expression falls, and a rebuild that rises in the whole
+  too is proposed to the search as the state it builds (`search.composite_step`), kept where its
+  descent ends cheaper; `effort=0` no longer takes it. A mined rule's step (`settle.rule`), the
+  negation twin the load mints from a rule (`settle.negation_twin`) and `permissive`'s joined
+  reciprocals in its answer (`perm.reciprocal_projection`) join the catalogue. A node tries the
+  first refused fire in the rules' order by the whole expression's price, and a node above a
+  refusal stays memo-marked while nothing changes. On the three sets, 268 `f64` calls and 442
+  `permissive` calls take a step by the whole expression's price, and 13 and 27 answers change
+  (`f64` 173 bits cheaper in all, `permissive` 44 bits); no answer there needs the search's
+  composite step.
+- **A long sum factors by its whole content.** The search read every two terms of a sum, so 64 terms
+  meant 2,016 pairs and a second per call, and a longer sum was not factored at all. A round now
+  tries a sum's pairs only after every other move found nothing, the content every term shares
+  among those first: `x0*x1 + ... + x0*x64` factors `x0` out in 13 ms in `f64`, a 200-term sum in
+  0.16 s, and past 64 terms a sum still factors its whole content and its shared bases. On the three
+  sets 61 `f64` and 71 `permissive` answers end at another of the search's valleys, 186 and 201 bits
+  dearer in all.
+- **A call says when a resource cap stopped it.** `simplify(..., return_status=True)` returns the
+  answer with a `SimplifyStatus` (`simplipy.SimplifyStatus`), whose `interrupted` is true where a
+  cap bound and whose `caps` names it: `'steps'` (the step cap, 10^6 accepted steps per call),
+  `'max_passes'` (the passes ran out before one confirmed the fixpoint) and `'effort'` (the search
+  budget ran out with candidates left). Every call is finite, but not short (a chain of n rules can
+  take 2^n - 1 steps), so a binding cap is a resource limit, which the docs now say throughout.
+- **Faster sign placement in `permissive`.** A product's sign placement looked for the value
+  float64 gives a pole beside every site, which only `f64` reads; `permissive` no longer looks.
+  On the three sets `permissive` takes about 4% less time. Answers are byte-identical.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and

@@ -84,7 +84,7 @@ ROWS = [
     # t - t = 0. f64: t finite almost everywhere; `log(x0) - log(x0)` is NaN for every x0 < 0.
     ('add.cancel', '- x0 x0', '0', '0'),
     ('add.cancel', '- * 2 sin x0 sin x0', 'sin x0', 'sin x0'),
-    ('add.cancel', '- log x0 log x0', '- log x0 log x0', '0'),
+    ('add.cancel', '- inv floor x0 inv floor x0', '- inv floor x0 inv floor x0', '0'),
     ('add.cancel', '- exp tan asin 1 exp tan asin 1', NAN, NAN),
     # t/t = 1. f64: t finite and nonzero almost everywhere, and the exponents' branch cut.
     ('mul.cancel', '/ x0 x0', '1', '1'),
@@ -497,6 +497,16 @@ def engine() -> SimpliPyEngine:
 
 
 @pytest.fixture(scope='module')
+def rule_engine() -> SimpliPyEngine:
+    """acj2-4's operators and two rules, the same in each mode."""
+    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+        ops = yaml.safe_load(f)['operators']
+    rules = [[['+', 'pow', 'sin', '_0', '2', 'pow', 'cos', '_0', '2'], ['1']],
+             [['-', '1', '*', '2', 'pow', 'sin', '_0', '2'], ['cos', '*', '2', '_0']]]
+    return SimpliPyEngine(operators=ops, rules=rules, rules_permissive=rules)
+
+
+@pytest.fixture(scope='module')
 def scipy_engine() -> SimpliPyEngine:
     """acj2-4's operators and the scipy heads, with an empty rule set per mode."""
     with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
@@ -570,14 +580,76 @@ def test_the_core_names_its_laws() -> None:
         ('pow.even_orientation', '(-S)^(2*k) = S^(2*k)'), ('pow.negated_site', '(-F)^s = flip(F)^s'),
         ('fun.even', 'g(-t) = g(t)'), ('fun.odd_sign', 'f(-u) = -f(u)'),
         ('fun.atan2_sign', 'atan2(-y, x) = -atan2(y, x)'),
-        ('fun.besseli_parity', 'I_n(-t) = (-1)^n I_n(t)')]
+        ('fun.besseli_parity', 'I_n(-t) = (-1)^n I_n(t)'),
+        ('search.distribute', 'A*(B + C) = A*B + A*C'),
+        ('search.pow_expand', '(a + b)^n = its expansion, 2 <= n <= 6'),
+        ('search.factor', 'c*q1 + c*q2 = c*(q1 + q2)'),
+        ('search.reciprocal_join', 'A^-1*B^-1 = (A*B)^-1, f*A^-1 = (A/f)^-1'),
+        ('search.composite_step', 'a refused rebuild is kept where the whole descends'),
+        ('settle.rule', 'a mined rule L -> T fires where L binds'),
+        ('settle.negation_twin', 'L -> T entails -L -> -T'),
+        ('perm.reciprocal_projection', 'a^-1*b^-1 = (a*b)^-1, as written')]
 
 
 ALL_ROWS = ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS + SIGN_ROWS
 
+#: (law, input, f64 answer, permissive answer) of the search's laws, at the default effort (`effort=0`
+#: does not search). The distributive law's two sides differ only where a piece it multiplies into
+#: two or more addends, or collects out of them, is infinite: in f64 such a piece is infinite only
+#: on a null set and may have no value on a region, at each pole one addend keeps the pole, and
+#: where an odd negative power reads the zero of the sum, a content positive and never zero keeps
+#: its sign; permissive reads no value at a pole.
+SEARCH_ROWS = [
+    ('search.distribute', '* x2 + x2 / + x1 1 x2', '+ x1 + pow x2 2 1', '+ x1 + pow x2 2 1'),
+    # one move whose constructors cancel x0/x0: 1/x0 keeps its pole in one addend
+    ('search.distribute', '* inv x0 + 1 x0', '+ inv x0 1', '+ inv x0 1'),
+    # -inf at x0 = 0, x1 = 1, x2 = -2, where x1/x0 + x2/x0 is NaN
+    ('search.distribute', '/ + x1 x2 x0', '/ + x1 x2 x0', '/ + x1 x2 x0'),
+    ('search.pow_expand', '- pow + x0 1 2 pow x0 2', '+ * 2 x0 1', '+ * 2 x0 1'),
+    # +inf at x0 = 0, where the expansion is NaN
+    ('search.pow_expand', '- pow + inv x0 x1 2 pow x1 2', '- pow + x1 inv x0 2 pow x1 2',
+     '+ inv pow x0 2 / * 2 x1 x0'),
+    ('search.factor', '+ * x0 x1 * x0 x2', '* x0 + x1 x2', '* x0 + x1 x2'),
+    # a content with no value on a region
+    ('search.factor', '+ * x1 rootn x0 2 rootn x0 2', '* rootn x0 2 + x1 1', '* rootn x0 2 + x1 1'),
+    ('search.factor', '- log x0 log x0', '* 0 log x0', '0'),
+    # composite results through one move: the content's pole is no addend's
+    ('search.factor', '- / + x1 x2 x0 / x2 x0', '/ x1 x0', '/ x1 x0'),
+    # f64: +inf at x1 = 0, x2 = -2, where 1/(x1*(x2 + 1)) is -inf
+    ('search.factor', 'inv + x1 * x1 x2', 'inv + x1 * x1 x2', '/ inv + x2 1 x1'),
+    # f64: the classes' orientations at the pole x2 = x3 (class.pole_orientation)
+    ('search.factor', '+ / x1 - x2 x3 / x4 - x3 x2', '+ / x1 - x2 x3 / x4 - x3 x2',
+     '/ - x1 x4 - x2 x3'),
+    ('search.reciprocal_join', 'inv * + x0 1 - x0 1', '* inv - x0 1 inv + x0 1', 'inv - pow x0 2 1'),
+    # tan(x0) has a zero, where the left side is 0 and 2/(1/tan(x0) - tan(x0)) has no value
+    ('search.reciprocal_join', '/ * 2 tan x0 - 1 pow tan x0 2', '/ * 2 tan x0 - 1 pow tan x0 2',
+     '/ * 2 tan x0 - 1 pow tan x0 2'),
+    # f64 distributes the inverse over the product (pow.distribute); permissive's answer writes it
+    # joined
+    ('perm.reciprocal_projection', 'inv * x0 floor x1', '/ inv floor x1 x0', 'inv * x0 floor x1'),
+]
+
+#: (law, input, f64 answer, permissive answer) of the settling's laws, on an engine with two rules
+#: (`rule_engine`): sin^2 + cos^2 = 1, and 1 - 2*sin^2 = cos(2*t), whose twin -(1 - 2*sin^2) =
+#: -cos(2*t) the load mints.
+RULE_ROWS = [
+    ('settle.rule', '+ pow sin x0 2 pow cos x0 2', '1', '1'),
+    ('settle.rule', '* 3 + pow sin x1 2 pow cos x1 2', '3', '3'),
+    ('settle.negation_twin', '- * 2 pow sin x0 2 1', 'neg cos * 2 x0', 'neg cos * 2 x0'),
+    ('settle.negation_twin', '+ x1 - * 2 pow sin x0 2 1', '- x1 cos * 2 x0', '- x1 cos * 2 x0'),
+]
+
+
+#: The search's composite step is an acceptance with no identity of its own; a rebuild the settling
+#: refuses and the search then keeps is met nowhere in srbf's ground truths, a tenth of the
+#: training-data inputs or a tenth of the predictions, so its proposal is pinned in the core's own
+#: tests (`ac::search`, `the_composite_step_proposes_a_refused_rebuild_where_its_node_stands`).
+ACCEPTANCES = {'search.composite_step'}
+
 
 def test_every_law_has_its_rows() -> None:
-    assert {law for law, *_ in ALL_ROWS + SCIPY_ROWS} == {name for name, _ in _core.laws()}
+    rows = ALL_ROWS + SCIPY_ROWS + SEARCH_ROWS + RULE_ROWS
+    assert {law for law, *_ in rows} | ACCEPTANCES == {name for name, _ in _core.laws()}
 
 
 def rows_on(rows, fixture):
@@ -585,7 +657,8 @@ def rows_on(rows, fixture):
 
 
 @pytest.mark.parametrize('fixture, law, expr, f64, permissive',
-                         rows_on(ALL_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine'))
+                         rows_on(ALL_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine')
+                         + rows_on(RULE_ROWS, 'rule_engine'))
 @pytest.mark.parametrize('effort', [0, None], ids=['effort 0', 'default effort'])
 def test_each_mode_applies_the_law_where_its_premise_holds(
         request, fixture, law, expr, f64, permissive, effort) -> None:
@@ -596,11 +669,47 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
 
 
 @pytest.mark.parametrize('fixture, law, expr, f64, permissive',
-                         rows_on(ALL_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine'))
+                         rows_on(ALL_ROWS, 'engine') + rows_on(SCIPY_ROWS, 'scipy_engine')
+                         + rows_on(RULE_ROWS, 'rule_engine'))
 def test_each_answer_reads_back_to_itself(request, fixture, law, expr, f64, permissive) -> None:
     engine = request.getfixturevalue(fixture)
     for mode, answer in (('f64', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)
+
+
+@pytest.mark.parametrize('law, expr, f64, permissive', [
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in SEARCH_ROWS])
+def test_the_search_applies_its_laws_where_their_premises_hold(engine, law, expr, f64, permissive) -> None:
+    for mode, want in (('f64', f64), ('permissive', permissive)):
+        got = ' '.join(engine.simplify(expr.split(), mode=mode))
+        assert got == want, (law, mode, expr)
+        # the answer is its own simplification
+        assert ' '.join(engine.simplify(want.split(), mode=mode)) == want, (law, mode)
+
+
+@pytest.mark.parametrize('law, expr, f64, permissive', [
+    pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in SEARCH_ROWS])
+def test_the_searchs_f64_answer_keeps_float64s_values(engine, law, expr, f64, permissive) -> None:
+    """Float64's value of the search's f64 answer is the input's wherever the input has one, an
+    infinity's sign included, at the poles of its pieces too (x0, x1 and x2 - x3 at 0)."""
+    names = ['x0', 'x1', 'x2', 'x3', 'x4']
+    rng = np.random.default_rng(0)
+    points = rng.uniform(-3, 3, size=(2000, 5))
+    for col in range(4):
+        points[col * 100:(col + 1) * 100, col] = 0.0
+    points[400:500, 2] = points[400:500, 3]
+    points[500:600, 1:3] = [1.0, -2.0]
+
+    def values(tokens):
+        f = engine.as_callable(tokens.split(), variables=names)
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            v = np.asarray(f(*points.T), dtype=np.float64)
+        return np.broadcast_to(v, (len(points),))
+
+    a, b = values(expr), values(f64)
+    same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
+    assert same.all(), (law, expr, f64, points[~same][0])
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
@@ -671,8 +780,10 @@ def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
 
 @pytest.mark.parametrize('expr, f64', [
     # srbf's ground truths #164 and #584: log(1/x1) collapses where nothing reads its zero's sign
-    ('* * -3.47355 x1 + * * x1 - x1 3.47355 log / 1 x1 * 3.47355 x1', '* -3.47355 * x1 + * 3.47355 x1 * x1 * log x1 - 3.47355 x1'),
-    ('* + neg x1 / x1 x2 + + - * x1 x2 x1 log / 1 x1 / 1 * x1 x2', '* x1 * - inv x2 1 - + * x1 - x2 1 inv * x1 x2 log x1'),
+    ('* * -3.47355 x1 + * * x1 - x1 3.47355 log / 1 x1 * 3.47355 x1',
+     '* -3.47355 * pow x1 2 + * log x1 - 3.47355 x1 3.47355'),
+    ('* + neg x1 / x1 x2 + + - * x1 x2 x1 log / 1 x1 / 1 * x1 x2',
+     '* - inv x2 1 - inv x2 * x1 + log x1 * x1 - 1 x2'),
 ])
 def test_the_log_of_an_inverse_collapses_in_srbfs_ground_truths(engine, expr, f64) -> None:
     assert ' '.join(engine.simplify(expr.split(), mode='f64')) == f64

@@ -388,10 +388,13 @@ class TestContracts:
         # ...while log(x) - log(x) is REFUSED: log is undefined on x < 0, a
         # positive-measure set, so cancelling would fill undefined values with 0 -- exactly
         # what the certificate exists to forbid. The refusal keeps both terms.
-        assert engine.simplify(engine.to_tagged(["-", "log", "x0", "log", "x0"])) \
+        assert engine.simplify(engine.to_tagged(["-", "log", "x0", "log", "x0"]), effort=0) \
             == ["<add>", "log", "x0", "<sub>", "log", "x0", "</add>"]
-        assert engine.simplify(["-", "log", "x0", "log", "x0"]) \
+        assert engine.simplify(["-", "log", "x0", "log", "x0"], effort=0) \
             == ["-", "log", "x0", "log", "x0"]
+        # The search factors log(x) out, a content infinite at a point only, whose region
+        # without a value is the product's too: 0*log(x) fills nothing.
+        assert engine.simplify(["-", "log", "x0", "log", "x0"]) == ["*", "0", "log", "x0"]
 
     def test_ground_pole_arithmetic_is_exact(self, engine: SimpliPyEngine) -> None:
         # Under the supported (sort-promoted) pairing every pole spelling resolves exactly:
@@ -1139,14 +1142,20 @@ class TestF68ConstructionRouteConfluence:
         # acos x4 > 1/2 and 0 * (acos x4 - 1/2) is +0 there, two values an inverse tells
         # apart. Each value files one state whatever mirror spells it (its sign on the zero,
         # on a negation or on the sum), and each state is its own fixpoint.
-        a = engine.simplify('* 0 - / 1 2 acos x4'.split())
+        a = engine.simplify('* 0 - / 1 2 acos x4'.split(), effort=0)
         for spelling in ('* -1 * 0 - acos x4 / 1 2', 'neg * 0 - acos x4 / 1 2',
                          '* 0 neg - acos x4 / 1 2', '* -0.0 - acos x4 / 1 2'):
-            assert engine.simplify(spelling.split()) == a, spelling
-        b = engine.simplify('* 0 - acos x4 / 1 2'.split())
+            assert engine.simplify(spelling.split(), effort=0) == a, spelling
+        b = engine.simplify('* 0 - acos x4 / 1 2'.split(), effort=0)
         assert a != b
         for state in (a, b):
-            assert engine.simplify(list(state)) == state, state
+            assert engine.simplify(list(state), effort=0) == state, state
+        # At the root nothing reads the zero's sign, so the search distributes the zero over the
+        # sum and both are one answer; under an inverse, which reads it, they stay apart.
+        assert engine.simplify('* 0 - / 1 2 acos x4'.split()) \
+            == engine.simplify('* 0 - acos x4 / 1 2'.split())
+        assert engine.simplify('inv * 0 - / 1 2 acos x4'.split()) \
+            != engine.simplify('inv * 0 - acos x4 / 1 2'.split())
         nested_a = engine.simplify('* 0 * pow x1 x0 - / 1 2 acos x4'.split())
         nested_b = engine.simplify('* -1 * 0 * pow x1 x0 - acos x4 / 1 2'.split())
         assert nested_a == nested_b, (nested_a, nested_b)

@@ -880,8 +880,11 @@ class TestBangSort:
         engine = self._engine(tmp_path)
         # log: nan on half the line -- rewriting to 0 would invent a function. The refusal
         # keeps both terms (native tagged spelling of the same refusal).
-        assert list(engine.simplify(engine.to_tagged(["-", "log", "x0", "log", "x0"]))) \
+        assert list(engine.simplify(engine.to_tagged(["-", "log", "x0", "log", "x0"]), effort=0)) \
             == ["<add>", "log", "x0", "<sub>", "log", "x0", "</add>"]
+        # The search factors log out (search.factor: a content infinite at a point only, with no
+        # value where the product has none): 0*log(x0) invents nothing either.
+        assert list(engine.simplify(["-", "log", "x0", "log", "x0"])) == ["*", "0", "log", "x0"]
         # pow(x, inf): a.e. in {0, inf} -- inf - inf = nan on positive measure
         out = list(engine.simplify(engine.to_tagged(
             ["-", "pow", "x0", 'float("inf")', "pow", "x0", 'float("inf")'])))
@@ -913,7 +916,9 @@ class TestB2TailArm:
     def test_in_box_control_and_flagship_unchanged(self, eng) -> None:
         # onset 1/0.0157 = 63.69 sits INSIDE the box: was refused before, stays refused
         ctl = 'log(1 - 0.0157*x1) - log(1 - 0.0157*x1)'
-        assert eng.simplify(ctl) == ctl
+        assert eng.simplify(ctl, effort=0) == ctl
+        # the search factors the log out, its region without a value the product's too
+        assert eng.simplify(ctl) == '0*log(1 - 0.0157*x1)'
         # pole-free unbounded growth is the slab predicate's whole point: the flagship binder still fires
         assert eng.simplify('exp(x0) - exp(x0)') == '0'
 

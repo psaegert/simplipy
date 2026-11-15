@@ -108,6 +108,19 @@ strictly below it in the engine's one reduction ordering. Acceptance is that ord
 and nothing else; no new measure or tolerance enters. No rule states the law: factoring has
 several answers (`x1*x2 + x1*x3 + x2*x4` factors two ways) and which one pays depends on the
 whole expression, so the search owns it, in every mode alike, and `effort=0` does not factor.
+Each move is a law of the catalogue with its own premise (`search.distribute`,
+`search.pow_expand`, `search.factor`, `search.reciprocal_join`): the two sides of the law differ
+only where a piece it multiplies into two or more terms, or collects out of them, is infinite, so
+in `f64` such a piece is infinite only at points and may have no value on a region
+(`x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)`), and the value float64 gives a pole is kept:
+`(x1 + x2)/x0` stays (`-inf` at `x0 = 0`, `x1 = 1`, `x2 = -2`, where `x1/x0 + x2/x0` is NaN), and
+so does `1/(x1 + x1*x2)` (`+inf` at `x1 = 0`, `x2 = -2`, where `1/(x1*(x2 + 1))` is `-inf`), while
+`(x1 + x2)/x0 - x2/x0` is `x1/x0` in one factoring. `permissive` reads no value at a pole.
+
+The chain takes a step that rises at its node where the whole expression's price falls, the
+price not being monotone in a part's (a cheaper part can make the expression around it dearer,
+and the reverse); a rebuild that rises in the whole too is proposed to the search as the state it
+builds (the composite step), and kept where that state's descent ends cheaper.
 
 The budget is the `effort` parameter. The default, `effort=None`
 (`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
@@ -125,7 +138,10 @@ the predictions no answer is costlier than at cap 4 and 1,633 are cheaper. The s
 walk: it rebuilds each candidate of the current answer into the whole expression it makes,
 tries them cheapest first, steps to the first whose descent ends cheaper than the current
 answer, and stops when a whole round finds nothing; `effort=k` is the first `k` descents of that
-walk. On srbf's predictions it spends 15% more matcher steps and constructor calls than
+walk. A round tries a sum's pairs of terms only once every other move found nothing: their count
+grows with the square of the terms, and a factor every term shares goes first
+(`x0*x1 + ... + x0*x64` factors `x0` out in 13 ms, where reading its 2,016 pairs took a second;
+past 64 terms the pairs are not read, and a longer sum still factors what all its terms share). On srbf's predictions it spends 15% more matcher steps and constructor calls than
 `effort=4` in `f64`. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
@@ -334,7 +350,11 @@ with them.
 A step cap bounds each call (10^6 accepted rewrite steps). It is a resource limit, not
 proof of a bug: a valid terminating descent can take more steps (a chain of n rules can take
 2^n - 1 of them). When it binds, rewriting stops at a state reached by sound steps, which may
-not be minimal, and the binding is counted (`engine._core.step_cap_binds()`).
+not be minimal, and the call says so: `simplify(x, return_status=True)` returns the answer with
+a `SimplifyStatus` whose `interrupted` is true and whose `caps` names the cap that bound
+(`'steps'`; `'max_passes'` where the passes ran out before one confirmed the fixpoint, and
+`'effort'` where the search budget ran out with candidates left). The process-wide count of
+step-cap bindings stays readable (`engine._core.step_cap_binds()`).
 
 **The f64 realizations.** `f64` means the shipped realizations, `simplipy.operators`, each the
 core's float64 kernel, so the deployed value, the constant fold, the miner and the rule judge

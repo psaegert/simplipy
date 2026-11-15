@@ -1715,6 +1715,64 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Is `e` INFINITE ONLY ON A NULL SET of the variables' space? It may have no value on a
+    /// region (`sqrt(x0)` for x0 < 0, `log(x0)` there too), but an infinity it takes is a pole,
+    /// never a region (`1/x0` at x0 = 0, `log(x0)` at 0). The premise the distributive law asks
+    /// of a piece in `f64` (`search.distribute`, `search.factor`), weaker than finite almost
+    /// everywhere ([`Cx::fin_certified`], which implies it). Read by the form: a variable, a
+    /// constant and a finite literal; sums and products of such pieces (each infinite only where
+    /// a member is); a function bounded on the reals (`sin`, `tanh`, `asin`, `erf`, ...) of
+    /// anything; a function that maps finite to finite or to no value (`exp`, `abs`, `acosh`,
+    /// `floor`, ...) of such a piece; a power of one with a non-negative literal exponent, or with
+    /// another exponent and a base whose zero set is null (`Cx::nz_ae_certified`), and a
+    /// logarithm or a root of either sign of index likewise. A float64 overflow is a range event,
+    /// not an infinity (as for `certainly_finite`). Anything else asks the finite a.e.
+    /// certificate. Fail closed.
+    pub(crate) fn inf_null(&self, e: &Ex) -> bool {
+        match e {
+            Ex::PosInf | Ex::NegInf => false,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const | Ex::NaN => true,
+            Ex::Leaf(_) => self.certainly_finite(e),
+            Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| self.inf_null(x)),
+            Ex::Pow(b, x) => {
+                self.inf_null(b)
+                    && match &**x {
+                        Ex::Num(r) => !r.is_negative() || self.nz_ae_certified(b),
+                        y => self.inf_null(y) && self.nz_ae_certified(b),
+                    }
+            }
+            Ex::Fun(f, v) => {
+                let is = |s: &str| self.view.tok_is(*f, s);
+                let bounded = v.len() == 1
+                    && ["sin", "cos", "tanh", "atan", "asin", "acos", "erf", "erfc"]
+                        .iter()
+                        .any(|s| is(s));
+                let finite_to_finite = [
+                    "exp", "sinh", "cosh", "asinh", "acosh", "abs", "floor", "ceil", "max", "min",
+                ]
+                .iter()
+                .any(|s| is(s));
+                if bounded {
+                    true
+                } else if finite_to_finite {
+                    v.iter().all(|x| self.inf_null(x))
+                } else if v.len() == 1 && is("log") {
+                    self.inf_null(&v[0]) && self.nz_ae_certified(&v[0])
+                } else if v.len() == 2 && is("rootn") {
+                    match &v[1] {
+                        Ex::Num(k) if k.is_integer() && !k.is_zero() => {
+                            self.inf_null(&v[0])
+                                && (!k.is_negative() || self.nz_ae_certified(&v[0]))
+                        }
+                        _ => self.fin_certified(e),
+                    }
+                } else {
+                    self.fin_certified(e)
+                }
+            }
+        }
+    }
+
     /// Is `e` CERTAINLY finite and nonzero almost everywhere (the `$`-certificate), the `f64`
     /// premise of `mul.cancel` ([`Law::MulCancel`])? Variables qualify (a variable is zero only
     /// on a null set); `Pi`/`E` are nonzero literals; nonzero `Num` likewise; `Const` does NOT
@@ -10001,7 +10059,8 @@ fn literal_multiple_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
 /// form `(a*b)^-1` (registered row 1414: mu 80 vs 72). Neither mode consulted `mu` when
 /// choosing the spelling; sound's smaller form was a fail-closed accident.
 ///
-/// This is an OUTPUT-BOUNDARY projection, deliberately NOT a constructor arm. The first
+/// This is an OUTPUT-BOUNDARY projection (`perm.reciprocal_projection`), deliberately NOT a
+/// constructor arm. The first
 /// build of this fix put the join into `mul`'s final assembly, making the joined form
 /// the WORKING representation -- disqualified by the debug stability assert: `pow`'s
 /// distribution arm settles its two parts in a nested vacuum `mul` that joined them

@@ -400,7 +400,16 @@ class TestCorpusGate:
         # around such a pole), 12 dearer by one or two bits (22, 68, 83, 152, 270, 282, 288, 290,
         # 309, 314, 329, 399 +1,000 or +2,000: the sign stays beside the pole), and row 243
         # +415, whose search now runs again from its landed endpoint until it offers no move.
-        assert walk['complexity_out'] == 54716628, walk['complexity_out']
+        # THE SEARCH'S PREMISES AND THE WHOLE EXPRESSION'S PRICE: 54,716,628 -> 54,513,176
+        # (-203,452). In f64 a piece the distributive law multiplies into two or more terms, or
+        # collects out of them, is infinite only at points and may have no value on a region, and
+        # a pole is read by float64's value; the settling takes a step where the whole expression
+        # falls, and a round of the search reads a sum's pairs of terms last. 51 walk rows move:
+        # 37 rest cheaper (-267,452 in all; a content with no value on a region now factors:
+        # 243 -29,000, 231 -22,000, 236 -18,000, 103 and 225 -14,000 each), 14 dearer (+64,000:
+        # 5, 83, 95, 98, 125, 149, 156, 159, 161, 211, 219, 227, 249, 396), the search ending at
+        # another valley or keeping a pole's value (125 +19,000).
+        assert walk['complexity_out'] == 54513176, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

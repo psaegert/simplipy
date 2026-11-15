@@ -564,7 +564,8 @@ impl AcRules {
                 out.n_distributed += 1;
             }
         }
-        // ORIENTATION CLOSURE (rules fire modulo the sign orientation class): an admitted
+        // ORIENTATION CLOSURE (rules fire modulo the sign orientation class,
+        // `settle.negation_twin`): an admitted
         // rule `L -> T` entails `-L -> -T` -- negation is total, so the twin inherits the
         // rule's soundness outright, and sub-multiset semantics carry over term-by-term
         // with the remainder untouched. A sum and its negation are DIFFERENT canonical
@@ -754,21 +755,30 @@ pub struct PassCtx<'a> {
     pub fold: &'a dyn Fn(&Ex) -> Option<Ex>,
     /// Count of accepted DESCENT STEPS (rule fires and oriented rebuilds) across the whole
     /// call, and the operand of the release-mode step cap (`STEP_CAP`). The well-founded
-    /// reduction ordering makes every run finite as a theorem (T6, docs/formal.md); the
-    /// cap is defense-in-depth: `rewrite_pass` stops accepting steps -- soundly -- if the
-    /// counter ever reaches it. Never observed to bind; a binding cap indicates a bug in
-    /// the ordering invariant, not a large input.
+    /// reduction ordering makes every run finite as a theorem (T6, docs/formal.md), not short:
+    /// the cap is a resource limit, and `rewrite_pass` stops accepting steps -- soundly -- if
+    /// the counter reaches it, and the call says it was interrupted ([`take_caps`]).
     pub fires: Cell<u64>,
     /// Normal-form memo: subtrees this pass already walked to a fixpoint cannot fire and are
     /// returned untouched.
     pub normal: RefCell<FxHashSet<Ex>>,
-    /// Composite-step exploration switch (docs/formal.md, the rebuild case of the step
-    /// relation). `true` for the engine's pass: a rebuild that fails the immediate
-    /// ordering test gets ONE tentative walk from the rebuilt candidate, and commits iff
-    /// the settled endpoint is strictly below. `false` inside that tentative walk itself:
-    /// one level of exploration is what keeps oscillating reassemblies refused (their
-    /// endpoint is the starting node, never strictly below) instead of regressing forever.
-    pub explore: bool,
+    /// How many refusals the walk met so far (`visit`): a fire or a rebuild that does not descend
+    /// at its node is taken where the whole expression's price falls, which reads the ancestors,
+    /// so a node above a refusal is normal only in its place as it stands (`normal_at`).
+    pub contextual: Cell<u64>,
+    /// The memo of nodes normal in their place: a node above a refusal, with the walk's `epoch`
+    /// when it was marked. It is normal while nothing changed since; after a change it is walked
+    /// again, its refusals reading the ancestors as they then stand.
+    pub normal_at: RefCell<FxHashMap<Ex, u64>>,
+    /// How many changes the walk made so far (steps, folds and carried steps), in the whole call.
+    pub epoch: Cell<u64>,
+    /// THE COMPOSITE STEP, for the search: rebuilds the settling refused, as `(node, rebuilt)`,
+    /// the first `REFUSED_KEPT` of the call. A rebuild that rises at its node and in the whole
+    /// can still pay once the rebuilt node settles (an integer power distributing over a freshly
+    /// minted product whose literal factor then folds); the search proposes the rebuilt node at
+    /// every place of its state that holds the node, and keeps it where the whole state's
+    /// descent lands below (`ac::search`).
+    pub refused: RefCell<Vec<(Ex, Ex)>>,
     /// SUPPRESSED ARTIFACT ROWS (`AcRules::src` values), checked at the single fire site
     /// (`try_rules_at`): a suppressed rule and every orientation twin minted from it (the
     /// twin reports its source's row) never fires, so the walk is BEHAVIORALLY the walk
@@ -790,8 +800,9 @@ pub struct PassCtx<'a> {
 
 /// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic order
 /// (mu, the sign key, canonical total order -- `tie_cmp`)? This one predicate orients the
-/// whole system: `rewrite_pass` refuses any FIRE or REBUILD whose result does not descend it
-/// at the rewritten node (Lemma L2), and the search accepts only states below its best;
+/// whole system: `rewrite_pass` takes a FIRE or a REBUILD where its result descends it at the
+/// rewritten node (Lemma L2), or where the whole expression's does (`whole_falls`), and the
+/// search accepts only states below its best;
 /// `translate` drops only rules whose canonical pattern sides climb in mu (gate G7,
 /// docs/formal.md).
 ///
@@ -834,6 +845,15 @@ fn oriented_mu(next: &Ex, node_mu: u64, node: &Ex, p: &PassCtx) -> bool {
         std::cmp::Ordering::Greater => false,
         std::cmp::Ordering::Equal => tie_cmp(next, node, p.cx.view) == std::cmp::Ordering::Less,
     };
+    if !below {
+        // A candidate of the whole expression's test (`visit`).
+        REFUSED_FIRES.with(|r| {
+            let mut r = r.borrow_mut();
+            if r.len() < REFUSED_FIRES_KEPT {
+                r.push(next.clone());
+            }
+        });
+    }
     below && ground_step_admitted(node, next, p)
 }
 
@@ -914,8 +934,9 @@ fn memo_log(what: &str, e: &Ex) {
     eprintln!("AC memo {what}: {t}");
 }
 
-/// Try every applicable rule at this node (bucket fire order, sig-prefiltered). On a bag fire the
-/// remainder joins the substituted RHS in a fresh canonical bag.
+/// Try every applicable rule at this node (bucket fire order, sig-prefiltered): a mined rule's
+/// step, `settle.rule` (`ac::laws::Law::SettleRule`). On a bag fire the remainder joins the
+/// substituted RHS in a fresh canonical bag.
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     let node_sig = atom_sig(e, p.cx.view);
     // Lazy per-visit complexity of the subject (first candidate that needs it pays it).
@@ -1167,55 +1188,81 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
 /// the answer may then be a non-fixpoint, so every binding is counted ([`step_cap_binds`]).
 const STEP_CAP: u64 = 1_000_000;
 
-/// Descent steps refused because `STEP_CAP` had bound, process-wide. Expected 0 on every
-/// input: a nonzero count means the ordering invariant has a bug (see `STEP_CAP`).
+/// Descent steps refused because `STEP_CAP` had bound, process-wide. 0 on every corpus the
+/// gates measure; a binding is a resource limit (see `STEP_CAP`), which the call reports.
 static STEP_CAP_BINDS: AtomicU64 = AtomicU64::new(0);
 
-/// How many descent steps `STEP_CAP` has refused in this process (expected 0).
+/// How many descent steps `STEP_CAP` has refused in this process.
 pub fn step_cap_binds() -> u64 {
     STEP_CAP_BINDS.load(Relaxed)
 }
 
-/// May the walk take one more descent step? A refusal is a binding of the cap, counted.
+/// May the walk take one more descent step? A refusal is a binding of the cap, counted and
+/// reported for the call ([`CAP_STEPS`]).
 #[inline]
 fn step_allowed(p: &PassCtx) -> bool {
     let allowed = p.fires.get() < STEP_CAP;
     if !allowed {
         STEP_CAP_BINDS.fetch_add(1, Relaxed);
+        note_cap(CAP_STEPS);
     }
     allowed
 }
 
+/// THE CALL'S STATUS: the resource caps that bound during the simplify call on this thread,
+/// as bits. A call that hits one returns the state it reached -- by sound steps, possibly not a
+/// fixpoint, possibly not the search's endpoint -- and says it was interrupted: the caller reads
+/// the bits once the call returns ([`take_caps`], `simplify(..., return_status=True)`).
+/// `STEP_CAP` bound.
+pub const CAP_STEPS: u8 = 1;
+/// `max_passes` bound: the chain's passes, a candidate's descent or the search's rounds ended
+/// before a pass confirmed the fixpoint.
+pub const CAP_PASSES: u8 = 2;
+/// The search's budget (`effort`) bound with candidates left to descend.
+pub const CAP_EFFORT: u8 = 4;
+
+thread_local! {
+    /// The caps that bound in the current call on this thread ([`CAP_STEPS`], ...).
+    static CAPS_BOUND: Cell<u8> = const { Cell::new(0) };
+}
+
+/// Record that the cap `cap` bound in the current call.
+pub fn note_cap(cap: u8) {
+    CAPS_BOUND.with(|c| c.set(c.get() | cap));
+}
+
+/// The caps that bound since the last read on this thread, and reset them: read once before a
+/// call (to start clean) and once after it.
+pub fn take_caps() -> u8 {
+    CAPS_BOUND.with(|c| c.replace(0))
+}
+
 /// One top-down rewrite pass. The protocol at each node ([`visit`]): fire site on the node
 /// as-is -> fold fallback -> recurse into children + canonical rebuild -> re-enter on an
-/// ORIENTED rebuild (else give the rebuild its one COMPOSITE chance, else refuse it) ->
-/// normal form.
+/// ORIENTED rebuild -> normal form; a fire or a rebuild that does not descend at its node is
+/// taken where the WHOLE expression's price falls ([`whole_falls`]), carried to the
+/// ancestor where it descends.
 ///
-/// Every state change strictly descends the reduction ordering (`ordered_below`) at this
-/// node: fires and rebuilds are gated explicitly (a composite step is gated on its
-/// ENDPOINT), and a fold replaces a composite node (complexity >= 2) by a single leaf or
-/// `Const` (complexity 1). Consequently the pass returns a result <= its input in the
-/// ordering, equal exactly when nothing changed (Lemma L3, docs/formal.md) -- which is
-/// what makes the outer loop's fixpoint detection and its no-cycle argument (L4) sound.
+/// Every state change strictly descends the reduction ordering (`ordered_below`): a fire or a
+/// rebuild at the node it rewrites, a fold by replacing a composite node (complexity >= 2) by a
+/// single leaf or `Const` (complexity 1), and a carried step at the ancestor it is carried to,
+/// whose rebuild is gated there. The root is its own ancestor, so the pass returns a result <=
+/// its input in the ordering, equal exactly when nothing changed (Lemma L3, docs/formal.md) --
+/// which is what makes the outer loop's fixpoint detection and its no-cycle argument (L4) sound.
 ///
 /// The NORMAL-FORM memo (per simplify call, shared across the outer iterations) marks
 /// subtrees walked to a true fixpoint, plus refused-rebuild nodes, which are fixpoints of
-/// this pass by decision; marked subtrees return untouched. Marks are NOT placed once the
-/// step cap has bound: a capped walk skipped fire sites, so its results are not certified
-/// normal forms (the cap is permanent for the call, so this is hygiene of the memo's
-/// meaning, not a behavioral necessity).
+/// this pass by decision; marked subtrees return untouched. A node is not marked where a step
+/// below it was refused by the whole expression's price ([`PassCtx::contextual`]): that refusal
+/// reads the ancestors, which a later step can change, so the node is walked again there. Marks
+/// are NOT placed once the step cap has bound: a capped walk skipped fire sites, so its results
+/// are not certified normal forms (the cap is permanent for the call, so this is hygiene of the
+/// memo's meaning, not a behavioral necessity).
 ///
 /// The owned loop re-enters on every accepted step, so fire chains iterate instead of
 /// recursing; [`rewrite_pass_opt`] is the borrow-side entry the child walk uses.
 pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
-    let mut node = e;
-    loop {
-        match visit(&node, p) {
-            Visit::Normal => return node,
-            Visit::Folded(x) => return x,
-            Visit::Step(next) => node = next,
-        }
-    }
+    walk(e, p, None).0
 }
 
 /// Borrow-side single visit: `None` = this subtree is unchanged by the pass (no clone was
@@ -1223,10 +1270,114 @@ pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
 /// reduction ordering, by the same gates as [`rewrite_pass`]). The owned loop handles
 /// everything past the first change, so fire chains never recurse.
 pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
-    match visit(node0, p) {
+    walk_opt(node0, p, None).map(|(x, _)| x)
+}
+
+/// A PLACE OF THE WALK: the ancestor `node` (as the walk visits it), the index of the child the
+/// walk is in, the ancestor's depth (the root's is 0) and its own place. The whole expression's
+/// test ([`whole_falls`]) rebuilds the ancestors from it. An `atan2` is rebuilt from its
+/// arguments' members (`expr::atan2_of`), not by a constructor of its children: below it the
+/// place is a BARRIER (`idx == usize::MAX`), where the test stops.
+pub(crate) struct Up<'a> {
+    node: &'a Ex,
+    idx: usize,
+    depth: usize,
+    up: Option<&'a Up<'a>>,
+}
+
+impl Up<'_> {
+    /// The ancestor with its child at this place replaced by `child`, rebuilt as the walk
+    /// rebuilds it. `None` at a barrier.
+    fn rebuild(&self, child: Ex, p: &PassCtx) -> Option<Ex> {
+        let swap = |v: &[Ex]| {
+            let mut w = v.to_vec();
+            w[self.idx] = child.clone();
+            w
+        };
+        match self.node {
+            _ if self.idx == usize::MAX => None,
+            Ex::Add(v) => Some(add(swap(v), p.cx)),
+            Ex::Mul(v) => Some(mul(swap(v), p.cx)),
+            Ex::Pow(b, x) => Some(if self.idx == 0 {
+                super::expr::pow(child, (**x).clone(), p.cx)
+            } else {
+                super::expr::pow((**b).clone(), child, p.cx)
+            }),
+            Ex::Fun(f, v) => Some(super::expr::fun(*f, swap(v), p.cx)),
+            _ => None,
+        }
+    }
+}
+
+/// THE WHOLE EXPRESSION'S PRICE: replacing the node at `up` by `next` -- a step its own node
+/// refuses, because it does not descend there -- does the whole expression fall? Each ancestor is
+/// rebuilt with the new child through its constructor and compared with itself as visited, up
+/// to the root, whose comparison is the whole's. `Some(depth)` of the lowest ancestor where the
+/// step descends, where the whole falls: the step is carried there ([`Visit::Carry`]), whose
+/// rebuild then descends at its own level. `None` where the whole does not fall, at the root
+/// (nothing above it), or at a barrier.
+///
+/// The ancestors are read as the walk visited them; a sibling rewritten since is read at its
+/// visit too. The rebuild at the ancestor the step is carried to is gated on the real state, so
+/// the reading decides only where to carry, never what is accepted.
+fn whole_falls(next: Ex, up: Option<&Up>, p: &PassCtx) -> Option<usize> {
+    let view = p.cx.view;
+    let mut frame = up?;
+    let mut cur = next;
+    let mut target = None;
+    loop {
+        let rebuilt = frame.rebuild(cur, p)?;
+        let below = ordered_below(&rebuilt, frame.node, view);
+        if below && target.is_none() {
+            target = Some(frame.depth);
+        }
+        match frame.up {
+            Some(f) => {
+                cur = rebuilt;
+                frame = f;
+            }
+            None => return target.filter(|_| below),
+        }
+    }
+}
+
+/// The owned loop at one place of the walk (`up`: its ancestors). Returns the state reached and,
+/// where its last step was carried to an ancestor, that ancestor's depth.
+fn walk(e: Ex, p: &PassCtx, up: Option<&Up>) -> (Ex, Option<usize>) {
+    let mut node = e;
+    loop {
+        let v = visit(&node, p, up);
+        if !matches!(v, Visit::Normal) {
+            p.epoch.set(p.epoch.get() + 1);
+        }
+        match v {
+            Visit::Normal => return (node, None),
+            Visit::Folded(x) => return (x, None),
+            Visit::Step(next) => node = next,
+            Visit::Carry(x, t) => return (x, Some(t)),
+        }
+    }
+}
+
+/// [`walk`] from a borrowed node: `None` where nothing changed.
+fn walk_opt(node0: &Ex, p: &PassCtx, up: Option<&Up>) -> Option<(Ex, Option<usize>)> {
+    let v = visit(node0, p, up);
+    if !matches!(v, Visit::Normal) {
+        p.epoch.set(p.epoch.get() + 1);
+    }
+    match v {
         Visit::Normal => None,
-        Visit::Folded(x) => Some(x),
-        Visit::Step(next) => Some(rewrite_pass(next, p)),
+        Visit::Folded(x) => Some((x, None)),
+        Visit::Step(next) => Some(walk(next, p, up)),
+        Visit::Carry(x, t) => Some((x, Some(t))),
+    }
+}
+
+/// The higher of two carries (the lower depth): the ancestor both steps reach.
+fn carry_to(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, y) => x.or(y),
     }
 }
 
@@ -1243,7 +1394,10 @@ pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
         fold: p.fold,
         fires: Cell::new(0),
         normal: RefCell::new(FxHashSet::default()),
-        explore: p.explore,
+        contextual: Cell::new(0),
+        normal_at: RefCell::new(FxHashMap::default()),
+        epoch: Cell::new(0),
+        refused: RefCell::new(Vec::new()),
         suppressed: p.suppressed,
         ground_step: p.ground_step,
     };
@@ -1252,22 +1406,27 @@ pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
 
 /// What one visit of a node decided.
 enum Visit {
-    /// The node is a normal form of this pass (memo-marked unless the cap has bound).
+    /// The node is a normal form of this pass (memo-marked unless the cap has bound or a refusal
+    /// below read the ancestors).
     Normal,
     /// The numeric fold replaced the node by a leaf: final, no re-entry. (A fold whose result
     /// is no leaf -- an absorbed bag, `mod(a, b) = a - k b` -- is a [`Visit::Step`]: its
     /// members have not been visited yet.)
     Folded(Ex),
-    /// An accepted descent step (a fire, an oriented rebuild, or a committed composite
-    /// step): the walk re-enters on the new node.
+    /// An accepted descent step (a fire or an oriented rebuild): the walk re-enters on the new
+    /// node.
     Step(Ex),
+    /// A step accepted by the whole expression's price, carried to the ancestor at the
+    /// depth given, where it descends: final at this place, which every ancestor below that one
+    /// takes as it is; the ancestor's rebuild is gated as any.
+    Carry(Ex, usize),
 }
 
-/// THE PER-NODE PROTOCOL, written once for both entries ([`rewrite_pass`],
-/// [`rewrite_pass_opt`]); see [`rewrite_pass`] for the ordering argument. Inlined into
-/// both, so the walk's recursion keeps the frame layout of the former two copies.
+/// THE PER-NODE PROTOCOL, written once for both entries ([`walk`], [`walk_opt`]); see
+/// [`rewrite_pass`] for the ordering argument. `up` is the node's place. Inlined into both, so
+/// the walk's recursion keeps the frame layout of the former two copies.
 #[inline(always)]
-fn visit(node: &Ex, p: &PassCtx) -> Visit {
+fn visit(node: &Ex, p: &PassCtx, up: Option<&Up>) -> Visit {
     if matches!(
         node,
         Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
@@ -1287,20 +1446,46 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
             _ => Visit::Normal,
         };
     }
-    if p.normal.borrow().contains(node) {
+    if p.normal.borrow().contains(node) || p.normal_at.borrow().get(node) == Some(&p.epoch.get()) {
         if trace_memo() {
             memo_log("HIT", node);
         }
         return Visit::Normal;
     }
+    let depth = up.map_or(0, |u| u.depth + 1);
+    // The refusals by the whole expression's price so far: one below this node keeps it unmarked.
+    let contextual = p.contextual.get();
 
     // First fire site. Every accepted fire strictly descends the reduction ordering at this
     // node (gated inside `try_rules_at`); the step cap bounds the tier the descent argument
-    // leaves open (see STEP_CAP).
+    // leaves open (see STEP_CAP). A fire refused there is taken where the whole expression's
+    // price falls.
     if step_allowed(p) {
+        REFUSED_FIRES.with(|r| r.borrow_mut().clear());
         if let Some(next) = try_rules_at(node, p) {
             p.fires.set(p.fires.get() + 1);
             return Visit::Step(next);
+        }
+        // A refusal reads the node's place: a node above it is normal there only as it stands
+        // (`PassCtx::normal_at`), at the root too, since the node can stand below another later
+        // (a search's candidate).
+        let refused = REFUSED_FIRES.with(|r| std::mem::take(&mut *r.borrow_mut()));
+        if !refused.is_empty() {
+            p.contextual.set(p.contextual.get() + 1);
+        }
+        for next in refused {
+            if up.is_none() || !ground_step_admitted(node, &next, p) {
+                continue;
+            }
+            if let Some(t) = whole_falls(next.clone(), up, p) {
+                if step_allowed(p) {
+                    p.fires.set(p.fires.get() + 1);
+                    if trace_fires() {
+                        eprintln!("AC fire carried to depth {t}:\n  node={node:?}\n  ->={next:?}");
+                    }
+                    return Visit::Carry(next, t);
+                }
+            }
         }
     }
     // Fold fallback, GOVERNED BY THE MEASURE: the
@@ -1322,142 +1507,193 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
     // every node in this walk IS constructor output under this same `cx` (from_prefix+canon
     // at entry, constructors everywhere after), so re-running them reproduces the node. The
     // normal-form memo relies on the same fact when it returns marked subtrees untouched.
-    let rebuilt: Option<Ex> = match node {
-        Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
-        Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
+    // A child's step carried above this node comes back with the depth it is carried to.
+    let (rebuilt, carry): (Option<Ex>, Option<usize>) = match node {
+        Ex::Add(v) => match rewrite_children(v, p, node, depth, up) {
+            Some((k, c)) => (Some(add(k, p.cx)), c),
+            None => (None, None),
+        },
+        Ex::Mul(v) => match rewrite_children(v, p, node, depth, up) {
+            Some((k, c)) => (Some(mul(k, p.cx)), c),
+            None => (None, None),
+        },
         Ex::Pow(b, ex) => {
-            let nb = rewrite_pass_opt(b, p);
-            let nx = in_exact(|| rewrite_pass_opt(ex, p));
+            let (fb, fx) = (
+                Up {
+                    node,
+                    idx: 0,
+                    depth,
+                    up,
+                },
+                Up {
+                    node,
+                    idx: 1,
+                    depth,
+                    up,
+                },
+            );
+            let nb = walk_opt(b, p, Some(&fb));
+            let nx = in_exact(|| walk_opt(ex, p, Some(&fx)));
             if nb.is_none() && nx.is_none() {
-                None
+                (None, None)
             } else {
-                Some(super::expr::pow(
-                    nb.unwrap_or_else(|| (**b).clone()),
-                    nx.unwrap_or_else(|| (**ex).clone()),
-                    p.cx,
-                ))
+                let c = carry_to(nb.as_ref().and_then(|x| x.1), nx.as_ref().and_then(|x| x.1));
+                (
+                    Some(super::expr::pow(
+                        nb.map_or_else(|| (**b).clone(), |x| x.0),
+                        nx.map_or_else(|| (**ex).clone(), |x| x.0),
+                        p.cx,
+                    )),
+                    c,
+                )
             }
         }
         // `atan2` is rebuilt from its arguments' members (`expr::atan2_of`): a negated argument
         // keeps its members apart, so its rewritten members are not re-decided as a product.
+        // Below it the whole expression's test stops (a barrier, [`Up`]).
         Ex::Fun(f, v) if v.len() == 2 && p.cx.ieee_zeros() && p.cx.view.tok_is(*f, "atan2") => {
             let f = *f;
+            let barrier = Up {
+                node,
+                idx: usize::MAX,
+                depth,
+                up,
+            };
             let members = |a: &Ex| -> (Vec<Ex>, bool) {
                 match a {
-                    Ex::Mul(w) => match rewrite_children(w, p) {
-                        Some(k) => (k, true),
+                    Ex::Mul(w) => match rewrite_children(w, p, a, depth + 1, Some(&barrier)) {
+                        Some((k, _)) => (k, true),
                         None => (w.clone(), false),
                     },
-                    other => match rewrite_pass_opt(other, p) {
-                        Some(n) => (vec![n], true),
+                    other => match walk_opt(other, p, Some(&barrier)) {
+                        Some((n, _)) => (vec![n], true),
                         None => (vec![other.clone()], false),
                     },
                 }
             };
             let ((ym, cy), (xm, cxm)) = (members(&v[0]), members(&v[1]));
-            (cy || cxm).then(|| super::expr::atan2_of(f, ym, xm, p.cx))
+            (
+                (cy || cxm).then(|| super::expr::atan2_of(f, ym, xm, p.cx)),
+                None,
+            )
         }
         Ex::Fun(f, v) => {
             let f = *f;
             match exact_argument(f, v.len(), p.cx.view) {
                 Some(k) => {
                     let mut out: Option<Vec<Ex>> = None;
+                    let mut c = None;
                     for (i, x) in v.iter().enumerate() {
-                        let r = if i == k {
-                            in_exact(|| rewrite_pass_opt(x, p))
-                        } else {
-                            rewrite_pass_opt(x, p)
+                        let here = Up {
+                            node,
+                            idx: i,
+                            depth,
+                            up,
                         };
-                        if let Some(r) = r {
+                        let r = if i == k {
+                            in_exact(|| walk_opt(x, p, Some(&here)))
+                        } else {
+                            walk_opt(x, p, Some(&here))
+                        };
+                        if let Some((r, rc)) = r {
                             out.get_or_insert_with(|| v.to_vec())[i] = r;
+                            c = carry_to(c, rc);
                         }
                     }
-                    out
+                    out.map(|k| (k, c))
                 }
-                None => rewrite_children(v, p),
+                None => rewrite_children(v, p, node, depth, up),
             }
-            .map(|k| super::expr::fun(f, k, p.cx))
+            .map_or((None, None), |(k, c)| {
+                (Some(super::expr::fun(f, k, p.cx)), c)
+            })
         }
-        _ => None, // Leaf: no children
+        _ => (None, None), // Leaf: no children
     };
 
     match rebuilt {
         // A true fixpoint of one full walk: children unchanged, no fire, no fold.
-        None => mark_normal(node, p, "INSERT(fixpoint)"),
+        None => mark_normal(node, p, contextual, "INSERT(fixpoint)"),
         // A rebuild that changed anything must re-enter the full walk: the canonical
         // constructors can MINT new subterms during the rebuild (an integer power
         // distributing over a product, collection merging terms), and only a fresh top-down
         // walk visits them. The re-entry must satisfy the SAME reduction ordering as a rule
-        // fire (a disoriented rebuild is REFUSED), with the composite step as its one
-        // second chance.
+        // fire; a rebuild that does not descend here is taken where a step below was carried
+        // above this node, or where the whole expression's price falls, else REFUSED and
+        // proposed to the search as the state it builds (`PassCtx::refused`).
         Some(rebuilt) if rebuilt != *node => {
-            if oriented(&rebuilt, node, p)
-                && ground_step_admitted(node, &rebuilt, p)
-                && step_allowed(p)
-            {
+            let admitted = ground_step_admitted(node, &rebuilt, p);
+            if oriented(&rebuilt, node, p) && admitted && step_allowed(p) {
                 p.fires.set(p.fires.get() + 1);
                 return Visit::Step(rebuilt);
             }
-            if let Some(endpoint) = composite_step(rebuilt, node, p) {
-                return Visit::Step(endpoint);
+            if admitted {
+                if let Some(t) = carry.filter(|&t| t < depth) {
+                    return Visit::Carry(rebuilt, t);
+                }
+                if let Some(t) = whole_falls(rebuilt.clone(), up, p) {
+                    if step_allowed(p) {
+                        p.fires.set(p.fires.get() + 1);
+                        if trace_fires() {
+                            eprintln!(
+                                "AC rebuild carried to depth {t}:\n  node={node:?}\n  rebuilt={rebuilt:?}"
+                            );
+                        }
+                        return Visit::Carry(rebuilt, t);
+                    }
+                }
             }
-            mark_normal(node, p, "INSERT(refused-rebuild)")
+            if trace_fires() {
+                eprintln!("AC rebuild refused:\n  node={node:?}\n  rebuilt={rebuilt:?}");
+            }
+            p.contextual.set(p.contextual.get() + 1);
+            // Proposed to the search where the ground evaluator admits it (a fully numeric node
+            // rebuilt is judged whole: `1/sin(np.pi)` is no `1/0`).
+            let mut refused = p.refused.borrow_mut();
+            if admitted && refused.len() < REFUSED_KEPT && !refused.iter().any(|(n, _)| n == node) {
+                refused.push((node.clone(), rebuilt));
+            }
+            drop(refused);
+            mark_normal(node, p, contextual, "INSERT(refused-rebuild)")
         }
         // rebuilt == node with changed children: the constructor undid the child moves
         // (equality decided on the representation). A fixpoint by decision.
-        Some(_) => mark_normal(node, p, "INSERT(fixpoint)"),
+        Some(_) => mark_normal(node, p, contextual, "INSERT(fixpoint)"),
     }
 }
 
-/// COMPOSITE-STEP acceptance (docs/formal.md, step relation) for a rebuild that failed the
-/// immediate ordering test: judge the SETTLED ENDPOINT of the rebuilt candidate under a
-/// one-level, private-memo walk, and commit iff the endpoint strictly descends below
-/// `node`. `None` = refused (or exploration is off at this level, or the cap has bound).
-#[inline(always)]
-fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
-    if !(p.explore && step_allowed(p)) {
-        if trace_fires() {
-            eprintln!("AC rebuild refused (disoriented):\n  node={node:?}\n  rebuilt={rebuilt:?}");
-        }
-        return None;
-    }
-    let sub = PassCtx {
-        rules: p.rules,
-        cx: p.cx,
-        mcx: p.mcx,
-        fold: p.fold,
-        fires: Cell::new(p.fires.get()),
-        normal: RefCell::new(FxHashSet::default()),
-        explore: false,
-        suppressed: p.suppressed,
-        ground_step: p.ground_step,
-    };
-    let endpoint = rewrite_pass(rebuilt, &sub);
-    p.fires.set(sub.fires.get());
-    if oriented(&endpoint, node, p) && ground_step_admitted(node, &endpoint, p) && step_allowed(p) {
-        p.fires.set(p.fires.get() + 1);
-        if trace_fires() {
-            eprintln!("AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}");
-        }
-        return Some(endpoint);
-    }
-    if trace_fires() {
-        eprintln!(
-            "AC rebuild refused (endpoint not below):\n  node={node:?}\n  endpoint={endpoint:?}"
-        );
-    }
-    None
+/// How many refused rebuilds a call keeps for the search (`PassCtx::refused`): a size guard,
+/// not a measure.
+const REFUSED_KEPT: usize = 64;
+
+thread_local! {
+    /// The fires `try_rules_at` refused at the node it last tried because they do not descend
+    /// there (`oriented_mu`), the first [`REFUSED_FIRES_KEPT`]: the candidates of the whole
+    /// expression's test ([`visit`]).
+    static REFUSED_FIRES: RefCell<Vec<Ex>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Mark `node` a normal form of this pass (unless the step cap has bound) and report it so.
-fn mark_normal(node: &Ex, p: &PassCtx, why: &str) -> Visit {
+/// How many refused fires a visit tries by the whole expression's price: the first in the rules'
+/// fire order. A cost bound, not a measure: each try rebuilds every ancestor, and trying four
+/// took a sixth more time on the training-data inputs in `permissive`, with no answer of srbf's
+/// ground truths, a tenth of those inputs or a tenth of its predictions changed.
+const REFUSED_FIRES_KEPT: usize = 1;
+
+/// Mark `node` a normal form of this pass, unless the step cap has bound, and report it so: in
+/// its place as it stands where a refusal happened below it since `contextual` was read
+/// ([`PassCtx::normal_at`]), else wherever it stands.
+fn mark_normal(node: &Ex, p: &PassCtx, contextual: u64, why: &str) -> Visit {
     // a node normal inside an exponent, a root index or a Bessel order may not be outside it
     // (`in_exact_position`)
     if p.fires.get() < STEP_CAP && !in_exact_position() {
         if trace_memo() {
             memo_log(why, node);
         }
-        p.normal.borrow_mut().insert(node.clone());
+        if p.contextual.get() == contextual {
+            p.normal.borrow_mut().insert(node.clone());
+        } else {
+            p.normal_at.borrow_mut().insert(node.clone(), p.epoch.get());
+        }
     }
     Visit::Normal
 }
@@ -1503,12 +1739,30 @@ fn exact_argument(f: Tok, n: usize, view: &TokenView) -> Option<usize> {
     }
 }
 
-/// Rewrite a bag's members clone-on-change: `None` = no member moved (nothing allocated).
-fn rewrite_children(v: &[Ex], p: &PassCtx) -> Option<Vec<Ex>> {
+/// Rewrite the members of `parent` (at `depth`, its place `up`) clone-on-change: `None` = no
+/// member moved (nothing allocated); else the members, with the carry of a member's step above
+/// `parent` ([`carry_to`]).
+fn rewrite_children(
+    v: &[Ex],
+    p: &PassCtx,
+    parent: &Ex,
+    depth: usize,
+    up: Option<&Up>,
+) -> Option<(Vec<Ex>, Option<usize>)> {
     let mut out: Option<Vec<Ex>> = None;
+    let mut carry = None;
     for (i, x) in v.iter().enumerate() {
-        match rewrite_pass_opt(x, p) {
-            Some(nx) => out.get_or_insert_with(|| v[..i].to_vec()).push(nx),
+        let here = Up {
+            node: parent,
+            idx: i,
+            depth,
+            up,
+        };
+        match walk_opt(x, p, Some(&here)) {
+            Some((nx, c)) => {
+                out.get_or_insert_with(|| v[..i].to_vec()).push(nx);
+                carry = carry_to(carry, c);
+            }
             None => {
                 if let Some(o) = out.as_mut() {
                     o.push(x.clone());
@@ -1516,7 +1770,7 @@ fn rewrite_children(v: &[Ex], p: &PassCtx) -> Option<Vec<Ex>> {
             }
         }
     }
-    out
+    out.map(|o| (o, carry))
 }
 
 /// Diagnostic: no Add directly inside an Add, no Mul directly inside a Mul.

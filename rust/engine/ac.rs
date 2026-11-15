@@ -1923,7 +1923,10 @@ impl Engine {
             fold: &fold,
             fires: Cell::new(0),
             normal: RefCell::new(FxHashSet::default()),
-            explore: true,
+            contextual: Cell::new(0),
+            normal_at: RefCell::new(FxHashMap::default()),
+            epoch: Cell::new(0),
+            refused: RefCell::new(Vec::new()),
             suppressed,
             ground_step: Some(&ground_step),
         };
@@ -2009,9 +2012,13 @@ impl Engine {
         // earlier state of equal complexity but higher literal-size/canonical rank -- a
         // non-fixpoint, so idempotence would break). A budget-truncated run returns the
         // last state reached, which is sound.
+        // A run whose passes end before one confirms the fixpoint is interrupted: its answer
+        // is the state reached, and the call says so (`ac::rules::take_caps`).
+        let mut confirmed = max_passes == 0;
         for _ in 0..max_passes {
             // Clone-free fixpoint detection: `None` = the pass moved nothing.
             let Some(next) = rewrite_pass_opt(&current, &pass) else {
+                confirmed = true;
                 break; // fixpoint, decided on the representation itself
             };
             debug_assert!(
@@ -2028,6 +2035,9 @@ impl Engine {
                 "pass output is not serialization-stable: {current:?}"
             );
         }
+        if !confirmed {
+            crate::ac::rules::note_cap(crate::ac::rules::CAP_PASSES);
+        }
         // EXPLORATION (`ac::search`): the chain above ran UNCHANGED to its fixpoint -- the
         // theorems (T6, L3/L4) are already banked -- and only an explicit budget enters the
         // phase at all, in every mode, under the mode's own pass.
@@ -2039,21 +2049,31 @@ impl Engine {
             // released state can offer a move the held one did not, which a second call would
             // take: so the search runs again from it. Each round descends the reduction ordering
             // or stops; `max_passes` bounds the rounds as it bounds the chain's passes.
+            let mut ended = false;
             for _ in 0..max_passes.max(1) {
                 let explored =
                     crate::ac::search::explore(current, &pass, max_passes, explore_budget);
                 current = land_root(explored.clone(), &cx);
                 // The explored endpoint, landed, descends to the pass fixpoint as the chain's
                 // does.
+                let mut settled = max_passes == 0;
                 for _ in 0..max_passes {
                     let Some(next) = rewrite_pass_opt(&current, &pass) else {
+                        settled = true;
                         break;
                     };
                     current = land_root(next, &cx);
                 }
+                if !settled {
+                    crate::ac::rules::note_cap(crate::ac::rules::CAP_PASSES);
+                }
                 if current == explored || explore_budget != usize::MAX {
+                    ended = true;
                     break;
                 }
+            }
+            if !ended {
+                crate::ac::rules::note_cap(crate::ac::rules::CAP_PASSES);
             }
             debug_assert!(
                 stable(&current),

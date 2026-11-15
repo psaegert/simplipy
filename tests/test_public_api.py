@@ -13,7 +13,7 @@ import pytest
 # The root column + __version__, verbatim.
 ROOT_ALL = {
     'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
-    'Mode', 'SimpliPyEngine', '__version__',
+    'Mode', 'SimpliPyEngine', 'SimplifyStatus', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
     'normalize_variable_token', 'to_expression', 'to_skeleton',
@@ -39,7 +39,8 @@ MODULE_ALLS = {
         'get_path', 'install_asset', 'uninstall_asset', 'list_assets',
         'AssetType',
     },
-    'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT'},
+    'simplipy.engine': {'SimpliPyEngine', 'Mode', 'SimplifyStatus', 'ARTIFACT_ENV_SWITCHES',
+                        'DEFAULT_EFFORT'},
     'simplipy.mining': {'CertifiedRule', 'RuleMiner', 'verify_mine', 'cross_mode_complexity'},
     # The two public modules below were missed at first. The
     # compatibility policy says every public module declares its column; these

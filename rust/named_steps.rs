@@ -91,12 +91,12 @@ mod tests {
     /// which `permissive`, reading one zero, does not ask; no step of permissive's own.
     const SUM_SIGN_LAWS: [Law; 3] = [Law::AddUnfactor, Law::AddContent, Law::ClassSignTrade];
 
-    /// The functions' partial laws and the lattice's absorption: identities of the reals wherever
-    /// their left side has a value, whose premise in `f64` is a float64 kind (`tanh`'s
-    /// saturation, a flat point, a zero's sign, a pole's sign, a NaN on a region), which
-    /// `permissive` does not ask (`abs(t) = t` keeps the reals' own `t >= 0`); no step of
-    /// permissive's own.
-    const KIND_LAWS: [Law; 16] = [
+    /// The functions' partial laws, the lattice's absorption and the distributive law the search
+    /// applies: identities of the reals wherever their left side has a value, whose premise in
+    /// `f64` is a float64 kind (`tanh`'s saturation, a flat point, a zero's sign, a pole's sign, a
+    /// NaN on a region, an infinity on a region), which `permissive` does not ask (`abs(t) = t`
+    /// keeps the reals' own `t >= 0`); no step of permissive's own.
+    const KIND_LAWS: [Law; 19] = [
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAcoshCosh,
@@ -113,7 +113,15 @@ mod tests {
         Law::ClassLikeTermsUpToSign,
         Law::PowNegatedSite,
         Law::FunBesseliParity,
+        Law::SearchDistribute,
+        Law::SearchPowExpand,
+        Law::SearchFactor,
     ];
+
+    /// A step of `permissive`'s search alone, with a premise of its own there (a factor of one
+    /// strict sign): an identity of the reals where its premise holds, which `f64` does not take,
+    /// read on a rule's instances by permissive's own criterion; no schema.
+    const SEARCH_LAWS: [Law; 1] = [Law::SearchReciprocalJoin];
 
     /// The compositions of powers: identities of the reals on t >= 0 whose premise is the
     /// reals' own branch cut, which `permissive` takes by the step `powers compose` (its
@@ -127,7 +135,7 @@ mod tests {
 
     /// The step entries are the three the constructors take on a rule's structure, each schema
     /// one expression a side; the partial laws are the like-term laws, each with its schema, the
-    /// sum-sign, kind, composition and agreement laws, and the inverse pairs' law, which is the
+    /// sum-sign, kind, composition, agreement and search laws, and the inverse pairs' law, which is the
     /// step `inverse pairs cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue
     /// gains must be placed before it is read.
     #[test]
@@ -157,6 +165,7 @@ mod tests {
                     || KIND_LAWS.contains(&law)
                     || COMPOSE_LAWS.contains(&law)
                     || AGREEMENT_LAWS.contains(&law)
+                    || SEARCH_LAWS.contains(&law)
                     || law == Law::PermInversePairs,
                 "{}",
                 law.name()

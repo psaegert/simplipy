@@ -193,10 +193,7 @@ def test_the_up_to_sign_retry_keeps_a_class_whole(eng, src):
 #: orientation (`-2 (x1 - 3)` is `2 (3 - x1)`, -0 against +0 at x1 = 3); the inverse above then reads that zero as
 #: the pole's sign. The guarantee is per step: keeping the sign there would need the step to read the context.
 #: The acj-4 cell's rule `-1/tanh(!0) -> 1/(-tanh(!0))` writes such a product below the inverse.
-#: `SEARCH`: the search factors the class's polynomial multiple out of a sum with the sign its other orientation
-#: gives it at the pole; the search's premises read no pole's value.
 BELOW_THE_READER = 'a product below the reader takes its orientation at its own root, where no zero is read'
-SEARCH = "the search's factoring reads no pole's value"
 CLASS_AT_ITS_ZERO = ['inv * pow - 3 x1 / 1 2 sin - 3 x1', 'inv * rootn - 3 x1 2 tanh - 3 x1',
                      pytest.param('inv * tanh * 2 - 3 x1 * -1 - 3 x1',
                                   marks=pytest.mark.xfail(strict=True, reason=BELOW_THE_READER)),
@@ -259,9 +256,7 @@ POLYNOMIAL_MULTIPLES = [(['1/((9 - x1^2)*(x1 - 3))', '1/((x1^2 - 9)*(3 - x1))', 
 
 
 @pytest.mark.parametrize('spellings,side,effort', [
-    pytest.param(s, side, effort, marks=pytest.mark.xfail(strict=True, reason=SEARCH)
-                 if (i, effort) == (len(POLYNOMIAL_MULTIPLES) - 1, None) else [])
-    for i, (s, side) in enumerate(POLYNOMIAL_MULTIPLES) for effort in (0, None)])
+    (s, side, effort) for s, side in POLYNOMIAL_MULTIPLES for effort in (0, None)])
 def test_a_polynomial_multiple_of_a_class_is_a_member(eng, effort, spellings, side):
     answers = {' '.join(eng.simplify(eng.to_prefix(s), mode='permissive', effort=effort)) for s in spellings}
     assert len(answers) == 1, answers

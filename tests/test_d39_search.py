@@ -141,10 +141,13 @@ class TestRow156Falsifier:
         assert engine._core.ac_ordered_below_in(out, fix(engine, POWSPLIT), rule_mode='default') is True
 
     def test_certificates_gate_the_moves(self, engine: SimpliPyEngine) -> None:
-        # SOUND: log(x1) carries no finite-a.e. licence -- the moves are
-        # refused by the same certificates that gate the chain; the endpoint
-        # is the untouched sound fixpoint.
-        assert explore(engine, tok(engine, GATED), BUDGET) == fix(engine, GATED)
+        # SOUND: log(x1) is infinite at a point only, and has no value on a region, where the
+        # product has none either: the distributive law's premise holds, and the search moves.
+        # But log(x1)/log(x1) is no 1 there (`mul.cancel` asks a part finite and nonzero almost
+        # everywhere), so the endpoint is below the fixpoint and short of the valley.
+        out = explore(engine, tok(engine, GATED), BUDGET)
+        assert engine._core.ac_ordered_below_in(out, fix(engine, GATED), rule_mode='default') is True
+        assert out != fix(engine, GATED_VALLEY)
         # LOSSY: blanket licences (the shipped wildcard_all semantics) -- the
         # same move now descends to the valley.
         assert explore(engine, tok(engine, GATED), BUDGET, lossy=True) \
@@ -217,9 +220,13 @@ class TestFactorMove:
         assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
 
     def test_exploration_factors_and_cancels(self, engine: SimpliPyEngine) -> None:
-        for lossy in (False, True):
-            out = explore(engine, tok(engine, self.HILL), BUDGET, lossy=lossy)
-            assert out == fix(engine, self.VALLEY, lossy), lossy
+        out = explore(engine, tok(engine, self.HILL), BUDGET, lossy=True)
+        assert out == fix(engine, self.VALLEY, True)
+        # f64 reads the sign of the factored sum's zero at its pole: x1*x2 - x1^2 is +0 at
+        # x2 = x1, where x1*(x2 - x1) is the zero of x1's sign, so for x1 < 0 the hill is -inf
+        # there and the valley +inf. The hill stays.
+        out = explore(engine, tok(engine, self.HILL), BUDGET)
+        assert out == fix(engine, self.HILL)
 
     def test_factoring_under_an_inverse_takes_its_licence(self, engine: SimpliPyEngine) -> None:
         # Factoring a sum under a negative power is distributing that power read backwards:

@@ -421,14 +421,10 @@ it binds any subtree, in `permissive`), the matcher retrying in one orientation 
 binding was refused by its own negation; the search's FACTOR move (§4) takes a factor shared up
 to sign the same way. So `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`, and in `permissive`
 `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` (`f64` keeps the two inverses, both
-`+inf` at `x2 = x3`, apart). Residuals [EMPIRICAL]: a sum whose terms share a factor that is undefined on a region is not factored in `f64`,
-since FACTOR asks its content to be finite almost everywhere, which `log(3 - x3)` is
-not (it is NaN for `x3 > 3`), although the law fails only where the content is infinite: so
-`log(3 - x3)/(x3 - 3) + log(3 - x3)` stays two terms and is NaN at `x3 = 3`, each term reading
-its own limit (`-inf + inf`), where the limit is `+inf`; joined, the product would hold the class
-inside a sum among terms free of it, the residual above, and the cheapest orientation of that sum,
-`log(3 - x3)*(1/(x3 - 3) + 1)`, is `-inf` there, which is `permissive`'s answer (the joined
-`log(3 - x3)*(1 - 1/(3 - x3))` keeps the limit); one class split across the
+`+inf` at `x2 = x3`, apart). Residuals [EMPIRICAL]: FACTOR asks its content to be infinite only on a null set, as the law
+fails only where the content is infinite, so a content with no value on a region factors in `f64`
+too: `log(3 - x3)/(x3 - 3) + log(3 - x3)` is `log(3 - x3)*(1/(x3 - 3) + 1)` in both modes, `-inf`
+at `x3 = 3` as float64 gives the input there; one class split across the
 terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite, as
 the input does at other such points (`x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3`, limit
 `+inf` where `x5 > 2 abs(x1)`: the answer is NaN for `x1 < 0`, the input for `x1 > 0`; the sign of
@@ -647,7 +643,7 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   sub-multiset match binding $\ell$'s members and leaving a remainder $\mathrm{rem}$
   (Peterson–Stickel extension behavior); the candidate is
   $u' = \mathrm{nf}(\mathrm{bag}(\mathrm{rem} \cup \{\rho\sigma\}))$, and the step is
-  **accepted only if** $u' <_o u$;
+  **accepted if** $u' <_o u$, or else if the whole expression falls (below);
 - **(fold)** at a node $u$ that is *fully numeric* (no variable, no $\diamond$) or
   $\diamond$-collapsible: $u' =$ the cheapest expression the mode admits for $u$'s value
   (below), resp. $\diamond$, **accepted only if** $u' <_o u$. Exact rational arithmetic lives in
@@ -714,19 +710,26 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   a constructor's job in every mode: `exp(1)` $\to$ `e` chooses between two exact names for
   one value and nothing is rounded;
 - **(rebuild)** at a node $u$ whose children were rewritten: $u' = \mathrm{nf}(u[\text{new
-  children}])$, **accepted immediately if** $u' <_o u$. If the immediate test fails, the
-  rebuild gets one **composite** chance: the ordinary pass — with composite exploration
-  *disabled* and a private memo — is run from $u'$, and the composite step
-  $u \Rightarrow \mathrm{endpoint}$ is accepted **iff** the settled endpoint is strictly
-  below $u$. Otherwise the rebuild is refused and $u$ stands (the children's changes at
-  this position are discarded). One level of exploration is deliberate: an oscillating
-  reassembly's endpoint is $u$ itself — never strictly below — so oscillators are refused
-  without regress, while an uphill intermediate that pays for itself (an integer power
-  distributing over a freshly minted product, whose all-literal factor then folds) is
-  committed on the strength of where it lands.
+  children}])$, **accepted if** $u' <_o u$, or else if the whole expression falls (below).
+  Otherwise the rebuild is refused and $u$ stands (the children's changes at this position are
+  discarded).
 
-Acceptance is checked on the *instantiated, renormalized* result at the actual node —
-never predicted from the pattern (see §5 for why prediction is impossible).
+*The whole expression's price* (`settle.rule`'s acceptance). The price is not context-monotone: a
+cheaper subtree can make an ancestor dearer (a coefficient and an exponent priced jointly, a
+literal priced beside one it could merge with), and the reverse. So a fire or a rebuild that does
+not descend at its node $u$ is still taken where the whole expression with it falls: each
+ancestor of $u$ is rebuilt through its constructor with the new child, up to the root, whose
+comparison is the whole's ($t[u \leftarrow u'] <_o t$). The step is then **carried** to the
+lowest ancestor $a$ where it descends: every position between $u$ and $a$ takes its rebuild as it
+is and ends its loop there, and $a$'s own rebuild is gated as any. The ancestors are read as the
+walk visited them; since $a$'s gate reads its real state, that reading decides only where a step
+is carried, never what is accepted. Below an `atan2`, rebuilt from its arguments' members, the
+whole is not read. A step refused by the whole's price reads the ancestors, which a later step can
+change, so no node above it is marked normal in the visit that met it: a later step above walks
+it again.
+
+Acceptance is checked on the *instantiated, renormalized* result at the actual node and in the
+whole expression — never predicted from the pattern (see §5 for why prediction is impossible).
 
 **The search (exploration phase, `effort`).** After the chain's fixpoint, the search proposes
 moves the step relation refuses, because they ascend at their node: the distributive law, in
@@ -746,8 +749,17 @@ the product inside the reciprocal; the move joins two reciprocal sums (`A^-1 * B
 one reciprocal sum (`c * A^-1` becomes `(A/c)^-1`, with `1/c` distributed over `A`'s terms). So
 `x2/(x2 - x1)` is `1/(1 - x1/x2)` in `permissive`; `f64` keeps such a reciprocal
 joined where it is not certified to split, and its DISTRIBUTE reaches inside it. Each
-move carries its licence (every piece finite a.e., so the identity cannot meet $\infty - \infty$;
-no `<constant>` duplicated or merged). A candidate is the move at one place with its ancestors
+move is a law of the catalogue and carries its premise (`search.distribute`, `search.pow_expand`,
+`search.factor`, `search.reciprocal_join`; no `<constant>` duplicated or merged): the two sides
+of the distributive law differ only where a piece it multiplies into two or more addends (or
+collects out of them) is infinite, so in `f64` such a piece is infinite only on a null set, may
+have no value on a region, and at each pole either one addend keeps the pole or the addends that
+keep it take one strict sign there; where an odd negative power reads the zero of the product or
+the sum, a content or co-factor positive and never zero keeps that zero's sign. Beside the law,
+the search proposes the **COMPOSITE STEP** (`search.composite_step`): a rebuild the step relation
+refused, because it rises at its node and in the whole, is proposed as the state it builds, and
+kept where that state's descent lands below (an integer power distributing over a freshly minted
+product, whose all-literal factor then folds). A candidate is the move at one place with its ancestors
 rebuilt through the constructors, so it is the **whole state**; it is descended by the step
 relation to its fixpoint and accepted **iff** that endpoint is strictly below the current state
 in $<_o$ — the one acceptance for every move kind. A round tries the current state's candidates
@@ -957,17 +969,19 @@ Throughout, "step" means an accepted fire, a fold, or an accepted rebuild (§4),
 passes $t_{i+1} = \mathrm{pass}(t_i)$ until fixpoint or budget.
 
 **Lemma L2 (step descent)** [BY CONSTRUCTION]. Every step strictly descends $<_o$ at its
-node: all three step kinds carry an explicit `oriented` gate — fires and rebuilds in
-`try_rules_at` / `rewrite_pass`, and the fold by §4's own acceptance clause ("accepted
+node, or at the ancestor it is carried to: all three step kinds carry an explicit `oriented`
+gate — fires and rebuilds in `try_rules_at` / `rewrite_pass` (a carried step's at the ancestor
+whose rebuild takes it), and the fold by §4's own acceptance clause ("accepted
 only if $u' <_o u$"; the class literal or $\diamond$ is checked
 against the ordering, not assumed smaller).
 
 **Lemma L3 (pass contraction)** [THEOREM, from L2]. For every canonical $t$:
 $\mathrm{pass}(t) \leq_o t$, with equality iff the pass changed nothing. *Proof.* The
 pass's state at each position evolves only through accepted steps (each strictly
-$<_o$-descending at that position, hence — by induction up the spine, since a child change
-survives only through an accepted rebuild at the parent — descending at the root) or
-through refusals, which leave the pre-refusal state. $\square$
+$<_o$-descending at that position or at the ancestor it is carried to, hence — by induction up
+the spine, since a child change survives only through an accepted or a carried rebuild at the
+parent, and a carried one only up to an accepted rebuild — descending at the root) or through
+refusals, which leave the pre-refusal state. $\square$
 
 **Lemma L4 (no revisits)** [THEOREM, from L3 and totality of $<_o$]. The run's chain
 $t_0 >_o t_1 >_o \cdots$ is strictly descending in a strict total order, hence all states
@@ -982,13 +996,9 @@ $\mathbb{N}_{\geq 1}$, and $\mu$ never increases along the chain by L2/L3).
 terminates without any fuel: within a pass, each position's chain is a strictly
 $<_o$-descending sequence (finite by T-wf) and the walk is structurally recursive; across
 passes, the chain of pass outputs is strictly $<_o$-descending while it changes (L3),
-hence reaches its fixpoint after finitely many passes. *With composite steps:* the
-argument is two-tier. The exploration-disabled pass contains no tentative walks and
-terminates by the argument above directly; the engine's exploration-enabled pass adds, at
-refusal sites, one tentative walk each — a terminating exploration-disabled pass — and
-its *committed* steps (immediate or composite) all strictly descend $<_o$ at their node,
-so L2/L3 and the descent argument hold verbatim. A discarded exploration is finite wasted
-work that changes no state.
+hence reaches its fixpoint after finitely many passes. *With carried steps:* a position whose
+step is carried ends its loop there, and the ancestor it is carried to takes it by its own
+descending rebuild, so each position's chain still descends, and the whole expression with it.
 
 *Resource limits* [ENFORCED]. Two bounds remain in the code: the release-mode step cap
 (`STEP_CAP` = $10^6$ accepted steps per call) and the outer pass budget (`max_passes`, default
@@ -997,8 +1007,10 @@ pass only confirms it). T6 makes every call finite, not short: a valid descent c
 than $10^6$ steps (a chain of $n$ rules, each rewriting one spelling of a counter into the next,
 takes $2^n - 1$), so a binding cap is a resource limit, not proof of a bug. Neither binds on the
 corpora the gates measure [EMPIRICAL]. When one binds, rewriting stops and the state reached is
-returned — sound, possibly non-minimal — and each binding of the step cap is counted
-(`step_cap_binds`).
+returned — sound, possibly non-minimal — and the call reports it: `simplify(...,
+return_status=True)` names the caps that bound (the step cap, `max_passes`, and the search's
+`effort` budget where candidates were left), and each binding of the step cap is also counted
+process-wide (`step_cap_binds`).
 
 **Equal-$\mu$ ties, measured** [EMPIRICAL, on the 128-bit engine — instrumented build over 50,800 simplify
 calls: the 400-expression mined corpus in the `f64` and `permissive` modes, plus 50,000 fuzz
@@ -1118,9 +1130,9 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | I1–I4 canonical invariants | constructors in `ac/expr.rs` | `no_nested_bags` + `stable()` debug asserts; property tests in `tests/test_ac_core.py` |
 | L1 nf termination | structural recursion; the three audited self-calls (`pow`, `fun`/rootn, the even arm's `even_move`) | full suites exercise every self-call site; every spelling to length 5 around the special leaves builds (`test_even_arm_terminates.py`) |
 | G1–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
-| L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
+| L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass`, the whole expression's price (`whole_falls`) | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or carried by the whole expression's price) |
 | L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends and its members settle; a value f64 holds in pieces prices as its one number |
-| composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
+| composite step | the search's proposal of a refused rebuild (`refused_sites`), accepted by the whole state's descent | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form at the default effort |
 | T6 resource limits | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | a binding cap is a resource limit (a terminating descent can need more steps), not proof of a bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 |
 | ordering exactness | `Rat::cmp_exact` (256-bit) | Euclidean-oracle fuzz (60k pairs, 3 magnitude regimes) + transitivity triples |
@@ -1137,12 +1149,12 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | syntactic matching | AC sub-multiset matching with remainder | Peterson–Stickel extension rules; matching soundness is the matcher's contract |
 
 One research direction remains open, now about *completeness* rather than termination.
-The composite step heals refusals whose uphill intermediate pays for itself within one
-settled walk (measured incidence of refusals before the fix: 0 on the mined corpus, 1 in
-50,000 adversarial fuzz calls — that one now commits and the two spellings of its function
-converge). What remains refusable: reassemblies whose payoff would need a *further*
-exploration inside the tentative walk (nested composite steps are deliberately disabled to
-refuse oscillators), and true oscillators themselves. An ordering under which every
+The whole expression's price takes a step that rises at its node where the whole falls, and the
+search's composite step heals a refusal whose uphill intermediate pays for itself once settled
+(measured incidence of refusals before the composite step: 0 on the mined corpus, 1 in 50,000
+adversarial fuzz calls — that one now commits at the default effort and the two spellings of its
+function converge). What remains refusable: reassemblies whose payoff needs two such
+intermediates in sequence, and true oscillators. An ordering under which every
 $\mathrm{nf}$ fold is non-increasing — e.g. a polynomial interpretation handling power
 distribution — would make even those acceptances unconditional and the exploration
 machinery unnecessary. That is genuine research on the weight table; the G7 gate would

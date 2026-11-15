@@ -100,6 +100,14 @@
 //! | `fun.odd_sign` | f(-u) = -f(u), f odd | none | none |
 //! | `fun.atan2_sign` | atan2(-y, x) = -atan2(y, x) | none | no step (one zero) |
 //! | `fun.besseli_parity` | I_n(-t) = (-1)^n I_n(t), n an integer | n odd: t vanishes on no region | none |
+//! | `search.distribute` | A*(B + C) = A*B + A*C | A infinite only on a null set, at most one addend keeping each pole (or those that do of one strict sign), and a pole's reading of the product's zero kept | a spelled infinity's |
+//! | `search.pow_expand` | (a + b)^n = the expansion, 2 <= n <= 6 | as `search.distribute`, every term a shared piece | a spelled infinity's |
+//! | `search.factor` | c*q1 + c*q2 = c*(q1 + q2) | c infinite only on a null set; under a pole's reading, c positive and never zero | a spelled infinity's |
+//! | `search.reciprocal_join` | A^-1*B^-1 = (A*B)^-1, f*A^-1 = (A/f)^-1 | no step | f of one strict sign |
+//! | `search.composite_step` | a refused rebuild is kept where the whole descends | none | none |
+//! | `settle.rule` | a mined rule fires where its left side binds | none (the rule's own) | none (the rule's own) |
+//! | `settle.negation_twin` | L -> T entails -L -> -T | none | none |
+//! | `perm.reciprocal_projection` | a^-1*b^-1 = (a*b)^-1, as written | no step | none |
 //!
 //! An absorption is the specification's 3.2, a statement about families: for every value of
 //! the constants on the left there is one on the right, `d = c1 + r*c2 + q`, `d = r*c`,
@@ -505,11 +513,71 @@ pub enum Law {
     /// region (`besseli(1, -ceil(x0))` is `+0` on (-1, 0), `-besseli(1, ceil(x0))` is `-0`).
     /// [`Law::holds`] reads the argument, asked of an odd order. In `permissive`, none.
     FunBesseliParity,
+    /// THE DISTRIBUTIVE LAW, as the search applies it (DISTRIBUTE, `ac::search`):
+    /// `A*(B + C) = A*B + A*C`, a product over its sums, one factor into one sum, or the other
+    /// factors over one term of a sum. The two sides differ only where a piece the law multiplies
+    /// into two or more addends (`A`) is infinite: at `A = +inf`, `B = 1`, `C = 0` the left side
+    /// is `+inf` and the right side `inf + NaN`. In `f64` such a piece is infinite only on a null
+    /// set (`Cx::inf_null`; it may have no value on a region, as the product then has none), and
+    /// at each of its poles, read by float64's value there, at most one addend keeps the pole, or
+    /// the addends that do take one strict sign: `(1/x0)*(1 + x0)` is `1/x0 + 1`, one move whose
+    /// constructors cancel `x0/x0`, while `(x1 + x2)/x0` stays, `-inf` at x0 = 0, x1 = 1, x2 = -2,
+    /// where `x1/x0 + x2/x0` is NaN. Where an odd negative power reads the product's zero, the
+    /// distributed sum keeps that zero's sign (`class.pole_orientation`'s reading). [`Law::holds`]
+    /// reads a shared piece. In `permissive`, none, but a piece that spells an infinity needs the
+    /// sound certificate in every mode (`-inf*(x1 - 1/2)` is not `inf - inf*x1`).
+    SearchDistribute,
+    /// An integer power of a sum expands, `(a + b)^n` for `2 <= n <= 6`: the distributive law over
+    /// `n` copies of the sum, each term a shared piece (`search.distribute`'s premise):
+    /// `(1/x0 + x1)^2` stays in `f64`, `+inf` at x0 = 0, where its expansion is NaN.
+    /// [`Law::holds`] reads a term.
+    SearchPowExpand,
+    /// THE DISTRIBUTIVE LAW READ BACKWARDS, as the search applies it (FACTOR):
+    /// `c*q1 + c*q2 = c*(q1 + q2)`, by what a group of terms shares (shared bases, up to a class's
+    /// orientation, a sum factor spread among the terms). The two sides differ only where the
+    /// content `c` is infinite: where the quotients take one sign there both are that infinity,
+    /// and where they differ in sign the sum has no value and the product may have one. In `f64`
+    /// the content is infinite only on a null set (`Cx::inf_null`: a value gained on a null set,
+    /// never a region) and may have no value on a region (`x1*sqrt(x0) + sqrt(x0)` is
+    /// `sqrt(x0)*(x1 + 1)`); a quotient needs nothing. Where an odd negative power reads the sum's
+    /// zero, the content is positive and never zero: float64's sum cancels to `+0` where the
+    /// product is the zero of `c`'s sign times the quotients' (`1/(x1 + x1*x2)` stays, `+inf` at
+    /// x1 = 0, x2 = -2, where `1/(x1*(x2 + 1))` is `-inf`). [`Law::holds`] reads the content. In
+    /// `permissive`, none but a spelled infinity's, as `search.distribute`.
+    SearchFactor,
+    /// `permissive`'s search joins a product's reciprocal sums (RECIPROCAL JOIN), which its `pow`
+    /// holds split: `A^-1*B^-1 = (A*B)^-1`, `c*A^-1 = (A/c)^-1` and `f*A^-1 = (A/f)^-1`, each
+    /// joined sum distributed. The last loses a value at a zero of `f` (the left side 0,
+    /// `(A/0)^-1` no value), so `f` takes one strict sign wherever it has a value
+    /// (`ac::search::strict_sign`): `2*tan(x0)/(1 - tan(x0)^2)` stays. [`Law::holds`] reads `f`. In
+    /// `f64`, no step: its `pow` keeps such a reciprocal joined where it is not certified to split,
+    /// and DISTRIBUTE expands inside it.
+    SearchReciprocalJoin,
+    /// THE COMPOSITE STEP, the search's: a rebuild the settling refused, because it rises at its
+    /// node and in the whole expression, is proposed as the state it builds and kept where that
+    /// state's descent lands below (an integer power distributing over a product the settling
+    /// mints, whose literal factor then folds). An acceptance, no identity of its own: every step
+    /// of the descent is one. Total.
+    SearchCompositeStep,
+    /// A mined rule fires where its left side binds (`?` a variable, `!` a part finite almost
+    /// everywhere, `$` finite and nonzero almost everywhere, `_` anything; in `permissive` any slot
+    /// binds anything) and the whole expression's price falls (`rules::rewrite_pass`). Its
+    /// premise is the rule's own, judged at mining and read at its slots' sorts at bind time.
+    /// Total as a step of the catalogue.
+    SettleRule,
+    /// An admitted rule `L -> T` entails `-L -> -T`, minted where the negation is absorbed
+    /// (`rules::AcRules::translate`): negation is exact in both modes. Total.
+    SettleNegationTwin,
+    /// `permissive`'s answer writes a product's negative powers joined, `(a*b)^-1`, where that is
+    /// cheaper than `a^-1*b^-1` and the sound modes would not split it (`expr::rejoin_reciprocals`):
+    /// one value, the sign that leaves the base read by permissive's agreement. A spelling of the
+    /// answer, after the walk. Total; `f64` takes no such step.
+    PermReciprocalProjection,
 }
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 83] = [
+    pub const ALL: [Law; 91] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -593,6 +661,14 @@ impl Law {
         Law::FunOddSign,
         Law::FunAtan2Sign,
         Law::FunBesseliParity,
+        Law::SearchDistribute,
+        Law::SearchPowExpand,
+        Law::SearchFactor,
+        Law::SearchReciprocalJoin,
+        Law::SearchCompositeStep,
+        Law::SettleRule,
+        Law::SettleNegationTwin,
+        Law::PermReciprocalProjection,
     ];
 
     /// The law's stable name, `family.law`.
@@ -681,6 +757,14 @@ impl Law {
             Law::FunOddSign => "fun.odd_sign",
             Law::FunAtan2Sign => "fun.atan2_sign",
             Law::FunBesseliParity => "fun.besseli_parity",
+            Law::SearchDistribute => "search.distribute",
+            Law::SearchPowExpand => "search.pow_expand",
+            Law::SearchFactor => "search.factor",
+            Law::SearchReciprocalJoin => "search.reciprocal_join",
+            Law::SearchCompositeStep => "search.composite_step",
+            Law::SettleRule => "settle.rule",
+            Law::SettleNegationTwin => "settle.negation_twin",
+            Law::PermReciprocalProjection => "perm.reciprocal_projection",
         }
     }
 
@@ -772,6 +856,14 @@ impl Law {
             Law::FunOddSign => "f(-u) = -f(u)",
             Law::FunAtan2Sign => "atan2(-y, x) = -atan2(y, x)",
             Law::FunBesseliParity => "I_n(-t) = (-1)^n I_n(t)",
+            Law::SearchDistribute => "A*(B + C) = A*B + A*C",
+            Law::SearchPowExpand => "(a + b)^n = its expansion, 2 <= n <= 6",
+            Law::SearchFactor => "c*q1 + c*q2 = c*(q1 + q2)",
+            Law::SearchReciprocalJoin => "A^-1*B^-1 = (A*B)^-1, f*A^-1 = (A/f)^-1",
+            Law::SearchCompositeStep => "a refused rebuild is kept where the whole descends",
+            Law::SettleRule => "a mined rule L -> T fires where L binds",
+            Law::SettleNegationTwin => "L -> T entails -L -> -T",
+            Law::PermReciprocalProjection => "a^-1*b^-1 = (a*b)^-1, as written",
         }
     }
 
@@ -833,6 +925,10 @@ impl Law {
                 | Law::FunEven
                 | Law::FunOddSign
                 | Law::FunAtan2Sign
+                | Law::SearchCompositeStep
+                | Law::SettleRule
+                | Law::SettleNegationTwin
+                | Law::PermReciprocalProjection
         )
     }
 
@@ -867,6 +963,20 @@ impl Law {
             }
             // `t` is the argument of an odd order.
             Law::FunBesseliParity => !super::expr::vanishes_on_a_region(t, cx),
+            // `t` is a piece the law multiplies into two or more addends, or the content it
+            // collects out of them; the poles and a pole's reading are asked at the place
+            // (`ac::search`).
+            Law::SearchDistribute | Law::SearchPowExpand | Law::SearchFactor => {
+                if t.contains_infinity() {
+                    cx.fin_certified(t)
+                } else {
+                    cx.permits(Permissive::LikeTerms) || cx.inf_null(t)
+                }
+            }
+            // `t` is the factor joined into a reciprocal sum.
+            Law::SearchReciprocalJoin => {
+                cx.permits(Permissive::Agreement) && super::search::strict_sign(t, cx).is_some()
+            }
             // `t` is the argument of the inner function.
             Law::FunAtanhTanh => !cx.f64_semantics() || cx.certainly_in_band(t, 19),
             Law::FunLogExp => {

@@ -180,6 +180,8 @@ fn ac_simplify_impl(
     // GIL while it waits.
     let out = py.detach(|| {
         let inner = core.inner();
+        // The call's status starts clean (`ac_call_status`).
+        crate::ac::rules::take_caps();
         // The documented empty-input contract: `simplify([]) == []` (the one valid
         // case `is_valid` rejects). Restored explicitly after the malformed-input
         // hardening accidentally made it raise.
@@ -211,6 +213,8 @@ fn ac_simplify_infix_impl(
     // One read guard, GIL released, as in `ac_simplify_impl`.
     py.detach(|| {
         let inner = core.inner();
+        // The call's status starts clean (`ac_call_status`).
+        crate::ac::rules::take_caps();
         // Empty-input contract, as in `ac_simplify`: the empty rendering.
         if tokens.is_empty() {
             return Ok(String::new());
@@ -1368,11 +1372,19 @@ impl PyEngine {
         crate::worker::MINT_UNDECIDED.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Process-wide count of rewrite steps the step cap refused (`ac::rules::STEP_CAP`).
-    /// Expected 0 on every input: the reduction ordering is well-founded, so a binding cap
-    /// is an ordering bug and the answer it cut short may not be a fixpoint.
+    /// Process-wide count of rewrite steps the step cap refused (`ac::rules::STEP_CAP`). The
+    /// reduction ordering is well-founded, so every call is finite, but not short: a binding cap
+    /// is a resource limit, and the answer it cut short may not be a fixpoint.
     fn step_cap_binds(&self) -> u64 {
         crate::ac::rules::step_cap_binds()
+    }
+
+    /// THE STATUS OF THE LAST SIMPLIFY CALL ON THIS THREAD: the resource caps that bound
+    /// in it, as bits (`ac::rules::CAP_STEPS` 1, `CAP_PASSES` 2, `CAP_EFFORT` 4), read and reset.
+    /// 0: the call ended where its walk ends, the chain at a fixpoint and the search where a
+    /// round found nothing (or at its budget's end only where nothing was left to try).
+    fn ac_call_status(&self) -> u8 {
+        crate::ac::rules::take_caps()
     }
 
     // (`simplify_counters`/`reset_simplify_counters` are gone:
