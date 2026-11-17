@@ -863,8 +863,9 @@ that may write a cheaper value of the same number writes it, once, where the lit
 sum's constant term, a coefficient, a power's literal operand beside a non-literal one, a
 function's argument in `permissive`, the root of a state). `f64` writes float64's own value:
 a literal at the double float64 reads it as (`0.1234567890123456789` is
-`0.12345678901234568`), and a number the constructors make from two literals at float64's value
-of that operation on their doubles (`x*0.30000000000000004*0.30000000000000004` is
+`0.12345678901234568`), and a number the constructors make from literals at the double nearest
+that operation on their doubles, computed exactly and rounded once, which for two literals is
+float64's own value of it (`x*0.30000000000000004*0.30000000000000004` is
 `0.09000000000000002*x`, `x*0.7234567890123457*1.3821548250604163` is `0.9999292916561291*x`),
 each where that decimal is cheaper than the exact value (`0.1 + 0.2` is `0.3`). `permissive`
 writes whichever of the two doubles around the exact value prints shorter

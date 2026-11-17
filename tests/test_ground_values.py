@@ -114,6 +114,22 @@ def test_a_number_is_written_as_the_cheapest_value_its_mode_admits(engine, expr,
     assert _simplify(engine, expr, 'permissive') == permissive
 
 
+def test_f64_rounds_a_product_of_literals_once(engine) -> None:
+    # Three literals' doubles multiplied exactly and rounded once: 9.101978259167069e16, written as
+    # its shortest spelling. Float64's product taken one rounding at a time, in the ascending order
+    # the coefficient's literals are combined in, lands a unit away in the last place:
+    # 91019782591670700.
+    from fractions import Fraction
+    ds = [float(1 / Fraction(m)) for m in ('89875517873681764', '8.854e-12', '1.380649e-23')]
+    once = float(Fraction(ds[0]) * Fraction(ds[1]) * Fraction(ds[2]))
+    assert once == 9.101978259167069e16
+    assert ds[0] * ds[1] * ds[2] == 9.10197825916707e16
+    got = engine.simplify('* * * x0 / 1 89875517873681764 / 1 8.854e-12 / 1 1.380649e-23'.split(),
+                          mode='f64')
+    assert got == ['*', '91019782591670690', 'x0'], got
+    assert float(got[1]) == once
+
+
 @pytest.mark.parametrize('expr, both', [
     ('* 3.141592653589793 x0', '* np.pi x0'),
     ('* 6.283185307179586 x0', '* 2 * np.pi x0'),

@@ -38,8 +38,8 @@ organised by who you are, then the highlights, then every change in detail.
   reduced denominator is at most 24 keeps its fraction or decimal (`25*x1/2`, `0.05*x1`); past
   that bound the divisor can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`). `f64` writes float64's value of a number where that is cheaper: a
   literal at the double float64 reads it as (`0.1234567890123456789*x0` is
-  `0.12345678901234568*x0`), and a number made from two literals at float64's value of the
-  operation on their doubles (`x0*0.7234567890123457*1.3821548250604163` is
+  `0.12345678901234568*x0`), and a number made from literals at the operation on their doubles,
+  exact and rounded once (`x0*0.7234567890123457*1.3821548250604163` is
   `0.9999292916561291*x0`, `x0*0.30000000000000004*0.30000000000000004` is
   `0.09000000000000002*x0`); `permissive` writes the shorter of the two doubles around the exact
   value (`0.9999292916561292*x0`). An exact number stays where it is the cheaper spelling
@@ -1311,8 +1311,8 @@ model predictions.
   is cheaper, as it writes every number (the quotient is `1.2499999886093752e-296` in `f64`,
   float64's quotient of the two doubles). A mode that may write a cheaper value of a number
   writes it where the number lands: `f64` float64's value (a literal at the double float64
-  reads it as, a number made from two literals at float64's value of that operation on their
-  doubles), `permissive` the shorter of the two doubles around the exact value, each only where
+  reads it as, a number made from literals at that operation on their doubles, exact and rounded
+  once), `permissive` the shorter of the two doubles around the exact value, each only where
   that is the cheaper spelling. `0.3333333333333333` costs its 16 digits and `1/3` less.
   <!-- TO BE RE-MEASURED: the permissive share of changed answers and their printed length
        (34% of the predictions, 7% shorter; 2.6% of the training-data inputs, 4% shorter),
@@ -1321,6 +1321,17 @@ model predictions.
   present probe by probe: it warns, naming the probes, when a recorded probe now prices
   differently, and a probe the sidecar does not record is not a mismatch. The published
   rulesets record no probe that moved, so they load without a warning.
+- **`f64` rounds a product or a sum of literals once.** A coefficient or a constant term made
+  from literals is written, where the decimal is cheaper than the exact value, as the double
+  nearest the exact operation on the literals' doubles: the real value of what float64 reads,
+  which `f64` admits. It was float64's product taken one rounding at a time in the order the
+  literals are combined, which for three or more literals can land a unit or two in the last
+  place from both that double and float64's value in the order written:
+  `x0*(1/89875517873681764)*(1/8.854e-12)*(1/1.380649e-23)` is `91019782591670690*x0` (it was
+  `91019782591670700*x0`). `permissive` writes, as before, the shorter of the two doubles around
+  the exact value. On srbf's ground truths, a tenth of the training-data inputs and a tenth of the
+  predictions, 249 `f64` answers change, by +81 bits in all (75 cheaper, 95 at an equal price, 79
+  dearer); `permissive`'s answers do not change.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds

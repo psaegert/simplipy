@@ -11261,9 +11261,11 @@ fn unfactors(r: &Coef, inner: &[Ex], cx: &Cx) -> bool {
 
 /// STRICT'S NUMBERS, written as the cheapest value strict admits for them: a number the
 /// constructors make from literals is either its exact value (the reals' value, which float64's
-/// kind keeps: both finite) or float64's value of the same operation on the literals' doubles,
-/// written as its shortest decimal (float64 reads it as that double), whichever is cheaper, and
-/// the exact value at an equal price. `x0*0.30000000000000004*0.30000000000000004` is
+/// kind keeps: both finite) or the double nearest the same operation on the literals' doubles,
+/// computed exactly and rounded once (`rat::rounded_once`; for two literals float64's own value of
+/// the operation), written as its shortest decimal (float64 reads it as that double), whichever
+/// is cheaper, and the exact value at an equal price.
+/// `x0*0.30000000000000004*0.30000000000000004` is
 /// `0.09000000000000002*x0` (the exact product has 34 digits), `0.1 + 0.2` is `0.3` (the exact
 /// sum is cheaper than float64's `0.30000000000000004`). Float64's value is taken only where it
 /// is a normal double, or an exact zero the exact value also is: an overflow or an underflow
@@ -11307,14 +11309,17 @@ pub(crate) fn strict_number(exact: Rat, float: f64) -> Rat {
 
 /// The literal partition of a sum (`Rat::partition_sum`), exact in every mode; in `strict`, where
 /// the literals combine into one number, that number is written as the cheaper of its exact value
-/// and float64's sum of the literals' doubles ([`strict_number`]). Rounding only the combined
-/// number keeps every exact cancellation a later fold of the partition reaches. Inside a fully
-/// numeric sum (`ground`) the partition stays exact: the part is valued whole.
+/// and the sum of the literals' doubles, exact and rounded once ([`strict_number`]). Rounding only
+/// the combined number keeps every exact cancellation a later fold of the partition reaches.
+/// Inside a fully numeric sum (`ground`) the partition stays exact: the part is valued whole.
 fn literal_partition_sum(lits: Vec<Rat>, ground: bool, cx: &Cx) -> Vec<Rat> {
     let float = || {
-        lits.iter()
+        let ds: Vec<f64> = lits
+            .iter()
             .filter(|m| !m.is_zero())
-            .fold(0.0, |acc, m| acc + m.to_f64_nearest())
+            .map(Rat::to_f64_nearest)
+            .collect();
+        super::rat::rounded_once('+', &ds).unwrap_or_else(|| ds.iter().fold(0.0, |acc, d| acc + d))
     };
     let combined = lits.iter().filter(|m| !m.is_zero()).count() >= 2;
     let y = if cx.f64_semantics() && cx.fold_f64 && combined && !ground {
@@ -11346,17 +11351,23 @@ fn log_partition(op: &'static str, operands: Option<Vec<Rat>>, out: &[Rat]) {
 
 /// The coefficient partition of a product (`Rat::partition_product`), exact in every mode; in
 /// `strict`, where the literals combine into one number, that number is written as the cheaper
-/// of its exact value and float64's product of the literals' doubles ([`strict_number`]):
-/// `0.30000000000000004*0.30000000000000004` is `0.09000000000000002`, `1/3*1e300*1e-300` is
-/// `1/3`. Inside a fully numeric product (`ground`) the partition stays exact: the part is
-/// valued whole.
+/// of its exact value and the product of the literals' doubles, exact and rounded once
+/// ([`strict_number`]): `0.30000000000000004*0.30000000000000004` is `0.09000000000000002`,
+/// `1/3*1e300*1e-300` is `1/3`, and the reciprocals of `89875517873681764`, `8.854e-12` and
+/// `1.380649e-23` make `91019782591670690`, where float64's product taken one rounding at a time
+/// gives `91019782591670700`. Inside a fully numeric product (`ground`) the partition stays
+/// exact: the part is valued whole.
 fn literal_partition_product(nums: Vec<Rat>, ground: bool, cx: &Cx) -> Vec<Rat> {
     let combined = nums.iter().filter(|m| !m.is_one()).count() >= 2;
     let y = if cx.f64_semantics() && cx.fold_f64 && combined && !ground {
+        let ds: Vec<f64> = nums
+            .iter()
+            .filter(|m| !m.is_one())
+            .map(Rat::to_f64_nearest)
+            .collect();
         Some(
-            nums.iter()
-                .filter(|m| !m.is_one())
-                .fold(1.0, |acc, m| acc * m.to_f64_nearest()),
+            super::rat::rounded_once('*', &ds)
+                .unwrap_or_else(|| ds.iter().fold(1.0, |acc, d| acc * d)),
         )
     } else {
         None

@@ -1256,6 +1256,50 @@ pub fn token_denotes_integer(t: &str, v: f64) -> bool {
     p == vi * q
 }
 
+/// FLOAT64'S DOUBLES COMBINED EXACTLY AND ROUNDED ONCE: the product (`'*'`) or the sum (any other
+/// `op`) of the finite doubles `ds`, computed exactly and rounded to the nearest double (ties to
+/// even), as float64 rounds one operation: the nearest double to the exact value of operands
+/// float64 reads at their doubles. A sum that cancels is `+0`. `None` where a double is not
+/// finite.
+pub(crate) fn rounded_once(op: char, ds: &[f64]) -> Option<f64> {
+    // a finite double is m * 2^e exactly, m an integer of at most 53 bits
+    let parts: Vec<(BigInt, i64)> = ds
+        .iter()
+        .map(|&d| {
+            if !d.is_finite() {
+                return None;
+            }
+            let bits = d.to_bits();
+            let exp = ((bits >> 52) & 0x7ff) as i64;
+            let frac = bits & ((1u64 << 52) - 1);
+            let (m, e) = if exp == 0 {
+                (frac, -1074)
+            } else {
+                (frac | (1u64 << 52), exp - 1075)
+            };
+            let m = BigInt::from(m);
+            Some((if bits >> 63 == 1 { -m } else { m }, e))
+        })
+        .collect::<Option<_>>()?;
+    let (m, e) = if op == '*' {
+        parts
+            .iter()
+            .fold((BigInt::one(), 0i64), |(m, e), (mi, ei)| (m * mi, e + ei))
+    } else {
+        let low = parts.iter().map(|(_, e)| *e).min().unwrap_or(0);
+        let m = parts.iter().fold(BigInt::zero(), |acc, (mi, ei)| {
+            acc + (mi << (ei - low) as u64)
+        });
+        (m, low)
+    };
+    let (p, q) = if e >= 0 {
+        (m << e as u64, BigInt::one())
+    } else {
+        (m, BigInt::one() << (-e) as u64)
+    };
+    Some(big_ratio_to_f64(&p, &q))
+}
+
 /// `p/q` (`q > 0`) correctly rounded to f64 (ties to even), with subnormals and overflow to
 /// +-inf: the value `float(Fraction(p, q))` gives, except that Python raises OverflowError
 /// where this returns +-inf.
