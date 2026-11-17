@@ -83,7 +83,7 @@
 //! | `fun.sinh_asinh` | sinh(asinh(t)) = t | none | none |
 //! | `fun.acosh_cosh` | acosh(cosh(t)) = abs(t) | nothing around reads its flat point | none |
 //! | `fun.exp_log` | exp(log(t)) = t | t >= 0, not `-0` on a region | none |
-//! | `fun.log_inverse` | log(1/t) = -log(t) | t a monomial, and nothing around reads the sign of a zero | none |
+//! | `fun.log_inverse` | log(1/t) = -log(t) | t a monomial: 1 only at points | none |
 //! | `fun.unit_inverses` | cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t | t in [-1, 1] | none |
 //! | `perm.inverse_pairs` | f(g(t)) = t, g the inverse of f | no step | none |
 //! | `fun.abs_nonnegative` | abs(t) = t | t >= 0, not `-0` on a region | t >= 0 |
@@ -415,11 +415,13 @@ pub enum Law {
     /// `log(1/t) = -log(t)`. Float64's `log(1/t)` is `+0` where `-log(t)` is `-0`, wherever `t`
     /// is 1, so in `f64` it holds where `t` is a monomial (`expr::log_inverse_argument`:
     /// variables, fitted constants and nonzero numbers under integer powers and `abs`), whose
-    /// float64 value is 1 only at points, and where nothing around reads the sign of a zero
-    /// (`Cx::flat_unread`, `flat_read_below`): `1/log(1/x0)` is `+inf` at x0 = 1 and
-    /// `-1/log(x0)` is `-inf`. `permissive` reads one zero, and holds it everywhere. In both
-    /// modes the collapse waits for the root's walk (`release_flat`), so the constructors take
-    /// `exp(log(1/t)) = 1/t` first: `exp(-log(t))` is no inverse pair.
+    /// float64 value is 1 only at points: the sign of a zero at an isolated point, and the sign
+    /// of the infinity a pole makes of it, is no value the answer keeps (`1/log(1/x0)` is
+    /// `-1/log(x0)`, `+inf` against `-inf` at x0 = 1 alone). Where `t` rounds to 1 on a region
+    /// (`exp(x0)`, `ceil(x0)`) the sign stays, and the law does not hold. `permissive` reads one
+    /// zero, and holds it everywhere. In both modes the collapse waits for the root's walk
+    /// (`release_flat`), so the constructors take `exp(log(1/t)) = 1/t` first: `exp(-log(t))` is
+    /// no inverse pair.
     FunLogInverse,
     /// `cos(acos(t)) = t`, `sin(asin(t)) = t` and `tanh(atanh(t)) = t` where `t` is in [-1, 1]
     /// (`sin`, `cos` or `tanh` of something; off it the left side has no value). Both sides keep a

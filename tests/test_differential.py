@@ -886,10 +886,6 @@ def test_permissive_cancels_an_inverse_pair_in_both_orders(outer, inner) -> None
 #: reads the argument too (`ceil(x0)` is an integer, never inside the flat band).
 FAIL_CLOSED = ("the flat point's premise reads the context, not the argument: the pair stays "
                "under a reader of zeros")
-#: Why the engine keeps a step the judge holds: it keeps the sign float64 gives an infinity at an
-#: isolated pole, which strict does not promise (`1/log(1/x0)` is +inf and `1/(-log(x0))` -inf at
-#: x0 = 1 alone).
-POLE_SIGN_KEPT = "the engine keeps an infinity's sign at an isolated pole, which strict does not promise"
 
 
 class KnownDisagreement(AssertionError):
@@ -954,12 +950,10 @@ FUNCTION_PINS = [
     function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'permissive'),
     function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'permissive'),
     function_case('fun.log_inverse', 'sin log inv x0', 'sin neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'f64', POLE_SIGN_KEPT),
+    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'f64'),
     function_case('fun.log_inverse', 'inv inv log inv x0', 'neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'f64',
-                  POLE_SIGN_KEPT),
-    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'f64',
-                  POLE_SIGN_KEPT),
+    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'f64'),
+    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'f64'),
     function_case('fun.log_inverse', 'log inv exp x0', 'neg log exp x0', 'f64'),
     function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'f64'),
     function_case('fun.exp_log', 'exp log abs x0', 'abs x0', 'f64'),
@@ -981,7 +975,7 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
                                                                   causes) -> None:
     """The engine takes the step at effort 0 exactly where the judge holds the rule in the mode,
     or the two disagree for the cause the row names (`FAIL_CLOSED`: the engine keeps a flat pair
-    under a reader of zeros whatever its argument; `POLE_SIGN_KEPT`)."""
+    under a reader of zeros whatever its argument)."""
     engine = bare()
     takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
              == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
@@ -997,8 +991,6 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
         reader, pair = lhs.split()[0], lhs.split()[1:]
         assert reader == 'inv' and pair[:2] in (['log', 'exp'], ['acosh', 'cosh']), lhs
         assert list(engine.simplify(pair, mode=mode, effort=0)) != pair, pair
-    if POLE_SIGN_KEPT in causes:
-        assert mode == 'f64' and holds and not takes and 'POLE-SIGN' in (d.get('f64_kinds') or ()), lhs
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
                             f'{d.get("verdict")} {d.get("tier")}')
 
