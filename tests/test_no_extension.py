@@ -4,7 +4,9 @@ the cells would run past the interval layer's horizon (a literal past it, `x0/29
 budget (`log(cos(x1))` beside a second variable, the level sets of an exponent). Every node of the
 left side that can be the first undefined one occurs on the right side, under heads that keep it
 undefined, or is a power `b^e` the right side holds as `b^(q*e)` for a rational q > 0, with `e`
-nonconstant entire: the extension then lies in the level sets {e in Z/q}, a null set."""
+nonconstant entire: the extension then lies in the level sets {e in Z/q}, a null set. Where the
+whole left side occurs on the right side so (a rule that respells a side's literals), no node needs
+covering: the right side has no value wherever the left side has none."""
 import pytest
 
 from simplipy.verify import _contract, verify_rule
@@ -43,9 +45,25 @@ def test_a_rule_whose_right_side_is_undefined_where_its_left_side_is_holds(lhs, 
     ('* pow ?0 / floor ?1 2 pow ?0 / floor ?1 2', 'pow ?0 floor ?1', False, False),
     # another base: nothing covers the left side's power
     ('* pow ?0 ?1 pow ?0 ?1', 'pow abs ?0 * 2 ?1', False, False),
+    # the whole left side on the right, its literals respelled: in float64 `max` drops a NaN inside
+    # it, and still neither side has a value where the other has none
+    ('max erf ceil besseli ?0 1 * 2.0 ?0', 'max erf ceil besseli ?0 1 * 2 ?0', True, True),
+    ('max erf ceil besseli ?0 1 * 2.0 ?0', 'max erf ceil besseli ?0 1 * 2 ?0', False, True),
+    ('bessely ceil ?0 3.0', '+ 0 bessely ceil ?0 3', True, True),
 ])
 def test_the_certificate(lhs, rhs, f64, shown) -> None:
     assert _contract._no_extension(lhs.split(), rhs.split(), f64) is shown
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    ('max erf ceil besseli x0 1 * 2.0 x0', 'max erf ceil besseli x0 1 * 2 x0'),
+    ('erf / x1 bessely sinh sinh 3.0 asin x1', 'erf / x1 bessely sinh sinh 3 asin x1'),
+    ('besseli x0 harmonic besselk x0 3.0', 'besseli x0 harmonic besselk x0 3'),
+])
+def test_a_side_respelled_holds_in_strict(lhs, rhs) -> None:
+    # float64's cells past the layer's budget left the measure undecided, and strict refused
+    r = verify_rule(lhs.split(), rhs.split())
+    assert (r['tier'], r['realised'], r['f64_measure']) == ('core', True, 0.0), r
 
 
 def test_an_extension_is_still_measured() -> None:

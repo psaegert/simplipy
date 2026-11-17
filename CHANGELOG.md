@@ -168,8 +168,22 @@ organised by who you are, then the highlights, then every change in detail.
   `x0^(floor(x1)/2)` merged to `x0^floor(x1)` is refused.
 - **`f64` reads float64 at a pole no test point holds.** Where a divisor crosses zero, the
   judge solves for the zero and reads float64 at the doubles nearest it, where an isolated
-  pole's infinity is a value: `-1/(x0 - 3.5) -> 1/(3.5 - x0)` (-inf against +inf at x0 = 3.5)
-  is refused in `f64`, as `-1/(x0 - 3)` was.
+  pole's infinity is a value: a change of kind there is refused, as at a test point.
+- **`f64` does not promise an infinity's sign at an isolated pole.** Where a part is exactly zero
+  at an isolated point and an operation reads that zero as a pole (a divisor, `inv`, `pow` and
+  `rootn` at a negative exponent), float64's +inf and -inf agree there, as the two zeros do:
+  `-1/(x0 - 3) -> 1/(3 - x0)`, `1/(-x1 - 3) -> -1/(x1 + 3)` and `atan(-1/(x0 - 3)) ->
+  atan(1/(3 - x0))` hold in `f64`. The pole is isolated where, along a data variable or a fitted
+  constant, no operation reads a zero as a pole at the neighbouring doubles. An infinity's
+  sign on a region stays refused (`1/(0*x0) -> -inf/x0`, +inf against -inf for every x0 > 0), and
+  so does a change of kind at a pole (`1/sin(np.pi - x0) -> 1/sin(x0)`, +inf against 8.2e15 at
+  x0 = np.pi). The judge's f64 lane and the deployed bar read it; the mint's rows still refuse
+  such a difference, a pre-filter that refuses more than the judge.
+- **`f64` measures no extension where a side respells the other.** Where the whole left side
+  occurs on the right side under operations that keep it undefined, neither side has a value
+  where the other has none, and float64's measure is not left undecided by its cells:
+  `max(erf(ceil(besseli(x0, 1))), 2.0*x0) -> max(erf(ceil(besseli(x0, 1))), 2*x0)` holds in
+  `f64` (it was refused, as was every literal respelled inside `besseli` or `bessely`).
 - **A kernel's NaN is no range event.** At x = 800 both terms of `besseli(1, -x) +
   besseli(1, x)` overflow, and the true value 0 is accepted. But `besseli(1, x)` is NaN for
   0 < |x| <= 2.2e-308, where its true value is finite, so `besseli(1, -x) + besseli(1, x) -> 0`
@@ -203,7 +217,14 @@ organised by who you are, then the highlights, then every change in detail.
   around it only a value that turns on a zero's sign, an infinity included, on a region. With the
   rule `log(exp(x)) -> x`, `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is
   rounding under `1/`); `1/(0 + 0*x0) -> 1/(0*x0)` is still refused (+inf against -inf for
-  x0 < 0), and the engine still writes `1/(0*x0)` as `inf/x0`.
+  x0 < 0), and the engine still writes `1/(0*x0)` as `inf/x0`. The step read is the smallest part
+  the answer changed that holds as a step, a reciprocal's and a negation's spellings read as one:
+  `1/sin(np.pi - x0) -> 1/sin(x0)` is OK (the step `sin(np.pi - x0) -> sin(x0)` gives 0 against
+  1.2e-16 at x0 = np.pi, which `1/` makes +inf against 8.2e15), as is
+  `1/sin(x0 - np.pi) -> -1/sin(x0)`.
+- **The monitor refuses a whole answer whose value turns on a zero's sign.** An answer true in
+  the reals whose float64 differences are rounding alone was passed without reading a zero's
+  sign: `atan2(0*x0, -1) -> pi` (-pi against pi for every x0 < 0) passed, and is now refused.
 - **The precision ladder no longer refutes `log` of a value within 1e-99 of 1.** Where the
   coarse rung reads the two sides as one value, the judge measures the decay between the two finer
   rungs that both see a separation. `log(atanh(tanh(erf(x)))) -> log(erf(x))` was refuted at
@@ -2327,6 +2348,17 @@ model predictions.
   rule's tier cannot say which evidence applies, the licence reads the judgment, as
   `verify-mine` does, and the permissive mint certifies through `f64` with the two zeros one
   value.
+- **`f64` reads an infinity's sign at an isolated pole as a zero's.** At a point where float64's
+  two sides differ (F6) and agree once the zeros one side's operations read as poles (a divisor,
+  `inv`'s operand, the base of `pow` or `rootn` at a negative exponent) are read with the other
+  sign, they agree where the pole is isolated (along a data variable or a fitted constant, no
+  operation reads a zero as a pole at the neighbouring doubles), in F6 and where the reals give a
+  side no value alike; on a region they stay apart. The definition is the
+  core's (`battery::pole_sign_event`, `table::Expr::pole_flipped_f64`); the judge's f64 lane reads
+  it at every point where the sides differ (`_core.table_pole_sign`; a verdict reports
+  `POLE-SIGN` among `f64_kinds`), and the deployed bar at its probes, along a data variable or a
+  fitted constant and at a sort's isolated value. The monitor admits it in a whole answer
+  (`judge_pair`).
 - **A verdict's `permissive` includes `f64`.** It is permissive's reading, so it holds wherever
   `realised` does; permissive's own criterion alone is `permissive_own`. The field used to be
   the own criterion: `2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` read `realised`

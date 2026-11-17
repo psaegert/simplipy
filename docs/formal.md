@@ -615,6 +615,21 @@ and at the deployed bar's probes for every rule, each slot over its sort's value
 among them. The f64 mint applies the same bar to every pick. A zero's sign is `f64`'s alone:
 `permissive` includes `f64` with the two zeros one value, evidence included.
 
+**A pole's sign in `f64`** [BY CONSTRUCTION — one definition, `battery::pole_sign_event`]. At a
+point where no operation of either side overflows or underflows, float64's two sides differ only
+by a *pole's sign* where they differ (F6) and agree once the zeros one side's operations read as
+poles (a divisor, `inv`'s operand, the base of `pow` or `rootn` at a negative exponent) are read
+with the other sign: `-1/(x - 3)` and `1/(3 - x)` are $-\infty$ and $+\infty$ at $x = 3$. Where
+the pole is isolated -- along some data variable or left-side constant, at the neighbouring
+doubles on both sides no operation reads a zero as a pole, or one overflows or underflows -- the
+two sides agree there, in F6 and wherever the reals give a side no value alike: `f64` does not
+promise the sign of an infinity at an isolated pole. On a region it is a zero's sign on a region
+and stays refused (`1/(0 \cdot x) \to -\infty/x`), as does a pole whose zero holds on a region
+though the infinities part at isolated points only ($\lceil x_0\rceil^{x_1}\lceil x_0\rceil^{x_1}
+\to \lceil x_0\rceil^{2x_1}$ at $x_1 = -1/2$), and a change of kind at a pole (an infinity against
+a finite value) is no such event. The judge's f64 lane and the deployed bar read it at every point where
+the sides differ; the mint's rows do not, a pre-filter that refuses more than the judge.
+
 **The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
 licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$
 exists and some spelling of $p$ (its pattern, or an entry $m$ serves from it) has

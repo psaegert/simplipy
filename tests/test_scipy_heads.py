@@ -265,13 +265,12 @@ def test_a_rule_whose_points_had_no_reading_there_holds_in_permissive() -> None:
     assert r['permissive'] is True and 'unread_owed' not in r, r
 
 
-#: Why the engine and the judge read besseli's parity apart. `PER_STEP`: at an odd order the kernel
-#: gives `+0` at a zero of either sign, so `besseli(1, -x0) -> -besseli(1, x0)` moves only the sign
-#: of a zero at x0 = 0, at its own root, which reads none; an inverse around the step reads it as a
-#: pole's sign (the guarantee is per step). `SLOT`: a rule's slot has no zero set in the engine's
-#: reading of a pattern (as for every zero-sign premise), where the judge reads `_` as any part,
-#: `ceil(x0)` among them.
-PER_STEP = "an odd order's kernel gives +0 at both zeros; an inverse around the step reads it"
+#: Why the engine and the judge read besseli's parity apart. `SLOT`: a rule's slot has no zero set
+#: in the engine's reading of a pattern (as for every zero-sign premise), where the judge reads `_`
+#: as any part, `ceil(x0)` among them. At an odd order the kernel gives `+0` at a zero of either
+#: sign, so under an inverse `besseli(1, -x0) -> -besseli(1, x0)` is +inf against -inf at x0 = 0
+#: alone, an infinity's sign at an isolated pole, which strict does not promise: the engine and the
+#: judge agree there.
 SLOT = "a pattern's slot has no zero set in the engine's reading"
 
 
@@ -293,7 +292,7 @@ def parity_case(lhs, rhs, mode, *causes):
     parity_case('besseli 3 * -2 x0', 'neg besseli 3 * 2 x0', 'f64'),
     parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'f64'),
     parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'permissive'),
-    parity_case('inv besseli 1 neg x0', 'inv neg besseli 1 x0', 'f64', PER_STEP),
+    parity_case('inv besseli 1 neg x0', 'inv neg besseli 1 x0', 'f64'),
     parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'f64', SLOT),
     parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'permissive'),
 ])
@@ -308,7 +307,4 @@ def test_besselis_parity_is_taken_where_the_judge_holds_it(engine, lhs, rhs, mod
     if takes == holds:
         return
     assert causes and mode == 'f64' and takes and not holds, (lhs, mode, takes, d.get('verdict'))
-    if PER_STEP in causes:
-        assert lhs.split()[0] == 'inv' and _contract.judged_reading(
-            _contract.judge_rule(lhs.split()[1:], rhs.split()[1:]), mode) is True, lhs
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge {d.get("verdict")}')

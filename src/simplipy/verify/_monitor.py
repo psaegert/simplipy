@@ -30,11 +30,16 @@ step, and a rewrite the mode does not license as a whole is UNSCORED.
 A STEP IS HELD AT ITS OWN POINTS, AND IN ITS CONTEXT ONLY TO A ZERO'S SIGN. Each step is true in
 the reals and keeps float64's kinds at its own points; what an operation around it does with
 float64's rounding of its input is no step's promise. Where float64's kinds alone refuse an answer
-true in the reals, the part of the input the answer changed (below every operation the two share
-with its other arguments unchanged) is read as a step, and around it only a zero's sign is read
+true in the reals, the smallest part of the input the answer changed that holds as a step (below
+every operation the two share with its other arguments unchanged, a reciprocal's and a negation's
+spellings read as one) is read as the step, and around it only a zero's sign is read
 (`_contract.answer_zero_sign`): a value that turns on a zero's sign, an infinity included, on a
-region. `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is rounding under `1/`);
-`1/(0 + 0*x0) -> 1/(0*x0)` is not (+inf against -inf for x0 < 0).
+region. `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is rounding under `1/`),
+and so is `1/sin(np.pi - x1) -> 1/sin(x1)` (+inf against 8.2e15 at x1 = np.pi: the step
+`sin(np.pi - x1) -> sin(x1)` gives 0 against 1.2e-16 there); `1/(0 + 0*x0) -> 1/(0*x0)` is not
+(+inf against -inf for x0 < 0). Rounding alone apart, a whole answer whose value turns on a zero's
+sign on a region is refused too (`atan2(0*x0, -1) -> pi`). An infinity's sign at an isolated pole
+is not promised (the judge's reading of a pole's sign): `1/(-x0 - 3) -> -1/(x0 + 3)` is OK.
 
 A WHOLE ANSWER IS READ AT ITS ROOT. A zero's sign is a value where an operation reads it (F7),
 and no operation of the answer reads its root's: there two zeros of opposite sign are one value,
@@ -97,10 +102,12 @@ _REALS_UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'J
 
 
 #: Float64's disagreements F8 lets the engine's exact algebra leave: rounding and what rounding
-#: does near a zero or a pole (a sign, a zero against a nonzero), and a value where float64 reads
+#: does near a zero or a pole (a sign, a zero against a nonzero), a value where float64 reads
 #: the input as NaN (the rewrite holds in the reals: the reals' value, or an extension on a null
-#: set, `x/x -> 1` at 0). Not a zero's sign (F7: `0 + (-0)` is +0) or an infinity gained or lost.
-_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT'})
+#: set, `x/x -> 1` at 0), and an infinity's sign at an isolated pole, which strict does not
+#: promise (`1/(-x0 - 3) -> -1/(x0 + 3)`, +inf against -inf at x0 = -3 alone). Not a zero's sign on
+#: a region (F7: `0 + (-0)` is +0) or an infinity gained or lost.
+_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN'})
 
 
 def _steps(inp, mode, engine):
@@ -126,21 +133,58 @@ def _arguments(tokens):
     return out
 
 
-def _changed_part(lhs, rhs):
-    """THE PART OF THE INPUT THE ANSWER CHANGED: below every operation the two share with all its
-    other arguments unchanged, the smallest pair of subexpressions where they differ. The engine's
-    steps all lie inside it, and what lies around it is their context: `inv(log(exp(x0))) ->
-    inv(x0)` changes `log(exp(x0)) -> x0` under `inv`."""
-    lhs, rhs = list(lhs), list(rhs)
+def _literal_is(token, value):
+    """Is `token` a literal of the value `value` (`1`, `1.0`, `(-1)`)?"""
     try:
-        while lhs and rhs and lhs[0] == rhs[0] and _contract.ARITY.get(lhs[0], 0):
-            pairs = [(a, b) for a, b in zip(_arguments(lhs), _arguments(rhs)) if a != b]
-            if len(pairs) != 1:
-                break
-            lhs, rhs = pairs[0]
-    except IndexError:               # not one prefix expression: the whole rewrite
-        pass
-    return lhs, rhs
+        return _contract.literal_value(token) == value
+    except (ValueError, ArithmeticError):
+        return False
+
+
+def _signs_spelled_alike(node):
+    """The `_contract._term` tree `node` with float64's identical spellings of a reciprocal and a
+    negation made one: `1/t` as `inv(t)`, `-1/t` and `-inv(t)` as `inv(-t)`, `-1*t` and `t*-1` as
+    `-t`. Each is the value of the spelling it replaces at every point, in the reals and bit for
+    bit in float64 (a quotient's sign is its operands'), so the parts two sides share are found
+    where the engine spelled a reciprocal or moved a sign out of it: `1/sin(x1 - pi) -> -1/sin(x1)`
+    shares `inv` and changes `sin(x1 - pi) -> -sin(x1)`."""
+    head, kids = node
+    kids = tuple(_signs_spelled_alike(k) for k in kids)
+    if head == '/' and not kids[0][1] and _literal_is(kids[0][0], 1):
+        return ('inv', (kids[1],))
+    if head == '/' and not kids[0][1] and _literal_is(kids[0][0], -1):
+        return ('inv', (_signs_spelled_alike(('neg', (kids[1],))),))
+    if head == 'neg' and kids[0][0] == 'inv':
+        return ('inv', (_signs_spelled_alike(('neg', kids[0][1])),))
+    if head == '*':
+        for i in (0, 1):
+            if not kids[i][1] and _literal_is(kids[i][0], -1):
+                return _signs_spelled_alike(('neg', (kids[1 - i],)))
+    return (head, kids)
+
+
+def _changed_parts(lhs, rhs):
+    """THE PARTS OF THE INPUT THE ANSWER CHANGED, outermost first: below every operation the two
+    share with all its other arguments unchanged, each pair of subexpressions down to the smallest
+    one where they differ, read with a reciprocal's and a negation's spellings made one
+    (`_signs_spelled_alike`). The engine's steps all lie inside the smallest, and what lies around
+    a part is its context: `inv(log(exp(x0))) -> inv(x0)` changes `log(exp(x0)) -> x0` under
+    `inv`, and `1/sin(np.pi - x1) -> inv(sin(x1))` changes `np.pi - x1 -> x1`, inside
+    `sin(np.pi - x1) -> sin(x1)`, under `inv`. Only the whole rewrite where it is no one prefix
+    expression on each side."""
+    try:
+        node_l = _signs_spelled_alike(_contract._term(lhs))
+        node_r = _signs_spelled_alike(_contract._term(rhs))
+    except (ValueError, IndexError):
+        return [(list(lhs), list(rhs))]
+    parts = [(_contract._tokens_of(node_l), _contract._tokens_of(node_r))]
+    while node_l[0] == node_r[0] and node_l[1] and len(node_l[1]) == len(node_r[1]):
+        pairs = [(a, b) for a, b in zip(node_l[1], node_r[1]) if a != b]
+        if len(pairs) != 1:
+            break
+        node_l, node_r = pairs[0]
+        parts.append((_contract._tokens_of(node_l), _contract._tokens_of(node_r)))
+    return parts
 
 
 def _held(detail, name, engine, exact_steps):
@@ -176,6 +220,12 @@ def _held(detail, name, engine, exact_steps):
             return 'VIOLATION', (f'F8: {verdict} ({tier}), float64 {sorted(kinds - _F8_KINDS)}: '
                                  f'{str(detail.get("unrealised"))[:160]}'), \
                 sorted(kinds) if alone else None
+        if name == 'f64' and _contract.answer_zero_sign(detail) is False:
+            # rounding alone apart, but a value that turns on a zero's sign on a region (F7):
+            # `atan2(0*x0, -1) -> pi` is -pi against pi for x0 < 0
+            return 'VIOLATION', (f'F8: {verdict} ({tier}), a value that turns on a zero\'s sign: '
+                                 f'{str(detail.get("zero_sign_answer") or detail.get("zero_sign"))[:160]}'), \
+                None
         if exact_steps:
             return 'OK', f'F8: {verdict} ({tier}), float64 rounding alone', None
         return 'UNSCORED', f'F8: {verdict} ({tier}) through a step that holds in {name} alone', None
@@ -226,20 +276,28 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     if kinds is None:
         return verdict, why
     # float64's kinds alone refuse a rewrite true in the reals: each step is held at its own
-    # points, and in its context only to a zero's sign. The part of the input the answer changed
-    # is read as a step; around it, a change of kind is float64's rounding of the step's input
+    # points, and in its context only to a zero's sign. The smallest part of the input the answer
+    # changed that holds as a step is read as one (the engine's steps lie inside the smallest
+    # changed part, and so inside every part around it: `sin(np.pi - x1) -> sin(x1)` around
+    # `np.pi - x1 -> x1`); around it, a change of kind is float64's rounding of the step's input
     # magnified by an operation of the context, unless a value turns on a zero's sign there
-    part_lhs, part_rhs = _changed_part(lhs, rhs)
-    if (part_lhs, part_rhs) == (lhs, rhs):
+    parts = _changed_parts(lhs, rhs)[1:]
+    if not parts:
         return verdict, why
-    said = f'{" ".join(part_lhs)} -> {" ".join(part_rhs)}'
-    try:
-        part = _contract.judge_rule(part_lhs, part_rhs)
-    except Exception as error:
-        return verdict, f'{why}; the changed part {said}: {type(error).__name__}: {error}'
-    part_verdict, part_why, _ = _held(part, name, engine, exact_steps)
-    if part_verdict != 'OK':
-        return verdict, f'{why}; the changed part {said}: {part_why}'
+    first_why = None
+    for part_lhs, part_rhs in reversed(parts):
+        said = f'{" ".join(part_lhs)} -> {" ".join(part_rhs)}'
+        try:
+            part = _contract.judge_rule(part_lhs, part_rhs)
+        except Exception as error:
+            part_verdict, part_why = 'UNSCORED', f'{type(error).__name__}: {error}'
+        else:
+            part_verdict, part_why, _ = _held(part, name, engine, exact_steps)
+        if part_verdict == 'OK':
+            break
+        first_why = first_why or f'{why}; the changed part {said}: {part_why}'
+    else:
+        return verdict, first_why
     if name == 'f64' and _contract.answer_zero_sign(detail) is False:
         return 'VIOLATION', (f'F8: a zero\'s sign under an operation that reads it, around the '
                              f'changed part {said}: '

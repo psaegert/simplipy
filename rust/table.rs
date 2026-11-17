@@ -2108,6 +2108,44 @@ impl Expr {
             .is_some_and(|(v, _)| f64_agree(v, plus) != Cmp::Eq)
     }
 
+    /// float64's value at `env` with every zero an operation reads AS A POLE read with the other
+    /// sign: a divisor (`/`'s second argument), `inv`'s argument, and the base of `pow` and `rootn`
+    /// at a negative exponent or index, where float64 gives the zero an infinity of its sign
+    /// (`1/(+0)` is +inf, `1/(-0)` is -inf, `pow(-0, -3)` is -inf). `None` where no operation
+    /// reads a zero so (no pole at `env`) or the evaluation fails. Strict does not promise the
+    /// sign of an infinity at an isolated pole (`battery::pole_sign_event`).
+    pub fn pole_flipped_f64(&self, env: &[f64]) -> Option<f64> {
+        let mut read = false;
+        let v = self.node_pole_flipped(self.root, env, &mut read)?;
+        read.then_some(v)
+    }
+
+    /// `node_f64` with every zero an operation reads as a pole read with the other sign (`read`
+    /// says whether one was).
+    fn node_pole_flipped(&self, i: usize, env: &[f64], read: &mut bool) -> Option<f64> {
+        match &self.nodes[i] {
+            Node::Var(k) => env.get(*k).copied(),
+            Node::Lit(_, tok) => literal_f64(tok),
+            Node::Op(name, kids) => {
+                let mut args = Vec::with_capacity(kids.len());
+                for &k in kids {
+                    args.push(self.node_pole_flipped(k, env, read)?);
+                }
+                let pole = match (name.as_str(), args.as_slice()) {
+                    ("/", [_, d]) => (*d == 0.0).then_some(1),
+                    ("inv", [d]) => (*d == 0.0).then_some(0),
+                    ("pow" | "rootn", [b, e]) => (*b == 0.0 && *e < 0.0).then_some(0),
+                    _ => None,
+                };
+                if let Some(at) = pole {
+                    args[at] = -args[at];
+                    *read = true;
+                }
+                crate::numeric::apply_op(name, &args)
+            }
+        }
+    }
+
     /// `node_f64` with every negative zero a sign-reading operation receives read as +0 (`read`
     /// says whether one was).
     fn node_plus_zero(&self, i: usize, env: &[f64], read: &mut bool) -> Option<f64> {

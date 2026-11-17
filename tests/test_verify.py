@@ -1911,9 +1911,11 @@ def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
     for src in ('/ x0 / x0 - pow x0 2 x0', 'tan + x0 np.pi'):
         out = eng.simplify(src.split())
         assert judge_pair(src.split(), out, engine=eng)[0] == 'OK', (src, out)
+    # +inf against -inf at x0 = +-0 alone (x0^4 underflows around it, where the true value stands):
+    # strict does not promise an infinity's sign at an isolated pole
     src = 'inv + 0 neg pow x0 4'.split()
-    verdict, detail = judge_pair(src, eng.simplify(src), engine=eng)
-    assert verdict == 'VIOLATION' and 'INF-CHANGE' in detail, detail
+    assert eng.simplify(src) == ['/', '-1', 'pow', 'x0', '4']
+    assert judge_pair(src, eng.simplify(src), engine=eng) == ('OK', 'CERTIFIED (core)')
 
 
 def test_the_monitor_reads_a_step_in_its_context_only_for_a_zeros_sign() -> None:
@@ -1942,6 +1944,51 @@ def test_the_monitor_reads_a_step_in_its_context_only_for_a_zeros_sign() -> None
     verdict, detail = judge_pair('inv inv atanh tanh x0'.split(), 'inv inv x0'.split(),
                                  engine=bare)
     assert verdict == 'VIOLATION' and 'the changed part atanh tanh ?0 -> ?0' in detail, detail
+
+
+def test_the_monitor_reads_the_smallest_changed_part_that_holds_as_a_step() -> None:
+    # the step `sin(np.pi - x0) -> sin(x0)` gives 0 against 1.2e-16 at x0 = np.pi, both finite;
+    # under `1/` that is +inf against 8.2e15, float64's rounding of the step's input magnified
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    for src, part in (('/ 1 sin - np.pi x0', 'sin - np.pi ?0 -> sin ?0'),
+                      ('/ 1 sin - x0 np.pi', 'sin - ?0 np.pi -> neg sin ?0'),
+                      ('/ 1 sin + x0 np.pi', 'sin + ?0 np.pi -> neg sin ?0')):
+        out = bare.simplify(src.split())
+        verdict, detail = judge_pair(src.split(), out, engine=bare)
+        assert verdict == 'OK' and f'the changed part {part} holds' in detail, (src, out, detail)
+        # the whole, read as a rule, changes float64's kind at x0 = np.pi
+        assert judge_rule(src.split(), out)['tier'] == 'permissive', (src, out)
+    # no part of a false answer holds
+    verdict, _ = judge_pair('/ 1 sin - np.pi x0'.split(), 'inv sin + x0 1'.split(), engine=bare)
+    assert verdict == 'VIOLATION'
+
+
+def test_the_monitor_refuses_a_whole_answer_that_turns_on_a_zeros_sign() -> None:
+    # true in the reals and float64's kinds kept (-pi against pi), but -pi for every x0 < 0, where
+    # `0*x0` is -0 and atan2 reads it
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    verdict, detail = judge_pair('atan2 * 0 x0 -1'.split(), ['np.pi'], engine=bare)
+    assert verdict == 'VIOLATION' and "turns on a zero's sign" in detail, detail
+
+
+def test_the_monitor_does_not_hold_an_infinitys_sign_at_an_isolated_pole() -> None:
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    # +inf against -inf at x0 = -3 alone
+    src = '/ 1 - neg x0 3'.split()
+    assert bare.simplify(src) == ['/', '-1', '+', 'x0', '3']
+    assert judge_pair(src, bare.simplify(src), engine=bare) == ('OK', 'CERTIFIED (core)')
+    # +inf against -inf for every x0 > 0: an infinity's sign on a region
+    assert judge_pair('/ 1 * 0 x0'.split(), '/ float("-inf") x0'.split(),
+                      engine=bare)[0] == 'VIOLATION'
 
 
 # ------------------------------------------------------------------------------------------

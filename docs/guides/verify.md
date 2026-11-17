@@ -63,8 +63,13 @@ float64's two sides agree in kind -- both finite -- at every such point the judg
 their difference is rounding), and to 8 ULP at every other point: where the reals give one side
 no value, float64 decides (`1/3^t -> (1/3)^t` holds at `_`, where at t = -inf the left side has
 no real value and float64 gives +inf on both sides). An isolated pole's infinity is a value: the
-judge solves for the zeros of a divisor and reads float64 at the doubles nearest them
-(`-1/(x0 - 3.5) -> 1/(3.5 - x0)` is -inf against +inf at x0 = 3.5). A kernel's NaN is
+judge solves for the zeros of a divisor and reads float64 at the doubles nearest them, where a
+change of kind is refused (`1/sin(np.pi - x0) -> 1/sin(x0)` is +inf against 8.2e15 at
+x0 = np.pi). The sign of that infinity is not promised: where a part is exactly zero at an
+isolated point and an operation reads it as a pole, +inf and -inf agree, as the two zeros do, so
+`-1/(x0 - 3.5) -> 1/(3.5 - x0)` (-inf against +inf at x0 = 3.5 alone) and
+`1/(-x1 - 3) -> -1/(x1 + 3)` hold in `f64`, while `1/(0*x0) -> -inf/x0` (+inf against -inf for
+every x0 > 0) does not. A kernel's NaN is
 float64's value, not a range event (`besseli(1, x)` is NaN for 0 < |x| <= 2.2e-308). The
 second reading admits the identities float64 only rounds, however far a jump or a pole
 magnifies the rounding, and nothing false in the reals:
@@ -282,7 +287,12 @@ The gate's complement: instead of a per-rule scan, `monitor_ruleset` runs the
 input→output rewrite as the judge judges a rule, in the mode it was made in,
 attributing any violation to the rule set or, where the rules-empty engine
 makes it too, to the engine. It has no evaluator of its own: every value it
-compares is the core's. Both the gate and the monitor carry poison
+compares is the core's. An answer is held per step: every rule step to the mode, and the
+engine's own algebra to the reals with float64's kinds kept at the step's own points. Around the
+smallest part of the input the answer changed that holds as a step, only a zero's sign on a
+region is read, so `1/sin(np.pi - x0) -> 1/sin(x0)` passes (the step `sin(np.pi - x0) ->
+sin(x0)` gives 0 against 1.2e-16 at x0 = np.pi, which `1/` makes +inf against 8.2e15) and
+`atan2(0*x0, -1) -> pi` does not (-pi against pi for every x0 < 0). Both the gate and the monitor carry poison
 self-tests (`selftest`) that must pass before their verdicts are trusted.
 
 ## Promotion: `simplipy.promotion.promote`

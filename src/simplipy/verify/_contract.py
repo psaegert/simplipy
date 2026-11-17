@@ -2718,6 +2718,22 @@ def zero_sign_refusal(tl, tr, env, guards, answer=False):
     return _table.table_zero_sign_refusal(lexpr, rexpr, vals, along, answer)
 
 
+def pole_sign(tl, tr, env, guards):
+    """STRICT'S READING OF A POLE'S SIGN AT float64's POINT `env`, the core's one definition
+    (`_core.table_pole_sign`): None where the two sides do not differ there by the sign of an
+    infinity at a pole alone -- float64's values differ (F6), no operation overflowed or
+    underflowed, and they agree once the zeros one side's operations read as poles (a divisor,
+    `inv`, the base of `pow` and `rootn` at a negative exponent) are read with the other sign --
+    else whether its pole is isolated along a name of `guards` (the data slots and the left side's
+    constants: at the neighbouring doubles no operation reads a zero as a pole), where the two
+    sides agree. `-1/(x - 3)` and `1/(3 - x)` are -inf and +inf at x = 3 alone: True. `1/(0*x)`
+    and `-inf/x` are +inf and -inf for every x > 0: False."""
+    lexpr, rexpr, names, extra = _pair_compiled(tl, tr)
+    vals = [float(extra[n] if n in extra else env[n]) for n in names]
+    along = [i for i, n in enumerate(names) if n in guards]
+    return _table.table_pole_sign(lexpr, rexpr, vals, along)
+
+
 def strict_at_the_root(detail):
     """STRICT'S READING OF A STEP NO OPERATION READS ABOVE, the root of an answer: a zero's sign is
     a value where an operation reads it (F7), and nothing reads the root's, so two zeros of opposite
@@ -3485,7 +3501,10 @@ def _no_extension(lhs, rhs, f64=False):
     operand makes an operation undefined in the reals (THE TABLE), and in float64 at the heads
     that keep a NaN (`_F64_PROPAGATING`). So where the left side has no value at a point, some
     node of it is the first undefined one there (`_origin`), and the extension lies where that
-    node has none and the right side has a value. Each such node is covered:
+    node has none and the right side has a value. The whole left side is covered where it occurs
+    on the right side under heads that keep it undefined (in float64, a side that respells the
+    other's literals, `max(erf(ceil(besseli(x0, 1))), 2.0*x0)` against `2*x0`, though `max` drops a
+    NaN inside it); otherwise each such node is covered:
       - where it occurs on the right side (the same slots, literals read as their values, no
         `<constant>`) under heads that keep it undefined: the right side has no value there
         either. `x0/299792458` and `cos(x0) + log(cos(x1))` against themselves, and
@@ -3517,6 +3536,12 @@ def _no_extension(lhs, rhs, f64=False):
             walk(c, keeps and (not f64 or node[0] in _F64_PROPAGATING))
 
     walk(tr, True)
+    if _node_key(tl) in kept:
+        # the whole left side occurs on the right under heads that keep it undefined: wherever it
+        # has no value, neither does the right side. A rule that respells a side (`max(erf(x),
+        # 2.0*x) -> max(erf(x), 2*x)`, literals read as their values) is so shown, whatever heads
+        # inside it drop an undefined operand
+        return True
     slots = sorted({key for t in list(lhs) + list(rhs) if (key := slot_key(t))})
     spelling = {s: f'x{i}' for i, s in enumerate(slots)}
 
@@ -3873,16 +3898,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # a zero's sign is guarded by a data slot or a left-side constant (`zero_sign_refusal`)
     zero_sign_guards = frozenset(q_names) | (frozenset() if has_cr else frozenset(lnames))
 
-    def zero_sign_at(env, answer=False):
-        """Strict's reading of a zero's sign at float64's point `env` (`zero_sign_refusal`; with
-        `answer`, a whole answer's in its context). With a fitted target constant, a left-side
-        constant guards its point where, at each neighbouring double of it, the witness fitted
-        there shows no such event: `log(C^x) -> D*x` at C = 1 has the witness 0, where `0*x` is
-        -0 for x < 0 against the left side's +0, and at 1 +- 1 unit in the last place the
-        witness is no zero."""
-        event = zero_sign_refusal(tl, tr, env, zero_sign_guards, answer)
-        if event is None or not has_cr:
-            return event
+    def isolated_by_a_refit(env, shown):
+        """With a fitted target constant, does a left-side constant isolate an event at float64's
+        point `env`: at each neighbouring double of it, the witness fitted there shows none
+        (`shown(env)` False)?"""
         for n in lnames:
             x = float(env[n])
             if not math.isfinite(x):
@@ -3904,11 +3923,35 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 e = dict(env)
                 e.update({k: F(c) for k, c in cl.items()})
                 e.update({k: F(w) for k, w in ws.items()})
-                if zero_sign_refusal(tl, tr, e, frozenset(), answer) == event:
+                if shown(e):
                     break
             else:
-                return None
-        return event
+                return True
+        return False
+
+    def zero_sign_at(env, answer=False):
+        """Strict's reading of a zero's sign at float64's point `env` (`zero_sign_refusal`; with
+        `answer`, a whole answer's in its context). With a fitted target constant, a left-side
+        constant guards its point where, at each neighbouring double of it, the witness fitted
+        there shows no such event: `log(C^x) -> D*x` at C = 1 has the witness 0, where `0*x` is
+        -0 for x < 0 against the left side's +0, and at 1 +- 1 unit in the last place the
+        witness is no zero."""
+        event = zero_sign_refusal(tl, tr, env, zero_sign_guards, answer)
+        if event is None or not has_cr:
+            return event
+        shown = lambda e: zero_sign_refusal(tl, tr, e, frozenset(), answer) == event  # noqa: E731
+        return None if isolated_by_a_refit(env, shown) else event
+
+    def pole_sign_at(env, at_null=False):
+        """STRICT'S READING OF A POLE'S SIGN at float64's point `env` (`pole_sign`): do the two
+        sides differ there only by the sign of an infinity at a pole that is isolated along a data
+        slot or a left-side constant without a fitted target constant (`zero_sign_guards`), or at a
+        slot's isolated value (`at_null`, its sort's null set)? There they agree: strict does not
+        promise an infinity's sign at an isolated pole, as it does not promise a zero's
+        (`-1/(x0 - 3) -> 1/(3 - x0)` is -inf against +inf at x0 = 3 alone), while on a region the
+        sign stays (`1/(0*x0) -> -inf/x0`, +inf against -inf for x0 > 0)."""
+        reading = pole_sign(tl, tr, env, zero_sign_guards)
+        return reading is not None and (reading or at_null)
 
     def deployed(tl_env, v, point, all_real, snapped, out, owed=False, isolated=False):
         """The f64 lane at one point, on float64's own values: append `(kind, point)` to
@@ -3936,6 +3979,19 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             exact_point = ground and not has_cl
             if exact_point and dv == 'eq' and not _table.table_f64_same(float(_dl), float(_dr)):
                 dv = 'REAL-CHANGE'
+            if dv != 'eq' and not exact_point and in_range[0]:
+                try:
+                    pole = pole_sign_at(tl_env, isolated)
+                except Exception:  # noqa: BLE001  (a point it cannot read is read as it stands)
+                    pole = False
+                if pole:
+                    # AN INFINITY'S SIGN AT AN ISOLATED POLE IS NOT PROMISED: the two sides differ
+                    # there only by the sign of a zero an operation reads as a pole, and agree, as
+                    # two zeros of opposite sign do (F6 and the reading where the reals give a side
+                    # no value alike)
+                    out['kinds'].add('POLE-SIGN')
+                    out['read'] += 1
+                    return
             if not exact_point and not in_range[0] and not snapped and v == 'eq':
                 # THE f64 STANDARD: an operation of either side overflowed or underflowed,
                 # and the rewrite gives the true value -- an agreeing observation
@@ -4423,10 +4479,11 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         """THE POLES (`_pole_probes`), at the generic constants: along each lane, where a
         divisor crosses zero between two grid points, the zero is solved at `_PREIMAGE_DPS` and
         float64 is read at the doubles nearest it. Float64 gives an isolated pole an infinity,
-        and that infinity is a value: `-1/(x0 - 3.5) -> 1/(3.5 - x0)` is -inf against +inf at
-        x0 = 3.5, which no battery point or grid point holds. Where float64 never lands on the
-        zero, there is no pole in its values, and nothing to read. The reals give a division by
-        zero no value, so the pole is float64's alone."""
+        and that infinity is a value at x0 = 3.5 in `1/(x0 - 3.5)`, which no battery point or grid
+        point holds: a change of kind there is read, while its sign is not promised
+        (`pole_sign_at`: `-1/(x0 - 3.5) -> 1/(3.5 - x0)`, -inf against +inf there alone, holds).
+        Where float64 never lands on the zero, there is no pole in its values, and nothing to
+        read. The reals give a division by zero no value, so the pole is float64's alone."""
         probes = list(dict.fromkeys(_pole_probes(tl) + _pole_probes(tr)))
         if not probes:
             return

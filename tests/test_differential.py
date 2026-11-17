@@ -886,6 +886,10 @@ def test_permissive_cancels_an_inverse_pair_in_both_orders(outer, inner) -> None
 #: reads the argument too (`ceil(x0)` is an integer, never inside the flat band).
 FAIL_CLOSED = ("the flat point's premise reads the context, not the argument: the pair stays "
                "under a reader of zeros")
+#: Why the engine keeps a step the judge holds: it keeps the sign float64 gives an infinity at an
+#: isolated pole, which strict does not promise (`1/log(1/x0)` is +inf and `1/(-log(x0))` -inf at
+#: x0 = 1 alone).
+POLE_SIGN_KEPT = "the engine keeps an infinity's sign at an isolated pole, which strict does not promise"
 
 
 class KnownDisagreement(AssertionError):
@@ -950,10 +954,12 @@ FUNCTION_PINS = [
     function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'permissive'),
     function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'permissive'),
     function_case('fun.log_inverse', 'sin log inv x0', 'sin neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'f64', POLE_SIGN_KEPT),
     function_case('fun.log_inverse', 'inv inv log inv x0', 'neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'f64'),
-    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'f64'),
+    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'f64',
+                  POLE_SIGN_KEPT),
+    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'f64',
+                  POLE_SIGN_KEPT),
     function_case('fun.log_inverse', 'log inv exp x0', 'neg log exp x0', 'f64'),
     function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'f64'),
     function_case('fun.exp_log', 'exp log abs x0', 'abs x0', 'f64'),
@@ -975,7 +981,7 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
                                                                   causes) -> None:
     """The engine takes the step at effort 0 exactly where the judge holds the rule in the mode,
     or the two disagree for the cause the row names (`FAIL_CLOSED`: the engine keeps a flat pair
-    under a reader of zeros whatever its argument)."""
+    under a reader of zeros whatever its argument; `POLE_SIGN_KEPT`)."""
     engine = bare()
     takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
              == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
@@ -991,6 +997,8 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
         reader, pair = lhs.split()[0], lhs.split()[1:]
         assert reader == 'inv' and pair[:2] in (['log', 'exp'], ['acosh', 'cosh']), lhs
         assert list(engine.simplify(pair, mode=mode, effort=0)) != pair, pair
+    if POLE_SIGN_KEPT in causes:
+        assert mode == 'f64' and holds and not takes and 'POLE-SIGN' in (d.get('f64_kinds') or ()), lhs
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
                             f'{d.get("verdict")} {d.get("tier")}')
 
@@ -1002,14 +1010,13 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
 #: only over a leaf, the one base certain never to reach an infinity. `ONE_SPELLING`: an odd root
 #: under an integer power stays a root, so its class keeps one spelling (`rootn(t, m)^k`
 #: collects with `rootn(t, m)`, `t^(k/m)` would not), where the judge holds the composition over
-#: t >= 0 and, by permissive's powers compose, for every t. `PER_STEP`: float64's
-#: `x ** 0.5` is numpy's `sqrt`, which keeps the `-0` of an isolated point (x0 = -0), where
-#: `rootn(x0, 2)` and `x0^(3/2)` give `+0`; the step holds at its own root, and an inverse
-#: around it reads the sign (the guarantee is per step).
+#: t >= 0 and, by permissive's powers compose, for every t. Float64's `x ** 0.5` is numpy's
+#: `sqrt`, which keeps the `-0` of an isolated point (x0 = -0), where `rootn(x0, 2)` and
+#: `x0^(3/2)` give `+0`: under an inverse that is an infinity's sign at an isolated pole, which
+#: strict does not promise, so the engine and the judge agree there.
 DISTRIBUTION_HELD = 'the distribution keeps a product holding a sum that vanishes on a region'
 NEVER_INFINITE = 'a negative odd inner power composes over a leaf alone'
 ONE_SPELLING = "an odd root under an integer power stays a root: its class keeps one spelling"
-PER_STEP = "float64's sqrt keeps an isolated -0, which an inverse around the step reads"
 
 
 def power_case(law, lhs, rhs, mode, *causes):
@@ -1056,11 +1063,11 @@ POWER_PINS = [
     power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'f64'),
     power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'permissive'),
     power_case('pow.half_root', 'inv pow ceil x0 0.5', 'inv rootn ceil x0 2', 'f64'),
-    power_case('pow.half_root', 'inv pow x0 0.5', 'inv rootn x0 2', 'f64', PER_STEP),
+    power_case('pow.half_root', 'inv pow x0 0.5', 'inv rootn x0 2', 'f64'),
     power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'f64'),
     power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'permissive'),
     power_case('mul.collect', '* rootn x0 2 x0', 'pow x0 1.5', 'f64'),
-    power_case('mul.collect', 'inv * rootn x0 2 x0', 'inv pow x0 1.5', 'f64', PER_STEP),
+    power_case('mul.collect', 'inv * rootn x0 2 x0', 'inv pow x0 1.5', 'f64'),
     power_case('mul.collect', '* pow abs x0 0.5 pow abs x0 0.5', 'abs x0', 'f64'),
     # the symbolic merge: the level sets of the exponent null (nonconstant entire), and the base
     # not -0 on a region; a fat level set, or an exponent no certificate reads, stays
@@ -1083,8 +1090,7 @@ def test_the_engine_takes_a_law_of_powers_where_the_judge_holds_it(law, lhs, rhs
                                                                    causes) -> None:
     """The engine takes the step at effort 0 exactly where the judge holds the rule in the mode,
     or the two disagree for the cause the row names: the engine keeps what the judge holds
-    (`DISTRIBUTION_HELD`, `NEVER_INFINITE`, `ONE_SPELLING`), or takes, under an inverse, a step the
-    judge holds at its own root (`PER_STEP`)."""
+    (`DISTRIBUTION_HELD`, `NEVER_INFINITE`, `ONE_SPELLING`)."""
     engine = bare()
     takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
              == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
@@ -1093,27 +1099,23 @@ def test_the_engine_takes_a_law_of_powers_where_the_judge_holds_it(law, lhs, rhs
     if takes == holds:
         return
     assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('tier'))
-    if PER_STEP in causes:
-        reader, step = lhs.split()[0], (lhs.split()[1:], rhs.split()[1:])
-        assert mode == 'f64' and takes and not holds and reader == 'inv', (lhs, mode)
-        assert _contract.judged_reading(judged(' '.join(step[0]), ' '.join(step[1])),
-                                        mode) is True, step
-    else:
-        assert holds and not takes, (lhs, mode)
+    assert holds and not takes, (lhs, mode)
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
                             f'{d.get("verdict")} {d.get("tier")}')
 
 
 #: Why the engine and the judge read a law of signs apart. `ROOT_ZERO`: the step moves only the
 #: sign of a zero, at its own root, which reads none, where the judge reads the rule wherever it
-#: fires and the coincidence x0 = x1 as a line of the plane. `ISOLATED_POLE`: at an isolated zero
-#: of a sum `f64` keeps no zero's sign, nor the sign of the infinity a pole makes of it (a one-signed
-#: pole keeps its limit), where the judge reads float64's infinity there. `COINCIDENCE`: the input
-#: has no value where x0 = x1, which the answer extends, and the judge does not decide the measure
-#: of a coincidence of two variables. `ONE_ZERO`: `permissive` reads one zero, where
-#: `atan2(0, -1)` is pi: it takes no step of its own, and holds the rule by `f64`'s reading.
+#: fires and the coincidence x0 = x1 as a line of the plane. `POLE_LIMIT`: `f64` reads a sum of
+#: poles at their isolated zero by its limit (`1/(x0 - 3) + 1/(3 - x0)` is 0), where float64 gives
+#: an infinity there (+inf at x0 = 3): a change of kind, which the judge refuses at a pole as
+#: anywhere (the sign of an infinity at an isolated pole is not promised, its kind is).
+#: `COINCIDENCE`: the input has no value where x0 = x1, which the answer extends, and the judge does
+#: not decide the measure of a coincidence of two variables. `ONE_ZERO`: `permissive` reads one
+#: zero, where `atan2(0, -1)` is pi: it takes no step of its own, and holds the rule by `f64`'s
+#: reading.
 ROOT_ZERO = 'the step moves only the sign of a zero at its own root, which reads none'
-ISOLATED_POLE = "f64 keeps no sign of an isolated zero, which the judge reads as a pole's infinity"
+POLE_LIMIT = "f64 reads a sum of poles at their zero by its limit, a change of kind the judge refuses"
 COINCIDENCE = 'the judge does not decide the measure of a coincidence of two variables'
 ONE_ZERO = "permissive's one zero: no step of its own"
 
@@ -1127,8 +1129,8 @@ def sign_case(law, lhs, rhs, mode, *causes):
 #: The laws of signs and orientation over sums that vanish on a line, at an isolated point, on a
 #: region and never, at the root and under an inverse, in both modes. In `f64` a sum keeps the sign
 #: of its zero on a region under a reader; at an isolated zero float64 gives a pole the infinity of
-#: the sign written (a sum is +0 there in either orientation), a zero's sign the engine does not
-#: keep (`class.pole_orientation`).
+#: the sign written (a sum is +0 there in either orientation), a sign that neither the engine keeps
+#: nor strict promises (`class.pole_orientation`).
 SIGN_PINS = [
     sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'f64', ROOT_ZERO),
     sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'permissive'),
@@ -1138,27 +1140,27 @@ SIGN_PINS = [
               'inv * 2 sin - neg ceil x0 floor x1', 'f64'),
     sign_case('class.sign_trade', 'inv * -2 sin + ceil x0 floor x1',
               'inv * 2 sin - neg ceil x0 floor x1', 'permissive'),
-    sign_case('class.sign_trade', 'inv neg sin - x0 3', 'inv sin - 3 x0', 'f64', ISOLATED_POLE),
-    sign_case('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'f64', ISOLATED_POLE),
+    sign_case('class.sign_trade', 'inv neg sin - x0 3', 'inv sin - 3 x0', 'f64'),
+    sign_case('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'f64'),
     sign_case('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'permissive'),
-    sign_case('class.pole_orientation', 'neg inv sin - x0 3', 'inv sin - 3 x0', 'f64', ISOLATED_POLE),
-    sign_case('class.pole_orientation', 'pow * -2 - x0 3 -1', '/ inv - 3 x0 2', 'f64', ISOLATED_POLE),
+    sign_case('class.pole_orientation', 'neg inv sin - x0 3', 'inv sin - 3 x0', 'f64'),
+    sign_case('class.pole_orientation', 'pow * -2 - x0 3 -1', '/ inv - 3 x0 2', 'f64'),
     sign_case('class.pole_orientation', 'pow * -2 - x0 3 -1', '/ inv - 3 x0 2', 'permissive'),
     sign_case('class.pole_orientation', 'neg inv - -1 pow x0 2', 'inv + pow x0 2 1', 'f64'),
     sign_case('class.pole_orientation', 'inv neg - x0 3', 'neg inv - x0 3', 'f64'),
     sign_case('class.opposite_sums', '* - x0 3 - 3 x0', 'neg pow - x0 3 2', 'f64'),
-    sign_case('class.opposite_sums', 'inv * - x0 3 - 3 x0', 'neg inv pow - x0 3 2', 'f64', ISOLATED_POLE),
+    sign_case('class.opposite_sums', 'inv * - x0 3 - 3 x0', 'neg inv pow - x0 3 2', 'f64'),
     sign_case('class.opposite_sums', 'inv * - x0 3 - 3 x0', 'neg inv pow - x0 3 2', 'permissive'),
     sign_case('class.opposite_sums', '/ - x0 3 - 3 x0', '-1', 'f64'),
     sign_case('class.opposite_sums', '/ - x0 x1 - x1 x0', '-1', 'f64', COINCIDENCE),
     sign_case('class.like_terms_up_to_sign', '+ sin - x0 x1 sin - x1 x0', '0', 'f64'),
-    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'f64', ISOLATED_POLE),
+    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'f64', POLE_LIMIT),
     sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'permissive'),
     sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 neg inv - 3 x0', '* 2 inv - x0 3', 'f64'),
     sign_case('pow.even_orientation', 'pow - x1 x0 2', 'pow - x0 x1 2', 'f64'),
     sign_case('pow.even_orientation', 'pow - x1 x0 -2', 'pow - x0 x1 -2', 'f64'),
     sign_case('pow.negated_site', 'pow neg - x0 3 3', 'pow - 3 x0 3', 'f64'),
-    sign_case('pow.negated_site', 'inv pow neg - x0 3 3', 'inv pow - 3 x0 3', 'f64', ISOLATED_POLE),
+    sign_case('pow.negated_site', 'inv pow neg - x0 3 3', 'inv pow - 3 x0 3', 'f64'),
     sign_case('pow.negated_site', 'inv pow neg + ceil x0 floor x1 3',
               'inv pow - neg ceil x0 floor x1 3', 'f64'),
     sign_case('pow.negated_site', 'inv pow neg + ceil x0 floor x1 3',
@@ -1187,8 +1189,8 @@ def test_the_engine_takes_a_law_of_signs_where_the_judge_holds_it(law, lhs, rhs,
     assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('f64_kinds'))
     if ROOT_ZERO in causes:
         assert mode == 'f64' and takes and set(d.get('f64_kinds') or []) == {'ZERO-SIGN'}, lhs
-    elif ISOLATED_POLE in causes:
-        assert mode == 'f64' and takes and set(d.get('f64_kinds') or []) == {'INF-CHANGE'}, lhs
+    elif POLE_LIMIT in causes:
+        assert mode == 'f64' and takes and 'INF-CHANGE' in (d.get('f64_kinds') or ()), lhs
     elif COINCIDENCE in causes:
         assert mode == 'f64' and takes and d.get('verdict') == 'UNDECIDED-MEASURE', lhs
     else:

@@ -783,6 +783,51 @@ pub fn zero_sign_refusal(
     (!zero_sign_isolated(l, r, env, along, event)).then_some(event)
 }
 
+/// STRICT'S READING OF A POLE'S SIGN AT ONE POINT, the core's one definition, which the judge's
+/// f64 lane (`verify._contract`) and the deployed bar (`deployed_exact_over`) read: float64's
+/// values of the sides `l` and `r` at `env` differ (F6), no operation of either side overflowed or
+/// underflowed (where the range standard reads the true value), and they agree once the zeros
+/// one side's operations read as poles are read with the other sign
+/// (`table::Expr::pole_flipped_f64`). `-1/(x - 3)` is -inf and `1/(3 - x)` +inf at x = 3, and so
+/// are `atan(-1/(x - 3))`'s -pi/2 and `atan(1/(3 - x))`'s pi/2. Strict does not promise the sign
+/// of an infinity at an isolated pole: such a point agrees where it is isolated
+/// (`pole_sign_reading`), as two zeros of opposite sign do. A change of kind (an infinity
+/// against a finite value or NaN) is no such event.
+pub fn pole_sign_event(l: &crate::table::Expr, r: &crate::table::Expr, env: &[f64]) -> bool {
+    let (Some((a, a_in)), Some((b, b_in))) = (l.eval_f64(env), r.eval_f64(env)) else {
+        return false;
+    };
+    let agree = |x: f64, y: f64| crate::table::f64_agree(x, y) == crate::table::Cmp::Eq;
+    a_in && b_in
+        && !agree(a, b)
+        && (l.pole_flipped_f64(env).is_some_and(|f| agree(f, b))
+            || r.pole_flipped_f64(env).is_some_and(|f| agree(a, f)))
+}
+
+/// Strict's reading of a pole's sign at `env` (`pole_sign_event`): `None` where there is no such
+/// event, else whether its pole is ISOLATED along a name of `along` (the data variables and the
+/// fitted constants, as for a zero's sign: `zero_sign_isolated`), where the two sides agree: at
+/// the neighbouring doubles on both sides of it no operation of either side reads a zero as a pole
+/// (`table::Expr::pole_flipped_f64`), or an operation overflowed or underflowed, where the range
+/// standard reads the true value. The part that is zero must be zero at the point alone: `1/(0*x)
+/// -> -inf/x` is +inf against -inf for every x > 0, and `ceil(x0)^x1 * ceil(x0)^x1 ->
+/// ceil(x0)^(2*x1)`, though its infinities part only at x1 = -0.5, reads `ceil(x0)`'s -0 as a pole
+/// for every x0 in (-1, 0).
+pub fn pole_sign_reading(
+    l: &crate::table::Expr,
+    r: &crate::table::Expr,
+    env: &[f64],
+    along: &[usize],
+) -> Option<bool> {
+    let pole_at = |e: &[f64]| {
+        let in_range = |x: &crate::table::Expr| x.eval_f64(e).is_some_and(|(_, ok)| ok);
+        in_range(l)
+            && in_range(r)
+            && (l.pole_flipped_f64(e).is_some() || r.pole_flipped_f64(e).is_some())
+    };
+    pole_sign_event(l, r, env).then(|| isolated_along(env, along, pole_at))
+}
+
 /// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
 /// constant cannot be judged bit for bit beside them.
 const JUMP_HEADS: [&str; 3] = ["floor", "ceil", "mod"];
@@ -1304,7 +1349,9 @@ fn range_row_true(
 /// read (`zero_sign_bar_sorted`), for every rule. A probe where the left side alone has no value
 /// is excused where it is isolated: a data (`?`) variable's move to its neighbouring double, in
 /// each direction, gives the left side a value there, a null set of the data, which float64's
-/// constructors fill as the rewrite does (`ceil(atan(x)/x) -> 1` at x = +-0). The last
+/// constructors fill as the rewrite does (`ceil(atan(x)/x) -> 1` at x = +-0). So is a probe where
+/// the two sides differ only by the sign of an infinity at an isolated pole (`pole_sign_reading`:
+/// `-1/(x - 3) -> 1/(3 - x)` at x = 3). The last
 /// `n_finite` names of `var_names` are fitted constants, probed over the finite values only.
 ///
 /// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into strict's two
@@ -1404,12 +1451,37 @@ fn deployed_exact_over(
             !(in_l && in_r)
         })
     };
+    // a pole's sign at an isolated point is not promised (`pole_sign_reading`): along a data
+    // variable or a fitted constant, or at a sort's isolated value, whose null set it is
+    let pole_reader = (!ground)
+        .then(|| {
+            let arity: std::collections::HashMap<String, u8> = lhs
+                .iter()
+                .chain(rhs)
+                .filter_map(|t| ops.arity_of(t).map(|a| (t.clone(), a)))
+                .collect();
+            let l = crate::table::Expr::compile(lhs, var_names, &arity).ok()?;
+            let r = crate::table::Expr::compile(rhs, var_names, &arity).ok()?;
+            Some((l, r))
+        })
+        .flatten();
+    let guards: Vec<usize> = used
+        .iter()
+        .copied()
+        .filter(|&v| v >= first_finite || sorts.get(v) == Some(&'?'))
+        .collect();
+    let pole_agrees = |row: &[f64]| {
+        pole_reader.as_ref().is_some_and(|(l, r)| {
+            pole_sign_reading(l, r, row, &guards).is_some_and(|alone| alone || at_isolated(row))
+        })
+    };
     let mut range_rows: Vec<Vec<f64>> = Vec::new();
     for i in 0..n {
         if same(yl[i], yr[i], &rows[i])
             || (yl[i].is_nan()
                 && !yr[i].is_nan()
                 && (isolated_nan(&rows[i]) || at_isolated(&rows[i])))
+            || pole_agrees(&rows[i])
         {
             continue;
         }
@@ -1879,6 +1951,98 @@ mod deployed_bar_tests {
         // one value everywhere, and two zeros of opposite sign at the root
         assert!(!refused("inv * 0 x0", "/ float(\"inf\") x0", -1.0));
         assert!(!refused("* 0 sinh x0", "0", -1.0));
+    }
+
+    /// Strict does not promise an infinity's sign at an isolated pole (`pole_sign_reading`): two
+    /// sides that differ only by the sign of a zero an operation reads as a pole agree at a point
+    /// a data variable isolates, and not on a region; a change of kind is no such event.
+    #[test]
+    fn an_infinitys_sign_at_an_isolated_pole_is_not_promised() {
+        let arity: std::collections::HashMap<String, u8> = [
+            ("*", 2u8),
+            ("-", 2),
+            ("/", 2),
+            ("inv", 1),
+            ("neg", 1),
+            ("atan", 1),
+            ("sin", 1),
+            ("pow", 2),
+        ]
+        .iter()
+        .map(|(k, a)| (k.to_string(), *a))
+        .collect();
+        let pair = |l: &str, r: &str| {
+            let compile =
+                |t: &str| crate::table::Expr::compile(&s(t), &s("x0"), &arity).expect("compiles");
+            (compile(l), compile(r))
+        };
+        let reading = |l: &str, r: &str, x: f64| {
+            let (l, r) = pair(l, r);
+            pole_sign_reading(&l, &r, &[x], &[0])
+        };
+        // -inf against +inf at x0 = 3 alone, also read through an operation (-pi/2 against pi/2)
+        assert_eq!(reading("neg inv - x0 3", "inv - 3 x0", 3.0), Some(true));
+        assert_eq!(
+            reading("pow - x0 3 -3", "neg pow - 3 x0 -3", 3.0),
+            Some(true)
+        );
+        assert_eq!(
+            reading("atan neg inv - x0 3", "atan inv - 3 x0", 3.0),
+            Some(true)
+        );
+        // no pole there, and no pole's sign: the two sides agree or differ otherwise
+        assert_eq!(reading("neg inv - x0 3", "inv - 3 x0", 2.0), None);
+        assert_eq!(reading("inv - x0 3", "inv - 3 x0", 2.0), None);
+        // +inf against a finite value: a change of kind
+        assert_eq!(
+            reading("inv sin - np.pi x0", "inv sin x0", std::f64::consts::PI),
+            None
+        );
+        // +inf against -inf for every x0 > 0: a region
+        assert_eq!(
+            reading("inv * 0 x0", "/ float(\"-inf\") x0", 0.5),
+            Some(false)
+        );
+        // nothing guards the point
+        let (l, r) = pair("neg inv - x0 3", "inv - 3 x0");
+        assert_eq!(pole_sign_reading(&l, &r, &[3.0], &[]), Some(false));
+        // the infinities part at x1 = -0.5 alone, but the zero ceil(x0) is read as a pole for
+        // every x0 in (-1, 0) and every x1 < 0: no isolated pole
+        let mut arity2 = arity.clone();
+        arity2.insert("ceil".to_string(), 1);
+        let compile2 =
+            |t: &str| crate::table::Expr::compile(&s(t), &s("x0 x1"), &arity2).expect("compiles");
+        let (l, r) = (
+            compile2("* pow ceil x0 x1 pow ceil x0 x1"),
+            compile2("pow ceil x0 * 2 x1"),
+        );
+        assert_eq!(
+            pole_sign_reading(&l, &r, &[-0.5, -0.5], &[0, 1]),
+            Some(false)
+        );
+        // the deployed bar reads it so, at a data variable and not at a slot that matches any
+        // subexpression
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0");
+        let bar = |sort: char| {
+            f64_bar_sorted(
+                &s("floor neg inv - x0 3"),
+                &s("floor inv - 3 x0"),
+                &v,
+                &[sort],
+                false,
+                Agreement::F6,
+                ops,
+            )
+            .map(|d| d.ok)
+        };
+        assert_eq!(bar('?'), Some(true));
+        assert_eq!(bar('_'), Some(false));
     }
 
     /// The f64 bar of a rule with a 0.15 head: the deployed bar, a source constant probed as a

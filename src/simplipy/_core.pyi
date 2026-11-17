@@ -389,6 +389,11 @@ def zero_sign_bar_sorted(lhs: list[str], rhs: list[str], var_names: list[str], s
 #: the two sides differ, an infinity included.
 def table_zero_sign_refusal(lhs: TableExpr, rhs: TableExpr, env: list[float],
                             along: list[int], answer: bool = False) -> str | None: ...
+#: Strict's reading of a pole's sign at one point: None where the two sides (compiled over one
+#: name list) do not differ at `env` by the sign of an infinity at a pole alone, else whether that
+#: point is isolated along the names at the indices `along`, where the two sides agree.
+def table_pole_sign(lhs: TableExpr, rhs: TableExpr, env: list[float],
+                    along: list[int]) -> bool | None: ...
 #: The ground-composite policy on a rule's right side (a variable-free composite).
 def policy_ground_composite(rhs: list[str]) -> bool: ...
 #: The no-duplication policy: does the right side use a `_` slot more often than the left?

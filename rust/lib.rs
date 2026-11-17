@@ -2239,6 +2239,21 @@ fn table_zero_sign_refusal(
         .map(|e| e.name().to_string())
 }
 
+/// STRICT'S READING OF A POLE'S SIGN AT ONE POINT (`battery::pole_sign_reading`): `None` where
+/// the sides `lhs` and `rhs` (compiled over one name list) do not differ at `env` by the sign of
+/// an infinity at a pole alone, else whether that pole is isolated along the names at the
+/// indices `along` (the data variables and fitted constants), where the two sides agree. The
+/// contract judge's f64 lane reads it at every point where they differ.
+#[pyfunction]
+fn table_pole_sign(
+    lhs: PyRef<'_, PyTableExpr>,
+    rhs: PyRef<'_, PyTableExpr>,
+    env: Vec<f64>,
+    along: Vec<usize>,
+) -> Option<bool> {
+    crate::battery::pole_sign_reading(&lhs.inner, &rhs.inner, &env, &along)
+}
+
 /// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite_rule`) on a rule's right
 /// side, its slots and dummies the variables: the load's gate.
 #[pyfunction]
@@ -2855,6 +2870,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(f64_bar_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(zero_sign_bar_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(table_zero_sign_refusal, m)?)?;
+    m.add_function(wrap_pyfunction!(table_pole_sign, m)?)?;
     m.add_function(wrap_pyfunction!(policy_ground_composite, m)?)?;
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;
