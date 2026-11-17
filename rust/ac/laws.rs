@@ -91,11 +91,11 @@
 //! | `fun.besselj_reflection` | J_(-n)(t) = (-1)^n J_n(t) | none | none |
 //! | `lattice.absorb` | max(a, min(a, b)) = a, max(inf, a) = inf, max(-inf, a) = a | the dropped members no NaN almost everywhere | none |
 //! | `class.sign_trade` | f(-S) = -f(S), f an odd carrier of a sum S | a sign enters S only where S holds none (as `add.content`) | none |
-//! | `class.pole_orientation` | f(-S)^-k = -f(S)^-k, k odd | S never zero: float64 cancels a sum to `+0` in either orientation | none |
+//! | `class.pole_orientation` | f(-S)^-k = -f(S)^-k, k odd | S holds no sign (as `class.sign_trade`); a one-signed pole keeps its limit | none |
 //! | `class.opposite_sums` | S^a*(-S)^b = (-1)^b*S^(a+b) | a + b < 0: as `class.pole_orientation` | none |
 //! | `class.like_terms_up_to_sign` | u*f(S) + v*f(-S) = (u - v)*f(S), f odd | f(S) infinite at S's zero: as `class.pole_orientation` | none |
 //! | `pow.even_orientation` | (-S)^(2k) = S^(2k) | none | none |
-//! | `pow.negated_site` | (-F)^s = flip(F)^s | the flip as `class.sign_trade`'s; s odd and negative: F's zero no region with a sign of its own, and as `class.pole_orientation` | none |
+//! | `pow.negated_site` | (-F)^s = flip(F)^s | the flip as `class.sign_trade`'s; s odd and negative: F's zero no region with a sign of its own | none |
 //! | `fun.even` | g(-t) = g(t), g even | none | none |
 //! | `fun.odd_sign` | f(-u) = -f(u), f odd | none | none |
 //! | `fun.atan2_sign` | atan2(-y, x) = -atan2(y, x) | none | no step (one zero) |
@@ -453,32 +453,33 @@ pub enum Law {
     /// may vanish on a region and the expression around it reads its zero, the sign stays on the
     /// coefficient (`1/(2*(-ceil(x0) - floor(x1)))` is `+inf` wherever `ceil(x0) = -floor(x1)`,
     /// `-1/(2*(ceil(x0) + floor(x1)))` is `-inf`). A configuration also keeps the value the product
-    /// keeps at the zero of each class (`expr::zero_limit`) and, at an odd pole, the value
-    /// float64 gives it (`class.pole_orientation`). [`Law::holds`] reads the sum. In
+    /// keeps at the zero of each class (`expr::zero_limit`). [`Law::holds`] reads the sum. In
     /// `permissive`, none.
     ClassSignTrade,
     /// The orientation of a sum `S` under an odd negative power: `f(-S)^-k = -f(S)^-k`
     /// (`-1/(x0 - 3) = 1/(3 - x0)`), at a lone inverse, a pole that distribution splits, a negated
     /// site and like terms through a pole alike. The two sides agree wherever `S` is nonzero. At an
-    /// exact zero float64 gives the pole a value, the infinity of the sign written: a sum cancels to
-    /// `+0` in either orientation, so `-1/(x0 - 3)` is `-inf` at x0 = 3 and `1/(3 - x0)` is `+inf`.
-    /// In `f64` a sign moves through such a pole only where `S` is never zero (`expr::never_zero`:
-    /// `1/(-x0^2 - 1)` is `-1/(x0^2 + 1)`); elsewhere a configuration keeps the count of members
-    /// whose sign there differs from the one beside it (`expr::sign_place`). [`Law::holds`] reads
-    /// the class's sum. In `permissive`, none: the reals give `1/0` no value.
+    /// isolated zero float64 gives each side the infinity of the sign written (a sum cancels to
+    /// `+0` in either orientation), the sign of a zero at a point, which `f64` does not keep: a
+    /// two-signed pole has no value the answer keeps, and a one-signed one keeps its limit
+    /// (`expr::zero_limit`, asked by the sign placement). Where `S` may vanish on a region and the
+    /// expression around it reads its zero, `S` holds its sign (`expr::sum_holds_its_sign`, as
+    /// `class.sign_trade`). [`Law::holds`] reads the class's sum. In `permissive`, none: the reals
+    /// give `1/0` no value.
     ClassPoleOrientation,
     /// Factors over a sum and its negation are one class, decided on the product's exponent
     /// table: `S^a*(-S)^b = (-1)^b*S^(a+b)` (`(9.6 - x)*(x - 9.6) = -(x - 9.6)^2`,
-    /// `(x - 3)/(3 - x) = -1`). A positive total is free. In `f64` a negative total keeps the pole's
-    /// value where `S` may vanish exactly (`class.pole_orientation`): `1/((x0 - 3)*(3 - x0))` is
-    /// `+inf` at x0 = 3, where `-1/(x0 - 3)^2` is `-inf`, so the product stays as written there.
-    /// [`Law::holds`] reads the class's sum, asked of a negative total. In `permissive`, none.
+    /// `(x - 3)/(3 - x) = -1`). A positive total is free. In `f64` a negative total keeps the limit
+    /// of a one-signed pole (`expr::zero_limit`): `1/((x0 - 3)*(3 - x0))` is `-1/(x0 - 3)^2`,
+    /// `-inf` beside x0 = 3 on both sides, the isolated zero's own sign aside
+    /// (`class.pole_orientation`). [`Law::holds`] reads the class's sum, asked of a negative total.
+    /// In `permissive`, none.
     ClassOppositeSums,
     /// Like terms are like up to the orientation of their classes: `1/(x3 - x2)` and
-    /// `-1/(x2 - x3)` are one term. In `f64` a term with a pole at the zero of a class that may
-    /// vanish exactly keeps its orientation (`class.pole_orientation`): `1/(x0 - 3) + 1/(3 - x0)`
-    /// is `+inf` at x0 = 3 and stays. [`Law::holds`] reads the class's sum, asked of a term infinite
-    /// at its zero. In `permissive`, none.
+    /// `-1/(x2 - x3)` are one term. In `f64` a term keeps the limit its class's zero has where it
+    /// keeps one (`expr::zero_limit`), and a two-signed pole's infinity is an isolated zero's sign
+    /// (`class.pole_orientation`): `1/(x0 - 3) + 1/(3 - x0)` is 0. [`Law::holds`] reads the class's
+    /// sum, asked of a term infinite at its zero. In `permissive`, none.
     ClassLikeTermsUpToSign,
     /// An even power erases its base's orientation: `(-S)^(2k) = S^(2k)`, `f(-S)^(2k) = f(S)^(2k)`
     /// and `f(-c*u)^(2k) = f(c*u)^(2k)` for an odd head `f`. Total: bit for bit, zeros and poles
@@ -487,10 +488,9 @@ pub enum Law {
     /// A negated site under a power is the power of its flip: `(-F)^s = flip(F)^s`, the flip a
     /// sign trade into `F`'s sum (`class.sign_trade`'s premise). In `f64` an odd negative `s` reads
     /// the sign of `F`'s zero: where `F` may vanish on a region with a sign of its own
-    /// (`expr::region_signed_zero`) `1/-(S^3)` is `-inf` there and `1/flip(S)^3` is `+inf`, and
-    /// where its sum may vanish exactly the pole's sign is the one written
-    /// (`class.pole_orientation`: `1/-(x0 - 3)` is `-inf` at x0 = 3, `1/(3 - x0)` is `+inf`); the
-    /// power distributes instead. [`Law::holds_powers`] reads the site and the exponent. In
+    /// (`expr::region_signed_zero`) `1/-(S^3)` is `-inf` there and `1/flip(S)^3` is `+inf`, and the
+    /// power distributes instead; at an isolated zero the pole's sign is no value the answer keeps
+    /// (`class.pole_orientation`). [`Law::holds_powers`] reads the site and the exponent. In
     /// `permissive`, none.
     PowNegatedSite,
     /// An even function eats its argument's sign and orientation: `g(-t) = g(t)` for `g` in
@@ -519,18 +519,22 @@ pub enum Law {
     /// into two or more addends (`A`) is infinite: at `A = +inf`, `B = 1`, `C = 0` the left side
     /// is `+inf` and the right side `inf + NaN`. In `f64` such a piece is infinite only on a null
     /// set (`Cx::inf_null`; it may have no value on a region, as the product then has none), and
-    /// at each of its poles, read by float64's value there, at most one addend keeps the pole, or
-    /// the addends that do take one strict sign: `(1/x0)*(1 + x0)` is `1/x0 + 1`, one move whose
-    /// constructors cancel `x0/x0`, while `(x1 + x2)/x0` stays, `-inf` at x0 = 0, x1 = 1, x2 = -2,
-    /// where `x1/x0 + x2/x0` is NaN. Where an odd negative power reads the product's zero, the
-    /// distributed sum keeps that zero's sign (`class.pole_orientation`'s reading). [`Law::holds`]
-    /// reads a shared piece. In `permissive`, none, but a piece that spells an infinity needs the
-    /// sound certificate in every mode (`-inf*(x1 - 1/2)` is not `inf - inf*x1`).
+    /// at each of its poles, read by its limit, at most one addend keeps the pole, each addend
+    /// that keeps it carries two-signed poles only, whose infinity's sign is an isolated zero's
+    /// (`class.pole_orientation`), or those addends take one strict sign:
+    /// `(1/x0)*(1 + x0)` is `1/x0 + 1`, one move whose constructors cancel `x0/x0`, and
+    /// `(x1 + x2)/x0` may split into `x1/x0 + x2/x0`, while `(x1 + x2)/abs(x0)` stays: its pole is
+    /// `+inf` on both sides of x0 = 0 where x1 + x2 > 0, and the split is `inf - inf` there
+    /// wherever x1 and x2 differ in sign; so does `(x2 + 2*sqrt(x1))/x1`, whose co-factor
+    /// `sqrt(x1)` makes the pole one-sided.
+    /// [`Law::holds`] reads a shared piece. In `permissive`, none, but a piece that spells an
+    /// infinity needs the sound certificate in every mode (`-inf*(x1 - 1/2)` is not
+    /// `inf - inf*x1`).
     SearchDistribute,
     /// An integer power of a sum expands, `(a + b)^n` for `2 <= n <= 6`: the distributive law over
     /// `n` copies of the sum, each term a shared piece (`search.distribute`'s premise):
-    /// `(1/x0 + x1)^2` stays in `f64`, `+inf` at x0 = 0, where its expansion is NaN.
-    /// [`Law::holds`] reads a term.
+    /// `(1/x0 + x1)^2` stays, its pole `+inf` on both sides of x0 = 0, where `1/x0^2 + 2*x1/x0`
+    /// is NaN for x1 < 0. [`Law::holds`] reads a term.
     SearchPowExpand,
     /// THE DISTRIBUTIVE LAW READ BACKWARDS, as the search applies it (FACTOR):
     /// `c*q1 + c*q2 = c*(q1 + q2)`, by what a group of terms shares (shared bases, up to a class's
@@ -539,10 +543,11 @@ pub enum Law {
     /// and where they differ in sign the sum has no value and the product may have one. In `f64`
     /// the content is infinite only on a null set (`Cx::inf_null`: a value gained on a null set,
     /// never a region) and may have no value on a region (`x1*sqrt(x0) + sqrt(x0)` is
-    /// `sqrt(x0)*(x1 + 1)`); a quotient needs nothing. Where an odd negative power reads the sum's
-    /// zero, the content is positive and never zero: float64's sum cancels to `+0` where the
-    /// product is the zero of `c`'s sign times the quotients' (`1/(x1 + x1*x2)` stays, `+inf` at
-    /// x1 = 0, x2 = -2, where `1/(x1*(x2 + 1))` is `-inf`). [`Law::holds`] reads the content. In
+    /// `sqrt(x0)*(x1 + 1)`); a quotient needs nothing. Under an inverse the sum's zero is a pole
+    /// whose sign is an isolated zero's (`class.pole_orientation`): `1/(x1 + x1*x2)` is
+    /// `1/(x1*(x2 + 1))`; where the sum keeps its zero's sign on a region and a reader reads it,
+    /// the content leaves the sum only where it is positive and never zero
+    /// (`1/(2*asin(ceil(x1)) - asin(ceil(x1)))` stays). [`Law::holds`] reads the content. In
     /// `permissive`, none but a spelled infinity's, as `search.distribute`.
     SearchFactor,
     /// `permissive`'s search joins a product's reciprocal sums (RECIPROCAL JOIN), which its `pow`
@@ -957,9 +962,9 @@ impl Law {
             Law::AddUnfactor | Law::AddContent | Law::ClassSignTrade => {
                 !super::expr::sum_holds_its_sign(t, cx)
             }
-            // `t` is the class's sum (its key).
+            // `t` is the class's sum (its key): a sign moves through it where it holds none.
             Law::ClassPoleOrientation | Law::ClassOppositeSums | Law::ClassLikeTermsUpToSign => {
-                !super::expr::f64_zero_signs(cx) || super::expr::never_zero(t, cx)
+                !super::expr::sum_holds_its_sign(t, cx)
             }
             // `t` is the argument of an odd order.
             Law::FunBesseliParity => !super::expr::vanishes_on_a_region(t, cx),
@@ -1051,8 +1056,7 @@ impl Law {
             // `site` is the negated site, `s` the exponent.
             (Law::PowNegatedSite, Powers::Site { site, s }) => {
                 !(s.is_negative() && s.is_odd_integer())
-                    || !(super::expr::region_signed_zero(site, cx)
-                        || super::expr::pole_site(site, cx))
+                    || !super::expr::region_signed_zero(site, cx)
             }
             (Law::MulCollectSymbolic, Powers::Symbolic { base, y }) => {
                 cx.permits(Permissive::Agreement)

@@ -149,8 +149,8 @@ ROWS = [
      'exp - - ceil x2 * 2 ceil x0 * 2 floor x1', 'exp - - ceil x2 * 2 ceil x0 * 2 floor x1'),
     ('add.unfactor', 'inv + ceil x2 * -2 + ceil x0 floor x1', 'inv - ceil x2 * 2 + ceil x0 floor x1',
      '/ -1 - + * 2 ceil x0 * 2 floor x1 ceil x2'),
-    # f64: the sum may vanish exactly, where its pole keeps the sign it is written with
-    ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', 'inv - - x2 * 2 ceil x0 * 2 floor x1',
+    # beside x2, which is not -0 on a region, the product spreads: the sum's zero is isolated
+    ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', '/ -1 - + * 2 ceil x0 * 2 floor x1 x2',
      '/ -1 - + * 2 ceil x0 * 2 floor x1 x2'),
     ('add.unfactor', 'inv + * -1 - ceil x0 ceil x1 ceil x2', 'inv - ceil x2 - ceil x0 ceil x1',
      'inv - + ceil x1 ceil x2 ceil x0'),
@@ -439,9 +439,9 @@ ABSORB_ROWS = [
 ]
 
 #: (law, input, f64 answer, permissive answer) of the laws of signs and orientation. In f64 a sum
-#: is +0 at its zero in either orientation, so a sign moved through a pole there turns the
-#: infinity float64 gives it (`-1/(x0 - 3)` is -inf at x0 = 3, `1/(3 - x0)` is +inf): the pole's
-#: value is kept wherever the sum may vanish exactly; permissive reads no value at a pole.
+#: that may vanish on a region keeps the sign of its zero where it is read; at an isolated zero the
+#: sign, and the sign of the infinity a pole makes of it, is no value kept (`-1/(x0 - 3)` is
+#: `1/(3 - x0)`), and a one-signed pole keeps its limit; permissive reads no value at a pole.
 SIGN_ROWS = [
     # f(-S) = -f(S): the cheaper placement; under an inverse a sum that vanishes on a region holds
     # its sign
@@ -449,20 +449,20 @@ SIGN_ROWS = [
     ('class.sign_trade', '* -2 sin - x0 3', '* 2 sin - 3 x0', '* 2 sin - 3 x0'),
     ('class.sign_trade', 'inv * -2 sin + ceil x0 floor x1', '/ neg inv sin + ceil x0 floor x1 2',
      '/ neg inv sin + ceil x0 floor x1 2'),
-    # f(-S)^-k = -f(S)^-k, k odd; f64: S never zero
-    ('class.pole_orientation', 'neg inv - x0 3', '/ -1 - x0 3', 'inv - 3 x0'),
-    ('class.pole_orientation', 'neg inv sin - x0 3', '/ -1 sin - x0 3', 'inv sin - 3 x0'),
-    ('class.pole_orientation', 'neg pow - x0 3 -3', '/ -1 pow - x0 3 3', 'inv pow - 3 x0 3'),
+    # f(-S)^-k = -f(S)^-k, k odd; f64: an isolated zero's sign is no value kept
+    ('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'inv - 3 x0'),
+    ('class.pole_orientation', 'neg inv sin - x0 3', 'inv sin - 3 x0', 'inv sin - 3 x0'),
+    ('class.pole_orientation', 'neg pow - x0 3 -3', 'inv pow - 3 x0 3', 'inv pow - 3 x0 3'),
     ('class.pole_orientation', 'neg inv - -1 pow x0 2', 'inv + pow x0 2 1', 'inv + pow x0 2 1'),
-    # S^a*(-S)^b = (-1)^b*S^(a+b); f64: a negative total keeps the pole's value
+    # S^a*(-S)^b = (-1)^b*S^(a+b); a negative total keeps a one-signed pole's limit
     ('class.opposite_sums', '* - x0 3 - 3 x0', 'neg pow - x0 3 2', 'neg pow - x0 3 2'),
-    ('class.opposite_sums', 'inv * - x0 3 - 3 x0', '* inv - x0 3 inv - 3 x0', '/ -1 pow - x0 3 2'),
+    ('class.opposite_sums', 'inv * - x0 3 - 3 x0', '/ -1 pow - x0 3 2', '/ -1 pow - x0 3 2'),
     ('class.opposite_sums', '* pow - x0 3 -1 pow - 3 x0 -2', 'inv pow - x0 3 3',
      'inv pow - x0 3 3'),
-    # like terms up to the orientation of their classes; f64: a term infinite at its class's zero
-    # keeps its orientation
+    # like terms up to the orientation of their classes; a two-signed pole's infinity is an
+    # isolated zero's sign
     ('class.like_terms_up_to_sign', '+ sin - x0 x1 sin - x1 x0', '0', '0'),
-    ('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '+ inv - x0 3 inv - 3 x0', '0'),
+    ('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', '0'),
     ('pow.even_orientation', 'pow - x1 x0 2', 'pow - x0 x1 2', 'pow - x0 x1 2'),
     ('pow.even_orientation', 'pow sin * -2 x0 2', 'pow sin * 2 x0 2', 'pow sin * 2 x0 2'),
     # (-F)^s = flip(F)^s; f64: an odd negative s keeps a sign of a region's zero
@@ -596,17 +596,20 @@ ALL_ROWS = ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS + SIGN_
 #: (law, input, f64 answer, permissive answer) of the search's laws, at the default effort (`effort=0`
 #: does not search). The distributive law's two sides differ only where a piece it multiplies into
 #: two or more addends, or collects out of them, is infinite: in f64 such a piece is infinite only
-#: on a null set and may have no value on a region, at each pole one addend keeps the pole, and
-#: where an odd negative power reads the zero of the sum, a content positive and never zero keeps
-#: its sign; permissive reads no value at a pole.
+#: on a null set and may have no value on a region, and at each pole one addend keeps the pole,
+#: each addend that keeps it carries two-signed poles only (its infinity's sign an isolated
+#: zero's), or those addends take one strict sign; permissive reads no value at a pole.
 SEARCH_ROWS = [
     ('search.distribute', '* x2 + x2 / + x1 1 x2', '+ x1 + pow x2 2 1', '+ x1 + pow x2 2 1'),
     # one move whose constructors cancel x0/x0: 1/x0 keeps its pole in one addend
     ('search.distribute', '* inv x0 + 1 x0', '+ inv x0 1', '+ inv x0 1'),
-    # -inf at x0 = 0, x1 = 1, x2 = -2, where x1/x0 + x2/x0 is NaN
+    # a two-signed pole may split, but the split is dearer
     ('search.distribute', '/ + x1 x2 x0', '/ + x1 x2 x0', '/ + x1 x2 x0'),
+    # -inf at x1 = 0 where x2 < 0, the limit from x1 > 0, where x2/x1 + 2/sqrt(x1) is NaN
+    ('search.distribute', '/ + x2 * 2 rootn x1 2 x1', '/ + x2 * 2 rootn x1 2 x1',
+     '+ / 2 pow x1 / 1 2 / x2 x1'),
     ('search.pow_expand', '- pow + x0 1 2 pow x0 2', '+ * 2 x0 1', '+ * 2 x0 1'),
-    # +inf at x0 = 0, where the expansion is NaN
+    # +inf at x0 = 0, a one-signed pole, where the expansion is NaN for x1 < 0
     ('search.pow_expand', '- pow + inv x0 x1 2 pow x1 2', '- pow + x1 inv x0 2 pow x1 2',
      '+ inv pow x0 2 / * 2 x1 x0'),
     ('search.factor', '+ * x0 x1 * x0 x2', '* x0 + x1 x2', '* x0 + x1 x2'),
@@ -615,11 +618,10 @@ SEARCH_ROWS = [
     ('search.factor', '- log x0 log x0', '* 0 log x0', '0'),
     # composite results through one move: the content's pole is no addend's
     ('search.factor', '- / + x1 x2 x0 / x2 x0', '/ x1 x0', '/ x1 x0'),
-    # f64: +inf at x1 = 0, x2 = -2, where 1/(x1*(x2 + 1)) is -inf
-    ('search.factor', 'inv + x1 * x1 x2', 'inv + x1 * x1 x2', '/ inv + x2 1 x1'),
-    # f64: the classes' orientations at the pole x2 = x3 (class.pole_orientation)
-    ('search.factor', '+ / x1 - x2 x3 / x4 - x3 x2', '+ / x1 - x2 x3 / x4 - x3 x2',
-     '/ - x1 x4 - x2 x3'),
+    # the pole's sign at the sum's zero is an isolated zero's
+    ('search.factor', 'inv + x1 * x1 x2', '/ inv + x2 1 x1', '/ inv + x2 1 x1'),
+    # the classes' orientations at the pole x2 = x3 (class.pole_orientation)
+    ('search.factor', '+ / x1 - x2 x3 / x4 - x3 x2', '/ - x1 x4 - x2 x3', '/ - x1 x4 - x2 x3'),
     ('search.reciprocal_join', 'inv * + x0 1 - x0 1', '* inv - x0 1 inv + x0 1', 'inv - pow x0 2 1'),
     # tan(x0) has a zero, where the left side is 0 and 2/(1/tan(x0) - tan(x0)) has no value
     ('search.reciprocal_join', '/ * 2 tan x0 - 1 pow tan x0 2', '/ * 2 tan x0 - 1 pow tan x0 2',
@@ -691,7 +693,8 @@ def test_the_search_applies_its_laws_where_their_premises_hold(engine, law, expr
     pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in SEARCH_ROWS])
 def test_the_searchs_f64_answer_keeps_float64s_values(engine, law, expr, f64, permissive) -> None:
     """Float64's value of the search's f64 answer is the input's wherever the input has one, an
-    infinity's sign included, at the poles of its pieces too (x0, x1 and x2 - x3 at 0)."""
+    infinity's sign included, but at the isolated zeros of its pieces (x0, x1 and x2 - x3 at 0),
+    where a pole's infinity is no value kept (reading A)."""
     names = ['x0', 'x1', 'x2', 'x3', 'x4']
     rng = np.random.default_rng(0)
     points = rng.uniform(-3, 3, size=(2000, 5))
@@ -708,7 +711,10 @@ def test_the_searchs_f64_answer_keeps_float64s_values(engine, law, expr, f64, pe
         return np.broadcast_to(v, (len(points),))
 
     a, b = values(expr), values(f64)
-    same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
+    isolated = np.zeros(len(points), dtype=bool)
+    isolated[:600] = True
+    same = (np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
+            | (isolated & np.isinf(a)))
     assert same.all(), (law, expr, f64, points[~same][0])
 
 
@@ -757,9 +763,10 @@ def test_the_f64_answer_keeps_float64s_kinds(engine, law, expr, f64, permissive)
 def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
         request, fixture, law, expr, f64, permissive) -> None:
     """Float64's value of the f64 answer is the input's wherever the input has one, an infinity's
-    sign included, at the zeros of its sums too (the integer points of the plane, where x0 = 3,
-    x1 = 5 and x0 = x1 are met, and points in (-1, 0) and [0, 1), where `ceil` and `floor` are
-    `-0` and `+0`); the answer's own zero may be either zero, as nothing reads it."""
+    sign included, on the regions where its sums vanish too (points in (-1, 0) and [0, 1), where
+    `ceil` and `floor` are `-0` and `+0`); at the isolated zeros of its sums (the integer points of
+    the plane, where x0 = 3, x1 = 5 and x0 = x1 are met) a pole's infinity is no value kept
+    (reading A), and the answer's own zero may be either zero, as nothing reads it."""
     engine = request.getfixturevalue(fixture)
     names = ['x0', 'x1', 'x2']
     grid = np.array([(a, b, 0.0) for a in np.arange(-3.0, 7.0) for b in np.arange(-3.0, 7.0)])
@@ -774,7 +781,10 @@ def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
         return np.broadcast_to(v, (len(points),))
 
     a, b = values(expr), values(f64)
-    same = np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
+    isolated = np.zeros(len(points), dtype=bool)
+    isolated[:len(grid)] = True
+    same = (np.isnan(a) | (a == b) | (np.isfinite(a) & np.isclose(a, b, rtol=1e-12, atol=0))
+            | (isolated & np.isinf(a)))
     assert same.all(), (law, expr, f64, points[~same][0])
 
 

@@ -409,7 +409,13 @@ class TestCorpusGate:
         # 243 -29,000, 231 -22,000, 236 -18,000, 103 and 225 -14,000 each), 14 dearer (+64,000:
         # 5, 83, 95, 98, 125, 149, 156, 159, 161, 211, 219, 227, 249, 396), the search ending at
         # another valley or keeping a pole's value (125 +19,000).
-        assert walk['complexity_out'] == 54513176, walk['complexity_out']
+        # AN ISOLATED ZERO'S SIGN IS NO VALUE KEPT: 54,513,176 -> 54,412,176 (-101,000). In f64
+        # the sign of a sum's zero at an isolated point, and so the sign of the infinity a pole
+        # makes of it, is not kept; a zero's sign on a region still is, and a one-signed pole
+        # keeps its limit. 41 walk rows move, none dearer: 27 cheaper (318 -19,000, 283 -14,415,
+        # 98, 159, 227 and 255 -6,000 each, 5, 95, 152, 249 and 396 -4,000 each), 14 at an equal
+        # price (re-oriented).
+        assert walk['complexity_out'] == 54412176, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

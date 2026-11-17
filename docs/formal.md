@@ -397,9 +397,8 @@ sign beside the zero is read where $R$ with $v$ eliminated by $S = 0$ is a const
 product of its factors' parities; an odd function or odd root of an odd argument is odd; an even
 function or an even integer power is even; a sum has a parity only if all its terms share it.
 A class is written in one orientation with its sign in the coefficient, in every mode, and is a
-sign-trade site only as a whole, so a single member never flips: in `permissive` `-1/(x1 - 3)`
-and `1/(3 - x1)` are one answer, and `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2` (`f64` keeps the
-value float64 gives the pole, below). At the zero of $S$ each member's
+sign-trade site only as a whole, so a single member never flips: `-1/(x1 - 3)` and `1/(3 - x1)`
+are one answer, and `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`. At the zero of $S$ each member's
 float value is read from its parts (an exactly cancelling sum evaluates to $+0$); a placement is a
 candidate only if the product's value at the zero is its limit, so an even product with an odd
 count of members whose zero sign differs is refused and no sign moves through a pole whose two
@@ -419,9 +418,14 @@ keys a term by its classes in one orientation), and a pattern variable that occu
 class up to sign (in every mode for `_`, `!` and `$`, where they bind a class; for `?` only where
 it binds any subtree, in `permissive`), the matcher retrying in one orientation only after a
 binding was refused by its own negation; the search's FACTOR move (§4) takes a factor shared up
-to sign the same way. So `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`, and in `permissive`
-`x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` (`f64` keeps the two inverses, both
-`+inf` at `x2 = x3`, apart). Residuals [EMPIRICAL]: FACTOR asks its content to be infinite only on a null set, as the law
+to sign the same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
+`x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: where a member's value at the
+zero is not read, the class's cheapest orientation can leave that value off the limit (a polynomial
+multiple whose cofactor has no constant sign at the zero: `1/((x2^2 - x3^2)*(x2 - x3))` is `+inf`
+at `x2 = x3 = -1` where its limit is `-inf`); a sum one of whose terms is defined on one side of
+its zero only is a class like any other, so its pole is not read as one-sided
+(`-2/(sqrt(x1) - x1)` is `2/(x1 - sqrt(x1))`, `+inf` at `x1 = 0`, where the limit from `x1 > 0` is
+`-inf`); FACTOR asks its content to be infinite only on a null set, as the law
 fails only where the content is infinite, so a content with no value on a region factors in `f64`
 too: `log(3 - x3)/(x3 - 3) + log(3 - x3)` is `log(3 - x3)*(1/(x3 - 3) + 1)` in both modes, `-inf`
 at `x3 = 3` as float64 gives the input there; one class split across the
@@ -458,35 +462,23 @@ sign the product drops the factors that only gave it its sign: the answer itself
 the `+0` term below), a head with $f(-0) = f(+0)$ (`exp(0*x1)` is `1`) and a power that makes every
 zero `+0` (`(0*x1)^{3/2}` is `0`). `permissive` reads one zero.
 
-**In `f64` the value float64 gives a pole at an exact zero is kept** (`class.pole_orientation`).
-An exactly cancelling sum is `+0` in either orientation, so float64 gives a pole at its zero the
-infinity of the sign written, and the judge reads it (`-1/(x1 - 3)` is `-inf` at `x1 = 3`,
-`1/(3 - x1)` is `+inf`). Where a class's sum may vanish exactly (it is not shown never zero,
-`never_zero`: a nonzero literal, `exp` or `cosh` of anything, a sum of parts `>= 0` holding a
-positive literal, or its negation), a placement of a product that may be infinite at the zero
-(`may_be_infinite`: infinite there, or of a magnitude not read) is a candidate only if it keeps
-that value: the count of members whose sign at the zero differs from their sign beside it keeps
-its parity (`zero_check`, asked by the sign trade, the product table and the like terms). This
-replaces the limit at such a pole: in `f64` `-1/(x1 - 3)` and `1/(3 - x1)` are two answers, and
-`1/((x1 - 3)*(3 - x1))` stays as written, `+inf` at `x1 = 3` where its limit is `-inf`. Like
-terms through such a pole stay apart (`1/(x1 - 3) + 1/(3 - x1)` is `+inf` there, not 0), a
-negated site under an odd negative power keeps its sign, a negative coefficient is not folded into
-such a site before an odd negative power distributes, and the parse reads an inverted integer
-power of such a sum (`inv pow S k`, a divisor `pow S k`) as `S^-k` before either is built, so an
-answer reads back to itself. A sum that is never zero takes its sign as before
-(`-1/(-x1^2 - 1)` is `1/(x1^2 + 1)`). Residual [EMPIRICAL]: a product below an inverse is built
-first, at its own root, where its zero's sign is no value, and takes its cheaper orientation; the
-inverse then reads that zero as its pole's sign (`1/(-(x1 - 3))` is `1/(3 - x1)`, `+inf` at
-`x1 = 3` where the input is `-inf`). The guarantee is per step; keeping the sign there would need
-the step to read what is around it. The search's moves (§4) read no pole's value.
+**In `f64` the sign of an isolated zero of a sum is no value the answer keeps, nor the sign of
+the infinity a pole makes of it** (`class.pole_orientation`). An exactly cancelling sum is `+0` in
+either orientation, so float64 gives a pole at its zero the infinity of the sign written
+(`-1/(x1 - 3)` is `-inf` at `x1 = 3`, `1/(3 - x1)` is `+inf`). Where the zero is an isolated
+point, that sign is the sign of a zero at a point, which the answer does not keep (below); the
+pole is read by its limit (the convention above): a two-signed pole's orientation is the
+product's choice in both modes (`-1/(x1 - 3)` and `1/(3 - x1)` are one answer, and
+`1/(x1 - 3) + 1/(3 - x1)` is 0), and a one-signed pole keeps its limit (`1/((x1 - 3)*(3 - x1))` is
+`-1/(x1 - 3)^2`, `-inf` at `x1 = 3`, where float64 gives the input `+inf`). A sum whose zero may
+hold a region keeps its zero's sign under its readers (below).
 
 **A sum that vanishes on a region keeps its zero's sign where it is inverted, in `f64`.** float64
 adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` and `x1 - |x1|` are
 both `+0` for every x1 ≥ 0, and the negation `-(|x1| - x1)` is `-0` there. The canonical form holds
 a sum and its negation as one sum in one orientation, so it read `1/-(|x1| - x1)` as
 `1/(x1 - |x1|)`: `+inf` there, where float64 gives `-inf`. Where a sum's zero set is null, the sign
-of its zero is no value the answer keeps on a region (an isolated pole's value is kept, above).
-Where it may hold a
+of its zero is no value the answer keeps, at a pole either (above). Where it may hold a
 region, because the zero-set certificate cannot show it null, and the sum is inverted, `f64` keeps
 the sign with the inverse instead of in the sum: `1/-(|x1| - x1)` is `-1/(|x1| - x1)`. The same
 holds through an odd power, an odd function or an odd root of such a sum (`1/-(S^3)`,
@@ -753,9 +745,11 @@ move is a law of the catalogue and carries its premise (`search.distribute`, `se
 `search.factor`, `search.reciprocal_join`; no `<constant>` duplicated or merged): the two sides
 of the distributive law differ only where a piece it multiplies into two or more addends (or
 collects out of them) is infinite, so in `f64` such a piece is infinite only on a null set, may
-have no value on a region, and at each pole either one addend keeps the pole or the addends that
-keep it take one strict sign there; where an odd negative power reads the zero of the product or
-the sum, a content or co-factor positive and never zero keeps that zero's sign. Beside the law,
+have no value on a region, and at each pole either one addend keeps the pole, each addend that
+keeps it carries two-signed poles only (the sign of its infinity is an isolated zero's, no value
+kept, §3; a co-factor that shares the pole's variable can make it one-sided or even), or those
+addends take one strict sign there; where the zero's sign of a sum that keeps it on a region is
+read, a content leaves the sum only where it is positive and never zero (§3). Beside the law,
 the search proposes the **COMPOSITE STEP** (`search.composite_step`): a rebuild the step relation
 refused, because it rises at its node and in the whole, is proposed as the state it builds, and
 kept where that state's descent lands below (an integer power distributing over a freshly minted

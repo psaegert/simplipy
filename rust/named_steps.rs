@@ -89,14 +89,21 @@ mod tests {
 
     /// The other partial laws: identities of the reals whose premise in `f64` is a sum's sign,
     /// which `permissive`, reading one zero, does not ask; no step of permissive's own.
-    const SUM_SIGN_LAWS: [Law; 3] = [Law::AddUnfactor, Law::AddContent, Law::ClassSignTrade];
+    const SUM_SIGN_LAWS: [Law; 6] = [
+        Law::AddUnfactor,
+        Law::AddContent,
+        Law::ClassSignTrade,
+        Law::ClassPoleOrientation,
+        Law::ClassOppositeSums,
+        Law::ClassLikeTermsUpToSign,
+    ];
 
     /// The functions' partial laws, the lattice's absorption and the distributive law the search
     /// applies: identities of the reals wherever their left side has a value, whose premise in
-    /// `f64` is a float64 kind (`tanh`'s saturation, a flat point, a zero's sign, a pole's sign, a
-    /// NaN on a region, an infinity on a region), which `permissive` does not ask (`abs(t) = t`
-    /// keeps the reals' own `t >= 0`); no step of permissive's own.
-    const KIND_LAWS: [Law; 19] = [
+    /// `f64` is a float64 kind (`tanh`'s saturation, a flat point, a zero's sign, a NaN on a
+    /// region, an infinity on a region), which `permissive` does not ask (`abs(t) = t` keeps the
+    /// reals' own `t >= 0`); no step of permissive's own.
+    const KIND_LAWS: [Law; 16] = [
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAcoshCosh,
@@ -108,9 +115,6 @@ mod tests {
         Law::PowDistribute,
         Law::ParseInverseOfProduct,
         Law::PowHalfRoot,
-        Law::ClassPoleOrientation,
-        Law::ClassOppositeSums,
-        Law::ClassLikeTermsUpToSign,
         Law::PowNegatedSite,
         Law::FunBesseliParity,
         Law::SearchDistribute,

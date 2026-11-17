@@ -112,9 +112,11 @@ Each move is a law of the catalogue with its own premise (`search.distribute`,
 `search.pow_expand`, `search.factor`, `search.reciprocal_join`): the two sides of the law differ
 only where a piece it multiplies into two or more terms, or collects out of them, is infinite, so
 in `f64` such a piece is infinite only at points and may have no value on a region
-(`x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)`), and the value float64 gives a pole is kept:
-`(x1 + x2)/x0` stays (`-inf` at `x0 = 0`, `x1 = 1`, `x2 = -2`, where `x1/x0 + x2/x0` is NaN), and
-so does `1/(x1 + x1*x2)` (`+inf` at `x1 = 0`, `x2 = -2`, where `1/(x1*(x2 + 1))` is `-inf`), while
+(`x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)`), and a pole two or more terms keep is split
+only where each of those terms carries two-signed poles only, the sign of its infinity an isolated
+zero's, no value kept, or where they take one strict sign there: `(x1 + x2)/abs(x0)` stays, `+inf`
+at `x0 = 0` where `x1 = x2 = 1`, whose split is NaN wherever `x1` and `x2` differ in sign, and so
+does `(1/x0 + x1)^2 - x1^2`, `+inf` at `x0 = 0`, where `1/x0^2 + 2*x1/x0` is NaN for `x1 < 0`.
 `(x1 + x2)/x0 - x2/x0` is `x1/x0` in one factoring. `permissive` reads no value at a pole.
 
 The chain takes a step that rises at its node where the whole expression's price falls, the

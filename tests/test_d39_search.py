@@ -220,13 +220,11 @@ class TestFactorMove:
         assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
 
     def test_exploration_factors_and_cancels(self, engine: SimpliPyEngine) -> None:
-        out = explore(engine, tok(engine, self.HILL), BUDGET, lossy=True)
-        assert out == fix(engine, self.VALLEY, True)
-        # f64 reads the sign of the factored sum's zero at its pole: x1*x2 - x1^2 is +0 at
-        # x2 = x1, where x1*(x2 - x1) is the zero of x1's sign, so for x1 < 0 the hill is -inf
-        # there and the valley +inf. The hill stays.
-        out = explore(engine, tok(engine, self.HILL), BUDGET)
-        assert out == fix(engine, self.HILL)
+        # The sum's zero set, x1 = 0 and x2 = x1, is null, so the sign of its zero there is no
+        # value the answer keeps (in f64 too): the factoring is the search's in both modes.
+        for lossy in (False, True):
+            out = explore(engine, tok(engine, self.HILL), BUDGET, lossy=lossy)
+            assert out == fix(engine, self.VALLEY, lossy), lossy
 
     def test_factoring_under_an_inverse_takes_its_licence(self, engine: SimpliPyEngine) -> None:
         # Factoring a sum under a negative power is distributing that power read backwards:

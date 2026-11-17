@@ -3951,16 +3951,11 @@ mod tests {
             "positive twin distributes"
         );
         // A sign-trade site beside the coefficient sign -- still licensed. The pole at x1 = 5
-        // is read in `f64` (`class.pole_orientation`): float64's `-2*(x1 - 5)` is `-0` there, so
-        // the inverse is `-inf`, and the sign stays out of the sum, whose zero is `+0` in either
-        // orientation; `permissive` reads no value at the pole and puts the sign into the sum, a
-        // bit cheaper than `-inv(x1 - 5)/2` (`5 - x1` and `x1 - 5` cost the same, and the
-        // coefficient `1/2` a bit less than `-1/2`).
+        // is two-signed, so the inverse's orientation is the product's choice (reading A): the
+        // sign goes into the sum, a bit cheaper than `-inv(x1 - 5)/2` (`5 - x1` and `x1 - 5` cost
+        // the same, and the coefficient `1/2` a bit less than `-1/2`).
         for (mode, answer) in [
-            (
-                RuleMode::Default,
-                &["/", "neg", "inv", "-", "x1", "5", "2"][..],
-            ),
+            (RuleMode::Default, &["/", "inv", "-", "5", "x1", "2"][..]),
             (RuleMode::Permissive, &["/", "inv", "-", "5", "x1", "2"]),
         ] {
             assert_eq!(

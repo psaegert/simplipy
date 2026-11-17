@@ -53,9 +53,8 @@ organised by who you are, then the highlights, then every change in detail.
   normalization helpers, and certification. An artifact is two files, `rules_f64.json` and
   `rules_permissive.json`; `verify_artifact(f64, permissive)` gates it, and `verify_triple`
   raises.
-- **Answers and prices change.** The search owns the distributive law, a sum and its negation
-  are one class (`f64` keeps the value float64 gives a pole, `permissive` reads none), numbers
-  stay exact beyond 128 bits, and `complexity` prices each mode in its own
+- **Answers and prices change.** The search owns the distributive law, poles are read by their
+  limits, numbers stay exact beyond 128 bits, and `complexity` prices each mode in its own
   reading, every number as it is written. Regenerate every test, cache or
   dataset that pins answers or prices.
 - **What a variable is called no longer matters.** Over names other than `x<k>` (`x_1`, `v1`,
@@ -236,9 +235,10 @@ organised by who you are, then the highlights, then every change in detail.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
-  them, are written in one orientation with the sign in the coefficient. In `permissive`
-  `-1/(x1 - 3)` and `1/(3 - x1)` are one answer; `f64` keeps the value float64 gives a pole at an
-  exact zero of a sum (`-inf` and `+inf` at `x1 = 3`), so there they are two.
+  them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
+  `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit. The infinity float64
+  gives a pole at an isolated zero of a sum (`-inf` and `+inf` at `x1 = 3`) is the sign of a zero
+  at a point, which `f64` does not keep; it keeps a zero's sign on a region.
 - **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/4)` is `+0`,
   the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
   an exact zero is inverted, `f64` keeps the sign float64 gives it: `1/(x1*(x2 - x2))` is
@@ -421,8 +421,7 @@ organised by who you are, then the highlights, then every change in detail.
 - **`prettify()`** displays an answer for a reader, with shortest floats and readable fractions.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational of up to 1,100 bits on each
   side, printed in Python's float notation.
-- **A sum and its negation are one class** in every mode; `f64` keeps the value float64 gives a
-  pole, `permissive` reads none.
+- **Poles are read by their limits**, and a sum and its negation are one class in every mode.
 - **The search owns the distributive law**, in every mode alike, with whole-state acceptance.
 - **One complexity measure per mode**, every number priced as it is written.
 - **A fully numeric part takes its value first**, read by one ground evaluator per mode.
@@ -485,37 +484,37 @@ model predictions.
   73-token nested input 25 s in `permissive` (0.14.7: over 4 minutes at 8 deep). The flip is now
   computed once per call (0.006 s and 0.11 s), and the matcher no longer copies the expressions it
   compares. Answers are byte-identical.
-- **A sum and its negation are one class; `f64` keeps a pole's value, `permissive` reads none.**
-  The factors over one sum (the sum, its negation and its constant multiples, and odd functions,
-  odd roots and odd powers of them, read through products) form one class, written in one
-  orientation with the sign in the coefficient, in every mode, and a class trades its sign only as
-  a whole. A sum that holds the class's sum as an exact polynomial factor is read in the class
-  too, odd or even in it by the multiplicity of that factor, where the class's sum is linear in
-  one of its variables (`9 - x1^2` is `-(x1 - 3)*(x1 + 3)`); only a factor proven by exact
-  polynomial division counts, and its cofactor's sign at the zero is read where it is a constant
-  there (`x1 + 3` is 6 at `x1 = 3`). Where a class's sum vanishes exactly, float64 gives a pole
-  there a value, the infinity of the sign written: a sum is `+0` at its zero in either
-  orientation, so a sign moved through the pole turns it. `f64` keeps that value:
-  `-1/(x1 - 3)` and `1/(3 - x1)` are two answers, `-inf` and `+inf` at `x1 = 3` like their
-  inputs, and so are `-atan(1/(x1 - 3))` and `atan(1/(3 - x1))`; `1/((x1 - 3)*(3 - x1))` is
-  `1/(x1 - 3)/(3 - x1)`, `+inf` there like its input, `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf`
-  (0.14.7: `1/(x1 - 3)/(6 - 2*x1)`, `+inf`), and `-log(x1 - 3)/(x1 - 3)` stays, `+inf` at
-  `x1 = 3` where `log(x1 - 3)/(3 - x1)` is `-inf`. A sum that is never zero has no such pole and
-  takes its sign: `-1/(-x1^2 - 1)` is `1/(x1^2 + 1)`. `permissive` reads no value at a pole (the
-  reals give `1/0` none) and writes the cheapest orientation: `-1/(x1 - 3)` and `1/(3 - x1)` are
-  one answer, `1/(3 - x1)`, and so are `-atan(1/(x1 - 3))` and `atan(1/(3 - x1))` (0.14.7 gives
-  two answers for each pair); `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`;
+- **A pole is read by its limits.** Where the two sides of a pole disagree (`1/(x1 - 3)` at
+  `x1 = 3`), the value there is not part of the function; where they agree, the answer has that
+  limit. In `f64` too: float64 gives a pole at an isolated zero of a sum the infinity of the sign
+  written (a sum is `+0` at its zero in either orientation), which is the sign of a zero at a
+  point, and `f64` keeps a zero's sign only on a region. So the factors over one sum (the sum, its
+  negation and its constant multiples, and odd functions, odd roots and odd powers of them, read
+  through products) form one class, written in one orientation with the sign in the coefficient,
+  in every mode: `-1/(x1 - 3)` and `1/(3 - x1)` are one answer, `1/(3 - x1)`, and so are
+  `-atan(1/(x1 - 3))` and `atan(1/(3 - x1))` (0.14.7 gives two answers for each pair).
+  `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`, which is `-inf` at `x1 = 3` like its limit (0.14.7
+  and the input give `+inf` there), and `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf` (0.14.7:
+  `1/(x1 - 3)/(6 - 2*x1)`, `+inf`). A sum that holds the class's sum as an exact polynomial factor
+  is read in the class too, odd or even in it by the multiplicity of that factor, where the class's
+  sum is linear in one of its variables: `9 - x1^2` is `-(x1 - 3)*(x1 + 3)`, so in `f64`
   `1/((9 - x1^2)*(x1 - 3))`, `1/((x1^2 - 9)*(3 - x1))` and `-1/((x1^2 - 9)*(x1 - 3))` are one
-  answer, `1/(x1 - 3)/(9 - x1^2)`; and a member defined on one side of the zero only (a log, an
-  even root, a fractional or symbolic power) fixes the class's orientation, positive on that side:
+  answer, `-1/((x1 - 3)*(x1^2 - 9))`, `-inf` at `x1 = 3` like their limit (the first two inputs
+  give `+inf` there). Only a factor proven by exact polynomial division counts, and its cofactor's
+  sign at the zero is read where it is a constant there (`x1 + 3` is 6 at `x1 = 3`). A class
+  trades its sign only as a whole, so no sign moves through a pole whose two sides agree. A member
+  defined on one side of the zero only (a log, an even root, a fractional or symbolic power) fixes
+  the class's orientation, positive on that side, so the value at the zero is that side's limit:
   `log(x1 - 3)/(3 - x1)`, `-log(x1 - 3)/(x1 - 3)` and `log(x1 - 3)*(3 - x1)/(x1 - 3)^2` are one
-  answer, `log(x1 - 3)/(3 - x1)`, and `(3 - x1)^(-1/2)/(x1 - 3)` and `-(3 - x1)^(-1/2)/(3 - x1)`
-  are `-1/(3 - x1)^(3/2)`.
-  Like terms collect up to sign and a pattern variable that occurs twice matches a sum or its
-  negation, where no pole's value is read: `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1` in every
-  mode (0.14.7 gives `x1 + sin(x2 - x3) + sin(x3 - x2)`), and `x1/(x2 - x3) + x4/(x3 - x2)` is
-  `(x1 - x4)/(x2 - x3)` in `permissive` (0.14.7 keeps it as written, and so does `f64`, where both
-  inverses are `+inf` at `x2 = x3`). An odd function or odd root of a literal multiple and of its negation are one class
+  answer, `-log(x1 - 3)/(x1 - 3)`, `+inf` at `x1 = 3` like the limit from `x1 > 3`, and
+  `(3 - x1)^(-1/2)/(x1 - 3)` and `-(3 - x1)^(-1/2)/(3 - x1)` are `-1/(3 - x1)^(3/2)`, `-inf` there
+  like the limit from `x1 < 3` (0.14.7 answers the first `1/(x1 - 3)/(3 - x1)^(1/2)`, `+inf`
+  there). `permissive` keeps no value at a pole in general and gives its cheapest orientation.
+  Like terms collect up to
+  sign and a pattern variable that occurs twice matches a sum or its negation:
+  `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
+  is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
+  the second). An odd function or odd root of a literal multiple and of its negation are one class
   as well, a bare argument and a negated one included: `sin(2*x1)/sin(-2*x1)` and
   `sin(x1)/sin(-x1)` are `-1`, and `sin(2*x1)*sin(-2*x1)` and `sin(2)*sin(-2)` are
   `-sin(2*x1)^2` and `-sin(2)^2`, the answers of `-sin(2*x1)^2` and `-sin(2)^2`; an even power over
@@ -528,12 +527,21 @@ model predictions.
   answer, `-1/3/x1^2`, and `1/(-x1/3)` is `-3/x1`, all `-inf` at the zero like their inputs.
   Where two singularities meet, the float value at that point is the one the
   canonical spelling gives (most such points have no limit at all).
-  Known limits: in `f64` a product below an inverse is built first, at its own root, where its
-  zero's sign is no value, and takes its cheaper orientation; the inverse then reads that zero as
-  its pole's sign, so `1/(-(x1 - 3))` is `1/(3 - x1)`, `+inf` at `x1 = 3` where its input is
-  `-inf` (the guarantee is per step: keeping the sign there would need the step to read what is
-  around it). A polynomial multiple of a class whose sum is linear in none of its variables
-  (`x1^2 - 2`) is not read.
+  Known limits: where a member's value at the zero is not read, the class takes its cheapest
+  orientation, which can leave that value off the limit (`1/((x2^2 - x3^2)*(x2 - x3))`, whose
+  cofactor `x2 + x3` has no one sign at `x2 = x3`, is `+inf` at `x2 = x3 = -1` where its limit is
+  `-inf`); a sum one of whose terms is defined on one side of its zero only is a class like any
+  other, so its pole is not read as one-sided (`-2/(sqrt(x1) - x1)` is `2/(x1 - sqrt(x1))`, `+inf`
+  at `x1 = 0` where the limit from `x1 > 0` is `-inf`); a polynomial multiple of a class whose sum
+  is linear in none of its variables (`x1^2 - 2`) is not read; one class split across the terms of
+  a sum with a dominant even term can give NaN at its zero where the limit is infinite, as the
+  input does at other such points: `x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3` has the
+  limit `+inf` where `x5 > 2*abs(x1)`, and its answer `2*x1/tan(x3 - x2) + x5*abs(1/(x2 - x3))`
+  is `+inf` there for `x1 > 0` and NaN for `x1 < 0`, the input the other way round; the sign of
+  the odd term's infinity at the zero follows `x1`, so no spelling of that cost is right at every
+  such point; and a sum that vanishes at a class's zero only through a term that vanishes faster
+  there (`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is read as a class of its own, so its sign can move
+  alone and flip the infinity at that zero (also in 0.14.7).
 - **Fewest signs, then outermost.** Where two spellings cost the same, the answer is the one with
   fewer signs, then the one whose signs stand further out, wherever such a tie is decided: the sign
   placement, the product table, a sum's orientation and the order the rules fire under (a mined
@@ -694,51 +702,36 @@ model predictions.
   at their own root, where float64's `x ** 0.5`, numpy's `sqrt`, keeps the `-0` of an isolated point
   and `rootn(x, 2)` or `x^(3/2)` gives `+0` (`1/x0^(1/2) -> 1/rootn(x0, 2)`, `1/(rootn(x0, 2)*x0) ->
   1/x0^(3/2)` at x0 = -0); the guarantee is per step, as it is for every step.
-- **The laws of signs and orientation are named; `f64` keeps a pole's value.**
+- **The laws of signs and orientation are named.**
   `class.sign_trade`, `class.pole_orientation`, `class.opposite_sums`,
   `class.like_terms_up_to_sign`, `pow.even_orientation`, `pow.negated_site`, `fun.even`,
   `fun.odd_sign` and `fun.atan2_sign` join the catalogue, each applied where its premise holds and
   asked by its name. Each premise was measured against the judge over sums of every kind it reads
   (zero on a line, at an isolated point, on a region, on a half-line, never zero) and arguments of
   every kind (a variable, a function that is `-0` on a region, an odd function, a sum), at the root
-  and under an inverse. One premise changes, in `f64`: float64 gives a pole at an exact zero of a
-  sum the infinity of the sign written, a value the judge reads, and a sum is `+0` at its zero in
-  either orientation, so a sign moved through such a pole turns it (`-1/(x0 - 3) -> 1/(3 - x0)` is
-  `-inf` against `+inf` at x0 = 3). `class.pole_orientation` now holds only of a sum that is never
-  zero, and the sign placement, the product table's negative mass, the like terms, a negated site
-  under an odd negative power and the folding of a negative coefficient into a site before an odd
-  negative power distributes keep a pole's value wherever its sum may vanish exactly (the entry
-  on classes above gives the examples): `1/(-2*(x1 - 5))` is `-1/2/(x1 - 5)`, `-inf` at `x1 = 5`
-  like its input (it was `1/(10 - 2*x1)`), and `1/(x1 - 3) + 1/(3 - x1)` stays (it was 0). The
-  parse reads an inverted integer power of such a sum (`inv pow S k`, a divisor `pow S k`) as
-  `S^-k` before either is built, so an answer reads back to itself. The other premises are the
-  guards as they were: a sign trades into a sum only where the sum holds no sign (`add.content`'s
-  premise), so a negated site keeps the sign of a zero on a region under an odd power
-  (`1/(-(ceil(x0) + floor(x1)))^3` is `-1/(ceil(x0) + floor(x1))^3`), and `fun.atan2_sign` is a
-  step of `f64` alone. Where `f64` and the judge read a step apart, the cause is named: a step
-  that moves only a zero's sign at its own root, which the judge reads where two variables
-  coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); a product below an inverse built first, at its own
-  root, whose zero the inverse then reads as its pole's sign (`1/(-(x0 - 3))` is `1/(3 - x0)`; the
-  guarantee is per step); a coincidence whose measure the judge does not decide
-  (`(x0 - x1)/(x1 - x0) -> -1`); a term with a pole that keeps its orientation where the sum is NaN
-  there (`1/(x0 - 3) - 1/(3 - x0)`); and `permissive`'s one zero, under which it takes no `atan2`
+  and under an inverse. In `f64` the premises keep the sign of a zero on a region: a sign trades
+  into a sum only where the sum holds no sign (`add.content`'s premise), so a negated site keeps
+  the sign of a zero on a region under an odd power (`1/(-(ceil(x0) + floor(x1)))^3` is
+  `-1/(ceil(x0) + floor(x1))^3`), and `fun.atan2_sign` is a step of `f64` alone. The sign of a
+  sum's zero at an isolated point, and so the sign of the infinity a pole makes of it, is no value
+  kept (`-1/(x0 - 3)` is `1/(3 - x0)`, `-inf` against `+inf` at x0 = 3, and
+  `1/(x0 - 3) + 1/(3 - x0)` is 0). Where `f64` and the judge read a step apart, the cause is named:
+  a step that moves only a zero's sign at its own root, which the judge reads where two variables
+  coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); the sign of an isolated zero, which the judge reads as
+  a pole's infinity (`-1/(x0 - 3) -> 1/(3 - x0)`); a coincidence whose measure the judge does not
+  decide (`(x0 - x1)/(x1 - x0) -> -1`); and `permissive`'s one zero, under which it takes no `atan2`
   step of its own. An unlimited search (`effort=None`) now ends where its endpoint, landed and
   descended, offers it no move: the root's landing releases the sums a construction held, and a
-  released state could offer a move a second call took. On srbf's ground truths, a tenth of the
-  training-data inputs and a tenth of the predictions, 3,280 `f64` answers change (231, 1,192 and
-  1,857), by +2,685 bits in all: 3,254 only by the orientation of a class or the place of a sign
-  through a pole (2,187 dearer, +2,533 bits; 1,066 at an equal price; 1 cheaper), and 26 by a step
-  at a pole taken or kept (14 dearer, +155 bits; 11 at an equal price; 1 cheaper). `permissive`'s
-  answers do not change.
+  released state could offer a move a second call took.
 - **`besseli` reads its argument's parity.** `I_n(-t) = (-1)^n I_n(t)` for an integer order
   `n >= 0` joins the catalogue as `fun.besseli_parity`: `besseli(2, -x1)` is `besseli(2, x1)`,
   `besseli(0, x2 - x1)` is `besseli(0, x1 - x2)` and `besseli(1, -2*x1)` is `-besseli(1, 2*x1)`;
   all stayed as written. The kernel is even bit for bit at an even order; at an odd one it is odd
   but at a zero, where it gives `+0` for either sign, so `f64` moves an odd order's sign only where
   its argument vanishes on no region (`besseli(1, -ceil(x0))` stays, `+0` on (-1, 0) where
-  `-besseli(1, ceil(x0))` is `-0`), and under an inverse the step at the argument's isolated zero
-  is read as a pole's sign (`1/besseli(1, -x0)` is `-1/besseli(1, x0)`, `+inf` against `-inf` at
-  x0 = 0; the guarantee is per step). `besseli(1, -x1) + besseli(1, x1)` is 0 in `permissive`;
+  `-besseli(1, ceil(x0))` is `-0`), and under an inverse the sign of the argument's isolated zero
+  is no value kept (`1/besseli(1, -x0)` is `-1/besseli(1, x0)`, `+inf` against `-inf` at
+  x0 = 0). `besseli(1, -x1) + besseli(1, x1)` is 0 in `permissive`;
   in `f64` its two terms stay, the kernel being NaN for 0 < |x1| <= 2.2e-308.
 - **A slot in a divisor's product matches its instances.** A rule's left side is read as a pattern,
   whose slot may bind a member that vanishes on a region, so an odd negative power of a product
@@ -783,20 +776,18 @@ model predictions.
   more terms, or collects out of them, is infinite, so in `f64` that piece is infinite only at
   points and may have no value on a region (it had to be finite almost everywhere): a content with
   no value on a region factors, `x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)` and
-  `log(x0)*x1 + log(x0)` is `log(x0)*(x1 + 1)`, as in `permissive`. A pole is read by the value
-  float64 gives it, as the laws of signs read it: `(x1 + x2)/x0` stays, `-inf` at x0 = 0, x1 = 1,
-  x2 = -2, where `x1/x0 + x2/x0` is NaN (the search could split a pole that is no limit), and
-  `(1/x0 + x1)^2 - x1^2` stays (it was `1/x0^2 + 2*x1/x0`, NaN at x0 = 0 where the input is
-  `+inf`); where an odd negative power reads the zero of the sum or the product, a content or
-  co-factor that is positive and never zero keeps its sign, so `1/(x1 + x1*x2)` stays (`+inf` at
-  x1 = 0, x2 = -2, where `1/(x1*(x2 + 1))` is `-inf`), and so does `x1/(x1*x2 - x1^2)`, whose
-  inverse reads the zero at x2 = x1. A move is checked as one rewrite, its constructors
-  included: `(1/x0)*(1 + x0)` is `1/x0 + 1` and `(x1 + x2)/x0 - x2/x0` is `x1/x0`, by one
-  factoring. `permissive` reads no value at a pole and keeps its premises. On srbf's ground
-  truths, a tenth of the training-data inputs and a tenth of the predictions, 4,100 `f64` answers
-  change, by -29,327 bits in all: 2,751 cheaper (-37,454 bits), mostly a content with no value on
-  a region factored, 1,326 dearer (+8,128 bits), mostly a pole whose value a factoring or a
-  distribution would have turned, 23 at an equal price.
+  `log(x0)*x1 + log(x0)` is `log(x0)*(x1 + 1)`, as in `permissive`. A pole that two or more
+  addends keep is split only where each of those addends carries two-signed poles only, the sign
+  of its infinity an isolated zero's, no value kept, or where they take one strict sign there; a
+  one-signed pole stays joined: `(x1 + x2)/abs(x0)` stays, `+inf` at x0 = 0 where x1 = x2 = 1,
+  whose split is NaN wherever x1 and x2 differ in sign, and so do `(x2 + 2*sqrt(x1))/x1`, `-inf`
+  at x1 = 0 where x2 < 0, and `(1/x0 + x1)^2 - x1^2`, `+inf` at x0 = 0, where `1/x0^2 + 2*x1/x0`
+  is NaN for x1 < 0. Where the zero's sign of a sum that keeps it on a region is read, a content
+  leaves the sum only where it is positive and never zero: `1/(2*asin(ceil(x1)) -
+  asin(ceil(x1)))` stays, `+inf` on (-1, 0), where `1/asin(ceil(x1))` is `-inf`. A move is checked
+  as one rewrite, its constructors included: `(1/x0)*(1 + x0)` is `1/x0 + 1` and
+  `(x1 + x2)/x0 - x2/x0` is `x1/x0`, by one factoring. `permissive` reads no value at a pole and
+  keeps its premises.
 - **The settling accepts a step by the whole expression's price.** The price is not monotone in a
   part's: a cheaper part can make the expression around it dearer, and the reverse. Every
   ancestor of a rewritten node had to descend at its own level; a fire or a rebuild that rises at
@@ -824,8 +815,8 @@ model predictions.
   budget ran out with candidates left). Every call is finite, but not short (a chain of n rules can
   take 2^n - 1 steps), so a binding cap is a resource limit, which the docs now say throughout.
 - **Faster sign placement in `permissive`.** A product's sign placement looked for the value
-  float64 gives a pole beside every site, which only `f64` reads; `permissive` no longer looks.
-  On the three sets `permissive` takes about 4% less time. Answers are byte-identical.
+  float64 gives a pole beside every site, which no mode reads; it no longer looks. On the three
+  sets `permissive` takes about 4% less time, and its answers are byte-identical.
 - **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
   merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and

@@ -60,9 +60,8 @@
 //! is sound (candidates then settle high and are refused by the ordering test).
 
 use super::expr::{
-    add, atan2_of, complexity, distributes_power, fun, keeps_zero_sign, mul, never_zero, odd_head,
-    orient_term_classes, orientation_near_miss, pow, product_members, vanishes_with_a_sign,
-    zero_read_below, Cx, Ex,
+    add, atan2_of, complexity, distributes_power, fun, keeps_zero_sign, mul, orient_term_classes,
+    orientation_near_miss, pow, product_members, vanishes_with_a_sign, zero_read_below, Cx, Ex,
 };
 use super::laws::Law;
 use super::rat::Rat;
@@ -160,7 +159,6 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
                 groups,
                 None,
                 false,
-                false,
                 &mut Vec::new(),
                 &mut sites,
             );
@@ -204,8 +202,7 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
 /// The places of `e` with a move, in deterministic pre-order (the moves at a node first, then its
 /// children in canonical bag order), each with its moved node. `power` is the integer exponent
 /// `e` is the base of, if any (FACTOR's licence, see [`factor_moves`]). `read`: may the
-/// expression around `e` read the sign of its zero (`zero_read_below`)? `pole`: does an odd
-/// negative power around it read that sign as the sign of a pole (`pole_below`)?
+/// expression around `e` read the sign of its zero (`zero_read_below`)?
 #[allow(clippy::too_many_arguments)]
 fn site_list(
     e: &Ex,
@@ -213,12 +210,11 @@ fn site_list(
     groups: Groups,
     power: Option<&Rat>,
     read: bool,
-    pole: bool,
     path: &mut Vec<usize>,
     out: &mut Vec<Site>,
 ) {
     let mut own = Vec::new();
-    local_moves(e, cx, power, read, pole, groups, &mut own);
+    local_moves(e, cx, power, read, groups, &mut own);
     for m in own {
         out.push((path.clone(), m));
     }
@@ -231,16 +227,7 @@ fn site_list(
         Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {
             for (i, arg) in v.iter().enumerate() {
                 let mut inner = Vec::new();
-                site_list(
-                    arg,
-                    cx,
-                    groups,
-                    None,
-                    true,
-                    false,
-                    &mut Vec::new(),
-                    &mut inner,
-                );
+                site_list(arg, cx, groups, None, true, &mut Vec::new(), &mut inner);
                 for (rel, moved) in inner {
                     let (old, new) = match (arg, rel.split_first()) {
                         (Ex::Mul(w), Some((&j, rest))) => {
@@ -261,8 +248,15 @@ fn site_list(
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                let (r, p) = (zero_read_below(e, i, read, cx), pole_below(e, i, pole, cx));
-                site_list(c, cx, groups, None, r, p, path, out);
+                site_list(
+                    c,
+                    cx,
+                    groups,
+                    None,
+                    zero_read_below(e, i, read, cx),
+                    path,
+                    out,
+                );
                 path.pop();
             }
         }
@@ -272,41 +266,13 @@ fn site_list(
                 _ => None,
             };
             path.push(0);
-            let (r, p) = (zero_read_below(e, 0, read, cx), pole_below(e, 0, pole, cx));
-            site_list(b, cx, groups, k, r, p, path, out);
+            site_list(b, cx, groups, k, zero_read_below(e, 0, read, cx), path, out);
             path.pop();
             path.push(1);
-            site_list(x, cx, groups, None, false, false, path, out);
+            site_list(x, cx, groups, None, false, path, out);
             path.pop();
         }
         _ => {}
-    }
-}
-
-/// Does an odd negative power read the sign of the zero of child `i` of `e` as the sign of its
-/// pole, given `pole` for `e`'s own (in `f64`, `class.pole_orientation`'s reading)? Float64 gives
-/// a pole at an exact zero the infinity of the zero's sign. An odd negative power reads its base's
-/// zero so; a product carries the reading into every member, an odd power, a square root, an odd
-/// head in its odd argument, `floor` and `ceil` into their argument; a sum into a term only where
-/// it reads a term's zero at all (`zero_read_below`: every other term may be -0 on a region). Any
-/// other head has a zero of its own, not its argument's.
-fn pole_below(e: &Ex, i: usize, pole: bool, cx: &Cx) -> bool {
-    if !cx.ieee_zeros() {
-        return false;
-    }
-    match e {
-        Ex::Pow(_, x) if i == 0 => match &**x {
-            Ex::Num(k) if k.is_odd_integer() => pole || k.is_negative(),
-            Ex::Num(k) => pole && *k == Rat::new(1, 2).expect("1/2"),
-            _ => pole,
-        },
-        Ex::Mul(_) => pole,
-        Ex::Add(_) => pole && zero_read_below(e, i, true, cx),
-        Ex::Fun(f, a) => {
-            pole && (odd_head(cx.view, *f, a).is_some_and(|(p, _)| p == i)
-                || (a.len() == 1 && (cx.view.tok_is(*f, "floor") || cx.view.tok_is(*f, "ceil"))))
-        }
-        _ => false,
     }
 }
 
@@ -378,22 +344,18 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
 }
 
 /// The move kinds at one node. THE extension point: a new move is a new arm here (with its own
-/// licences), nothing else changes. Where a pole reads the node's zero (`pole`), a DISTRIBUTE
-/// keeps it only where the product's zero takes the sign the distributed sum's does
-/// ([`moves_a_pole_sign`]).
-#[allow(clippy::too_many_arguments)]
+/// licences), nothing else changes.
 fn local_moves(
     e: &Ex,
     cx: &Cx,
     power: Option<&Rat>,
     read: bool,
-    pole: bool,
     groups: Groups,
     out: &mut Vec<Ex>,
 ) {
     if groups == Groups::Pairs {
         if let Ex::Add(v) = e {
-            out.extend(factor_moves(v, cx, power, read, pole, groups));
+            out.extend(factor_moves(v, cx, power, read, groups));
         }
         return;
     }
@@ -404,11 +366,6 @@ fn local_moves(
         // (`x2*sqrt(x1)*(sqrt(x1) - x3)` is `x2*(x1 - x3*sqrt(x1))`), and the other factors over
         // one term of a sum factor, the rest of the sum left inside (`(x1 + x2 + x3)/x2` is
         // `(x1 + x3)/x2 + 1`).
-        Ex::Mul(v) if pole && moves_a_pole_sign(v, cx) => {
-            if cx.permits(crate::ac::expr::Permissive::Agreement) {
-                out.extend(reciprocal_joins(v, cx));
-            }
-        }
         Ex::Mul(v) => {
             if let Some(cand) = distribute_product(v, cx, read, Law::SearchDistribute) {
                 out.push(cand);
@@ -497,7 +454,7 @@ fn local_moves(
         }
         // FACTOR: the reverse of DISTRIBUTE, at a sum.
         Ex::Add(v) => {
-            out.extend(factor_moves(v, cx, power, read, pole, groups));
+            out.extend(factor_moves(v, cx, power, read, groups));
         }
         _ => {}
     }
@@ -560,26 +517,17 @@ fn term_factors(t: &Ex) -> SplitTerm {
 /// Factoring a sum under a negative power is distributing that power read backwards: the
 /// factored product then splits under it, so it takes the same licence (`distributes_power`).
 /// Where `pow` would hold the product -- a factor whose zero set may hold a region, where the
-/// inverse's infinity takes the product's sign -- the sum is not factored either. Where a pole
-/// reads the sum's zero (`pole`), the factored product keeps the sign of that zero only where
-/// the content does ([`moves_a_pole_sign`]).
+/// inverse's infinity takes the product's sign -- the sum is not factored either.
 ///
 /// Every licensed factoring is proposed, whether or not it is cheaper by itself: whether it pays
 /// is the whole state's question. Under a lone inverse the factored spelling can tie the sum
 /// (`1/(x1 - x1*x2)` against `-(1/(x2 - 1))/x1`), while the merges it enables across the product
 /// pay (`rootn(x1, 2)/(x1 - x1*x2)` becomes `-(1/pow(x1, 1/2))*(1/(x2 - 1))`); and a rule can fire
 /// on the factored sum alone.
-fn factor_moves(
-    terms: &[Ex],
-    cx: &Cx,
-    power: Option<&Rat>,
-    read: bool,
-    pole: bool,
-    groups: Groups,
-) -> Vec<Ex> {
+fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>, read: bool, groups: Groups) -> Vec<Ex> {
     let negative = power.filter(|k| k.is_negative());
-    // A sum that never vanishes has no zero for a pole to read.
-    let pole = pole && !never_zero(&Ex::Add(terms.to_vec()), cx);
+    // Read once per sum, where a content asks it (the certificate is dear on a long sum).
+    let held = std::cell::OnceCell::new();
     factorings(
         terms,
         cx,
@@ -588,7 +536,6 @@ fn factor_moves(
         groups,
     )
     .into_iter()
-    .filter(|(_, c)| !(pole && !positive(c, cx)))
     .filter(|(cand, _)| match (cand, negative) {
         (Ex::Mul(fs), Some(k)) => {
             distributes_power(fs, k, cx) && !(k.is_odd_integer() && moves_a_zero_sign(fs, cx))
@@ -598,6 +545,15 @@ fn factor_moves(
     // Where the expression around the sum reads its zero's sign (`read`), a content that may
     // be negative is not joined out of a sum that holds its sign (`sign_moves_over`).
     .filter(|(cand, c)| !(read && joins_over_a_held_sum(cand, c, cx)))
+    // Where it reads the zero's sign of a sum that keeps it on a region (`keeps_zero_sign`), the
+    // content leaves the sum only where it is positive and never zero (`strict_sign`): float64's
+    // sum is `+0` wherever its terms cancel, while the product's zero takes the content's sign
+    // (`1/(2*asin(ceil(x1)) - asin(ceil(x1)))` is `+inf` on (-1, 0), `1/asin(ceil(x1))` `-inf`).
+    .filter(|(_, c)| {
+        !(read
+            && strict_sign(c, cx) != Some(false)
+            && *held.get_or_init(|| keeps_zero_sign(&Ex::Add(terms.to_vec()), cx)))
+    })
     .map(|(cand, _)| cand)
     .collect()
 }
@@ -819,20 +775,17 @@ pub(crate) fn factorings(
 /// (`Engine::law_instance` builds it). A piece the certificates cannot vouch for at every
 /// binding -- a `_` wildcard inside it, say -- is unlicensed, so a rule over it stays a rule.
 pub(crate) fn is_factoring(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
-    #[allow(clippy::too_many_arguments)]
     fn walk(
         e: &Ex,
         power: Option<&Rat>,
-        pole: bool,
         root: &Ex,
         rhs: &Ex,
         cx: &Cx,
         path: &mut Vec<usize>,
     ) -> bool {
         if let Ex::Add(v) = e {
-            // A pattern has no region, so no zero's sign is held (`read` moot); a pole reads the
-            // zero of an instance as the search's does.
-            for cand in factor_moves(v, cx, power, false, pole, Groups::All) {
+            // A pattern has no region, so no zero's sign is held (`read` moot).
+            for cand in factor_moves(v, cx, power, false, Groups::All) {
                 if rebuild(root, path, cand, cx) == *rhs {
                     return true;
                 }
@@ -852,12 +805,12 @@ pub(crate) fn is_factoring(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
         };
         kids.into_iter().enumerate().any(|(i, (k, p))| {
             path.push(i);
-            let hit = walk(k, p, pole_below(e, i, pole, cx), root, rhs, cx, path);
+            let hit = walk(k, p, root, rhs, cx, path);
             path.pop();
             hit
         })
     }
-    walk(lhs, None, false, lhs, rhs, cx, &mut Vec::new())
+    walk(lhs, None, lhs, rhs, cx, &mut Vec::new())
 }
 
 /// `terms` as their content `c` (every base they all share, each at its least exponent) times
@@ -948,51 +901,25 @@ fn single_piece(f: &Ex, cx: &Cx) -> bool {
     !f.contains_infinity() || cx.fin_certified(f)
 }
 
-/// THE DISTRIBUTIVE LAW AT A ZERO A POLE READS (`f64`, `class.pole_orientation`'s reading):
-/// float64's sum is `+0` wherever its terms cancel (and `-0` only where every term is), while a
-/// product is the zero of its vanishing member's sign times the others' signs. An odd negative
-/// power gives that zero's sign to its infinity: `1/(x1 + x1*x2)` is `+inf` at x1 = 0, x2 = -2, and
-/// `1/(x1*(x2 + 1))` is `-inf`. Does distributing the product of `v` over its sum (or factoring
-/// that sum back into it) move that sign? Not where it never vanishes, and not where one sum
-/// stands beside members that are each positive and never zero ([`positive`]): the product's
-/// zero is then the sum's own. FACTOR asks it of its content (`positive`).
-fn moves_a_pole_sign(v: &[Ex], cx: &Cx) -> bool {
-    if v.iter().all(|f| never_zero(f, cx)) {
-        return false;
-    }
-    let sums = v.iter().filter(|f| matches!(f, Ex::Add(_))).count();
-    sums > 1
-        || !v
-            .iter()
-            .filter(|f| !matches!(f, Ex::Add(_)))
-            .all(|f| positive(f, cx))
-}
-
-/// Does `f` take one positive sign wherever it has a value, and never vanish: `strict_sign`'s
-/// positive reading, a part `>= 0` that is never zero (`x1^2 + 1`), or a product of such?
-fn positive(f: &Ex, cx: &Cx) -> bool {
-    match f {
-        Ex::Mul(fs) => fs.iter().all(|g| positive(g, cx)),
-        _ => strict_sign(f, cx) == Some(false) || (never_zero(f, cx) && cx.certainly_nonneg(f)),
-    }
-}
-
 /// A DISTRIBUTED POLE: does moving the product of `piece` into the addends it `meets` -- each as
-/// `(co-piece, the addend built)` -- split a pole whose value the product keeps? `f64` reads a
-/// pole by the value float64 gives it, an infinity of one sign. `P*(a + b)` is that infinity
-/// times `sign(a + b)`, while `P*a + P*b` is `inf - inf`, NaN, wherever `a` and `b` differ in sign
-/// there: `(x1 + x2)/x0` is `-inf` at x0 = 0, x1 = 1, x2 = -2, and `x1/x0 + x2/x0` is NaN;
-/// `(1 + x3 - x1 + 5/3*exp(x2))/abs(x3)` split as `5/3*exp(x2)*abs(1/x3) + (x3 + 1 - x1)*abs(1/x3)`
-/// is NaN at `x3 = 0` on the whole slab `1 < x1 < 1 + 5/3*exp(x2)`, where the product is `+inf`.
-/// The pole is split only where two or more addends keep it: an addend whose co-piece cancelled
-/// it is certainly finite (`(x1 + x2 + x3)/x2` is `(x1 + x3)/x2 + 1`, one move whose constructors
-/// cancel `x2/x2`), and where one addend holds the pole the sum takes that addend's value there,
-/// which is the product's. Where two or more hold it, the co-pieces of those addends keep one
-/// strict sign ([`strict_sign`]), which each then takes at the pole. `permissive` keeps no value at
-/// a pole.
+/// `(co-piece, the addend built)` -- split a pole whose limit the product keeps? `f64` reads a
+/// pole by its limit (reading A): `P*(a + b)` keeps `P`'s one-signed limit (`1/x^2`, `abs(1/x)`,
+/// `log(x)`, `x^(-1/2)`) times `sign(a + b)`, while `P*a + P*b` is `inf - inf`, NaN, wherever `a`
+/// and `b` differ in sign there: `(1 + x3 - x1 + 5/3*exp(x2))/abs(x3)` split as
+/// `5/3*exp(x2)*abs(1/x3) + (x3 + 1 - x1)*abs(1/x3)` is NaN at `x3 = 0` on the whole slab
+/// `1 < x1 < 1 + 5/3*exp(x2)`, where the product is `+inf`. The pole is split only where two or
+/// more addends keep it: an addend whose co-piece cancelled it is certainly finite
+/// (`(x1 + x2 + x3)/x2` is `(x1 + x3)/x2 + 1`, one move whose constructors cancel `x2/x2`), and
+/// where one addend holds the pole the sum takes that addend's value there, which is the
+/// product's. Where two or more hold it, each of those addends, the piece times its co-piece,
+/// carries two-signed poles only ([`two_signed_poles`]), whose infinity's sign is an isolated
+/// zero's, no value the answer keeps, or their co-pieces keep one strict sign ([`strict_sign`]),
+/// which each then takes at the pole. A co-piece that shares the pole's variable can make it
+/// one-sided or even: `(x2 + 2*sqrt(x1))/x1` stays, `-inf` at `x1 = 0` where `x2 < 0`, the limit
+/// from `x1 > 0`, where `x2/x1 + 2/sqrt(x1)` is NaN. `permissive` keeps no value at a pole.
 ///
 /// FACTOR runs the law the other way and needs no such licence: the joined product keeps the
-/// value wherever the quotients' sum is nonzero at the pole, and where the quotients differ in
+/// limit wherever the quotients' sum is nonzero at the pole, and where the quotients differ in
 /// sign there the unjoined sum was NaN.
 fn splits_a_pole(piece: &[Ex], meets: &[(&Ex, &Ex)], cx: &Cx) -> bool {
     if cx.permits(crate::ac::expr::Permissive::Agreement) {
@@ -1003,11 +930,96 @@ fn splits_a_pole(piece: &[Ex], meets: &[(&Ex, &Ex)], cx: &Cx) -> bool {
         .filter(|(_, addend)| holds_a_pole_of(addend, piece, cx))
         .map(|(co, _)| *co)
         .collect();
-    if held.len() < 2 {
+    if held.len() < 2
+        || held
+            .iter()
+            .all(|co| two_signed_poles(&members_of(piece.iter().chain([*co])), cx))
+    {
         return false;
     }
     let first = strict_sign(held[0], cx);
     first.is_none() || !held[1..].iter().all(|co| strict_sign(co, cx) == first)
+}
+
+/// The members of the product of `factors`, a product among them read as its own members.
+fn members_of<'e>(factors: impl Iterator<Item = &'e Ex>) -> Vec<Ex> {
+    let mut out = Vec::new();
+    for f in factors {
+        match f {
+            Ex::Mul(fs) => out.extend(fs.iter().cloned()),
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
+/// Are all the poles of the product of `members` two-signed, so that it keeps no limit at any?
+/// Every member is certainly finite (`Cx::certainly_finite`) or a negative odd power of a
+/// certainly finite base that changes sign at its zeros -- a variable, a sum (as the class
+/// reading takes a sum to change sign there), or `sin`, `cos`, `sinh`, `tanh`, `atan` or `asinh`
+/// of one -- an odd pole at its zero, and no member shares a variable with another's pole, since a
+/// factor vanishing there, or a second pole there, can make the product even (`sin(x)/x^3`).
+/// Anything else may hold a one-signed pole: an even or fractional power, `abs`, `log`, a
+/// function of something not finite.
+fn two_signed_poles(members: &[Ex], cx: &Cx) -> bool {
+    // A base that changes sign at its zeros: a variable, a sum, or an odd function or cosine of
+    // one (simple zeros; `sin(x2^2)` touches zero without changing sign, so its argument is a
+    // variable or a sum).
+    let crossing = |b: &Ex| match b {
+        Ex::Leaf(_) | Ex::Add(_) => true,
+        Ex::Fun(op, args) => {
+            args.len() == 1
+                && matches!(&args[0], Ex::Leaf(_) | Ex::Add(_))
+                && ["sin", "cos", "sinh", "tanh", "atan", "asinh"]
+                    .iter()
+                    .any(|n| cx.view.tok_is(*op, n))
+        }
+        _ => false,
+    };
+    let odd_pole = |f: &Ex| match f {
+        Ex::Pow(b, k) => {
+            matches!(&**k, Ex::Num(r) if r.is_negative() && r.is_odd_integer())
+                && crossing(b)
+                && cx.certainly_finite(b)
+        }
+        _ => false,
+    };
+    let mut poles: Vec<usize> = Vec::new();
+    for (i, f) in members.iter().enumerate() {
+        if odd_pole(f) {
+            poles.push(i);
+        } else if !cx.certainly_finite(f) {
+            return false;
+        }
+    }
+    poles.iter().all(|&p| {
+        let Ex::Pow(b, _) = &members[p] else {
+            unreachable!("an odd pole is a power")
+        };
+        members
+            .iter()
+            .enumerate()
+            .all(|(i, f)| i == p || !shares_a_variable(f, b))
+    })
+}
+
+/// Do `a` and `b` hold a common leaf?
+fn shares_a_variable(a: &Ex, b: &Ex) -> bool {
+    fn leaves<'e>(e: &'e Ex, out: &mut Vec<&'e Ex>) {
+        match e {
+            Ex::Leaf(_) => out.push(e),
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().for_each(|c| leaves(c, out)),
+            Ex::Pow(x, y) => {
+                leaves(x, out);
+                leaves(y, out);
+            }
+            _ => {}
+        }
+    }
+    let (mut la, mut lb) = (Vec::new(), Vec::new());
+    leaves(a, &mut la);
+    leaves(b, &mut lb);
+    la.iter().any(|x| lb.contains(x))
 }
 
 /// Does `addend`, built from the product of `pieces` and a co-piece, still hold one of their
@@ -1294,8 +1306,9 @@ fn distribute_product(factors: &[Ex], cx: &Cx, read: bool, law: Law) -> Option<E
     let addends: Vec<Ex> = picks.iter().map(|p| mul(p.clone(), cx)).collect();
     // A pole of the pieces that end up in more than one addend ([`splits_a_pole`]), the ones
     // `<constant>` independence asks about above. Over one sum the other factors meet its terms;
-    // over several, a piece in more than one addend meets several co-pieces, so no two addends
-    // hold a pole.
+    // over several, a piece in more than one addend meets several co-pieces, so where two or more
+    // addends hold a pole each of them carries two-signed poles only: `(1/x0 + x1)^2 - x1^2`
+    // stays, `+inf` at `x0 = 0`, where `1/x0^2 + 2*x1/x0` is NaN for `x1 < 0`.
     let rest = &picks[0][..rest_len];
     if let [v] = adds.as_slice() {
         let meets: Vec<(&Ex, &Ex)> = v.iter().zip(&addends).collect();
@@ -1308,11 +1321,17 @@ fn distribute_product(factors: &[Ex], cx: &Cx, read: bool, law: Law) -> Option<E
             .chain(adds.iter().copied().flatten())
             .cloned()
             .collect();
-        let held = addends
+        let held: Vec<&Vec<Ex>> = picks
             .iter()
-            .filter(|a| holds_a_pole_of(a, &pieces, cx))
-            .count();
-        if held > 1 {
+            .zip(&addends)
+            .filter(|(_, a)| holds_a_pole_of(a, &pieces, cx))
+            .map(|(p, _)| p)
+            .collect();
+        if held.len() > 1
+            && !held
+                .iter()
+                .all(|p| two_signed_poles(&members_of(p.iter()), cx))
+        {
             return None;
         }
     }

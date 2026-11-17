@@ -2019,10 +2019,11 @@ impl<'a> Cx<'a> {
                 self.sign_blind_rep(b).map(|s| pow(s, (**ex).clone(), self))
             }
             // A product's sign is erased here too, so each of its sign-trade sites takes its
-            // cheaper spelling whatever sign that leaves, and on a tie the one with fewer signs
-            // (`tie_cmp`): `|333 atan(u - 0.66)^5|` is `|333 atan(0.66 - u)^5|`, a sign bit
-            // cheaper, where the product alone keeps its coefficient positive on the tie (a sign
-            // bit for nothing), and `cos(x1*rootn(-x2*x3, 3))` is `cos(x1*rootn(x2*x3, 3))`.
+            // cheaper spelling whatever sign that leaves, and on an equal price the tie order
+            // (`tie_cmp`), a normal-form choice: `|333 atan(u - 0.66)^5|` is
+            // `|333 atan(0.66 - u)^5|`, a sign bit cheaper, where the product alone keeps its
+            // coefficient positive on the tie (a sign bit for nothing), and
+            // `cos(x1*rootn(-x2*x3, 3))` is `cos(x1*rootn(x2*x3, 3))`.
             Ex::Mul(v) => {
                 let mut out = v.clone();
                 let mut moved = false;
@@ -2768,25 +2769,13 @@ pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
             })
             .collect()
     };
-    // Where float64 gives a class's zero a pole's value (`class.like_terms_up_to_sign`, reading B
-    // as `class.pole_orientation`), the term keeps it: `1/(3 - x0)` is `+inf` at x0 = 3 and
-    // `-1/(x0 - 3)` is `-inf`, so it stays as it stands, unlike `1/(x0 - 3)`.
-    let poles: Vec<(&Ex, Option<bool>)> = classes
-        .iter()
-        .filter(|k| !Law::ClassLikeTermsUpToSign.holds(k, cx) && may_be_infinite(&factors, k, cx))
-        .map(|k| (k, zero_turn(&factors, k, cx)))
-        .collect();
-    let leaves = |now: &[Ex], k: &Ex| match poles.iter().find(|(p, _)| *p == k) {
-        Some((_, turn)) => turn.is_none() || zero_turn(now, k, cx) != *turn,
-        None => zero_off(now, k, cx) == Some(true),
-    };
     let mut turns: Vec<(Ex, Turn)> = Vec::new();
     let mut oriented = orient(&turns);
     for _ in 0..2 * classes.len() {
         let now: Vec<Ex> = oriented.iter().map(|(g, _, _)| g.clone()).collect();
-        let off = classes
-            .iter()
-            .find(|k| !turns.contains(&((*k).clone(), Turn::Keep)) && leaves(&now, k));
+        let off = classes.iter().find(|k| {
+            !turns.contains(&((*k).clone(), Turn::Keep)) && zero_off(&now, k, cx) == Some(true)
+        });
         let Some(k) = off else {
             break;
         };
@@ -4187,14 +4176,12 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     } else {
         Coef::ONE
     };
-    // The filed orientation is the mu-CHEAPER one ("the
-    // mirrors score equal; the bigger expression scores bigger"); the historical
-    // first-in-sort-positive lex rule survives only as the exact-tie breaker. For a
-    // content-1 sum the flip's wrapper cost is one sign (the negation `-1 x Add` exists
-    // only in the flipped spelling); for a non-unit content the wrapper exists in BOTH
-    // spellings and the flip pays only the coefficient's sign bit -- and the per-term
-    // deltas must then be priced on the DIVIDED terms (the candidates actually stored),
-    // not the raw ones, or g's sign bit is counted once per term instead of once.
+    // The orientation is a normal-form choice (`flipped_orientation_wins`): the cheaper spelling,
+    // the tie order on an equal price. For a content-1 sum the flip's wrapper costs one sign (the
+    // negation `-1 x Add` exists only in the flipped spelling); for a non-unit content the
+    // wrapper exists in both spellings and the flip pays only the coefficient's sign bit, the
+    // per-term deltas priced on the divided terms (the spellings stored), so `g`'s sign bit
+    // counts once.
     let sign_neg = if terms.iter().any(term_absorbs_negation) {
         false
     } else if g.is_one() {
@@ -4277,41 +4264,25 @@ fn divide_terms(terms: &[Ex], u: &Coef, cx: &Cx) -> Option<Vec<Ex>> {
     Some(divided)
 }
 
-/// Which of the two sign orientations {A, -A} of a sum is canonical? Compare the SORTED
-/// coefficient sequences of the two orientations lexicographically (exact rational order)
-/// and prefer the LARGER -- a decision that is a function of the orientation class, so both
-/// entry spellings land on the same representative. Positional comparison is well-defined
-/// because the stripped-key multiset is negation-invariant: position i carries the same
-/// stripped key in both sorted bags.
-///
-/// A positive-lead rule would be ill-defined on sums containing an uncertified
-/// flip-symmetric pair `{t, -t}` (cert-refused cancellation): the pair maps to itself
-/// under negation, so BOTH orientations lead with the negative twin and no lead-based
-/// decision is flip-antisymmetric. The lex rule decides that class by the first
-/// ASYMMETRIC position: `-a - b` flips to `-1 * (a + b)`, `-2a + 3b` flips to
-/// `-1 * (2a - 3b)`, `a - b` stays.
-///
-/// `Const` terms are sign-free (negation re-fits, `term_join` absorbs the sign) and compare
-/// equal at their positions; infinities carry their sign. `false` (keep the original
-/// orientation, extraction-free) on any negation overflow.
-/// What decides an EXACT mu tie between the two orientations that the sign key (`sign_key`)
-/// leaves tied: at a SIGN-TRADE site one spelling is distinguished -- bare / positive
-/// coefficient -- and it wins, so `Keep` (the current spelling is the
-/// distinguished one) and `Flip` (the flipped spelling is) resolve structurally. `Lex`
-/// survives ONLY for free-orientation sites (even carriers, wrapper delta 0), where
-/// both spellings are bare and no structural member is distinguished -- there the
-/// historical sorted-coefficient-sequence comparison remains the class-antisymmetric
-/// order.
+/// The structural part of the tie order between a sum's two orientations, where the price and the
+/// sign key (`sign_key`) leave them tied.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tie {
+    /// At a sign-trade site the current spelling is the distinguished one (bare, its coefficient
+    /// positive), and it stands.
     Keep,
-    /// The A-convention's mirror pole: no current call site prefers the flipped
-    /// spelling on an exact tie (tie A gives every sign-trade site `Keep`), but the
-    /// enum documents the complete decision space -- a future carrier whose bare
-    /// spelling is the WRAPPED one would use it. Kept deliberately over deletion so
-    /// the tie policy reads as the three-state choice it is.
+    /// The flipped spelling is the distinguished one (no site has this order).
     #[allow(dead_code)]
     Flip,
+    /// At a free-orientation site (an even power's base, an even function's argument) neither
+    /// spelling is distinguished, both bare: the sorted coefficient sequences compare
+    /// lexicographically (exact rational order) and the larger stands, an order on the orientation
+    /// class, so both entry spellings land on one representative. Position by position the
+    /// stripped keys agree (their multiset is negation-invariant), and the first asymmetric position
+    /// decides, also with a flip-symmetric pair `{t, -t}` the certificates do not cancel: `-a - b`
+    /// flips to `-1 * (a + b)`, `-2a + 3b` to `-1 * (2a - 3b)`, `a - b` stays. A `Const` term is
+    /// sign-free (a negation re-fits it) and compares equal at its position; an infinity carries its
+    /// sign.
     Lex,
 }
 
@@ -4329,8 +4300,16 @@ enum Wrapper {
     Both(i128),
 }
 
+/// THE ORIENTATION OF A SUM, `A` or `-A`: does the flipped spelling win? A normal-form choice,
+/// like every sign and orientation choice the constructors make: at the node, given its children,
+/// the cheaper admitted spelling (`complexity`), and on an equal price the tie order, the sign key
+/// (`sign_key`: fewer signs, then the outer ones), then the structure (`Tie`). The candidates are
+/// admitted by the premises, never by the price: a sum that holds its sign
+/// (`sum_holds_its_sign`) is not turned around by its callers. Every other price comparison
+/// belongs to the settling and the search. `false` (the spelling stands) where a negation
+/// overflows.
 fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -> bool {
-    // The mu-CHEAPER orientation wins. The wrapper's own price
+    // The cheaper orientation wins. The wrapper's own price
     // delta, from the caller's side: one sign for a content-1 sum (the negation exists only
     // in the flipped spelling), the coefficient's sign-bit delta for a non-unit content
     // (wrapper in both spellings), nothing at a free-orientation site.
@@ -4376,12 +4355,9 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
     if current != flip {
         return flip < current;
     }
-    // Equal signs too -> the caller's structural policy. Only `Lex` --
-    // the free-orientation sites, where neither spelling is structurally
-    // distinguished -- still runs the historical rule: compare the sorted coefficient
-    // sequences lexicographically and prefer the larger. Total and a function of the
-    // orientation CLASS (both entry spellings land on one representative), so the
-    // flip-flop disease cannot return through the tie path.
+    // Equal signs too: the structure (`Tie`). At a free-orientation site the sorted coefficient
+    // sequences compare, an order on the orientation class (both entry spellings land on one
+    // representative).
     match tie {
         Tie::Keep => return false,
         Tie::Flip => return true,
@@ -6108,8 +6084,8 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
         // The licensed factors drop before the collection too: a collection can merge one into
         // a factor the zero cannot drop (`0 * x^4 * sqrt(x)` collects to `0 * x^(9/2)`, while
         // dropping first keeps `0 * sqrt(x)`), as it can cancel what dropping first keeps
-        // (`0 * x / x`). Both read the product's members alone; the cheaper is kept, a tie
-        // going to the collected one.
+        // (`0 * x / x`). Both read the product's members alone: a normal-form choice, the cheaper
+        // kept, the tie order on an equal price (`tie_cmp`).
         if let Some(members) = zero_members {
             let w: Vec<Ex> = members
                 .into_iter()
@@ -6128,7 +6104,8 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
                     return signed_zero(zero_sign, cx);
                 }
                 let dropped = sign_place_zero(zero_sign, w, cx);
-                if complexity(&dropped, cx.view) < complexity(&kept, cx.view) {
+                let (md, mk) = (complexity(&dropped, cx.view), complexity(&kept, cx.view));
+                if md < mk || (md == mk && tie_cmp(&dropped, &kept, cx.view) == Ordering::Less) {
                     return dropped;
                 }
             }
@@ -6481,30 +6458,16 @@ fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
-    // SIGN-PLACEMENT OWNER (FULL family scope, tie
-    // convention A). A product's sign can trade between the coefficient and any
-    // ODD-carrier factor -- a bare mixed-sign Add, Pow(Add, odd POSITIVE integer),
-    // rootn(Add, odd index >= 3), or an odd function of an Add -- because
-    // f(-S) = -f(S) is TOTAL on those carriers (negative odd exponents/indices are
-    // NOT carriers: the one-zero pole trilemma, see is_odd_fun). With n trade sites
-    // the value has 2^n spellings (each site independently flippable, the
-    // coefficient's sign = entry sign times flip parity). The owner finds the argmin
-    // of the orbit in closed form over whole classes (`sign_place_groups`), builds that
-    // spelling and prices it with the real mu -- so the priced spelling IS the built
-    // spelling (the row-120 law: any gap between the two re-opens construction-history
-    // dependence), and the decision is a function of the ORBIT, not of the entry
-    // spelling. Ties go to the sign key (`sign_key`: fewest signs, then the outer ones);
-    // residual ties fall to a fixed order that is a function of the orbit. A negate_term overflow
-    // refusal keeps the entry spelling, whose display is injective. This arm
-    // SUBSUMES the former lone `-1 x Add` distribution arm (its case is n=1 with
-    // out.len() == 1; the mu comparison and the A-tie give the identical decision).
-    //
-    // No bounce: the returned spelling is the orbit argmin under a total tie order;
-    // re-running the owner on it re-selects it (idempotent), primitive_sum's re-file
-    // of any flipped inner sum stays bare (the flip only wins here when its whole-
-    // product mu is <= the wrap spelling's, which keeps the sum inside fow's
-    // wrapper-protection band), and the Const and negation absorption arms above never see
-    // these bags (their sum classes are excluded from the site set).
+    // THE PRODUCT'S SIGN (`sign_place`). A product's sign trades between its coefficient and its
+    // sign-trade sites -- a mixed-sign sum, an odd power or odd root of one, an odd function of
+    // one (`f(-S) = -f(S)`); the sites of one class flip together. Of the spellings the flips
+    // give, the product files the cheapest admitted one, the tie order on an equal price: a
+    // normal-form choice, admitted by the premises (the zero checks; a sum that holds its sign is
+    // no site), never by the price. The spelling priced is the spelling built, so the choice is a
+    // function of the orbit, not of the entry spelling. A negation overflow keeps the entry
+    // spelling. The result places its signs again as it stands (a flipped inner sum files bare,
+    // `flipped_orientation_wins`), and the absorption arms above never meet these bags (their
+    // sums are no sites).
     sign_place(coeff, out, cx)
 }
 
@@ -6630,29 +6593,13 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         }
         classes.push(Class::new(&read));
     }
-    // What each class keeps at its zero: reading B where float64 gives it a pole's value
-    // (`class.opposite_sums`, as `class.pole_orientation`: `1/((x0 - 3)*(3 - x0))` is `+inf` at
-    // x0 = 3 and `-1/(x0 - 3)^2` is `-inf`), the value written; else the limit, where the
-    // product keeps one (`zero_limit`). A class whose value there is not read stays as written.
-    let mut unread_poles = false;
+    // What each class keeps at its zero: the limit, where the product keeps one (`zero_limit`).
+    // An isolated zero's sign is no value the answer keeps, and neither is the sign of the infinity
+    // a two-signed pole makes of it.
     for c in classes.iter_mut().filter(|c| !c.multiple()) {
-        let Some((k, _, _)) = class_of(&c.sums[0], cx) else {
-            continue;
-        };
-        if !Law::ClassOppositeSums.holds(&k, cx) && may_be_infinite(&raw, &k, cx) {
-            match zero_turn(&raw, &k, cx) {
-                Some(turn) => c.kept = Some((k, Some(turn))),
-                None => {
-                    c.unread = true;
-                    unread_poles = true;
-                }
-            }
-        } else if zero_limit(&raw, &k, cx).is_some() {
-            c.kept = Some((k, None));
-        }
-    }
-    if unread_poles {
-        classes.retain(|c| !c.unread);
+        c.kept = class_of(&c.sums[0], cx)
+            .map(|(k, _, _)| k)
+            .filter(|k| zero_limit(&raw, k, cx).is_some());
     }
     // A class whose factors all arrived over one sum is decided too where they hold exponents of
     // both signs, as the cancellation they meet may be cheaper over the other sum
@@ -6733,9 +6680,11 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         }
         None
     };
-    // Cheaper than `(q, m)`: the price, then `sign_place`'s own tie order (a non-negative
-    // coefficient, then the structurally smaller product), so a product the sign owner alone
-    // would build from either spelling is the one chosen.
+    // Cheaper than `(q, m)`: the price, then the tie order (`tie_cmp`: the sign key, then the
+    // structure), as the product's sign is placed (`sign_place`), so a product the placement
+    // alone would build from either spelling is the one chosen. A normal-form choice: the
+    // candidates are admitted by the premises (a placement off a class's value at its zero,
+    // `off`, is none), never by the price.
     let better = |mu: u64, p: &Ex, q: &Ex, m: u64| {
         mu < m || (mu == m && tie_cmp(p, q, cx.view) == Ordering::Less)
     };
@@ -6867,8 +6816,8 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             );
             bound(members, lb)
         };
-        // A placement that leaves the product's value at a class's zero off the value it keeps
-        // there (`zero_check`, as `sign_place` reads it) is priced above every other.
+        // A placement that leaves the product's value at a class's zero off the limit it keeps
+        // there (`zero_limit`, as `sign_place` reads it) is priced above every other.
         let off = |p: &Ex| {
             let members = match p {
                 Ex::Mul(v) => v.as_slice(),
@@ -6877,10 +6826,7 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             classes
                 .iter()
                 .filter_map(|c| c.kept.as_ref())
-                .any(|(k, turn)| match turn {
-                    Some(t) => zero_turn(members, k, cx) != Some(*t),
-                    None => zero_off(members, k, cx) == Some(true),
-                })
+                .any(|k| zero_off(members, k, cx) == Some(true))
         };
         let price = |choice: &[usize]| -> Option<(Ex, u64)> {
             let (v, odd) = bag(choice)?;
@@ -7936,102 +7882,6 @@ fn zero_limit(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, bool)> {
     (product_mag(mags) != Mag::Nan).then_some((side, off))
 }
 
-/// READING B: does `f64` read the value of the product of `factors` at the zero of the class `k`,
-/// float64's infinity there (`class.pole_orientation`)? Where the product may be infinite there
-/// (`may_be_infinite`) and the class may vanish exactly (`Law::ClassPoleOrientation`'s premise
-/// fails). Float64 gives the pole the value of the sign written, every member's sum being `+0`
-/// there in either orientation: `1/((x0 - 3)*(3 - x0))` is `+inf` at x0 = 3, though its limit is
-/// `-inf`.
-fn pole_value_read(factors: &[Ex], k: &Ex, cx: &Cx) -> bool {
-    !Law::ClassPoleOrientation.holds(k, cx) && may_be_infinite(factors, k, cx)
-}
-
-/// May the product of `factors` be infinite at the zero of the class `k`: infinite there, or of a
-/// magnitude not read with a member that may be: one infinite there (`(x1 - 3)^-1` beside
-/// `log(x1 - 3) + x2`, whose magnitude is not read), or a power of something in the class whose
-/// exponent may be negative (`(3 - x1)^x2` is a pole where `x2 < 0`). A product whose members are
-/// all finite or zero there, or not read and no such power, has no pole there.
-fn may_be_infinite(factors: &[Ex], k: &Ex, cx: &Cx) -> bool {
-    // A class over no sum (an odd head of a literal multiple) negates exactly: no zero of it
-    // cancels to `+0` in either orientation.
-    if !matches!(k, Ex::Add(_)) {
-        return false;
-    }
-    let mags: Vec<Mag> = factors.iter().map(|f| zero_mag(f, k, cx)).collect();
-    match product_mag(mags.iter().copied()) {
-        Mag::Inf => true,
-        Mag::Unknown => factors.iter().zip(&mags).any(|(f, m)| {
-            *m == Mag::Inf
-                || matches!(f, Ex::Pow(b, e)
-                    if !matches!(&**e, Ex::Num(r) if r.signum() > 0)
-                        && parity_in(b, k, cx) != Parity::Free)
-        }),
-        _ => false,
-    }
-}
-
-/// The product's sign at the zero of the class `k` against its sign beside the zero (on the side
-/// where `k` is positive): whether they differ (`ZeroRead::differs`). Two spellings of one
-/// function agree beside the zero, so they agree at it exactly where this agrees. `None` where a
-/// member is not read.
-fn zero_turn(factors: &[Ex], k: &Ex, cx: &Cx) -> Option<bool> {
-    product_read(factors.iter().map(|f| zero_read(f, k, cx))).differs
-}
-
-/// What a product's spellings must keep at the zero of the class `k`, as a count to keep even
-/// (`sign_place`'s checks): `Some(off)`, where the factors as written are off the value kept by
-/// `off`, or `None` where nothing is kept. Reading B where float64 gives the zero a pole's value
-/// (`pole_value_read`): the value written, so nothing is off; else reading A (`zero_limit`): the
-/// limit there, where the product keeps one.
-fn zero_check(factors: &[Ex], k: &Ex, cx: &Cx) -> Option<bool> {
-    if pole_value_read(factors, k, cx) {
-        return Some(false);
-    }
-    zero_off(factors, k, cx)
-}
-
-/// READING B AT A SITE: is `f` a sign-trade site over a sum that may vanish, in `f64`
-/// (`class.pole_orientation`)? Under an odd negative power its zero is a pole whose sign is the
-/// sign the site is written with: the sum cancels to `+0` in either orientation, so a sign traded
-/// between the site and a coefficient turns the infinity there (`-1/(x0 - 3)` is `-inf` at
-/// x0 = 3, `1/(3 - x0)` is `+inf`).
-pub(crate) fn pole_site(f: &Ex, cx: &Cx) -> bool {
-    site_class(f, cx).is_some_and(|(k, _)| !Law::ClassPoleOrientation.holds(&k, cx))
-}
-
-/// Is `e` never zero, at every binding: a nonzero literal, an infinity, `exp` or `cosh` of
-/// anything, or a sum of parts `>= 0` holding a positive literal (or its negation)? Fail closed.
-pub(crate) fn never_zero(e: &Ex, cx: &Cx) -> bool {
-    match e {
-        Ex::Num(r) => !r.is_zero(),
-        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf => true,
-        Ex::Fun(f, a) if a.len() == 1 => cx.view.tok_is(*f, "exp") || cx.view.tok_is(*f, "cosh"),
-        Ex::Add(ts) => {
-            let positive = ts.iter().all(|t| cx.certainly_nonneg(t))
-                && ts.iter().any(|t| matches!(t, Ex::Num(r) if r.signum() > 0));
-            let negative = ts.iter().all(|t| term_nonpositive(t, cx))
-                && ts
-                    .iter()
-                    .any(|t| matches!(t, Ex::Num(r) if r.is_negative()));
-            positive || negative
-        }
-        _ => false,
-    }
-}
-
-/// Is the term `t` certainly `<= 0`: a non-positive literal, or a negative coefficient times a part
-/// that is `>= 0`?
-fn term_nonpositive(t: &Ex, cx: &Cx) -> bool {
-    match t {
-        Ex::Num(r) => !(r.signum() > 0),
-        Ex::Mul(fs) => {
-            matches!(fs.first(), Some(Ex::Num(r)) if r.is_negative())
-                && fs[1..].iter().all(|f| cx.certainly_nonneg(f))
-        }
-        _ => false,
-    }
-}
-
 /// Whether a product's value at the zero of a class is off the limit it keeps there
 /// (`zero_limit`); `None` where it keeps none.
 fn zero_off(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<bool> {
@@ -8154,12 +8004,8 @@ struct Class<'a> {
     sums: [Vec<Ex>; 2],
     key: u64,
     flip: SumFlip,
-    /// The class's key where the product keeps a value at its zero, and what it keeps: the
-    /// limit (`None`, `zero_limit`), or the sign float64 gives the pole as written against the
-    /// one beside it (`Some`, `zero_turn`).
-    kept: Option<(Ex, Option<bool>)>,
-    /// Float64 gives the class's zero a pole's value that no member reads: it stays as written.
-    unread: bool,
+    /// The class's key where the product keeps a value at its zero, the limit (`zero_limit`).
+    kept: Option<Ex>,
 }
 
 impl<'a> Class<'a> {
@@ -8170,7 +8016,6 @@ impl<'a> Class<'a> {
             key: negation_key(read.terms),
             flip: SumFlip::new(),
             kept: None,
-            unread: false,
         }
     }
 
@@ -9164,29 +9009,14 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
                 })
                 .collect()
         };
-        let mut checks: Vec<(bool, Vec<Option<bool>>)> = groups
+        let checks: Vec<(bool, Vec<Option<bool>>)> = groups
             .iter()
             .filter_map(|(k, _)| {
                 let k = k.as_ref()?;
-                Some((zero_check(&out, k, cx)?, toggles_of(k)))
+                let (_, now) = zero_limit(&out, k, cx)?;
+                Some((now, toggles_of(k)))
             })
             .collect();
-        // A site over a sum no other member meets is a class of its own, which no limit pins; at
-        // a pole float64 still gives it a value (reading B, `zero_check`). Only `f64` reads one
-        // (`class.pole_orientation`), so only `f64` looks.
-        let mut read: Vec<Ex> = groups.iter().filter_map(|(k, _)| k.clone()).collect();
-        for (pos, _) in site_flips.iter().filter(|_| f64_zero_signs(cx)) {
-            let Some((k, _)) = site_class(&out[*pos], cx) else {
-                continue;
-            };
-            if read.contains(&k) {
-                continue;
-            }
-            if pole_value_read(&out, &k, cx) {
-                checks.push((false, toggles_of(&k)));
-            }
-            read.push(k);
-        }
         let factor_price = |f: &Ex| -> u64 {
             match f {
                 Ex::Num(r) if r.is_one() => 0,
@@ -9487,8 +9317,9 @@ impl SignOrbit<'_> {
 /// check couples are decided together (a component, its orientations enumerated: in practice a
 /// check counts the sites of its own class only). Per component its cheapest orientation, and per
 /// parity of the sign the one component whose switch to the other parity costs least: the
-/// cheapest product of either sign, priced exactly, the cheaper winning (then a non-negative
-/// coefficient, then the structurally smaller product). Ties within a parity resolve by a fixed
+/// cheapest product of either sign, priced exactly, the cheaper winning, on an equal price the tie
+/// order (`tie_cmp`: the sign key, then the structure). A normal-form choice: the configurations
+/// are admitted by the zero checks, never by the price. Ties within a parity resolve by a fixed
 /// order that is a function of the orbit, never of the entry spelling: each component's
 /// orientation by its sites as they then stand, the switch by the components' smallest site.
 /// `None` where no configuration keeps the product's values at its zeros, or a component
@@ -9905,15 +9736,12 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
             .iter()
             .map(|t| negate_term(t, cx))
             .collect::<Option<Vec<Ex>>>()?;
-        // FILES-BARE gate: the flipped multiset must be a spelling primitive_sum
-        // itself would file bare -- if its own orientation decision would WRAP it
-        // (`-a - b` rests as -1 x (a+b)), the "site" is not a genuine hiding place:
-        // trading into it re-mints the wrapper (bounce), and the pow pre-fold would
-        // freeze a non-canonical one-signed sum under the refused carrier (caught by
-        // the completion pin). A sign-counting heuristic is NOT equivalent:
-        // the odd-literal fusion parks signs inside function arguments where no
-        // coefficient shows them (measured: 5 corpus rows + 4 rust pins regressed
-        // under mixed-sign counting).
+        // FILES-BARE gate: the flipped multiset must be a spelling the sum's own orientation
+        // (`flipped_orientation_wins`) files bare. Where it would wrap it (`-a - b` rests as
+        // `-1 x (a + b)`) the site is none: trading into it would mint the wrapper again, and a
+        // power over it would freeze a one-signed sum its constructors do not file. Counting signs
+        // is not the same test: an odd literal's sign sits inside a function's argument, where no
+        // coefficient shows it.
         if flipped_orientation_wins(&out, Wrapper::Flipped, Tie::Keep, cx) {
             return None;
         }
@@ -10529,17 +10357,11 @@ fn distributed_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Vec<Ex> {
     // post-distribute there is no legal trade, so entry-independence
     // requires one fixed pre-state.
     let vv: Vec<Ex>;
-    // In `f64` a site over a sum that may vanish is no place for it: the sum cancels to `+0` in
-    // either orientation, so the coefficient's sign is the sign of the pole the power gives it
-    // there (`class.pole_orientation`: `(-2 (x0 - x1))^-1` is `-inf` at x0 = x1, `(2 (x1 - x0))^-1`
-    // is `+inf`).
     let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() && !inverts_a_signed_zero(v, cx) {
         let ci = v
             .iter()
             .position(|f| matches!(f, Ex::Num(r) if r.is_negative()));
-        let si = v
-            .iter()
-            .position(|f| is_sign_trade_site(f, cx) && !pole_site(f, cx));
+        let si = v.iter().position(|f| is_sign_trade_site(f, cx));
         match (ci, si) {
             (Some(ci), Some(si)) => {
                 let nc = match &v[ci] {
@@ -10767,8 +10589,6 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // An odd negative power inverts the zero of a site that vanishes on a region with the sign
     // its orientation gives it (`region_signed_zero`): `1/-(S^3)` is `-inf` there and
     // `1/flip(S)^3` is `+inf`, so the power distributes instead (`inverts_a_signed_zero`).
-    // And where the site's sum may vanish exactly, the pole's sign is the one written
-    // (`class.pole_orientation`): `1/-(x0 - 3)` is `-inf` at x0 = 3, `1/(3 - x0)` is `+inf`.
     let negated_site = |f: &Ex| match &exp {
         Ex::Num(s) => Law::PowNegatedSite.holds_powers(Powers::Site { site: f, s }, cx),
         _ => true,
@@ -11113,16 +10933,13 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             return fun(cx.view.intern("rootn"), vec![base, Ex::Num(n)], cx);
         }
     }
-    // Even-carrier orientation (full family): an EVEN
-    // integer exponent erases the base's sign -- (-S)^2k == S^2k EXACTLY, at the
-    // poles too (negative even: at S = 0 both are +inf, at +-inf both 0) -- so a
-    // mixed-sign Add base's orientation is FREE and both orientations denote one
-    // value. Canonical form picks the fow winner; the exact tie (pure mirrors) is
-    // the one place the historical lex rule still decides, because neither spelling
-    // is structurally distinguished (Tie::Lex). Const-bearing and absorbing sums
-    // keep their absorption owners. Runs at the very end: base and exponent are in
-    // final form, and the flip re-enters `pow` exactly once (fow on the flipped
-    // orientation answers keep -- class-antisymmetry).
+    // AN EVEN POWER'S BASE: an even integer exponent erases the base's sign, `(-S)^2k = S^2k`
+    // exactly, at the poles too (a negative even power is `+inf` at `S = 0` in either orientation,
+    // 0 at an infinity), so a mixed-sign sum's orientation is free and both orientations are one
+    // value. The base takes the orientation the sum's normal-form choice gives a free site
+    // (`flipped_orientation_wins`, `Tie::Lex`: neither spelling distinguished). Const-bearing and
+    // absorbing sums keep their absorption owners. Base and exponent are final here, and the flip
+    // re-enters `pow` once (the flipped orientation stands, the order being one on the class).
     if let (Ex::Add(ts), Ex::Num(r)) = (&base, &exp) {
         if r.is_even_integer()
             && !r.is_zero()
@@ -11971,13 +11788,11 @@ pub(crate) fn lattice(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
 /// sign-blind representative (`sign_blind_rep`), or else the other orientation of a sum where it
 /// wins.
 ///
-/// Even-carrier orientation (full family): beyond the CARRIED sign
-/// `sign_blind_rep` drops, an even function also erases its argument's ORIENTATION -- `cos(x - y)`
-/// and `cos(y - x)` are one value -- and bag orientation is invisible to `sign_blind_rep` (a
-/// mixed-sign sum carries no top-level sign to drop). Same doctrine as the even-power base: fow
-/// picks, exact ties (pure mirrors) to the lex rule, Const-bearing and absorbing sums keep their
-/// absorption owners, and the flip re-enters `fun` exactly once (class-antisymmetry answers keep
-/// on the flipped orientation).
+/// Beyond the carried sign `sign_blind_rep` drops, an even function erases its argument's
+/// orientation (`cos(x - y)` and `cos(y - x)` are one value), which a mixed-sign sum carries in no
+/// top-level sign. As an even power's base, the argument takes the orientation the sum's
+/// normal-form choice gives a free site (`flipped_orientation_wins`, `Tie::Lex`); Const-bearing and
+/// absorbing sums keep their absorption owners, and the flip re-enters `fun` once.
 fn even_argument(a: &Ex, cx: &Cx) -> Option<Ex> {
     if let Some(sign_free) = cx.sign_blind_rep(a) {
         return Some(sign_free);
@@ -12596,11 +12411,11 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     if args.len() == 1 && cx.view.tok_is(op, "abs") && Law::FunAbsNonnegative.holds(&args[0], cx) {
         return args.into_iter().next().unwrap();
     }
-    // THE SIGN OF AN ODD HEAD (the one tie key, `sign_key`): `f(-u)` and `-f(u)` are one value
-    // for an odd head of a negatable argument (`class_base`); the cheaper spelling stands, and on
-    // an equal price the sign stands outside (fewer signs, then the outer one). A product the head
-    // stands in decides again over all its members (`sign_place`). A constant argument keeps its
-    // sign on its literal (`sin(-2)`).
+    // THE SIGN OF AN ODD HEAD: `f(-u)` and `-f(u)` are one value for an odd head of a negatable
+    // argument (`class_base`). A normal-form choice: the cheaper spelling stands, and on an equal
+    // price the tie order (`tie_cmp`: fewer signs, then the outer one, so the sign stands outside;
+    // then the structure). A product the head stands in decides again over all its members
+    // (`sign_place`). A constant argument keeps its sign on its literal (`sin(-2)`).
     let head = Ex::Fun(op, args);
     let pos = match &head {
         Ex::Fun(f, a) => odd_head(cx.view, *f, a).map_or(0, |(p, _)| p),
@@ -12970,14 +12785,10 @@ mod tests {
                     mul(vec![Ex::int(1), raw_sin.clone()], &cx),
                     "{mode:?}"
                 );
-                // a power over a lone site reads its class, whichever orientation it stands in;
-                // in `f64` an odd negative power reads the sign of the pole that orientation gives
-                // it (`class.pole_orientation`: the sum is `+0` at its zero in either orientation,
-                // so `1/-(x1 + x2 - x0)^3` is `-inf` there and `1/(x0 - x1 - x2)^3` is `+inf`)
-                let pole_read = mode == RuleMode::Default;
+                // a power over a lone site reads its class, whichever orientation it stands in
                 assert_eq!(
-                    pow(cube.clone(), Ex::int(-1), &cx) == pow(s.clone(), Ex::int(-3), &cx),
-                    !pole_read,
+                    pow(cube.clone(), Ex::int(-1), &cx),
+                    pow(s.clone(), Ex::int(-3), &cx),
                     "{mode:?}"
                 );
                 assert_eq!(
@@ -12986,8 +12797,8 @@ mod tests {
                     "{mode:?}"
                 );
                 assert_eq!(
-                    pow(sine, Ex::int(-1), &cx) == pow(raw_sin, Ex::int(-1), &cx),
-                    !pole_read,
+                    pow(sine, Ex::int(-1), &cx),
+                    pow(raw_sin, Ex::int(-1), &cx),
                     "{mode:?}"
                 );
             }

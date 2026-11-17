@@ -23,8 +23,8 @@
 use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
-    add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pole_site,
-    pow, pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
+    add, atan2_of, canon, fun, inverts_a_signed_zero, lattice_head, mul, mul_undecided, pow,
+    pow_member, pow_spelled, raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -280,15 +280,6 @@ fn parse_node(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     if let Some((members, at)) = product_power(tokens, idx, cx) {
         return Some((mul(members, cx), at));
     }
-    if s == "inv" && view.arity(t) == Some(1) {
-        match inverted_power(tokens, idx + 1, cx) {
-            Some((InvertedPower::Composed(b, k), at)) => return Some((pow(b, Ex::Num(k), cx), at)),
-            Some((InvertedPower::Built(p), at)) => {
-                return Some((desugar(&s, t, vec![p], cx), at));
-            }
-            None => {}
-        }
-    }
     // The TAGGED bags of the strict prefix form: `<add> ... </add>` / `<mul> ... </mul>`.
     // Children are read until the matching closer; a bag needs >= 2 children and a closer
     // (anything else is malformed and fails the parse). The two languages share one parser:
@@ -472,15 +463,7 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
         "/" => {
             let mut num = Vec::new();
             let at = parse_members(tokens, idx + 1, cx, &mut num)?;
-            let (mut den, at) = match inverted_power(tokens, at, cx) {
-                Some((InvertedPower::Composed(b, k), at)) => {
-                    out.extend(num);
-                    out.push(pow_member(b, Ex::Num(k), cx));
-                    return Some(at);
-                }
-                Some((InvertedPower::Built(p), at)) => (vec![p], at),
-                None => divisor_members(tokens, at, cx)?,
-            };
+            let (mut den, at) = divisor_members(tokens, at, cx)?;
             // A literal over a literal is the spelling of one number (`/ p q`), and stays one
             // member of the coefficient's partition -- but for a zero over a literal in the
             // float64 modes, which is the signed zero of the divisor's sign (`0/(-2)` is -0), so
@@ -504,7 +487,6 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             let mut children = 0usize;
             let mut inverted = false; // past the <div> INVERSE SECTION marker?
             let (mut num, mut den) = (Vec::new(), Vec::new());
-            let mut raised: Vec<Ex> = Vec::new();
             loop {
                 let nt = *tokens.get(at)?;
                 let ns = view.resolve_owned(nt);
@@ -522,15 +504,7 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                 }
                 children += 1;
                 at = if inverted {
-                    let (d, next) = match inverted_power(tokens, at, cx) {
-                        Some((InvertedPower::Composed(b, k), next)) => {
-                            raised.push(pow_member(b, Ex::Num(k), cx));
-                            at = next;
-                            continue;
-                        }
-                        Some((InvertedPower::Built(p), next)) => (vec![p], next),
-                        None => divisor_members(tokens, at, cx)?,
-                    };
+                    let (d, next) = divisor_members(tokens, at, cx)?;
                     den.push(d);
                     next
                 } else {
@@ -542,9 +516,7 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             // over a literal in the float64 modes, `zero_over_literal`).
             match (num.as_slice(), den.as_slice()) {
                 ([Ex::Num(n)], [d])
-                    if raised.is_empty()
-                        && matches!(d.as_slice(), [Ex::Num(_)])
-                        && !zero_over_literal(n, cx) =>
+                    if matches!(d.as_slice(), [Ex::Num(_)]) && !zero_over_literal(n, cx) =>
                 {
                     let (p, q) = (num.remove(0), den.remove(0).remove(0));
                     out.push(
@@ -557,7 +529,6 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                     for d in den {
                         out.extend(powered_members(d, &Rat::NEG_ONE, cx));
                     }
-                    out.extend(raised);
                 }
             }
             // An empty numerator is allowed (`<mul> <div> x y </mul>` = 1/(x*y)); the bag still
@@ -583,52 +554,6 @@ fn literal_quotient(p: &Ex, q: &Ex) -> Option<Ex> {
 /// them keeps the sign (`1/(0/(-2))` is -inf), and their product is the zero as before.
 fn zero_over_literal(n: &Rat, cx: &Cx) -> bool {
     n.is_zero() && cx.ieee_zeros()
-}
-
-/// An integer power read under an inverse (`inv pow X k`, or a divisor spelled `pow X k`).
-enum InvertedPower {
-    /// `X` and `-k`: the inverse composed with the power before it is built.
-    Composed(Ex, Rat),
-    /// The power as the parse builds it alone (an exponent no nonzero integer literal, or a
-    /// base without such a pole).
-    Built(Ex),
-}
-
-/// AN INVERTED INTEGER POWER OF A POLE SITE IS READ AS ITS NEGATIVE POWER: the power spelled
-/// `pow X k` at `idx`, `k` a nonzero integer literal and `X` a sum (or an odd head of one) that may
-/// vanish exactly, in `f64` (`expr::pole_site`), under an inverse is `X^-k`, the inverse composed
-/// with the power before either is built (`pow.compose` at an integer exponent, an identity of
-/// float64 too: `(x^3)^-1` and `x^-3` agree at a zero of either sign). So `X`'s orientation is
-/// decided once, under the negative power that reads its pole, as the answer `X^-k` is written
-/// (`/ a pow X k`, `inv pow X k`): built alone, `X^3` would take its cheaper orientation, where its
-/// zero's sign is no value (`(x0 - x1 - x2)^3` is `-(x1 + x2 - x0)^3`), and the inverse would then
-/// read the pole that orientation gives (`class.pole_orientation`). Any other power is built as the
-/// parse builds it alone. `None` where `idx` spells no power of a spelling other than a product's
-/// (`product_power` reads those).
-fn inverted_power(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(InvertedPower, usize)> {
-    let view = cx.view;
-    let t = *tokens.get(idx)?;
-    if !(view.tok_is(t, "pow") && view.arity(t) == Some(2)) {
-        return None;
-    }
-    let bt = *tokens.get(idx + 1)?;
-    if product_head(&view.resolve_owned(bt), view.arity(bt)) {
-        return None;
-    }
-    let (b, at) = parse_one(tokens, idx + 1, cx)?;
-    if !b.has_measure_space(view) && !b.contains_wildcard(view) {
-        // a ground power is read as the parse reads it alone (its value first)
-        let (p, at) = parse_one(tokens, idx, cx)?;
-        return Some((InvertedPower::Built(p), at));
-    }
-    let (e, at) = parse_one(tokens, at, cx)?;
-    match &e {
-        Ex::Num(k) if k.is_integer() && !k.is_zero() && pole_site(&b, cx) => {
-            let k = k.checked_neg()?;
-            Some((InvertedPower::Composed(b, k), at))
-        }
-        _ => Some((InvertedPower::Built(desugar("pow", t, vec![b, e], cx)), at)),
-    }
 }
 
 /// The members of a divisor spelled at `idx`, as `parse_members` reads every spelling: a
