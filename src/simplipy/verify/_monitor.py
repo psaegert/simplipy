@@ -42,6 +42,15 @@ sign on a region is refused too (`atan2(0*x0, -1) -> pi`). An infinity's sign at
 is not promised (the judge's reading of a pole's sign): `1/(-x0 - 3) -> -1/(x0 + 3)` is OK, and
 nor is any value where the input has an isolated two-signed pole: `1/(x0 - 3) + 1/(3 - x0) -> 0`.
 
+A FOLD IS A STEP. In f64 the engine writes a number its own algebra combines from literals (a
+product's coefficient, a sum's constant term) as the double nearest the exact operation on the
+literals' doubles, and a long number at its double (`ac_simplify_trace`'s folds). Where an answer as
+written is refused, each of its numbers that a fold wrote is read as the numbers it was folded from,
+through the exact products and sums the engine held between folds (`_unfolded`): each fold is
+judged as the ground rule it makes (`_fold_rules`), and the answer so read as an answer. `27.940055475362794*(x1 + 0.2856797429345068*x2)`, distributed to
+`27.940055475362794*x1 + 7.981907865777503*x2`, is OK where the reals refute the answer as written
+by the fold's rounding.
+
 A WHOLE ANSWER IS READ AT ITS ROOT. A zero's sign is a value where an operation reads it (F7),
 and no operation of the answer reads its root's: there two zeros of opposite sign are one value,
 while a value that turns on a zero's sign an operation inside reads is a change
@@ -113,14 +122,226 @@ _REALS_UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'J
 _F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN', 'TWO-SIGNED-POLE'})
 
 
-def _steps(inp, mode, engine):
-    """The rule steps the engine takes on `inp` in `mode`: each fire's rule instance, as the judge
-    reads a rule (`_as_rule`)."""
+def _trace(inp, mode, engine):
+    """The rule steps the engine takes on `inp` in `mode` -- each fire's rule instance, as the judge
+    reads a rule (`_as_rule`) -- and its folds of numbers into one number (`ac_simplify_trace`:
+    `(op, [operand], written)`, each operand and the written number as prefix tokens)."""
     from ..engine import _RULE_MODE, _coerce_mode
     rule_mode = _RULE_MODE[_coerce_mode(mode)]
-    _, fires = engine._core.ac_simplify_fires(list(inp), rule_mode=rule_mode)
-    return list(dict.fromkeys(tuple(map(tuple, _as_rule(lhs, rhs, engine)))
-                              for lhs, rhs in fires))
+    _, fires, folds = engine._core.ac_simplify_trace(list(inp), rule_mode=rule_mode)
+    steps = list(dict.fromkeys(tuple(map(tuple, _as_rule(lhs, rhs, engine)))
+                               for lhs, rhs in fires))
+    return steps, folds
+
+
+def _steps(inp, mode, engine):
+    """The rule steps the engine takes on `inp` in `mode` (`_trace`)."""
+    return _trace(inp, mode, engine)[0]
+
+
+#: The arithmetic a fold's operands are made of, read exactly (`_exact_value`).
+_EXACT_OPS = {
+    '+': lambda a, b: a + b, '-': lambda a, b: a - b, '*': lambda a, b: a * b,
+    '/': lambda a, b: a / b if b else None, 'neg': lambda a: -a,
+    'inv': lambda a: 1 / a if a else None,
+}
+
+
+def _exact_value(node):
+    """The exact rational value of a `_contract._term` node made of literals and `+`, `-`, `*`,
+    `/`, `neg` and `inv` (every number of strict is a rational, and arithmetic between numbers is
+    exact), or None where it holds anything else (`np.pi`, a function, a variable)."""
+    from fractions import Fraction
+    head, kids = node
+    if not kids:
+        try:
+            v = _contract.literal_value(head)
+        except (ValueError, ArithmeticError):
+            return None
+        return v if isinstance(v, Fraction) else None
+    args = [_exact_value(k) for k in kids]
+    f = _EXACT_OPS.get(head)
+    if f is None or any(a is None for a in args) or len(args) != f.__code__.co_argcount:
+        return None
+    return f(*args)
+
+
+def _spelled_exactly(v):
+    """A rational as one literal token the judge reads exactly (`p/q`, or an integer)."""
+    return str(v.numerator) if v.denominator == 1 else f'{v.numerator}/{v.denominator}'
+
+
+def _fold_rules(fold):
+    """THE GROUND RULES A FOLD MAKES, as strict reads it: `op(m1, m2, ...) -> written`, in each of
+    the two readings the engine writes a fold by. The literals a product's coefficient or a sum's
+    constant term combines (`*`, `+`) are combined as written (their exact value, or float64's
+    value in the written order), or read at their doubles, as float64 reads a literal, and combined
+    exactly, which the engine writes rounded once: then the left side is that exact value as one
+    number, at whose double the written number agrees or not. A number written as another
+    (`literal`) is its exact value as one number. A fully numeric node written as its value
+    (`ground`) is the node. A fold holds where one of its rules holds."""
+    from fractions import Fraction
+    op, operands, written = fold
+    written = list(written)
+    trees = [_contract._term(o) for o in operands]
+    if op in ('*', '+') and trees:
+        lhs = list(operands[0])
+        for o in operands[1:]:
+            lhs = [op] + lhs + list(o)
+        rules = [(lhs, written)]
+        values = [_exact_value(t) for t in trees]
+        if all(v is not None for v in values):
+            doubles = [Fraction(float(v)) for v in values]
+            total = doubles[0]
+            for d in doubles[1:]:
+                total = total * d if op == '*' else total + d
+            rules.append(([_spelled_exactly(total)], written))
+        return rules
+    if op == 'literal' and trees:
+        v = _exact_value(trees[0])
+        return [([_spelled_exactly(v)] if v is not None else list(operands[0]), written)]
+    return [(list(operands[0]) if operands else [], written)]
+
+
+def _unfolded(lhs, rhs, folds):
+    """THE REWRITE WITH ITS FOLDS READ AS STEPS. The engine reads a literal of the input that a
+    double does not hold at its double (`literal`, a fold of its own), and its exact algebra then
+    acts on that double: such a literal of `lhs` (up to its sign) is read as the double. Each number
+    of `rhs` that the input so read does not hold (up to its sign) is read as the numbers it was
+    made of: where a fold wrote it, as the numbers it was folded from -- their operation (`*`, `+`)
+    or the one number (`literal`, `ground`) as the engine held it before it wrote the number, its
+    sign the written number's; where no fold wrote it, as the exact product or sum of two or three
+    numbers the engine held (the input's, a fold's, a term's unit coefficient: the engine holds
+    `x - 0.05523072428633124*(2.0417762114714635*x)` as `0.88723122100982965*x`, which is
+    `1 - 0.11276877899017035`, the fold of the two literals), which is the number itself, so the
+    reading changes no value -- and so on, through the numbers those were made of. Then the rewrite reads
+    as the engine's own algebra, which is exact, and each fold is a step of its own
+    (`_fold_rules`). -> `(lhs, rhs, [fold used])`, or None where no number was folded; the last
+    fold that wrote a number is the one read."""
+    from fractions import Fraction
+    try:
+        tl, tr = _contract._term(lhs), _contract._term(rhs)
+    except (ValueError, IndexError):
+        return None
+
+    def value(t):
+        try:
+            v = _contract.literal_value(t)
+        except (ValueError, ArithmeticError):
+            return None
+        return v if isinstance(v, Fraction) else None
+
+    used = []
+    # the input's literals the engine read at their doubles, by their magnitude
+    at_double = {}
+    for fold in folds:
+        op, operands, written = fold
+        if op == 'literal' and len(operands) == 1 and len(operands[0]) == 1 and len(written) == 1:
+            v, d = value(operands[0][0]), value(written[0])
+            if v is not None and d is not None and v != 0:
+                at_double.setdefault(abs(v), (fold, written[0].lstrip('-')))
+
+    def read_input(node):
+        head, kids = node
+        if kids:
+            return (head, tuple(read_input(k) for k in kids))
+        v = value(head)
+        if v is None or abs(v) not in at_double:
+            return node
+        fold, spelled = at_double[abs(v)]
+        if spelled == head.lstrip('-'):
+            return node
+        used.append(fold)
+        return ('-' + spelled if v < 0 else spelled, ())
+
+    tl = read_input(tl)
+    held = {abs(v) for n in _contract._nodes(tl) if not n[1] and (v := value(n[0])) is not None}
+    wrote = {}
+    for fold in folds:
+        written = fold[2]
+        if len(written) == 1 and (v := value(written[0])) is not None and v != 0:
+            wrote[abs(v)] = fold
+    # every number the engine held, signed, by its spelling
+    spelled = {}
+    for node in _contract._nodes(tl):
+        if not node[1] and (v := value(node[0])) is not None:
+            spelled.setdefault(v, node[0])
+    for _, operands, written in folds:
+        for tokens in list(operands) + [written]:
+            for t in tokens:
+                if (v := value(t)) is not None:
+                    spelled.setdefault(v, t)
+    spelled.setdefault(Fraction(1), '1')  # a term's unit coefficient: `x - c*x` is `(1 - c)*x`
+    members = {s * v for v in spelled if v != 0 for s in (1, -1)}
+    pool = sorted(members, key=lambda v: (v < 0, abs(v)))  # the positive ones first, smallest first
+    products = {}
+
+    def number(v):
+        if v in spelled:
+            return (spelled[v], ())
+        return ('neg', ((spelled[-v], ()),))
+
+    def made_of(v):
+        """The exact product or sum of two numbers the engine held that is `v`, else of three."""
+        for op, rest in (('*', lambda a: v / a), ('+', lambda a: v - a)):
+            for a in pool:
+                b = rest(a)
+                if b in members and abs(a) != abs(v) and abs(b) != abs(v):
+                    return (op, (number(a), number(b)))
+        if not products:
+            for i, a in enumerate(pool):
+                for b in pool[i:]:
+                    if abs(a) != 1 and abs(b) != 1:
+                        products.setdefault(a * b, (a, b))
+        for c in pool:
+            ab = products.get(v / c)
+            if ab is not None and abs(c) != abs(v) and all(abs(x) != abs(v) for x in ab):
+                return ('*', (('*', (number(ab[0]), number(ab[1]))), number(c)))
+        return None
+
+    reading = {}
+
+    def read(node):
+        """-> `(node read, whether a fold was read in it)`."""
+        head, kids = node
+        if kids:
+            parts = [read(k) for k in kids]
+            return (head, tuple(p for p, _ in parts)), any(f for _, f in parts)
+        v = value(head)
+        if v is None or v == 0 or abs(v) in held:
+            return node, False
+        if v in reading:
+            return reading[v] or (node, False)
+        reading[v] = None  # a number read in its own reading stays as written
+        if abs(v) in wrote:
+            fold = wrote[abs(v)]
+            op, operands, _ = fold
+            trees = [read(_contract._term(o))[0] for o in operands]
+            if not trees:
+                return node, False
+            expr = trees[0]
+            if op in ('*', '+'):
+                for t in trees[1:]:
+                    expr = (op, (expr, t))
+            exact = _exact_value(expr)
+            if exact is not None and exact != 0 and (exact < 0) != (v < 0):
+                expr = ('neg', (expr,))
+            used.append(fold)
+            result = (expr, True)
+        else:
+            # an integer no fold wrote is exact as written; a number made of numbers held as
+            # written, no fold among them, reads the same as written
+            made = None if v.denominator == 1 else made_of(v)
+            expr, folded = read(made) if made is not None else (node, False)
+            result = (expr, True) if folded else (node, False)
+        reading[v] = result
+        return result
+
+    out, _ = read(tr)
+    if not used:
+        return None
+    return (_contract._tokens_of(tl), _contract._tokens_of(out),
+            list(dict.fromkeys((op, tuple(map(tuple, ops)), tuple(w)) for op, ops, w in used)))
 
 
 def _arguments(tokens):
@@ -260,9 +481,10 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     except Exception as error:       # an unreadable rewrite is reported, never passed
         return 'UNSCORED', f'{type(error).__name__}: {error}'
     exact_steps = True
+    folds = []
     if engine is not None:
         try:
-            steps = _steps(inp, name, engine)
+            steps, folds = _trace(inp, name, engine)
         except Exception as error:
             return 'UNSCORED', f'steps: {type(error).__name__}: {error}'
         for step_lhs, step_rhs in steps:
@@ -275,6 +497,57 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
                                        f'({step.get("verdict")})'
                 return 'VIOLATION', f'F8: the step {said} is {step_tier}, not {name}\'s'
             exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
+    verdict, why = _whole_answer(lhs, rhs, detail, name, engine, exact_steps)
+    if verdict == 'OK' or name != 'f64' or not folds:
+        return verdict, why
+    return _with_folds(lhs, rhs, folds, name, engine, exact_steps, verdict, why)
+
+
+def _with_folds(lhs, rhs, folds, name, engine, exact_steps, verdict, why):
+    """THE ANSWER READ WITH ITS FOLDS AS STEPS (`_unfolded`): the engine writes a number its own
+    algebra combines from literals as a double (a product's coefficient, a sum's constant term, a
+    long number at its double), a step of its own, which strict admits per step (`_fold_rules`, each
+    judged as the ground rule it makes). Where the answer as written is refused, each number of it
+    the engine folded is read as the numbers it was folded from; where every such fold holds in the
+    mode and the answer so read holds as an answer (`_whole_answer`), the answer is OK. Otherwise
+    the verdict stands, with what the reading found."""
+    from . import MODE_TIERS, effective_tier
+    unfolded = _unfolded(lhs, rhs, folds)
+    if unfolded is None:
+        return verdict, why
+    read_lhs, read, used = unfolded
+    for fold in used:
+        said = None
+        for fold_lhs, fold_rhs in _fold_rules(fold):
+            said = said or f'{" ".join(fold_lhs)} -> {" ".join(fold_rhs)} ({fold[0]})'
+            try:
+                d = _contract.judge_rule(fold_lhs, fold_rhs)
+            except Exception:  # noqa: BLE001  (a rule the judge cannot read holds nothing)
+                continue
+            if effective_tier(d) in MODE_TIERS[name] or _reading(d, name) is True:
+                break
+        else:
+            return verdict, f'{why}; the fold {said} is not {name}' + "'s"
+    try:
+        detail = _contract.judge_rule(read_lhs, read)
+    except Exception as error:
+        return verdict, f'{why}; with its folds read as steps: {type(error).__name__}: {error}'
+    read_verdict, read_why = _whole_answer(read_lhs, read, detail, name, engine, exact_steps)
+    if read_verdict == 'OK':
+        return 'OK', f'F8: {len(used)} folds read as steps, each {name}' + "'s" + f'; so read, {read_why}'
+    if read_verdict == 'UNSCORED':
+        # the answer as written is refused by its folds' rounding alone, and so read it reaches no
+        # answer
+        return 'UNSCORED', f'F8: {len(used)} folds read as steps, each {name}' + "'s" + \
+            f'; so read, {read_why[:200]}'
+    return verdict, f'{why}; with its folds read as steps: {read_verdict}: {read_why[:200]}'
+
+
+def _whole_answer(lhs, rhs, detail, name, engine, exact_steps):
+    """The mode's reading of a whole answer `lhs -> rhs` judged as `detail` (`judge_pair`, its
+    steps' verdicts read already): `_held`, and where float64's kinds alone refuse an answer true
+    in the reals, the smallest changed part that holds as a step, around which only a zero's sign
+    is read. -> `(verdict, why)`."""
     verdict, why, kinds = _held(detail, name, engine, exact_steps)
     if kinds is None:
         return verdict, why

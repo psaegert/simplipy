@@ -236,6 +236,14 @@ organised by who you are, then the highlights, then every change in detail.
 - **The monitor refuses a whole answer whose value turns on a zero's sign.** An answer true in
   the reals whose float64 differences are rounding alone was passed without reading a zero's
   sign: `atan2(0*x0, -1) -> pi` (-pi against pi for every x0 < 0) passed, and is now refused.
+- **The monitor reads a fold as a step.** Where an answer as written is refused in `f64`, each
+  fold of the call is judged as the ground rule it makes (the literals' doubles combined exactly
+  and rounded once, or the operation as written; a long literal at its double), and where every
+  fold holds, the answer is read with each folded number as the numbers it was made of, through
+  the exact products and sums the engine held between folds: `27.940055475362794*(x1 +
+  0.2856797429345068*x2) -> 27.940055475362794*x1 + 7.981907865777503*x2` is OK, where the reals
+  refute the answer as written by the fold's rounding. A fold `f64` refuses, or an answer so read
+  that the reals refute, keeps the verdict.
 - **The engine records its folds beside its rule steps.** `_core.ac_simplify_trace` returns,
   beside the answer and the rule steps, every fold of the call as the ground rule
   `op(operands) -> written`: the literals a product's coefficient or a sum's constant term

@@ -297,7 +297,13 @@ engine's own algebra to the reals with float64's kinds kept at the step's own po
 smallest part of the input the answer changed that holds as a step, only a zero's sign on a
 region is read, so `1/sin(np.pi - x0) -> 1/sin(x0)` passes (the step `sin(np.pi - x0) ->
 sin(x0)` gives 0 against 1.2e-16 at x0 = np.pi, which `1/` makes +inf against 8.2e15) and
-`atan2(0*x0, -1) -> pi` does not (-pi against pi for every x0 < 0). Both the gate and the monitor carry poison
+`atan2(0*x0, -1) -> pi` does not (-pi against pi for every x0 < 0). A number the engine folds
+from literals (a product's coefficient, a sum's constant term, a long literal written at its
+double: `_core.ac_simplify_trace`'s folds) is a step too: each fold is judged as the ground rule
+it makes, and where every fold holds in `f64`, the answer is read with each folded number as the
+numbers it was made of, so `27.940055475362794*(x1 + 0.2856797429345068*x2) ->
+27.940055475362794*x1 + 7.981907865777503*x2` passes although the reals refute the answer as
+written by the fold's rounding. Both the gate and the monitor carry poison
 self-tests (`selftest`) that must pass before their verdicts are trusted.
 
 ## Promotion: `simplipy.promotion.promote`

@@ -1917,6 +1917,45 @@ def test_the_trace_records_each_fold_as_a_ground_rule() -> None:
     assert ('*', [['0.30000000000000004'], ['0.30000000000000004']], ['0.09000000000000002']) in folds, folds
 
 
+def test_the_monitor_reads_a_fold_as_a_step() -> None:
+    # The answer distributes 27.94*(x1 + 0.2857*x2) and folds the two literals into float64's product
+    # of their doubles, 7.981907865777503: refuted in the reals as written, it reads as the engine's
+    # exact algebra once the folded number is read as the numbers it was folded from, and the fold
+    # is the ground rule `27.94*0.2857 -> 7.981907865777503`, which f64 holds
+    from simplipy.verify import _contract, _monitor
+
+    def held(rules):
+        return [_contract.judged_reading(judge_rule(lhs, rhs), 'f64') for lhs, rhs in rules]
+
+    lhs = '* 27.940055475362794 + ?1 * 0.2856797429345068 ?2'.split()
+    rhs = '+ * 27.940055475362794 ?1 * 7.981907865777503 ?2'.split()
+    fold = ('*', [['0.2856797429345068'], ['27.940055475362794']], ['7.981907865777503'])
+    read_lhs, read, used = _monitor._unfolded(lhs, rhs, [fold])
+    assert read_lhs == lhs and len(used) == 1, (read_lhs, used)
+    assert read == '+ * 27.940055475362794 ?1 * * 0.2856797429345068 27.940055475362794 ?2'.split()
+    assert judge_rule(lhs, rhs)['verdict'] == 'KILL'
+    assert judge_rule(lhs, read)['verdict'] in ('CERTIFIED', 'ENGINE-MISALIGN')
+    assert True in held(_monitor._fold_rules(used[0]))
+    # a number the fold did not write is no fold's
+    assert True not in held(_monitor._fold_rules(('*', fold[1], ['7.981907865777504'])))
+    # a literal the engine read at its double is read so on the input's side too
+    long = ('literal', [['5.8620137538424231e-5']], ['5.862013753842423e-5'])
+    read_lhs, read, used = _monitor._unfolded(['*', '5.8620137538424231e-5', '?0'],
+                                              ['*', '5.862013753842423e-5', '?0'], [long])
+    assert read_lhs == read == ['*', '5.862013753842423e-5', '?0'], (read_lhs, read)
+    # a number the engine held exactly between two folds (the square's folded coefficient times
+    # 0.6483799169849713, written at its double by a fold of its own) is read as the product it is
+    lhs = '* 0.6483799169849713 pow * 0.003403449125649549 ?0 2'.split()
+    rhs = '* 7.51048669163285e-6 pow ?0 2'.split()
+    folds = [('*', [['0.003403449125649549'], ['0.003403449125649549']], ['1.158346595088468e-5']),
+             ('literal', [['7.510486691632850460235499409684e-6']], ['7.51048669163285e-6'])]
+    read_lhs, read, used = _monitor._unfolded(lhs, rhs, folds)
+    assert read == ('* * * 0.003403449125649549 0.003403449125649549 0.6483799169849713 '
+                    'pow ?0 2').split(), read
+    assert len(used) == 2 and all(True in held(_monitor._fold_rules(f)) for f in used)
+    assert judge_rule(lhs, read)['verdict'] in ('CERTIFIED', 'ENGINE-MISALIGN')
+
+
 def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
     # F8: no promise of 8 units in the last place for a whole answer, only the engine's algebra
     # exact in the reals; a zero's sign is float64's own event and is held (F7)
