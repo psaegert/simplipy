@@ -722,10 +722,11 @@ model predictions.
   power composes over a leaf alone (`(sin(x0)^-1)^(1/2)`); and an odd root under an integer power
   stays a root in both modes, so its class keeps one spelling (`rootn(t, 3)^2` collects with
   `rootn(t, 3)`, `t^(2/3)` would not), where the judge holds the composition over `t >= 0` and, by
-  `permissive`'s powers compose, for every `t`. Under an inverse the judge refuses steps that hold
-  at their own root, where float64's `x ** 0.5`, numpy's `sqrt`, keeps the `-0` of an isolated point
-  and `rootn(x, 2)` or `x^(3/2)` gives `+0` (`1/x0^(1/2) -> 1/rootn(x0, 2)`, `1/(rootn(x0, 2)*x0) ->
-  1/x0^(3/2)` at x0 = -0); the guarantee is per step, as it is for every step.
+  `permissive`'s powers compose, for every `t`. Under an inverse float64's `x ** 0.5`, numpy's
+  `sqrt`, keeps the `-0` of an isolated point where `rootn(x, 2)` or `x^(3/2)` gives `+0`, so
+  `1/x0^(1/2) -> 1/rootn(x0, 2)` and `1/(rootn(x0, 2)*x0) -> 1/x0^(3/2)` are `-inf` against `+inf`
+  at x0 = -0 alone: the sign of an infinity at an isolated pole, which `f64` does not promise, and
+  the judge holds both.
 - **The laws of signs and orientation are named.**
   `class.sign_trade`, `class.pole_orientation`, `class.opposite_sums`,
   `class.like_terms_up_to_sign`, `pow.even_orientation`, `pow.negated_site`, `fun.even`,
@@ -741,10 +742,12 @@ model predictions.
   kept (`-1/(x0 - 3)` is `1/(3 - x0)`, `-inf` against `+inf` at x0 = 3, and
   `1/(x0 - 3) + 1/(3 - x0)` is 0). Where `f64` and the judge read a step apart, the cause is named:
   a step that moves only a zero's sign at its own root, which the judge reads where two variables
-  coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); the sign of an isolated zero, which the judge reads as
-  a pole's infinity (`-1/(x0 - 3) -> 1/(3 - x0)`); a coincidence whose measure the judge does not
-  decide (`(x0 - x1)/(x1 - x0) -> -1`); and `permissive`'s one zero, under which it takes no `atan2`
-  step of its own. An unlimited search (`effort=None`) now ends where its endpoint, landed and
+  coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); a sum of poles read at their isolated zero by its
+  limit, where float64 gives an infinity, a change of kind the judge refuses
+  (`1/(x0 - 3) + 1/(3 - x0) -> 0` is `+inf` against 0 at x0 = 3); a coincidence whose measure the
+  judge does not decide (`(x0 - x1)/(x1 - x0) -> -1`); and `permissive`'s one zero, under which it
+  takes no `atan2` step of its own. The sign of an isolated zero, and so of the infinity a pole
+  makes of it, the judge does not read either (`-1/(x0 - 3) -> 1/(3 - x0)` holds in `f64`). An unlimited search (`effort=None`) now ends where its endpoint, landed and
   descended, offers it no move: the root's landing releases the sums a construction held, and a
   released state could offer a move a second call took.
 - **`besseli` reads its argument's parity.** `I_n(-t) = (-1)^n I_n(t)` for an integer order
