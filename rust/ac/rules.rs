@@ -874,22 +874,53 @@ fn ground_step_admitted(node: &Ex, next: &Ex, p: &PassCtx) -> bool {
 thread_local! {
     /// The rule steps of the calls inside a [`FireLog`] scope on this thread.
     static FIRE_LOG: RefCell<Option<Vec<(Ex, Ex)>>> = const { RefCell::new(None) };
+    /// The folds of the calls inside a [`FireLog`] scope on this thread.
+    static FOLD_LOG: RefCell<Option<Vec<Fold>>> = const { RefCell::new(None) };
 }
 
-/// THE RULE STEPS OF A SIMPLIFY CALL: within the scope, every fire is recorded as its rule's
-/// instance, the left side as matched and the right side as substituted (before the
+/// A FOLD: numbers written as one number, `op(operands) -> written`. `op` is `*` or `+` for the
+/// literals a product's coefficient or a sum's constant term combines, in the order they are
+/// combined (float64's value is computed in that order); `literal` for one number written as
+/// another (a written literal at its double, `permissive`'s landing on a float, an entry of the
+/// recognition list); `ground` for a fully numeric node written as its value by the pass.
+#[derive(Clone, Debug)]
+pub struct Fold {
+    pub op: &'static str,
+    pub operands: Vec<Ex>,
+    pub written: Ex,
+}
+
+/// THE RULE STEPS AND THE FOLDS OF A SIMPLIFY CALL: within the scope, every fire is recorded as
+/// its rule's instance, the left side as matched and the right side as substituted (before the
 /// constructors place it), in firing order -- what F8 holds each step to (the deployed monitor
-/// judges each one in the mode). Restores the enclosing log when dropped.
-pub struct FireLog(Option<Vec<(Ex, Ex)>>);
+/// judges each one in the mode) -- and every fold of numbers into one number ([`Fold`]), exact or
+/// rounded, in the order made, so a fold can be judged as the ground rule
+/// `op(m1, m2, ...) -> written`. The folds of constructions the walk then discards (a
+/// candidate the search or the settling refuses) are recorded too. Restores the enclosing logs
+/// when dropped; recording changes nothing the call computes.
+pub struct FireLog(Option<Vec<(Ex, Ex)>>, Option<Vec<Fold>>);
 
 impl FireLog {
     pub fn open() -> Self {
-        FireLog(FIRE_LOG.with(|l| l.replace(Some(Vec::new()))))
+        FireLog(
+            FIRE_LOG.with(|l| l.replace(Some(Vec::new()))),
+            FOLD_LOG.with(|l| l.replace(Some(Vec::new()))),
+        )
     }
 
     /// The steps recorded so far in this scope (the log is emptied).
     pub fn take(&self) -> Vec<(Ex, Ex)> {
         FIRE_LOG.with(|l| {
+            l.borrow_mut()
+                .as_mut()
+                .map(std::mem::take)
+                .unwrap_or_default()
+        })
+    }
+
+    /// The folds recorded so far in this scope (the log is emptied).
+    pub fn take_folds(&self) -> Vec<Fold> {
+        FOLD_LOG.with(|l| {
             l.borrow_mut()
                 .as_mut()
                 .map(std::mem::take)
@@ -902,7 +933,28 @@ impl Drop for FireLog {
     fn drop(&mut self) {
         let outer = self.0.take();
         FIRE_LOG.with(|l| *l.borrow_mut() = outer);
+        let outer = self.1.take();
+        FOLD_LOG.with(|l| *l.borrow_mut() = outer);
     }
+}
+
+/// Is a [`FireLog`] open on this thread, so that a fold is recorded ([`log_fold`])?
+#[inline]
+pub(crate) fn folds_logged() -> bool {
+    FOLD_LOG.with(|l| l.borrow().is_some())
+}
+
+/// Record a fold where a [`FireLog`] is open.
+pub(crate) fn log_fold(op: &'static str, operands: Vec<Ex>, written: Ex) {
+    FOLD_LOG.with(|l| {
+        if let Some(folds) = l.borrow_mut().as_mut() {
+            folds.push(Fold {
+                op,
+                operands,
+                written,
+            });
+        }
+    });
 }
 
 /// Record a fire's rule instance where a [`FireLog`] is open.
@@ -1437,6 +1489,9 @@ fn visit(node: &Ex, p: &PassCtx, up: Option<&Up>) -> Visit {
         // a number the fold spells otherwise (the recognition list), where that descends
         return match (p.fold)(node) {
             Some(folded) if oriented(&folded, node, p) => {
+                if folds_logged() {
+                    log_fold("literal", vec![node.clone()], folded.clone());
+                }
                 if matches!(folded, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)) {
                     Visit::Step(folded)
                 } else {
@@ -1493,6 +1548,14 @@ fn visit(node: &Ex, p: &PassCtx, up: Option<&Up>) -> Visit {
     // priced, so `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds).
     if let Some(folded) = (p.fold)(node) {
         if oriented(&folded, node, p) {
+            if folds_logged() {
+                let op = if matches!(node, Ex::Leaf(_)) {
+                    "literal"
+                } else {
+                    "ground"
+                };
+                log_fold(op, vec![node.clone()], folded.clone());
+            }
             return if matches!(folded, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)) {
                 Visit::Step(folded)
             } else {

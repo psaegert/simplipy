@@ -11097,7 +11097,12 @@ pub fn land(r: Rat, cx: &Cx) -> Rat {
         return strict_literal(r, cx);
     }
     match lossy_literal(&r) {
-        Some(s) => s,
+        Some(s) => {
+            if super::rules::folds_logged() {
+                super::rules::log_fold("literal", vec![Ex::Num(r)], Ex::Num(s.clone()));
+            }
+            s
+        }
         None => r,
     }
 }
@@ -11317,11 +11322,26 @@ fn literal_partition_sum(lits: Vec<Rat>, ground: bool, cx: &Cx) -> Vec<Rat> {
     } else {
         None
     };
+    let operands = (combined && !ground && super::rules::folds_logged())
+        .then(|| lits.iter().filter(|m| !m.is_zero()).cloned().collect());
     let mut out = Rat::partition_sum(lits);
     if let (Some(y), [one]) = (y, out.as_mut_slice()) {
         *one = strict_number(one.clone(), y);
     }
+    log_partition("+", operands, &out);
     out
+}
+
+/// Record a literal partition that combined its operands into one number (a [`super::rules::Fold`]
+/// of `op`), where a fire log is open.
+fn log_partition(op: &'static str, operands: Option<Vec<Rat>>, out: &[Rat]) {
+    if let (Some(operands), [one]) = (operands, out) {
+        super::rules::log_fold(
+            op,
+            operands.into_iter().map(Ex::Num).collect(),
+            Ex::Num(one.clone()),
+        );
+    }
 }
 
 /// The coefficient partition of a product (`Rat::partition_product`), exact in every mode; in
@@ -11341,10 +11361,13 @@ fn literal_partition_product(nums: Vec<Rat>, ground: bool, cx: &Cx) -> Vec<Rat> 
     } else {
         None
     };
+    let operands = (combined && !ground && super::rules::folds_logged())
+        .then(|| nums.iter().filter(|m| !m.is_one()).cloned().collect());
     let mut out = Rat::partition_product(nums);
     if let (Some(y), [one]) = (y, out.as_mut_slice()) {
         *one = strict_number(one.clone(), y);
     }
+    log_partition("*", operands, &out);
     out
 }
 
@@ -11359,7 +11382,11 @@ pub(crate) fn strict_literal(r: Rat, cx: &Cx) -> Rat {
         return r;
     }
     let y = r.to_f64_nearest();
-    strict_number(r, y)
+    let written = strict_number(r.clone(), y);
+    if written != r && super::rules::folds_logged() {
+        super::rules::log_fold("literal", vec![Ex::Num(r)], Ex::Num(written.clone()));
+    }
+    written
 }
 
 /// `atan2(y, x)` built from the product members of its arguments, as float64 reads them: it

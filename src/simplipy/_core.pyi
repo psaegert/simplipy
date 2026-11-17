@@ -53,6 +53,19 @@ class Engine:
         *,
         rule_mode: str,
     ) -> tuple[list[str], list[tuple[list[str], list[str]]]]: ...
+    #: `ac_simplify_fires` with the folds of the call: (answer, [(lhs, rhs)], [(op, [operand],
+    #: written)]), each fold the ground rule `op(operands) -> written` as prefix tokens (`op` is
+    #: `*`, `+`, `literal` or `ground`), in the order made, discarded constructions included.
+    def ac_simplify_trace(
+        self,
+        tokens: list[str],
+        max_passes: int = ...,
+        form: Literal["tagged", "explicit"] = ...,
+        explore_budget: int | None = ...,
+        *,
+        rule_mode: str,
+    ) -> tuple[list[str], list[tuple[list[str], list[str]]],
+               list[tuple[str, list[list[str]], list[str]]]]: ...
     def ac_simplify_infix_in_mode(
         self,
         tokens: list[str],

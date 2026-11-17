@@ -228,6 +228,12 @@ organised by who you are, then the highlights, then every change in detail.
 - **The monitor refuses a whole answer whose value turns on a zero's sign.** An answer true in
   the reals whose float64 differences are rounding alone was passed without reading a zero's
   sign: `atan2(0*x0, -1) -> pi` (-pi against pi for every x0 < 0) passed, and is now refused.
+- **The engine records its folds beside its rule steps.** `_core.ac_simplify_trace` returns,
+  beside the answer and the rule steps, every fold of the call as the ground rule
+  `op(operands) -> written`: the literals a product's coefficient or a sum's constant term
+  combines (`*`, `+`), in the order they are combined, one number written as another (`literal`),
+  and a fully numeric node written as its value (`ground`), so the monitor can judge a fold as it
+  judges a step. Recording changes no answer.
 - **The precision ladder no longer refutes `log` of a value within 1e-99 of 1.** Where the
   coarse rung reads the two sides as one value, the judge measures the decay between the two finer
   rungs that both see a separation. `log(atanh(tanh(erf(x)))) -> log(erf(x))` was refuted at

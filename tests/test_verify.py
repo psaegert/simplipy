@@ -1901,6 +1901,22 @@ def test_the_monitor_holds_each_rule_step_to_the_mode() -> None:
     assert judge_pair(['atanh', 'tanh', 'x0'], out, engine=eng, mode='permissive')[0] == 'OK'
 
 
+def test_the_trace_records_each_fold_as_a_ground_rule() -> None:
+    # Beside the rule steps, every fold of the call: `op(operands) -> written`, the operands in the
+    # order the fold combines them. `x0*0.30000000000000004*0.30000000000000004` writes float64's
+    # product of the two doubles, `0.09000000000000002` (the exact product has 34 digits). The
+    # trace changes no answer.
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    eng = SimpliPyEngine(operators=ops, rules=[])
+    src = ['*', '*', 'x0', '0.30000000000000004', '0.30000000000000004']
+    out, fires, folds = eng._core.ac_simplify_trace(list(src), rule_mode='default')
+    assert (out, fires) == eng._core.ac_simplify_fires(list(src), rule_mode='default')
+    assert out == ['*', '0.09000000000000002', 'x0'], out
+    assert ('*', [['0.30000000000000004'], ['0.30000000000000004']], ['0.09000000000000002']) in folds, folds
+
+
 def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
     # F8: no promise of 8 units in the last place for a whole answer, only the engine's algebra
     # exact in the reals; a zero's sign is float64's own event and is held (F7)

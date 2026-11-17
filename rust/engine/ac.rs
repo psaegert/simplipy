@@ -119,6 +119,10 @@ fn is_ground(e: &Ex, view: &TokenView) -> bool {
 /// see [`Engine::ac_simplify_fires`].
 pub type RuleStep = (Vec<String>, Vec<String>);
 
+/// One FOLD of a simplify call (`ac::rules::Fold`): `(op, operands, written)`, as prefix tokens --
+/// see [`Engine::ac_simplify_trace`].
+pub type FoldStep = (String, Vec<Vec<String>>, Vec<String>);
+
 /// One SERVED rule: `(lhs, rhs, artifact index)` -- see [`Engine::ac_served_rules`].
 pub type ServedRule = (Vec<String>, Vec<String>, usize);
 
@@ -1262,6 +1266,22 @@ impl Engine {
         explore_budget: usize,
         mode: RuleMode,
     ) -> Option<(Vec<String>, Vec<RuleStep>)> {
+        self.ac_simplify_trace(tokens, max_passes, form, explore_budget, mode)
+            .map(|(answer, fires, _)| (answer, fires))
+    }
+
+    /// [`Engine::ac_simplify_fires`] with the FOLDS of the call beside the rule steps
+    /// (`ac::rules::Fold`): each as `(op, operands, written)`, the operands in the order the fold
+    /// combines them, every expression as prefix tokens, in the order made. A fold is the ground
+    /// rule `op(m1, m2, ...) -> written`; the folds of discarded constructions are among them.
+    pub fn ac_simplify_trace(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        form: AcForm,
+        explore_budget: usize,
+        mode: RuleMode,
+    ) -> Option<(Vec<String>, Vec<RuleStep>, Vec<FoldStep>)> {
         let log = crate::ac::rules::FireLog::open();
         let (ctx, best) = self.ac_simplify_ex_fold_sup(
             tokens,
@@ -1272,8 +1292,9 @@ impl Engine {
             None,
         );
         let steps = log.take();
+        let made = log.take_folds();
         drop(log);
-        let fires = {
+        let (fires, folds) = {
             let view = self.view(&ctx);
             let _domain = crate::ac::rat::number_domain(true);
             // A step's sides are read as the places they stand at may read their zeros.
@@ -1284,9 +1305,17 @@ impl Engine {
                 spell.sign_held = Some(&is_held);
                 self.resolve_seq(&to_prefix(x, &spell), &ctx)
             };
-            steps.iter().map(|(l, r)| (side(l), side(r))).collect()
+            let fires = steps.iter().map(|(l, r)| (side(l), side(r))).collect();
+            let folds = made
+                .iter()
+                .map(|f| {
+                    let operands = f.operands.iter().map(&side).collect();
+                    (f.op.to_string(), operands, side(&f.written))
+                })
+                .collect();
+            (fires, folds)
         };
-        Some((self.project(ctx, best, form, mode)?, fires))
+        Some((self.project(ctx, best, form, mode)?, fires, folds))
     }
 
     /// Simplify in `mode` with a SUPPRESSION SET of artifact rule rows (rows of `mode`'s

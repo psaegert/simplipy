@@ -666,6 +666,40 @@ impl PyEngine {
         })
     }
 
+    /// `ac_simplify_fires` with the FOLDS of the call (`Engine::ac_simplify_trace`):
+    /// `(answer, [(lhs, rhs)], [(op, [operand], written)])`, each fold the ground rule
+    /// `op(operands) -> written` as prefix tokens (`op` is `*`, `+`, `literal` or `ground`), in
+    /// the order made. Contracts as `ac_simplify_in_mode`.
+    #[pyo3(signature = (tokens, max_passes=48, form="explicit", explore_budget=None, *, rule_mode))]
+    #[allow(clippy::type_complexity)]
+    fn ac_simplify_trace(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        max_passes: usize,
+        form: &str,
+        explore_budget: Option<usize>,
+        rule_mode: &str,
+    ) -> PyResult<(
+        Vec<String>,
+        Vec<(Vec<String>, Vec<String>)>,
+        Vec<(String, Vec<Vec<String>>, Vec<String>)>,
+    )> {
+        let explore_budget = explore_budget_of(explore_budget);
+        let mode = parse_rule_mode(rule_mode)?;
+        if tokens.is_empty() {
+            return Ok((Vec::new(), Vec::new(), Vec::new()));
+        }
+        let form = parse_ac_form(form)?;
+        py.detach(|| {
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
+                .ac_simplify_trace(&tokens, max_passes, form, explore_budget, mode)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })
+    }
+
     /// The search driven directly (a test surface): the deterministic chain runs to its
     /// fixpoint, then the search proposes expansion moves through the same certified
     /// machinery and accepts only endpoints STRICTLY below in the serve ordering
