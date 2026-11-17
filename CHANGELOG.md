@@ -180,10 +180,13 @@ organised by who you are, then the highlights, then every change in detail.
   x0 = np.pi). The judge's f64 lane and the deployed bar read it; the mint's rows still refuse
   such a difference, a pre-filter that refuses more than the judge.
 - **`f64` measures no extension where a side respells the other.** Where the whole left side
-  occurs on the right side under operations that keep it undefined, neither side has a value
-  where the other has none, and float64's measure is not left undecided by its cells:
-  `max(erf(ceil(besseli(x0, 1))), 2.0*x0) -> max(erf(ceil(besseli(x0, 1))), 2*x0)` holds in
-  `f64` (it was refused, as was every literal respelled inside `besseli` or `bessely`).
+  occurs on the right side under operations that keep it undefined, up to the order of a sum's,
+  a product's, a `max`'s or a `min`'s operands, neither side has a value where the other has
+  none, and float64's measure is not left undecided by its cells:
+  `max(erf(ceil(besseli(x0, 1))), 2.0*x0) -> max(erf(ceil(besseli(x0, 1))), 2*x0)` and
+  `max(sinh(x1), harmonic(x0)) -> max(harmonic(x0), sinh(x1))` hold in `f64` (they were refused,
+  as was every literal respelled or operand reordered inside `besseli`, `bessely` or
+  `harmonic`).
 - **A kernel's NaN is no range event.** At x = 800 both terms of `besseli(1, -x) +
   besseli(1, x)` overflow, and the true value 0 is accepted. But `besseli(1, x)` is NaN for
   0 < |x| <= 2.2e-308, where its true value is finite, so `besseli(1, -x) + besseli(1, x) -> 0`

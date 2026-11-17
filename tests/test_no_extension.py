@@ -5,8 +5,9 @@ budget (`log(cos(x1))` beside a second variable, the level sets of an exponent).
 left side that can be the first undefined one occurs on the right side, under heads that keep it
 undefined, or is a power `b^e` the right side holds as `b^(q*e)` for a rational q > 0, with `e`
 nonconstant entire: the extension then lies in the level sets {e in Z/q}, a null set. Where the
-whole left side occurs on the right side so (a rule that respells a side's literals), no node needs
-covering: the right side has no value wherever the left side has none."""
+whole left side occurs on the right side so, up to the order of a commutative operation's operands
+(a rule that respells a side's literals or orders them otherwise), no node needs covering: the right
+side has no value wherever the left side has none."""
 import pytest
 
 from simplipy.verify import _contract, verify_rule
@@ -50,6 +51,14 @@ def test_a_rule_whose_right_side_is_undefined_where_its_left_side_is_holds(lhs, 
     ('max erf ceil besseli ?0 1 * 2.0 ?0', 'max erf ceil besseli ?0 1 * 2 ?0', True, True),
     ('max erf ceil besseli ?0 1 * 2.0 ?0', 'max erf ceil besseli ?0 1 * 2 ?0', False, True),
     ('bessely ceil ?0 3.0', '+ 0 bessely ceil ?0 3', True, True),
+    # the operands of a sum, a product, a max or a min in another order, literals respelled
+    ('max sinh ?1 harmonic ?0', 'max harmonic ?0 sinh ?1', True, True),
+    ('+ 2.0 inv tan besselj log ?1 ?1', '+ inv tan besselj log ?1 ?1 2', True, True),
+    ('min harmonic besselj ?1 3.0 0', 'min 0 harmonic besselj ?1 3', True, True),
+    # no other head's operands: atan2 is not commutative
+    ('atan2 harmonic ?0 ?1', 'atan2 ?1 harmonic ?0', True, False),
+    # a literal of a quarter of a million digits orders as any other
+    ('* 2.827881176741212e-244756 ?0', '* ?0 2.827881176741212e-244756', False, True),
 ])
 def test_the_certificate(lhs, rhs, f64, shown) -> None:
     assert _contract._no_extension(lhs.split(), rhs.split(), f64) is shown
@@ -59,6 +68,8 @@ def test_the_certificate(lhs, rhs, f64, shown) -> None:
     ('max erf ceil besseli x0 1 * 2.0 x0', 'max erf ceil besseli x0 1 * 2 x0'),
     ('erf / x1 bessely sinh sinh 3.0 asin x1', 'erf / x1 bessely sinh sinh 3 asin x1'),
     ('besseli x0 harmonic besselk x0 3.0', 'besseli x0 harmonic besselk x0 3'),
+    ('max sinh x1 harmonic x0', 'max harmonic x0 sinh x1'),
+    ('min rootn 1 cosh exp x1 exp np.pi', 'min exp np.pi rootn 1 cosh exp x1'),
 ])
 def test_a_side_respelled_holds_in_strict(lhs, rhs) -> None:
     # float64's cells past the layer's budget left the measure undecided, and strict refused

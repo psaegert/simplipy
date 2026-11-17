@@ -3451,6 +3451,38 @@ def _origin(node, f64):
     return True
 
 
+#: The operations whose two operands commute, bit for bit in float64 (IEEE's sum and product; the
+#: core's `max` and `min`, which order -0 below +0) and in the reals.
+_COMMUTATIVE_HEADS = frozenset({'+', '*', 'max', 'min'})
+
+
+def _order_of(key):
+    """A string that orders structural keys (`_commuted_key`) without spelling a number in full:
+    a rational is read by its components' sizes and residues (a literal's exact value can run to
+    millions of digits, `2.827881176741212e-244756`). Two keys with one string may still differ;
+    the keys themselves decide equality."""
+    if isinstance(key, tuple):
+        return '(' + ','.join(_order_of(k) for k in key) + ')'
+    if isinstance(key, (Fraction, int)) and not isinstance(key, bool):
+        q = Fraction(key)
+        return (f'q{q.numerator.bit_length()}:{q.numerator % 1000003}'
+                f'/{q.denominator.bit_length()}:{q.denominator % 1000003}')
+    return repr(key)
+
+
+def _commuted_key(node):
+    """`_node_key` with each commutative operation's operands (`_COMMUTATIVE_HEADS`) in one
+    order: two parts with one such key are one function in every mode. None where it holds a
+    `<constant>`."""
+    head, kids = node
+    if not kids:
+        return _leaf(head)[0]
+    ks = [_commuted_key(k) for k in kids]
+    if any(k is None for k in ks):
+        return None
+    return (head, tuple(sorted(ks, key=_order_of) if head in _COMMUTATIVE_HEADS else ks))
+
+
 def _nodes(node):
     yield node
     for k in node[1]:
@@ -3502,9 +3534,11 @@ def _no_extension(lhs, rhs, f64=False):
     that keep a NaN (`_F64_PROPAGATING`). So where the left side has no value at a point, some
     node of it is the first undefined one there (`_origin`), and the extension lies where that
     node has none and the right side has a value. The whole left side is covered where it occurs
-    on the right side under heads that keep it undefined (in float64, a side that respells the
-    other's literals, `max(erf(ceil(besseli(x0, 1))), 2.0*x0)` against `2*x0`, though `max` drops a
-    NaN inside it); otherwise each such node is covered:
+    on the right side under heads that keep it undefined, up to the order of a commutative
+    operation's operands (`_commuted_key`: in float64, a side that respells the other's literals,
+    `max(erf(ceil(besseli(x0, 1))), 2.0*x0)` against `2*x0`, or orders them otherwise,
+    `max(sinh(x1), harmonic(x0))` against `max(harmonic(x0), sinh(x1))`, though `max` drops a NaN
+    inside it); otherwise each such node is covered:
       - where it occurs on the right side (the same slots, literals read as their values, no
         `<constant>`) under heads that keep it undefined: the right side has no value there
         either. `x0/299792458` and `cos(x0) + log(cos(x1))` against themselves, and
@@ -3524,23 +3558,27 @@ def _no_extension(lhs, rhs, f64=False):
     except (IndexError, ValueError):
         return False
     kept = set()        # the right side's nodes reached through heads that keep them undefined
+    kept_commuted = set()   # the same, each commutative operation's operands in one order
     powers = []         # the right side's powers so reached: (base key, the exponent's part)
 
     def walk(node, keeps):
         k = _node_key(node)
         if k is not None and keeps:
             kept.add(k)
+            kept_commuted.add(_commuted_key(node))
             if node[0] == 'pow':
                 powers.append((_node_key(node[1][0]), _rational_part(node[1][1])))
         for c in node[1]:
             walk(c, keeps and (not f64 or node[0] in _F64_PROPAGATING))
 
     walk(tr, True)
-    if _node_key(tl) in kept:
-        # the whole left side occurs on the right under heads that keep it undefined: wherever it
-        # has no value, neither does the right side. A rule that respells a side (`max(erf(x),
-        # 2.0*x) -> max(erf(x), 2*x)`, literals read as their values) is so shown, whatever heads
-        # inside it drop an undefined operand
+    if _commuted_key(tl) in kept_commuted:
+        # the whole left side occurs on the right under heads that keep it undefined, up to the
+        # order of a commutative operation's operands: wherever it has no value, neither does the
+        # right side. A rule that respells a side (`max(erf(x), 2.0*x) -> max(erf(x), 2*x)`,
+        # literals read as their values) or orders its operands otherwise (`max(sinh(x1),
+        # harmonic(x0)) -> max(harmonic(x0), sinh(x1))`) is so shown, whatever heads inside it drop
+        # an undefined operand
         return True
     slots = sorted({key for t in list(lhs) + list(rhs) if (key := slot_key(t))})
     spelling = {s: f'x{i}' for i, s in enumerate(slots)}
