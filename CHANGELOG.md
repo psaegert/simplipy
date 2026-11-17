@@ -179,6 +179,14 @@ organised by who you are, then the highlights, then every change in detail.
   so does a change of kind at a pole (`1/sin(np.pi - x0) -> 1/sin(x0)`, +inf against 8.2e15 at
   x0 = np.pi). The judge's f64 lane and the deployed bar read it; the mint's rows still refuse
   such a difference, a pre-filter that refuses more than the judge.
+- **`f64` promises no value at an isolated two-signed pole.** Where an operation of the left side
+  reads an exact zero as a pole at an isolated point and its infinity takes both signs arbitrarily
+  near it (`1/(x0 - 3)` at 3), the point has no value, and an answer may take any value there, its
+  limit included, as `x0/x0 -> 1` does at 0:
+  `1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `f64` (+inf against 0 at x0 = 3). A one-signed pole
+  keeps its infinity, of either sign (`1/(x0 - 3)^2 -> 0` is refused), and a `_` slot, which can
+  bind a part that is zero on a region, isolates no pole (`1/(_0 - 3) + 1/(3 - _0) -> 0` is
+  refused).
 - **`f64` measures no extension where a side respells the other.** Where the whole left side
   occurs on the right side under operations that keep it undefined, up to the order of a sum's,
   a product's, a `max`'s or a `min`'s operands, neither side has a value where the other has
@@ -749,12 +757,12 @@ model predictions.
   kept (`-1/(x0 - 3)` is `1/(3 - x0)`, `-inf` against `+inf` at x0 = 3, and
   `1/(x0 - 3) + 1/(3 - x0)` is 0). Where `f64` and the judge read a step apart, the cause is named:
   a step that moves only a zero's sign at its own root, which the judge reads where two variables
-  coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); a sum of poles read at their isolated zero by its
-  limit, where float64 gives an infinity, a change of kind the judge refuses
-  (`1/(x0 - 3) + 1/(3 - x0) -> 0` is `+inf` against 0 at x0 = 3); a coincidence whose measure the
+  coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); a coincidence whose measure the
   judge does not decide (`(x0 - x1)/(x1 - x0) -> -1`); and `permissive`'s one zero, under which it
   takes no `atan2` step of its own. The sign of an isolated zero, and so of the infinity a pole
-  makes of it, the judge does not read either (`-1/(x0 - 3) -> 1/(3 - x0)` holds in `f64`). An unlimited search (`effort=None`) now ends where its endpoint, landed and
+  makes of it, the judge does not read either (`-1/(x0 - 3) -> 1/(3 - x0)` holds in `f64`), nor a
+  value at an isolated pole whose infinity takes both signs (`1/(x0 - 3) + 1/(3 - x0) -> 0` holds
+  in `f64`). An unlimited search (`effort=None`) now ends where its endpoint, landed and
   descended, offers it no move: the root's landing releases the sums a construction held, and a
   released state could offer a move a second call took.
 - **`besseli` reads its argument's parity.** `I_n(-t) = (-1)^n I_n(t)` for an integer order

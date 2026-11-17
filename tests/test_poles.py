@@ -2,10 +2,11 @@
 operand of `inv` or the base of a negative power crosses zero between two of the judge's grid
 points, the judge solves for the zero and reads float64 at the doubles nearest it
 (`_contract._pole_probes`), so a pole no battery point holds is read too. Strict does not promise
-the sign of the infinity at an isolated pole: there +inf and -inf agree, as the two zeros do, while
-a change of kind (an infinity against a finite value) and an infinity's sign on a region stay
-refused. The reals give a division by zero no value, so the reading is strict's alone; permissive
-is unaffected."""
+the sign of the infinity at an isolated pole: there +inf and -inf agree, as the two zeros do. Where
+the pole takes both signs beside it, strict promises no value at all: the point counts as one where
+the left side has none. A change of kind elsewhere (an infinity against a finite value) and an
+infinity's sign on a region stay refused. The reals give a division by zero no value, so the
+reading is strict's alone; permissive is unaffected."""
 import pytest
 
 from simplipy.verify import _contract, verify_rule
@@ -51,6 +52,23 @@ def test_strict_reads_an_infinitys_sign_on_a_region_and_a_change_of_kind(lhs, rh
     r = verify_rule(lhs.split(), rhs.split())
     assert r['realised'] is False and r['tier'] == 'permissive', r
     assert any(k == kind for k, _ in r['unrealised']), r
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    # +inf against 0 at x0 = 3 alone, where 1/(x0 - 3) takes both signs beside the pole
+    ('+ inv - x0 3 inv - 3 x0', '0'),
+    ('+ inv - x0 1.7 inv - 1.7 x0', '0'),
+])
+def test_strict_promises_no_value_at_an_isolated_two_signed_pole(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['realised'] is True and r['tier'] == 'core', r
+    assert 'TWO-SIGNED-POLE' in r['f64_kinds'], r
+
+
+def test_a_slot_that_binds_any_part_isolates_no_two_signed_pole() -> None:
+    # `_0` binds `3 + 0*x1` on a region, where the left side is +inf against 0
+    r = verify_rule('+ inv - _0 3 inv - 3 _0'.split(), ['0'])
+    assert r['realised'] is False and r['tier'] == 'permissive', r
 
 
 def test_a_rule_that_keeps_the_infinity_holds() -> None:

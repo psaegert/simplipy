@@ -2146,6 +2146,47 @@ impl Expr {
         }
     }
 
+    /// The POLES of float64's evaluation at `env`: each operation that reads an exact zero as a pole
+    /// there (the operations `pole_flipped_f64` reads), with float64's values of that operation at
+    /// each of `near`: the part whose infinity the pole is, read beside it. Empty where no
+    /// operation reads a zero so, or the evaluation fails.
+    pub fn poles_near(&self, env: &[f64], near: &[Vec<f64>]) -> Vec<Vec<Option<f64>>> {
+        let mut at = Vec::new();
+        if self.node_poles(self.root, env, &mut at).is_none() {
+            return Vec::new();
+        }
+        at.iter()
+            .map(|&i| {
+                near.iter()
+                    .map(|e| self.node_f64(i, e, &mut true))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// `node_f64`, the nodes that read an exact zero as a pole collected into `at`.
+    fn node_poles(&self, i: usize, env: &[f64], at: &mut Vec<usize>) -> Option<f64> {
+        match &self.nodes[i] {
+            Node::Var(k) => env.get(*k).copied(),
+            Node::Lit(_, tok) => literal_f64(tok),
+            Node::Op(name, kids) => {
+                let mut args = Vec::with_capacity(kids.len());
+                for &k in kids {
+                    args.push(self.node_poles(k, env, at)?);
+                }
+                let pole = match (name.as_str(), args.as_slice()) {
+                    ("/", [_, d]) | ("inv", [d]) => *d == 0.0,
+                    ("pow" | "rootn", [b, e]) => *b == 0.0 && *e < 0.0,
+                    _ => false,
+                };
+                if pole {
+                    at.push(i);
+                }
+                crate::numeric::apply_op(name, &args)
+            }
+        }
+    }
+
     /// `node_f64` with every negative zero a sign-reading operation receives read as +0 (`read`
     /// says whether one was).
     fn node_plus_zero(&self, i: usize, env: &[f64], read: &mut bool) -> Option<f64> {

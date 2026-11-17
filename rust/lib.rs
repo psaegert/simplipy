@@ -2288,6 +2288,16 @@ fn table_pole_sign(
     crate::battery::pole_sign_reading(&lhs.inner, &rhs.inner, &env, &along)
 }
 
+/// Is `env` an ISOLATED TWO-SIGNED POLE of the side `lhs` (`battery::two_signed_pole`): an
+/// operation reads an exact zero as a pole there, alone along a name at the indices `along` (the
+/// data variables and fitted constants), and takes opposite signs beside it? There strict promises
+/// no value of float64's, and the point counts as one where the side has none. The contract
+/// judge's f64 lane reads it at every point where the two sides differ.
+#[pyfunction]
+fn table_two_signed_pole(lhs: PyRef<'_, PyTableExpr>, env: Vec<f64>, along: Vec<usize>) -> bool {
+    crate::battery::two_signed_pole(&lhs.inner, &env, &along)
+}
+
 /// THE GROUND-COMPOSITE POLICY (`engine::refusals::ground_composite_rule`) on a rule's right
 /// side, its slots and dummies the variables: the load's gate.
 #[pyfunction]
@@ -2905,6 +2915,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(zero_sign_bar_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(table_zero_sign_refusal, m)?)?;
     m.add_function(wrap_pyfunction!(table_pole_sign, m)?)?;
+    m.add_function(wrap_pyfunction!(table_two_signed_pole, m)?)?;
     m.add_function(wrap_pyfunction!(policy_ground_composite, m)?)?;
     m.add_function(wrap_pyfunction!(policy_duplicates, m)?)?;
     m.add_function(wrap_pyfunction!(table_extension_width, m)?)?;

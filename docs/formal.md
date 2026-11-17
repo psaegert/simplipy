@@ -630,6 +630,17 @@ though the infinities part at isolated points only ($\lceil x_0\rceil^{x_1}\lcei
 a finite value) is no such event. The judge's f64 lane and the deployed bar read it at every point where
 the sides differ; the mint's rows do not, a pre-filter that refuses more than the judge.
 
+**No value at a two-signed pole in `f64`** [BY CONSTRUCTION — one definition,
+`battery::two_signed_pole`]. Where an operation of the left side reads an exact zero as a pole
+at a point that is isolated as above, and its values at the neighbouring doubles have opposite
+signs, the reals' pole takes both signs arbitrarily near the point and float64's value there is
+not promised at all: the point counts as one where the left side has no value, and the right side
+may take any value there, its limit included, as $x/x \to 1$ does at 0. So
+$1/(x - 3) + 1/(3 - x) \to 0$ holds in `f64` ($+\infty$ against 0 at $x = 3$). A one-signed pole
+keeps its infinity ($1/(x - 3)^2 \to 0$ is a change of kind at $x = 3$), its sign alone open
+(above); a zero's sign on a region, and every point that is not such a pole, are read as before.
+The judge's f64 lane and the deployed bar read it.
+
 **The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
 licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$
 exists and some spelling of $p$ (its pattern, or an entry $m$ serves from it) has

@@ -407,6 +407,10 @@ def table_zero_sign_refusal(lhs: TableExpr, rhs: TableExpr, env: list[float],
 #: point is isolated along the names at the indices `along`, where the two sides agree.
 def table_pole_sign(lhs: TableExpr, rhs: TableExpr, env: list[float],
                     along: list[int]) -> bool | None: ...
+#: Is `env` an isolated two-signed pole of the side `lhs`: an operation reads an exact zero as a
+#: pole there, alone along a name at the indices `along`, and takes opposite signs beside it? There
+#: strict promises no value of float64's.
+def table_two_signed_pole(lhs: TableExpr, env: list[float], along: list[int]) -> bool: ...
 #: The ground-composite policy on a rule's right side (a variable-free composite).
 def policy_ground_composite(rhs: list[str]) -> bool: ...
 #: The no-duplication policy: does the right side use a `_` slot more often than the left?

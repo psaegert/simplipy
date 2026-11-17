@@ -39,7 +39,8 @@ and so is `1/sin(np.pi - x1) -> 1/sin(x1)` (+inf against 8.2e15 at x1 = np.pi: t
 `sin(np.pi - x1) -> sin(x1)` gives 0 against 1.2e-16 there); `1/(0 + 0*x0) -> 1/(0*x0)` is not
 (+inf against -inf for x0 < 0). Rounding alone apart, a whole answer whose value turns on a zero's
 sign on a region is refused too (`atan2(0*x0, -1) -> pi`). An infinity's sign at an isolated pole
-is not promised (the judge's reading of a pole's sign): `1/(-x0 - 3) -> -1/(x0 + 3)` is OK.
+is not promised (the judge's reading of a pole's sign): `1/(-x0 - 3) -> -1/(x0 + 3)` is OK, and
+nor is any value where the input has an isolated two-signed pole: `1/(x0 - 3) + 1/(3 - x0) -> 0`.
 
 A WHOLE ANSWER IS READ AT ITS ROOT. A zero's sign is a value where an operation reads it (F7),
 and no operation of the answer reads its root's: there two zeros of opposite sign are one value,
@@ -104,10 +105,12 @@ _REALS_UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'J
 #: Float64's disagreements F8 lets the engine's exact algebra leave: rounding and what rounding
 #: does near a zero or a pole (a sign, a zero against a nonzero), a value where float64 reads
 #: the input as NaN (the rewrite holds in the reals: the reals' value, or an extension on a null
-#: set, `x/x -> 1` at 0), and an infinity's sign at an isolated pole, which strict does not
-#: promise (`1/(-x0 - 3) -> -1/(x0 + 3)`, +inf against -inf at x0 = -3 alone). Not a zero's sign on
-#: a region (F7: `0 + (-0)` is +0) or an infinity gained or lost.
-_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN'})
+#: set, `x/x -> 1` at 0), an infinity's sign at an isolated pole, which strict does not promise
+#: (`1/(-x0 - 3) -> -1/(x0 + 3)`, +inf against -inf at x0 = -3 alone), and any value where the input
+#: has an isolated two-signed pole, which counts as a point without a value
+#: (`1/(x0 - 3) + 1/(3 - x0) -> 0`, +inf against 0 at x0 = 3). Not a zero's sign on a region (F7:
+#: `0 + (-0)` is +0) or an infinity gained or lost elsewhere.
+_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN', 'TWO-SIGNED-POLE'})
 
 
 def _steps(inp, mode, engine):

@@ -828,6 +828,52 @@ pub fn pole_sign_reading(
     pole_sign_event(l, r, env).then(|| isolated_along(env, along, pole_at))
 }
 
+/// Is `env` an ISOLATED TWO-SIGNED POLE of `l`: an operation of `l` reads an exact zero as a pole
+/// there, and along some name of `along` (a data variable or a fitted constant) the neighbouring
+/// doubles on both sides read no zero as a pole (an operation overflowing or underflowing there
+/// aside, where the range standard reads the true value) while that operation's values there take
+/// opposite signs. The reals' pole there takes both signs arbitrarily near it, so strict promises
+/// no value of float64's at the point: it counts as one where `l` has no value, and a rewrite may
+/// give any value there, its limit included, as `x/x -> 1` does at 0. `1/(x - 3) + 1/(3 - x)` at
+/// x = 3 (the part `1/(x - 3)` is -huge and +huge beside it), so `1/(x - 3) + 1/(3 - x) -> 0`
+/// holds; not `1/(x - 3)^2` (+huge on both sides), whose infinity stays a value, its sign alone
+/// open (`pole_sign_reading`).
+pub fn two_signed_pole(l: &crate::table::Expr, env: &[f64], along: &[usize]) -> bool {
+    along.iter().any(|&v| {
+        let Some(&x) = env.get(v) else {
+            return false;
+        };
+        if !x.is_finite() {
+            return false;
+        }
+        let near: Vec<Vec<f64>> = [crate::ac::rat::next_down(x), crate::ac::rat::next_up(x)]
+            .iter()
+            .map(|&y| {
+                let mut e = env.to_vec();
+                e[v] = y;
+                e
+            })
+            .collect();
+        let clear = near.iter().all(|e| {
+            let in_range = l.eval_f64(e).is_none_or(|(_, ok)| ok);
+            !in_range || l.pole_flipped_f64(e).is_none()
+        });
+        clear
+            && l.poles_near(env, &near)
+                .iter()
+                .any(|beside| match beside.as_slice() {
+                    [Some(a), Some(b)] => {
+                        !a.is_nan()
+                            && !b.is_nan()
+                            && *a != 0.0
+                            && *b != 0.0
+                            && (*a < 0.0) != (*b < 0.0)
+                    }
+                    _ => false,
+                })
+    })
+}
+
 /// The 0.15 heads whose float64 value jumps (a step, a remainder's wrap): a fitted target
 /// constant cannot be judged bit for bit beside them.
 const JUMP_HEADS: [&str; 3] = ["floor", "ceil", "mod"];
@@ -1351,7 +1397,8 @@ fn range_row_true(
 /// each direction, gives the left side a value there, a null set of the data, which float64's
 /// constructors fill as the rewrite does (`ceil(atan(x)/x) -> 1` at x = +-0). So is a probe where
 /// the two sides differ only by the sign of an infinity at an isolated pole (`pole_sign_reading`:
-/// `-1/(x - 3) -> 1/(3 - x)` at x = 3). The last
+/// `-1/(x - 3) -> 1/(3 - x)` at x = 3), and one where the left side has an isolated two-signed pole
+/// (`two_signed_pole`: `1/(x - 3) + 1/(3 - x) -> 0` at x = 3). The last
 /// `n_finite` names of `var_names` are fitted constants, probed over the finite values only.
 ///
 /// It is the verdict of the f64 bar (`f64_bar`), which the contract judge ANDs into strict's two
@@ -1470,9 +1517,12 @@ fn deployed_exact_over(
         .copied()
         .filter(|&v| v >= first_finite || sorts.get(v) == Some(&'?'))
         .collect();
+    // and the left side has no value strict promises at an isolated two-signed pole
+    // (`two_signed_pole`): any value of the right side agrees there
     let pole_agrees = |row: &[f64]| {
         pole_reader.as_ref().is_some_and(|(l, r)| {
             pole_sign_reading(l, r, row, &guards).is_some_and(|alone| alone || at_isolated(row))
+                || two_signed_pole(l, row, &guards)
         })
     };
     let mut range_rows: Vec<Vec<f64>> = Vec::new();
@@ -1951,6 +2001,36 @@ mod deployed_bar_tests {
         // one value everywhere, and two zeros of opposite sign at the root
         assert!(!refused("inv * 0 x0", "/ float(\"inf\") x0", -1.0));
         assert!(!refused("* 0 sinh x0", "0", -1.0));
+    }
+
+    /// At an isolated two-signed pole strict promises no value of float64's (`two_signed_pole`): an
+    /// operation reads an exact zero as a pole, alone along a data variable, and takes opposite
+    /// signs beside it; a one-signed pole keeps its infinity.
+    #[test]
+    fn a_two_signed_pole_promises_no_value() {
+        let arity: std::collections::HashMap<String, u8> = [
+            ("*", 2u8),
+            ("+", 2),
+            ("-", 2),
+            ("/", 2),
+            ("inv", 1),
+            ("pow", 2),
+        ]
+        .iter()
+        .map(|(k, a)| (k.to_string(), *a))
+        .collect();
+        let c = |t: &str| crate::table::Expr::compile(&s(t), &s("x0"), &arity).expect("compiles");
+        // 1/(x - 3) is -huge and +huge beside x = 3
+        assert!(two_signed_pole(&c("+ inv - x0 3 inv - 3 x0"), &[3.0], &[0]));
+        assert!(two_signed_pole(&c("pow - x0 3 -3"), &[3.0], &[0]));
+        // a one-signed pole: +huge on both sides
+        assert!(!two_signed_pole(&c("pow - x0 3 -2"), &[3.0], &[0]));
+        assert!(!two_signed_pole(&c("inv * - x0 3 - x0 3"), &[3.0], &[0]));
+        // the zero holds on a region: 0*x is a zero beside x = 0.5 too
+        assert!(!two_signed_pole(&c("inv * 0 x0"), &[0.5], &[0]));
+        // no pole there, and nothing guards the point
+        assert!(!two_signed_pole(&c("inv - x0 3"), &[2.0], &[0]));
+        assert!(!two_signed_pole(&c("inv - x0 3"), &[3.0], &[]));
     }
 
     /// Strict does not promise an infinity's sign at an isolated pole (`pole_sign_reading`): two

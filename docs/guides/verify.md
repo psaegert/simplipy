@@ -65,12 +65,16 @@ no value, float64 decides (`1/3^t -> (1/3)^t` holds at `_`, where at t = -inf th
 no real value and float64 gives +inf on both sides). An isolated pole's infinity is a value: the
 judge solves for the zeros of a divisor and reads float64 at the doubles nearest them, where a
 change of kind is refused (`1/sin(np.pi - x0) -> 1/sin(x0)` is +inf against 8.2e15 at
-x0 = np.pi, `1/(x0 - 3) + 1/(3 - x0) -> 0` +inf against 0 at x0 = 3). The sign of that infinity
+x0 = np.pi, `1/(x0 - 3)^2 -> 0` +inf against 0 at x0 = 3). The sign of that infinity
 is not promised: where a part is exactly zero at an
 isolated point and an operation reads it as a pole, +inf and -inf agree, as the two zeros do, so
 `-1/(x0 - 3.5) -> 1/(3.5 - x0)` (-inf against +inf at x0 = 3.5 alone) and
 `1/(-x1 - 3) -> -1/(x1 + 3)` hold in `f64`, while `1/(0*x0) -> -inf/x0` (+inf against -inf for
-every x0 > 0) does not. A kernel's NaN is
+every x0 > 0) does not. Where the pole is two-signed -- its infinity takes both signs arbitrarily
+near the isolated point -- float64's value there is not promised at all: the point has no value,
+and an answer may take any value there, its limit included, as `x0/x0 -> 1` does at 0. So
+`1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `f64` (+inf against 0 at x0 = 3), while
+`1/(x0 - 3)^2`, +inf on both sides of 3, keeps its infinity. A kernel's NaN is
 float64's value, not a range event (`besseli(1, x)` is NaN for 0 < |x| <= 2.2e-308). The
 second reading admits the identities float64 only rounds, however far a jump or a pole
 magnifies the rounding, and nothing false in the reals:

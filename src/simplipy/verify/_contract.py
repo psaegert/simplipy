@@ -2734,6 +2734,20 @@ def pole_sign(tl, tr, env, guards):
     return _table.table_pole_sign(lexpr, rexpr, vals, along)
 
 
+def two_signed_pole(tl, tr, env, guards):
+    """Is float64's point `env` an ISOLATED TWO-SIGNED POLE of the left side `tl`, the core's one
+    definition (`_core.table_two_signed_pole`): an operation of it reads an exact zero as a pole
+    there, alone along a name of `guards` (the data slots and the left side's constants), and takes
+    opposite signs beside it? The reals' pole there takes both signs arbitrarily near it, so strict
+    promises no value of float64's at the point: it counts as one where the left side has no value,
+    and the right side may take any value there, its limit included. `1/(x - 3) + 1/(3 - x) -> 0`
+    at x = 3: True. `1/(x - 3)^2` at x = 3 (+huge on both sides): False."""
+    lexpr, _, names, extra = _pair_compiled(tl, tr)
+    vals = [float(extra[n] if n in extra else env[n]) for n in names]
+    along = [i for i, n in enumerate(names) if n in guards]
+    return _table.table_two_signed_pole(lexpr, vals, along)
+
+
 def strict_at_the_root(detail):
     """STRICT'S READING OF A STEP NO OPERATION READS ABOVE, the root of an answer: a zero's sign is
     a value where an operation reads it (F7), and nothing reads the root's, so two zeros of opposite
@@ -4028,6 +4042,18 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     # two zeros of opposite sign do (F6 and the reading where the reals give a side
                     # no value alike)
                     out['kinds'].add('POLE-SIGN')
+                    out['read'] += 1
+                    return
+                try:
+                    two_signed = not isolated and two_signed_pole(tl, tr, tl_env, zero_sign_guards)
+                except Exception:  # noqa: BLE001  (a point it cannot read is read as it stands)
+                    two_signed = False
+                if two_signed:
+                    # NO VALUE AT AN ISOLATED TWO-SIGNED POLE IS PROMISED: the left side takes both
+                    # signs arbitrarily near the point, which counts as one where it has no value,
+                    # so the right side may take any value there, its limit included, as `x/x -> 1`
+                    # does at 0
+                    out['kinds'].add('TWO-SIGNED-POLE')
                     out['read'] += 1
                     return
             if not exact_point and not in_range[0] and not snapped and v == 'eq':

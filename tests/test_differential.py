@@ -1098,16 +1098,11 @@ def test_the_engine_takes_a_law_of_powers_where_the_judge_holds_it(law, lhs, rhs
 
 #: Why the engine and the judge read a law of signs apart. `ROOT_ZERO`: the step moves only the
 #: sign of a zero, at its own root, which reads none, where the judge reads the rule wherever it
-#: fires and the coincidence x0 = x1 as a line of the plane. `POLE_LIMIT`: `f64` reads a sum of
-#: poles at their isolated zero by its limit (`1/(x0 - 3) + 1/(3 - x0)` is 0), where float64 gives
-#: an infinity there (+inf at x0 = 3): a change of kind, which the judge refuses at a pole as
-#: anywhere (the sign of an infinity at an isolated pole is not promised, its kind is).
-#: `COINCIDENCE`: the input has no value where x0 = x1, which the answer extends, and the judge does
-#: not decide the measure of a coincidence of two variables. `ONE_ZERO`: `permissive` reads one
-#: zero, where `atan2(0, -1)` is pi: it takes no step of its own, and holds the rule by `f64`'s
-#: reading.
+#: fires and the coincidence x0 = x1 as a line of the plane. `COINCIDENCE`: the input has no value
+#: where x0 = x1, which the answer extends, and the judge does not decide the measure of a
+#: coincidence of two variables. `ONE_ZERO`: `permissive` reads one zero, where `atan2(0, -1)` is
+#: pi: it takes no step of its own, and holds the rule by `f64`'s reading.
 ROOT_ZERO = 'the step moves only the sign of a zero at its own root, which reads none'
-POLE_LIMIT = "f64 reads a sum of poles at their zero by its limit, a change of kind the judge refuses"
 COINCIDENCE = 'the judge does not decide the measure of a coincidence of two variables'
 ONE_ZERO = "permissive's one zero: no step of its own"
 
@@ -1122,7 +1117,8 @@ def sign_case(law, lhs, rhs, mode, *causes):
 #: region and never, at the root and under an inverse, in both modes. In `f64` a sum keeps the sign
 #: of its zero on a region under a reader; at an isolated zero float64 gives a pole the infinity of
 #: the sign written (a sum is +0 there in either orientation), a sign that neither the engine keeps
-#: nor strict promises (`class.pole_orientation`).
+#: nor strict promises (`class.pole_orientation`), and where a pole there takes both signs beside it
+#: strict promises no value at all (`1/(x0 - 3) + 1/(3 - x0)` is 0).
 SIGN_PINS = [
     sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'f64', ROOT_ZERO),
     sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'permissive'),
@@ -1146,7 +1142,7 @@ SIGN_PINS = [
     sign_case('class.opposite_sums', '/ - x0 3 - 3 x0', '-1', 'f64'),
     sign_case('class.opposite_sums', '/ - x0 x1 - x1 x0', '-1', 'f64', COINCIDENCE),
     sign_case('class.like_terms_up_to_sign', '+ sin - x0 x1 sin - x1 x0', '0', 'f64'),
-    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'f64', POLE_LIMIT),
+    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'f64'),
     sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'permissive'),
     sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 neg inv - 3 x0', '* 2 inv - x0 3', 'f64'),
     sign_case('pow.even_orientation', 'pow - x1 x0 2', 'pow - x0 x1 2', 'f64'),
@@ -1181,8 +1177,6 @@ def test_the_engine_takes_a_law_of_signs_where_the_judge_holds_it(law, lhs, rhs,
     assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('f64_kinds'))
     if ROOT_ZERO in causes:
         assert mode == 'f64' and takes and set(d.get('f64_kinds') or []) == {'ZERO-SIGN'}, lhs
-    elif POLE_LIMIT in causes:
-        assert mode == 'f64' and takes and 'INF-CHANGE' in (d.get('f64_kinds') or ()), lhs
     elif COINCIDENCE in causes:
         assert mode == 'f64' and takes and d.get('verdict') == 'UNDECIDED-MEASURE', lhs
     else:
