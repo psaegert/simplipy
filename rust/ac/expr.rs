@@ -941,9 +941,8 @@ pub fn eq_mod_nums(a: &Ex, b: &Ex, view: &TokenView) -> bool {
 ///
 /// Mirrors the pricing arms exactly, including their silences: a +1 rational coefficient
 /// inside a `Mul` bag is free, so it is not counted; a -1 coefficient is a `Sign`, and a
-/// negation standing alone (`Mul[-1, x]`) is a `Sign` and no `Mul`; a degenerate
-/// all-coefficient bag is the literal itself. Counting serialized TOKENS instead gets this
-/// wrong in both directions -- `-` and `/` are not nodes (they are an inverted member of an
+/// negation standing alone (`Mul[-1, x]`) is a `Sign` and no `Mul`. Counting serialized
+/// TOKENS instead gets this wrong in both directions -- `-` and `/` are not nodes (they are an inverted member of an
 /// Add/Mul bag), and an n-ary bag is ONE node however many `+` the spelling shows.
 pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap<String, u64>) {
     let mut bump = |k: &str| *out.entry(k.to_string()).or_insert(0) += 1;
@@ -1203,7 +1202,6 @@ fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
         Ex::Mul(v) => {
             let head = mu_mul();
             let mut total = head;
-            let mut members = 0u64;
             // The product's literal: its coefficient slots and its other pieces, priced as the
             // one literal they denote.
             let (mut lit, mut lit_nodes, mut pieces) = (0u64, 0u64, 0usize);
@@ -1224,7 +1222,6 @@ fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
                         pieces += 1;
                     }
                     _ => {
-                        members += 1;
                         let (p, piece) = priced(f, view);
                         if piece {
                             lit = lit.saturating_add(p);
@@ -1240,10 +1237,10 @@ fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
                 .then(|| bag_literal_value(v, false, view))
                 .flatten();
             let total = total.saturating_add(piece_price(lit, value.as_ref(), lit_nodes));
-            let structural = if members == 0 {
-                // Degenerate all-coefficient bag: the literal (or bare Const) itself.
-                (total - head).max(2)
-            } else if is_negation(v) {
+            // A product of numbers alone is numbers the number domain holds apart (it admits no
+            // number for their product, `1e200*1e200`): it pays its product charge, as the same
+            // product beside a variable does, and a known value caps it below.
+            let structural = if is_negation(v) {
                 // A negation standing alone is a sign, not a product: its operand and one bit.
                 total - head
             } else {

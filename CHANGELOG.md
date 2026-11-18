@@ -345,6 +345,11 @@ organised by who you are, then the highlights, then every change in detail.
   `-log(t)` is `-0`, at t = 1, an isolated zero whose sign `f64` does not keep. `log(1/x1)` is
   `-log(x1)` and `1/log(1/x0)` is `-1/log(x0)` in both modes, while `log(1/(x0 + x1))` stays in
   `f64`.
+- **A product of numbers held apart pays its product charge.** Two numbers whose product no
+  number of the domain admits (`1e200*1e200`, beyond the 1,100-bit cap) stay a product, which is
+  now priced as the same product beside a variable is: the parts and the product, as a sum of
+  numbers held apart pays its sum. A product with a known exact value still costs at most that
+  value's price.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor.
 - **One orientation per class.** A sum and its negation, and odd functions and odd roots of
