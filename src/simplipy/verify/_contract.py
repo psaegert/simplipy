@@ -2665,8 +2665,8 @@ def reals_valued_at(tl, tr, env, valued=(False, False)):
     """Do the reals give both sides a value at float64's point `env` (its doubles, read exactly)?
     A side `valued` shows to have one everywhere (`_always_valued`: `sin(x0 + pi)`,
     `floor(tanh(abs(x0)))`) has one without a reading; another is read at the gap ladder's rungs
-    and at the precision its operands' magnitudes demand. True, False, or None where a side reads
-    no answer. Read at the doubles float64 reads, each the exact rational it is (so `floor` at an
+    and at the precision its operands' magnitudes demand, which alone decides that a side has none.
+    True, False, or None where a side reads no answer. Read at the doubles float64 reads, each the exact rational it is (so `floor` at an
     integer double reads it), not at the battery's exact atoms: at pi/2's double the reals' `sin`
     is below 1, so `pow(sin(x), inf)` has the value 0 there."""
     old = mp.dps
@@ -2684,9 +2684,13 @@ def reals_valued_at(tl, tr, env, valued=(False, False)):
             for i, t in enumerate((tl, tr)):
                 if sides[i] is None:
                     try:
-                        sides[i] = cls_mp(c_eval(t, e))[0] != 'nan'
+                        has = cls_mp(c_eval(t, e))[0] != 'nan'
                     except Unresolved:
-                        pass
+                        continue
+                    # below the digits the operands demand, no value may be a rounding's:
+                    # `sin(x0 + 2*pi)` at x0 = 1e-300 reads zero at 50 digits, 1e-300 at 380
+                    if has or dps >= demanded:
+                        sides[i] = has
             if False in sides:
                 return False
             if None not in sides:
@@ -2759,24 +2763,14 @@ def pole_sign(tl, tr, env, guards):
     return _table.table_pole_sign(lexpr, rexpr, vals, along)
 
 
-def two_signed_pole(tl, tr, env, guards):
-    """Is float64's point `env` an ISOLATED TWO-SIGNED POLE of the left side `tl`, the core's one
-    definition (`_core.table_two_signed_pole`): an operation of it reads an exact zero as a pole
-    there, alone along a name of `guards` (the data slots and the left side's constants), and takes
-    opposite signs beside it? The reals' pole there takes both signs arbitrarily near it, so strict
-    promises no value of float64's at the point: it counts as one where the left side has no value,
-    and the right side may take any value there, its limit included. `1/(x - 3) + 1/(3 - x) -> 0`
-    at x = 3: True. `1/(x - 3)^2` at x = 3 (+huge on both sides): False."""
-    lexpr, _, names, extra = _pair_compiled(tl, tr)
-    vals = [float(extra[n] if n in extra else env[n]) for n in names]
-    along = [i for i, n in enumerate(names) if n in guards]
-    return _table.table_two_signed_pole(lexpr, vals, along)
-
-
 #: The longest run of doubles, on either side of a point, the judge walks to find where float64's
-#: exact zero of a part ends: 2^44 doubles, found by doubling the step and halving it
-#: back; a run that reaches no end there, or an infinity, is no zero's point.
-_RUN_REACH = 1 << 44
+#: exact zero of a part ends: every double (a run of any width, `sin(1e-10*x0) - 1e-10*x0` is
+#: exactly 0 for |x0| up to 214), found by doubling the step and halving it back; a run that
+#: reaches an infinity is no zero's point.
+_RUN_REACH = 1 << 64
+
+#: Heads whose value jumps (`zero_run`): across a jump the reals' sign may change with no zero
+_JUMP_HEADS = frozenset({'floor', 'ceil', 'mod', 'atan2'})
 
 
 def _ulp_step(x, k):
@@ -2784,6 +2778,8 @@ def _ulp_step(x, k):
     bits = struct.unpack('<q', struct.pack('<d', x))[0]
     order = bits if bits >= 0 else -(bits & 0x7FFFFFFFFFFFFFFF)
     order += k
+    if abs(order) > 0x7FF0000000000000:
+        return math.copysign(math.inf, order)
     bits = order if order >= 0 else (-order) | (-0x8000000000000000)
     return struct.unpack('<d', struct.pack('<q', bits))[0]
 
@@ -2842,6 +2838,15 @@ def _real_minimum(tree, env, name, lo, hi, dps, steps):
         mp.dps = old
 
 
+def _widened(x0, ends):
+    """The bracket of a run (its first doubles off the run, `ends` doubles above and below `x0`),
+    widened by four times its length on each side, in value (a run across zero holds every tiny
+    double)."""
+    b, a = _ulp_step(x0, ends[0]), _ulp_step(x0, -ends[1])
+    width = b - a
+    return b + 4 * width, a - 4 * width
+
+
 def zero_run(tree, env, name):
     """THE RUN OF DOUBLES ON WHICH FLOAT64 ROUNDS A PART TO AN EXACT ZERO, along `name` around the
     point `env`, and whether the reals place an isolated zero of the part in it: a run
@@ -2875,6 +2880,8 @@ def zero_run(tree, env, name):
         return None
     if not zero_at(_ulp_step(x0, 1)) and not zero_at(_ulp_step(x0, -1)):
         return 'single'
+    if any(t[0] in _JUMP_HEADS for t in _subtrees(tree)):
+        return None      # a part that jumps: no sign change or minimum places a zero of it
     ends = []
     for way in (1, -1):
         k, last = 1, 0
@@ -2894,8 +2901,7 @@ def zero_run(tree, env, name):
         ends.append(k)
     # float64's run sits around the reals' zero up to its own rounding of the part: the reals are
     # read over the run widened by four times its length on each side
-    width = ends[0] + ends[1]
-    hi, lo = _ulp_step(x0, ends[0] + 4 * width), _ulp_step(x0, -(ends[1] + 4 * width))
+    hi, lo = _widened(x0, ends)
     if not (math.isfinite(hi) and math.isfinite(lo)):
         return False
     signs = []
@@ -2942,6 +2948,376 @@ def _zero_parts(tree):
     return out
 
 
+def _zero_bracket(tree, env, name):
+    """`zero_run`'s reading with the bracket the reals read: `(kind, lo, hi)`, the bracket the run
+    widened by four times its length on each side; a part zero at this double alone is bracketed
+    by four doubles on each side, and placed as a run of one. `kind` is `'odd'`, `'even'`, False or
+    None as `zero_run`'s."""
+    x0 = float(env[name])
+    kind = zero_run(tree, env, name)
+    if kind != 'single':
+        if kind not in ('odd', 'even'):
+            return kind, None, None
+        # the run's bracket, walked again (the run is short or its reading was cached by now)
+    e = dict(env)
+
+    def zero_at(x):
+        e[name] = x
+        with np.errstate(all='ignore'):
+            return float(d_eval(tree, e)) == 0.0
+
+    ends = []
+    for way in (1, -1):
+        k, last = 1, 0
+        while zero_at(_ulp_step(x0, way * k)) and k <= _RUN_REACH:
+            last, k = k, 2 * k
+        while k - last > 1:
+            mid = (last + k) // 2
+            if zero_at(_ulp_step(x0, way * mid)):
+                last = mid
+            else:
+                k = mid
+        ends.append(k)
+    hi, lo = _widened(x0, ends)
+    if not (math.isfinite(hi) and math.isfinite(lo)):
+        return False, None, None
+    if kind == 'single':
+        if any(t[0] in _JUMP_HEADS for t in _subtrees(tree)):
+            return None, None, None
+        signs = []
+        for x in (lo, hi):
+            f = dict(env)
+            f[name] = x
+            signs.append(_real_sign(tree, f))
+        if None in signs:
+            return None, None, None
+        kind = 'odd' if (0 in signs or signs[0] != signs[1]) else 'even'
+    return kind, lo, hi
+
+
+def _locate_zero(tree, env, name, lo, hi, kind):
+    """The reals' zero of `tree` in [lo, hi] along `name`, at 120 digits: by bisection of its sign
+    (a zero of odd order) or by golden-section search of its least |value| (even order). -> an mpf,
+    or None where a point reads no value."""
+    old = mp.dps
+    mp.dps = 2 * BASE_DPS + 20
+    try:
+        e = {k: Fraction(float(v)) for k, v in env.items()}
+
+        def at(x):
+            e[name] = x
+            return c_eval(tree, e)
+        a, b = mpf(lo), mpf(hi)
+        if kind == 'odd':
+            sa = mp.sign(at(a))
+            for _ in range(240):
+                m = (a + b) / 2
+                sm = mp.sign(at(m))
+                if sm == 0:
+                    return m
+                if sm == sa:
+                    a = m
+                else:
+                    b = m
+            return (a + b) / 2
+        g = (mp.sqrt(5) - 1) / 2
+        c, d = b - g * (b - a), a + g * (b - a)
+        fc, fd = abs(at(c)), abs(at(d))
+        for _ in range(240):
+            if fc < fd:
+                b, d, fd = d, c, fc
+                c = b - g * (b - a)
+                fc = abs(at(c))
+            else:
+                a, c, fc = c, d, fd
+                d = a + g * (b - a)
+                fd = abs(at(d))
+        return c if fc < fd else d
+    except Unresolved:
+        return None
+    finally:
+        mp.dps = old
+
+
+def _side_limit(values):
+    """One side's approach to a point, the reals' values at offsets shrinking 10^8-fold each, the
+    last three read:
+    `('inf', sign)` where the values grow 10^4-fold each step with one sign, `('fin', v)` where they
+    settle (each step at least ten times smaller than the one before, the values bounded), `'none'`
+    where the side has no value at all, or None where the values do neither (`log(x)` at 0 and
+    `x^-0.25` at 0 alike). A reading at offsets is evidence, not a proof."""
+    if all(v is None for v in values):
+        return 'none'
+    values = values[-3:]
+    if any(v is None or misnan(v) for v in values):
+        return None
+    v1, v2, v3 = values
+    signs = {mp.sign(v) for v in values}
+    if len(signs) == 1 and 0 not in signs and abs(v2) >= abs(v1) * 10 ** 4 \
+            and abs(v3) >= abs(v2) * 10 ** 4:
+        return ('inf', int(mp.sign(v3)))
+    # a value settles where each step is at least ten times smaller than the one before: a slow
+    # divergence (`log(x)` at 0, -55, -74, -92) takes steps of one size and is read as neither
+    if abs(v3 - v2) <= abs(v2 - v1) / 10 and abs(v3) <= max(1, abs(v1)) * 10 ** 6:
+        return ('fin', v3)
+    return None
+
+
+def input_limit(tl, point, names, scale):
+    """THE REALS' LIMIT OF THE INPUT at `point` (a binding, one name possibly an mpf off the
+    doubles), along every name of `names` from both sides, the others fixed: the reals' values at
+    offsets `scale*10^-8` to `scale*10^-40` (`_side_limit`), at 120 digits, a side where the
+    input has no value left out (so a boundary point's one-sided limit counts).
+    -> `('inf', sign)` where every side with a value grows to one infinity of one sign,
+    `('fin', value)` where every side settles to one value (to 12 digits), `'none'` where the
+    sides differ (a two-signed pole, two values, a value and an infinity), None where a side reads
+    neither or no side has a value: a point it cannot classify."""
+    old = mp.dps
+    mp.dps = 2 * BASE_DPS + 20
+    try:
+        base = {k: (v if isinstance(v, (Fraction, int)) or not isinstance(v, float) else Fraction(v))
+                for k, v in point.items()}
+        sides = []
+        for n in names:
+            c = base[n]
+            center = mpf(c.numerator) / mpf(c.denominator) if isinstance(c, Fraction) else mpf(c)
+            sc = scale[n]
+            sc = mpf(sc.numerator) / mpf(sc.denominator) if isinstance(sc, Fraction) else mpf(sc)
+            for way in (1, -1):
+                vals = []
+                for k in (8, 16, 24, 32, 40):
+                    e = dict(base)
+                    e[n] = center + way * sc * mpf(10) ** -k
+                    try:
+                        v = c_eval(tl, e)
+                        vals.append(None if misnan(v) else v)
+                    except Unresolved:
+                        vals.append(mpf('nan'))
+                sides.append(_side_limit(vals))
+        valued = [s for s in sides if s != 'none']
+        if not valued or None in valued:
+            return None
+        if all(s[0] == 'inf' for s in valued):
+            return valued[0] if len({s[1] for s in valued}) == 1 else 'none'
+        if all(s[0] == 'fin' for s in valued):
+            v0 = valued[0][1]
+            if all(abs(s[1] - v0) <= mpf(10) ** -12 * max(1, abs(v0)) for s in valued):
+                return valued[0]
+        return 'none'
+    finally:
+        mp.dps = old
+
+
+def _subtrees(tree):
+    """Every subexpression of a parsed side, the side included."""
+    out, stack = [], [tree]
+    while stack:
+        t = stack.pop()
+        out.append(t)
+        if t[0] not in ('lit', 'slot'):
+            stack.extend(t[1:])
+    return out
+
+
+def _zero_of_the_reals(part, env):
+    """Is the reals' value of `part` at float64's point `env` (its doubles, read exactly) zero: exact
+    zero, or 10^30-fold smaller at 60 more digits than at the digits its operands' magnitudes
+    demand (a zero at an irrational constant, `sin(x0 + 2*pi)` at x0 = 0, reads ever smaller as the
+    digits grow; a value, however small, holds)?"""
+    old = mp.dps
+    mags = [abs(_log10(abs(float(v)))) for v in env.values()
+            if math.isfinite(float(v)) and float(v) != 0]
+    demanded = min(MAX_DPS - 60, BASE_DPS + 30 + int(max(mags, default=0)))
+    e = {k: Fraction(float(v)) for k, v in env.items()}
+    try:
+        reads = []
+        for dps in (demanded, demanded + 60):
+            mp.dps = dps
+            try:
+                reads.append(abs(c_eval(part, e)))
+            except Unresolved:
+                return False
+        if any(misnan(r) for r in reads):
+            return False
+        return reads[1] == 0 or reads[1] < reads[0] * mpf(10) ** -30
+    finally:
+        mp.dps = old
+
+
+def _f6_agree(a, b):
+    """F6 between two doubles, without the range clause (`compare_deployed_realised`)."""
+    return compare_deployed_realised(cls_np(a), cls_np(b)) == 'eq'
+
+
+def _limit_place(tl, tr, env, names, right):
+    """WHERE THE INPUT'S LIMIT IS READ (`limit_point`) at float64's point `env`, `right` float64's
+    value of the answer `tr`: None where the point is no such point, else `(where, point,
+    leaving, scale)`: 'exact' or 'run', the point of the reals (a binding), the variables that
+    leave the set where the left side has no value, and the scale the limit reads at."""
+    names = [n for n in sorted(names) if n in env and math.isfinite(float(env[n]))]
+    if not names:
+        return None
+    readers = _zero_parts(tl)[1:]
+    with np.errstate(all='ignore'):
+        def f64(t, e=env):
+            try:
+                return float(d_eval(t, e))
+            except Exception:  # noqa: BLE001  (a part it cannot read is read as no value)
+                return math.nan
+        # a cheap gate: a non-finite value of L, R or a part of L, or a divisor float64 rounds to
+        # zero or near it
+        if all(math.isfinite(f64(t)) for t in _subtrees(tl)) and math.isfinite(right) \
+                and not any(f64(r) == 0 for r in _zero_parts(tr)[1:]) \
+                and not any(abs(f64(r)) < 2.0 ** -40 for r in readers):
+            return None
+    point = None
+    zero = None
+    if _no_real_value(tl, env):
+        leaving = []
+        for n in names:
+            for k in (-1, 1):
+                e = dict(env)
+                e[n] = _ulp_step(float(env[n]), k)
+                if not _no_real_value(tl, e):
+                    leaving.append(n)
+                    break
+        if not leaving:
+            return None          # a region where the reals give L no value: unchanged
+        point, where = {k: Fraction(float(v)) for k, v in env.items()}, 'exact'
+    else:
+        zero = next((r for r in readers if _zero_of_the_reals(r, env)), None)
+        if zero is not None:
+            leaving = []
+            for n in names:
+                for k in (-1, 1):
+                    e = dict(env)
+                    e[n] = _ulp_step(float(env[n]), k)
+                    if not _zero_of_the_reals(zero, e):
+                        leaving.append(n)
+                        break
+            if not leaving:
+                return None
+            point, where = {k: Fraction(float(v)) for k, v in env.items()}, 'exact'
+    if point is not None:
+        scale = {m: max(abs(Fraction(float(env[m]))), Fraction(1)) / 10 ** 12 for m in names}
+    else:
+        for tree in (tl, tr):
+            for part in _zero_parts(tree)[1:]:
+                with np.errstate(all='ignore'):
+                    try:
+                        if float(d_eval(part, env)) != 0.0:
+                            continue
+                    except Exception:  # noqa: BLE001  (a part it cannot read is no zero)
+                        continue
+                for n in names:
+                    kind, lo, hi = _zero_bracket(part, env, n)
+                    if kind not in ('odd', 'even'):
+                        continue
+                    x = _locate_zero(part, env, n, lo, hi, kind)
+                    if x is None:
+                        continue
+                    at = {k: Fraction(float(v)) for k, v in env.items()}
+                    at[n] = x
+                    old = mp.dps
+                    mp.dps = 2 * BASE_DPS + 20
+                    try:
+                        zero = next((r for r in readers if abs(c_eval(r, at)) < mpf(10) ** -40),
+                                    None)
+                        if zero is None:
+                            continue
+                        width = mpf(hi) - mpf(lo)
+                        scale = {m: width * 10 ** 8 if m == n else
+                                 max(abs(Fraction(float(env[m]))), Fraction(1)) / 10 ** 12
+                                 for m in names}
+                        leaving = [n]
+                        for m in names:
+                            if m == n:
+                                continue
+                            sc = scale[m]
+                            for way in (1, -1):
+                                e = dict(at)
+                                e[m] = mpf(at[m].numerator) / at[m].denominator \
+                                    + way * mpf(sc.numerator) / sc.denominator * mpf(10) ** -8
+                                if abs(c_eval(zero, e)) >= mpf(10) ** -40:
+                                    leaving.append(m)
+                                    break
+                    except Unresolved:
+                        continue
+                    finally:
+                        mp.dps = old
+                    point, where = at, 'run'
+                    break
+                if point is not None:
+                    break
+            if point is not None:
+                break
+    if point is None:
+        return None
+    return where, point, leaving, scale
+
+
+def limit_point(tl, tr, env, names, left, right):
+    """THE INPUT'S REAL LIMIT DECIDES AT FLOAT64'S POINT `env`, where float64 gives the input `tl`
+    (L) the value `left` and the answer `tr` (R) the value `right`, for a rule that holds in the
+    reals. THE POINT: a double where the reals give L no value (an operation undefined there, or a
+    divisor whose real zero is that double), the set left along some data variable of `names` at
+    the neighbouring doubles (the exact double), or a double of a run around such a zero of the
+    reals (float64 rounds a part of either side to an exact zero there, around a real zero of a
+    divisor of L). THE LIMIT: L's (`input_limit`), along each variable of `names` that leaves the
+    set, the others fixed. AT THE EXACT DOUBLE, the first case that applies decides:
+      0. L is NaN: R may take any value (`x/x -> 1` at 0);
+      1. an infinity of one sign: R is an infinity (its sign open) or agrees with L;
+      2. finite: R agrees with L or with the limit; where L is an infinity, R may be NaN;
+      3. none (a two-signed pole, sides that differ): R may take any value.
+    AT THE RUN'S OTHER DOUBLES, where the reals give L a value: L NaN, any R; else R agrees with L
+    (an infinity's sign open) or with the reals' value of L there, and beside a finite limit an
+    infinity of L may become NaN. Agreement is F6 without its range clause.
+    -> None (no such point: read as before), or `(where, verdict)`: `where` 'exact' or 'run',
+    `verdict` 'admit', 'refuse' or 'unplaced' (a point whose case the judge cannot certify: it
+    fails closed, R agreeing with L)."""
+    placed = _limit_place(tl, tr, env, names, right)
+    if placed is None:
+        return None
+    where, point, leaving, scale = placed
+    if math.isnan(left):
+        return where, 'admit'          # float64 gives L no value: section 3.1 (b) decides
+    if where == 'exact':
+        limit = input_limit(tl, point, leaving, scale)
+        if limit is None:
+            return where, 'unplaced'   # fail closed: R agrees with float64's L, which it does not
+        if limit == 'none':
+            return where, 'admit'                                              # case 3
+        if limit[0] == 'inf':                                                  # case 1
+            return where, ('admit' if math.isinf(right) or _f6_agree(left, right) else 'refuse')
+        return where, ('admit' if _f6_agree(left, right) or _f6_agree(float(limit[1]), right)
+                       or (math.isinf(left) and math.isnan(right)) else 'refuse')  # case 2
+    # the run's other doubles, where the reals give L a value: R agrees with float64's L (an
+    # infinity's sign open) or with the reals' value of L there; beside a finite limit, an
+    # infinity of L may become NaN
+    if _f6_agree(left, right) or (math.isinf(left) and math.isinf(right)):
+        return where, 'admit'
+    old = mp.dps
+    mags = [abs(_log10(abs(float(v)))) for v in env.values()
+            if math.isfinite(float(v)) and float(v) != 0]
+    mp.dps = max(2 * BASE_DPS + 20, min(MAX_DPS, BASE_DPS + 30 + int(max(mags, default=0))))
+    try:
+        real = c_eval(tl, {k: Fraction(float(v)) for k, v in env.items()})
+        real = None if misnan(real) else float(real)
+    except Unresolved:
+        real = None
+    finally:
+        mp.dps = old
+    if real is not None and _f6_agree(real, right):
+        return where, 'admit'
+    if math.isinf(left) and math.isnan(right):
+        limit = input_limit(tl, point, leaving, scale)
+        if limit is None:
+            return where, 'unplaced'
+        if limit != 'none' and limit[0] == 'fin':
+            return where, 'admit'
+        return where, 'refuse'
+    return where, ('unplaced' if real is None else 'refuse')
+
 def run_point(tl, tr, env, guards):
     """IS FLOAT64'S POINT `env` A ZERO'S POINT BY RULING 33: every part of either side that float64
     rounds to an exact zero there (`_zero_parts`) lies in a run around an isolated zero of the reals
@@ -2971,6 +3347,21 @@ def run_point(tl, tr, env, guards):
             if side == 'l' and k > 0 and placed == 'odd':
                 reading = 'odd'
     return reading if found else None
+
+
+class limits_off:
+    """A context where the input's limit is not read (`limit_point`): the monitor judges a whole
+    answer as a rule, and the input is a rule's left side or the part one step rewrites, never the
+    enclosing expression."""
+
+    def __enter__(self):
+        self.old = getattr(_LOCAL, 'no_limits', False)
+        _LOCAL.no_limits = True
+        return self
+
+    def __exit__(self, *exc):
+        _LOCAL.no_limits = self.old
+        return False
 
 
 def strict_at_the_root(detail):
@@ -3182,7 +3573,10 @@ def _basis(r, mode):
     def proved(m):
         return ex.get(m) == 'proved' and m not in conflict
 
-    if proved(mode) or (mode == 'permissive' and r.get('realised') is True and proved('f64')):
+    # a point the input's limit decided is read at offsets: evidence, not a proof
+    by_limit = 'LIMIT' in (r.get('f64_kinds') or ())
+    if (proved(mode) and not (mode == 'f64' and by_limit)) \
+            or (mode == 'permissive' and r.get('realised') is True and proved('f64') and not by_limit):
         return 'proved'
     return 'evidence'
 
@@ -4570,6 +4964,24 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         reading = pole_sign(tl, tr, env, zero_sign_guards)
         return reading is not None and (reading or at_null)
 
+    limit_cache = {}
+    # a slot that matches any subexpression guards no point: a rule with one gets no latitude
+    limit_names = None if any(nvars[n] in ('_', '!') for n in names) else frozenset(q_names)
+
+    def limit_at(env, left, right):
+        """The input's limit at float64's point `env` (`limit_point`), in the data variables;
+        none for a rule with a `_` or `!` slot, or within a whole answer the monitor reads
+        (`limits_off`: the input is a rule's left side or the part one step rewrites). Cached."""
+        if limit_names is None or getattr(_LOCAL, 'no_limits', False):
+            return None
+        key = tuple(sorted((k, float(v)) for k, v in env.items()))
+        if key not in limit_cache:
+            try:
+                limit_cache[key] = limit_point(tl, tr, env, limit_names, left, right)
+            except Exception:  # noqa: BLE001  (a point it cannot read is read as it stands)
+                limit_cache[key] = None
+        return limit_cache[key]
+
     run_cache = {}
 
     def run_at(env):
@@ -4610,6 +5022,26 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             if exact_point and dv == 'eq' and not _table.table_f64_same(float(_dl), float(_dr)):
                 dv = 'REAL-CHANGE'
             if dv != 'eq' and not exact_point and in_range[0]:
+                limit = None if isolated else limit_at(tl_env, float(_dl), float(_dr))
+                if limit is not None:
+                    # THE INPUT'S REAL LIMIT DECIDES where the reals give it no value
+                    # (`limit_point`): `1/(x0 - 3) + 1/(3 - x0) -> 0` holds at x0 = 3,
+                    # `atan(-1/(x0 - 3)^2) -> atan(1/((x0 - 3)*(3 - x0)))` does not (-pi/2 against
+                    # pi/2, the limit -pi/2). Float64's agreement alone keeps the latitude at a
+                    # double where the reals give the input no value, not on the rest of a run.
+                    where, verdict = limit
+                    out['read'] += 1
+                    if verdict == 'admit':
+                        out['kinds'].add('LIMIT')
+                        if where == 'run':
+                            out['bad'].append((dv, point))
+                        return
+                    # a refusal, or a point whose case the judge cannot certify (fail closed:
+                    # R agrees with float64's L there, which it does not)
+                    out['bad'].append((dv, point))
+                    out['kinds'].add('LIMIT-REFUSED' if verdict == 'refuse' else 'LIMIT-UNPLACED')
+                    out['kind_bad'].append((dv, point))
+                    return
                 try:
                     pole = pole_sign_at(tl_env, isolated)
                 except Exception:  # noqa: BLE001  (a point it cannot read is read as it stands)
@@ -4622,32 +5054,15 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     out['kinds'].add('POLE-SIGN')
                     out['read'] += 1
                     return
-                try:
-                    two_signed = not isolated and two_signed_pole(tl, tr, tl_env, zero_sign_guards)
-                except Exception:  # noqa: BLE001  (a point it cannot read is read as it stands)
-                    two_signed = False
-                if two_signed:
-                    # NO VALUE AT AN ISOLATED TWO-SIGNED POLE IS PROMISED: the left side takes both
-                    # signs arbitrarily near the point, which counts as one where it has no value,
-                    # so the right side may take any value there, its limit included, as `x/x -> 1`
-                    # does at 0
-                    out['kinds'].add('TWO-SIGNED-POLE')
-                    out['read'] += 1
-                    return
                 run = None if isolated else run_at(tl_env)
-                if run is not None:
+                if run is not None and pole_sign_at(tl_env, True):
                     # A RUN OF DOUBLES AROUND AN ISOLATED ZERO OF THE REALS IS THAT ZERO'S POINT
                     # float64 rounds the part to an exact zero on every double of it,
-                    # and the readings of an isolated pole apply on the whole run, `1/(-sin(x0) -
-                    # 1) -> -1/(sin(x0) + 1)` on about 10^8 doubles around -pi/2
-                    if pole_sign_at(tl_env, True):
-                        out['kinds'].add('POLE-SIGN')
-                        out['read'] += 1
-                        return
-                    if run == 'odd':
-                        out['kinds'].add('TWO-SIGNED-POLE')
-                        out['read'] += 1
-                        return
+                    # and an infinity's sign is open on the whole run, `1/(-sin(x0) - 1) ->
+                    # -1/(sin(x0) + 1)` on about 10^8 doubles around -pi/2
+                    out['kinds'].add('POLE-SIGN')
+                    out['read'] += 1
+                    return
             if not exact_point and not in_range[0] and not snapped and v == 'eq':
                 # THE f64 STANDARD: an operation of either side overflowed or underflowed,
                 # and the rewrite gives the true value -- an agreeing observation
@@ -4687,15 +5102,22 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 if dv == 'INF-CHANGE' and math.isinf(float(_dl)) and math.isfinite(float(_dr)) \
                         and not exact_point and not isolated:
                     # AN INFINITY THE ANSWER LOSES AT A POLE OF THE REALS: the left side has no
-                    # real value here (a two-signed pole was read above), so float64's infinity is
-                    # no rounding a further operation magnified, and a one-signed pole keeps it
-                    # `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` at x0 = 0
+                    # real value here and its limit is an infinity of one sign (or one the judge
+                    # cannot certify), so float64's infinity is no rounding a further operation
+                    # magnified: `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` at x0 = 0. A point with no
+                    # limit keeps none (`1/sin(x0)` at 0)
                     try:
                         no_value = not always_valued[0] and _no_real_value(tl, tl_env)
                     except Exception:  # noqa: BLE001  (a point it cannot read is no such point)
                         no_value = False
                     if no_value:
-                        out['pole_lost'].append(point)
+                        try:
+                            placed = _limit_place(tl, tr, tl_env, frozenset(q_names), float(_dr))
+                            limit = None if placed is None else input_limit(tl, *placed[1:])
+                        except Exception:  # noqa: BLE001  (a limit it cannot read is uncertified)
+                            limit = None
+                        if limit is None or (limit != 'none' and limit[0] == 'inf'):
+                            out['pole_lost'].append(point)
             elif _dl == 0 and _dr == 0 and math.copysign(1.0, _dl) != math.copysign(1.0, _dr):
                 out['kinds'].add('ZERO-SIGN')
                 # F6 reads the two zeros as one; strict reads their signs where they differ on

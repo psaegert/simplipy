@@ -894,6 +894,12 @@ FAIL_CLOSED = ("the flat point's premise reads the context, not the argument: th
 PLATFORM_LIBM = "the judge reads the platform's libm, where the engine's premise reads none"
 
 
+#: Why the engine keeps a flat pair under a carrier of a reader of zeros, where f64 holds the step:
+#: on float64's run of zeros of the pair around 0 the answer gives the reals' value.
+CARRIED = ("the flat point's premise reads the context, not the argument: the pair stays under a "
+           "carrier of a reader of zeros")
+
+
 class KnownDisagreement(AssertionError):
     """The judge and the engine read a function law apart, for the cause the row names."""
 
@@ -937,11 +943,11 @@ FUNCTION_PINS = [
     function_case('fun.acosh_cosh', 'inv acosh cosh sin x0', 'inv abs sin x0', 'f64'),
     # the flat point: held under a reader of zeros, through a carrier, and collapsed at the root,
     # under a carrier with nothing above it and under a blind head
-    function_case('fun.log_exp', 'inv log exp x0', 'inv x0', 'f64'),
+    function_case('fun.log_exp', 'inv log exp x0', 'inv x0', 'f64', FAIL_CLOSED),
     function_case('fun.log_exp', 'log log exp x0', 'log x0', 'f64'),
-    function_case('fun.log_exp', 'inv sin log exp x0', 'inv sin x0', 'f64'),
-    function_case('fun.log_exp', 'inv * 2 log exp x0', 'inv * 2 x0', 'f64'),
-    function_case('fun.log_exp', 'inv inv log exp x0', 'x0', 'f64'),
+    function_case('fun.log_exp', 'inv sin log exp x0', 'inv sin x0', 'f64', CARRIED),
+    function_case('fun.log_exp', 'inv * 2 log exp x0', 'inv * 2 x0', 'f64', CARRIED),
+    function_case('fun.log_exp', 'inv inv log exp x0', 'x0', 'f64', CARRIED),
     function_case('fun.log_exp', 'sin log exp x0', 'sin x0', 'f64'),
     function_case('fun.log_exp', 'inv exp log exp x0', 'inv exp x0', 'f64'),
     function_case('fun.acosh_cosh', 'inv acosh cosh x0', 'inv abs x0', 'f64'),
@@ -1004,6 +1010,9 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
         reader, pair = lhs.split()[0], lhs.split()[1:]
         assert reader == 'inv' and pair[:2] in (['log', 'exp'], ['acosh', 'cosh']), lhs
         assert list(engine.simplify(pair, mode=mode, effort=0)) != pair, pair
+    if CARRIED in causes:
+        # the engine keeps the step the judge holds, never the other way
+        assert mode == 'f64' and holds and not takes, (lhs, mode)
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
                             f'{d.get("verdict")} {d.get("tier")}')
 

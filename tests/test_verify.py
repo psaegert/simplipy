@@ -2034,8 +2034,9 @@ def test_the_monitor_reads_the_smallest_changed_part_that_holds_as_a_step() -> N
         out = bare.simplify(src.split())
         verdict, detail = judge_pair(src.split(), out, engine=bare)
         assert verdict == 'OK' and f'the changed part {part} holds' in detail, (src, out, detail)
-        # the whole, read as a rule, changes float64's kind at x0 = np.pi
-        assert judge_rule(src.split(), out)['tier'] == 'permissive', (src, out)
+        # the whole, read as a rule, holds too: at x0 = np.pi float64's left side is +inf, the
+        # reals' 8.2e15 the answer's value
+        assert judge_rule(src.split(), out)['tier'] == 'core', (src, out)
     # no part of a false answer holds
     verdict, _ = judge_pair('/ 1 sin - np.pi x0'.split(), 'inv sin + x0 1'.split(), engine=bare)
     assert verdict == 'VIOLATION'

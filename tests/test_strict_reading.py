@@ -196,4 +196,4 @@ def test_a_pattern_is_refused_at_an_infinite_binding_its_instance_holds_at_its_p
     assert any(abs(p['!0']) == float('inf') for _, p in r['unrealised']), r
     r = verify_rule('/ + x1 x2 x0'.split(), '+ / x1 x0 / x2 x0'.split())
     assert r['realised'] is True and r['tier'] == 'core', r
-    assert 'TWO-SIGNED-POLE' in r['f64_kinds'], r
+    assert 'LIMIT' in r['f64_kinds'], r

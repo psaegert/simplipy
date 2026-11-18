@@ -129,7 +129,7 @@ _REALS_UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'J
 #: operation reads (F7); a zero's sign on a region under an operation that reads it is read
 #: apart (`_contract.answer_zero_sign`): `atan2(0*x0, -1) -> pi` stays refused. Not an infinity
 #: gained or lost elsewhere.
-_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN', 'TWO-SIGNED-POLE', 'ZERO-SIGN'})
+_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN', 'ZERO-SIGN', 'LIMIT'})
 
 
 def _trace(inp, mode, engine):
@@ -708,7 +708,9 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
     name = _mode_name(mode)
     try:
         lhs, rhs = _as_rule(inp, out, engine)
-        detail = _contract.judge_rule(lhs, rhs)
+        with _contract.limits_off():
+            # the whole answer is no step: the input's limit is a step's
+            detail = _contract.judge_rule(lhs, rhs)
     except Exception as error:       # an unreadable rewrite is reported, never passed
         return 'UNSCORED', f'{type(error).__name__}: {error}'
     exact_steps = True
@@ -760,7 +762,8 @@ def _with_folds(lhs, rhs, folds, name, engine, exact_steps, verdict, why):
         else:
             return verdict, f'{why}; the fold {said} is not {name}' + "'s"
     try:
-        detail = _contract.judge_rule(read_lhs, read)
+        with _contract.limits_off():
+            detail = _contract.judge_rule(read_lhs, read)
     except Exception as error:
         return verdict, f'{why}; with its folds read as steps: {type(error).__name__}: {error}'
     read_verdict, read_why = _whole_answer(read_lhs, read, detail, name, engine, exact_steps)

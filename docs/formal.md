@@ -630,31 +630,53 @@ though the infinities part at isolated points only ($\lceil x_0\rceil^{x_1}\lcei
 a finite value) is no such event. The judge's f64 lane and the deployed bar read it at every point where
 the sides differ; the mint's rows do not, a pre-filter that refuses more than the judge.
 
-**No value at a two-signed pole in `f64`** [BY CONSTRUCTION — one definition,
-`battery::two_signed_pole`]. Where an operation of the left side reads an exact zero as a pole
-at a point that is isolated as above, and its values at the neighbouring doubles have opposite
-signs, the reals' pole takes both signs arbitrarily near the point and float64's value there is
-not promised at all: the point counts as one where the left side has no value, and the right side
-may take any value there, its limit included, as $x/x \to 1$ does at 0. So
-$1/(x - 3) + 1/(3 - x) \to 0$ holds in `f64` ($+\infty$ against 0 at $x = 3$). A one-signed pole
-keeps its infinity ($1/(x - 3)^2 \to 0$ is a change of kind at $x = 3$), its sign alone open
-(above); a zero's sign on a region, and every point that is not such a pole, are read as before.
-The judge's f64 lane and the deployed bar read it.
+**Where the reals give the left side no value, its limit decides in `f64`** [BY CONSTRUCTION —
+one definition, `_contract.limit_point`]. For a rule with no `_` or `!` slot, at a double where the
+reals give the left side $L$ no value (a pole, $0/0$, any undefined operation) and its neighbouring
+doubles along some data variable do (the exact double), and at the other doubles of a run around
+such a point (below), float64's value of the right side $R$ is read against $L$'s real limit,
+along each data variable that leaves the set where $L$ has no value, the others fixed, one-sided at
+a boundary. At the exact double, the first case that applies decides: float64 gives $L$ NaN, and
+$R$ may take any value; the limit is an infinity of one sign, and $R$ is an infinity (its sign
+open) or agrees with $L$; the limit is finite, and $R$ agrees with $L$ or with the limit, or is NaN
+where $L$ is an infinity; there is none (a two-signed pole, sides that differ), and $R$ may take
+any value. At the run's other doubles, where the reals give $L$ a value: float64 gives $L$ NaN, and
+$R$ may take any value; otherwise $R$ agrees with $L$ (an infinity's sign open) or with the reals'
+value of $L$ there, or is NaN where $L$ is an infinity beside a finite limit. Agreement is F6
+without its range clause; a point whose case the judge cannot certify fails closed ($R$ agrees with
+$L$); float64's agreement alone, clause (a), keeps this latitude at the exact double only. The
+judge reads the limit at offsets of $10^{-8}$ to $10^{-40}$ times a scale (the run's width, or the
+double's magnitude times $10^{-12}$), at 120 digits, the last three deciding: growing $10^4$-fold
+at each step with one sign, an infinity; settling, each step at least ten times smaller than
+the one before, a value; sides that differ, none; anything else, uncertified (a slow divergence,
+$\log x$ at 0, among them). A verdict that rests on this reading is evidence, not a proof. So $1/(x - 3) + 1/(3 - x) \to 0$ ($+\infty$ against 0 at 3, the limit 0),
+$x/x \to 1$, $1/\sin(x + 2\pi) \to 1/\sin x$ (no limit at 0) and $1/(\sin x - 1) \to -(1 + \sin
+x)/\cos^2 x$ (the reals' $-5.3 \cdot 10^{32}$ beside float64's $+\infty$ near $\pi/2$) hold in
+`f64`, while $1/(x - 3)^2 \to 0$, $\exp((x - 1)/x^2) \to \exp(1/x - 1/x^2)$ (0 against NaN at
+$+0$, the limit 0), $\operatorname{atan}(-1/(x - 3)^2) \to \operatorname{atan}(1/((x - 3)(3 - x)))$
+($-\pi/2$ against $\pi/2$ at 3) and $1/\sin(x + 2\pi)^2 \to 1/\sin(x + 4\pi)^2$ ($1.7 \cdot 10^{31}$
+against $4.2 \cdot 10^{30}$ at 0, the limit $+\infty$) do not. The judge's f64 lane reads it for a
+rule; a whole answer the monitor reads is no step's input, and there it is not read; the
+deployed bar reads a two-signed pole per operation, a pre-filter the judge decides after. The reals
+decide that a side has no value at a double only at the digits its operands demand ($\sin(x +
+2\pi)$ at $x = 10^{-300}$ reads zero at 50 digits and $10^{-300}$ at 380).
 
 **A run of doubles around a zero of the reals is its point** [BY CONSTRUCTION — one definition,
 `_contract.zero_run`]. Where float64 rounds a part to an exact zero on a run of consecutive doubles
 (float64's $\sin x$ is exactly $-1$ on about $10^8$ doubles around $-\pi/2$), the run counts as one
-point if the reals have an isolated zero of the part in it, and the readings of an isolated pole
-and of a zero's sign above apply on the whole run; a run where the reals have no zero is a region
+point if the reals have an isolated zero of the part in it: an infinity's sign and a zero's
+sign are open on the whole run, and the limit's reading above says what else it promises; a run where the reals have no zero is a region
 (float64's $\tanh x$ is exactly 1 past 19.06, where $\tanh x - 1 < 0$). The judge walks the run
 along a data variable, doubling the step and halving it back, to the first doubles where
-float64's part is not zero (at most $2^{44}$ doubles each way), widens it by four times its
-length on each side to $[a, b]$ (float64's run sits around the reals' zero up to its own rounding
-of the part), and the reals decide: the part's real values at $a$ and $b$ of opposite sign place
+float64's part is not zero (a run of any width: float64's $\sin(10^{-10}x) - 10^{-10}x$ is
+exactly 0 for $|x|$ up to 214), widens it by four times its length in value on each side to
+$[a, b]$ (float64's run sits around the reals' zero up to its own rounding
+of the part), and the reals decide, for a part with no jump ($\lfloor\cdot\rfloor$,
+$\lceil\cdot\rceil$, mod, atan2 place none): the part's real values at $a$ and $b$ of opposite sign place
 a zero of odd order by continuity; otherwise
 the part's least $|$value$|$ over $[a, b]$, by golden-section search at 50 and 100 digits, falling
 by 20 orders or more places a zero of even order, and holding within three orders places none.
-A run past the reach, or one the reals leave undecided, is no point: the reading stands as
+A run that reaches an infinity, or one the reals leave undecided, is no point: the reading stands as
 without the run. So $1/(-\sin x - 1) \to -1/(\sin x + 1)$ and $1/(-\cos x - 1) \to -1/(\cos x +
 1)$ hold in `f64` (an infinity's sign at a one-signed pole), while $1/(\tanh x - 1) \to -1/(1 -
 \tanh x)$ and $0 \cdot \operatorname{asin} x \to 0 \cdot \operatorname{acos} x$ do not. The judge's

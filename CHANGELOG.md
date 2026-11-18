@@ -176,23 +176,29 @@ organised by who you are, then the highlights, then every change in detail.
   atan(1/(3 - x0))` hold in `f64`. The pole is isolated where, along a data variable or a fitted
   constant, no operation reads a zero as a pole at the neighbouring doubles. An infinity's
   sign on a region stays refused (`1/(0*x0) -> -inf/x0`, +inf against -inf for every x0 > 0), and
-  so does a change of kind at a pole (`1/sin(np.pi - x0) -> 1/sin(x0)`, +inf against 8.2e15 at
-  x0 = np.pi). The judge's f64 lane and the deployed bar read it; the mint's rows still refuse
+  so does a change of kind at a pole (`1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2`, +inf against 1.7e31
+  at x0 = 0). The judge's f64 lane and the deployed bar read it; the mint's rows still refuse
   such a difference, a pre-filter that refuses more than the judge.
-- **`f64` promises no value at an isolated two-signed pole.** Where an operation of the left side
-  reads an exact zero as a pole at an isolated point and its infinity takes both signs arbitrarily
-  near it (`1/(x0 - 3)` at 3), the point has no value, and an answer may take any value there, its
-  limit included, as `x0/x0 -> 1` does at 0:
-  `1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `f64` (+inf against 0 at x0 = 3). A one-signed pole
-  keeps its infinity, of either sign (`1/(x0 - 3)^2 -> 0` is refused), and a `_` slot, which can
-  bind a part that is zero on a region, isolates no pole (`1/(_0 - 3) + 1/(3 - _0) -> 0` is
-  refused). `(x1 + x2)/x0 -> x1/x0 + x2/x0` now holds in `f64`: the right side has no value at
-  x0 = 0 where x1 and x2 differ in sign, the left side's isolated two-signed pole.
+- **Where the reals give the left side no value, its limit decides in `f64`.** At a double where
+  the reals give a rule's left side no value (a pole, 0/0, any undefined operation), isolated along
+  a data variable, the answer may take any value where float64 gives the left side NaN or the
+  left side has no limit (a two-signed pole); beside an infinity of one sign it is an infinity of
+  either sign or the left side's value; beside a finite limit it is the left side's value, the
+  limit, or NaN where the left side is an infinity. On the rest of a run around such a point (the
+  reals give the left side a value there) the answer agrees with float64's left side, an
+  infinity's sign open, or with the reals' value there. A point whose case the judge cannot
+  certify fails closed (a slow divergence, `log(x0)` at 0, among them); float64's agreement alone
+  keeps the latitude at the exact double only; a `_` or `!` slot gets none. The limit is read at
+  offsets, so a verdict that rests on it is evidence, not a proof. `1/(x0 - 3) + 1/(3 - x0) -> 0`, `1/sin(x0 + 2*pi) -> 1/sin(x0)`,
+  `1/sin(np.pi - x0) -> 1/sin(x0)` and `1/(sin(x0) - 1) -> -(1 + sin(x0))/cos(x0)^2` hold;
+  `1/(x0 - 3)^2 -> 0`, `exp((x0 - 1)/x0^2) -> exp(1/x0 - 1/x0^2)` (0 against NaN at +0) and
+  `atan(-1/(x0 - 3)^2) -> atan(1/((x0 - 3)*(3 - x0)))` (-pi/2 against pi/2 at 3) are refused.
 - **A run of doubles around a zero of the reals is its point.** Where float64 rounds a part to an
   exact zero on consecutive doubles, the run counts as one point if the reals have an isolated
-  zero of the part in it, and the readings of an isolated pole and of a zero's sign apply on the
-  whole run; a run where the reals have none is a region. The judge walks the run (at most 2^44
-  doubles each way) and the reals place its zero by a sign change across it, or by the part's
+  zero of the part in it: an infinity's and a zero's sign are open on the whole run, and the
+  limit's reading says what else it promises; a run where the reals have none is a region. The
+  judge walks the run (of any width) and the reals place its zero, for a part with no jump
+  (floor, ceil, mod and atan2 place none), by a sign change across it, or by the part's
   least |value| over it falling by 20 orders from 50 to 100 digits; a run they cannot place is
   no point. `1/(-sin(x0) - 1) -> -1/(sin(x0) + 1)` and `1/(-cos(x0) - 1) -> -1/(cos(x0) + 1)` hold
   in `f64` (+inf against -inf on about 10^8 doubles around -pi/2 and pi, an infinity's sign at a
