@@ -643,7 +643,7 @@ def _held(detail, name, engine, exact_steps, part=False):
     where a change of kind beyond rounding's alone refused a rewrite true in the reals (F8), else
     None: a refusal that names no event, or beside an undecided measure of float64's extension,
     is read as it stands. A `part` of an answer is no root: its context may read its zero's
-    sign, so a zero's sign on a region refuses it (ruling 29), as it refuses a rule."""
+    sign, so a zero's sign on a region refuses it, as it refuses a rule."""
     from . import MODE_TIERS, effective_tier
     verdict, tier = detail.get('verdict'), effective_tier(detail)
     if tier in MODE_TIERS[name] or _reading(detail, name) is True:
@@ -832,7 +832,7 @@ def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0, part=Fal
                              f'{str(detail.get("zero_sign_answer") or detail.get("zero_sign"))[:160]}')
     if name == 'f64' and _contract.answer_keeps_poles(detail) is False:
         # around a held step a change of kind is float64's rounding of its input, but where the
-        # left side has an infinity at a pole of the reals the answer keeps it (ruling 32)
+        # left side has an infinity at a pole of the reals the answer keeps it
         return 'VIOLATION', (f'F8: an infinity the left side has at a pole of the reals, lost '
                              f'around {said}: {str(detail.get("pole_lost"))[:160]}')
     return 'OK', f'F8: {said} holds ({part_why}); around it float64 {kinds} from rounding'

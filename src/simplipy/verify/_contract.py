@@ -2774,7 +2774,7 @@ def two_signed_pole(tl, tr, env, guards):
 
 
 #: The longest run of doubles, on either side of a point, the judge walks to find where float64's
-#: exact zero of a part ends (ruling 33): 2^44 doubles, found by doubling the step and halving it
+#: exact zero of a part ends: 2^44 doubles, found by doubling the step and halving it
 #: back; a run that reaches no end there, or an infinity, is no zero's point.
 _RUN_REACH = 1 << 44
 
@@ -2844,7 +2844,7 @@ def _real_minimum(tree, env, name, lo, hi, dps, steps):
 
 def zero_run(tree, env, name):
     """THE RUN OF DOUBLES ON WHICH FLOAT64 ROUNDS A PART TO AN EXACT ZERO, along `name` around the
-    point `env`, and whether the reals place an isolated zero of the part in it (ruling 33): a run
+    point `env`, and whether the reals place an isolated zero of the part in it: a run
     around an isolated zero of the reals is that zero's point, and a run where the reals have none
     is a region (a saturation plateau, a part zero on a real region). The run is walked by
     doubling the step and halving it back (`_RUN_REACH`) to its first doubles where float64's part
@@ -2856,7 +2856,7 @@ def zero_run(tree, env, name):
         at 100 digits: falling by 20 orders or more, as at a zero, places a zero of even order,
         `'even'` (`-sin(x0) - 1` over about 10^8 doubles around -pi/2); holding within three
         orders, as at a positive minimum, places none, `False`.
-    -> `'single'` (the part is zero at this double alone along `name`, ruling 29's point), `'odd'`
+    -> `'single'` (the part is zero at this double alone along `name`, a point by its neighbours), `'odd'`
     or `'even'` (a zero placed), `False` (no zero: a region, or a run past the reach), or None
     (the part is no zero here, or the reals cannot place one): a run it cannot place is no
     point."""
@@ -3005,7 +3005,7 @@ def answer_zero_sign(detail):
 def answer_keeps_poles(detail):
     """A WHOLE ANSWER'S READING OF A POLE'S INFINITY: where the left side has an infinity at a pole
     of the reals (no real value there, the pole not two-signed and isolated), the answer keeps it
-    (ruling 32: a one-signed pole keeps its infinity); a change of kind elsewhere is float64's
+    (a one-signed pole keeps its infinity); a change of kind elsewhere is float64's
     rounding of a step's input, magnified by an operation around the step, which no step promises.
     `1/sin(x0 + 2*pi)^2 -> 1/sin(x0)^2` keeps it (the answer gains the reals' infinity at x0 = 0),
     `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` loses it. -> True (no infinity lost) or False."""
@@ -4637,7 +4637,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 run = None if isolated else run_at(tl_env)
                 if run is not None:
                     # A RUN OF DOUBLES AROUND AN ISOLATED ZERO OF THE REALS IS THAT ZERO'S POINT
-                    # (ruling 33): float64 rounds the part to an exact zero on every double of it,
+                    # float64 rounds the part to an exact zero on every double of it,
                     # and the readings of an isolated pole apply on the whole run, `1/(-sin(x0) -
                     # 1) -> -1/(sin(x0) + 1)` on about 10^8 doubles around -pi/2
                     if pole_sign_at(tl_env, True):
@@ -4689,7 +4689,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     # AN INFINITY THE ANSWER LOSES AT A POLE OF THE REALS: the left side has no
                     # real value here (a two-signed pole was read above), so float64's infinity is
                     # no rounding a further operation magnified, and a one-signed pole keeps it
-                    # (ruling 32): `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` at x0 = 0
+                    # `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` at x0 = 0
                     try:
                         no_value = not always_valued[0] and _no_real_value(tl, tl_env)
                     except Exception:  # noqa: BLE001  (a point it cannot read is no such point)
