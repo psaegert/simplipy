@@ -40,7 +40,9 @@ and so is `1/sin(np.pi - x1) -> 1/sin(x1)` (+inf against 8.2e15 at x1 = np.pi: t
 (+inf against -inf for x0 < 0). Where the answer respells a product or a quotient, the factors it
 changed, less those the two sides share, are a part too, read under the reciprocal where one
 divides: `x/(a*x^2 + b*x) -> 1/(a*x + b)` changes `(a*x^2 + b*x)/x -> a*x + b`, which holds as a
-step where float64's divisor of the answer vanishes a double away from the input's. Rounding alone apart, a whole answer whose value turns on a zero's
+step where float64's divisor of the answer vanishes a double away from the input's. Several
+factors changed, as many on each side, are paired one to one (`_factor_pairings`), each pair a
+step of its own. Rounding alone apart, a whole answer whose value turns on a zero's
 sign on a region is refused too (`atan2(0*x0, -1) -> pi`). An infinity's sign at an isolated pole
 is not promised (the judge's reading of a pole's sign): `1/(-x0 - 3) -> -1/(x0 + 3)` is OK, and
 nor is any value where the input has an isolated two-signed pole: `1/(x0 - 3) + 1/(3 - x0) -> 0`.
@@ -390,35 +392,80 @@ def _signs_spelled_alike(node):
     return (head, kids)
 
 
-def _changed_parts(lhs, rhs, factors=True):
+def _changed_parts(lhs, rhs, factors=True, depth=0):
     """THE PARTS OF THE INPUT THE ANSWER CHANGED, outermost first: below every operation the two
     share with all its other arguments unchanged, each pair of subexpressions down to the smallest
     one where they differ, read with a reciprocal's and a negation's spellings made one
     (`_signs_spelled_alike`). The engine's steps all lie inside the smallest, and what lies around
     a part is its context: `inv(log(exp(x0))) -> inv(x0)` changes `log(exp(x0)) -> x0` under
     `inv`, and `1/sin(np.pi - x1) -> inv(sin(x1))` changes `np.pi - x1 -> x1`, inside
-    `sin(np.pi - x1) -> sin(x1)`, under `inv`. Where the smallest is a product or a quotient on
-    either side, its changed factors follow (`_changed_factors`), each with its own parts. Only the
-    whole rewrite where it is no one prefix expression on each side."""
+    `sin(np.pi - x1) -> sin(x1)`, under `inv`. A sum whose terms (`_terms`) are the other side's
+    but one changes that one (`_changed_term`), up to the order of the terms. Where the smallest is
+    a product or a quotient on either side, its changed factors follow (`_changed_factors`), each
+    with its own parts. Only the whole rewrite where it is no one prefix expression on each
+    side."""
     try:
         node_l = _signs_spelled_alike(_contract._term(lhs))
         node_r = _signs_spelled_alike(_contract._term(rhs))
     except (ValueError, IndexError):
         return [(list(lhs), list(rhs))]
     parts = [(_contract._tokens_of(node_l), _contract._tokens_of(node_r))]
-    while node_l[0] == node_r[0] and node_l[1] and len(node_l[1]) == len(node_r[1]):
-        pairs = [(a, b) for a, b in zip(node_l[1], node_r[1]) if a != b]
-        if len(pairs) != 1:
+    for _ in range(64):
+        while node_l[0] == node_r[0] and node_l[1] and len(node_l[1]) == len(node_r[1]):
+            pairs = [(a, b) for a, b in zip(node_l[1], node_r[1]) if a != b]
+            if len(pairs) != 1:
+                break
+            node_l, node_r = pairs[0]
+            parts.append((_contract._tokens_of(node_l), _contract._tokens_of(node_r)))
+        term = _changed_term(node_l, node_r)
+        if term is None or term == (node_l, node_r):
             break
-        node_l, node_r = pairs[0]
+        node_l, node_r = term
         parts.append((_contract._tokens_of(node_l), _contract._tokens_of(node_r)))
-    if factors:
+    if factors and depth < 3:
         for part_l, part_r in _changed_factors(node_l, node_r):
             said = (_contract._tokens_of(part_l), _contract._tokens_of(part_r))
             parts.append(said)
-            parts.extend(_changed_parts(*said, factors=False)[1:])
+            parts.extend(_changed_parts(*said, depth=depth + 1)[1:])
     unique = dict.fromkeys((tuple(a), tuple(b)) for a, b in parts)
     return [(list(a), list(b)) for a, b in unique]
+
+
+def _terms(node):
+    """A sum's terms, each `(sign, term)`: `a - (b + -c)` is `[(1, a), (-1, b), (1, c)]`."""
+    head, kids = node
+    if head == '+' and len(kids) == 2:
+        return _terms(kids[0]) + _terms(kids[1])
+    if head == '-' and len(kids) == 2:
+        return _terms(kids[0]) + [(-s, t) for s, t in _terms(kids[1])]
+    if head == 'neg' and len(kids) == 1:
+        return [(-s, t) for s, t in _terms(kids[0])]
+    return [(1, node)]
+
+
+def _unshared(left, right):
+    """The members of two lists less those they share, counted with multiplicity."""
+    rest, kept = list(right), []
+    for x in left:
+        if x in rest:
+            rest.remove(x)
+        else:
+            kept.append(x)
+    return kept, rest
+
+
+def _changed_term(node_l, node_r):
+    """THE ONE TERM A SUM CHANGED: where the two sides' terms (`_terms`) are the same but one on
+    each side, that pair, the right one negated where their signs differ: `a + f(x) - b ->
+    -b + g(x) + a` changes `f(x) -> g(x)`. None where a side is no sum, or more terms changed."""
+    additive = ('+', '-', 'neg')
+    if node_l[0] not in additive and node_r[0] not in additive:
+        return None
+    kept, rest = _unshared(_terms(node_l), _terms(node_r))
+    if len(kept) != 1 or len(rest) != 1:
+        return None
+    (sign_l, a), (sign_r, b) = kept[0], rest[0]
+    return (a, b) if sign_l == sign_r else (a, ('neg', (b,)))
 
 
 def _factors(node):
@@ -449,6 +496,55 @@ def _quotient(sign, factors):
     den = [f for f, e in factors if e < 0]
     out = ('/', (num, product(den))) if den else num
     return ('neg', (out,)) if sign < 0 else out
+
+
+def _factor_pairings(lhs, rhs, limit=64):
+    """THE CHANGED FACTORS OR TERMS PAIRED ONE TO ONE: below every operation the two sides share
+    (`_changed_parts`), where a product or a quotient changed as many factors on each side
+    (`_factors`, less those the two share, at least two), each pairing of a left factor with a
+    right factor of the same exponent, the right factors of any set of pairs negated whose size
+    has the parity of the sign the two sides do not share: `A*B*C -> C2*(A2*B)` pairs `A -> A2`
+    and `C -> C2`, `sin(x0)*sin(x1) -> -sin(x0 - pi)*-sin(x1 - pi)` pairs
+    `sin(x0) -> -sin(x0 - pi)` and `sin(x1) -> -sin(x1 - pi)`, each a step of its own, and a
+    factor that divides is read under its reciprocal. Where a sum changed as many terms on each
+    side (`_terms`), each pairing of its terms, a pair's signs read on the pair. -> `[[(part_l,
+    part_r)]]` as prefix tokens, at most `limit` pairings."""
+    import itertools
+    parts = _changed_parts(lhs, rhs, factors=False)
+    try:
+        node_l, node_r = (_signs_spelled_alike(_contract._term(t)) for t in parts[-1])
+    except (ValueError, IndexError):
+        return []
+    out = []
+    if node_l[0] in ('+', '-', 'neg') or node_r[0] in ('+', '-', 'neg'):
+        # a sum's terms: each pair's signs read on the pair
+        kept, rest = _unshared(_terms(node_l), _terms(node_r))
+        if 2 <= len(kept) == len(rest) <= 5:
+            for order in itertools.permutations(range(len(rest))):
+                pairing = []
+                for (sign_l, a), (sign_r, b) in zip(kept, (rest[j] for j in order)):
+                    b = b if sign_l == sign_r else ('neg', (b,))
+                    pairing.append((_contract._tokens_of(a), _contract._tokens_of(b)))
+                out.append(pairing)
+                if len(out) >= limit:
+                    return out
+        return out
+    (sign_l, fl), (sign_r, fr) = _factors(node_l), _factors(node_r)
+    kept_l, rest_r = _unshared(fl, fr)
+    if len(kept_l) < 2 or len(kept_l) != len(rest_r) or len(kept_l) > 5:
+        return []
+    for order in itertools.permutations(range(len(rest_r))):
+        if any(kept_l[i][1] != rest_r[j][1] for i, j in enumerate(order)):
+            continue
+        pairs = [(kept_l[i][0], rest_r[j][0]) for i, j in enumerate(order)]
+        for negated in itertools.product((False, True), repeat=len(pairs)):
+            if (sum(negated) % 2 == 1) != (sign_l != sign_r):
+                continue
+            out.append([(_contract._tokens_of(a), _contract._tokens_of(('neg', (b,)) if n else b))
+                        for (a, b), n in zip(pairs, negated)])
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def _changed_factors(node_l, node_r):
@@ -612,7 +708,7 @@ def _with_folds(lhs, rhs, folds, name, engine, exact_steps, verdict, why):
     return verdict, f'{why}; with its folds read as steps: {read_verdict}: {read_why[:200]}'
 
 
-def _whole_answer(lhs, rhs, detail, name, engine, exact_steps):
+def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0):
     """The mode's reading of a whole answer `lhs -> rhs` judged as `detail` (`judge_pair`, its
     steps' verdicts read already): `_held`, and where float64's kinds alone refuse an answer true
     in the reals, the smallest changed part that holds as a step, around which only a zero's sign
@@ -626,29 +722,49 @@ def _whole_answer(lhs, rhs, detail, name, engine, exact_steps):
     # changed part, and so inside every part around it: `sin(np.pi - x1) -> sin(x1)` around
     # `np.pi - x1 -> x1`); around it, a change of kind is float64's rounding of the step's input
     # magnified by an operation of the context, unless a value turns on a zero's sign there
-    parts = _changed_parts(lhs, rhs)[1:]
-    if not parts:
-        return verdict, why
+    held = {}
+
+    def part_held(part_lhs, part_rhs, in_context=False):
+        key = (tuple(part_lhs), tuple(part_rhs), in_context)
+        if key not in held:
+            try:
+                part = _contract.judge_rule(list(part_lhs), list(part_rhs))
+            except Exception as error:
+                held[key] = 'UNSCORED', f'{type(error).__name__}: {error}'
+            else:
+                held[key] = _whole_answer(list(part_lhs), list(part_rhs), part, name, engine,
+                                          exact_steps, depth + 1) if in_context \
+                    else _held(part, name, engine, exact_steps)[:2]
+        return held[key]
+
     first_why = None
-    for part_lhs, part_rhs in reversed(parts):
-        said = f'{" ".join(part_lhs)} -> {" ".join(part_rhs)}'
-        try:
-            part = _contract.judge_rule(part_lhs, part_rhs)
-        except Exception as error:
-            part_verdict, part_why = 'UNSCORED', f'{type(error).__name__}: {error}'
-        else:
-            part_verdict, part_why, _ = _held(part, name, engine, exact_steps)
+    for part_lhs, part_rhs in reversed(_changed_parts(lhs, rhs)[1:]):
+        said = f'the changed part {" ".join(part_lhs)} -> {" ".join(part_rhs)}'
+        part_verdict, part_why = part_held(part_lhs, part_rhs)
         if part_verdict == 'OK':
             break
-        first_why = first_why or f'{why}; the changed part {said}: {part_why}'
+        first_why = first_why or f'{why}; {said}: {part_why}'
     else:
-        return verdict, first_why
+        # several factors or terms changed: each, paired one to one, holds as a step of its own,
+        # read in its own context
+        for pairing in (_factor_pairings(lhs, rhs) if depth < 2 else []):
+            readings = []
+            for a, b in pairing:
+                readings.append(part_held(a, b, in_context=True))
+                if readings[-1][0] != 'OK':
+                    break
+            if all(v == 'OK' for v, _ in readings):
+                said = 'the changed factors ' + '; '.join(
+                    f'{" ".join(a)} -> {" ".join(b)}' for a, b in pairing)
+                part_why = ', '.join(w for _, w in readings)
+                break
+        else:
+            return verdict, first_why or why
     if name == 'f64' and _contract.answer_zero_sign(detail) is False:
-        return 'VIOLATION', (f'F8: a zero\'s sign under an operation that reads it, around the '
-                             f'changed part {said}: '
+        return 'VIOLATION', (f'F8: a zero\'s sign under an operation that reads it, around '
+                             f'{said}: '
                              f'{str(detail.get("zero_sign_answer") or detail.get("zero_sign"))[:160]}')
-    return 'OK', (f'F8: the changed part {said} holds ({part_why}); around it float64 {kinds} '
-                  f'from rounding')
+    return 'OK', f'F8: {said} holds ({part_why}); around it float64 {kinds} from rounding'
 
 
 # ---------------------------------------------------------------------------------------

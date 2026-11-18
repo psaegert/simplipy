@@ -255,7 +255,14 @@ organised by who you are, then the highlights, then every change in detail.
   where one divides: `x/(a*x^2 + b*x) -> 1/(a*x + b)` is OK where float64's divisor of the answer
   vanishes a double away from the input's (+inf against 8.7e15 at x = -0.48357881371968436 for
   a = 1.84813996308601, b = 0.893721330937074), since `(a*x^2 + b*x)/x -> a*x + b` holds as a
-  step.
+  step. Where several factors changed, as many on each side, they are paired one to one, each
+  pair a step of its own and a sign the two sides do not share read on some of them:
+  `sin(x1)/sin(x0) -> -sin(x1 - pi)/-sin(x0 - pi)` is OK (-inf against 8.2e15 at x0 = np.pi,
+  where float64's sin(x0 - pi) is 0), as `sin(x0) -> -sin(x0 - pi)` and
+  `sin(x1) -> -sin(x1 - pi)` hold, where the two factors read as one part take in the
+  reciprocal. Each pair is read in its own context, as a whole answer is. A sum's terms are read
+  the same way, up to their order and signs: one term changed is a part of its own, several are
+  paired one to one.
 - **The monitor refuses a whole answer whose value turns on a zero's sign.** An answer true in
   the reals whose float64 differences are rounding alone was passed without reading a zero's
   sign: `atan2(0*x0, -1) -> pi` (-pi against pi for every x0 < 0) passed, and is now refused.

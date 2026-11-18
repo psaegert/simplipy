@@ -2044,6 +2044,40 @@ def test_the_monitor_reads_a_products_changed_factors_as_a_step() -> None:
     assert verdict == 'VIOLATION'
 
 
+def test_the_monitor_reads_a_sums_changed_term() -> None:
+    # (x1 - 1/sin(pi - x0)) + x2 -> (x2 + x1) - 1/sin(x0): the terms the two sides share, in another
+    # order, leave one changed term, read as a part with its own parts
+    from simplipy.verify import _monitor
+    parts = _monitor._changed_parts('+ - ?1 inv sin - np.pi ?0 ?2'.split(),
+                                    '- + ?2 ?1 inv sin ?0'.split())
+    assert ('inv sin - np.pi ?0'.split(), 'inv sin ?0'.split()) in parts, parts
+    assert ('- np.pi ?0'.split(), ['?0']) in parts, parts
+    # several terms changed are paired one to one, a pair's signs read on the pair
+    pairings = _monitor._factor_pairings('+ sin - np.pi ?0 cos + ?1 np.pi'.split(),
+                                         '- sin ?0 cos ?1'.split())
+    assert [('sin - np.pi ?0'.split(), 'sin ?0'.split()),
+            ('cos + ?1 np.pi'.split(), 'neg cos ?1'.split())] in pairings, pairings
+
+
+def test_the_monitor_pairs_changed_factors_one_to_one() -> None:
+    # sin(x1)/sin(x0) -> -sin(x1 - pi)/-sin(x0 - pi): float64's sin(x0 - pi) is 0 at x0 = np.pi,
+    # where sin(x0) is 1.2e-16 (-inf against 8.2e15 under the reciprocal). Both factors changed;
+    # read as one part they take in the reciprocal, paired one to one each holds as a step
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    src = '* inv sin x0 sin x1'.split()
+    out = '* inv neg sin - x0 np.pi neg sin - x1 np.pi'.split()
+    assert judge_rule(src, out)['tier'] == 'permissive'
+    verdict, detail = judge_pair(src, out, engine=bare)
+    assert verdict == 'OK' and 'the changed factors sin ?0 -> neg sin - ?0 np.pi; ' \
+        'sin ?1 -> neg sin - ?1 np.pi holds' in detail, detail
+    # a factor of a false answer
+    verdict, _ = judge_pair(src, '* inv neg sin - x0 np.pi neg sin - x1 3'.split(), engine=bare)
+    assert verdict == 'VIOLATION'
+
+
 def test_the_monitor_refuses_a_whole_answer_that_turns_on_a_zeros_sign() -> None:
     # true in the reals and float64's kinds kept (-pi against pi), but -pi for every x0 < 0, where
     # `0*x0` is -0 and atan2 reads it
