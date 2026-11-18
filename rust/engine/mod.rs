@@ -4,8 +4,8 @@
 //! `&[String]` methods (intern once at entry, resolve once at exit). Submodules: [`stats`]
 //! (hot-path counters), `memo` (cache/ctx state), `ac` (THE engine), `miner` (the OFFLINE
 //! mining surface); config deserialization, the `Engine` struct and constructors live here.
-//! The old binary kernel is deleted (clean 0.12); masking is the PYTHON-side
-//! `simplipy.masking` module, downstream of simplify, never a kernel pass.
+//! Masking is the PYTHON-side `simplipy.masking` module, downstream of simplify, never a
+//! kernel pass.
 
 mod ac;
 mod memo;

@@ -21,8 +21,8 @@
 //! `apply_rules_top_down`, ported to bags: at every node, try the rules for that root kind
 //! MOST SPECIFIC FIRST (exact rules, then patterns, each by `specificity`, asset order among
 //! equals; first-match-wins), with the bag rules matching SUB-MULTISETS and preserving the
-//! remainder (the widening). If no rule fires, the NUMERIC FOLD fallback runs -- the exact
-//! ordering of the shipped engine, which is load-bearing: `sin(pi) -> 0` (a rule) must beat
+//! remainder (the widening). If no rule fires, the NUMERIC FOLD fallback runs -- an
+//! ordering that is load-bearing: `sin(pi) -> 0` (a rule) must beat
 //! `sin(3.14159...) -> 1.22e-16` (the f64 fold). Then recurse into children, rebuild
 //! canonically, and re-enter when the rebuild descends the reduction ordering (else refuse
 //! it). Every accepted step -- fire or rebuild -- strictly descends that ordering at its
@@ -55,11 +55,10 @@ pub struct AcRule {
     /// an authority.
     pub sig: u64,
     /// Does the LHS contain wildcards? EXACT (wildcard-free) rules are tried BEFORE pattern
-    /// rules within a bucket -- the shipped engine's protocol (exact lookup first, then the
-    /// pattern scan), which desugaring makes LOAD-BEARING: `/ inf inf -> nan` (exact) and
-    /// `* _0 inv _0 -> 1` (pattern) lived in different buckets of the binary engine but share
-    /// the `Mul` bucket here, and the pattern rule is unsound exactly on the ground poles the
-    /// exact rules exist for.
+    /// rules within a bucket (exact lookup first, then the pattern scan), which desugaring makes
+    /// LOAD-BEARING: `/ inf inf -> nan` (exact) and `* _0 inv _0 -> 1` (pattern) share the `Mul`
+    /// bucket, and the pattern rule is unsound exactly on the ground poles the exact rules exist
+    /// for.
     pub is_pattern: bool,
     /// Does a wildcard occur more than once in the LHS? Then it binds a class (a sum, an odd
     /// function or odd root of one) up to sign: a sum pattern whose first match met a near miss
@@ -130,8 +129,8 @@ pub struct AcRules {
     pub fun_idx: FxHashMap<Tok, Vec<usize>>,
     /// Patterns rooted at a leaf kind (literals, `Const`): matched by whole-node equality.
     pub leaf_idx: Vec<usize>,
-    /// O(1) EXACT dispatch (the old engine's exact-lookup-first protocol, restored for the
-    /// AC engine): canonical wildcard-free LHS -> rule indices in asset order, for NON-BAG
+    /// O(1) EXACT dispatch (exact lookup first): canonical wildcard-free LHS -> rule indices
+    /// in asset order, for NON-BAG
     /// roots only. Sound because a wildcard-free pattern at a non-bag root matches a
     /// canonical subject iff it structurally equals it: every `matches_each` arm without a
     /// wildcard is strict equality, and nested bags match full-cover as multisets, which for
@@ -461,15 +460,13 @@ impl AcRules {
             // `<constant>` placeholders. The classic violators are the masking-era
             // CONST-INTRODUCING rules (a `<constant>` in the RHS with none in the LHS):
             // they REPLACE an exact literal by an abstract constant
-            // (`neg div5 inv !0 -> * <constant> inv !0`). In the old engine they fired on
-            // one exact tree shape; widened to sub-multiset matching they would erase exact
-            // coefficients everywhere (`(-1/5) * x * log(y) / z` loses its -1/5). Masking is
-            // a separate REPRESENTATION pass -- the shipped engine carved it out of simplify
-            // for the same reason -- so abstraction-manufacturing rules do not belong in the
-            // AC simplifier at all. The count form also refuses the Const-bearing analogue
-            // (one slot in the LHS, two in the RHS), which the old boolean gate let through;
-            // counts are judged on the CANONICAL sides (canon may absorb Const arithmetic,
-            // e.g. `C+C -> C`, changing the spelled count).
+            // (`neg div5 inv !0 -> * <constant> inv !0`). Under sub-multiset matching they
+            // would erase exact coefficients everywhere (`(-1/5) * x * log(y) / z` loses its
+            // -1/5). Masking is a separate REPRESENTATION pass, so abstraction-manufacturing
+            // rules do not belong in the AC simplifier at all. The count form also refuses the
+            // Const-bearing analogue (one slot in the LHS, two in the RHS); counts are judged
+            // on the CANONICAL sides (canon may absorb Const arithmetic, e.g. `C+C -> C`,
+            // changing the spelled count).
             if const_count(&rhs) > const_count(&lhs) {
                 out.note_drop("const-count-increase");
                 continue;
@@ -750,8 +747,8 @@ pub struct PassCtx<'a> {
     /// re-canonicalized under the full gates).
     pub cx: &'a Cx<'a>,
     pub mcx: &'a MCx<'a>,
-    /// The numeric-fold fallback (engine glue): all-literal evaluation at f64 parity with the
-    /// shipped engine, plus the licence-gated `<constant>` collapse. `None` result = no fold.
+    /// The numeric-fold fallback (engine glue): all-literal evaluation in float64, plus the
+    /// licence-gated `<constant>` collapse. `None` result = no fold.
     pub fold: &'a dyn Fn(&Ex) -> Option<Ex>,
     /// Count of accepted DESCENT STEPS (rule fires and oriented rebuilds) across the whole
     /// call, and the operand of the release-mode step cap (`STEP_CAP`). The well-founded
@@ -807,10 +804,9 @@ pub struct PassCtx<'a> {
 /// docs/formal.md).
 ///
 /// Stage 2 (design/UNIFIED_SIMPLICITY_MEASURE.md): the first component is the unified
-/// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size
-/// middle tier -- mu's literal component prices a literal as it is written, so the ordering
-/// loses a layer. The dense-literal chain its own tier existed for (`Mul[3/2^k, x]`) ascends
-/// in k; it stays finite through the 1,100-bit cap (below).
+/// simplicity measure mu (`ac::expr::complexity`), whose literal component prices a literal
+/// as it is written, so the ordering needs no separate literal tier. The dense-literal chain
+/// (`Mul[3/2^k, x]`) ascends in k; it stays finite through the 1,100-bit cap (below).
 ///
 /// The pair is a strict total order (mu is a u64; cmp_ex is total by construction
 /// with EXACT literal comparison) that is WELL-FOUNDED: mu can strictly drop only
@@ -1045,7 +1041,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
         // Acceptance rides the assignment enumeration: a disoriented
         // assignment asks the matcher for the NEXT one, so a rule yields to later rules
         // only when NO assignment produces an oriented fire. (Shipped rules have unique
-        // assignments, where this is exactly the old fire-then-check behavior.)
+        // assignments, where this is fire-then-check.)
         let fired: Option<Ex> = match (&rule.lhs, e) {
             (Ex::Add(pv), Ex::Add(sv)) => {
                 let fire = |sv: &[Ex], cls: &std::cell::OnceCell<Vec<usize>>| -> Option<Ex> {

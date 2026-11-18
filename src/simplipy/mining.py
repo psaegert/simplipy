@@ -3566,8 +3566,7 @@ class RuleMiner:
                 or judge_processes < 1:
             raise ValueError(f'judge_processes must be a positive integer, got {judge_processes!r}')
         if prune is True:
-            # Fail HERE, not after the length loop: the old late raise fired at the END
-            # of a potentially week-scale mine.
+            # Fail HERE, not after the length loop, which can end a week-scale mine.
             raise ValueError(
                 "prune=True (the redundant-rule prune) died with the legacy kernel; "
                 "use prune='covered' (AC-judged behavioral coverage) or prune=False")

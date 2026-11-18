@@ -2,22 +2,22 @@
 //!
 //! A rule rooted at `Add`/`Mul` (or a lattice bag, `max`/`min`) matches any SUB-MULTISET of a
 //! subject bag; the unmatched remainder is preserved around the replacement. Combined with the
-//! bags being flat and sorted, this removes both axes of the old invariance defect: there is no
-//! operand order to be sensitive to, and no bracketing to hide a match behind.
+//! bags being flat and sorted, this removes both axes of the binary-tree invariance defect
+//! (`ac`): there is no operand order to be sensitive to, and no bracketing to hide a match
+//! behind.
 //!
-//! Wildcard sorts are carried over from the shipped matcher unchanged -- the sort rides in the
-//! token: `?N` binds a variable leaf only; `_N` binds anything; `!N` binds a variable leaf
-//! freely and a composite only under the finite-a.e. certificate; `$N` likewise under
-//! finite-and-nonzero-a.e.; `wildcard_all` (`permissive`) binds everything and skips the
-//! certificates. A wildcard that occurs twice may bind a sum and its negation (a class up to
-//! sign): a binding refused by its own negation is a near miss the caller retries in one
-//! orientation. The `<constant>` rebind guard is ported as-is: a placeholder bound to a
+//! The sort of a wildcard rides in its token: `?N` binds a variable leaf only; `_N` binds
+//! anything; `!N` binds a variable leaf freely and a composite only under the finite-a.e.
+//! certificate; `$N` likewise under finite-and-nonzero-a.e.; `wildcard_all` (`permissive`)
+//! binds everything and skips the certificates. A wildcard that occurs twice may bind a sum and
+//! its negation (a class up to sign): a binding refused by its own negation is a near miss the
+//! caller retries in one orientation. The `<constant>` rebind guard: a placeholder bound to a
 //! `Const`-containing expression never matches a second occurrence (independent constants).
 //!
 //! Bag matching detail: pattern elements are tried STRUCTURED-FIRST (non-wildcard elements bind
 //! wildcards through their structure), then wildcard elements. A wildcard already bound to a
 //! same-kind bag consumes its elements as a sub-multiset (this is how `* $0 inv $0` fires on
-//! `Mul[a, b, Pow(Mul[a, b], -1)]` with `$0 = a*b`, the reach the old tree matcher had); an
+//! `Mul[a, b, Pow(Mul[a, b], -1)]` with `$0 = a*b`, the reach of a bracketed subtree); an
 //! unbound wildcard tries each single element in canonical order, then -- as the last
 //! alternative -- ABSORBS every remaining element as a sub-bag. Backtracking is leftmost-first,
 //! deterministic, and assignment-COMPLETE: the search is continuation-passing, so a nested
@@ -68,9 +68,9 @@ fn is_variable_leaf(e: &Ex, view: &TokenView) -> bool {
     matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0 && !view.with_str(*t, super::expr::numeric_leaf))
 }
 
-/// May a wildcard of this sort bind this subject? (The certificates run EAGERLY at bind time --
-/// unlike the old matcher's post-walk pass -- because bag backtracking must be able to retry a
-/// different assignment after a certificate refusal. The per-engine certificate caches keep the
+/// May a wildcard of this sort bind this subject? (The certificates run EAGERLY at bind time,
+/// because bag backtracking must be able to retry a different assignment after a certificate
+/// refusal. The per-engine certificate caches keep the
 /// repeat cost negligible.)
 fn bind_ok(sigil: u8, subject: &Ex, cx: &MCx) -> bool {
     if cx.wildcard_all || is_variable_leaf(subject, cx.view) {
@@ -86,7 +86,7 @@ fn bind_ok(sigil: u8, subject: &Ex, cx: &MCx) -> bool {
             // verified CORRECT on ground poles (`finite_ae("inv 0") == false`), so this guard
             // is defense-in-depth, not a bug fix: it makes soundness on ground independent of
             // interval edge behavior, at the cost of also refusing ground FINITE composites
-            // (`+ 1 np.e`) that the old matcher would bind. Since fold unification
+            // (`+ 1 np.e`) that an unrestricted bind would take. Since fold unification
             // nothing rescues those: rational grounds never reach this gate
             // (exact constructor arithmetic collapses them to literals at build, `+ 1 2`
             // -> `3`), while transcendental-bearing grounds stay composite BY DESIGN (no
@@ -204,8 +204,7 @@ pub fn matches_each(subject: &Ex, pattern: &Ex, binds: &mut Binds, cx: &MCx, k: 
 
 /// CPS chain over parallel child slices (`Fun` arguments): child `i` enumerates, and each of
 /// its assignments continues into child `i + 1`; a later child's failure RESUMES the earlier
-/// children's enumeration -- the rollback the old pairwise loop approximated with a bindings
-/// snapshot, now exact and allocation-free.
+/// children's enumeration -- an exact, allocation-free rollback.
 fn matches_seq(sub: &[Ex], pat: &[Ex], i: usize, binds: &mut Binds, cx: &MCx, k: Cont) -> bool {
     if i == pat.len() {
         return k(binds);
@@ -583,9 +582,8 @@ fn try_assign(
     }
 }
 
-/// Substitute bound wildcards into a rule RHS template. A wildcard with no binding panics,
-/// mirroring the old `apply_mapping` (the mining invariant guarantees RHS wildcards are a
-/// subset of LHS wildcards).
+/// Substitute bound wildcards into a rule RHS template. A wildcard with no binding panics (the
+/// mining invariant guarantees RHS wildcards are a subset of LHS wildcards).
 pub fn substitute(template: &Ex, binds: &Binds, view: &TokenView) -> Ex {
     match template {
         Ex::Leaf(t) if view.sigil(*t) != 0 => binds
@@ -705,7 +703,7 @@ mod tests {
             let m = mcx(view);
             // pattern bag: [_0, log(_0)] over Add; subject: a + b + log(a + b). The structured
             // element binds _0 := Add[a, b]; the bag wildcard then consumes {a, b} as a
-            // sub-multiset -- the reach the old tree matcher had via bracketed subtrees.
+            // sub-multiset -- the reach of a bracketed subtree.
             // (An INVERSE-of-product case cannot arise here: integer powers distribute over
             // Mul in canon, so `(a*b)^-1` never survives as a bag element.)
             let w = view.intern("_0");

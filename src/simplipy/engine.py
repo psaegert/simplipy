@@ -557,8 +557,7 @@ class SimpliPyEngine:
         self._realization_roots: dict[str, list[str]] = {}
         for operator, realization in self.operator_realizations.items():
             # TOTAL by construction: returns a root, returns None for the shapes that
-            # reference nothing, or REFUSES. The old `realization_root(...) is not None`
-            # test silently passed everything else through to code_to_lambda.
+            # reference nothing, or REFUSES, so nothing passes unchecked to code_to_lambda.
             root = check_realization(str(realization), str(operator))
             if root is not None:
                 self._realization_roots.setdefault(root, []).append(operator)
@@ -2170,9 +2169,9 @@ class SimpliPyEngine:
 
         # DIALECT-PRESERVING: `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
-        # a bag delimiter is tagged, anything else is the explicit binary prefix. This is
-        # what closed the old "tagged leak" (a prefix-in token list used to come back
-        # tagged); to change the NOTATION, convert: `simplify(to_tagged(x))`.
+        # a bag delimiter is tagged, anything else is the explicit binary prefix, so a
+        # prefix input never comes back tagged; to change the NOTATION, convert:
+        # `simplify(to_tagged(x))`.
         form, tokens = self._read_input(expression)
 
         # ONE lookup, both branches: the rule mode is decided here and the core is asked

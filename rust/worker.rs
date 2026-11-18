@@ -2878,8 +2878,7 @@ fn certify_candidate(
 /// `accept` (optional) is the caller's acceptance criterion, threaded into the scan: when every
 /// match at a length is refused, the scan CONTINUES to the next length -- token count is not the
 /// reduction ordering, so a longer spelling can still sit strictly below the caller's mark
-/// (the old accept-after-scan shape returned one representative and let the caller
-/// veto the whole search).
+/// (returning one representative would let the caller veto the whole search).
 ///
 /// `accept_resolved` (optional) is an ADDITIONAL criterion for COMPUTED-literal targets:
 /// literal-RESOLVED candidates (see `resolve_const_slots`) and the evaluate
@@ -3800,8 +3799,7 @@ mod tests {
                 .unwrap();
         assert_eq!(lib2.n_filtered(), 3);
         assert_eq!(lib2.n_candidates(), 3);
-        // the decisions the old fold_filter parity test pinned still hold on the
-        // filtered library (the only library there is now)
+        // the fold filter's decisions hold on the filtered library
         for (src, want) in [
             (s(&["+", "x0", "np.pi"]), None),
             (s(&["neg", "neg", "x0"]), Some(s(&["x0"]))),

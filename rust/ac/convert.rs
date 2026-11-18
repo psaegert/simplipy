@@ -31,8 +31,7 @@ use num_bigint::BigInt;
 use num_traits::{One, Zero};
 
 /// Parse a prefix token sequence into a canonical AC expression. `None` on malformed input
-/// (arity underflow / trailing tokens) -- callers pass the input through unchanged, exactly as
-/// the shipped engine treats malformed expressions.
+/// (arity underflow / trailing tokens).
 pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     // Literals parse in the context's number domain: in the f64 domain a literal that is not
     // admissible (subnormal, beyond float64's range) stays a leaf as written.
@@ -812,8 +811,8 @@ pub fn to_prefix_literal_tokens(e: &Ex, cx: &Cx) -> Vec<Tok> {
     to_prefix(e, cx)
 }
 
-/// Serialize a canonical AC expression back to prefix tokens in the old token language --
-/// the EXPLICIT form (literal coefficients, no hyper-operators).
+/// Serialize a canonical AC expression back to prefix tokens -- the EXPLICIT form (literal
+/// coefficients, no hyper-operators).
 pub fn to_prefix(e: &Ex, cx: &Cx) -> Vec<Tok> {
     // Spelling choices (reciprocals, splits) compute in the number domain the state was
     // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
@@ -1246,8 +1245,8 @@ fn emit_bin_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 /// Emit a rational literal in the ARGMIN spelling of `mu_rat_exact`'s two codes: integers bare,
 /// a decimal token when the decimal code is cheaper (`1/5 -> 0.2`, `6/5 -> 1.2`, every
 /// power of ten), else the structural division `/ p q` (`1/2`, `5/8`, `11/2`, and every
-/// non-terminating value). The old rule -- decimal whenever one exists -- printed `0.5`
-/// and `0.625`, the spelling mu prices HIGHER.
+/// non-terminating value). A decimal whenever one exists would print `0.5` and `0.625`, the
+/// spelling mu prices HIGHER.
 fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
     if LITERAL_TOKENS.with(std::cell::Cell::get) {

@@ -230,7 +230,7 @@ fn ac_simplify_infix_impl(
     })
 }
 
-/// The AC entry accepts BOTH the old grammar and the tagged form; `is_valid` only understands
+/// The AC entry accepts BOTH the explicit prefix and the tagged form; `is_valid` only understands
 /// the former, so tag-bearing inputs skip the arity scan (the shared AC parser is the
 /// authority there -- a malformed tagged input fails the parse, the kernel returns `None`,
 /// and the FFI raises the same ValueError as every other malformed input;

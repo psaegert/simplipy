@@ -1182,7 +1182,7 @@ fn decimal_parts_big(p: &BigInt, q: &BigInt) -> Option<DecimalParts> {
 }
 
 /// The digit limit of the exact token readers, CPython's integer-string limit: a longer
-/// component keeps the old floating reading rather than spend time building it.
+/// component keeps the floating reading rather than spend time building it.
 pub const READER_DIGITS: usize = 4300;
 
 /// The exact rational a numeral token spells -- a decimal or a `p/q` fraction, the grammar of

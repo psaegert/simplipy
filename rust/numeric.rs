@@ -136,9 +136,8 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
         _ => {}
     }
     // Bare or parenthesized, decimal or exact-fraction: the wrapping composes with
-    // both grammars. The old paren branch `return`ed parse_pyfloat(inner) EVEN ON
-    // None, so "(-1/3)" never reached the fraction arm below it.
-    // The engine-side reader had the same hole, kept aligned.
+    // both grammars: a parenthesized fraction ("(-1/3)") reaches the fraction arm. The
+    // engine-side reader is kept aligned.
     fn bare_value(t: &str) -> Option<f64> {
         if let Some(v) = parse_pyfloat(t) {
             // An INTEGER spelling is an integer to the deployed evaluator (Python reads `-0`
@@ -168,9 +167,8 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
 /// `i128`, and from the exact big-integer components beyond that (up to
 /// `rat::READER_DIGITS` digits; `10^400/10^399` is 10.0, not inf/inf). Only beyond that limit
 /// is the f64 `float(p) / float(q)`, which three roundings can leave up to three ulps from the
-/// fraction (the old reader: `673107593011939307760027002528 /
-/// 810572757194796821120128085049` read 1.5 ulps low, outside the interval kernel's
-/// one-ulp leaf bracket).
+/// fraction (`673107593011939307760027002528 / 810572757194796821120128085049` reads 1.5 ulps
+/// low that way, outside the interval kernel's one-ulp leaf bracket).
 pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
     let (p, q) = crate::utils::split_fraction(t)?;
     let (pv, qv) = (p.parse::<f64>().ok()?, q.parse::<f64>().ok()?);
