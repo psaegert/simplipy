@@ -1160,32 +1160,14 @@ impl Engine {
         form: AcForm,
     ) -> Option<Vec<String>> {
         // THE DISPATCHER, not `ac_simplify_ex_fold`: permissive decides between two
-        // disciplines here, and routing this entry past it silently made permissive stop
-        // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
-        // does so on purpose.
+        // disciplines here.
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
         self.project(ctx, best, form, mode)
     }
 
-    /// [`Engine::ac_simplify_proj`] with the fold discipline stated rather than derived.
-    /// The MINE is the only caller that overrides it: it canonicalises unfolded, so that
-    /// every rule stays discoverable, and folding is applied per mode at serve.
-    pub fn ac_simplify_proj_fold(
-        &self,
-        tokens: &[String],
-        max_passes: usize,
-        mode: RuleMode,
-        form: AcForm,
-        fold_tr: bool,
-    ) -> Option<Vec<String>> {
-        let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, mode, 0, fold_tr);
-        self.project(ctx, best, form, mode)
-    }
-
-    /// The shared tail of both projections: malformed input is `None` -- the AC parser is
-    /// the arbiter, and the FAILURE SIGNAL propagates to the caller (the FFI raises
-    /// ValueError). The old contract returned the input unchanged, which silently passed
-    /// garbage through the one entry point whose inputs skip `is_valid`.
+    /// The shared tail of the projections: malformed input is `None` -- the AC parser is the
+    /// arbiter, and the failure propagates to the caller (the FFI raises ValueError), so garbage
+    /// never passes through the one entry point whose inputs skip `is_valid`.
     fn project(
         &self,
         ctx: SimplifyCtx,
@@ -1397,40 +1379,6 @@ impl Engine {
         let ea = canon(from_prefix(&ta, &bare)?, &bare);
         let eb = canon(from_prefix(&tb, &bare)?, &bare);
         Some(crate::ac::rules::ordered_below(&ea, &eb, &view))
-    }
-
-    /// The MINING JUDGE, fused: parse once, simplify, and return
-    /// `(canonical input complexity, best complexity, best in the explicit projection)`.
-    /// The AC parser is the arbiter (`None` on malformed input) -- no config-vocabulary
-    /// gate, so the judge works under any mining vocabulary, including minimal test
-    /// configs whose `is_valid` does not span the AC output language.
-    /// The two scores are REFERENCE values (the input one is measured on the bare
-    /// canonical form): coverage decisions -- prune, the strict-Kruskal skip, proposal
-    /// verdicts -- judge in the serve ordering via `ac_ordered_below`, never by
-    /// comparing these scores (one coverage ordering, everywhere).
-    pub fn ac_judge(
-        &self,
-        tokens: &[String],
-        max_passes: usize,
-    ) -> Option<(u64, u64, Vec<String>)> {
-        let src_c = self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)?;
-        // THE MINE CANONICALISES UNFOLDED. The default RULE SET, but with transcendental
-        // folding OFF, which is the finest-grained canonical form there is, so every rule is
-        // discoverable: with folding on, the mine folds the source `cos 0` to `1` before the
-        // target search ever runs, and the rule is never discovered, for ANY mode. Folding
-        // is a per-mode SERVE behaviour; the per-mode prune then drops from each file what
-        // that mode already performs.
-        let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, RuleMode::Default, 0, false);
-        let best = best?;
-        let view = self.view(&ctx);
-        let best_c = complexity(&best, &view);
-        // Spelled as `project` spells an answer: with its held sums (`held_in`).
-        let held = self.held_in(&best, false, &view, &ctx, RuleMode::Default);
-        let is_held = |s: &Ex| held.contains(s);
-        let mut spell = Cx::bare(&view);
-        spell.sign_held = Some(&is_held);
-        let toks = to_prefix(&best, &spell);
-        Some((src_c, best_c, self.resolve_seq(&toks, &ctx)))
     }
 
     /// The semantic complexity of an expression (either grammar), measured on its canonical

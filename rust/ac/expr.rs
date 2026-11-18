@@ -4272,9 +4272,6 @@ enum Tie {
     /// At a sign-trade site the current spelling is the distinguished one (bare, its coefficient
     /// positive), and it stands.
     Keep,
-    /// The flipped spelling is the distinguished one (no site has this order).
-    #[allow(dead_code)]
-    Flip,
     /// At a free-orientation site (an even power's base, an even function's argument) neither
     /// spelling is distinguished, both bare: the sorted coefficient sequences compare
     /// lexicographically (exact rational order) and the larger stands, an order on the orientation
@@ -4361,7 +4358,6 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
     // representative).
     match tie {
         Tie::Keep => return false,
-        Tie::Flip => return true,
         Tie::Lex => {}
     }
     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -4951,8 +4947,15 @@ pub(crate) enum FlatPair {
     LogInverse = 2,
 }
 
-/// The pairs whose collapse waits for the root's walk, in their index order.
-const FLAT_PAIRS: [FlatPair; 3] = [FlatPair::LogExp, FlatPair::AcoshCosh, FlatPair::LogInverse];
+/// The pairs whose flat point a context may read (`flat_read_below`), in their index order: the
+/// read state of a walk is one flag per pair here. The log of an inverse has none: nothing reads
+/// its zero (`flat_read_below`'s note), so it collapses wherever the root's walk meets it.
+const READ_PAIRS: [FlatPair; 2] = [FlatPair::LogExp, FlatPair::AcoshCosh];
+
+/// Whether `read` reads `pair`'s flat point: never the log of an inverse's.
+fn reads(read: [bool; 2], pair: FlatPair) -> bool {
+    pair != FlatPair::LogInverse && read[pair as usize]
+}
 
 /// Is `e` a pair whose collapse waits for the root's walk: in `f64` `log(exp(t))` or
 /// `acosh(cosh(t))`, flat at 0, or `log(1/t)`; in `permissive` `log(1/t)`?
@@ -4992,9 +4995,9 @@ fn flat_pair(e: &Ex, cx: &Cx) -> Option<FlatPair> {
     }
 }
 
-/// [`flat_read_below`] for every pair kind at once, each with its own `read`.
-fn flat_read_below_all(e: &Ex, i: usize, read: [bool; 3], cx: &Cx) -> [bool; 3] {
-    FLAT_PAIRS.map(|p| flat_read_below(e, i, read[p as usize], p, cx))
+/// [`flat_read_below`] for both flat-point pairs at once, each with its own `read`.
+fn flat_read_below_all(e: &Ex, i: usize, read: [bool; 2], cx: &Cx) -> [bool; 2] {
+    READ_PAIRS.map(|p| flat_read_below(e, i, read[p as usize], p, cx))
 }
 
 /// May the expression around child `i` of `e` read the FLAT POINT of a `pair` in that child --
@@ -5012,15 +5015,13 @@ fn flat_read_below_all(e: &Ex, i: usize, read: [bool; 3], cx: &Cx) -> [bool; 3] 
 /// beside a variable, `atan2` beside a variable), while `floor` and `atanh` carry it;
 /// `acosh o cosh` drifts below `|t|` (`acosh(cosh(3))` is 2.9999999999999996), so `floor` and
 /// `atanh` read it. A head the table does not name reads it.
+///
+/// The log of an inverse of a monomial is a zero only at points, where its value parts from the
+/// collapse's in the sign of that zero alone: an isolated zero's sign, no value the answer keeps,
+/// so nothing reads it, and it has no read state (`READ_PAIRS`).
 pub(crate) fn flat_read_below(e: &Ex, i: usize, read: bool, pair: FlatPair, cx: &Cx) -> bool {
     // `permissive` reads one zero
-    if !cx.f64_semantics() {
-        return false;
-    }
-    // The log of an inverse of a monomial is a zero only at points, where its value parts from
-    // the collapse's in the sign of that zero alone: an isolated zero's sign, no value the answer
-    // keeps, so nothing reads it.
-    if pair == FlatPair::LogInverse {
+    if !cx.f64_semantics() || pair == FlatPair::LogInverse {
         return false;
     }
     let view = cx.view;
@@ -5117,9 +5118,8 @@ pub(crate) fn flat_read_below(e: &Ex, i: usize, read: bool, pair: FlatPair, cx: 
 /// the two powers read a pair's zero that the one power does not, in `f64` where the pairs are
 /// held? Float64's value has turned on that zero at the inner power: `1/(1/log(exp(x0)))` and
 /// `1/sqrt(log(1/x0))` stay (`sqrt` keeps `-0`, which `1/...` reads, and `pow(-0, -1/2)` is
-/// `+inf` like `pow(+0, -1/2)`). Two integer powers hide no reader of the log of an inverse,
-/// whose two zeros differ only in sign: `((±0)^r)^s` is `(±0)^(r*s)`, sign and all, so
-/// `1/(1/log(1/x0))` is `log(1/x0)`.
+/// `+inf` like `pow(+0, -1/2)`). Nothing reads the log of an inverse's zero (`flat_read_below`),
+/// so `1/(1/log(1/x0))` is `log(1/x0)`.
 pub(crate) fn compose_hides_a_flat_read(b: &Ex, r: &Rat, s: &Rat, cx: &Cx) -> bool {
     if !cx.f64_semantics() || cx.flat_unread {
         return false;
@@ -5129,25 +5129,22 @@ pub(crate) fn compose_hides_a_flat_read(b: &Ex, r: &Rat, s: &Rat, cx: &Cx) -> bo
     };
     let power = |k: Rat| Ex::Pow(Box::new(Ex::NaN), Box::new(Ex::Num(k)));
     let outer = Ex::Pow(Box::new(power(r.clone())), Box::new(Ex::Num(s.clone())));
-    let at_inner = flat_read_below_all(&outer, 0, [false; 3], cx);
+    let at_inner = flat_read_below_all(&outer, 0, [false; 2], cx);
     let before = flat_read_below_all(&power(r.clone()), 0, at_inner, cx);
-    let after = flat_read_below_all(&power(rs), 0, [false; 3], cx);
-    let mut hidden = FLAT_PAIRS.map(|p| before[p as usize] && !after[p as usize]);
-    if r.is_integer() && s.is_integer() {
-        hidden[FlatPair::LogInverse as usize] = false;
-    }
+    let after = flat_read_below_all(&power(rs), 0, [false; 2], cx);
+    let hidden = READ_PAIRS.map(|p| before[p as usize] && !after[p as usize]);
     flat_reads_a_pair_at(b, hidden, cx)
 }
 
 /// Does `e` hold a pair whose zero is read (`flat_read_below`), `e`'s own zero read as `read` says,
 /// pair by pair?
-fn flat_reads_a_pair_at(e: &Ex, read: [bool; 3], cx: &Cx) -> bool {
-    fn walk(e: &Ex, read: [bool; 3], cx: &Cx) -> bool {
+fn flat_reads_a_pair_at(e: &Ex, read: [bool; 2], cx: &Cx) -> bool {
+    fn walk(e: &Ex, read: [bool; 2], cx: &Cx) -> bool {
         if !read.iter().any(|r| *r) {
             return false;
         }
         if let Some(p) = flat_pair(e, cx) {
-            if read[p as usize] {
+            if reads(read, p) {
                 return true;
             }
         }
@@ -5214,12 +5211,12 @@ pub(crate) fn release_flat(e: Ex, cx: &Cx) -> Ex {
         flat_unread: true,
         ..*cx
     };
-    flat_released(&e, [false; 3], cx, &free).unwrap_or(e)
+    flat_released(&e, [false; 2], cx, &free).unwrap_or(e)
 }
 
-/// [`release_flat`] at `e`, each pair's flat point read or not (`read`, by [`FlatPair`]): the node
-/// where it changes, `None` where nothing does.
-fn flat_released(e: &Ex, read: [bool; 3], cx: &Cx, free: &Cx) -> Option<Ex> {
+/// [`release_flat`] at `e`, each pair's flat point read or not (`read`, by [`READ_PAIRS`]): the
+/// node where it changes, `None` where nothing does.
+fn flat_released(e: &Ex, read: [bool; 2], cx: &Cx, free: &Cx) -> Option<Ex> {
     let below = |i: usize| flat_read_below_all(e, i, read, cx);
     let rebuilt = match e {
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
@@ -5258,7 +5255,7 @@ fn flat_released(e: &Ex, read: [bool; 3], cx: &Cx, free: &Cx) -> Option<Ex> {
     };
     let node = rebuilt.as_ref().unwrap_or(e);
     if let (Some(p), Ex::Fun(f, a)) = (flat_pair(node, cx), node) {
-        if !read[p as usize] {
+        if !reads(read, p) {
             let freed = fun(*f, a.clone(), free);
             if freed != *node {
                 return Some(freed);

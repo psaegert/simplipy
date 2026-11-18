@@ -15,7 +15,6 @@ pub mod refusals;
 pub mod stats;
 
 use std::error::Error;
-use std::fs;
 
 use rustc_hash::FxHashMap;
 
@@ -132,18 +131,6 @@ impl Engine {
     /// parse IS the validation, so both share one arbiter.
     pub fn check_form(&self, tokens: &[String]) -> Result<(), String> {
         crate::forms::check(tokens, &self.operators)
-    }
-
-    /// Build from resolved local paths (the Python shim resolves HF-hub/local via simplipy's own
-    /// asset_manager and hands us files; the Rust core is network-free). REUSES the unchanged
-    /// config.yaml + rules.json (single source of truth shared with Python).
-    pub fn from_paths(
-        config_yaml_path: &str,
-        rules_json_path: &str,
-    ) -> Result<Self, Box<dyn Error>> {
-        let cfg_text = fs::read_to_string(config_yaml_path)?;
-        let rules_text = fs::read_to_string(rules_json_path)?;
-        Self::from_strs(&cfg_text, &rules_text)
     }
 
     /// Build from in-memory config/rules text: direct `SimpliPyEngine(operators=..., rules=...)`
