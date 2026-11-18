@@ -641,6 +641,26 @@ keeps its infinity ($1/(x - 3)^2 \to 0$ is a change of kind at $x = 3$), its sig
 (above); a zero's sign on a region, and every point that is not such a pole, are read as before.
 The judge's f64 lane and the deployed bar read it.
 
+**A run of doubles around a zero of the reals is its point** [BY CONSTRUCTION — one definition,
+`_contract.zero_run`]. Where float64 rounds a part to an exact zero on a run of consecutive doubles
+(float64's $\sin x$ is exactly $-1$ on about $10^8$ doubles around $-\pi/2$), the run counts as one
+point if the reals have an isolated zero of the part in it, and the readings of an isolated pole
+and of a zero's sign above apply on the whole run; a run where the reals have no zero is a region
+(float64's $\tanh x$ is exactly 1 past 19.06, where $\tanh x - 1 < 0$). The judge walks the run
+along a data variable, doubling the step and halving it back, to the first doubles where
+float64's part is not zero (at most $2^{44}$ doubles each way), widens it by four times its
+length on each side to $[a, b]$ (float64's run sits around the reals' zero up to its own rounding
+of the part), and the reals decide: the part's real values at $a$ and $b$ of opposite sign place
+a zero of odd order by continuity; otherwise
+the part's least $|$value$|$ over $[a, b]$, by golden-section search at 50 and 100 digits, falling
+by 20 orders or more places a zero of even order, and holding within three orders places none.
+A run past the reach, or one the reals leave undecided, is no point: the reading stands as
+without the run. So $1/(-\sin x - 1) \to -1/(\sin x + 1)$ and $1/(-\cos x - 1) \to -1/(\cos x +
+1)$ hold in `f64` (an infinity's sign at a one-signed pole), while $1/(\tanh x - 1) \to -1/(1 -
+\tanh x)$ and $0 \cdot \operatorname{asin} x \to 0 \cdot \operatorname{acos} x$ do not. The judge's
+f64 lane reads it; the deployed bar and the mint's rows read a point by its neighbouring doubles
+alone, a pre-filter that refuses more than the judge.
+
 **The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
 licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$
 exists and some spelling of $p$ (its pattern, or an entry $m$ serves from it) has

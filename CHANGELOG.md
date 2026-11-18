@@ -188,6 +188,16 @@ organised by who you are, then the highlights, then every change in detail.
   bind a part that is zero on a region, isolates no pole (`1/(_0 - 3) + 1/(3 - _0) -> 0` is
   refused). `(x1 + x2)/x0 -> x1/x0 + x2/x0` now holds in `f64`: the right side has no value at
   x0 = 0 where x1 and x2 differ in sign, the left side's isolated two-signed pole.
+- **A run of doubles around a zero of the reals is its point.** Where float64 rounds a part to an
+  exact zero on consecutive doubles, the run counts as one point if the reals have an isolated
+  zero of the part in it, and the readings of an isolated pole and of a zero's sign apply on the
+  whole run; a run where the reals have none is a region. The judge walks the run (at most 2^44
+  doubles each way) and the reals place its zero by a sign change across it, or by the part's
+  least |value| over it falling by 20 orders from 50 to 100 digits; a run they cannot place is
+  no point. `1/(-sin(x0) - 1) -> -1/(sin(x0) + 1)` and `1/(-cos(x0) - 1) -> -1/(cos(x0) + 1)` hold
+  in `f64` (+inf against -inf on about 10^8 doubles around -pi/2 and pi, an infinity's sign at a
+  one-signed pole), while `1/(tanh(x0) - 1) -> -1/(1 - tanh(x0))` (float64's tanh is exactly 1
+  past 19.06, where the reals have no zero) and `0*asin(x0) -> 0*acos(x0)` stay refused.
 - **Clause (b) reads a rational function of its atoms.** In the reals, a left side built by `+`,
   `-`, `*`, `/`, negation, the reciprocal and integer powers from its atoms (the other maximal
   parts: a variable, `log(x3)`, `sin(x2)`, `np.pi`) has no value only where an atom has none, an

@@ -47,6 +47,7 @@ import contextlib
 import functools
 import itertools
 import math
+import struct
 import re
 import threading
 from fractions import Fraction
@@ -2636,6 +2637,30 @@ def reals_hold(verdict):
     return False if verdict == 'KILL' else None
 
 
+def _no_real_value(tree, env):
+    """Do the reals give `tree` no value at float64's point `env` (its doubles, read exactly), at the
+    precision its operands' magnitudes demand and at twice that? A pole of the reals has none at
+    every precision, while `1/log(exp(x0))` at x0 = 1e-300 has one (1e300) that 50 digits miss.
+    -> True only where both readings find none."""
+    old = mp.dps
+    mags = [abs(_log10(abs(float(v)))) for v in env.values()
+            if math.isfinite(float(v)) and float(v) != 0]
+    demanded = min(MAX_DPS, BASE_DPS + 30 + int(max(mags, default=0)))
+    e = {k: Fraction(float(v)) if math.isfinite(float(v)) else mpf(float(v))
+         for k, v in env.items()}
+    try:
+        for dps in (demanded, min(MAX_DPS, 2 * demanded)):
+            mp.dps = dps
+            try:
+                if cls_mp(c_eval(tree, e))[0] != 'nan':
+                    return False
+            except Unresolved:
+                return False
+        return True
+    finally:
+        mp.dps = old
+
+
 def reals_valued_at(tl, tr, env, valued=(False, False)):
     """Do the reals give both sides a value at float64's point `env` (its doubles, read exactly)?
     A side `valued` shows to have one everywhere (`_always_valued`: `sin(x0 + pi)`,
@@ -2748,6 +2773,206 @@ def two_signed_pole(tl, tr, env, guards):
     return _table.table_two_signed_pole(lexpr, vals, along)
 
 
+#: The longest run of doubles, on either side of a point, the judge walks to find where float64's
+#: exact zero of a part ends (ruling 33): 2^44 doubles, found by doubling the step and halving it
+#: back; a run that reaches no end there, or an infinity, is no zero's point.
+_RUN_REACH = 1 << 44
+
+
+def _ulp_step(x, k):
+    """The double `k` doubles above `x` (below for k < 0), across zero, in the order of the reals."""
+    bits = struct.unpack('<q', struct.pack('<d', x))[0]
+    order = bits if bits >= 0 else -(bits & 0x7FFFFFFFFFFFFFFF)
+    order += k
+    bits = order if order >= 0 else (-order) | (-0x8000000000000000)
+    return struct.unpack('<d', struct.pack('<q', bits))[0]
+
+
+def _real_sign(tree, env):
+    """The sign of the reals' value of `tree` at `env` (each double read as the exact rational it
+    is), read at the gap ladder's rungs: -1, 0, 1, or None where no rung resolves it."""
+    old = mp.dps
+    e = {k: Fraction(float(v)) if math.isfinite(float(v)) else mpf(float(v)) for k, v in env.items()}
+    try:
+        for dps in GAP_RUNGS:
+            mp.dps = dps
+            try:
+                v = c_eval(tree, e)
+            except Unresolved:
+                continue
+            if misnan(v):
+                return None
+            return int(mp.sign(v))
+        return None
+    finally:
+        mp.dps = old
+
+
+def _real_minimum(tree, env, name, lo, hi, dps, steps):
+    """The reals' least |value| of `tree` over [lo, hi] along `name`, by golden-section search at
+    `dps` digits (`steps` steps): the least |value| found, or None where a point reads no value."""
+    old = mp.dps
+    mp.dps = dps
+    try:
+        e = {k: Fraction(float(v)) for k, v in env.items()}
+
+        def at(x):
+            e[name] = x
+            v = c_eval(tree, e)
+            return None if misnan(v) else abs(v)
+        a, b = mpf(lo), mpf(hi)
+        g = (mp.sqrt(5) - 1) / 2
+        c, d = b - g * (b - a), a + g * (b - a)
+        fc, fd = at(c), at(d)
+        for _ in range(steps):
+            if fc is None or fd is None:
+                return None
+            if fc < fd:
+                b, d, fd = d, c, fc
+                c = b - g * (b - a)
+                fc = at(c)
+            else:
+                a, c, fc = c, d, fd
+                d = a + g * (b - a)
+                fd = at(d)
+        return None if fc is None or fd is None else min(fc, fd)
+    except Unresolved:
+        return None
+    finally:
+        mp.dps = old
+
+
+def zero_run(tree, env, name):
+    """THE RUN OF DOUBLES ON WHICH FLOAT64 ROUNDS A PART TO AN EXACT ZERO, along `name` around the
+    point `env`, and whether the reals place an isolated zero of the part in it (ruling 33): a run
+    around an isolated zero of the reals is that zero's point, and a run where the reals have none
+    is a region (a saturation plateau, a part zero on a real region). The run is walked by
+    doubling the step and halving it back (`_RUN_REACH`) to its first doubles where float64's part
+    is not zero, and widened by four times its length on each side to [a, b] (float64's run sits
+    around the reals' zero up to its own rounding of the part); the reals then decide:
+      - a sign change of the part across [a, b] (the reals' values at a and b): a zero of odd
+        order inside, `'odd'`: `87.07695650950396*atan(u) + 46.8` over 3 doubles;
+      - no sign change: the reals' least |value| over [a, b] by golden-section search, at 50 and
+        at 100 digits: falling by 20 orders or more, as at a zero, places a zero of even order,
+        `'even'` (`-sin(x0) - 1` over about 10^8 doubles around -pi/2); holding within three
+        orders, as at a positive minimum, places none, `False`.
+    -> `'single'` (the part is zero at this double alone along `name`, ruling 29's point), `'odd'`
+    or `'even'` (a zero placed), `False` (no zero: a region, or a run past the reach), or None
+    (the part is no zero here, or the reals cannot place one): a run it cannot place is no
+    point."""
+    x0 = float(env[name])
+    if not math.isfinite(x0):
+        return None
+
+    def zero_at(x):
+        e = dict(env)
+        e[name] = x
+        with np.errstate(all='ignore'):
+            v = float(d_eval(tree, e))
+        return v == 0.0
+
+    if not zero_at(x0):
+        return None
+    if not zero_at(_ulp_step(x0, 1)) and not zero_at(_ulp_step(x0, -1)):
+        return 'single'
+    ends = []
+    for way in (1, -1):
+        k, last = 1, 0
+        while True:
+            x = _ulp_step(x0, way * k)
+            if not math.isfinite(x) or k > _RUN_REACH:
+                return False
+            if not zero_at(x):
+                break
+            last, k = k, 2 * k
+        while k - last > 1:
+            mid = (last + k) // 2
+            if zero_at(_ulp_step(x0, way * mid)):
+                last = mid
+            else:
+                k = mid
+        ends.append(k)
+    # float64's run sits around the reals' zero up to its own rounding of the part: the reals are
+    # read over the run widened by four times its length on each side
+    width = ends[0] + ends[1]
+    hi, lo = _ulp_step(x0, ends[0] + 4 * width), _ulp_step(x0, -(ends[1] + 4 * width))
+    if not (math.isfinite(hi) and math.isfinite(lo)):
+        return False
+    signs = []
+    for x in (lo, hi):
+        e = dict(env)
+        e[name] = x
+        signs.append(_real_sign(tree, e))
+    if None in signs:
+        return None
+    if 0 in signs or signs[0] != signs[1]:
+        return 'odd'
+    coarse = _real_minimum(tree, env, name, lo, hi, BASE_DPS, 60)
+    fine = _real_minimum(tree, env, name, lo, hi, 2 * BASE_DPS, 140)
+    if coarse is None or fine is None:
+        return None
+    if fine == 0 or fine < coarse * mpf(10) ** -20:
+        return 'even'
+    if fine > coarse * mpf(10) ** -3:
+        return False
+    return None
+
+
+def _zero_parts(tree):
+    """The parts of a parsed side an operation reads as a pole at zero (a divisor, `inv`'s operand,
+    the base of `pow` or `rootn` at a negative literal exponent), and the side itself."""
+    out = [tree]
+    stack = [tree]
+    while stack:
+        t = stack.pop()
+        if t[0] in ('lit', 'slot'):
+            continue
+        head, kids = t[0], t[1:]
+        if head == '/' and len(kids) == 2:
+            out.append(kids[1])
+        elif head == 'inv' and len(kids) == 1:
+            out.append(kids[0])
+        elif head in ('pow', 'rootn') and len(kids) == 2 and kids[1][0] == 'lit':
+            try:
+                if float(kids[1][1]) < 0:
+                    out.append(kids[0])
+            except (TypeError, ValueError):
+                pass
+        stack.extend(kids)
+    return out
+
+
+def run_point(tl, tr, env, guards):
+    """IS FLOAT64'S POINT `env` A ZERO'S POINT BY RULING 33: every part of either side that float64
+    rounds to an exact zero there (`_zero_parts`) lies in a run around an isolated zero of the reals
+    (`zero_run`) along some name of `guards`, or is zero at this double alone? -> None where some
+    part's run is no point (a region, or a run the reals cannot place) or no part is zero; else
+    `'odd'` where a part of the left side an operation reads as a pole changes sign across its
+    run (a two-signed pole of the reals), `'even'` otherwise."""
+    names = [n for n in sorted(guards) if n in env and math.isfinite(float(env[n]))]
+    found, reading = False, 'even'
+    for side, tree in (('l', tl), ('r', tr)):
+        for k, part in enumerate(_zero_parts(tree)):
+            with np.errstate(all='ignore'):
+                try:
+                    v = float(d_eval(part, env))
+                except Exception:  # noqa: BLE001  (a part it cannot read is no zero)
+                    continue
+            if v != 0.0:
+                continue
+            found = True
+            placed = None
+            for name in names:
+                placed = zero_run(part, env, name)
+                if placed in ('single', 'odd', 'even'):
+                    break
+            if placed not in ('single', 'odd', 'even'):
+                return None
+            if side == 'l' and k > 0 and placed == 'odd':
+                reading = 'odd'
+    return reading if found else None
+
+
 def strict_at_the_root(detail):
     """STRICT'S READING OF A STEP NO OPERATION READS ABOVE, the root of an answer: a zero's sign is
     a value where an operation reads it (F7), and nothing reads the root's, so two zeros of opposite
@@ -2775,6 +3000,16 @@ def answer_zero_sign(detail):
     reads. -> True (no such event) or False."""
     return not detail.get('zero_sign_answer') and \
         'turns-on-a-zero-sign' not in (detail.get('zero_sign_kinds') or ())
+
+
+def answer_keeps_poles(detail):
+    """A WHOLE ANSWER'S READING OF A POLE'S INFINITY: where the left side has an infinity at a pole
+    of the reals (no real value there, the pole not two-signed and isolated), the answer keeps it
+    (ruling 32: a one-signed pole keeps its infinity); a change of kind elsewhere is float64's
+    rounding of a step's input, magnified by an operation around the step, which no step promises.
+    `1/sin(x0 + 2*pi)^2 -> 1/sin(x0)^2` keeps it (the answer gains the reals' infinity at x0 = 0),
+    `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` loses it. -> True (no infinity lost) or False."""
+    return not detail.get('pole_lost')
 
 
 def strict_reading(f6, kinds, reals):
@@ -4335,6 +4570,19 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         reading = pole_sign(tl, tr, env, zero_sign_guards)
         return reading is not None and (reading or at_null)
 
+    run_cache = {}
+
+    def run_at(env):
+        """RULING 33 at float64's point `env` (`run_point`): is it a zero's point, every part float64
+        rounds to an exact zero there in a run around an isolated zero of the reals? Cached."""
+        key = tuple(sorted((k, float(v)) for k, v in env.items()))
+        if key not in run_cache:
+            try:
+                run_cache[key] = run_point(tl, tr, env, zero_sign_guards)
+            except Exception:  # noqa: BLE001  (a point it cannot place is no zero's point)
+                run_cache[key] = None
+        return run_cache[key]
+
     def deployed(tl_env, v, point, all_real, snapped, out, owed=False, isolated=False):
         """The f64 lane at one point, on float64's own values: append `(kind, point)` to
         `out['bad']` / `out['div']`; an extension on a lower-dimensional cell is clause (b)'s,
@@ -4386,6 +4634,20 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     out['kinds'].add('TWO-SIGNED-POLE')
                     out['read'] += 1
                     return
+                run = None if isolated else run_at(tl_env)
+                if run is not None:
+                    # A RUN OF DOUBLES AROUND AN ISOLATED ZERO OF THE REALS IS THAT ZERO'S POINT
+                    # (ruling 33): float64 rounds the part to an exact zero on every double of it,
+                    # and the readings of an isolated pole apply on the whole run, `1/(-sin(x0) -
+                    # 1) -> -1/(sin(x0) + 1)` on about 10^8 doubles around -pi/2
+                    if pole_sign_at(tl_env, True):
+                        out['kinds'].add('POLE-SIGN')
+                        out['read'] += 1
+                        return
+                    if run == 'odd':
+                        out['kinds'].add('TWO-SIGNED-POLE')
+                        out['read'] += 1
+                        return
             if not exact_point and not in_range[0] and not snapped and v == 'eq':
                 # THE f64 STANDARD: an operation of either side overflowed or underflowed,
                 # and the rewrite gives the true value -- an agreeing observation
@@ -4411,10 +4673,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     # zero's sign there and the other's does not: strict's reading of a zero's
                     # sign, which refuses strict alone
                     event = zero_sign_at(tl_env)
-                    if event is not None:
+                    if event is not None and run_at(tl_env) is None:
                         out['zero_sign'].append((event, point))
                 elif not held and not exact_point and not isolated \
-                        and zero_sign_at(tl_env, answer=True) is not None:
+                        and zero_sign_at(tl_env, answer=True) is not None and run_at(tl_env) is None:
                     # a whole answer's reading of a zero's sign in its context, where float64's
                     # kinds differ too (`answer_zero_sign`)
                     out['zero_sign_answer'].append(point)
@@ -4422,12 +4684,24 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     out['kind_unread'].append(point)
                 elif not held:
                     out['kind_bad'].append((dv, point))
+                if dv == 'INF-CHANGE' and math.isinf(float(_dl)) and math.isfinite(float(_dr)) \
+                        and not exact_point and not isolated:
+                    # AN INFINITY THE ANSWER LOSES AT A POLE OF THE REALS: the left side has no
+                    # real value here (a two-signed pole was read above), so float64's infinity is
+                    # no rounding a further operation magnified, and a one-signed pole keeps it
+                    # (ruling 32): `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` at x0 = 0
+                    try:
+                        no_value = not always_valued[0] and _no_real_value(tl, tl_env)
+                    except Exception:  # noqa: BLE001  (a point it cannot read is no such point)
+                        no_value = False
+                    if no_value:
+                        out['pole_lost'].append(point)
             elif _dl == 0 and _dr == 0 and math.copysign(1.0, _dl) != math.copysign(1.0, _dr):
                 out['kinds'].add('ZERO-SIGN')
                 # F6 reads the two zeros as one; strict reads their signs where they differ on
                 # a region
                 event = None if (exact_point or isolated) else zero_sign_at(tl_env)
-                if event is not None:
+                if event is not None and run_at(tl_env) is None:
                     out['zero_sign'].append((event, point))
             # ENGINE-MISALIGN keeps its gate: the contract agrees, every binding real, and
             # a few-ULP rounding is no divergence
@@ -4443,7 +4717,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 'bad': [], 'div': [], 'seen': False, 'oor': 0, 'finite_f64': False,
                 'kind_bad': [], 'kind_unread': [],
                 'kinds': set(), 'null': 0, 'read': 0, 'unread': 0,
-                'perm_unread': [], 'owed_unread': [], 'zero_sign': [], 'zero_sign_answer': [],
+                'perm_unread': [], 'owed_unread': [], 'zero_sign': [], 'zero_sign_answer': [], 'pole_lost': [],
                 'float_kills': []}
 
     def valued_at(env):
@@ -4532,7 +4806,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         return owes_cache[key]
 
     vacuous, owed_keys = [], set()
-    zero_sign_events, zero_sign_answer = [], []
+    zero_sign_events, zero_sign_answer, pole_lost = [], [], []
     # the float-resolution reading's counterexamples where the reals give both sides a value
     float_kills = []
     ext_where = []
@@ -4561,6 +4835,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         if owes['f64']:
             zero_sign_events.extend(acc['zero_sign'])
             zero_sign_answer.extend(acc['zero_sign_answer'])
+            pole_lost.extend(acc['pole_lost'])
             dep_bad.extend(acc['bad'])
             dep_kind_bad.extend(acc['kind_bad'])
             dep_kind_unread.extend(acc['kind_unread'])
@@ -5278,6 +5553,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         # a whole answer's reading of a zero's sign in its context (`answer_zero_sign`), where
         # float64's kinds differ: the points
         base['zero_sign_answer'] = zero_sign_answer[:3]
+    if pole_lost:
+        # the points where the answer loses an infinity the left side has at a pole of the reals
+        # (`answer_keeps_poles`)
+        base['pole_lost'] = pole_lost[:3]
     if zero_sign_events:
         # strict's reading of a zero's sign (`zero_sign_refusal`): where it refused, and why
         base['zero_sign'] = zero_sign_events[:3]

@@ -33,9 +33,6 @@ def test_strict_reads_an_infinity_at_an_isolated_pole_up_to_its_sign(lhs, rhs) -
 
 #: Refused: the sign of an infinity on a region, and a change of kind at a pole.
 REFUSED = [
-    # float64 lands on the zero at fl(log 2) and at its neighbours, where exp is 2.0 too: no
-    # isolated point
-    ('neg inv - exp x0 2', 'inv - 2 exp x0', 'INF-CHANGE'),
     # +inf against -inf for every x0 > 0, and -inf against +inf for every x0 < 0
     ('inv * 0 x0', '/ float("-inf") x0', 'INF-CHANGE'),
     # 1 against -1 for every x0 > 0, where the reals give neither side a value
@@ -101,3 +98,41 @@ def test_the_poles_of_a_side() -> None:
     # a product's factors carry its zero
     got = probes('inv * - x1 3.5 - 3.5 x1')
     assert len(got) == 3 and got[0][0] == '*', got
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    # float64's sin(x0) is exactly -1 on about 10^8 doubles around -pi/2, its cos(x0) exactly -1
+    # around pi: each run lies around a zero of the reals (of even order), and is its point, where
+    # an infinity's sign is open
+    ('inv - neg sin ?0 1', 'neg inv + sin ?0 1'),
+    ('inv - neg cos ?0 1', 'neg inv + cos ?0 1'),
+    # float64's exp is 2.0 at fl(log 2) and at its neighbours: a run around log 2, its point
+    ('neg inv - exp x0 2', 'inv - 2 exp x0'),
+    # three doubles where float64's divisor is exactly 0 around a simple zero of the reals
+    ('inv - * -23.918005637790476 sin + * 0.0082535 ?0 11.865502713421696 23.60396315341633',
+     'neg inv + * 23.918005637790476 sin + * 0.0082535 ?0 11.865502713421696 23.60396315341633'),
+])
+def test_a_run_of_doubles_around_a_zero_of_the_reals_is_its_point(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert (r['realised'], r['tier']) == (True, 'core'), r
+
+
+@pytest.mark.parametrize('lhs, rhs', [
+    # float64's tanh(x0) is exactly 1 past 19.06, where the reals have no zero of tanh(x0) - 1:
+    # a region, where the two infinities part
+    ('inv - tanh ?0 1', 'neg inv - 1 tanh ?0'),
+    # 0*asin(x0) is zero on a region of the reals
+    ('* 0 asin ?0', '* 0 acos ?0'),
+])
+def test_a_run_without_a_zero_of_the_reals_is_a_region(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['tier'] != 'core', r
+
+
+def test_the_reals_place_a_run() -> None:
+    def run(tokens, at):
+        return _contract.zero_run(_contract.parse(tokens.split(), number=True), {'?0': at}, '?0')
+    assert run('+ sin ?0 1', -1.5707963267948966) == 'even'
+    assert run('- tanh ?0 1', 20.0) is False
+    assert run('- ?0 3', 3.0) == 'single'
+    assert run('- ?0 3', 2.0) is None

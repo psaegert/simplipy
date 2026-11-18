@@ -74,7 +74,14 @@ every x0 > 0) does not. Where the pole is two-signed -- its infinity takes both 
 near the isolated point -- float64's value there is not promised at all: the point has no value,
 and an answer may take any value there, its limit included, as `x0/x0 -> 1` does at 0. So
 `1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `f64` (+inf against 0 at x0 = 3), while
-`1/(x0 - 3)^2`, +inf on both sides of 3, keeps its infinity. A kernel's NaN is
+`1/(x0 - 3)^2`, +inf on both sides of 3, keeps its infinity. A point may be a run of doubles:
+where float64 rounds a part to an exact zero on consecutive doubles around an isolated zero of the
+reals, the run is that zero's point, and these readings apply on all of it, so
+`1/(-sin(x0) - 1) -> -1/(sin(x0) + 1)` holds (float64's sin(x0) is exactly -1 on about 10^8
+doubles around -pi/2); a run where the reals have no zero is a region, so
+`1/(tanh(x0) - 1) -> -1/(1 - tanh(x0))` is refused (float64's tanh(x0) is exactly 1 past 19.06).
+The reals place a run's zero by a sign change across it, or by its least |value| falling with the
+precision; a run they cannot place is no point. A kernel's NaN is
 float64's value, not a range event (`besseli(1, x)` is NaN for 0 < |x| <= 2.2e-308). The
 second reading admits the identities float64 only rounds, however far a jump or a pole
 magnifies the rounding, and nothing false in the reals:
