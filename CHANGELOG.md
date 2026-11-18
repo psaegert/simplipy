@@ -186,7 +186,8 @@ organised by who you are, then the highlights, then every change in detail.
   `1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `f64` (+inf against 0 at x0 = 3). A one-signed pole
   keeps its infinity, of either sign (`1/(x0 - 3)^2 -> 0` is refused), and a `_` slot, which can
   bind a part that is zero on a region, isolates no pole (`1/(_0 - 3) + 1/(3 - _0) -> 0` is
-  refused).
+  refused). `(x1 + x2)/x0 -> x1/x0 + x2/x0` now holds in `f64`: the right side has no value at
+  x0 = 0 where x1 and x2 differ in sign, the left side's isolated two-signed pole.
 - **`f64` measures no extension where a side respells the other.** Where the whole left side
   occurs on the right side under operations that keep it undefined, up to the order of a sum's,
   a product's, a `max`'s or a `min`'s operands, neither side has a value where the other has

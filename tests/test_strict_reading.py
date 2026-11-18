@@ -186,12 +186,14 @@ def test_a_dollar_slots_zero_is_read() -> None:
     assert r['realised'] is False and r['tier'] == 'reject', r
 
 
-def test_a_pattern_and_its_instance_are_refused_alike() -> None:
+def test_a_pattern_is_refused_at_an_infinite_binding_its_instance_holds_at_its_pole() -> None:
     """`a*(b + c) -> a*b + a*c` with `a` a `!` slot: at a = -inf, b = -1.7, c = +inf the left side
     is -inf and the right side -inf*(-1.7) + -inf*inf has no value. Its instance
-    `(x1 + x2)/x0 -> x1/x0 + x2/x0` likewise at x0 = 0, x1 + x2 nonzero."""
+    `(x1 + x2)/x0 -> x1/x0 + x2/x0` has no value on the right side at x0 = 0 where x1 and x2 differ
+    in sign, an isolated two-signed pole of the left side, where strict promises no value."""
     r = verify_rule('* !0 + _1 _2'.split(), '+ * !0 _1 * !0 _2'.split())
     assert r['realised'] is False, r
     assert any(abs(p['!0']) == float('inf') for _, p in r['unrealised']), r
     r = verify_rule('/ + x1 x2 x0'.split(), '+ / x1 x0 / x2 x0'.split())
-    assert r['realised'] is False, r
+    assert r['realised'] is True and r['tier'] == 'core', r
+    assert 'TWO-SIGNED-POLE' in r['f64_kinds'], r
