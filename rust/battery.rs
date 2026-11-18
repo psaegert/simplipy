@@ -1291,6 +1291,56 @@ pub fn f64_magnitudes_mint(
     true
 }
 
+/// THE PERMISSIVE MAGNITUDE LADDER AT THE MINT, read in the reals: the probes of
+/// `f64_magnitudes_mint` (along each variable either side uses, every magnitude of
+/// `table::F64_MAGNITUDES` in both signs, the other variables at 1.7 and then at -1.3), each read
+/// as permissive reads a point (P3, `point_reading`: both sides' real values as the doubles nearest
+/// to them). A probe refutes where the reals' doubles differ (F6), unless the left side alone has
+/// no value there (permissive may give one); an unread probe passes. `floor(atan(atan(x))) ->
+/// floor(erf(x))` is refuted at x = -1e5, -2 against -1 in the reals (the sides part at
+/// |x| = 74.69), a finite difference f64's ladder leaves to the judge; float64's erf is exactly 1.0
+/// from 5.9, where the reals still agree. A pair holding a `<constant>` is left to the judge, as
+/// f64's ladder leaves it. The mint reads it as
+/// permissive's own check: where it refutes, f64's lane may still certify the pair, which
+/// permissive serves (`worker::Lanes::certify`).
+pub fn permissive_magnitudes_mint(
+    lhs: &[String],
+    rhs: &[String],
+    var_names: &[String],
+    ops: &Operators,
+) -> bool {
+    use crate::interval::FloatReading;
+    if lhs.iter().chain(rhs).any(|t| t == "<constant>") {
+        return true;
+    }
+    let used: Vec<usize> = (0..var_names.len())
+        .filter(|&i| lhs.iter().chain(rhs).any(|t| *t == var_names[i]))
+        .collect();
+    let agree = |a: f64, b: f64| crate::table::f64_agree(a, b) == crate::table::Cmp::Eq;
+    for cfg in [1.7f64, -1.3] {
+        for &v in &used {
+            for &m in &crate::table::F64_MAGNITUDES {
+                for x in [m, -m] {
+                    let atoms: Vec<ProbeAtom> = (0..var_names.len())
+                        .map(|i| ProbeAtom::Val(if i == v { x } else { cfg }))
+                        .collect();
+                    let refuted = match point_reading(lhs, &[], rhs, &[], ops, var_names, &atoms) {
+                        FloatReading::Agree | FloatReading::Unread => false,
+                        FloatReading::Differ => true,
+                        FloatReading::Doubles(a, b) => {
+                            !(agree(a, b) || (a.is_nan() && !b.is_nan()))
+                        }
+                    };
+                    if refuted {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Is float64's extension at `row` -- the left side undefined, the right side a value -- ISOLATED,
 /// a null set of the data (ruling 15)? It is where, along some variable of `along`, the
 /// neighbouring doubles on both sides are no extension: the left side has a value there, or the
@@ -1676,6 +1726,36 @@ mod deployed_bar_tests {
 
     fn s(t: &str) -> Vec<String> {
         t.split(' ').map(String::from).collect()
+    }
+
+    /// Permissive's magnitude ladder reads the reals: float64 reads floor(atan(atan(x))) ->
+    /// floor(erf(x)) backwards (erf is -1.0 from -5.9, and float64's two sides differ there by a
+    /// finite step, the judge's to decide), while the reals give -2 against -1 at every magnitude
+    /// past 74.69 below zero; the laws of the reals pass, and so does a left side alone without a
+    /// value.
+    #[test]
+    fn the_permissive_ladder_reads_the_reals() {
+        let e = crate::engine::Engine::from_strs(
+            include_str!("../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let ops = e.operators_ref();
+        let v = s("x0 x1");
+        let (l, r) = (s("floor atan atan x0"), s("floor erf x0"));
+        assert!(f64_magnitudes_mint(&l, &r, &v, ops));
+        assert!(!permissive_magnitudes_mint(&l, &r, &v, ops));
+        for (l, r) in [
+            ("log exp x0", "x0"),
+            ("/ x0 x0", "1"),
+            ("sinh asinh x0", "x0"),
+            ("+ x0 x1", "+ x1 x0"),
+        ] {
+            assert!(
+                permissive_magnitudes_mint(&s(l), &s(r), &v, ops),
+                "{l} -> {r}"
+            );
+        }
     }
 
     /// The bar refuses the laws of the reals that float64 breaks at a jump or a pole, and passes

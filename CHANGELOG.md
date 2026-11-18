@@ -2212,6 +2212,10 @@ model predictions.
   - The `f64` mint reads the judge's magnitude ladder (one ladder, `table::F64_MAGNITUDES`):
     `sinh(asinh(x0)) -> x0` and its compositions, 66 units in the last place apart at 1e100,
     are no longer proposed in `f64`.
+  - The `permissive` mint reads the same ladder in the reals, at float resolution:
+    `floor(atan(atan(x0))) -> floor(erf(x0))`, -2 against -1 in the reals at x0 = -1e5 (the sides
+    part at |x0| = 74.69), is no longer proposed in `permissive`. Where the ladder refutes a pair,
+    `f64`'s lane may still certify it, which `permissive` serves.
   - The special points are read in each mode's values: `f64` reads float64 at their doubles and
     the reals only for a true value where an operation overflows or underflows; `permissive`
     reads the reals at the points themselves at float resolution, at every point:

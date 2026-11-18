@@ -2621,6 +2621,23 @@ impl<'s> Lanes<'s> {
                 accept_resolved,
             )
         });
+        // permissive's own reading answers to its magnitude ladder in the reals too
+        // (`battery::permissive_magnitudes_mint`); where the ladder refutes, f64's lane may still
+        // certify the pair below
+        let own = match own {
+            Some(Ok(c))
+                if matches!(self.lane.0, crate::engine::RuleMode::Permissive)
+                    && !crate::battery::permissive_magnitudes_mint(
+                        self.source,
+                        &c.tokens,
+                        self.var_names,
+                        self.ops,
+                    ) =>
+            {
+                Some(Err(("magnitudes", c.tokens)))
+            }
+            other => other,
+        };
         if let Some(Ok(c)) = own {
             return Ok(c);
         }

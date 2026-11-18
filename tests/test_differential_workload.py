@@ -53,8 +53,8 @@ FIT = dict(challenges=8, retries=8, rtol=1e-11, atol=1e-12, min_informative=N_RO
 VERDICTS = {
     'reach': 'N', 'finite_rows': 'N', 'rows': 'N', 'fit': 'N', 'domain_gate': 'N',
     'special_points': 'N', 'special_constants': 'N', 'dirac': 'N', 'resolved_rows': 'N',
-    'evaluable': 'N', 'not_realised': 'N', 'unconfirmed': 'N', 'pole-class-change': 'N',
-    'ground_value': 'N',
+    'evaluable': 'N', 'not_realised': 'N', 'magnitudes': 'N', 'unconfirmed': 'N',
+    'pole-class-change': 'N', 'ground_value': 'N',
     'domain_undecided': 'U', 'blind': 'U',
     'variable_mask': 'well_formed', 'constant_count': 'constant_count',
     'resolution': 'constant_count', 'ground_composite': 'ground_composite',
@@ -332,16 +332,15 @@ def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
 # Assertion 2: every rule the mint accepts is licensed.
 # ------------------------------------------------------------------------------------------
 #: The picks the mint accepts on its rows that the judge refutes past them, by mode and up to the
-#: names of their slots, each with where the two sides part. Permissive's mint reads no magnitude
-#: ladder beyond its rows, as f64's does (`battery::f64_magnitudes_mint`). The draw follows the
-#: canonical sources, so each is checked on its own source, where the mint must still pick it and
-#: the judge must still refute it.
-BEYOND_THE_ROWS = {
+#: names of their slots, each with where the two sides part. Each mode's mint reads the judge's
+#: magnitude ladder beyond its rows, f64's in float64 (`battery::f64_magnitudes_mint`) and
+#: permissive's in the reals (`battery::permissive_magnitudes_mint`), so
+#: `floor(atan(atan(x0))) -> floor(erf(x0))`, -2 against -1 in the reals at x0 = -1e5, is no
+#: longer picked. The draw follows the canonical sources, so each is checked on its own source,
+#: where the mint must still pick it and the judge must still refute it.
+BEYOND_THE_ROWS: dict = {
     'f64': {},
-    'permissive': {
-        ('floor atan atan ?0', 'floor erf ?0'):
-            'from x0 = 74.7 atan(atan(x0)) passes 1, while erf(x0) stays below 1 in the reals',
-    },
+    'permissive': {},
 }
 
 
