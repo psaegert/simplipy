@@ -1954,6 +1954,26 @@ def test_the_monitor_reads_a_fold_as_a_step() -> None:
                     'pow ?0 2').split(), read
     assert len(used) == 2 and all(True in held(_monitor._fold_rules(f)) for f in used)
     assert judge_rule(lhs, read)['verdict'] in ('CERTIFIED', 'ENGINE-MISALIGN')
+    # an expansion's coefficient: the engine holds the signed sum of five products the folds wrote
+    # exactly, then writes it at its double; the coefficient reads as those five folds
+    from decimal import Decimal, localcontext
+    from fractions import Fraction
+    pairs = [('0.1234567', '1.1'), ('0.2345678', '2.2'), ('0.3456789', '3.3'),
+             ('0.4567891', '4.4'), ('0.5678912', '5.5')]
+    signs = [1, 1, -1, 1, 1]
+    written = [repr(float(Fraction(float(a)) * Fraction(float(b)))) for a, b in pairs]
+    with localcontext() as ctx:
+        ctx.prec = 200
+        exact = sum(Decimal(s) * Decimal(w) for s, w in zip(signs, written))
+    term = ['*', pairs[0][0], pairs[0][1]]
+    for s, (a, b) in zip(signs[1:], pairs[1:]):
+        term = ['+' if s > 0 else '-'] + term + ['*', a, b]
+    lhs, rhs = ['*'] + term + ['?0'], ['*', repr(float(exact)), '?0']
+    folds = [('*', [[a], [b]], [w]) for (a, b), w in zip(pairs, written)]
+    folds.append(('literal', [[format(exact, 'f')]], [repr(float(exact))]))
+    read_lhs, read, used = _monitor._unfolded(lhs, rhs, folds)
+    assert len(used) == 6 and all(True in held(_monitor._fold_rules(f)) for f in used), used
+    assert judge_rule(lhs, read)['verdict'] in ('CERTIFIED', 'ENGINE-MISALIGN'), read
 
 
 def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
@@ -2087,6 +2107,47 @@ def test_the_monitor_refuses_a_whole_answer_that_turns_on_a_zeros_sign() -> None
     bare = SimpliPyEngine(operators=ops, rules=[])
     verdict, detail = judge_pair('atan2 * 0 x0 -1'.split(), ['np.pi'], engine=bare)
     assert verdict == 'VIOLATION' and "turns on a zero's sign" in detail, detail
+    # and under a reader: 1/(-0) against 1/(+0) for x0 < 0
+    verdict, _ = judge_pair('inv * 0 asin x0'.split(), 'inv * 0 acos x0'.split(), engine=bare)
+    assert verdict == 'VIOLATION'
+
+
+def test_around_a_held_step_the_monitor_keeps_poles_and_a_regions_zero_sign() -> None:
+    # sin(x0) -> sin(x0 + 2*pi) holds as a step (0 against -2.4e-16 at x0 = 0); around it the answer
+    # gains the reals' infinity at x0 = 0 in one direction, and loses it in the other, where the
+    # left side's pole is one-signed and keeps its infinity
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    gains = judge_pair('inv pow sin + x0 * 2 np.pi 2'.split(), 'inv pow sin x0 2'.split(), engine=bare)
+    assert gains[0] == 'OK', gains
+    verdict, detail = judge_pair('inv pow sin x0 2'.split(), 'inv pow sin + x0 * 2 np.pi 2'.split(),
+                                 engine=bare)
+    assert verdict == 'VIOLATION' and 'pole of the reals' in detail, detail
+    # tanh(x0) - 1 is +0 for every x0 past 19.06 and -(1 - tanh(x0)) is -0: a part is no root, and
+    # under 1/ the two infinities part on a region
+    verdict, detail = judge_pair('inv - tanh x0 1'.split(), 'neg inv - 1 tanh x0'.split(), engine=bare)
+    assert verdict == 'VIOLATION', detail
+
+
+def test_the_monitor_reads_no_zeros_sign_at_the_root_or_at_isolated_points() -> None:
+    # (x1*log(x3)/sin(x2) - x1)*sin(x2) -> x1*(log(x3) - sin(x2)): the two zeros differ where
+    # float64's log(x3) and sin(x2) are equal (+0 against -0 at (-1, 1.5707963267948966, e)), at the
+    # answer's root, which no operation reads; the f64 lane names the kind, and it is no refusal
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    src = '* - / * x1 log x3 sin x2 x1 sin x2'.split()
+    out = '* x1 - log x3 sin x2'.split()
+    assert 'ZERO-SIGN' in judge_rule(src, out)['f64_kinds']
+    verdict, detail = judge_pair(src, out, engine=bare)
+    assert verdict == 'OK', detail
+    # a rule stays held to the region's zero sign: it may be applied under a reader
+    for lhs, rhs in (('* 0 asin x0', '* 0 acos x0'), ('ceil mod x0 -1', '0'),
+                     ('atan2 * 0 x0 -1', 'np.pi')):
+        assert judge_rule(lhs.split(), rhs.split())['tier'] != 'core', (lhs, rhs)
 
 
 def test_the_monitor_does_not_hold_an_infinitys_sign_at_an_isolated_pole() -> None:

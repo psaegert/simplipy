@@ -72,6 +72,7 @@ Importable API:
   * :func:`selftest`    -- poison self-test (returns True iff every poison is caught).
   * :func:`monitor`     -- top-level driver (optional self-test, then the main sweep).
 """
+import itertools
 import json
 import os
 import re
@@ -122,9 +123,13 @@ _REALS_UNDECIDED = ('NO-WITNESS', 'UNRESOLVED-COVERAGE', 'UNSUPPORTED-SHAPE', 'J
 #: set, `x/x -> 1` at 0), an infinity's sign at an isolated pole, which strict does not promise
 #: (`1/(-x0 - 3) -> -1/(x0 + 3)`, +inf against -inf at x0 = -3 alone), and any value where the input
 #: has an isolated two-signed pole, which counts as a point without a value
-#: (`1/(x0 - 3) + 1/(3 - x0) -> 0`, +inf against 0 at x0 = 3). Not a zero's sign on a region (F7:
-#: `0 + (-0)` is +0) or an infinity gained or lost elsewhere.
-_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN', 'TWO-SIGNED-POLE'})
+#: (`1/(x0 - 3) + 1/(3 - x0) -> 0`, +inf against 0 at x0 = 3). Two zeros of opposite sign
+#: (`ZERO-SIGN`, which the f64 lane names at every point where the two sides' zeros differ) are
+#: one value where nothing reads them: at isolated points, and at the answer's root, which no
+#: operation reads (F7); a zero's sign on a region under an operation that reads it is read
+#: apart (`_contract.answer_zero_sign`): `atan2(0*x0, -1) -> pi` stays refused. Not an infinity
+#: gained or lost elsewhere.
+_F8_KINDS = frozenset({'ROUNDING', 'SIGN', 'EXT', 'POLE-SIGN', 'TWO-SIGNED-POLE', 'ZERO-SIGN'})
 
 
 def _trace(inp, mode, engine):
@@ -208,6 +213,13 @@ def _fold_rules(fold):
     return [(list(operands[0]) if operands else [], written)]
 
 
+#: The most candidates (recorded fold outputs, the most recent first, then input literals) a number
+#: held between folds is read as a sum or a product of (`_unfolded`): signed sums and products of up
+#: to six of them are searched, three a side (with 64, at most 333,312 signed sums and 41,664
+#: products of three in a table, built once per rewrite).
+_MADE_OF_CANDIDATES = 64
+
+
 def _unfolded(lhs, rhs, folds):
     """THE REWRITE WITH ITS FOLDS READ AS STEPS. The engine reads a literal of the input that a
     double does not hold at its double (`literal`, a fold of its own), and its exact algebra then
@@ -215,11 +227,13 @@ def _unfolded(lhs, rhs, folds):
     of `rhs` that the input so read does not hold (up to its sign) is read as the numbers it was
     made of: where a fold wrote it, as the numbers it was folded from -- their operation (`*`, `+`)
     or the one number (`literal`, `ground`) as the engine held it before it wrote the number, its
-    sign the written number's; where no fold wrote it, as the exact product or sum of two or three
-    numbers the engine held (the input's, a fold's, a term's unit coefficient: the engine holds
+    sign the written number's; where no fold wrote it, as the exact product or sum of two numbers
+    the engine held (the input's, a fold's, a term's unit coefficient: the engine holds
     `x - 0.05523072428633124*(2.0417762114714635*x)` as `0.88723122100982965*x`, which is
-    `1 - 0.11276877899017035`, the fold of the two literals), which is the number itself, so the
-    reading changes no value -- and so on, through the numbers those were made of. Then the rewrite reads
+    `1 - 0.11276877899017035`, the fold of the two literals), else as a signed sum or a product of
+    three to six of the recorded fold outputs and input literals (an expansion's coefficient is
+    the exact sum of the products the folds wrote; `_MADE_OF_CANDIDATES`), which is the number
+    itself, so the reading changes no value -- and so on, through the numbers those were made of. Then the rewrite reads
     as the engine's own algebra, which is exact, and each fold is a step of its own
     (`_fold_rules`). -> `(lhs, rhs, [fold used])`, or None where no number was folded; the last
     fold that wrote a number is the one read."""
@@ -279,15 +293,44 @@ def _unfolded(lhs, rhs, folds):
     spelled.setdefault(Fraction(1), '1')  # a term's unit coefficient: `x - c*x` is `(1 - c)*x`
     members = {s * v for v in spelled if v != 0 for s in (1, -1)}
     pool = sorted(members, key=lambda v: (v < 0, abs(v)))  # the positive ones first, smallest first
-    products = {}
+    # the candidates of a longer sum or product: the fold outputs the trace records, the most
+    # recent first, then the input's literals and the numbers folds were made of
+    recent = [abs(v) for _, _, written in reversed(folds) for t in written
+              if (v := value(t)) is not None]
+    recent += [abs(v) for node in _contract._nodes(tl) if not node[1]
+               and (v := value(node[0])) is not None]
+    recent += [abs(v) for _, operands, _ in folds for tokens in operands for t in tokens
+               if (v := value(t)) is not None]
+    candidates = [v for v in dict.fromkeys(recent) if v not in (0, 1)][:_MADE_OF_CANDIDATES]
+    tables, products = {}, {}
 
     def number(v):
         if v in spelled:
             return (spelled[v], ())
         return ('neg', ((spelled[-v], ()),))
 
+    def table(op):
+        """{value: ((candidate index, sign), ...)} of the signed sums (`+`) or the products (`*`)
+        of one, two and three distinct candidates, by their count, built once."""
+        if op not in tables:
+            by_count = [None, {}, {}, {}]
+            for k in (1, 2, 3):
+                for chosen in itertools.combinations(range(len(candidates)), k):
+                    for signs in (itertools.product((1, -1), repeat=k) if op == '+' else [(1,) * k]):
+                        if op == '+':
+                            v = sum((g * candidates[i] for g, i in zip(signs, chosen)), Fraction(0))
+                        else:
+                            v = Fraction(1)
+                            for i in chosen:
+                                v *= candidates[i]
+                        by_count[k].setdefault(v, tuple(zip(chosen, signs)))
+            tables[op] = by_count
+        return tables[op]
+
     def made_of(v):
-        """The exact product or sum of two numbers the engine held that is `v`, else of three."""
+        """The exact product or sum of two numbers the engine held that is `v`, else their product
+        of three; else a signed sum or a product of three to six candidates, found by meeting in the
+        middle (three a side)."""
         for op, rest in (('*', lambda a: v / a), ('+', lambda a: v - a)):
             for a in pool:
                 b = rest(a)
@@ -302,6 +345,25 @@ def _unfolded(lhs, rhs, folds):
             ab = products.get(v / c)
             if ab is not None and abs(c) != abs(v) and all(abs(x) != abs(v) for x in ab):
                 return ('*', (('*', (number(ab[0]), number(ab[1]))), number(c)))
+        for op in ('+', '*'):
+            target, by_count = (v if op == '+' else abs(v)), table(op)
+            for total in range(3, 2 * 3 + 1):
+                for a in range(1, total // 2 + 1):
+                    if total - a > 3:
+                        continue
+                    for left_value, left in by_count[a].items():
+                        if op == '*' and left_value == 0:
+                            continue
+                        right = by_count[total - a].get(
+                            target - left_value if op == '+' else target / left_value)
+                        if right is None or {i for i, _ in left} & {i for i, _ in right} or \
+                                any(candidates[i] == abs(v) for i, _ in left + right):
+                            continue
+                        terms = [number(g * candidates[i]) for i, g in left + right]
+                        expr = terms[0]
+                        for t in terms[1:]:
+                            expr = (op, (expr, t))
+                        return ('neg', (expr,)) if op == '*' and v < 0 else expr
         return None
 
     reading = {}
@@ -509,7 +571,6 @@ def _factor_pairings(lhs, rhs, limit=64):
     factor that divides is read under its reciprocal. Where a sum changed as many terms on each
     side (`_terms`), each pairing of its terms, a pair's signs read on the pair. -> `[[(part_l,
     part_r)]]` as prefix tokens, at most `limit` pairings."""
-    import itertools
     parts = _changed_parts(lhs, rhs, factors=False)
     try:
         node_l, node_r = (_signs_spelled_alike(_contract._term(t)) for t in parts[-1])
@@ -576,18 +637,23 @@ def _changed_factors(node_l, node_r):
     return [(a, b) for a, b in out if (a, b) != (node_l, node_r)]
 
 
-def _held(detail, name, engine, exact_steps):
+def _held(detail, name, engine, exact_steps, part=False):
     """The mode's reading of the judged rewrite `detail` (`judge_pair`, its steps' verdicts
     `exact_steps` read already): `(verdict, why, kinds)`, where `kinds` names float64's events
     where a change of kind beyond rounding's alone refused a rewrite true in the reals (F8), else
     None: a refusal that names no event, or beside an undecided measure of float64's extension,
-    is read as it stands."""
+    is read as it stands. A `part` of an answer is no root: its context may read its zero's
+    sign, so a zero's sign on a region refuses it (ruling 29), as it refuses a rule."""
     from . import MODE_TIERS, effective_tier
     verdict, tier = detail.get('verdict'), effective_tier(detail)
     if tier in MODE_TIERS[name] or _reading(detail, name) is True:
         # a fully numeric rewrite holds where the mode's own reading of its value holds
         return 'OK', f'{verdict} ({tier})', None
-    if name == 'f64' and not detail.get('ground') and _contract.strict_at_the_root(detail) is True:
+    if name == 'f64' and part and detail.get('zero_sign_refused'):
+        return 'VIOLATION', (f'F8: {verdict} ({tier}), a zero\'s sign on a region, which the '
+                             f'context may read: {str(detail.get("zero_sign"))[:160]}'), None
+    if name == 'f64' and not part and not detail.get('ground') \
+            and _contract.strict_at_the_root(detail) is True:
         # no operation reads the root's zero's sign (F7)
         return 'OK', (f'{verdict} ({tier}): strict at the root, two zeros of opposite sign one '
                       f'value there'), None
@@ -708,12 +774,12 @@ def _with_folds(lhs, rhs, folds, name, engine, exact_steps, verdict, why):
     return verdict, f'{why}; with its folds read as steps: {read_verdict}: {read_why[:200]}'
 
 
-def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0):
+def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0, part=False):
     """The mode's reading of a whole answer `lhs -> rhs` judged as `detail` (`judge_pair`, its
     steps' verdicts read already): `_held`, and where float64's kinds alone refuse an answer true
     in the reals, the smallest changed part that holds as a step, around which only a zero's sign
     is read. -> `(verdict, why)`."""
-    verdict, why, kinds = _held(detail, name, engine, exact_steps)
+    verdict, why, kinds = _held(detail, name, engine, exact_steps, part=part)
     if kinds is None:
         return verdict, why
     # float64's kinds alone refuse a rewrite true in the reals: each step is held at its own
@@ -733,8 +799,8 @@ def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0):
                 held[key] = 'UNSCORED', f'{type(error).__name__}: {error}'
             else:
                 held[key] = _whole_answer(list(part_lhs), list(part_rhs), part, name, engine,
-                                          exact_steps, depth + 1) if in_context \
-                    else _held(part, name, engine, exact_steps)[:2]
+                                          exact_steps, depth + 1, True) if in_context \
+                    else _held(part, name, engine, exact_steps, part=True)[:2]
         return held[key]
 
     first_why = None
@@ -764,6 +830,11 @@ def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0):
         return 'VIOLATION', (f'F8: a zero\'s sign under an operation that reads it, around '
                              f'{said}: '
                              f'{str(detail.get("zero_sign_answer") or detail.get("zero_sign"))[:160]}')
+    if name == 'f64' and _contract.answer_keeps_poles(detail) is False:
+        # around a held step a change of kind is float64's rounding of its input, but where the
+        # left side has an infinity at a pole of the reals the answer keeps it (ruling 32)
+        return 'VIOLATION', (f'F8: an infinity the left side has at a pole of the reals, lost '
+                             f'around {said}: {str(detail.get("pole_lost"))[:160]}')
     return 'OK', f'F8: {said} holds ({part_why}); around it float64 {kinds} from rounding'
 
 
