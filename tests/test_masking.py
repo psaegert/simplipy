@@ -46,6 +46,14 @@ class TestRoleClassification:
             # ...while the BASE stays a value position: its coefficients are fittable.
             (["pow", "<mul>", "2", "x0", "</mul>", "3"],
              [("2", masking.Role.COEFFICIENT), ("3", masking.Role.EXPONENT)]),
+            # The typed role reaches through the functions, powers, roots and orders inside
+            # the subtree: each literal there still decides the domain.
+            (["pow", "x0", "abs", "2"], [("2", masking.Role.EXPONENT)]),
+            (["pow", "x0", "sin", "<mul>", "2", "x1", "</mul>"], [("2", masking.Role.EXPONENT)]),
+            (["pow", "x0", "pow", "2", "x1"], [("2", masking.Role.EXPONENT)]),
+            (["rootn", "x0", "abs", "pow", "x1", "3"], [("3", masking.Role.ROOT_INDEX)]),
+            (["pow", "x0", "rootn", "2", "3"],
+             [("2", masking.Role.EXPONENT), ("3", masking.Role.EXPONENT)]),
         ]
         for tokens, want in cases:
             got = [(v, r) for _, v, r in masking.literal_sites(tokens, engine)]
@@ -324,6 +332,10 @@ class TestBesseljOrder:
         assert sites(["besselj", "<mul>", "1", "<div>", "2", "</mul>", "x0"]) == [
             ("1", masking.Role.ORDER), ("2", masking.Role.ORDER)]
         assert sites(["besselj", "x1", "2"]) == [("2", masking.Role.VALUE)]
+        # the order types its whole subtree, through a function and a root inside it, and a
+        # Bessel function inside an exponent is exponent through and through
+        assert sites(["besselj", "abs", "rootn", "x1", "2", "x0"]) == [("2", masking.Role.ORDER)]
+        assert sites(["pow", "x0", "besselj", "2", "x1"]) == [("2", masking.Role.EXPONENT)]
 
     def test_fittable_keeps_the_order_and_all_masks_it(self, bessel_engine: SimpliPyEngine) -> None:
         tokens = ["besselj", "2", "*", "3", "x0"]

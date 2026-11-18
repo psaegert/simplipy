@@ -345,6 +345,10 @@ organised by who you are, then the highlights, then every change in detail.
   `-log(t)` is `-0`, at t = 1, an isolated zero whose sign `f64` does not keep. `log(1/x1)` is
   `-log(x1)` and `1/log(1/x0)` is `-1/log(x0)` in both modes, while `log(1/(x0 + x1))` stays in
   `f64`.
+- **A structural role types its whole subtree in masking.** An exponent, a root index and a
+  Bessel order type every literal below them, through the functions, powers, roots and orders
+  inside: `pow(x0, abs(2))`'s `2` is an exponent, which `mask_fittable` keeps, where it was read as
+  a function's argument and masked.
 - **A product of numbers held apart pays its product charge.** Two numbers whose product no
   number of the domain admits (`1e200*1e200`, beyond the 1,100-bit cap) stay a product, which is
   now priced as the same product beside a variable is: the parts and the product, as a sum of

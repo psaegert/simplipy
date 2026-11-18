@@ -173,9 +173,11 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         t = tokens[i]
         # A TYPED position types its whole subtree: the exponent ``3/2`` is spelled
         # structurally (``<mul> 3 <div> 2 </mul>``, or ``/ 3 2`` explicitly), and each of
-        # those literals controls the DOMAIN exactly as a bare exponent does -- so the
-        # openers and the arithmetic operators inside an exponent / root index pass the
-        # typed role down instead of their own COEFFICIENT / ADDEND roles.
+        # those literals controls the DOMAIN exactly as a bare exponent does -- so every
+        # operator inside an exponent / root index / order passes the typed role down: the
+        # openers and the arithmetic instead of their COEFFICIENT / ADDEND roles, and a
+        # function, a power, a root and a Bessel function instead of their own operands'
+        # roles (``pow(x, abs(2))``'s ``2`` is an exponent).
         typed = role in _TYPED
         if t in _OPENERS:
             closer, section, child_role = _OPENERS[t]
@@ -192,14 +194,14 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
                     continue
                 i = walk(i, child_role)
         if t == "pow":
-            i = walk(i + 1, Role.VALUE)
-            return walk(i, Role.EXPONENT)
+            i = walk(i + 1, role if typed else Role.VALUE)
+            return walk(i, role if typed else Role.EXPONENT)
         if t == "rootn":
-            i = walk(i + 1, Role.VALUE)
-            return walk(i, Role.ROOT_INDEX)
+            i = walk(i + 1, role if typed else Role.VALUE)
+            return walk(i, role if typed else Role.ROOT_INDEX)
         if t in ("besselj", "besseli") and arity.get(t) == 2:
-            i = walk(i + 1, Role.ORDER)
-            return walk(i, Role.VALUE)
+            i = walk(i + 1, role if typed else Role.ORDER)
+            return walk(i, role if typed else Role.VALUE)
         if t in ("*", "/"):
             child = role if typed else Role.COEFFICIENT
             i = walk(i + 1, child)
@@ -214,7 +216,7 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         if n:
             j = i + 1
             for _ in range(int(n)):
-                j = walk(j, Role.VALUE)
+                j = walk(j, role if typed else Role.VALUE)
             return j
         if t != "<constant>" and (t in _SPECIAL_CONSTANTS or is_numeric_string(t)):
             sites.append((i, t, role))
