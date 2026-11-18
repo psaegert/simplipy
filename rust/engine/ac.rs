@@ -1694,9 +1694,6 @@ impl Engine {
             flat_unread: false,
             sign_held: None,
         };
-        // The whole call runs in the mode's number domain: the
-        // certificates and folds below build numbers too.
-        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Parse with the CHAIN'S context for the requested mode
         // -- see ac_complexity; this is the theorem-bearing
         // instrument, and its parse route must be the one the descent actually
@@ -1853,9 +1850,6 @@ impl Engine {
             flat_unread: false,
             sign_held: None,
         };
-        // The whole call runs in the mode's number domain: the
-        // certificates and folds below build numbers too.
-        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Each distinct base's region verdict is decided once per context in the call.
         let _regions = crate::ac::expr::RegionScope::open();
         // Parse with the CALL's MODE: each constructor step is the mode's (a `permissive` sum

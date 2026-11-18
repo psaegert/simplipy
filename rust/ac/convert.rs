@@ -33,9 +33,8 @@ use num_traits::{One, Zero};
 /// Parse a prefix token sequence into a canonical AC expression. `None` on malformed input
 /// (arity underflow / trailing tokens).
 pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
-    // Literals parse in the context's number domain: in the f64 domain a literal that is not
-    // admissible (subnormal, beyond float64's range) stays a leaf as written.
-    let _domain = super::rat::number_domain(cx.f64_numbers());
+    // Literals parse in the thread's number domain (`rat::number_domain`): in the f64 domain a
+    // literal that is not admissible (subnormal, beyond float64's range) stays a leaf as written.
     // One scope for the whole parse: a product met again is decided once (`FlipScope`).
     let _memo = FlipScope::open();
     let view = cx.view;
@@ -814,9 +813,6 @@ pub fn to_prefix_literal_tokens(e: &Ex, cx: &Cx) -> Vec<Tok> {
 /// Serialize a canonical AC expression back to prefix tokens -- the EXPLICIT form (literal
 /// coefficients, no hyper-operators).
 pub fn to_prefix(e: &Ex, cx: &Cx) -> Vec<Tok> {
-    // Spelling choices (reciprocals, splits) compute in the number domain the state was
-    // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut out = Vec::new();
     emit(e, cx, &mut out);
     out
@@ -1314,9 +1310,6 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 /// and every serialization -- this one included -- is a bijective-on-classes projection of it,
 /// verified per chain state by a debug assertion in the simplify loop.
 pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
-    // Spelling choices (reciprocals, splits) compute in the number domain the state was
-    // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut out = Vec::new();
     emit_tagged(e, cx, &mut out);
     // A spelling without a bag reads back as explicit notation, so a tagged answer either
@@ -1736,9 +1729,6 @@ fn within_tagged_bound(r: &Rat) -> bool {
 /// token answers, so it keeps one fixed spelling, and so do the token answers built on it.
 /// Nothing in the engine reads this text.
 pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
-    // Spelling choices (reciprocals, splits) compute in the number domain the state was
-    // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     render(e, cx, 0)
 }
 

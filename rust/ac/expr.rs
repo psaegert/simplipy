@@ -1563,9 +1563,9 @@ impl<'a> Cx<'a> {
         matches!(self.mode, RuleMode::Default)
     }
 
-    /// The number domain this construction runs in (`rat::number_domain`): f64 in every mode
-    /// -- `permissive` is evaluated in float64 too -- and exact whenever the enclosing run is
-    /// (an exact display or reading).
+    /// The number domain this construction runs in, the thread's (`rat::number_domain`): f64 in
+    /// every mode -- `permissive` is evaluated in float64 too -- and exact whenever the enclosing
+    /// run is (an exact display or reading).
     #[inline]
     pub fn f64_numbers(&self) -> bool {
         super::rat::f64_numbers()
@@ -3617,7 +3617,6 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 /// The laws applied here (`ac::laws::Law`): `add.flatten`, `add.collect`, `add.unfactor`,
 /// `num.literal_arith`, `num.inf_arith`.
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     // a fully numeric sum is valued whole: its literals combine exactly
     let ground_bag = in_ground(&items, cx);
     // `x + (-0)` is `x` bit for bit in float64, the sign of a zero and NaN included: the written
@@ -5773,7 +5772,6 @@ fn host_partition_sign(e: Ex) -> Ex {
 
 /// The laws applied here (`ac::laws::Law`): `mul.flatten`, `mul.rootn_join`, `num.inf_arith`.
 fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     // a fully numeric product is valued whole: its literals combine exactly
     let ground_bag = in_ground(&items, cx);
     let mut nums: Vec<Rat> = Vec::new();
@@ -10368,7 +10366,6 @@ pub(crate) fn pow_spelled(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 /// The laws applied here (`ac::laws::Law`): `pow.refused_power`, `num.zero_pole`, `num.inf_power`,
 /// `num.literal_base_inf_exponent`, `num.table_fold`.
 pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     // A ZERO PRODUCT UNDER A POSITIVE POWER (`mul.zero`): the power 1/2 is float64's `sqrt`, which
     // keeps a zero, its sign and NaN, so the power is the product itself; any other that is no
     // odd integer is `+0` (or NaN) whatever the zero's sign, so the product drops the factors that
@@ -11917,7 +11914,6 @@ fn besseli_parity(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
 /// `fun.half_period`, `num.abs_literal`, `num.exp_one`, `num.rootn_index`, and the inverse pairs'
 /// (`Cx::inverse_pair_collapse`).
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
-    let _domain = super::rat::number_domain(cx.f64_numbers());
     // A `pow` call (`pow_spelled`: numpy's `sqrt` of a signed zero) is rebuilt as the spelling
     // it is, which decides again whether it stays a call.
     if args.len() == 2 && cx.view.tok_is(op, "pow") {
@@ -13854,7 +13850,6 @@ mod tests {
         {
             let mut cx = Cx::bare(view);
             cx.mode = mode;
-            let _domain = super::super::rat::number_domain(cx.f64_numbers());
             let big =
                 |p: num_bigint::BigInt| Rat::from_big(p, num_bigint::BigInt::from(1)).unwrap();
             let ten40 = big(num_traits::pow(num_bigint::BigInt::from(10), 40));
