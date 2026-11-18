@@ -113,8 +113,8 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     a miss.
     ``verbose`` reports each step; ``progress`` overrides the reporter (see
     :mod:`simplipy.progress`).
-    ``rule_mode`` is the mode the rules serve in (``'f64'``, also ``'default'``,
-    ``'permissive'`` or a :class:`~simplipy.Mode` member): each rung is licensed in it, and the
+    ``rule_mode`` is the mode the rules serve in (``'strict'``, ``'permissive'`` or a
+    :class:`~simplipy.Mode` member): each rung is licensed in it, and the
     derivability refund asks that mode's engine.
     ``judge``: the judged tier of each pair of a batch, as the mine's judge gives it
     (:func:`simplipy.mining.judge_tiers` when None).
@@ -132,7 +132,7 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     from ..mining import judge_tiers
     from ..progress import Progress
     rule_mode = _coerce_rule_mode(rule_mode)
-    mode = 'f64' if rule_mode == 'default' else rule_mode
+    mode = 'strict' if rule_mode == 'default' else rule_mode
     judge = judge if judge is not None else judge_tiers
     prog = progress if progress is not None else Progress(verbose, prefix="  [promote] ")
     # Every slot starts at `?`, the sort the mine certified: a rule offered at a stronger sort

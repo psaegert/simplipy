@@ -19,7 +19,7 @@ from typing import Callable
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 from copy import deepcopy
-from enum import Enum
+from enum import Enum, EnumType
 
 import numpy as np
 import json
@@ -83,7 +83,7 @@ def _coverage_variants(
     to ``x{i}`` alone, which would read a ``_0 + 1`` rule as covered by it.
     In ``permissive``, where every slot binds any subtree, each non-finite literal is a
     variant too (all slots at once): `$0 / $0 -> 1` is what takes `inf/inf` to `1` there,
-    which the constructor takes to `nan`. (In ``f64`` the ground fold reads such an instance
+    which the constructor takes to `nan`. (In ``strict`` the ground fold reads such an instance
     before any rule.) ``non_finite=False`` leaves that tier out: the
     GENERIC instances only, which the liveness gate asks a rule to fire on.
     """
@@ -275,7 +275,7 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: ``None``: the search runs until a round finds nothing, so a second call returns the
 #: answer unchanged. The previous default, 4, stops searches between
 #: two improvements: on srbf's 125,127 model predictions 1,632 answers change on a second
-#: call in f64 at cap 4 (none uncapped).
+#: call in strict at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
@@ -311,10 +311,34 @@ def _status(bits: int) -> SimplifyStatus:
 _SPECIAL_LEAVES = {'np.pi', 'np.e', 'float("inf")', 'float("-inf")', 'float("nan")'}
 
 
-class Mode(Enum):
+def _warn_deprecated_mode(spelling: str, stacklevel: int = 3) -> None:
+    """The one warning of the mode's pre-0.15 names (``f64``, ``'default'``), removed in 0.16."""
+    warnings.warn(
+        f"{spelling} is deprecated and will be removed in simplipy 0.16: the mode is named "
+        f"'strict' (Mode.strict)", DeprecationWarning, stacklevel=stacklevel)
+
+
+class _ModeType(EnumType):
+    """:class:`Mode`'s metaclass: the pre-0.15 member name ``f64`` answers with ``Mode.strict``
+    and a ``DeprecationWarning``, as an attribute and as an item, until 0.16."""
+
+    def __getattr__(cls, name: str) -> Any:
+        if name == 'f64':
+            _warn_deprecated_mode('Mode.f64')
+            return cls._member_map_['strict']
+        raise AttributeError(f"type object {cls.__name__!r} has no attribute {name!r}")
+
+    def __getitem__(cls, name: str) -> Any:
+        if name == 'f64':
+            _warn_deprecated_mode("Mode['f64']")
+            name = 'strict'
+        return super().__getitem__(name)
+
+
+class Mode(Enum, metaclass=_ModeType):
     """What a simplification preserves.
 
-    - ``f64`` (the default; also spelled ``'default'``): preserves what the deployed
+    - ``strict`` (the default): preserves what the deployed
       float64 evaluator computes, wherever no operation overflows or underflows. Where one
       does, a rewrite may give the true value instead (``exp(x)/exp(x)`` is ``1`` also
       past ``exp``'s overflow). This is the inference and scoring mode: a rewrite in it
@@ -327,50 +351,57 @@ class Mode(Enum):
       training data is generated from the simplified form, so there is no external function
       to violate. Do not use it on an inference or scoring path.
 
-    Each mode names one complete rule set of its own -- ``rules_f64.json`` and
-    ``rules_permissive.json`` (artifacts published before 0.14.0 call the f64 file
-    ``rules.json`` and the permissive file ``rules_corpus.json``; configs name their files)
-    -- so selecting a mode selects a file, and what is loaded is what is served.
+    Each mode names one complete rule set of its own -- ``rules_strict.json`` and
+    ``rules_permissive.json``; configs name their files -- so selecting a mode selects a file,
+    and what is loaded is what is served.
 
-    The ``real`` mode is retired: asking for it raises ``ValueError``. The names ``SOUND``
-    and ``LOSSY`` were removed in 0.14.0; use ``f64`` and ``permissive``.
+    ``strict`` was named ``f64`` before 0.15: ``Mode.f64``, ``Mode('f64')`` and the names
+    ``'f64'`` and ``'default'`` select it with a ``DeprecationWarning`` and are removed in 0.16.
+    The ``real`` mode is retired: asking for it raises ``ValueError``. The names ``SOUND`` and
+    ``LOSSY`` were removed in 0.14.0.
     """
 
-    f64 = 'f64'
+    strict = 'strict'
     permissive = 'permissive'
 
     @classmethod
     def _missing_(cls, value: object) -> 'Mode':
         if isinstance(value, str) and value.strip().lower() == 'real':
             raise ValueError(_REAL_MODE_RETIRED)
+        if isinstance(value, str) and value.strip().lower() == 'f64':
+            _warn_deprecated_mode("Mode('f64')", stacklevel=5)
+            return cls.strict
         return None  # type: ignore[return-value]
 
 
 #: THE MAP from the public ``Mode`` onto the core's RULE MODE -- the one place the two
-#: vocabularies meet on the Python side, and the twin of ``RuleMode::from_wildcard_all``
-#: on the Rust side. ``'default'`` is the core's name for the f64 set (the
-#: ``rules_f64.json`` file; ``rules.json`` in pre-rename artifacts).
-_RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.permissive: 'permissive'}
+#: vocabularies meet on the Python side. ``'default'`` is the core's name for the strict set
+#: (the ``rules_strict.json`` file).
+_RULE_MODE: dict[Mode, str] = {Mode.strict: 'default', Mode.permissive: 'permissive'}
 
 
-#: Every name a mode answers to, matched case-insensitively. ``'default'`` is the f64
-#: mode's second name: the rule-file entries (``rule_mode=``) have always used it.
-_MODE_NAMES: dict[str, Mode] = {'f64': Mode.f64, 'default': Mode.f64, 'permissive': Mode.permissive}
-_MODE_CHOICES = "'f64' (also 'default') or 'permissive'"
+#: Every name a mode answers to, matched case-insensitively.
+_MODE_NAMES: dict[str, Mode] = {'strict': Mode.strict, 'permissive': Mode.permissive}
+#: The strict mode's pre-0.15 names, read with a ``DeprecationWarning`` until 0.16:
+#: ``'f64'``, and ``'default'``, the name its rule-file entries (``rule_mode=``) used.
+_DEPRECATED_MODE_NAMES: dict[str, Mode] = {'f64': Mode.strict, 'default': Mode.strict}
+_MODE_CHOICES = "'strict' or 'permissive'"
 
 #: The one refusal of the retired mode, raised wherever a mode is named (every mode argument,
 #: a config's ``rules_real`` key, a sidecar's or a canon's mode). Its values remain the
 #: reference permissive is defined against.
 _REAL_MODE_RETIRED = (
-    "the real mode is retired (simplipy 0.15): use mode='f64' for what the deployed float64 "
+    "the real mode is retired (simplipy 0.15): use mode='strict' for what the deployed float64 "
     "evaluator computes, or mode='permissive' for training-corpus canonicalisation")
 
 
 def _canon_of_record(rules_path: str) -> str:
     """The canon the rule file at ``rules_path`` was certified in, as its provenance sidecar
-    records it: the mode of a per-mode mine (``'f64'``, ``'permissive'``), else
+    records it: the mode of a per-mode mine (``'strict'``, ``'permissive'``), else
     ``'legacy'``. Mines before per-mode mines (simplipy 0.14 and earlier) mined all three files
-    in one canon and recorded no mode: they wrote one sidecar, beside the f64 file."""
+    in one canon and recorded no mode: they wrote one sidecar, beside the strict file. A sidecar
+    recording the mode's pre-0.15 name ``'f64'`` reads as ``'strict'``, with a
+    ``DeprecationWarning`` until 0.16."""
     sidecar = rules_path + '.provenance.json'
     if not os.path.exists(sidecar):
         return 'legacy'
@@ -381,6 +412,9 @@ def _canon_of_record(rules_path: str) -> str:
         return 'legacy'
     if mode == 'real':
         raise ValueError(f"the sidecar '{sidecar}' records the mode 'real': {_REAL_MODE_RETIRED}")
+    if mode == 'f64':
+        _warn_deprecated_mode(f"the sidecar '{sidecar}' records the mode 'f64', which")
+        return Mode.strict.name
     if mode not in {m.name for m in Mode}:
         raise ValueError(f"the sidecar '{sidecar}' records the mode {mode!r}, which this "
                          f"simplipy does not know: expected one of {[m.name for m in Mode]}")
@@ -391,15 +425,19 @@ def _coerce_mode(mode: 'Mode | str') -> Mode:
     """A :class:`Mode` member, or one of its names in any case; anything else raises.
 
     The one coercion every entry that takes a mode uses (``mode=``, ``modes=``,
-    ``rule_mode=``): ``'f64'`` and ``'default'`` name the same mode, and the retired
-    ``'real'`` raises the retirement message. A bare int does not bind: only members and
-    their names select a mode.
+    ``rule_mode=``): the strict mode's pre-0.15 names ``'f64'`` and ``'default'`` select it
+    with a ``DeprecationWarning`` until 0.16, and the retired ``'real'`` raises the retirement
+    message. A bare int does not bind: only members and their names select a mode.
     """
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, str):
         if mode.strip().lower() == 'real':
             raise ValueError(_REAL_MODE_RETIRED)
+        old = _DEPRECATED_MODE_NAMES.get(mode.strip().lower())
+        if old is not None:
+            _warn_deprecated_mode(f"the mode name {mode!r}", stacklevel=4)
+            return old
         match = _MODE_NAMES.get(mode.strip().lower())
         if match is None:
             raise ValueError(
@@ -418,7 +456,7 @@ def _coerce_rule_mode(mode: 'Mode | str') -> str:
 
 #: The wrapper attribute carrying each NON-DEFAULT rule mode's own set -- the set the lazy
 #: machinery (``modes=...`` at construction, :meth:`SimpliPyEngine.unload_mode`) can defer
-#: and drop. The default (f64) set is deliberately absent from this map: it is the core's
+#: and drop. The default (strict) set is deliberately absent from this map: it is the core's
 #: construction substrate (the canon context, the dedup key, and the set every absent mode
 #: falls back to), so it is always built eagerly and never unloadable.
 _MODE_RULES_ATTR: dict[str, str] = {
@@ -466,7 +504,7 @@ class SimpliPyEngine:
         different, sayable statement "the ``permissive`` mode serves nothing".
     rule_canons : dict[str, str] or None, optional
         The canon each set was certified in, which the engine reads it in, by mode name
-        (``'f64'``, ``'permissive'``): a mode name for a set mined in that mode, or
+        (``'strict'``, ``'permissive'``): a mode name for a set mined in that mode, or
         ``'legacy'`` for a set mined before per-mode mines (simplipy 0.14 and earlier mined
         all their files in one canon). A mode not named reads its set in its own canon.
         :meth:`from_config` fills this from each file's provenance sidecar.
@@ -474,7 +512,7 @@ class SimpliPyEngine:
         Which mode rule sets are built EAGERLY, at construction. The default ``'all'``
         builds every set the engine names -- byte-identical to the historical
         behavior, so lean loading is opted into and never inherited. A tuple/list of
-        mode names or :class:`Mode` members (e.g. ``modes=('f64', 'permissive')``)
+        mode names or :class:`Mode` members (e.g. ``modes=('strict', 'permissive')``)
         builds exactly those; a set NOT named builds LAZILY on its mode's first use
         (any ``simplify``/``complexity`` call addressing it) -- once,
         lock-guarded, announced with one WARNING record on the ``simplipy`` logger
@@ -482,15 +520,15 @@ class SimpliPyEngine:
         seconds for a large artifact while the set loads and compiles. The machinery
         is ADDITIVE-ONLY: a lazy build never evicts another mode's structures, and
         nothing is ever dropped implicitly -- dropping is :meth:`unload_mode`, an
-        explicit call. The default (f64) set is always built eagerly regardless of
+        explicit call. The default (strict) set is always built eagerly regardless of
         ``modes``: it is the core's construction substrate (the canon context, the
-        dedup key, and the set every absent mode falls back to). Naming ``'f64'`` in
+        dedup key, and the set every absent mode falls back to). Naming ``'strict'`` in
         the tuple is therefore allowed but redundant.
 
         A built set is compiled at construction too, so the first call in a mode
         pays nothing extra. Measured on the acj-5-4-llm artifact (fresh process each,
         peak RSS directly after ``load``): about 0.7 GB with both sets and 0.45 GB for
-        ``modes=('f64',)``, about 100 MB per set; a deferred set then costs its build on
+        ``modes=('strict',)``, about 100 MB per set; a deferred set then costs its build on
         first use (about 3-4 s on this artifact, announced by the log line).
     trusted_modules : list[str] or None, optional
         Extra module roots this engine may import for its operator realizations,
@@ -508,7 +546,7 @@ class SimpliPyEngine:
     simplification_rules : list[tuple]
         The DEFAULT mode's rule set, as loaded into the engine (mirrored into the
         compiled core by :meth:`compile_rules`). This one list is what
-        ``Mode.f64`` serves; the permissive set is a separate attribute and never
+        ``Mode.strict`` serves; the permissive set is a separate attribute and never
         appears here, so a consumer reading this reads exactly what it is served.
     permissive_simplification_rules : list[tuple] or None
         The ``permissive`` mode's own complete rule set, or ``None`` when this engine names
@@ -582,7 +620,7 @@ class SimpliPyEngine:
         else:
             self._core = self._build_core(self._operators_config, [])
             self.simplification_rules = deduplicate_rules(
-                rules, dummy_variables=dummy_variables, engine=self, rule_mode='default',
+                rules, dummy_variables=dummy_variables, engine=self, rule_mode='strict',
                 canon=self._rule_canons.get('default'))
 
         # THE PERMISSIVE SET. Normalized to the same (tuple, tuple) shape as the default
@@ -606,7 +644,7 @@ class SimpliPyEngine:
         # `modes=` selection keeps its recipe (the attribute above, or a file source
         # `from_config` attaches after construction) and builds on first use through
         # `_ensure_mode_loaded` -- see the class docstring's `modes` entry.
-        eager = self._modes if self._modes != 'all' else ('f64', 'permissive')
+        eager = self._modes if self._modes != 'all' else ('strict', 'permissive')
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.permissive_simplification_rules if 'permissive' in eager else None,
@@ -625,7 +663,7 @@ class SimpliPyEngine:
     @staticmethod
     def _normalized_modes(modes: 'str | Mode | tuple | list') -> 'str | tuple[str, ...]':
         """Validate + normalize the ``modes=`` selection: ``'all'``, or the tuple of
-        PUBLIC mode names built eagerly (``'f64'`` always present -- the default set
+        PUBLIC mode names built eagerly (``'strict'`` always present -- the default set
         is the core's construction substrate and cannot be deferred).
 
         Loud on everything else: a bare mode-name string is refused with the tuple
@@ -646,7 +684,7 @@ class SimpliPyEngine:
             raise TypeError(
                 f"modes must be 'all', a simplipy.Mode, or a tuple/list of mode names "
                 f"or Mode members, not {type(modes).__name__} ({modes!r})")
-        names = {'f64'}
+        names = {'strict'}
         for m in modes:
             if isinstance(m, str):
                 m = _coerce_mode(m)
@@ -655,7 +693,7 @@ class SimpliPyEngine:
                     f"modes entries must be mode names or simplipy.Mode members, "
                     f"not {type(m).__name__} ({m!r})")
             names.add(m.name)
-        return tuple(n for n in ('f64', 'permissive') if n in names)
+        return tuple(n for n in ('strict', 'permissive') if n in names)
 
     @staticmethod
     def _normalized_rule_canons(canons: dict[str, str] | None) -> dict[str, str]:
@@ -878,7 +916,7 @@ class SimpliPyEngine:
         """``call(core)`` for one public call in ``mode``, on the live core captured once,
         after a set deferred by a lean ``modes=`` selection has been built. A mode naming no
         set of its own is served the default set by the core."""
-        if mode is not Mode.f64:
+        if mode is not Mode.strict:
             self._ensure_mode_loaded(_RULE_MODE[mode])
         return call(self._core)
 
@@ -888,7 +926,7 @@ class SimpliPyEngine:
         The OPERATIONAL RAM KNOB paired with lean loading (``modes=`` at
         construction): a long-lived process that needed a mode only transiently --
         say a worker that canonicalised one corpus in ``permissive`` and then serves
-        ``f64`` -- calls this to hand the memory back. Dropping is EXPLICIT and only
+        ``strict`` -- calls this to hand the memory back. Dropping is EXPLICIT and only
         ever happens here: no lazy build, sync, or other call evicts a set
         implicitly. The engine keeps the set's recipe (its config-named file, or the
         in-memory list it was constructed with), so the mode's next use rebuilds the
@@ -903,7 +941,7 @@ class SimpliPyEngine:
         drops the compiled structures only: the wrapper's list is the sole recipe,
         so it stays.
 
-        The DEFAULT (f64) set is REFUSED, loudly: it is the core's construction
+        The DEFAULT (strict) set is REFUSED, loudly: it is the core's construction
         substrate -- the canon every mode's rewrite descends runs on it, the dedup
         key is a function of it, and every mode naming no set of its own serves it --
         so an engine without it cannot exist, and half-supporting the call would turn
@@ -920,12 +958,12 @@ class SimpliPyEngine:
         ----------
         mode : Mode or str
             The mode to unload, as a :class:`Mode` member or its name (``'permissive'``).
-            ``Mode.f64`` (``'f64'``, ``'default'``) raises ``ValueError``.
+            ``Mode.strict`` (``'strict'``) raises ``ValueError``.
         """
         mode = _coerce_mode(mode)
-        if mode is Mode.f64:
+        if mode is Mode.strict:
             raise ValueError(
-                "the default (f64) rule set cannot be unloaded: it is the core's "
+                "the default (strict) rule set cannot be unloaded: it is the core's "
                 "construction substrate (the canon every mode's rewrite descends "
                 "runs on it, the dedup key is a function of it, and every mode "
                 "naming no set of its own serves it), so an engine without it "
@@ -1006,7 +1044,7 @@ class SimpliPyEngine:
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
         rule_mode : str or Mode
-            The mode whose own set is pruned: ``'f64'`` (also ``'default'``),
+            The mode whose own set is pruned: ``'strict'``,
             ``'permissive'``, or a :class:`Mode` member. Coverage is asked of that mode's
             engine: its serve answer (the miner's mark) and its serve ordering, with the kept
             rules installed as its set.
@@ -1198,7 +1236,7 @@ class SimpliPyEngine:
             The absolute or relative path to the YAML configuration file.
         modes : str or Mode or tuple or list, optional
             Which mode rule sets are built eagerly at load; the default ``'all'``
-            builds every set the config names. Under a lean selection (``modes=('f64',)``)
+            builds every set the config names. Under a lean selection (``modes=('strict',)``)
             a config-named set outside it is not even read here -- its resolved
             path is recorded and the file loads on the mode's first use. See the
             class docstring's ``modes`` entry for the full contract and the peak RSS
@@ -1320,7 +1358,7 @@ class SimpliPyEngine:
                     f"the config '{config_path}' declares a {mode_name!r}-mode rule set "
                     f"{declared!r} that could not be resolved (looked for "
                     f"'{mode_path}'): the engine is built WITHOUT it, so Mode {mode_name!r} "
-                    f"serves the default rule set instead. The f64 mode is unaffected -- "
+                    f"serves the default rule set instead. The strict mode is unaffected -- "
                     f"each mode's set is its own file.",
                     UserWarning)
         # THE RULE FILES OF THIS VERSION: a file mined before 0.15 is refused, by the version
@@ -1333,7 +1371,7 @@ class SimpliPyEngine:
         # Each file is read in the canon it was certified in, which its sidecar records.
         canons = {mode_name: _canon_of_record(path) for mode_name, path in mode_sources.items()}
         if rules_path is not None and os.path.exists(rules_path):
-            canons['f64'] = _canon_of_record(rules_path)
+            canons['strict'] = _canon_of_record(rules_path)
         engine = cls(operators=config['operators'], rules=rules,
                      rules_permissive=mode_rules['permissive'],
                      rule_canons=canons, modes=modes, trusted_modules=trusted_modules)
@@ -1401,7 +1439,7 @@ class SimpliPyEngine:
             The filename of the manifest file. If None, the default filename is used.
         modes : str or Mode or tuple or list, optional
             Which mode rule sets are built eagerly at load; ``'all'`` (the default)
-            builds both, a lean selection such as ``modes=('f64',)`` defers the rest to
+            builds both, a lean selection such as ``modes=('strict',)`` defers the rest to
             first use. See :meth:`from_config` and the class docstring's ``modes`` entry (with
             the peak RSS measured on the acj-5-4-llm artifact); :meth:`unload_mode` is the
             paired explicit drop.
@@ -2015,7 +2053,7 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             *,
             max_passes: int | None = None,
-            mode: Mode | str = Mode.f64,
+            mode: Mode | str = Mode.strict,
             effort: int | None = None,
             return_status: bool = False) -> Any:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
@@ -2242,7 +2280,7 @@ class SimpliPyEngine:
           exactly is not affected.
         * pi: a value that is an exact number within ``D`` times or over the literal
           ``3.141592653589793`` is written with pi factored out as the symbol ``pi``
-          (``np.pi`` in the token forms): ``x0/(2*pi)``, ``0.15*x0^2/(pi*x1*x2)``. In ``f64``
+          (``np.pi`` in the token forms): ``x0/(2*pi)``, ``0.15*x0^2/(pi*x1*x2)``. In ``strict``
           the symbol is that float. It holds at every precision: pi is never shortened, and a
           precision applies to the other numbers only. The literal is written instead where
           the symbol would read back as another expression (reading ``sin(x1 + pi)`` builds
@@ -2350,18 +2388,18 @@ class SimpliPyEngine:
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             certified: bool = True,
-            mode: Mode | str = Mode.f64) -> int:
+            mode: Mode | str = Mode.strict) -> int:
         """The SEMANTIC COMPLEXITY of an expression in a mode: its price as that mode reads it.
 
         Each mode reads an expression into its own canonical form, because the modes accept
-        different simplifications as true: ``f64`` follows the deployed float evaluator
+        different simplifications as true: ``strict`` follows the deployed float evaluator
         wherever no operation overflows or underflows (``atanh(tanh(x))`` is not ``x``: in
         floats ``tanh`` saturates to ``1``; past an overflow the true value is accepted as
         well, so ``exp(x)/exp(x)`` is ``1``), and ``permissive`` real numbers
         (``atanh(tanh(x))`` is ``x``) and also what holds only up to sign or domain
-        (``(x^2)^(1/2)`` is ``x``, where ``f64`` gives ``abs(x)``). A ground
+        (``(x^2)^(1/2)`` is ``x``, where ``strict`` gives ``abs(x)``). A ground
         constant is read as written in every mode: folding it to its float is a step of
-        :meth:`simplify`'s walk in ``f64`` and ``permissive``, not part of the reading.
+        :meth:`simplify`'s walk in ``strict`` and ``permissive``, not part of the reading.
         This prices that form, on the
         CERTIFIED canonical state (the same certificate-carrying canonicalization the
         simplify chain runs on), with the one codebook (the unified measure mu). It is the
@@ -2389,7 +2427,7 @@ class SimpliPyEngine:
         Every number is priced as it is written: a number carrying more digits than its
         float needs costs those digits, and :meth:`simplify` writes the cheaper value its
         mode admits (``strict``: float64's double; ``permissive``: the double nearest the
-        value). ``f64`` and ``permissive`` admit a number only where its numerator and
+        value). ``strict`` and ``permissive`` admit a number only where its numerator and
         denominator are at most 2^1022, and hold any other value in pieces
         (``1.2345678901234567e-305`` as written, and its quotient by ``9.876543210987654e-10``
         as that literal times a number), which cost at most what the exact number is priced
@@ -2448,10 +2486,10 @@ class SimpliPyEngine:
         # (the numeric-string pricer -- its clamp once stayed
         # at two bits after the floor moved and NO probe noticed), and `<constant>`.
         ('1000',), ('1/2',), ('355/113',), ('0.2',), ('1e-40',), ('<constant>',),
-        # a LONG LITERAL, which the f64 reading writes as float64's double of it (cheaper than
+        # a LONG LITERAL, which the strict reading writes as float64's double of it (cheaper than
         # its 64 digits): the probe moves with the reading of numbers
         ('0.0766541268471677307861497420516056347394916180597539647375669841',),
-        # a value f64's number domain holds in pieces (here a literal whose denominator passes
+        # a value strict's number domain holds in pieces (here a literal whose denominator passes
         # 2^1022 times the exact reciprocal of a number), each piece priced as its number
         ('/', '1.2345678901234567e-305', '9.876543210987654e-10'),
         # the RECIPROCAL codeword: 1/c, c a terminating decimal, priced as the divisor `/c`
@@ -2476,17 +2514,17 @@ class SimpliPyEngine:
         ('pow', 'pow', 'x0', '2', '0.5'),        # (x0^2)^(1/2): x0 only in permissive
         ('asin', '1e-08'),                       # ground constants are read as written in
         ('*', 'inv', 'exp', '5132.3', 'x0'),     # every mode (the float fold is a walk step)
-        ('atanh', 'tanh', 'x0'),                 # x0 except in f64, where tanh saturates
+        ('atanh', 'tanh', 'x0'),                 # x0 except in strict, where tanh saturates
         ('/', 'x0', '*', 'x0', 'x1'),            # a shared factor cancels in every mode
     )
 
     #: The sidecars published before per-mode fingerprints key each probe by its FIRST
-    #: token and price it in f64's reading. These are the compound probes of that
+    #: token and price it in strict's reading. These are the compound probes of that
     #: battery; every other legacy key is the probe's whole spelling.
     _LEGACY_PROBE_KEYS: dict[str, str] = {
         '+': '+ x0 x1', '*': '* x0 x1', 'pow': 'pow x0 2', 'sin': 'sin x0', 'asin': 'asin x0'}
 
-    def _measure_fingerprint(self, mode: 'Mode | str' = Mode.f64) -> dict:
+    def _measure_fingerprint(self, mode: 'Mode | str' = Mode.strict) -> dict:
         """A fingerprint of the REDUCTION MEASURE in ``mode``, for the provenance sidecar.
 
         Without it an artifact mined under one measure is indistinguishable from one mined
@@ -2536,14 +2574,14 @@ class SimpliPyEngine:
         price differs to ``(recorded, now)``, and ``unrecorded`` lists the probes the
         record does not hold. A probe added to the battery after the record was written
         is unrecorded, not moved. The record is compared in the mode it names; a record
-        without a mode is the earlier layout (f64's reading, probes keyed by their first
+        without a mode is the earlier layout (strict's reading, probes keyed by their first
         token), compared through :attr:`_LEGACY_PROBE_KEYS`.
         """
         held = recorded.get('probes') or {}
         if 'mode' in recorded:
             mode = _coerce_mode(recorded['mode'])
         else:
-            mode = Mode.f64
+            mode = Mode.strict
             held = {self._LEGACY_PROBE_KEYS.get(key, key): value for key, value in held.items()}
         current = self._measure_fingerprint(mode)['probes']
         moved = {key: (held[key], now) for key, now in current.items()
@@ -2566,7 +2604,7 @@ class SimpliPyEngine:
             return
         moved, _ = self._measure_drift(recorded)
         if moved:
-            mode = recorded.get('mode', Mode.f64.name)
+            mode = recorded.get('mode', Mode.strict.name)
             detail = '; '.join(f'{probe!r}: {old} -> {now}' for probe, (old, now) in moved.items())
             warnings.warn(
                 f"measure fingerprint mismatch: the rules at '{rules_path}' were mined under "

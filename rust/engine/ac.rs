@@ -2092,10 +2092,11 @@ impl RuleMode {
         crate::ac::expr::Permissive::AnySlot.applies_in(self)
     }
 
-    /// The wire spelling used by the FFI (`ac_simplify_in_mode`) and by the config keys.
+    /// The wire spelling used by the FFI (`ac_simplify_in_mode`) and by the config keys; the
+    /// strict set is `default`, and its public name `strict` reads the same.
     pub fn parse(name: &str) -> Option<Self> {
         match name {
-            "default" => Some(RuleMode::Default),
+            "default" | "strict" => Some(RuleMode::Default),
             "permissive" => Some(RuleMode::Permissive),
             _ => None,
         }

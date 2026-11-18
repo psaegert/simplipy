@@ -1044,7 +1044,7 @@ class TestCleanlinessIsPerMode:
                                  engine_config=acj_config_path(),
                                  corpus_rows=[['sin', 'x0'], ['+', 'x1', '1']])
         assert report['permissive_dominance'] == {'checked': True, 'violations': [
-            {'expression': ['sin', 'x0'], 'mu': {'f64': 6000, 'permissive': 12000}}]}
+            {'expression': ['sin', 'x0'], 'mu': {'strict': 6000, 'permissive': 12000}}]}
         assert report['is_clean'] is False
 
 

@@ -637,7 +637,7 @@ def test_a_source_given_up_on_gets_no_rule_and_the_mine_goes_on(tmp_path, monkey
             X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
             symbolic_gate=False, output_file=out, judge=judge)
 
-    expected = [{'mode': 'f64', 'length': 4, 'stage': 'scan', 'source': source,
+    expected = [{'mode': 'strict', 'length': 4, 'stage': 'scan', 'source': source,
                  'refused': [{'target': target, 'by': 'judge', 'reason': 'tier permissive'}]}
                 for source, target in ((['tan', 'atan', 'atan', 'x0'], ['atan', 'x0']),
                                        (['tan', 'atan', 'tan', 'x0'], ['tan', 'x0']))]
@@ -652,7 +652,7 @@ def test_a_source_given_up_on_gets_no_rule_and_the_mine_goes_on(tmp_path, monkey
             pytest.raises(KeyboardInterrupt):
         mine()
     lines = [r.getMessage() for r in caplog.records if 'gave up on' in r.getMessage()]
-    assert lines == [f'simplipy mine: gave up on {" ".join(e["source"])} (f64, length 4, scan) '
+    assert lines == [f'simplipy mine: gave up on {" ".join(e["source"])} (strict, length 4, scan) '
                      f'after 1 refusals (judge 1); it gets no rule' for e in expected], lines
     ckpt = json.load(open(out + '.checkpoint.json'))
     assert ckpt['completed_length'] == 4 and ckpt['provenance']['given_up'] == expected

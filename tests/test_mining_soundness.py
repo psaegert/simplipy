@@ -601,8 +601,8 @@ class TestProvenance:
         assert side["universe"]["3"]["coverage"] == 1.0
         assert side["universe"]["2"]["coverage"] == 1.0
         assert side["progress"]["final"] is True
-        # One mine per file: this sidecar records the f64 file's own mine.
-        assert side["mode"] == "f64"
+        # One mine per file: this sidecar records the strict file's own mine.
+        assert side["mode"] == "strict"
         assert side["progress"]["rules_total"] == len(json.load(open(out)))
         assert side["simplipy_version"]
         # The versions that serve the mined rules: the running version's minor series,
@@ -782,7 +782,7 @@ class TestCertifyRules:
         from simplipy.verify._contract import judge_rule
         assert judge_rule(list(proposals[3]), ['+', 'x0', 'x0'])['tier'] == 'core'
 
-    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
+    @pytest.mark.parametrize('mode', ['strict', 'permissive'])
     def test_each_rule_is_certified_in_the_mode_it_is_licensed_for(self, engine, mode) -> None:
         """`certify_rules` runs in the mode it is given and keeps only rules whose tier that
         mode licenses; each result says its mode and what the judge's verdict rests on there,
@@ -1523,7 +1523,7 @@ class TestMeasureFingerprintAtLoad:
     probes, when a recorded probe now prices differently; a probe the record does not
     hold is unrecorded, not moved."""
 
-    _FILES = {"f64": "rules.json", "permissive": "rules_permissive.json"}
+    _FILES = {"strict": "rules.json", "permissive": "rules_permissive.json"}
 
     def _asset(self, tmp_path, measures):
         """An empty rule file per mode; `measures` maps a mode to its sidecar's record."""
@@ -1555,7 +1555,7 @@ class TestMeasureFingerprintAtLoad:
         _, warned = self._load(self._asset(tmp_path, self._own(tmp_path)))
         assert warned == []
 
-    @pytest.mark.parametrize("mode", ["f64", "permissive"])
+    @pytest.mark.parametrize("mode", ["strict", "permissive"])
     def test_a_moved_probe_warns_and_is_named(self, tmp_path, mode) -> None:
         (tmp_path / "own").mkdir()
         records = self._own(tmp_path)
@@ -1568,14 +1568,14 @@ class TestMeasureFingerprintAtLoad:
         assert "D25" not in warned[0] and "R6" not in warned[0]
 
     def test_each_record_is_compared_in_its_own_mode(self, tmp_path) -> None:
-        # f64's record put beside the permissive file still names f64, so it is compared
-        # in f64's reading and stays silent: like is compared with like.
+        # strict's record put beside the permissive file still names strict, so it is compared
+        # in strict's reading and stays silent: like is compared with like.
         (tmp_path / "own").mkdir()
         records = self._own(tmp_path)
-        assert records["f64"]["probes"]["pow pow x0 2 0.5"] != records["permissive"]["probes"]["pow pow x0 2 0.5"]
-        _, warned = self._load(self._asset(tmp_path, {"permissive": records["f64"]}))
+        assert records["strict"]["probes"]["pow pow x0 2 0.5"] != records["permissive"]["probes"]["pow pow x0 2 0.5"]
+        _, warned = self._load(self._asset(tmp_path, {"permissive": records["strict"]}))
         assert warned == []
-        # without its mode the permissive record would read as the earlier f64 layout
+        # without its mode the permissive record would read as the earlier strict layout
         # and its readings would differ
         legacy = {k: v for k, v in records["permissive"].items() if k != "mode"}
         _, warned = self._load(self._asset(tmp_path, {"permissive": legacy}))
@@ -1590,17 +1590,17 @@ class TestMeasureFingerprintAtLoad:
         assert engine._measure_drift(records["permissive"]) == ({}, ["asin 1e-08"])
 
     def test_an_earlier_layout_is_compared_by_its_first_token_keys(self, tmp_path) -> None:
-        # The sidecars published before per-mode fingerprints: no mode, f64's reading,
+        # The sidecars published before per-mode fingerprints: no mode, strict's reading,
         # each probe keyed by its first token.
         (tmp_path / "own").mkdir()
-        f64 = self._own(tmp_path)["f64"]["probes"]
+        f64 = self._own(tmp_path)["strict"]["probes"]
         legacy = {"x0": f64["x0"], "+": f64["+ x0 x1"], "asin": f64["asin x0"], "1/2": f64["1/2"]}
-        engine, warned = self._load(self._asset(tmp_path, {"f64": {"probes": legacy}}))
+        engine, warned = self._load(self._asset(tmp_path, {"strict": {"probes": legacy}}))
         assert warned == []
         moved, unrecorded = engine._measure_drift({"probes": legacy})
         assert moved == {} and "asin x0" not in unrecorded and "* x0 x1" in unrecorded
         legacy["asin"] += 1
-        _, warned = self._load(self._asset(tmp_path, {"f64": {"probes": legacy}}))
+        _, warned = self._load(self._asset(tmp_path, {"strict": {"probes": legacy}}))
         assert len(warned) == 1 and "'asin x0'" in warned[0], warned
 
 
@@ -2237,7 +2237,7 @@ class TestTheGateRoutesInsteadOfDeleting:
             assert not carried, (lhs, carried)
             assert (tuple(lhs), tuple(rhs)) not in keys(permissive), lhs
         # each file's sidecar records its own mine
-        for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_permissive.json'), 'permissive')):
+        for path, mode in ((out, 'strict'), (str(tmp_path / 'mined_permissive.json'), 'permissive')):
             prov = json.load(open(path + '.provenance.json'))
             assert prov['mode'] == mode
             assert prov['gates']['file'] == path.rsplit('/', 1)[-1]
@@ -2669,18 +2669,19 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
 
 class TestModePaths:
     """The mine's file names derive from the requested output path:
-    the f64 file is named ``rules_f64.json``; the sibling replaces the
+    the strict file is named ``rules_strict.json``; the sibling replaces the
     mode marker rather than append to it."""
 
-    def test_the_f64_marker_is_replaced_not_appended(self) -> None:
+    def test_the_strict_marker_is_replaced_not_appended(self) -> None:
         from simplipy.mining import _mode_paths
-        assert _mode_paths('rules_f64.json') == {
-            'f64': 'rules_f64.json', 'permissive': 'rules_permissive.json'}
+        assert _mode_paths('rules_strict.json') == {
+            'strict': 'rules_strict.json', 'permissive': 'rules_permissive.json'}
 
     def test_directories_survive_the_derivation(self) -> None:
         from simplipy.mining import _mode_paths
-        assert _mode_paths('path/to/my_rules_f64.json') == {
-            'f64': 'path/to/my_rules_f64.json', 'permissive': 'path/to/my_rules_permissive.json'}
+        assert _mode_paths('path/to/my_rules_strict.json') == {
+            'strict': 'path/to/my_rules_strict.json',
+            'permissive': 'path/to/my_rules_permissive.json'}
 
     def test_a_markerless_name_keeps_its_historic_siblings(self) -> None:
         # A markerless name gets the SAME siblings as a marked one. The historic
@@ -2689,4 +2690,4 @@ class TestModePaths:
         # simplipy, so a filename carve-out in THIS build protected nothing.
         from simplipy.mining import _mode_paths
         assert _mode_paths('rules.json') == {
-            'f64': 'rules.json', 'permissive': 'rules_permissive.json'}
+            'strict': 'rules.json', 'permissive': 'rules_permissive.json'}

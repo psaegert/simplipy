@@ -53,7 +53,7 @@ type ValueSetBox = (bool, bool, bool, bool, f64, f64);
 fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     engine::RuleMode::parse(name).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "unknown rule_mode {name:?}: expected 'default' (the f64 set) or 'permissive'"
+            "unknown rule_mode {name:?}: expected 'default' (the strict set) or 'permissive'"
         ))
     })
 }

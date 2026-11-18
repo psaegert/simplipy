@@ -42,7 +42,7 @@ def main(argv: str = None) -> None:
 
     find_simplifications_parser = subparsers.add_parser(
         "find-rules",
-        help="Mine an engine's rule files (f64, permissive), each in its own mode")
+        help="Mine an engine's rule files (strict, permissive), each in its own mode")
     find_simplifications_parser.add_argument(
         '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
@@ -50,14 +50,14 @@ def main(argv: str = None) -> None:
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
     find_simplifications_parser.add_argument(
         '-o', '--output-file', type=str, required=True,
-        help='Path of the f64 rules file (convention: rules_f64.json). The permissive '
-             'sibling is derived from it with the _f64 marker replaced: '
-             'rules_f64.json writes rules_permissive.json beside it')
+        help='Path of the strict rules file (convention: rules_strict.json). The permissive '
+             'sibling is derived from it with the _strict marker replaced: '
+             'rules_strict.json writes rules_permissive.json beside it')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument(
-        '--modes', type=_mode_names, default='f64,permissive',
-        help='The modes to mine, comma-separated (default: f64,permissive). The other '
-             'file is left as it is, and permissive mines beside the f64 file and is offered it')
+        '--modes', type=_mode_names, default='strict,permissive',
+        help='The modes to mine, comma-separated (default: strict,permissive). The other '
+             'file is left as it is, and permissive mines beside the strict file and is offered it')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
     # A length split across runs: stop before it, scan its shards anywhere, merge them.
     find_simplifications_parser.add_argument(
@@ -88,12 +88,12 @@ def main(argv: str = None) -> None:
     # Prune-rules command
     prune_covered_rules_parser = subparsers.add_parser(
         "prune-covered-rules",
-        help="Remove the f64 rules that the remaining f64 rules cover behaviorally")
+        help="Remove the strict rules that the remaining strict rules cover behaviorally")
     prune_covered_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
     )
-    prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned f64 rules json file')
+    prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned strict rules json file')
     prune_covered_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
     # Resolve-rules command
@@ -110,7 +110,7 @@ def main(argv: str = None) -> None:
         "verify-mine", help="Check a mined rule file against the re-mine gates in its own mode")
     verify_mine_parser.add_argument('rules_file', type=str, help='The mined rule file (its provenance sidecar beside it)')
     verify_mine_parser.add_argument('--mode', required=True, type=_mode_name,
-                                    help="The mode the file serves: f64 (also 'default') or permissive")
+                                    help="The mode the file serves: strict or permissive")
     verify_mine_parser.add_argument(
         '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file (its operators)')
@@ -262,7 +262,7 @@ def main(argv: str = None) -> None:
 
             engine = SimpliPyEngine.from_config(engine_config_path)
             n_before = len(engine.simplification_rules)
-            n_pruned = engine.prune_covered_rules(verbose=args.verbose, rule_mode='f64')
+            n_pruned = engine.prune_covered_rules(verbose=args.verbose, rule_mode='strict')
 
             output_dir = os.path.dirname(args.output_file)
             if output_dir and not os.path.exists(output_dir):

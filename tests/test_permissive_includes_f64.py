@@ -115,15 +115,15 @@ def test_the_coverage_gate_names_an_f64_rule_permissive_leaves_dearer(acj) -> No
     """On each f64 rule's generic instance, permissive's answer must cost no more, in
     permissive's price, than the rule's right side: an empty permissive set leaves
     `ceil(abs(cos(x0)))` as it is, dearer than 1, and the set holding the rule covers it."""
-    from simplipy.mining import RuleMiner, _uncovered_f64_rules
+    from simplipy.mining import RuleMiner, _uncovered_strict_rules
     rule = (('ceil', 'abs', 'cos', '!0'), ('1',))
     miner = RuleMiner(acj)
     miner._install('permissive', [])
     try:
-        assert _uncovered_f64_rules(acj, [rule]) == [
+        assert _uncovered_strict_rules(acj, [rule]) == [
             [list(rule[0]), list(rule[1]), ['ceil', 'abs', 'cos', 'x0'],
              ['ceil', 'abs', 'cos', 'x0']]]
         miner._install('permissive', [rule])
-        assert _uncovered_f64_rules(acj, [rule]) == []
+        assert _uncovered_strict_rules(acj, [rule]) == []
     finally:
         miner._install('permissive', [])

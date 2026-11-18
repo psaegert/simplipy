@@ -11,6 +11,12 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Everyone**
 
+- **`f64` is now `strict`.** The mode that preserves what the deployed float64 evaluator
+  computes is `Mode.strict` (`mode='strict'`), and its rule file is `rules_strict.json`; a
+  provenance sidecar records the mode as `strict`, and `find-rules --modes` defaults to
+  `strict,permissive`. `Mode.f64`, `Mode('f64')` and the names `'f64'` and `'default'` select it
+  with a `DeprecationWarning` in 0.15 and are removed in 0.16. A file named `rules_f64.json` is
+  not read by its name: the 0.15 rule sets are new and the older ones do not serve 0.15.
 - **`permissive` includes `f64`.** Every rule that holds in `f64` holds in `permissive`, and
   the permissive file covers the f64 file: on each f64 rule's instance, permissive's answer is
   no dearer than the rule's right side.

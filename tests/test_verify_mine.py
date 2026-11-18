@@ -16,7 +16,7 @@ _OPERATORS = {
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
 }
-FILES = {'f64': 'mined.json', 'permissive': 'mined_permissive.json'}
+FILES = {'strict': 'mined.json', 'permissive': 'mined_permissive.json'}
 
 
 def core_judge(pairs):
@@ -41,7 +41,7 @@ def _plant(tmp_path, mine, mode, rules, sidecar_edit=None):
     the clean one, edited by `sidecar_edit`. A permissive file lies beside the clean f64
     file its sidecar pins (the `offered` gate)."""
     if mode == 'permissive':
-        (tmp_path / FILES['f64']).write_bytes((mine / FILES['f64']).read_bytes())
+        (tmp_path / FILES['strict']).write_bytes((mine / FILES['strict']).read_bytes())
     path = tmp_path / FILES[mode]
     path.write_text(json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules]))
     side = json.load(open(mine / (FILES[mode] + '.provenance.json')))
@@ -51,7 +51,7 @@ def _plant(tmp_path, mine, mode, rules, sidecar_edit=None):
     return str(path)
 
 
-@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
 def test_a_clean_mine_passes_every_gate(mine, mode) -> None:
     report = verify_mine(str(mine / FILES[mode]), mode, _OPERATORS, judge_processes=1)
     assert report['ok'], report['gates']
@@ -68,11 +68,11 @@ def test_the_twin_shadow_gate(tmp_path, mine) -> None:
     ops = yaml.safe_load(open(acj_config_path()))['operators']
     sib = [(('-', 'acosh', 'atanh', '?0', '?1'), ('-', '?0', '?1')),
            (('-', '?1', 'acosh', 'atanh', '?0'), ('-', '?1', '?0'))]
-    path = _plant(tmp_path, mine, 'f64', sib)
-    gate = _gate(verify_mine(path, 'f64', ops, judge=core_judge), 'twin_shadow')
+    path = _plant(tmp_path, mine, 'strict', sib)
+    gate = _gate(verify_mine(path, 'strict', ops, judge=core_judge), 'twin_shadow')
     assert not gate['ok'] and gate['examples'] == [[list(sib[1][0]), list(sib[1][1])]]
-    path = _plant(tmp_path, mine, 'f64', sib[:1])
-    assert _gate(verify_mine(path, 'f64', ops, judge=core_judge), 'twin_shadow')['ok']
+    path = _plant(tmp_path, mine, 'strict', sib[:1])
+    assert _gate(verify_mine(path, 'strict', ops, judge=core_judge), 'twin_shadow')['ok']
 
 
 def test_the_engine_owned_law_gate(tmp_path, mine) -> None:
@@ -80,8 +80,8 @@ def test_the_engine_owned_law_gate(tmp_path, mine) -> None:
     factor = (('+', '*', '?0', '?1', '*', '?2', '?1'), ('*', '+', '?0', '?2', '?1'))
     canon = (('*', '?0', '1'), ('?0',))
     mined = (('*', 'exp', '?0', 'exp', '?0'), ('exp', '*', '2', '?0'))  # a rule of its own
-    path = _plant(tmp_path, mine, 'f64', [factor, canon, mined])
-    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'engine_owned_law')
+    path = _plant(tmp_path, mine, 'strict', [factor, canon, mined])
+    gate = _gate(verify_mine(path, 'strict', _OPERATORS, judge=core_judge), 'engine_owned_law')
     assert gate['examples'] == [[list(factor[0]), list(factor[1]), 'engine-owned-law'],
                                 [list(canon[0]), list(canon[1]), 'canon']], gate
 
@@ -93,20 +93,20 @@ def test_the_engine_owned_law_gate_catches_the_sign_pull(tmp_path, mine) -> None
     ops = dict(_OPERATORS, asin={"realization": "np.arcsin", "alias": [], "inverse": "sin",
                                  "arity": 1, "precedence": 3, "commutative": False})
     pull = (('neg', 'asin', '_0'), ('asin', 'neg', '_0'))
-    path = _plant(tmp_path, mine, 'f64', [pull])
-    gate = _gate(verify_mine(path, 'f64', ops, judge=core_judge), 'engine_owned_law')
+    path = _plant(tmp_path, mine, 'strict', [pull])
+    gate = _gate(verify_mine(path, 'strict', ops, judge=core_judge), 'engine_owned_law')
     assert not gate['ok'], gate
 
 
 def test_the_unlicensed_gate(tmp_path, mine) -> None:
     """An f64 file holding a rule the judge files `permissive`."""
     rule = (('log', 'exp', '?0'), ('?0',))
-    path = _plant(tmp_path, mine, 'f64', [rule])
+    path = _plant(tmp_path, mine, 'strict', [rule])
 
     def judge(pairs):
         return ['permissive' if tuple(map(tuple, p)) == rule else 'core' for p in pairs]
 
-    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=judge), 'unlicensed')
+    gate = _gate(verify_mine(path, 'strict', _OPERATORS, judge=judge), 'unlicensed')
     assert not gate['ok'] and gate['examples'] == [[list(rule[0]), list(rule[1]), 'permissive', []]]
     # the same file read as `permissive`, which licenses the tier
     path = _plant(tmp_path, mine, 'permissive', [rule])
@@ -118,7 +118,7 @@ def test_the_unlicensed_gate_reads_the_named_policies(tmp_path, mine) -> None:
     ground composite on its right (`verify.licensed`), so a file holding it fails the gate in
     every mode."""
     rule = (('*', '2', 'log', '3'), ('log', '9'))
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         path = _plant(tmp_path, mine, mode, [rule])
         gate = _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'unlicensed')
         want = [list(rule[0]), list(rule[1]), 'core']
@@ -128,8 +128,8 @@ def test_the_unlicensed_gate_reads_the_named_policies(tmp_path, mine) -> None:
 
 def test_the_preempted_gate(tmp_path, mine) -> None:
     """A ground rule f64's constructor performs (`exp 0 -> 1`)."""
-    path = _plant(tmp_path, mine, 'f64', [(('exp', '0'), ('1',))])
-    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'preempted')
+    path = _plant(tmp_path, mine, 'strict', [(('exp', '0'), ('1',))])
+    gate = _gate(verify_mine(path, 'strict', _OPERATORS, judge=core_judge), 'preempted')
     assert not gate['ok'] and gate['count'] == 1, gate
 
 
@@ -137,8 +137,8 @@ def test_the_dead_gate(tmp_path, mine) -> None:
     """A rule another rule takes from its own instance, ending dearer, never decides an answer:
     here two rows of one left side, the first ending at `2*x` where the second promises `x`."""
     first, second = (('exp', 'log', '_0'), ('*', '2', '_0')), (('exp', 'log', '_0'), ('_0',))
-    path = _plant(tmp_path, mine, 'f64', [first, second])
-    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'dead')
+    path = _plant(tmp_path, mine, 'strict', [first, second])
+    gate = _gate(verify_mine(path, 'strict', _OPERATORS, judge=core_judge), 'dead')
     assert not gate['ok'] and [e[:2] for e in gate['examples']] == [[list(second[0]),
                                                                      list(second[1])]], gate
     assert gate['examples'][0][2:] == [['exp', 'log', 'x0'], ['*', '2', 'x0']], gate
@@ -193,8 +193,8 @@ def test_the_overlaps_gate(tmp_path, mine) -> None:
 
 def test_the_translation_gate(tmp_path, mine) -> None:
     """A rule the load subsumes by exact arithmetic (`* 1 ?0 -> ?0`)."""
-    path = _plant(tmp_path, mine, 'f64', [(('*', '1', '?0'), ('?0',))])
-    gate = _gate(verify_mine(path, 'f64', _OPERATORS, judge=core_judge), 'translation')
+    path = _plant(tmp_path, mine, 'strict', [(('*', '1', '?0'), ('?0',))])
+    gate = _gate(verify_mine(path, 'strict', _OPERATORS, judge=core_judge), 'translation')
     assert not gate['ok'] and gate['examples'][0]['subsumed'] == 1, gate
 
 
@@ -219,7 +219,7 @@ def _interrupted(side):
 
 
 def _another_mode(side):
-    side['mode'] = 'f64'
+    side['mode'] = 'strict'
 
 
 def _no_probes(side):
@@ -247,8 +247,8 @@ def test_a_vacuous_or_foreign_sidecar_fails(tmp_path, mine, edit, gate) -> None:
 
 
 def test_an_empty_file_fails(tmp_path, mine) -> None:
-    path = _plant(tmp_path, mine, 'f64', [])
-    report = verify_mine(path, 'f64', _OPERATORS, judge=core_judge)
+    path = _plant(tmp_path, mine, 'strict', [])
+    report = verify_mine(path, 'strict', _OPERATORS, judge=core_judge)
     assert not report['ok'] and not report['gates']['rules']['ok'], report['gates']
 
 
@@ -270,7 +270,7 @@ def test_the_env_switch_gate(tmp_path, mine, monkeypatch) -> None:
     assert gate['examples'] == [['SIMPLIPY_SOMETHING', '1']]
 
 
-@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
 def test_the_basis_gate(tmp_path, mine, mode) -> None:
     """The sidecar records what every rule's verdict rests on in the mode, proved or on
     evidence alone, one entry per rule: a mine's own record passes, a missing, short or refused
@@ -321,7 +321,7 @@ def test_a_sidecar_records_the_acceptance_and_the_code(mine) -> None:
     assert side['acceptance']['tiers'] == ['core', 'permissive']
     assert len(side['acceptance']['judge_digest']) == 64
     assert set(side['code_digest']) == {'core', 'python'}
-    f64 = json.load(open(mine / (FILES['f64'] + '.provenance.json')))
+    f64 = json.load(open(mine / (FILES['strict'] + '.provenance.json')))
     assert f64['acceptance']['rescue'] is False and f64['acceptance']['near_miss_frac'] is None
     assert f64['params']['interval_node_budget'] is None
     assert copy.deepcopy(f64['soundness']['env_overrides']) == {}
@@ -340,16 +340,16 @@ def test_the_offered_gate(tmp_path, mine) -> None:
         return _gate(verify_mine(path, 'permissive', _OPERATORS, judge=core_judge), 'offered')
 
     assert offered()['ok'], offered()
-    assert 'offered' not in verify_mine(str(tmp_path / FILES['f64']), 'f64', _OPERATORS,
+    assert 'offered' not in verify_mine(str(tmp_path / FILES['strict']), 'strict', _OPERATORS,
                                         judge=core_judge)['gates']
     # the f64 file changes after the mine
-    f64 = json.load(open(tmp_path / FILES['f64']))
-    (tmp_path / FILES['f64']).write_text(json.dumps(f64[1:], indent=4))
+    f64 = json.load(open(tmp_path / FILES['strict']))
+    (tmp_path / FILES['strict']).write_text(json.dumps(f64[1:], indent=4))
     gate = offered()
-    assert not gate['ok'] and gate['examples'] == [['f64', 'sha256', str(tmp_path / FILES['f64'])]]
+    assert not gate['ok'] and gate['examples'] == [['strict', 'sha256', str(tmp_path / FILES['strict'])]]
     # the f64 file is gone
-    (tmp_path / FILES['f64']).unlink()
-    assert [e[:2] for e in offered()['examples']] == [['f64', 'missing']]
+    (tmp_path / FILES['strict']).unlink()
+    assert [e[:2] for e in offered()['examples']] == [['strict', 'missing']]
     # a permissive mine that was offered nothing
     side_path = tmp_path / (FILES['permissive'] + '.provenance.json')
     side = json.load(open(side_path))
@@ -359,7 +359,7 @@ def test_the_offered_gate(tmp_path, mine) -> None:
     assert not gate['ok'] and gate['count'] == 1, gate
 
 
-def test_the_covers_f64_gate(tmp_path, mine) -> None:
+def test_the_covers_strict_gate(tmp_path, mine) -> None:
     """Permissive includes f64, so the permissive file covers the f64 file it was offered: on
     each f64 rule's generic instance, permissive's answer is no dearer than the rule's right
     side. A clean mine passes; an f64 file holding a rule whose instance the permissive file
@@ -374,21 +374,21 @@ def test_the_covers_f64_gate(tmp_path, mine) -> None:
     def gates():
         return verify_mine(path, 'permissive', _OPERATORS, judge=core_judge)['gates']
 
-    assert gates()['covers_f64']['ok'], gates()['covers_f64']
-    assert 'covers_f64' not in verify_mine(str(tmp_path / FILES['f64']), 'f64', _OPERATORS,
-                                           judge=core_judge)['gates']
+    assert gates()['covers_strict']['ok'], gates()['covers_strict']
+    assert 'covers_strict' not in verify_mine(str(tmp_path / FILES['strict']), 'strict', _OPERATORS,
+                                              judge=core_judge)['gates']
     planted = [['exp', 'neg', 'log', '?0'], ['/', '1', '?0']]
-    f64 = json.load(open(tmp_path / FILES['f64'])) + [planted]
-    (tmp_path / FILES['f64']).write_text(json.dumps(f64, indent=4))
+    f64 = json.load(open(tmp_path / FILES['strict'])) + [planted]
+    (tmp_path / FILES['strict']).write_text(json.dumps(f64, indent=4))
     side_path = tmp_path / (FILES['permissive'] + '.provenance.json')
     side = json.load(open(side_path))
-    side['offered']['files']['f64']['sha256'] = hashlib.sha256(
-        (tmp_path / FILES['f64']).read_bytes()).hexdigest()
+    side['offered']['files']['strict']['sha256'] = hashlib.sha256(
+        (tmp_path / FILES['strict']).read_bytes()).hexdigest()
     side_path.write_text(json.dumps(side))
     found = gates()
     assert found['offered']['ok'], found['offered']
-    assert not found['covers_f64']['ok']
-    assert [e[:2] for e in found['covers_f64']['examples']] == [planted]
+    assert not found['covers_strict']['ok']
+    assert [e[:2] for e in found['covers_strict']['examples']] == [planted]
 
 
 def test_the_ground_exact_gate(tmp_path, mine) -> None:
@@ -399,7 +399,7 @@ def test_the_ground_exact_gate(tmp_path, mine) -> None:
     table decides, at float resolution."""
     held, same, false = ((('exp', 'log', '3'), ('3',)), (('log', 'exp', '2'), ('2',)),
                          (('exp', 'log', '3'), ('2',)))
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         path = _plant(tmp_path, mine, mode, [held, same, false])
         gate = _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'ground_exact')
         assert not gate['ok'] and [e[:2] for e in gate['examples']] == [
@@ -418,8 +418,8 @@ def test_a_ground_fact_the_engine_folds_is_no_rule(tmp_path, mine) -> None:
     """`preempted` is the census of ground facts: a ground rule whose left side the rule-less
     engine already takes to its right side's state. `log(-3)` folds to `nan` today."""
     fact = (('log', '(-3)'), ('float("nan")',))
-    path = _plant(tmp_path, mine, 'f64', [fact])
-    gate = _gate(verify_mine(path, 'f64', _acj_operators(), judge=core_judge), 'preempted')
+    path = _plant(tmp_path, mine, 'strict', [fact])
+    gate = _gate(verify_mine(path, 'strict', _acj_operators(), judge=core_judge), 'preempted')
     assert not gate['ok'] and gate['examples'] == [[list(fact[0]), list(fact[1])]], gate
 
 
@@ -429,6 +429,6 @@ def test_a_ground_nan_fact_of_a_non_integer_root_index_is_no_rule(tmp_path, mine
     core folds them itself, so the gate refuses every one, and a mine mints none (its mark is
     the fold)."""
     fact = (('rootn', '(-5)', 'asinh', 'tanh', '4'), ('float("nan")',))
-    path = _plant(tmp_path, mine, 'f64', [fact])
-    gate = _gate(verify_mine(path, 'f64', _acj_operators(), judge=core_judge), 'preempted')
+    path = _plant(tmp_path, mine, 'strict', [fact])
+    gate = _gate(verify_mine(path, 'strict', _acj_operators(), judge=core_judge), 'preempted')
     assert not gate['ok'] and gate['examples'] == [[list(fact[0]), list(fact[1])]], gate

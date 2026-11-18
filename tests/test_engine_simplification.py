@@ -191,9 +191,9 @@ class TestMode:
         is a category error, not a question with a wrong answer, so `<` must not
         type-check."""
         from simplipy import Mode
-        assert [m.name for m in Mode] == ["f64", "permissive"]
+        assert [m.name for m in Mode] == ["strict", "permissive"]
         with pytest.raises(TypeError):
-            Mode.f64 < Mode.permissive        # type: ignore[operator]
+            Mode.strict < Mode.permissive        # type: ignore[operator]
 
     def test_an_unknown_mode_attribute_is_still_an_attribute_error(self) -> None:
         """`__getattr__` serves the two retired names; it must not swallow typos."""

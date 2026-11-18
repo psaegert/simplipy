@@ -657,7 +657,7 @@ class TestFingerprintAndArtifactLoad:
             '/ x0 * x0 x1': 9 * MILLI,
             'atanh tanh x0': 22 * MILLI,
         }
-        assert fp['mode'] == 'f64'
+        assert fp['mode'] == 'strict'
         assert fp['digest'] != ACJ_MINED_DIGEST
 
     def test_each_mode_prices_the_readings_in_its_own(self, eng):
@@ -666,14 +666,14 @@ class TestFingerprintAndArtifactLoad:
         compound = ('pow x0 2', 'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1',
                     'atanh tanh x0')
         readings = {m: {k: eng._measure_fingerprint(m)['probes'][k] for k in compound}
-                    for m in ('f64', 'permissive')}
-        assert readings['f64'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 13170,
-                                   '* inv exp 5132.3 x0': 33647, '/ x0 * x0 x1': 9000,
-                                   'atanh tanh x0': 22000}
+                    for m in ('strict', 'permissive')}
+        assert readings['strict'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 13170,
+                                      '* inv exp 5132.3 x0': 33647, '/ x0 * x0 x1': 9000,
+                                      'atanh tanh x0': 22000}
         # permissive reads atanh(tanh(x0)) and (x0^2)^(1/2) as x0
-        assert readings['permissive'] == dict(readings['f64'], **{'atanh tanh x0': 6000,
-                                                                  'pow pow x0 2 0.5': 6000})
-        for m in ('f64', 'permissive'):
+        assert readings['permissive'] == dict(readings['strict'], **{'atanh tanh x0': 6000,
+                                                                     'pow pow x0 2 0.5': 6000})
+        for m in ('strict', 'permissive'):
             assert eng._measure_fingerprint(m)['mode'] == m
 
     def test_acj_load_compares_what_was_recorded(self):

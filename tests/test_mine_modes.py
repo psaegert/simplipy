@@ -227,7 +227,7 @@ def _offer_mine(tmp_path, offer):
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
                       X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
                       judge=lambda pairs: ['core'] * len(pairs), offer_final_rules=offer,
-                      output_file=str(tmp_path / 'rules_f64.json'))
+                      output_file=str(tmp_path / 'rules_strict.json'))
     side = json.load(open(tmp_path / 'rules_permissive.json.provenance.json'))
     return engine, side
 
@@ -241,8 +241,8 @@ def test_the_permissive_mine_is_offered_the_finished_file(tmp_path):
     assert OFFERED in engine.simplification_rules
     assert OFFERED in engine.permissive_simplification_rules
     offered = side['offered']
-    assert set(offered['files']) == {'f64'}
-    for key, name in (('f64', 'rules_f64.json'),):
+    assert set(offered['files']) == {'strict'}
+    for key, name in (('strict', 'rules_strict.json'),):
         pin = offered['files'][key]
         assert pin['file'] == name
         assert pin['sha256'] == hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
@@ -280,14 +280,14 @@ def test_an_f64_rule_is_offered_at_permissives_reading_of_its_left_side(tmp_path
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2,
                       dummy_variables=1, X=128, seed=3, reset_rules=False, promote_sorts=False,
                       symbolic_gate=False, judge=lambda pairs: ['core'] * len(pairs),
-                      offer_final_rules=True, output_file=str(tmp_path / 'rules_f64.json'))
+                      offer_final_rules=True, output_file=str(tmp_path / 'rules_strict.json'))
     side = json.load(open(tmp_path / 'rules_permissive.json.provenance.json'))
     assert GROUND_OFFERED in engine.simplification_rules
     reading = ['atan2', '<constant>', 'float("-inf")']
     entry, = [e for e in side['offered']['trail'] if e['source'] == reading]
     assert entry['verdict'] == 'certified' and entry['target'] == ['<constant>'], entry
     assert (tuple(reading), ('<constant>',)) in engine.permissive_simplification_rules
-    assert side['gates']['covers_f64'] == []
+    assert side['gates']['covers_strict'] == []
 
 
 def test_the_f64_scan_reads_the_range_standard(eng):
@@ -340,8 +340,8 @@ def test_the_f64_mine_reads_the_range_standard(tmp_path):
     engine = SimpliPyEngine(operators=ops, rules=[])
     engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
                       extra_internal_terms=['2'], X=512, seed=7, judge_processes=1,
-                      output_file=str(tmp_path / 'rules_f64.json'), promote_sorts=False)
-    f64 = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(tmp_path / 'rules_f64.json'))]
+                      output_file=str(tmp_path / 'rules_strict.json'), promote_sorts=False)
+    f64 = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(tmp_path / 'rules_strict.json'))]
     assert (('rootn', 'exp', '?0', '2'), ('exp', '/', '?0', '2')) in f64
     assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and len(r[0]) == 3]
     assert not [r for r in f64 if r[0][:2] == ('log', 'exp')]
