@@ -423,12 +423,9 @@ impl Engine {
     ///
     /// The EXPLICIT projection, not the tagged one: this is the serialization the contract
     /// judge (`simplipy.verify`) parses.
-    pub fn ac_served_rules(&self) -> Vec<ServedRule> {
-        self.ac_served_rules_in_mode(RuleMode::Default)
-    }
-
-    /// [`Engine::ac_served_rules`] for ANY mode: the set that mode actually fires, with
-    /// `source` indexing THAT MODE'S OWN artifact file. This is the surface a judge needs
+    ///
+    /// Per mode: the set that mode actually fires, with `source` indexing THAT MODE'S OWN
+    /// artifact file. This is the surface a judge needs
     /// to rule on the artifact -- each mode's file is judged against the rules its
     /// own mode serves, and a verdict is actionable in the file it came from because no
     /// tier offsets sit between the index and the line.
@@ -2094,16 +2091,6 @@ impl RuleMode {
         crate::ac::expr::Permissive::AnySlot.applies_in(self)
     }
 
-    /// The mode a bare `wildcard_all` flag names: `true` the permissive set, `false` the
-    /// default (f64) one.
-    pub fn from_wildcard_all(wildcard_all: bool) -> Self {
-        if wildcard_all {
-            RuleMode::Permissive
-        } else {
-            RuleMode::Default
-        }
-    }
-
     /// The wire spelling used by the FFI (`ac_simplify_in_mode`) and by the config keys.
     pub fn parse(name: &str) -> Option<Self> {
         match name {
@@ -2617,8 +2604,6 @@ mod tests {
     /// than by accident.
     #[test]
     fn the_mode_map_is_what_ships_today() {
-        assert_eq!(RuleMode::from_wildcard_all(false), RuleMode::Default);
-        assert_eq!(RuleMode::from_wildcard_all(true), RuleMode::Permissive);
         assert!(!RuleMode::Default.wildcard_all());
         assert!(RuleMode::Permissive.wildcard_all());
         assert_eq!(RuleMode::parse("default"), Some(RuleMode::Default));
