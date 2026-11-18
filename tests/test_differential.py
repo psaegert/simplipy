@@ -886,6 +886,12 @@ def test_permissive_cancels_an_inverse_pair_in_both_orders(outer, inner) -> None
 #: reads the argument too (`ceil(x0)` is an integer, never inside the flat band).
 FAIL_CLOSED = ("the flat point's premise reads the context, not the argument: the pair stays "
                "under a reader of zeros")
+#: Why the engine may keep a function law the judge holds on this machine: under `floor` the judge's
+#: verdict reads where the platform's libm drifts. glibc 2.43's `acosh(cosh(1))` is
+#: 0.9999999999999999, which `floor` reads, and the judge refuses the law; glibc 2.39 is exact at 1
+#: and drifts at 32 instead (31.999999999999996), and the judge holds it. The engine's premise reads
+#: no libm and keeps the pair under `floor` on both, so the row asserts only the safe direction.
+PLATFORM_LIBM = "the judge reads the platform's libm, where the engine's premise reads none"
 
 
 class KnownDisagreement(AssertionError):
@@ -894,7 +900,9 @@ class KnownDisagreement(AssertionError):
 
 def function_case(law, lhs, rhs, mode, *causes):
     marks = [pytest.mark.xfail(strict=True, raises=KnownDisagreement, reason='; '.join(causes))]
-    return pytest.param(law, lhs, rhs, mode, causes, marks=marks if causes else [],
+    # a disagreement that depends on the platform is no strict expectation either way
+    expected = [c for c in causes if c != PLATFORM_LIBM]
+    return pytest.param(law, lhs, rhs, mode, causes, marks=marks if expected else [],
                         id=f'{law}: {lhs} -> {rhs} [{mode}]')
 
 
@@ -937,7 +945,7 @@ FUNCTION_PINS = [
     function_case('fun.log_exp', 'sin log exp x0', 'sin x0', 'f64'),
     function_case('fun.log_exp', 'inv exp log exp x0', 'inv exp x0', 'f64'),
     function_case('fun.acosh_cosh', 'inv acosh cosh x0', 'inv abs x0', 'f64'),
-    function_case('fun.acosh_cosh', 'floor acosh cosh x0', 'floor abs x0', 'f64'),
+    function_case('fun.acosh_cosh', 'floor acosh cosh x0', 'floor abs x0', 'f64', PLATFORM_LIBM),
     function_case('fun.acosh_cosh', 'exp acosh cosh x0', 'exp abs x0', 'f64'),
     function_case('fun.acosh_cosh', 'acosh cosh x0', 'abs x0', 'f64'),
     # the log of an inverse: +0 against -0 at t = 1, held under a reader of a zero's sign, over a
@@ -975,7 +983,8 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
                                                                   causes) -> None:
     """The engine takes the step at effort 0 exactly where the judge holds the rule in the mode,
     or the two disagree for the cause the row names (`FAIL_CLOSED`: the engine keeps a flat pair
-    under a reader of zeros whatever its argument)."""
+    under a reader of zeros whatever its argument; `PLATFORM_LIBM`: the judge holds the law through
+    this platform's libm, and the engine keeps it)."""
     engine = bare()
     takes = (list(engine.simplify(lhs.split(), mode=mode, effort=0))
              == list(engine.simplify(rhs.split(), mode=mode, effort=0)))
@@ -984,6 +993,10 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
     if takes == holds:
         return
     assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('tier'))
+    if PLATFORM_LIBM in causes:
+        # only the safe direction: the engine keeps a step the judge holds on this machine
+        assert mode == 'f64' and holds and not takes, (lhs, mode)
+        return
     if FAIL_CLOSED in causes:
         # the engine keeps the step the judge holds, never the other way, and keeps it under a
         # reader: the same pair at the root is taken
