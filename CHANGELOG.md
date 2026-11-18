@@ -233,7 +233,12 @@ organised by who you are, then the highlights, then every change in detail.
   the answer changed that holds as a step, a reciprocal's and a negation's spellings read as one:
   `1/sin(np.pi - x0) -> 1/sin(x0)` is OK (the step `sin(np.pi - x0) -> sin(x0)` gives 0 against
   1.2e-16 at x0 = np.pi, which `1/` makes +inf against 8.2e15), as is
-  `1/sin(x0 - np.pi) -> -1/sin(x0)`.
+  `1/sin(x0 - np.pi) -> -1/sin(x0)`. Where the answer respells a product or a quotient, the
+  factors it changed, less those the two sides share, are a part too, read under the reciprocal
+  where one divides: `x/(a*x^2 + b*x) -> 1/(a*x + b)` is OK where float64's divisor of the answer
+  vanishes a double away from the input's (+inf against 8.7e15 at x = -0.48357881371968436 for
+  a = 1.84813996308601, b = 0.893721330937074), since `(a*x^2 + b*x)/x -> a*x + b` holds as a
+  step.
 - **The monitor refuses a whole answer whose value turns on a zero's sign.** An answer true in
   the reals whose float64 differences are rounding alone was passed without reading a zero's
   sign: `atan2(0*x0, -1) -> pi` (-pi against pi for every x0 < 0) passed, and is now refused.

@@ -37,7 +37,10 @@ spellings read as one) is read as the step, and around it only a zero's sign is 
 region. `1/log(exp(x0)) -> 1/x0` is OK (+inf against 1e17 at x0 = 1e-17 is rounding under `1/`),
 and so is `1/sin(np.pi - x1) -> 1/sin(x1)` (+inf against 8.2e15 at x1 = np.pi: the step
 `sin(np.pi - x1) -> sin(x1)` gives 0 against 1.2e-16 there); `1/(0 + 0*x0) -> 1/(0*x0)` is not
-(+inf against -inf for x0 < 0). Rounding alone apart, a whole answer whose value turns on a zero's
+(+inf against -inf for x0 < 0). Where the answer respells a product or a quotient, the factors it
+changed, less those the two sides share, are a part too, read under the reciprocal where one
+divides: `x/(a*x^2 + b*x) -> 1/(a*x + b)` changes `(a*x^2 + b*x)/x -> a*x + b`, which holds as a
+step where float64's divisor of the answer vanishes a double away from the input's. Rounding alone apart, a whole answer whose value turns on a zero's
 sign on a region is refused too (`atan2(0*x0, -1) -> pi`). An infinity's sign at an isolated pole
 is not promised (the judge's reading of a pole's sign): `1/(-x0 - 3) -> -1/(x0 + 3)` is OK, and
 nor is any value where the input has an isolated two-signed pole: `1/(x0 - 3) + 1/(3 - x0) -> 0`.
@@ -387,15 +390,16 @@ def _signs_spelled_alike(node):
     return (head, kids)
 
 
-def _changed_parts(lhs, rhs):
+def _changed_parts(lhs, rhs, factors=True):
     """THE PARTS OF THE INPUT THE ANSWER CHANGED, outermost first: below every operation the two
     share with all its other arguments unchanged, each pair of subexpressions down to the smallest
     one where they differ, read with a reciprocal's and a negation's spellings made one
     (`_signs_spelled_alike`). The engine's steps all lie inside the smallest, and what lies around
     a part is its context: `inv(log(exp(x0))) -> inv(x0)` changes `log(exp(x0)) -> x0` under
     `inv`, and `1/sin(np.pi - x1) -> inv(sin(x1))` changes `np.pi - x1 -> x1`, inside
-    `sin(np.pi - x1) -> sin(x1)`, under `inv`. Only the whole rewrite where it is no one prefix
-    expression on each side."""
+    `sin(np.pi - x1) -> sin(x1)`, under `inv`. Where the smallest is a product or a quotient on
+    either side, its changed factors follow (`_changed_factors`), each with its own parts. Only the
+    whole rewrite where it is no one prefix expression on each side."""
     try:
         node_l = _signs_spelled_alike(_contract._term(lhs))
         node_r = _signs_spelled_alike(_contract._term(rhs))
@@ -408,7 +412,72 @@ def _changed_parts(lhs, rhs):
             break
         node_l, node_r = pairs[0]
         parts.append((_contract._tokens_of(node_l), _contract._tokens_of(node_r)))
-    return parts
+    if factors:
+        for part_l, part_r in _changed_factors(node_l, node_r):
+            said = (_contract._tokens_of(part_l), _contract._tokens_of(part_r))
+            parts.append(said)
+            parts.extend(_changed_parts(*said, factors=False)[1:])
+    unique = dict.fromkeys((tuple(a), tuple(b)) for a, b in parts)
+    return [(list(a), list(b)) for a, b in unique]
+
+
+def _factors(node):
+    """A product's or a quotient's factors, `(sign, [(factor, 1 or -1)])`: `-x/(y*inv(z))` is
+    `(-1, [(x, 1), (y, -1), (z, 1)])`, a negation and a factor -1 its sign."""
+    head, kids = node
+    if head in ('*', '/') and len(kids) == 2:
+        (s1, f1), (s2, f2) = _factors(kids[0]), _factors(kids[1])
+        return s1 * s2, f1 + (f2 if head == '*' else [(f, -e) for f, e in f2])
+    if head in ('inv', 'neg') and len(kids) == 1:
+        s, f = _factors(kids[0])
+        return (s, [(g, -e) for g, e in f]) if head == 'inv' else (-s, f)
+    for unit in (1, -1):
+        if not kids and _literal_is(head, unit):
+            return unit, []
+    return 1, [(node, 1)]
+
+
+def _quotient(sign, factors):
+    """The `_contract._term` tree of `_factors`' reading `(sign, factors)`: the product of the
+    factors of exponent 1 over the product of those of exponent -1, negated where `sign` is -1."""
+    def product(nodes):
+        out = nodes[0] if nodes else ('1', ())
+        for f in nodes[1:]:
+            out = ('*', (out, f))
+        return out
+    num = product([f for f, e in factors if e > 0])
+    den = [f for f, e in factors if e < 0]
+    out = ('/', (num, product(den))) if den else num
+    return ('neg', (out,)) if sign < 0 else out
+
+
+def _changed_factors(node_l, node_r):
+    """THE FACTORS A PRODUCT OR A QUOTIENT CHANGED: each side's factors (`_factors`) less those
+    the two share, as one quotient each, and, where a factor divides, its reciprocal. A shared
+    factor multiplies the same value on both sides, and a reciprocal reads the zero of what it
+    divides by as a pole, so around the changed factors float64's rounding of their step is
+    magnified, as around any part: `-1/(x1*S) -> inv(T)/x1` changes `S` to `-T`, read under the
+    reciprocal, and `x/(a*x^2 + b*x) -> 1/(a*x + b)` changes `(a*x^2 + b*x)/x` to `a*x + b`. ->
+    `[(part_l, part_r)]`, none where neither side is a product or a quotient."""
+    heads = ('*', '/', 'inv', 'neg')
+    if node_l[0] not in heads and node_r[0] not in heads:
+        return []
+    (sign_l, fl), (sign_r, fr) = _factors(node_l), _factors(node_r)
+    rest_r, kept_l = list(fr), []
+    for f in fl:
+        if f in rest_r:
+            rest_r.remove(f)
+        else:
+            kept_l.append(f)
+    if not kept_l and not rest_r:
+        return []
+    out = []
+    if len(kept_l) < len(fl):
+        out.append((_quotient(sign_l, kept_l), _quotient(sign_r, rest_r)))
+    if any(e < 0 for _, e in kept_l + rest_r):
+        out.append((_quotient(sign_l, [(f, -e) for f, e in kept_l]),
+                    _quotient(sign_r, [(f, -e) for f, e in rest_r])))
+    return [(a, b) for a, b in out if (a, b) != (node_l, node_r)]
 
 
 def _held(detail, name, engine, exact_steps):

@@ -2021,6 +2021,29 @@ def test_the_monitor_reads_the_smallest_changed_part_that_holds_as_a_step() -> N
     assert verdict == 'VIOLATION'
 
 
+def test_the_monitor_reads_a_products_changed_factors_as_a_step() -> None:
+    # x/(a*x^2 + b*x) -> 1/(a*x + b): float64's divisor of the answer is 0 at x = -0.48357881371968436,
+    # where the input's is not (+inf against 8.7e15). The changed factors, (a*x^2 + b*x)/x -> a*x + b,
+    # hold as a step (0 against a rounding there), and the reciprocal around them magnifies it
+    import yaml
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    src = '/ x0 + * 1.84813996308601 pow x0 2 * 0.893721330937074 x0'.split()
+    out = 'inv + * 1.84813996308601 x0 0.893721330937074'.split()
+    assert judge_rule(src, out)['tier'] == 'permissive'
+    verdict, detail = judge_pair(src, out, engine=bare)
+    part = '/ + * 1.84813996308601 pow ?0 2 * 0.893721330937074 ?0 ?0 -> + * 1.84813996308601 ?0 0.893721330937074'
+    assert verdict == 'OK' and f'the changed part {part} holds' in detail, detail
+    # a factor's sign read out: -1/(x1*S) -> inv(T)/x1 changes S to -T
+    verdict, detail = judge_pair('/ -1 * x1 + log / 1 x1 / + neg x2 / 1 x1 x2'.split(),
+                                 '/ inv - + log x1 1 inv * x1 x2 x1'.split(), engine=bare)
+    assert verdict == 'OK', detail
+    # no changed factor of a false answer holds
+    verdict, _ = judge_pair(src, 'inv + * 1.84813996308601 x0 0.9'.split(), engine=bare)
+    assert verdict == 'VIOLATION'
+
+
 def test_the_monitor_refuses_a_whole_answer_that_turns_on_a_zeros_sign() -> None:
     # true in the reals and float64's kinds kept (-pi against pi), but -pi for every x0 < 0, where
     # `0*x0` is -0 and atan2 reads it
