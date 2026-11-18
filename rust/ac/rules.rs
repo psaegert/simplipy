@@ -740,6 +740,71 @@ impl AcRules {
 /// A step's admission on a fully numeric node (`PassCtx::ground_step`): `(node, result)`.
 pub type GroundStep<'a> = &'a dyn Fn(&Ex, &Ex) -> bool;
 
+/// THE NORMAL-FORM MEMO'S KEYS: each distinct subtree a pass meets is one id, made from its own head
+/// and its children's ids, so two subtrees share an id exactly when they are equal (`Ex`'s
+/// structural equality, a number by its exact value) and the memo stores ids, not copies: a chain
+/// of depth `d` costs memory linear in `d` (a copy per node cost `d^2/2` nodes).
+#[derive(Default)]
+pub struct NodeIds {
+    ids: FxHashMap<Box<[u32]>, u32>,
+    nums: FxHashMap<Rat, u32>,
+    stack: Vec<u32>,
+}
+
+impl NodeIds {
+    /// The id of `e`, given the first time `e`'s structure is met.
+    pub fn id(&mut self, e: &Ex) -> u32 {
+        let base = self.stack.len();
+        match e {
+            Ex::Num(r) => {
+                let n = self.nums.len() as u32;
+                let k = *self.nums.entry(r.clone()).or_insert(n);
+                self.stack.extend([0, k]);
+            }
+            Ex::Pi => self.stack.push(1),
+            Ex::E => self.stack.push(2),
+            Ex::PosInf => self.stack.push(3),
+            Ex::NegInf => self.stack.push(4),
+            Ex::NaN => self.stack.push(5),
+            Ex::Const => self.stack.push(6),
+            Ex::Leaf(t) => self.stack.extend([7, t.0]),
+            Ex::Add(v) | Ex::Mul(v) => {
+                self.stack.push(if matches!(e, Ex::Add(_)) { 8 } else { 9 });
+                self.stack.push(v.len() as u32);
+                for c in v {
+                    let i = self.id(c);
+                    self.stack.push(i);
+                }
+            }
+            Ex::Pow(b, x) => {
+                self.stack.push(10);
+                let i = self.id(b);
+                self.stack.push(i);
+                let j = self.id(x);
+                self.stack.push(j);
+            }
+            Ex::Fun(f, v) => {
+                self.stack.extend([11, f.0, v.len() as u32]);
+                for c in v {
+                    let i = self.id(c);
+                    self.stack.push(i);
+                }
+            }
+        }
+        let key = &self.stack[base..];
+        let id = match self.ids.get(key) {
+            Some(&i) => i,
+            None => {
+                let n = self.ids.len() as u32;
+                self.ids.insert(key.into(), n);
+                n
+            }
+        };
+        self.stack.truncate(base);
+        id
+    }
+}
+
 /// Per-pass context for the rewrite walk.
 pub struct PassCtx<'a> {
     pub rules: &'a AcRules,
@@ -757,8 +822,8 @@ pub struct PassCtx<'a> {
     /// the counter reaches it, and the call says it was interrupted ([`take_caps`]).
     pub fires: Cell<u64>,
     /// Normal-form memo: subtrees this pass already walked to a fixpoint cannot fire and are
-    /// returned untouched.
-    pub normal: RefCell<FxHashSet<Ex>>,
+    /// returned untouched. Keyed by the subtree's id ([`NodeIds`]), so it holds no copy of one.
+    pub normal: RefCell<FxHashSet<u32>>,
     /// How many refusals the walk met so far (`visit`): a fire or a rebuild that does not descend
     /// at its node is taken where the whole expression's price falls, which reads the ancestors,
     /// so a node above a refusal is normal only in its place as it stands (`normal_at`).
@@ -766,7 +831,9 @@ pub struct PassCtx<'a> {
     /// The memo of nodes normal in their place: a node above a refusal, with the walk's `epoch`
     /// when it was marked. It is normal while nothing changed since; after a change it is walked
     /// again, its refusals reading the ancestors as they then stand.
-    pub normal_at: RefCell<FxHashMap<Ex, u64>>,
+    pub normal_at: RefCell<FxHashMap<u32, u64>>,
+    /// The ids of the subtrees the memo has met ([`NodeIds`]).
+    pub ids: RefCell<NodeIds>,
     /// How many changes the walk made so far (steps, folds and carried steps), in the whole call.
     pub epoch: Cell<u64>,
     /// THE COMPOSITE STEP, for the search: rebuilds the settling refused, as `(node, rebuilt)`,
@@ -1444,6 +1511,7 @@ pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
         normal: RefCell::new(FxHashSet::default()),
         contextual: Cell::new(0),
         normal_at: RefCell::new(FxHashMap::default()),
+        ids: RefCell::new(NodeIds::default()),
         epoch: Cell::new(0),
         refused: RefCell::new(Vec::new()),
         suppressed: p.suppressed,
@@ -1497,7 +1565,8 @@ fn visit(node: &Ex, p: &PassCtx, up: Option<&Up>) -> Visit {
             _ => Visit::Normal,
         };
     }
-    if p.normal.borrow().contains(node) || p.normal_at.borrow().get(node) == Some(&p.epoch.get()) {
+    let id = p.ids.borrow_mut().id(node);
+    if p.normal.borrow().contains(&id) || p.normal_at.borrow().get(&id) == Some(&p.epoch.get()) {
         if trace_memo() {
             memo_log("HIT", node);
         }
@@ -1748,10 +1817,11 @@ fn mark_normal(node: &Ex, p: &PassCtx, contextual: u64, why: &str) -> Visit {
         if trace_memo() {
             memo_log(why, node);
         }
+        let id = p.ids.borrow_mut().id(node);
         if p.contextual.get() == contextual {
-            p.normal.borrow_mut().insert(node.clone());
+            p.normal.borrow_mut().insert(id);
         } else {
-            p.normal_at.borrow_mut().insert(node.clone(), p.epoch.get());
+            p.normal_at.borrow_mut().insert(id, p.epoch.get());
         }
     }
     Visit::Normal

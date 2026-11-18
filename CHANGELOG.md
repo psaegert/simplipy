@@ -2565,6 +2565,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **A deep expression's memory is linear in its depth.** The normal-form memo of a simplify pass
+  keeps one id per distinct subtree, where it kept a copy of every subtree it marked, which grew
+  with the square of the depth on a chain at the input cap of 4,096 tokens. Answers are unchanged.
 - **The core's tests are lint-clean.** `cargo clippy --all-targets -- -D warnings` passes, the
   test targets included (it stopped at four lints in the tests of the interval layer and the
   high-precision `besselj`).

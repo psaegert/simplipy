@@ -1893,6 +1893,7 @@ impl Engine {
             normal: RefCell::new(FxHashSet::default()),
             contextual: Cell::new(0),
             normal_at: RefCell::new(FxHashMap::default()),
+            ids: RefCell::new(crate::ac::rules::NodeIds::default()),
             epoch: Cell::new(0),
             refused: RefCell::new(Vec::new()),
             suppressed,
