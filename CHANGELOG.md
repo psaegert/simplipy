@@ -188,6 +188,23 @@ organised by who you are, then the highlights, then every change in detail.
   bind a part that is zero on a region, isolates no pole (`1/(_0 - 3) + 1/(3 - _0) -> 0` is
   refused). `(x1 + x2)/x0 -> x1/x0 + x2/x0` now holds in `f64`: the right side has no value at
   x0 = 0 where x1 and x2 differ in sign, the left side's isolated two-signed pole.
+- **Clause (b) reads a rational function of its atoms.** In the reals, a left side built by `+`,
+  `-`, `*`, `/`, negation, the reciprocal and integer powers from its atoms (the other maximal
+  parts: a variable, `log(x3)`, `sin(x2)`, `np.pi`) has no value only where an atom has none, an
+  atom is infinite, or a divisor is zero. The extension is shown null where each atom's undefined
+  set is the right side's too (the right side holds the atom; or the atom's head has a value
+  wherever its operands have finite ones, `exp`, `sin`, `abs`, an odd root, and its operands are
+  read the same way; or the right side holds the same head of an operand equal to the atom's as a
+  rational function of the same atoms, and the atom's operand is read the same way), each atom
+  that can be infinite is analytic and nonconstant on every component of its domain, and each
+  divisor's numerator, by exact polynomial arithmetic over the atoms, is a nonzero polynomial of
+  atoms that are analytic, nonconstant and read disjoint variables (at most one of `np.pi` and
+  `np.e` among them), or a nonconstant polynomial of atoms built from the entire heads alone:
+  its zero set is then null. `(x1*log(x3)/sin(x2) - x1)*sin(x2) -> x1*(log(x3) - sin(x2))` and
+  `x0/x0 -> 1` so measure 0 in the reals, where the cells ran past their budget; `log(x0) -
+  log(x0) -> 0` (no value for x0 <= 0) and `0/(sqrt(x0)^2 - x0) + 1 -> 1` (a divisor of two
+  atoms of one variable, zero everywhere) are left to the cells, as is every rule in `f64`,
+  where a rational function rounds and overflows on whole regions.
 - **`f64` measures no extension where a side respells the other.** Where the whole left side
   occurs on the right side under operations that keep it undefined, up to the order of a sum's,
   a product's, a `max`'s or a `min`'s operands, neither side has a value where the other has

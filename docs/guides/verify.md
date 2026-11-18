@@ -234,8 +234,13 @@ rests on, per mode (`verdict['basis']`):
 - **`proved`**: an exact route decides the rule over its whole domain (below);
 - **`evidence`**: the rule holds at every point the judge read (its sort batteries, a grid, the
   mine's rows, the preimages of jumps, at a precision that is climbed until the reading settles)
-  and the measure of clause (b) is decided by certified cells; no counterexample was found, which
-  is no proof;
+  and the measure of clause (b) is decided by certified cells or by a structural certificate (in
+  the reals, a left side that is a rational function of its atoms has no value only where an atom
+  has none, which the right side must hold too, where an atom is infinite, or where a divisor is
+  zero, a null set where the divisor's numerator is a nonzero polynomial of atoms that are
+  analytic, nonconstant and read disjoint variables, or a nonconstant polynomial of entire atoms:
+  `(x1*log(x3)/sin(x2) - x1)*sin(x2) -> x1*(log(x3) - sin(x2))`); no counterexample was found,
+  which is no proof;
 - **`refused`**: a counterexample, or a check that could not decide (an undecided check never
   reads as a pass). Two readings that agree only because the precision ran out are no equality:
   a point whose operands demand more than 2,000 digits is undecided

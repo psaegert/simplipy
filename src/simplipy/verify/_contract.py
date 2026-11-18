@@ -3542,6 +3542,332 @@ def _tokens_of(node):
     return out
 
 
+#: The heads analytic on the interior of their domain and nonconstant on every interval of it, of
+#: one operand: composed with an operand analytic and nonconstant on every component of its domain,
+#: such a head is too (`_RationalReading.analytic`). `rootn` at an integer literal index and `pow`
+#: at a non-integer rational literal exponent are such heads of their base.
+_ANALYTIC_HEADS = frozenset({'exp', 'log', 'sin', 'cos', 'tan', 'sinh', 'cosh', 'tanh', 'asin',
+                             'acos', 'atan', 'asinh', 'acosh', 'atanh', 'erf', 'erfc'})
+#: The size past which the exact polynomial arithmetic gives up: monomials of one polynomial, and
+#: the bits of one literal's numerator or denominator.
+_POLY_CAP, _LITERAL_BITS_CAP = 4000, 4096
+
+
+class _NotRational(Exception):
+    """The rational reading gives up (`_RationalReading`)."""
+
+
+def _poly_add(p, q, sign=1):
+    out = dict(p)
+    for m, c in q.items():
+        v = out.get(m, 0) + sign * c
+        if v:
+            out[m] = v
+        else:
+            out.pop(m, None)
+    return out
+
+
+def _poly_mul(p, q):
+    out = {}
+    for m1, c1 in p.items():
+        for m2, c2 in q.items():
+            e = dict(m1)
+            for a, k in m2:
+                e[a] = e.get(a, 0) + k
+            m = tuple(sorted(e.items()))
+            v = out.get(m, 0) + c1 * c2
+            if v:
+                out[m] = v
+            else:
+                out.pop(m, None)
+        if len(out) > _POLY_CAP:
+            raise _NotRational('too large')
+    return out
+
+
+def _poly_pow(p, n):
+    out = {(): Fraction(1)}
+    for _ in range(n):
+        out = _poly_mul(out, p)
+    return out
+
+
+def _poly_atoms(p):
+    return {a for m in p for a, _ in m}
+
+
+def _proportional(p, q):
+    """Is the polynomial `p` a rational multiple of the nonzero polynomial `q`?"""
+    m, c = next(iter(q.items()))
+    ratio = p.get(m, 0) / c
+    return not _poly_add(p, {k: ratio * v for k, v in q.items()}, -1)
+
+
+class _RationalReading:
+    """A side read as a RATIONAL FUNCTION OF ITS ATOMS, by exact polynomial arithmetic over the
+    rationals: `+`, `-`, `*`, `/`, `neg`, `inv` and a power at an integer literal exponent are
+    read; every other maximal part is an atom (a variable, `np.pi` or `np.e`, `log(x0)`,
+    `sqrt(x0 + x1)`), one per commuted structural key (`_commuted_key`). Each operand a quotient,
+    `inv` or a power at an exponent <= 0 divides by is recorded as a divisor, a rational function
+    `(numerator, denominator)`. Gives up (`_NotRational`) on a `<constant>`, a `_`, `!` or `$`
+    slot, an infinity or NaN, a literal past `_LITERAL_BITS_CAP` bits and a polynomial past
+    `_POLY_CAP` monomials."""
+
+    def __init__(self):
+        self.atoms, self.index, self.divisors = [], {}, []
+
+    def atom(self, node):
+        key = _commuted_key(node)
+        if key is None:
+            raise _NotRational('a <constant>')
+        if key not in self.index:
+            self.index[key] = len(self.atoms)
+            self.atoms.append(node)
+        return ({((self.index[key], 1),): Fraction(1)}, {(): Fraction(1)})
+
+    def read(self, node):
+        head, kids = node
+        one = {(): Fraction(1)}
+        if not kids:
+            key = _leaf(head)[0]
+            if key is None:
+                raise _NotRational(f'the leaf {head}')
+            if key[0] == 'var':
+                if not (key[1].startswith('?') or slot_key(key[1]) is None):
+                    raise _NotRational(f'the slot {head}')
+                return self.atom(node)
+            v = key[2]
+            if isinstance(v, (Fraction, int)) and not isinstance(v, bool):
+                v = Fraction(v)
+                if max(v.numerator.bit_length(), v.denominator.bit_length()) > _LITERAL_BITS_CAP:
+                    raise _NotRational('a long literal')
+                return ({(): v} if v else {}), one
+            if v in (math.pi, math.e):
+                return self.atom(node)
+            raise _NotRational(f'the literal {head}')
+        if head in ('+', '-') and len(kids) == 2:
+            (n1, d1), (n2, d2) = self.read(kids[0]), self.read(kids[1])
+            return (_poly_add(_poly_mul(n1, d2), _poly_mul(n2, d1), 1 if head == '+' else -1),
+                    _poly_mul(d1, d2))
+        if head == '*' and len(kids) == 2:
+            (n1, d1), (n2, d2) = self.read(kids[0]), self.read(kids[1])
+            return _poly_mul(n1, n2), _poly_mul(d1, d2)
+        if head == '/' and len(kids) == 2:
+            (n1, d1), (n2, d2) = self.read(kids[0]), self.read(kids[1])
+            self.divisors.append((n2, d2))
+            return _poly_mul(n1, d2), _poly_mul(d1, n2)
+        if head == 'neg' and len(kids) == 1:
+            n, d = self.read(kids[0])
+            return {m: -c for m, c in n.items()}, d
+        if head == 'inv' and len(kids) == 1:
+            n, d = self.read(kids[0])
+            self.divisors.append((n, d))
+            return d, n
+        if head == 'pow' and len(kids) == 2 and not kids[1][1]:
+            try:
+                e = literal_value(kids[1][0])
+            except Exception:  # noqa: BLE001
+                e = None
+            if isinstance(e, Fraction) and e.denominator == 1 and abs(e) <= 64:
+                n, d = self.read(kids[0])
+                k = int(e)
+                if k <= 0:
+                    self.divisors.append((n, d))
+                    n, d = d, n
+                return _poly_pow(n, abs(k)), _poly_pow(d, abs(k))
+        return self.atom(node)
+
+    def variables(self, node):
+        """The variables an atom reads."""
+        return {_leaf(n[0])[0][1] for n in _nodes(node)
+                if not n[1] and (_leaf(n[0])[0] or ('',))[0] == 'var'}
+
+    def independent(self, atoms):
+        """Are `atoms` (indices) such that a nonzero polynomial of them vanishes only on a null
+        set: each a variable or `analytic`, any two reading disjoint variables, and at most one of
+        the transcendental constants `np.pi` and `np.e` among them (a nonzero polynomial with
+        coefficients in Q[pi], or in Q[e], has a nonzero real coefficient)? Then on each component
+        of their domain the atoms' values fill a box of positive volume, where no nonzero
+        polynomial vanishes, so the polynomial of them is analytic and not identically zero
+        there."""
+        seen, constants = set(), set()
+        for i in atoms:
+            node = self.atoms[i]
+            if not node[1] and _leaf(node[0])[0][0] == 'lit':
+                constants.add(node[0])
+                continue
+            if not self.analytic(node):
+                return False
+            names = self.variables(node)
+            if names & seen:
+                return False
+            seen |= names
+        return len(constants) <= 1
+
+    def analytic(self, node):
+        """Is the atom `node` ANALYTIC AND NONCONSTANT ON EVERY COMPONENT OF ITS DOMAIN: a
+        variable, or an analytic head (`_ANALYTIC_HEADS`, `rootn` at an integer literal index,
+        `pow` at a non-integer rational literal exponent) of an operand that is a rational
+        function of independent atoms, no transcendental constant among them, and no constant
+        (its numerator no multiple of its denominator)? The operand then takes a nondegenerate
+        interval of values on each component, where the head is nonconstant."""
+        head, kids = node
+        if not kids:
+            key = _leaf(head)[0]
+            return key is not None and key[0] == 'var' and \
+                (key[1].startswith('?') or slot_key(key[1]) is None)
+        if head in _ANALYTIC_HEADS and len(kids) == 1:
+            operand = kids[0]
+        elif head in ('rootn', 'pow') and len(kids) == 2 and not kids[1][1]:
+            try:
+                e = literal_value(kids[1][0])
+            except Exception:  # noqa: BLE001
+                return False
+            if not isinstance(e, Fraction) or (head == 'rootn') != (e.denominator == 1) or \
+                    (head == 'rootn' and e < 2):
+                return False
+            operand = kids[0]
+        else:
+            return False
+        inner = _RationalReading()
+        try:
+            n, d = inner.read(operand)
+        except _NotRational:
+            return False
+        if not n or not d:
+            return False
+        atoms = _poly_atoms(n) | _poly_atoms(d)
+        if any(not inner.atoms[i][1] and _leaf(inner.atoms[i][0])[0][0] == 'lit' for i in atoms):
+            return False
+        return bool(atoms) and inner.independent(atoms) and not _proportional(n, d)
+
+
+#: Heads that have a value wherever their operands have finite ones, in the reals: the cover reads
+#: through them to their operands (`_cover_by_atoms`). `rootn` at a positive odd index joins them.
+_COVER_TOTAL = _TOTAL_HEADS | {'sin', 'cos'}
+
+
+def _odd_root(node):
+    """Is `node` `rootn(u, n)` at a positive odd integer literal index, real for every real u?"""
+    head, kids = node
+    if head != 'rootn' or len(kids) != 2 or kids[1][1]:
+        return False
+    try:
+        n = literal_value(kids[1][0])
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(n, Fraction) and n.denominator == 1 and n > 0 and n % 2 == 1
+
+
+def _poly_tokens(poly, reading, names):
+    """The polynomial `poly` of `reading`'s atoms as prefix tokens, scaled to integer coefficients
+    (its zero set unchanged), its slots spelled as the interval layer's dummies (`names`), a power
+    as a product, a negative coefficient as a negation."""
+    scale = 1
+    for c in poly.values():
+        scale = scale * c.denominator // math.gcd(scale, c.denominator)
+    terms = []
+    for mono, c in sorted(poly.items(), key=lambda kv: _order_of(kv[0])):
+        c = c * scale
+        factors = [[str(abs(c.numerator))]] if abs(c) != 1 or not mono else []
+        for i, k in mono:
+            factors += [_spelled(_tokens_of(reading.atoms[i]), names)] * k
+        term = factors[0]
+        for f in factors[1:]:
+            term = ['*'] + term + f
+        terms.append(['neg'] + term if c < 0 else term)
+    out = terms[0]
+    for t in terms[1:]:
+        out = ['+'] + out + t
+    return out
+
+
+def _cover_by_atoms(tl, tr):
+    """THE LEFT SIDE'S UNDEFINED SET, READ AS A RATIONAL FUNCTION OF ITS ATOMS
+    (`_RationalReading`), in the reals. A rational function of finite atoms is undefined only
+    where an atom is or a divisor is zero, so the extension lies within
+    - each atom's undefined set: none where the right side holds the same atom (an undefined
+      operand makes every operation undefined in the reals); for a head with a value wherever its
+      operands have finite ones (`_COVER_TOTAL`, an odd root), its operands' undefined sets, read
+      the same way; for any other head of one operand (`log`, `asin`, an even root), its
+      operand's, and where the operand is outside the head's domain, none where the right side
+      holds the same head of an operand equal to it as a rational function of the same atoms;
+    - each atom's infinite set (`log(x0)` at x0 = 0), unless it is finite wherever defined
+      (`_finite`): a level set of an analytic nonconstant operand, null, where the atom is
+      `analytic`;
+    - each divisor's zero set: within the zero set of its numerator, a nonzero polynomial of
+      independent atoms (`independent`), or of atoms built from the entire heads alone and
+      nonconstant (`_core.nonconstant_entire`): null either way.
+    So `(x1*log(x3)/sin(x2) - x1)*sin(x2) -> x1*(log(x3) - sin(x2))` is shown (log(x3) on the right
+    side, the divisor sin(x2) a nonzero polynomial of one analytic atom), while `log(x0) - log(x0)
+    -> 0` is not (log(x0) has no value for x0 <= 0, and the right side holds no log), nor is
+    `0/(sqrt(x0)^2 - x0) + 1 -> 1` (the divisor's atoms x0 and sqrt(x0) read one variable and are
+    not entire: a nonzero polynomial of them can vanish, and this one does everywhere). Whether
+    the two sides agree is clause (a)'s; this reads where the left side has no value.
+    -> True where it shows that set null outside the right side's, else False."""
+    right = {_commuted_key(n) for n in _nodes(tr)}
+    right_nodes = [n for n in _nodes(tr) if n[1]]
+    names = {}
+    for n in list(_nodes(tl)) + list(_nodes(tr)):
+        key = None if n[1] else _leaf(n[0])[0]
+        if key is not None and key[0] == 'var':
+            names.setdefault(slot_key(n[0]) or n[0], f'x{len(names)}')
+
+    def equal(u, v):
+        reading = _RationalReading()
+        try:
+            (nu, du), (nv, dv) = reading.read(u), reading.read(v)
+        except _NotRational:
+            return False
+        return bool(du) and bool(dv) and not _poly_add(_poly_mul(nu, dv), _poly_mul(nv, du), -1)
+
+    def matched(atom):
+        head, kids = atom
+        rest = [_node_key(k) for k in kids[1:]]
+        return any(o[0] == head and len(o[1]) == len(kids)
+                   and [_node_key(k) for k in o[1][1:]] == rest and equal(kids[0], o[1][0])
+                   for o in right_nodes)
+
+    def null_zeros(numerator, reading):
+        atoms = _poly_atoms(numerator)
+        if not numerator:
+            return False
+        if reading.independent(atoms):
+            return True
+        tokens = _poly_tokens(numerator, reading, names)
+        return bool(_table.nonconstant_entire(tokens, dict(ARITY), False))
+
+    def covered(node, depth):
+        if depth > 8:
+            return False
+        reading = _RationalReading()
+        try:
+            reading.read(node)
+        except _NotRational:
+            return False
+        for atom in reading.atoms:
+            head, kids = atom
+            if not kids:
+                continue
+            if _commuted_key(atom) in right:
+                pass
+            elif head in _COVER_TOTAL or _odd_root(atom):
+                if not all(covered(k, depth + 1) for k in kids):
+                    return False
+            elif not (kids and all(not k[1] for k in kids[1:]) and covered(kids[0], depth + 1)
+                      and matched(atom)):
+                return False
+            if not _finite(atom, False) and not reading.analytic(atom):
+                return False
+        return all(null_zeros(numerator, reading) for numerator, _ in reading.divisors)
+
+    try:
+        return covered(tl, 0)
+    except _NotRational:
+        return False
+
+
 def _no_extension(lhs, rhs, f64=False):
     """A STRUCTURAL CERTIFICATE THAT CLAUSE (b) HAS ONLY A NULL SET TO MEASURE. An undefined
     operand makes an operation undefined in the reals (THE TABLE), and in float64 at the heads
@@ -3609,8 +3935,12 @@ def _no_extension(lhs, rhs, f64=False):
         return bool(_table.nonconstant_entire(_spelled(_tokens_of(exponent), spelling),
                                               dict(ARITY), f64))
 
-    return all(not _origin(n, f64) or _node_key(n) in kept or level_sets_null(n)
-               for n in _nodes(tl))
+    if all(not _origin(n, f64) or _node_key(n) in kept or level_sets_null(n) for n in _nodes(tl)):
+        return True
+    # in the reals, a left side that is a rational function of its atoms is undefined only where
+    # an atom is, an atom is infinite, or a divisor is zero (`_cover_by_atoms`); float64 rounds
+    # and overflows a rational function on whole regions, so it is left to the cells there
+    return not f64 and _cover_by_atoms(tl, tr)
 
 
 def _ground_parts_as_doubles(tokens):

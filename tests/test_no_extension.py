@@ -30,7 +30,26 @@ def test_a_rule_whose_right_side_is_undefined_where_its_left_side_is_holds(lhs, 
     ('+ log cos ?2 cos ?1', '+ cos ?1 log cos ?2', True, True),
     # an extension: the left side's `log(x)` has no value on x < 0, the right side does
     ('exp log ?0', '?0', False, False),
-    ('/ ?0 ?0', '1', False, False),
+    # a rational function of its atoms: x0/x0 has no value where its divisor x0 is zero, a null
+    # set; in float64 a rational function rounds and overflows on whole regions: the cells decide
+    ('/ ?0 ?0', '1', False, True),
+    ('/ ?0 ?0', '1', True, False),
+    # its atoms x1, log(x3) and sin(x2): log(x3) is on the right side, the divisor sin(x2) is a
+    # nonzero polynomial of one analytic atom
+    ('* - / * ?1 log ?3 sin ?2 ?1 sin ?2', '* ?1 - log ?3 sin ?2', False, True),
+    ('* tan ?0 / ?1 ?1', 'tan ?0', False, True),
+    # an atom with no value on a region, which the right side does not hold
+    ('- log ?0 log ?0', '0', False, False),
+    ('+ ?1 - log ?0 log ?0', '?1', False, False),
+    # a divisor that is zero: x1 - x1, and sqrt(x0)^2 - x0, whose atoms x0 and sqrt(x0) read one
+    # variable, so a nonzero polynomial of them can vanish
+    ('/ ?0 - ?1 ?1', '?0', False, False),
+    ('+ 1 / 0 - pow rootn ?0 2 2 ?0', '1', False, False),
+    ('+ 1 / 0 - + pow sin ?0 2 pow cos ?0 2 1', '1', False, False),
+    # an atom of a constant operand, infinite everywhere it has a value
+    ('* log - ?0 ?0 / ?1 ?1', 'log - ?0 ?0', False, False),
+    # a `_` slot binds any part, a constant or a step function among them
+    ('/ _0 _0', '1', False, False),
     # float64's `max` drops a NaN: its operand's undefinedness does not reach the right side's top
     ('log ?0', 'max log ?0 0', True, False),
     # exp of a real is finite in the reals, so their difference has a value; in float64 both
@@ -103,6 +122,14 @@ def test_float64_reads_a_fully_numeric_exponent_by_its_double(lhs, rhs) -> None:
     both modes, as the sum is exactly 3."""
     r = verify_rule(lhs.split(), rhs.split())
     assert (r['tier'], r['realised'], r['f64_measure']) == ('core', True, 0.0), r
+
+
+def test_a_rational_function_of_its_atoms_is_measured_by_its_divisors() -> None:
+    # (x1*log(x3)/sin(x2) - x1)*sin(x2) -> x1*(log(x3) - sin(x2)): the left side has no value
+    # where log(x3) has none, as the right side, and where sin(x2) = 0, a null set; the cells ran
+    # past the interval layer's budget and left the measure undecided
+    r = verify_rule('* - / * x1 log x3 sin x2 x1 sin x2'.split(), '* x1 - log x3 sin x2'.split())
+    assert r['verdict'] != 'UNDECIDED-MEASURE' and r['measure'] == 0.0, r
 
 
 def test_a_fully_numeric_exponent_still_reads_an_extension() -> None:
