@@ -39,6 +39,8 @@ from fractions import Fraction
 
 import numpy as np
 
+from ._modes import ModeKeyed
+
 #: The most breakpoints a side's function may have before the route answers unknown.
 MAX_BREAKPOINTS = 256
 #: The most bits a coefficient or breakpoint may carry before the route answers unknown.
@@ -255,8 +257,8 @@ def _witness(d):
 
 def piecewise_affine(tl, tr, d_eval, f64_agree):
     """The piecewise-affine route on the judge's parsed sides `tl`, `tr`: `None` where the rule is
-    outside the fragment or past a size limit, else `{'route', 'reals', 'permissive', 'f64',
-    'witness'}`, each mode 'proved', 'refuted' or None. `d_eval(tree, env, in_range)` is the
+    outside the fragment or past a size limit, else `{'route', 'reals', 'permissive', 'strict',
+    'witness'}`, each mode 'proved', 'refuted' or None (`_modes.ModeKeyed`). `d_eval(tree, env, in_range)` is the
     judge's float64 evaluator and `f64_agree(a, b)` F6's agreement."""
     slots = set()
     for t in (tl, tr):
@@ -270,17 +272,17 @@ def piecewise_affine(tl, tr, d_eval, f64_agree):
                        lambda u, v: (u[0] - v[0], u[1] - v[1]))
     except (Unknown, ZeroDivisionError, OverflowError):
         return None
-    out = {'route': 'piecewise-affine', 'witness': None}
+    out = ModeKeyed({'route': 'piecewise-affine', 'witness': None})
     if not d.b and d.p[0] == (0, 0):
         out.update(reals='proved', permissive='proved',
-                   f64='proved' if _f64_exact((tl, tr)) else None)
+                   strict='proved' if _f64_exact((tl, tr)) else None)
         return out
     x = _witness(d)
     out.update(reals='refuted', witness=x)
     lv, rv = (as_double(_build(t, var).at(x)) for t in (tl, tr))
     out['permissive'] = 'refuted' if None not in (lv, rv) and f64_agree(lv, rv) != 'eq' \
         else None
-    out['f64'] = None
+    out['strict'] = None
     xf = as_double(x)
     for y in () if xf is None else (xf, math.nextafter(xf, math.inf),
                                     math.nextafter(xf, -math.inf)):
@@ -289,14 +291,14 @@ def piecewise_affine(tl, tr, d_eval, f64_agree):
             dl, dr = d_eval(tl, {var: np.float64(y)}, in_range), d_eval(tr, {var: np.float64(y)},
                                                                         in_range)
         if in_range[0] and f64_agree(float(dl), float(dr)) != 'eq':
-            out['f64'] = 'refuted'
+            out['strict'] = 'refuted'
             out['witness_f64'] = y
             break
     return out
 
 
 def whole_domain_literal(lhs_spelled, tr, value_set, literal_f64):
-    """The whole-domain enclosure route: `{'route', 'reals', 'permissive', 'f64'}` where the left
+    """The whole-domain enclosure route: `{'route', 'reals', 'permissive', 'strict'}` where the left
     side's enclosure over every finite binding is exactly the right side's literal (`tr` a
     literal), each mode 'proved' or None; `None` where the right side is no literal.
     `value_set(tokens, f64)` is the layer's enclosure, `literal_f64(token)` F2's reading."""
@@ -318,18 +320,18 @@ def whole_domain_literal(lhs_spelled, tr, value_set, literal_f64):
 
     real = v if isinstance(v, (Fraction, int)) or (isinstance(v, float) and not math.isfinite(v)) \
         else None
-    out = {'route': 'whole-domain', 'reals': None, 'permissive': None, 'f64': None}
+    out = ModeKeyed({'route': 'whole-domain', 'reals': None, 'permissive': None, 'strict': None})
     if real is not None and is_exactly(value_set(lhs_spelled, False), real):
         out['reals'] = out['permissive'] = 'proved'
     fv = literal_f64(tok)
     if fv is not None and is_exactly(value_set(lhs_spelled, True), fv):
-        out['f64'] = 'proved'
-    return out if any(out[m] for m in ('reals', 'permissive', 'f64')) else None
+        out['strict'] = 'proved'
+    return out if any(out[m] for m in ('reals', 'permissive', 'strict')) else None
 
 
 def ground(tl, tr, verdict):
     """The ground-point route: `None` where the rule has a variable or a constant, else
-    `{'route', 'reals', 'permissive', 'f64', 'readings'}`. A fully numeric rule has one point,
+    `{'route', 'reals', 'permissive', 'strict', 'readings'}`. A fully numeric rule has one point,
     and the core's ground evaluator reads it (`verdict()`, `_core.ground_rule_verdict`: the one
     definition the engine's parse and fold and verify-mine's gate read). It holds in strict where
     float64 gives both sides one double (a), or the reals give both one value and float64's two
@@ -344,12 +346,13 @@ def ground(tl, tr, verdict):
         _ops_and_slots(t, set(), slots)
     if slots:
         return None
-    out = {'route': 'ground', 'reals': None, 'permissive': None, 'f64': None, 'readings': None}
+    out = ModeKeyed({'route': 'ground', 'reals': None, 'permissive': None, 'strict': None,
+                     'readings': None})
     v = verdict()
     if v is None:
         return out
     same_double, same_real_in_kind, reals, permissive = v
-    out['f64'] = 'proved' if same_double or same_real_in_kind else 'refuted'
+    out['strict'] = 'proved' if same_double or same_real_in_kind else 'refuted'
     out['permissive'] = 'proved' if permissive else 'refuted'
     out['reals'] = None if reals is None else ('proved' if reals else 'refuted')
     out['readings'] = {'same_double': same_double, 'same_real_in_kind': same_real_in_kind}
@@ -357,7 +360,7 @@ def ground(tl, tr, verdict):
 
 
 def own_value(tl, tr):
-    """The constant's-own-value route: `{'route', 'reals', 'permissive', 'f64'}`, every mode
+    """The constant's-own-value route: `{'route', 'reals', 'permissive', 'strict'}`, every mode
     proved, where the right side is one `<constant>` and the left side has a constant and no
     variable; else `None`."""
     if tr[0] != 'slot' or not tr[1].startswith('<C'):
@@ -366,4 +369,5 @@ def own_value(tl, tr):
     _ops_and_slots(tl, set(), slots)
     if not slots or any(not s.startswith('<C') for s in slots):
         return None
-    return {'route': 'own-value', 'reals': 'proved', 'permissive': 'proved', 'f64': 'proved'}
+    return ModeKeyed({'route': 'own-value', 'reals': 'proved', 'permissive': 'proved',
+                      'strict': 'proved'})

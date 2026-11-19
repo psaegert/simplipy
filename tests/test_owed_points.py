@@ -138,7 +138,7 @@ def test_an_owed_point_left_unread_refuses_f64(monkeypatch) -> None:
                         lambda tl, tr, env, owed=False: (None, False) if at_half(env())
                         else point_verdict(tl, tr, env, owed))
     d = verify_rule(lhs, rhs)
-    assert d['realised'] is None and {'_0': 0.5} in d['unread_owed']['f64'], d
+    assert d['realised'] is None and {'_0': 0.5} in d['unread_owed']['strict'], d
 
 
 def test_the_f64_bar_keeps_a_reading_without_an_answer(monkeypatch) -> None:

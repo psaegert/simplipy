@@ -30,7 +30,7 @@ def test_a_narrow_tent_is_refuted_in_every_mode(width: str, slot: str) -> None:
     lhs = f'max 0 - {width} abs - {slot} 0.123456789'
     d = judged(lhs, '0')
     assert d['exact']['route'] == 'piecewise-affine'
-    assert (d['exact']['reals'], d['exact']['permissive'], d['exact']['f64']) == \
+    assert (d['exact']['reals'], d['exact']['permissive'], d['exact']['strict']) == \
         ('refuted', 'refuted', 'refuted'), d['exact']
     assert d['exact']['witness'] == _contract.literal_value('0.123456789')
     assert d['verdict'] == 'KILL' and d['tier'] == 'reject', d
@@ -50,7 +50,7 @@ def test_an_identity_of_the_fragment_is_proved(lhs: str, rhs: str, f64) -> None:
     """Equal pieces on every cell: proved in the reals and permissive, and in float64 only where
     every operation is exact on doubles (`neg`, `abs`, `max`, `min`)."""
     out = route(lhs, rhs)
-    assert (out['reals'], out['permissive'], out['f64']) == ('proved', 'proved', f64), out
+    assert (out['reals'], out['permissive'], out['strict']) == ('proved', 'proved', f64), out
     d = judged(lhs, rhs)
     assert d['verdict'] == 'CERTIFIED' and effective_tier(d) in MODE_TIERS['permissive'], d
 
@@ -66,7 +66,7 @@ def test_a_value_beyond_the_doubles_is_read_without_a_double() -> None:
     resolution (`as_double` is None)."""
     for lhs, rhs in (('max ?0 1e400', 'max 1e400 ?0'), ('* ?0 1e400', '* 1e400 ?0')):
         out = route(lhs, rhs)
-        assert (out['reals'], out['permissive'], out['f64']) == ('proved', 'proved', None), out
+        assert (out['reals'], out['permissive'], out['strict']) == ('proved', 'proved', None), out
     out = route('* ?0 1e400', '* ?0 2e400')
     assert (out['reals'], out['permissive']) == ('refuted', None), out
     assert _exact.as_double(10 ** 400) is None and _exact.as_double(10 ** 300) == 1e300
@@ -121,8 +121,8 @@ def test_every_verdict_says_what_it_rests_on(lhs: str, rhs: str, f64: str,
                                              permissive: str) -> None:
     """The basis of a verdict per mode (the specification's 3.4): proved by an exact route,
     held on the judge's points alone (evidence), or refused."""
-    assert judged(lhs, rhs)['basis'] == {'f64': f64, 'permissive': permissive}
+    assert judged(lhs, rhs)['basis'] == {'strict': f64, 'permissive': permissive}
 
 
 def test_an_unjudgeable_rule_is_refused_in_every_mode() -> None:
-    assert judged('foo ?0', '?0')['basis'] == {'f64': 'refused', 'permissive': 'refused'}
+    assert judged('foo ?0', '?0')['basis'] == {'strict': 'refused', 'permissive': 'refused'}

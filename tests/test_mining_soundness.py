@@ -2256,7 +2256,7 @@ class TestTheGateRoutesInsteadOfDeleting:
         none = verify_rule('max <constant> ?0'.split(), ['<constant>'])
         assert (none['verdict'], none['tier']) == ('NO-WITNESS', 'reject'), none
         uncovered = verify_rule('+ + pow ?0 2 1 1e-3000'.split(), '+ pow ?0 2 1'.split())
-        assert uncovered['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}, uncovered
+        assert uncovered['basis'] == {'strict': 'evidence', 'permissive': 'evidence'}, uncovered
 
 
 class TestCertifyRulesRoutesLikeTheMine:

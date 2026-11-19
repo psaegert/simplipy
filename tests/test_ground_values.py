@@ -232,7 +232,7 @@ def test_the_judge_reads_a_fully_numeric_rule_by_each_modes_value(lhs, rhs, stri
                                                                   tier) -> None:
     d = verify_rule(lhs.split(), rhs.split())
     assert d['realised'] is strict and d['permissive'] is permissive and d['tier'] == tier, d
-    assert d['basis'] == {'f64': 'proved' if strict else 'refused',
+    assert d['basis'] == {'strict': 'proved' if strict else 'refused',
                           'permissive': 'proved' if permissive else 'refused'}, d
 
 

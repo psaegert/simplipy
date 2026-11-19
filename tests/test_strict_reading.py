@@ -141,7 +141,7 @@ def test_a_ground_rule_is_read_on_each_modes_value() -> None:
 @pytest.mark.parametrize('lhs, rhs', [ADMITTED[0], ADMITTED[5]])
 def test_the_mine_licenses_what_strict_holds(lhs, rhs) -> None:
     r = verify_rule(lhs.split(), rhs.split())
-    assert effective_tier(r) in MODE_TIERS['f64'] and effective_tier(r) in MODE_TIERS['permissive']
+    assert effective_tier(r) in MODE_TIERS['strict'] and effective_tier(r) in MODE_TIERS['permissive']
 
 
 #: A `!` binding is finite but on a null set, its +-inf; a `$` binding is finite and nonzero but on

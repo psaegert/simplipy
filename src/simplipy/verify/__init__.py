@@ -29,6 +29,7 @@ import warnings
 from typing import Any
 
 from . import _contract, _gate, _monitor
+from ._modes import RULE_MODES, ModeKeyed, engine_mode, judge_mode
 
 #: Every bucket that is NOT sound to ship: all verdicts but CERTIFIED / TOLERATED.
 #: THE single source of truth for "fatal" -- consumed by this module's
@@ -75,9 +76,9 @@ TIERS: dict[str, tuple] = dict(_contract.TIERS)
 
 #: Which judged tiers each mode's rule set is allowed to contain: the tiers that hold in the
 #: mode, read off `TIERS`.
-MODE_TIERS: dict[str, frozenset] = {
+MODE_TIERS: dict[str, frozenset] = ModeKeyed({
     mode: frozenset(tier for tier, modes in TIERS.items() if mode in modes)
-    for mode in _contract.MODES}
+    for mode in _contract.MODES})
 
 
 def tier_table() -> str:
@@ -113,7 +114,7 @@ _LOAD_POLICY = {'const-count-increase': 'constant_count', 'ground-composite': 'g
                 'unbound-rhs-wildcard': 'well_formed', 'unparseable-side': 'well_formed'}
 
 #: A mode's name as the engine's rule sets are named.
-_RULE_MODE = {'f64': 'default', 'permissive': 'permissive'}
+_RULE_MODE = RULE_MODES
 
 
 def load_policy_refusal(lhs: list[str], rhs: list[str], mode: str, engine: Any,
@@ -124,9 +125,12 @@ def load_policy_refusal(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     ground composite (4.3), the ordering (4.5), what the engine does itself (4.8), and
     well-formedness. The load, :func:`licensed` and :func:`verify_ruleset` read it here, so the
     three agree. It checks policies, never truth: `sin(x0) -> x0` passes it. ``canon`` is the
-    canon the rule is read in (``'legacy'``, ``'f64'`` or ``'permissive'``; ``None``, the
-    mode's own), as the load reads a file in the canon its sidecar records."""
-    read_in = None if canon is None else _RULE_MODE.get(canon, canon)
+    canon the rule is read in (``'legacy'``, ``'strict'`` or ``'permissive'``, a sidecar's
+    ``'f64'`` read as ``'strict'``; ``None``, the mode's own), as the load reads a file in the
+    canon its sidecar records."""
+    mode = judge_mode(mode)
+    read_in = None if canon is None else _RULE_MODE.get('strict' if canon == 'f64' else canon,
+                                                        canon)
     load = engine._core.load_refusal(list(lhs), list(rhs), rule_mode=_RULE_MODE[mode],
                                      canon=read_in)
     if load == 'catch-all-lhs' and len(lhs) > 1:
@@ -150,6 +154,7 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     from .. import _core  # type: ignore[attr-defined]
     from ..mining import _in_cell, _preempted_by
     lhs, rhs = list(lhs), list(rhs)
+    mode = judge_mode(mode)
     out: list[str] = []
     if _core.table_mode_evidence(_evidence_spelling(lhs, rhs), dict(_contract.ARITY),
                                  _RULE_MODE[mode]) is not True:
@@ -166,7 +171,7 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
         out.append('constant_count')
     if _core.policy_duplicates(lhs, rhs):
         out.append('duplication')
-    if _preempted_by(engine, lhs, rhs, mode):
+    if _preempted_by(engine, lhs, rhs, engine_mode(mode)):
         out.append('engine_owned')
     return [p for p in POLICIES if p in out]
 
@@ -242,9 +247,7 @@ def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
     ``evidence``. ``holds`` is the mode's own reading of the rule; a fully numeric rule that
     holds in f64 alone is refused by ``engine_owned`` there, since f64's fold writes every fully
     numeric part as the cheapest value it admits (its tier is ``reject``)."""
-    if mode not in MODE_TIERS:
-        from ..engine import _coerce_mode
-        mode = _coerce_mode(mode).name
+    mode = judge_mode(mode)
     detail = detail if detail is not None else verify_rule(lhs, rhs)
     tier = effective_tier(detail)
     holds = tier in MODE_TIERS[mode] or (bool(detail.get('ground'))
@@ -305,8 +308,9 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = 
     """Gate a whole rule set: judge every rule at its own trigger points.
 
     ``rules``: a list of ``[lhs, rhs]`` token-list pairs, or a path to such a JSON file.
-    ``mode``: which mode's set this is -- ``'f64'`` (also ``'default'``), ``'permissive'``
-    or a :class:`~simplipy.Mode` member. See below; ``None`` keeps the mode-less meaning.
+    ``mode``: which mode's set this is -- ``'strict'``, ``'permissive'`` or a
+    :class:`~simplipy.Mode` member (the pre-0.15 names ``'f64'`` and ``'default'`` select strict
+    with a ``DeprecationWarning`` until 0.16). See below; ``None`` keeps the mode-less meaning.
     ``report_path``: optional path to dump the full per-rule report.
     ``build_path``: optional path to write the kept set (CERTIFIED + TOLERATED).
     ``judge_timeout_s``: per-rule wall-clock cap (a rule that exceeds it is bucketed
@@ -338,8 +342,7 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = 
     import tempfile
     import os
     if mode is not None:
-        from ..engine import _coerce_mode
-        mode = _coerce_mode(mode).name
+        mode = judge_mode(mode)
     # Without a `report_path` the sweep's report is read back from a scratch directory
     # that is removed afterwards (it used to stay behind in the system temp dir).
     with tempfile.TemporaryDirectory() as scratch:
@@ -349,6 +352,11 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None, engine: Any = 
                            announce_report=report_path is not None)
         with open(tmp) as fh:
             report = json.load(fh)
+    # the report was read back from JSON: its mode-keyed tables answer the pre-0.15 names again
+    for d in report.get('detail', []):
+        for key in ('basis', 'exact', 'unread_owed'):
+            if isinstance(d.get(key), dict):
+                d[key] = ModeKeyed(d[key])
     if mode is None:
         report['is_clean'] = not any(report['buckets'].get(k) for k in FATAL_BUCKETS)
         report['exit_code'] = code
@@ -411,8 +419,8 @@ def verify_artifact(f64_rules: list | str, permissive_rules: list | str, *,
     Returns ``{'is_clean', 'modes': {mode: report}, 'relationships': [...],
     'permissive_dominance': ... }``.
     """
-    reports = {}
-    for mode, rules in (('f64', f64_rules), ('permissive', permissive_rules)):
+    reports = ModeKeyed()
+    for mode, rules in (('strict', f64_rules), ('permissive', permissive_rules)):
         reports[mode] = verify_ruleset(rules, mode=mode, judge_timeout_s=judge_timeout_s)
 
     problems: list = []

@@ -110,7 +110,7 @@ def test_a_constant_whose_left_side_has_no_finite_witness_refuses_the_rule():
     rule is refused in both modes."""
     r = _contract.judge_rule('max x0 log <constant>'.split(), 'max <constant> x0'.split())
     assert r['verdict'] == 'NO-WITNESS' and '(0.0,)' in r['detail'], r
-    assert r['basis'] == {'f64': 'refused', 'permissive': 'refused'}, r
+    assert r['basis'] == {'strict': 'refused', 'permissive': 'refused'}, r
 
 
 def test_the_fit_keeps_the_witness_it_found():

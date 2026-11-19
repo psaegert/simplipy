@@ -38,7 +38,7 @@ def test_a_rule_f64_holds_holds_in_permissive(acj, lhs, rhs) -> None:
     d = verify_rule(lhs.split(), rhs.split())
     assert d['realised'] is True and d['permissive'] is True and d['permissive_own'] is False, d
     assert d['tier'] == 'core'
-    assert d['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}
+    assert d['basis'] == {'strict': 'evidence', 'permissive': 'evidence'}
     for mode in ('f64', 'permissive'):
         assert licensed(lhs.split(), rhs.split(), mode, acj, detail=d)['licensed'], mode
 

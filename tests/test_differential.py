@@ -840,7 +840,7 @@ def test_the_judge_decides_a_rule_with_constants(lhs, rhs, verdict) -> None:
     got = judged(lhs, rhs)
     assert got['verdict'] == verdict, got
     if verdict == 'NO-WITNESS':
-        assert got['basis'] == {'f64': 'refused', 'permissive': 'refused'}, got
+        assert got['basis'] == {'strict': 'refused', 'permissive': 'refused'}, got
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -1386,7 +1386,7 @@ def test_precision_run_out_is_no_equality(slot) -> None:
         (True, None, True, 'core'), v
     name = '?0' if slot == 'x0' else slot
     assert v['unread_owed'] == {'permissive': [{name: 2.718281828459045}]}, v
-    assert v['basis'] == {'f64': 'evidence', 'permissive': 'evidence'}, v
+    assert v['basis'] == {'strict': 'evidence', 'permissive': 'evidence'}, v
     w = verify_rule('+ + pow x0 2 1 1e-100'.split(), '+ pow x0 2 1'.split())
     assert (w['verdict'], w['tier']) == ('KILL', 'core'), w
 

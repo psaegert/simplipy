@@ -166,10 +166,10 @@ stay refused in `f64`. The tiers are one registry, `simplipy.verify.TIERS`, and 
 from it (`simplipy.verify.tier_table()`):
 
 <!-- tier-table: begin (rendered by simplipy.verify.tier_table(); a test checks it) -->
-| tier | `f64` | `permissive` | meaning |
+| tier | `strict` | `permissive` | meaning |
 |---|---|---|---|
-| `core` | yes | yes | holds in f64 (the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every value's kind: `sin(x0 + pi) -> -sin(x0)`), and so in permissive, which includes every rule f64 holds |
-| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an extension (`exp(log(x0)) -> x0`), held by f64 with the two zeros one value and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`), or an instance of permissive's named steps (`asin(sin(x0)) -> x0`) |
+| `core` | yes | yes | holds in strict (the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every value's kind: `sin(x0 + pi) -> -sin(x0)`), and so in permissive, which includes every rule strict holds |
+| `permissive` | no | yes | holds in permissive alone: true in the reals at float resolution and refused by strict (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an extension (`exp(log(x0)) -> x0`), held by strict's readings with the two zeros one value and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`), or an instance of permissive's named steps (`asin(sin(x0)) -> x0`) |
 | `reject` | no | no | holds in no mode; recorded in the drop census |
 <!-- tier-table: end -->
 

@@ -133,7 +133,7 @@ class TestRootnSemantics:
         # undefined everywhere and the extension is measured
         r = judge_rule(['rootn', '(-1)', 'tanh', '?0'], ['(-1)'])
         assert r['verdict'] == 'KILL' and r['measure'] > 0, r
-        assert r['tier'] not in v.MODE_TIERS['f64']
+        assert r['tier'] not in v.MODE_TIERS['strict']
 
 
 class TestZeroLanes:
@@ -306,7 +306,7 @@ class TestShippingArtifact:
             assert r['verdict'] in census, (lhs, rhs, r)
             # a KILL is admitted only as what this f64 file may hold: false over the reals and
             # bit-exact in float64 (below)
-            assert r['verdict'] != 'KILL' or r['tier'] in v.MODE_TIERS['f64'], (lhs, rhs, r)
+            assert r['verdict'] != 'KILL' or r['tier'] in v.MODE_TIERS['strict'], (lhs, rhs, r)
             census[r['verdict']] += 1
         # measured census of the shipped artifact. An artifact
         # refresh re-pins this alongside the gate_acj REFS, with evidence. The 4330 ->
@@ -578,7 +578,7 @@ class TestTheRealisationAxis:
         from simplipy.verify._contract import judge_rule
         got = judge_rule(['sin', 'exp', 'log', 'np.pi'], ['0'])
         assert got['verdict'] == 'CERTIFIED'
-        assert got['realised'] is True and got['basis']['f64'] == 'proved'
+        assert got['realised'] is True and got['basis']['strict'] == 'proved'
         exact = judge_rule(['sin', 'np.pi'], ['0'])
         assert (exact['verdict'], exact['realised'], exact['tier']) == ('CERTIFIED', True, 'core')
         assert judge_rule(['tan', 'asin', '1'], ['0'])['realised'] is False
@@ -709,7 +709,7 @@ class TestTheF64RangeStandard:
     accepts the true value as well as the evaluator's, and it compares every other point
     with the same bar as before."""
 
-    F64 = v.MODE_TIERS['f64']
+    F64 = v.MODE_TIERS['strict']
 
     def test_a_rule_that_differs_only_out_of_range_is_f64(self) -> None:
         """`rootn(exp(x), 2) -> exp(x/2)` and `exp(x)/exp(x) -> 1` are true on R and
@@ -875,7 +875,7 @@ class TestCleanlinessIsPerMode:
         # a genuine defect is still caught, per file
         dirty = verify_artifact([self.CORE, self.REJECT], [self.CORE])
         assert dirty['is_clean'] is False
-        assert dirty['modes']['f64']['is_clean'] is False
+        assert dirty['modes']['strict']['is_clean'] is False
 
     def test_the_three_file_gate_is_refused(self) -> None:
         from simplipy.verify import verify_triple
@@ -983,7 +983,7 @@ class TestCleanlinessIsPerMode:
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
-        assert len(tier['f64'] - {126}) == 119 and len(policy_only['f64']) == 25
+        assert len(tier['strict'] - {126}) == 119 and len(policy_only['strict']) == 25
         assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 40
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
@@ -2099,6 +2099,40 @@ def test_the_monitor_pairs_changed_factors_one_to_one() -> None:
     assert verdict == 'VIOLATION'
 
 
+def test_the_judge_names_the_strict_mode_and_reads_its_old_names_with_a_warning() -> None:
+    import warnings
+    import yaml
+    from simplipy.verify import _contract
+    assert _contract.MODES == ('strict', 'permissive') and v.TIERS['core'] == ('strict', 'permissive')
+    d = judge_rule('* 0 asin ?0'.split(), '* 0 acos ?0'.split())
+    assert set(d['basis']) == {'strict', 'permissive'} and d['basis']['strict'] == 'refused', d
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        assert _contract.judge_mode('Strict') == 'strict'
+        assert _contract.judge_mode('permissive') == 'permissive'
+        assert v.MODE_TIERS['strict'] == frozenset({'core'}) and d['basis'].get('permissive')
+    # the strict mode's pre-0.15 names: the same entries, with a DeprecationWarning until 0.16
+    for old in ('f64', 'default', 'F64'):
+        with pytest.warns(DeprecationWarning, match="the mode is named 'strict'"):
+            assert v.MODE_TIERS[old] == v.MODE_TIERS['strict']
+        with pytest.warns(DeprecationWarning, match="the mode is named 'strict'"):
+            assert d['basis'][old] == d['basis']['strict'] == d['basis'].get(old)
+        with pytest.warns(DeprecationWarning, match="the mode is named 'strict'"):
+            assert _contract.judged_reading(d, old) is _contract.judged_reading(d, 'strict')
+    with pytest.raises(ValueError):
+        _contract.judge_mode('real')
+    # the monitor's strict branches read a zero's sign under every spelling of the mode
+    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+                                           'config.yaml')))['operators']
+    bare = SimpliPyEngine(operators=ops, rules=[])
+    pair = ('atan2 * 0 x0 -1'.split(), ['np.pi'])
+    assert judge_pair(*pair, engine=bare)[0] == 'VIOLATION'
+    assert judge_pair(*pair, mode='strict', engine=bare)[0] == 'VIOLATION'
+    with pytest.warns(DeprecationWarning):
+        assert judge_pair(*pair, mode='f64', engine=bare)[0] == 'VIOLATION'
+    assert judge_pair(*pair, mode='permissive', engine=bare)[0] == 'OK'
+
+
 def test_the_monitor_refuses_a_whole_answer_that_turns_on_a_zeros_sign() -> None:
     # true in the reals and float64's kinds kept (-pi against pi), but -pi for every x0 < 0, where
     # `0*x0` is -0 and atan2 reads it
@@ -2171,8 +2205,8 @@ def test_the_monitor_does_not_hold_an_infinitys_sign_at_an_isolated_pole() -> No
 # ------------------------------------------------------------------------------------------
 def test_the_tiers_are_one_registry() -> None:
     assert v.MODE_TIERS == {mode: frozenset(tier for tier, modes in v.TIERS.items() if mode in modes)
-                            for mode in ('f64', 'permissive')}
-    assert v.TIERS['core'] == ('f64', 'permissive')
+                            for mode in ('strict', 'permissive')}
+    assert v.TIERS['core'] == ('strict', 'permissive')
 
 
 class TestTheJudgeKeepsItsStateToItself:

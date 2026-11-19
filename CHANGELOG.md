@@ -193,6 +193,13 @@ organised by who you are, then the highlights, then every change in detail.
   `1/sin(np.pi - x0) -> 1/sin(x0)` and `1/(sin(x0) - 1) -> -(1 + sin(x0))/cos(x0)^2` hold;
   `1/(x0 - 3)^2 -> 0`, `exp((x0 - 1)/x0^2) -> exp(1/x0 - 1/x0^2)` (0 against NaN at +0) and
   `atan(-1/(x0 - 3)^2) -> atan(1/((x0 - 3)*(3 - x0)))` (-pi/2 against pi/2 at 3) are refused.
+- **The rule judge names the strict mode `strict`.** Its modes are `simplipy.verify` `MODES =
+  ('strict', 'permissive')`; `MODE_TIERS`, a judgment's `basis`, `exact` and `unread_owed`, and
+  `verify_artifact`'s `modes` are keyed `strict`, and the monitor and the licence read `strict`.
+  The pre-0.15 names `'f64'` and `'default'`, passed as a mode or read as a key of those tables,
+  select `strict` with a `DeprecationWarning` until 0.16. Names that describe float64's
+  arithmetic rather than the mode (`f64_bar`, `f64_measure`, `realised_f6`, the f64 lane) keep
+  their names.
 - **A run of doubles around a zero of the reals is its point.** Where float64 rounds a part to an
   exact zero on consecutive doubles, the run counts as one point if the reals have an isolated
   zero of the part in it: an infinity's and a zero's sign are open on the whole run, and the

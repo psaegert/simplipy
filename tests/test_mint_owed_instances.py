@@ -45,7 +45,7 @@ def test_f64_refuses_where_an_owed_special_constant_has_no_witness(engine, sourc
     it used to skip the unfitted instance and leave the refusal to the judge loop."""
     pick, verdicts = _scan(engine, source, target, 'default')
     assert pick is None and verdicts == ['special_constants'], verdicts
-    assert verify_rule(source.split(), target.split())['basis']['f64'] == 'refused'
+    assert verify_rule(source.split(), target.split())['basis']['strict'] == 'refused'
 
 
 def test_f64s_fit_at_a_special_constant_reads_float64(engine) -> None:
@@ -57,7 +57,7 @@ def test_f64s_fit_at_a_special_constant_reads_float64(engine) -> None:
     pick, verdicts = _scan(engine, source, target, 'default')
     assert pick is None and verdicts == ['special_constants'], verdicts
     d = verify_rule(source.split(), target.split())
-    assert d['basis']['f64'] == 'evidence' and d['realised_kinds'] is True, d
+    assert d['basis']['strict'] == 'evidence' and d['realised_kinds'] is True, d
 
 
 @pytest.mark.parametrize('source, target', [

@@ -58,6 +58,7 @@ from mpmath import isnan as misnan, isinf as misinf
 from mpmath.libmp import from_rational as _from_rational
 
 from . import _exact
+from ._modes import MODES, ModeKeyed, judge_mode
 from .. import operators as _operators
 
 
@@ -2580,33 +2581,33 @@ def _point_verdict(tl, tr, env_mp, owed=False):
         mp.dps = old
 
 
-#: The modes, in the order every table lists them.
-MODES = ('f64', 'permissive')
+#: The modes, in the order every table lists them, are `_modes.MODES`: strict and permissive.
 
 #: THE TIERS, the one registry: each tier is the set of modes a judged rule holds in, and so the
 #: modes whose files may hold it (`verify.MODE_TIERS` is read off it, and the documentation's
-#: tier table is checked against it). PERMISSIVE INCLUDES f64: a rule holds in permissive where
-#: it holds in f64, or where permissive's own criterion holds (the reals' values at float
-#: resolution, with its extensions). So a rule f64 holds is `core`, whatever permissive's own
+#: tier table is checked against it). PERMISSIVE INCLUDES STRICT: a rule holds in permissive
+#: where it holds in strict, or where permissive's own criterion holds (the reals' values at float
+#: resolution, with its extensions). So a rule strict holds is `core`, whatever permissive's own
 #: reading says (`floor(tanh(40)) -> 1` is float64's own value, off the reals); a rule only
 #: permissive's own criterion holds is `permissive` (`atanh(tanh t) -> t`, exact over the reals,
 #: `inf` in f64).
 TIERS = {
-    'core': ('f64', 'permissive'),
+    'core': ('strict', 'permissive'),
     'permissive': ('permissive',),
     'reject': (),
 }
 
 #: What each tier of `TIERS` means, as the documentation's tier table states it.
 TIER_MEANINGS = {
-    'core': ('holds in f64 (the deployed evaluator reproduces it, or it is true in the reals and '
-             'float64 keeps every value\'s kind: `sin(x0 + pi) -> -sin(x0)`), and so in '
-             'permissive, which includes every rule f64 holds'),
+    'core': ('holds in strict (the deployed evaluator reproduces it, or it is true in the reals '
+             'and float64 keeps every value\'s kind: `sin(x0 + pi) -> -sin(x0)`), and so in '
+             'permissive, which includes every rule strict holds'),
     'permissive': ("holds in permissive alone: true in the reals at float resolution and refused "
-                   "by f64 (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an "
-                   "extension (`exp(log(x0)) -> x0`), held by f64 with the two zeros one value "
-                   "and refused by strict for a zero's sign (`0*asin(x0) -> 0*acos(x0)`), or an "
-                   "instance of permissive's named steps (`asin(sin(x0)) -> x0`)"),
+                   "by strict (`atanh(tanh(x0)) -> x0`, where float64 gives +inf against x0), an "
+                   "extension (`exp(log(x0)) -> x0`), held by strict's readings with the two zeros "
+                   "one value and refused by strict for a zero's sign "
+                   "(`0*asin(x0) -> 0*acos(x0)`), or an instance of permissive's named steps "
+                   "(`asin(sin(x0)) -> x0`)"),
     'reject': 'holds in no mode; recorded in the drop census',
 }
 
@@ -3464,9 +3465,9 @@ def mode_reading(realised, permissive, mode):
     """A mode's reading of a judged rule: True (holds), False (refused on a counterexample) or
     None (no answer reached). `realised` is strict's reading (`strict_reading`), `permissive`
     permissive's own criterion's (the reals' values at float resolution) or its reading, which
-    includes strict's. Permissive includes f64: it holds where either holds, is refused where
-    both are, and reaches no answer otherwise."""
-    if mode == 'f64':
+    includes strict's. Permissive includes strict: it holds where either holds, is refused where
+    both are, and reaches no answer otherwise. `mode` is a mode name (`_modes.judge_mode`)."""
+    if judge_mode(mode) == 'strict':
         return realised
     if realised is True or permissive is True:
         return True
@@ -3480,7 +3481,7 @@ def judged_reading(detail, mode):
     readings, permissive including strict; a fully numeric rule's modes each read their own
     ground value (`_ground_settled`), so there each mode's reading is its own."""
     if detail.get('ground'):
-        return detail.get('realised') if mode == 'f64' else detail.get('permissive')
+        return detail.get('realised') if judge_mode(mode) == 'strict' else detail.get('permissive')
     return mode_reading(detail.get('realised'), detail.get('permissive'), mode)
 
 
@@ -3546,7 +3547,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
         if r.get('verdict') != 'UNSUPPORTED-SHAPE':
             r = _with_exact_routes(lhs, rhs, r, deployed_check)
     r = _with_named_steps(lhs, rhs, r, deployed_check)
-    return dict(r, basis={mode: _basis(r, mode) for mode in MODES})
+    return dict(r, basis=ModeKeyed({mode: _basis(r, mode) for mode in MODES}))
 
 
 #: What a verdict rests on in a mode (the specification's 3.4).
@@ -3575,8 +3576,9 @@ def _basis(r, mode):
 
     # a point the input's limit decided is read at offsets: evidence, not a proof
     by_limit = 'LIMIT' in (r.get('f64_kinds') or ())
-    if (proved(mode) and not (mode == 'f64' and by_limit)) \
-            or (mode == 'permissive' and r.get('realised') is True and proved('f64') and not by_limit):
+    if (proved(mode) and not (mode == 'strict' and by_limit)) \
+            or (mode == 'permissive' and r.get('realised') is True and proved('strict')
+                and not by_limit):
         return 'proved'
     return 'evidence'
 
@@ -3769,11 +3771,11 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
         r['reals_valued_holds'] = False
     elif ex['reals'] == 'proved' and not doubted and r.get('reals_valued_holds') is None:
         r['reals_valued_holds'] = True
-    readings = {'f64': r.get('realised_f6') if deployed_check else None,
+    readings = {'strict': r.get('realised_f6') if deployed_check else None,
                 'permissive': r.get('permissive_own')}
     conflict = []
     for mode in MODES:
-        if mode == 'f64' and not deployed_check:
+        if mode == 'strict' and not deployed_check:
             continue
         if ex[mode] == 'refuted':
             readings[mode] = False
@@ -3782,7 +3784,7 @@ def _with_exact_routes(lhs, rhs, r, deployed_check):
                 conflict.append(mode)
             elif readings[mode] is None:
                 readings[mode] = True
-    r.update(realised_f6=readings['f64'], permissive_own=readings['permissive'])
+    r.update(realised_f6=readings['strict'], permissive_own=readings['permissive'])
     if not variables and '<constant>' not in list(lhs) + list(rhs):
         # a fully numeric rule the ground evaluator cannot read: its one point is read by the
         # battery alone, bit for bit
@@ -3824,7 +3826,7 @@ def _ground_settled(r, ex, deployed_check=True):
     r['realised'] = strict_reading(f6, kinds, r['reals_valued_holds'])
     r['realised_one_zero'] = r['realised']
     r['permissive'] = r['permissive_own']
-    holds = tuple(m for m, h in (('f64', r['realised'] is True and r['permissive']),
+    holds = tuple(m for m, h in (('strict', r['realised'] is True and r['permissive']),
                                  ('permissive', r['permissive'])) if h)
     r['tier'] = next(tier for tier, modes in TIERS.items() if modes == holds)
     r['ground'] = True
@@ -5244,7 +5246,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
     # the jump preimages and the slots' magnitude ladder are sampled, and a constant-only rule's
     # points keep the quota.
     owed_point = bool(names) or not has_cl
-    unread_owed = {'f64': [], 'permissive': []}
+    unread_owed = {'strict': [], 'permissive': []}
 
     def merge(acc, key, builders):
         nonlocal resolved_pts, attempted_pts
@@ -5266,7 +5268,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             f64_owed.add(key)
             f64_read[0] += acc['read']
             f64_read[1] += acc['unread']
-            unread_owed['f64'].extend(acc['owed_unread'])
+            unread_owed['strict'].extend(acc['owed_unread'])
             if acc['null']:
                 f64_null_keys.add(key)
         dep_seen[0] = dep_seen[0] or acc['seen']
@@ -5924,7 +5926,7 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             held = False
         if unwitnessed['f64'] and held is not False:
             held = None        # owed a witness at a constant, and none found: no answer
-        if unread_owed['f64'] and held is not False:
+        if unread_owed['strict'] and held is not False:
             held = None        # an owed point left unread: no answer (4.10)
         return held
 
@@ -5963,8 +5965,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
             'reals_valued_holds': reals_valued_holds}
     if collapse is not None:
         base['collapse'] = sorted(collapse)
-    if unread_owed['f64'] or unread_owed['permissive']:
-        base['unread_owed'] = {m: pts[:3] for m, pts in unread_owed.items() if pts}
+    if unread_owed['strict'] or unread_owed['permissive']:
+        base['unread_owed'] = ModeKeyed({m: pts[:3] for m, pts in unread_owed.items() if pts})
     if perm_left:
         base['permissive_points'] = [p for _, p, _ in perm_left[:3]]
     if correlated_f64 is not None:

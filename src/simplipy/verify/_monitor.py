@@ -83,13 +83,14 @@ import yaml
 from ..engine import _TAGGED_DIALECT_TOKENS, SimpliPyEngine
 from ..utils import count_expressions, sample_expression
 from . import _contract
+from ._modes import RULE_MODES, judge_mode
 
 VAR_RE = re.compile(r'^x(\d+)$')
 
 def _mode_name(mode):
-    """The file mode (`f64` or `permissive`) of a mode name or `simplipy.Mode` member."""
-    from ..engine import _coerce_mode
-    return _coerce_mode(mode).name
+    """The judge's mode (`strict` or `permissive`) of a mode name or `simplipy.Mode` member
+    (`_modes.judge_mode`)."""
+    return judge_mode(mode)
 
 
 def _as_rule(inp, out, engine):
@@ -136,8 +137,7 @@ def _trace(inp, mode, engine):
     """The rule steps the engine takes on `inp` in `mode` -- each fire's rule instance, as the judge
     reads a rule (`_as_rule`) -- and its folds of numbers into one number (`ac_simplify_trace`:
     `(op, [operand], written)`, each operand and the written number as prefix tokens)."""
-    from ..engine import _RULE_MODE, _coerce_mode
-    rule_mode = _RULE_MODE[_coerce_mode(mode)]
+    rule_mode = RULE_MODES[judge_mode(mode)]
     _, fires, folds = engine._core.ac_simplify_trace(list(inp), rule_mode=rule_mode)
     steps = list(dict.fromkeys(tuple(map(tuple, _as_rule(lhs, rhs, engine)))
                                for lhs, rhs in fires))
@@ -649,10 +649,10 @@ def _held(detail, name, engine, exact_steps, part=False):
     if tier in MODE_TIERS[name] or _reading(detail, name) is True:
         # a fully numeric rewrite holds where the mode's own reading of its value holds
         return 'OK', f'{verdict} ({tier})', None
-    if name == 'f64' and part and detail.get('zero_sign_refused'):
+    if name == 'strict' and part and detail.get('zero_sign_refused'):
         return 'VIOLATION', (f'F8: {verdict} ({tier}), a zero\'s sign on a region, which the '
                              f'context may read: {str(detail.get("zero_sign"))[:160]}'), None
-    if name == 'f64' and not part and not detail.get('ground') \
+    if name == 'strict' and not part and not detail.get('ground') \
             and _contract.strict_at_the_root(detail) is True:
         # no operation reads the root's zero's sign (F7)
         return 'OK', (f'{verdict} ({tier}): strict at the root, two zeros of opposite sign one '
@@ -660,7 +660,7 @@ def _held(detail, name, engine, exact_steps, part=False):
     if _reading(detail, name) is None:
         return 'UNSCORED', (f'{name} reaches no answer ({verdict}): '
                             f'{str(detail.get("detail"))[:200]}'), None
-    if engine is not None and name == 'f64' and verdict in _REALS_UNDECIDED:
+    if engine is not None and name == 'strict' and verdict in _REALS_UNDECIDED:
         # F8 excuses float64's rounding where the engine's algebra is exact in the reals, and
         # the reals reach no answer on it
         return 'UNSCORED', (f'F8: the reals reach no answer ({verdict}): '
@@ -675,7 +675,7 @@ def _held(detail, name, engine, exact_steps, part=False):
             return 'VIOLATION', (f'F8: {verdict} ({tier}), float64 {sorted(kinds - _F8_KINDS)}: '
                                  f'{str(detail.get("unrealised"))[:160]}'), \
                 sorted(kinds) if alone else None
-        if name == 'f64' and _contract.answer_zero_sign(detail) is False:
+        if name == 'strict' and _contract.answer_zero_sign(detail) is False:
             # rounding alone apart, but a value that turns on a zero's sign on a region (F7):
             # `atan2(0*x0, -1) -> pi` is -pi against pi for x0 < 0
             return 'VIOLATION', (f'F8: {verdict} ({tier}), a value that turns on a zero\'s sign: '
@@ -687,9 +687,10 @@ def _held(detail, name, engine, exact_steps, part=False):
     return 'VIOLATION', f'{verdict} ({tier}): {str(detail.get("detail"))[:200]}', None
 
 
-def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
-    """Judge one rewrite ``inp -> out`` made in ``mode`` (``'f64'``, also ``'default'``,
-    ``'permissive'`` or a :class:`~simplipy.Mode` member; the default is the engine's default
+def judge_pair(inp, out, rng=None, *, mode='strict', engine=None):
+    """Judge one rewrite ``inp -> out`` made in ``mode`` (``'strict'``, ``'permissive'`` or a
+    :class:`~simplipy.Mode` member, the pre-0.15 names ``'f64'`` and ``'default'`` read as
+    ``'strict'`` with a ``DeprecationWarning`` until 0.16; the default is the engine's default
     mode) as the rule judge judges the rule ``inp -> out``.
 
     Returns ``(verdict, detail)``, by the mode's own reading of the judgment: ``OK`` where the
@@ -731,7 +732,7 @@ def judge_pair(inp, out, rng=None, *, mode='f64', engine=None):
                 return 'VIOLATION', f'F8: the step {said} is {step_tier}, not {name}\'s'
             exact_steps = exact_steps and step.get('verdict') in _contract.HOLDS_IN_THE_REALS
     verdict, why = _whole_answer(lhs, rhs, detail, name, engine, exact_steps)
-    if verdict == 'OK' or name != 'f64' or not folds:
+    if verdict == 'OK' or name != 'strict' or not folds:
         return verdict, why
     return _with_folds(lhs, rhs, folds, name, engine, exact_steps, verdict, why)
 
@@ -829,11 +830,11 @@ def _whole_answer(lhs, rhs, detail, name, engine, exact_steps, depth=0, part=Fal
                 break
         else:
             return verdict, first_why or why
-    if name == 'f64' and _contract.answer_zero_sign(detail) is False:
+    if name == 'strict' and _contract.answer_zero_sign(detail) is False:
         return 'VIOLATION', (f'F8: a zero\'s sign under an operation that reads it, around '
                              f'{said}: '
                              f'{str(detail.get("zero_sign_answer") or detail.get("zero_sign"))[:160]}')
-    if name == 'f64' and _contract.answer_keeps_poles(detail) is False:
+    if name == 'strict' and _contract.answer_keeps_poles(detail) is False:
         # around a held step a change of kind is float64's rounding of its input, but where the
         # left side has an infinity at a pole of the reals the answer keeps it
         return 'VIOLATION', (f'F8: an infinity the left side has at a pole of the reals, lost '
