@@ -7,6 +7,7 @@ select it with a ``DeprecationWarning`` until 0.16, as the engine's ``Mode`` doe
 describe float64's arithmetic rather than the mode (``f64_bar``, ``f64_measure``, ``realised_f6``,
 the f64 lane) keep their names."""
 import warnings
+from typing import Any
 
 #: The modes, in the order every table lists them.
 MODES = ('strict', 'permissive')
@@ -19,7 +20,7 @@ PRE_015_NAMES = frozenset({'f64', 'default'})
 RULE_MODES = {'strict': 'default', 'permissive': 'permissive'}
 
 
-def warn_pre_015(spelling, stacklevel=4):
+def warn_pre_015(spelling: str, stacklevel: int = 4) -> None:
     """The one warning of the strict mode's pre-0.15 names (``f64``, ``'default'``), removed in
     0.16."""
     warnings.warn(
@@ -27,7 +28,7 @@ def warn_pre_015(spelling, stacklevel=4):
         f"'strict' (Mode.strict)", DeprecationWarning, stacklevel=stacklevel)
 
 
-def judge_mode(mode):
+def judge_mode(mode: Any) -> str:
     """THE JUDGE'S NAME OF A MODE, ``'strict'`` or ``'permissive'``: one of those names in any
     case, a :class:`~simplipy.Mode` member (read by its name; a member still named ``f64`` reads
     as strict), or the strict mode's pre-0.15 names ``'f64'`` and ``'default'``, read as
@@ -45,7 +46,7 @@ def judge_mode(mode):
     return 'strict' if name == 'f64' else name
 
 
-def engine_mode(mode):
+def engine_mode(mode: Any) -> Any:
     """The engine's :class:`~simplipy.Mode` member of a judge mode (`judge_mode`), whichever name
     the engine gives the strict mode, for a call into the engine or the miner."""
     from ..engine import Mode
@@ -61,18 +62,18 @@ class ModeKeyed(dict):
     ``DeprecationWarning`` until 0.16: ``MODE_TIERS``, a judgment's ``basis``, ``exact`` and
     ``unread_owed``, :func:`~simplipy.verify.verify_artifact`'s ``modes``."""
 
-    def _key(self, key):
+    def _key(self, key: Any) -> Any:
         if isinstance(key, str) and not dict.__contains__(self, key) \
                 and key.strip().lower() in PRE_015_NAMES:
             warn_pre_015(f'the mode name {key!r}', stacklevel=5)
             return 'strict'
         return key
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any) -> Any:
         return dict.__getitem__(self, self._key(key))
 
-    def get(self, key, default=None):
+    def get(self, key: Any, default: Any = None) -> Any:
         return dict.get(self, self._key(key), default)
 
-    def __contains__(self, key):
+    def __contains__(self, key: object) -> bool:
         return dict.__contains__(self, self._key(key))

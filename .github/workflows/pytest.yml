@@ -9,10 +9,9 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     # A hung job runs to GitHub's 6h default, so the job carries its own bound. The
-    # suite takes about 13 minutes on a development host (the shipped-triple sweep of
-    # the permissive-dominance gate alone about 5); 60 minutes leaves room for a slower
-    # runner and still bounds a hang.
-    timeout-minutes: 60
+    # suite takes 40 to 57 minutes on a hosted runner; 90 minutes leaves room for a
+    # slower runner and still bounds a hang.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
