@@ -976,6 +976,8 @@ FUNCTION_PINS = [
     function_case('fun.unit_inverses', 'cos acos sin x0', 'sin x0', 'f64'),
     function_case('fun.unit_inverses', 'cos acos x0', 'x0', 'f64'),
     function_case('fun.abs_nonnegative', 'abs exp x0', 'exp x0', 'f64'),
+    function_case('fun.log_inverse', 'log abs inv x0', 'neg log abs x0', 'f64'),
+    function_case('fun.log_inverse', 'log abs inv x0', 'neg log abs x0', 'permissive'),
     function_case('fun.abs_nonnegative', 'inv abs pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'f64'),
     function_case('perm.inverse_pairs', 'asin sin x0', 'x0', 'permissive'),
     function_case('perm.inverse_pairs', 'atan tan x0', 'x0', 'permissive'),

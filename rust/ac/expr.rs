@@ -4964,9 +4964,8 @@ fn flat_pair(e: &Ex, cx: &Cx) -> Option<FlatPair> {
     // the log of an inverse waits only where its law may collapse it: over a part with a
     // variable, a slot or a fitted constant, in `f64` a monomial
     if view.tok_is(*o, "log") {
-        if let Ex::Pow(t, k) = &a[0] {
-            if matches!(&**k, Ex::Num(r) if *r == Rat::NEG_ONE)
-                && (t.has_measure_space(view) || t.contains_wildcard(view))
+        if let Some((t, _)) = log_inverse_read(&a[0], view) {
+            if (t.has_measure_space(view) || t.contains_wildcard(view))
                 && (!cx.f64_semantics() || log_inverse_argument(t, view))
             {
                 return Some(FlatPair::LogInverse);
@@ -5154,6 +5153,22 @@ fn flat_reads_a_pair_at(e: &Ex, read: [bool; 2], cx: &Cx) -> bool {
         }
     }
     walk(e, read, cx)
+}
+
+/// The inverse the log of an inverse reads (`fun.log_inverse`): `t` of `1/t`, and of `abs(1/t)`,
+/// which is `1/abs(t)` in every mode, float64 included (`1/t` and `1/(-t)` are one magnitude,
+/// zeros and infinities included), with whether it stood in an absolute value.
+fn log_inverse_read<'a>(e: &'a Ex, view: &TokenView) -> Option<(&'a Ex, bool)> {
+    let inverse = |x: &'a Ex| match x {
+        Ex::Pow(t, k) if matches!(&**k, Ex::Num(r) if *r == Rat::NEG_ONE) => Some(&**t),
+        _ => None,
+    };
+    match e {
+        Ex::Fun(f, a) if a.len() == 1 && view.tok_is(*f, "abs") => {
+            inverse(&a[0]).map(|t| (t, true))
+        }
+        _ => inverse(e).map(|t| (t, false)),
+    }
 }
 
 /// Is `t` a MONOMIAL, the argument `fun.log_inverse` reads: a product of variables, fitted
@@ -12160,19 +12175,21 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
-    // THE LOG OF AN INVERSE (`fun.log_inverse`): `log(1/t) = -log(t)` where its law holds, at the
-    // root's walk in both modes (`release_flat`; in `f64` over a monomial `t`, where nothing reads
-    // the sign of a zero); a fully numeric `t` is read for its value first.
+    // THE LOG OF AN INVERSE (`fun.log_inverse`): `log(1/t) = -log(t)` and
+    // `log(abs(1/t)) = -log(abs(t))` where its law holds, at the root's walk in both modes
+    // (`release_flat`; in `f64` over a monomial `t`, where nothing reads the sign of a zero); a
+    // fully numeric `t` is read for its value first.
     if args.len() == 1 && cx.view.tok_is(op, "log") {
-        if let Ex::Pow(t, k) = &args[0] {
-            if matches!(&**k, Ex::Num(r) if *r == Rat::NEG_ONE)
-                && (t.has_measure_space(cx.view) || t.contains_wildcard(cx.view))
+        if let Some((t, in_abs)) = log_inverse_read(&args[0], cx.view) {
+            if (t.has_measure_space(cx.view) || t.contains_wildcard(cx.view))
                 && Law::FunLogInverse.holds(t, cx)
             {
-                return mul(
-                    vec![Ex::Num(Rat::NEG_ONE), fun(op, vec![(**t).clone()], cx)],
-                    cx,
-                );
+                let read = if in_abs {
+                    fun(cx.view.intern("abs"), vec![t.clone()], cx)
+                } else {
+                    t.clone()
+                };
+                return mul(vec![Ex::Num(Rat::NEG_ONE), fun(op, vec![read], cx)], cx);
             }
         }
     }

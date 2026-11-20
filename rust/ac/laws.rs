@@ -83,7 +83,7 @@
 //! | `fun.sinh_asinh` | sinh(asinh(t)) = t | none | none |
 //! | `fun.acosh_cosh` | acosh(cosh(t)) = abs(t) | nothing around reads its flat point | none |
 //! | `fun.exp_log` | exp(log(t)) = t | t >= 0, not `-0` on a region | none |
-//! | `fun.log_inverse` | log(1/t) = -log(t) | t a monomial: 1 only at points | none |
+//! | `fun.log_inverse` | log(1/t) = -log(t), log(abs(1/t)) = -log(abs(t)) | t a monomial: 1 only at points | none |
 //! | `fun.unit_inverses` | cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t | t in [-1, 1] | none |
 //! | `perm.inverse_pairs` | f(g(t)) = t, g the inverse of f | no step | none |
 //! | `fun.abs_nonnegative` | abs(t) = t | t >= 0, not `-0` on a region | t >= 0 |
@@ -844,7 +844,7 @@ impl Law {
             Law::FunSinhAsinh => "sinh(asinh(t)) = t",
             Law::FunAcoshCosh => "acosh(cosh(t)) = abs(t)",
             Law::FunExpLog => "exp(log(t)) = t",
-            Law::FunLogInverse => "log(1/t) = -log(t)",
+            Law::FunLogInverse => "log(1/t) = -log(t), log(abs(1/t)) = -log(abs(t))",
             Law::FunUnitInverses => "cos(acos(t)) = t, sin(asin(t)) = t, tanh(atanh(t)) = t",
             Law::PermInversePairs => "f(g(t)) = t, g the inverse of f",
             Law::FunAbsNonnegative => "abs(t) = t",
