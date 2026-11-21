@@ -17,7 +17,7 @@ import re
 import signal
 import threading
 import time
-from typing import Callable, NamedTuple, TYPE_CHECKING
+from typing import Callable, Collection, NamedTuple, TYPE_CHECKING
 from typing import Any
 from copy import deepcopy
 
@@ -949,17 +949,42 @@ def _universe(leaf_nodes: list[str], non_leaf_nodes: dict[str, int], max_length:
 
 
 def _in_cell(overlap: dict, max_source: int | None,
-             operator_max_length: dict | None = None) -> bool:
+             operator_max_length: dict | None = None,
+             literals: Collection[str] | None = None) -> bool:
     """Is the overlap's completion a rule of the mine's cell: its source a source of the
-    mine's universe, no longer than the mine's sources (``max_source``, None for no bound) and
+    mine's universe, no longer than the mine's sources (``max_source``, None for no bound),
     holding no operator the per-length operator set (``operator_max_length``) keeps out of its
-    length? A source outside the universe is one the mine does not enumerate, and completing
-    there breeds without end: each completion overlaps the rules again at a longer instance."""
+    length, and no literal but the universe's own (``literals``, :func:`_cell_literals`; None
+    for no bound)? A source outside the universe is one the mine does not enumerate, and
+    completing there breeds without end: each completion overlaps the rules again at a longer
+    instance. The canon writes a fully numeric part of that instance as one literal, so a
+    source no longer than the mine's can still lie outside it: `floor(1 + (10 - x0))` is
+    `floor(11 - x0)`, four tokens and a number the mine never enumerates, and its completion
+    overlaps the rules again on further numbers."""
     source = overlap['completion'][0]
     if max_source is not None and len(source) > max_source:
         return False
     excluded = _excluded_at_length(len(source), operator_max_length)
-    return not any(str(token) in excluded for token in source)
+    if any(str(token) in excluded for token in source):
+        return False
+    return literals is None or all(str(token) in literals for token in source
+                                   if _is_literal(str(token)))
+
+
+def _is_literal(token: str) -> bool:
+    """Is ``token`` a literal leaf: a numeral of the engine's grammar or a constant-like leaf
+    (`np.pi`, `float("inf")`, `<constant>`)?"""
+    return token in _CONSTLIKE_LEAVES or is_numeric_string(token)
+
+
+def _cell_literals(engine: Any, leaf_nodes: Any, rule_mode: str) -> frozenset[str]:
+    """THE LITERALS OF THE MINE'S CELL: each literal among the universe's leaves
+    (``_universe``'s ``leaf_nodes``) as the mode's sources write it (`(-10)` is `-10`), which
+    the cell test (:func:`_in_cell`) holds a completion's source to."""
+    core = engine._core
+    return frozenset(token for leaf in leaf_nodes
+                     for token in core.mine_mark([str(leaf)], rule_mode=rule_mode)
+                     if _is_literal(token))
 
 
 def _completion_pattern(overlap: dict) -> tuple:
@@ -972,7 +997,8 @@ def _completion_pattern(overlap: dict) -> tuple:
 
 def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
               judged: dict | None = None, max_source: int | None = None,
-              operator_max_length: dict | None = None) -> dict:
+              operator_max_length: dict | None = None,
+              literals: Collection[str] | None = None) -> dict:
     """``verify.licensed`` of each distinct pair in the file of ``rule_mode``: the judge's tier
     holds in the mode and no named policy refuses it (evidence, the constant count, ground
     composites, the cell, the ordering, the specials, duplication, what the engine does
@@ -986,7 +1012,7 @@ def _licences(engine: Any, rule_mode: str, pairs: list, judge: Callable,
         judged[pair] = tier
     mode = _file_mode(rule_mode)
     return {pair: licensed(list(pair[0]), list(pair[1]), mode, engine, max_source=max_source,
-                           operator_max_length=operator_max_length,
+                           operator_max_length=operator_max_length, literals=literals,
                            detail={'tier': judged[pair]})
             for pair in distinct}
 
@@ -1008,9 +1034,11 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
                   verdicts: Callable | None = None, max_source: int | None = None,
                   prog: Any = None,
                   operator_max_length: dict | None = None,
-                  prefilter: Callable | None = None) -> tuple[list, list, list, list]:
+                  prefilter: Callable | None = None,
+                  literals: Collection[str] | None = None) -> tuple[list, list, list, list]:
     """THE OVERLAP GATE: every overlap that does not join (``_unjoined_overlaps``) within the
-    mine's cell (``_in_cell``) is asked about as the rule completion would add:
+    mine's cell (``_in_cell``: ``max_source``, ``operator_max_length``, ``literals``) is asked
+    about as the rule completion would add:
     ``verify.licensed`` in the mode, the judge's tier and the named policies. -> ``(missing,
     refused, beyond, prefiltered)``: the completions the mode licenses, which the file lacks
     (expected empty), those it does not, each with the judge's tier, the policies that refuse it
@@ -1024,11 +1052,12 @@ def _overlap_gate(engine: Any, rule_mode: str, rules: Any, judge: Callable,
     paths."""
     started = time.monotonic()
     unjoined = _unjoined_overlaps(engine, rule_mode, rules)
-    beyond = [o for o in unjoined if not _in_cell(o, max_source, operator_max_length)]
-    unjoined = [o for o in unjoined if _in_cell(o, max_source, operator_max_length)]
+    within = [_in_cell(o, max_source, operator_max_length, literals) for o in unjoined]
+    beyond = [o for o, inside in zip(unjoined, within) if not inside]
+    unjoined = [o for o, inside in zip(unjoined, within) if inside]
     pairs = [_completion_pattern(o) for o in unjoined]
     licence = _licences(engine, rule_mode, pairs, judge, max_source=max_source,
-                        operator_max_length=operator_max_length)
+                        operator_max_length=operator_max_length, literals=literals)
     if prog is not None:
         prog.stage('overlap gate', unjoined=len(unjoined), beyond_the_cell=len(beyond),
                    judged=len(licence), seconds=round(time.monotonic() - started, 1))
@@ -2047,7 +2076,13 @@ class RuleMiner:
             # completions within the mine's cell are offered (`_in_cell`): a longer source lies
             # outside the universe the mine enumerates, and completing there breeds without
             # end: on the reduced length-4 strict mine, offering every unjoined overlap took the file
-            # from 543 rules to 1,022 in one round, and the next round offered 13,772.
+            # from 543 rules to 1,022 in one round, and the next round offered 13,772. So does a
+            # source of the mine's length with a literal the universe lacks, a fully numeric part
+            # of a longer instance written as one number (`floor(11 - x0)`): on the length-4
+            # strict mine over the literals -10..10, the rounds certified 40, 64, 205 and 820
+            # rules, all but four on such sources, and the fifth offered 3,925.
+            _literals = _cell_literals(
+                self.engine, leaf_nodes if leaf_nodes is not None else dummy_variables, rule_mode)
             _completion: list = []
             _tried: dict = {}
             from .progress import Progress
@@ -2068,7 +2103,7 @@ class RuleMiner:
                 _unjoined = _unjoined_overlaps(self.engine, rule_mode,
                                                self._mode_rules(rule_mode), prog=_cprog)
                 _within = [o for o in _unjoined
-                           if _in_cell(o, cell_source_length, operator_max_length)]
+                           if _in_cell(o, cell_source_length, operator_max_length, _literals)]
                 # only a completion the mode licenses is offered (the overlap gate's question):
                 # one the judge refuses or a named policy refuses is no rule to mine
                 # a completion is offered again once the set it was mined against has moved:
@@ -2080,7 +2115,7 @@ class RuleMiner:
                 _licence = _licences(self.engine, rule_mode,
                                      [_completion_pattern(o) for o in _fresh], _timed_judge,
                                      judged, max_source=cell_source_length,
-                                     operator_max_length=operator_max_length)
+                                     operator_max_length=operator_max_length, literals=_literals)
                 for o in _fresh:
                     pair = (tuple(o['completion'][0]), tuple(o['completion'][1]))
                     if _tried.get(pair) != _set and _licence[_completion_pattern(o)]['licensed']:
@@ -2185,7 +2220,7 @@ class RuleMiner:
                                       warn_s=judge_warn_s, fail_s=judge_fail_s),
                     max_source=cell_source_length,
                     prog=Progress(verbose, prefix='  [gate] '),
-                    operator_max_length=operator_max_length,
+                    operator_max_length=operator_max_length, literals=_literals,
                     prefilter=(_prefilter_reading(
                         self.engine, X_data if X_confirm is None
                         else np.vstack([X_data, X_confirm]), dummy_variables, rtol, atol)
@@ -3824,7 +3859,8 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``overlaps``: where two rules overlap and the paths do not join, the completion the
       mode licenses is in the file (``_overlap_gate``), within the mine's cell (a completion
       source no longer than the sidecar's ``max_source_pattern_length``, holding no operator
-      its ``operator_max_length`` keeps out of that length); the completions it
+      its ``operator_max_length`` keeps out of that length and no literal but the universe's
+      leaves, its ``dummy_variables`` and ``extra_internal_terms``); the completions it
       does not license are listed under ``overlaps_refused`` with the judge's tier, the policies
       that refuse it and the judge's verdict, those beyond the cell are counted under
       ``overlaps_beyond_cell``, and neither fails;
@@ -3890,13 +3926,18 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
                           if _preempted_by(engine, lhs, rhs, mode)]
     gates['dead'] = _dead_rules(engine, rule_mode, rules)
     params = sidecar.get('params') or {}
+    # the cell's literals are the universe's leaves the sidecar records (a sidecar recording
+    # none bounds no literal)
+    leaves = None if 'extra_internal_terms' not in params else \
+        list(params.get('dummy_variables') or []) + list(params['extra_internal_terms'] or [])
     gates['overlaps'], overlaps_refused, beyond, overlaps_prefilter = _overlap_gate(
         engine, rule_mode, rules,
         judge if judge is not None else functools.partial(judge_tiers, processes=judge_processes),
         functools.partial(judge_verdicts, processes=judge_processes),
         max_source=params.get('max_source_pattern_length'),
         operator_max_length=params.get('operator_max_length'),
-        prefilter=_sidecar_prefilter(engine, sidecar) if rule_mode == 'default' else None)
+        prefilter=_sidecar_prefilter(engine, sidecar) if rule_mode == 'default' else None,
+        literals=None if leaves is None else _cell_literals(engine, leaves, rule_mode))
     gates['translation'] = load_gates['translation']
     recorded = sidecar.get('measure')
     if isinstance(recorded, dict):

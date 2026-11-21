@@ -10,7 +10,8 @@ import yaml
 import simplipy.mining as mining
 from simplipy import SimpliPyEngine
 from simplipy.__main__ import main
-from simplipy.mining import RuleMiner, _in_cell, _operator_max_length, _universe
+from simplipy.mining import (RuleMiner, _cell_literals, _in_cell, _operator_max_length,
+                             _universe)
 from simplipy.utils import count_expressions, enumerate_expressions
 from simplipy.verify import policy_refusals
 
@@ -124,6 +125,7 @@ def test_a_mine_reads_the_setting_wherever_it_builds_the_universe(tmp_path, monk
                        judge=lambda pairs: ['core'] * len(pairs))
     assert cells and cells[0]['max_source'] == 3
     assert cells[0]['operator_max_length'] == {'exp': 2}
+    assert cells[0]['literals'] == {'0', '1', '<constant>'}
 
 
 def test_the_cell_is_the_universe(tmp_path) -> None:
@@ -140,6 +142,31 @@ def test_the_cell_is_the_universe(tmp_path) -> None:
                                            max_source=4, operator_max_length={'exp': 2})
     assert 'cell_bound' not in policy_refusals(['exp', 'exp', '?0'], ['?0'], 'f64', engine,
                                                max_source=4)
+
+
+def test_the_cell_holds_the_universes_literals_only(tmp_path) -> None:
+    """A completion's source carries no literal the universe's leaves lack: the canon writes a
+    fully numeric part of a longer instance as one number (`floor(1 + (10 - x0))` is
+    `floor(11 - x0)`), a source of the mine's length the mine never enumerates, and completing
+    there breeds new numbers round after round. The universe's literals are its leaves as the
+    sources write them (`(-1)` is `-1`); variables and operators are not literals."""
+    engine = _engine(tmp_path)
+    literals = _cell_literals(engine, ['x0', 'x1', '(-1)', '0', '1', '<constant>',
+                                       'float("inf")'], 'default')
+    assert literals == {'-1', '0', '1', '<constant>', 'float("inf")'}
+    assert _cell_literals(engine, ['x0', '(-1)', '1'], 'permissive') == {'-1', '1'}
+    inside = {'completion': [['*', '-1', 'log', 'x1'], ['neg', 'log', 'x1']]}
+    special = {'completion': [['exp', '*', 'float("inf")', '<constant>'], ['<constant>']]}
+    folded = {'completion': [['*', '0.3', 'log', 'x0'], ['log', 'pow', 'x0', '0.3']]}
+    summed = {'completion': [['exp', '+', '11', 'x0'], ['*', '11', 'exp', 'x0']]}
+    for o in (inside, special):
+        assert _in_cell(o, 4, None, literals), o
+    for o in (folded, summed):
+        assert not _in_cell(o, 4, None, literals) and _in_cell(o, 4), o
+    assert 'cell_bound' in policy_refusals(['*', '0.3', 'log', '?0'], ['log', 'pow', '?0', '0.3'],
+                                           'f64', engine, max_source=4, literals=literals)
+    assert 'cell_bound' not in policy_refusals(['*', '-1', 'log', '?0'], ['neg', 'log', '?0'],
+                                               'f64', engine, max_source=4, literals=literals)
 
 
 def test_an_empty_setting_mines_the_same_files(tmp_path) -> None:

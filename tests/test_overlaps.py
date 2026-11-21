@@ -7,7 +7,8 @@ import yaml
 
 from simplipy import SimpliPyEngine
 from simplipy.engine import _CORE_SERIALIZATION_ARITIES
-from simplipy.mining import RuleMiner, _critical_instances, _overlap_gate, _unjoined_overlaps
+from simplipy.mining import (RuleMiner, _cell_literals, _critical_instances, _overlap_gate,
+                             _unjoined_overlaps)
 
 ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
 
@@ -72,3 +73,31 @@ def test_the_gate_judges_the_cell_and_counts_the_rest():
     missing, refused, beyond, _ = _overlap_gate(engine, 'default', rules, judge, max_source=3)
     assert missing == [] and refused == [] and asked == []
     assert [' '.join(o['completion'][0]) for o in beyond] == ['cos asin tanh x0'], beyond
+
+
+def test_a_number_the_canon_folds_lies_beyond_the_cell():
+    """`floor(x) + 1 -> floor(1 + x)` and `floor(10 - x) -> 10 - ceil(x)` overlap on
+    `floor(10 - x) + 1`. The first rule's path ends in `floor(11 - x)`, the canon writing 1 + 10
+    as one number, so the completion `floor(11 - x0) -> 11 - ceil(x0)` has a source of four
+    tokens with a literal the universe lacks: a mine of sources to length 4 over the literals
+    0..10 does not enumerate it, and the gate counts it beyond the cell and judges nothing."""
+    rules = [(('+', 'floor', '_0', '1'), ('floor', '+', '1', '_0')),
+             (('floor', '-', '10', '_0'), ('-', '10', 'ceil', '_0'))]
+    asked = []
+
+    def judge(pairs):
+        asked.extend(pairs)
+        return ['core'] * len(pairs)
+
+    engine = _engine('default', rules)
+    found = {(' '.join(o['completion'][0]), ' '.join(o['completion'][1]))
+             for o in _unjoined_overlaps(engine, 'default', rules)}
+    assert ('floor - 11 x0', '- 11 ceil x0') in found, found
+    literals = _cell_literals(engine, ['x0'] + [str(k) for k in range(11)], 'default')
+    missing, refused, beyond, _ = _overlap_gate(engine, 'default', rules, judge, max_source=4,
+                                                literals=literals)
+    assert 'floor - 11 x0' in [' '.join(o['completion'][0]) for o in beyond], beyond
+    assert not any('11' in o['completion'][0] for o in missing + refused)
+    assert not any('11' in lhs for lhs, _ in asked)
+    missing, refused, _, _ = _overlap_gate(engine, 'default', rules, judge, max_source=4)
+    assert 'floor - 11 x0' in [' '.join(o['completion'][0]) for o in missing + refused]

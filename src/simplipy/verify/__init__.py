@@ -26,7 +26,7 @@ evaluator of its own: every value either compares is the core's.
 import json
 import os
 import warnings
-from typing import Any
+from typing import Any, Collection
 
 from . import _contract, _gate, _monitor
 from ._modes import RULE_MODES, ModeKeyed, engine_mode, judge_mode
@@ -140,14 +140,15 @@ def load_policy_refusal(lhs: list[str], rhs: list[str], mode: str, engine: Any,
 
 def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
                     max_source: int | None = None,
-                    operator_max_length: dict | None = None) -> list[str]:
+                    operator_max_length: dict | None = None,
+                    literals: Collection[str] | None = None) -> list[str]:
     """The named policies (``POLICIES``) that refuse ``lhs -> rhs`` in ``mode``, each read
     from its one place: evidence (4.1, the core's certified cells in the mode's values,
     `_core.table_mode_evidence`; permissive includes f64, so its evidence is float64's or the
     reals'); the load's gates (4.2 constant count, 4.3 ground composite, 4.5
     ordering, 4.8 the engine's own laws, well-formedness: :func:`load_policy_refusal`); the
-    mine's cell (4.4, with ``max_source`` and the mine's per-length operator set
-    ``operator_max_length``); the
+    mine's cell (4.4, with ``max_source``, the mine's per-length operator set
+    ``operator_max_length`` and the literals of its universe ``literals``); the
     registry's special absorption and constant introduction (4.6, 4.2); the duplication
     predicate (4.7); and the ground facts the engine's fold performs (4.8, the preemption
     gate). ``engine`` is a :class:`~simplipy.SimpliPyEngine` holding the operators."""
@@ -162,7 +163,7 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     load = load_policy_refusal(lhs, rhs, mode, engine)
     if load is not None:
         out.append(load)
-    if not _in_cell({'completion': [lhs, rhs]}, max_source, operator_max_length):
+    if not _in_cell({'completion': [lhs, rhs]}, max_source, operator_max_length, literals):
         out.append('cell_bound')
     registry = engine._core.registry_mint_refusal(lhs, lhs, rhs, [])
     if registry == 'special_absorption':
@@ -235,7 +236,7 @@ def _judgment(lhs: list[str], rhs: list[str]) -> dict:
 
 def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
              max_source: int | None = None, operator_max_length: dict | None = None,
-             detail: dict | None = None) -> dict:
+             literals: Collection[str] | None = None, detail: dict | None = None) -> dict:
     """``licensed(L, R, mode)`` (the specification's 3.4): the rule holds in the mode -- its
     judged tier is one ``MODE_TIERS`` gives the mode -- and no named policy refuses it
     (:func:`policy_refusals`). In permissive, which includes f64, the rule's evidence is that
@@ -252,7 +253,7 @@ def licensed(lhs: list[str], rhs: list[str], mode: str, engine: Any, *,
     tier = effective_tier(detail)
     holds = tier in MODE_TIERS[mode] or (bool(detail.get('ground'))
                                           and _contract.judged_reading(detail, mode) is True)
-    refused = policy_refusals(lhs, rhs, mode, engine, max_source, operator_max_length)
+    refused = policy_refusals(lhs, rhs, mode, engine, max_source, operator_max_length, literals)
     if holds and tier not in MODE_TIERS[mode] and 'engine_owned' not in refused:
         refused = [p for p in POLICIES if p in refused or p == 'engine_owned']
     if mode == 'permissive' and holds and 'evidence' not in refused \

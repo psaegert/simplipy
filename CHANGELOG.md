@@ -2351,6 +2351,24 @@ model predictions.
   pass ends when a round offers or certifies nothing (a safety cap of 32 rounds; it was 3).
   `1/atanh(ceil(x)) -> 0` and `sinh(acosh(1/x)) -> tan(acos(x))`, which the reduced mine's
   `permissive` file lacked, are completed.
+- **The mine's cell holds the universe's literals only.** A completion's source lies in the
+  mine's cell only if every literal it carries is a leaf of the universe, as the mine's sources
+  write it (`(-1)` is `-1`). The canon writes a fully numeric part of an overlap's instance as
+  one number, so a source no longer than the mine's sources could lie outside its universe:
+  `floor(x) + 1 -> floor(1 + x)` and `floor(10 - x) -> 10 - ceil(x)` overlap on
+  `floor(10 - x) + 1`, whose first path ends in `floor(11 - x)`, and an overlap at
+  `3*log(rootn(x, 10))` ends in `0.3*log(x)`. Each completion on such a source overlapped the
+  rules again on further numbers, so the pass did not end: on the length-4 strict mine over the
+  literals -10..10 its rounds certified 40, 64, 205 and 820 rules, all but four on such sources,
+  and the fifth offered 3,925. Each number needs a rule of its own there, since the rule with a
+  slot in the literal's place does not hold (`exp(x)^c -> exp(c*x)` holds in `strict` for each
+  positive literal `c`, and with a slot only in `permissive`). Resumed from the same scan with
+  the cell bounded, the completion offers 11 rules, certifies 4, offers the 7 it refused once
+  more and ends after two rounds. The overlap gate and `verify-mine` read the same cell, its
+  literals from the sidecar's `dummy_variables` and `extra_internal_terms`. On the reduced
+  length-4 mine (literals -1, 0 and 1) the strict file loses `erfc(-inf*C) -> C` and the
+  permissive file `erfc(-inf*C) -> C` and `erf(-inf*C) -> C`: completions on a source with
+  `-inf`, which that universe does not enumerate; no rule is gained.
 - **The gates ask `licensed`.** The mine's completion step offers, its overlap gate demands,
   its judge loop keeps, and its final gate and `verify-mine` pass only what `verify.licensed`
   passes in the mode: the
