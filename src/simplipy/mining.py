@@ -17,7 +17,7 @@ import re
 import signal
 import threading
 import time
-from typing import Callable, Collection, NamedTuple, TYPE_CHECKING
+from typing import Callable, Collection, Iterator, NamedTuple, TYPE_CHECKING
 from typing import Any
 from copy import deepcopy
 
@@ -174,6 +174,21 @@ def _reconcile_proposal_census(
                             dropped_at=stage, drop_reason=reason)
         outcomes['certified'] -= 1
         outcomes['certified_then_dropped'] += 1
+
+
+def _in_parallel(fn: Callable, items: Any, prog: Any = None, name: str = '') -> Iterator:
+    """``fn`` of each of ``items``, in order, on as many threads as the core's own pool
+    (``_core.mine_threads``): for work that is one call into the core per item (which releases
+    the interpreter) and reads nothing another item writes, so its results are the serial
+    loop's. ``prog`` (a :class:`~simplipy.progress.Progress`) reports them as they come in,
+    under ``name``."""
+    from concurrent.futures import ThreadPoolExecutor
+    from simplipy import _core  # type: ignore[attr-defined]
+    items = list(items)
+    workers = max(1, min(len(items), _core.mine_threads()))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = pool.map(fn, items)
+        yield from (results if prog is None else prog.track(results, name, total=len(items)))
 
 
 def _tokens_in_vocabulary(tokens: Any, vocabulary: set) -> bool:
@@ -3210,12 +3225,12 @@ class RuleMiner:
             return len(trail) - 1
 
         pending: dict[int, dict[str, Any]] = {}
-        indexed = list(enumerate(proposal_entries))
-        if prog is not None:
-            indexed = prog.track(indexed, 'certify')
-        for index, (source, hint) in indexed:
+
+        def _first(index: int) -> dict[str, Any] | None:
+            """The first certification of proposal ``index`` (None: outside the vocabulary)."""
+            source, hint = proposal_entries[index]
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
-                continue
+                return None
             # The engine's own result is the MARK TO BEAT, never a reason to skip:
             # the serve-time ordering acceptance rides the candidate
             # scan, so 'already_covered' below is a SEARCH-VERIFIED
@@ -3233,10 +3248,18 @@ class RuleMiner:
             # randomises str hashing per process).
             offset = int.from_bytes(
                 hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
-            pending[index] = {'reduces': engine_reduces, 'seed': mine_seed + offset,
-                              'result': self._certify_one(
-                                  source, hint, library, vocabulary, max_target_pattern_length,
-                                  fit, mine_seed + offset, confirm, rule_mode)}
+            return {'reduces': engine_reduces, 'seed': mine_seed + offset,
+                    'result': self._certify_one(
+                        source, hint, library, vocabulary, max_target_pattern_length,
+                        fit, mine_seed + offset, confirm, rule_mode)}
+
+        # EACH PROPOSAL IS CERTIFIED ON ITS OWN, against the fixed state with its own seed, so
+        # the batch runs on the core's threads (`_in_parallel`) and its results are the serial
+        # loop's, in file order.
+        indices = range(len(proposal_entries))
+        for index, entry in zip(indices, _in_parallel(_first, indices, prog, 'certify')):
+            if entry is not None:
+                pending[index] = entry
 
         excluded: dict[int, list] = {}
         refused_by: dict[int, list[str]] = {}
@@ -3260,11 +3283,14 @@ class RuleMiner:
                     again.append(i)
             if not again:
                 break
-            for i in again:
+
+            def _again(i: int) -> tuple:
                 source, hint = proposal_entries[i]
-                pending[i]['result'] = self._certify_one(
+                return self._certify_one(
                     source, hint, library, vocabulary, max_target_pattern_length, fit,
                     pending[i]['seed'], confirm, rule_mode, excluded=excluded[i])
+            for i, result in zip(again, _in_parallel(_again, again)):
+                pending[i]['result'] = result
 
         for index, (source, hint) in enumerate(proposal_entries):
             if index not in pending:

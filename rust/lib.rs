@@ -2112,6 +2112,13 @@ fn miss_counters() -> (u64, u64, u64, u64) {
     )
 }
 
+/// The threads of the core's pool (rayon's, capped by `RAYON_NUM_THREADS`): the mine certifies
+/// a batch of proposals on as many, each certification one call into the core.
+#[pyfunction]
+fn mine_threads() -> usize {
+    rayon::current_num_threads()
+}
+
 /// The CORE SERIALIZATION LANGUAGE, exported so Python reads the SAME table the engine
 /// does instead of keeping its own copy.
 ///
@@ -2945,6 +2952,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
     m.add_function(wrap_pyfunction!(miss_counters, m)?)?;
+    m.add_function(wrap_pyfunction!(mine_threads, m)?)?;
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;

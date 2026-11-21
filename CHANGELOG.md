@@ -2369,6 +2369,15 @@ model predictions.
   length-4 mine (literals -1, 0 and 1) the strict file loses `erfc(-inf*C) -> C` and the
   permissive file `erfc(-inf*C) -> C` and `erf(-inf*C) -> C`: completions on a source with
   `-inf`, which that universe does not enumerate; no rule is gained.
+- **A batch of proposals is certified on the core's threads.** Each proposal, and each overlap
+  completion offered through the same lane, is certified on its own: against the fixed rule
+  set, with a seed derived from its own source, in one call into the core. The batch runs on as
+  many threads as the core's pool (`RAYON_NUM_THREADS`, read by `simplipy._core.mine_threads()`),
+  and the results are taken in file order, so the files and the sidecar are the serial loop's.
+  Most of a certification is the scan's constant fits (with 16 challenges and retries, 87% of
+  the time on the length-4 strict mine's completions, the stage-2 confirmation's fits included);
+  64 completions of that mine took 629 s on one thread and 51 s on 16, with the same results,
+  and its 415 proposals certify on 16 threads to the serial run's pairs, in the same order.
 - **The gates ask `licensed`.** The mine's completion step offers, its overlap gate demands,
   its judge loop keeps, and its final gate and `verify-mine` pass only what `verify.licensed`
   passes in the mode: the

@@ -1259,6 +1259,30 @@ class TestProposalChannel:
             "certified": 1, "already_covered": 1, "rejected": 2, "duplicate": 0,
             "certified_then_dropped": 0}
 
+    def test_the_channel_certifies_on_the_cores_threads(self, tmp_path, monkeypatch) -> None:
+        """Each proposal is certified on its own, against the fixed state with its own seed, so
+        the batch runs on the core's threads: one thread and four give the same files and the
+        same record, byte for byte, and the results come back in file order."""
+        from simplipy import _core
+        from simplipy.mining import _in_parallel
+        proposals_file = tmp_path / "proposals.json"
+        proposals_file.write_text(json.dumps([
+            {"source": ["*", "exp", "x0", "exp", "x0"]},
+            {"source": ["*", "exp", "x0", "exp", "x0"],
+             "target": ["exp", "+", "x0", "x0"]},
+            {"source": ["+", "exp", "x0", "cosh", "x0"], "target": ["exp", "cosh", "x0"]},
+            {"source": ["+", "x0", "0"]},
+            {"source": ["*", "x0", "*", "x0", "x0"], "target": ["pow", "x0", "3"]},
+            {"source": ["-", "exp", "x0", "exp", "x0"]},
+        ]))
+        results = []
+        for threads in (1, 4):
+            monkeypatch.setattr(_core, "mine_threads", lambda threads=threads: threads)
+            assert list(_in_parallel(lambda k: k * k, range(9))) == [k * k for k in range(9)]
+            _, sidecar, out = self._mine(str(tmp_path / f"threads{threads}"), str(proposals_file))
+            results.append((open(out).read(), sidecar["proposals"]))
+        assert results[0] == results[1]
+
 
 class TestProposalTargetAllowance:
     """The proposals target allowance: a rule
