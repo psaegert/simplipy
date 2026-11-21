@@ -38,13 +38,12 @@ engine.to_infix(engine.simplify(expr))
 # -> '<constant> / log(x3)'
 ```
 
-`simplify`'s default `Mode.f64` is sound as the deployed f64 evaluator computes;
-`Mode.real` is sound as mathematics defines. The two disagree in both directions:
-`asin(1e-8) → 1e-8` is bit-identical in f64 yet wrong over the reals by the cubic
-term, while `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in f64
-once `tanh` saturates to exactly `1.0` at large `|t|` — so each mode serves only the
-rules sound on its own axis. The training-only `Mode.permissive` trades
-soundness for recall. The
+`simplify`'s default `Mode.f64` is sound as the deployed f64 evaluator computes,
+wherever no operation overflows or underflows (where one does, the true value is accepted
+too). The training-only `Mode.permissive` reads the reals' values and trades soundness for
+recall: `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in f64 once
+`tanh` saturates to exactly `1.0` at large `|t|`, so f64 does not serve it and permissive
+does. The `real` mode is retired: naming it raises. The
 [simplification guide](guides/simplify.md) covers the modes, the search
 budget, and the guarantee the engine actually makes.
 
@@ -58,8 +57,8 @@ sp.list_assets("engine")
 # --- Available engine assets ---
 # - acj-5-4-llm [installed] Complete AC-judged rule mine of the clean 23-operator
 #                         vocabulary (sources to length 5, targets to length 4) plus the
-#                         LLM-augmented proposal lane, mined as a triple and independently
-#                         gate-verified ... Pairs with simplipy >= 0.14.
+#                         LLM-augmented proposal lane, independently gate-verified ...
+#                         Pairs with simplipy >= 0.14.
 # - acj-4                 Complete AC-judged rule mine ... (sources and targets to length 4), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.

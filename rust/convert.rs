@@ -144,7 +144,7 @@ pub fn prefix_to_infix(
 
         if arity == 2 {
             let (mut left_str, left_prec, _left_root) = operands_data[0].clone();
-            let (mut right_str, right_prec, _right_root) = operands_data[1].clone();
+            let (mut right_str, right_prec, right_root) = operands_data[1].clone();
             let mut write_operator = write_operator;
 
             // `rootn` is a FUNCTION in every dialect: the infix parser reads
@@ -176,8 +176,22 @@ pub fn prefix_to_infix(
             // `hypot2`) -- a serialization that does not re-parse, the same defect the
             // `rootn` arm above was added for. Config-declared binaries render as calls.
             if !matches!(canonical, "+" | "-" | "*" | "/" | "pow" | "**") {
+                // `max` and `min` are lattice bags: a right operand of the same head is one
+                // call with it, `max(a, max(b, c))` is `max(a, b, c)`, which the reader nests to
+                // the right again (`VARIADIC`), so the rendering re-reads as the same tokens. A
+                // realization is a binary function and keeps its nesting.
+                let inner = (!realization
+                    && VARIADIC.contains(&canonical)
+                    && right_root.as_deref() == Some(canonical))
+                .then(|| {
+                    right_str
+                        .strip_prefix(&format!("{write_operator}("))
+                        .and_then(|r| r.strip_suffix(')'))
+                })
+                .flatten();
+                let joined = inner.unwrap_or(&right_str);
                 stack.push((
-                    format!("{write_operator}({left_str}, {right_str})"),
+                    format!("{write_operator}({left_str}, {joined})"),
                     INF,
                     Some(canonical.to_string()),
                 ));
@@ -196,7 +210,7 @@ pub fn prefix_to_infix(
             {
                 left_str = format!("({left_str})");
             }
-            // X10 (2026-08-15): a LEADING UNARY MINUS must parenthesize under '**'
+            // A LEADING UNARY MINUS must parenthesize under '**'
             // regardless of precedence bookkeeping -- a bare negative literal is one
             // atomic-precedence token, so the generic rule above never fires, yet the
             // re-parse (this engine, Python, and SymPy 1.14 alike) binds '**' TIGHTER
@@ -257,7 +271,7 @@ pub fn prefix_to_infix(
                 // x**N / x**(1/N); operand parens iff operand_prec <= power_prec.
                 let power_precedence = ops.precedence_get("**").unwrap_or(current_precedence);
                 if operand_prec <= power_precedence || operand_str.starts_with('-') {
-                    // the leading-minus arm is X10's render site 2: same defect,
+                    // the leading-minus arm is render site 2: same defect,
                     // same re-parse inversion -- see the binary '**' site's comment.
                     operand_str = format!("({operand_str})");
                 }
@@ -325,7 +339,7 @@ fn join_operands(operands_data: &[Item]) -> String {
 /// (`insert_implicit_products`) applies only to touching tokens, so a dropped char never turns
 /// two operands into a product; whitespace still counts as touching.
 ///
-/// WHITESPACE SEPARATES TOKENS (owner ruling 2026-10-05): `sin x0` is two tokens, never the
+/// WHITESPACE SEPARATES TOKENS: `sin x0` is two tokens, never the
 /// name `sinx0`, and `2 3` is two numbers, never `23`. Two joins survive it, because the text
 /// can only mean one thing: `* *` is the power operator (`x0 * * 2` is `x0**2`), and an
 /// exponent part after a number joins it (`1 e-5` is `1e-5`; but `1e -5` is `1*e - 5`, since
@@ -417,7 +431,7 @@ fn tokenize_infix(s: &str) -> Vec<Token> {
             // emits (`rootn(x0, 3)`, `pow(a, b)`). It used to fall into the silent
             // drop below, which FUSED the two arguments and let operators bind across
             // the boundary: `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1)
-            // (hardening H-011, 2026-08-03 -- a round-trip break of the parser's own
+            // (a round-trip break of the parser's own
             // output language; 97/2000 fuzz rows).
             push(
                 &mut tokens,
@@ -459,7 +473,7 @@ fn match_exponent(s: &[char], i: usize) -> Option<usize> {
     (j > start).then_some(j)
 }
 
-/// IMPLICIT MULTIPLICATION (owner ruling 2026-10-05, infix only -- token lists are expected
+/// IMPLICIT MULTIPLICATION (infix only -- token lists are expected
 /// well formed): an explicit `*` is inserted between two touching tokens when the left one
 /// is a number or a `)` and the right one starts an operand (a name, a `(`, or -- after a
 /// `)` -- a number). So `2x` reads `2*x`, `0x` reads `0*x`, `2(x1 + 1)` reads `2*(x1 + 1)`,
@@ -473,7 +487,7 @@ fn match_exponent(s: &[char], i: usize) -> Option<usize> {
 /// `_`: that is Python's digit grouping (`1_000`, `3.14_15`), which must not become a product
 /// with a rule-placeholder name (`1*_000`).
 ///
-/// A FUNCTION WITHOUT PARENTHESES (owner ruling 2026-10-05): a declared one-argument operator
+/// A FUNCTION WITHOUT PARENTHESES: a declared one-argument operator
 /// separated by whitespace from the operand after it, or followed by a minus sign, applies to
 /// that operand: `sin x0` is `sin(x0)`, `sin -x0` and `sin-x0` are `sin(-x0)` (the latter used to
 /// read `-(sin x0)`), and `sin cos x0` is `sin(cos(x0))`. Its argument takes powers and signs, but
@@ -665,6 +679,35 @@ fn is_ident_start(token: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
+/// THE STRICT READING: refuse a call -- a name directly before `(` -- of a name the engine
+/// declares no operator for, naming every such name in order of first appearance
+/// (`sqrt(x1^2) + foo(x2)` calls `sqrt` and `foo`). The tolerant reading keeps such a call as
+/// a bare symbol followed by its argument, which is no expression the engine can read.
+fn refuse_undeclared_calls(
+    tokens: &[Token],
+    infix_expression: &str,
+    ops: &Operators,
+) -> Result<(), String> {
+    let mut unknown: Vec<&str> = Vec::new();
+    for pair in tokens.windows(2) {
+        let (name, next) = (pair[0].text.as_str(), pair[1].text.as_str());
+        let declared = ops.operator_aliases.contains_key(name) || ops.arity_of(name).is_some();
+        if next == "(" && is_ident_start(name) && !declared && !unknown.contains(&name) {
+            unknown.push(name);
+        }
+    }
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<String> = unknown.iter().map(|n| format!("'{n}'")).collect();
+    Err(format!(
+        "unknown function{} {} in '{infix_expression}': this engine declares no operator by \
+         that name",
+        if unknown.len() > 1 { "s" } else { "" },
+        names.join(", ")
+    ))
+}
+
 /// A function without parentheses (`sin x0`) waiting on the stack is marked with this prefix.
 const APP_MARK: char = '\u{1}';
 /// It binds looser than powers (`sin x0^2` is `sin(x0^2)`) and tighter than unary minus,
@@ -681,16 +724,130 @@ fn unmark(s: String) -> String {
 /// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Malformed inputs produce
 /// structurally-degenerate prefix lists, matching Python; the one error is two operands that
 /// only whitespace separates (`x0 x1`, `2 3`; see `insert_implicit_products`).
-pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Result<Vec<String>, String> {
+/// With `strict`, a call of an undeclared name is refused (`refuse_undeclared_calls`).
+pub fn infix_to_prefix(
+    infix_expression: &str,
+    ops: &Operators,
+    strict: bool,
+) -> Result<Vec<String>, String> {
+    read_infix_tokens(infix_expression, ops, strict, false)
+}
+
+/// The legacy CALL spellings of the identity and the reciprocal: `pow1(a)` is `a` and
+/// `pow_1(a)` is `inv(a)`. They are rewritten where they are called -- a name followed by `(` --
+/// so a bare `pow_1` stays the symbol it spells, as every name does (`x0*pow_1` is the product
+/// of two symbols, as `x0*pow_2` is; a token-wise rename read it as `* x0 inv`, an operator
+/// with no operand). A dropped `pow1` hands its spacing to its `(`.
+fn rewrite_legacy_calls(tokens: Vec<Token>) -> Vec<Token> {
+    let mut out: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut it = tokens.into_iter().peekable();
+    while let Some(mut t) = it.next() {
+        let called = it.peek().is_some_and(|n| n.text == "(");
+        match t.text.as_str() {
+            "pow1" if called => {
+                if let Some(paren) = it.peek_mut() {
+                    paren.touching = t.touching;
+                    paren.spaced = t.spaced;
+                }
+                continue;
+            }
+            "pow_1" if called => t.text = "inv".to_string(),
+            _ => {}
+        }
+        out.push(t);
+    }
+    out
+}
+
+/// One parenthesized group on the right-to-left stream of [`read_infix_tokens`], opened at its
+/// `)`: where its tokens start in the output, and where each top-level `,` cut it.
+struct Group {
+    start: usize,
+    cuts: Vec<usize>,
+}
+
+/// A comma separates the arguments of a call, and nothing else.
+const STRAY_COMMA: &str = "a comma outside a call's argument list";
+
+/// The operators a call may give any number (at least two) of arguments, read nested to the
+/// right: `max(a, b, c)` is `max(a, max(b, c))`, as sympy writes `Max` n-ary. The engine reads
+/// any nesting of one of them as ONE lattice bag of members (`ac::expr::lattice`), and the
+/// infix printer writes a right-nested chain back as one call.
+const VARIADIC: [&str; 2] = ["max", "min"];
+
+/// Close a parenthesized group at its `(`. A group a declared operator's name calls (`callee`,
+/// the token just left of the `(`) must give that operator exactly its arity in arguments,
+/// except that a binary `max`/`min` takes any number of at least two, nested to the right.
+/// A call of an undeclared name passes through as written (the tolerant reading; the strict
+/// one has refused it already), and a group nothing calls holds one expression. `prefix` is
+/// the reversed output so far.
+fn close_group(
+    group: Group,
+    callee: Option<&str>,
+    prefix: &mut Vec<String>,
+    ops: &Operators,
+) -> Result<(), String> {
+    let n_args = if group.cuts.is_empty() {
+        usize::from(prefix.len() > group.start)
+    } else {
+        group.cuts.len() + 1
+    };
+    let mut prev = group.start;
+    for &cut in group.cuts.iter().chain(std::iter::once(&prefix.len())) {
+        if cut == prev && n_args > 1 {
+            return Err("an empty argument in a call's argument list".to_string());
+        }
+        prev = cut;
+    }
+    let callee = callee.filter(|c| is_ident_start(c));
+    let declared = callee.and_then(|c| {
+        let canonical = ops.operator_aliases.get(c).map_or(c, String::as_str);
+        ops.arity_of(canonical)
+            .map(|arity| (c, canonical, usize::from(arity)))
+    });
+    match declared {
+        Some((_, _, arity)) if n_args == arity => Ok(()),
+        Some((written, canonical, 2)) if n_args > 2 && VARIADIC.contains(&canonical) => {
+            // On the reversed stream the arguments arrived last-first; a copy of the callee
+            // after every cut but the first (between a_k and a_(k-1), k < n) nests them to
+            // the right, the callee's own token closing the outermost call.
+            for &cut in group.cuts[1..].iter().rev() {
+                prefix.insert(cut, written.to_string());
+            }
+            Ok(())
+        }
+        Some((written, _, arity)) => Err(format!(
+            "{written} takes {arity} argument{}, got {n_args}",
+            if arity == 1 { "" } else { "s" }
+        )),
+        None if callee.is_none() && n_args > 1 => Err(STRAY_COMMA.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// [`infix_to_prefix`]'s reader; `legacy_calls` reads the legacy call spellings
+/// ([`rewrite_legacy_calls`]), after the strict refusal of undeclared calls.
+fn read_infix_tokens(
+    infix_expression: &str,
+    ops: &Operators,
+    strict: bool,
+    legacy_calls: bool,
+) -> Result<Vec<String>, String> {
+    let mut tokens = tokenize_infix(infix_expression);
+    if strict {
+        refuse_undeclared_calls(&tokens, infix_expression, ops)?;
+    }
+    if legacy_calls {
+        tokens = rewrite_legacy_calls(tokens);
+    }
     let (mut tokens, mut apps): (Vec<String>, Vec<bool>) =
-        insert_implicit_products(tokenize_infix(infix_expression), ops)?
-            .into_iter()
-            .unzip();
+        insert_implicit_products(tokens, ops)?.into_iter().unzip();
     tokens.reverse(); // right-to-left parse
     apps.reverse();
 
     let mut stack: Vec<String> = Vec::new();
     let mut prefix_expr: Vec<String> = Vec::new();
+    let mut groups: Vec<Group> = Vec::new();
     let prec = |t: &str| ops.precedence_get(t).unwrap_or(0.0); // `.get(t, 0)`
 
     let mut i = 0;
@@ -730,6 +887,10 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Result<Vec<St
             });
         } else if token == ")" {
             stack.push(token);
+            groups.push(Group {
+                start: prefix_expr.len(),
+                cuts: Vec::new(),
+            });
         } else if token == "(" {
             while stack.last().is_some_and(|t| t != ")") {
                 prefix_expr.push(unmark(stack.pop().unwrap()));
@@ -737,12 +898,26 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Result<Vec<St
             if stack.last().is_some_and(|t| t == ")") {
                 stack.pop();
             }
+            // The group's arguments are complete: check them against its callee, the name
+            // directly left of the `(` (the next token of the reversed stream).
+            if let Some(group) = groups.pop() {
+                let callee = tokens
+                    .get(i + 1)
+                    .filter(|_| !apps[i + 1])
+                    .map(String::as_str);
+                close_group(group, callee, &mut prefix_expr, ops)?;
+            }
         } else if token == "," {
             // Argument separator: flush the just-finished argument's pending operators
             // down to the enclosing ')' (the paren boundary WITHOUT consuming it), so
-            // each argument of a 2-ary call parses independently (H-011).
+            // each argument of a call parses independently, and mark where the
+            // argument ends.
             while stack.last().is_some_and(|t| t != ")") {
                 prefix_expr.push(unmark(stack.pop().unwrap()));
+            }
+            match groups.last_mut() {
+                Some(group) => group.cuts.push(prefix_expr.len()),
+                None => return Err(STRAY_COMMA.to_string()),
             }
         } else {
             // A function without parentheses on the right of this operator is complete: the
@@ -765,13 +940,13 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Result<Vec<St
                 && (next_raw.is_none()
                     || after_function
                     || next_norm == Some("(")
-                    || next_norm == Some(",")  // `pow(x0, -2)`: unary after a separator (H-011)
+                    || next_norm == Some(",")  // `pow(x0, -2)`: unary after a separator
                     || next_norm
                         .map(|t| ops.precedence_get(t).is_some())
                         .unwrap_or(false))
             {
                 token = "neg".to_string();
-                // EXPONENT POSITION (audit 9.10). A unary minus whose original LEFT
+                // EXPONENT POSITION. A unary minus whose original LEFT
                 // neighbor is a power operator is the exponent's sign: `x ^ -2` is
                 // x^(-2), never -(x^2). The generic precedence machinery cannot say
                 // this -- `neg` binds looser than `**` on the base side (`-x ** 2` is
@@ -913,9 +1088,9 @@ fn int_chain_exp(op: &str) -> Option<i128> {
 
 // The legacy float-approximation chain (`exact_ratio` -> `limit_denominator` ->
 // `fraction_limit_denominator`, the CPython `Fraction(float(s)).limit_denominator(1e6)`
-// port that H-044 patched) was RETIRED by H-047 (2026-08-05): the `**`-exponent fold
-// gate is now spelling-exact (`Rat::parse_decimal`), so nothing approximates. See the
-// register rows H-044/H-047 for the mechanisms; git history holds the port.
+// port) is RETIRED: the `**`-exponent fold
+// gate is spelling-exact (`Rat::parse_decimal`), so nothing approximates;
+// git history holds the port.
 
 /// `['pow', [base, exponent]]` -- the KEEP fallback (gate-fail / non-numeric exponent).
 fn pow_keep(base: Ir, exponent: Ir) -> Ir {
@@ -935,12 +1110,12 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
             _ => return Ok(pow_keep(base, exponent)),
         };
         if is_int_string(&tok) {
-            // H-049 (2026-08-05): a beyond-i128 integer spelling KEEPS the binary pow.
+            // A beyond-i128 integer spelling KEEPS the binary pow.
             // The legacy CPython `int(tok)` was arbitrary-precision and NEVER failed on
             // a digit string (the huge power then died at the factorize gate and kept
-            // binary pow anyway) -- the i128 parse error was PORT-MINTED (H-044's
-            // sibling), and it raised on the engine's OWN rendered infix
-            // (`^(170141183460469231731687303715884105728)`, extreme-lane P9 rows).
+            // binary pow anyway) -- the i128 parse error was PORT-MINTED, and it
+            // raised on the engine's OWN rendered infix
+            // (`^(170141183460469231731687303715884105728)`, extreme-lane fuzz rows).
             let Ok(v) = tok.parse::<i128>() else {
                 return Ok(pow_keep(base, exponent));
             };
@@ -967,7 +1142,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
                 Ok(Ir::L(vec![Ir::S(pow_op), Ir::L(vec![base])])) // [pow_op, [base]]
             }
         } else if is_numeric_string(&tok) {
-            // H-047 (2026-08-05): the fold gate is SPELLING-EXACT. The port (and the
+            // The fold gate is SPELLING-EXACT. The port (and the
             // legacy CPython original) gated on `limit_denominator(1e6)` of the f64
             // VALUE -- an APPROXIMATION: any exponent within ~5e-7 of 1 collapsed the
             // pow entirely (`x**(1.0000000000000002) -> x`, `x**(0.9999995) -> x`),
@@ -976,7 +1151,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
             // snapped to the wrong function (`x**(0.5000000000000001) -> sqrt(x)`).
             // The (1,1) case emitted NO token, so no vocabulary gate protected it in
             // ANY config -- a silent value change on the DEFAULT parse path, found by
-            // the extreme-literal fuzz lane (P7-infix, 146/2k smoke rows). The exact
+            // the extreme-literal fuzz lane (146/2k smoke rows). The exact
             // decimal denotation now decides: every legacy-intended fold survives
             // (nice spellings ARE exact -- "0.5", "0.2", "1.0", "2.5"), every
             // approximation keeps the verbatim binary pow (the AC core reads the
@@ -1036,7 +1211,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
         match (op0_is_div, num_tok, den_tok) {
             (true, Some(nt), Some(dt)) if is_numeric_string(nt) && is_numeric_string(dt) => {
                 if is_int_string(nt) && is_int_string(dt) {
-                    // H-049: beyond-i128 operands keep binary pow (see the unary arm).
+                    // Beyond-i128 operands keep binary pow (see the unary arm).
                     let (Ok(numerator), Ok(denominator)) = (nt.parse::<i128>(), dt.parse::<i128>())
                     else {
                         return Ok(pow_keep(base, exponent));
@@ -1066,17 +1241,17 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
                     let inner = Ir::L(vec![Ir::S(num_power), Ir::L(vec![base])]);
                     let dnode = Ir::L(vec![Ir::S(den_power), Ir::L(vec![inner])]);
                     // Sign via comparison, not the product: `numerator * denominator`
-                    // can overflow i128 (H-049 collateral; wrapping would flip the inv).
+                    // can overflow i128; wrapping would flip the inv.
                     if (numerator < 0) != (denominator < 0) {
                         Ok(Ir::L(vec![Ir::S("inv".into()), Ir::L(vec![dnode])]))
                     } else {
                         Ok(dnode)
                     }
                 } else {
-                    // H-049: the legacy dead branch RAISED here (`int('2.0')`
+                    // The legacy dead branch RAISED here (`int('2.0')`
                     // failure-parity) -- but the ENGINE'S OWN infix can render an
                     // exponent as a float division (divisor-side literal spelling,
-                    // extreme-lane P9 row 355), and the engine's own serialization
+                    // extreme-lane fuzz row 355), and the engine's own serialization
                     // must always re-parse. KEEP binary pow; the AC core reads the
                     // division exactly.
                     Ok(pow_keep(base, exponent))
@@ -1281,18 +1456,20 @@ fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
 
 // ---- parse --------------------------------------------------------------------------------------
 
-/// `parse`: `infix_to_prefix` -> (if `convert`) `convert_expression`
-/// -> (if `mask_numbers`) `numbers_to_constant` -> ALWAYS `remove_pow1`. The high-level entry that
+/// `parse`: `infix_to_prefix` reading the legacy call spellings ([`rewrite_legacy_calls`]) -> (if
+/// `convert`) `convert_expression` -> (if `mask_numbers`) `numbers_to_constant`. The high-level entry that
 /// closes `simplify(str)` and the flash-ansr canonicalization path. `Err` propagates a
-/// `convert_expression` raise.
+/// `convert_expression` raise. `strict` refuses a call of an undeclared name (the reading of
+/// every entry that knows only declared operators); without it the call is kept as written.
 pub fn parse(
     infix_expression: &str,
     ops: &Operators,
     convert: bool,
     mask_numbers: bool,
+    strict: bool,
 ) -> Result<Vec<String>, String> {
-    let parsed = infix_to_prefix(infix_expression, ops)?;
-    // H-043/D4: the tokenize + shunting stages above are iterative, but
+    let parsed = read_infix_tokens(infix_expression, ops, strict, true)?;
+    // The tokenize + shunting stages above are iterative, but
     // `convert_expression` below recurses (its IR flatten) -- cap the TOKENIZED length
     // exactly like the token-list boundary caps its input, or a deep infix string
     // aborts the process where the equivalent token list would raise.
@@ -1304,7 +1481,7 @@ pub fn parse(
             crate::MAX_TOKENS
         ));
     }
-    // H-007: the tokenizer reads `inf`/`nan`/`1_000` as NAME tokens; refuse them HERE,
+    // The tokenizer reads `inf`/`nan`/`1_000` as NAME tokens; refuse them HERE,
     // before `numbers_to_constant` (whose `float()` semantics WOULD read them) can
     // silently absorb a reserved spelling into `<constant>`. Same ruling as the token-list
     // boundary (`ensure_tokens_are_tokens`).
@@ -1314,7 +1491,7 @@ pub fn parse(
     {
         return Err(format!(
             "invalid token {t:?}: reserved numeric spelling -- a value to Python or a \
-             malformed numeral, but not a simplipy numeric literal (H-007); use the canonical \
+             malformed numeral, but not a simplipy numeric literal; use the canonical \
              spelling ('5', '0.5', '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), \
              float(\"nan\"))"
         ));
@@ -1324,12 +1501,11 @@ pub fn parse(
     } else {
         parsed
     };
-    let parsed = if mask_numbers {
+    Ok(if mask_numbers {
         crate::utils::numbers_to_constant(&parsed)
     } else {
         parsed
-    };
-    Ok(crate::utils::remove_pow1(&parsed))
+    })
 }
 
 #[cfg(test)]
@@ -1339,7 +1515,7 @@ mod tests {
 
     /// The conversion layer's subject is the INPUT LANGUAGE of a table that declares the
     /// legacy sugar (unary hyper-operators, `**`, chain combining) -- exactly what the
-    /// in-repo legacy-vocabulary fixture provides (audit Tier-1 #3: no asset dependence;
+    /// in-repo legacy-vocabulary fixture provides (no asset dependence;
     /// the historical expectations below are unchanged, dev_7-3's table verbatim).
     fn engine() -> Option<Engine> {
         Some(crate::legacy_sugar_engine())
@@ -1462,8 +1638,8 @@ mod tests {
             v(&["**", "a", "neg", "**", "b", "c"])
         );
         assert_eq!(i2p(&e, "x0 ^ (-2)"), v(&["**", "x0", "neg", "2"]));
-        // function-name left neighbor -> unary, and the function applies to it (owner
-        // 2026-10-05; it used to read -(sin x1)); neg float precedence both ways.
+        // function-name left neighbor -> unary, and the function applies to it (it
+        // used to read -(sin x1)); neg float precedence both ways.
         assert_eq!(i2p(&e, "sin - x1"), v(&["sin", "neg", "x1"]));
         assert_eq!(i2p(&e, "sin-x1"), v(&["sin", "neg", "x1"]));
         assert_eq!(i2p(&e, "-x1 ** 2"), v(&["neg", "**", "x1", "2"]));
@@ -1485,7 +1661,7 @@ mod tests {
         assert_eq!(i2p(&e, "x1 $ x2"), v(&["x1", "x2"]));
         assert_eq!(i2p(&e, "()"), Vec::<String>::new());
         assert_eq!(i2p(&e, ""), Vec::<String>::new());
-        // Implicit multiplication (owner 2026-10-05): an ordinary `*`, same precedence.
+        // Implicit multiplication: an ordinary `*`, same precedence.
         assert_eq!(i2p(&e, "2x"), v(&["*", "2", "x"]));
         assert_eq!(i2p(&e, "0x10"), v(&["*", "0", "x10"]));
         assert_eq!(i2p(&e, "2(x1 + 1)"), v(&["*", "2", "+", "x1", "1"]));
@@ -1503,7 +1679,7 @@ mod tests {
         // Touching numbers stay malformed, and so does Python's digit grouping.
         assert_eq!(i2p(&e, "1.5.3"), v(&["1.5", ".3"]));
         assert_eq!(i2p(&e, "1_000"), v(&["1", "_000"]));
-        // Whitespace separates tokens; every whitespace char like a space (owner 2026-10-05).
+        // Whitespace separates tokens; every whitespace char like a space.
         assert_eq!(i2p(&e, "2\tx1"), v(&["*", "2", "x1"]));
         assert_eq!(i2p(&e, "x1 * * 2"), v(&["**", "x1", "2"]));
         assert_eq!(i2p(&e, "1 e-5 * x1"), v(&["*", "1e-5", "x1"]));
@@ -1553,7 +1729,7 @@ mod tests {
         }
         // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
-        // 2-ary CALL SYNTAX (H-011): the comma is a real argument separator -- it
+        // 2-ary CALL SYNTAX: the comma is a real argument separator -- it
         // used to be silently dropped, fusing the arguments (`rootn(x0, x1 - 1)`
         // parsed as rootn(x0 - x1, 1)). Composite args on either side, nesting,
         // and unary minus directly after the separator.
@@ -1575,7 +1751,7 @@ mod tests {
         // round-trip identity (parse half; paired with the paren-keeping render).
         let pre = v(&["*", "a", "*", "b", "c"]);
         let inf = e.prefix_to_infix(&pre, Power::StarStar, false).unwrap();
-        assert_eq!(e.parse(&inf, false, false).unwrap(), pre);
+        assert_eq!(e.parse(&inf, false, false, false).unwrap(), pre);
     }
 
     /// RESERVED CONSTANT NAMES of the infix language (emit-parse closure): the pretty
@@ -1595,6 +1771,79 @@ mod tests {
         assert_eq!(i2p(&e, "np.pi + x0"), v(&["+", "np.pi", "x0"]));
         // Prefixed/suffixed identifiers are NOT reserved (`pie`, `inf2` stay variables).
         assert_eq!(i2p(&e, "pie + inf2"), v(&["+", "pie", "inf2"]));
+    }
+
+    /// A call gives its operator exactly its arity in arguments; `max` and `min` take any
+    /// number of at least two, nested to the right (sympy prints `Max(x0, x1, x2)`). Every
+    /// other count is refused by name, as is a comma no declared operator's call holds.
+    #[test]
+    fn calls_take_their_operators_arity_and_max_min_nest() {
+        use crate::operators::{OperatorSpec, Operators};
+        let mut specs: rustc_hash::FxHashMap<String, OperatorSpec> = Default::default();
+        let mut order = Vec::new();
+        for (name, arity, alias) in [
+            ("+", 2, ""),
+            ("-", 2, ""),
+            ("*", 2, ""),
+            ("sin", 1, ""),
+            ("max", 2, "Max"),
+            ("min", 2, "Min"),
+        ] {
+            order.push(name.to_string());
+            specs.insert(
+                name.to_string(),
+                OperatorSpec {
+                    realization: name.to_string(),
+                    alias: if alias.is_empty() {
+                        vec![]
+                    } else {
+                        vec![alias.to_string()]
+                    },
+                    inverse: None,
+                    arity,
+                    precedence: None,
+                    commutative: false,
+                },
+            );
+        }
+        let ops = Operators::from_specs(order, specs);
+        let read = |s: &str| super::infix_to_prefix(s, &ops, false);
+        let v = |xs: &[&str]| -> Result<Vec<String>, String> {
+            Ok(xs.iter().map(|s| s.to_string()).collect())
+        };
+        let err = |m: &str| -> Result<Vec<String>, String> { Err(m.to_string()) };
+        assert_eq!(read("max(x0, x1)"), v(&["max", "x0", "x1"]));
+        assert_eq!(
+            read("max(x0, x1, x2)"),
+            v(&["max", "x0", "max", "x1", "x2"])
+        );
+        assert_eq!(
+            read("Max(x0, x1 + 1, -x2, sin(x3))"),
+            v(&["Max", "x0", "Max", "+", "x1", "1", "Max", "neg", "x2", "sin", "x3"])
+        );
+        assert_eq!(
+            read("min(max(x0, x1, x2), x3) * 2"),
+            v(&["*", "min", "max", "x0", "max", "x1", "x2", "x3", "2"])
+        );
+        assert_eq!(read("Min(x0, x1)"), v(&["Min", "x0", "x1"]));
+        assert_eq!(read("sin(x0, x1)"), err("sin takes 1 argument, got 2"));
+        assert_eq!(read("max(x0)"), err("max takes 2 arguments, got 1"));
+        assert_eq!(read("max()"), err("max takes 2 arguments, got 0"));
+        assert_eq!(read("sin()"), err("sin takes 1 argument, got 0"));
+        let comma = "a comma outside a call's argument list";
+        assert_eq!(read("(x0, x1)"), err(comma));
+        assert_eq!(read("x0, x1"), err(comma));
+        assert_eq!(read("x0 * (x1, x2)"), err(comma));
+        assert_eq!(
+            read("max(x0, , x1)"),
+            err("an empty argument in a call's argument list")
+        );
+        // a parenthesized argument is one argument
+        assert_eq!(read("max((x0, x1), x2)"), err(comma));
+        assert_eq!(read("sin((x0))"), v(&["sin", "x0"]));
+        // the tolerant reading passes a call of an undeclared name through as written
+        assert_eq!(read("foo(x0, x1, x2)"), v(&["foo", "x0", "x1", "x2"]));
+        assert_eq!(read("foo()"), v(&["foo"]));
     }
 
     /// `**` conversion under a CLEAN config (no `pow{N}`/`pow1_{N}` in the vocabulary):
@@ -1622,12 +1871,26 @@ mod tests {
             );
         }
         let ops = Operators::from_specs(order, specs);
-        let p = |s: &str| super::parse(s, &ops, true, false).unwrap();
+        let p = |s: &str| super::parse(s, &ops, true, false, true).unwrap();
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         assert_eq!(p("x0^2"), v(&["pow", "x0", "2"]));
         assert_eq!(p("x0^0.5"), v(&["pow", "x0", "0.5"]));
         assert_eq!(p("x0^(-0.5)"), v(&["pow", "x0", "-0.5"]));
         assert_eq!(p("x0^2.0"), v(&["pow", "x0", "2.0"]));
+        // the strict reading refuses a call of an undeclared name, naming it; the tolerant
+        // reading keeps it as written
+        assert_eq!(
+            super::parse("sqrt(x0^2)", &ops, true, false, true),
+            Err(
+                "unknown function 'sqrt' in 'sqrt(x0^2)': this engine declares no operator \
+                 by that name"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            super::parse("sqrt(x0)", &ops, true, false, false).unwrap(),
+            v(&["sqrt", "x0"])
+        );
     }
 
     fn conv(e: &Engine, toks: &[&str]) -> Result<Vec<String>, String> {
@@ -1719,7 +1982,7 @@ mod tests {
             conv(&e, &["**", "x1", "/", "-2", "3"]).unwrap(),
             v(&["inv", "pow1_3", "pow2", "x1"])
         );
-        // H-044 pin: a float exponent whose exact ratio exceeds i128 KEEPS binary pow.
+        // A float exponent whose exact ratio exceeds i128 KEEPS binary pow.
         // 2^128 / 2^129 wrapped `num0 << e` to numerator 0 and folded x**3.4e38 to `1`;
         // 3*2^127 wrapped to i128::MIN (debug: abs() overflow panic in `reduce`).
         for huge in [
@@ -1736,7 +1999,7 @@ mod tests {
         // Raw unconfigured powN tokens no longer KeyError: kept (pow7) / combined away (pow1).
         assert_eq!(conv(&e, &["pow7", "x1"]).unwrap(), v(&["pow7", "x1"]));
         assert_eq!(conv(&e, &["pow1", "x1"]).unwrap(), v(&["x1"]));
-        // H-049 (2026-08-05): the dead float-division branch KEEPS binary pow now --
+        // The dead float-division branch KEEPS binary pow now --
         // the legacy raise (int('2.0') failure-parity) fired on the engine's OWN
         // divisor-side rendered infix, and the engine's own output must always
         // re-parse.
@@ -1751,7 +2014,7 @@ mod tests {
     fn parse_traps() {
         let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
-        let p = |s: &str, c: bool, m: bool| e.parse(s, c, m).unwrap();
+        let p = |s: &str, c: bool, m: bool| e.parse(s, c, m, false).unwrap();
         // default (convert=True, mask=False): integer power + negative exponent -> inv,
         // the reciprocal. (Until the 9.10 fix the reader bound the exponent's minus
         // OUTSIDE the power, this pinned `x1 ** -2` to neg(pow2(x1)) = -(x1^2), and the
@@ -1764,7 +2027,17 @@ mod tests {
             p("3.14 * x1 + 2", true, true),
             v(&["+", "*", "<constant>", "x1", "<constant>"])
         );
-        // convert=False -> raw infix_to_prefix + remove_pow1 (no ** conversion).
+        // convert=False -> raw infix_to_prefix (no ** conversion).
         assert_eq!(p("x1 + x2", false, false), v(&["+", "x1", "x2"]));
+        // The legacy call spellings are read where they are called; a bare name is a symbol.
+        for c in [true, false] {
+            assert_eq!(p("pow_1(x0)", c, false), v(&["inv", "x0"]));
+            assert_eq!(p("x1*pow1(x0)", c, false), v(&["*", "x1", "x0"]));
+            assert_eq!(p("x0*pow_1", c, false), v(&["*", "x0", "pow_1"]));
+            assert_eq!(
+                p("pow_1 + pow_1(x1)", c, false),
+                v(&["+", "pow_1", "inv", "x1"])
+            );
+        }
     }
 }

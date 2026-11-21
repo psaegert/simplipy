@@ -1,15 +1,14 @@
-"""The PERMISSIVE literal fold (owner ruling 2026-09-03: "in the permissive mode, we can relax
-this"). Falsifier-first: written red against 0.14.5, where the permissive tier printed
+"""The PERMISSIVE literal fold (the permissive mode relaxes the literal rule). Falsifier-first: written red against 0.14.5, where the permissive tier printed
 `2e29/426738538271436458205631863649` for `4 / (2.7167019109484434 * 3.1415926535897)`.
 
 The exact rational core prices a literal with the two-codeword mu' codebook and prints the
 cheaper EXACT codeword; a value with no finite decimal expansion has only the rational
 codeword, so the quotient of two 16-digit decimals became a 60-digit fraction, three tokens
-for one degree of freedom. The strict tiers cannot do better: a spelling denotes the state's
-exact value. The permissive tier is licensed to move values, so there an exact literal folds
-to its f64 nearest, spelled shortest, WHEN mu' prices that spelling strictly cheaper -- and
-only then: `1/2`, `15/37`, `4366/8875` keep their fractions, drawn constants (already shortest
-f64 spellings) never move.
+for one degree of freedom. Strict writes float64's double of that one number where it is
+cheaper (its nearest double). The permissive tier is licensed to move values, so there an exact
+literal folds to the shorter-spelled of the two floats around it WHEN mu' prices that spelling
+strictly cheaper -- and only then: `1/2`, `15/37`, `4366/8875` keep their fractions, drawn
+constants (already shortest f64 spellings) never move.
 """
 import math
 import re
@@ -42,23 +41,35 @@ def exact_value(expr):
     return eval(src, {"Fraction": Fraction, "pow": pow})
 
 
+def floats_around(value):
+    """The float nearest to `value` and the float on its other side (one when exact)."""
+    nearest = float(value)
+    if Fraction(nearest) == value:
+        return [nearest]
+    return [nearest, math.nextafter(nearest, math.inf if value > Fraction(nearest) else -math.inf)]
+
+
+def significant_digits(spelling):
+    mantissa = spelling.lstrip('-').split('e')[0].replace('.', '')
+    return len(mantissa.strip('0'))
+
+
 def test_permissive_folds_the_monster_to_its_float(engine):
     out = prefix(engine, MONSTER, Mode.permissive)
-    # The f64 nearest to the EXACT quotient, spelled shortest: 0.46867105279529636 (float
-    # arithmetic on the literals lands one ulp away, at 0.4686710527952964 -- the fold is
-    # correctly rounded, not the quotient of two rounded components).
-    assert out == [repr(float(exact_value(MONSTER)))] == ["0.46867105279529636"], out
+    # The EXACT quotient lies between 0.46867105279529636 (the nearest float) and
+    # 0.4686710527952964: permissive promises float precision, not the nearest float, so it
+    # lands on the shorter spelling.
+    assert float(out[0]) in floats_around(exact_value(MONSTER))
+    assert out == ["0.4686710527952964"], out
+    assert repr(float(exact_value(MONSTER))) == "0.46867105279529636"
 
 
-def test_strict_tier_keeps_the_exact_fraction(engine):
-    # (Mode.real needs a mined real ruleset, which a rules-less engine cannot serve; the fold
-    # is gated on the permissive mode alone, so the f64 tier stands for both strict tiers.)
+def test_f64_writes_the_double_of_the_exact_value(engine):
+    # f64 builds the EXACT value, 2e29/426738538271436458205631863649, and writes float64's
+    # double of that one number, cheaper than the 60-digit fraction: the double nearest it,
+    # where permissive takes the shorter-spelled of the two floats around it.
     out = prefix(engine, MONSTER, Mode.f64)
-    # The strict tier keeps the EXACT value, 2e29/426738538271436458205631863649, in the token
-    # printer's own spelling (the reader's integer-over-decimal spelling is the infix text's,
-    # test_ratio_spelling.py) -- not the permissive tier's float.
-    assert out == ["/", "200000000000000000000000000000", "426738538271436458205631863649"], out
-    assert Fraction(out[1]) / Fraction(out[2]) == exact_value(MONSTER)
+    assert out == [repr(float(exact_value(MONSTER)))] == ["0.46867105279529636"], out
 
 
 @pytest.mark.parametrize("expr,expected", [
@@ -87,18 +98,55 @@ def test_fold_is_idempotent_and_descends_the_exact_price(engine):
     once = prefix(engine, MONSTER, Mode.permissive)
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     exact = prefix(engine, MONSTER, Mode.f64)
-    # Under the float cap the exact quotient already costs its float's shortest
-    # decimal, so the measure is level; the fold descends the EXACT price, which gates it.
-    assert engine.complexity(once) == engine.complexity(exact)
+    # Under the float cap the exact quotient costs its nearest float's shortest decimal; the
+    # fold lands on the shorter neighbour, so the measure never rises; the fold descends the
+    # EXACT price, which gates it.
+    assert engine.complexity(once) <= engine.complexity(exact)
     assert exact_price(Fraction(once[0])) < exact_price(exact_value(MONSTER))
 
 
 def test_huge_integer_folds_to_its_float_value(engine):
-    # A 30-digit integer product: the fold keeps an integer spelling (the emitter prints
-    # integers as digit strings) but the VALUE is the f64 nearest, priced by its scientific codeword.
+    # A 30-digit integer product: the fold takes the f64 nearest, an integer whose trailing zeros
+    # print in scientific notation (`7.572696344528648e29`), priced by its scientific codeword.
     out = prefix(engine, "757269634452864785310003246961 * 1", Mode.permissive)
-    assert len(out) == 1 and float(out[0]) == float(757269634452864785310003246961), out
-    assert int(out[0]) != 757269634452864785310003246961
+    assert out == ["7.572696344528648e29"], out
+    assert float(out[0]) == float(757269634452864785310003246961)
+    assert Fraction(out[0]) != 757269634452864785310003246961
+
+
+def test_one_thirds_double_is_one_third(engine):
+    # the recognition list reads 0.3333333333333333, 1/3's double, as 1/3, in both modes
+    for mode in (Mode.f64, Mode.permissive):
+        assert prefix(engine, "0.3333333333333333 * 0.3333333333333333", mode) == ["/", "1", "9"]
+
+
+@pytest.mark.parametrize("expr", [
+    MONSTER,
+    "1 / (2.7167019109484434 * 3.1415926535897 * 1.0000000000000002)",
+    "1e-7 / 3.0000000000000004",
+    "0.3333333333333335 * 0.3333333333333335",
+])
+def test_f64_writes_a_double_where_cheaper(engine, expr):
+    """Strict writes float64's value of the one exact number the literals make where that double
+    is cheaper than the exact value: one of the two doubles around it, priced below it."""
+    out = prefix(engine, expr, Mode.f64)
+    exact = exact_value(expr)
+    assert len(out) == 1 and "/" not in out[0], out
+    assert float(out[0]) in floats_around(exact), (out, exact)
+    assert exact_price(Fraction(out[0])) < exact_price(exact)
+
+
+@pytest.mark.parametrize("expr,expected", [
+    ("2.5 / 5", ["/", "1", "2"]),
+    ("1.5 / 3.7", ["/", "15", "37"]),
+    ("123456789.123456789 / 987654321.987654321", None),
+])
+def test_f64_keeps_an_exact_value_cheaper_than_its_double(engine, expr, expected):
+    out = prefix(engine, expr, Mode.f64)
+    if expected is not None:
+        assert out == expected, out
+    value = Fraction(out[0]) if len(out) == 1 else Fraction(out[1]) / Fraction(out[2])
+    assert value == exact_value(expr), out
 
 
 @pytest.mark.parametrize("expr", [
@@ -107,15 +155,15 @@ def test_huge_integer_folds_to_its_float_value(engine):
     "757269634452864785310003246961 / 7",
     "1e-7 / 3.0000000000000004",
     "123456789.123456789 / 987654321.987654321",                          # reduces to a CHEAP fraction: stays
-    "0.3333333333333333 * 0.3333333333333333",
+    "0.3333333333333335 * 0.3333333333333335",
     "74.22110491129965 - 92.12760331603121 * pow(9.440764872280846, 4)",  # beyond 128 bits: the strict tier kept all four operators before 2c
     "2.7167019109484434 * 3.1415926535897 * 1.4142135623730951 * 1.7320508075688772",
 ])
-def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
+def test_fold_follows_the_mu_gate_and_lands_on_a_float_around_the_value(engine, expr):
     """The permissive endpoint is the cheaper of the strict tier's exact spelling and the single
-    literal float(Fraction(...)) -- the correctly rounded float, not the quotient of two rounded
-    components -- priced by the EXACT codewords (where the fold fires, the float cap prices both
-    alike; the fold changes what is printed)."""
+    literal on one of the two floats around the exact value -- the shorter-spelled one, not the
+    quotient of two rounded components -- priced by the EXACT codewords (where the fold fires,
+    the fold changes what is printed and never raises the price)."""
     exact = exact_value(expr)
     strict = prefix(engine, expr, Mode.f64)
     as_float = [repr(float(exact))]
@@ -124,10 +172,11 @@ def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
         # One literal, the float's value; the emitter spells it as the exact decimal of that
         # float (an integer as its digit string, a small value positionally), so compare values.
         assert len(out) == 1 and "/" not in out[0], out
-        if len(strict) == 3 and strict[0] == "/":
-            assert float(out[0]) == float(exact), (out, as_float)
-        elif len(strict) == 1:
-            assert float(out[0]) == float(exact), (out, as_float)
+        if (len(strict) == 3 and strict[0] == "/") or len(strict) == 1:
+            around = floats_around(exact)
+            assert float(out[0]) in around, (out, as_float)
+            assert significant_digits(out[0]) == min(significant_digits(repr(f)) for f in around), \
+                (out, around)
         else:
             # the strict tier keeps more than one literal (a refused fold): the members fold
             # piecewise, so the endpoint is correctly rounded per fold, within an ulp or two
@@ -136,7 +185,7 @@ def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
         assert out == strict, (out, strict, engine.complexity(as_float), engine.complexity(strict))
 
 
-# A constant-only draw from the v25.0-T7 training stream (2026-09-03): the argument of the cosine
+# A constant-only draw from the v25.0-T7 training stream: the argument of the cosine
 # is a product of ten 16-digit constants whose exact value left i128, so before phase 2c the strict
 # tier kept the whole subtree, and the first fold cut left a 20-digit exact decimal behind (the
 # emitter folded two literals at print time that the constructor had kept apart). The permissive
@@ -150,6 +199,10 @@ def test_stream_constant_draw_folds_to_one_literal_and_is_idempotent(engine):
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     strict = list(engine.simplify(STREAM_DRAW, mode=Mode.f64))
     # Phase 2c: the exact product fits the 1,100-bit cap, so the strict tier folds the subtree
-    # too (the cosine in float64, as f64 mode folds functions; the subtraction exactly) and agrees
-    # with the permissive float in value.
-    assert len(strict) == 1 and math.isclose(float(strict[0]), float(once[0]), rel_tol=4e-16), strict
+    # too (the cosine in float64, as f64 mode folds functions; the subtraction exactly). The two
+    # modes' floats differ: permissive values the whole ground subtree by the table and rounds it
+    # once (P3), the double nearest to the true value 14.817389436549068...; f64 folds in float64,
+    # and the cosine of a 9,121-radian argument carries the rounding of its argument
+    # (14.817389436549087).
+    assert len(strict) == 1 and float(strict[0]) == 14.817389436549087, strict
+    assert once == ['14.81738943654907'], once

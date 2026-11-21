@@ -16,12 +16,13 @@ import numpy as np
 import pytest
 
 from simplipy import SimpliPyEngine
+from conftest import legacy_from_config  # noqa: E402
+from simplipy.asset_manager import get_path  # noqa: E402
 
 INF, NINF = 'float("inf")', 'float("-inf")'
 
 CASES = [
     f'* {NINF} - x1 / 1 2',                       # the reported second call
-    f'/ - 0.5 x1 / exp x2 {INF}',                 # the reported first call
     f'+ 1 tanh * {INF} - x1 / 1 2',               # a wrong finite value: 0 for 1 + sign
     f'* x2 + 1 tanh * {INF} - x1 1',
     f'tanh * {INF} - pow x1 2 3',
@@ -36,7 +37,7 @@ VARS = ['x1', 'x2', 'x3']
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.load('acj-5-4-llm', install=True)
+    return legacy_from_config(get_path('acj-5-4-llm', install=True))
 
 
 def values(engine: SimpliPyEngine, expr: list[str], points: np.ndarray) -> np.ndarray:
@@ -75,6 +76,17 @@ def test_the_answer_keeps_every_defined_value(engine, points, expr, effort) -> N
     assert ok.all(), (expr, effort, answer, again, points[~ok][0])
 
 
+@pytest.mark.parametrize('effort', [0, 1, 4, None])
+def test_a_quotient_by_a_vanishing_quotient_has_no_value_in_permissive(engine, points, effort) -> None:
+    # The reported first call. `exp(x2)/inf` is 0 at every x2 (the reciprocal of an infinity is
+    # its determined 0), and the reals give `(0.5 - x1)/0` no value, so permissive has none to
+    # keep: NaN. f64 keeps float64's signed infinity.
+    t = f'/ - 0.5 x1 / exp x2 {INF}'.split()
+    assert engine.simplify(t, mode='permissive', effort=effort) == ['float("nan")']
+    answer = engine.simplify(t, mode='f64', effort=effort)
+    assert agrees_where_defined(values(engine, t, points), values(engine, answer, points)).all()
+
+
 @pytest.mark.parametrize('expr', CASES)
 def test_the_search_leaves_these_alone(engine, expr) -> None:
     # No sound move applies to these, so the search ends where the chain does.
@@ -91,6 +103,6 @@ def test_the_search_leaves_these_alone(engine, expr) -> None:
 def test_finite_pieces_still_distribute(engine, expr, expected) -> None:
     # The move itself is kept wherever no piece spells an infinity, in every mode.
     t = expr.split()
-    for mode in ('f64', 'real', 'permissive'):
+    for mode in ('f64', 'permissive'):
         assert ' '.join(engine.simplify(t, mode=mode, effort=0)) != expected, mode  # the search did it
         assert ' '.join(engine.simplify(t, mode=mode)) == expected, mode

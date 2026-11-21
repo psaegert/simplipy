@@ -699,7 +699,7 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
         z ^ (z >> 31)
     }
-    fn next_f64(&mut self) -> f64 {
+    pub(crate) fn next_f64(&mut self) -> f64 {
         // 53-bit mantissa in [0, 1)
         (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
     }
@@ -857,6 +857,92 @@ fn subtree_end(tokens: &[String], start: usize, ops: &Operators) -> Option<usize
         }
     }
     Some(i)
+}
+
+/// THE ALIGNMENT OF A CONSTANT COLLAPSE, its one definition: where `candidate` is `source` with
+/// variable-free subtrees that hold a `<constant>` each replaced by a `<constant>`, and is
+/// otherwise the source token for token, per candidate `<constant>` in order the source subtree's
+/// span `(start, end)` and the index of its first constant among the source's; `None` where the
+/// candidate is no collapse of the source. A `<constant>` of the source that stays one is the
+/// subtree of itself. `var_names` are the tokens that are variables (a data variable or a slot).
+/// The mint's fit (`CollapseWitness`) and the judge (`_core.collapse_spans`) read it, and the
+/// f64 bar exempts a collapse beside a jump head (`battery::f64_bar_sorted`).
+pub(crate) fn collapse_spans(
+    source: &[String],
+    candidate: &[String],
+    ops: &Operators,
+    var_names: &[String],
+) -> Option<Vec<(usize, usize, usize)>> {
+    if !candidate.iter().any(|t| t == "<constant>") {
+        return None;
+    }
+    let (mut i, mut k, mut first_const) = (0usize, 0usize, 0usize);
+    let mut spans = Vec::new();
+    while k < candidate.len() {
+        if candidate[k] == "<constant>" {
+            let j = subtree_end(source, i, ops)?;
+            let sub = &source[i..j];
+            let n = sub.iter().filter(|t| t.as_str() == "<constant>").count();
+            if n == 0 || sub.iter().any(|t| var_names.contains(t)) {
+                return None;
+            }
+            spans.push((i, j, first_const));
+            first_const += n;
+            i = j;
+        } else {
+            if source.get(i) != Some(&candidate[k]) {
+                return None;
+            }
+            if source[i] == "<constant>" {
+                first_const += 1;
+            }
+            i += 1;
+        }
+        k += 1;
+    }
+    (i == source.len()).then_some(spans)
+}
+
+/// THE WITNESS OF A CONSTANT COLLAPSE (the specification's 3.2): where a candidate is its source
+/// with variable-free subtrees that hold a `<constant>` each replaced by a `<constant>`
+/// (`collapse_spans`), the subtrees' own values at the source's constants are a witness.
+/// `atan2(x0, atan(C)) -> atan2(x0, C)` has the witness `atan(c)`, which at c = -0.0 is the -0.0
+/// no search from a random start reaches. The fit reads it before it searches.
+pub(crate) struct CollapseWitness {
+    /// Per candidate `<constant>`, in order: the source subtree's tape and the index of its first
+    /// constant among the source's.
+    slots: Vec<(Tape, usize)>,
+}
+
+impl CollapseWitness {
+    /// The alignment of `candidate` against `source` (`collapse_spans`) with each subtree
+    /// compiled, or `None` where the candidate is no collapse of the source.
+    pub(crate) fn of(
+        source: &[String],
+        candidate: &[String],
+        ops: &Operators,
+        var_names: &[String],
+    ) -> Option<CollapseWitness> {
+        let spans = collapse_spans(source, candidate, ops, var_names)?;
+        let slots = spans
+            .into_iter()
+            .map(|(i, j, k0)| Some((Tape::compile(&source[i..j], ops, var_names).ok()?, k0)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(CollapseWitness { slots })
+    }
+
+    /// The witness at the source's constants `params`: `None` where a subtree's value there is
+    /// not finite (no constant has it).
+    pub(crate) fn at(&self, params: &[f64]) -> Option<Vec<f64>> {
+        self.slots
+            .iter()
+            .map(|(tape, k0)| {
+                let p = params.get(*k0..*k0 + tape.n_params)?;
+                let v = *tape.eval_columns(&[], p, 1).first()?;
+                v.is_finite().then_some(v)
+            })
+            .collect()
+    }
 }
 
 /// Recognize `pow(<constant>, g)` / `pow(g, <constant>)` with a single `<constant>` and a const-free
@@ -1135,6 +1221,87 @@ mod tests {
         assert_eq!(c(&["/", "<constant>", "3"]), Linearity::Affine); // C/3 == div3(C)
         assert_eq!(c(&["/", "3", "<constant>"]), Linearity::Nonlinear); // 3/C: C in denominator
         assert_eq!(c(&["rootn", "<constant>", "2"]), Linearity::Nonlinear); // C under a root
+    }
+
+    #[test]
+    fn a_collapse_is_read_at_its_own_witness() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0", "x1"]);
+        let of = |src: &[&str], cand: &[&str]| CollapseWitness::of(&s(src), &s(cand), ops, &vars);
+        // the replaced subtree's value, its zero's sign included
+        let w = of(
+            &["atan2", "x0", "atan", "<constant>"],
+            &["atan2", "x0", "<constant>"],
+        )
+        .unwrap();
+        let d = w.at(&[-0.0]).unwrap();
+        assert!(
+            d.len() == 1 && d[0] == 0.0 && d[0].is_sign_negative(),
+            "{d:?}"
+        );
+        // the constants beside the subtree keep their places
+        let w = of(
+            &["+", "*", "<constant>", "x0", "exp", "<constant>"],
+            &["+", "*", "<constant>", "x0", "<constant>"],
+        )
+        .unwrap();
+        assert_eq!(w.at(&[3.0, 0.0]), Some(vec![3.0, 1.0]));
+        // no finite value, no witness: log(0) is -inf
+        let w = of(
+            &["+", "x0", "log", "<constant>"],
+            &["+", "x0", "<constant>"],
+        )
+        .unwrap();
+        assert_eq!(w.at(&[0.0]), None);
+        // no collapse: a replaced subtree with a variable, a ground subtree, another token
+        assert!(of(&["sin", "*", "<constant>", "x0"], &["sin", "<constant>"]).is_none());
+        assert!(of(&["+", "x0", "exp", "1"], &["+", "x0", "<constant>"]).is_none());
+        assert!(of(
+            &["atan2", "x1", "atan", "<constant>"],
+            &["atan2", "x0", "<constant>"]
+        )
+        .is_none());
+    }
+
+    /// The alignment the judge reads: each right constant's left span and its first constant,
+    /// a slot of the judge's spelling a variable as a data variable is.
+    #[test]
+    fn a_collapse_aligns_its_parts() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let spans = |src: &[&str], cand: &[&str], vars: &[&str]| {
+            collapse_spans(&s(src), &s(cand), ops, &s(vars))
+        };
+        assert_eq!(
+            spans(
+                &["tanh", "+", "_0", "log", "<constant>"],
+                &["tanh", "+", "_0", "<constant>"],
+                &["_0"]
+            ),
+            Some(vec![(3, 5, 0)])
+        );
+        assert_eq!(
+            spans(
+                &["+", "*", "<constant>", "x0", "exp", "<constant>"],
+                &["+", "*", "<constant>", "x0", "<constant>"],
+                &["x0"]
+            ),
+            Some(vec![(2, 3, 0), (4, 6, 1)])
+        );
+        // a part that holds a slot is no constant part
+        assert_eq!(
+            spans(
+                &["tanh", "+", "_0", "log", "_0"],
+                &["tanh", "+", "_0", "<constant>"],
+                &["_0"]
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1421,6 +1588,7 @@ mod tests {
             &cols,
             1e-9,
             1e-12,
+            true,
         ));
     }
 }

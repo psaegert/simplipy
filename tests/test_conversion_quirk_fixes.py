@@ -9,6 +9,7 @@ import pytest
 from simplipy import Mode, SimpliPyEngine  # noqa: F401  (re-exported for the suite's historical imports)
 
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -54,7 +55,7 @@ def test_quirk3_neg_literal_toggles_one_minus(engine):
 # -- #4: '^' parses unary minus like '**' ---------------------------------------------------------
 def test_quirk4_caret_matches_starstar_for_unary_minus(engine):
     assert engine.infix_to_prefix("x1 ^ - x2") == engine.infix_to_prefix("x1 ** - x2")
-    # the minus is the EXPONENT'S sign (audit 9.10): x1^(-x2), never -(x1^x2). This
+    # the minus is the EXPONENT'S sign: x1^(-x2), never -(x1^x2). This
     # line pinned the wrong binding until the 9.10 fix.
     assert engine.infix_to_prefix("x1 ^ - x2") == ["**", "x1", "neg", "x2"]
 
@@ -107,7 +108,7 @@ def test_non_smooth_exponents_keep_binary_pow(engine):
     assert engine.read_infix("v1 ** (4/3)", mask_numbers=False) == ["pow1_3", "pow4", "v1"]
 
 
-# -- H-047 (2026-08-05): the **-exponent fold gate is SPELLING-EXACT --------------------------
+# -- The **-exponent fold gate is SPELLING-EXACT --------------------------
 # The port (and the legacy original) gated folds on limit_denominator(1e6) of the f64
 # VALUE: exponents within ~5e-7 of 1 collapsed the pow entirely (x**(1+ulp) -> x, with NO
 # vocabulary gate protecting the emit-nothing case), near-0 folded to 1, near -1 to inv,
@@ -133,7 +134,7 @@ def test_h047_near_fraction_no_longer_snaps(engine):
     assert engine.read_infix("v1 ** (0.5000000000000001)", mask_numbers=False) == ["pow", "v1", "0.5000000000000001"]
 
 
-# -- H-049 (2026-08-05): beyond-i128 exponent spellings KEEP binary pow, never raise ----------
+# -- Beyond-i128 exponent spellings KEEP binary pow, never raise ----------
 # The legacy CPython int() was arbitrary-precision and never failed on a digit string; the
 # i128 parse error was port-minted and raised on the engine's OWN rendered infix.
 def test_h049_beyond_i128_integer_exponent_keeps_pow(engine):
@@ -148,7 +149,7 @@ def test_h049_float_division_exponent_keeps_pow(engine):
     assert engine.read_infix("v1 ** (2.0/4.0)", mask_numbers=False) == ["pow", "v1", "/", "2.0", "4.0"]
 
 
-# -- X10 (2026-08-15): a negative-literal pow base parenthesizes under power='**' -------------
+# -- A negative-literal pow base parenthesizes under power='**' -------------
 # `['pow','-2','x0']` rendered as '-2 ** x0', which re-parses -- in this engine AND in
 # SymPy 1.14 -- as -(2 ** x0): '**' outbinds the unary minus, so the render changed the
 # value. Measured: an exact bijection, 59/5494 canonical outputs broke, every one a
@@ -173,7 +174,7 @@ def test_x10_site2_unary_pow_negative_literal_parenthesizes(engine):
 class TestEvaluateConstants:
     """The FRONT DOOR for numeric folding: explicit, opt-in, and priced by nothing.
 
-    The 2026-08-02 fold unification deleted serve's last f64-evaluation arm, because
+    Fold unification deleted serve's last f64-evaluation arm, because
     "an f64 evaluation landing exactly on a cheap literal while truly differing at
     1e-17" is a rounding, not a simplification. That removed a real capability. This
     method gives it back with a name and a door, so it can never contaminate a
@@ -182,30 +183,22 @@ class TestEvaluateConstants:
 
     @pytest.fixture(scope='class')
     def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
+        return legacy_from_config(acj_config_path())
 
     def test_it_evaluates_what_simplify_refuses(self, eng):
         assert eng.simplify(['tan', '1']) == ['tan', '1']
         assert eng.evaluate_constants(['tan', '1']) == ['1.5574077246549023']
 
     def test_simplify_folds_only_where_mu_says_cheaper(self, eng):
-        """The claim this used to make -- "no mode folds a ground transcendental" -- was
-        retired by mode-aware folding, and its own `real` arm was wiped rather than
-        checked (`set_mode_rules('real', [])`, against a docstring saying the artifact's
-        real set was used).
-
-        What holds now: `f64` and `corpus` fold when mu prices the literal cheaper, and
-        `real` never folds a transcendental at all -- `tan(1)` is irrational and no
-        literal spells it. `tan 1` survives everywhere because its float costs 58,877
-        against the expression's 11,000; `asin 1e-08` folds where folding is allowed."""
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
-        assert eng._core.mode_rules_len('real') is not None, 'the artifact must ship one'
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        """`f64` and `permissive` fold a ground transcendental when mu prices the literal
+        cheaper: `tan 1` survives in both because its float costs 58,877 against the
+        expression's 11,000; `asin 1e-08` folds."""
+        from conftest import require_mode_sets
+        require_mode_sets()
+        assert eng._core.mode_rules_len(rule_mode='permissive') is not None, 'the artifact must ship one'
+        for mode in (Mode.f64, Mode.permissive):
             assert eng.simplify(['tan', '1'], mode=mode) == ['tan', '1'], mode
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.f64) == ['0.00000001']
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['0.00000001']
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '0.00000001']
+            assert eng.simplify(['asin', '1e-08'], mode=mode) == ['1e-8'], mode
 
     def test_a_fitted_constant_is_not_a_value(self, eng):
         """`<constant>` is a degree of freedom, so a subtree carrying one is not
@@ -224,6 +217,13 @@ class TestEvaluateConstants:
         assert eng.evaluate_constants(['+', 'tan', '1', 'x0']) \
             == ['+', '1.5574077246549023', 'x0']
         assert eng.evaluate_constants(['+', 'x0', 'x1']) == ['+', 'x0', 'x1']
+
+    def test_a_variable_is_what_expression_variables_says(self, eng):
+        """`y` is a variable to `expression_variables`, so the subtree holding it is not a
+        constant -- it used to be tried, fail inside the evaluator, and be left alone by
+        an `except Exception` that hid the reason."""
+        assert eng.expression_variables(['+', 'y', 'tan', '1']) == ['y']
+        assert eng.evaluate_constants(['+', 'y', 'tan', '1']) == ['+', 'y', '1.5574077246549023']
 
     def test_it_is_dialect_preserving_like_simplify(self, eng):
         assert eng.evaluate_constants('tan(1) + x0') == '1.5574077246549023 + x0'

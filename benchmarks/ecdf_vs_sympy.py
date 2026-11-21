@@ -8,8 +8,7 @@ declared corpora — the v25 SR training prior (seed 20260830, n = 65,536), the
 same prior under the engine mask policy 'all' (n = 65,536), and an external
 neutral problem set (SOOSE fc/nc/wc, n = 600; every row compiles in the engine
 language). The engine is the pinned acj-5-4-llm artifact: ``f64`` is the
-shipped default, ``real`` is ``Mode.real``, ``permissive`` is
-``Mode.permissive``, every arm at ``effort=4`` (the default before 0.15.0); the unmasked leg
+shipped default, ``permissive`` is ``Mode.permissive``, every arm at ``effort=4`` (the default before 0.15.0); the unmasked leg
 adds the explore-budget sweep arms ``effort=0`` and ``effort=64``.
 
 Scoring runs in the deployment space: ratio = complexity(output, mode) /
@@ -290,7 +289,7 @@ def score(cfg, corpora, results):
         mu0 = np.array([pricer.complexity(r) for r in corpus], float)
         arrays[f'{tag}/mu0'] = mu0
         for label, d in results[tag]['modes'].items():
-            mode = label.split('_')[0]  # 'f64', 'real', 'permissive', 'f64_e64', ...
+            mode = label.split('_')[0]  # 'f64', 'permissive', 'f64_e64', ...
             mu_in = mu0 if mode == 'f64' else np.array([pricer.complexity(r, mode=mode) for r in corpus], float)
             mu = np.array([pricer.complexity(r, mode=mode) for r in d['outputs']], float)
             ratio = mu / mu_in
@@ -404,12 +403,11 @@ GRID = '#e3e3df'
 SPINE = '#c9c9c4'
 ANNOT = '#444444'
 
-C = {'f64': '#1f77b4', 'real': '#9467bd', 'permissive': '#2ca02c',
-     'sympy': '#d62728'}
-LBL = {'f64': 'SimpliPy f64 (default)', 'real': 'SimpliPy real',
-       'permissive': 'SimpliPy permissive', 'sympy': 'SymPy simplify'}
-ARMS = ['f64', 'real', 'permissive', 'sympy']
-ENGINE_ARMS = ['f64', 'real', 'permissive']
+C = {'f64': '#1f77b4', 'permissive': '#2ca02c', 'sympy': '#d62728'}
+LBL = {'f64': 'SimpliPy f64 (default)', 'permissive': 'SimpliPy permissive',
+       'sympy': 'SymPy simplify'}
+ARMS = ['f64', 'permissive', 'sympy']
+ENGINE_ARMS = ['f64', 'permissive']
 
 DPI = 170
 
@@ -832,8 +830,8 @@ def resolve_corpora(limit):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='The published SimpliPy-vs-SymPy benchmark: four arms '
-                    '(f64/real/permissive at effort 4, sympy under a 1 s cap), '
+        description='The published SimpliPy-vs-SymPy benchmark: three arms '
+                    '(f64/permissive at effort 4, sympy under a 1 s cap), '
                     'three corpora, plus the effort 0/64 sweep on the '
                     'unmasked leg.')
     parser.add_argument('--limit', type=int, default=None,
@@ -864,7 +862,7 @@ def main():
         print(f'== {tag}: {len(corpus)} rows', flush=True)
         sympy_res = run_sympy(corpus, tag)
         modes = {}
-        for mode in (Mode.f64, Mode.real, Mode.permissive):
+        for mode in (Mode.f64, Mode.permissive):
             modes[mode.name] = run_simplipy(cfg, corpus, f'{tag}/{mode.name}',
                                             mode=mode, effort=4)
         if tag == 'unmasked':

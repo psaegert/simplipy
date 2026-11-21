@@ -61,11 +61,11 @@ pub struct OperatorSpec {
     pub realization: String,
     #[serde(default)]
     pub alias: Vec<String>,
-    /// PARSE-ONLY at 0.12.0 (D3): shipped configs declare `inverse:` entries, so the
+    /// PARSE-ONLY at 0.12.0: shipped configs declare `inverse:` entries, so the
     /// field stays accepted for deserialization compatibility, but nothing derives from
     /// it any more -- the `operator_inverses` map and its one (dead) intern site were
     /// removed with the binary kernel's relic layer. The shipped acj configs' historic
-    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) were FIXED 2026-08-05;
+    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) are FIXED;
     /// legacy configs in the wild still carry them (the legacy fixture reproduces one
     /// verbatim), which is why `worker.rs::inverse_unary_name` keeps its own map
     /// rather than trusting the field.
@@ -83,7 +83,6 @@ pub struct OperatorSpec {
 #[derive(Debug, Default)]
 pub struct Operators {
     pub arity: FxHashMap<String, u8>,
-    pub commutative: Vec<String>,
     /// `max_power`: `max(int(op[3:]) for op in operator_tokens if op matches
     /// `^pow\d+` NOT followed by `_`)`, else 0. The factor ceiling for the LEGACY
     /// conversion paths' power-chain factorization (`convert.rs`; the other historical
@@ -118,11 +117,6 @@ impl Operators {
     pub fn from_specs(order: Vec<String>, specs: FxHashMap<String, OperatorSpec>) -> Self {
         let arity: FxHashMap<String, u8> =
             specs.iter().map(|(k, v)| (k.clone(), v.arity)).collect();
-        let commutative = order
-            .iter()
-            .filter(|k| specs.get(*k).map(|s| s.commutative).unwrap_or(false))
-            .cloned()
-            .collect();
         let max_power = order.iter().filter_map(|t| pow_power(t)).max().unwrap_or(0);
         let max_fractional_power = order
             .iter()
@@ -199,7 +193,6 @@ impl Operators {
         }
         Self {
             arity,
-            commutative,
             max_power,
             max_fractional_power,
             operator_precedence_compat,
@@ -225,12 +218,6 @@ impl Operators {
     #[inline]
     pub fn is_operator(&self, token: &str) -> bool {
         core_arity(token).is_some() || self.arity.contains_key(token)
-    }
-
-    /// `operator in self.commutative_operators`. dev_7-3: `{'+', '*'}`.
-    #[inline]
-    pub fn is_commutative(&self, token: &str) -> bool {
-        self.commutative.iter().any(|c| c == token)
     }
 
     /// `operator_precedence_compat.get(token)`. `None` if the token is unknown;
