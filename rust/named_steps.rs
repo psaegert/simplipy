@@ -78,7 +78,6 @@ pub fn schemas(entry: Permissive) -> Vec<Schema> {
             .collect(),
         Permissive::ConstantCollapse
         | Permissive::LiteralToFloat
-        | Permissive::SharedNumbers
         | Permissive::AnySlot
         | Permissive::FloatResolution
         | Permissive::Agreement => Vec::new(),

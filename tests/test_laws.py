@@ -140,18 +140,18 @@ ROWS = [
     # r*(a + b) + c = r*a + r*b + c. f64: float64's sum is +0 wherever it cancels, so a negative
     # r spreads only where the sum holds no sign or nothing reads its zero: the answer itself, a
     # head blind to the sign, a sum another addend keeps off -0 (`ceil(x2)` is -0 on (-1, 0), `x2`
-    # only at a point). permissive spreads every product, and its terms then group by their
-    # shared number again (`add.group`).
-    ('add.unfactor', '+ x2 * 2 + x0 x1', '+ * 2 x0 + * 2 x1 x2', '+ x2 * 2 + x0 x1'),
-    ('add.unfactor', '+ x2 * -2 + x0 x1', '- - x2 * 2 x0 * 2 x1', '- x2 * 2 + x0 x1'),
-    ('add.unfactor', '+ ceil x2 * -2 + ceil x0 floor x1', '- - ceil x2 * 2 ceil x0 * 2 floor x1',
+    # only at a point). permissive spreads every product. The spread terms then group by their
+    # shared number again (`add.group`), the sign taken out of the group where the spread was.
+    ('add.unfactor', '+ x2 * 2 + x0 x1', '+ x2 * 2 + x0 x1', '+ x2 * 2 + x0 x1'),
+    ('add.unfactor', '+ x2 * -2 + x0 x1', '- x2 * 2 + x0 x1', '- x2 * 2 + x0 x1'),
+    ('add.unfactor', '+ ceil x2 * -2 + ceil x0 floor x1', '- ceil x2 * 2 + ceil x0 floor x1',
      '- ceil x2 * 2 + ceil x0 floor x1'),
     ('add.unfactor', 'exp + ceil x2 * -2 + ceil x0 floor x1',
-     'exp - - ceil x2 * 2 ceil x0 * 2 floor x1', 'exp - ceil x2 * 2 + ceil x0 floor x1'),
+     'exp - ceil x2 * 2 + ceil x0 floor x1', 'exp - ceil x2 * 2 + ceil x0 floor x1'),
     ('add.unfactor', 'inv + ceil x2 * -2 + ceil x0 floor x1', 'inv - ceil x2 * 2 + ceil x0 floor x1',
      'inv - ceil x2 * 2 + ceil x0 floor x1'),
     # beside x2, which is not -0 on a region, the product spreads: the sum's zero is isolated
-    ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', '/ -1 - + * 2 ceil x0 * 2 floor x1 x2',
+    ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', 'inv - x2 * 2 + ceil x0 floor x1',
      'inv - x2 * 2 + ceil x0 floor x1'),
     ('add.unfactor', 'inv + * -1 - ceil x0 ceil x1 ceil x2', 'inv - ceil x2 - ceil x0 ceil x1',
      'inv - + ceil x1 ceil x2 ceil x0'),
@@ -182,16 +182,17 @@ ROWS = [
      'inv - floor x1 floor x0'),
     ('add.content', 'inv + ceil x2 neg - floor x0 floor x1', 'inv - ceil x2 - floor x0 floor x1',
      'inv - + ceil x2 floor x1 floor x0'),
-    # c*a + c*b + d = c*(a + b) + d. permissive writes a number its terms share once, the terms
+    # c*a + c*b + d = c*(a + b) + d. A sum writes a number its terms share once, the terms
     # grouped by the exact value of their coefficient up to sign (a literal term's coefficient is
     # itself), the sign in the coefficient; a magnitude of one is no number to share, and 4 is not
-    # 2. f64 keeps the terms distributed.
-    ('add.group', '+ + * 2 x0 * 2 x1 x2', '+ * 2 x0 + * 2 x1 x2', '+ x2 * 2 + x0 x1'),
-    ('add.group', '+ - * 3 x0 * 3 x1 x2', '- + * 3 x0 x2 * 3 x1', '+ x2 * 3 - x0 x1'),
-    ('add.group', '- - x2 * 2 x0 * 2 x1', '- - x2 * 2 x0 * 2 x1', '- x2 * 2 + x0 x1'),
-    ('add.group', '+ + + * 2 x0 * 2 x1 2 x2', '+ * 2 x0 + * 2 x1 + x2 2', '+ x2 * 2 + x0 + x1 1'),
-    ('add.group', '+ * 2 + x0 x1 x2', '+ * 2 x0 + * 2 x1 x2', '+ x2 * 2 + x0 x1'),
-    ('add.group', '+ + * 2 x0 * 2 x1 * 4 x2', '+ * 2 x0 + * 2 x1 * 4 x2', '+ * 4 x2 * 2 + x0 x1'),
+    # 2. Each group is the whole-sum factoring of its terms: f64 takes a sign out of it only where
+    # the group's sum holds none (`SIGN_ROWS`).
+    ('add.group', '+ + * 2 x0 * 2 x1 x2', '+ x2 * 2 + x0 x1', '+ x2 * 2 + x0 x1'),
+    ('add.group', '+ - * 3 x0 * 3 x1 x2', '+ x2 * 3 - x0 x1', '+ x2 * 3 - x0 x1'),
+    ('add.group', '- - x2 * 2 x0 * 2 x1', '- x2 * 2 + x0 x1', '- x2 * 2 + x0 x1'),
+    ('add.group', '+ + + * 2 x0 * 2 x1 2 x2', '+ x2 * 2 + x0 + x1 1', '+ x2 * 2 + x0 + x1 1'),
+    ('add.group', '+ * 2 + x0 x1 x2', '+ x2 * 2 + x0 x1', '+ x2 * 2 + x0 x1'),
+    ('add.group', '+ + * 2 x0 * 2 x1 * 4 x2', '+ * 4 x2 * 2 + x0 x1', '+ * 4 x2 * 2 + x0 x1'),
     ('mul.exp_merge', '* exp x0 exp x1', 'exp + x0 x1', 'exp + x0 x1'),
     ('mul.exp_merge', '* exp x0 np.e', 'exp + x0 1', 'exp + x0 1'),
     ('mul.rootn_join', '* rootn x0 3 rootn x1 3', 'rootn * x0 x1 3', 'rootn * x0 x1 3'),
@@ -455,6 +456,16 @@ ABSORB_ROWS = [
 #: sign, and the sign of the infinity a pole makes of it, is no value kept (`-1/(x0 - 3)` is
 #: `1/(3 - x0)`), and a one-signed pole keeps its limit; permissive reads no value at a pole.
 SIGN_ROWS = [
+    # c*a + c*b + d = c*(a + b) + d with a negative c. f64: under an inverse a group whose sum
+    # vanishes on a region beside `ceil(x2)`, which is -0 there too, keeps the sign inside; beside
+    # x2, which is not -0 on a region, the sign leaves it; and a sum that holds its sign keeps the
+    # groups it holds as they are.
+    ('add.group', 'inv + + ceil x2 * -2 ceil x0 * -2 floor x1',
+     'inv + ceil x2 * 2 - neg ceil x0 floor x1', 'inv - ceil x2 * 2 + ceil x0 floor x1'),
+    ('add.group', 'inv + + x2 * -2 ceil x0 * -2 floor x1', 'inv - x2 * 2 + ceil x0 floor x1',
+     'inv - x2 * 2 + ceil x0 floor x1'),
+    ('add.group', 'inv + + * -2 ceil x0 * -2 floor x1 * -3 ceil x2',
+     'inv - * 2 - neg ceil x0 floor x1 * 3 ceil x2', '/ -1 + * 3 ceil x2 * 2 + ceil x0 floor x1'),
     # f(-S) = -f(S): the cheaper placement; under an inverse a sum that vanishes on a region holds
     # its sign
     ('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'sin - x1 x0'),
@@ -608,11 +619,11 @@ def test_the_core_names_its_laws() -> None:
 #: `ROWS` reads x0, x1 and x2): two shared numbers, a term with a fitted constant, and terms of
 #: magnitude one beside a group.
 GROUP_ROWS = [
-    ('add.group', '+ + * 2 x0 * 2 x1 + * 3 x2 * 3 x3', '+ * 2 x0 + * 2 x1 + * 3 x2 * 3 x3',
+    ('add.group', '+ + * 2 x0 * 2 x1 + * 3 x2 * 3 x3', '+ * 2 + x0 x1 * 3 + x2 x3',
      '+ * 2 + x0 x1 * 3 + x2 x3'),
-    ('add.group', '+ + * 2 x0 * 2 x1 <constant>', '+ * 2 x0 + * 2 x1 <constant>',
+    ('add.group', '+ + * 2 x0 * 2 x1 <constant>', '+ * 2 + x0 x1 <constant>',
      '+ * 2 + x0 x1 <constant>'),
-    ('add.group', '+ + neg x0 neg x1 + * 2 x2 * 2 x3', '- - + * 2 x2 * 2 x3 x0 x1',
+    ('add.group', '+ + neg x0 neg x1 + * 2 x2 * 2 x3', '- - * 2 + x2 x3 x0 x1',
      '- - * 2 + x2 x3 x0 x1'),
 ]
 

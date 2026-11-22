@@ -1573,15 +1573,6 @@ pub enum Permissive {
     /// A literal becomes its float where the float is cheaper: the quotient of two 16-digit
     /// decimals is `0.46867105279529636` (`land`, and the engine's ground fold).
     LiteralToFloat,
-    /// A sum writes a number its terms share once: after the flatten, its terms are grouped by the
-    /// exact value of their coefficient up to sign, and each group of two or more is `c*(group)`
-    /// where that costs no more than its terms distributed (`2*x1 + 2*x2 + x3` is
-    /// `2*(x1 + x2) + x3`, `3.71649*(x1 + x2) + 5.11927*(x3 + x4)` keeps its two numbers), the sign
-    /// in the coefficient; where two spellings of a sum then tie in price, the one strict prices
-    /// lower (`flipped_orientation_wins`). With the whole sum as the group it is the content every
-    /// mode extracts (`add.group`, `primitive_sum`). The sound modes keep the terms distributed:
-    /// in float64 `c*a + c*b` and `c*(a + b)` round differently.
-    SharedNumbers,
     /// Every slot matches any subexpression, without its certificate: `$0/$0 -> 1` also matches
     /// `inf/inf` (the matcher's `wildcard_all`).
     AnySlot,
@@ -1599,13 +1590,12 @@ pub enum Permissive {
 
 impl Permissive {
     /// The whole list, in the specification's order.
-    pub const ALL: [Permissive; 9] = [
+    pub const ALL: [Permissive; 8] = [
         Permissive::InversePairs,
         Permissive::PowersCompose,
         Permissive::LikeTerms,
         Permissive::ConstantCollapse,
         Permissive::LiteralToFloat,
-        Permissive::SharedNumbers,
         Permissive::AnySlot,
         Permissive::FloatResolution,
         Permissive::Agreement,
@@ -1625,7 +1615,6 @@ impl Permissive {
             Permissive::LikeTerms => "like terms cancel",
             Permissive::ConstantCollapse => "constant collapse without evidence",
             Permissive::LiteralToFloat => "literal to float",
-            Permissive::SharedNumbers => "shared numbers group",
             Permissive::AnySlot => "any slot matches",
             Permissive::FloatResolution => "float-resolution rules served",
             Permissive::Agreement => "holds by agreement",
@@ -4239,20 +4228,21 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     }
 }
 
-/// The TERMS OF A SUM AS ITS FLATTEN READS THEM: in `permissive`, where a sum writes the number
-/// its terms share once ([`group_shared_numbers`]), each group `c*(a + b)` is its terms `c*a`,
-/// `c*b`, which is how `add` reads it on entering a sum. The search proposes its factorings on these
-/// terms, so a group never hides a term from a factoring across it (`x14*x16 - 2*(x16 + x6)` offers
-/// `x16*(x14 - 2) - 2*x6`). The terms as given elsewhere.
+/// The TERMS OF A SUM AS ITS FLATTEN READS THEM: where a sum writes the number its terms share
+/// once ([`group_shared_numbers`]), each group `c*(a + b)` is its terms `c*a`, `c*b`, which is how
+/// `add` reads it on entering a sum. The search proposes its factorings on these terms, so a group
+/// never hides a term from a factoring across it (`x14*x16 - 2*(x16 + x6)` offers
+/// `x16*(x14 - 2) - 2*x6`). A group whose coefficient the flatten keeps whole (`add.unfactor`'s
+/// premise) stays one term.
 pub(crate) fn spread_groups<'t>(terms: &'t [Ex], cx: &Cx) -> std::borrow::Cow<'t, [Ex]> {
     let group = |t: &Ex| matches!(t, Ex::Mul(v) if factored_sum(v).is_some());
-    if !cx.permits(Permissive::SharedNumbers) || !terms.iter().any(group) {
+    if !terms.iter().any(group) {
         return std::borrow::Cow::Borrowed(terms);
     }
     let mut out: Vec<Ex> = Vec::with_capacity(terms.len() + 2);
     for t in terms {
         if let Ex::Mul(v) = t {
-            if let Some((r, inner)) = factored_sum(v) {
+            if let Some((r, inner)) = factored_sum(v).filter(|(r, inner)| unfactors(r, inner, cx)) {
                 let scaled: Option<Vec<Ex>> = inner.iter().map(|s| scale_term(s, &r, cx)).collect();
                 if let Some(scaled) = scaled {
                     out.extend(scaled);
@@ -4265,10 +4255,10 @@ pub(crate) fn spread_groups<'t>(terms: &'t [Ex], cx: &Cx) -> std::borrow::Cow<'t
     std::borrow::Cow::Owned(out)
 }
 
-/// PERMISSIVE GROUPS A SHARED NUMBER (`Permissive::SharedNumbers`, `add.group`): the terms of a
+/// A SUM GROUPS A SHARED NUMBER (`add.group`), in every mode: the terms of a
 /// flattened sum, grouped by the exact value of their coefficient up to sign (a literal term's
 /// coefficient is itself), each group of two or more written `c*(group)` with its content and
-/// orientation decided as a whole sum's ([`primitive_sum`]), the sign in the coefficient:
+/// orientation decided as a whole sum's ([`whole_primitive_sum`]), the sign in the coefficient:
 /// `2*x1 + 2*x2 + x3` is `2*(x1 + x2) + x3`, `3.71649*x1 - 3.71649*x2 + x3` is
 /// `3.71649*(x1 - x2) + x3`, and `3.71649*x1 + 3.71649*x2 + 5.11927*x3 + 5.11927*x4` writes each
 /// number once. The key is the exact value, so the grouping is deterministic, and every
@@ -4277,16 +4267,26 @@ pub(crate) fn spread_groups<'t>(terms: &'t [Ex], cx: &Cx) -> std::borrow::Cow<'t
 /// number to share, and those terms stay as they are; so do a term holding a fitted constant
 /// (absorption owns its coefficient) and a factored sum the flatten kept whole.
 ///
+/// IN `f64` A GROUP IS THE WHOLE-SUM FACTORING OF ITS TERMS, with that factoring's premise
+/// (`add.content`): `c*a + c*b` and `c*(a + b)` have one real value and differ in float64 by
+/// rounding alone, which strict admits (float64's kinds are kept: both sides finite, the same
+/// infinity or both undefined), and a positive content moves no zero's sign; a sign leaves the
+/// group only where the group's sum holds none (`Law::AddContent`, read by
+/// [`whole_primitive_sum`]), so `x2 - 2*x0 - 2*x1` is `x2 - 2*(x0 + x1)`, while under an inverse
+/// `ceil(x2) - 2*ceil(x0) - 2*floor(x1)` is `ceil(x2) + 2*(-ceil(x0) - floor(x1))`. A group the
+/// flatten meets again spreads as `add.unfactor` says, and is grouped again here: the two
+/// premises are one test.
+///
 /// A GROUP IS WRITTEN ONLY WHERE IT COSTS NO MORE than its terms distributed: the price of
 /// `c*(group)` against the prices of its terms, the members a sum prices one by one. A number
 /// written once saves its own price each time it is not written again, which an inexact number
 /// always pays for (`3.71649*(x1 + x2)` saves a constant); an exact number whose group costs
 /// more stays distributed (`x13/2 + x1/(4*x13) + 1/4` keeps its quarters, where
-/// `(x1/x13 + 1)/4` is dearer), so permissive's answer stays no dearer than strict's. The price
-/// is a function of the group's terms alone, so the choice is deterministic. The remaining sum
-/// then takes its orientation as any sum does. `None` where no group is written beside other
-/// terms: with the whole sum as one group the sum's content is the content [`primitive_sum`]
-/// extracts in every mode.
+/// `(x1/x13 + 1)/4` is dearer), so a grouping never prices a sum above its distributed terms.
+/// The price is a function of the group's terms alone, so the choice is deterministic. The
+/// remaining sum then takes its orientation as any sum does. `None` where no group is written
+/// beside other terms: with the whole sum as one group the sum's content is the content
+/// [`whole_primitive_sum`] extracts.
 fn group_shared_numbers(terms: &[Ex], cx: &Cx) -> Option<Ex> {
     if terms.len() < 3 {
         return None;
@@ -4365,8 +4365,8 @@ fn group_shared_numbers(terms: &[Ex], cx: &Cx) -> Option<Ex> {
 /// NaN); `Const` terms pass through unchanged (`c / u` re-fits to `c'`, the contract's
 /// forall-exists direction).
 ///
-/// In `permissive` a sum first groups the numbers its terms share ([`group_shared_numbers`]);
-/// the whole sum as one group is the content extracted here.
+/// A sum first groups the numbers its terms share ([`group_shared_numbers`]); the whole sum as
+/// one group is the content extracted here.
 ///
 /// The laws applied here (`ac::laws::Law`): `add.content`, `add.group`.
 fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
@@ -4377,10 +4377,8 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
         !terms.iter().any(|t| matches!(t, Ex::PosInf | Ex::NegInf)),
         "primitive_sum received a bare infinity: the add() inf-exit must precede it"
     );
-    if cx.permits(Permissive::SharedNumbers) {
-        if let Some(grouped) = group_shared_numbers(&terms, cx) {
-            return grouped;
-        }
+    if let Some(grouped) = group_shared_numbers(&terms, cx) {
+        return grouped;
     }
     whole_primitive_sum(terms, cx)
 }
@@ -4435,6 +4433,7 @@ fn whole_primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // wrapper exists in both spellings and the flip pays only the coefficient's sign bit, the
     // per-term deltas priced on the divided terms (the spellings stored), so `g`'s sign bit
     // counts once.
+    let mut primitive: Option<Vec<Ex>> = None;
     let sign_neg = if terms.iter().any(term_absorbs_negation) {
         false
     } else if g.is_one() {
@@ -4458,7 +4457,10 @@ fn whole_primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
                         wrap(&g.negated()) - wrap(&g)
                     }
                 };
-                flipped_orientation_wins(&divided_pos, Wrapper::Both(wsd), Tie::Keep, cx)
+                let wins =
+                    flipped_orientation_wins(&divided_pos, Wrapper::Both(wsd), Tie::Keep, cx);
+                primitive = Some(divided_pos);
+                wins
             }
             None => return Ex::Add(terms),
         }
@@ -4467,8 +4469,16 @@ fn whole_primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // Float64's `-a - b` is `+0` wherever the sum cancels, and `-(a + b)` is `-0` there, so a sum
     // that may vanish on a region keeps its orientation (`sum_holds_its_sign`):
     // `-ceil(x0) - floor(x1)` stays as it is, `-x0 - x1` is `-(x0 + x1)`. A positive content moves
-    // no sign.
-    let sign_neg = sign_neg && Law::AddContent.holds(&Ex::Add(terms.clone()), cx);
+    // no sign. A content held out of the sum leaves its primitive part, the sum the state holds
+    // (`2*(-ceil(x0) - floor(x1))` holds `-ceil(x0) - floor(x1)`), and the root's walk names the
+    // sums whose zero is read by the spelling it finds (`release_unread`): the premise reads both
+    // spellings, so a group a flatten spreads and gathers again keeps the sign it held
+    // (`ceil(x2) + 2*(-ceil(x0) - floor(x1))` under an inverse).
+    let sign_neg = sign_neg
+        && Law::AddContent.holds(&Ex::Add(terms.clone()), cx)
+        && primitive
+            .as_ref()
+            .is_none_or(|p| Law::AddContent.holds(&Ex::Add(p.clone()), cx));
     let u = if sign_neg { g.negated() } else { g };
     if u.is_one() || u.is_zero() {
         return Ex::Add(terms);
@@ -4582,11 +4592,10 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
         return delta < 0;
     }
     // PERMISSIVE'S TWO SPELLINGS TIE IN PRICE: the one strict prices lower is taken
-    // ([`strict_price`]: the spelling read by strict's constructors, priced). A shared number's
-    // group is a spelling strict reads distributed, so beside one the two orientations can tie in
-    // permissive and not in strict (`1/(cosh(x9) - x15/x14) + x14*x16 - 2*(x16 + x6)` against its
-    // flip, whose pole strict writes `-1/(x15/x14 - cosh(x9))`, a sign cheaper). Where strict
-    // prices them alike too, the tie order below.
+    // ([`strict_price`]: the spelling read by strict's constructors, priced), so where the modes
+    // read a spelling apart (a sign strict holds in a sum, a pole's orientation) a permissive
+    // answer is no dearer than strict's on strict's yardstick. Where strict prices them alike
+    // too, the tie order below.
     if matches!(cx.mode, RuleMode::Permissive) {
         let negated = !matches!(wrapper, Wrapper::Neither);
         let (a, b) = (
@@ -5047,6 +5056,21 @@ pub fn held_sums(e: &Ex, read: bool, cx: &Cx) -> rustc_hash::FxHashSet<Ex> {
         {
             out.insert(e.clone());
         }
+        // A held sum is written with its groups as they are, as the root's walk keeps them
+        // (`released`): a group's sum holding a subtracted term is written as it is there.
+        if read && matches!(e, Ex::Add(_)) && may_keep_zero_sign(e, cx) {
+            if let Ex::Add(ts) = e {
+                for t in ts {
+                    if let Ex::Mul(f) = t {
+                        if let (Some(_), Some(inner @ Ex::Add(its))) = (factored_sum(f), f.last()) {
+                            if its.iter().any(subtracted_term) {
+                                out.insert(inner.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         match e {
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
                 for (i, c) in v.iter().enumerate() {
@@ -5162,9 +5186,23 @@ fn released(e: &Ex, read: bool, cx: &Cx, free: &Cx) -> (Option<Ex>, bool) {
     if freed == *node {
         return (rebuilt, true);
     }
+    // A sum whose zero is read is named by its spelling, and so is each group it holds
+    // (`group_shared_numbers`): a group a sum keeps is spelled with it, so the group keeps its
+    // sign there even where nothing reads the group's own zero (`ceil(x2) + 2*(-ceil(x0) -
+    // floor(x1))` under an inverse is that sum, and releasing the group's sign would spell
+    // another).
     fn kept_below<'e>(e: &'e Ex, read: bool, cx: &Cx, out: &mut Vec<&'e Ex>) {
         if read && matches!(e, Ex::Add(_)) && keeps_zero_sign(e, cx) {
             out.push(e);
+            if let Ex::Add(ts) = e {
+                for t in ts {
+                    if let Ex::Mul(f) = t {
+                        if let (Some(_), Some(inner)) = (factored_sum(f), f.last()) {
+                            out.push(inner);
+                        }
+                    }
+                }
+            }
         }
         match e {
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {

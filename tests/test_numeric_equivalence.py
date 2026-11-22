@@ -418,7 +418,12 @@ class TestCorpusGate:
         # THE LOG OF AN INVERSE UNDER EVERY HEAD: 54,412,176 -> 54,409,176 (-3,000). Over a
         # monomial, `log(1/t)` and `-log(t)` part only in an isolated zero's sign, so f64 takes the
         # law under a divisor too: row 257's `.../log(1/x7)` is `-.../log(x7)` (-3,000).
-        assert walk['complexity_out'] == 54409176, walk['complexity_out']
+        # A SUM GROUPS A SHARED NUMBER IN F64 TOO: 54,409,176 -> 54,355,437 (-53,739). A number
+        # two terms of a sum share is written once beside the other terms, where that costs no
+        # more. 12 walk rows move, all cheaper: 42 -10,755, 239 -8,644, 325 and 355 -6,000 each,
+        # 171 -4,585, 341 -4,000, 73 -3,585, 193 and 352 -3,000 each, 145 -2,585, 5 -1,000,
+        # 393 -585.
+        assert walk['complexity_out'] == 54355437, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

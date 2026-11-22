@@ -181,15 +181,15 @@ class TestTheSearchRunsUntilItSettles:
 
     @pytest.mark.parametrize('k', [4, 5])
     def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
-        # What a search needs grows with the expression: each copy takes five descents, so 2
-        # copies reach the uncapped answer within 10, 4 need 20 and 5 need 25, and a cap of 16
-        # falls short here.
+        # What a search needs grows with the expression: the first copy takes five descents and
+        # each further one three (its numbers group with the first copy's), so 2 copies reach
+        # the uncapped answer within 6, 4 need 12 and 5 need 15, and a cap of 8 falls short here.
         t = _copies(k)
         once = shipped.simplify(t)
         assert shipped.simplify(once) == once
-        capped = shipped.simplify(t, effort=16)
+        capped = shipped.simplify(t, effort=8)
         assert shipped.complexity(once) < shipped.complexity(capped)
-        assert shipped.simplify(capped, effort=16) != capped
+        assert shipped.simplify(capped, effort=8) != capped
 
     def test_the_cheapest_candidate_is_tried_first(self, shipped) -> None:
         # Eight products whose expansion does not pay, then one that does: the candidates are

@@ -154,8 +154,8 @@ reciprocal of a product holding a sum or a function stays one bag in the section
 floats is written as its float64, computed as SimpliPy's evaluator computes it and shown at the
 `precision`. A function of a number written exactly stays a function, and so does one whose
 float would be 0, infinite or subnormal, and one whose float would let reading the display
-build another sum: a number times a sum is distributed over the sum it stands in, and a term
-collects with a like term. No numbers combine to inf, 0 or a subnormal.
+build another sum, as a term that collects with a like term. A number its group shares reads
+back as the same group. No numbers combine to inf, 0 or a subnormal.
 
 ```python
 engine.prettify(engine.simplify("x1*exp(-381/2)"))
@@ -167,7 +167,7 @@ engine.prettify(engine.simplify("sin(sin(9463/890))"))
 engine.prettify(engine.simplify("x1 + sin(2)"))
 # -> 'x1 + sin(2)'
 engine.prettify(engine.simplify("x3 + atan(1.2345678)*(x1 + x2)"))
-# -> 'x3 + atan(1.2345678)*(x1 + x2)'
+# -> 'x3 + 0.8899874577727933*(x1 + x2)'
 ```
 
 **Exponents** follow the same rules, and `x^(1/n)` and `x^(-1/n)` are written `rootn(x, n)`
@@ -226,11 +226,11 @@ written with its rest is one term. The tagged form writes bags, which have no or
 same either way.
 
 ```python
-grouped = engine.simplify("2*x2 + 2*x3 + exp(x2 + x3) - x1")
+grouped = engine.simplify("x1 + x2 + exp(x3)")
 engine.prettify(grouped)
-# -> '2*x2 + 2*x3 + exp(x2 + x3) - x1'
+# -> 'x1 + x2 + exp(x3)'
 engine.prettify(grouped, keep_grouping=True)
-# -> '2*x2 + (2*x3 + exp(x2 + x3)) - x1'
+# -> 'x1 + (x2 + exp(x3))'
 engine.prettify(engine.simplify("2*x1*x2/(x3*x4*x5)"), keep_grouping=True)
 # -> '2*(x1*x2)/(x3*(x4*x5))'
 engine.prettify("x1 + 1.000000000000000000003", keep_grouping=True)
@@ -248,15 +248,14 @@ product into one denominator.
 
 `prettify` reads the expression with the canonical constructors of a mode, `strict` unless
 `mode=` says otherwise, as `simplify` answers in `strict` unless told otherwise. Pass the mode
-the answer was simplified in. A `permissive` answer writes a number its terms share once, and
-that grouping is part of how `permissive` builds the expression, so it is displayed only when
-the answer is read in `permissive`; `strict` reads the group distributed. `keep_grouping` groups
+the answer was simplified in, and the display is that mode's reading of it. Both modes write a
+number a sum's terms share once, and display the group as it is written; `keep_grouping` groups
 the state the mode builds.
 
 ```python
 answer = engine.simplify('3.71649*x1 + 3.71649*x2 + x3', mode='permissive')
 engine.prettify(answer, mode='permissive')
 # -> 'x3 + 3.71649*(x1 + x2)'
-engine.prettify(answer)
-# -> '3.71649*x1 + 3.71649*x2 + x3'
+engine.prettify(engine.simplify('3.71649*x1 + 3.71649*x2 + x3'))
+# -> 'x3 + 3.71649*(x1 + x2)'
 ```

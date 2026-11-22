@@ -56,11 +56,12 @@ organised by who you are, then the highlights, then every change in detail.
   per name, shared by every occurrence of the name; `<constant>` stays one independent constant
   per occurrence. A token of that form was read as an ordinary variable before (see the detail
   below).
-- **`permissive` writes a shared number once.** A sum's terms are grouped by the exact value of
-  their coefficient up to sign, each group of two or more written `c*(group)` where that costs
-  no more than its terms: `3.71649*x1 + 3.71649*x2 + x3` is `x3 + 3.71649*(x1 + x2)`, so its
-  mask holds one `<constant>` where it held two. `strict` keeps the terms distributed. Pass
-  `mode='permissive'` to `prettify` to display a permissive answer's groups.
+- **A shared number is written once, in every mode.** A sum's terms are grouped by the exact
+  value of their coefficient up to sign, each group of two or more written `c*(group)` where that
+  costs no more than its terms: `3.71649*x1 + 3.71649*x2 + x3` is `x3 + 3.71649*(x1 + x2)`, so
+  its mask holds one `<constant>` where it held two. `strict` answers that were written
+  distributed change, and so does its rule file: each group is the factoring `strict` already
+  made of a whole sum, which float64 only rounds otherwise. `prettify` displays the groups.
 - **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
   computes, and `permissive`, for training-corpus canonicalisation, which reads the reals'
   values. `Mode.real`, `mode='real'` and a config's `rules_real:` set raise `ValueError` at
@@ -570,7 +571,8 @@ organised by who you are, then the highlights, then every change in detail.
   artifact names the simplipy versions that serve it.
 - **Infix text** reads implicit multiplication, and whitespace separates tokens.
 - **Named constants** `<constant_NAME>`: one shared unknown per name, a parameter everywhere.
-- **`permissive` writes a number its terms share once**, so a mask holds one `<constant>` for it.
+- **A number its terms share is written once**, in every mode, so a mask holds one `<constant>`
+  for it.
 
 ### In detail
 
@@ -614,10 +616,10 @@ model predictions.
     variables (`<constant_a>*x1 + <constant_a>*x2` compiles to `lambda x1, x2, constant_a: ...`),
     and `explicit_constant_placeholders` and `substitute_constants` give every occurrence of a
     name one identifier and one value.
-- **`permissive` groups a shared number.** After the flatten, a sum's terms are grouped by the
-  exact value of their coefficient up to sign (a literal term's coefficient is itself), and each
-  group of two or more is written `c*(group)`, its content and orientation decided as a whole
-  sum's, the sign in the coefficient: `3.71649*(x1 + x2) + x3` is `x3 + 3.71649*(x1 + x2)`,
+- **A sum groups a shared number, in every mode.** After the flatten, a sum's terms are grouped
+  by the exact value of their coefficient up to sign (a literal term's coefficient is itself),
+  and each group of two or more is written `c*(group)`, its content and orientation decided as a
+  whole sum's, the sign in the coefficient: `3.71649*(x1 + x2) + x3` is `x3 + 3.71649*(x1 + x2)`,
   `3.71649*(x1 + x2) + 5.11927*(x3 + x4)` keeps its two numbers, `2*x1 + 2*x2 + x3` is
   `x3 + 2*(x1 + x2)`, and `-3.71649*x1 + 3.71649*x2 + x3` is `x3 + 3.71649*(x2 - x1)`. The key
   is the exact value, so the grouping is deterministic, and it is decided on the complete sum, so
@@ -628,15 +630,18 @@ model predictions.
   proposes a factoring, so a group hides no term from one (`x14*x16 - 2*(x16 + x6)` offers
   `x16*(x14 - 2) - 2*x6`). A group is written only where it costs no more than its terms
   distributed: an inexact number always saves a written constant, while an exact number whose
-  group costs more stays distributed (`x13/2 + x1/(4*x13) + 1/4` keeps both quarters). Where a
-  sum's two orientations then cost the same in `permissive`, the one `strict` prices lower is
-  taken, so a permissive answer stays no dearer than `strict`'s on `strict`'s yardstick.
-  `strict` keeps the terms distributed, since float64 rounds `c*a + c*b` and `c*(a + b)`
-  differently.
+  group costs more stays distributed (`x13/2 + x1/(4*x13) + 1/4` keeps both quarters). In
+  `strict` each group is the factoring `strict` already made of a whole sum, which float64 only
+  rounds otherwise, with that factoring's premise: a sign leaves a group only where nothing reads
+  the zero of the group's sum (`x2 - 2*x0 - 2*x1` is `x2 - 2*(x0 + x1)`, while under an inverse
+  `ceil(x2) - 2*ceil(x0) - 2*floor(x1)` is `ceil(x2) + 2*(-ceil(x0) - floor(x1))`, as float64's
+  `+0` and `-0` there require). Where a sum's two orientations then cost the same in
+  `permissive`, the one `strict` prices lower is taken, so a permissive answer stays no dearer
+  than `strict`'s on `strict`'s yardstick.
 - **`prettify(..., mode=)`** reads the expression with the constructors of a mode, `strict` by
-  default: pass the mode an answer was simplified in. A permissive answer read in `permissive`
-  is displayed with its groups (`x3 + 3.71649*(x1 + x2)`), `keep_grouping` included; read in
-  `strict` it is displayed distributed, as before.
+  default: pass the mode an answer was simplified in, and the display is that mode's reading of
+  it. Both modes display a group as it is written (`x3 + 3.71649*(x1 + x2)`), `keep_grouping`
+  included.
 
 - **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or

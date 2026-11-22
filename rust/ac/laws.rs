@@ -61,7 +61,7 @@
 //! | `add.collect` | r1*t + r2*t = (r1 + r2)*t | none | none |
 //! | `add.unfactor` | r*(a + b) + c = r*a + r*b + c | r <= 0: the sum holds no sign | none |
 //! | `add.content` | u*a + u*b = u*(a + b), -a - b = -(a + b) | a sign moves: no held sign | none |
-//! | `add.group` | c*a + c*b + d = c*(a + b) + d, the terms grouped by the exact value of c, where the group costs no more | no step | none |
+//! | `add.group` | c*a + c*b + d = c*(a + b) + d, the terms grouped by the exact value of c, where the group costs no more | none (a sign leaving a group: `add.content`) | none |
 //! | `mul.exp_merge` | exp(a)*exp(b) = exp(a + b) | none | none |
 //! | `mul.rootn_join` | rootn(a, n)*rootn(b, n) = rootn(a*b, n) | none | none |
 //! | `mul.infinity_sign` | -k*(s + inf) = k*(-s - inf) | none | none |
@@ -315,10 +315,12 @@ pub enum Law {
     /// is, while the answer `-ceil(x0) - floor(x1)` is `-(ceil(x0) + floor(x1))`). A positive
     /// content moves no sign. [`Law::holds`] reads the sum. In `permissive`, none.
     AddContent,
-    /// A sum writes a number its terms share once (`Permissive::SharedNumbers`): its terms grouped
-    /// by the exact value of their coefficient up to sign, each group of two or more `c*(group)`,
-    /// `c*a + c*b + d = c*(a + b) + d`. Total in the reals; a step of `permissive` alone (the sound
-    /// modes keep the distributed terms, which float64 rounds otherwise).
+    /// A sum writes a number its terms share once: its terms grouped by the exact value of their
+    /// coefficient up to sign, each group of two or more `c*(group)` where that costs no more than
+    /// its terms distributed, `c*a + c*b + d = c*(a + b) + d`. Total: a positive coefficient
+    /// moves no zero's sign, and float64 only rounds the two spellings apart. Each group is the
+    /// whole-sum factoring of its terms, so a sign leaves it as `add.content` says (in `f64` only
+    /// where the group's sum holds none).
     AddGroup,
     /// `exp(a)*exp(b) = exp(a + b)`, and `e = exp(1)` beside one. Total: an overflow is a range
     /// event.

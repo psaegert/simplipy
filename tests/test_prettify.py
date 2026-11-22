@@ -508,8 +508,9 @@ def test_any_other_function_of_numbers_stays(eng, text, expected):
 # made and the function stays. A fold that only turns a sum around (`cos(c) - x2` is
 # `-(x2 + 0.997)`) is made, and the display is of the sum reading it back builds.
 CONTRACT = [
-    ('x1 + atan(1.2345678)*(x2 + x3)', None, 'x1 + atan(1.2345678)*(x2 + x3)'),
-    ('x1 + atan(1.2345678)*(x2 + x3)', 3, 'x1 + atan(1.23)*(x2 + x3)'),
+    # a number its group shares: the fold reads back as the same group
+    ('x1 + atan(1.2345678)*(x2 + x3)', None, 'x1 + 0.8899874577727933*(x2 + x3)'),
+    ('x1 + atan(1.2345678)*(x2 + x3)', 3, 'x1 + 0.89*(x2 + x3)'),
     ('x1 + x2 + x1/log(0.7377233226141932)', None, 'x1 + x2 + x1/log(0.7377233226141932)'),
     ('x1 + x2 + x1/log(0.7377233226141932)', 3, 'x1 + x2 + x1/log(0.738)'),
     # distributed and its numbers combined: as many terms, another structure
@@ -877,8 +878,8 @@ def test_p2_catches_a_one_ulp_change(eng, text):
 # from the left.
 GROUPED = [
     ('x1 + x2 + exp(x3)', 'x1 + x2 + exp(x3)', 'x1 + (x2 + exp(x3))'),
-    ('2*x2 + 2*x3 + exp(x2 + x3) - x1', '2*x2 + 2*x3 + exp(x2 + x3) - x1',
-     '2*x2 + (2*x3 + exp(x2 + x3)) - x1'),
+    ('2*x2 + 2*x3 + exp(x2 + x3) - x1', 'exp(x2 + x3) + 2*(x2 + x3) - x1',
+     'exp(x2 + x3) + 2*(x2 + x3) - x1'),
     ('-x1 - x2 - x3', '-x1 - x2 - x3', '-x1 - (x2 + x3)'),
     ('x1 + x2 - x3 - x4', 'x1 + x2 - x3 - x4', 'x1 + x2 - x3 - x4'),
     ('2*x1*x2*x3', '2*x1*x2*x3', '2*(x1*(x2*x3))'),
@@ -912,10 +913,9 @@ def test_keep_grouping_writes_the_grouping_of_the_explicit_tokens(eng, text, fla
 
 # Where the terms of a sum nearly cancel, or a function amplifies its argument, the flat display
 # read from the left evaluates apart from the state; the grouped display evaluates as the state,
-# bit for bit, in infix and in explicit tokens. The rows are srbf's (a ground truth, and parts of
-# a prediction and of a ground truth).
+# bit for bit, in infix and in explicit tokens. The rows are srbf's (parts of a prediction and of
+# a ground truth).
 APART = [
-    '-cos(exp(2*x2 + 2*x3 + exp(x2 + x3) - x1))/(x2 + x3 + exp(x2 + x3) - x1)',
     'cos(221742068887.4986*x1 + 0.00331/(18.464400843893329*x2 - 7.698449108356519) + 62.24454675925565)',
     '0.7088195661797923*cos(21267013.501384924*x1^5*(x3 - 0.52035366738351248*x2)^5)/x1',
     # srbf ground truths whose coefficient is a quotient, 3.1415926535897e37/3313: its float is
