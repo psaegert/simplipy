@@ -100,15 +100,12 @@ class TestRow156Hill:
     """Premise pins -- they must stay green: the DEFAULT
     chain does not move (opt-in exploration, effort=0 default)."""
 
-    def test_greedy_chain_stops_at_the_hill(self, engine: SimpliPyEngine) -> None:
-        hill = fix(engine, ROW156)
-        assert fix(engine, ROW156_SOOSE) == hill, \
-            "both spellings of row-156 must reach one canonical hill"
+    def test_the_constructors_multiply_row_156_out(self, engine: SimpliPyEngine) -> None:
+        # x2*(x2 + (x1 + 1)/x2) nests x2's own powers, which the product constructor multiplies
+        # out: the greedy chain stands in the valley itself, from both spellings.
         valley = fix(engine, ROW156_VALLEY)
-        assert hill != valley, "row-156 stopped being a hill: D39's premise moved"
-        # The falsifiable claim, in the engine's own ordering: a strictly
-        # lower endpoint EXISTS and the greedy chain did not reach it.
-        assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
+        assert fix(engine, ROW156) == valley
+        assert fix(engine, ROW156_SOOSE) == valley
 
     def test_powsplit_hill(self, engine: SimpliPyEngine) -> None:
         hill = fix(engine, POWSPLIT)
@@ -128,12 +125,9 @@ class TestRow156Falsifier:
     """RED at HEAD: the exploration entry point does not exist yet."""
 
     def test_exploration_reaches_the_valley(self, engine: SimpliPyEngine) -> None:
-        hill = fix(engine, ROW156)
         valley = fix(engine, ROW156_VALLEY)
         for spelling in (ROW156, ROW156_SOOSE):
-            out = explore(engine, tok(engine, spelling), BUDGET)
-            assert out == valley
-            assert engine._core.ac_ordered_below_in(out, hill, rule_mode='default') is True
+            assert explore(engine, tok(engine, spelling), BUDGET) == valley
 
     def test_powsplit_reaches_the_valley(self, engine: SimpliPyEngine) -> None:
         out = explore(engine, tok(engine, POWSPLIT), BUDGET)

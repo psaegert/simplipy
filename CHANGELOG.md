@@ -62,6 +62,11 @@ organised by who you are, then the highlights, then every change in detail.
   its mask holds one `<constant>` where it held two. `strict` answers that were written
   distributed change, and so does its rule file: each group is the factoring `strict` already
   made of a whole sum, which float64 only rounds otherwise. `prettify` displays the groups.
+- **The canonical form reads like a law, in every mode.** A quantity's own powers are never
+  nested: `x1*(x1 + 1)` is `x1^2 + x1` and `x1*(x1*(0.4*x1 + 2.7) + 1.3)` is
+  `0.4*x1^3 + 2.7*x1^2 + 1.3*x1`, and `x1^2 + 3*x1 + 2` stays as it is (it was
+  `x1*(x1 + 3) + 2`). A factor that does not reappear inside is still taken out (`x1*(x2 + x3)`,
+  `exp(x1)*(x1 + 1)`). Answers holding such products change, in both modes.
 - **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
   computes, and `permissive`, for training-corpus canonicalisation, which reads the reals'
   values. `Mode.real`, `mode='real'` and a config's `rules_real:` set raise `ValueError` at
@@ -573,6 +578,8 @@ organised by who you are, then the highlights, then every change in detail.
 - **Named constants** `<constant_NAME>`: one shared unknown per name, a parameter everywhere.
 - **A number its terms share is written once**, in every mode, so a mask holds one `<constant>`
   for it.
+- **The canonical form reads like a law**: no quantity's own powers nested, polynomials written
+  with their powers.
 
 ### In detail
 
@@ -638,6 +645,33 @@ model predictions.
   `+0` and `-0` there require). Where a sum's two orientations then cost the same in
   `permissive`, the one `strict` prices lower is taken, so a permissive answer stays no dearer
   than `strict`'s on `strict`'s yardstick.
+- **The canonical form reads like a law.** A product of a sum with a factor that reappears in
+  it, itself or the base of one of its powers (a root's radicand included), as a multiplicative
+  factor of a term, is multiplied out, the reappearing factors only, in both modes:
+  `x1*(x1 + 1)` is `x1^2 + x1`, `x1*(x1*(0.4*x1 + 2.7) + 1.3)` is `0.4*x1^3 + 2.7*x1^2 + 1.3*x1`,
+  `sin(x1)*(sin(x1) + 1)` is `sin(x1)^2 + sin(x1)`, `x1*(x1 + sin(x1))` is `x1^2 + x1*sin(x1)`,
+  `x1^0.5*(x1 + 1)` is `x1^1.5 + x1^0.5`, `x1*x2*(x1 + x2)` is `x1^2*x2 + x1*x2^2`, and
+  `2*x1*(x1 + 1)` is `2*(x1^2 + x1)`, the shared number grouped. The search takes no move that
+  nests one: `x1^2 + 3*x1 + 2` and `x1^2 - 0.6*x1 + 0.09` stay expanded, while a factoring whose
+  sum cancels across a quotient still does (`x1/(x1*x2 - x1^2)` is `1/(x2 - x1)`). A factor that
+  does not reappear inside is taken out as before (`x1*(x2 + x3) + x4`, `x2*(x1 + 1)`,
+  `x1*(sin(x1) + cos(x1))`, `exp(x1)*(x1 + 1)`, `log(x2)*(x1 + 1)`), also where it stands beside
+  one that does (`x1^2*x13 - x1*x13` is `x13*(x1^2 - x1)`); products and powers of sums stay
+  products (`(x1 + 1)*(x1 + 2)`, `(x1 + x2)^2`, `x1*(x1 + 1)*(x1 + 2)`); a quotient by a power
+  keeps the form it comes in (`(x1 + 1)/x1^2`, `x1 + 1/x1`). The step is the distributive law with
+  its premises, `strict`'s in both modes (a zero's sign aside in `permissive`): where they refuse
+  it (a sum whose zero's sign may be read beside a factor that may be negative, a pole the product
+  keeps), the product stays.
+- **Permissive dominance is measured against `strict`'s answer as permissive reads it.**
+  `verify_artifact(..., engine_config=)`, `simplipy.mining.assert_permissive_dominates` and the
+  core's corpus gate ask that permissive's answer cost no more than `strict`'s answer read by
+  permissive's constructors, both priced in `strict`'s canon (it was `strict`'s answer as
+  `strict` spells it). A product `strict` keeps for a premise of its own (a zero's sign it
+  reads) is the expanded polynomial permissive writes, which costs more and is no
+  simplification permissive misses. A permissive answer without a value (NaN: no value in the
+  reals, such as a division by zero however it is written) is not priced, since `strict`'s answer
+  then holds float64's value (`1/(0*x)` is `inf/x` there), which permissive does not share. A
+  violation now reports three prices: `strict`, `permissive` and `strict_as_permissive`.
 - **`prettify(..., mode=)`** reads the expression with the constructors of a mode, `strict` by
   default: pass the mode an answer was simplified in, and the display is that mode's reading of
   it. Both modes display a group as it is written (`x3 + 3.71649*(x1 + x2)`), `keep_grouping`

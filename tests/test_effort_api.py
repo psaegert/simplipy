@@ -13,15 +13,16 @@ import yaml
 
 from simplipy import Mode, SimpliPyEngine, SimplifyStatus
 
-HILL = 'x2*(x2 + (x1+1)/x2)'
+# The pow-expand hill: the chain keeps the square, the search expands it and recollects.
+HILL = '(x1 + 1)**2 - x1**2'
 BUDGET = 64
 
 
 @pytest.fixture(scope='module')
 def engine(tmp_path_factory):
-    # A bare acj-vocabulary engine with NO rules: the row-156 valley is reachable
-    # through constructor-level cancellation alone, so the falsifier isolates the
-    # exploration phase from any mined ruleset.
+    # A bare acj-vocabulary engine with NO rules: the pow-expand valley is reachable
+    # through the search's expansion and the constructors' recollection alone, so the
+    # falsifier isolates the exploration phase from any mined ruleset.
     from conftest import acj_config_path, require_or_skip
     require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
     ops = yaml.safe_load(open(acj_config_path()))['operators']
@@ -172,9 +173,10 @@ class TestTheSearchRunsUntilItSettles:
         assert shipped.simplify(once) == once
 
     def test_a_cap_can_stop_between_two_improvements(self, shipped) -> None:
-        # What the old default did: the cap is still available, and still a cap.
-        once = shipped.simplify(PARTIAL, effort=4)
-        twice = shipped.simplify(once, effort=4)
+        # What the old default did: the cap is still available, and still a cap (two descents
+        # stop short here; three reach the uncapped answer).
+        once = shipped.simplify(PARTIAL, effort=2)
+        twice = shipped.simplify(once, effort=2)
         assert twice != once
         assert shipped.complexity(twice) < shipped.complexity(once)
         assert shipped.complexity(shipped.simplify(PARTIAL)) <= shipped.complexity(twice)

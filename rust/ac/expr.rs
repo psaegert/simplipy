@@ -3375,7 +3375,7 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
                 Ex::Mul(v) => items.extend(v),
                 k => items.push(k),
             }
-            let placed = mul(items, cx);
+            let placed = mul_keeping_sums(items, cx);
             debug_assert!(
                 !matches!(placed, Ex::Add(_)),
                 "term_join produced a bare Add term: {placed:?}"
@@ -3414,7 +3414,9 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
                 Ex::Mul(v) => v,
                 k => vec![k],
             };
-            let placed = mul(items, cx);
+            // A term stays a term: its key is assembled as a product, not multiplied out over a
+            // sum it holds (`mul_keeping_sums`), which the sum around it decides.
+            let placed = mul_keeping_sums(items, cx);
             debug_assert!(
                 !matches!(placed, Ex::Add(_)),
                 "term_join produced a bare Add term: {placed:?}"
@@ -3538,7 +3540,7 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
                 let mut items = Vec::with_capacity(v.len() + 1);
                 items.push(Ex::Num(c));
                 items.extend(v);
-                let placed = mul(items, cx);
+                let placed = mul_keeping_sums(items, cx);
                 debug_assert!(
                     !matches!(placed, Ex::Add(_)),
                     "term_join produced a bare Add term: {placed:?}"
@@ -3553,7 +3555,7 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
             if matches!(k, Ex::Num(_)) || (c.is_negative() && is_sign_trade_site(&k, cx)) {
                 // A bare-Num key (the other partition-bag shape) folds or
                 // re-hosts through `mul()` exactly like the Num-bearing Mul above.
-                let placed = mul(vec![Ex::Num(c), k], cx);
+                let placed = mul_keeping_sums(vec![Ex::Num(c), k], cx);
                 debug_assert!(
                     !matches!(placed, Ex::Add(_)),
                     "term_join produced a bare Add term: {placed:?}"
@@ -6103,7 +6105,184 @@ pub(crate) fn mul_undecided(items: Vec<Ex>, cx: &Cx) -> Ex {
 }
 
 fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
-    host_partition_sign(mul_assembled(items, cx, decide))
+    let e = host_partition_sign(mul_assembled(items, cx, decide));
+    // A product about to be raised to a negative power (`mul_undecided`) is a divisor, which
+    // keeps the form it comes in.
+    if decide {
+        own_powers_multiplied_out(e, cx)
+    } else {
+        e
+    }
+}
+
+/// NO NESTING OF A QUANTITY'S OWN POWERS: a product of a sum with a factor that
+/// reappears in it, itself or the base of one of its powers, as a multiplicative factor of a term,
+/// is multiplied out over that sum, the reappearing factors only: `x1*(x1 + 1)` is `x1^2 + x1`,
+/// `x1*(x1*(0.4*x1 + 2.7) + 1.3)` is `0.4*x1^3 + 2.7*x1^2 + 1.3*x1`, `sin(x1)*(sin(x1) + 1)` is
+/// `sin(x1)^2 + sin(x1)`, `x1^(1/2)*(x1 + 1)` is `x1^(3/2) + x1^(1/2)`, while `x2*(x1 + 1)`,
+/// `x1*(sin(x1) + cos(x1))` (x1 inside the functions, no factor of a term) and `exp(x1)*(x1 + 1)`
+/// keep their factor out, and `x2*x1*(x1 + 1)` is `x2*(x1^2 + x1)`. So nested input reaches the
+/// expanded form, and the search takes no move that nests one (`search::explore`, with
+/// [`own_power_nestings`]): `x1^2 + 3*x1 + 2` stays, never `x1*(x1 + 3) + 2`. Products and powers of sums
+/// stay products (`(x1 + 1)*(x1 + 2)`, `x1*(x1 + 1)*(x1 + 2)`, `x1*(x1 + 1)^2`), and a divisor
+/// keeps the form it comes in (`(x1 + 1)/x1^2`): a factor under a negative power is no factor
+/// multiplied out. The step is the distributive law with its premises (`search.distribute`,
+/// [`crate::ac::search::distribute_product`], read where the sum's zero may be read), strict's in
+/// both modes; where they refuse it the product stays. An even root is a power of its radicand (`rootn(x1, 2)` of `x1`).
+fn own_powers_multiplied_out(e: Ex, cx: &Cx) -> Ex {
+    let Ex::Mul(v) = &e else {
+        return e;
+    };
+    let mut sum_at = None;
+    for (i, f) in v.iter().enumerate() {
+        if matches!(f, Ex::Add(_)) {
+            if sum_at.is_some() {
+                return e;
+            }
+            sum_at = Some(i);
+        }
+    }
+    let Some(si) = sum_at else {
+        return e;
+    };
+    let Ex::Add(ts) = &v[si] else {
+        unreachable!("the sum member")
+    };
+    let (mut own, kept): (Vec<Ex>, Vec<Ex>) = v
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != si)
+        .map(|(_, f)| f.clone())
+        .partition(|f| {
+            own_power_base(f, cx).is_some_and(|b| ts.iter().any(|t| own_factor_of(b, t, cx)))
+        });
+    if own.is_empty() {
+        return e;
+    }
+    own.push(v[si].clone());
+    // The premises are strict's in every mode, so both modes read one form: where strict keeps a
+    // product (a pole it would split, an infinity it would spread), permissive keeps it too, and
+    // its answer stays no dearer than strict's on strict's yardstick. A zero's sign is no value
+    // permissive reads (nor a premise its context certifies), so that premise is not asked.
+    if matches!(cx.mode, RuleMode::Permissive) {
+        let strict = Cx {
+            mode: RuleMode::Default,
+            zero_sign_unread: true,
+            ..*cx
+        };
+        if crate::ac::search::distribute_product(&own, &strict, false, Law::SearchDistribute)
+            .is_none()
+        {
+            return e;
+        }
+    }
+    let Some(spread) = crate::ac::search::distribute_product(&own, cx, true, Law::SearchDistribute)
+    else {
+        return e;
+    };
+    let mut items = kept;
+    items.push(spread);
+    mul(items, cx)
+}
+
+/// `mul` without its last step ([`own_powers_multiplied_out`]): the product of a factoring as it
+/// writes it (`search::factor_shared`), which the state it is rebuilt into reads.
+pub(crate) fn mul_keeping_sums(items: Vec<Ex>, cx: &Cx) -> Ex {
+    host_partition_sign(mul_assembled(items, cx, true))
+}
+
+/// How many products of `e`, at any depth, nest a quantity's own powers ([`nests_own_powers`]).
+pub(crate) fn own_power_nestings(e: &Ex, cx: &Cx) -> usize {
+    let own = usize::from(matches!(e, Ex::Mul(_)) && nests_own_powers(e, cx));
+    own + match e {
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+            v.iter().map(|c| own_power_nestings(c, cx)).sum()
+        }
+        Ex::Pow(b, x) => own_power_nestings(b, cx) + own_power_nestings(x, cx),
+        _ => 0,
+    }
+}
+
+/// Does `e` (a product, or a sum of terms) hold a product that nests a quantity's own powers: a
+/// sum, or a power of one, beside a factor that reappears in it ([`own_powers_multiplied_out`]'s
+/// trigger, which leaves a power of a sum a product)? The search
+/// takes no move that adds one (`search::explore`), whatever the distributive law's premises say of
+/// multiplying it out.
+pub(crate) fn nests_own_powers(e: &Ex, cx: &Cx) -> bool {
+    // The sum a member holds: itself, or the base of a positive power of it (the search's
+    // factoring under a power: `(x1*(x2 + x1))^3` is `x1^3*(x2 + x1)^3`).
+    fn sum_of(f: &Ex) -> Option<&Vec<Ex>> {
+        match f {
+            Ex::Add(ts) => Some(ts),
+            Ex::Pow(b, q) => match (&**b, &**q) {
+                (Ex::Add(ts), Ex::Num(r)) if !r.is_negative() && !r.is_zero() => Some(ts),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let nests = |p: &Ex| -> bool {
+        let Ex::Mul(v) = p else {
+            return false;
+        };
+        let mut sums = v.iter().filter(|f| sum_of(f).is_some());
+        let (Some(s), None) = (sums.next(), sums.next()) else {
+            return false;
+        };
+        let ts = sum_of(s).expect("a sum");
+        v.iter().any(|f| {
+            sum_of(f).is_none()
+                && own_power_base(f, cx).is_some_and(|b| ts.iter().any(|t| own_factor_of(b, t, cx)))
+        })
+    };
+    match e {
+        Ex::Add(ts) => ts.iter().any(nests),
+        p => nests(p),
+    }
+}
+
+/// The quantity a factor of a product is a power of, for [`own_powers_multiplied_out`]: the base
+/// of a positive numeric power or the radicand of a root, the factor itself otherwise; none for a
+/// number, a fitted constant, a sum or a power of one, or a divisor (a negative power).
+pub(crate) fn own_power_base<'e>(f: &'e Ex, cx: &Cx) -> Option<&'e Ex> {
+    match f {
+        Ex::Num(_) | Ex::Const(_) | Ex::Pi | Ex::E | Ex::NaN | Ex::PosInf | Ex::NegInf => None,
+        Ex::Add(_) => None,
+        Ex::Pow(b, q) => match &**q {
+            Ex::Num(r) if !r.is_negative() && !r.is_zero() => own_power_base(b, cx),
+            _ => None,
+        },
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => match &a[1] {
+            Ex::Num(n) if !n.is_negative() && !n.is_zero() => own_power_base(&a[0], cx),
+            _ => None,
+        },
+        other => Some(other),
+    }
+}
+
+/// Does `b`, or a power of it, stand as a multiplicative factor of the term `t`, or of a term of
+/// the one sum `t` holds as a factor (that sum is multiplied out with it)?
+pub(crate) fn own_factor_of(b: &Ex, t: &Ex, cx: &Cx) -> bool {
+    let power_of_b = |m: &Ex| -> bool {
+        match m {
+            Ex::Pow(base, q) if matches!(**q, Ex::Num(_)) => **base == *b,
+            Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => a[0] == *b,
+            other => other == b,
+        }
+    };
+    match t {
+        Ex::Mul(ms) => {
+            if ms.iter().any(power_of_b) {
+                return true;
+            }
+            let mut sums = ms.iter().filter(|m| matches!(m, Ex::Add(_)));
+            match (sums.next(), sums.next()) {
+                (Some(Ex::Add(us)), None) => us.iter().any(|u| own_factor_of(b, u, cx)),
+                _ => false,
+            }
+        }
+        other => power_of_b(other),
+    }
 }
 
 /// A product's sign, where its coefficient is a partition of several literals (a fold refused),
@@ -6135,7 +6314,8 @@ fn host_partition_sign(e: Ex) -> Ex {
     Ex::Mul(v)
 }
 
-/// The laws applied here (`ac::laws::Law`): `mul.flatten`, `mul.rootn_join`, `num.inf_arith`.
+/// The laws applied here (`ac::laws::Law`): `mul.flatten`, `mul.rootn_join`, `num.inf_arith`;
+/// [`mul_with`] then `search.distribute` ([`own_powers_multiplied_out`]).
 fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     // a fully numeric product is valued whole: its literals combine exactly
     let ground_bag = in_ground(&items, cx);

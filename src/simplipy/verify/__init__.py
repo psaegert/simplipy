@@ -401,8 +401,9 @@ def verify_artifact(f64_rules: list | str, permissive_rules: list | str, *,
     Pass ``engine_config`` (and optionally ``corpus_rows``) to check it -- the report then
     carries ``permissive_dominance``. The check runs on an engine built from the config's
     operators and the two rule sets given here, never the rule files the config names, and
-    prices every answer by
-    :func:`simplipy.mining.cross_mode_complexity`. A row on which a mode raises is a
+    asks, row by row, that permissive's answer cost no more than strict's answer as
+    permissive reads it, both priced by :func:`simplipy.mining.cross_mode_complexity`
+    (:func:`simplipy.mining.assert_permissive_dominates`). A row on which a mode raises is a
     violation, reported with its error. Without an engine nothing can be said about the
     relationship between the files, and ``relationships`` stays empty rather than
     asserting something false.

@@ -97,7 +97,9 @@ def test_the_search_leaves_these_alone(engine, expr) -> None:
 
 
 @pytest.mark.parametrize('expr, expected', [
-    ('* x1 + x1 / 1 x1', '+ pow x1 2 1'),       # a finite factor times a sum
+    # a finite factor times a sum (`x1*(x1 + 1/x1)` nests x1's own powers, which the product
+    # constructor multiplies out before any search)
+    ('- * x2 + x1 1 x2', '* x1 x2'),
     ('* + x1 x2 - x1 x2', '- pow x1 2 pow x2 2'),  # a sum times a sum
 ])
 def test_finite_pieces_still_distribute(engine, expr, expected) -> None:

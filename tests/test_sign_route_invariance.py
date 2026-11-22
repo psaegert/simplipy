@@ -451,9 +451,9 @@ def test_a_shared_odd_function_is_read_up_to_sign(eng, mode, spellings, expected
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('spellings, expected', [
     (['pow - * x3 - x3 x1 x2 3', '* 1 pow - * x3 - x3 x1 x2 3', 'neg pow + x2 * x3 - x1 x3 3'],
-     'neg pow + x2 * x3 - x1 x3 3'),
+     'neg pow - + x2 * x1 x3 pow x3 2 3'),
     (['inv pow - * x3 - x3 x1 x2 3', '/ 1 * 1 pow - * x3 - x3 x1 x2 3', 'pow - * x3 - x3 x1 x2 -3',
-      'inv neg pow + x2 * x3 - x1 x3 3'], '/ -1 pow + x2 * x3 - x1 x3 3'),
+      'inv neg pow + x2 * x3 - x1 x3 3'], '/ -1 pow - + x2 * x1 x3 pow x3 2 3'),
     (['sin - - x1 x2 x3', '* 1 sin - - x1 x2 x3', 'neg sin - + x2 x3 x1'], 'neg sin - + x2 x3 x1'),
     (['inv sin - - x1 x2 x3', '/ 1 * 1 sin - - x1 x2 x3', 'inv neg sin - + x2 x3 x1'],
      '/ -1 sin - + x2 x3 x1'),

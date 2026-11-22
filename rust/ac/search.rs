@@ -170,9 +170,17 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
                 refused_sites(&best, &refused, &mut Vec::new(), &mut sites);
             }
             let mut round: Vec<(u64, Ex)> = Vec::with_capacity(sites.len());
+            // No move nests a quantity's own powers where the state did not
+            // (`expr::own_power_nestings`): a factor is never left out of a sum in which it still
+            // stands as a factor of a term, `x1^2 + 3*x1 + 2` offers no `x1*(x1 + 3) + 2`, while a factoring whose
+            // sum cancels across a quotient is the state it is rebuilt into.
+            let nested = crate::ac::expr::own_power_nestings(&best, pass.cx);
             for (path, moved) in sites {
                 let rebuilt = rebuild(&best, &path, moved, pass.cx);
-                if rebuilt != best && seen.insert(rebuilt.clone()) {
+                if rebuilt != best
+                    && crate::ac::expr::own_power_nestings(&rebuilt, pass.cx) <= nested
+                    && seen.insert(rebuilt.clone())
+                {
                     round.push((complexity(&rebuilt, view), rebuilt));
                 }
             }
@@ -624,23 +632,28 @@ pub(crate) fn factorings(
     let whole = Ex::Add(terms.to_vec());
     // The sum with the terms at `members` (ascending) replaced by `group` factored.
     let push = |members: &[usize], group: &[Ex], out: &mut Vec<(Ex, Ex)>| {
-        let Some((factored, c)) = factor_shared(group, cx, content, quotient) else {
-            return;
-        };
-        let mut items: Vec<Ex> = terms
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| members.binary_search(j).is_err())
-            .map(|(_, t)| t.clone())
-            .collect();
-        let cand = if items.is_empty() {
-            factored
-        } else {
-            items.push(factored);
-            add(items, cx)
-        };
-        if cand != whole && !out.iter().any(|(o, _)| *o == cand) {
-            out.push((cand, c));
+        // Everything the terms share, and, where a base of it still stands in a quotient, the
+        // rest of it (a factor that does not reappear inside is taken out: `x1^2*x13 - x1*x13` is
+        // `x13*(x1^2 - x1)`, where `x1*x13*(x1 - 1)` would nest x1's own powers).
+        for own_only in [false, true] {
+            let Some((factored, c)) = factor_shared(group, cx, content, quotient, own_only) else {
+                continue;
+            };
+            let mut items: Vec<Ex> = terms
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| members.binary_search(j).is_err())
+                .map(|(_, t)| t.clone())
+                .collect();
+            let cand = if items.is_empty() {
+                factored
+            } else {
+                items.push(factored);
+                add(items, cx)
+            };
+            if cand != whole && !out.iter().any(|(o, _)| *o == cand) {
+                out.push((cand, c));
+            }
         }
     };
     let phase = groups;
@@ -828,6 +841,7 @@ fn factor_shared(
     cx: &Cx,
     content: &dyn Fn(&Ex) -> bool,
     quotient: &dyn Fn(&Ex) -> bool,
+    own_only: bool,
 ) -> Option<(Ex, Ex)> {
     let split: Vec<SplitTerm> = terms.iter().map(term_factors).collect();
     // A term that holds one base twice holds two powers of it its constructor would not merge,
@@ -859,6 +873,24 @@ fn factor_shared(
         if common.is_empty() {
             return None;
         }
+    }
+    if own_only {
+        // The bases no quotient keeps a power of: each term holds exactly the shared exponent.
+        let kept: Vec<(Ex, Rat)> = common
+            .iter()
+            .filter(|(b, r)| {
+                split.iter().all(|(_, fs)| {
+                    fs.iter()
+                        .find(|(c, _)| c == b)
+                        .is_some_and(|(_, s)| s.cmp_exact(r) == std::cmp::Ordering::Equal)
+                })
+            })
+            .cloned()
+            .collect();
+        if kept.is_empty() || kept.len() == common.len() {
+            return None;
+        }
+        common = kept;
     }
     let power = |b: Ex, r: Rat| {
         if r.is_one() {
@@ -898,7 +930,12 @@ fn factor_shared(
     if !content(&c) || !quotients.iter().all(quotient) {
         return None;
     }
-    Some((mul(vec![c.clone(), add(quotients, cx)], cx), c))
+    // The factored product as the factoring writes it, its own powers not multiplied out again
+    // (`expr::mul_keeping_sums`): the state it is rebuilt into decides, where the sum cancels
+    // across a quotient (`x1/(x1*x2 - x1^2)` is `1/(x2 - x1)`) or the product reads back as the
+    // sum it came from ([`explore`]'s nesting check).
+    let factored = crate::ac::expr::mul_keeping_sums(vec![c.clone(), add(quotients, cx)], cx);
+    Some((factored, c))
 }
 
 /// THE DISTRIBUTIVE LAW'S PREMISE ON A PIECE IN ONE ADDEND (`B`, `C`; a quotient of a
@@ -1240,7 +1277,7 @@ fn sign_moves_over(s: &Ex, others: &[Ex], cx: &Cx) -> bool {
 ///   semantic widening no certificate covers). Any factor or term that would end up
 ///   in more than one addend must be `Const`-free.
 /// * SIZE -- the cartesian width is capped (`EXPAND_TERM_CAP`).
-fn distribute_product(factors: &[Ex], cx: &Cx, read: bool, law: Law) -> Option<Ex> {
+pub(crate) fn distribute_product(factors: &[Ex], cx: &Cx, read: bool, law: Law) -> Option<Ex> {
     let mut adds: Vec<&Vec<Ex>> = Vec::new();
     let mut rest: Vec<Ex> = Vec::new();
     for f in factors {
@@ -1380,9 +1417,9 @@ mod tests {
         }
     }
 
-    /// Row 156 (the falsifier row): exploration lands in the valley the
-    /// greedy chain cannot reach, and the valley is strictly below in the serve
-    /// ordering -- asserted through `ac_ordered_below`, measure-agnostic.
+    /// Row 156 (the falsifier row): `x2*(x2 + (x1 + 1)/x2)` nests x2's own powers, which the
+    /// product constructor multiplies out, so the greedy chain lands in the valley itself, and
+    /// exploration lands there too.
     #[test]
     fn d39_row156_reaches_the_valley() {
         let Some(e) = engine() else { return };
@@ -1390,7 +1427,7 @@ mod tests {
         let valley = t(&["+", "1", "+", "x1", "pow", "x2", "2"]);
         let hill_fix = e.ac_simplify(&row156, 48, RuleMode::Default).unwrap();
         let valley_fix = e.ac_simplify(&valley, 48, RuleMode::Default).unwrap();
-        assert_ne!(hill_fix, valley_fix, "row-156 stopped being a hill");
+        assert_eq!(hill_fix, valley_fix);
         let out = e
             .ac_explore_proj(
                 &row156,
@@ -1401,7 +1438,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, valley_fix);
-        assert_eq!(e.ac_ordered_below(&out, &hill_fix), Some(true));
     }
 
     /// A reached valley re-explores to nothing, and two runs are identical

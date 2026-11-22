@@ -4107,22 +4107,35 @@ def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
 
     Stated as behaviour, not as a set identity between the files (which measures spelling
     overlap: each mode's constructor performs what its file then omits): for every
-    expression, permissive's answer costs no more than strict's, both priced by
-    :func:`cross_mode_complexity`. Returns the violations, empty when the property holds. A
-    row on which a mode raises or an answer cannot be priced is a violation too, reported
-    with its error: a crash never reads as dominance.
+    expression, permissive's answer costs no more than strict's answer as permissive reads
+    it, both priced by :func:`cross_mode_complexity`. Strict's answer is read by permissive's
+    constructors rather than taken as strict spells it: a product strict keeps for a premise
+    of its own (a zero's sign it reads) is the expanded polynomial permissive writes
+    (`x1*(x1 + 1)` beside a sum whose zero sign strict reads is `x1^2 + x1` to permissive),
+    which costs more on strict's yardstick and is no simplification permissive misses. A
+    permissive answer without a value (NaN: the expression has no value in the reals, such as
+    a division by zero however it is written) is not priced: strict's answer then holds
+    float64's value (`1/(0*x)` is `inf/x` to float64), which permissive does not share.
+    Returns the violations, empty when the property holds, each with the three prices
+    (``strict``, ``permissive`` and ``strict_as_permissive``). A row on which a mode raises or
+    an answer cannot be priced is a violation too, reported with its error: a crash never
+    reads as dominance.
     """
     from .engine import Mode
-    modes = (Mode.strict, Mode.permissive)
     bad: list[dict[str, Any]] = []
     for expr in expressions:
         try:
-            mu = {m: cross_mode_complexity(engine, engine.simplify(list(expr), mode=m), m)
-                  for m in modes}
+            strict = engine.simplify(list(expr), mode=Mode.strict)
+            permissive = engine.simplify(list(expr), mode=Mode.permissive)
+            mu = {'strict': cross_mode_complexity(engine, strict, Mode.strict),
+                  'permissive': cross_mode_complexity(engine, permissive, Mode.permissive),
+                  'strict_as_permissive': cross_mode_complexity(engine, strict, Mode.permissive)}
         except Exception as error:  # reported as a violation below, never skipped
             bad.append({'expression': list(expr), 'error': f'{type(error).__name__}: {error}'})
             continue
-        if mu[Mode.permissive] > mu[Mode.strict]:
-            bad.append({'expression': list(expr),
-                        'mu': {m.name: v for m, v in mu.items()}})
+        # A permissive answer without a value is no price to compare: the expression has none
+        # in the reals, and strict's answer holds float64's value (an infinity from a division
+        # by zero), which permissive does not share.
+        if permissive != ['float("nan")'] and mu['permissive'] > mu['strict_as_permissive']:
+            bad.append({'expression': list(expr), 'mu': mu})
     return bad

@@ -279,6 +279,21 @@ engine.simplify('2*x1 + 2*x2 + 4*x3 - x4')                          # -> '4*x3 +
 engine.simplify('-3.71649*x1 + 3.71649*x2 + x3')                    # -> 'x3 + 3.71649*(x2 - x1)'
 ```
 
+The canonical form reads like a law, in both modes: a quantity's own powers are never nested.
+A product of a sum with a factor that reappears in it, itself or the base of one of its powers,
+as a multiplicative factor of a term, is multiplied out (the reappearing factors only), and the
+search takes no move that nests one. A factor that does not reappear inside is taken out;
+products and powers of sums stay products, and a quotient by a power keeps the form it comes in.
+The step is the distributive law with its `f64` premises, in both modes; where they refuse it,
+the product stays.
+
+```python
+engine.simplify('x1*(x1*(0.4*x1 + 2.7) + 1.3)')   # -> '1.3*x1 + 2.7*x1^2 + 0.4*x1^3'
+engine.simplify('x1^2 + 3*x1 + 2')                 # -> '3*x1 + x1^2 + 2'
+engine.simplify('x1*(x2 + x3) + x4')                # -> 'x4 + x1*(x2 + x3)'
+engine.simplify('2*x1*(x1 + 1)')                    # -> '2*(x1 + x1^2)'
+```
+
 ### How numbers are printed
 
 Every literal is its exact rational value (`0.1` is 1/10), and arithmetic between numbers is

@@ -4421,21 +4421,27 @@ mod tests {
                 lossy,
                 "lossy permutation variance on {expr:?}"
             );
-            let cs = e
-                .ac_complexity(&sound, RuleMode::Default, RuleMode::Default)
-                .expect("sound parses");
+            // Permissive takes every step f64 takes, so its answer is never dearer than f64's
+            // answer as permissive reads it, both priced in f64's canon. f64's answer is read by
+            // permissive's constructors, not taken as f64 spells it: a product f64 keeps for a
+            // premise of its own (a zero's sign it reads) is the expanded polynomial permissive
+            // writes, which costs more and is no simplification permissive misses. A permissive
+            // answer without a value (NaN: no value in the reals, a division by zero however it
+            // is written) is not priced: f64's answer then holds float64's value (`1/(0*x)` is
+            // `inf/x`), which permissive does not share.
+            let cr = e
+                .ac_complexity(&sound, RuleMode::Permissive, RuleMode::Default)
+                .expect("sound parses in permissive");
             let cl = e
-                .ac_complexity(&lossy, RuleMode::Default, RuleMode::Default)
+                .ac_complexity(&lossy, RuleMode::Permissive, RuleMode::Default)
                 .expect("lossy parses");
-            // Permissive rewrites more, so on f64's yardstick its answer is never dearer
-            // than f64's.
-            if cl > cs {
-                dearer.push((expr.join(" "), cl, cs));
+            if lossy != ["float(\"nan\")"] && cl > cr {
+                dearer.push((expr.join(" "), cl, cr));
             }
         }
         assert!(
             dearer.is_empty(),
-            "permissive answers dearer than f64's: {dearer:?}"
+            "permissive answers dearer than f64's answer as permissive reads it: {dearer:?}"
         );
     }
 

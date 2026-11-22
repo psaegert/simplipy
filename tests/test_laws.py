@@ -827,9 +827,9 @@ def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
 @pytest.mark.parametrize('expr, f64', [
     # srbf's ground truths #164 and #584: log(1/x1) collapses where nothing reads its zero's sign
     ('* * -3.47355 x1 + * * x1 - x1 3.47355 log / 1 x1 * 3.47355 x1',
-     '* -3.47355 * pow x1 2 + * log x1 - 3.47355 x1 3.47355'),
+     '* -3.47355 + * 3.47355 pow x1 2 * log x1 - * 3.47355 pow x1 2 pow x1 3'),
     ('* + neg x1 / x1 x2 + + - * x1 x2 x1 log / 1 x1 / 1 * x1 x2',
-     '* - inv x2 1 - inv x2 * x1 + log x1 * x1 - 1 x2'),
+     '* - inv x2 1 - + inv x2 * pow x1 2 - x2 1 * x1 log x1'),
 ])
 def test_the_log_of_an_inverse_collapses_in_srbfs_ground_truths(engine, expr, f64) -> None:
     assert ' '.join(engine.simplify(expr.split(), mode='f64')) == f64

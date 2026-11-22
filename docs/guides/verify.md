@@ -222,8 +222,15 @@ report['is_clean'], report['relationships']
 With `engine_config=` it also checks that `permissive` is at least as capable as `f64` on
 every expression of a corpus: `corpus_rows`, or by default the 400-expression corpus that
 ships with the package (`simplipy.verify.default_corpus()`). The check runs on the config's
-operators and the two rule sets passed in, prices both modes' answers on one shared scale,
-and counts a row on which a mode raises as a violation. `verify_triple`, the gate of the
+operators and the two rule sets passed in and asks, row by row, that permissive's answer cost
+no more than `f64`'s answer as permissive reads it, both priced on one shared scale (`f64`'s
+canon). `f64`'s answer is read by permissive's constructors rather than taken as `f64` spells
+it: a product `f64` keeps for a premise of its own, such as a zero's sign it reads, is the
+expanded polynomial permissive writes, which costs more and is no simplification permissive
+misses. A permissive answer without a value (NaN: the expression has no value in the reals, such
+as a division by zero however it is written) is not priced: `f64`'s answer then holds float64's
+value, an infinity from the division, which permissive does not share. A row on which a mode
+raises counts as a violation. `verify_triple`, the gate of the
 earlier three-file artifact, raises: its middle file was the retired real mode's.
 
 The same tier routing gates the miner's own output, so the two authorities cannot

@@ -423,7 +423,12 @@ class TestCorpusGate:
         # more. 12 walk rows move, all cheaper: 42 -10,755, 239 -8,644, 325 and 355 -6,000 each,
         # 171 -4,585, 341 -4,000, 73 -3,585, 193 and 352 -3,000 each, 145 -2,585, 5 -1,000,
         # 393 -585.
-        assert walk['complexity_out'] == 54355437, walk['complexity_out']
+        # THE CANONICAL FORM READS LIKE A LAW: 54,355,437 -> 55,021,607 (+666,170). A quantity's
+        # own powers are no longer nested: a product of a sum with a factor that reappears in it is
+        # multiplied out, and the search factors none out. 75 walk rows move: 72 dearer
+        # (+673,585, the polynomial written with its powers), 2 cheaper (-7,415), 1 at an equal
+        # price.
+        assert walk['complexity_out'] == 55021607, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old
