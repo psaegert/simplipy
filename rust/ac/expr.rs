@@ -33,6 +33,48 @@ use super::rat::{Mantissa, Rat};
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 
+/// THE NAME A FITTED CONSTANT IS WRITTEN WITH: `None` for `<constant>`, the token of a named
+/// constant `<constant_NAME>` the expression uses once (`TokenView::is_free_name`) otherwise. A
+/// name used once is exactly a `<constant>` (one unknown finite real nothing else refers to), so
+/// the engine treats the two alike; the name is how the answer writes the constant. Where
+/// fitted constants become one (`c1 + c2 = c`, `5*c = c`, `log(c) = c`), the one keeps a name if
+/// any of them had one, the least in string order ([`ConstName::merge`]).
+///
+/// Part of the expression's equality, so a memo never hands one name's state to another; an
+/// anonymous constant hashes as the unit variant did (`Hash` writes nothing for `None`), so
+/// every expression without a named constant hashes, compares and orders as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConstName(pub Option<Tok>);
+
+impl std::hash::Hash for ConstName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if let Some(t) = self.0 {
+            t.hash(state);
+        }
+    }
+}
+
+impl ConstName {
+    /// `<constant>`.
+    pub const ANON: ConstName = ConstName(None);
+
+    /// The name of the one constant that `self` and `other` become: a name where either has
+    /// one, the least in string order where both do.
+    pub fn merge(self, other: ConstName, view: &TokenView) -> ConstName {
+        match (self.0, other.0) {
+            (None, _) => other,
+            (_, None) => self,
+            (Some(a), Some(b)) => {
+                if view.str_cmp(a, b) == Ordering::Greater {
+                    other
+                } else {
+                    self
+                }
+            }
+        }
+    }
+}
+
 /// An AC-core expression. Leaves carry interned [`Tok`] ids (variables `x0..`, wildcards
 /// `_0`/`?0`/`!0`/`$0`); everything numeric is EXACT ([`Rat`], or the symbolic
 /// transcendentals/extended values as their own variants).
@@ -49,8 +91,9 @@ pub enum Ex {
     NaN,
     /// `<constant>` -- a fitted constant, existentially quantified over R. EVERY occurrence is an
     /// INDEPENDENT constant: two `Const`s are structurally equal but semantically distinct, which
-    /// is why `Const`-containing keys never merge in collection.
-    Const,
+    /// is why `Const`-containing keys never merge in collection. A named constant the expression
+    /// uses once is one too, written with its name ([`ConstName`]).
+    Const(ConstName),
     /// A variable or wildcard leaf (sigil-classified by the token, exactly as the old matcher).
     Leaf(Tok),
     /// n-ary flat sorted addition bag.
@@ -64,8 +107,28 @@ pub enum Ex {
 }
 
 impl Ex {
+    /// `<constant>`, the anonymous fitted constant.
+    pub const ANON: Ex = Ex::Const(ConstName::ANON);
+
     pub fn int(n: i128) -> Ex {
         Ex::Num(Rat::int(n))
+    }
+
+    /// The names of the fitted constants of `self` (`Ex::Const(_)` carrying a name), merged into one
+    /// ([`ConstName::merge`]): the name a constant standing for all of them is written with.
+    pub fn merged_const_name(&self, view: &TokenView) -> ConstName {
+        match self {
+            Ex::Const(n) => *n,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Leaf(_) => {
+                ConstName::ANON
+            }
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().fold(ConstName::ANON, |n, x| {
+                n.merge(x.merged_const_name(view), view)
+            }),
+            Ex::Pow(b, e) => b
+                .merged_const_name(view)
+                .merge(e.merged_const_name(view), view),
+        }
     }
 
     /// Does this expression contain a `<constant>` anywhere? (The independence guard: such
@@ -73,7 +136,7 @@ impl Ex {
     /// a placeholder to one -- both carried over from the shipped engine.)
     pub fn contains_const(&self) -> bool {
         match self {
-            Ex::Const => true,
+            Ex::Const(_) => true,
             Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Leaf(_) => false,
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(Ex::contains_const),
             Ex::Pow(b, e) => b.contains_const() || e.contains_const(),
@@ -87,7 +150,7 @@ impl Ex {
     pub fn contains_infinity(&self) -> bool {
         match self {
             Ex::PosInf | Ex::NegInf => true,
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::NaN | Ex::Const | Ex::Leaf(_) => false,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::NaN | Ex::Const(_) | Ex::Leaf(_) => false,
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(Ex::contains_infinity),
             Ex::Pow(b, e) => b.contains_infinity() || e.contains_infinity(),
         }
@@ -112,7 +175,7 @@ impl Ex {
             Ex::Leaf(t) => {
                 view.sigil(*t) == 0 && !crate::utils::is_numeric_string(&view.resolve_owned(*t))
             }
-            Ex::Const => true,
+            Ex::Const(_) => true,
             Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN => false,
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|e| e.has_measure_space(view)),
             Ex::Pow(b, e) => b.has_measure_space(view) || e.has_measure_space(view),
@@ -123,7 +186,7 @@ impl Ex {
     pub fn contains_wildcard(&self, view: &TokenView) -> bool {
         match self {
             Ex::Leaf(t) => view.sigil(*t) != 0,
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const => false,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const(_) => false,
             Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|e| e.contains_wildcard(view)),
             Ex::Pow(b, e) => b.contains_wildcard(view) || e.contains_wildcard(view),
         }
@@ -953,7 +1016,7 @@ pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap
         Ex::PosInf => bump("PosInf"),
         Ex::NegInf => bump("NegInf"),
         Ex::NaN => bump("NaN"),
-        Ex::Const => bump("Const"),
+        Ex::Const(_) => bump("Const"),
         Ex::Leaf(_) => bump("Leaf"),
         Ex::Add(v) => {
             bump("Add");
@@ -1163,6 +1226,12 @@ fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
         Ex::Pi => (mu_pi(), false),
         Ex::E => (mu_e(), false),
         Ex::PosInf | Ex::NegInf | Ex::NaN => (mu_infinity(), false),
+        // A NAMED CONSTANT is priced as a fitted constant at every occurrence, whether the
+        // expression uses it once (it is then `Ex::Const`) or more than once (a leaf, read as a
+        // variable): its price does not depend on how often the expression uses it, so an answer
+        // that leaves a name in one place, read then as a fitted constant, never prices above
+        // the expression it came from.
+        Ex::Leaf(t) if view.is_named(*t) => (mu_free(), false),
         // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a literal the engine holds
         // as written and pays the description length of the value its print denotes (see
         // `mu_numeric_str` -- the boundary must not be an ordering cliff), capped
@@ -1174,7 +1243,7 @@ fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
                 (mu_leaf(), false)
             }
         }),
-        Ex::Const => (mu_free(), false),
+        Ex::Const(_) => (mu_free(), false),
         Ex::Add(v) => {
             // The sum's literal: its pieces, priced as the one literal they denote.
             let mut total = mu_add();
@@ -1305,7 +1374,7 @@ fn rank(e: &Ex) -> u8 {
         Ex::PosInf => 3,
         Ex::NegInf => 4,
         Ex::NaN => 5,
-        Ex::Const => 6,
+        Ex::Const(_) => 6,
         Ex::Leaf(_) => 7,
         Ex::Fun(..) => 8,
         Ex::Pow(..) => 9,
@@ -1319,33 +1388,80 @@ fn rank(e: &Ex) -> u8 {
 /// concern only -- bags denote the same function in any order -- so no soundness rests here,
 /// but determinism does: this order is the whole fix for the ORDER axis of the invariance
 /// defect, so it must be total and stable.
+///
+/// NAMES LAST. Two expressions compare first with every named constant's name read as the same
+/// (`<constant_a>*x1` and `<constant_b>*x1` tie there), and only where they tie so, by the names
+/// (a fitted constant's name too, `ConstName`; `<constant>` first). So a consistent renaming of
+/// named constants changes no decision this order takes between expressions that differ in more
+/// than their names: which part a sum's factoring takes out, which orientation a class keeps.
+/// An expression without a named constant compares as before.
 pub fn cmp_ex(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
+    let named = std::cell::Cell::new(false);
+    match cmp_ex_in(a, b, view, Some(&named)) {
+        Ordering::Equal if named.get() => cmp_ex_in(a, b, view, None),
+        o => o,
+    }
+}
+
+/// [`cmp_ex`]'s two readings: `blind` (names read as the same, recording whether two differed),
+/// or by the names (`None`).
+fn cmp_ex_in(a: &Ex, b: &Ex, view: &TokenView, blind: Option<&std::cell::Cell<bool>>) -> Ordering {
     let (ra, rb) = (rank(a), rank(b));
     if ra != rb {
         return ra.cmp(&rb);
     }
     match (a, b) {
         (Ex::Num(x), Ex::Num(y)) => x.cmp_exact(y),
-        (Ex::Leaf(x), Ex::Leaf(y)) => view.str_cmp(*x, *y),
-        (Ex::Fun(fa, va), Ex::Fun(fb, vb)) => {
-            view.str_cmp(*fa, *fb).then_with(|| cmp_vec(va, vb, view))
-        }
+        (Ex::Leaf(x), Ex::Leaf(y)) => match blind {
+            Some(seen) if x != y && view.is_named(*x) && view.is_named(*y) => {
+                seen.set(true);
+                Ordering::Equal
+            }
+            _ => view.str_cmp(*x, *y),
+        },
+        (Ex::Const(m), Ex::Const(n)) => match (blind, m.0, n.0) {
+            (Some(seen), _, _) => {
+                if m != n {
+                    seen.set(true);
+                }
+                Ordering::Equal
+            }
+            (None, Some(x), Some(y)) => view.str_cmp(x, y),
+            (None, x, y) => x.is_some().cmp(&y.is_some()),
+        },
+        (Ex::Fun(fa, va), Ex::Fun(fb, vb)) => view
+            .str_cmp(*fa, *fb)
+            .then_with(|| cmp_vec_in(va, vb, view, blind)),
         (Ex::Pow(ba, ea), Ex::Pow(bb, eb)) => {
-            cmp_ex(ba, bb, view).then_with(|| cmp_ex(ea, eb, view))
+            cmp_ex_in(ba, bb, view, blind).then_with(|| cmp_ex_in(ea, eb, view, blind))
         }
-        (Ex::Add(va), Ex::Add(vb)) | (Ex::Mul(va), Ex::Mul(vb)) => cmp_vec(va, vb, view),
-        _ => Ordering::Equal, // same rank, no payload (Pi, E, infinities, NaN, Const)
+        (Ex::Add(va), Ex::Add(vb)) | (Ex::Mul(va), Ex::Mul(vb)) => cmp_vec_in(va, vb, view, blind),
+        _ => Ordering::Equal, // same rank, no payload (Pi, E, infinities, NaN)
     }
 }
 
-fn cmp_vec(a: &[Ex], b: &[Ex], view: &TokenView) -> Ordering {
+fn cmp_vec_in(
+    a: &[Ex],
+    b: &[Ex],
+    view: &TokenView,
+    blind: Option<&std::cell::Cell<bool>>,
+) -> Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
-        match cmp_ex(x, y, view) {
+        match cmp_ex_in(x, y, view, blind) {
             Ordering::Equal => continue,
             o => return o,
         }
     }
     a.len().cmp(&b.len())
+}
+
+/// [`cmp_ex`] on two sequences, position by position, then by length: names last.
+fn cmp_vec(a: &[Ex], b: &[Ex], view: &TokenView) -> Ordering {
+    let named = std::cell::Cell::new(false);
+    match cmp_vec_in(a, b, view, Some(&named)) {
+        Ordering::Equal if named.get() => cmp_vec_in(a, b, view, None),
+        o => o,
+    }
 }
 
 /// The enclosure certificate's type ([`Cx::cert_encl`]): a ground composite's closed float64 box.
@@ -1645,7 +1761,7 @@ impl<'a> Cx<'a> {
     /// "no" where the certificate would say "yes", never the reverse.
     pub(crate) fn certainly_finite(&self, e: &Ex) -> bool {
         match e {
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const => true,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const(_) => true,
             // A numeral leaf beyond float64's range denotes a finite real, but in f64
             // mode the deployed evaluator reads it as inf: there it
             // is not certainly finite (`0 * 1e400` is NaN to the evaluator).
@@ -1729,7 +1845,7 @@ impl<'a> Cx<'a> {
     pub(crate) fn inf_null(&self, e: &Ex) -> bool {
         match e {
             Ex::PosInf | Ex::NegInf => false,
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const | Ex::NaN => true,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const(_) | Ex::NaN => true,
             Ex::Leaf(_) => self.certainly_finite(e),
             Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| self.inf_null(x)),
             Ex::Pow(b, x) => {
@@ -1814,7 +1930,7 @@ impl<'a> Cx<'a> {
     /// inside lossy mode `nz_ae_licensed` is constant true and cannot pose that question.
     pub(crate) fn nz_ae_certified(&self, e: &Ex) -> bool {
         match e {
-            Ex::Pi | Ex::E | Ex::Const => true,
+            Ex::Pi | Ex::E | Ex::Const(_) => true,
             Ex::Num(r) => !r.is_zero(),
             Ex::Leaf(t) => self.view.sigil(*t) == 0,
             _ => match self.cert_nzae {
@@ -1851,7 +1967,7 @@ impl<'a> Cx<'a> {
     /// Used by the power-of-power composition, whose odd-negative-exponent arm is sound exactly
     /// when the base cannot reach an infinity (see the licence comment in `pow`).
     pub(crate) fn never_infinite(&self, e: &Ex) -> bool {
-        matches!(e, Ex::Leaf(_) | Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E)
+        matches!(e, Ex::Leaf(_) | Ex::Const(_) | Ex::Num(_) | Ex::Pi | Ex::E)
     }
 
     pub(crate) fn certainly_nonneg(&self, e: &Ex) -> bool {
@@ -2250,7 +2366,7 @@ impl<'a> Cx<'a> {
 fn is_constlike(e: &Ex) -> bool {
     matches!(
         e,
-        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
+        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const(_)
     )
 }
 
@@ -3130,7 +3246,7 @@ fn scale_term(t: &Ex, r: &Coef, cx: &Cx) -> Option<Ex> {
             p if p.rat().is_some() => Ex::Num(p.rat().expect("one member")),
             p => mul(p.items(), cx),
         }),
-        Ex::Const => {
+        Ex::Const(n) => {
             if r.is_zero() {
                 // 0 * c = 0 EXACTLY (masked constants are FINITE by doctrine): the
                 // structural zero must not launder into the fittable class -- the
@@ -3140,7 +3256,7 @@ fn scale_term(t: &Ex, r: &Coef, cx: &Cx) -> Option<Ex> {
                 // one path around them (found by a constructor-licence sweep).
                 return Some(Ex::Num(Rat::ZERO));
             }
-            Some(Ex::Const) // r * c refits to c' (forall-exists; `Law::AbsorbProduct`)
+            Some(Ex::Const(*n)) // r * c refits to c' (forall-exists; `Law::AbsorbProduct`)
         }
         Ex::PosInf | Ex::NegInf => {
             if r.is_zero() {
@@ -3236,7 +3352,8 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     match key {
         Ex::Mul(v) => {
             !v.iter().any(|f| {
-                matches!(f, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const) || f.contains_const()
+                matches!(f, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const(_))
+                    || f.contains_const()
             }) && v
                 .iter()
                 .any(|f| may_be_site(f) && is_sign_trade_site(f, cx))
@@ -3320,8 +3437,8 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
         // `mul()`: absorbing a STRUCTURAL zero into the constant class would hand the fitter
         // a fittable constant where mathematics has an exact 0 (the masking-soundness
         // principle).
-        Ex::Const if !c.is_zero() => Ex::Const,
-        Ex::Const => Ex::Mul(vec![Ex::Num(c), Ex::Const]),
+        Ex::Const(n) if !c.is_zero() => Ex::Const(n),
+        Ex::Const(n) => Ex::Mul(vec![Ex::Num(c), Ex::Const(n)]),
         // An infinity absorbs the coefficient's magnitude and takes its sign, EXACTLY
         // (`c * inf = sign(c) * inf` for rational c != 0): joining a raw `Num` next to an
         // Inf factor would leave an unfolded product whose serialization is not
@@ -3372,7 +3489,7 @@ fn term_join(c: Coef, key: Ex, cx: &Cx) -> Ex {
                 }
                 return Ex::Mul(v);
             }
-            if v.iter().any(|f| matches!(f, Ex::Const)) {
+            if v.iter().any(|f| matches!(f, Ex::Const(_))) {
                 // A NONZERO coefficient is absorbed by the constant (forall-exists);
                 // an exact ZERO stays OUTSIDE, mirroring `mul()` (see the bare-Const
                 // arm: a structural zero must never launder into the constant class).
@@ -3644,6 +3761,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let mut pos_inf = false;
     let mut neg_inf = false;
     let mut has_const = false;
+    // The name the one fitted constant of the sum is written with (`ConstName::merge`).
+    let mut const_name = ConstName::ANON;
     let mut terms: Vec<Ex> = Vec::new();
     // Where another addend is never -0 on a region (`add.zero`'s test), the sum is never -0 there
     // either: no zero of a factored sum is read through it, and a negative coefficient spreads
@@ -3708,7 +3827,10 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             Ex::Num(r) => lits.push(r),
             Ex::PosInf => pos_inf = true,
             Ex::NegInf => neg_inf = true,
-            Ex::Const => has_const = true,
+            Ex::Const(n) => {
+                has_const = true;
+                const_name = const_name.merge(n, cx.view);
+            }
             other => terms.push(other),
         }
     }
@@ -3773,7 +3895,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let mut const_terms = false; // any r*Const term seen (merges into the bare-Const pool)
     for t in terms {
         let (c, key) = term_split(t, cx.view);
-        if key == Ex::Const {
+        if let Ex::Const(n) = key {
+            const_name = const_name.merge(n, cx.view);
             // r*Const: joins the bare-Const pool (c1*r1 + c2*r2 = c3, forall-exists;
             // `Law::AbsorbSum`).
             const_terms = true;
@@ -3964,7 +4087,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             out.push(Ex::NegInf);
         }
         if has_const {
-            out.push(Ex::Const);
+            out.push(Ex::Const(const_name));
         }
         if !acc.is_zero() {
             out.push(Ex::Num(acc));
@@ -4023,7 +4146,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
             out.push(Ex::NegInf);
         }
         if has_const {
-            out.push(Ex::Const);
+            out.push(Ex::Const(const_name));
         }
         if !acc.is_zero() {
             out.push(Ex::Num(acc));
@@ -4078,7 +4201,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         owes_zero = false;
     }
     if has_const {
-        out.push(Ex::Const);
+        out.push(Ex::Const(const_name));
     } else if !acc.is_zero() {
         // The constant term LANDS beside other terms here (permissive's ρ, [`land`]); a sum
         // of literals alone stays exact, and a sum of ground terms.
@@ -4154,7 +4277,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let mut magnitudes: Vec<Coef> = Vec::with_capacity(terms.len());
     for t in &terms {
         let c = match t {
-            Ex::Const => Coef::ONE,
+            Ex::Const(_) => Coef::ONE,
             Ex::Num(r) => Coef::of(r),
             _ => term_split(t.clone(), cx.view).0,
         };
@@ -4249,7 +4372,7 @@ fn divide_terms(terms: &[Ex], u: &Coef, cx: &Cx) -> Option<Vec<Ex>> {
     let mut divided: Vec<Ex> = Vec::with_capacity(terms.len());
     for t in terms {
         let d = match t {
-            Ex::Const => Ex::Const,
+            Ex::Const(n) => Ex::Const(*n),
             Ex::Num(r) => Ex::Num(Coef::of(r).over(u)?.rat()?),
             _ => {
                 let (c, key) = term_split(t.clone(), cx.view);
@@ -4522,7 +4645,7 @@ fn term_absorbs_negation(t: &Ex) -> bool {
 
 fn orientation_coeff(t: &Ex, view: &TokenView) -> Coef {
     match t {
-        Ex::Const => Coef::ONE,
+        Ex::Const(_) => Coef::ONE,
         Ex::PosInf => Coef::ONE,
         Ex::NegInf => Coef::ONE.negated(),
         Ex::Num(r) => Coef::of(r),
@@ -5179,7 +5302,7 @@ fn log_inverse_read<'a>(e: &'a Ex, view: &TokenView) -> Option<(&'a Ex, bool)> {
 /// `+0` and `-log(t)` is `-0`.
 pub(crate) fn log_inverse_argument(t: &Ex, view: &TokenView) -> bool {
     match t {
-        Ex::Const | Ex::Pi | Ex::E => true,
+        Ex::Const(_) | Ex::Pi | Ex::E => true,
         Ex::Num(r) => !r.is_zero(),
         Ex::Leaf(tok) => {
             if t.contains_wildcard(view) {
@@ -5523,7 +5646,7 @@ pub(crate) fn sqrt_parts_from_rootn(b: &Ex, cx: &Cx) -> bool {
 fn zero_set_null_by_form(e: &Ex, cx: &Cx) -> bool {
     match e {
         Ex::Num(r) => !r.is_zero(),
-        Ex::Pi | Ex::E | Ex::Const | Ex::PosInf | Ex::NegInf => true,
+        Ex::Pi | Ex::E | Ex::Const(_) | Ex::PosInf | Ex::NegInf => true,
         Ex::Leaf(_) => form_variable(e, cx),
         Ex::Mul(v) => v.iter().all(|f| zero_set_null_by_form(f, cx)),
         Ex::Pow(b, q) => match &**q {
@@ -5565,7 +5688,7 @@ fn zero_set_null_by_separation(s: &Ex, cx: &Cx) -> bool {
                     true
                 }
             },
-            Ex::Leaf(_) | Ex::Const => false,
+            Ex::Leaf(_) | Ex::Const(_) => false,
             Ex::Add(w) | Ex::Mul(w) | Ex::Fun(_, w) => w.iter().all(|x| one_variable(x, cx, v)),
             Ex::Pow(b, x) => one_variable(b, cx, v) && one_variable(x, cx, v),
             _ => true,
@@ -5634,10 +5757,10 @@ fn level_sets_null(e: &Ex, cx: &Cx) -> bool {
     // hold a variable?
     let monomial = |t: &Ex| -> Option<bool> {
         match t {
-            Ex::Num(_) | Ex::Const => Some(false),
+            Ex::Num(_) | Ex::Const(_) => Some(false),
             Ex::Mul(v) => v
                 .iter()
-                .all(|f| matches!(f, Ex::Num(_) | Ex::Const) || power_of_variable(f))
+                .all(|f| matches!(f, Ex::Num(_) | Ex::Const(_)) || power_of_variable(f))
                 .then(|| v.iter().any(power_of_variable)),
             f => power_of_variable(f).then_some(true),
         }
@@ -5741,7 +5864,7 @@ pub(crate) fn mul_undecided(items: Vec<Ex>, cx: &Cx) -> Ex {
     let (mut plain, rest): (Vec<Ex>, Vec<Ex>) = items.into_iter().partition(|f| {
         matches!(
             f,
-            Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const | Ex::NaN
+            Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const(_) | Ex::NaN
         )
     });
     let (merged, _) = collect_like_bases(rest, cx);
@@ -5790,6 +5913,8 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     let mut coeff_overflow: Vec<Ex> = Vec::new();
     let mut inf_sign: Option<bool> = None; // Some(true) = +inf so far, Some(false) = -inf
     let mut has_const = false;
+    // The name the product's one fitted constant is written with (`ConstName::merge`).
+    let mut const_name = ConstName::ANON;
     let mut factors: Vec<Ex> = Vec::new();
     // In `f64` a written negative zero is a zero with its sign (`zero_sign`).
     let signed_zeros = f64_zero_signs(cx);
@@ -5804,7 +5929,10 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
                 Ex::Num(r) => nums.push(r),
                 Ex::PosInf => inf_sign = Some(inf_sign.unwrap_or(true)),
                 Ex::NegInf => inf_sign = Some(!inf_sign.unwrap_or(true)),
-                Ex::Const => has_const = true,
+                Ex::Const(n) => {
+                    has_const = true;
+                    const_name = const_name.merge(n, cx.view);
+                }
                 e if signed_zeros && is_neg_zero(&e, cx.view) => {
                     nums.push(Rat::ZERO);
                     neg_zeros = !neg_zeros;
@@ -5927,7 +6055,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
         if has_const {
             // inf * c: c = 0 is reachable (0 * inf = nan), so the constant does NOT absorb the
             // infinity; keep both factors.
-            factors.push(Ex::Const);
+            factors.push(Ex::Const(const_name));
             has_const = false;
         }
     }
@@ -5969,7 +6097,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
             out.push(Ex::Num(coeff));
         }
         if has_const {
-            out.push(Ex::Const);
+            out.push(Ex::Const(const_name));
         }
         if let Some(sign) = inf_sign {
             out.push(if sign { Ex::PosInf } else { Ex::NegInf });
@@ -5979,7 +6107,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     if let Some(raw) = opposite {
         let host = match inf_sign {
             Some(sign) => SignHost::Inf(sign),
-            None if has_const => SignHost::Const,
+            None if has_const => SignHost::Const(const_name),
             None => SignHost::Coeff(coeff),
         };
         return collect_opposite_sums(host, raw, out, cx);
@@ -6003,7 +6131,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
             .filter(|f| !Law::MulZero.holds(f, cx))
             .collect();
         if signed_zeros && has_const {
-            v.push(Ex::Const);
+            v.push(Ex::Const(const_name));
         }
         if v.is_empty() {
             return signed_zero(zero_sign, cx);
@@ -6030,7 +6158,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
                     .filter(|f| !Law::MulZero.holds(f, cx))
                     .collect();
                 if signed_zeros && has_const {
-                    w.push(Ex::Const);
+                    w.push(Ex::Const(const_name));
                 }
                 if w.is_empty() {
                     return signed_zero(zero_sign, cx);
@@ -6048,7 +6176,7 @@ fn mul_assembled(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
     if has_const {
         // Bare Const absorbs the (nonzero) rational coefficient: c * r = c'.
         coeff = Rat::ONE;
-        out.push(Ex::Const);
+        out.push(Ex::Const(const_name));
     }
     if let Some(sign) = inf_sign {
         out.push(if sign { Ex::PosInf } else { Ex::NegInf });
@@ -6408,7 +6536,7 @@ fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
 /// it).
 enum SignHost {
     Coeff(Rat),
-    Const,
+    Const(ConstName),
     Inf(bool),
 }
 
@@ -6419,8 +6547,8 @@ impl SignHost {
         let coeff = match self {
             SignHost::Coeff(c) if neg => c.checked_neg()?,
             SignHost::Coeff(c) => c.clone(),
-            SignHost::Const => {
-                out.push(Ex::Const);
+            SignHost::Const(n) => {
+                out.push(Ex::Const(*n));
                 Rat::ONE
             }
             SignHost::Inf(pos) => {
@@ -6434,7 +6562,7 @@ impl SignHost {
     fn key(&self) -> HostKey {
         match self {
             SignHost::Coeff(c) => HostKey::Coeff(c.clone()),
-            SignHost::Const => HostKey::Const,
+            SignHost::Const(n) => HostKey::Const(*n),
             SignHost::Inf(pos) => HostKey::Inf(*pos),
         }
     }
@@ -6444,7 +6572,7 @@ impl SignHost {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum HostKey {
     Coeff(Rat),
-    Const,
+    Const(ConstName),
     Inf(bool),
 }
 
@@ -6658,7 +6786,7 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             let unit = c.is_one() || *c == Rat::NEG_ONE;
             (if unit { 0 } else { mu_rat(&c.abs()) }, 0, unit)
         }
-        SignHost::Const => (complexity(&Ex::Const, cx.view), 1, true),
+        SignHost::Const(_) => (complexity(&Ex::ANON, cx.view), 1, true),
         SignHost::Inf(_) => (complexity(&Ex::PosInf, cx.view), 1, true),
     };
     let bound = |members: usize, lb: u64| -> u64 {
@@ -7275,7 +7403,7 @@ fn class_multiple(ts: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, Option<bool>)
                     None => atom(e, 1),
                 }
             }
-            Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
+            Ex::Const(_) | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
             other => atom(other, 1),
         }
     }
@@ -7422,7 +7550,7 @@ fn poly_screen(e: &Ex, v: &Ex, x: f64) -> Option<(f64, f64)> {
             }
             _ => atom(e),
         },
-        Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
+        Ex::Const(_) | Ex::PosInf | Ex::NegInf | Ex::NaN => None,
         other => atom(other),
     }
 }
@@ -8783,7 +8911,7 @@ fn signed_zero(negative: Option<bool>, cx: &Cx) -> Ex {
 /// carries the product's sign, `+0` or `-0`, and a flip of a site moves it, unless a bare `Const`
 /// is beside it (the refit eats every sign); `None`, the one zero eats it.
 fn sign_place_zero(negative: Option<bool>, out: Vec<Ex>, cx: &Cx) -> Ex {
-    if out.iter().any(|f| matches!(f, Ex::Const)) {
+    if out.iter().any(|f| matches!(f, Ex::Const(_))) {
         return sign_place(Rat::ZERO, out, cx);
     }
     sign_place_signed(Rat::ZERO, out, negative, cx)
@@ -8797,7 +8925,7 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
     // coefficient eats a sign.
     // Beside such a sum the coefficient and the infinities are positive and the sum holds their
     // signs (the Const sign fold, extended to the infinities).
-    let const_sum = if !coeff.is_zero() && !out.iter().any(|f| matches!(f, Ex::Const)) {
+    let const_sum = if !coeff.is_zero() && !out.iter().any(|f| matches!(f, Ex::Const(_))) {
         out.iter()
             .position(|f| matches!(f, Ex::Add(v) if v.iter().any(Ex::contains_const)))
     } else {
@@ -8882,7 +9010,7 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
         // Beside a bare `Const`, which absorbs every constant factor of the product and so the
         // orientation sign of every class, every class is a site (`refit_trade_flip`,
         // `Law::AbsorbRefitSign`).
-        let refit = out.iter().any(|f| matches!(f, Ex::Const));
+        let refit = out.iter().any(|f| matches!(f, Ex::Const(_)));
         let site_flips: Vec<(usize, Ex)> = out
             .iter()
             .enumerate()
@@ -8969,7 +9097,7 @@ fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &
             // into it and the orbit has one component.
             let carrier = if let (Some(negative), true) = (zero, coeff.is_zero()) {
                 Carrier::Zero(negative)
-            } else if coeff.is_zero() || out.iter().any(|f| matches!(f, Ex::Const)) {
+            } else if coeff.is_zero() || out.iter().any(|f| matches!(f, Ex::Const(_))) {
                 Carrier::Free
             } else if let Some(i) = const_sum {
                 Carrier::Absorb(i)
@@ -9884,7 +10012,7 @@ fn rejoin_reciprocals(settled: Ex, signed: bool, cx: &Cx) -> Ex {
             // had `inf` as a direct member of the joined product. DEEP infinities
             // (inside function arguments, row 1414's `acos(inf * x4)`) stay eligible:
             // no fold sees through those either way.
-            if matches!(**b, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const) {
+            if matches!(**b, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const(_)) {
                 return None;
             }
             let Ex::Num(r) = &**e else { return None };
@@ -12665,18 +12793,18 @@ mod tests {
         with_view(|view| {
             let cx = Cx::bare(view);
             // C + C -> C (one constant absorbs, forall-exists).
-            assert_eq!(add(vec![Ex::Const, Ex::Const], &cx), Ex::Const);
+            assert_eq!(add(vec![Ex::ANON, Ex::ANON], &cx), Ex::ANON);
             // C + 5 -> C.
-            assert_eq!(add(vec![Ex::Const, Ex::int(5)], &cx), Ex::Const);
+            assert_eq!(add(vec![Ex::ANON, Ex::int(5)], &cx), Ex::ANON);
             // 2C + x + 3 -> C + x.
             let e = add(
-                vec![mul(vec![Ex::int(2), Ex::Const], &cx), x(view), Ex::int(3)],
+                vec![mul(vec![Ex::int(2), Ex::ANON], &cx), x(view), Ex::int(3)],
                 &cx,
             );
             // Constant-like terms sort LAST under the stripped order (x + C, not C + x).
-            assert_eq!(e, Ex::Add(vec![x(view), Ex::Const]));
+            assert_eq!(e, Ex::Add(vec![x(view), Ex::ANON]));
             // C*x + C*x must NOT merge (independent constants).
-            let cx_term = || Ex::Mul(vec![Ex::Const, x(view)]);
+            let cx_term = || Ex::Mul(vec![Ex::ANON, x(view)]);
             let e = add(vec![cx_term(), cx_term()], &cx);
             assert_eq!(e, Ex::Add(vec![cx_term(), cx_term()]));
         });
@@ -12692,25 +12820,25 @@ mod tests {
                 let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
                 // A sum holding a `<constant>` takes a sign into its terms: -(x0 + x1^c) is
                 // -x0 - x1^c.
-                let s = add(vec![x(view), pow(y(view), Ex::Const, &cx)], &cx);
+                let s = add(vec![x(view), pow(y(view), Ex::ANON, &cx)], &cx);
                 let neg_s = neg(s.clone());
                 assert!(matches!(&neg_s, Ex::Add(_)), "{mode:?}: {neg_s:?}");
                 // Beside a bare `<constant>`, which absorbs every constant factor of its
                 // product, that sign is the constant's, whatever route built the product, and the
                 // sum takes the orientation with the fewer signs: c*-(x0 + x1^c) is c*(x0 + x1^c).
-                let want = mul(vec![Ex::Const, s.clone()], &cx);
-                assert_eq!(want, Ex::Mul(vec![Ex::Const, s.clone()]), "{mode:?}");
-                assert_eq!(mul(vec![neg_s.clone(), Ex::Const], &cx), want, "{mode:?}");
+                let want = mul(vec![Ex::ANON, s.clone()], &cx);
+                assert_eq!(want, Ex::Mul(vec![Ex::ANON, s.clone()]), "{mode:?}");
+                assert_eq!(mul(vec![neg_s.clone(), Ex::ANON], &cx), want, "{mode:?}");
                 assert_eq!(
-                    mul(vec![Ex::Const, Ex::int(-1), s.clone()], &cx),
+                    mul(vec![Ex::ANON, Ex::int(-1), s.clone()], &cx),
                     want,
                     "{mode:?}"
                 );
                 // So does an odd function of one: c*sin(c - x0) is c*sin(x0 + c).
-                let t = add(vec![x(view), Ex::Const], &cx);
+                let t = add(vec![x(view), Ex::ANON], &cx);
                 assert_eq!(
-                    mul(vec![Ex::Const, fun(sin, vec![neg(t.clone())], &cx)], &cx),
-                    mul(vec![Ex::Const, fun(sin, vec![t], &cx)], &cx),
+                    mul(vec![Ex::ANON, fun(sin, vec![neg(t.clone())], &cx)], &cx),
+                    mul(vec![Ex::ANON, fun(sin, vec![t], &cx)], &cx),
                     "{mode:?}"
                 );
                 // Without a bare `<constant>` the sum keeps the sign the product gave it.
@@ -13027,7 +13155,7 @@ mod tests {
                 // sign-blind context), which was testing the parity arm rather than this
                 // control's subject.
                 fun(view.intern("tan"), vec![x(view)], &cx),
-                Ex::Const,
+                Ex::ANON,
             ] {
                 let e = fun(abs_t, vec![keep.clone()], &cx);
                 assert_eq!(e, Ex::Fun(abs_t, vec![keep]), "abs must stay");
@@ -13045,18 +13173,18 @@ mod tests {
             assert_eq!(mul(vec![Ex::NegInf, Ex::NegInf], &cx), Ex::PosInf);
             // C * C -> C; C * 5 -> C; C * 0 keeps C in `f64`, whose sign is the zero's, and is 0
             // in `permissive`.
-            assert_eq!(mul(vec![Ex::Const, Ex::Const], &cx), Ex::Const);
-            assert_eq!(mul(vec![Ex::Const, Ex::int(5)], &cx), Ex::Const);
+            assert_eq!(mul(vec![Ex::ANON, Ex::ANON], &cx), Ex::ANON);
+            assert_eq!(mul(vec![Ex::ANON, Ex::int(5)], &cx), Ex::ANON);
             assert_eq!(
-                mul(vec![Ex::Const, Ex::int(0)], &cx),
-                Ex::Mul(vec![Ex::int(0), Ex::Const])
+                mul(vec![Ex::ANON, Ex::int(0)], &cx),
+                Ex::Mul(vec![Ex::int(0), Ex::ANON])
             );
             let mut lossy = Cx::bare(view);
             lossy.mode = RuleMode::Permissive;
-            assert_eq!(mul(vec![Ex::Const, Ex::int(0)], &lossy), Ex::int(0));
+            assert_eq!(mul(vec![Ex::ANON, Ex::int(0)], &lossy), Ex::int(0));
             // inf * C: C = 0 reachable -> keep both factors.
-            let e = mul(vec![Ex::PosInf, Ex::Const], &cx);
-            assert_eq!(e, Ex::Mul(vec![Ex::PosInf, Ex::Const]));
+            let e = mul(vec![Ex::PosInf, Ex::ANON], &cx);
+            assert_eq!(e, Ex::Mul(vec![Ex::PosInf, Ex::ANON]));
         });
     }
 
@@ -13376,7 +13504,7 @@ mod tests {
             // price, so the table does not touch it: it now outweighs its own structure by
             // more than it did, which is the direction the ordering wants.
             assert_eq!(
-                c(&mul(vec![Ex::Const, x_.clone()], &cx)),
+                c(&mul(vec![Ex::ANON, x_.clone()], &cx)),
                 mu_mul() + MU_FREE_WORST_CASE_F64 + mu_leaf()
             );
             assert_eq!(mu_free(), 67 * MU_MILLI);
@@ -13694,7 +13822,7 @@ mod tests {
             Ex::PosInf => "inf".into(),
             Ex::NegInf => "-inf".into(),
             Ex::NaN => "nan".into(),
-            Ex::Const => "C".into(),
+            Ex::Const(_) => "C".into(),
             Ex::Leaf(t) => view.resolve_owned(*t),
             Ex::Fun(f, args) => {
                 let a: Vec<String> = args.iter().map(|x| ex_str(x, view)).collect();

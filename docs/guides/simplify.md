@@ -184,6 +184,38 @@ phases move only on strict descent of a well-founded ordering
 until a round finds nothing, the default in every mode: a cap can stop it
 between two improvements, which a second call then continues.
 
+## Named constants
+
+`<constant>` is a fitted constant, and every occurrence is an independent one. A **named
+constant**, `<constant_NAME>` with NAME letters and digits, is one unknown finite real shared
+by every occurrence of its name; distinct names are independent. All three dialects read it,
+infix text included.
+
+- A name the expression uses **more than once** is read as a variable, in both modes: every
+  answer holds for every value, and the name is never folded with numbers.
+- A name used **once** is exactly a `<constant>`: it is absorbed as one, and the answer writes
+  it with its name. Where fitted constants become one, the one keeps a name if any of them had
+  one, the least in string order. A name the answer uses once is read as a fitted constant too,
+  so an answer simplifies to itself.
+- The complexity measure prices a name as a `<constant>` at every occurrence, however often the
+  expression uses it, so an answer never prices above its input.
+
+```python
+engine.simplify('<constant_a>*x1 + <constant_a>*x2 + x3')   # -> 'x3 + <constant_a>*(x1 + x2)'
+engine.simplify('<constant_a>*x1 + sin(<constant_a>)')      # -> 'sin(<constant_a>) + <constant_a>*x1'
+engine.simplify('sin(<constant_a>)')                         # -> '<constant_a>'
+engine.simplify('<constant_b> + 3.7*<constant_a>')           # -> '<constant_a>'
+engine.simplify('exp(<constant_a>) + exp(<constant_a>)*x1')  # -> '<constant_a>*(x1 + 1)'
+```
+
+A name is a parameter, not a variable, everywhere else too: `expression_variables` leaves it
+out, `evaluate_constants` folds no part that holds one, `as_code` and `as_callable` bind one
+parameter per name after the variables (written `constant_NAME` in the code), the
+code-generation helpers give all occurrences of a name one identifier and one value, and
+masking never masks it (see the [masking guide](masking.md#named-constants)). The canonical
+order compares names last, so renaming the constants consistently changes no choice between
+parts that differ in more than their names.
+
 ## Soundness modes
 
 `simplify(expr, mode=...)` selects a point on an **axis**, not a rung on a ladder.

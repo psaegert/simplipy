@@ -215,17 +215,36 @@ def get_used_modules(infix_expression: str) -> list[str]:
 
 _CONSTANT_ID_PATTERN = re.compile(r"C_\d+")
 
+#: A NAMED CONSTANT: ``<constant_NAME>``, NAME alphanumeric. One unknown finite real per name,
+#: distinct names independent; ``<constant>`` stays an anonymous constant per occurrence.
+_NAMED_CONSTANT_PATTERN = re.compile(r"<constant_[A-Za-z0-9]+>")
+
+
+def is_named_constant(token: str) -> bool:
+    """True iff ``token`` is a named constant, ``<constant_NAME>`` with NAME alphanumeric.
+
+    A named constant is one unknown finite real per name: every occurrence of a name is the
+    same value, distinct names are independent, and ``<constant>`` stays an anonymous constant
+    per occurrence. It is a parameter, never a data variable: :meth:`SimpliPyEngine.simplify`
+    treats a name used more than once as it treats a variable and a name used once as exactly
+    a ``<constant>`` (keeping its name), and the code-generation helpers bind one parameter per
+    name.
+    """
+    return bool(_NAMED_CONSTANT_PATTERN.fullmatch(token))
+
 
 def is_constant_placeholder(token: str, extra: "Any" = ()) -> bool:
     """True iff ``token`` is an abstract-constant slot.
 
-    A slot is the generic ``"<constant>"`` placeholder, an indexed ``C_<n>`` identifier,
-    or one of the caller-declared names in ``extra``. This is the ONE definition of
-    "placeholder" shared by the mechanical codegen helpers (`explicit_constant_placeholders`,
-    `substitute_constants`); deciding which LITERALS become placeholders in the first
-    place is a masking-policy question and lives in ``simplipy.masking``.
+    A slot is the generic ``"<constant>"`` placeholder, a named constant ``<constant_NAME>``
+    (:func:`is_named_constant`), an indexed ``C_<n>`` identifier, or one of the caller-declared
+    names in ``extra``. This is the ONE definition of "placeholder" shared by the mechanical
+    codegen helpers (`explicit_constant_placeholders`, `substitute_constants`); deciding which
+    LITERALS become placeholders in the first place is a masking-policy question and lives in
+    ``simplipy.masking``.
     """
-    return token == "<constant>" or bool(_CONSTANT_ID_PATTERN.fullmatch(token)) or token in extra
+    return (token == "<constant>" or is_named_constant(token)
+            or bool(_CONSTANT_ID_PATTERN.fullmatch(token)) or token in extra)
 
 
 def substitute_constants(prefix_expression: list[str], values: list | np.ndarray, constants: list[str] | None = None, inplace: bool = False) -> list[str]:
@@ -233,7 +252,9 @@ def substitute_constants(prefix_expression: list[str], values: list | np.ndarray
 
     This helper replaces constant placeholders such as ``"<constant>"`` or the
     tokens listed in ``constants`` with the values supplied in ``values``. Values
-    are consumed from left to right as matching tokens are encountered.
+    are consumed from left to right as matching tokens are encountered. A named
+    constant (``<constant_NAME>``) is one parameter: its first occurrence consumes a
+    value and every later occurrence of the same name takes the same value.
 
     Parameters
     ----------
@@ -273,6 +294,10 @@ def substitute_constants(prefix_expression: list[str], values: list | np.ndarray
     >>> expr = ['*', 'k1', '+', 'x', 'k2']
     >>> substitute_constants(expr, [3.14, 2.71], constants=['k1', 'k2'])
     ['*', '3.14', '+', 'x', '2.71']
+
+    >>> expr = ['+', '*', '<constant_a>', 'x1', '*', '<constant_a>', 'x2']
+    >>> substitute_constants(expr, [3.14])
+    ['+', '*', '3.14', 'x1', '*', '3.14', 'x2']
     """
     if inplace:
         modified_prefix_expression = prefix_expression
@@ -284,11 +309,16 @@ def substitute_constants(prefix_expression: list[str], values: list | np.ndarray
         constants = []
     else:
         constants = list(constants)
+    named: dict[str, str] = {}
 
     for i, token in enumerate(prefix_expression):
-        if is_constant_placeholder(token, constants):
+        if token in named:
+            modified_prefix_expression[i] = named[token]
+        elif is_constant_placeholder(token, constants):
             modified_prefix_expression[i] = str(values[constant_index])
             constant_index += 1
+            if is_named_constant(token):
+                named[token] = modified_prefix_expression[i]
 
     return modified_prefix_expression
 
@@ -328,7 +358,9 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     A purely MECHANICAL code-generation step: every placeholder slot -- ``"<constant>"``
     or an existing ``C_i`` identifier (re-numbered) -- is renamed to a positional
     constant name, so ``codify`` can build a call signature where constants are passed
-    as named arguments. This function decides NOTHING about which literals are
+    as named arguments. A named constant (``<constant_NAME>``) is ONE parameter: every
+    occurrence of a name is renamed to the identifier its first occurrence received, and
+    the identifier is listed once. This function decides NOTHING about which literals are
     abstract; that is a masking-policy question and lives in ``simplipy.masking``.
 
     Parameters
@@ -358,6 +390,9 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
 
     >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'])
     (['+', 'K', 'C_0'], ['K', 'C_0'])
+
+    >>> explicit_constant_placeholders(['+', '*', '<constant_a>', 'x1', '*', '<constant_a>', 'x2'])
+    (['+', '*', 'C_0', 'x1', '*', 'C_0', 'x2'], ['C_0'])
     """
 
     if inplace:
@@ -370,12 +405,15 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     used_constants: list[str] = []
     provided_index = 0
     generated_index = 0
+    named: dict[str, str] = {}
 
     for i, token in enumerate(prefix_expression):
         # C_i re-numbering is the helper's whole contract: it renames placeholder slots and
         # never numerals (which literals become constants is decided upstream, by
         # `simplipy.masking`).
-        if is_constant_placeholder(token):
+        if token in named:
+            modified_prefix_expression[i] = named[token]
+        elif is_constant_placeholder(token):
             if provided_index < len(provided_constants):
                 constant_name = provided_constants[provided_index]
                 provided_index += 1
@@ -387,6 +425,8 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
 
             modified_prefix_expression[i] = constant_name
             used_constants.append(constant_name)
+            if is_named_constant(token):
+                named[token] = constant_name
 
     return modified_prefix_expression, used_constants
 

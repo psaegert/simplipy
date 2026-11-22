@@ -1162,7 +1162,7 @@ impl<'a, 'v> Display<'a, 'v> {
             Ex::PosInf => name("inf", "float(\"inf\")"),
             Ex::NegInf => Node::Neg(Box::new(name("inf", "float(\"inf\")"))),
             Ex::NaN => name("nan", "float(\"nan\")"),
-            Ex::Const => name("<constant>", "<constant>"),
+            Ex::Const(_) => name("<constant>", "<constant>"),
             Ex::Leaf(t) => {
                 let s = view.resolve_owned(*t);
                 Node::Name(s.clone(), s)
@@ -1618,7 +1618,7 @@ fn combine(numbers: &[Rat], op: fn(&Rat, &Rat) -> Option<Rat>) -> Option<Rat> {
 fn ground(e: &Ex) -> bool {
     match e {
         Ex::Num(_) => true,
-        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const | Ex::Leaf(_) => false,
+        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const(_) | Ex::Leaf(_) => false,
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().all(ground),
         Ex::Pow(b, x) => ground(b) && ground(x),
     }
@@ -1730,7 +1730,7 @@ fn joined_reciprocal(f: &Ex) -> Option<&[Ex]> {
 
 /// Does `f` absorb a coefficient beside it (a fitted constant, an infinity, nan)?
 fn absorbs_a_coefficient(f: &Ex) -> bool {
-    matches!(f, Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN)
+    matches!(f, Ex::Const(_) | Ex::PosInf | Ex::NegInf | Ex::NaN)
 }
 
 /// `b^k` for a reciprocal `b^-k` (a negative numeric exponent), built canonically.
@@ -1854,7 +1854,7 @@ pub fn shape(e: &Ex, cx: &Cx) -> String {
         Ex::PosInf => "inf".to_string(),
         Ex::NegInf => "-inf".to_string(),
         Ex::NaN => "nan".to_string(),
-        Ex::Const => "<constant>".to_string(),
+        Ex::Const(_) => "<constant>".to_string(),
         Ex::Leaf(t) => cx.view.resolve_owned(*t),
     }
 }

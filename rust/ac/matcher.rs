@@ -167,9 +167,12 @@ pub fn matches_each(subject: &Ex, pattern: &Ex, binds: &mut Binds, cx: &MCx, k: 
             false
         }
         Ex::Leaf(pk) => matches!(subject, Ex::Leaf(s) if s == pk) && k(binds),
-        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const => {
+        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN => {
             subject == pattern && k(binds)
         }
+        // A pattern's `<constant>` matches every fitted constant, whatever name it is written
+        // with (a named constant used once is exactly a `<constant>`).
+        Ex::Const(_) => matches!(subject, Ex::Const(_)) && k(binds),
         // `max` and `min` are lattice BAGS (`expr::lattice`), matched as sums and products are.
         Ex::Fun(pf, pa) if lattice_head(*pf, cx.view) => match subject {
             Ex::Fun(sf, sa) if sf == pf => {
@@ -582,6 +585,86 @@ fn try_assign(
     }
 }
 
+/// [`substitute`] for a rule fired on `matched` (the subject, or the bag members the LHS
+/// matched), keeping the names of fitted constants (`expr::ConstName`): the names of the fitted
+/// constants the match consumed that the substituted bindings do not carry on are written on
+/// the `<constant>`s the template writes, the least name first, in the template's order; where
+/// the template writes fewer constants than it consumed names, the constants it writes keep
+/// the least ones (fitted constants that become one keep the least name). Without names in the
+/// call this is [`substitute`].
+pub fn substitute_named<'s>(
+    template: &Ex,
+    binds: &Binds,
+    matched: impl Iterator<Item = &'s Ex>,
+    view: &TokenView,
+) -> Ex {
+    let plain = substitute(template, binds, view);
+    if !view.has_free_names() {
+        return plain;
+    }
+    let mut lost: Vec<Tok> = Vec::new();
+    for m in matched {
+        const_names(m, &mut lost);
+    }
+    if lost.is_empty() {
+        return plain;
+    }
+    let mut kept: Vec<Tok> = Vec::new();
+    const_names(&plain, &mut kept);
+    for t in kept {
+        if let Some(i) = lost.iter().position(|&u| u == t) {
+            lost.swap_remove(i);
+        }
+    }
+    if lost.is_empty() {
+        return plain;
+    }
+    // Popped from the back: the least name first.
+    lost.sort_by(|a, b| view.str_cmp(*b, *a));
+    name_constants(template, binds, &mut lost, view)
+}
+
+/// The names of the fitted constants of `e`, pushed to `out`.
+fn const_names(e: &Ex, out: &mut Vec<Tok>) {
+    match e {
+        Ex::Const(n) => out.extend(n.0),
+        Ex::Leaf(_) | Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN => {}
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().for_each(|x| const_names(x, out)),
+        Ex::Pow(b, x) => {
+            const_names(b, out);
+            const_names(x, out);
+        }
+    }
+}
+
+/// [`substitute`], writing the template's `<constant>`s with the names `names` pops.
+fn name_constants(template: &Ex, binds: &Binds, names: &mut Vec<Tok>, view: &TokenView) -> Ex {
+    match template {
+        Ex::Const(_) => Ex::Const(super::expr::ConstName(names.pop())),
+        Ex::Add(v) => Ex::Add(
+            v.iter()
+                .map(|e| name_constants(e, binds, names, view))
+                .collect(),
+        ),
+        Ex::Mul(v) => Ex::Mul(
+            v.iter()
+                .map(|e| name_constants(e, binds, names, view))
+                .collect(),
+        ),
+        Ex::Pow(b, e) => Ex::Pow(
+            Box::new(name_constants(b, binds, names, view)),
+            Box::new(name_constants(e, binds, names, view)),
+        ),
+        Ex::Fun(f, v) => Ex::Fun(
+            *f,
+            v.iter()
+                .map(|e| name_constants(e, binds, names, view))
+                .collect(),
+        ),
+        _ => substitute(template, binds, view),
+    }
+}
+
 /// Substitute bound wildcards into a rule RHS template. A wildcard with no binding panics (the
 /// mining invariant guarantees RHS wildcards are a subset of LHS wildcards).
 pub fn substitute(template: &Ex, binds: &Binds, view: &TokenView) -> Ex {
@@ -597,7 +680,7 @@ pub fn substitute(template: &Ex, binds: &Binds, view: &TokenView) -> Ex {
         | Ex::PosInf
         | Ex::NegInf
         | Ex::NaN
-        | Ex::Const => template.clone(),
+        | Ex::Const(_) => template.clone(),
         Ex::Add(v) => Ex::Add(v.iter().map(|e| substitute(e, binds, view)).collect()),
         Ex::Mul(v) => Ex::Mul(v.iter().map(|e| substitute(e, binds, view)).collect()),
         Ex::Pow(b, e) => Ex::Pow(
@@ -875,7 +958,7 @@ mod tests {
             let w = view.intern("_0");
             // subject bag: two structurally equal <constant>-containing terms; a nonlinear
             // pattern `_0 + _0` must NOT match through the Const-bearing binding.
-            let cxterm = || Ex::Mul(vec![Ex::Const, Ex::Leaf(view.intern("x0"))]);
+            let cxterm = || Ex::Mul(vec![Ex::ANON, Ex::Leaf(view.intern("x0"))]);
             let subj = vec![cxterm(), cxterm()];
             let pat = vec![Ex::Leaf(w), Ex::Leaf(w)];
             let mut binds = Binds::default();

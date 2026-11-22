@@ -502,11 +502,13 @@ fn insert_implicit_products(
     ops: &Operators,
 ) -> Result<Vec<(String, bool)>, String> {
     let is_leaf = |t: &str| {
-        t == "<constant>" || t.starts_with("float(\"") || (is_ident_start(t) && !t.starts_with('_'))
+        is_constant_token(t)
+            || t.starts_with("float(\"")
+            || (is_ident_start(t) && !t.starts_with('_'))
     };
     let is_operand = |t: &str| {
         is_number_fullmatch(t)
-            || t == "<constant>"
+            || is_constant_token(t)
             || t.starts_with("float(\"")
             || is_ident_start(t)
     };
@@ -585,13 +587,30 @@ fn insert_implicit_products(
     Ok(out)
 }
 
+/// A fitted constant at `i`: `<constant>`, or a named constant `<constant_NAME>` with NAME
+/// alphanumeric (`tokens::is_named_constant`); the end index, or `None`.
 fn match_constant(s: &[char], i: usize) -> Option<usize> {
-    const C: &[char] = &['<', 'c', 'o', 'n', 's', 't', 'a', 'n', 't', '>'];
-    if s.len() - i >= C.len() && s[i..i + C.len()] == *C {
-        Some(i + C.len())
-    } else {
-        None
+    const C: &[char] = &['<', 'c', 'o', 'n', 's', 't', 'a', 'n', 't'];
+    if s.len() - i < C.len() + 1 || s[i..i + C.len()] != *C {
+        return None;
     }
+    let j = i + C.len();
+    if s[j] == '>' {
+        return Some(j + 1);
+    }
+    if s[j] != '_' {
+        return None;
+    }
+    let mut k = j + 1;
+    while k < s.len() && s[k].is_ascii_alphanumeric() {
+        k += 1;
+    }
+    (k > j + 1 && k < s.len() && s[k] == '>').then_some(k + 1)
+}
+
+/// Is `t` a fitted constant's token, `<constant>` or a named constant?
+fn is_constant_token(t: &str) -> bool {
+    t == "<constant>" || crate::tokens::is_named_constant(t)
 }
 
 /// The numeric folder's inf/nan result tokens, kept ATOMIC (mirrors the Python `float_special`
@@ -872,7 +891,7 @@ fn read_infix_tokens(
             stack.push(format!("{APP_MARK}{token}"));
         } else if is_number_fullmatch(&token) {
             prefix_expr.push(token);
-        } else if is_ident_start(&token) || token == "<constant>" {
+        } else if is_ident_start(&token) || is_constant_token(&token) {
             // RESERVED CONSTANT NAMES of the infix language: the pretty renderer spells
             // the canonical constants as bare `pi`/`e`/`inf`/`nan` (`ac::convert::render_prec`),
             // so the parser reads exactly these identifiers back as the constants --

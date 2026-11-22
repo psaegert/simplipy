@@ -52,6 +52,10 @@ organised by who you are, then the highlights, then every change in detail.
   (`0.1 + 0.2` is `0.3`, `x0/3`).
 - **Masking removes the redundant constants it recognises.** It does not find every
   redundancy: `(a*x + b)/(c*y + d)` keeps four constants, among them a common scale.
+- **Named constants.** `<constant_NAME>` (NAME letters and digits) is one unknown finite real
+  per name, shared by every occurrence of the name; `<constant>` stays one independent constant
+  per occurrence. A token of that form was read as an ordinary variable before (see the detail
+  below).
 - **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
   computes, and `permissive`, for training-corpus canonicalisation, which reads the reals'
   values. `Mode.real`, `mode='real'` and a config's `rules_real:` set raise `ValueError` at
@@ -560,12 +564,50 @@ organised by who you are, then the highlights, then every change in detail.
 - **Rule files per mode.** Each file is mined in its own mode, `verify-mine` checks it, and an
   artifact names the simplipy versions that serve it.
 - **Infix text** reads implicit multiplication, and whitespace separates tokens.
+- **Named constants** `<constant_NAME>`: one shared unknown per name, a parameter everywhere.
 
 ### In detail
 
 The measurements below use three sets: the 129,490 simplify inputs of flash-ansr's
 training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
 model predictions.
+
+- **Named constants.** A token `<constant_NAME>`, NAME letters and digits (`<constant_a>`,
+  `<constant_k12>`), is a named constant: one unknown finite real per name, every occurrence of a
+  name the same value, distinct names independent. `<constant>` stays an anonymous constant per
+  occurrence. All three dialects read them, infix text included.
+  - Simplification reads a name the expression uses more than once as it reads a variable, in
+    both modes: every answer holds for every value, and the name is never folded with numbers
+    (`<constant_a>*x1 + <constant_a>*x2 + x3` is `x3 + <constant_a>*(x1 + x2)`,
+    `<constant_a>*x1 + 2*<constant_a>*x2` is `<constant_a>*(x1 + 2*x2)`).
+  - A name used once is exactly a `<constant>`, absorbed as one and written with its name:
+    `sin(<constant_a>)` is `<constant_a>`, `3.7*<constant_a>` is `<constant_a>`. A name used more
+    than once is never absorbed, since that would cut the tie between its uses:
+    `<constant_a>*x1 + sin(<constant_a>)` stays. Where fitted constants become one, the one keeps
+    a name if any of them had one, the least in string order (`<constant_b> + <constant_a>` is
+    `<constant_a>`). A name the answer uses once is read as a fitted constant too, so an answer
+    simplifies to itself: `exp(<constant_a>) + exp(<constant_a>)*x1` is `<constant_a>*(x1 + 1)`,
+    and `<constant_a>*<constant_a>` is `<constant_a>`.
+  - The complexity measure prices a name as a `<constant>` at every occurrence, however often the
+    expression uses it, so an answer that leaves a name in one place, where it is read as a
+    fitted constant, never prices above its input.
+  - Answers keep the names. The canonical order compares names last, so a consistent renaming
+    changes no choice between parts that differ in more than their names; a choice between two
+    equally priced answers that differ only in which name a sum's factoring takes out is decided
+    by the names (`<constant_a>*<constant_b>*x1 + <constant_a>*x2 + <constant_b>*x3` takes out
+    `<constant_a>`).
+  - Masking never masks a name. Its collect stage turns a ground part (no data variable) into
+    one fresh `<constant>` only if the part holds a parameter used nowhere else:
+    `<constant_a>*<constant_b>*x1 + <constant_a>*x2` is `<constant>*x1 + <constant_a>*x2`, and so
+    is `3.7*<constant_a>*x1 + <constant_a>*x2` with its 3.7 masked, while
+    `<constant_a>*<constant_b>*x1 + <constant_a>*x2 + <constant_b>*x3` keeps both names and
+    `<constant_a>*x1 + <constant_a>*x2` has nothing to merge.
+  - Code generation and the list of an expression's variables treat a name as a parameter:
+    `expression_variables` leaves it out, `evaluate_constants` folds no part holding one,
+    `as_code` and `as_callable` bind one parameter per name, written `constant_NAME`, after the
+    variables (`<constant_a>*x1 + <constant_a>*x2` compiles to `lambda x1, x2, constant_a: ...`),
+    and `explicit_constant_placeholders` and `substitute_constants` give every occurrence of a
+    name one identifier and one value.
 
 - **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or

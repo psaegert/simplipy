@@ -101,7 +101,7 @@ Example (the flash-ansr-style policy)::
 import enum
 from typing import TYPE_CHECKING, Callable, Optional, cast
 
-from simplipy.utils import is_numeric_string, reserved_numeric_spelling
+from simplipy.utils import is_named_constant, is_numeric_string, reserved_numeric_spelling
 
 if TYPE_CHECKING:
     from simplipy.engine import SimpliPyEngine
@@ -131,6 +131,8 @@ _OPENERS = {"<add>": ("</add>", "<sub>", Role.ADDEND),
             "<mul>": ("</mul>", "<div>", Role.COEFFICIENT),
             "<max>": ("</max>", None, Role.VALUE),
             "<min>": ("</min>", None, Role.VALUE)}
+#: The tokens only the tagged dialect writes (its bag delimiters).
+_TAGGED_DELIMITERS = frozenset(_OPENERS) | frozenset(c for c, _, _ in _OPENERS.values())
 # Sign/reciprocal wrappers are role-transparent: the literal in ``neg 2`` plays whatever
 # role the wrapped position plays.
 _TRANSPARENT = {"neg", "inv"}
@@ -241,6 +243,14 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
     Pass ``collect=False`` for the raw positional substitution (a strict 1:1 token
     correspondence with ``tokens``), at the cost of the degree-of-freedom guarantee.
 
+    NAMED CONSTANTS (``<constant_NAME>``) are parameters, never literals: the policy does not
+    see them, and stage (b) keeps every name the expression uses more than once. A ground part
+    (no data variable) that holds such a name and a parameter used nowhere else (a
+    ``<constant>``, or a name used once) becomes one fresh ``<constant>``:
+    ``c_a*c_b*x1 + c_a*x2`` is ``<constant>*x1 + c_a*x2``, and ``3.7*c_a*x1 + c_a*x2``, its
+    3.7 masked, likewise, while ``c_a*c_b*x1 + c_a*x2 + c_b*x3`` keeps both names (each is
+    used elsewhere) and ``c_a*x1 + c_a*x2`` has nothing to merge.
+
     ONE-SHOT, BY DESIGN -- feed it an unmasked expression, never a skeleton. ``mask`` is
     deliberately NOT idempotent: stage (b) can turn STRUCTURE into a literal, and masking
     that literal would widen the family. Measured on 20k rows, ~0.15% of skeletons: a
@@ -253,6 +263,13 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
         replacement = policy(value, role)
         if replacement is not None:
             out[idx] = replacement
+    if collect and any(is_named_constant(t) for t in out):
+        # The ground parts that hold a name used more than once and a parameter used nowhere
+        # else, each one fresh `<constant>` (the core's `collect_parameters`), in the input's
+        # dialect. The simplification below never collects such a part: it reads a name used
+        # more than once as a variable.
+        form = 'tagged' if _TAGGED_DELIMITERS.intersection(out) else 'explicit'
+        out = engine._core.collect_parameters(out, form)
     if collect and out != list(tokens):
         # simplify mirrors the input container AND the input DIALECT, so the collect
         # stage needs no projection argument: a tagged

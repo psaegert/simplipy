@@ -68,6 +68,29 @@ correctly leaving `c1*x0 + c2*x1` alone (two), and normalizes the shape the
 way a human would write it (`x0 / <constant>` → `<constant> * x0`).
 `mask(..., collect=False)` gives the raw positional substitution instead.
 
+## Named constants
+
+A named constant, `<constant_NAME>` with NAME letters and digits, is a
+parameter shared by every occurrence of its name (see the
+[simplify guide](simplify.md#named-constants)). Masking never masks one: it
+is not a literal. The collect pass turns a ground part (a part with no data
+variable) into one fresh `<constant>` only if the part holds a parameter used
+nowhere else in the expression, a `<constant>` or a name used once; a name
+used more than once stays, since it ties its uses together:
+
+```python
+engine.mask('<constant_a>*<constant_b>*x1 + <constant_a>*x2')
+# -> '<constant> * x1 + <constant_a> * x2'
+engine.mask('3.7*<constant_a>*x1 + <constant_a>*x2', 'fittable')
+# -> '<constant> * x1 + <constant_a> * x2'
+engine.mask('<constant_a>*<constant_b>*x1 + <constant_a>*x2 + <constant_b>*x3')
+# -> '<constant_a> * <constant_b> * x1 + <constant_a> * x2 + <constant_b> * x3'
+```
+
+The number 3.7 is masked and then collected with the name beside it, never
+absorbed into `<constant_a>`; in the last example each name is used
+elsewhere, so nothing is collected.
+
 ## Mask once
 
 Masking **destroys information**: feed `mask` an expression, never a

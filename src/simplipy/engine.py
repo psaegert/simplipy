@@ -26,6 +26,7 @@ import json
 import yaml
 
 from simplipy.utils import (
+    is_named_constant,
     is_numeric_string,
     deduplicate_rules)
 from simplipy.trust import check_chain, check_realization, check_root, package_for, resolve_trusted
@@ -1832,9 +1833,10 @@ class SimpliPyEngine:
         corpus does not get one by accident.
 
         A subtree is foldable when it contains no variable and no slot -- a
-        ``<constant>`` is a FITTED degree of freedom, not a value, so a subtree carrying
-        one is left alone. Folding is MAXIMAL: the largest foldable subtrees go first,
-        so ``tan(1) + x`` folds the ``tan(1)`` and stops.
+        ``<constant>`` is a FITTED degree of freedom, not a value, and so is a named
+        constant (``<constant_NAME>``), so a subtree carrying one is left alone. Folding is
+        MAXIMAL: the largest foldable subtrees go first, so ``tan(1) + x`` folds the
+        ``tan(1)`` and stops.
 
         A subtree whose value is NOT FINITE is left unevaluated. Substituting
         ``float("inf")`` or ``float("nan")`` would inject a non-finite token into an
@@ -1865,7 +1867,8 @@ class SimpliPyEngine:
             return j
 
         def foldable(sub: list[str]) -> bool:
-            return not any(t in variables or t == '<constant>' or t[:1] in '_!?$' and t[1:].isdigit()
+            return not any(t in variables or t == '<constant>' or is_named_constant(t)
+                           or t[:1] in '_!?$' and t[1:].isdigit()
                            for t in sub)
 
         out: list[str] = []
@@ -2714,7 +2717,8 @@ class SimpliPyEngine:
         :meth:`as_callable` binds, so `f(*values)` has to mean what the expression
         reads. A token is a variable when it is none of the things that are not one --
         an operator, a numeric literal, a special constant, or a slot. Slots are
-        excluded because a `<constant>` is a fitted degree of freedom, not an argument.
+        excluded because a `<constant>` is a fitted degree of freedom, not an argument,
+        and so is a named constant (``<constant_NAME>``): a parameter, never a variable.
         """
         from .utils import is_numeric_string
         tokens = self.to_prefix(expression)
@@ -2766,6 +2770,14 @@ class SimpliPyEngine:
         is exact integer arithmetic: ``sin(4294967296*4294967297)`` raises numpy's TypeError
         as before (the simplified form folds the product to one literal).
 
+        A named constant (``<constant_NAME>``) is a PARAMETER of the compiled function, one
+        per name, written ``constant_NAME`` in the code: with ``variables=None`` the
+        signature is :meth:`expression_variables` followed by the named constants in order of
+        first appearance (``<constant_a>*x1 + <constant_a>*x2`` compiles to
+        ``lambda x1, x2, constant_a: ...``); an explicit ``variables`` list names each of them
+        by its token, where the caller wants it. The anonymous ``<constant>`` is not a
+        parameter of its own: name its slots first (:func:`simplipy.utils.explicit_constant_placeholders`).
+
         .. warning::
            Compiling runs the expression's realizations through :func:`compile`, so the
            usual trust rules apply -- the evaluation namespace is scoping, not a sandbox
@@ -2773,8 +2785,26 @@ class SimpliPyEngine:
         """
         from .utils import codify, evaluator_literal
         prefix = self.to_prefix(expression)
+        named: list[str] = []
+        for t in prefix:
+            if is_named_constant(t) and t not in named:
+                named.append(t)
         if variables is None:
-            variables = self.expression_variables(prefix)
+            variables = self.expression_variables(prefix) + named
+        if named:
+            missing = [t for t in named if t not in variables]
+            if missing:
+                raise ValueError(
+                    f"the named constants {missing} are parameters of the compiled function: "
+                    f"list them in `variables` (or pass variables=None)")
+            identifier = {t: 'constant_' + t[len('<constant_'):-1] for t in named}
+            clash = set(identifier.values()) & (set(variables) | set(prefix))
+            if clash:
+                raise ValueError(
+                    f"the identifiers {sorted(clash)} of named constants are already names in "
+                    f"the expression or in `variables`")
+            prefix = [identifier.get(t, t) for t in prefix]
+            variables = [identifier.get(v, v) for v in variables]
         # Every literal is read as its nearest float64 (`evaluator_literal`): an integer
         # beyond 2^53 would otherwise reach Python as an exact int, which numpy's ufuncs and
         # float arithmetic reject above int64 and float64's range.

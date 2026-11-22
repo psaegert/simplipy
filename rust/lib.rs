@@ -812,6 +812,27 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().ac_canonical_keys(&exprs, canon)))
     }
 
+    /// Masking's collection of degrees of freedom for named constants
+    /// (`Engine::ac_collect_parameters`): each ground part holding a named constant used more
+    /// than once and a fitted constant used nowhere else becomes one `<constant>`. The tokens
+    /// come back in `form`, or as given where no part is collected.
+    #[pyo3(signature = (tokens, form="explicit"))]
+    fn collect_parameters(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        form: &str,
+    ) -> PyResult<Vec<String>> {
+        let form = parse_ac_form(form)?;
+        py.detach(|| {
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
+                .ac_collect_parameters(&tokens, form)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })
+    }
+
     /// OFFLINE miner: the MARK a mine of `rule_mode` sets for `source` -- the mode's serve
     /// answer (`simplify(source, mode)` at the default effort, with the
     /// mode's rules installed) in the explicit projection (`Engine::mine_mark`).

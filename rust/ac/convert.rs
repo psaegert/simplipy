@@ -70,6 +70,37 @@ impl Drop for GroundParts {
     }
 }
 
+thread_local! {
+    /// Whether the printers write a named fitted constant with its name ([`WriteNames`]).
+    static WRITE_NAMES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While the guard lives, the printers write a fitted constant that carries a name
+/// (`expr::ConstName`) with its name, as an answer is written; elsewhere every fitted constant
+/// prints as `<constant>`, which is what it is to the certificates, the interval layer and the
+/// memo keys printed from states (a named constant used once is exactly a `<constant>`).
+pub(crate) struct WriteNames(bool);
+
+impl WriteNames {
+    pub(crate) fn open() -> WriteNames {
+        WriteNames(WRITE_NAMES.with(|w| w.replace(true)))
+    }
+}
+
+impl Drop for WriteNames {
+    fn drop(&mut self) {
+        WRITE_NAMES.with(|w| w.set(self.0));
+    }
+}
+
+/// The token a fitted constant prints as: its name inside [`WriteNames`], else `<constant>`.
+fn const_token(n: super::expr::ConstName, view: &TokenView) -> Tok {
+    match n.0 {
+        Some(t) if WRITE_NAMES.with(|w| w.get()) => t,
+        _ => view.intern("<constant>"),
+    }
+}
+
 /// Is `s` an atom with a value (a number, `np.pi`, `np.e`, an infinity, NaN, the written -0.0)?
 fn value_atom(s: &str) -> bool {
     crate::numeric::leaf_value(s).is_some() || crate::utils::is_numeric_string(s)
@@ -637,9 +668,11 @@ fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
     }
 }
 
-/// Classify a leaf token: exact-decimal numerics, the named literals, `<constant>`, else an
-/// opaque leaf (variable or wildcard). Public within the crate: the engine's numeric-fold glue
-/// parses evaluator result tokens back through the same classification.
+/// Classify a leaf token: exact-decimal numerics, the named literals, `<constant>` and a named
+/// constant the call's expression uses once (a free name, `TokenView::is_free_name`: the fitted
+/// constant carrying its name), else an opaque leaf (a variable, a named constant used more than
+/// once, or a wildcard). Public within the crate: the engine's numeric-fold glue parses
+/// evaluator result tokens back through the same classification.
 ///
 /// The laws applied here (`ac::laws::Law`): `parse.signed_literal`, `num.literal_arith`.
 pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
@@ -649,8 +682,11 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         "float(\"inf\")" => return Ex::PosInf,
         "float(\"-inf\")" => return Ex::NegInf,
         "float(\"nan\")" => return Ex::NaN,
-        "<constant>" => return Ex::Const,
+        "<constant>" => return Ex::ANON,
         _ => {}
+    }
+    if view.is_free_name(t) {
+        return Ex::Const(super::expr::ConstName(Some(t)));
     }
     if let Some(r) = Rat::parse_decimal(s) {
         return Ex::Num(r);
@@ -1046,7 +1082,7 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
             // absorption (`3 * C -> C`) before the inversion, collapsing members the
             // internal form keeps distinct. No other member class interacts under
             // `mul` (a canonical flat Mul cannot yield two like-based members).
-            if cx.nz_ae_licensed(&m) && !matches!(m, Ex::Const) {
+            if cx.nz_ae_licensed(&m) && !matches!(m, Ex::Const(_)) {
                 den.push(m);
             } else {
                 num.push(f.clone());
@@ -1074,7 +1110,7 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
         Ex::PosInf => out.push(view.intern("float(\"inf\")")),
         Ex::NegInf => out.push(view.intern("float(\"-inf\")")),
         Ex::NaN => out.push(view.intern("float(\"nan\")")),
-        Ex::Const => out.push(view.intern("<constant>")),
+        Ex::Const(n) => out.push(const_token(*n, view)),
         Ex::Leaf(t) => out.push(*t),
         // A lattice bag is the binary chain of its members in the canonical order, nested to
         // the right (`max a max b c`), as a sum's positive part is.
@@ -1393,7 +1429,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
         Ex::PosInf => out.push(view.intern("float(\"inf\")")),
         Ex::NegInf => out.push(view.intern("float(\"-inf\")")),
         Ex::NaN => out.push(view.intern("float(\"nan\")")),
-        Ex::Const => out.push(view.intern("<constant>")),
+        Ex::Const(n) => out.push(const_token(*n, view)),
         Ex::Leaf(t) => out.push(*t),
         // A lattice bag is delimited, as a sum and a product are: `<max> a b c </max>`.
         Ex::Fun(f, args) if lattice_head(*f, view) => {
@@ -1840,7 +1876,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
         Ex::PosInf => ("inf".to_string(), 4),
         Ex::NegInf => ("-inf".to_string(), 1),
         Ex::NaN => ("nan".to_string(), 4),
-        Ex::Const => ("<constant>".to_string(), 4),
+        Ex::Const(n) => (view.resolve_owned(const_token(*n, view)), 4),
         Ex::Leaf(t) => (view.resolve_owned(*t), 4),
         Ex::Fun(f, args) => {
             let inner: Vec<String> = args.iter().map(|a| render(a, cx, 0)).collect();

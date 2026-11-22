@@ -42,7 +42,9 @@ use super::expr::{
     add, canon, complexity, distribution_licensed, fun, lattice_head, mul, orient_term_classes,
     pattern_distributed, tie_cmp, Cx, Ex, Licences,
 };
-use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
+use super::matcher::{
+    match_bag_each_cls, matches_each, substitute, substitute_named, BagKind, Binds, MCx,
+};
 use super::rat::Rat;
 
 /// One translated rule. `lhs`/`rhs` are canonical-with-bare-context AC expressions over TABLE
@@ -227,7 +229,7 @@ pub fn atom_sig(e: &Ex, view: &TokenView) -> u64 {
         Ex::PosInf => 1u64 << 59,
         Ex::NegInf => 1u64 << 60,
         Ex::NaN => 1u64 << 61,
-        Ex::Const => 1u64 << 62,
+        Ex::Const(_) => 1u64 << 62,
         Ex::Fun(f, v) => v
             .iter()
             .fold(1u64 << (f.0 & 63), |acc, x| acc | atom_sig(x, view)),
@@ -240,7 +242,7 @@ pub fn atom_sig(e: &Ex, view: &TokenView) -> u64 {
 /// translate-time gates below).
 fn const_count(e: &Ex) -> usize {
     match e {
-        Ex::Const => 1,
+        Ex::Const(_) => 1,
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().map(const_count).sum(),
         Ex::Pow(b, ex) => const_count(b) + const_count(ex),
         _ => 0,
@@ -258,7 +260,7 @@ fn collect_wildcards(e: &Ex, view: &TokenView, out: &mut FxHashSet<Tok>) {
                 out.insert(*t);
             }
         }
-        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const => {}
+        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const(_) => {}
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for x in v {
                 collect_wildcards(x, view, out);
@@ -766,7 +768,7 @@ impl NodeIds {
             Ex::PosInf => self.stack.push(3),
             Ex::NegInf => self.stack.push(4),
             Ex::NaN => self.stack.push(5),
-            Ex::Const => self.stack.push(6),
+            Ex::Const(_) => self.stack.push(6),
             Ex::Leaf(t) => self.stack.extend([7, t.0]),
             Ex::Add(v) | Ex::Mul(v) => {
                 self.stack.push(if matches!(e, Ex::Add(_)) { 8 } else { 9 });
@@ -1126,7 +1128,15 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                             if !rule.licensed(b, p.cx) {
                                 return false;
                             }
-                            let replacement = substitute(&rule.rhs, b, p.cx.view);
+                            let replacement = substitute_named(
+                                &rule.rhs,
+                                b,
+                                sv.iter()
+                                    .zip(used.iter())
+                                    .filter(|(_, &u)| u)
+                                    .map(|(x, _)| x),
+                                p.cx.view,
+                            );
                             let mut parts: Vec<Ex> = sv
                                 .iter()
                                 .zip(used.iter())
@@ -1198,7 +1208,15 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                         if !rule.licensed(b, p.cx) {
                             return false;
                         }
-                        let replacement = substitute(&rule.rhs, b, p.cx.view);
+                        let replacement = substitute_named(
+                            &rule.rhs,
+                            b,
+                            sv.iter()
+                                .zip(used.iter())
+                                .filter(|(_, &u)| u)
+                                .map(|(x, _)| x),
+                            p.cx.view,
+                        );
                         let mut parts: Vec<Ex> = sv
                             .iter()
                             .zip(used.iter())
@@ -1235,7 +1253,15 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                         if !rule.licensed(b, p.cx) {
                             return false;
                         }
-                        let replacement = substitute(&rule.rhs, b, p.cx.view);
+                        let replacement = substitute_named(
+                            &rule.rhs,
+                            b,
+                            sv.iter()
+                                .zip(used.iter())
+                                .filter(|(_, &u)| u)
+                                .map(|(x, _)| x),
+                            p.cx.view,
+                        );
                         let mut parts: Vec<Ex> = sv
                             .iter()
                             .zip(used.iter())
@@ -1266,7 +1292,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     if !rule.licensed(b, p.cx) {
                         return false;
                     }
-                    let next = canon(substitute(&rule.rhs, b, p.cx.view), p.cx);
+                    let next = canon(
+                        substitute_named(&rule.rhs, b, std::iter::once(e), p.cx.view),
+                        p.cx,
+                    );
                     if oriented_mu(&next, node_mu(), e, p) {
                         log_fire(&rule.lhs, &rule.rhs, b, p.cx.view);
                         out = Some(next);
@@ -1545,7 +1574,7 @@ enum Visit {
 fn visit(node: &Ex, p: &PassCtx, up: Option<&Up>) -> Visit {
     if matches!(
         node,
-        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
+        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const(_)
     ) {
         return Visit::Normal; // literal leaves: nothing to do
     }

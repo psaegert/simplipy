@@ -87,13 +87,132 @@ fn contains_bracket_poisoned_pow(e: &Ex, view: &TokenView) -> bool {
     }
 }
 
+/// [`Engine::ac_collect_parameters`]'s step: `e` with each part that is one fresh constant
+/// ([`parameter_part`]) written as `<constant>`, and whether any was. A whole node first, then
+/// the ground members of a sum or a product together, then the rest of the expression.
+fn collect_parameter_parts(e: Ex, view: &TokenView) -> (Ex, bool) {
+    let composite = matches!(e, Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..));
+    if composite && parameter_part(std::slice::from_ref(&e), view) {
+        return (Ex::ANON, true);
+    }
+    let each = |v: Vec<Ex>, changed: &mut bool| -> Vec<Ex> {
+        v.into_iter()
+            .map(|x| {
+                let (y, c) = collect_parameter_parts(x, view);
+                *changed |= c;
+                y
+            })
+            .collect()
+    };
+    let bag = |v: Vec<Ex>, changed: &mut bool| -> Vec<Ex> {
+        let (ground, rest): (Vec<Ex>, Vec<Ex>) =
+            v.into_iter().partition(|m| parameter_ground(m, view));
+        let mut out = if ground.len() >= 2 && parameter_part(&ground, view) {
+            *changed = true;
+            vec![Ex::ANON]
+        } else {
+            each(ground, changed)
+        };
+        out.extend(each(rest, changed));
+        out
+    };
+    let mut changed = false;
+    let out = match e {
+        Ex::Add(v) => Ex::Add(bag(v, &mut changed)),
+        Ex::Mul(v) => Ex::Mul(bag(v, &mut changed)),
+        Ex::Fun(f, v) => Ex::Fun(f, each(v, &mut changed)),
+        Ex::Pow(b, x) => {
+            let mut v = each(vec![*b, *x], &mut changed);
+            let x = v.pop().expect("an exponent");
+            let b = v.pop().expect("a base");
+            Ex::Pow(Box::new(b), Box::new(x))
+        }
+        leaf => leaf,
+    };
+    (out, changed)
+}
+
+/// Is `e` free of data variables, as masking reads it: a named constant is a parameter, not a
+/// variable?
+fn parameter_ground(e: &Ex, view: &TokenView) -> bool {
+    match e {
+        Ex::Leaf(t) => {
+            view.sigil(*t) == 0
+                && view.with_str(*t, |s| {
+                    crate::tokens::is_named_constant(s) || crate::ac::expr::numeric_leaf(s)
+                })
+        }
+        Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const(_) | Ex::PosInf | Ex::NegInf | Ex::NaN => true,
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().all(|x| parameter_ground(x, view)),
+        Ex::Pow(b, x) => parameter_ground(b, view) && parameter_ground(x, view),
+    }
+}
+
+/// Are the members `part` together ONE FRESH CONSTANT for masking: free of data variables, holding
+/// a named constant the expression uses more than once (a leaf) and a fitted constant it uses
+/// nowhere else (`Ex::Const`: a `<constant>` or a named constant used once), and no exact zero,
+/// infinity or NaN (a fitted constant is finite and never stands for a structural zero)?
+fn parameter_part(part: &[Ex], view: &TokenView) -> bool {
+    fn scan(e: &Ex, view: &TokenView, named: &mut bool, free: &mut bool, bad: &mut bool) {
+        match e {
+            Ex::Leaf(t) => view.with_str(*t, |s| {
+                *named |= crate::tokens::is_named_constant(s);
+                *bad |= s == crate::ac::expr::NEG_ZERO;
+            }),
+            Ex::Const(_) => *free = true,
+            Ex::Num(r) => *bad |= r.is_zero(),
+            Ex::PosInf | Ex::NegInf | Ex::NaN => *bad = true,
+            Ex::Pi | Ex::E => {}
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
+                v.iter().for_each(|x| scan(x, view, named, free, bad))
+            }
+            Ex::Pow(b, x) => {
+                scan(b, view, named, free, bad);
+                scan(x, view, named, free, bad);
+            }
+        }
+    }
+    if !part.iter().all(|m| parameter_ground(m, view)) {
+        return false;
+    }
+    let (mut named, mut free, mut bad) = (false, false, false);
+    part.iter()
+        .for_each(|m| scan(m, view, &mut named, &mut free, &mut bad));
+    named && free && !bad
+}
+
+/// Does `e` use a named constant read as a variable (a leaf: the expression it came from used
+/// the name more than once) exactly once? Such an answer is simplified again with that name
+/// read as a fitted constant (`Engine::ac_simplify_ex_fold_sup`).
+fn leaf_name_used_once(e: &Ex, view: &TokenView) -> bool {
+    fn count(e: &Ex, view: &TokenView, out: &mut Vec<(crate::tokens::Tok, usize)>) {
+        match e {
+            Ex::Leaf(t) if view.with_str(*t, crate::tokens::is_named_constant) => {
+                match out.iter_mut().find(|(u, _)| u == t) {
+                    Some((_, n)) => *n += 1,
+                    None => out.push((*t, 1)),
+                }
+            }
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().for_each(|x| count(x, view, out)),
+            Ex::Pow(b, x) => {
+                count(b, view, out);
+                count(x, view, out);
+            }
+            _ => {}
+        }
+    }
+    let mut seen = Vec::new();
+    count(e, view, &mut seen);
+    seen.iter().any(|&(_, n)| n == 1)
+}
+
 /// Recursively GROUND: no `<constant>` and no variable leaf anywhere (numeric-string
 /// leaves are literals and qualify). The certified-absorption arm's scope guard.
 /// Is `e` free of variables (a ground value, or a family of `<constant>` values)? Like
 /// [`is_ground`] with `<constant>` admitted.
 fn variable_free(e: &Ex, view: &TokenView) -> bool {
     match e {
-        Ex::Const => true,
+        Ex::Const(_) => true,
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().all(|x| variable_free(x, view)),
         Ex::Pow(b, ex) => variable_free(b, view) && variable_free(ex, view),
         leaf => is_ground(leaf, view),
@@ -102,7 +221,7 @@ fn variable_free(e: &Ex, view: &TokenView) -> bool {
 
 fn is_ground(e: &Ex, view: &TokenView) -> bool {
     match e {
-        Ex::Const => false,
+        Ex::Const(_) => false,
         Ex::Leaf(t) => view.with_str(*t, |s| {
             s.as_bytes()
                 .first()
@@ -1048,7 +1167,9 @@ impl Engine {
         // invariant at load), and non-bijective positions (pow and kin) are not
         // absorption sites. `<constant>`-bearing members are not ground and never
         // qualify (Const-independence).
-        if matches!(e, Ex::Add(_) | Ex::Mul(_)) && children.iter().any(|c| matches!(c, Ex::Const)) {
+        if matches!(e, Ex::Add(_) | Ex::Mul(_))
+            && children.iter().any(|c| matches!(c, Ex::Const(_)))
+        {
             let is_mul = matches!(e, Ex::Mul(_));
             // THE COLLAPSE LICENCE decides it: the member and the constant together, `C + g`
             // or `C * g`, collapse to a constant wherever the licence lets that sub-bag
@@ -1056,7 +1177,7 @@ impl Engine {
             // product absorbs only a member certainly nonzero: `C * 0` is the exact 0, which a
             // fitted constant would erase (the reparametrization must be a bijection).
             let absorbable = |m: &Ex| -> bool {
-                if matches!(m, Ex::Const) || !is_ground(m, &view) {
+                if matches!(m, Ex::Const(_)) || !is_ground(m, &view) {
                     return false;
                 }
                 if is_mul {
@@ -1072,9 +1193,9 @@ impl Engine {
                     }
                 }
                 let pair = if is_mul {
-                    crate::ac::expr::mul(vec![Ex::Const, m.clone()], &bare)
+                    crate::ac::expr::mul(vec![Ex::ANON, m.clone()], &bare)
                 } else {
-                    crate::ac::expr::add(vec![Ex::Const, m.clone()], &bare)
+                    crate::ac::expr::add(vec![Ex::ANON, m.clone()], &bare)
                 };
                 let strs = self.resolve_seq(&to_prefix(&pair, &bare), ctx);
                 crate::interval::collapse_licence(&strs, &self.operators, mode)
@@ -1096,8 +1217,8 @@ impl Engine {
         }
         let const_or_fin = children
             .iter()
-            .all(|c| matches!(c, Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E))
-            && children.iter().any(|c| matches!(c, Ex::Const));
+            .all(|c| matches!(c, Ex::Const(_) | Ex::Num(_) | Ex::Pi | Ex::E))
+            && children.iter().any(|c| matches!(c, Ex::Const(_)));
         if const_or_fin {
             // THE CONSTANT COLLAPSE (`Law::AbsorbCollapse`), read by the collapse licence
             // (`interval::collapse_licence`, the specification's 3.2 with 4.1) in the mode's
@@ -1106,7 +1227,9 @@ impl Engine {
             // collapses without evidence.
             // Memoized per call beside the ground classes (the key holds a `<constant>`, so it
             // never meets a ground key, and a tag past every token id keeps it apart from the
-            // NaN-family verdict of the same node).
+            // NaN-family verdict of the same node). The memo holds the verdict; the constant the
+            // node collapses to keeps the name of its constants (`ConstName::merge`), which the
+            // key, printed without names, does not hold.
             let flat = to_prefix(e, &bare);
             let mut key = flat.clone();
             key.push(crate::tokens::Tok(u32::MAX));
@@ -1116,13 +1239,13 @@ impl Engine {
                 None => {
                     let strs = self.resolve_seq(&flat, ctx);
                     let v = crate::interval::collapse_licence(&strs, &self.operators, mode)
-                        .then_some(Ex::Const);
+                        .then_some(Ex::ANON);
                     class_memo.borrow_mut().insert(key, v.clone());
                     v
                 }
             };
             if collapsed.is_some() {
-                return collapsed;
+                return Some(Ex::Const(e.merged_const_name(&view)));
             }
         }
         None
@@ -1186,6 +1309,7 @@ impl Engine {
         let is_held = |s: &Ex| held.contains(s);
         let mut spell = Cx::bare(&view);
         spell.sign_held = Some(&is_held);
+        let _names = crate::ac::convert::WriteNames::open();
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &spell),
             AcForm::Tagged => to_prefix_tagged(&best, &spell),
@@ -1339,6 +1463,7 @@ impl Engine {
         let is_held = |s: &Ex| held.contains(s);
         let mut spell = Cx::bare(&view);
         spell.sign_held = Some(&is_held);
+        let _names = crate::ac::convert::WriteNames::open();
         Some(to_infix_pretty(&best, &spell))
     }
 
@@ -1359,6 +1484,7 @@ impl Engine {
         let is_held = |s: &Ex| held.contains(s);
         let mut spell = Cx::bare(&view);
         spell.sign_held = Some(&is_held);
+        let _names = crate::ac::convert::WriteNames::open();
         Some(to_infix_pretty(&best, &spell))
     }
 
@@ -1394,6 +1520,8 @@ impl Engine {
     ) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
+        // A named constant the expression uses once is a fitted constant (`TokenView::is_free_name`).
+        self.view(&ctx).classify_names(&toks);
         let view = self.view(&ctx);
         // Parse with the CHAIN'S context for the REQUESTED mode: the
         // instrument must price the state that mode's chain
@@ -1493,6 +1621,43 @@ impl Engine {
             self.resolve_seq(&explicit, &ctx),
             self.resolve_seq(&key, &ctx),
         ))
+    }
+
+    /// MASKING'S COLLECTION OF DEGREES OF FREEDOM, for named constants: a ground part of the
+    /// expression (no data variable; named constants are parameters) that holds a named constant
+    /// the expression uses more than once and a fitted constant used nowhere else (a
+    /// `<constant>`, or a named constant used once) is one fresh `<constant>`: the free constant
+    /// takes every value the part does. A part is a whole ground node, or the ground members of
+    /// a sum or a product together (`c_a*c_b*x1 + c_a*x2` is `<constant>*x1 + c_a*x2`;
+    /// `3.7*c_a*x1 + c_a*x2`, its 3.7 masked, likewise); `c_a*c_b*x1 + c_a*x2 + c_b*x3` holds
+    /// none, each name being used elsewhere. A part holding an exact zero or an infinity is
+    /// never one (a fitted constant is finite, and it never stands for a structural zero). Parts
+    /// without a name used more than once are the simplification's own absorption, which the
+    /// collect stage runs next. Repeated until no part is left: collecting one part can leave a
+    /// name used once. The tokens come back in `form`, or as given where no part is collected;
+    /// `None` on malformed input.
+    pub fn ac_collect_parameters(&self, tokens: &[String], form: AcForm) -> Option<Vec<String>> {
+        let mut current = tokens.to_vec();
+        loop {
+            let ctx = SimplifyCtx::new(self.tokens.len());
+            let toks = self.intern_seq(&current, &ctx);
+            let view = self.view(&ctx);
+            view.classify_names(&toks);
+            let _domain = crate::ac::rat::number_domain(true);
+            let bare = Cx::bare(&view);
+            let e = from_prefix(&toks, &bare)?;
+            let (collected, changed) = collect_parameter_parts(e, &view);
+            if !changed {
+                return Some(current);
+            }
+            let collected = canon(collected, &bare);
+            let _names = crate::ac::convert::WriteNames::open();
+            let out = match form {
+                AcForm::Explicit => to_prefix(&collected, &bare),
+                AcForm::Tagged => to_prefix_tagged(&collected, &bare),
+            };
+            current = self.resolve_seq(&out, &ctx);
+        }
     }
 
     /// Does the rule `lhs -> rhs` state something the engine itself performs, read in
@@ -1669,6 +1834,7 @@ impl Engine {
         ctx: &SimplifyCtx,
     ) -> Option<(Ex, u64)> {
         let toks = self.intern_seq(tokens, ctx);
+        self.view(ctx).classify_names(&toks);
         let view = self.view(ctx);
         let f64 = matches!(canon_mode, RuleMode::Default);
         let cf = |e: &Ex| self.ac_cert(e, ctx, false, f64);
@@ -1805,7 +1971,62 @@ impl Engine {
     /// probes each `?`-rule under the engine WITHOUT that rule: per-candidate engine
     /// rebuilds cost seconds each (lazy rule translation) and the refund needs tens of
     /// thousands of them, while a per-probe suppression set costs microseconds.
+    ///
+    /// NAMED CONSTANTS AT THE FIXPOINT. A named constant the expression uses once is a fitted
+    /// constant, one used more than once a variable (`TokenView::is_free_name`). Simplifying can
+    /// leave a name the input used several times in one place (`<constant_a>*x1 +
+    /// <constant_a>*x2` is `<constant_a>*(x1 + x2)`); the answer then reads that name as a
+    /// fitted constant, so a second call would treat it as one. The answer is simplified again
+    /// with it read so, until every name the answer uses once is read as a fitted constant: the
+    /// answer is then a fixpoint, and a second call reproduces it. Each round reads one name
+    /// more as a fitted constant and none less (a fitted constant is never duplicated), so the
+    /// rounds end.
     fn ac_simplify_ex_fold_sup(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        explore_budget: usize,
+        fold_tr: bool,
+        suppressed: Option<&FxHashSet<usize>>,
+    ) -> (SimplifyCtx, Option<Ex>) {
+        let (ctx, best) = self.ac_simplify_once(
+            tokens,
+            max_passes,
+            mode,
+            explore_budget,
+            fold_tr,
+            suppressed,
+        );
+        let again = best.as_ref().and_then(|e| {
+            let view = self.view(&ctx);
+            if !leaf_name_used_once(e, &view) {
+                return None;
+            }
+            let _domain = crate::ac::rat::number_domain(true);
+            let held = self.held_in(e, false, &view, &ctx, mode);
+            let is_held = |s: &Ex| held.contains(s);
+            let mut spell = Cx::bare(&view);
+            spell.sign_held = Some(&is_held);
+            let _names = crate::ac::convert::WriteNames::open();
+            Some(self.resolve_seq(&to_prefix(e, &spell), &ctx))
+        });
+        match again {
+            Some(answer) => self.ac_simplify_ex_fold_sup(
+                &answer,
+                max_passes,
+                mode,
+                explore_budget,
+                fold_tr,
+                suppressed,
+            ),
+            None => (ctx, best),
+        }
+    }
+
+    /// One round of [`Engine::ac_simplify_ex_fold_sup`]: the input's named constants read as
+    /// it uses them.
+    fn ac_simplify_once(
         &self,
         tokens: &[String],
         max_passes: usize,
@@ -1821,6 +2042,8 @@ impl Engine {
         let wildcard_all = mode.wildcard_all();
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
+        // A named constant the expression uses once is a fitted constant (`TokenView::is_free_name`).
+        self.view(&ctx).classify_names(&toks);
         let view = self.view(&ctx);
 
         let f64 = matches!(mode, RuleMode::Default);
@@ -1916,6 +2139,7 @@ impl Engine {
             let is_held = |s: &Ex| held.contains(s);
             let mut spell = Cx::bare(cxx.view);
             spell.sign_held = Some(&is_held);
+            let _names = crate::ac::convert::WriteNames::open();
             let t = to_prefix(e, &spell);
             // Re-parse under the call's MODE (cert-less, like the entry parse):
             // serialization stability is a PER-MODE contract.
