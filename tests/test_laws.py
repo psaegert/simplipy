@@ -394,6 +394,13 @@ POWER_ROWS = [
     ('mul.collect', '* pow x0 2 pow x0 3', 'pow x0 5', 'pow x0 5'),
     ('mul.collect', '* pow x0 0.5 pow x0 0.5', '* rootn x0 2 rootn x0 2', 'x0'),
     ('mul.collect', '* rootn x0 2 x0', 'pow x0 / 3 2', 'pow x0 / 3 2'),
+    # three halves merge as a whole, where no two of them do in f64: x0^(3/2) has no value for
+    # x0 < 0, as each half has none
+    ('mul.collect', '* pow x0 0.5 * pow x0 0.5 pow x0 0.5', 'pow x0 / 3 2', 'pow x0 / 3 2'),
+    ('mul.collect', '/ 1 * pow x0 0.5 * pow x0 0.5 pow x0 0.5', 'inv pow x0 / 3 2',
+     'inv pow x0 / 3 2'),
+    ('mul.collect', '* pow x0 0.5 * pow x0 0.5 * pow x0 0.5 pow x0 0.5',
+     '* pow x0 / 3 2 rootn x0 2', 'pow x0 2'),
     ('mul.collect', '* pow abs x0 0.5 pow abs x0 0.5', 'abs x0', 'abs x0'),
     # t^y*t^y = t^(2y): t >= 0 or y's level sets null, and in f64 t not -0 on a region
     ('mul.collect_symbolic', '* pow x0 x1 pow x0 x1', 'pow x0 * 2 x1', 'pow x0 * 2 x1'),

@@ -6698,7 +6698,29 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
             vec![poss, negs]
         };
         for pool in pools {
-            for r in Rat::partition_with(pool, merge, Rat::is_zero) {
+            let mut parts = Rat::partition_with(pool, merge, Rat::is_zero);
+            // THE POWERS LEFT MERGE AS A WHOLE where no two of them did: the licence reads the
+            // merged exponent, which two members can make an integer their whole does not, so
+            // `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` while `x^(1/2)*x^(1/2)` keeps its halves in
+            // f64 (`x` has a value where they have none). The first k of the parts merge, for the
+            // largest k of three or more the licence admits, until none does.
+            while parts.len() >= 3 {
+                let merged = (3..=parts.len()).rev().find_map(|k| {
+                    let rest = parts[1..k]
+                        .iter()
+                        .try_fold(Rat::ZERO, |acc, r| acc.checked_add(r))?;
+                    merge(&parts[0], &rest).map(|total| (k, total))
+                });
+                let Some((k, total)) = merged else {
+                    break;
+                };
+                parts.drain(..k);
+                if !total.is_zero() {
+                    parts.push(total);
+                }
+                parts.sort_by(Rat::cmp_exact);
+            }
+            for r in parts {
                 let f = rebuild_factor(base.clone(), sym.clone(), r, cx);
                 if !matches!(f, Ex::Mul(_)) && factor_split(f.clone(), cx).0 != base {
                     rebased = true;

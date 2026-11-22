@@ -672,6 +672,10 @@ model predictions.
   reals, such as a division by zero however it is written) is not priced, since `strict`'s answer
   then holds float64's value (`1/(0*x)` is `inf/x` there), which permissive does not share. A
   violation now reports three prices: `strict`, `permissive` and `strict_as_permissive`.
+- **Powers of one base merge as a whole.** Where no two of a product's powers of one base may
+  merge in `strict` (their sum an integer, which has a value where they have none), the powers
+  merge as a whole where that sum does not: `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` and
+  `1/(x^0.5*x^0.5*x^0.5)` is `x^(-3/2)`, while `x^(1/2)*x^(1/2)` keeps its halves.
 - **`prettify(..., mode=)`** reads the expression with the constructors of a mode, `strict` by
   default: pass the mode an answer was simplified in, and the display is that mode's reading of
   it. Both modes display a group as it is written (`x3 + 3.71649*(x1 + x2)`), `keep_grouping`
