@@ -7,7 +7,8 @@
 //! premise holds of the operand its statement names, and each mode states its own premise:
 //! `f64` reads float64's values (a step is admitted where float64's two sides agree wherever
 //! the input has a value, or where the step holds in the reals and the two sides agree in kind),
-//! `permissive` reads the table's values and cancels like terms without a definedness check.
+//! `permissive` reads the table's values, cancels like terms and lets a zero factor absorb the
+//! product without a definedness check.
 //! No flag is shared between laws: a site that applies a law asks [`Law::holds`] by the law's
 //! name.
 //!
@@ -963,7 +964,7 @@ impl Law {
                 cx.permits(Permissive::LikeTerms) || super::expr::signed_zero_null(t, true, cx)
             }
             Law::MulZero => {
-                cx.permits(Permissive::LikeTerms)
+                cx.permits(Permissive::ZeroAbsorbs)
                     || (cx.fin_certified(t)
                         && (!super::expr::f64_zero_signs(cx) || cx.certainly_nonneg(t)))
             }

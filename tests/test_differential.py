@@ -865,8 +865,8 @@ def test_the_core_names_permissives_list() -> None:
     from simplipy import _core
     assert _core.permissive_simplifications() == [
         'inverse pairs cancel', 'powers compose', 'like terms cancel',
-        'constant collapse without evidence', 'literal to float',
-        'any slot matches', 'float-resolution rules served', 'holds by agreement']
+        'a zero factor absorbs the product', 'constant collapse without evidence',
+        'literal to float', 'any slot matches', 'float-resolution rules served', 'holds by agreement']
 
 
 INVERSE_PAIRS = [('exp', 'log'), ('sin', 'asin'), ('cos', 'acos'), ('tan', 'atan'),
@@ -1285,14 +1285,15 @@ def test_permissive_leaves_what_is_no_entry_as_f64_does(expr) -> None:
 
 def test_the_core_exports_the_named_steps_schemas() -> None:
     """The judge reads permissive's named steps from the core (`_core.permissive_schemas`), one
-    entry per name of the list, in its order: the three steps the constructors take on an
+    entry per name of the list, in its order: the four steps the constructors take on an
     expression's structure carry schemas, built from the tables they read, and the readings
     none."""
     from simplipy import _core
     exported = _core.permissive_schemas()
     assert [name for name, _ in exported] == _core.permissive_simplifications()
     assert [name for name, schemas in exported if schemas] == [
-        'inverse pairs cancel', 'powers compose', 'like terms cancel']
+        'inverse pairs cancel', 'powers compose', 'like terms cancel',
+        'a zero factor absorbs the product']
     inverse = dict(exported)['inverse pairs cancel']
     assert sorted((lhs[0], lhs[1]) for lhs, _ in inverse) == sorted(
         (o, i) for f, g in INVERSE_PAIRS for o, i in ((f, g), (g, f)))
@@ -1333,6 +1334,21 @@ def test_the_monitor_reads_a_named_step_in_an_answer() -> None:
     inp, out = '+ x1 asin sin x0'.split(), '+ x0 x1'.split()
     assert judge_pair(inp, out, mode='permissive')[0] == 'OK'
     assert judge_pair(inp, out, mode='f64')[0] == 'VIOLATION'
+
+
+@pytest.mark.parametrize('inp', [
+    '+ x1 - log x0 log x0',        # like terms cancel
+    '+ x1 * 0 log x0',             # a zero factor absorbs the product
+    '+ x1 * 0 asin x0',
+    '+ x1 / 0 pow x0 0.5',
+])
+def test_the_monitor_reads_permissives_steps_without_a_definedness_check(inp) -> None:
+    """Like terms cancelling and a zero factor absorbing the product give a value only where the
+    input has none, so the answer `x1` is permissive's, and a violation in f64, where float64
+    gives the input NaN on a region."""
+    from simplipy.verify._monitor import judge_pair
+    assert judge_pair(inp.split(), ['x1'], mode='permissive')[0] == 'OK'
+    assert judge_pair(inp.split(), ['x1'], mode='f64')[0] == 'VIOLATION'
 
 
 # ------------------------------------------------------------------------------------------

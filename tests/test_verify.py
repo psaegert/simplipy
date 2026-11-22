@@ -979,12 +979,15 @@ class TestCleanlinessIsPerMode:
         # A power of a non-integer exponent is `>= 0` wherever it has a value, so the load
         # refuses five more rows as the engine's own in each file, `abs rootn _0 (-2k) ->
         # rootn _0 (-2k)`: f64's policy alone 25, permissive's 40.
+        # A zero factor absorbs the product in permissive on every instance, so the load refuses
+        # one more row of the permissive file as the engine's own, `/ 0 $0 -> 0`: permissive's
+        # policy alone 41.
         tier = {m: {o['idx'] for o in r['offenders'] if (o['tier'] or 'reject') not in v.MODE_TIERS[m]}
                 for m, r in report['modes'].items()}
         policy_only = {m: {o['idx'] for o in r['offenders']} - tier[m]
                        for m, r in report['modes'].items()}
         assert len(tier['strict'] - {126}) == 119 and len(policy_only['strict']) == 25
-        assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 40
+        assert len(tier['permissive']) == 46 and len(policy_only['permissive']) == 41
         # the package ships the corpus, so the sweep runs in any install. Exactly the known
         # violations (conftest).
         assert report['permissive_dominance'] == {

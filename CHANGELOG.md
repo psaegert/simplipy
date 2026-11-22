@@ -672,6 +672,19 @@ model predictions.
   reals, such as a division by zero however it is written) is not priced, since `strict`'s answer
   then holds float64's value (`1/(0*x)` is `inf/x` there), which permissive does not share. A
   violation now reports three prices: `strict`, `permissive` and `strict_as_permissive`.
+- **In `permissive` a zero factor absorbs the product without a definedness check**, a step of
+  its own named beside like-term cancellation (`_core.permissive_simplifications()` lists
+  `a zero factor absorbs the product`, and the judge's permissive tier reads its schema
+  `0*t = 0` by that name). The constructors take it on every instance, with no rule loaded:
+  `0*log(x2)`, `0*sqrt(x2)`, `0*x2^x2`, `0*asin(x2)`, `0/x2^(1/2)`, `0*acosh(x2)` and
+  `0*(1/x2)` are 0. Wherever the product has a value it is 0, so the step never changes a value;
+  it gives one where the factor has none. `strict` keeps a product float64 gives no value
+  (`0*log(x2)` is NaN for `x2 < 0`).
+- **A rule stating that a zero factor absorbs the product is the engine's.** In `permissive`,
+  `* 0 !0 -> 0` and `/ 0 $0 -> 0` state the step the constructors take on every instance: they
+  are engine-owned, so the mine does not mint them and the load drops them, with no answer
+  changed. A rule stating a like-term cancellation (`- !0 !0 -> 0`, `/ $0 $0 -> 1`) stays a rule:
+  the walk takes it where the constructors' merge does not, and answers change without it.
 - **Powers of one base merge as a whole.** Where no two of a product's powers of one base may
   merge in `strict` (their sum an integer, which has a value where they have none), the powers
   merge as a whole where that sum does not: `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` and
@@ -2196,7 +2209,8 @@ model predictions.
   holds the true value and, in `f64`, float64's infinity (it was a finite part pinned at +inf).
   The judge's whole-domain proofs and the mint's certificates rest on these enclosures.
 - **`permissive`'s own simplifications are one named list.** Inverse pairs cancel, powers
-  compose, like terms cancel without a definedness check, constants collapse without evidence, a
+  compose, like terms cancel and a zero factor absorbs the product without a definedness check,
+  constants collapse without evidence, a
   literal becomes its float where that is cheaper, every slot matches any subexpression, and the
   rules that agree with real's values up to float resolution are served; every other step
   `permissive` takes holds by agreement, and

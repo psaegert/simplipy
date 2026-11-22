@@ -11,7 +11,9 @@
 //!   (`pow`'s and `rootn`'s licence, `as_rational_power`);
 //! * `like terms cancel`: the laws whose premise `permissive` drops by this entry (`Law::holds`),
 //!   each spelled as its statement says. The catalogue's other partial laws read a sum's sign in
-//!   `f64` and are identities of the reals, where `permissive` reads one zero: no step of its own.
+//!   `f64` and are identities of the reals, where `permissive` reads one zero: no step of its own;
+//! * `a zero factor absorbs the product`: `mul.zero`, whose premise `permissive` drops by this
+//!   entry, spelled as its statement says.
 //!
 //! The other entries are readings, not steps over a rule's structure, and have no schema: a
 //! constant's collapse is the collapse alignment the judge reads (`fit::collapse_spans`); a
@@ -36,9 +38,8 @@ fn tokens(s: &str) -> Vec<String> {
 
 /// The laws `permissive` applies by [`Permissive::LikeTerms`]: their premise in `f64` is the
 /// like terms' definedness or a zero's sign, and `permissive` drops it (`Law::holds`).
-pub const LIKE_TERM_LAWS: [Law; 5] = [
+pub const LIKE_TERM_LAWS: [Law; 4] = [
     Law::AddZero,
-    Law::MulZero,
     Law::AddCancel,
     Law::MulCancel,
     Law::InfinityAbsorbs,
@@ -49,7 +50,6 @@ pub const LIKE_TERM_LAWS: [Law; 5] = [
 pub fn like_term_schema(law: Law) -> Option<Schema> {
     let (lhs, rhs) = match law {
         Law::AddZero => ("+ _0 0", "_0"),
-        Law::MulZero => ("* 0 _0", "0"),
         Law::AddCancel => ("- _0 _0", "0"),
         Law::MulCancel => ("/ _0 _0", "1"),
         Law::InfinityAbsorbs => ("+ float(\"inf\") _0", "float(\"inf\")"),
@@ -76,6 +76,8 @@ pub fn schemas(entry: Permissive) -> Vec<Schema> {
             .iter()
             .filter_map(|&law| like_term_schema(law))
             .collect(),
+        // `mul.zero`'s statement (`Law::statement`), `0*t = 0`.
+        Permissive::ZeroAbsorbs => vec![(tokens("* 0 _0"), tokens("0"))],
         Permissive::ConstantCollapse
         | Permissive::LiteralToFloat
         | Permissive::AnySlot
@@ -138,11 +140,12 @@ mod tests {
     /// reading, no schema.
     const AGREEMENT_LAWS: [Law; 2] = [Law::MulCollect, Law::MulCollectSymbolic];
 
-    /// The step entries are the three the constructors take on a rule's structure, each schema
-    /// one expression a side; the partial laws are the like-term laws, each with its schema, the
-    /// sum-sign, kind, composition, agreement and search laws, and the inverse pairs' law, which is the
-    /// step `inverse pairs cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue
-    /// gains must be placed before it is read.
+    /// The step entries are the four the constructors take on a rule's structure, each schema
+    /// one expression a side; the partial laws are the like-term laws, each with its schema,
+    /// `mul.zero` (the step `a zero factor absorbs the product`), the sum-sign, kind,
+    /// composition, agreement and search laws, and the inverse pairs' law, which is the step
+    /// `inverse pairs cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue gains
+    /// must be placed before it is read.
     #[test]
     fn the_schemas_are_the_constructors_tables() {
         let stepped: Vec<&str> = Permissive::ALL
@@ -155,8 +158,13 @@ mod tests {
             [
                 "inverse pairs cancel",
                 "powers compose",
-                "like terms cancel"
+                "like terms cancel",
+                "a zero factor absorbs the product"
             ]
+        );
+        assert_eq!(
+            schemas(Permissive::ZeroAbsorbs),
+            [(tokens("* 0 _0"), tokens("0"))]
         );
         assert_eq!(
             schemas(Permissive::InversePairs).len(),
@@ -166,7 +174,8 @@ mod tests {
             let like = LIKE_TERM_LAWS.contains(&law);
             assert_eq!(
                 !law.total(),
-                like || SUM_SIGN_LAWS.contains(&law)
+                like || law == Law::MulZero
+                    || SUM_SIGN_LAWS.contains(&law)
                     || KIND_LAWS.contains(&law)
                     || COMPOSE_LAWS.contains(&law)
                     || AGREEMENT_LAWS.contains(&law)

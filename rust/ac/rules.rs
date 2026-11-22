@@ -371,14 +371,21 @@ impl RuleCanon {
 }
 
 /// THE ENGINE-OWNED LAW (gate G8), one definition for the rule load and the miner: does the
-/// rule `lhs -> rhs` (canonical sides) state a law the engine itself performs? Today that is
-/// the distributive law as the search applies it (one FACTOR move, `search::is_factoring`).
+/// rule `lhs -> rhs` (canonical sides) state a law the engine itself performs? The distributive
+/// law as the search applies it (one FACTOR move, `search::is_factoring`), and a zero factor
+/// absorbing the product (`mul.zero`; in `permissive` without a definedness check, the step
+/// `Permissive::ZeroAbsorbs`): a rule whose right side is 0 and whose left side is a product
+/// holding a literal 0, where the constructors read both sides' instances to one state, so
+/// `* 0 !0 -> 0` and `/ 0 $0 -> 0` in `permissive`, though their patterns, whose slot may stand
+/// for what no instance spells, are not read to `0`. Strict keeps a product float64 gives no
+/// value, so no such rule is its own there. A rule stating a like-term cancellation
+/// (`- !0 !0 -> 0`, `/ $0 $0 -> 1`) stays a rule: the walk takes it where the constructors'
+/// merge does not, and answers change without it.
 /// The load drops such a rule ("engine-owned-law"); the miner refuses to mint it
-/// (`Engine::law_instance`, the miner's acceptance). A law the constructors perform needs no
-/// arm here, the collection of powers of e (`exp(a) exp(b) = exp(a + b)`) among them: every
-/// canon a rule side is read in performs it, so a rule stating it, in either direction, has one
-/// canonical state on both sides, which the load refuses as subsumed before this gate and
-/// `Engine::law_instance` names `canon`.
+/// (`Engine::law_instance`, the miner's acceptance). A law the constructors perform on the
+/// pattern itself, the collection of powers of e (`exp(a) exp(b) = exp(a + b)`) among them, has
+/// one canonical state on both written sides, which the load refuses as subsumed before this gate
+/// and `Engine::law_instance` names `canon`.
 ///
 /// The search meets a rule's INSTANCES, so the law is judged on one: every `?`, `!` and `$`
 /// wildcard becomes a variable of its own ([`pattern_instance`]), and the sides are read in
@@ -388,7 +395,9 @@ pub(crate) fn engine_owned_law(lhs: &Ex, rhs: &Ex, law: &Cx) -> bool {
     let mut fresh = FxHashMap::default();
     let l = canon(pattern_instance(lhs, law.view, &mut fresh), law);
     let r = canon(pattern_instance(rhs, law.view, &mut fresh), law);
-    super::search::is_factoring(&l, &r, law)
+    let zero = |e: &Ex| matches!(e, Ex::Num(z) if z.is_zero());
+    let zero_absorbs = zero(rhs) && matches!(lhs, Ex::Mul(v) if v.iter().any(zero));
+    (zero_absorbs && l == r) || super::search::is_factoring(&l, &r, law)
 }
 
 /// The spelling prefix of the variables [`pattern_instance`] puts in place of wildcards: the

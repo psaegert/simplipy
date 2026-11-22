@@ -1562,12 +1562,19 @@ pub enum Permissive {
     /// `(x0^3)^(1/3)` are `x0` and `(x0^2)^(1/4)` is `x0^(1/2)` (an even root of a power or a power
     /// of a root alike).
     PowersCompose,
-    /// Like terms cancel without a definedness check: `log(x0) - log(x0)` is 0,
-    /// `asin(x0)/asin(x0)` is 1 and `0*log(x0)` is 0. A part with a variable beside an infinity
-    /// is one term to them, and they run before the infinity absorbs it
-    /// ([`Law::InfinityAbsorbs`]): `(x0 + inf)/(x0 + inf)` is 1 and `(x0 + inf) - (x0 + inf)`
-    /// is 0. A fully numeric `inf/inf` has no value: NaN.
+    /// Like terms cancel without a definedness check: `log(x0) - log(x0)` is 0 and
+    /// `asin(x0)/asin(x0)` is 1. A part with a variable beside an infinity is one term to them,
+    /// and they run before the infinity absorbs it ([`Law::InfinityAbsorbs`]):
+    /// `(x0 + inf)/(x0 + inf)` is 1 and `(x0 + inf) - (x0 + inf)` is 0. A fully numeric
+    /// `inf/inf` has no value: NaN.
     LikeTerms,
+    /// A zero factor absorbs the product without a definedness check (`Law::MulZero`):
+    /// `0*log(x0)`, `0*sqrt(x0)`, `0*x0^x0`, `0*asin(x0)`, `0/x0^(1/2)`, `0*acosh(x0)` and
+    /// `0*(1/x0)` are 0, as `0*x0` and `0*sin(x0)` are in every mode. Wherever the product has a
+    /// value it is 0, so the step never changes a value; it gives one where the factor has none
+    /// or is infinite, the kind of step like-term cancellation is. A fully numeric factor is read
+    /// for its value first: `0*tan(asin(1))` is NaN.
+    ZeroAbsorbs,
     /// A constant collapses without evidence: `(-1)^C` is `C` (`interval::collapse_licence`).
     ConstantCollapse,
     /// A literal becomes its float where the float is cheaper: the quotient of two 16-digit
@@ -1590,10 +1597,11 @@ pub enum Permissive {
 
 impl Permissive {
     /// The whole list, in the specification's order.
-    pub const ALL: [Permissive; 8] = [
+    pub const ALL: [Permissive; 9] = [
         Permissive::InversePairs,
         Permissive::PowersCompose,
         Permissive::LikeTerms,
+        Permissive::ZeroAbsorbs,
         Permissive::ConstantCollapse,
         Permissive::LiteralToFloat,
         Permissive::AnySlot,
@@ -1613,6 +1621,7 @@ impl Permissive {
             Permissive::InversePairs => "inverse pairs cancel",
             Permissive::PowersCompose => "powers compose",
             Permissive::LikeTerms => "like terms cancel",
+            Permissive::ZeroAbsorbs => "a zero factor absorbs the product",
             Permissive::ConstantCollapse => "constant collapse without evidence",
             Permissive::LiteralToFloat => "literal to float",
             Permissive::AnySlot => "any slot matches",
