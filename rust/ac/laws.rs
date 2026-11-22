@@ -61,6 +61,7 @@
 //! | `add.collect` | r1*t + r2*t = (r1 + r2)*t | none | none |
 //! | `add.unfactor` | r*(a + b) + c = r*a + r*b + c | r <= 0: the sum holds no sign | none |
 //! | `add.content` | u*a + u*b = u*(a + b), -a - b = -(a + b) | a sign moves: no held sign | none |
+//! | `add.group` | c*a + c*b + d = c*(a + b) + d, the terms grouped by the exact value of c, where the group costs no more | no step | none |
 //! | `mul.exp_merge` | exp(a)*exp(b) = exp(a + b) | none | none |
 //! | `mul.rootn_join` | rootn(a, n)*rootn(b, n) = rootn(a*b, n) | none | none |
 //! | `mul.infinity_sign` | -k*(s + inf) = k*(-s - inf) | none | none |
@@ -314,6 +315,11 @@ pub enum Law {
     /// is, while the answer `-ceil(x0) - floor(x1)` is `-(ceil(x0) + floor(x1))`). A positive
     /// content moves no sign. [`Law::holds`] reads the sum. In `permissive`, none.
     AddContent,
+    /// A sum writes a number its terms share once (`Permissive::SharedNumbers`): its terms grouped
+    /// by the exact value of their coefficient up to sign, each group of two or more `c*(group)`,
+    /// `c*a + c*b + d = c*(a + b) + d`. Total in the reals; a step of `permissive` alone (the sound
+    /// modes keep the distributed terms, which float64 rounds otherwise).
+    AddGroup,
     /// `exp(a)*exp(b) = exp(a + b)`, and `e = exp(1)` beside one. Total: an overflow is a range
     /// event.
     MulExpMerge,
@@ -584,7 +590,7 @@ pub enum Law {
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 91] = [
+    pub const ALL: [Law; 92] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -629,6 +635,7 @@ impl Law {
         Law::AddCollect,
         Law::AddUnfactor,
         Law::AddContent,
+        Law::AddGroup,
         Law::MulExpMerge,
         Law::MulRootnJoin,
         Law::MulInfinitySign,
@@ -725,6 +732,7 @@ impl Law {
             Law::AddCollect => "add.collect",
             Law::AddUnfactor => "add.unfactor",
             Law::AddContent => "add.content",
+            Law::AddGroup => "add.group",
             Law::MulExpMerge => "mul.exp_merge",
             Law::MulRootnJoin => "mul.rootn_join",
             Law::MulInfinitySign => "mul.infinity_sign",
@@ -822,6 +830,7 @@ impl Law {
             Law::AddCollect => "r1*t + r2*t = (r1 + r2)*t",
             Law::AddUnfactor => "r*(a + b) + c = r*a + r*b + c",
             Law::AddContent => "u*a + u*b = u*(a + b), -a - b = -(a + b)",
+            Law::AddGroup => "c*a + c*b + d = c*(a + b) + d",
             Law::MulExpMerge => "exp(a)*exp(b) = exp(a + b)",
             Law::MulRootnJoin => "rootn(a, n)*rootn(b, n) = rootn(a*b, n)",
             Law::MulInfinitySign => "-k*(s + inf) = k*(-s - inf)",
@@ -916,6 +925,7 @@ impl Law {
                 | Law::MulFlatten
                 | Law::LatticeBag
                 | Law::AddCollect
+                | Law::AddGroup
                 | Law::MulExpMerge
                 | Law::MulRootnJoin
                 | Law::MulInfinitySign

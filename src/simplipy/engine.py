@@ -2241,7 +2241,8 @@ class SimpliPyEngine:
             digits: int = 3,
             precision: int | None = None,
             form: str | None = None,
-            keep_grouping: bool = False) -> str | list[str]:
+            keep_grouping: bool = False,
+            mode: Mode | str = Mode.strict) -> str | list[str]:
         """Write an expression for a READER: each number written to a digit budget, nothing else decided.
 
         :meth:`simplify` returns the canonical form, whose numbers are exact
@@ -2358,6 +2359,12 @@ class SimpliPyEngine:
             (``x1*(x2*x3)/(x4*(x5*x6))``), and at full precision every number exactly, as the
             tokens write it. Default ``False``: one flat chain per sum and product. The tagged form writes bags, which have no order, and is the same either
             way.
+        mode : Mode or str, optional
+            The mode whose canonical constructors read the expression, ``Mode.strict`` by
+            default, as :meth:`simplify` answers by default. Pass the mode the answer was
+            simplified in: a ``permissive`` answer read in ``permissive`` keeps the groups of its
+            shared numbers (``x3 + 3.71649*(x1 + x2)``), which ``strict`` reads distributed
+            (``3.71649*x1 + 3.71649*x2 + x3``). ``keep_grouping`` groups that state too.
 
         Returns
         -------
@@ -2385,7 +2392,8 @@ class SimpliPyEngine:
         if not tokens:
             return '' if target == 'infix' else []
         return self._core.prettify(tokens, int(digits), target, precision,
-                                   keep_grouping=bool(keep_grouping))
+                                   keep_grouping=bool(keep_grouping),
+                                   rule_mode=_RULE_MODE[_coerce_mode(mode)])
 
     def complexity(
             self,

@@ -1573,6 +1573,15 @@ pub enum Permissive {
     /// A literal becomes its float where the float is cheaper: the quotient of two 16-digit
     /// decimals is `0.46867105279529636` (`land`, and the engine's ground fold).
     LiteralToFloat,
+    /// A sum writes a number its terms share once: after the flatten, its terms are grouped by the
+    /// exact value of their coefficient up to sign, and each group of two or more is `c*(group)`
+    /// where that costs no more than its terms distributed (`2*x1 + 2*x2 + x3` is
+    /// `2*(x1 + x2) + x3`, `3.71649*(x1 + x2) + 5.11927*(x3 + x4)` keeps its two numbers), the sign
+    /// in the coefficient; where two spellings of a sum then tie in price, the one strict prices
+    /// lower (`flipped_orientation_wins`). With the whole sum as the group it is the content every
+    /// mode extracts (`add.group`, `primitive_sum`). The sound modes keep the terms distributed:
+    /// in float64 `c*a + c*b` and `c*(a + b)` round differently.
+    SharedNumbers,
     /// Every slot matches any subexpression, without its certificate: `$0/$0 -> 1` also matches
     /// `inf/inf` (the matcher's `wildcard_all`).
     AnySlot,
@@ -1590,12 +1599,13 @@ pub enum Permissive {
 
 impl Permissive {
     /// The whole list, in the specification's order.
-    pub const ALL: [Permissive; 8] = [
+    pub const ALL: [Permissive; 9] = [
         Permissive::InversePairs,
         Permissive::PowersCompose,
         Permissive::LikeTerms,
         Permissive::ConstantCollapse,
         Permissive::LiteralToFloat,
+        Permissive::SharedNumbers,
         Permissive::AnySlot,
         Permissive::FloatResolution,
         Permissive::Agreement,
@@ -1615,6 +1625,7 @@ impl Permissive {
             Permissive::LikeTerms => "like terms cancel",
             Permissive::ConstantCollapse => "constant collapse without evidence",
             Permissive::LiteralToFloat => "literal to float",
+            Permissive::SharedNumbers => "shared numbers group",
             Permissive::AnySlot => "any slot matches",
             Permissive::FloatResolution => "float-resolution rules served",
             Permissive::Agreement => "holds by agreement",
@@ -4228,6 +4239,115 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     }
 }
 
+/// The TERMS OF A SUM AS ITS FLATTEN READS THEM: in `permissive`, where a sum writes the number
+/// its terms share once ([`group_shared_numbers`]), each group `c*(a + b)` is its terms `c*a`,
+/// `c*b`, which is how `add` reads it on entering a sum. The search proposes its factorings on these
+/// terms, so a group never hides a term from a factoring across it (`x14*x16 - 2*(x16 + x6)` offers
+/// `x16*(x14 - 2) - 2*x6`). The terms as given elsewhere.
+pub(crate) fn spread_groups<'t>(terms: &'t [Ex], cx: &Cx) -> std::borrow::Cow<'t, [Ex]> {
+    let group = |t: &Ex| matches!(t, Ex::Mul(v) if factored_sum(v).is_some());
+    if !cx.permits(Permissive::SharedNumbers) || !terms.iter().any(group) {
+        return std::borrow::Cow::Borrowed(terms);
+    }
+    let mut out: Vec<Ex> = Vec::with_capacity(terms.len() + 2);
+    for t in terms {
+        if let Ex::Mul(v) = t {
+            if let Some((r, inner)) = factored_sum(v) {
+                let scaled: Option<Vec<Ex>> = inner.iter().map(|s| scale_term(s, &r, cx)).collect();
+                if let Some(scaled) = scaled {
+                    out.extend(scaled);
+                    continue;
+                }
+            }
+        }
+        out.push(t.clone());
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// PERMISSIVE GROUPS A SHARED NUMBER (`Permissive::SharedNumbers`, `add.group`): the terms of a
+/// flattened sum, grouped by the exact value of their coefficient up to sign (a literal term's
+/// coefficient is itself), each group of two or more written `c*(group)` with its content and
+/// orientation decided as a whole sum's ([`primitive_sum`]), the sign in the coefficient:
+/// `2*x1 + 2*x2 + x3` is `2*(x1 + x2) + x3`, `3.71649*x1 - 3.71649*x2 + x3` is
+/// `3.71649*(x1 - x2) + x3`, and `3.71649*x1 + 3.71649*x2 + 5.11927*x3 + 5.11927*x4` writes each
+/// number once. The key is the exact value, so the grouping is deterministic, and every
+/// construction decides it on the complete flattened bag (`add` spreads a group entering a sum
+/// first), so it does not depend on how the sum was built. A coefficient of magnitude one is no
+/// number to share, and those terms stay as they are; so do a term holding a fitted constant
+/// (absorption owns its coefficient) and a factored sum the flatten kept whole.
+///
+/// A GROUP IS WRITTEN ONLY WHERE IT COSTS NO MORE than its terms distributed: the price of
+/// `c*(group)` against the prices of its terms, the members a sum prices one by one. A number
+/// written once saves its own price each time it is not written again, which an inexact number
+/// always pays for (`3.71649*(x1 + x2)` saves a constant); an exact number whose group costs
+/// more stays distributed (`x13/2 + x1/(4*x13) + 1/4` keeps its quarters, where
+/// `(x1/x13 + 1)/4` is dearer), so permissive's answer stays no dearer than strict's. The price
+/// is a function of the group's terms alone, so the choice is deterministic. The remaining sum
+/// then takes its orientation as any sum does. `None` where no group is written beside other
+/// terms: with the whole sum as one group the sum's content is the content [`primitive_sum`]
+/// extracts in every mode.
+fn group_shared_numbers(terms: &[Ex], cx: &Cx) -> Option<Ex> {
+    if terms.len() < 3 {
+        return None;
+    }
+    let magnitude = |t: &Ex| -> Option<Coef> {
+        if t.contains_const() || is_inf_carrying(t) {
+            return None;
+        }
+        let c = match t {
+            Ex::Num(r) => Coef::of(r),
+            Ex::Mul(v) if factored_sum(v).is_some() => return None,
+            _ => term_split(t.clone(), cx.view).0,
+        };
+        let m = c.abs();
+        (!m.is_one() && !m.is_zero()).then_some(m)
+    };
+    let mut groups: Vec<(Coef, Vec<usize>)> = Vec::new();
+    for (i, t) in terms.iter().enumerate() {
+        let Some(m) = magnitude(t) else { continue };
+        match groups.iter_mut().find(|(g, _)| *g == m) {
+            Some((_, members)) => members.push(i),
+            None => groups.push((m, vec![i])),
+        }
+    }
+    groups.retain(|(_, members)| members.len() >= 2);
+    if groups.is_empty() || (groups.len() == 1 && groups[0].1.len() == terms.len()) {
+        return None;
+    }
+    let mut grouped = vec![false; terms.len()];
+    let mut out: Vec<Ex> = Vec::with_capacity(terms.len());
+    for (_, members) in &groups {
+        let mut group: Vec<Ex> = members.iter().map(|&i| terms[i].clone()).collect();
+        group.sort_by(|a, b| add_term_cmp(a, b, cx.view));
+        let distributed = group
+            .iter()
+            .fold(0u64, |p, t| p.saturating_add(complexity(t, cx.view)));
+        // A content that does not divide out (an overflow) leaves the group's terms as they are,
+        // and so does a group that costs more than its terms.
+        let written = whole_primitive_sum(group, cx);
+        if matches!(written, Ex::Add(_)) || complexity(&written, cx.view) > distributed {
+            continue;
+        }
+        for &i in members {
+            grouped[i] = true;
+        }
+        out.push(written);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    out.extend(
+        terms
+            .iter()
+            .zip(&grouped)
+            .filter(|(_, &g)| !g)
+            .map(|(t, _)| t.clone()),
+    );
+    out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
+    Some(whole_primitive_sum(out, cx))
+}
+
 /// The PRIMITIVE-SUM normal form: a canonical `Add` carries the ORIENTATION-MAXIMAL sign and
 /// no UNANIMOUS common coefficient magnitude. The extracted unit/content wraps the sum in a
 /// coefficient (`-a - b -> -1 * (a + b)`; `a/3 + b/3 -> 1/3 * (a + b)`; `-2a + 3b ->
@@ -4245,7 +4365,10 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
 /// NaN); `Const` terms pass through unchanged (`c / u` re-fits to `c'`, the contract's
 /// forall-exists direction).
 ///
-/// The laws applied here (`ac::laws::Law`): `add.content`.
+/// In `permissive` a sum first groups the numbers its terms share ([`group_shared_numbers`]);
+/// the whole sum as one group is the content extracted here.
+///
+/// The laws applied here (`ac::laws::Law`): `add.content`, `add.group`.
 fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // Bare infinities never arrive here: the `add()` constructor's one-infinity exit
     // returns its flat bag before this call (deliberately -- see the closure argument
@@ -4254,6 +4377,16 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
         !terms.iter().any(|t| matches!(t, Ex::PosInf | Ex::NegInf)),
         "primitive_sum received a bare infinity: the add() inf-exit must precede it"
     );
+    if cx.permits(Permissive::SharedNumbers) {
+        if let Some(grouped) = group_shared_numbers(&terms, cx) {
+            return grouped;
+        }
+    }
+    whole_primitive_sum(terms, cx)
+}
+
+/// [`primitive_sum`] of the whole sum: its unanimous content and its orientation.
+fn whole_primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // A Const-bearing sum NEVER extracts content: absorption owns it (`mul`'s Const
     // fold arm unwraps `-1 x Add[Const-bearing]` through per-term `negate_term`,
     // where Const-carrying terms absorb the sign by the forall-exists refit), so
@@ -4448,6 +4581,22 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
     if delta != 0 {
         return delta < 0;
     }
+    // PERMISSIVE'S TWO SPELLINGS TIE IN PRICE: the one strict prices lower is taken
+    // ([`strict_price`]: the spelling read by strict's constructors, priced). A shared number's
+    // group is a spelling strict reads distributed, so beside one the two orientations can tie in
+    // permissive and not in strict (`1/(cosh(x9) - x15/x14) + x14*x16 - 2*(x16 + x6)` against its
+    // flip, whose pole strict writes `-1/(x15/x14 - cosh(x9))`, a sign cheaper). Where strict
+    // prices them alike too, the tie order below.
+    if matches!(cx.mode, RuleMode::Permissive) {
+        let negated = !matches!(wrapper, Wrapper::Neither);
+        let (a, b) = (
+            strict_price(terms, false, cx),
+            strict_price(&flipped, negated, cx),
+        );
+        if a != b {
+            return b < a;
+        }
+    }
     // EXACT mu tie -> the one sign key (`sign_key`): fewer signs, then outer ones. The flipped
     // spelling carries the wrapper's sign (`-1 x Add` for a content-1 sum, `-g x Add` beside a
     // current `g x Add`), except at the free-orientation sites (`Lex`: an even power's base),
@@ -4490,6 +4639,33 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -
         }
     }
     false // fully flip-symmetric: both orientations are the same multiset
+}
+
+/// STRICT'S PRICE of a spelling: the sum of `terms` (negated where `negated`: `-1 * (terms)`)
+/// read by strict's constructors, certificate-free (the bare canon, the reading `complexity`
+/// gives strict's answers), priced. Permissive breaks a tie between two equally priced spellings
+/// by it ([`flipped_orientation_wins`]). Remembered for the simplify call where one holds the
+/// memo open (`RegionScope`): the sums a search visits recur from state to state.
+fn strict_price(terms: &[Ex], negated: bool, cx: &Cx) -> u64 {
+    let sum = Ex::Add(terms.to_vec());
+    let e = if negated {
+        Ex::Mul(vec![Ex::Num(Rat::NEG_ONE), sum])
+    } else {
+        sum
+    };
+    let key = (e, cx.f64_numbers());
+    if let Some(p) =
+        STRICT_PRICE_MEMO.with(|m| m.borrow().as_ref().and_then(|m| m.get(&key).copied()))
+    {
+        return p;
+    }
+    let p = complexity(&canon(key.0.clone(), &Cx::bare(cx.view)), cx.view);
+    STRICT_PRICE_MEMO.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.insert(key, p);
+        }
+    });
+    p
 }
 
 /// The signed rational coefficient a term contributes to the orientation comparison
@@ -4747,18 +4923,32 @@ thread_local! {
     static REGION_MEMO: std::cell::RefCell<Option<RegionMemo>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Holds a fresh region memo (`zero_set_null`) and class-read memo (`zero_read`) open for one
-/// simplify call and restores the
+/// [`strict_price`]'s prices within a simplify call (`RegionScope`), per spelling and number
+/// domain (the token view is the call's own).
+type StrictPriceMemo = rustc_hash::FxHashMap<(Ex, bool), u64>;
+
+thread_local! {
+    static STRICT_PRICE_MEMO: std::cell::RefCell<Option<StrictPriceMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Holds a fresh region memo (`zero_set_null`), class-read memo (`zero_read`) and strict-price
+/// memo (`strict_price`) open for one simplify call and restores the
 /// caller's when it drops. The memo's key holds the context's identities (its token view and
 /// certificate closures), which live as long as the call that opens the scope, so no identity is
 /// reused within one memo's extent; a nested call keys its own contexts in its own memo.
-pub(crate) struct RegionScope(Option<RegionMemo>, Option<ReadMemo>);
+pub(crate) struct RegionScope(
+    Option<RegionMemo>,
+    Option<ReadMemo>,
+    Option<StrictPriceMemo>,
+);
 
 impl RegionScope {
     pub(crate) fn open() -> Self {
         RegionScope(
             REGION_MEMO.with(|m| m.borrow_mut().replace(RegionMemo::default())),
             READ_MEMO.with(|m| m.borrow_mut().replace(ReadMemo::default())),
+            STRICT_PRICE_MEMO.with(|m| m.borrow_mut().replace(StrictPriceMemo::default())),
         )
     }
 }
@@ -4769,6 +4959,8 @@ impl Drop for RegionScope {
         REGION_MEMO.with(|m| *m.borrow_mut() = outer);
         let reads = self.1.take();
         READ_MEMO.with(|m| *m.borrow_mut() = reads);
+        let prices = self.2.take();
+        STRICT_PRICE_MEMO.with(|m| *m.borrow_mut() = prices);
     }
 }
 

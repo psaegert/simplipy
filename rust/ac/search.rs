@@ -61,7 +61,8 @@
 
 use super::expr::{
     add, atan2_of, complexity, distributes_power, fun, keeps_zero_sign, mul, orient_term_classes,
-    orientation_near_miss, pow, product_members, vanishes_with_a_sign, zero_read_below, Cx, Ex,
+    orientation_near_miss, pow, product_members, spread_groups, vanishes_with_a_sign,
+    zero_read_below, Cx, Ex,
 };
 use super::laws::Law;
 use super::rat::Rat;
@@ -528,14 +529,20 @@ fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>, read: bool, groups: 
     let negative = power.filter(|k| k.is_negative());
     // Read once per sum, where a content asks it (the certificate is dear on a long sum).
     let held = std::cell::OnceCell::new();
+    // The factorings read the sum's terms as its flatten does: a shared number's group is its
+    // terms (`spread_groups`), so the group hides none of them; a candidate that only groups the
+    // number again is the sum itself.
+    let spread = spread_groups(terms, cx);
+    let current = matches!(spread, std::borrow::Cow::Owned(_)).then(|| Ex::Add(terms.to_vec()));
     factorings(
-        terms,
+        &spread,
         cx,
         &|f| Law::SearchFactor.holds(f, cx),
         &|f| single_piece(f, cx),
         groups,
     )
     .into_iter()
+    .filter(|(cand, _)| current.as_ref() != Some(cand))
     .filter(|(cand, _)| match (cand, negative) {
         (Ex::Mul(fs), Some(k)) => {
             distributes_power(fs, k, cx) && !(k.is_odd_integer() && moves_a_zero_sign(fs, cx))

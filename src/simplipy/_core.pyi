@@ -83,6 +83,7 @@ class Engine:
         *,
         check_structure: bool = ...,  # answer (display, whether it keeps the structure)
         keep_grouping: bool = ...,  # every sum grouped as the explicit tokens group it
+        rule_mode: str,  # the mode whose constructors read the expression ('default': strict)
     ) -> str | list[str] | tuple[str | list[str], bool]: ...
     def ac_simplify_explore(
         self,

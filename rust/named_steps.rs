@@ -15,6 +15,7 @@
 //!
 //! The other entries are readings, not steps over a rule's structure, and have no schema: a
 //! constant's collapse is the collapse alignment the judge reads (`fit::collapse_spans`); a
+//! sum's grouping of a shared number is an identity of the reals, which the judge reads; a
 //! literal's float, a slot that matches any subexpression, float resolution and agreement where
 //! the input has no value are permissive's own criterion.
 //!
@@ -77,6 +78,7 @@ pub fn schemas(entry: Permissive) -> Vec<Schema> {
             .collect(),
         Permissive::ConstantCollapse
         | Permissive::LiteralToFloat
+        | Permissive::SharedNumbers
         | Permissive::AnySlot
         | Permissive::FloatResolution
         | Permissive::Agreement => Vec::new(),

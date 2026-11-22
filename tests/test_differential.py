@@ -865,8 +865,8 @@ def test_the_core_names_permissives_list() -> None:
     from simplipy import _core
     assert _core.permissive_simplifications() == [
         'inverse pairs cancel', 'powers compose', 'like terms cancel',
-        'constant collapse without evidence', 'literal to float', 'any slot matches',
-        'float-resolution rules served', 'holds by agreement']
+        'constant collapse without evidence', 'literal to float', 'shared numbers group',
+        'any slot matches', 'float-resolution rules served', 'holds by agreement']
 
 
 INVERSE_PAIRS = [('exp', 'log'), ('sin', 'asin'), ('cos', 'acos'), ('tan', 'atan'),

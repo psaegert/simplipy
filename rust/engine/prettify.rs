@@ -68,13 +68,16 @@ impl PrettyForm {
 
 /// How `prettify` writes a display: the digit budget, the significant digits a float shows
 /// (`None`: the shortest decimal of its float64), the output form, and whether every sum and
-/// product is written with the grouping of the explicit token form (`ac::prettify`, rule 10).
+/// product is written with the grouping of the explicit token form (`ac::prettify`, rule 10). The
+/// mode is the one whose constructors read the expression: an answer is displayed as its own mode
+/// builds it (a permissive answer keeps the groups of its shared numbers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrettyOptions {
     pub digits: usize,
     pub precision: Option<usize>,
     pub form: PrettyForm,
     pub keep_grouping: bool,
+    pub mode: crate::engine::RuleMode,
 }
 
 /// A displayed expression: infix text or tokens.
@@ -109,12 +112,13 @@ impl Engine {
     /// The shape of the state a display reads back as, read exactly as `prettify` reads its
     /// input: infix text through the strict infix parse, tokens as they stand, then the
     /// canonical constructors in the f64 number domain.
-    fn read_shape(&self, shown: &Pretty) -> Option<String> {
+    fn read_shape(&self, shown: &Pretty, mode: crate::engine::RuleMode) -> Option<String> {
         let tokens = self.read_display(shown)?;
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(&tokens, &ctx);
         let view = self.view(&ctx);
-        let bare = Cx::bare(&view);
+        let mut bare = Cx::bare(&view);
+        bare.mode = mode;
         let _domain = crate::ac::rat::number_domain(true);
         let state = canon(from_prefix(&toks, &bare)?, &bare);
         Some(shape(&state, &bare))
@@ -158,7 +162,9 @@ impl Engine {
             return Some((first.shown, first.kept));
         };
         match self.display_keeping(&read, options, true) {
-            Some(again) if again.kept && self.read_shape(&again.shown) == first.reference => {
+            Some(again)
+                if again.kept && self.read_shape(&again.shown, options.mode) == first.reference =>
+            {
                 Some((again.shown, true))
             }
             _ => Some((first.shown, first.kept)),
@@ -187,11 +193,13 @@ impl Engine {
             precision,
             form,
             keep_grouping,
+            mode,
         } = options;
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
-        let bare = Cx::bare(&view);
+        let mut bare = Cx::bare(&view);
+        bare.mode = mode;
         let _domain = crate::ac::rat::number_domain(true);
         let state = canon(from_prefix(&toks, &bare)?, &bare);
         let pass = |choices: &Choices| -> (Pretty, Vec<Rat>, bool) {
@@ -210,7 +218,7 @@ impl Engine {
                 .with_choices(Choices::all(Choice::Exact))
                 .kept_shape(&state),
         );
-        let kept = |p: &Pretty| self.read_shape(p) == reference;
+        let kept = |p: &Pretty| self.read_shape(p, mode) == reference;
         // With the grouping kept at full precision the display evaluates as the state does: its
         // sums and products in the state's order (rule 10) and every number as the state's
         // tokens write it, exactly. A float one rounding from a quotient the tokens divide by

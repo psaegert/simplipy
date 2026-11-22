@@ -259,6 +259,26 @@ reals at float resolution and its own simplifications.
   generated *from* the simplified form, so the target equals the data and there is no external
   function to violate.
 
+  A sum writes a number its terms share once: its terms are grouped by the exact value of their
+  coefficient up to sign, and each group of two or more is written `c*(group)`, the sign in the
+  coefficient, where that costs no more than its terms distributed, so a masked answer
+  abstracts a shared inexact number into one `<constant>`; an exact number whose group costs
+  more stays distributed. The key is the exact value, so the grouping is deterministic and does
+  not depend on how the sum was built; with the whole sum as the group it is the content every
+  mode takes out. A coefficient of magnitude one is no number to share, and a term holding a
+  fitted constant keeps its own. Where two spellings of a sum then cost the same, the one
+  `strict` prices lower is taken, so the answer is never dearer than `strict`'s on `strict`'s
+  yardstick. `strict` keeps the terms distributed: in float64 `c*a + c*b` and `c*(a + b)` round
+  differently.
+  `prettify(answer, mode='permissive')` displays the groups.
+
+```python
+engine.simplify('3.71649*(x1 + x2) + x3', mode='permissive')       # -> 'x3 + 3.71649*(x1 + x2)'
+engine.simplify('3.71649*(x1 + x2) + x3')                           # -> '3.71649*x1 + 3.71649*x2 + x3'
+engine.simplify('2*x1 + 2*x2 + 4*x3 - x4', mode='permissive')      # -> '4*x3 + 2*(x1 + x2) - x4'
+engine.simplify('-3.71649*x1 + 3.71649*x2 + x3', mode='permissive')  # -> 'x3 + 3.71649*(x2 - x1)'
+```
+
 ### How numbers are printed
 
 Every literal is its exact rational value (`0.1` is 1/10), and arithmetic between numbers is

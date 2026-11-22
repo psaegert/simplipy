@@ -243,3 +243,20 @@ the canonical form holds exactly is still written by the rules above, so where t
 tokens divide by an integer (`/ * 3.1415926535897e37 * x1 x2 3313`) the display writes one
 float (`9.482621954692726e33*(x1*x2)`), and the one-slash layout still joins every divisor of a
 product into one denominator.
+
+## Modes
+
+`prettify` reads the expression with the canonical constructors of a mode, `strict` unless
+`mode=` says otherwise, as `simplify` answers in `strict` unless told otherwise. Pass the mode
+the answer was simplified in. A `permissive` answer writes a number its terms share once, and
+that grouping is part of how `permissive` builds the expression, so it is displayed only when
+the answer is read in `permissive`; `strict` reads the group distributed. `keep_grouping` groups
+the state the mode builds.
+
+```python
+answer = engine.simplify('3.71649*x1 + 3.71649*x2 + x3', mode='permissive')
+engine.prettify(answer, mode='permissive')
+# -> 'x3 + 3.71649*(x1 + x2)'
+engine.prettify(answer)
+# -> '3.71649*x1 + 3.71649*x2 + x3'
+```

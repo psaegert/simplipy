@@ -926,8 +926,10 @@ impl PyEngine {
     /// structure. Display only: it applies no rules, and nothing in the engine calls this or
     /// reads what it returns. `check_structure` answers `(display, kept)`: whether the display
     /// reads back to the shape of the state after the display's folds. `keep_grouping` writes
-    /// every sum and product with the grouping of the explicit token form.
-    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, check_structure=false, keep_grouping=false))]
+    /// every sum and product with the grouping of the explicit token form. `rule_mode` is the mode
+    /// whose constructors read the expression: a permissive answer read in `"permissive"` keeps the
+    /// groups of its shared numbers.
+    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, check_structure=false, keep_grouping=false, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn prettify(
         &self,
@@ -938,7 +940,9 @@ impl PyEngine {
         precision: Option<usize>,
         check_structure: bool,
         keep_grouping: bool,
+        rule_mode: &str,
     ) -> PyResult<Py<PyAny>> {
+        let mode = parse_rule_mode(rule_mode)?;
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
                 "unknown form {form:?}: expected 'infix', 'explicit' or 'tagged'"
@@ -961,6 +965,7 @@ impl PyEngine {
                         precision,
                         form,
                         keep_grouping,
+                        mode,
                     },
                     check_structure,
                 )

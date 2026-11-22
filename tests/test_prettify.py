@@ -530,7 +530,7 @@ def test_the_contract_holds_where_a_fold_or_a_size_would_break_it(eng, text, pre
     assert shown == expected
     assert eng.prettify(shown, precision=precision) == shown
     tokens = list(eng._core.parse(text, True, False, True))
-    _, kept = eng._core.prettify(tokens, 3, 'infix', precision, check_structure=True)
+    _, kept = eng._core.prettify(tokens, 3, 'infix', precision, check_structure=True, rule_mode='default')
     assert kept
     if precision is None:
         back = list(eng._core.parse(shown, True, False, True))
@@ -549,7 +549,7 @@ def test_a_fold_in_a_sum_keeps_the_structure_on_a_fuzz(eng, precision):
     lost = []
     for text in fold_fuzz(200, seed=5, shapes=shapes):
         tokens = list(eng._core.parse(text, True, False, True))
-        shown, kept = eng._core.prettify(tokens, 3, 'infix', precision, check_structure=True)
+        shown, kept = eng._core.prettify(tokens, 3, 'infix', precision, check_structure=True, rule_mode='default')
         if not kept or eng.prettify(shown, precision=precision) != shown:
             lost.append((text, shown))
     assert not lost, lost[:5]
@@ -671,7 +671,7 @@ def structure(eng, expression, precision=None, keep_grouping=False):
     the shape of the state after the display's folds."""
     form, tokens = eng._read_input(expression)
     return eng._core.prettify(tokens, 3, form, precision, check_structure=True,
-                              keep_grouping=keep_grouping)
+                              keep_grouping=keep_grouping, rule_mode='default')
 
 
 @pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])

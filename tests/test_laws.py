@@ -140,18 +140,19 @@ ROWS = [
     # r*(a + b) + c = r*a + r*b + c. f64: float64's sum is +0 wherever it cancels, so a negative
     # r spreads only where the sum holds no sign or nothing reads its zero: the answer itself, a
     # head blind to the sign, a sum another addend keeps off -0 (`ceil(x2)` is -0 on (-1, 0), `x2`
-    # only at a point).
-    ('add.unfactor', '+ x2 * 2 + x0 x1', '+ * 2 x0 + * 2 x1 x2', '+ * 2 x0 + * 2 x1 x2'),
-    ('add.unfactor', '+ x2 * -2 + x0 x1', '- - x2 * 2 x0 * 2 x1', '- - x2 * 2 x0 * 2 x1'),
+    # only at a point). permissive spreads every product, and its terms then group by their
+    # shared number again (`add.group`).
+    ('add.unfactor', '+ x2 * 2 + x0 x1', '+ * 2 x0 + * 2 x1 x2', '+ x2 * 2 + x0 x1'),
+    ('add.unfactor', '+ x2 * -2 + x0 x1', '- - x2 * 2 x0 * 2 x1', '- x2 * 2 + x0 x1'),
     ('add.unfactor', '+ ceil x2 * -2 + ceil x0 floor x1', '- - ceil x2 * 2 ceil x0 * 2 floor x1',
-     '- - ceil x2 * 2 ceil x0 * 2 floor x1'),
+     '- ceil x2 * 2 + ceil x0 floor x1'),
     ('add.unfactor', 'exp + ceil x2 * -2 + ceil x0 floor x1',
-     'exp - - ceil x2 * 2 ceil x0 * 2 floor x1', 'exp - - ceil x2 * 2 ceil x0 * 2 floor x1'),
+     'exp - - ceil x2 * 2 ceil x0 * 2 floor x1', 'exp - ceil x2 * 2 + ceil x0 floor x1'),
     ('add.unfactor', 'inv + ceil x2 * -2 + ceil x0 floor x1', 'inv - ceil x2 * 2 + ceil x0 floor x1',
-     '/ -1 - + * 2 ceil x0 * 2 floor x1 ceil x2'),
+     'inv - ceil x2 * 2 + ceil x0 floor x1'),
     # beside x2, which is not -0 on a region, the product spreads: the sum's zero is isolated
     ('add.unfactor', 'inv + x2 * -2 + ceil x0 floor x1', '/ -1 - + * 2 ceil x0 * 2 floor x1 x2',
-     '/ -1 - + * 2 ceil x0 * 2 floor x1 x2'),
+     'inv - x2 * 2 + ceil x0 floor x1'),
     ('add.unfactor', 'inv + * -1 - ceil x0 ceil x1 ceil x2', 'inv - ceil x2 - ceil x0 ceil x1',
      'inv - + ceil x1 ceil x2 ceil x0'),
     ('add.unfactor', 'inv + * -2 + ceil x0 floor x1 * 2 floor x1', '/ neg inv ceil x0 2',
@@ -181,6 +182,16 @@ ROWS = [
      'inv - floor x1 floor x0'),
     ('add.content', 'inv + ceil x2 neg - floor x0 floor x1', 'inv - ceil x2 - floor x0 floor x1',
      'inv - + ceil x2 floor x1 floor x0'),
+    # c*a + c*b + d = c*(a + b) + d. permissive writes a number its terms share once, the terms
+    # grouped by the exact value of their coefficient up to sign (a literal term's coefficient is
+    # itself), the sign in the coefficient; a magnitude of one is no number to share, and 4 is not
+    # 2. f64 keeps the terms distributed.
+    ('add.group', '+ + * 2 x0 * 2 x1 x2', '+ * 2 x0 + * 2 x1 x2', '+ x2 * 2 + x0 x1'),
+    ('add.group', '+ - * 3 x0 * 3 x1 x2', '- + * 3 x0 x2 * 3 x1', '+ x2 * 3 - x0 x1'),
+    ('add.group', '- - x2 * 2 x0 * 2 x1', '- - x2 * 2 x0 * 2 x1', '- x2 * 2 + x0 x1'),
+    ('add.group', '+ + + * 2 x0 * 2 x1 2 x2', '+ * 2 x0 + * 2 x1 + x2 2', '+ x2 * 2 + x0 + x1 1'),
+    ('add.group', '+ * 2 + x0 x1 x2', '+ * 2 x0 + * 2 x1 x2', '+ x2 * 2 + x0 x1'),
+    ('add.group', '+ + * 2 x0 * 2 x1 * 4 x2', '+ * 2 x0 + * 2 x1 * 4 x2', '+ * 4 x2 * 2 + x0 x1'),
     ('mul.exp_merge', '* exp x0 exp x1', 'exp + x0 x1', 'exp + x0 x1'),
     ('mul.exp_merge', '* exp x0 np.e', 'exp + x0 1', 'exp + x0 1'),
     ('mul.rootn_join', '* rootn x0 3 rootn x1 3', 'rootn * x0 x1 3', 'rootn * x0 x1 3'),
@@ -550,6 +561,7 @@ def test_the_core_names_its_laws() -> None:
         ('add.collect', 'r1*t + r2*t = (r1 + r2)*t'),
         ('add.unfactor', 'r*(a + b) + c = r*a + r*b + c'),
         ('add.content', 'u*a + u*b = u*(a + b), -a - b = -(a + b)'),
+        ('add.group', 'c*a + c*b + d = c*(a + b) + d'),
         ('mul.exp_merge', 'exp(a)*exp(b) = exp(a + b)'),
         ('mul.rootn_join', 'rootn(a, n)*rootn(b, n) = rootn(a*b, n)'),
         ('mul.infinity_sign', '-k*(s + inf) = k*(-s - inf)'),
@@ -592,7 +604,19 @@ def test_the_core_names_its_laws() -> None:
         ('perm.reciprocal_projection', 'a^-1*b^-1 = (a*b)^-1, as written')]
 
 
-ALL_ROWS = ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS + SIGN_ROWS
+#: add.group's rows beyond three variables or holding a fitted constant (the float64 check of
+#: `ROWS` reads x0, x1 and x2): two shared numbers, a term with a fitted constant, and terms of
+#: magnitude one beside a group.
+GROUP_ROWS = [
+    ('add.group', '+ + * 2 x0 * 2 x1 + * 3 x2 * 3 x3', '+ * 2 x0 + * 2 x1 + * 3 x2 * 3 x3',
+     '+ * 2 + x0 x1 * 3 + x2 x3'),
+    ('add.group', '+ + * 2 x0 * 2 x1 <constant>', '+ * 2 x0 + * 2 x1 <constant>',
+     '+ * 2 + x0 x1 <constant>'),
+    ('add.group', '+ + neg x0 neg x1 + * 2 x2 * 2 x3', '- - + * 2 x2 * 2 x3 x0 x1',
+     '- - * 2 + x2 x3 x0 x1'),
+]
+
+ALL_ROWS = ROWS + GROUND_ROWS + FUNCTION_ROWS + POWER_ROWS + ABSORB_ROWS + SIGN_ROWS + GROUP_ROWS
 
 #: (law, input, f64 answer, permissive answer) of the search's laws, at the default effort (`effort=0`
 #: does not search). The distributive law's two sides differ only where a piece it multiplies into
