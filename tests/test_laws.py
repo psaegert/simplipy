@@ -376,6 +376,18 @@ POWER_ROWS = [
     ('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow rootn x0 3 2', 'pow rootn x0 3 2'),
     ('pow.odd_root_compose', 'pow rootn abs x0 3 2', 'pow rootn abs x0 3 2',
      'pow rootn abs x0 3 2'),
+    # beside a power of t, an integer s composes too: in f64 where a power of t with a
+    # non-integer exponent (an even root is one) confines the product to t >= 0, in permissive
+    # always; a root whose powers would merge to nothing keeps its spelling
+    ('pow.odd_root_compose', '/ pow x0 / 3 2 pow rootn x0 3 2', 'pow x0 / 5 6', 'pow x0 / 5 6'),
+    ('pow.odd_root_compose', '* pow rootn x0 3 2 rootn x0 2', 'pow x0 / 7 6', 'pow x0 / 7 6'),
+    ('pow.odd_root_compose', '* rootn x0 4 rootn x0 3', 'pow x0 / 7 12', 'pow x0 / 7 12'),
+    ('pow.odd_root_compose', '* <constant> / pow x0 / 3 2 pow rootn x0 3 2',
+     '* <constant> pow x0 / 5 6', '* <constant> pow x0 / 5 6'),
+    ('pow.odd_root_compose', '* x0 rootn x0 3', '* x0 rootn x0 3', 'pow x0 / 4 3'),
+    ('pow.odd_root_compose', '* rootn x0 3 rootn x0 5', '* rootn x0 3 rootn x0 5',
+     'pow x0 / 8 15'),
+    ('pow.odd_root_compose', '* pow x0 / 2 3 rootn x0 3', '* pow x0 / 2 3 rootn x0 3', 'x0'),
     # an even unit fraction over an index of no known parity
     ('pow.unknown_parity_root', 'pow rootn x0 9007199254740993 -0.5',
      'inv rootn x0 18014398509481986', 'inv rootn x0 18014398509481986'),

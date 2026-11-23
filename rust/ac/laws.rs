@@ -72,7 +72,7 @@
 //! | `parse.inverse_of_product` | 1/(a*b) = (1/a)*(1/b) as a divisor is read | as `pow.distribute` | as `pow.distribute` |
 //! | `pow.compose` | (t^r)^s = t^(r*s) | s an integer; r an odd integer (positive, or t never infinite) and r*s no integer; r and r*s no integers; or t >= 0 | none |
 //! | `pow.root_inverse` | rootn(t, n)^n = t, rootn(t, n)^-n = 1/t, rootn(t^n, n) = t | n odd, or t >= 0 | none |
-//! | `pow.odd_root_compose` | rootn(t, m)^s = t^(s/m), m odd | s no integer | s no integer: the root's class keeps one spelling |
+//! | `pow.odd_root_compose` | rootn(t, m)^s = t^(s/m), m odd | s no integer; in a product beside a power of t with a non-integer exponent, any s | s no integer; in a product beside a power of t, any s |
 //! | `pow.unknown_parity_root` | rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n), n even | none | none |
 //! | `pow.literal_base_sign` | r^(-t) = (1/r)^t, 1/(r^t) = (1/r)^t, (1/t)^(+-inf) = t^(-+inf) | none | none |
 //! | `pow.half_root` | t^(1/(2k)) = rootn(t, 2k) | t^(1/2) as numpy's `sqrt`: t is no zero with a sign of its own | none |
@@ -364,7 +364,11 @@ pub enum Law {
     /// NaN on t < 0. An integer `s` keeps the root in both modes: on t < 0 it is no identity
     /// (`rootn(-8, 3)^2` is 4, `(-8)^(2/3)` has no value), and where it is one (t >= 0, or in
     /// `permissive`, which composes powers ignoring the sign) the root's class keeps one spelling:
-    /// `rootn(t, m)^k` collects with `rootn(t, m)` over one base, `t^(k/m)` would not.
+    /// `rootn(t, m)^k` collects with `rootn(t, m)` over one base, `t^(k/m)` would not. In a
+    /// product beside a power of `t` (the like-base collection), an integer `s` composes too: in
+    /// `f64` where another power of `t` has a non-integer exponent, so the product has no value
+    /// for t < 0 (`t^(3/2)/rootn(t, 3)^2` is `t^(5/6)`), in `permissive` always (`t*rootn(t, 3)`
+    /// is `t^(4/3)`).
     PowOddRootCompose,
     /// `rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n)` for an even `n` over an index of no known
     /// parity (beyond 2^53, `f64`). Total: both sides are `1/R^(1/n)` on R = `rootn(t, m)` >= 0,

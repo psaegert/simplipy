@@ -685,6 +685,15 @@ model predictions.
   are engine-owned, so the mine does not mint them and the load drops them, with no answer
   changed. A rule stating a like-term cancellation (`- !0 !0 -> 0`, `/ $0 $0 -> 1`) stays a rule:
   the walk takes it where the constructors' merge does not, and answers change without it.
+- **An odd root's powers merge with its radicand's.** `rootn` is the real root
+  (`rootn(-8, 3)` is -2), so `rootn(t, k)^m` is `t^(m/k)` only where t >= 0. Beside another
+  power of `t`, the like-base collection now reads it so: in `strict` where the product is
+  confined to t >= 0 by a power of `t` with a non-integer exponent (`x1*x17^(3/2)/rootn(x17, 3)^2`
+  is `x1*x17^(5/6)`, `rootn(x, 4)*rootn(x, 3)` is `x^(7/12)`), so the two readings differ by
+  rounding alone; in `permissive` always, as powers compose there ignoring the sign
+  (`x*rootn(x, 3)` is `x^(4/3)`, `rootn(x, 3)*rootn(x, 5)` is `x^(8/15)`). `strict` keeps
+  `x*rootn(x, 3)`, which has a value for x < 0, and a root whose powers would merge to nothing
+  keeps its spelling (`x^(2/3)*rootn(x, 3)` in `strict`, `rootn(x, 3)^2`).
 - **Powers of one base merge as a whole.** Where no two of a product's powers of one base may
   merge in `strict` (their sum an integer, which has a value where they have none), the powers
   merge as a whole where that sum does not: `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` and

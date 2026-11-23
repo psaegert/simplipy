@@ -6639,9 +6639,6 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     }
     let mut buckets: Vec<FBucket> = Vec::new();
     let mut opaque: Vec<Ex> = Vec::new(); // Const-containing and merge-refused factors, verbatim
-    let branch_ok = |cx: &Cx, base: &Ex, a: &Rat, b: &Rat| -> bool {
-        Law::MulCollect.holds_powers(Powers::Rational { base, r: a, s: b }, cx)
-    };
     for f in factors {
         let (base, fe) = factor_split(f, cx);
         let (sym, r) = match fe {
@@ -6659,6 +6656,74 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
                 base,
                 sym,
                 exps: vec![r],
+            }),
+        }
+    }
+
+    // AN ODD ROOT'S POWERS MERGE WITH ITS RADICAND'S (`pow.odd_root_compose` in a product):
+    // `rootn(t, k)^m` is `t^(m/k)` wherever t >= 0, while `rootn` is the real root on t < 0
+    // (`rootn(-8, 3)` is -2, `(-8)^(1/3)` has none). So beside a power of `t` the root's bucket
+    // joins `t`'s, its exponents scaled by `1/k` (a radicand `t^p` by `p/k`): in `f64` only where
+    // the product is confined to t >= 0, a power of `t` with a non-integer exponent beside it
+    // having no value for t < 0, so the product has none there either and the two readings
+    // differ by rounding alone (`t^(3/2)/rootn(t, 3)^2` is `t^(5/6)`; an even root is such a
+    // power, `rootn(t, 4)*rootn(t, 3)` is `t^(7/12)`); in `permissive` always, as powers compose
+    // there ignoring the sign (`t*rootn(t, 3)` is `t^(4/3)`, `rootn(t, 3)*rootn(t, 5)` is
+    // `t^(8/15)`). A root no other power of `t` meets keeps its spelling (`rootn(t, 3)^2`), and
+    // in `f64` so does one beside integer powers only (`t*rootn(t, 3)` has a value for t < 0).
+    // The collection's licence then folds the merged pool as any other.
+    let mut i = 0;
+    while i < buckets.len() {
+        let Some((rad, scale)) = buckets[i]
+            .sym
+            .is_none()
+            .then(|| odd_root_of_a_power(&buckets[i].base, cx))
+            .flatten()
+        else {
+            i += 1;
+            continue;
+        };
+        let radicand_at = |b: &FBucket| b.sym.is_none() && b.base == rad;
+        let target = buckets.iter().position(radicand_at);
+        let composes = if cx.permits(Permissive::PowersCompose) {
+            target.is_some()
+                || buckets.iter().enumerate().any(|(j, b)| {
+                    j != i
+                        && b.sym.is_none()
+                        && odd_root_of_a_power(&b.base, cx).is_some_and(|(r2, _)| r2 == rad)
+                })
+        } else {
+            target.is_some_and(|t| buckets[t].exps.iter().any(|r| !r.is_integer()))
+        };
+        let scaled: Option<Vec<Rat>> = buckets[i]
+            .exps
+            .iter()
+            .map(|m| m.checked_mul(&scale))
+            .collect();
+        let (true, Some(scaled)) = (composes, scaled) else {
+            i += 1;
+            continue;
+        };
+        // Only where its powers merge: the radicand's pool folds into fewer factors with the
+        // root's exponents than the two buckets give apart (`t^(2/3)*rootn(t, 3)` keeps the root
+        // in `f64`, where `t^(2/3 + 1/3)` would give `t` a value on t < 0).
+        let apart = fold_exponents(&buckets[i].base, None, buckets[i].exps.clone(), cx).len()
+            + target.map_or(0, |t| {
+                fold_exponents(&rad, None, buckets[t].exps.clone(), cx).len()
+            });
+        let mut pooled = target.map_or_else(Vec::new, |t| buckets[t].exps.clone());
+        pooled.extend(scaled.iter().cloned());
+        if target.is_some() && fold_exponents(&rad, None, pooled, cx).len() >= apart {
+            i += 1;
+            continue;
+        }
+        buckets.remove(i);
+        match buckets.iter_mut().find(|b| radicand_at(b)) {
+            Some(b) => b.exps.extend(scaled),
+            None => buckets.push(FBucket {
+                base: rad,
+                sym: None,
+                exps: scaled,
             }),
         }
     }
@@ -6681,61 +6746,12 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     let mut rebased = false;
     for b in buckets {
         let FBucket { base, sym, exps } = b;
-        // DETERMINISTIC licence-gated fold (`Rat::partition_with`): two exponents
-        // merge when the branch-cut licence admits the pair and the sum is a number, until no
-        // two merge -- a function of the exponent MULTISET that re-reads to itself in any
-        // order (a greedy fold left pieces the next pass merged: `x^1e-306*x^1000*x^1001`).
-        // Opposite signs share one pool only on a finite-nonzero base (`x^a * x^-a = 1`
-        // needs the licence); a zero sum drops the factor.
-        let sym_ok = match &sym {
-            None => true,
-            Some(y) => cx.sym_merge_licensed(&base, y),
-        };
-        let merge = |a: &Rat, b: &Rat| -> Option<Rat> {
-            if sym_ok && branch_ok(cx, &base, a, b) {
-                a.checked_add(b)
-            } else {
-                None
+        for r in fold_exponents(&base, sym.as_ref(), exps, cx) {
+            let f = rebuild_factor(base.clone(), sym.clone(), r, cx);
+            if !matches!(f, Ex::Mul(_)) && factor_split(f.clone(), cx).0 != base {
+                rebased = true;
             }
-        };
-        let mixed = exps.iter().any(|r| r.is_negative()) && exps.iter().any(|r| !r.is_negative());
-        let pools: Vec<Vec<Rat>> = if mixed && sym_ok && Law::MulCancel.holds(&base, cx) {
-            vec![exps]
-        } else {
-            let (negs, poss): (Vec<Rat>, Vec<Rat>) =
-                exps.into_iter().partition(|r| r.is_negative());
-            vec![poss, negs]
-        };
-        for pool in pools {
-            let mut parts = Rat::partition_with(pool, merge, Rat::is_zero);
-            // THE POWERS LEFT MERGE AS A WHOLE where no two of them did: the licence reads the
-            // merged exponent, which two members can make an integer their whole does not, so
-            // `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` while `x^(1/2)*x^(1/2)` keeps its halves in
-            // f64 (`x` has a value where they have none). The first k of the parts merge, for the
-            // largest k of three or more the licence admits, until none does.
-            while parts.len() >= 3 {
-                let merged = (3..=parts.len()).rev().find_map(|k| {
-                    let rest = parts[1..k]
-                        .iter()
-                        .try_fold(Rat::ZERO, |acc, r| acc.checked_add(r))?;
-                    merge(&parts[0], &rest).map(|total| (k, total))
-                });
-                let Some((k, total)) = merged else {
-                    break;
-                };
-                parts.drain(..k);
-                if !total.is_zero() {
-                    parts.push(total);
-                }
-                parts.sort_by(Rat::cmp_exact);
-            }
-            for r in parts {
-                let f = rebuild_factor(base.clone(), sym.clone(), r, cx);
-                if !matches!(f, Ex::Mul(_)) && factor_split(f.clone(), cx).0 != base {
-                    rebased = true;
-                }
-                push_factor(&mut out, &mut spliced, f);
-            }
+            push_factor(&mut out, &mut spliced, f);
         }
     }
     if rebased {
@@ -6744,6 +6760,84 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     }
     let merged = merge_e_powers(&mut out, cx);
     (out, spliced || merged)
+}
+
+/// THE LIKE-BASE FOLD of one bucket (`collect_like_bases`): the exponents of `base` (and its
+/// symbolic exponent `sym`, if any) after every merge the branch-cut licence admits, in the order
+/// they are rebuilt. A DETERMINISTIC licence-gated fold (`Rat::partition_with`): two exponents
+/// merge when the licence admits the pair and the sum is a number, until no two merge -- a
+/// function of the exponent MULTISET that re-reads to itself in any order (a greedy fold left
+/// pieces the next pass merged: `x^1e-306*x^1000*x^1001`). Opposite signs share one pool only on
+/// a finite-nonzero base (`x^a * x^-a = 1` needs the licence); a zero sum drops the factor.
+fn fold_exponents(base: &Ex, sym: Option<&Ex>, exps: Vec<Rat>, cx: &Cx) -> Vec<Rat> {
+    let sym_ok = match sym {
+        None => true,
+        Some(y) => cx.sym_merge_licensed(base, y),
+    };
+    let merge = |a: &Rat, b: &Rat| -> Option<Rat> {
+        if sym_ok && Law::MulCollect.holds_powers(Powers::Rational { base, r: a, s: b }, cx) {
+            a.checked_add(b)
+        } else {
+            None
+        }
+    };
+    let mixed = exps.iter().any(|r| r.is_negative()) && exps.iter().any(|r| !r.is_negative());
+    let pools: Vec<Vec<Rat>> = if mixed && sym_ok && Law::MulCancel.holds(base, cx) {
+        vec![exps]
+    } else {
+        let (negs, poss): (Vec<Rat>, Vec<Rat>) = exps.into_iter().partition(|r| r.is_negative());
+        vec![poss, negs]
+    };
+    let mut out = Vec::new();
+    for pool in pools {
+        let mut parts = Rat::partition_with(pool, merge, Rat::is_zero);
+        // THE POWERS LEFT MERGE AS A WHOLE where no two of them did: the licence reads the
+        // merged exponent, which two members can make an integer their whole does not, so
+        // `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` while `x^(1/2)*x^(1/2)` keeps its halves in
+        // f64 (`x` has a value where they have none). The first k of the parts merge, for the
+        // largest k of three or more the licence admits, until none does.
+        while parts.len() >= 3 {
+            let merged = (3..=parts.len()).rev().find_map(|k| {
+                let rest = parts[1..k]
+                    .iter()
+                    .try_fold(Rat::ZERO, |acc, r| acc.checked_add(r))?;
+                merge(&parts[0], &rest).map(|total| (k, total))
+            });
+            let Some((k, total)) = merged else {
+                break;
+            };
+            parts.drain(..k);
+            if !total.is_zero() {
+                parts.push(total);
+            }
+            parts.sort_by(Rat::cmp_exact);
+        }
+        out.extend(parts);
+    }
+    out
+}
+
+/// An odd root of a power, `rootn(t^p, k)` for an odd index k >= 3 (`p` 1 for a radicand that is no
+/// rational power), as `(t, p/k)`: the base and exponent the like-base collection reads its powers
+/// with where it may (`collect_like_bases`).
+fn odd_root_of_a_power(f: &Ex, cx: &Cx) -> Option<(Ex, Rat)> {
+    let Ex::Fun(op, args) = f else {
+        return None;
+    };
+    if args.len() != 2 || !cx.view.tok_is(*op, "rootn") {
+        return None;
+    }
+    let Ex::Num(k) = &args[1] else {
+        return None;
+    };
+    if !k.is_odd_integer() || k.cmp_int(3) == Ordering::Less {
+        return None;
+    }
+    let inv = k.checked_inv()?;
+    match as_rational_power(&args[0], cx) {
+        Some((t, p)) => Some((t.clone(), p.checked_mul(&inv)?)),
+        None => Some((args[0].clone(), inv)),
+    }
 }
 
 /// The exponent of `f` read as a power of Euler's number: `exp(a)` is `e^a`, the leaf `E` is

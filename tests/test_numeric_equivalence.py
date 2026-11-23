@@ -428,7 +428,11 @@ class TestCorpusGate:
         # multiplied out, and the search factors none out. 75 walk rows move: 72 dearer
         # (+673,585, the polynomial written with its powers), 2 cheaper (-7,415), 1 at an equal
         # price.
-        assert walk['complexity_out'] == 55021607, walk['complexity_out']
+        # AN ODD ROOT'S POWERS MERGE WITH ITS RADICAND'S where the product is confined to a
+        # non-negative radicand: 55,021,607 -> 55,026,131 (+4,524). One walk row moves, 296:
+        # `rootn(x17, 4)*rootn(x17, 5)` is `x17^0.45`, and the root no longer kept apart is
+        # multiplied out over the sum beside it.
+        assert walk['complexity_out'] == 55026131, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old
