@@ -4554,7 +4554,7 @@ fn divide_terms(terms: &[Ex], u: &Coef, cx: &Cx) -> Option<Vec<Ex>> {
 
 /// The structural part of the tie order between a sum's two orientations, where the price and the
 /// sign key (`sign_key`) leave them tied.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Tie {
     /// At a sign-trade site the current spelling is the distinguished one (bare, its coefficient
     /// positive), and it stands.
@@ -4572,7 +4572,7 @@ enum Tie {
 }
 
 /// Where the wrapper of a sum's flipped orientation stands (`flipped_orientation_wins`).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Wrapper {
     /// In neither spelling: a free-orientation site (an even power's base, an even function's
     /// argument), where both orientations are bare.
@@ -4594,6 +4594,29 @@ enum Wrapper {
 /// belongs to the settling and the search. `false` (the spelling stands) where a negation
 /// overflows.
 fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -> bool {
+    // A decision of the call's own contexts is made once in the call (`CallDecisions`).
+    let Some(ctx) = call_decision_key(cx) else {
+        return orientation_decided(terms, wrapper, tie, cx);
+    };
+    let key = (ctx, terms.to_vec(), wrapper, tie);
+    if let Some(hit) = CALL_DECISIONS.with(|m| {
+        m.borrow()
+            .as_ref()
+            .and_then(|d| d.orientations.get(&key).copied())
+    }) {
+        return hit;
+    }
+    let r = orientation_decided(terms, wrapper, tie, cx);
+    CALL_DECISIONS.with(|m| {
+        if let Some(d) = m.borrow_mut().as_mut() {
+            d.orientations.insert(key, r);
+        }
+    });
+    r
+}
+
+/// [`flipped_orientation_wins`], decided.
+fn orientation_decided(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -> bool {
     // The cheaper orientation wins. The wrapper's own price
     // delta, from the caller's side: one sign for a content-1 sum (the negation exists only
     // in the flipped spelling), the coefficient's sign-bit delta for a non-unit content
@@ -9483,7 +9506,30 @@ fn sign_place_zero(negative: Option<bool>, out: Vec<Ex>, cx: &Cx) -> Ex {
 }
 
 /// [`sign_place`], with the zero's sign where the coefficient is a zero that carries one.
-fn sign_place_signed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &Cx) -> Ex {
+fn sign_place_signed(coeff: Rat, out: Vec<Ex>, zero: Option<bool>, cx: &Cx) -> Ex {
+    // A placement under the call's own contexts is made once in the call (`CallDecisions`).
+    let Some(ctx) = call_decision_key(cx) else {
+        return sign_placed(coeff, out, zero, cx);
+    };
+    let key = (ctx, coeff.clone(), out.clone(), zero);
+    if let Some(hit) = CALL_DECISIONS.with(|m| {
+        m.borrow()
+            .as_ref()
+            .and_then(|d| d.placements.get(&key).cloned())
+    }) {
+        return hit;
+    }
+    let r = sign_placed(coeff, out, zero, cx);
+    CALL_DECISIONS.with(|m| {
+        if let Some(d) = m.borrow_mut().as_mut() {
+            d.placements.insert(key, r.clone());
+        }
+    });
+    r
+}
+
+/// [`sign_place_signed`], placed.
+fn sign_placed(mut coeff: Rat, mut out: Vec<Ex>, zero: Option<bool>, cx: &Cx) -> Ex {
     // A sum holding a `Const` takes a sign into its terms (`negate_term`: a Const term absorbs it
     // in the refit, every other term negates; `Law::AbsorbSumSign`), so it carries the product's
     // sign exactly, as a negation-absorbing sum does; only a bare `Const` factor or a zero
@@ -10283,6 +10329,26 @@ pub(crate) struct CallMemo {
     lived: Vec<usize>,
     flips: FlipMemo,
     opposite: rustc_hash::FxHashMap<OppositeKey, Ex>,
+    placements: rustc_hash::FxHashMap<(DecisionCxKey, Rat, Vec<Ex>, Option<bool>), Ex>,
+    orientations: rustc_hash::FxHashMap<(DecisionCxKey, Vec<Ex>, Wrapper, Tie), bool>,
+}
+
+/// The context part of a placement's or an orientation's key: the flip's
+/// ([`trade_cx_key`]) and the enclosure certificate's identity, which the constructors a
+/// decision builds through read too.
+type DecisionCxKey = (FlipCxKey, usize);
+
+/// The context key of a decision under one of the call's own contexts (`call_lived`), `None`
+/// under any other.
+fn call_decision_key(cx: &Cx) -> Option<DecisionCxKey> {
+    let key = trade_cx_key(cx);
+    let encl = cx
+        .cert_encl
+        .map_or(0, |f| f as *const dyn Fn(&Ex) -> Option<(f64, f64)> as *const () as usize);
+    let lived = call_lived(&key)
+        && (encl == 0
+            || CALL_DECISIONS.with(|m| m.borrow().as_ref().is_some_and(|d| d.lived.contains(&encl))));
+    lived.then_some((key, encl))
 }
 
 thread_local! {
@@ -10297,11 +10363,16 @@ impl CallDecisions {
         let (view, certs, _) = flip_cx_key(cx);
         let mut lived: Vec<usize> = certs.iter().copied().filter(|&c| c != 0).collect();
         lived.push(view);
+        if let Some(f) = cx.cert_encl {
+            lived.push(f as *const dyn Fn(&Ex) -> Option<(f64, f64)> as *const () as usize);
+        }
         CallDecisions(CALL_DECISIONS.with(|m| {
             m.borrow_mut().replace(CallMemo {
                 lived,
                 flips: FlipMemo::default(),
                 opposite: rustc_hash::FxHashMap::default(),
+                placements: rustc_hash::FxHashMap::default(),
+                orientations: rustc_hash::FxHashMap::default(),
             })
         }))
     }
@@ -10314,8 +10385,13 @@ impl Drop for CallDecisions {
     }
 }
 
-/// Does every closure the context key names (and its token view) live as long as the call?
+/// Does every closure the context key names (and its token view) live as long as the call? Not
+/// while a fire log records the folds (`rules::FireLog`): a decision taken from the memo would not
+/// record the folds of its constructions again.
 fn call_lived(key: &FlipCxKey) -> bool {
+    if super::rules::folds_logged() {
+        return false;
+    }
     CALL_DECISIONS.with(|m| {
         m.borrow().as_ref().is_some_and(|d| {
             d.lived.contains(&key.0) && key.1.iter().all(|&c| c == 0 || d.lived.contains(&c))
