@@ -2072,6 +2072,9 @@ impl Engine {
         };
         // Each distinct base's region verdict is decided once per context in the call.
         let _regions = crate::ac::expr::RegionScope::open();
+        // The flips and opposite-sums decisions of the call's own contexts are remembered for
+        // the whole call (`expr::CallDecisions`).
+        let _decisions = crate::ac::expr::CallDecisions::open(&cx);
         // Parse with the CALL's MODE: each constructor step is the mode's (a `permissive` sum
         // keeps a part with a variable beside an infinity, so the like terms can cancel first:
         // `(x0 + inf)/(x0 + inf)` is 1). The parse Cx stays CERT-LESS: `canon(e0, &cx)` below

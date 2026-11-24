@@ -7157,10 +7157,19 @@ enum HostKey {
 /// product once from all of its members, so no smaller product a spelling nests is decided on
 /// its own first.
 fn collect_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> Ex {
+    // Under the call's own contexts each distinct product is decided once in the call
+    // (`CallDecisions`).
+    let ctx_key = trade_cx_key(cx);
+    let lived = call_lived(&ctx_key).then(|| (ctx_key, host.key(), raw.clone()));
+    if let Some(hit) = lived.as_ref().and_then(|k| {
+        CALL_DECISIONS.with(|m| m.borrow().as_ref().and_then(|d| d.opposite.get(k).cloned()))
+    }) {
+        return hit;
+    }
     // Within an enclosing scope (a parse, a re-walk) each distinct product is decided once.
     let key = FLIP_MEMO
         .with(|m| m.borrow().is_some())
-        .then(|| (trade_cx_key(cx), host.key(), raw.clone()));
+        .then(|| (ctx_key, host.key(), raw.clone()));
     if let Some(hit) = key
         .as_ref()
         .and_then(|k| OPPOSITE_MEMO.with(|m| m.borrow().get(k).cloned()))
@@ -7171,6 +7180,13 @@ fn collect_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) ->
     // same sites.
     let _memo = FlipScope::open();
     let decided = decide_opposite_sums(host, raw, out, cx);
+    if let Some(k) = lived {
+        CALL_DECISIONS.with(|m| {
+            if let Some(d) = m.borrow_mut().as_mut() {
+                d.opposite.insert(k, decided.clone());
+            }
+        });
+    }
     if let Some(k) = key {
         OPPOSITE_MEMO.with(|m| m.borrow_mut().insert(k, decided.clone()));
     }
@@ -10196,6 +10212,16 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
         return None;
     }
     let key = (trade_cx_key(cx), f.clone(), refit);
+    let lived = call_lived(&key.0);
+    if lived {
+        if let Some(hit) = CALL_DECISIONS.with(|m| {
+            m.borrow()
+                .as_ref()
+                .and_then(|d| d.flips.get(&key).cloned())
+        }) {
+            return hit;
+        }
+    }
     let outer = FLIP_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if m.is_none() {
@@ -10210,12 +10236,77 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
         return hit;
     }
     let r = sign_trade_flip_raw(f, cx, refit);
+    if lived {
+        CALL_DECISIONS.with(|m| {
+            if let Some(d) = m.borrow_mut().as_mut() {
+                d.flips.insert(key.clone(), r.clone());
+            }
+        });
+    }
     FLIP_MEMO.with(|m| {
         if let Some(t) = m.borrow_mut().as_mut() {
             t.insert(key, r.clone());
         }
     });
     r
+}
+
+/// THE CALL'S DECISIONS: the flips ([`trade_flip`]) and the opposite-sums decisions
+/// ([`collect_opposite_sums`]) made under the simplify call's own contexts, remembered for the
+/// whole call. Each is a function of its key (the factor or the product as it arrived, and the
+/// context: its token view, certificate closures, mode, switches and the thread's number
+/// domain), so a decision met again in a later product -- the search rebuilds every candidate
+/// through the constructors, round after round, over sums whose orientation does not change --
+/// is the one already made. A key is remembered beyond its decision only where every closure it
+/// names lives as long as the call (`call_lived`): a context a caller builds around a closure of
+/// its own (a sum's held sign, `Cx::sign_held`) is keyed by that closure's address, which a later
+/// caller's closure may take, so its decisions keep the extent of the decision that made them
+/// ([`FlipScope`]).
+pub(crate) struct CallDecisions(Option<CallMemo>);
+
+/// The call's decisions and the identities of its own contexts' closures and token view.
+pub(crate) struct CallMemo {
+    lived: Vec<usize>,
+    flips: FlipMemo,
+    opposite: rustc_hash::FxHashMap<OppositeKey, Ex>,
+}
+
+thread_local! {
+    static CALL_DECISIONS: std::cell::RefCell<Option<CallMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl CallDecisions {
+    /// Opens the call's memo for the contexts of `cx` (its token view and certificate closures),
+    /// restoring the caller's when it drops.
+    pub(crate) fn open(cx: &Cx) -> Self {
+        let (view, certs, _) = flip_cx_key(cx);
+        let mut lived: Vec<usize> = certs.iter().copied().filter(|&c| c != 0).collect();
+        lived.push(view);
+        CallDecisions(CALL_DECISIONS.with(|m| {
+            m.borrow_mut().replace(CallMemo {
+                lived,
+                flips: FlipMemo::default(),
+                opposite: rustc_hash::FxHashMap::default(),
+            })
+        }))
+    }
+}
+
+impl Drop for CallDecisions {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        CALL_DECISIONS.with(|m| *m.borrow_mut() = outer);
+    }
+}
+
+/// Does every closure the context key names (and its token view) live as long as the call?
+fn call_lived(key: &FlipCxKey) -> bool {
+    CALL_DECISIONS.with(|m| {
+        m.borrow().as_ref().is_some_and(|d| {
+            d.lived.contains(&key.0) && key.1.iter().all(|&c| c == 0 || d.lived.contains(&c))
+        })
+    })
 }
 
 /// The memo key's context part: everything `sign_trade_flip` reads besides the factor -- the
