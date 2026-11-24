@@ -6053,13 +6053,14 @@ fn analytic_nonzero_witness_in(t: &[String], ops: &Operators, far: bool) -> bool
         d: u32,
         depth_max: u32,
         budget: &mut u32,
+        memo: &mut PointMemo,
     ) -> bool {
         if *budget == 0 {
             return false;
         }
         *budget -= 1;
         let doms = doms_from_box(bx, used, width, (-r, r));
-        if let Some(v) = value_set_p(e, ops, &doms, &[]) {
+        if let Some(v) = value_set_p_cells(e, ops, &doms, &[], memo) {
             if v.fin_pm() {
                 let zero_in = (v.lo < 0.0 || (v.lo == 0.0 && !v.lo_open))
                     && (v.hi > 0.0 || (v.hi == 0.0 && !v.hi_open));
@@ -6083,13 +6084,15 @@ fn analytic_nonzero_witness_in(t: &[String], ops: &Operators, far: bool) -> bool
         let (lo, hi) = bx[i];
         let mid = 0.5 * (lo + hi);
         bx[i] = (lo, mid);
-        let left = rec(e, ops, r, bx, used, width, d + 1, depth_max, budget);
+        let left = rec(e, ops, r, bx, used, width, d + 1, depth_max, budget, memo);
         bx[i] = (mid, hi);
-        let right = !left && rec(e, ops, r, bx, used, width, d + 1, depth_max, budget);
+        let right = !left && rec(e, ops, r, bx, used, width, d + 1, depth_max, budget, memo);
         bx[i] = (lo, hi);
         left || right
     }
-    rec(t, ops, r, &mut bx, &used, width, 0, depth_max, &mut budget)
+    // The cell-free subtrees (the literals, read exactly) are read once for all the cells.
+    let mut memo = PointMemo::default();
+    rec(t, ops, r, &mut bx, &used, width, 0, depth_max, &mut budget, &mut memo)
 }
 
 // ---------------------------------------------------------------------------
