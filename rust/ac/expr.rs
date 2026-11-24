@@ -448,6 +448,20 @@ pub const MU_MILLI: u64 = 1000;
 /// `x` is held in fixed point with `FRAC` fractional bits, so `x^2` needs `2*FRAC + 4`
 /// bits and stays inside `u128`.
 pub fn l_millibits(n: u128) -> u64 {
+    // The small arguments (a literal's digits, exponents and denominators are mostly small) are
+    // read from a table the same extraction fills once.
+    if n < L_SMALL {
+        static TABLE: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+        return TABLE.get_or_init(|| (0..L_SMALL).map(l_millibits_computed).collect())[n as usize];
+    }
+    l_millibits_computed(n)
+}
+
+/// How many small arguments [`l_millibits`] reads from its table.
+const L_SMALL: u128 = 4096;
+
+/// [`l_millibits`], computed.
+fn l_millibits_computed(n: u128) -> u64 {
     let m = n.saturating_add(1);
     if m <= 1 {
         return 0; // log2(1) = 0, i.e. n = 0
