@@ -10274,11 +10274,9 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     let key = (trade_cx_key(cx), f.clone(), refit);
     let lived = call_lived(&key.0);
     if lived {
-        if let Some(hit) = CALL_DECISIONS.with(|m| {
-            m.borrow()
-                .as_ref()
-                .and_then(|d| d.flips.get(&key).cloned())
-        }) {
+        if let Some(hit) =
+            CALL_DECISIONS.with(|m| m.borrow().as_ref().and_then(|d| d.flips.get(&key).cloned()))
+        {
             return hit;
         }
     }
@@ -10342,12 +10340,13 @@ type DecisionCxKey = (FlipCxKey, usize);
 /// under any other.
 fn call_decision_key(cx: &Cx) -> Option<DecisionCxKey> {
     let key = trade_cx_key(cx);
-    let encl = cx
-        .cert_encl
-        .map_or(0, |f| f as *const dyn Fn(&Ex) -> Option<(f64, f64)> as *const () as usize);
+    let encl = cx.cert_encl.map_or(0, |f| {
+        f as *const dyn Fn(&Ex) -> Option<(f64, f64)> as *const () as usize
+    });
     let lived = call_lived(&key)
         && (encl == 0
-            || CALL_DECISIONS.with(|m| m.borrow().as_ref().is_some_and(|d| d.lived.contains(&encl))));
+            || CALL_DECISIONS
+                .with(|m| m.borrow().as_ref().is_some_and(|d| d.lived.contains(&encl))));
     lived.then_some((key, encl))
 }
 

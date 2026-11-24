@@ -6092,7 +6092,18 @@ fn analytic_nonzero_witness_in(t: &[String], ops: &Operators, far: bool) -> bool
     }
     // The cell-free subtrees (the literals, read exactly) are read once for all the cells.
     let mut memo = PointMemo::default();
-    rec(t, ops, r, &mut bx, &used, width, 0, depth_max, &mut budget, &mut memo)
+    rec(
+        t,
+        ops,
+        r,
+        &mut bx,
+        &used,
+        width,
+        0,
+        depth_max,
+        &mut budget,
+        &mut memo,
+    )
 }
 
 // ---------------------------------------------------------------------------
