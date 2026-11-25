@@ -299,7 +299,7 @@ class TestTheWholeDottedPathIsChecked:
     """
 
     ESCAPES = ['simplipy.engine.os.system', 'simplipy.io.os.abort',
-               'simplipy._loading.importlib.import_module', 'simplipy.engine.hashlib.sha256',
+               'simplipy._loading.importlib.import_module', 'simplipy._loading.hashlib.sha256',
                'simplipy.asset_manager.shutil.rmtree', 'simplipy.engine.os']
 
     @pytest.mark.parametrize('realization', ESCAPES)
