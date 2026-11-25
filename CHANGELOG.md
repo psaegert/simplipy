@@ -587,6 +587,17 @@ The measurements below use three sets: the 129,490 simplify inputs of flash-ansr
 training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
 model predictions.
 
+- **One operator schema for the helpers.** The core reads and writes `+`, `-`, `*`, `/`, `neg`,
+  `inv`, `pow` and `rootn` whatever a config declares (an engine over `+`, `*` and `sin` answers
+  `x0*x0` with `pow(x0, 2)`), and every helper that walks an expression now reads them beside the
+  config's operators: `expression_variables` no longer reports `neg` or `pow` as a variable,
+  `evaluate_constants` folds under them (`x0 + pow(2, 0.5)` is `x0 + 1.4142135623730951`), and
+  `resolve_constant_rules` reads them as operators. Masking already did. A config that declares
+  every core operator, as every shipped config does, sees no change.
+- **`evaluate_constants` reads an expression of any depth** within the core's token cap; past a
+  depth of about 1,000 it raised `RecursionError`.
+- **`is_valid` reads an array of byte strings** (dtype `S`) as the tokens it spells, as the
+  conversion API does; every such array was invalid before.
 - **Named constants.** A token `<constant_NAME>`, NAME letters and digits (`<constant_a>`,
   `<constant_k12>`), is a named constant: one unknown finite real per name, every occurrence of a
   name the same value, distinct names independent. `<constant>` stays an anonymous constant per
