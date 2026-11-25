@@ -129,8 +129,9 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   $-1 \cdot x_0 \cdot \sin(2)$ as $x_0 \cdot \sin(-2)$: a sign costs one bit wherever it sits
   (§5), so the placements tie and the sign key decides.
   **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
-  `rootn` is the canonical spelling of a principal even root and $\mu$ ties it with
-  $\mathrm{Pow}(t, 1/k)$, so neither orientation is forced.
+  `rootn` is the canonical spelling of a principal even root, and the constructors read
+  $\mathrm{Pow}(t, 1/k)$ as it, so the two spellings are one state and $\mu$ never chooses
+  between them (spelled out, `rootn(t, 2)` would cost 14.585 bits and $\mathrm{Pow}(t, 1/2)$ 12.585).
 
 **Route invariance** [EMPIRICAL — deliberately *not* claimed as a theorem]:
 $\mathrm{nf}$ is deterministic *per route*, but a state built incrementally through
@@ -856,7 +857,7 @@ symbol-vs-literal *ratio* — the sensitivity axis that matters — is independe
 laws a frequency count cannot see: a **named constant costs less than the cheapest
 expression denoting it** ($\mathrm{acos}(-1) = 11$ bits, $\exp(1) = 8$, so $4$ has
 room), and a **leaf must also name which variable it is** -- the class `Leaf` carries
-$1.65$ bits of the corpus census, a specific variable among eighteen carries $5.82$, and
+$1.65$ bits of the corpus census, a specific variable among seventeen carries $5.74$, and
 it is the second number the code has to charge for Kraft's inequality to hold and for
 collection ($x + x \to 2x$) to stay a descent. A numeric literal is priced **on its
 exact value**, spelling-free, by a

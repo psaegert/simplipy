@@ -88,7 +88,7 @@ fn sym_bits(bits: u64) -> u64 {
 ///
 /// Pi and E are fixed instead by a LAW the census cannot see: A NAMED CONSTANT MUST COST
 /// LESS THAN THE CHEAPEST EXPRESSION DENOTING IT, or writing the name is never a descent.
-/// The cheapest spellings here are `acos(-1)` = 11 bits and `exp(1)` = 9, so 4 has room --
+/// The cheapest spellings here are `acos(-1)` = 11 bits and `exp(1)` = 8, so 4 has room --
 /// and `np.e` now beats `exp 1` on COST rather than on the canonical tie-break, which is
 /// what the fold filter's correctness had been resting on.
 ///
@@ -161,7 +161,7 @@ pub fn mu_pi() -> u64 {
     sym_bits(MU_BITS_PI)
 }
 
-/// `np.e`. Below `exp(1)` = 9 bits, its cheapest denoting expression -- the inequality
+/// `np.e`. Below `exp(1)` = 8 bits, its cheapest denoting expression -- the inequality
 /// the fold filter needs `exp 1 -> np.e` to be a strict improvement.
 #[inline]
 pub fn mu_e() -> u64 {
@@ -178,10 +178,12 @@ pub fn mu_infinity() -> u64 {
 
 /// A function HEAD, priced by name, in BITS at the 8-bit unit.
 ///
-/// Two tiers, read off the census: the ELEMENTARY heads a skeleton reaches for constantly
-/// (`rootn` alone is 181 of 10,996 charged nodes at 5.92 bits) and the TRANSCENDENTAL
-/// heads it barely reaches at all (40-68 occurrences each, 7.3-8.1 bits). The gap between
-/// the tiers is the whole point: it is what makes `pi - 2` cheaper than `asin(sin 2)`.
+/// Two tiers: the ELEMENTARY heads at `rootn`'s price, the one head a skeleton reaches for
+/// constantly (181 of 10,996 charged nodes at 5.92 bits), and the TRANSCENDENTAL heads at the
+/// price of those it barely reaches (40-68 occurrences each, 7.3-8.1 bits). Which head sits in
+/// which tier is a choice the census does not make: `exp`, `log`, `abs`, `sin`, `cos` and `tan`
+/// are as rare in it as the transcendental heads. The gap between the tiers is the whole point:
+/// it is what makes `pi - 2` cheaper than `asin(sin 2)`.
 ///
 /// A head this table does not name is a USER-DEFINED operator, which no census can price;
 /// it keeps the flat unit, so an unknown symbol is never made cheaper than mu' had it.
