@@ -279,8 +279,8 @@ impl<'a> Acceptor<'a> {
             };
             let strict = v.same_double || v.same_real_in_kind;
             match self.spec.mode {
-                RuleMode::Default if !strict => return Err(MineRefusal::GroundValue),
-                RuleMode::Default if !v.permissive => {
+                RuleMode::Strict if !strict => return Err(MineRefusal::GroundValue),
+                RuleMode::Strict if !v.permissive => {
                     return Err(MineRefusal::Policy("engine_owned"))
                 }
                 RuleMode::Permissive if !v.permissive => return Err(MineRefusal::GroundValue),
@@ -362,7 +362,7 @@ impl<'a> Acceptor<'a> {
         // (`floor(x + 1) -> floor(x) + 1`, 1 against 0 at x = -1e-17; `sinh(asinh(x)) -> x`, 66
         // units in the last place off at 1e100) is the judge's to decide, which admits it where
         // the rule is true in the reals.
-        if matches!(self.spec.mode, RuleMode::Default)
+        if matches!(self.spec.mode, RuleMode::Strict)
             && !realised_in_f64(self.src, t, self.vars, self.eng)
         {
             return Err(MineRefusal::NotRealised);
@@ -656,7 +656,7 @@ impl Engine {
         )?;
         // f64 holds only what float64 realises (`Acceptor::license`'s f64 bar and ladder)
         if why.is_none()
-            && matches!(spec.mode, RuleMode::Default)
+            && matches!(spec.mode, RuleMode::Strict)
             && !realised_in_f64(src, tgt, var_names, self)
         {
             return Ok(Some(MineRefusal::NotRealised.name()));
@@ -830,9 +830,9 @@ impl Engine {
     /// (append-only; existing ids -- including `bang_cache` keys -- stay valid).
     pub fn set_rules(&mut self, raw: Vec<(Vec<String>, Vec<String>)>) {
         self.set_mode_rules_read_in(
-            RuleMode::Default,
+            RuleMode::Strict,
             Some(raw),
-            crate::ac::rules::RuleCanon::Mode(RuleMode::Default),
+            crate::ac::rules::RuleCanon::Mode(RuleMode::Strict),
         );
     }
 
@@ -843,7 +843,7 @@ impl Engine {
     /// mode then serves nothing. The distinction is the design (see `Engine::ac_rules_for`)
     /// and it survives every layer up to the config loader.
     ///
-    /// `RuleMode::Default` with `None` installs the empty default set (the default mode
+    /// `RuleMode::Strict` with `None` installs the empty default set (the default mode
     /// always has one). The `&mut self` token-table extension is append-only, so existing
     /// ids -- including `bang_cache` keys -- stay valid.
     ///
@@ -868,7 +868,7 @@ impl Engine {
         let compiled =
             raw.map(|r| CompiledRules::compile(r, canon, &mut self.tokens, &self.operators));
         match mode {
-            RuleMode::Default => {
+            RuleMode::Strict => {
                 self.rules = compiled.unwrap_or_else(|| {
                     CompiledRules::compile(Vec::new(), canon, &mut self.tokens, &self.operators)
                 });

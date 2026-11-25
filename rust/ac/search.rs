@@ -1403,7 +1403,7 @@ mod tests {
         let row156 = t(&["*", "x2", "+", "x2", "/", "+", "x1", "1", "x2"]);
         let plain = t(&["+", "x1", "x2"]);
         for toks in [&row156, &plain] {
-            for mode in [RuleMode::Default, RuleMode::Permissive] {
+            for mode in [RuleMode::Strict, RuleMode::Permissive] {
                 for form in [
                     crate::engine::AcForm::Tagged,
                     crate::engine::AcForm::Explicit,
@@ -1425,14 +1425,14 @@ mod tests {
         let Some(e) = engine() else { return };
         let row156 = t(&["*", "x2", "+", "x2", "/", "+", "x1", "1", "x2"]);
         let valley = t(&["+", "1", "+", "x1", "pow", "x2", "2"]);
-        let hill_fix = e.ac_simplify(&row156, 48, RuleMode::Default).unwrap();
-        let valley_fix = e.ac_simplify(&valley, 48, RuleMode::Default).unwrap();
+        let hill_fix = e.ac_simplify(&row156, 48, RuleMode::Strict).unwrap();
+        let valley_fix = e.ac_simplify(&valley, 48, RuleMode::Strict).unwrap();
         assert_eq!(hill_fix, valley_fix);
         let out = e
             .ac_explore_proj(
                 &row156,
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
                 crate::engine::AcForm::Tagged,
                 32,
             )
@@ -1448,15 +1448,15 @@ mod tests {
         let row156 = t(&["*", "x2", "+", "x2", "/", "+", "x1", "1", "x2"]);
         let form = crate::engine::AcForm::Tagged;
         let out = e
-            .ac_explore_proj(&row156, 48, RuleMode::Default, form, 32)
+            .ac_explore_proj(&row156, 48, RuleMode::Strict, form, 32)
             .unwrap();
         assert_eq!(
-            e.ac_explore_proj(&row156, 48, RuleMode::Default, form, 32)
+            e.ac_explore_proj(&row156, 48, RuleMode::Strict, form, 32)
                 .unwrap(),
             out
         );
         assert_eq!(
-            e.ac_explore_proj(&out, 48, RuleMode::Default, form, 32)
+            e.ac_explore_proj(&out, 48, RuleMode::Strict, form, 32)
                 .unwrap(),
             out
         );

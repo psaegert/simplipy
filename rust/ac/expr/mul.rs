@@ -168,7 +168,7 @@ fn own_powers_multiplied_out(e: Ex, cx: &Cx) -> Ex {
     // permissive reads (nor a premise its context certifies), so that premise is not asked.
     if matches!(cx.mode, RuleMode::Permissive) {
         let strict = Cx {
-            mode: RuleMode::Default,
+            mode: RuleMode::Strict,
             zero_sign_unread: true,
             ..*cx
         };

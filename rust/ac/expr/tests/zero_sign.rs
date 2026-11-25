@@ -6,10 +6,10 @@ use super::*;
 fn a_zero_keeps_its_ieee_sign_where_it_is_inverted() {
     with_view(|view| {
         let lg = |cx: &Cx| fun(view.intern("log"), vec![x(view)], cx);
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             let mut cx = Cx::bare(view);
             cx.mode = mode;
-            let ieee = matches!(mode, RuleMode::Default);
+            let ieee = matches!(mode, RuleMode::Strict);
             let inverse = |members: Vec<Ex>| -> Ex {
                 let raised = raised_members(members, &Rat::NEG_ONE, &cx)
                     .unwrap_or_else(|held| vec![pow(held, Ex::int(-1), &cx)]);
@@ -43,7 +43,7 @@ fn a_zero_keeps_its_ieee_sign_where_it_is_inverted() {
 #[test]
 fn a_zero_term_stays_where_the_rest_may_be_neg_zero_on_a_region() {
     with_view(|view| {
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             let mut cx = Cx::bare(view);
             cx.mode = mode;
             let x1 = Ex::Leaf(view.intern("x1"));
@@ -59,7 +59,7 @@ fn a_zero_term_stays_where_the_rest_may_be_neg_zero_on_a_region() {
                 other => panic!("a product expected: {other:?}"),
             };
             let collected = add(vec![scaled(2), scaled(-1)], &cx);
-            if matches!(mode, RuleMode::Default) {
+            if matches!(mode, RuleMode::Strict) {
                 // t + 0 and 2t - t are +0 there, as float64 sums them
                 let kept = Ex::Add(vec![t.clone(), Ex::int(0)]);
                 assert_eq!(plus_zero, kept);

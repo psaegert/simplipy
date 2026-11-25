@@ -478,7 +478,7 @@ fn dirac_refutes_literal(
         // f64's second reading (`battery::kind_holds`) passes two finite values where the reals
         // give the source a value at the witness (the target is a literal) and agree there.
         let second = || {
-            matches!(mode, crate::engine::RuleMode::Default)
+            matches!(mode, crate::engine::RuleMode::Strict)
                 && crate::battery::kind_holds(got, want, || {
                     constant_value(&toks, ops, crate::engine::RuleMode::Permissive).map(|r| {
                         !r.is_nan() && crate::table::f64_agree(r, want) == crate::table::Cmp::Eq
@@ -504,7 +504,7 @@ fn constant_value(
     ops: &Operators,
     mode: crate::engine::RuleMode,
 ) -> Option<f64> {
-    if matches!(mode, crate::engine::RuleMode::Default) {
+    if matches!(mode, crate::engine::RuleMode::Strict) {
         let tok = crate::numeric::evaluate_constant_subtree(tokens, ops)?;
         return crate::numeric::leaf_value(&tok);
     }
@@ -1085,7 +1085,7 @@ fn battery_rows_ok(
     mode: crate::engine::RuleMode,
 ) -> bool {
     let Some(sb) = battery else { return true };
-    let f64_range = matches!(mode, crate::engine::RuleMode::Default);
+    let f64_range = matches!(mode, crate::engine::RuleMode::Strict);
     // f64's range standard (`numeric::RangeKind`): a special point where an operation of
     // either side overflows or underflows may carry the true value.
     let (y_s, y_c, events) = if f64_range {
@@ -1767,7 +1767,7 @@ impl Lane {
     }
     /// Is a near miss re-judged by the table (every mode but f64)?
     pub fn rescue(self) -> bool {
-        !matches!(self.0, crate::engine::RuleMode::Default)
+        !matches!(self.0, crate::engine::RuleMode::Strict)
     }
     /// Does the mode owe clause (b), so the domain gate applies (every mode but permissive)?
     pub fn owes_b(self) -> bool {
@@ -1960,7 +1960,7 @@ fn owed_at(
         source,
         params,
         ops,
-        matches!(mode, crate::engine::RuleMode::Default),
+        matches!(mode, crate::engine::RuleMode::Strict),
     )
 }
 
@@ -2016,7 +2016,7 @@ fn evidence_rows(
     seed: u64,
     mode: crate::engine::RuleMode,
 ) -> Option<Vec<Vec<f64>>> {
-    let f64 = matches!(mode, crate::engine::RuleMode::Default);
+    let f64 = matches!(mode, crate::engine::RuleMode::Strict);
     // EVIDENCE IS ONE FUNCTION (`interval::evidence`, which the judge's policy reads too): a
     // source without it over its variables and constants, in the mode's values, holds no witness
     // in any instance. A variable-free source of constants reads the collapse licence, the same
@@ -2344,7 +2344,7 @@ impl<'s> SourceCtx<'s> {
         mode: crate::engine::RuleMode,
         min_informative: usize,
     ) -> Result<Option<Self>, String> {
-        let f64_range = matches!(mode, crate::engine::RuleMode::Default);
+        let f64_range = matches!(mode, crate::engine::RuleMode::Strict);
         let tape = Tape::compile(source, ops, var_names)?;
         let n_const = tape.n_params;
         let combos = sign_combos(n_const);
@@ -2499,7 +2499,7 @@ fn f64_refusal(
 fn lane_refutes_literal(source: &[String], target: &[String], ops: &Operators, lane: Lane) -> bool {
     dirac_refutes_literal(source, target, ops, lane.0)
         && (!lane.includes_f64()
-            || dirac_refutes_literal(source, target, ops, crate::engine::RuleMode::Default))
+            || dirac_refutes_literal(source, target, ops, crate::engine::RuleMode::Strict))
 }
 
 /// ONE SOURCE'S CERTIFICATION IN A MODE: its own context (`SourceCtx`, in the mode's values) and,
@@ -2582,7 +2582,7 @@ impl<'s> Lanes<'s> {
                     self.n_rows,
                     self.challenges,
                     self.seed,
-                    crate::engine::RuleMode::Default,
+                    crate::engine::RuleMode::Strict,
                     self.min_informative,
                 )
                 .ok()
@@ -2652,7 +2652,7 @@ impl<'s> Lanes<'s> {
                 atol,
                 min_informative,
                 seed,
-                Lane(crate::engine::RuleMode::Default),
+                Lane(crate::engine::RuleMode::Strict),
                 accept_resolved,
             )
             .and_then(|c| {
@@ -3483,7 +3483,7 @@ mod tests {
             &s(&["acosh", "sin", "*", "<constant>", "4"]),
             &s(&["float(\"nan\")"]),
             ops,
-            crate::engine::RuleMode::Default,
+            crate::engine::RuleMode::Strict,
         ));
         // owed only where the source is finite: `log(pow(0, C))` is 0 at C = 0 and an infinity
         // at every other constant, where `0` owes nothing; `pow(0, C)` is 1 at C = 0
@@ -3491,10 +3491,10 @@ mod tests {
             &s(&["pow", "0", "<constant>"]),
             &s(&["0"]),
             ops,
-            crate::engine::RuleMode::Default,
+            crate::engine::RuleMode::Strict,
         ));
         for mode in [
-            crate::engine::RuleMode::Default,
+            crate::engine::RuleMode::Strict,
             crate::engine::RuleMode::Permissive,
         ] {
             assert!(!dirac_refutes_literal(
@@ -3556,7 +3556,7 @@ mod tests {
     }
 
     const LANES: [crate::engine::RuleMode; 2] = [
-        crate::engine::RuleMode::Default,
+        crate::engine::RuleMode::Strict,
         crate::engine::RuleMode::Permissive,
     ];
 
@@ -4144,7 +4144,7 @@ mod tests {
         let n = 512usize;
         let xf = grid_1var(n);
         for mode in LANES {
-            let f64 = mode == crate::engine::RuleMode::Default;
+            let f64 = mode == crate::engine::RuleMode::Strict;
             let fr = |src: &[&str], cand: &[&str]| {
                 let src = s(src);
                 let cand = s(cand);

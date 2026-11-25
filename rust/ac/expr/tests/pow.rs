@@ -206,7 +206,7 @@ fn odd_rootn_negative_exponent_composes() {
 /// (in `f64`: permissive composes powers naively, ignoring the sign).
 #[test]
 fn big_integers_keep_their_integer_reading() {
-    with_view(|view| big_integer_sites(view, RuleMode::Default));
+    with_view(|view| big_integer_sites(view, RuleMode::Strict));
 }
 
 fn big_integer_sites(view: &TokenView, mode: RuleMode) {

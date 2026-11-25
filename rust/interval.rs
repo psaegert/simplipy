@@ -7715,7 +7715,7 @@ pub fn evidence_in(
     mode: crate::engine::RuleMode,
 ) -> Option<bool> {
     let f64 = evidence(tokens, ops, true);
-    if matches!(mode, crate::engine::RuleMode::Default) || f64 == Some(true) {
+    if matches!(mode, crate::engine::RuleMode::Strict) || f64 == Some(true) {
         return f64;
     }
     match evidence(tokens, ops, false) {
@@ -7893,11 +7893,7 @@ pub fn collapse_licence(tokens: &[String], ops: &Operators, mode: crate::engine:
     if crate::ac::expr::Permissive::ConstantCollapse.applies_in(mode) {
         return true;
     }
-    evidence(
-        tokens,
-        ops,
-        matches!(mode, crate::engine::RuleMode::Default),
-    ) == Some(true)
+    evidence(tokens, ops, matches!(mode, crate::engine::RuleMode::Strict)) == Some(true)
 }
 
 /// FLOAT64'S TAILS on one cell, for the evidence certificate (`finite_cells`): `tanh`, `atan` and
@@ -8937,7 +8933,7 @@ mod tests {
             "float(\"-inf\")",
             "np.pi",
         ];
-        let out = e.ac_simplify(&s(&row), 48, RuleMode::Default).unwrap();
+        let out = e.ac_simplify(&s(&row), 48, RuleMode::Strict).unwrap();
         assert_ne!(
             out,
             s(&["float(\"inf\")"]),
@@ -10389,7 +10385,7 @@ mod new_head_tests {
             assert!(collapse_licence(
                 &s(&["log", "harmonic", "<constant>"]),
                 ops,
-                crate::engine::RuleMode::Default
+                crate::engine::RuleMode::Strict
             ));
             let x = finite_cells(&s(&["harmonic", "x0"]), &[], ops, 4, f64).unwrap();
             assert!(x.cells.len() >= 4, "f64={f64}: {:?}", x.cells);

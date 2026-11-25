@@ -984,7 +984,7 @@ pub(super) fn flip_cx_key(cx: &Cx) -> FlipCxKey {
         c.map_or(0, |f| f as *const dyn Fn(&Ex) -> bool as *const () as usize)
     }
     let mode = match cx.mode {
-        RuleMode::Default => 0u8,
+        RuleMode::Strict => 0u8,
         RuleMode::Permissive => 2,
     };
     let bits = mode

@@ -212,7 +212,7 @@ impl<'a> Cx<'a> {
     /// pass, and `permissive` folds in its pass by its lossy reading.
     #[inline]
     pub fn folds_for(mode: RuleMode) -> bool {
-        matches!(mode, RuleMode::Default)
+        matches!(mode, RuleMode::Strict)
     }
 
     /// The F64 reading: is this construction answerable only in what the deployed f64
@@ -221,7 +221,7 @@ impl<'a> Cx<'a> {
     /// this and not `permits`.
     #[inline]
     pub fn f64_semantics(&self) -> bool {
-        matches!(self.mode, RuleMode::Default)
+        matches!(self.mode, RuleMode::Strict)
     }
 
     /// The number domain this construction runs in, the thread's (`rat::number_domain`): f64 in
@@ -238,7 +238,7 @@ impl<'a> Cx<'a> {
     /// `permissive`, whose values are the reals', has one zero, and `1/0` has no value there.
     #[inline]
     pub fn ieee_zeros(&self) -> bool {
-        matches!(self.mode, RuleMode::Default)
+        matches!(self.mode, RuleMode::Strict)
     }
 
     /// Are this mode's values THE TABLE's real values, so that an operation on literals (a
@@ -246,7 +246,7 @@ impl<'a> Cx<'a> {
     /// `permissive`, whose values are the reals': `1/0` has no value there.
     #[inline]
     pub fn table_values(&self) -> bool {
-        !matches!(self.mode, RuleMode::Default)
+        !matches!(self.mode, RuleMode::Strict)
     }
 
     /// In f64 mode, a numeral leaf the evaluator reads as +-inf or (underflowing) as 0:
@@ -270,7 +270,7 @@ impl<'a> Cx<'a> {
             cert_nce: None,
             cert_region: None,
             cert_encl: None,
-            mode: RuleMode::Default,
+            mode: RuleMode::Strict,
             fold_f64: false,
             ground_first: None,
             zero_sign_unread: false,

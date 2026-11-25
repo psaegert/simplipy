@@ -364,7 +364,7 @@ impl RuleCanon {
         use crate::engine::RuleMode;
         match self {
             RuleCanon::Legacy => "legacy",
-            RuleCanon::Mode(RuleMode::Default) => "default",
+            RuleCanon::Mode(RuleMode::Strict) => "default",
             RuleCanon::Mode(RuleMode::Permissive) => "permissive",
         }
     }

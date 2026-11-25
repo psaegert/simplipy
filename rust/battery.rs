@@ -325,7 +325,7 @@ pub fn rows_consistent(
 ) -> bool {
     use crate::engine::RuleMode;
     use crate::hiprec::PointCmp as P;
-    let lane_f64 = matches!(mode, RuleMode::Default);
+    let lane_f64 = matches!(mode, RuleMode::Strict);
     let agree = |s: f64, c: f64| {
         if cand_params.is_empty() {
             crate::table::f64_agree(s, c) == crate::table::Cmp::Eq

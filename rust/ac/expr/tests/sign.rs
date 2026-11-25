@@ -6,7 +6,7 @@ use super::*;
 fn a_constant_absorbs_the_orientation_sign_of_every_class() {
     with_view(|view| {
         let sin = view.intern("sin");
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             let mut cx = Cx::bare(view);
             cx.mode = mode;
             let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
@@ -49,7 +49,7 @@ fn a_lone_site_takes_the_orientation_of_a_products_one_factor() {
         let sin = view.intern("sin");
         let z = || Ex::Leaf(view.intern("x2"));
         let half = Ex::Num(Rat::new(1, 2).unwrap());
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             let mut cx = Cx::bare(view);
             cx.mode = mode;
             let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);

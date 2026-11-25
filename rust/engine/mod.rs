@@ -141,7 +141,7 @@ impl Engine {
         Self::from_strs_read_in(
             cfg_text,
             rules_text,
-            crate::ac::rules::RuleCanon::Mode(RuleMode::Default),
+            crate::ac::rules::RuleCanon::Mode(RuleMode::Strict),
         )
     }
 

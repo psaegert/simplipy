@@ -79,7 +79,7 @@ fn parse_rule_canon(name: Option<&str>, mode: engine::RuleMode) -> PyResult<ac::
 /// become a third pricing.
 fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine::RuleMode> {
     match canon {
-        "default" => Ok(engine::RuleMode::Default),
+        "default" => Ok(engine::RuleMode::Strict),
         "mode" => Ok(rule_mode),
         other => Err(PyValueError::new_err(format!(
             "unknown canon {other:?}: expected 'mode' (the mode's own reading) or \
@@ -478,7 +478,7 @@ impl PyEngine {
 /// pays for a translation and the only deferred work is the Python shim's `modes=`
 /// selection, which decides which sets are pushed at all.
 fn translate_held_sets(engine: &engine::Engine) {
-    for mode in [engine::RuleMode::Default, engine::RuleMode::Permissive] {
+    for mode in [engine::RuleMode::Strict, engine::RuleMode::Permissive] {
         engine.ac_rules_for(mode);
     }
 }
@@ -535,7 +535,7 @@ impl PyEngine {
         rules_json: &str,
         canon: Option<&str>,
     ) -> PyResult<Self> {
-        let canon = parse_rule_canon(canon, engine::RuleMode::Default)?;
+        let canon = parse_rule_canon(canon, engine::RuleMode::Strict)?;
         // threatmodel-3: parse and CAP the rules BEFORE the engine build -- rule
         // compile walks each side recursively, and this was the one token-taking
         // FFI entry the depth cap never reached: a ~1e5-deep chain in a hostile or
@@ -558,7 +558,7 @@ impl PyEngine {
         })
     }
 
-    /// Simplify `tokens` in the rule mode `rule_mode`: `"default"` (the f64 set, `Mode.f64`)
+    /// Simplify `tokens` in the rule mode `rule_mode`: `"default"` (the strict set, `Mode.strict`)
     /// or `"permissive"`. Each mode serves ONE DISTINCT, COMPLETE set, and every mode runs one
     /// walk: its chain, then the search.
     ///
@@ -1949,7 +1949,7 @@ impl PyEngine {
                     .engine
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if mode == engine::RuleMode::Default {
+                if mode == engine::RuleMode::Strict {
                     let rules = rules.unwrap_or_default();
                     let digest = pushed_rules_digest(&rules);
                     engine.set_mode_rules_read_in(mode, Some(rules), canon);

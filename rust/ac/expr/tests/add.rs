@@ -67,8 +67,8 @@ fn add_sign_cancel_gate() {
             cert_nce: None,
             cert_region: None,
             cert_encl: None,
-            mode: RuleMode::Default,
-            fold_f64: Cx::folds_for(RuleMode::Default),
+            mode: RuleMode::Strict,
+            fold_f64: Cx::folds_for(RuleMode::Strict),
             ground_first: None,
             zero_sign_unread: false,
             flat_unread: false,
@@ -124,7 +124,7 @@ fn add_const_independence_and_absorption() {
 /// construction saw together: a state and the parse of its own print differed.
 #[test]
 fn refused_partition_is_one_coefficient() {
-    for mode in [RuleMode::Default, RuleMode::Permissive] {
+    for mode in [RuleMode::Strict, RuleMode::Permissive] {
         with_view(|view| {
             let mut cx = Cx::bare(view);
             cx.mode = mode;

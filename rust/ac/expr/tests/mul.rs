@@ -49,7 +49,7 @@ fn powers_of_e_collect_by_their_exponents() {
     with_view(|view| {
         let exp = view.intern("exp");
         let y = || Ex::Leaf(view.intern("x1"));
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             let mut cx = Cx::bare(view);
             cx.mode = mode;
             let e = |a: Ex| fun(exp, vec![a], &cx);

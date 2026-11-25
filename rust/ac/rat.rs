@@ -739,7 +739,7 @@ impl Rat {
     ///
     /// This used to be `#[cfg(test)]`, carrying the note "f64 has authority nowhere in
     /// the engine". That was true of a single-mode engine and is exactly the sentence the
-    /// mode split overturns: in `Mode.f64` the deployed f64 evaluator IS the authority,
+    /// mode split overturns: in `Mode.strict` the deployed f64 evaluator IS the authority,
     /// so the constructor must be able to ask it. A big number reads as its nearest f64.
     pub fn to_f64(&self) -> f64 {
         match &self.0 {

@@ -36,7 +36,7 @@ use rustc_hash::FxHashMap;
 use crate::operators::Operators;
 use crate::table::{self, Exact, Val};
 
-/// The two modes' readings. `Strict` is the engine's `RuleMode::Default`.
+/// The two modes' readings. `Strict` is the engine's `RuleMode::Strict`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Strict,

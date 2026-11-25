@@ -251,7 +251,7 @@ impl Engine {
     /// and [`Engine::translate_rules`] for the load gates every set faces.
     pub(crate) fn ac_rules(&self) -> &AcRules {
         self.ac_rules_cell
-            .get_or_init(|| self.translate_rules(&self.rules, RuleMode::Default))
+            .get_or_init(|| self.translate_rules(&self.rules, RuleMode::Strict))
     }
 
     /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE, never a base
@@ -276,7 +276,7 @@ impl Engine {
     /// level down.
     pub(crate) fn ac_rules_for(&self, mode: RuleMode) -> &AcRules {
         match mode {
-            RuleMode::Default => self.ac_rules(),
+            RuleMode::Strict => self.ac_rules(),
             RuleMode::Permissive => self.ac_mode_rules(
                 &self.permissive_rules,
                 &self.ac_permissive_rules_cell,
@@ -409,7 +409,7 @@ impl Engine {
         f: impl FnOnce(&Cx) -> R,
     ) -> R {
         let memo = RefCell::new(FxHashMap::default());
-        let f64 = matches!(mode, RuleMode::Default);
+        let f64 = matches!(mode, RuleMode::Strict);
         let cf = |e: &Ex| self.pattern_cert(e, view, false, f64, &memo);
         let cfz = |e: &Ex| self.pattern_cert(e, view, true, f64, &memo);
         let law = Cx {
@@ -514,7 +514,7 @@ impl Engine {
     /// right file arrived without paying to translate it.
     pub fn mode_rules_len(&self, mode: RuleMode) -> Option<usize> {
         match mode {
-            RuleMode::Default => Some(self.rules.raw.len()),
+            RuleMode::Strict => Some(self.rules.raw.len()),
             RuleMode::Permissive => self.permissive_rules.as_ref().map(|c| c.raw.len()),
         }
     }
@@ -523,7 +523,7 @@ impl Engine {
     /// or, for a mode with no set of its own, the default set's, which it serves.
     pub fn mode_rules_canon(&self, mode: RuleMode) -> crate::ac::rules::RuleCanon {
         let own = match mode {
-            RuleMode::Default => None,
+            RuleMode::Strict => None,
             RuleMode::Permissive => self.permissive_rules.as_ref(),
         };
         own.unwrap_or(&self.rules).canon
@@ -730,7 +730,7 @@ impl Engine {
     /// The ground evaluator's mode of an engine mode.
     fn ground_mode(mode: RuleMode) -> crate::ground::Mode {
         match mode {
-            RuleMode::Default => crate::ground::Mode::Strict,
+            RuleMode::Strict => crate::ground::Mode::Strict,
             RuleMode::Permissive => crate::ground::Mode::Permissive,
         }
     }
@@ -770,7 +770,7 @@ impl Engine {
     ) -> Option<Ex> {
         let r = crate::ground::read(&self.resolve_seq(span, ctx), &self.operators)?;
         match mode {
-            RuleMode::Default => {
+            RuleMode::Strict => {
                 let d = r.float?;
                 if d.is_finite() {
                     return None;
@@ -806,7 +806,7 @@ impl Engine {
             // in `f64`, inside an exponent, a root index or a Bessel order only float64's own
             // double stands
             (Some(p), Some(c))
-                if matches!(mode, RuleMode::Default) && crate::ac::rules::in_exact_position() =>
+                if matches!(mode, RuleMode::Strict) && crate::ac::rules::in_exact_position() =>
             {
                 Self::same_double(&p, &c)
             }
@@ -1060,7 +1060,7 @@ impl Engine {
         let mode = if lossy {
             RuleMode::Permissive
         } else {
-            RuleMode::Default
+            RuleMode::Strict
         };
         // GROUND VALUES FIRST: a fully numeric composite is read by the ground evaluator
         // and written as the cheapest expression its mode admits for it (`ground_value_fold`),
@@ -1331,7 +1331,7 @@ impl Engine {
         ctx: &SimplifyCtx,
         mode: RuleMode,
     ) -> FxHashSet<Ex> {
-        if !matches!(mode, RuleMode::Default) {
+        if !matches!(mode, RuleMode::Strict) {
             return FxHashSet::default();
         }
         let czn = |x: &Ex| self.ac_zsn(x, ctx, true);
@@ -1509,7 +1509,7 @@ impl Engine {
     /// `None` on malformed input.
     ///
     /// `canon` is the mode the CANON itself runs in: `complexity()` passes the requested
-    /// mode (each mode's own reading); `RuleMode::Default` keeps the mode's parse and prices
+    /// mode (each mode's own reading); `RuleMode::Strict` keeps the mode's parse and prices
     /// in f64's canon (the deprecated `canon='default'`). The canon context stays certificate-free and
     /// fold-free either way: that is this instrument's contract.
     pub fn ac_complexity(
@@ -1812,7 +1812,7 @@ impl Engine {
     /// the requested mode, pricing in that mode's own canon (its fold discipline and
     /// licences) -- the measure that mode's simplify descends, under which
     /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` holds in every mode (the walk starts at this
-    /// reading and descends). `RuleMode::Default` keeps the
+    /// reading and descends). `RuleMode::Strict` keeps the
     /// mode's parse and prices in f64's canon (the deprecated `canon='default'`).
     pub fn ac_complexity_certified(
         &self,
@@ -1836,7 +1836,7 @@ impl Engine {
         let toks = self.intern_seq(tokens, ctx);
         self.view(ctx).classify_names(&toks);
         let view = self.view(ctx);
-        let f64 = matches!(canon_mode, RuleMode::Default);
+        let f64 = matches!(canon_mode, RuleMode::Strict);
         let cf = |e: &Ex| self.ac_cert(e, ctx, false, f64);
         let cfz = |e: &Ex| self.ac_cert(e, ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, ctx, f64);
@@ -2046,7 +2046,7 @@ impl Engine {
         self.view(&ctx).classify_names(&toks);
         let view = self.view(&ctx);
 
-        let f64 = matches!(mode, RuleMode::Default);
+        let f64 = matches!(mode, RuleMode::Strict);
         // The interval layer reads this mode's values for the whole call: float64's in `f64`,
         // the reals' (the table's at every point) in `permissive`.
         let _reading = crate::interval::ReadingScope::open(!f64);
@@ -2294,12 +2294,12 @@ impl Engine {
 }
 
 /// THE ENGINE'S RULE MODE -- two inhabitants, one distinct COMPLETE rule set each
-/// (`rules_f64.json`, `rules_permissive.json`). This is the internal selection key; the
+/// (`rules_strict.json`, `rules_permissive.json`). This is the internal selection key; the
 /// Python-facing `simplipy.Mode` maps onto it at exactly ONE place (`_RULE_MODE` in
-/// `engine.py`, read back by `parse_rule_mode` in `rust/lib.rs`).
+/// `_modes.py`, read back by `parse_rule_mode` in `rust/lib.rs`).
 ///
 /// ```text
-///     Default     `Mode.f64`        -- rules_f64.json, the deployed f64 set
+///     Strict      `Mode.strict`     -- rules_strict.json, what deployed float64 computes
 ///     Permissive  `Mode.permissive` -- rules_permissive.json, training-corpus canonicalisation
 /// ```
 ///
@@ -2308,7 +2308,7 @@ impl Engine {
 /// semantics run, so the two can never be set inconsistently.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RuleMode {
-    Default,
+    Strict,
     Permissive,
 }
 
@@ -2323,7 +2323,7 @@ impl RuleMode {
     /// strict set is `default`, and its public name `strict` reads the same.
     pub fn parse(name: &str) -> Option<Self> {
         match name {
-            "default" | "strict" => Some(RuleMode::Default),
+            "default" | "strict" => Some(RuleMode::Strict),
             "permissive" => Some(RuleMode::Permissive),
             _ => None,
         }
@@ -2359,7 +2359,7 @@ mod tests {
                 .unwrap()
                 .join(" ")
         };
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             assert_eq!(run(&["floor", "2.5"], mode), "2", "{mode:?}");
             assert_eq!(run(&["ceil", "-2.5"], mode), "-2", "{mode:?}");
             assert_eq!(run(&["max", "1", "/", "1", "3"], mode), "1", "{mode:?}");
@@ -2395,7 +2395,7 @@ mod tests {
         // strict writes the reals' value where float64's kind agrees (float64 floors its 1.0 to
         // 1, both finite), at an equal price the reals'
         assert_eq!(
-            run(&["floor", "0.99999999999999999"], RuleMode::Default),
+            run(&["floor", "0.99999999999999999"], RuleMode::Strict),
             "0"
         );
         assert_eq!(
@@ -2403,10 +2403,10 @@ mod tests {
             "0"
         );
         // the f64 kernels fold where the literal is cheaper
-        assert_eq!(run(&["erf", "0"], RuleMode::Default), "0");
-        assert_eq!(run(&["besselj", "0", "0"], RuleMode::Default), "1");
+        assert_eq!(run(&["erf", "0"], RuleMode::Strict), "0");
+        assert_eq!(run(&["besselj", "0", "0"], RuleMode::Strict), "1");
         // erf is odd: the sign leaves it
-        assert_eq!(run(&["erf", "neg", "x0"], RuleMode::Default), "neg erf x0");
+        assert_eq!(run(&["erf", "neg", "x0"], RuleMode::Strict), "neg erf x0");
     }
 
     /// `max` and `min` are lattice bags: every nesting and order of one bag is one answer,
@@ -2421,7 +2421,7 @@ mod tests {
         .expect("acj2-4 builds");
         let run = |t: &str, form: crate::engine::AcForm| {
             let v: Vec<String> = t.split(' ').map(String::from).collect();
-            e.ac_simplify_proj(&v, 48, RuleMode::Default, form)
+            e.ac_simplify_proj(&v, 48, RuleMode::Strict, form)
                 .unwrap()
                 .join(" ")
         };
@@ -2475,7 +2475,7 @@ mod tests {
     fn ac_canonical_key_is_the_bare_translate_form() {
         let Some(e) = engine() else { return };
         let k = |toks: &[&str]| {
-            e.ac_canonical_key(&t(toks), RuleMode::Default)
+            e.ac_canonical_key(&t(toks), RuleMode::Strict)
                 .expect("parses")
         };
         // The two AC spellings of one pattern share a key.
@@ -2492,7 +2492,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["asin", "sin", "sin", "_0"]),
                 1,
-                RuleMode::Default,
+                RuleMode::Strict,
                 super::AcForm::Explicit
             )
             .unwrap(),
@@ -2507,7 +2507,7 @@ mod tests {
     fn ac_canonical_key_separates_wildcard_sorts_and_indices() {
         let Some(e) = engine() else { return };
         let k = |toks: &[&str]| {
-            e.ac_canonical_key(&t(toks), RuleMode::Default)
+            e.ac_canonical_key(&t(toks), RuleMode::Strict)
                 .expect("parses")
         };
         let sorts = ["_0", "?0", "!0", "$0"];
@@ -2541,12 +2541,12 @@ mod tests {
             vec!["/", "float(\"inf\")", "!0"],
         ] {
             let k1 = e
-                .ac_canonical_key(&t(&toks), RuleMode::Default)
+                .ac_canonical_key(&t(&toks), RuleMode::Strict)
                 .expect("parses");
             let k2 = e
                 .ac_canonical_key(
                     &k1.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                    RuleMode::Default,
+                    RuleMode::Strict,
                 )
                 .expect("key re-parses");
             assert_eq!(k1, k2, "{toks:?}");
@@ -2614,7 +2614,7 @@ mod tests {
         for r in [P_ALL, P_DEFAULT, P_OTHER, P_CORPUS] {
             let (lhs, _) = probe(r);
             assert!(
-                !fires(&e, r, RuleMode::Default),
+                !fires(&e, r, RuleMode::Strict),
                 "constructor reaches {lhs:?}"
             );
             assert!(
@@ -2636,7 +2636,7 @@ mod tests {
         // permissive set, so clearing it is what makes this the no-set engine.
         e.set_mode_rules(RuleMode::Permissive, None);
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), None);
-        assert_eq!(e.mode_rules_len(RuleMode::Default), Some(e.rules.raw.len()));
+        assert_eq!(e.mode_rules_len(RuleMode::Strict), Some(e.rules.raw.len()));
         assert_eq!(
             e.ac_rules_info_in_mode(RuleMode::Permissive),
             e.ac_rules_info()
@@ -2660,9 +2660,9 @@ mod tests {
         );
         // WHAT IS LOADED IS WHAT IS SERVED: no rule is dropped or minted in between, so
         // the served counts are the file lengths and the behaviour below is attributable.
-        assert_eq!(e.mode_rules_len(RuleMode::Default), Some(2));
+        assert_eq!(e.mode_rules_len(RuleMode::Strict), Some(2));
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(3));
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Default).0, 2);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Strict).0, 2);
         assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 3);
 
         let table = [
@@ -2673,7 +2673,7 @@ mod tests {
         ];
         for (r, want) in table {
             let got = [
-                fires(&e, r, RuleMode::Default),
+                fires(&e, r, RuleMode::Strict),
                 fires(&e, r, RuleMode::Permissive),
             ];
             assert_eq!(got, want, "probe {:?} fired in the wrong modes", r.0);
@@ -2695,9 +2695,9 @@ mod tests {
             vec![long.clone(), short.clone()],
         ] {
             e.set_rules(set);
-            let got = simp_mode(&e, &t(&["sin", "acos", "tanh", "x0"]), RuleMode::Default);
+            let got = simp_mode(&e, &t(&["sin", "acos", "tanh", "x0"]), RuleMode::Strict);
             assert_eq!(got, t(&["inv", "cosh", "x0"]));
-            let got = simp_mode(&e, &t(&["sin", "acos", "x0"]), RuleMode::Default);
+            let got = simp_mode(&e, &t(&["sin", "acos", "x0"]), RuleMode::Strict);
             assert_eq!(got, t(&["cos", "asin", "x0"]));
         }
     }
@@ -2717,7 +2717,7 @@ mod tests {
             "permissive was translated again"
         );
         assert!(fires(&e, P_OTHER, RuleMode::Permissive));
-        assert!(fires(&e, P_DEFAULT, RuleMode::Default) && !fires(&e, P_ALL, RuleMode::Default));
+        assert!(fires(&e, P_DEFAULT, RuleMode::Strict) && !fires(&e, P_ALL, RuleMode::Strict));
     }
 
     /// AN EMPTY SET IS NOT AN ABSENT ONE. `Some(vec![])` says "this mode serves nothing"
@@ -2765,10 +2765,10 @@ mod tests {
         e.set_rules(pair.clone());
         e.set_mode_rules(RuleMode::Permissive, Some(pair));
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(2));
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Default).0, 0);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Strict).0, 0);
         assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 1);
         assert_eq!(
-            simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Default),
+            simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Strict),
             t(&["sin", "x0"])
         );
         assert_eq!(
@@ -2790,7 +2790,7 @@ mod tests {
 
         // A DEFAULT call builds the default index and only that one.
         let (lhs, _) = probe(P_OTHER);
-        simp_mode(&e, &lhs, RuleMode::Default);
+        simp_mode(&e, &lhs, RuleMode::Strict);
         assert!(e.ac_rules_cell.get().is_some());
         assert!(e.ac_permissive_rules_cell.get().is_none());
 
@@ -2823,9 +2823,9 @@ mod tests {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![rule(P_DEFAULT)]);
         let (lhs, _) = probe(P_DEFAULT);
-        let before = simp_mode(&e, &lhs, RuleMode::Default);
+        let before = simp_mode(&e, &lhs, RuleMode::Strict);
         e.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
-        assert_eq!(simp_mode(&e, &lhs, RuleMode::Default), before);
+        assert_eq!(simp_mode(&e, &lhs, RuleMode::Strict), before);
     }
 
     /// `wildcard_all` is a FUNCTION of the mode, and `simplipy.Mode` maps onto the two
@@ -2833,9 +2833,9 @@ mod tests {
     /// than by accident.
     #[test]
     fn the_mode_map_is_what_ships_today() {
-        assert!(!RuleMode::Default.wildcard_all());
+        assert!(!RuleMode::Strict.wildcard_all());
         assert!(RuleMode::Permissive.wildcard_all());
-        assert_eq!(RuleMode::parse("default"), Some(RuleMode::Default));
+        assert_eq!(RuleMode::parse("default"), Some(RuleMode::Strict));
         assert_eq!(RuleMode::parse("permissive"), Some(RuleMode::Permissive));
         // retired spellings are no mode, not aliases: a stray string that resolves to a
         // mode by accident is the bug the parse doctrine forbids
@@ -2861,7 +2861,7 @@ mod tests {
         let srcs: Vec<usize> = served.iter().map(|(_, _, s)| *s).collect();
         assert_eq!(srcs, vec![0, 1, 2]);
         // ...and the DEFAULT mode's provenance still indexes ITS file, unshifted.
-        let d = e.ac_served_rules_in_mode(RuleMode::Default);
+        let d = e.ac_served_rules_in_mode(RuleMode::Strict);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].2, 0);
     }
@@ -2922,7 +2922,7 @@ mod tests {
     fn f64_parity_beyond_2_53_is_the_doubles() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd = "9007199254740993"; // 2^53 + 1
@@ -2954,8 +2954,8 @@ mod tests {
         };
         let t1: Vec<String> = "<add> <sub> <mul> 0 <div> <add> x3 <sub> pow <add> x3 asinh x3 </add> 0.25 </add> </mul> <mul> x3 atanh x3 </mul> </add>"
             .split_whitespace().map(str::to_string).collect();
-        let t2 = e.ac_simplify(&t1, 48, RuleMode::Default).unwrap();
-        let t3 = e.ac_simplify(&t2, 48, RuleMode::Default).unwrap();
+        let t2 = e.ac_simplify(&t1, 48, RuleMode::Strict).unwrap();
+        let t3 = e.ac_simplify(&t2, 48, RuleMode::Strict).unwrap();
         assert_eq!(t2, t3, "kept-zero sign spelling must be unique");
         // The sign-free zero term displays in the POSITIVE section: `<add> <mul> 0 ...`.
         assert_eq!(&t2[..2], &["<add>".to_string(), "<mul>".to_string()]);
@@ -2981,8 +2981,8 @@ mod tests {
         // release-observable contract is idempotence plus the licensed collapse of the
         // finite part (0*x0 drops, the unlicensed 0*log(x1) survives).
         let t1 = t(&["+", "x2", "*", "0", "+", "x0", "log", "x1"]);
-        let s1 = e.ac_simplify(&t1, 48, RuleMode::Default).unwrap();
-        let s2 = e.ac_simplify(&s1, 48, RuleMode::Default).unwrap();
+        let s1 = e.ac_simplify(&t1, 48, RuleMode::Strict).unwrap();
+        let s2 = e.ac_simplify(&s1, 48, RuleMode::Strict).unwrap();
         assert_eq!(s1, s2, "kept-zero distribution must be idempotent");
         assert_eq!(
             s1,
@@ -3013,9 +3013,9 @@ mod tests {
                 .split_whitespace()
                 .map(str::to_string)
                 .collect();
-        let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
+        let out = e.ac_simplify(&toks, 48, RuleMode::Strict).unwrap();
         // Terminates, is idempotent, and keeps the cert-refused acosh-acosh pair.
-        assert_eq!(e.ac_simplify(&out, 48, RuleMode::Default).unwrap(), out);
+        assert_eq!(e.ac_simplify(&out, 48, RuleMode::Strict).unwrap(), out);
         assert_eq!(out.iter().filter(|t| *t == "acosh").count(), 2);
     }
 
@@ -3114,7 +3114,7 @@ mod tests {
         }
         let full: Vec<&str> = SPECS.iter().map(|(n, _)| *n).collect();
         let referee = build(&full);
-        let state = |toks: &[String]| referee.ac_simplify(toks, 48, RuleMode::Default).unwrap();
+        let state = |toks: &[String]| referee.ac_simplify(toks, 48, RuleMode::Strict).unwrap();
         let mut batteries: Vec<Vec<&str>> = ["neg", "inv", "-", "/", "+", "*"]
             .iter()
             .map(|drop| full.iter().copied().filter(|n| n != drop).collect())
@@ -3132,18 +3132,18 @@ mod tests {
             universe(&arities, 3, &mut uni);
             for src in &uni {
                 let want = state(src);
-                let tagged = e.ac_simplify(src, 48, RuleMode::Default).unwrap();
+                let tagged = e.ac_simplify(src, 48, RuleMode::Strict).unwrap();
                 let explicit = e
-                    .ac_simplify_proj(src, 48, RuleMode::Default, super::AcForm::Explicit)
+                    .ac_simplify_proj(src, 48, RuleMode::Strict, super::AcForm::Explicit)
                     .unwrap();
                 for out in [&tagged, &explicit] {
                     assert!(
-                        e.ac_complexity(out, RuleMode::Default, RuleMode::Default)
+                        e.ac_complexity(out, RuleMode::Strict, RuleMode::Strict)
                             .is_some(),
                         "cfg {ops:?}: {src:?} -> {out:?} does not re-parse"
                     );
                     assert_eq!(
-                        &e.ac_simplify(out, 48, RuleMode::Default).unwrap(),
+                        &e.ac_simplify(out, 48, RuleMode::Strict).unwrap(),
                         &tagged,
                         "cfg {ops:?}: {src:?} -> {out:?} is not a fixpoint spelling"
                     );
@@ -3190,7 +3190,7 @@ mod tests {
         let e = Engine::from_strs(cfg, rules).expect("engine builds");
         let t = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
         let ex = |toks: &[String]| {
-            e.ac_simplify_proj(toks, 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(toks, 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap()
         };
         // The rule's own orientation fires (sanity).
@@ -3287,10 +3287,10 @@ mod tests {
         // ORDER: `* tan(A) cos(A) -> sin(A)` fired in the old engine while `* cos(A) tan(A)`
         // did not. Both spellings must now give the same (and simplified) answer.
         let a = e
-            .ac_simplify(&t(&["*", "tan", "x0", "cos", "x0"]), 48, RuleMode::Default)
+            .ac_simplify(&t(&["*", "tan", "x0", "cos", "x0"]), 48, RuleMode::Strict)
             .unwrap();
         let b = e
-            .ac_simplify(&t(&["*", "cos", "x0", "tan", "x0"]), 48, RuleMode::Default)
+            .ac_simplify(&t(&["*", "cos", "x0", "tan", "x0"]), 48, RuleMode::Strict)
             .unwrap();
         assert_eq!(a, b, "order invariance");
         assert_eq!(a, t(&["sin", "x0"]), "the rule fires through the bag");
@@ -3301,7 +3301,7 @@ mod tests {
             .ac_simplify(
                 &t(&["+", "x3", "+", "x8", "/", "x3", "5"]),
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
             )
             .unwrap();
         assert_eq!(
@@ -3325,7 +3325,7 @@ mod tests {
             ],
         ];
         for c in cases {
-            let out = e.ac_simplify(&t(c), 48, RuleMode::Default).unwrap();
+            let out = e.ac_simplify(&t(c), 48, RuleMode::Strict).unwrap();
             for tok in &out {
                 let hyper = tok.starts_with("mult")
                     || tok.starts_with("div")
@@ -3334,7 +3334,7 @@ mod tests {
             }
             // Tagged validity = the shared parser round-trips it (is_valid only knows the
             // old grammar).
-            let again = e.ac_simplify(&out, 48, RuleMode::Default).unwrap();
+            let again = e.ac_simplify(&out, 48, RuleMode::Strict).unwrap();
             assert_eq!(again, out, "tagged output fails round-trip for {c:?}");
         }
         // 7x arrives as an explicit literal coefficient in a tagged bag.
@@ -3344,7 +3344,7 @@ mod tests {
                     "+", "x0", "+", "x0", "+", "x0", "+", "x0", "+", "x0", "+", "x0", "x0",
                 ]),
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
             )
             .unwrap();
         assert_eq!(out, t(&["<mul>", "7", "x0", "</mul>"]));
@@ -3358,7 +3358,7 @@ mod tests {
         let e = crate::legacy_sugar_engine();
         let expr = t(&["+", "x3", "+", "x8", "div5", "x3"]);
         assert_eq!(
-            e.ac_simplify_proj(&expr, 48, RuleMode::Default, super::AcForm::Tagged)
+            e.ac_simplify_proj(&expr, 48, RuleMode::Strict, super::AcForm::Tagged)
                 .unwrap(),
             t(&["<add>", "<mul>", "6", "x3", "<div>", "5", "</mul>", "x8", "</add>"])
         );
@@ -3367,25 +3367,25 @@ mod tests {
         // denominator wins as a decimal. Two
         // dialects, one value; mu is spelling-independent.
         assert_eq!(
-            e.ac_simplify_proj(&expr, 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(&expr, 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap(),
             t(&["+", "*", "1.2", "x3", "x8"])
         );
         // ...and the user-facing infix agrees with the explicit dialect: `1.2` is the
         // argmin token for 6/5, so the reader gets `1.2*x3` rather than `6*x3/5`.
         assert_eq!(
-            e.ac_simplify_infix(&expr, 48, RuleMode::Default).unwrap(),
+            e.ac_simplify_infix(&expr, 48, RuleMode::Strict).unwrap(),
             "1.2*x3 + x8"
         );
         // The inverse SECTIONS: subtraction and division spell as `<sub>`/`<div>` sections
         // of their bags; fractions are single tokens.
         assert_eq!(
-            e.ac_simplify(&t(&["-", "x0", "x1"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["-", "x0", "x1"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["<add>", "x0", "<sub>", "x1", "</add>"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["/", "x0", "x1"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["/", "x0", "x1"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["<mul>", "x0", "<div>", "x1", "</mul>"])
         );
@@ -3393,7 +3393,7 @@ mod tests {
         // `<div>` section, not as the `1/3` coefficient token (integer reciprocal is
         // the strictly shorter exact spelling; ties like 22/7 stay coefficient-side).
         assert_eq!(
-            e.ac_simplify(&t(&["div3", "x0"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["div3", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["<mul>", "x0", "<div>", "3", "</mul>"])
         );
@@ -3402,7 +3402,7 @@ mod tests {
             e.ac_simplify(
                 &t(&["/", "*", "mult2", "x1", "1", "*", "x2", "x3"]),
                 48,
-                RuleMode::Default
+                RuleMode::Strict
             )
             .unwrap(),
             t(&["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"])
@@ -3412,18 +3412,18 @@ mod tests {
         // the input is liberal). A negation leaves an odd function on an equal price (fewest
         // signs, then the outermost).
         assert_eq!(
-            e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["neg", "tan", "x0"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["inv", "x0"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["inv", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["<mul>", "1", "<div>", "x0", "</mul>"])
         );
         // A negated reciprocal keeps the coefficient bag, as `/ -1 x0` reads in tagged form.
         assert_eq!(
-            e.ac_simplify(&t(&["exp", "neg", "inv", "x0"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["exp", "neg", "inv", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["exp", "<mul>", "-1", "<div>", "x0", "</mul>"])
         );
@@ -3433,18 +3433,18 @@ mod tests {
             e.ac_simplify(
                 &t(&["<add>", "x2", "2.3", "neg", "x1", "</add>"]),
                 48,
-                RuleMode::Default
+                RuleMode::Strict
             )
             .unwrap(),
             t(&["<add>", "x2", "2.3", "<sub>", "x1", "</add>"])
         );
         assert_eq!(
-            e.ac_simplify_infix(&t(&["div3", "neg", "x0"]), 48, RuleMode::Default)
+            e.ac_simplify_infix(&t(&["div3", "neg", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             "-x0/3"
         );
         assert_eq!(
-            e.ac_simplify_infix(&t(&["/", "x0", "x1"]), 48, RuleMode::Default)
+            e.ac_simplify_infix(&t(&["/", "x0", "x1"]), 48, RuleMode::Strict)
                 .unwrap(),
             "x0/x1"
         );
@@ -3454,11 +3454,11 @@ mod tests {
         let old_spelling = t(&["<mul>", "1/3", "x0", "</mul>"]);
         let tagged = t(&["<mul>", "x0", "<div>", "3", "</mul>"]);
         assert_eq!(
-            e.ac_simplify(&old_spelling, 48, RuleMode::Default).unwrap(),
+            e.ac_simplify(&old_spelling, 48, RuleMode::Strict).unwrap(),
             tagged
         );
         assert_eq!(
-            e.ac_simplify(&tagged, 48, RuleMode::Default).unwrap(),
+            e.ac_simplify(&tagged, 48, RuleMode::Strict).unwrap(),
             tagged
         );
     }
@@ -3474,7 +3474,7 @@ mod tests {
         let sugar = crate::legacy_sugar_engine();
         assert_eq!(
             sugar
-                .ac_simplify(&t(&["pow1_3", "x0"]), 48, RuleMode::Default)
+                .ac_simplify(&t(&["pow1_3", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["rootn", "x0", "3"])
         );
@@ -3483,7 +3483,7 @@ mod tests {
                 .ac_simplify_proj(
                     &t(&["pow1_3", "x0"]),
                     48,
-                    RuleMode::Default,
+                    RuleMode::Strict,
                     super::AcForm::Explicit
                 )
                 .unwrap(),
@@ -3493,7 +3493,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["rootn", "x0", "5"]),
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
                 super::AcForm::Explicit
             )
             .unwrap(),
@@ -3502,12 +3502,12 @@ mod tests {
         // Normalizations: even index == principal power; index 1 == identity; negative
         // index inverts (rendered as the division of the odd root).
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "2"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["rootn", "x0", "2"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["rootn", "x0", "2"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "1"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["rootn", "x0", "1"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["x0"])
         );
@@ -3515,7 +3515,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["rootn", "x0", "-3"]),
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
                 super::AcForm::Explicit
             )
             .unwrap(),
@@ -3527,7 +3527,7 @@ mod tests {
         // (`cos 0 -> 1`) must normalize in the SAME call -- this was the idempotence
         // break (simplify twice used to differ from simplify once).
         let once = e
-            .ac_simplify(&t(&["rootn", "x0", "cos", "0"]), 48, RuleMode::Default)
+            .ac_simplify(&t(&["rootn", "x0", "cos", "0"]), 48, RuleMode::Strict)
             .unwrap();
         assert_eq!(
             once,
@@ -3535,17 +3535,17 @@ mod tests {
             "index fold + unit normalization in ONE call"
         );
         let abs_case = e
-            .ac_simplify(&t(&["rootn", "x1", "abs", "(-2)"]), 48, RuleMode::Default)
+            .ac_simplify(&t(&["rootn", "x1", "abs", "(-2)"]), 48, RuleMode::Strict)
             .unwrap();
         assert_eq!(abs_case, t(&["rootn", "x1", "2"]));
         // Invalid indices are NaN everywhere (IEEE): zero and provably-non-integer.
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "0"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["rootn", "x0", "0"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["float(\"nan\")"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "0.5"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["rootn", "x0", "0.5"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["float(\"nan\")"])
         );
@@ -3555,13 +3555,13 @@ mod tests {
         // the fold refuses and the pow spelling stands ("simplify is lossless";
         // pre-mu this pin read `2.8284271247461903`).
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "8", "2"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["rootn", "8", "2"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["rootn", "8", "2"])
         );
         // Arbitrary odd roots exist now (no legacy spelling; tagged carries them).
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "7"]), 48, RuleMode::Default)
+            e.ac_simplify(&t(&["rootn", "x0", "7"]), 48, RuleMode::Strict)
                 .unwrap(),
             t(&["rootn", "x0", "7"])
         );
@@ -3573,32 +3573,32 @@ mod tests {
         // root -- which is the measure telling two different operators apart, not a
         // parity being lost. (The pow1_3 spelling needs the sugar-declaring fixture.)
         assert_eq!(
-            sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Default, RuleMode::Default),
+            sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Strict, RuleMode::Strict),
             Some(15_000)
         );
         assert_eq!(
             e.ac_complexity(
                 &t(&["rootn", "x0", "2"]),
-                RuleMode::Default,
-                RuleMode::Default
+                RuleMode::Strict,
+                RuleMode::Strict
             ),
             Some(14_585)
         );
         assert!(
             e.ac_complexity(
                 &t(&["rootn", "x0", "2"]),
-                RuleMode::Default,
-                RuleMode::Default
+                RuleMode::Strict,
+                RuleMode::Strict
             ) < e.ac_complexity(
                 &t(&["rootn", "x0", "3"]),
-                RuleMode::Default,
-                RuleMode::Default
+                RuleMode::Strict,
+                RuleMode::Strict
             )
         );
         // The pretty infix is function-call style (x^(1/3) would claim the WRONG function).
         assert_eq!(
             sugar
-                .ac_simplify_infix(&t(&["pow1_3", "x0"]), 48, RuleMode::Default)
+                .ac_simplify_infix(&t(&["pow1_3", "x0"]), 48, RuleMode::Strict)
                 .unwrap(),
             "rootn(x0, 3)"
         );
@@ -3627,8 +3627,8 @@ mod tests {
         ];
         for s in specimens {
             let toks: Vec<String> = s.iter().map(|t| t.to_string()).collect();
-            let once = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
-            let twice = e.ac_simplify(&once, 48, RuleMode::Default).unwrap();
+            let once = e.ac_simplify(&toks, 48, RuleMode::Strict).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Strict).unwrap();
             assert_eq!(
                 twice, once,
                 "not idempotent through serialization: {toks:?}"
@@ -3847,21 +3847,21 @@ mod tests {
         for (input, fixpoint) in cases {
             let toks: Vec<String> = input.iter().map(|s| s.to_string()).collect();
             let want: Vec<String> = fixpoint.iter().map(|s| s.to_string()).collect();
-            let once = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
+            let once = e.ac_simplify(&toks, 48, RuleMode::Strict).unwrap();
             assert_eq!(
                 once, want,
                 "pass-1 must ship the mul()-conformant orientation: {toks:?}"
             );
-            let twice = e.ac_simplify(&once, 48, RuleMode::Default).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Strict).unwrap();
             assert_eq!(
                 twice, once,
                 "not idempotent through serialization: {toks:?}"
             );
             let exp = e
-                .ac_simplify_proj(&toks, 48, RuleMode::Default, super::AcForm::Explicit)
+                .ac_simplify_proj(&toks, 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap();
             let exp2 = e
-                .ac_simplify_proj(&exp, 48, RuleMode::Default, super::AcForm::Explicit)
+                .ac_simplify_proj(&exp, 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap();
             assert_eq!(exp2, exp, "P7-explicit round-trip unstable: {toks:?}");
         }
@@ -3890,7 +3890,7 @@ mod tests {
             "asinh",
             "x0",
         ]);
-        let sound = e.ac_simplify(&row1414, 48, RuleMode::Default).unwrap();
+        let sound = e.ac_simplify(&row1414, 48, RuleMode::Strict).unwrap();
         let lossy = e.ac_simplify(&row1414, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             lossy, sound,
@@ -3899,7 +3899,7 @@ mod tests {
         // Pow(3) + Mul(3) + [acos(8) + Mul(3) + inf(8) + leaf(6)] + [atan(8) + asinh(8)
         // + leaf(6)] = 53; the -1 exponent is division and free.
         assert_eq!(
-            e.ac_complexity(&lossy, RuleMode::Default, RuleMode::Default),
+            e.ac_complexity(&lossy, RuleMode::Strict, RuleMode::Strict),
             Some(53_000)
         );
 
@@ -3911,7 +3911,7 @@ mod tests {
         );
 
         let certified = t(&["inv", "*", "acos", "x0", "atan", "x1"]);
-        let cs = e.ac_simplify(&certified, 48, RuleMode::Default).unwrap();
+        let cs = e.ac_simplify(&certified, 48, RuleMode::Strict).unwrap();
         let cl = e.ac_simplify(&certified, 48, RuleMode::Permissive).unwrap();
         assert_eq!(cl, cs, "certified pair: both modes stay distributed");
         assert!(cs.contains(&"<div>".to_string()));
@@ -4002,7 +4002,7 @@ mod tests {
         // the base's zero set is not certified null, its reading tells `1/(-P)` from
         // `-1/P` at the zeros, which the lossy projection reads alike. One price.
         let nonconst = t(&["inv", "*", "neg", "np.pi", "rootn", "3", "x1"]);
-        let ns = e.ac_simplify(&nonconst, 48, RuleMode::Default).unwrap();
+        let ns = e.ac_simplify(&nonconst, 48, RuleMode::Strict).unwrap();
         let nl = e.ac_simplify(&nonconst, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             ns,
@@ -4023,8 +4023,8 @@ mod tests {
             "the negative completion joins with its sign outermost"
         );
         assert_eq!(
-            e.ac_complexity(&nl, RuleMode::Default, RuleMode::Default),
-            e.ac_complexity(&ns, RuleMode::Default, RuleMode::Default),
+            e.ac_complexity(&nl, RuleMode::Strict, RuleMode::Strict),
+            e.ac_complexity(&ns, RuleMode::Strict, RuleMode::Strict),
             "at sound's price"
         );
         let nl2 = e.ac_simplify(&nl, 48, RuleMode::Permissive).unwrap();
@@ -4057,7 +4057,7 @@ mod tests {
             "neg",
             "x2",
         ]);
-        let s = e.ac_simplify(&reciprocal, 48, RuleMode::Default).unwrap();
+        let s = e.ac_simplify(&reciprocal, 48, RuleMode::Strict).unwrap();
         let l = e
             .ac_simplify(&reciprocal, 48, RuleMode::Permissive)
             .unwrap();
@@ -4110,7 +4110,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(toks),
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
                 crate::engine::AcForm::Explicit,
             )
             .unwrap()
@@ -4140,7 +4140,7 @@ mod tests {
         // sign goes into the sum, a bit cheaper than `-inv(x1 - 5)/2` (`5 - x1` and `x1 - 5` cost
         // the same, and the coefficient `1/2` a bit less than `-1/2`).
         for (mode, answer) in [
-            (RuleMode::Default, &["/", "inv", "-", "5", "x1", "2"][..]),
+            (RuleMode::Strict, &["/", "inv", "-", "5", "x1", "2"][..]),
             (RuleMode::Permissive, &["/", "inv", "-", "5", "x1", "2"]),
         ] {
             assert_eq!(
@@ -4161,7 +4161,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-3", "exp", "x1"]),
                 48,
-                RuleMode::Default,
+                RuleMode::Strict,
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
@@ -4188,7 +4188,7 @@ mod tests {
             "-1",
         ]);
         let out = e
-            .ac_simplify_proj(&row, 48, RuleMode::Default, crate::engine::AcForm::Explicit)
+            .ac_simplify_proj(&row, 48, RuleMode::Strict, crate::engine::AcForm::Explicit)
             .unwrap();
         assert_eq!(
             out,
@@ -4259,7 +4259,7 @@ mod tests {
         ];
         for (src, want) in cases {
             let toks: Vec<String> = src.iter().map(|s| s.to_string()).collect();
-            let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
+            let out = e.ac_simplify(&toks, 48, RuleMode::Strict).unwrap();
             let want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
             assert_eq!(out, want, "healed fold regressed: {src:?}");
         }
@@ -4273,7 +4273,7 @@ mod tests {
             (vec!["cosh", "tan", "acos", "0"], "float(\"inf\")"),
         ] {
             let toks: Vec<String> = src.iter().map(|s| s.to_string()).collect();
-            let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
+            let out = e.ac_simplify(&toks, 48, RuleMode::Strict).unwrap();
             assert_eq!(out, vec![want.to_string()], "{src:?}");
         }
     }
@@ -4299,7 +4299,7 @@ mod tests {
         let Some(e) = engine() else { return };
         // The zero-absorption must refuse the mixed-class cofactor.
         let s1 = t(&["/", "0", "pow", "exp", "np.e", "/", "float(\"-inf\")", "x2"]);
-        let out = e.ac_simplify(&s1, 48, RuleMode::Default).unwrap();
+        let out = e.ac_simplify(&s1, 48, RuleMode::Strict).unwrap();
         assert_ne!(
             out,
             t(&["0"]),
@@ -4308,7 +4308,7 @@ mod tests {
         // Integer bracket: the exact path finishes with the true value.
         let s2 = t(&["pow", "log", "0", "+", "atan", "0", "3"]);
         assert_eq!(
-            e.ac_simplify(&s2, 48, RuleMode::Default).unwrap(),
+            e.ac_simplify(&s2, 48, RuleMode::Strict).unwrap(),
             t(&["float(\"-inf\")"]),
             "(-inf)^3 must fold through the exact path, not ship the enclosure nan"
         );
@@ -4329,7 +4329,7 @@ mod tests {
         // layer could only bracket. The refusal was conservatism about a value that is
         // now known, not a soundness requirement.
         assert_eq!(
-            e.ac_simplify(&s3, 48, RuleMode::Default).unwrap(),
+            e.ac_simplify(&s3, 48, RuleMode::Strict).unwrap(),
             t(&["1"]),
             "f64 folds the exponent to an exact 0, and nan^0 is 1"
         );
@@ -4355,7 +4355,7 @@ mod tests {
             "1",
             "3",
         ]);
-        let out = e.ac_simplify(&powbase, 48, RuleMode::Default).unwrap();
+        let out = e.ac_simplify(&powbase, 48, RuleMode::Strict).unwrap();
         assert!(
             !out.contains(&"neg".to_string()),
             "sign must fold into the Const sum: {out:?}"
@@ -4363,7 +4363,7 @@ mod tests {
         // Mixed sum: the Const term refits, the non-Const term carries its sign as
         // ordinary structure -- no wrapper survives.
         let mixed = t(&["neg", "+", "*", "<constant>", "x4", "tanh", "x1"]);
-        let m = e.ac_simplify(&mixed, 48, RuleMode::Default).unwrap();
+        let m = e.ac_simplify(&mixed, 48, RuleMode::Strict).unwrap();
         assert!(
             !m.starts_with(&["neg".to_string()]),
             "wrapper must fold: {m:?}"
@@ -4382,8 +4382,8 @@ mod tests {
             "3.89",
         ]);
         for toks in [&powbase, &mixed, &bag] {
-            let once = e.ac_simplify(toks, 48, RuleMode::Default).unwrap();
-            let twice = e.ac_simplify(&once, 48, RuleMode::Default).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Strict).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Strict).unwrap();
             assert_eq!(
                 twice, once,
                 "not idempotent through serialization: {toks:?}"
@@ -4410,7 +4410,7 @@ mod tests {
                 .expect("corpus parses");
         let mut dearer: Vec<(String, u64, u64)> = Vec::new();
         for expr in corpus.iter() {
-            let sound = e.ac_simplify(expr, 48, RuleMode::Default).unwrap();
+            let sound = e.ac_simplify(expr, 48, RuleMode::Strict).unwrap();
             let lossy = e.ac_simplify(expr, 48, RuleMode::Permissive).unwrap();
             // Idempotence and permutation invariance under LOSSY.
             assert_eq!(
@@ -4433,10 +4433,10 @@ mod tests {
             // is written) is not priced: f64's answer then holds float64's value (`1/(0*x)` is
             // `inf/x`), which permissive does not share.
             let cr = e
-                .ac_complexity(&sound, RuleMode::Permissive, RuleMode::Default)
+                .ac_complexity(&sound, RuleMode::Permissive, RuleMode::Strict)
                 .expect("sound parses in permissive");
             let cl = e
-                .ac_complexity(&lossy, RuleMode::Permissive, RuleMode::Default)
+                .ac_complexity(&lossy, RuleMode::Permissive, RuleMode::Strict)
                 .expect("lossy parses");
             if lossy != ["float(\"nan\")"] && cl > cr {
                 dearer.push((expr.join(" "), cl, cr));
@@ -4462,7 +4462,7 @@ mod tests {
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).expect("corpus present"))
                 .expect("corpus parses");
-        for mode in [RuleMode::Default, RuleMode::Permissive] {
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
             for expr in corpus.iter() {
                 e.ac_explore_proj(expr, 48, mode, super::AcForm::Tagged, usize::MAX)
                     .expect("corpus row parses");
@@ -4493,12 +4493,12 @@ mod tests {
             // separately: it must round-trip through the shared parser (idempotence feeds
             // it back in).
             let out = e
-                .ac_simplify_proj(expr, 48, RuleMode::Default, super::AcForm::Explicit)
+                .ac_simplify_proj(expr, 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap();
             assert!(e.is_valid(&out), "invalid output {out:?} for {expr:?}");
-            let tagged = e.ac_simplify(expr, 48, RuleMode::Default).unwrap();
+            let tagged = e.ac_simplify(expr, 48, RuleMode::Strict).unwrap();
             // Idempotence in the native form: feeding the tagged answer back reproduces it.
-            let again = e.ac_simplify(&tagged, 48, RuleMode::Default).unwrap();
+            let again = e.ac_simplify(&tagged, 48, RuleMode::Strict).unwrap();
             assert_eq!(again, tagged, "not idempotent on {expr:?}");
             // The tagged form is strict: no binary sugar operators (bags + sections own
             // that structure); `neg`/`inv` are the sanctioned STANDALONE unary spellings.
@@ -4512,7 +4512,7 @@ mod tests {
             // must not change the answer (the ORDER axis, corpus-wide).
             let swapped = swap_commutative(expr, &e);
             let out_swapped = e
-                .ac_simplify_proj(&swapped, 48, RuleMode::Default, super::AcForm::Explicit)
+                .ac_simplify_proj(&swapped, 48, RuleMode::Strict, super::AcForm::Explicit)
                 .unwrap();
             assert_eq!(out_swapped, out, "permutation variance on {expr:?}");
 
@@ -4528,10 +4528,10 @@ mod tests {
             // The answer never prices above its input, both read in the certified canon
             // the serve ordering descends.
             let c_in = e
-                .ac_complexity_certified(expr, RuleMode::Default, RuleMode::Default)
+                .ac_complexity_certified(expr, RuleMode::Strict, RuleMode::Strict)
                 .expect("input parses");
             let c_out = e
-                .ac_complexity_certified(&out, RuleMode::Default, RuleMode::Default)
+                .ac_complexity_certified(&out, RuleMode::Strict, RuleMode::Strict)
                 .expect("answer parses");
             assert!(
                 c_out <= c_in,
