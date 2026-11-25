@@ -139,6 +139,16 @@ class TestFormDetectionMatchesTheTrio:
         assert engine.is_valid(np.array(['+', 'x0', 'x0'], dtype=object)) is True
         assert engine.is_valid(np.array(['+', 'x0'], dtype=object)) is False
 
+    def test_an_ndarray_of_byte_strings_is_read_as_the_tokens_it_spells(
+            self, engine: SimpliPyEngine) -> None:
+        """A byte-string array (dtype ``S``) is read as the conversion API reads it: each token
+        is the text it spells, not the ``repr`` of a ``bytes`` object."""
+        tokens = np.array([b'*', b'x0', b'x1'])
+        assert tokens.dtype.kind == 'S'
+        assert engine.is_valid(tokens) is True
+        assert engine.is_valid(np.array([b'*', b'x0'])) is False
+        assert engine.to_prefix(tokens) == ['*', 'x0', 'x1']
+
     def test_a_non_expression_type_refuses_loudly(
             self, engine: SimpliPyEngine) -> None:
         with pytest.raises(TypeError):

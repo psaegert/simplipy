@@ -111,6 +111,9 @@ class _Reading(_Loading):
                 raise TypeError(
                     'is_valid expects an infix str or a token sequence '
                     '(list, tuple or 1-D ndarray of string-like tokens)')
+            if expression.dtype.kind == 'S':
+                # a byte string is the token it spells, as the conversion API reads it
+                expression = expression.astype(str)
             return [str(t) for t in expression.tolist()]
         if isinstance(expression, (list, tuple)):
             return list(expression)
