@@ -230,6 +230,15 @@ class TestEvaluateConstants:
         assert eng.evaluate_constants(eng.to_tagged(['+', 'tan', '1', 'x0'])) \
             == ['<add>', '1.5574077246549023', 'x0', '</add>']
 
+    def test_the_depth_of_an_expression_sets_no_limit(self, eng):
+        """A chain of 4,000 functions, deeper than Python's recursion limit and within the
+        core's token cap: the subtree holding the variable stays, its foldable sibling folds, and
+        a ground chain folds whole."""
+        sin1 = eng.evaluate_constants(['sin', '1'])
+        deep = ['sin'] * 4000 + ['x0']
+        assert eng.evaluate_constants(['+'] + deep + ['sin', '1']) == ['+'] + deep + sin1
+        assert eng.evaluate_constants(['neg'] * 4000 + ['2']) == ['2.0']
+
     def test_it_is_more_accurate_than_the_rounding_rule_it_replaces(self, eng):
         """`e**sinh(-5)` is 5.94e-33, and a mined rule says 0 -- a 100% relative error
         that the judge's tolerance floor used to hide. The front door tells the truth."""

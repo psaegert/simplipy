@@ -59,23 +59,29 @@ class _Evaluation(_Reading):
         # A variable is what `expression_variables` says it is, the engine's one definition.
         variables = set(self.expression_variables(prefix))
 
-        def span(i: int) -> int:
-            j = i + 1
-            for _ in range(arity.get(prefix[i], 0)):
-                j = span(j)
-            return j
+        def blocks(t: str) -> bool:
+            return (t in variables or t == '<constant>' or is_named_constant(t)
+                    or t[:1] in '_!?$' and t[1:].isdigit())
 
-        def foldable(sub: list[str]) -> bool:
-            return not any(t in variables or t == '<constant>' or is_named_constant(t)
-                           or t[:1] in '_!?$' and t[1:].isdigit()
-                           for t in sub)
+        # Each subtree's end and whether it holds a token that keeps it from folding, in one pass
+        # from the right over an explicit stack: an expression's depth sets no limit.
+        end = [0] * len(prefix)
+        held = [False] * len(prefix)
+        stack: list[int] = []
+        for i in range(len(prefix) - 1, -1, -1):
+            j, h = i + 1, blocks(prefix[i])
+            for _ in range(arity.get(prefix[i], 0)):
+                child = stack.pop()
+                j, h = end[child], h or held[child]
+            end[i], held[i] = j, h
+            stack.append(i)
 
         out: list[str] = []
         i = 0
         while i < len(prefix):
-            j = span(i)
-            sub = prefix[i:j]
-            if len(sub) > 1 and foldable(sub):
+            j = end[i]
+            if j - i > 1 and not held[i]:
+                sub = prefix[i:j]
                 try:
                     value = float(np.asarray(
                         self._core.evaluate_batch(sub, ['x0'], [0.0], 1, [])).ravel()[0])
