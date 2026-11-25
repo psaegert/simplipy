@@ -1,6 +1,6 @@
 """A product's sign placement is a function of its value class, not of the route that built it.
 
-`sign_place` (rust/ac/expr.rs) prices every orientation of a product's sign-trade sites and
+`sign_place` (rust/ac/expr/sign_place.rs) prices every orientation of a product's sign-trade sites and
 builds the cheapest. Two holes let the route decide instead, and in both the state and the parse
 of its own print were two states of one value (the debug build's serialization-stability
 assertion failed, and a second call could return another answer):

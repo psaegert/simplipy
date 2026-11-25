@@ -704,7 +704,7 @@ impl Rat {
     /// wide path computes both cross-products exactly in 256 bits (the former f64 fallback
     /// broke totality -- Equal on 6.6% and inverted 0.35% of adjacent sub-1e-18 literal
     /// pairs -- and the canonical sort's totality is load-bearing even though ordering is
-    /// a CANONICALIZATION concern, not a soundness one; see `expr.rs` on why order never
+    /// a CANONICALIZATION concern, not a soundness one; see `expr/order.rs` on why order never
     /// changes denotation). A big operand compares by big cross-products.
     pub fn cmp_exact(&self, o: &Rat) -> Ordering {
         let (Some((p1, q1)), Some((p2, q2))) = (self.small_parts(), o.small_parts()) else {

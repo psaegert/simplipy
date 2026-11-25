@@ -448,7 +448,7 @@ class TestPowerOfExpIsExp:
     against a literal, or `a = 1` against anything -- is simultaneously the mu gate (a
     symbolic `a` makes the composition a tie through `pow` and an outright ASCENT through
     `rootn`) and the soundness gate (it is what excludes `0 * inf`, the one configuration
-    where the two sides disagree). See `compose_e_power` in `rust/ac/expr.rs`.
+    where the two sides disagree). See `compose_e_power` in `rust/ac/expr/terms.rs`.
     """
 
     def test_e_leaf_both_spellings_and_both_signs(self, eng) -> None:

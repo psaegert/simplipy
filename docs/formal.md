@@ -19,7 +19,7 @@ the claim:
 
 Semantic soundness (that a rewrite preserves the denoted function, with which
 almost-everywhere licences) is out of scope here; it is governed by the operator
-documentation and the per-fold licences cited in `rust/ac/expr.rs`. This page covers
+documentation and the per-fold licences cited in `rust/ac/expr/`. This page covers
 *structure*: well-definedness, termination, canonicity.
 
 ---
@@ -46,7 +46,7 @@ Both layers fire under one Knuth–Bendix-style orientation: the reduction order
 
 ## 2. Terms
 
-The term set $T$ is the canonical expression algebra (`rust/ac/expr.rs`, `Ex`):
+The term set $T$ is the canonical expression algebra (`rust/ac/expr/ex.rs`, `Ex`):
 
 $$ t ::= q \mid \pi \mid e \mid +\infty \mid -\infty \mid \mathrm{NaN} \mid \diamond
    \mid x \mid \mathrm{Add}\,M \mid \mathrm{Mul}\,M \mid \mathrm{Pow}(t, t)
@@ -74,7 +74,7 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   exponent-stripped base (rational coefficient first); a lattice bag's members by the canonical
   total order, distinct (a `<constant>`-bearing member aside). Stripping makes the order invariant
   under sign and exponent edits, which is what makes the sign orientation of sums
-  well-defined (`rust/ac/expr.rs`, "STRIPPED comparators").
+  well-defined (`rust/ac/expr/order.rs`, "STRIPPED comparators").
 - **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries one rational factor and an
   $\mathrm{Add}$ one rational term, unless a fold is refused. The literals of a bag, the
   coefficients of one like-term bucket and the exponents of one like-base pool fold to a
@@ -1191,7 +1191,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 
 | Property | Code site (enforcement) | Test / gate (evidence) |
 |---|---|---|
-| I1–I4 canonical invariants | constructors in `ac/expr.rs` | `no_nested_bags` + `stable()` debug asserts; property tests in `tests/test_ac_core.py` |
+| I1–I4 canonical invariants | constructors in `ac/expr/` | `no_nested_bags` + `stable()` debug asserts; property tests in `tests/test_ac_core.py` |
 | L1 nf termination | structural recursion; the three audited self-calls (`pow`, `fun`/rootn, the even arm's `even_move`) | full suites exercise every self-call site; every spelling to length 5 around the special leaves builds (`test_even_arm_terminates.py`) |
 | G1–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass`, the whole expression's price (`whole_falls`) | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or carried by the whole expression's price) |

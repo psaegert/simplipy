@@ -3,7 +3,7 @@ answer keeps that limit.
 
 A negative odd power's pole is two-signed (its sides disagree), so the sign of its infinity is no value the answer
 keeps: the inverse's orientation is the product's choice in every mode, as every other sign carrier's is
-(`sign_trade_flip`, `sign_place` in rust/ac/expr.rs). The class of a sum is decided as a whole: a factor belongs to
+(`sign_trade_flip`, `sign_place` in rust/ac/expr/sign_place.rs). The class of a sum is decided as a whole: a factor belongs to
 it by its parity in the sum (`zero_read`), the sites over one sum flip together, and where the product is even in
 the sum its pole is one-signed and its value there is the limit, which the answer keeps; where a member is defined
 on one side of the zero only (a log, an even root, a fractional or symbolic power), the class is written in the

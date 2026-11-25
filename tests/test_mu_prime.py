@@ -40,7 +40,7 @@ from conftest import legacy_from_config  # noqa: E402
 MILLI = 1000
 SEL = 1 * MILLI          # the selector bit: one bit, once per priced numeric leaf
 MU_SYM = 8 * MILLI       # the symbol UNIT; a LEAF is priced separately
-MU_LEAF = 6 * MILLI      # the symbol table's leaf entry (rust/ac/expr.rs MU_BITS_LEAF)
+MU_LEAF = 6 * MILLI      # the symbol table's leaf entry (rust/ac/expr/price.rs MU_BITS_LEAF)
 MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation earns it)
 
 # The digest acj-4-3 was MINED under (its provenance sidecar; mu, before mu'). The mu'

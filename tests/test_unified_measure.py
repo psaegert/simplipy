@@ -41,7 +41,7 @@ AMENDED (the SYMBOL TABLE): the two "8" rows above are gone. A description
 length is not flat, and the flatness was minting degenerate rules -- `pi - 2` and
 `asin(sin 2)` both priced 19 bits, so the mine preferred the composition. Each grammar
 symbol now carries its own price, informed by the node census and rounded to whole bits
-(rust/ac/expr.rs, the `MU_BITS_*` block); the module constants below mirror it.
+(rust/ac/expr/price.rs, the `MU_BITS_*` block); the module constants below mirror it.
 Everything BEHAVIORAL in this file is unchanged -- the worked-example inequalities all still
 hold, and the collection inequality now holds with room it did not have at the
 first-draft leaf price.
@@ -65,7 +65,7 @@ from conftest import legacy_from_config  # noqa: E402
 # real quantity log2(1 + |n|), not a bit COUNT, so the ordering can tell 100 from 1000.
 # The unit stays an INTEGER so no float enters a comparison.
 MILLI = 1000
-# The SYMBOL TABLE, mirroring rust/ac/expr.rs's `MU_BITS_*`. There is no
+# The SYMBOL TABLE, mirroring rust/ac/expr/price.rs's `MU_BITS_*`. There is no
 # single "one grammar symbol" price any more; 8 survives only as the UNIT the table is
 # read against and as the price of a head the table does not name.
 MU_LEAF = 6 * MILLI
@@ -275,10 +275,10 @@ class TestB22AstronomicSaturation:
     The old arms saturated there, so `1e5553000000000000` priced exactly 2^64 - 1,
     every larger scale (and every beyond-i64 exponent) collided on that one price,
     and the poisoned leaf overflowed the tree sums downstream. The knee schedule
-    (rust/ac/expr.rs::MU_SCALE_KNEE) keeps every f64-reachable literal on the exact
+    (rust/ac/expr/price.rs::MU_SCALE_KNEE) keeps every f64-reachable literal on the exact
     linear price -- the knee sits nine orders of magnitude past |scale| = 324 -- and
     orders the absurd by the exponent's own magnitude. The core-level property tests
-    live in expr.rs (astronomic_literals_stay_ordered_and_sums_never_wrap); these
+    live in expr/tests/price.rs (astronomic_literals_stay_ordered_and_sums_never_wrap); these
     pin the same facts through `ac_complexity`, the surface the mine and the gates
     actually price with.
     """
