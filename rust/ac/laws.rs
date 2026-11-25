@@ -68,17 +68,17 @@
 //! | `mul.infinity_sign` | -k*(s + inf) = k*(-s - inf) | none | none |
 //! | `pow.exp_compose` | e^t = exp(t), exp(a)^b = exp(a*b) | none | none |
 //! | `pow.refused_power` | (a*b)^-k = ((a*b)^k)^-1 | none | none |
+//! | `fun.rootn_index` | rootn(t, -n) = 1/rootn(t, n) | none | none |
 //! | `pow.distribute` | (a*b)^n = a^n*b^n, n an integer | n >= 0 or even; else every member nonzero almost everywhere, or one infinite, or all >= 0, or a zero whose sign an inverse reads | as `f64` |
-//! | `parse.inverse_of_product` | 1/(a*b) = (1/a)*(1/b) as a divisor is read | as `pow.distribute` | as `pow.distribute` |
+//! | `parse.inverse_of_product` | 1/(a*b) = (1/a)*(1/b), as a divisor is read | as `pow.distribute` | as `pow.distribute` |
 //! | `pow.compose` | (t^r)^s = t^(r*s) | s an integer; r an odd integer (positive, or t never infinite) and r*s no integer; r and r*s no integers; or t >= 0 | none |
 //! | `pow.root_inverse` | rootn(t, n)^n = t, rootn(t, n)^-n = 1/t, rootn(t^n, n) = t | n odd, or t >= 0 | none |
 //! | `pow.odd_root_compose` | rootn(t, m)^s = t^(s/m), m odd | s no integer; in a product beside a power of t with a non-integer exponent, any s | s no integer; in a product beside a power of t, any s |
 //! | `pow.unknown_parity_root` | rootn(t, m)^(-1/n) = 1/rootn(rootn(t, m), n), n even | none | none |
 //! | `pow.literal_base_sign` | r^(-t) = (1/r)^t, 1/(r^t) = (1/r)^t, (1/t)^(+-inf) = t^(-+inf) | none | none |
-//! | `pow.half_root` | t^(1/(2k)) = rootn(t, 2k) | t^(1/2) as numpy's `sqrt`: t is no zero with a sign of its own | none |
+//! | `pow.half_root` | t^(1/(2*k)) = rootn(t, 2*k) | t^(1/2) as numpy's `sqrt`: t is no zero with a sign of its own | none |
 //! | `mul.collect` | t^a*t^b = t^(a+b) | a and b integers float64 reads exactly; or t >= 0; or a + b a nonzero non-integer | none |
 //! | `mul.collect_symbolic` | t^y*t^y = t^(2*y) | t not `-0` on a region, and t >= 0 or the level sets of y null | none |
-//! | `fun.rootn_index` | rootn(t, -n) = 1/rootn(t, n) | none | none |
 //! | `fun.atanh_tanh` | atanh(tanh(t)) = t | abs(t) at most 19: tanh(t) is no +-1 | none |
 //! | `fun.log_exp` | log(exp(t)) = t | t is not `-0` on a region, and nothing around reads its flat point | none |
 //! | `fun.asinh_sinh` | asinh(sinh(t)) = t | none | none |
@@ -96,18 +96,18 @@
 //! | `class.pole_orientation` | f(-S)^-k = -f(S)^-k, k odd | S holds no sign (as `class.sign_trade`); a one-signed pole keeps its limit | none |
 //! | `class.opposite_sums` | S^a*(-S)^b = (-1)^b*S^(a+b) | a + b < 0: as `class.pole_orientation` | none |
 //! | `class.like_terms_up_to_sign` | u*f(S) + v*f(-S) = (u - v)*f(S), f odd | f(S) infinite at S's zero: as `class.pole_orientation` | none |
-//! | `pow.even_orientation` | (-S)^(2k) = S^(2k) | none | none |
+//! | `pow.even_orientation` | (-S)^(2*k) = S^(2*k) | none | none |
 //! | `pow.negated_site` | (-F)^s = flip(F)^s | the flip as `class.sign_trade`'s; s odd and negative: F's zero no region with a sign of its own | none |
 //! | `fun.even` | g(-t) = g(t), g even | none | none |
 //! | `fun.odd_sign` | f(-u) = -f(u), f odd | none | none |
 //! | `fun.atan2_sign` | atan2(-y, x) = -atan2(y, x) | none | no step (one zero) |
 //! | `fun.besseli_parity` | I_n(-t) = (-1)^n I_n(t), n an integer | n odd: t vanishes on no region | none |
 //! | `search.distribute` | A*(B + C) = A*B + A*C | A infinite only on a null set, at most one addend keeping each pole (or those that do of one strict sign), and a pole's reading of the product's zero kept | a spelled infinity's |
-//! | `search.pow_expand` | (a + b)^n = the expansion, 2 <= n <= 6 | as `search.distribute`, every term a shared piece | a spelled infinity's |
+//! | `search.pow_expand` | (a + b)^n = its expansion, 2 <= n <= 6 | as `search.distribute`, every term a shared piece | a spelled infinity's |
 //! | `search.factor` | c*q1 + c*q2 = c*(q1 + q2) | c infinite only on a null set; under a pole's reading, c positive and never zero | a spelled infinity's |
 //! | `search.reciprocal_join` | A^-1*B^-1 = (A*B)^-1, f*A^-1 = (A/f)^-1 | no step | f of one strict sign |
 //! | `search.composite_step` | a refused rebuild is kept where the whole descends | none | none |
-//! | `settle.rule` | a mined rule fires where its left side binds | none (the rule's own) | none (the rule's own) |
+//! | `settle.rule` | a mined rule L -> T fires where L binds | none (the rule's own) | none (the rule's own) |
 //! | `settle.negation_twin` | L -> T entails -L -> -T | none | none |
 //! | `perm.reciprocal_projection` | a^-1*b^-1 = (a*b)^-1, as written | no step | none |
 //!

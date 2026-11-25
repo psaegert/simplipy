@@ -14,6 +14,7 @@ constants on the left there is one on the right), so their rows have no float64 
 check: the rule judge reads them (`tests/test_differential.py`).
 """
 import os
+import re
 import warnings
 
 import numpy as np
@@ -707,6 +708,38 @@ ACCEPTANCES = {'search.composite_step'}
 def test_every_law_has_its_rows() -> None:
     rows = ALL_ROWS + SCIPY_ROWS + SEARCH_ROWS + RULE_ROWS
     assert {law for law, *_ in rows} | ACCEPTANCES == {name for name, _ in _core.laws()}
+
+
+def test_the_core_documents_the_catalogue() -> None:
+    """The laws table of the core's documentation (the module doc of `rust/ac/laws.rs`) lists
+    the catalogue: every law in its order, each with its statement and, after a comma, what the
+    statement leaves implicit."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'rust', 'ac', 'laws.rs')
+    if not os.path.exists(path):
+        pytest.skip('the core sources are not beside the tests')
+    rows = []
+    for line in open(path, encoding='utf-8'):
+        if line.startswith('//! | `'):
+            cells = [c.strip() for c in line[len('//! |'):].rstrip().rstrip('|').split(' | ')]
+            rows.append((cells[0].strip('`'), cells[1]))
+    catalogue = _core.laws()
+    assert [name for name, _ in rows] == [name for name, _ in catalogue]
+    for (name, documented), (_, statement) in zip(rows, catalogue):
+        assert documented == statement or documented.startswith(statement + ', '), \
+            (name, documented, statement)
+
+
+def test_every_law_a_test_names_is_in_the_catalogue() -> None:
+    """A test that names a law names one the catalogue holds, so no row checks a law that is
+    gone or misspelt."""
+    pattern = re.compile(r"""['"]((?:add|mul|pow|rootn|absorb|num|parse|lattice|fun|perm|class|"""
+                         r"""search|settle)\.[a-z0-9_]+)['"]""")
+    names = {name for name, _ in _core.laws()}
+    here = os.path.dirname(os.path.abspath(__file__))
+    unknown = sorted({(f, law) for f in os.listdir(here) if f.endswith('.py')
+                      for law in pattern.findall(open(os.path.join(here, f), encoding='utf-8').read())
+                      if law not in names})
+    assert not unknown, unknown
 
 
 def rows_on(rows, fixture):
