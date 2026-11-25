@@ -2,7 +2,7 @@
 
 Every published engine asset carries `config.yaml` (the operator table and engine
 configuration), the rule sets that config names. A mine produces one file per mode,
-`rules_f64.json` and `rules_permissive.json`, and `mine.yaml` (the exact mine
+`rules_strict.json` and `rules_permissive.json`, and `mine.yaml` (the exact mine
 configuration). Each artifact is byte-deterministically reproducible from the config with one
 `simplipy find-rules` command at the recorded environment
 (see [environment qualification](../method/environment-qualification.md)).
@@ -12,14 +12,14 @@ configuration). Each artifact is byte-deterministically reproducible from the co
 
 | file | mode | contains |
 |---|---|---|
-| `rules_f64.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
-| `rules_permissive.json` | `Mode.permissive` | every rule that holds in permissive: every rule that holds in f64 (permissive includes f64), and the rules that agree with the reals' values up to float resolution or give a value where the input has none |
+| `rules_strict.json` | `Mode.strict` (the default) | every rule the deployed float64 evaluator reproduces |
+| `rules_permissive.json` | `Mode.permissive` | every rule that holds in permissive: every rule that holds in strict (permissive includes strict), and the rules that agree with the reals' values up to float resolution or give a value where the input has none |
 
 The two files carry their mode in their name. `config.yaml` names its rule files
 explicitly and the loader serves whatever the config declares, so a file named `rules.json`
 (the convention before 0.15) loads too. The `rules_permissive:` config key is optional (the
 key `rules_corpus:` of earlier artifacts is read as it), and a mode naming no set of its own
-serves the default (f64) set. A config naming a `rules_real:` set is refused: the real mode
+serves the default (strict) set. A config naming a `rules_real:` set is refused: the real mode
 is retired.
 
 From 0.15 the loader refuses a rule file mined before 0.15, by the simplipy version its
@@ -27,14 +27,14 @@ provenance sidecar records: 0.15 changed the canonical forms, the measure and th
 and serves only the rule sets mined for it (`acj2-4-llm`). The error names the version that
 mined the file. A rule file without a sidecar is a hand-made set and loads.
 
-Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('f64',))` builds only the
+Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('strict',))` builds only the
 named sets, each compiled before `load` returns — the profile an inference worker runs, at
 about 0.45 GB instead of about 0.7 GB with both sets of acj-5-4-llm — and any other
 config-named set builds on its mode's first use, once, in about 3–4 s, announced with one log
 record. The default
 `modes='all'` builds everything. `engine.unload_mode(mode)` is the paired operational RAM knob:
 it drops that mode's built structures (about 100 MB per set with acj-5-4-llm) and the mode's next
-use lazily reloads them; the default f64 set is always present and refuses to unload.
+use lazily reloads them; the default strict set is always present and refuses to unload.
 
 **The two files are the unit of mining, pinning and distribution.** One mine run writes
 both, each mined in its own mode (see [How mining works](../rules.md#how-mining-works)),
@@ -52,7 +52,7 @@ against its own mode's contract, and a freshly mined file with `simplipy verify-
 translation, the measure fingerprint, environment switches; see
 [Verifying a mine](../rules.md#verifying-a-mine)). Cleanliness is per mode:
 `atanh(tanh t) → t` is exactly what belongs in `rules_permissive.json` and would be a
-defect in `rules_f64.json`.
+defect in `rules_strict.json`.
 
 The provenance
 sidecar records how the ruleset came to be: the mine parameters, the core build stamp

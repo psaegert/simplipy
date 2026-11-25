@@ -6,7 +6,7 @@ refuses. Every value it compares comes from one table, defined once in the compi
 core: read in the reals, a literal is the rational it spells and a pole takes its limit
 where every direction gives the same one (`log(0)` is `-inf`, `tan(pi/2)` has no value), and
 a division by zero has no value however it is written (`1/0`, `pow(0, -2)`, `mod(1, 0)`), so
-`x^-2` and `1/x^2` agree everywhere; read in `f64`, an operation is the engine's own float64
+`x^-2` and `1/x^2` agree everywhere; read in `strict`, an operation is the engine's own float64
 kernel. `permissive` reads the reals'
 values. The judge's own part is the
 procedure: the precision ladder, the fitted constants and the sample points. It is a
@@ -23,7 +23,7 @@ A rule holds in the reals when, wherever its left side has a value, an infinity 
 right side has the same value, and its right side gives a value where the left side has none
 only on a set of measure zero, decided by certified cells (`x0/x0 -> 1` holds; `exp(log(x0)) ->
 x0` does not, and neither does `abs(log(cos(x0))) -> log(1/cos(x0))`, whose left side is `+inf`
-at pi/2, where the right side has no value). In `f64` the same cells are read in float64's
+at pi/2, where the right side has no value). In `strict` the same cells are read in float64's
 values, where a saturation plateau is a cell like any other (`tanh(x)` is 1.0 past 19.06), and
 an extension at a double counts as measure zero only where its neighbouring doubles are no
 extension (`x0/x0 -> 1` at 0). A rule without variables has one point and no tolerance; a `_`
@@ -56,7 +56,7 @@ The second rule is the classic trap this package exists to catch:
 `exp(log(x0))` equals `x0` only on `x0 > 0` — rewriting it changes the
 function on a positive-measure set, so the judge kills it.
 
-Each mode is judged on its own values. `f64` holds a rule with variables where float64's two
+Each mode is judged on its own values. `strict` holds a rule with variables where float64's two
 sides agree (to 8 ULP, the true value accepted where an operation overflows or underflows), or
 where the rule is true in the reals at every point where they give both sides a value and
 float64's two sides agree in kind -- both finite -- at every such point the judge reads (there
@@ -69,10 +69,10 @@ x0 = 0, `1/(x0 - 3)^2 -> 0` +inf against 0 at x0 = 3). The sign of that infinity
 is not promised: where a part is exactly zero at an
 isolated point and an operation reads it as a pole, +inf and -inf agree, as the two zeros do, so
 `-1/(x0 - 3.5) -> 1/(3.5 - x0)` (-inf against +inf at x0 = 3.5 alone) and
-`1/(-x1 - 3) -> -1/(x1 + 3)` hold in `f64`, while `1/(0*x0) -> -inf/x0` (+inf against -inf for
+`1/(-x1 - 3) -> -1/(x1 + 3)` hold in `strict`, while `1/(0*x0) -> -inf/x0` (+inf against -inf for
 every x0 > 0) does not. Where the reals give the left side no value at an isolated point, its
 real limit decides what float64 owes there: with no limit (a two-signed pole), an answer may take
-any value, so `1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `f64` (+inf against 0 at x0 = 3); with an
+any value, so `1/(x0 - 3) + 1/(3 - x0) -> 0` holds in `strict` (+inf against 0 at x0 = 3); with an
 infinity of one sign, an infinity of either sign or the left side's value, so `1/(x0 - 3)^2 -> 0`
 is refused; with a finite limit, the left side's value or the limit, or NaN where the left side is
 an infinity, so `exp((x0 - 1)/x0^2) -> exp(1/x0 - 1/x0^2)` is refused (0 against NaN at +0, the
@@ -91,18 +91,18 @@ second reading admits the identities float64 only rounds, however far a jump or 
 magnifies the rounding, and nothing false in the reals:
 `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `x0 + 1 - x0 -> 1`,
 `floor(x0 + 1) -> floor(x0) + 1` (1 against 0 at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`
-hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06), `exp(log(x0)) -> x0` (NaN
+hold in `strict`; `atanh(tanh(x0)) -> x0` (+inf against x0 past 19.06), `exp(log(x0)) -> x0` (NaN
 against x0 for x0 < 0) and `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1 against -1 on
-x0 > 0, where the reals give neither side a value) do not. In both readings `f64` reads a
+x0 > 0, where the reals give neither side a value) do not. In both readings `strict` reads a
 zero's sign where it changes a value on a region: float64 may give the two sides zeros of
 opposite sign, and the reading in kind may admit a difference at which one side's value turns on
 a zero's sign (a divisor, `pow` or `rootn` at an odd negative exponent, `atan2`) and the other's
 does not, only at isolated points. `0*asin(x0) -> 0*acos(x0)` (-0 against +0 for x0 < 0) and
-`atan2(0*x0, -1) -> pi` (-pi against pi for x0 < 0) do not hold in `f64`; `log(exp(x0)) -> x0`
+`atan2(0*x0, -1) -> pi` (-pi against pi for x0 < 0) do not hold in `strict`; `log(exp(x0)) -> x0`
 (+0 against -0 at x0 = -0 alone) does, and `log(exp(_0)) -> _0` does not, since a slot that
-matches any subexpression can bind one that is -0 on a region. A zero's sign is `f64`'s alone: `permissive`, which reads one zero, includes `f64` with the two zeros one value, so those rules hold in `permissive`, with float64's evidence where `f64` so read holds them (`neg(acosh(erf(x0))) -> acosh(erf(x0))`). `permissive` is judged on the reals' values at float resolution.
+matches any subexpression can bind one that is -0 on a region. A zero's sign is `strict`'s alone: `permissive`, which reads one zero, includes `strict` with the two zeros one value, so those rules hold in `permissive`, with float64's evidence where `strict` so read holds them (`neg(acosh(erf(x0))) -> acosh(erf(x0))`). `permissive` is judged on the reals' values at float resolution.
 The bucket names (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) are the reals' outcome, a
-diagnostic that decides no mode by itself; `f64`'s second reading reads the reals'
+diagnostic that decides no mode by itself; `strict`'s second reading reads the reals'
 counterexamples at the points where they give both sides a value, from the precision ladder and,
 where it runs out, at float resolution (`ceil(atan(atan(x0))) -> ceil(erf(x0))`, 2 against 1 for
 x0 > 74.7, is `KILL` with clause `a-float-resolution`). A mode whose reading reaches no answer
@@ -116,44 +116,44 @@ constant value the mode owes a witness at, and a ground rule's one point; the ve
 unread one (`unread_owed`). At a `!` slot's +-inf and a `$` slot's 0 and +-inf, the null set
 the slot's certificate leaves it, a value the left side has is read, and its having none, or a
 zero's sign, is not: `tan(atan(!0)) -> !0` (1.633123935319537e16 against +inf at +inf) is
-refused in `f64` and holds at `?`, while `erf(!0) - 1 -> -erfc(!0)` (+0 against -0 at +inf) and
+refused in `strict` and holds at `?`, while `erf(!0) - 1 -> -erfc(!0)` (+0 against -0 at +inf) and
 `!0 - !0 -> 0` hold. The grid, the rows of the shipped mines' matrix (one matrix, the
 same for every caller, so a verdict is the rule's), the preimages of jumps, the slots'
 magnitude ladder and the constants' span and saturation magnitudes (`|c|` from 0.001 to 0.1
 and from 10 to 1e4, and 19 to 1e17) are samples: a point among them that cannot be read counts neither way. A rule with
 constants and no slots reads one point per constant value, and at least a quarter of them must
 be read.
-`f64` reads float64's values: `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in
-`f64`, where `1e-3000` is the double 0.0 and the two sides are bit-identical. `permissive`'s
+`strict` reads float64's values: `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in
+`strict`, where `1e-3000` is the double 0.0 and the two sides are bit-identical. `permissive`'s
 own criterion, agreement at float resolution, needs no exact equality: where the reals' readings
 run out of precision (`UNRESOLVED-COVERAGE`, the 6,050 digits `1e-3000` beside 1 demands), the
 interval layer's enclosure of both sides at the point decides that every double either side can
 round to is the same, so `x + 1e-3000 -> x` holds by it too. (At the atom e, an approximation,
 the enclosure of `x^2 + 1` is wider than that, so `permissive`'s own reading of the first rule
-leaves an owed point unread; `permissive` holds it through `f64`.) Running out of precision
+leaves an owed point unread; `permissive` holds it through `strict`.) Running out of precision
 never reads as equality: `((x + 1e-3000) - x) * 1e3000 -> 0`, whose left side is 1, encloses
-unbounded and is refused. A measure the cells cannot decide is refused where it is owed: `f64`
-owes it in float64's values, so an undecided float64 measure refuses `f64`;
+unbounded and is refused. A measure the cells cannot decide is refused where it is owed: `strict`
+owes it in float64's values, so an undecided float64 measure refuses `strict`;
 `UNDECIDED-MEASURE` labels the reals' measure, which `permissive` does not owe. An undecided
 check never reads as a pass.
 
 `KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
-Each rule gets a **tier**: the modes it holds in, from two questions. Does it hold in `f64`
+Each rule gets a **tier**: the modes it holds in, from two questions. Does it hold in `strict`
 (the deployed evaluator reproduces it, or it is true in the reals and float64 keeps every
 value's kind)? Does it hold by `permissive`'s own criterion, the reals' values up to
 float resolution, and agreement alone where the input has no value (a permissive rule may give
 a value where its input has none, over real-valued bindings)? `permissive` binds every slot to
 any subexpression, so its own question is asked at the `_` sort: no disagreement at an isolated
-point is excused there. **Permissive includes f64**: a rule holds in `permissive` where it holds
-in `f64` or by permissive's own criterion, and a step permissive takes by an f64 rule promises
-what `f64` promises (float64's values agree wherever the left side has one). So
+point is excused there. **Permissive includes strict**: a rule holds in `permissive` where it holds
+in `strict` or by permissive's own criterion, and a step permissive takes by a strict rule promises
+what `strict` promises (float64's values agree wherever the left side has one). So
 `floor(tanh(40 + abs(x0))) -> 1`, float64's own value and off the reals, and
 `ceil(abs(cos(x0))) -> 1`,
 false at pi/2 in the reals and true at every double, hold in both modes; `ceil(x0) - floor(x0)
--> 1` holds in neither. A verdict carries each mode's reading: `realised` for `f64` (from its two
+-> 1` holds in neither. A verdict carries each mode's reading: `realised` for `strict` (from its two
 readings of float64, `realised_f6` and `realised_kinds`, and the reals' outcome) and `permissive`
-for `permissive`, which includes `f64`'s: `permissive_own` is its own criterion's reading alone
-(`2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` holds in `f64`, float64's `1/0` being
+for `permissive`, which includes `strict`'s: `permissive_own` is its own criterion's reading alone
+(`2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` holds in `strict`, float64's `1/0` being
 `inf`, and so in `permissive`, though its own criterion, which reads `1/0` as no value, refuses
 it at x0 = 0). A rule that is an instance of the steps `permissive` takes inside its
 constructors, its named simplifications, holds in `permissive` with the steps' names as its reason
@@ -162,7 +162,7 @@ constructors, its named simplifications, holds in `permissive` with the steps' n
 judge rewrites both sides by them, and the rewritten rule (`permissive_by_rule`) is read by
 permissive's own criterion. `asin(sin(x0)) -> x0`, false in the reals at x0 = 2 (pi - 2 against
 2), holds so by `inverse pairs cancel`, and `(x0^2)^(1/4) -> x0^(1/2)` by `powers compose`; both
-stay refused in `f64`. The tiers are one registry, `simplipy.verify.TIERS`, and this table is rendered
+stay refused in `strict`. The tiers are one registry, `simplipy.verify.TIERS`, and this table is rendered
 from it (`simplipy.verify.tier_table()`):
 
 <!-- tier-table: begin (rendered by simplipy.verify.tier_table(); a test checks it) -->
@@ -173,7 +173,7 @@ from it (`simplipy.verify.tier_table()`):
 | `reject` | no | no | holds in no mode; recorded in the drop census |
 <!-- tier-table: end -->
 
-`f64`'s first reading means the deployed evaluator computes the rewrite, to within 8 ULP, at
+`strict`'s first reading means the deployed evaluator computes the rewrite, to within 8 ULP, at
 every battery and grid point, and at every slot magnitude from the smallest normal double to the
 largest, where no operation of either side overflows or underflows; its second, that the rule is
 true in the reals and both sides have one kind at all those points (`sinh(asinh(x0)) → x0` is 66
@@ -195,13 +195,13 @@ one predicate, `load_policy_refusal`, which the load, `licensed` and `verify_rul
 which is the whole point and which a bucket count cannot express:
 
 ```python
-rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 saturates to inf at large t
+rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; float64 saturates to inf at large t
 
 verify_ruleset([rule], mode='permissive')['is_clean']  # -> True   belongs there
-verify_ruleset([rule], mode='f64')['is_clean']         # -> False  f64 contradicts it
+verify_ruleset([rule], mode='strict')['is_clean']      # -> False  float64 contradicts it
 ```
 
-The converse does not happen: permissive includes f64, so a rule that holds in `f64` holds in
+The converse does not happen: permissive includes strict, so a rule that holds in `strict` holds in
 `permissive` too (a policy can still tell the files apart, the ordering being each mode's own).
 
 `report['offenders']` names the rules that fail, with their tier. Omitting `mode`
@@ -219,16 +219,16 @@ report = verify_artifact('rules.json', 'rules_permissive.json')
 report['is_clean'], report['relationships']
 ```
 
-With `engine_config=` it also checks that `permissive` is at least as capable as `f64` on
+With `engine_config=` it also checks that `permissive` is at least as capable as `strict` on
 every expression of a corpus: `corpus_rows`, or by default the 400-expression corpus that
 ships with the package (`simplipy.verify.default_corpus()`). The check runs on the config's
 operators and the two rule sets passed in and asks, row by row, that permissive's answer cost
-no more than `f64`'s answer as permissive reads it, both priced on one shared scale (`f64`'s
-canon). `f64`'s answer is read by permissive's constructors rather than taken as `f64` spells
-it: a product `f64` keeps for a premise of its own, such as a zero's sign it reads, is the
+no more than `strict`'s answer as permissive reads it, both priced on one shared scale (`strict`'s
+canon). `strict`'s answer is read by permissive's constructors rather than taken as `strict` spells
+it: a product `strict` keeps for a premise of its own, such as a zero's sign it reads, is the
 expanded polynomial permissive writes, which costs more and is no simplification permissive
 misses. A permissive answer without a value (NaN: the expression has no value in the reals, such
-as a division by zero however it is written) is not priced: `f64`'s answer then holds float64's
+as a division by zero however it is written) is not priced: `strict`'s answer then holds float64's
 value, an infinity from the division, which permissive does not share. A row on which a mode
 raises counts as a violation. `verify_triple`, the gate of the
 earlier three-file artifact, raises: its middle file was the retired real mode's.
@@ -274,7 +274,7 @@ The exact routes (`verdict['exact']`):
   `+`, `-`, `neg`, products and quotients by a constant, `abs`, `max` and `min` are continuous
   piecewise-affine functions, compared cell by cell with exact rational breakpoints. The rule is
   proved, or refuted at a rational witness: `max(0, 1e-200 - abs(x0 - 0.123456789)) -> 0` is
-  false on an interval no sample point reaches, and is refused in every mode. In `f64` such a
+  false on an interval no sample point reaches, and is refused in every mode. In `strict` such a
   proof carries over only where every operation is exact on doubles (`neg`, `abs`, `max`,
   `min`). Rules of several variables, and functions past 256 breakpoints or 4,096-bit
   coefficients, are left to the sampled procedure.
@@ -282,7 +282,7 @@ The exact routes (`verdict['exact']`):
   side, over every finite binding of its variables and constants, by the right side's literal
   and nothing else, the rule is proved (`0*exp(x0) -> 0`).
 - **A rule without variables or constants** has one point, read by the ground evaluator the
-  engine's fold and `verify-mine` read too. In `f64` it holds where its two sides are the same
+  engine's fold and `verify-mine` read too. In `strict` it holds where its two sides are the same
   double, or the reals give them one value and float64's two values agree in kind (both finite,
   two zeros of one sign, the same infinity, both undefined, or a range event's true value):
   `exp(sin(pi)) -> 1` holds (the left side is 1.0000000000000002), `cos(pi) -> -1` and
@@ -290,8 +290,8 @@ The exact routes (`verdict['exact']`):
   `permissive` it holds where the table's two values agree at float resolution, each read to as
   many digits as it needs: `log(-1) -> 0` is refused, the left side having no value. Each mode
   reads its own value of a fully numeric expression, so here permissive does not include
-  `f64`: `0*tan(asin(1)) -> 0` holds in `f64` (float64's 1.633e16 times 0) and not in
-  `permissive` (tan(pi/2) has no value), and its tier is `reject`, since `f64`'s fold writes
+  `strict`: `0*tan(asin(1)) -> 0` holds in `strict` (float64's 1.633e16 times 0) and not in
+  `permissive` (tan(pi/2) has no value), and its tier is `reject`, since `strict`'s fold writes
   every fully numeric part as the cheapest value it admits and no file needs such a rule.
 - **`L(C) -> C` without variables** holds in every mode: the witness is the left side's own
   value wherever it is finite (`acos(C) -> C`).
@@ -304,7 +304,7 @@ duplication of a `_` slot, and what the engine does itself (`policy_refusals`):
 <!-- docs-example: skip: needs an engine; see tests/test_differential.py -->
 ```python
 from simplipy.verify import licensed
-licensed(['asin', '1'], ['acos', '0'], 'f64', engine)
+licensed(['asin', '1'], ['acos', '0'], 'strict', engine)
 # -> {'licensed': False, 'holds': True, 'tier': 'core', 'refused_by': ['ground_composite']}
 ```
 
@@ -327,7 +327,7 @@ float64's divisor of the answer vanishes a double away from the input's, since
 `(a*x^2 + b*x)/x -> a*x + b` holds as a step. A number the engine folds
 from literals (a product's coefficient, a sum's constant term, a long literal written at its
 double: `_core.ac_simplify_trace`'s folds) is a step too: each fold is judged as the ground rule
-it makes, and where every fold holds in `f64`, the answer is read with each folded number as the
+it makes, and where every fold holds in `strict`, the answer is read with each folded number as the
 numbers it was made of, so `27.940055475362794*(x1 + 0.2856797429345068*x2) ->
 27.940055475362794*x1 + 7.981907865777503*x2` passes although the reals refute the answer as
 written by the fold's rounding. Both the gate and the monitor carry poison

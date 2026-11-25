@@ -1,7 +1,7 @@
 # Displaying expressions
 
 `simplify` returns the canonical form and writes each number as the cheapest value its mode
-admits: in `f64` float64's double where that is cheaper than the exact value, so a literal
+admits: in `strict` float64's double where that is cheaper than the exact value, so a literal
 longer than a float becomes its double. A canonical form can still hold numbers longer than a
 float: a fraction cheaper than its double stays exact, and an expression given to `prettify` as
 it is keeps every digit it was given. `prettify` is the display of a canonical form. It decides
@@ -109,7 +109,7 @@ engine.prettify(engine.simplify("x0/(2*3.141592653589793)"), precision=3)
 
 **pi.** A value that is a number written exactly times the literal `3.141592653589793`, or over
 it, is written with pi factored out as the symbol `pi` (`np.pi` in the token forms), at every
-precision: pi is never shortened, and a precision applies to the other numbers only. In `f64`
+precision: pi is never shortened, and a precision applies to the other numbers only. In `strict`
 the symbol is that float, so the display evaluates as the literal does. (`simplify` reads that
 literal as pi itself, as it reads every literal on its recognition list.)
 

@@ -54,7 +54,7 @@ $$ t ::= q \mid \pi \mid e \mid +\infty \mid -\infty \mid \mathrm{NaN} \mid \dia
 
 where $q$ ranges over exact rationals (`Rat`: $p/q$ with $|p|$ and $q$ of at most 1,100 bits
 each, `CAP_BITS`; normalized $q > 0$, $\gcd(|p|, q) = 1$; held as `i128` whenever it fits, never
-`i128::MIN`; in both modes -- "f64 mode" below, for the number domain -- only zero and the
+`i128::MIN`; in both modes -- "the float64 domain" below -- only zero and the
 numbers whose numerator and denominator are both at most $2^{1022}$, so that the number and its
 reciprocal are normal float64 values and every printed spelling reads back as the same number;
 any other literal stays a token leaf as written: `1e400`, the subnormal `5e-324` and `5e307`), $\diamond$ is the abstract fitted constant
@@ -80,17 +80,17 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   coefficients of one like-term bucket and the exponents of one like-base pool fold to a
   CANONICAL PARTITION (`Rat::partition_with`): sorted ascending, each member folds into the
   lowest kept member it folds with, until no two members fold. A fold refuses beyond the cap,
-  and in f64 mode where the result is not admissible (numerator and denominator at most
+  and in the float64 domain where the result is not admissible (numerator and denominator at most
   $2^{1022}$, a set closed under negation and reciprocals); an exponent merge also needs its
   branch-cut licence. No two members of a partition fold, so it is the partition of each of its
   subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL]:
   the partition makes each group re-read to itself, not every form around it. Measured against
   the same code with 128-bit literals, two boundary fuzzes with literals at the 128-bit,
   float64-range and cap boundaries gave fewer canonical-form idempotence failures (at effort 0)
-  in every mode: 3 f64, 1 permissive over 60,000 calls per mode (128 bits: 6, 3), and
+  in every mode: 3 strict, 1 permissive over 60,000 calls per mode (128 bits: 6, 3), and
   10, 5 over another 52,000 (128 bits: 16, 19; exact McNemar p = 0.26, 0.001, so
   only permissive's gap is significant). The classes: sums whose sign orientation stays open
-  because they hold literals that stay opaque leaves (beyond the cap, or in f64 mode outside the
+  because they hold literals that stay opaque leaves (beyond the cap, or in the float64 domain outside the
   admissible set: `1e400`, subnormals, `1.7976931348623157e308`, and the decimal
   `2.2250738585072014e-308`, whose exact denominator is $10^{324}$) or stand beside a
   $\pm\infty$ factor; a like term whose coefficient is itself a refused two-member partition,
@@ -103,13 +103,13 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   partition's sign on its smallest member (`-1e300*1e300*x1`), which a re-read factors out
   again; on 20,000
   sums of products of boundary literals, no answer changes on a second call in any mode at
-  effort 0 (before: 80 f64, 81 permissive). A class independent of literal size is
+  effort 0 (before: 80 strict, 81 permissive). A class independent of literal size is
   closed: a product with more than six sign-trade sites kept the placement it entered with, two
   sums that are each
   other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
   a state and the parse of its own print could differ (0.14.7: 28 of srbf's 125,127 model
-  predictions change on a second call in f64 with the search off). Each is now decided by the
-  orbit (§3), and no f64 answer changes on a second call on the 129,490 simplify inputs
+  predictions change on a second call in strict with the search off). Each is now decided by the
+  orbit (§3), and no strict answer changes on a second call on the 129,490 simplify inputs
   of flash-ansr's training-data generator, srbf's ground truths or its predictions, with the
   search off or at the default effort. The sign placement keeps the entry
   spelling where an orientation would collide with another factor's base or a negation overflows
@@ -215,7 +215,7 @@ keeps its strength. They fail closed on a sum mixing directions whose derivative
 derivative to read (`x1 + 1/log(x1)`, `log(log(x1)) - x1`), and on two parts that move whose
 product has neither a certain sign nor a readable derivative.
 
-**In `f64` the zero-set certificate reads each function on its float64 range.** Two functions of
+**In `strict` the zero-set certificate reads each function on its float64 range.** Two functions of
 the vocabulary are exactly constant on a whole tail in float64: `tanh(u)` is ±1 for every
 |u| ≥ 18.990341103219276 (the deployed evaluator; the engine's own saturates at 19.06) and
 `atan(u)` is ±fl(π/2) for every |u| ≥ 5805358775541310. This was measured on every operator,
@@ -223,7 +223,7 @@ with both evaluators, out to the largest float. Every other operator keeps chang
 or overflows to an infinity or underflows to 0 (`exp`, `sinh`, `cosh`, `pow`), which the overflow
 reading covers, or is NaN off its domain. On a tail such a function is not analytic, and a sum
 that cancels its limit vanishes on a region: `x2*tanh(x1) - x2` is `+0` wherever x1 ≥ 18.99, so
-its inverse is `+inf` there. In `f64` the certificate therefore splits the space. Off the tails the
+its inverse is `+inf` there. In `strict` the certificate therefore splits the space. Off the tails the
 expression is the real one, so its zeros there are among the real expression's, which the real
 certificate shows null. On a tail it is exactly the expression with that function replaced by
 its limit, and the tail adds no zero set when that expression's zero set is null in float64 on
@@ -234,7 +234,7 @@ stay null, while `x2*tanh(x1) - x2`, `tanh(x1 - x3) + 1`, `atan(x1) - fl(π/2)`,
 `tanh(tanh(x1)) - tanh(1)` and `1/(1/(tanh(x1) - 1))` are not. The certificates behind the
 cancellations, "finite almost everywhere" (`!`) and "finite and nonzero almost everywhere" (`$`),
 read an expression the same way: `1/(tanh(x1) - 1)` is not finite on the tail, nor
-`tanh(x1) - 1` nonzero, so `(tanh(x1) - 1)/(tanh(x1) - 1)`, NaN there, is not `1` in `f64`.
+`tanh(x1) - 1` nonzero, so `(tanh(x1) - 1)/(tanh(x1) - 1)`, NaN there, is not `1` in `strict`.
 The merge of `x^y * x^y` into `x^(2y)` needs the levels of `y` off the integers to be null. On a
 tail `y` is constant, which is harmless where that constant is an integer (`tanh(x1)` at ±1) and
 refused elsewhere (`3*atan(x1)` at ±3·fl(π/2)).
@@ -426,7 +426,7 @@ at `x2 = x3 = -1` where its limit is `-inf`); a sum one of whose terms is define
 its zero only is a class like any other, so its pole is not read as one-sided
 (`-2/(sqrt(x1) - x1)` is `2/(x1 - sqrt(x1))`, `+inf` at `x1 = 0`, where the limit from `x1 > 0` is
 `-inf`); FACTOR asks its content to be infinite only on a null set, as the law
-fails only where the content is infinite, so a content with no value on a region factors in `f64`
+fails only where the content is infinite, so a content with no value on a region factors in `strict`
 too: `log(3 - x3)/(x3 - 3) + log(3 - x3)` is `log(3 - x3)*(1/(x3 - 3) + 1)` in both modes, `-inf`
 at `x3 = 3` as float64 gives the input there; one class split across the
 terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite, as
@@ -440,17 +440,17 @@ vanishes at a class's zero only through a term that vanishes faster there
 root keeps the sign of zero like every odd function (IEEE-754 `rootn(-0, n) = -0` for odd `n`), so
 it reads at the zero as its radicand does.
 
-A zero that holds everywhere (`x2 - x2`) has no limit to read. In `f64` and `permissive`, whose
+A zero that holds everywhere (`x2 - x2`) has no limit to read. In `strict` and `permissive`, whose
 evaluator is float64, it is IEEE-754's signed zero: where a product holding an exact zero is
 inverted, the inverse distributes over its members, the zero giving `+inf` (it is `+0`) and each
 other member its own power, so the answer keeps the sign the members give the zero:
 `1/(x1*(x2 - x2))` is `inf/x1`, `1/(-(x1 - x1))` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`.
-In `f64` a written product or negation of numbers that is
+In `strict` a written product or negation of numbers that is
 zero is float64's signed zero, `-0.0` where its sign is negative, which an odd function keeps:
 `1/tan(-(x1 - x1))` is `-inf` there. float64 subtracts by adding the negation, so a written zero
 subtrahend is the zero of the other sign: `-0.0 - 0` is `-0.0` and `1/(0*(-2) - 0)` is `-inf`
-in `f64`, as float64 gives it (`-0.0 + 0` is `+0`, and `x - 0` is `x`). A product of a zero
-keeps its sign in `f64` wherever a later step can read it (`mul.zero`): a factor whose sign may
+in `strict`, as float64 gives it (`-0.0 + 0` is `+0`, and `x - 0` is `x`). A product of a zero
+keeps its sign in `strict` wherever a later step can read it (`mul.zero`): a factor whose sign may
 vary stays beside the zero, and the zero is `+0` or `-0` (the written negative zero) by the sign
 of the other members, the reciprocal of `-inf` being `-0` too. A head that keeps a zero, its
 sign and NaN (an odd function with $f(\pm 0) = \pm 0$, `floor`, `ceil`, an odd root, `sqrt`) is
@@ -462,7 +462,7 @@ sign the product drops the factors that only gave it its sign: the answer itself
 the `+0` term below), a head with $f(-0) = f(+0)$ (`exp(0*x1)` is `1`) and a power that makes every
 zero `+0` (`(0*x1)^{3/2}` is `0`). `permissive` reads one zero.
 
-**In `f64` the sign of an isolated zero of a sum is no value the answer keeps, nor the sign of
+**In `strict` the sign of an isolated zero of a sum is no value the answer keeps, nor the sign of
 the infinity a pole makes of it** (`class.pole_orientation`). An exactly cancelling sum is `+0` in
 either orientation, so float64 gives a pole at its zero the infinity of the sign written
 (`-1/(x1 - 3)` is `-inf` at `x1 = 3`, `1/(3 - x1)` is `+inf`). Where the zero is an isolated
@@ -473,13 +473,13 @@ product's choice in both modes (`-1/(x1 - 3)` and `1/(3 - x1)` are one answer, a
 `-1/(x1 - 3)^2`, `-inf` at `x1 = 3`, where float64 gives the input `+inf`). A sum whose zero may
 hold a region keeps its zero's sign under its readers (below).
 
-**A sum that vanishes on a region keeps its zero's sign where it is inverted, in `f64`.** float64
+**A sum that vanishes on a region keeps its zero's sign where it is inverted, in `strict`.** float64
 adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` and `x1 - |x1|` are
 both `+0` for every x1 ≥ 0, and the negation `-(|x1| - x1)` is `-0` there. The canonical form holds
 a sum and its negation as one sum in one orientation, so it read `1/-(|x1| - x1)` as
 `1/(x1 - |x1|)`: `+inf` there, where float64 gives `-inf`. Where a sum's zero set is null, the sign
 of its zero is no value the answer keeps, at a pole either (above). Where it may hold a
-region, because the zero-set certificate cannot show it null, and the sum is inverted, `f64` keeps
+region, because the zero-set certificate cannot show it null, and the sum is inverted, `strict` keeps
 the sign with the inverse instead of in the sum: `1/-(|x1| - x1)` is `-1/(|x1| - x1)`. The same
 holds through an odd power, an odd function or an odd root of such a sum (`1/-(S^3)`,
 `1/sin(-S)`, `1/rootn(-S, 3)`), and in a product holding one, whose inverse then distributes over
@@ -490,7 +490,7 @@ sign of a zero.
 
 The rule acts where an inverse meets the sum, and a sum turned around before that would lose its
 zero's sign: `1/(-x1 - |x1|)` is `+inf` for every x1 ≤ 0, where the sum is `+0`, and
-`-1/(x1 + |x1|)` is `-inf` there. So in `f64` a sum the zero-set test cannot clear holds its sign
+`-1/(x1 + |x1|)` is `-inf` there. So in `strict` a sum the zero-set test cannot clear holds its sign
 wherever the expression around it reads the sign of its zero: its sign does not leave it
 (`-a - b` is not `-(a + b)`), no sign trades into it (`2(-a - b)` is not `-2(a + b)`, nor is
 `sin(-a - b)` `-sin(a + b)`), and inside a sum no negative coefficient spreads over it
@@ -510,11 +510,11 @@ factors whose zero sets are null: for almost every value of the other variables 
 vanishes on a null set of that one), and the walk that lands each state at its root gives every
 held sum its orientation where nothing reads its zero or the certificate clears it. A held sum's
 negation is written as the negation it is (`-(a - b)`, not `b - a`), so an answer reads back to
-its state. On srbf's ground truths 5 `f64` answers change (0 cheaper, 5 dearer, 0 at an equal price), on a tenth of the training-data inputs 22 (0, 19, 3) and on a tenth of the predictions 98 (4, 73, 21); the dearer ones hold a sum under an inverse whose zero set the certificate
+its state. On srbf's ground truths 5 `strict` answers change (0 cheaper, 5 dearer, 0 at an equal price), on a tenth of the training-data inputs 22 (0, 19, 3) and on a tenth of the predictions 98 (4, 73, 21); the dearer ones hold a sum under an inverse whose zero set the certificate
 cannot show null, or take another path through a sum held while the search ran. `permissive`
 reads a value up to the sign of a zero.
 
-**A sum keeps a `+0` term where its other terms may all be -0 on a region, in `f64`.** float64's
+**A sum keeps a `+0` term where its other terms may all be -0 on a region, in `strict`.** float64's
 sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`, and a cancellation is `+0`), and
 some terms are -0 on a whole region: `ceil(x1)` on (-1, 0), `-floor(x1)` on [0, 1),
 `min(x1, -0.0)` on x1 ≥ 0, `mod(floor(x1), -1)` everywhere, `x2*ceil(x1)` wherever x2 > 0 there,
@@ -576,7 +576,7 @@ Every drop is counted by reason (`ac_rules_drop_census`). On the shipped `acj-5-
 
 | mode's file | rows reaching translation | G2 | G4 | G7 | G8 | twins | served |
 |---|---|---|---|---|---|---|---|
-| `f64` | 138,334 | 83 | 0 | 0 | 0 | 337 | 138,588 |
+| `strict` | 138,334 | 83 | 0 | 0 | 0 | 337 | 138,588 |
 | `permissive` | 139,299 | 122 | 0 | 0 | 5 | 457 | 139,629 |
 
 No row is dropped by G1, G3, G5 or G6 (G5 measured on the current build: 0 in both files),
@@ -588,7 +588,7 @@ $\mathrm{simplify}_m(s)$ under the rules of the shorter lengths, and a candidate
 *accepted* iff it passes, in order: the licences (no `<constant>` introduced into a
 determined source, no special constant absorbed, $\mathrm{nf}_m(t) <_o$ the mark in $m$'s
 serve ordering, no instance of an engine-owned law — G8's predicate — and no defined
-extended-real value changed at a pole), the numeric agreement on the mine's matrix (in `f64`
+extended-real value changed at a pole), the numeric agreement on the mine's matrix (in `strict`
 one row agreement, `battery::strict_row_agrees`, at every row it reads: F6, or both finite
 within the mine's tolerances where the reals give both sides a value, the true value at a row
 where an operation overflowed; at the special points and the Dirac witnesses strict's two
@@ -603,26 +603,26 @@ reading, each maximal ground part written as the engine's own ground-value readi
 (`min(log(1), x0)` and `min(sin(0), x0)` are one class, `min(0, x0)`); the library holds one
 candidate per class, written as that reading.
 
-**A zero's sign in `f64`** [BY CONSTRUCTION — one definition, `battery::zero_sign_event`].
+**A zero's sign in `strict`** [BY CONSTRUCTION — one definition, `battery::zero_sign_event`].
 At a point where no operation of either side overflows or underflows, float64 gives a rule an
 *event* where its two sides are zeros of opposite sign, or finite values that differ (F6) where
 exactly one side's value *turns on a zero's sign*: it changes when every $-0$ that a divisor,
 `inv`, `pow`, `rootn` or `atan2` receives is read as $+0$, the reals' one zero. An event is
 *isolated* where, along some data variable or left-side constant, the neighbouring doubles on
 both sides show no such event; a slot that matches any subexpression guards no point. A rule
-holds in `f64` only if every event the judge reads is isolated: at every point of its f64 lane,
+holds in `strict` only if every event the judge reads is isolated: at every point of its f64 lane,
 and at the deployed bar's probes for every rule, each slot over its sort's values with $-0$
-among them. The f64 mint applies the same bar to every pick. A zero's sign is `f64`'s alone:
-`permissive` includes `f64` with the two zeros one value, evidence included.
+among them. The strict mint applies the same bar to every pick. A zero's sign is `strict`'s alone:
+`permissive` includes `strict` with the two zeros one value, evidence included.
 
-**A pole's sign in `f64`** [BY CONSTRUCTION — one definition, `battery::pole_sign_event`]. At a
+**A pole's sign in `strict`** [BY CONSTRUCTION — one definition, `battery::pole_sign_event`]. At a
 point where no operation of either side overflows or underflows, float64's two sides differ only
 by a *pole's sign* where they differ (F6) and agree once the zeros one side's operations read as
 poles (a divisor, `inv`'s operand, the base of `pow` or `rootn` at a negative exponent) are read
 with the other sign: `-1/(x - 3)` and `1/(3 - x)` are $-\infty$ and $+\infty$ at $x = 3$. Where
 the pole is isolated -- along some data variable or left-side constant, at the neighbouring
 doubles on both sides no operation reads a zero as a pole, or one overflows or underflows -- the
-two sides agree there, in F6 and wherever the reals give a side no value alike: `f64` does not
+two sides agree there, in F6 and wherever the reals give a side no value alike: `strict` does not
 promise the sign of an infinity at an isolated pole. On a region it is a zero's sign on a region
 and stays refused (`1/(0 \cdot x) \to -\infty/x`), as does a pole whose zero holds on a region
 though the infinities part at isolated points only ($\lceil x_0\rceil^{x_1}\lceil x_0\rceil^{x_1}
@@ -630,7 +630,7 @@ though the infinities part at isolated points only ($\lceil x_0\rceil^{x_1}\lcei
 a finite value) is no such event. The judge's f64 lane and the deployed bar read it at every point where
 the sides differ; the mint's rows do not, a pre-filter that refuses more than the judge.
 
-**Where the reals give the left side no value, its limit decides in `f64`** [BY CONSTRUCTION —
+**Where the reals give the left side no value, its limit decides in `strict`** [BY CONSTRUCTION —
 one definition, `_contract.limit_point`]. For a rule with no `_` or `!` slot, at a double where the
 reals give the left side $L$ no value (a pole, $0/0$, any undefined operation) and its neighbouring
 doubles along some data variable do (the exact double), and at the other doubles of a run around
@@ -652,7 +652,7 @@ the one before, a value; sides that differ, none; anything else, uncertified (a 
 $\log x$ at 0, among them). A verdict that rests on this reading is evidence, not a proof. So $1/(x - 3) + 1/(3 - x) \to 0$ ($+\infty$ against 0 at 3, the limit 0),
 $x/x \to 1$, $1/\sin(x + 2\pi) \to 1/\sin x$ (no limit at 0) and $1/(\sin x - 1) \to -(1 + \sin
 x)/\cos^2 x$ (the reals' $-5.3 \cdot 10^{32}$ beside float64's $+\infty$ near $\pi/2$) hold in
-`f64`, while $1/(x - 3)^2 \to 0$, $\exp((x - 1)/x^2) \to \exp(1/x - 1/x^2)$ (0 against NaN at
+`strict`, while $1/(x - 3)^2 \to 0$, $\exp((x - 1)/x^2) \to \exp(1/x - 1/x^2)$ (0 against NaN at
 $+0$, the limit 0), $\operatorname{atan}(-1/(x - 3)^2) \to \operatorname{atan}(1/((x - 3)(3 - x)))$
 ($-\pi/2$ against $\pi/2$ at 3) and $1/\sin(x + 2\pi)^2 \to 1/\sin(x + 4\pi)^2$ ($1.7 \cdot 10^{31}$
 against $4.2 \cdot 10^{30}$ at 0, the limit $+\infty$) do not. The judge's f64 lane reads it for a
@@ -678,7 +678,7 @@ the part's least $|$value$|$ over $[a, b]$, by golden-section search at 50 and 1
 by 20 orders or more places a zero of even order, and holding within three orders places none.
 A run that reaches an infinity, or one the reals leave undecided, is no point: the reading stands as
 without the run. So $1/(-\sin x - 1) \to -1/(\sin x + 1)$ and $1/(-\cos x - 1) \to -1/(\cos x +
-1)$ hold in `f64` (an infinity's sign at a one-signed pole), while $1/(\tanh x - 1) \to -1/(1 -
+1)$ hold in `strict` (an infinity's sign at a one-signed pole), while $1/(\tanh x - 1) \to -1/(1 -
 \tanh x)$ and $0 \cdot \operatorname{asin} x \to 0 \cdot \operatorname{acos} x$ do not. The judge's
 f64 lane reads it; the deployed bar and the mint's rows read a point by its neighbouring doubles
 alone, a pre-filter that refuses more than the judge.
@@ -708,7 +708,7 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   $\diamond$-collapsible: $u' =$ the cheapest expression the mode admits for $u$'s value
   (below), resp. $\diamond$, **accepted only if** $u' <_o u$. Exact rational arithmetic lives in
   the constructors (bag coefficient merging, integer/rational `pow`, exact roots, the two
-  determined reciprocal arms $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$ in `f64`, as
+  determined reciprocal arms $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$ in `strict`, as
   float64 computes them; in `permissive` an operation on literals takes the table's value, where
   a division by zero has none however it is written, so $0^{-k}$ is NaN there).
 
@@ -718,7 +718,7 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   realizations in written order, each literal at its nearest double, every range event noted;
   its elementary functions are `numeric::elementary`'s, the one place their float64 value is
   decided) and the reals' (the table, read at the judge's precision ladder: as many digits as
-  the reading asks for, so `floor(tanh(100))` is read at 140 digits and is 0). In `f64` an
+  the reading asks for, so `floor(tanh(100))` is read at 140 digits and is 0). In `strict` an
   expression $R$ may stand for $u$ where float64 gives $R$ the double it gives $u$, or the reals
   give $R$ $u$'s value and float64's two values agree in kind: both finite (two zeros of one
   sign), the same infinity, both NaN, or a range event on either side whose true value is of
@@ -728,16 +728,16 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   give, and the recognition list's entry for either double; of those the evaluator admits, the
   cheapest is kept, the reals' value at an equal price. So `floor(tanh(100))` and `sin(np.pi)`
   are 0 and `exp(sin(np.pi))` is 1 in both modes, `tanh(100)` is 1, and `tan(asin(1))` keeps
-  float64's 1.633e16 in `f64`, the reals giving it no value, and is NaN in `permissive`.
+  float64's 1.633e16 in `strict`, the reals giving it no value, and is NaN in `permissive`.
 
   *A fully numeric part is read first.* The parse reads every maximal fully numeric part, as
-  written, before any constructor builds it: where the part's only value is an atom (in `f64`
+  written, before any constructor builds it: where the part's only value is an atom (in `strict`
   float64's NaN or infinity, unless the reals give the part a finite value that float64 reached
   through a range event; in `permissive` no value, or an infinity, in the table) the part is
   that atom, so no law reaches it: `0*tan(asin(1))` and `tan(asin(1))/tan(asin(1))` are NaN in
   `permissive`, `exp(t)/exp(t)` with `t = tan(asin(1))` is NaN in both modes, while
   `x*exp(1000)/exp(1000)` is `x`. A step inside a fully numeric part is admitted for the whole
-  part, not only for the operand it rewrites (`1/sin(np.pi)` keeps float64's 8.2e15 in `f64`:
+  part, not only for the operand it rewrites (`1/sin(np.pi)` keeps float64's 8.2e15 in `strict`:
   `sin(np.pi)` alone is 0, but `1/0` is no value of the whole), and `permissive`'s own
   simplifications never act on a fully numeric operand (`asin(sin(4))` keeps its value,
   $\pi - 4$).
@@ -747,25 +747,25 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   $k\pi/m$ and $ke/m$ for coprime $1 \le k, m \le 24$, $k/m$ for coprime $m \le 24$ whose
   decimal does not terminate and $|k/m| \le 100$, $\log 2$, $\log 3$, $\log 10$, $\sqrt 2$,
   $\sqrt 3$, $\sqrt 5$ (`3.141592653589793` is `np.pi`, `0.3333333333333333` is `1/3`). In
-  `f64` float64 reads the same double, so the step changes no value; in `permissive` it moves
+  `strict` float64 reads the same double, so the step changes no value; in `permissive` it moves
   by less than a unit in the last place. The fold spells a value from the same list.
 
   Two further shapes fold to `nan`: a `rootn` whose index is ground and whose rigorous value set reaches no
   nonzero integer is `nan` at every radicand (`rootn(x1, asinh(tanh(4)))`, the ground form of
   the constructor's literal arm `rootn(x1, 2.5)`; an index whose enclosure holds an integer
-  stays, so `rootn(x1, acos(cos(1)))` is kept even in `f64`, whose evaluator rounds that index
+  stays, so `rootn(x1, acos(cos(1)))` is kept even in `strict`, whose evaluator rounds that index
   off 1), and a variable-free composite holding a $\diamond$ whose class over every value of its
   constants is `nan` (`acosh(acos(cosh(c)))`, the class dropping a finite part on a null set of
   the constants as for any family). The interval layer reads a positive base under a
   non-integer exponent by its four corner powers, so `acosh(1/pi^(1/6))` classifies as `nan`.
   No constructor folds a transcendental in any mode. The pass reaches an enclosing node before
-  its children, so `rootn(exp(19.11787581094798), 2)` is `14170.787488305119` in `f64` and
+  its children, so `rootn(exp(19.11787581094798), 2)` is `14170.787488305119` in `strict` and
   `14170.787488305128` in `permissive` (the root of e^19.11787581094798, the decimal read
   exactly, is 14170.7874883051273...); `asin(1e-8)` is `1e-8` in both;
-  `sin(91618929858.17857)` is `-0.9807991153359534` in `f64` and `-0.9807984116169761` in
+  `sin(91618929858.17857)` is `-0.9807991153359534` in `strict` and `-0.9807984116169761` in
   `permissive`, whose argument is the decimal itself and not its nearest double; `sin(1)`
   stays in both (its float costs more). `atanh(tanh(30))` is `30` in `permissive`, the table's
-  value, and `inf` in `f64`, where `tanh` saturates to 1.0 within the range and `atanh(1.0)` is
+  value, and `inf` in `strict`, where `tanh` saturates to 1.0 within the range and `atanh(1.0)` is
   a pole: float64's `inf` is the part's only value there. `complexity` prices the reading, so a ground constant is priced as written in every mode. Respelling one exact symbol as another is
   a constructor's job in every mode: `exp(1)` $\to$ `e` chooses between two exact names for
   one value and nothing is rounded;
@@ -807,12 +807,12 @@ product unconditionally, so `c/(A*B)` is held as `c * A^-1 * B^-1`, where no DIS
 the product inside the reciprocal; the move joins two reciprocal sums (`A^-1 * B^-1` becomes
 `(A*B)^-1`, with `A*B` distributed into one sum), or moves the coefficient or another factor into
 one reciprocal sum (`c * A^-1` becomes `(A/c)^-1`, with `1/c` distributed over `A`'s terms). So
-`x2/(x2 - x1)` is `1/(1 - x1/x2)` in `permissive`; `f64` keeps such a reciprocal
+`x2/(x2 - x1)` is `1/(1 - x1/x2)` in `permissive`; `strict` keeps such a reciprocal
 joined where it is not certified to split, and its DISTRIBUTE reaches inside it. Each
 move is a law of the catalogue and carries its premise (`search.distribute`, `search.pow_expand`,
 `search.factor`, `search.reciprocal_join`; no `<constant>` duplicated or merged): the two sides
 of the distributive law differ only where a piece it multiplies into two or more addends (or
-collects out of them) is infinite, so in `f64` such a piece is infinite only on a null set, may
+collects out of them) is infinite, so in `strict` such a piece is infinite only on a null set, may
 have no value on a region, and at each pole either one addend keeps the pole, each addend that
 keeps it carries two-signed poles only (the sign of its infinity is an isolated zero's, no value
 kept, §3; a co-factor that shares the pole's variable can make it one-sided or even), or those
@@ -889,20 +889,20 @@ price, and the sign key decides it ($-x_1 \tanh(3)$ and $x_1 \tanh(-3)$ cost the
 second is filed). The coefficient $+1$ is no sign and costs $0$, and a rational exponent of
 magnitude $1$ is a reciprocal, priced as division ($x^{-1}$ is the `Pow` head and $x$); every
 other coefficient or rational-exponent slot pays its literal cost; a numeric literal that is no number to the engine (beyond the
-cap, or in f64 mode not admissible) lives as a token string and pays the same two-codeword
+cap, or not admissible in the float64 domain) lives as a token string and pays the same two-codeword
 rule parsed from its canonical print (`mu_numeric_str`, monotone in significand and
 scale within each codeword, with the astronomic knee at scale $2^{32}$ keeping the
 codomain inside `u64`); and the
 free placeholder $\diamond$ costs $c_{\mathrm{free}} = 67$ — **derived, not
 chosen**: the supremum of the codeword
-minimum over f64 round-trip spellings ($64.649$ bits, attained at
+minimum over float64 round-trip spellings ($64.649$ bits, attained at
 $8.9002954340287245 \times 10^{-308}$ — the largest 17-digit mantissa a shortest
 repr can carry, $m < 10 \cdot 2^{53}$, meeting the deepest scale a 17-digit spelling
 reaches) plus the sign bit and the selector bit, ceiled. The ceiling is robust to the
 exact argmax — analytically $L(m) < 56.48$ and $|k| \leq 343$ put the supremum below
-$64.92$ — and the supremum is scoped to the f64 range on purpose: $\diamond$ stands
+$64.92$ — and the supremum is scoped to the float64 range on purpose: $\diamond$ stands
 for a value a fit will supply, and dominating exactly those is what the construction
-guarantees (a beyond-f64 literal can price below it — $\mu(10^{-400}) = 10.647$
+guarantees (a literal beyond float64's range can price below it — $\mu(10^{-400}) = 10.647$
 via its scientific codeword — and nothing rests on outpricing those). An exact $\mu$ tie goes
 to the sign key $\sigma$ (§3: the number of signs, then the sum of their depths, compared as a
 pair: fewest signs, then outermost), and a tie in both to the canonical total order `cmp_ex`
@@ -914,7 +914,7 @@ literal as it is written, and the 1,100-bit cap keeps the literals finite (L5).
 the 34-digit exact product `0.0900000000000000240000000000000016` costs its 34 digits. A mode
 that may write a cheaper value of the same number writes it, once, where the literal lands (a
 sum's constant term, a coefficient, a power's literal operand beside a non-literal one, a
-function's argument in `permissive`, the root of a state). `f64` writes float64's own value:
+function's argument in `permissive`, the root of a state). `strict` writes float64's own value:
 a literal at the double float64 reads it as (`0.1234567890123456789` is
 `0.12345678901234568`), and a number the constructors make from literals at the double nearest
 that operation on their doubles, computed exactly and rounded once, which for two literals is
@@ -922,7 +922,7 @@ float64's own value of it (`x*0.30000000000000004*0.30000000000000004` is
 `0.09000000000000002*x`, `x*0.7234567890123457*1.3821548250604163` is `0.9999292916561291*x`),
 each where that decimal is cheaper than the exact value (`0.1 + 0.2` is `0.3`). `permissive`
 writes whichever of the two doubles around the exact value prints shorter
-(`0.9999292916561292*x`). An integer keeps its exact spelling in both. f64 mode admits a number
+(`0.9999292916561292*x`). An integer keeps its exact spelling in both. The float64 domain admits a number
 only where its numerator and denominator are at most $2^{1022}$ and holds any other value in
 *pieces* -- a numeric string as written, or a sum, product or integer power of numbers that
 would leave the domain. Pieces whose exact value is a number within the 1,100-bit cap price as
@@ -984,7 +984,7 @@ hence finitely many shapes; the non-leaf alphabet (operators) and the variable/s
 vocabulary are finite; and there are finitely many numbers at all: a number's numerator
 and denominator have at most 1,100 bits each ($\mu_0$ bounds a literal's codeword
 components too, since a literal is priced as written). A numeric-string
-leaf not admissible in f64 mode but within the cap denotes one of those numbers; one beyond the
+leaf not admissible in the float64 domain but within the cap denotes one of those numbers; one beyond the
 cap pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
@@ -1006,7 +1006,7 @@ $\mu$ (the leaf multiset and shape are unchanged) and is decided by the sign key
 
 **Why numeric-string leaves are priced.** The numeric fold interns its result as a
 token; a term can therefore carry literals that exist only as opaque numeric *strings*
-(values beyond the 1,100-bit cap, or in f64 mode not admissible). Pricing them at one
+(values beyond the 1,100-bit cap, or not admissible in the float64 domain). Pricing them at one
 vocabulary symbol would break L5 (unboundedly many strings at one level), invert the
 ordering at the number/leaf boundary, and license deep-magnitude roundings;
 `mu_numeric_str` closes all three.
@@ -1076,7 +1076,7 @@ return_status=True)` names the caps that bound (the step cap, `max_passes`, and 
 process-wide (`step_cap_binds`).
 
 **Equal-$\mu$ ties, measured** [EMPIRICAL, on the 128-bit engine — instrumented build over 50,800 simplify
-calls: the 400-expression mined corpus in the `f64` and `permissive` modes, plus 50,000 fuzz
+calls: the 400-expression mined corpus in the `strict` and `permissive` modes, plus 50,000 fuzz
 expressions biased toward coefficient/exponent cost shifts and i128-boundary literals].
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
 fuzz input carrying overflow-magnitude literals, at most 4 per call, none from the
@@ -1097,7 +1097,7 @@ own measure <!-- re-measure after the re-mine: this table -->:
 
 | mode | $\mu(\mathrm{simplify}(e)) \leq \mu(e)$ | strictly cheaper | longer, explicit dialect | of these, at an exact $\mu$ tie | longer, tagged dialect |
 |---|---|---|---|---|---|
-| `f64` | 400/400 | 138 | 73 | 54 | 34 |
+| `strict` | 400/400 | 138 | 73 | 54 | 34 |
 | `permissive` | 400/400 | 197 | 62 | 36 | 32 |
 
 The longer outputs not at a tie are strictly $\mu$-cheaper yet longer: a cheaper literal or
@@ -1140,21 +1140,21 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it [EMPIRICAL:
-srbf's 125,127 model predictions change on a second call 1,632 times in `f64` at cap 4, the former
-default, every one to a cheaper form; uncapped, never, in `f64`, on these and on
+srbf's 125,127 model predictions change on a second call 1,632 times in `strict` at cap 4, the former
+default, every one to a cheaper form; uncapped, never, in `strict`, on these and on
 srbf's ground truths and the training-data generator's inputs]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
 `permissive` is one walk like every mode (its chain, then the search, in its own canon and
 rules), so L3, L6 and the prefix argument for `effort` cover it as they cover every mode. Its
 two steps of its own are ordinary steps: the ground fold is the pass's fold (tried after the
-rules at a node, kept only when the result descends, so L3 holds; `f64` takes the same step), and
+rules at a node, kept only when the result descends, so L3 holds; `strict` takes the same step), and
 the
 landing rounding ρ moves a literal to one of the two floats around it, the one whose shortest
 spelling is cheaper (permissive promises float precision, not the nearest float), and only where
 that spelling is cheaper as an exact codeword than the literal, so ρ never raises a price and the
 descent arguments and T6 are unchanged (idempotent, since a float's shortest spelling is never
-moved). `f64` lands a literal the same way, on the double float64 reads it as. Its
+moved). `strict` lands a literal the same way, on the double float64 reads it as. Its
 search move that joins reciprocal sums is a candidate like the others, accepted only strictly
 below. A literal rounded where it lands is exact from then on, so a later step that combines it
 rounds again: an answer's literal can sit an ulp or more from the correctly rounded value of the
@@ -1171,8 +1171,8 @@ their exponent totals, a function of the multiset of members (§3). On 1,653 gen
 products over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
 bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
 chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
-for 72), no product in `f64` and one in `permissive` reaches two answers (0.14.7:
-616 in `f64`, 687 in `permissive`), and in `f64` none changes on a second
+for 72), no product in `strict` and one in `permissive` reaches two answers (0.14.7:
+616 in `strict`, 687 in `permissive`), and in `strict` none changes on a second
 call at the same effort <!-- re-measure after the re-mine: the 1,653-product counts -->; on the
 route fuzz of 150 products none depends on the nesting in any mode, with the search off or at
 the default (0.14.7 with the search off: 87, 87 and 82). Where the certificate refuses to split an inverse over a product (a
@@ -1194,7 +1194,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | L1 nf termination | structural recursion; the three audited self-calls (`pow`, `fun`/rootn, the even arm's `even_move`) | full suites exercise every self-call site; every spelling to length 5 around the special leaves builds (`test_even_arm_terminates.py`) |
 | G1–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass`, the whole expression's price (`whole_falls`) | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or carried by the whole expression's price) |
-| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends and its members settle; a value f64 holds in pieces prices as its one number |
+| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends and its members settle; a value the float64 domain holds in pieces prices as its one number |
 | composite step | the search's proposal of a refused rebuild (`refused_sites`), accepted by the whole state's descent | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form at the default effort |
 | T6 resource limits | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | a binding cap is a resource limit (a terminating descent can need more steps), not proof of a bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 |
@@ -1206,7 +1206,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 |---|---|---|
 | terms: binary prefix trees | canonical bags (I1–I4) | redefinition required (done here, §2) |
 | cancellation procedure outside the TRS | $\mathrm{nf}$ (§3), much larger | same architectural role; L1 replaces the informal argument |
-| rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on the f64 file of `acj-5-4-llm`: 138,640 of 138,651 rows, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
+| rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on the strict file of `acj-5-4-llm`: 138,640 of 138,651 rows, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
 | termination: length is a reduction order | T-wf/T6: the pair $(\mu, \mathrm{cmp\_ex})$ is a well-founded strict total order (no separate literal-size tier — literal content lives in $\mu$, §5) | **new proof, done here, unconditional** |
 | iteration cap $K = 5$ | `max_passes` | demoted to defense-in-depth: T6 guarantees the fixpoint in finitely many passes |
 | syntactic matching | AC sub-multiset matching with remainder | Peterson–Stickel extension rules; matching soundness is the matcher's contract |

@@ -17,16 +17,16 @@ organised by who you are, then the highlights, then every change in detail.
   `strict,permissive`. `Mode.f64`, `Mode('f64')` and the names `'f64'` and `'default'` select it
   with a `DeprecationWarning` in 0.15 and are removed in 0.16. A file named `rules_f64.json` is
   not read by its name: the 0.15 rule sets are new and the older ones do not serve 0.15.
-- **`permissive` includes `f64`.** Every rule that holds in `f64` holds in `permissive`, and
-  the permissive file covers the f64 file: on each f64 rule's instance, permissive's answer is
+- **`permissive` includes `strict`.** Every rule that holds in `strict` holds in `permissive`, and
+  the permissive file covers the strict file: on each strict rule's instance, permissive's answer is
   no dearer than the rule's right side.
 - **`permissive` promises per rule.** Every rule it applies agrees with the reals' values up
-  to float resolution, or gives a value where its input has none, or holds in `f64` (float64's
+  to float resolution, or gives a value where its input has none, or holds in `strict` (float64's
   values agree); a whole answer carries no such bound, since `floor`, `ceil` and cancellations
   magnify a rounding-sized difference.
 - **A fully numeric part takes its value first.** Each mode reads a fully numeric part by one
   ground evaluator, the one the rule judge and `verify-mine` read too, before any law reaches it,
-  and writes it as the cheapest value the mode admits (see the `f64` and `permissive` notes
+  and writes it as the cheapest value the mode admits (see the `strict` and `permissive` notes
   below). `floor(tanh(100))` and `sin(np.pi)` are 0 and `exp(sin(np.pi))` is 1 in both modes.
 - **Literals on the recognition list.** A decimal literal that float64 reads as exactly the
   double of a short symbolic number is read as that number, in every mode: `3.141592653589793`
@@ -42,7 +42,7 @@ organised by who you are, then the highlights, then every change in detail.
   number is printed by the codeword it is priced at: `x1*5/21` is `5*x1/21` (it was `x1/4.2`, a
   spelling that costs more than the fraction). A value whose
   reduced denominator is at most 24 keeps its fraction or decimal (`25*x1/2`, `0.05*x1`); past
-  that bound the divisor can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`). `f64` writes float64's value of a number where that is cheaper: a
+  that bound the divisor can win for small values too (`x2 + 10/27` is `x2 + 1/2.7`). `strict` writes float64's value of a number where that is cheaper: a
   literal at the double float64 reads it as (`0.1234567890123456789*x0` is
   `0.12345678901234568*x0`), and a number made from literals at the operation on their doubles,
   exact and rounded once (`x0*0.7234567890123457*1.3821548250604163` is
@@ -67,12 +67,12 @@ organised by who you are, then the highlights, then every change in detail.
   `0.4*x1^3 + 2.7*x1^2 + 1.3*x1`, and `x1^2 + 3*x1 + 2` stays as it is (it was
   `x1*(x1 + 3) + 2`). A factor that does not reappear inside is still taken out (`x1*(x2 + x3)`,
   `exp(x1)*(x1 + 1)`). Answers holding such products change, in both modes.
-- **The `real` mode is retired.** The modes are `f64`, for what the deployed float64 evaluator
+- **The `real` mode is retired.** The modes are `strict`, for what the deployed float64 evaluator
   computes, and `permissive`, for training-corpus canonicalisation, which reads the reals'
   values. `Mode.real`, `mode='real'` and a config's `rules_real:` set raise `ValueError` at
   every entry: `simplify`, `load`, the verify APIs and CLIs, `find-rules`, the masking and
-  normalization helpers, and certification. An artifact is two files, `rules_f64.json` and
-  `rules_permissive.json`; `verify_artifact(f64, permissive)` gates it, and `verify_triple`
+  normalization helpers, and certification. An artifact is two files, `rules_strict.json` and
+  `rules_permissive.json`; `verify_artifact(strict, permissive)` gates it, and `verify_triple`
   raises.
 - **Answers and prices change.** The search owns the distributive law, poles are read by their
   limits, numbers stay exact beyond 128 bits, and `complexity` prices each mode in its own
@@ -95,7 +95,7 @@ organised by who you are, then the highlights, then every change in detail.
   `max_passes`, the `effort` budget); a call without it returns the answer alone, as before.
 - **Loading does more up front.** Every rule set named at load is compiled before `load`
   returns, so the first call in each mode answers at once. With `acj-5-4-llm` the process peaks
-  at about 0.7 GB with both sets and about 0.45 GB with `f64` alone; a set left out builds on
+  at about 0.7 GB with both sets and about 0.45 GB with `strict` alone; a set left out builds on
   its mode's first use, in about 3–4 s and about 100 MB.
 - **Messages go through `logging`.** The default-engine announcement and the first-use build of
   a deferred set are WARNING records on the `simplipy` logger, install progress is INFO and an
@@ -129,14 +129,14 @@ organised by who you are, then the highlights, then every change in detail.
   a sidecar (a hand-made set) loads. The acj-4 and acj-4-3 rule files are no longer in the
   package (their configs are).
 
-**`f64` users**
+**`strict` users**
 
-- **What `f64` promises.** `f64` promises the deployed evaluator's value wherever no operation
+- **What `strict` promises.** `strict` promises the deployed evaluator's value wherever no operation
   overflows or underflows. Where one does, a rewrite may give the true value instead, as the
-  constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads f64 rules by
+  constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads strict rules by
   the same standard.
 - **A fully numeric part is float64's value, or the reals' where float64's kind agrees.**
-  `f64` writes a fully numeric part as its double, or as its value in the reals where float64's
+  `strict` writes a fully numeric part as its double, or as its value in the reals where float64's
   two values agree in kind (both finite, two zeros of one sign, the same infinity, both NaN, or
   a range event's true value), whichever is cheaper: `floor(tanh(100))` is 0 (it was 1, float64
   flooring its 1.0), `sin(np.pi)` and `x0*sin(np.pi)` are 0, `exp(sin(np.pi))` is 1 and
@@ -148,13 +148,13 @@ organised by who you are, then the highlights, then every change in detail.
   and `x0 - 1e309` is `-inf`; `x0*exp(1000)/exp(1000)` stays `x0`, the reals giving the part 1
   beside float64's overflow. Where a whole fully numeric part overflows, float64's infinity is
   written where it is the cheaper of the two values the range standard accepts
-  (`3^5000*x1` and `exp(1905)*x1` are `inf*x1`, `log(1e-400)` is `-inf`). A ground rule holds in `f64` where its two sides are one double, or
+  (`3^5000*x1` and `exp(1905)*x1` are `inf*x1`, `log(1e-400)` is `-inf`). A ground rule holds in `strict` where its two sides are one double, or
   have one value in the reals with float64's kinds kept (`exp(sin(np.pi)) -> 1` holds); the
   judge, the mint and `verify-mine`'s gate (`ground_exact`, which replaces `ground_bit_exact` and
   checks both files) read the same evaluator: the mint refuses a fully numeric pick the
   evaluator does not hold in the mode or cannot read (`ceil(atan(tan(1))) -> 1`, whose reals
   sit at the jump), as the judge does.
-- **`f64` reads a zero's sign where it changes a value on a region.** A rule holds in `f64` only
+- **`strict` reads a zero's sign where it changes a value on a region.** A rule holds in `strict` only
   if float64 never gives its two sides zeros of opposite sign, and the reading in kind never
   admits a difference at which one side's value turns on a zero's sign while the other's does
   not, on a set of positive measure: a divisor, `inv`, `pow` and `rootn` at an odd negative
@@ -163,7 +163,7 @@ organised by who you are, then the highlights, then every change in detail.
   hold in `permissive` only; `log(exp(x0)) -> x0`, whose sides differ at x0 = -0 alone, holds.
   A slot that matches any subexpression guards no point: `log(exp(_0)) -> _0` is refused, since
   `_0` can bind `ceil(x1)`, which is -0 on (-1, 0), while the rule with a variable holds.
-- **`f64`'s reading in kind asks the reals to hold only where they give both sides a value.** At a
+- **`strict`'s reading in kind asks the reals to hold only where they give both sides a value.** At a
   point where the reals give one side no value, float64 decides by its own agreement:
   `1/3^t -> (1/3)^t` holds at `_`, where at t = -inf the left side has no real value (1/0) and
   float64 gives +inf on both sides, and so does `cos(atan(tan(_0))) -> abs(cos(_0))`. A
@@ -173,7 +173,7 @@ organised by who you are, then the highlights, then every change in detail.
   1 there.
 - **A constant collapse holds wherever its part has a value.** Where a right side is its left
   side with variable-free parts that hold a constant replaced by constants, each right constant
-  takes its part's own value, float64's in `f64` and the reals' in `permissive`; a constant at
+  takes its part's own value, float64's in `strict` and the reals' in `permissive`; a constant at
   which a part has no finite value is no member (a fitted constant is finite). So
   `tanh(x0 + log(C)) -> tanh(x0 + C)`, `tanh(x0 + 0^C) -> tanh(x0 + C)` and
   `tanh(x0 + exp(C)) -> tanh(x0 + C)` hold in both modes, as the engine already absorbs them. The
@@ -181,26 +181,26 @@ organised by who you are, then the highlights, then every change in detail.
   a double witness, `besselj(x0, exp(C))` at C = 300 parted from its collapse in the reals), and
   the f64 bar no longer refuses a collapse beside `floor`, `ceil` or `mod`.
 - **A right constant the right side does not read takes its left constant's value.**
-  `C*(x1 - x0) -> C*(x0 - x1)` holds in `f64`: where x0 = x1 every value is a witness, and the
+  `C*(x1 - x0) -> C*(x0 - x1)` holds in `strict`: where x0 = x1 every value is a witness, and the
   left constant's own value keeps the zero's sign.
 - **A merged power holds where its exponent's level sets are null.** `x0^x1 * x0^x1 ->
-  x0^(2*x1)` holds in `f64`: the two sides differ only where x0 < 0 and x1 is a half-integer, a
+  x0^(2*x1)` holds in `strict`: the two sides differ only where x0 < 0 and x1 is a half-integer, a
   null set by the certificate the engine reads (the exponent is nonconstant entire), while
   `x0^(floor(x1)/2)` merged to `x0^floor(x1)` is refused.
-- **`f64` reads float64 at a pole no test point holds.** Where a divisor crosses zero, the
+- **`strict` reads float64 at a pole no test point holds.** Where a divisor crosses zero, the
   judge solves for the zero and reads float64 at the doubles nearest it, where an isolated
   pole's infinity is a value: a change of kind there is refused, as at a test point.
-- **`f64` does not promise an infinity's sign at an isolated pole.** Where a part is exactly zero
+- **`strict` does not promise an infinity's sign at an isolated pole.** Where a part is exactly zero
   at an isolated point and an operation reads that zero as a pole (a divisor, `inv`, `pow` and
   `rootn` at a negative exponent), float64's +inf and -inf agree there, as the two zeros do:
   `-1/(x0 - 3) -> 1/(3 - x0)`, `1/(-x1 - 3) -> -1/(x1 + 3)` and `atan(-1/(x0 - 3)) ->
-  atan(1/(3 - x0))` hold in `f64`. The pole is isolated where, along a data variable or a fitted
+  atan(1/(3 - x0))` hold in `strict`. The pole is isolated where, along a data variable or a fitted
   constant, no operation reads a zero as a pole at the neighbouring doubles. An infinity's
   sign on a region stays refused (`1/(0*x0) -> -inf/x0`, +inf against -inf for every x0 > 0), and
   so does a change of kind at a pole (`1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2`, +inf against 1.7e31
   at x0 = 0). The judge's f64 lane and the deployed bar read it; the mint's rows still refuse
   such a difference, a pre-filter that refuses more than the judge.
-- **Where the reals give the left side no value, its limit decides in `f64`.** At a double where
+- **Where the reals give the left side no value, its limit decides in `strict`.** At a double where
   the reals give a rule's left side no value (a pole, 0/0, any undefined operation), isolated along
   a data variable, the answer may take any value where float64 gives the left side NaN or the
   left side has no limit (a two-signed pole); beside an infinity of one sign it is an infinity of
@@ -229,7 +229,7 @@ organised by who you are, then the highlights, then every change in detail.
   (floor, ceil, mod and atan2 place none), by a sign change across it, or by the part's
   least |value| over it falling by 20 orders from 50 to 100 digits; a run they cannot place is
   no point. `1/(-sin(x0) - 1) -> -1/(sin(x0) + 1)` and `1/(-cos(x0) - 1) -> -1/(cos(x0) + 1)` hold
-  in `f64` (+inf against -inf on about 10^8 doubles around -pi/2 and pi, an infinity's sign at a
+  in `strict` (+inf against -inf on about 10^8 doubles around -pi/2 and pi, an infinity's sign at a
   one-signed pole), while `1/(tanh(x0) - 1) -> -1/(1 - tanh(x0))` (float64's tanh is exactly 1
   past 19.06, where the reals have no zero) and `0*asin(x0) -> 0*acos(x0)` stay refused.
 - **Clause (b) reads a rational function of its atoms.** In the reals, a left side built by `+`,
@@ -247,14 +247,14 @@ organised by who you are, then the highlights, then every change in detail.
   its zero set is then null. `(x1*log(x3)/sin(x2) - x1)*sin(x2) -> x1*(log(x3) - sin(x2))` and
   `x0/x0 -> 1` so measure 0 in the reals, where the cells ran past their budget; `log(x0) -
   log(x0) -> 0` (no value for x0 <= 0) and `0/(sqrt(x0)^2 - x0) + 1 -> 1` (a divisor of two
-  atoms of one variable, zero everywhere) are left to the cells, as is every rule in `f64`,
+  atoms of one variable, zero everywhere) are left to the cells, as is every rule in `strict`,
   where a rational function rounds and overflows on whole regions.
-- **`f64` measures no extension where a side respells the other.** Where the whole left side
+- **`strict` measures no extension where a side respells the other.** Where the whole left side
   occurs on the right side under operations that keep it undefined, up to the order of a sum's,
   a product's, a `max`'s or a `min`'s operands, neither side has a value where the other has
   none, and float64's measure is not left undecided by its cells:
   `max(erf(ceil(besseli(x0, 1))), 2.0*x0) -> max(erf(ceil(besseli(x0, 1))), 2*x0)` and
-  `max(sinh(x1), harmonic(x0)) -> max(harmonic(x0), sinh(x1))` hold in `f64` (they were refused,
+  `max(sinh(x1), harmonic(x0)) -> max(harmonic(x0), sinh(x1))` hold in `strict` (they were refused,
   as was every literal respelled or operand reordered inside `besseli`, `bessely` or
   `harmonic`).
 - **A kernel's NaN is no range event.** At x = 800 both terms of `besseli(1, -x) +
@@ -276,12 +276,12 @@ organised by who you are, then the highlights, then every change in detail.
   composition, the like-term laws); the judge rewrites both sides by them and reads the
   rewritten rule by permissive's own criterion. `asin(sin(x0)) -> x0` (pi - 2 against 2 at
   x0 = 2), `acosh(cosh(x0)) -> x0` and `(x0^2)^(1/4) -> x0^(1/2)` hold in `permissive` and stay
-  refused in `f64`; `asin(sin(x0)) -> x0 + 1` is refused in both. Such a rule is the engine's
+  refused in `strict`; `asin(sin(x0)) -> x0 + 1` is refused in both. Such a rule is the engine's
   own step, which no rule file licenses (`engine_owned`). The monitor reads an answer the same
   way: `x1 + asin(sin(x0)) -> x0 + x1` is `permissive`'s.
-- **`f64` reads a fully numeric exponent by its double.** float64 computes `1 + 2` to the double 3
-  before a power or a root reads it, and the judge's measure of `f64`'s clause (b) now reads it so:
-  `pow(x1, 1 + 2) -> pow(x1, 3)` and `rootn(x1, 2 + 1) -> rootn(x1, 3)` hold in `f64` (they were
+- **`strict` reads a fully numeric exponent by its double.** float64 computes `1 + 2` to the double 3
+  before a power or a root reads it, and the judge's measure of `strict`'s clause (b) now reads it so:
+  `pow(x1, 1 + 2) -> pow(x1, 3)` and `rootn(x1, 2 + 1) -> rootn(x1, 3)` hold in `strict` (they were
   refused for an extension over x1 < 0 that float64 does not make).
 - **The monitor reads a step in its context only for a zero's sign.** Each step of the engine is
   held at its own points; what an operation around a step does with float64's rounding of the
@@ -319,13 +319,13 @@ organised by who you are, then the highlights, then every change in detail.
   x0 = 19.06, is refused). And where the left side has an infinity at a pole of the reals that is
   not two-signed, the answer keeps it: `1/sin(x0)^2 -> 1/sin(x0 + 2*pi)^2` (+inf against 1.7e31
   at x0 = 0) is refused, while `1/sin(x0 + 2*pi)^2 -> 1/sin(x0)^2` gains the infinity and is OK.
-- **The monitor reads a fold as a step.** Where an answer as written is refused in `f64`, each
+- **The monitor reads a fold as a step.** Where an answer as written is refused in `strict`, each
   fold of the call is judged as the ground rule it makes (the literals' doubles combined exactly
   and rounded once, or the operation as written; a long literal at its double), and where every
   fold holds, the answer is read with each folded number as the numbers it was made of, through
   the exact products and sums the engine held between folds: `27.940055475362794*(x1 +
   0.2856797429345068*x2) -> 27.940055475362794*x1 + 7.981907865777503*x2` is OK, where the reals
-  refute the answer as written by the fold's rounding. A fold `f64` refuses, or an answer so read
+  refute the answer as written by the fold's rounding. A fold `strict` refuses, or an answer so read
   that the reals refute, keeps the verdict. A number the engine held between folds is read as the
   exact product or sum of two numbers it held, or their product of three, and else as a signed
   sum or a product of three to six of the recorded fold outputs and input literals (the 64 most
@@ -353,7 +353,7 @@ organised by who you are, then the highlights, then every change in detail.
   flat point at 0: `log(exp(sin(x0)))` is `sin(x0)` and `floor(log(exp(x0)))` is `floor(x0)`,
   while `1/log(exp(x0))` stays, float64's `log(exp(t))` being `+0` wherever
   0 < |t| < 1.1e-16.
-- **The laws of powers carry their premises.** `t^y*t^y` is `t^(2*y)` in `f64` only where `t` is not
+- **The laws of powers carry their premises.** `t^y*t^y` is `t^(2*y)` in `strict` only where `t` is not
   `-0` on a region: `ceil(x0)^x1*ceil(x0)^x1` stays, `+inf` against `-inf` at x0 = -0.5, x1 = -0.5.
   A power of a non-integer exponent is read as `>= 0` wherever it has a value: `abs(x0^(1/3))` is
   `x0^(1/3)`.
@@ -361,11 +361,11 @@ organised by who you are, then the highlights, then every change in detail.
   `sqrt(2/(x1*?0))*sinh(?0) -> t` fire on `1/(x1*x3)` and on `sqrt(2/(x1*x3))*sinh(x3)`, whose
   products distribute where the rule's could not.
 - **The log of an inverse is minus the log.** `log(1/t)` is `-log(t)`: in `permissive` for every
-  `t`, and in `f64` where `t` is a monomial (variables, fitted constants and nonzero numbers under
+  `t`, and in `strict` where `t` is a monomial (variables, fitted constants and nonzero numbers under
   integer powers and `abs`), which is 1 only at points: float64's `log(1/t)` is `+0` where
-  `-log(t)` is `-0`, at t = 1, an isolated zero whose sign `f64` does not keep. `log(1/x1)` is
+  `-log(t)` is `-0`, at t = 1, an isolated zero whose sign `strict` does not keep. `log(1/x1)` is
   `-log(x1)` and `1/log(1/x0)` is `-1/log(x0)` in both modes, while `log(1/(x0 + x1))` stays in
-  `f64`.
+  `strict`.
 - **The log of an inverse reads the absolute value of one.** `log(abs(1/t))` is `-log(abs(t))`
   where `log(1/t)` is `-log(t)`: `abs(1/t)` is `1/abs(t)` in every mode, float64 included, so
   `log(abs(1/x0))` is `-log(abs(x0))` as `log(1/abs(x0))` is.
@@ -384,14 +384,14 @@ organised by who you are, then the highlights, then every change in detail.
   them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
   `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit. The infinity float64
   gives a pole at an isolated zero of a sum (`-inf` and `+inf` at `x1 = 3`) is the sign of a zero
-  at a point, which `f64` does not keep; it keeps a zero's sign on a region.
+  at a point, which `strict` does not keep; it keeps a zero's sign on a region.
 - **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/4)` is `+0`,
   the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
-  an exact zero is inverted, `f64` keeps the sign float64 gives it: `1/(x1*(x2 - x2))` is
+  an exact zero is inverted, `strict` keeps the sign float64 gives it: `1/(x1*(x2 - x2))` is
   `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `permissive` reads one zero, and
   `1/0` has no value there (the limit rule), so it is NaN.
 - **A product's zero keeps its sign wherever a later step reads it.** Float64's `0*t` is -0
-  wherever `t < 0`, and an inverse or `atan2` reads that sign, so `f64` keeps a factor whose sign
+  wherever `t < 0`, and an inverse or `atan2` reads that sign, so `strict` keeps a factor whose sign
   may vary beside the zero, and the zero carries the product's sign: `1/(x0/float("-inf"))` is
   `-inf/x0` (it was `inf/x0`), `1/(0*x0 + 0*x1)` keeps its sum (it was `inf`; float64 gives
   `-inf` wherever both are negative), `1/atan(0*x0)` is `inf/x0` (a head that keeps a zero keeps
@@ -409,9 +409,9 @@ organised by who you are, then the highlights, then every change in detail.
   keeps its product. Where nothing reads the zero (the answer, `exp`, `cos`, `abs`, an even
   power, a sum with a term that is not -0 on a region) such a sum takes its orientation as
   before: `-ceil(x0) - floor(x1)` is `-(ceil(x0) + floor(x1))`.
-- **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
-  integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
-  and one sign bit; `permissive` reads it as 0. An `f64` ground fold writes its float
+- **`strict` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
+  integer `-0` is Python's +0) keeps its sign in `strict` and is printed `-0.0`, priced as the zero
+  and one sign bit; `permissive` reads it as 0. A `strict` ground fold writes its float
   exactly, -0 included, and the floats of pi and e as `np.pi` and `np.e`: `1/(-0.0)` is `-inf`
   (it was `inf`), `atan2(0, -0.0)` is `np.pi` (it was `0`), `x + -0.0` is `x`. A written
   product or negation of numbers that is zero takes float64's sign: `-1*0`, `0*(-2)` and `-(0)`
@@ -426,9 +426,9 @@ organised by who you are, then the highlights, then every change in detail.
   `(-inf)^-2` is `0`. A zero beside a variable carries its sign too (above); as an answer it is
   `0` (`x1*0` and `x1/float("-inf")` are `0`). A nonzero literal that underflows to -0 stays
   the leaf it is written as.
-- **Known `f64` limit: a zero term at -0.** `x + 0` is `x`, and `x1 + sin(0)` is `x1`: at the
+- **Known `strict` limit: a zero term at -0.** `x + 0` is `x`, and `x1 + sin(0)` is `x1`: at the
   single point `x = -0` the answer is -0 where float64's sum is +0 (`-0 + 0 = +0`). A point is
-  a null set, whose zero sign `f64` does not keep. A term that is -0 on a whole region keeps the
+  a null set, whose zero sign `strict` does not keep. A term that is -0 on a whole region keeps the
   zero: `ceil(x1) + 0` and `2*ceil(x1) - ceil(x1)` are `ceil(x1) + 0`, since `ceil(x1)` is -0 on
   all of (-1, 0). `x + -0.0` is `x` exactly, since float64's `x + -0` is `x` at every `x`, -0
   included.
@@ -458,7 +458,7 @@ organised by who you are, then the highlights, then every change in detail.
   `1/x^2` agree everywhere; `pow(-inf, 0)` is 1, and `mod(0, inf)` has no value (the remainder
   tends to 0 along (1/n, n) and to +inf along (-1/n, n)). A fully numeric expression takes this
   value: `pow(0, -2)` and `rootn(0, -2)` are NaN (they were inf), `mod(0, atanh(1))` is NaN (it
-  was 0), `pow(-inf, 0)` is 1 (it was NaN). The rule judge reads the same values; `f64` follows
+  was 0), `pow(-inf, 0)` is 1 (it was NaN). The rule judge reads the same values; `strict` follows
   the evaluator and does not change.
 - **A fully numeric part takes the table's value first.** A part without a value is NaN and
   absorbs the expression around it: `0*tan(asin(1))`, `pow(tan(asin(1)), 0)` and
@@ -475,14 +475,14 @@ organised by who you are, then the highlights, then every change in detail.
 - **The ground fold is a step of the chain**, kept only where it is cheaper (`asin(1e-8)` is
   `1e-8`).
 - **The sign of an infinity is kept**: distributing over an infinity needs certified
-  finiteness, as in `f64` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
+  finiteness, as in `strict` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
 - **Like terms cancel before an infinity absorbs them.** A part with a variable beside an
   infinity is one term to the like-term cancellations, which run first:
   `(x0 + inf)/(x0 + inf)` and `(x0 + inf)*(1/(x0 + inf))` are 1, `2*(x0 + inf)/(x0 + inf)` is 2
   and `(x0 + inf) - (x0 + inf)` is 0 (they were NaN); what is left is absorbed, so `x0 + inf`
   is `inf`. The reciprocal of an infinity is its 0 at once, so `(0.5 - x1)/(exp(x2)/inf)`,
   a division by zero, is NaN (it was a signed infinity).
-- **The lean profile.** A worker that needs inference only loads `modes=('f64',)`, about
+- **The lean profile.** A worker that needs inference only loads `modes=('strict',)`, about
   0.45 GB with `acj-5-4-llm`; `permissive` then builds on its first use.
 
 **Publishers of rule files**
@@ -501,12 +501,12 @@ organised by who you are, then the highlights, then every change in detail.
 - The rule judge reads poles by their limits and judges one criterion per mode (see In detail):
   a file mined before this version can fail `verify-mine` where a rule read `1/0` as `+inf` or
   tolerated an extension at a single point. `verify_ruleset` has a ninth bucket,
-  `UNDECIDED-MEASURE`, and the tiers are `core` (holds in f64, and so in permissive),
+  `UNDECIDED-MEASURE`, and the tiers are `core` (holds in strict, and so in permissive),
   `permissive` (holds in permissive alone) and `reject`, read off one registry
   (`simplipy.verify.TIERS`). A fully numeric rule is read by each mode's own value of it: `core`
   where both modes hold it, `permissive` where only permissive does, and `reject` where only
-  `f64` does, since `f64`'s ground fold writes every fully numeric part as the cheapest value it
-  admits and no file needs such a rule (`floor(tanh(100)) -> 1` holds in `f64` and is
+  `strict` does, since `strict`'s ground fold writes every fully numeric part as the cheapest value it
+  admits and no file needs such a rule (`floor(tanh(100)) -> 1` holds in `strict` and is
   `reject`). Where two `?` slots that coincide make an instance the judge cannot read (its
   literals past the table's reach), the rule is `UNRESOLVED-COVERAGE` there, never `KILL`.
 - A fully numeric rule mints no orientation twin at the load: its negation is another fully
@@ -526,7 +526,7 @@ organised by who you are, then the highlights, then every change in detail.
   refuses is clean for no file. `verify_ruleset` takes `engine=`, the operators the policies
   are read with (by default a rule-less engine over the operators the file's provenance sidecar
   records, else over the judge's vocabulary), and each offender carries `refused_by`.
-- `verify_artifact(f64, permissive, engine_config=)` checks the two rule sets it is given (the
+- `verify_artifact(strict, permissive, engine_config=)` checks the two rule sets it is given (the
   config contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which
   ships in the wheel, when `corpus_rows` is not given.
 - <!-- PENDING the re-mine: name the new artifacts and the pinned revision here. -->The rule
@@ -536,8 +536,8 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Users of the miner API**
 
-- `find_rules` mines `rules_f64.json` and `rules_permissive.json` each in its own mode (the
-  permissive mine is offered the f64 file), and writes a checkpoint after every completed
+- `find_rules` mines `rules_strict.json` and `rules_permissive.json` each in its own mode (the
+  permissive mine is offered the strict file), and writes a checkpoint after every completed
   length, which a rerun of the same mine resumes from; the rerun takes a mode whose file is
   already final as it is.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
@@ -547,7 +547,7 @@ organised by who you are, then the highlights, then every change in detail.
   (CLI `-s/--save-every`) is removed: the rule file is written once, when the mode's mine ends
   (see Removed).
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
-  keyword `rule_mode` (`'f64'` or its alias `'default'`, or `'permissive'`), and
+  keyword `rule_mode` (`'strict'` or its alias `'default'`, or `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
 - The sidecar's `gates.unlicensed` rows are `[lhs, rhs, tier, refused_by]` and each of its
   `gates.overlaps_refused` carries `refused_by`, the named policies that refuse it.
@@ -557,10 +557,10 @@ organised by who you are, then the highlights, then every change in detail.
   it explicitly (see Removed).
 - `N_PTS` and `THRESH` are no longer read; `utils.remove_pow1` and
   `explicit_constant_placeholders(convert_numbers_to_constant=)` are removed.
-- `certify_rules` takes a required keyword `mode` (`'f64'` or `'permissive'`): its chain runs in
+- `certify_rules` takes a required keyword `mode` (`'strict'` or `'permissive'`): its chain runs in
   that mode and it keeps only the rules that mode licenses. It returns
   `simplipy.mining.CertifiedRule` `(source, target, certificate, mode, basis)`; it certified in
-  `permissive` and returned triples, which the documented example installed into the f64 set.
+  `permissive` and returned triples, which the documented example installed into the strict set.
 
 ### Highlights
 
@@ -744,18 +744,18 @@ model predictions.
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the
      simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
      predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
-     400-row corpus f64 takes 26% more time than 0.14.7, real 14% more, permissive 52% less. -->
+     400-row corpus strict takes 26% more time than 0.14.7, real 14% more, permissive 52% less. -->
 - **Faster canonical forms.** Placing the signs of a nested sum asked the same flip four times per
   nesting level, so an expression nested `d` deep cost `4^d` flips: even with the faster products
-  below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `f64` with the search off, and a
+  below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `strict` with the search off, and a
   73-token nested input 25 s in `permissive` (0.14.7: over 4 minutes at 8 deep). The flip is now
   computed once per call (0.006 s and 0.11 s), and the matcher no longer copies the expressions it
   compares. Answers are byte-identical.
 - **A pole is read by its limits.** Where the two sides of a pole disagree (`1/(x1 - 3)` at
   `x1 = 3`), the value there is not part of the function; where they agree, the answer has that
-  limit. In `f64` too: float64 gives a pole at an isolated zero of a sum the infinity of the sign
+  limit. In `strict` too: float64 gives a pole at an isolated zero of a sum the infinity of the sign
   written (a sum is `+0` at its zero in either orientation), which is the sign of a zero at a
-  point, and `f64` keeps a zero's sign only on a region. So the factors over one sum (the sum, its
+  point, and `strict` keeps a zero's sign only on a region. So the factors over one sum (the sum, its
   negation and its constant multiples, and odd functions, odd roots and odd powers of them, read
   through products) form one class, written in one orientation with the sign in the coefficient,
   in every mode: `-1/(x1 - 3)` and `1/(3 - x1)` are one answer, `1/(3 - x1)`, and so are
@@ -764,7 +764,7 @@ model predictions.
   and the input give `+inf` there), and `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf` (0.14.7:
   `1/(x1 - 3)/(6 - 2*x1)`, `+inf`). A sum that holds the class's sum as an exact polynomial factor
   is read in the class too, odd or even in it by the multiplicity of that factor, where the class's
-  sum is linear in one of its variables: `9 - x1^2` is `-(x1 - 3)*(x1 + 3)`, so in `f64`
+  sum is linear in one of its variables: `9 - x1^2` is `-(x1 - 3)*(x1 + 3)`, so in `strict`
   `1/((9 - x1^2)*(x1 - 3))`, `1/((x1^2 - 9)*(3 - x1))` and `-1/((x1^2 - 9)*(x1 - 3))` are one
   answer, `-1/((x1 - 3)*(x1^2 - 9))`, `-inf` at `x1 = 3` like their limit (the first two inputs
   give `+inf` there). Only a factor proven by exact polynomial division counts, and its cofactor's
@@ -832,16 +832,16 @@ model predictions.
   cost the same, and the answer is `x1*tanh(-3)`. `exp(-x1)` is now two bits cheaper than
   `1/exp(x1)` (they cost the same before, and the reciprocal had fewer signs). Against the same
   code with the old prices, at the default effort: on srbf's ground truths 675 answers change in
-  `f64` (143 cheaper, 12 dearer, the rest the same price), 703 in `real` (166, 13) and 905 in
-  `permissive` (257, 49); on a tenth of the training-data inputs 2,540 in `f64` (666, 16), 2,562
+  `strict` (143 cheaper, 12 dearer, the rest the same price), 703 in `real` (166, 13) and 905 in
+  `permissive` (257, 49); on a tenth of the training-data inputs 2,540 in `strict` (666, 16), 2,562
   in `real` (670, 17) and 2,858 in `permissive` (908, 31); on a tenth of the model predictions
-  2,111 in `f64` (166, 15), 2,113 in `real` (169, 16) and 2,720 in `permissive` (332, 33). No
+  2,111 in `strict` (166, 15), 2,113 in `real` (169, 16) and 2,720 in `permissive` (332, 33). No
   answer changes on a second call. The dearer answers are the search ending at another local
   minimum, or a cancellation the shipped rule files reach only through the old spelling
   (`exp(u)/exp(u)` cancels, `exp(u)*exp(-u)` does not), which the re-mine under these prices
-  addresses. The staged `acj-4` asset's f64 file loses 2 rows to the load gate (their sides now
+  addresses. The staged `acj-4` asset's strict file loses 2 rows to the load gate (their sides now
   climb: `-exp(-x)` is cheaper than `-1/exp(x)`). The permissive answer on the corpus row where it
-  priced a bit above `f64`'s now matches `f64`'s price. The measure fingerprint gains three sign
+  priced a bit above `strict`'s now matches `strict`'s price. The measure fingerprint gains three sign
   probes (`-2`, `neg x0`, `* neg x0 x1`); sidecars that predate them do not record them, so
   loading stays silent.
 - **The engine folds the NaN facts the rule files carried.** A root whose index is a ground
@@ -853,26 +853,26 @@ model predictions.
   interval: where that holds an integer the root stays (`rootn(x1, acos(cos(1)))`). The interval
   also reads a positive base under a non-integer exponent by its corner powers, so
   `acosh(1/pi^(1/6))` is NaN. The published `acj-5-4-llm` files hold 110,122 rules with a NaN
-  answer in `f64` (110,135 in each other mode), 106,130 of them about roots. With every one of
-  them removed, the engine alone answers 108,323 of them NaN in `f64` (108,365 in `real`,
+  answer in `strict` (110,135 in each other mode), 106,130 of them about roots. With every one of
+  them removed, the engine alone answers 108,323 of them NaN in `strict` (108,365 in `real`,
   108,470 in `permissive`); the rest are roots whose index is exactly an integer that the float
   evaluator rounds off it, or families the interval cannot bound. Answers do not change on
   srbf's ground truths and on a tenth of the training-data inputs, in any mode, with or without
   those rules, nor on a tenth of the model predictions; without them the engine holds 215 MB
   after loading every mode, where the published files take 839 MB.
-- **`f64` folds a ground constant as a step of the walk.** The constructor folded a function of
+- **`strict` folds a ground constant as a step of the walk.** The constructor folded a function of
   one literal to its float, bottom-up, so an enclosing node never saw the expression it came from:
   `rootn(exp(19.11787581094798), 2)` was `rootn(200811218.03870487, 2)` (66,912 milli-bits). The
   fold is now the pass's step, as in `permissive`: tried after the rules at each node, enclosing
   nodes first, and kept only where it is cheaper, so that expression is `14170.787488305119`
   (58,354). The value folded is the deployed evaluator's, each literal read at the float nearest
   to it, and it now reaches every ground node, not only a function of one literal: `cos(pi)` is
-  `-1` and `acos(0)/pi` is `1/2` by the walk, so an `f64` mine no longer needs them as rules, as a
+  `-1` and `acos(0)/pi` is `1/2` by the walk, so a `strict` mine no longer needs them as rules, as a
   `permissive` mine did not. Every reading prices a ground constant as written now:
-  `complexity(['asin', '1e-08'], mode='f64')` is 13,170 (was 5,170), and `simplify` still answers
+  `complexity(['asin', '1e-08'], mode='strict')` is 13,170 (was 5,170), and `simplify` still answers
   `1e-8`; the readings the mine's sources and the rule load use keep `cos(0)` too. The measure
-  fingerprint gains the probe `atanh tanh x0`, which `f64` reads apart from the other modes. On
-  srbf's ground truths 22 `f64` answers change, all cheaper; on a tenth of the training-data
+  fingerprint gains the probe `atanh tanh x0`, which `strict` reads apart from the other modes. On
+  srbf's ground truths 22 `strict` answers change, all cheaper; on a tenth of the training-data
   inputs 241 (164 cheaper, 6 dearer: a whole ground node folded where folding its parts first
   reached a cheaper exact form) and on a tenth of the predictions 51 (50 cheaper). `real` and
   `permissive` answers do not change, and none changes on a second call.
@@ -884,11 +884,11 @@ model predictions.
   the training-data inputs 724 (610 cheaper, 9 dearer) and on a tenth of the predictions 7,621
   (5,890 cheaper, 270 dearer); the dearer ones are literals combined from several landed literals,
   each landing moving less than an ulp, which can end farther from the single rounding. No answer
-  changes on a second call, and `f64` and `real` do not change.
+  changes on a second call, and `strict` and `real` do not change.
 - **The inverse pairs collapse wherever their laws hold.** Float64's round trip through a function
   and its inverse drifts by many units in the last place while both sides stay finite
   (`atanh(tanh(t))` is past 8 ulps from `t` from |t| ≈ 2.7 on), and the drift keeps float64's
-  kind of the value. `f64` held each pair to a band of the rounding it measured (a floor of 1 on
+  kind of the value. `strict` held each pair to a band of the rounding it measured (a floor of 1 on
   `log∘exp` and `acosh∘cosh`, a ceiling of 710 on `sinh∘asinh` and of 2 on `atanh∘tanh`). Each
   pair is now a law of the catalogue with the judge's premises: `asinh(sinh(t))` and
   `sinh(asinh(t))` are `t` for every `t`; `atanh(tanh(t))` is `t` where `|t|` is shown at most 19,
@@ -906,7 +906,7 @@ model predictions.
   `floor(x0)` and `1/exp(log(exp(x0)))` is `1/exp(x0)`, while `1/log(exp(x0))`,
   `log(log(exp(x0)))`, `1/sin(log(exp(x0)))` and `1/(1/log(exp(x0)))` stay as written. Where an
   overflow or an underflow comes between, the collapse gives the true value. A zero's sign that
-  `f64` reads on a region keeps a pair whose collapse would turn it: `log(exp(ceil(x0)))` stays
+  `strict` reads on a region keeps a pair whose collapse would turn it: `log(exp(ceil(x0)))` stays
   under an inverse, `log(exp(-0))` being `+0`, and so do `1/exp(log(t))` and `1/|t|` for a
   `t >= 0` that is -0 on a region (`sqrt(ceil(x0))` on (-1, 0)). A zero's sign reads an odd
   negative power as `-0` only where its base is negative (at `-inf`, or by underflow), so `1/|t|`
@@ -921,7 +921,7 @@ model predictions.
   srbf's ground truths, a tenth of the training-data inputs
   and a tenth of the predictions do not change in either mode, and no answer changes on a second
   call.
-- **`f64` writes a fully numeric part's real value as its own double.** `f64`'s fold offered a
+- **`strict` writes a fully numeric part's real value as its own double.** `strict`'s fold offered a
   part's value in the reals only where the table carries it exactly (a rational, a multiple of
   pi, an infinity) or as the recognition list's entry of its double, so `atanh(tanh(2))`, whose
   float64 value is 1.9999999999999996, stayed as written. It now offers the real value's own
@@ -931,7 +931,7 @@ model predictions.
   float64's overflow and which costs less than `inf`. A decimal is the rational it spells, so
   `1e400/1e400` is 1 (float64 reads the leaves as `inf` and gives NaN, a range event). An
   exponent, a root index and a Bessel order read more than a part's kind, its integrality and
-  parity (a negative base under an exponent that is no integer is NaN), so there `f64` writes a
+  parity (a negative base under an exponent that is no integer is NaN), so there `strict` writes a
   fully numeric part only as float64's own double, by the fold and by a rule step:
   `rootn(x1, acos(cos(1)))`, `rootn(x1, exp(log(3)))`, `x1^exp(log(3))` and
   `besselj(exp(log(3)), x1)` stay, float64's index, exponent and order being 0.9999999999999999
@@ -940,7 +940,7 @@ model predictions.
   On srbf's ground truths, a tenth of the training-data inputs and a tenth of the predictions no
   answer changes in either mode, and none changes on a second call.
 - **`erfc` is never `-0`.** Its float64 zero is `+0`, by underflow past x = 27.2, and the zero-sign
-  test (`signed_zero_null`) now knows it, as it knows `exp`'s: the `f64` laws whose premise is a
+  test (`signed_zero_null`) now knows it, as it knows `exp`'s: the `strict` laws whose premise is a
   part that is not `-0` on a region hold of it. `log(exp(erfc(x1)))` is `erfc(x1)` where nothing
   reads its flat point, and `erfc(x1) + 0` is `erfc(x1)`; `1/log(exp(erfc(x1)))` stays. No answer of
   srbf's ground truths, a tenth of the training-data inputs or a tenth of the predictions changes,
@@ -953,13 +953,13 @@ model predictions.
   variable, `abs`, a function that is `-0` on a region, a square root that keeps `-0`, a positive
   function, one that vanishes on a region, a log), at the root and under an inverse. One premise
   changes: the two sides of `t^y*t^y = t^(2*y)` part where `t` is `-0` and `2*y` an odd integer,
-  `+0` or `+inf` against `-0` or `-inf`, a value where the input has one, so in `f64` a `t` that is
+  `+0` or `+inf` against `-0` or `-inf`, a value where the input has one, so in `strict` a `t` that is
   `-0` on a region keeps its occurrences apart (`ceil(x0)^x1*ceil(x0)^x1`, `+inf` against `-inf` at
   x0 = -0.5, x1 = -0.5); where `t` is never `-0` on a region the merge stands on the level sets of
   `y`, as before (`x0^x1*x0^x1` is `x0^(2*x1)`, `y` nonconstant entire, the certificate the judge
   reads). And a power of a non-integer exponent is the principal power, `>= 0` wherever it has a
   value (NaN on a negative base), which the premises that read `t >= 0` now know: `abs(x0^(1/3))` is
-  `x0^(1/3)`. The other premises are the guards as they were. Where `f64` keeps a step the judge
+  `x0^(1/3)`. The other premises are the guards as they were. Where `strict` keeps a step the judge
   holds, the cause is named: the distribution keeps a product holding a sum that vanishes on a
   region whole, for the sign trades that follow (`(x1*(x0 - abs(x0))^2)^-3`); a negative odd inner
   power composes over a leaf alone (`(sin(x0)^-1)^(1/2)`); and an odd root under an integer power
@@ -968,7 +968,7 @@ model predictions.
   `permissive`'s powers compose, for every `t`. Under an inverse float64's `x ** 0.5`, numpy's
   `sqrt`, keeps the `-0` of an isolated point where `rootn(x, 2)` or `x^(3/2)` gives `+0`, so
   `1/x0^(1/2) -> 1/rootn(x0, 2)` and `1/(rootn(x0, 2)*x0) -> 1/x0^(3/2)` are `-inf` against `+inf`
-  at x0 = -0 alone: the sign of an infinity at an isolated pole, which `f64` does not promise, and
+  at x0 = -0 alone: the sign of an infinity at an isolated pole, which `strict` does not promise, and
   the judge holds both.
 - **The laws of signs and orientation are named.**
   `class.sign_trade`, `class.pole_orientation`, `class.opposite_sums`,
@@ -977,32 +977,32 @@ model predictions.
   asked by its name. Each premise was measured against the judge over sums of every kind it reads
   (zero on a line, at an isolated point, on a region, on a half-line, never zero) and arguments of
   every kind (a variable, a function that is `-0` on a region, an odd function, a sum), at the root
-  and under an inverse. In `f64` the premises keep the sign of a zero on a region: a sign trades
+  and under an inverse. In `strict` the premises keep the sign of a zero on a region: a sign trades
   into a sum only where the sum holds no sign (`add.content`'s premise), so a negated site keeps
   the sign of a zero on a region under an odd power (`1/(-(ceil(x0) + floor(x1)))^3` is
-  `-1/(ceil(x0) + floor(x1))^3`), and `fun.atan2_sign` is a step of `f64` alone. The sign of a
+  `-1/(ceil(x0) + floor(x1))^3`), and `fun.atan2_sign` is a step of `strict` alone. The sign of a
   sum's zero at an isolated point, and so the sign of the infinity a pole makes of it, is no value
   kept (`-1/(x0 - 3)` is `1/(3 - x0)`, `-inf` against `+inf` at x0 = 3, and
-  `1/(x0 - 3) + 1/(3 - x0)` is 0). Where `f64` and the judge read a step apart, the cause is named:
+  `1/(x0 - 3) + 1/(3 - x0)` is 0). Where `strict` and the judge read a step apart, the cause is named:
   a step that moves only a zero's sign at its own root, which the judge reads where two variables
   coincide (`-sin(x0 - x1) -> sin(x1 - x0)`); a coincidence whose measure the
   judge does not decide (`(x0 - x1)/(x1 - x0) -> -1`); and `permissive`'s one zero, under which it
   takes no `atan2` step of its own. The sign of an isolated zero, and so of the infinity a pole
-  makes of it, the judge does not read either (`-1/(x0 - 3) -> 1/(3 - x0)` holds in `f64`), nor a
+  makes of it, the judge does not read either (`-1/(x0 - 3) -> 1/(3 - x0)` holds in `strict`), nor a
   value at an isolated pole whose infinity takes both signs (`1/(x0 - 3) + 1/(3 - x0) -> 0` holds
-  in `f64`). An unlimited search (`effort=None`) now ends where its endpoint, landed and
+  in `strict`). An unlimited search (`effort=None`) now ends where its endpoint, landed and
   descended, offers it no move: the root's landing releases the sums a construction held, and a
   released state could offer a move a second call took.
 - **`besseli` reads its argument's parity.** `I_n(-t) = (-1)^n I_n(t)` for an integer order
   `n >= 0` joins the catalogue as `fun.besseli_parity`: `besseli(2, -x1)` is `besseli(2, x1)`,
   `besseli(0, x2 - x1)` is `besseli(0, x1 - x2)` and `besseli(1, -2*x1)` is `-besseli(1, 2*x1)`;
   all stayed as written. The kernel is even bit for bit at an even order; at an odd one it is odd
-  but at a zero, where it gives `+0` for either sign, so `f64` moves an odd order's sign only where
+  but at a zero, where it gives `+0` for either sign, so `strict` moves an odd order's sign only where
   its argument vanishes on no region (`besseli(1, -ceil(x0))` stays, `+0` on (-1, 0) where
   `-besseli(1, ceil(x0))` is `-0`), and under an inverse the sign of the argument's isolated zero
   is no value kept (`1/besseli(1, -x0)` is `-1/besseli(1, x0)`, `+inf` against `-inf` at
   x0 = 0). `besseli(1, -x1) + besseli(1, x1)` is 0 in `permissive`;
-  in `f64` its two terms stay, the kernel being NaN for 0 < |x1| <= 2.2e-308.
+  in `strict` its two terms stay, the kernel being NaN for 0 < |x1| <= 2.2e-308.
 - **A slot in a divisor's product matches its instances.** A rule's left side is read as a pattern,
   whose slot may bind a member that vanishes on a region, so an odd negative power of a product
   holding a slot stays whole where the pattern's members cannot license `pow.distribute`
@@ -1011,19 +1011,19 @@ model predictions.
   reading as written, and the distributed reading matches where the binding's members license the
   distribution, read at bind time: `1/(x1*?0) -> t` fires on `1/(x1*x3)`, and
   `sqrt(2/(x1*?0))*sinh(?0)`, the half-integer Bessel functions' closed forms, fires on its
-  instances in both modes. In `f64` an instance spelled as two inverses over a member that vanishes
+  instances in both modes. In `strict` an instance spelled as two inverses over a member that vanishes
   on a region with a zero of no sign of its own (`1/x1*1/abs(x2 - abs(x2))`) is no instance of the
   product's inverse and keeps its value, while the product's own inverse, held whole as the pattern
   is, matches the reading as written.
 - **`log(1/t)` is `-log(t)`.** The law `fun.log_inverse` joins the catalogue beside `fun.log_exp`
   and `fun.exp_log`. Float64's `log(1/t)` is `+0` where `-log(t)` is `-0`, wherever `t` is 1, so
-  `f64` takes it where that is no change of kind. Its argument is a monomial, a product of
+  `strict` takes it where that is no change of kind. Its argument is a monomial, a product of
   variables, fitted constants and nonzero numbers, each perhaps under an integer power or `abs`,
   whose float64 value is 1 only at points; an argument float64 rounds to 1 on a region is none:
   `log(1/exp(x0))`, `log(1/ceil(x0))` and `log(1/(x0 + x1))` stay, the two sides being `+0` and `-0`
   wherever |x0| < 1.1e-16, on (0, 1] and wherever x0 + x1 rounds to 1. Over a monomial the two
   sides part only in the sign of a zero at an isolated point, and the sign of the infinity a pole
-  makes of it, which `f64` does not keep, so the law holds under every head: `log(1/x0)` is
+  makes of it, which `strict` does not keep, so the law holds under every head: `log(1/x0)` is
   `-log(x0)`, `sin(log(1/x0))` is `-sin(log(x0))`, `1/log(1/x0)` is `-1/log(x0)` (`+inf` against
   `-inf` at x0 = 1 alone) and `log(1/x0)^-3` is `-1/log(x0)^3`. `permissive` reads one zero, so
   there the law holds for every `t`: `log(1/(x0 + x1))` is `-log(x0 + x1)`. In both modes the collapse waits for the root's walk, after the constructors, so
@@ -1034,7 +1034,7 @@ model predictions.
 - **The search's laws are named, each with its premise.** `search.distribute`,
   `search.pow_expand`, `search.factor` and `search.reciprocal_join` join the catalogue, each asked
   by its name. The distributive law's two sides differ only where a piece it multiplies into two or
-  more terms, or collects out of them, is infinite, so in `f64` that piece is infinite only at
+  more terms, or collects out of them, is infinite, so in `strict` that piece is infinite only at
   points and may have no value on a region (it had to be finite almost everywhere): a content with
   no value on a region factors, `x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)` and
   `log(x0)*x1 + log(x0)` is `log(x0)*(x1 + 1)`, as in `permissive`. A pole that two or more
@@ -1058,16 +1058,16 @@ model predictions.
   negation twin the load mints from a rule (`settle.negation_twin`) and `permissive`'s joined
   reciprocals in its answer (`perm.reciprocal_projection`) join the catalogue. A node tries the
   first refused fire in the rules' order by the whole expression's price, and a node above a
-  refusal stays memo-marked while nothing changes. On the three sets, 268 `f64` calls and 442
+  refusal stays memo-marked while nothing changes. On the three sets, 268 `strict` calls and 442
   `permissive` calls take a step by the whole expression's price, and 13 and 27 answers change
-  (`f64` 173 bits cheaper in all, `permissive` 44 bits); no answer there needs the search's
+  (`strict` 173 bits cheaper in all, `permissive` 44 bits); no answer there needs the search's
   composite step.
 - **A long sum factors by its whole content.** The search read every two terms of a sum, so 64 terms
   meant 2,016 pairs and a second per call, and a longer sum was not factored at all. A round now
   tries a sum's pairs only after every other move found nothing, the content every term shares
-  among those first: `x0*x1 + ... + x0*x64` factors `x0` out in 13 ms in `f64`, a 200-term sum in
+  among those first: `x0*x1 + ... + x0*x64` factors `x0` out in 13 ms in `strict`, a 200-term sum in
   0.16 s, and past 64 terms a sum still factors its whole content and its shared bases. On the three
-  sets 61 `f64` and 71 `permissive` answers end at another of the search's valleys, 186 and 201 bits
+  sets 61 `strict` and 71 `permissive` answers end at another of the search's valleys, 186 and 201 bits
   dearer in all.
 - **A call says when a resource cap stopped it.** `simplify(..., return_status=True)` returns the
   answer with a `SimplifyStatus` (`simplipy.SimplifyStatus`), whose `interrupted` is true where a
@@ -1083,18 +1083,18 @@ model predictions.
   `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and
   `exp(u)*exp(-u)` is `1` wherever `u` is finite, as `exp(u)/exp(u)` is. Since a sign costs one
   bit, `exp(-u)` is the cheaper spelling of `1/exp(u)`, and nothing cancelled it against
-  `exp(u)`. The law is exact on the extended reals; under the f64 evaluator the two sides differ
+  `exp(u)`. The law is exact on the extended reals; under the float64 evaluator the two sides differ
   where an `exp` overflows or underflows (`exp(800)*exp(-800)` is `inf*0 = nan`, `exp(0)` is
-  1), where `f64` accepts the true value, and by the rounding of the summed exponent
+  1), where `strict` accepts the true value, and by the rounding of the summed exponent
   (`exp(x1)*exp(1.7)` against `exp(x1 + 1.7)`, measured on 40,002 points per band: at most 8 ulps
   for `|x1| <= 12.3`, 26 up to 100, 152 up to 300 and 410 up to 700). A rule stating the law, in
   either direction, has one
   canonical state on both sides and the load refuses it as subsumed. The published
-  `acj-5-4-llm` files serve 16 rows fewer in `f64` (2 subsumed, 14 now duplicating the left side
+  `acj-5-4-llm` files serve 16 rows fewer in `strict` (2 subsumed, 14 now duplicating the left side
   of another row), 57 in `real` and 55 in `permissive` (all subsumed). Ground truth 2255 rests at
   77,000 milli-bits (94,000 before) and
   1299 at 64,000 (75,000). Against the previous build, at the default effort: on srbf's ground
-  truths 38 answers change in `f64` (19 cheaper, 1 dearer, 18 rereading to the same state), 38
+  truths 38 answers change in `strict` (19 cheaper, 1 dearer, 18 rereading to the same state), 38
   in `real` (19, 1) and 69 in `permissive` (49, 1); on a tenth of the training-data inputs 3, 4
   and 3, none cheaper or dearer; on a tenth of the predictions 14, 14 and 13 (`permissive`: 2
   cheaper, 2 dearer; the other modes 1 dearer). The dearer answers are the search ending
@@ -1113,7 +1113,7 @@ model predictions.
   two spellings now give one skeleton for every row (one row gave two). srbf's ground truths,
   predictions and the training-data inputs hold no `<constant>`, and none of their answers
   changes in any mode.
-- **A zero keeps its IEEE sign where it is inverted, in `f64` and `permissive`.** Their evaluator
+- **A zero keeps its IEEE sign where it is inverted, in `strict` and `permissive`.** Their evaluator
   is float64, whose zero carries the sign of what formed it: `x1*(x2 - x2)` is `-0` wherever
   `x1 < 0`, and its inverse `-inf`. The inverse of a product that holds an exact zero now
   distributes over its members, the zero giving `+inf` and each other member its own power, which
@@ -1124,14 +1124,14 @@ model predictions.
   `inf*x`). The canonical form holds one exact zero, so a sign a derived zero takes through an
   odd function or a sum is not kept: `1/sin(0*x1)` and `1/(0*x1 + 0*x2)` are `+inf`, where
   float64 gives `-inf` for `x1 < 0`, resp. `x1, x2 < 0` (a written signed zero keeps float64's
-  sign, see "`f64` writes the negative zero"). On a tenth of the training-data inputs 85 `f64` answers change (14
+  sign, see "`strict` writes the negative zero"). On a tenth of the training-data inputs 85 `strict` answers change (14
   cheaper, 64 dearer, 7 at an equal price) and 81 `permissive` ones (14, 61, 6); evaluated beside
-  their inputs on 256 points, the `f64` answers that give an infinity of the other sign fall from
+  their inputs on 256 points, the `strict` answers that give an infinity of the other sign fall from
   50 rows to 1, and the `permissive` ones from 48 to 13. srbf's ground truths and predictions do
   not change in any mode, `real` does not change, and no answer changes on a second call. The
   rule judge's deployed lane already reads float64's signed zeros; the end-to-end monitor
   (`monitor_ruleset`, `judge_pair(..., mode=)`) now reads a zero in the lane of the mode a rewrite
-  was made in, the signed zeros of `f64` and `permissive` or the one zero of `real`. On the
+  was made in, the signed zeros of `strict` and `permissive` or the one zero of `real`. On the
   release corpus `permissive` no longer prices at or below `real` on one row, whose `real` answer
   takes the one zero's `+inf` where float64 gives `-inf`.
 - **A class takes one orientation wherever it stands.** An odd power or odd root of a sum, and an
@@ -1144,12 +1144,12 @@ model predictions.
   the second's further out), and `sin(x1 - x2 - x3)` is `-sin(x2 + x3 - x1)`. A power over a
   negated site reads its class, `(-F)^s` being the flip of `F` to the `s`, so `1/S^3` and
   `(S^3)^(1/2)` are read over one class whichever orientation `S^3` stands in, and a factor of a
-  product is still oriented by its product. On srbf's ground truths 3 answers change in `f64`, 3
+  product is still oriented by its product. On srbf's ground truths 3 answers change in `strict`, 3
   in `real` and 4 in `permissive`, on a tenth of the training-data inputs 10 in each mode, and on
   a tenth of the predictions 2, 2 and 12, every one at an equal price and none changing on a
   second call; respelling each odd function of srbf's 1,780 ground truths that hold one as
   `-f(-u)` gives the original answer in every mode. Where the sum under such a site vanishes on a
-  region and is inverted, `f64` keeps the sign of its zero (see "a sum that vanishes on a region
+  region and is inverted, `strict` keeps the sign of its zero (see "a sum that vanishes on a region
   keeps its zero's sign", below). The decision costs about 5% of `permissive`'s time on a tenth of
   the predictions.
 - **The certificates read a variable whatever it is called.** The interval layer that certifies
@@ -1164,11 +1164,11 @@ model predictions.
   holds and never on the axis a free `<constant>` shares, so an expression over `x_1, x_2` is
   analysed as it is over `x1, x2`. srbf's ground truths and the training-data inputs, spelled
   over `x<k>`, do not change in any mode. srbf's model predictions are spelled over `v<k>` and
-  `x_<k>`: of all 125,127, 44,103 `f64` answers change (15,024 cheaper, 1,520 dearer, 27,559 at
+  `x_<k>`: of all 125,127, 44,103 `strict` answers change (15,024 cheaper, 1,520 dearer, 27,559 at
   an equal price), 44,061 in `real` (14,968, 1,525, 27,568) and 5,387 in `permissive` (1, 1,
   5,385). Every changed answer checked (each dearer one and 2,000 random rows per mode) is the
   answer of the same expression spelled over `x<k>`, renamed, and no answer changes on a second
-  call. Evaluated beside their inputs on 256 points, 2 `f64` and 9 `real` answers no longer show
+  call. Evaluated beside their inputs on 256 points, 2 `strict` and 9 `real` answers no longer show
   the input's infinities and NaNs where the old answers did, each where a power or an exact
   literal leaves float64's range (`v1^158`, a coefficient of `5.3e320`).
 - **A zero set is read on the expression's domain.** The certificate of a null zero set that
@@ -1176,7 +1176,7 @@ model predictions.
   theorem only to expressions analytic on all of R^n, so a sum over `log`, a root, a fractional
   power, `asin`, `acos`, `atanh`, `acosh`, a quotient or `abs` was never shown null: under an
   inverse `log(x2) - x2` kept the sign it was written with, `-1/(x1 - log(x1))` stayed as written
-  in `f64` and `real` where `permissive` wrote `1/(log(x1) - x1)`, and the inverse of
+  in `strict` and `real` where `permissive` wrote `1/(log(x1) - x1)`, and the inverse of
   `x3*(log(x2) - x2)` stayed joined. A zero is a value, so only where an expression is defined
   can it have one, and a NaN region holds no zero. The certificate now reads the zero set on the
   domain: every operator is analytic where its argument is positive, in (-1, 1), above 1 or
@@ -1187,7 +1187,7 @@ model predictions.
   and `sin(x3)/x1 - sqrt(x2)` are now null; `x1 - |x1|`, `asin(sin(x1)) - x1` and
   `log(exp(x1)) - x1`, which vanish on a region of their domain, are not, nor is a sum over `tan`
   (its poles cut the line into infinitely many pieces). The plain certificate behind the
-  `$`-cancel keeps its strength. On srbf's ground truths 321 `f64` answers change (14 cheaper, 1
+  `$`-cancel keeps its strength. On srbf's ground truths 321 `strict` answers change (14 cheaper, 1
   dearer, 306 at an equal price), 323 in `real` (15, 4, 304) and 38 in `permissive` (all at an
   equal price); on a tenth of the training-data inputs 458 (23, 3, 432), 461 (23, 4, 434) and
   156; on a tenth of the predictions 256 (29, 12, 215), 255 (31, 11, 213) and 35. No answer
@@ -1195,7 +1195,7 @@ model predictions.
   over a product (`1/(a*b)` as `1/a * 1/b`), which can price above the joined product, and the
   searches that start from those forms. One `real` training-data answer no longer shows the
   input's float64 infinity: a denominator `x2*tanh(u) - x2`, which float64 rounds to exactly zero
-  where `tanh` saturates to 1 and the real `tanh` never does (`f64` reads float64's `tanh`, below).
+  where `tanh` saturates to 1 and the real `tanh` never does (`strict` reads float64's `tanh`, below).
 - **A zero set is read on a slice.** The certificate of a null zero set that reading A, the
   distribution licences and the orientation of a pole read applied the identity theorem on the
   expression's domain only where every restricted argument is affine. So a sum over
@@ -1212,82 +1212,82 @@ model predictions.
   `log(log(x1)) - x2`, `x1 + log(cos(x1))` and `x1 - log(sqrt(x1))` are now null. `x1 - |x1|` and
   `x1*|1/x1| + 1`, which vanish on a region, are not, nor is `x1 + 1/log(x1)`, whose derivative
   needs a second derivative to read. The plain certificate behind the `$`-cancel keeps its
-  strength. On srbf's ground truths 25 `f64` answers change (1 cheaper, 24 at an equal price), 52
+  strength. On srbf's ground truths 25 `strict` answers change (1 cheaper, 24 at an equal price), 52
   in `real` (3 cheaper, 1 dearer, 48 at an equal price) and 10 in `permissive` (all at an equal
   price). On a tenth of the training-data inputs 470 (21, 4, 445), 906 (40, 10, 856) and 246
   change; on a tenth of the predictions 501 (66, 19, 416), 744 (87, 32, 625) and 131. No answer
   changes on a second call, and none loses the input's infinities and NaNs on 256 points. The
   dearer answers are inverses the stronger licence distributes over a product, and the searches
   that start from them. The time per call does not change.
-- **`f64` reads `tanh` and `atan` on their float64 range.** float64's `tanh(u)` is exactly ±1 for
+- **`strict` reads `tanh` and `atan` on their float64 range.** float64's `tanh(u)` is exactly ±1 for
   every |u| ≥ 18.99 and its `atan(u)` exactly ±fl(π/2) for every |u| ≥ 5.8e15, in the deployed
   evaluator as in the engine's. No other operator is constant on a tail: measured on each out to
   the largest float, the others keep changing, overflow or underflow (which the overflow reading
-  covers), or are NaN off their domains. So in `f64` a sum that cancels such a limit is `+0` on a
+  covers), or are NaN off their domains. So in `strict` a sum that cancels such a limit is `+0` on a
   whole region: `x2*tanh(x1) - x2` vanishes wherever x1 ≥ 18.99. The zero-set certificate the core
   reads took the real functions, which never reach their limits, and let a sign move through such
   a sum under an inverse: `-1/(x2*tanh(x1) - x2)` became `1/((1 - tanh(x1))*x2)`, `+inf` where
-  float64 gives `-inf`. In `f64` the certificate now reads the expression as the real one off the
+  float64 gives `-inf`. In `strict` the certificate now reads the expression as the real one off the
   tails and, on each tail, as the expression with the function replaced by its limit, whose zero
   set must be null too. `-1/(x2*tanh(x1) - x2)` stays as written, and so, under an inverse, do
   `tanh(x1 - x3) + 1`, `atan(x1) - fl(π/2)` and `tanh(tanh(x1)) - tanh(1)`. `x2*tanh(x1) - x1` and
   `atan(x1) - x1`, whose tails do not cancel, are null as before. `real` and `permissive` read the
   real functions. srbf's ground truths do not change in any mode. On a tenth of the
-  training-data inputs 2 `f64` answers change (1 cheaper, 1 at an equal price), and the
-  `x2*tanh(u) - x2` answer above keeps the input's infinity in `f64`. On a tenth of the
+  training-data inputs 2 `strict` answers change (1 cheaper, 1 at an equal price), and the
+  `x2*tanh(u) - x2` answer above keeps the input's infinity in `strict`. On a tenth of the
   predictions 5 change (3 dearer, 2 at an equal price). `real` and `permissive` do not change, and
   no answer changes on a second call. The dearer answers keep an inverse joined where the
   certificate cannot read a tail and so fails closed: the limit leaves a constant past its horizon
   (`atan(u)^64` is fl(π/2)^64 = 3.6e12 there), or it sits under `cos`, where `cos(fl(π/2))` is
   6e-17 but the literal's enclosure holds π/2.
-- **The `!` and `$` certificates read float64's tails in `f64` too.** The certificates behind the
+- **The `!` and `$` certificates read float64's tails in `strict` too.** The certificates behind the
   cancellations are "defined and finite almost everywhere" (`!`: `2t - t` as `t`, `0*t` as `0`)
   and "defined, finite and nonzero almost everywhere" (`$`: `t/t` as `1`, `t^2/t` as `t`). They
   are consulted on the core's terms and on a rule's pieces. They took the real `tanh` and `atan`,
-  so in `f64` `(tanh(x1) - 1)/(tanh(x1) - 1)` became `1` and `2/(tanh(x1) - 1) - 1/(tanh(x1) - 1)`
+  so in `strict` `(tanh(x1) - 1)/(tanh(x1) - 1)` became `1` and `2/(tanh(x1) - 1) - 1/(tanh(x1) - 1)`
   became `1/(tanh(x1) - 1)`: a value where float64 gives NaN, wherever x1 ≥ 18.99. They now read
   an expression as the zero-set certificate does, as the real one off the tails and, on each tail,
   with the function replaced by its limit; each reading keeps its own certificate memo. `real` and
   `permissive` do not change. srbf's ground truths and a tenth of the training-data inputs do not
-  change in any mode. On a tenth of the predictions one `f64` answer is 2.8% dearer: there a tail
+  change in any mode. On a tenth of the predictions one `strict` answer is 2.8% dearer: there a tail
   leaves a constant past the certificate's horizon (`480586*atan(v2)` is 754906 on it), and the
   certificate fails closed. No answer changes on a second call.
-- **The symbolic-exponent merge reads float64's tails in `f64`.** `x^y * x^y` merges into
+- **The symbolic-exponent merge reads float64's tails in `strict`.** `x^y * x^y` merges into
   `x^(2y)` where the level sets of `y` off the integers are null, which the certificate drew from
   `y` being a nonconstant analytic function. In float64 a `tanh` or `atan` exponent is constant on
   whole tails, so its level set there is the whole tail. No merge the certificate licensed was
   wrong: a `tanh` tail sits at an integer, harmless to the merge, and an `atan` tail at a float
-  none of whose small multiples is an integer. But the claim it rested on was false. In `f64` the
+  none of whose small multiples is an integer. But the claim it rested on was false. In `strict` the
   certificate now reads `y` as the zero-set certificate does and accepts a tail only where `y` is
   an integer there: `x2^tanh(x1) * x2^tanh(x1)` still merges, and
   `x2^(3*atan(x1)) * x2^(3*atan(x1))` stays as written. `real` and `permissive` do not change, and
   no answer of srbf's ground truths, a tenth of the training-data inputs or a tenth of the
   predictions changes in any mode.
-- **In `f64` a sum that vanishes on a region keeps its zero's sign where it is inverted.** float64
+- **In `strict` a sum that vanishes on a region keeps its zero's sign where it is inverted.** float64
   adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` is `+0` for every
   x1 ≥ 0, so `-(|x1| - x1)` is `-0` there and `1/-(|x1| - x1)` is `-inf`. The canonical form holds a
-  sum and its negation as one sum in one orientation, and `f64` wrote that inverse as
+  sum and its negation as one sum in one orientation, and `strict` wrote that inverse as
   `1/(x1 - |x1|)`, `+inf` there. Where the zero-set certificate cannot show a sum's zero set null
-  and the sum is inverted, `f64` now keeps the sign with the inverse: `1/-(|x1| - x1)` is
+  and the sum is inverted, `strict` now keeps the sign with the inverse: `1/-(|x1| - x1)` is
   `-1/(|x1| - x1)`. The same holds through an odd power, an odd function or an odd root of such a
   sum, and in a product holding one, whose inverse distributes over its members:
   `1/(x2*-(|x1| - x1))` is `-(1/(|x1| - x1))/x2`. Under an inverse the search no longer factors a
   content out of such a sum unless that content is certainly positive. A ground sum, and a sum
   holding a `<constant>` or an infinity, are read as before. `real` and `permissive` do not change.
-  On srbf's ground truths 50 `f64` answers change (2 cheaper, 3 dearer, 45 at an equal price), on
+  On srbf's ground truths 50 `strict` answers change (2 cheaper, 3 dearer, 45 at an equal price), on
   a tenth of the training-data inputs 596 (28, 32, 536) and on a tenth of the predictions 488 (70,
   63, 355), most of them at an equal price. No answer changes on a second call, and none loses the
   input's infinities and NaNs on 256 points.
-  `prettify` builds its display with the same `f64` constructors, so a display can move a sign
+  `prettify` builds its display with the same `strict` constructors, so a display can move a sign
   accordingly, also where the answer is unchanged: an answer that displayed as
   `-sin(x1 + pi/6 - x1^3)` now displays as `sin(x1^3 - x1 - pi/6)`.
   Respelling each odd function of srbf's 1,780 ground truths that hold one as `-f(-u)` still gives
   the original answer in every mode. Respelling each sum as its negation turned around still does
-  in `real` and `permissive` (5,986 of 5,986), and does for 5,897 in `f64`. The other 89 (44 over
+  in `real` and `permissive` (5,986 of 5,986), and does for 5,897 in `strict`. The other 89 (44 over
   `log`, 37 over a root, 8 others) hold a sum whose zero set the certificate cannot show null, so
   there the orientation written decides which infinity the answer gives. A sum turned around
   before it is inverted keeps its zero's sign too (next entry).
-- **In `f64` a sum that may vanish on a region holds its sign wherever its zero is read.** A sum
+- **In `strict` a sum that may vanish on a region holds its sign wherever its zero is read.** A sum
   turned around before an inverse reached it lost its zero's sign: `1/(-x1 - |x1|)` is `+inf`
   for every x1 ≤ 0, where the sum is `+0`, and its answer was `-1/(x1 + |x1|)`, `-inf` there. Now
   a sum the zero-set test cannot clear keeps its sign wherever the expression around it reads the
@@ -1301,11 +1301,11 @@ model predictions.
   `x2 - 2*ceil(x0)` vanishes on a null set, as `a*g(x2) + b` does for almost every value of the
   other variables, where `g` has null level sets and holds no `tanh` or `atan` (constant on a
   tail in float64). A held sum's negation is written as it is held (`-(a - b)`, not `b - a`), in
-  every printer. On srbf's ground truths 5 `f64` answers change (0 cheaper, 5 dearer, 0 at an equal price), on a tenth of the training-data inputs 22 (0, 19, 3) and on a tenth of the predictions 98 (4, 73, 21); the dearer ones hold a sum under an inverse whose zero set the
+  every printer. On srbf's ground truths 5 `strict` answers change (0 cheaper, 5 dearer, 0 at an equal price), on a tenth of the training-data inputs 22 (0, 19, 3) and on a tenth of the predictions 98 (4, 73, 21); the dearer ones hold a sum under an inverse whose zero set the
   certificate cannot show null (`(x2 - sin(x2))/(x1*(-2*x2 - sqrt(sin(x2))))`) or reach a
   different factoring past a sum held while the search ran. No answer changes on a second call.
   `permissive` does not change.
-- **In `f64` a sum keeps a `+0` term where its other terms may all be -0 on a region.** float64's
+- **In `strict` a sum keeps a `+0` term where its other terms may all be -0 on a region.** float64's
   sum of zeros is -0 only where every term is -0 (`-0 + 0` is `+0`), and some terms are -0 on a
   whole region: `ceil(x1)` on (-1, 0), `-floor(x1)` on [0, 1), `min(x1, -0.0)` for x1 ≥ 0,
   `mod(floor(x1), -1)` everywhere, `x2*ceil(x1)` wherever x2 > 0 there, `sin`, `atan2` or an odd
@@ -1323,7 +1323,7 @@ model predictions.
   on (-1, 0), and `exp(-1/(x1 - |x1|))` for x1 ≥ 0), and `ceil(g)` and `floor(g)` over a range that
   meets their zero interval only at `g = 0` as zero where `g` is (`ceil(|x1|)` vanishes only at
   x1 = 0). `real` and `permissive` do not change. On srbf's ground truths and a tenth of its
-  predictions no answer changes in any mode; on a tenth of the training-data inputs 14 `f64`
+  predictions no answer changes in any mode; on a tenth of the training-data inputs 14 `strict`
   answers change, 3 cheaper and 11 dearer by a kept `+0` term where the certificate cannot show
   the remaining product's zero set null (`0 - x13*(x13 + 1/(2*log(x13)))` after an `x13 - x13`,
   where it was `-x13*(x13 + 1/(2*log(x13)))`). No answer changes on a second call, and none
@@ -1348,22 +1348,22 @@ model predictions.
   factors over one term of it. So `x1*x2 + x1*x3 + x4` is `x4 + x1*(x2 + x3)`,
   `x2*x3 + x2 + x3 + 1` is `(x2 + 1)*(x3 + 1)`, `sin(x1)*x2 + sin(x1)*x3 + x4` is
   `x4 + sin(x1)*(x2 + x3)`, `x3 - x2 + (x2 - x3)*x4` is `(x2 - x3)*(x4 - 1)` and
-  `(x1 + x2 + x3)/x2` is `(x1 + x3)/x2 + 1`, in `f64`, `real` and `permissive`, and
+  `(x1 + x2 + x3)/x2` is `(x1 + x3)/x2 + 1`, in `strict`, `real` and `permissive`, and
   `sin(x1)*sin(rootn(sin(x1), 2))/(x1*sin(x1) + sin(x1))` is `sin(rootn(sin(x1), 2))/(x1 + 1)`
   (0.14.7: `sin(x1)*sin(rootn(sin(x1), 2))/(sin(x1) + x1*sin(x1))`). On 400 random sums of 2 to
   5 monomials, which mean the same in every mode, the three modes give one answer for each. The
   rule load refuses a rule that one factoring turns from its left side into its right, judged by
   that law and not by spelling: on the `real` and `permissive` files it refuses four
   common-factor rules and `<constant>*x - x -> <constant>*x`. Factoring a sum under a division
-  takes the licence distributing the division needs, so in `f64` and `real` a sum that vanishes
+  takes the licence distributing the division needs, so in `strict` and `real` a sum that vanishes
   on a region keeps its spelling. Against the factoring this replaces, at the default effort,
-  answers are cheaper on 653 of srbf's 6,531 ground truths in `f64` and 576 in `real`, none
-  costlier; on its 125,127 predictions 33,401 are cheaper and 76 costlier in `f64` (`real`:
+  answers are cheaper on 653 of srbf's 6,531 ground truths in `strict` and 576 in `real`, none
+  costlier; on its 125,127 predictions 33,401 are cheaper and 76 costlier in `strict` (`real`:
   33,194 and 149), and on the 129,490 simplify inputs of flash-ansr's training-data generator
   21,403 and 25 (`real`: 19,047 and 78).
   <!-- TO BE RE-MEASURED: the permissive figures, measured against the removed three-arm
-       selection. --> No answer changes on a second call in `f64` or `real`. The search does
-  more work for it: in `f64` 56% more matcher steps and constructor calls on the ground truths,
+       selection. --> No answer changes on a second call in `strict` or `real`. The search does
+  more work for it: in `strict` 56% more matcher steps and constructor calls on the ground truths,
   48% on the predictions and 138% on the training-data inputs (`real`: 8%, 15% and 73% more).
   `effort=0`, the chain alone, no longer factors in `real` and `permissive`.
 - **A fractional power of `-0` is `+0`.** The evaluator computed `(-0)^(1/2)` with numpy's
@@ -1392,10 +1392,10 @@ model predictions.
   over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
   bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
   chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
-  for 72), no product in `f64` and `real` reaches two answers (0.14.7: 616), and none changes on
+  for 72), no product in `strict` and `real` reaches two answers (0.14.7: 616), and none changes on
   a second call at the same effort.
   <!-- TO BE RE-MEASURED: the 1,653 generated products in permissive (0.14.7: 687 reach two
-       answers), measured before permissive became one walk. --> In `f64` and `real` no answer
+       answers), measured before permissive became one walk. --> In `strict` and `real` no answer
   changes on a second call on any of the three sets (0.14.7: 59 and 57 of the training-data
   inputs, 4 ground truths, 31 predictions). The debug-build check that every intermediate state
   reads back as itself printed in a spelling no caller receives; it now prints as the callers do
@@ -1408,12 +1408,12 @@ model predictions.
 - **`pi^C` is a fitted constant.** `pow(np.pi, <constant>)` simplifies to `<constant>`, as
   `pow(2, <constant>)`, `pow(np.e, <constant>)` and `exp(<constant>)` do: every positive base
   gives the same family of values, which the fitted constant represents.
-- **One f64 standard for the rule judge and the constructors.** The f64 constructors fill a NaN
+- **One strict standard for the rule judge and the constructors.** The strict constructors fill a NaN
   hole on a null set (`x1/x1` is `1`), and the rule judge now files a rule that does only that,
-  at points the contract tolerates as null events, as realised in f64: `/ $0 $0 -> 1` is `core`
+  at points the contract tolerates as null events, as realised in strict: `/ $0 $0 -> 1` is `core`
   (served in every mode), not `real`. A NaN hole on positive measure, or at a point the contract
-  does not tolerate, still keeps a rule out of f64.
-  Overflow and underflow are the same kind of special case: f64 promises the evaluator's value
+  does not tolerate, still keeps a rule out of strict.
+  Overflow and underflow are the same kind of special case: strict promises the evaluator's value
   wherever nothing overflows or underflows. Where an operation overflows or underflows, the
   constructors give the true value (`exp(x1)/exp(x1)` is `1`, `rootn(exp(800.5), 2)` is
   `exp(1601/4)`), and the judge now accepts the true value at such a point as well as the
@@ -1421,23 +1421,23 @@ model predictions.
   `real`. A pole is not an overflow (`atanh(1)` is infinite exactly) and an exact zero is not an
   underflow (`log(1)`). Every other point is compared as before, so a rule that gives neither
   value at a range event (`exp(1000) -> 5`) or disagrees where nothing leaves the range stays
-  out of f64: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range (+inf against x0
+  out of strict: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range (+inf against x0
   from x0 = 19.06). `log(exp(x0)) -> x0`, 34 ULP apart at `x0 = 0.0137421`, where `exp` rounds
-  its argument into the neighbourhood of 1, holds in f64 by its reading in kind: it is true in
+  its argument into the neighbourhood of 1, holds in strict by its reading in kind: it is true in
   the reals, and float64 keeps both sides finite. The verdict counts the points read this way
-  (`out_of_range`). The miner's own numeric check in f64 applies the same standard: a row of
+  (`out_of_range`). The miner's own numeric check in strict applies the same standard: a row of
   its matrix where an operation of either side overflows or underflows is judged at high
   precision, where the two sides' true values must agree, and every other row is compared as
   before. Both read one definition of the event, the core's (`simplipy._core.range_event`), so
-  an f64 mine mints `rootn(exp(x0), 2) -> exp(x0/2)`. The numeric check compares the other rows
+  a strict mine mints `rootn(exp(x0), 2) -> exp(x0/2)`. The numeric check compares the other rows
   of a pair without constants as strict reads them, within the mine's tolerances: a change of
   kind fails it, and a rounding of two finite values passes, so `log(exp(x0)) -> x0`, 34 apart,
-  passes it and an f64 mine mints `log(exp(?0)) -> ?0`.
+  passes it and a strict mine mints `log(exp(?0)) -> ?0`.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
   `x1 > 1/2` (`1 + tanh(inf*(x1 - 1/2))` became `0`). Distributing over an infinity now needs
-  certified finiteness, as in `f64` and `real`.
+  certified finiteness, as in `strict` and `real`.
   <!-- TO BE RE-MEASURED: wrong answers on the 3,008 fuzzed expressions (389 -> 0 when it
        landed) and the changed training-data inputs whose answer holds an infinity, both
        measured against the removed three-arm selection. -->
@@ -1460,14 +1460,14 @@ model predictions.
   product's `<div>` section holds, and a negated one keeps its coefficient
   (`exp <mul> -1 <div> x0 </mul>`, as `to_tagged` writes `exp / -1 x0`). Explicit and infix
   answers do not change. From tagged inputs (`to_tagged` of each row), the tagged answers that
-  hold an `inv` fall to none (srbf's ground truths: 965 in `f64`, 964 in `real` and 1,205 in
+  hold an `inv` fall to none (srbf's ground truths: 965 in `strict`, 964 in `real` and 1,205 in
   `permissive`; a tenth of the training-data inputs: 1,970, 1,983 and 2,314; a tenth of the
   predictions: 1,011, 1,012 and 4,967), every one respelled at its price, and the tagged answers
   that are `to_tagged` of the explicit answer rise from 4,317 to 5,307 of the 6,531 ground truths
-  in `f64` (`real`: 4,296 to 5,291, `permissive`: 4,126 to 5,394). No answer changes on a second
+  in `strict` (`real`: 4,296 to 5,291, `permissive`: 4,126 to 5,394). No answer changes on a second
   call, in either notation.
 - **Permissive is one walk.** `simplify(.., mode='permissive')` ran three arms (its two fold
-  disciplines and the `f64` chain) and chose between them by the price of internal states it did
+  disciplines and the `strict` chain) and chose between them by the price of internal states it did
   not return: 0.14.7 returns 769 of the training-data inputs, 3,326 of srbf's predictions and 12
   of its ground truths costlier than they came in, in permissive's own measure. It now runs one
   walk, like every mode: its chain, then the search, in its own canon and rules. Its constructors never fold a
@@ -1482,22 +1482,22 @@ model predictions.
   a tenth of the training-data inputs (12,949) and of srbf's predictions (12,513) none prices above
   its input and none changes on a second call. Against the three-arm selection it replaces, in
   permissive's own measure, 323 ground truths get cheaper and 18 costlier, 790 training-data
-  inputs and 54, and 5,368 predictions and 552; it spends 3.3, 2.6 and 2.9 times `f64`'s work
-  units on these sets (the selection: 8.2, 5.9 and 10.6). Where `f64`'s answer prices below
+  inputs and 54, and 5,368 predictions and 552; it spends 3.3, 2.6 and 2.9 times `strict`'s work
+  units on these sets (the selection: 8.2, 5.9 and 10.6). Where `strict`'s answer prices below
   permissive's in permissive's reading (14, 49 and 399 rows), the causes are a literal rounded
   twice (rounded where it landed, then combined again, so one ulp off: on the predictions 454
   answers print such a literal one digit longer and 634 one digit shorter than the selection's
   single rounding), sign placement, `inf` beside a signed zero, and the search's walk order.
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
-  the modes accept different simplifications as true (`f64` follows the float evaluator, so
+  the modes accept different simplifications as true (`strict` follows the float evaluator, so
   `atanh(tanh(x))` is not `x`; `real` follows exact arithmetic, so it is; `permissive` also what
-  holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64` and `real` give `abs(x)`),
+  holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `strict` and `real` give `abs(x)`),
   and each mode's `simplify` descends its own reading. So
   `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (no answer
   prices above its input on srbf's ground truths, its predictions and the training-data inputs in
-  `f64` and `real`, nor in `permissive` on the ground truths and a tenth of each other set), and
-  prices of different modes are not comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
-  `permissive` answer could price above its input although its own mode made it cheaper. `f64` is
+  `strict` and `real`, nor in `permissive` on the ground truths and a tenth of each other set), and
+  prices of different modes are not comparable. Before, `complexity()` read every expression the `strict` way, under which a `real` or
+  `permissive` answer could price above its input although its own mode made it cheaper. `strict` is
   unchanged.
 - **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
   (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
@@ -1505,14 +1505,14 @@ model predictions.
   every candidate tried over the whole expression, refused ones included, so the cap a search
   needs grows with the expression (one srbf prediction needs 5 candidates, a sum of 2 copies of it
   10 and of 6 copies 30). Capped at 4 in this release, 1,632 of srbf's 125,127 model predictions
-  change on a second call in `f64` and in `real`. Uncapped, none does in `f64` and `real` (with
+  change on a second call in `strict` and in `real`. Uncapped, none does in `strict` and `real` (with
   the canonical forms that read back as themselves, above). On the predictions no answer is
-  costlier than at cap 4, and 1,633 are cheaper, in `f64` and in `real`. The search is one walk: it tries the current
+  costlier than at cap 4, and 1,633 are cheaper, in `strict` and in `real`. The search is one walk: it tries the current
   answer's candidates cheapest whole expression first, steps to the first that ends cheaper, and
   stops when a whole round finds nothing. Each candidate's whole state is rebuilt through the
   canonical constructors and is not re-canonicalized in full before its descent. On srbf's
   predictions the uncapped search spends 15% more matcher steps and constructor calls than
-  `effort=4` in `f64` (16% in `real`). Every
+  `effort=4` in `strict` (16% in `real`). Every
   internal caller that passes no `effort` (normalization, masking, mining, the verification
   monitor, the promotion refund) follows the default. `effort=k` caps the search at `k`
   candidates (a cap beyond 2^63 - 1 is none), the first `k` of that one walk; `effort=0` never enters the search, so the search change
@@ -1526,19 +1526,19 @@ model predictions.
   nesting), sums each orientation's price from per-factor prices, and remembers the prices of
   numbers beyond 128 bits. Answers are byte-identical on every simplify input of flash-ansr's
   training-data generator, srbf's ground truths and srbf's model predictions, in every mode. On
-  srbf's predictions `simplify` takes 40-45% less time than without this in `f64`.
+  srbf's predictions `simplify` takes 40-45% less time than without this in `strict`.
   <!-- TO BE RE-MEASURED: the permissive speed-up (about half the time, the slowest inputs about
        5 times faster), measured against the removed three-arm selection. -->
 - **Every number is priced as it is written.** The measure (`complexity`, and the ordering every
   simplification follows) prices a literal by its own exact spelling, the one the answer prints:
-  a long exact number costs its digits. `f64` and `permissive` admit a number only where its
+  a long exact number costs its digits. `strict` and `permissive` admit a number only where its
   numerator and denominator are at most 2^1022 and hold any other value in pieces
   (`1.2345678901234567e-305` as written, its quotient by `9.876543210987654e-10` as that literal
   times a number), which cost at most what the one number costs; only a literal beyond the
   1,100-bit cap keeps its print's price. Each mode writes such a value as its double where that
-  is cheaper, as it writes every number (the quotient is `1.2499999886093752e-296` in `f64`,
+  is cheaper, as it writes every number (the quotient is `1.2499999886093752e-296` in `strict`,
   float64's quotient of the two doubles). A mode that may write a cheaper value of a number
-  writes it where the number lands: `f64` float64's value (a literal at the double float64
+  writes it where the number lands: `strict` float64's value (a literal at the double float64
   reads it as, a number made from literals at that operation on their doubles, exact and rounded
   once), `permissive` the shorter of the two doubles around the exact value, each only where
   that is the cheaper spelling. `0.3333333333333333` costs its 16 digits and `1/3` less.
@@ -1549,16 +1549,16 @@ model predictions.
   present probe by probe: it warns, naming the probes, when a recorded probe now prices
   differently, and a probe the sidecar does not record is not a mismatch. The published
   rulesets record no probe that moved, so they load without a warning.
-- **`f64` rounds a product or a sum of literals once.** A coefficient or a constant term made
+- **`strict` rounds a product or a sum of literals once.** A coefficient or a constant term made
   from literals is written, where the decimal is cheaper than the exact value, as the double
   nearest the exact operation on the literals' doubles: the real value of what float64 reads,
-  which `f64` admits. It was float64's product taken one rounding at a time in the order the
+  which `strict` admits. It was float64's product taken one rounding at a time in the order the
   literals are combined, which for three or more literals can land a unit or two in the last
   place from both that double and float64's value in the order written:
   `x0*(1/89875517873681764)*(1/8.854e-12)*(1/1.380649e-23)` is `91019782591670690*x0` (it was
   `91019782591670700*x0`). `permissive` writes, as before, the shorter of the two doubles around
   the exact value. On srbf's ground truths, a tenth of the training-data inputs and a tenth of the
-  predictions, 249 `f64` answers change, by +81 bits in all (75 cheaper, 95 at an equal price, 79
+  predictions, 249 `strict` answers change, by +81 bits in all (75 cheaper, 95 at an equal price, 79
   dearer); `permissive`'s answers do not change.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
@@ -1567,7 +1567,7 @@ model predictions.
   and the Larmor denominator `6*3.1415926535897*8.854e-12*(2.99792458e8)^3` is one number. A
   result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Answers carry these numbers
   exactly, every significant digit included (`x1*1.602176634e-19*1.602176634e-19` is
-  `2.566969966535569956e-38*x1`), in `f64` and `real`; `permissive` rounds a literal once, to its
+  `2.566969966535569956e-38*x1`), in `strict` and `real`; `permissive` rounds a literal once, to its
   float, where it lands (`2.56696996653557e-38*x1`). A number prints positionally from 0.0001 up to 10^16 and as
   `<mantissa>e<exponent>` outside that range where that is shorter, Python's float notation
   applied to exact values, in the list, tagged and text answers alike: `x1*1e-300` comes back as
@@ -1575,11 +1575,11 @@ model predictions.
   `1e-5*x1` (0.14.7: `1e-150^2*x1`, `100000000000000000000*x1` and `0.00001*x1`), while `1000`,
   `0.001` and `12345678901234567890` keep their digits. The measure prices such a number at most
   like the float it reads as (above).
-- **f64 mode holds a number only where float64 can.** In `mode='f64'` (and `permissive`) a
+- **strict mode holds a number only where float64 can.** In `mode='strict'` (and `permissive`) a
   number's numerator and denominator must both be at most 2^1022, so the number and its reciprocal
   are normal float64 values; any other literal stays as written (`1e308`, `1e400`, the subnormal
   `5e-324`), as before. `real` mode holds everything within the cap: `x1 + 1e308 + 1e308` is
-  `x1 + 2e308` there and `2*1e308 + x1` in f64 mode. Two more f64 readings follow the evaluator:
+  `x1 + 2e308` there and `2*1e308 + x1` in strict mode. Two more strict readings follow the evaluator:
   an integer beyond 2^53 is the double nearest to it, an even integer (`(-1)^9007199254740993` is
   1 and `(-inf)^10000000000000000001` is +inf, as float64 gives them, and `x1^(2^53)*x1` is not
   merged: the evaluator reads 2^53 + 1 as 2^53), and a literal the evaluator reads as inf
@@ -1595,7 +1595,7 @@ model predictions.
   instead of being split across a product (the evaluator multiplied a 300-digit numerator in
   before dividing and overflowed).
 - **A term's coefficient is all of its literals.** Where a fold is refused (`1e300*1e300` has
-  more than 1,100 bits, and is beyond float64 in `f64`), a product keeps both literals, and the
+  more than 1,100 bits, and is beyond float64 in `strict`), a product keeps both literals, and the
   coefficient of the term is now both of them. Like terms of one such coefficient collect and
   cancel (`1e300*1e300*x1 - 1e300*1e300*x1` is `0`, and `2*1e300*1e300*x1 - 1e300*1e300*x1` is
   `1e300*1e300*x1`; both stayed as written), a sum scales by it as by one number
@@ -1610,7 +1610,7 @@ model predictions.
   list and `<mul> -1e300 1e300 x1 </mul>` in the tagged list (it was a separate `-1`, `neg` in
   the explicit list, priced as a sign either way). On 20,000 random sums of products of
   literals at the cap and float64 boundaries no answer changes on a second call in any mode
-  with the search off (before: 80 in `f64`, 39 in `real`, 81 in `permissive`), nor on 6,000 at
+  with the search off (before: 80 in `strict`, 39 in `real`, 81 in `permissive`), nor on 6,000 at
   the default effort (before: 2, 4, 3). srbf's ground truths, a tenth of its predictions and a
   tenth of the T8.1 training inputs keep their answers in every mode, except one prediction in
   `real` whose terms change order at the same price, and none changes on a second call.
@@ -1659,7 +1659,7 @@ model predictions.
 - **Exact literals are read as their nearest float.** The deployed evaluator reads a literal
   correctly rounded (Python's `float()` of a decimal, `int / int` for a fraction), but two
   engine paths computed `float(p) / float(q)`, which is an ulp or two off once `p` or `q` leaves
-  53 bits. The f64 fold of a ground function evaluated there, and the function amplified the
+  53 bits. The strict fold of a ground function evaluated there, and the function amplified the
   slip: `sin(91618929858.17857)` folded to `-0.9807961394411915` instead of the evaluator's
   `-0.9807991153359534`. The fold now reads the nearest float, through the same system libm
   kernels as the evaluator (Rust's own `atanh` drifts from libm near the domain edges). The
@@ -1747,7 +1747,7 @@ model predictions.
   it precedes; a config without the key loads as before. `packaging` is now a declared
   dependency (it was already installed through `huggingface_hub`).
 
-- **Each rule file is mined in its own mode.** `find_rules` mines `rules_f64.json`,
+- **Each rule file is mined in its own mode.** `find_rules` mines `rules_strict.json`,
   `rules_real.json` and `rules_permissive.json` each in its own mode: the mode's reading of
   a source, its own answer as the mark to beat, its numerics, its serve ordering for the
   covered prune and the deduplication, and its licence for the judge's tier. The contract
@@ -1759,17 +1759,17 @@ model predictions.
   rule the mode's constructor performs) before it is written. In `permissive` the covered
   prune also asks the non-finite instances every slot binds there, so the file keeps
   `$0 / $0 → 1` (`inf/inf` is `1`, not `nan`).
-- **The permissive mine is offered the f64 file.** Permissive includes f64, so every f64 rule
-  holds there too, and its answer must never cost more than f64's; a per-mode mine finds only
+- **The permissive mine is offered the strict file.** Permissive includes strict, so every strict rule
+  holds there too, and its answer must never cost more than strict's; a per-mode mine finds only
   what its own scan reaches. The permissive file is mined last, and every rule of the finished
-  f64 file runs through its proposal lane: certified by permissive's own acceptance, it enters
+  strict file runs through its proposal lane: certified by permissive's own acceptance, it enters
   only where permissive's answer is not already as low. A rule is offered at permissive's
   reading of its left side wherever its spelling would not match there: permissive reads a
   ground pole as its infinity before any rule fires, so `atan2(C, atanh(-1)) -> C` is offered
   as `atan2(C, -inf) -> C`. The permissive sidecar pins the file (`offered`: name, sha256 and
   count, the lane's outcomes, and every offered rule that did not read `already_covered`), and
-  `verify-mine` checks the pin (gate `offered`) and that the permissive file covers the f64
-  file (gate `covers_f64`). `find_rules(offer_final_rules=False)` (config key
+  `verify-mine` checks the pin (gate `offered`) and that the permissive file covers the strict
+  file (gate `covers_strict`). `find_rules(offer_final_rules=False)` (config key
   `offer_final_rules`) declines the offer.
 - **A mine resumes from its checkpoint.** `find_rules` writes `<file>.checkpoint.json` after
   every completed length and a rerun of the same mine resumes after the last one; a
@@ -1801,9 +1801,9 @@ model predictions.
   licenses `acos(c) -> c_t` from |c| <= 1 alone. Sort promotion refused a collapse at the first
   probed constant where its source was NaN or infinite, so licensed rules never reached a file:
   `atanh(cos(c)) -> c_t` (infinite where cos(c) = +-1), `log(abs(c)) -> c_t`,
-  `x*log(c) -> c_t*x` and `max(x, acos(c)) -> max(c_t, x)`, and with them `f64` left
+  `x*log(c) -> c_t*x` and `max(x, acos(c)) -> max(c_t, x)`, and with them `strict` left
   `atan(atanh(tanh(c)))` at `atan(atanh(c))`; it now reduces it to `c_t`. On the reduced
-  length-4 mine the `f64` and `real` files gain 139 rules each and `permissive` 24. The judge,
+  length-4 mine the `strict` and `real` files gain 139 rules each and `permissive` 24. The judge,
   the sort ladder's ground tier and its witness bar now read one definition of "the source is
   defined" (finite, the rule the evidence gate counts rows by); a source defined at no constant
   (`log(-cosh(c))`) still gets no rule.
@@ -1836,7 +1836,7 @@ model predictions.
   the rest. `abs(atanh(acos(x))) -> atanh(acos(x))`, finite for x in (cos 1, 1] (15 rows of
   512), is mined now.
 - **A high-precision refutation needs converged values.** `real` and `permissive` re-judge an
-  f64 near miss at 1024 and 2048 bits. A row whose values still moved between the two was taken
+  strict near miss at 1024 and 2048 bits. A row whose values still moved between the two was taken
   as a refutation: `tanh(x)` is exactly -1 at both precisions once x < -710, so
   `sin(acos(tanh(x)))` read the residue of `sin(pi)` against `1/cosh(x)` ~ 1e-407 at x = -937,
   and `sin(acos(tanh(x))) -> 1/cosh(x)` was mined only when the matrices held no row below
@@ -1844,7 +1844,7 @@ model predictions.
   8192 bits, the precision the mine's range (|x| <= 1e3) needs, by the same rule; a converged
   false row (`exp(sinh(-5)) -> 0`) is refuted at 2048 bits as before. With these two changes the
   reduced length-4 mines at seeds 42 and 7 write byte-identical files in all three modes, and
-  the files gain 16 `f64` rules, 7 `real` and 6 `permissive` (`cos(asin(tanh(x))) ->
+  the files gain 16 `strict` rules, 7 `real` and 6 `permissive` (`cos(asin(tanh(x))) ->
   1/cosh(x)` among them) and lose none that is not served by the rest.
 - **A source without evidence is not scanned.** The evidence decision is the source's, the
   same for every candidate, but it was read at the end of each candidate's judgment, after its
@@ -1889,12 +1889,12 @@ model predictions.
   `sin(acos(tanh(_0))) -> 1/cosh(_0)` in the reduced mine's `real` and `permissive` files
   (the only rule it lists); it lists none now, and mined again the reduced mine writes the
   same three files.
-- **Each mode reads a source's evidence in its own semantics.** `f64` certifies the cell where
+- **Each mode reads a source's evidence in its own semantics.** `strict` certifies the cell where
   float64 finds the source finite, its exact tails included; `real` and `permissive` judge over
   the reals, and certify there. `acosh(erf(x))` is finite only where float64 rounds erf to 1
   (x >= 5.92) and NaN everywhere over the reals, so `real` and `permissive` no longer mine
   rules on it or on `acosh(tanh(x))` (`acosh(tanh(x)) -> acosh(erf(x))` and the 15 rules
-  `f(acosh(erf(x))) -> acosh(erf(x))` leave both files), while `f64` keeps them on both
+  `f(acosh(erf(x))) -> acosh(erf(x))` leave both files), while `strict` keeps them on both
   (`atan(acosh(erf(x))) -> acosh(erf(x))`, `atan(acosh(tanh(x))) -> acosh(tanh(x))`).
 - **The engine collapses a constant-only subtree wherever the mint would.** The engine's own
   fold collapsed a `<constant>`-bearing subtree only when its value class was finite, while
@@ -1909,10 +1909,10 @@ model predictions.
   With `acj-5-4-llm` no answer changes on the srbf ground truths or on a tenth of its
   predictions or of the training-data inputs, in any mode; with `acj-4-3` the 400-row corpus
   walk rests 141,510 milli-bits cheaper on 11 rows, none dearer. The reduced length-4 mine's
-  f64, real and permissive files hold 392, 543 and 422 rules (767, 913 and 400 before), 181,
+  strict, real and permissive files hold 392, 543 and 422 rules (767, 913 and 400 before), 181,
   182 and 162 of them with `<constant>` (582, 559 and 148): every rule they lose that has a
   variable is served by the engine and the rest of the file, but for the `acosh(erf(x))`
-  family `real` and `permissive` no longer mine (below). Mined at seeds 42 and 7, the f64
+  family `real` and `permissive` no longer mine (below). Mined at seeds 42 and 7, the strict
   file is byte-identical.
 - **The covered prune and the liveness gate read every alphabet.** Their probe instance for a
   wide placeholder wrapped it in `sin(x)`, which an engine without `sin` cannot read; it is
@@ -1929,25 +1929,25 @@ model predictions.
   `cos(asin(tanh(_0))) -> 1/cosh(_0)`; `acos(cos(asin(_0)))` and `cos(asin(sin(_0)))` overlap
   where the slot is `sin(x)`. Only completions within the mine's cell are offered, their
   source no longer than the mine's sources: beyond it a completion overlaps the rules again at
-  a longer instance, and completion breeds without end (on the reduced length-4 mine's f64
+  a longer instance, and completion breeds without end (on the reduced length-4 mine's strict
   file, offering every overlap took 543 rules to 1,022 in one round, and the next round
   offered 13,772). The mine's final-gate line and sidecar (`gates.overlaps`) count the
   completions within the cell that the judge licenses and the file still lacks, list those
   it refuses (`gates.overlaps_refused`) with its tier and verdict, and count the overlaps
   beyond the cell (`gates.overlaps_beyond_cell`); `verify-mine` fails on the first
   (`overlaps`), reading the cell from the sidecar. The step prints its progress
-  (`[complete]`, `[gate]`). On the reduced length-4 mine it takes 11 s in f64, 40 s in real and
+  (`[complete]`, `[gate]`). On the reduced length-4 mine it takes 11 s in strict, 40 s in real and
   15 s in permissive (the whole mine takes 616, 1,118 and 1,246 s, 2,983 s against 3,774 before,
-  4 threads), and the f64 file lacks no completion the judge licenses. The real and permissive
+  4 threads), and the strict file lacks no completion the judge licenses. The real and permissive
   files lack 20 and 7: ground overlaps whose completion has a composite target the mine never
   writes (`asin(1) -> acos(0)`, 17 and 6), `ceil(1/cosh(x)) -> 1` (certified, then killed by
   sort promotion's atom bar, where x = ±inf gives `ceil(0) = 0`), and in real `tan(asin(ceil(x)))
   -> atanh(ceil(x))` and its `floor` twin, which the judge licenses and the mine does not
   certify at `ceil(x) = ±1`.
-- **`simplipy find-rules --modes f64,real,permissive`** (and `find_rules(modes=...)`) mines
+- **`simplipy find-rules --modes strict,real,permissive`** (and `find_rules(modes=...)`) mines
   only the listed modes, all three by default, and leaves the other files as they are; a mode
-  mined beside an existing file reads it (`real` and `permissive` mine with the f64 file in
-  the default slot, and `permissive` is offered the f64 and real files). Each mined file
+  mined beside an existing file reads it (`real` and `permissive` mine with the strict file in
+  the default slot, and `permissive` is offered the strict and real files). Each mined file
   keeps its own sidecar and final-gate line.
 - **`prettify(keep_grouping=True)` writes every number as the expression holds it.** Its
   promise is a display that evaluates as the expression does, but at full precision it wrote
@@ -1959,7 +1959,7 @@ model predictions.
   `sin(3.1415926535897e37*(x1*x2)/3313)^2`, and reads back bit for bit. The default display
   still writes the float.
 - **The Bessel kernels multiply and divide complex numbers the same way on every platform.**
-  The f64 kernels of `besselj`, `bessely` and `besselk` compute as the C++ they port, whose
+  The float64 kernels of `besselj`, `bessely` and `besselk` compute as the C++ they port, whose
   complex product and quotient a C compiler leaves to its runtime (`__muldc3`, `__divdc3`),
   and runtimes differ between machines in the last bits of a quotient. The core computes both
   itself, with the algorithms of GCC's runtime: C99 Annex G's product, and Smith's quotient
@@ -2007,7 +2007,7 @@ model predictions.
   values, by the one evidence function at the constant (`_core.table_owes_at`, the certified
   cells the evidence policy reads), in the judge and the mint alike; where it cannot decide, a
   witness is owed. Finite at a point is no positive measure: `log(C^x0) -> C*x0` owes nothing at
-  C < 0, where its left side is finite at the even integers alone (`f64` refused it for an
+  C < 0, where its left side is finite at the even integers alone (`strict` refused it for an
   extension at C = -1.5; it still refuses it for float64's rounding, `log(2.5^x)` being 57 units
   in the last place from `log(2.5)*x` at x = 0.0137). A search that finds none refuses the rule
   with uncertainty (`NO-WITNESS`):
@@ -2029,14 +2029,14 @@ model predictions.
   whose zero set is null (`x0`, `x1*x2`, `x3 - exp(x10)`) holds it on a null set only, which the
   value set leaves out, and one whose zero is an interval of the input keeps it (`floor(x0)` is
   0 on all of [0, 1)). `tanh(floor(x0)/floor(x0))`, 0/0 on all of [0, 1), is no longer certified
-  finite almost everywhere, and `0*tanh(floor(x0)/floor(x0))` stays as it is in `f64` (it became
-  0, where float64 gives NaN). `0*tanh(1/floor(x0))` is still 0 in `f64`: float64's 1/+0 is
+  finite almost everywhere, and `0*tanh(floor(x0)/floor(x0))` stays as it is in `strict` (it became
+  0, where float64 gives NaN). `0*tanh(1/floor(x0))` is still 0 in `strict`: float64's 1/+0 is
   +inf, and tanh of it 1.
 - **A saturation ray at a pole holds the pole's value.** float64's tanh is 1.0 on the whole
   ray past 19.06, where `atanh(tanh(x0))` is +inf: the interval layer's enclosure of a domain
   edge at a pole that the operand attains on a set of positive measure now holds the pole's
   infinity beside its finite part, so a cell that reaches the ray is no finite cell and the
-  cells below it are. `atanh(tanh(x0))` has evidence in `f64` (it is finite for |x0| below
+  cells below it are. `atanh(tanh(x0))` has evidence in `strict` (it is finite for |x0| below
   about 19.06); it read as finite nowhere.
 - **A judgment keeps its precision and its state to itself.** The judge computes in an mpmath
   context of its own on each thread while a judgment runs, and its scratch registers are per
@@ -2057,19 +2057,19 @@ model predictions.
   one of them has its kink), to 500 digits, and judges the rule there with every copy of
   that argument replaced by its exact level, so the heads read their values at the level;
   `float64` reads the 17 doubles nearest the point. The rule above is refused in `real` and
-  `f64` and kept in `permissive` (the two sides agree on both sides of each such point);
+  `strict` and kept in `permissive` (the two sides agree on both sides of each such point);
   identities through jumps (`mod(sinh(x0), 2) -> sinh(x0) - 2*floor(sinh(x0)/2)`) still hold.
   A point where a side, so substituted, still jumps is skipped. At most 16 points a rule, about
   0.1 s more on a rule with a jump head.
 - **The rule judge reads the rows the mine's mint reads.** Its `float64` lane read a grid
   whose smallest magnitude is 0.0137, so `log(exp(atanh(_0))) -> atanh(_0)`, which float64 loses
-  for small arguments (`exp` rounds 1 + y), was admitted in `f64` while the mint refuted it on
+  for small arguments (`exp` rounds 1 + y), was admitted in `strict` while the mint refuted it on
   its rows. The mine's sampler is now one function (`verify._contract.mine_rows`), the judge
   reads the deployed sides at every row of the mine's sample and confirmation matrix (the
   shipped mine's, seed 42, by default; a mine sets its own for its judge and gates, and
   `verify-mine` draws them again from the sidecar's seed), and a row where float64's sides
   disagree is judged as a grid point. Read so, the published `acj-4-3` triple holds 25 rules
-  false in `f64` (6 before: `pi - acos(_0) -> acos(-_0)` cancels near -1, 77 units in the last
+  false in `strict` (6 before: `pi - acos(_0) -> acos(-_0)` cancels near -1, 77 units in the last
   place at -0.99971) and two more false in the reals in every mode, `sin(abs(atanh(_0))) ->
   abs(sin(atanh(_0)))` and its twin, wrong where atanh passes pi near 1.
 - **The rule judge reads one table of values per mode.** Every value `simplipy.verify` compares
@@ -2077,7 +2077,7 @@ model predictions.
   exactly pi/2, and a pole or an infinite argument takes the limit where every direction gives
   the same one: `pow(0, -2)` and `atanh(1)` are `+inf`, while `1/0`, `pow(0, -1)`, `tan(pi/2)`,
   `pow(1, inf)` and `pow(inf, 0)` have no value (the judge read the first two as `+inf`, left
-  points reaching `tan(pi/2)` unresolved, and read the last two as `1`). In `f64` a literal is
+  points reaching `tan(pi/2)` unresolved, and read the last two as `1`). In `strict` a literal is
   its nearest double, `-0.0` keeping its sign, and an operation is the engine's own kernel with
   its overflow and underflow events. `sin(5e14)` is decided (the judge stopped at 1e12), so
   `sin(x0*1e15*(1 + 1e-20)) -> sin(x0*1e15)` is refused.
@@ -2104,20 +2104,20 @@ model predictions.
   exclude, and a `_` slot guards nothing -- bound to `floor(x0) + 1` it is 1 on all of [0, 1),
   so `atan(tan(asin(_0))) -> asin(_0)` is refused (with `x0` it holds). Two `?` slots can bind
   one variable, so every way they can coincide is judged as its own rule:
-  `(x0 - x1)/(x1 - x0) -> -1` is refused in `real` and `f64` (with x0 = x1 the left side has no
+  `(x0 - x1)/(x1 - x0) -> -1` is refused in `real` and `strict` (with x0 = x1 the left side has no
   value anywhere). A measure the cells cannot decide refuses the mode that owes it in the
-  values it was read in: the reals' refuses `real`, float64's refuses `f64`, and `permissive`
+  values it was read in: the reals' refuses `real`, float64's refuses `strict`, and `permissive`
   owes neither.
-- **`f64` decides its measure on its own values.** A set of bindings has measure zero when it
+- **`strict` decides its measure on its own values.** A set of bindings has measure zero when it
   lies on lower-dimensional cells of the interval layer's partition of the real input space,
-  and `f64` reads those cells in float64's values: a saturation plateau is a cell like any
+  and `strict` reads those cells in float64's values: a saturation plateau is a cell like any
   other, never of measure zero, and a float64 extension at a double is excused only where its
   neighbouring doubles are no extension (`x0/x0 -> 1` at 0). `x0 + 0*sqrt(x0^2 - 1e-6) -> x0`,
-  with no value on (-0.001, 0.001), narrower than any cell, is refused in `f64`, and
+  with no value on (-0.001, 0.001), narrower than any cell, is refused in `strict`, and
   `(x0 - 0.1)/(x0 - 0.1) -> 1`, whose float64 left side has no value at the one double 0.1, holds
-  there. The reals' measure, where the cells cannot decide it, no longer refuses `f64` by
+  there. The reals' measure, where the cells cannot decide it, no longer refuses `strict` by
   itself: `1/(x1*(x0 - |x0|)) -> (1/(x0 - |x0|))/x1`, which has no value in the reals on all of
-  x0 >= 0 on either side, holds in `f64`. A way two `?` slots coincide holds in `f64` only where
+  x0 >= 0 on either side, holds in `strict`. A way two `?` slots coincide holds in `strict` only where
   float64 was read on it and held.
 - **The judge decides two fragments exactly.** A rule of one variable whose sides are built
   from rational literals, `+`, `-`, `neg`, products and quotients by a constant, `abs`, `max`
@@ -2129,7 +2129,7 @@ model predictions.
   whole domain is proved too (`0*exp(x0) -> 0`). The verdict reports the route (`exact`). A
   value past the doubles' range has no double and is compared at no float resolution:
   `x0*1e400 -> 1e400*x0` is proved in `real` and `permissive` and left to the sampled procedure
-  in `f64`.
+  in `strict`.
 - **Every verdict says what it rests on.** `verify_rule(...)['basis']` gives, per mode,
   `proved` (an exact route: the two fragments above, a rule without variables or constants
   whose values are read exactly, or `L(C) -> C` without variables, whose witness is the left
@@ -2144,7 +2144,7 @@ model predictions.
   demands 6,000 digits), and where a point demands more than the 2,000-digit ceiling, two
   readings that agree at the ceiling are no reading of equality: the point is undecided in the
   reals. At 1e-100 the readings reach the separation, and the rule is false in the reals and
-  holds in `f64` and `permissive`.
+  holds in `strict` and `permissive`.
 - **`permissive` reads float resolution without exact equality.** Its criterion is agreement
   of the doubles nearest to the two sides (P3), which needs no exact equality, and a point is
   read under a rigorous bound: the interval layer's enclosure of both sides at the point
@@ -2157,26 +2157,26 @@ model predictions.
   excused as float resolution, is refused (read at the 450 digits the point demands, the left
   side is 1). `x + 1e-20 -> x` stays refused. The permissive mint reads its special points the
   same way.
-- **Each mode is judged on its own values.** `f64` reads float64's values, and the reals only for
+- **Each mode is judged on its own values.** `strict` reads float64's values, and the reals only for
   the true value where an operation overflows or underflows; `permissive` reads the reals' values
   at float resolution. The verdict name (`CERTIFIED`, `KILL`, `UNRESOLVED-COVERAGE`, ...) is the
   reals' outcome, a diagnostic that no longer decides a mode by itself:
-  `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in `f64`, where `1e-3000` is the double 0.0 and the two
+  `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in `strict`, where `1e-3000` is the double 0.0 and the two
   sides are bit-identical. A mode whose reading reaches no answer refuses the rule with
   uncertainty: a constant owed a witness in the mode's values with none found, or a battery the
-  mode could not read. `f64` reads every point it is given in float64, whether or not the reals
+  mode could not read. `strict` reads every point it is given in float64, whether or not the reals
   resolved it.
-- **`f64` is judged at every magnitude.** The judge's float64 lane reads each slot from the
+- **`strict` is judged at every magnitude.** The judge's float64 lane reads each slot from the
   smallest normal double to the largest (its grid stopped at 1e4 and the mine's rows at 1e3),
   past every magnitude to which the core keeps one of its own inverse collapses. Where float64's
-  sides differ with no operation leaving the range, `f64` fails; where one leaves it, the true
+  sides differ with no operation leaving the range, `strict` fails; where one leaves it, the true
   value stands. `sinh(asinh(x0)) -> x0` (66 units in the last place off at 1e100),
   `rootn(pow(x0, 3), 3) -> x0` (101 at 1e-100), `pow(x0, log(2)) -> pow(2, log(x0))` and
   `tan(atan(asinh(x0))) -> asinh(x0)` now hold in `permissive` only.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's
-  own value). `pow(0, C)` now collapses to `C` in `f64` and `real` (0 for C > 0, 1 at 0);
+  own value). `pow(0, C)` now collapses to `C` in `strict` and `real` (0 for C > 0, 1 at 0);
   `(-1)^C`, finite only at the integers, does not. A sum or product absorbs a ground member by
   the same licence, a product only a member certainly nonzero (`C * 0` stays 0). `permissive`
   collapses without evidence.
@@ -2187,7 +2187,7 @@ model predictions.
   the other), `pow(1, inf)`, `pow(inf, 0)`, `pow(nan, 0)`. `permissive`, whose values are
   real's, reads one zero as `real` does: `1/(x1*0)` is NaN (it was `inf/x1`, float64's signed
   zero), and a corpus row dividing by `x13 - x13` no longer prices above `real` there: on the
-  shipped corpus `permissive` is now at most as dear as `f64` and `real` on every row. `f64`
+  shipped corpus `permissive` is now at most as dear as `strict` and `real` on every row. `strict`
   keeps float64's values (`1/(x1*0)` is `inf/x1`). The table's `max` and `min` of an exact and an
   approximate value it cannot tell apart is approximate, never the exact member: `max(2,
   cosh(acosh(2)))` stays as written in `real`. Likewise `floor` and `ceil` of an approximate
@@ -2197,25 +2197,25 @@ model predictions.
 - **The interval layer reads each mode's values.** In `real` and `permissive` (and in the
   judge's measure) every point is the table's value and no float64 saturation exists: `1/0` and
   `tan(asin(1))` are undefined, `tanh(x)` stays below 1 past 19.06, `erf(x)` below 1 past 5.92
-  and `exp(x)` above 0 below -745.13; `f64` keeps float64's reading. So `acosh(tanh(x0))` has no
+  and `exp(x)` above 0 below -745.13; `strict` keeps float64's reading. So `acosh(tanh(x0))` has no
   evidence in `real` (it is undefined everywhere), and `rootn(-1, tanh(x0)) -> -1` is refused
   with a measured extension instead of an undecided measure (`tanh` stays inside (-1, 1), which
   holds no nonzero integer index).
-- **The interval layer holds every value it encloses.** In `f64`'s reading a point zero keeps
+- **The interval layer holds every value it encloses.** In `strict`'s reading a point zero keeps
   the sign float64 gives it where the layer computes it (a literal, a negation, `abs`, a sum, a
   product of two points, the reciprocal of an infinity) and may carry either sign elsewhere, and
   its reciprocal, or a negative power of it, is the infinity of each sign it may carry:
   `1/(-0.0)` and `1/(0*(-1))` are -inf, `1/atan2(-0.0, 1)` is either (it was +inf); in the reals
   it has no value. A zero the layer encloses as a hull (an interval that holds 0, not a point)
-  carries no sign, so its reciprocal and its negative odd powers are both infinities in `f64`
+  carries no sign, so its reciprocal and its negative odd powers are both infinities in `strict`
   (`1/atan2(-0.0, 0)` and `1/mod(1, -1)` are -inf in float64; they were enclosed with +inf
   alone), and its negative even powers +inf. A negative base under exponents past 2^53, each an even integer in float64,
   is the even power (`(-2)^1.8e308` is +inf; it was NaN). `besselj` at an infinite order holds
-  the kernel's NaN past x = 2 in `f64` (it was 0), and in the reals takes the limit (0 for +inf
+  the kernel's NaN past x = 2 in `strict` (it was 0), and in the reals takes the limit (0 for +inf
   at every finite argument, no value for -inf), as at an infinite argument (0 at +inf, and at
   -inf under an integer order). A value past the largest double is enclosed open towards
   infinity (`5e-324 + 1.8e308` had a NaN bound), and an overflow (`2 * 1.8e308`, `exp(710)`)
-  holds the true value and, in `f64`, float64's infinity (it was a finite part pinned at +inf).
+  holds the true value and, in `strict`, float64's infinity (it was a finite part pinned at +inf).
   The judge's whole-domain proofs and the mint's certificates rest on these enclosures.
 - **`permissive`'s own simplifications are one named list.** Inverse pairs cancel, powers
   compose, like terms cancel and a zero factor absorbs the product without a definedness check,
@@ -2246,39 +2246,39 @@ model predictions.
   so its rules are judged at the `_` sort, over real-valued bindings, and no disagreement at an
   isolated point is excused: `tanh(sinh(atanh(x0))) -> tanh(tan(asin(x0)))` differs only at
   x0 = +-1, and so on all of (0, 1] where `x0` is bound to `ceil(x1)` (1 against no value). It
-  holds in `f64`, and so in `permissive`, which includes every rule `f64` holds (tier `core`,
-  below). A rule `real` and `f64` hold only by an allowance a slot guards (an
+  holds in `strict`, and so in `permissive`, which includes every rule `strict` holds (tier `core`,
+  below). A rule `real` and `strict` hold only by an allowance a slot guards (an
   isolated infinity of the left side at a `?` slot, a `$` slot's zero) carries the new tier
-  `strict`, which the `f64` and `real` files may hold. Past the table's reach (a value beyond
+  `strict`, which the `strict` and `real` files may hold. Past the table's reach (a value beyond
   the doubles' range, `exp(sinh(-50))`) the doubles are float64's under the range standard.
 - **The judge reads every literal the engine writes.** A decimal whose exponent lies past
   4,000 (`2.827881176741212e-244756`, which the engine keeps as written) is read exactly, up to
   an exponent of 1,000,000; a rule holding it was refused as unsupported.
 - **`permissive` holds by agreement alone.** A permissive rule may give a value where its input
   has none, over real-valued bindings: `exp(log(x0)) -> x0` and `log(x0) - log(x0) -> 0` hold in
-  `permissive` (tier `permissive`), and so does every rule that holds in `f64`
+  `permissive` (tier `permissive`), and so does every rule that holds in `strict`
   (`asin(1e-8) -> 1e-8`). A rule that holds in `real` only because a `$` slot owes nothing at 0
   is tier `real-only`.
-- **`permissive` includes `f64`.** A rule holds in `permissive` where it holds in `f64`, or where
+- **`permissive` includes `strict`.** A rule holds in `permissive` where it holds in `strict`, or where
   permissive's own criterion holds (the reals' values at float resolution, with its
-  extensions). Permissive serves an f64 rule with its own matcher, every slot binding any
-  subexpression, and such a step promises what `f64` promises: float64's values agree wherever
+  extensions). Permissive serves a strict rule with its own matcher, every slot binding any
+  subexpression, and such a step promises what `strict` promises: float64's values agree wherever
   the left side has one. `ceil(abs(cos(x0))) -> 1`, `erf(sinh(atanh(x0))) -> erf(tan(asin(x0)))`
   and its `tanh` twin hold in `permissive` (in float64, `cos(asin(1.0))` is 6.1e-17 and
   `asin(1.0)` falls short of pi/2); `ceil(x0) - floor(x0) -> 1` stays refused in both modes (the
-  left side is 0 at every integer). The tiers are `core` (holds in f64, and so in both),
+  left side is 0 at every integer). The tiers are `core` (holds in strict, and so in both),
   `permissive` (holds in permissive alone) and `reject`. Evidence in `permissive` is float64's
   or the reals' (`simplipy._core.table_mode_evidence`), that of a reading the rule holds in:
   `(-1)^erf(C) -> C` has evidence in float64, where erf rounds to +-1 past |C| = 5.92, and is
   licensed in `permissive`; `tan(atan2(x0, 0)) -> nan` holds by permissive's own criterion
   alone, vacuously (no value in the reals off x0 = 0), and float64's evidence, where it is
   false, licenses nothing. The
-  permissive mint certifies a pair where its own check does or where f64's does, with f64's
+  permissive mint certifies a pair where its own check does or where strict's does, with strict's
   acceptance; permissive's ordering, price and liveness stay its own. The permissive mine keeps
-  every rule the f64 file holds through its offered lane, and `verify-mine` checks that the
-  permissive file covers the f64 file (gate `covers_f64`): on each f64 rule's generic instance,
+  every rule the strict file holds through its offered lane, and `verify-mine` checks that the
+  permissive file covers the strict file (gate `covers_strict`): on each strict rule's generic instance,
   permissive's answer costs no more, in permissive's price, than the rule's right side.
-- **The f64 check of the 0.15 heads reads data as finite.** The judge probes a `?` slot over
+- **The strict check of the 0.15 heads reads data as finite.** The judge probes a `?` slot over
   finite doubles only, and where an operation overflows the rewrite may give the true value:
   `ceil(1/cosh(x0)) -> 1` is `core` (it was `real`: the check tried `x0 = inf`).
 - **`simplipy.verify.licensed(lhs, rhs, mode, engine)`** is what a mode's file may hold: the
@@ -2286,7 +2286,7 @@ model predictions.
   evidence, the constant count, ground composites, the mine's cell, the serve ordering, special
   constants, duplication of a `_` slot, and what the engine does itself. `asin(1) -> acos(0)`
   holds in every mode and is refused as a ground composite; `exp(tan(asin(1))) -> inf` holds in
-  `f64` and has no evidence.
+  `strict` and has no evidence.
 - **The mint reads the judge's values and licences.** The mine's numeric acceptance kept
   criteria of its own beside the judge's, so a rule could pass the mint and be refused at the
   end, or never reach the judge though it holds. `real` and `permissive` re-judge a near miss
@@ -2296,7 +2296,7 @@ model predictions.
   row the table cannot read there is skipped, below). A source row float64 reads off a rounded
   pole is the table's: `tan(asin(ceil(x)))` has no value at ceil(x) = 1, where float64 gives
   1.633e16, and the source's evidence is counted in those values, so `tan(atan2(x, 0))`, which
-  has no value off x = 0, has none. `f64` compares the rows of a pair
+  has no value off x = 0, has none. `strict` compares the rows of a pair
   without constants by the judge's agreement, 8 units in the last place, where the mine's
   tolerance was wider, and its bar probes the mined variables over finite doubles, reading a
   probe where an operation leaves the range by the table: `ceil(1/cosh(x)) -> 1` passes.
@@ -2311,25 +2311,25 @@ model predictions.
   are gone with their evaluators (numpy and an exact one of its own), their probe lists (the
   atoms, with +-inf for a `?` slot, and the step and power preimages), the ground tier and the
   spike refusal; two positive controls (`x + 1 -> x` refused, `1*x -> x` licensed at `_`) are
-  asked of the judge first. `ceil(1/cosh(x)) -> 1` ships at `!` in `f64` and `real` (it was
+  asked of the judge first. `ceil(1/cosh(x)) -> 1` ships at `!` in `strict` and `real` (it was
   killed at `?`, at x = +-inf, which is no data) and at `_` in `permissive`, which binds a slot
   to real values only. A rule without slots has no rung and passes through, its judgment the
   mine's. `promote(judge=)` takes the mine's judge.
 - **The monitor judges with the judge, by what a whole answer promises.** `monitor_ruleset`
   judges each rewrite of the deployed engine as the judge judges the rule `input -> output`, in
-  the engine's default mode (`f64`): its own high-precision evaluator, which read the reals with
+  the engine's default mode (`strict`): its own high-precision evaluator, which read the reals with
   IEEE's signed zeros, its folds and its tolerances are gone, a tagged output is read through
   the engine, and a rewrite the judge cannot decide is unscored. A whole answer is held to
-  what `f64` promises for one: every rule step the engine took (each fire's rule instance,
+  what `strict` promises for one: every rule step the engine took (each fire's rule instance,
   `_core.Engine.ac_simplify_fires`) licensed in the mode, and the rewrite licensed as a whole
   or, the engine's own algebra being exact, true in the reals with float64's disagreements what
   rounding does, never a zero's sign or an infinity gained or lost. On the acj-4 engine with no
   rules, 186 of a 223-row corpus are rewritten: 2 are refused, both the engine's own
   (`1/(0 - x0^4) -> -1/x0^4` turns +inf into -inf at x0 = 0, the sign of a zero;
   `(-x0)^(-1/2) -> 1/(-x0)^(1/2)` loses the value at 0), and 8 are undecided;
-  `tan(x0 + pi) -> tan(x0)`, exact, is no longer refused. With the acj-4 `f64` file, 189 are
+  `tan(x0 + pi) -> tan(x0)`, exact, is no longer refused. With the acj-4 `strict` file, 189 are
   rewritten and one more refused, through the step `sin(acos(_0)) -> cos(asin(_0))`, which
-  does not hold in `f64` (at 1, 0 against 6.1e-17). Its poison self-test catches all five
+  does not hold in `strict` (at 1, 0 against 6.1e-17). Its poison self-test catches all five
   poisons.
 - **The mint refuses only what the judge refuses.** A pre-filter stricter than the judge leaves
   a licensed completion unmined, and the reduced length-4 mine's `real` and `permissive` files
@@ -2339,7 +2339,7 @@ model predictions.
   variables (the judge's isolated infinity: `sinh(atanh(x)) -> tan(asin(x))`, +inf against
   tan's pole at x = 1); a source value float64 gives off a rounded zero is the table's, as one
   off a rounded pole is (`tan(acos(-1.0))` is -1.2e-16 in float64, tan(pi) is 0); the special
-  points check float64's divergence in `f64` only; and in `permissive`, whose agreement is
+  points check float64's divergence in `strict` only; and in `permissive`, whose agreement is
   float resolution, the special points and the exceptional points leave a change of the reals
   to the judge.
 - **A wide miss is read, not refused.** The mint read a near miss's failing rows by the table
@@ -2362,7 +2362,7 @@ model predictions.
   atanh's pole exactly where ceil(x) = 1, and the mint refuses `-> 0` there as the judge does.
 - **Evidence is one function.** The interval layer's certificate confirms a cell at points read
   in the mode's values (its centre and three drawn in it, by the table in the reals, by the
-  f64 kernels in `f64`), and the mint reads the same function for a source as the judge's
+  float64 kernels in `strict`), and the mint reads the same function for a source as the judge's
   evidence policy does for a rule: the enclosure read `tan` of `atan2(x, 0)`, constant pi/2,
   as a varying argument's pole and certified cells of x > 0, so the policy licensed
   `tan(atan2(x, 0)) -> nan` where the mint found no evidence; both refuse it now in `real` and
@@ -2377,14 +2377,14 @@ model predictions.
 - **The mint reads as the judge reads.** Every check the mint applies before the judge either
   refuses only at a counterexample in the mode's values, by the mode's agreement, or counts the
   case as undecided.
-  - The `f64` mint reads the judge's magnitude ladder (one ladder, `table::F64_MAGNITUDES`):
+  - The `strict` mint reads the judge's magnitude ladder (one ladder, `table::F64_MAGNITUDES`):
     `sinh(asinh(x0)) -> x0` and its compositions, 66 units in the last place apart at 1e100,
-    are no longer proposed in `f64`.
+    are no longer proposed in `strict`.
   - The `permissive` mint reads the same ladder in the reals, at float resolution:
     `floor(atan(atan(x0))) -> floor(erf(x0))`, -2 against -1 in the reals at x0 = -1e5 (the sides
     part at |x0| = 74.69), is no longer proposed in `permissive`. Where the ladder refutes a pair,
-    `f64`'s lane may still certify it, which `permissive` serves.
-  - The special points are read in each mode's values: `f64` reads float64 at their doubles and
+    `strict`'s lane may still certify it, which `permissive` serves.
+  - The special points are read in each mode's values: `strict` reads float64 at their doubles and
     the reals only for a true value where an operation overflows or underflows; `permissive`
     reads the reals at the points themselves at float resolution, at every point:
     `ceil(cos(asin(x0))) -> 1` is refused at x0 = 1, where cos(pi/2) is 0 (float64 gives
@@ -2395,7 +2395,7 @@ model predictions.
     holds where either agrees: permissive's own reading refused `besselj(cos(1), C) -> C` at
     C = 0.1, where float64's fitted witness is 1.4e-11 off the reals' value.
   - At a special constant where the source owes a witness, the mint fits the target as at a
-    drawn instance. In `f64`, whose values the fit reads, a target with no witness there is
+    drawn instance. In `strict`, whose values the fit reads, a target with no witness there is
     refused by the mint, as the judge refuses it, and no longer left to the judge loop:
     `1/C^x -> C^x` at C = 0, where float64's left side is 0 on x < 0, and
     `exp(x + log(C)) -> C*exp(x)` at C = 0, where float64's `0*exp(838)` is NaN. Permissive
@@ -2430,7 +2430,7 @@ model predictions.
     licence, an entry it serves, preemption, liveness, a law the engine owns, a row the load
     mints anyway, the load's translation), and writes nothing.
 - **The permissive load serves what its judge licenses.** The load's pole entry, a pre-filter
-  that reads f64's values at a rule's exceptional points (`1/0` is +inf there), applies to f64
+  that reads strict's values at a rule's exceptional points (`1/0` is +inf there), applies to strict
   alone: in `permissive`, where `1/0` has no value and a rule may give one, it refused rules its
   judge licenses, so the mine could not close their overlaps. `inv(atanh(ceil(x0))) -> 0`, its
   `floor` twin and `sinh(acosh(1/x0)) -> tan(acos(x0))` are served and minted, and the reduced
@@ -2449,11 +2449,11 @@ model predictions.
 - **The rule monitor labels a rewrite by its mode's verdict.** `judge_pair` reads the mode's
   own answer: `OK` where the mode holds the rewrite, `VIOLATION` where it refuses it, `UNSCORED`
   where it reaches no answer. The reals' verdict is no mode's label: `(x - x)/(x - x) -> 1`,
-  whose measure is undecided in the reals, is a `VIOLATION` in f64 (0/0 against 1 at every
-  double), where it was `UNSCORED`. Holding an engine's answer to F8, a rewrite f64 refuses
+  whose measure is undecided in the reals, is a `VIOLATION` in strict (0/0 against 1 at every
+  double), where it was `UNSCORED`. Holding an engine's answer to F8, a rewrite strict refuses
   whose exactness in the reals the judge cannot decide stays `UNSCORED`.
 - **The differential test runs the specification's workload.** `tests/test_differential_workload.py`
-  holds every step to the judge on generated inputs, in f64 and permissive: every (source,
+  holds every step to the judge on generated inputs, in strict and permissive: every (source,
   candidate) pair the length-4 scan considers for 500 sources, with the verdict that decided it;
   the overlap completions proposed on a shipped rule file; every respelling sort promotion
   tries; a probe table of each operator at its poles, +-0, +-inf, NaN, the overflow and
@@ -2463,11 +2463,11 @@ model predictions.
     reach, the rows, the fit, the domain gate, which names an undecided measure apart, the
     special points and constants, literal resolution, the Dirac refuter, the emit guard, the
     collapse licence, evaluability) or the acceptance's answer on the target it emits.
-  - The load names a policy before f64's pole entry: a pair whose right side holds a slot its
-    left side does not bind reads as ill-formed in f64 too, where the pole entry, a pre-filter
+  - The load names a policy before strict's pole entry: a pair whose right side holds a slot its
+    left side does not bind reads as ill-formed in strict too, where the pole entry, a pre-filter
     of truth, hid the policy from the licence.
   - The probe table found defects outside the miner. One stays open, a test marked with it: the
-    engine's f64 fold of a numeric expression is not float64's value in written order
+    engine's strict fold of a numeric expression is not float64's value in written order
     (`0.1 + 0.2` folds to 0.3, `0 * (-1)` to +0). The interval layer's enclosures that missed a
     value hold it now ("The interval layer holds every value it encloses"), and their tests guard
     them.
@@ -2525,10 +2525,10 @@ model predictions.
   `exp(tan(asin(1))) -> inf` (no evidence). A refused overlap and a dropped row carry the
   policies that refuse them (`refused_by`) beside the judge's tier.
 - **The reduced length-4 mine, mined again** with the mint, promotion and gates above (seed 42,
-  4 threads): 429 `f64`, 495 `real` and 682 `permissive` rules (392, 543 and 422 before), in
-  4,104 s (2,983 before: `f64` 603 s, `real` 1,768, `permissive` 1,731, the length-4 scans of
+  4 threads): 429 `strict`, 495 `real` and 682 `permissive` rules (392, 543 and 422 before), in
+  4,104 s (2,983 before: `strict` 603 s, `real` 1,768, `permissive` 1,731, the length-4 scans of
   `real` and `permissive` 1,506 and 1,345 s against 894 and 1,005). `verify-mine` holds every
-  gate of the `f64` file and every gate but the overlaps of the other two, which lack 2 and 4
+  gate of the `strict` file and every gate but the overlaps of the other two, which lack 2 and 4
   completions their mode licenses: `floor(erf(cosh(x))) -> 0` (float64 rounds erf to 1 on
   more than half the rows, and the mint takes only a near miss to the table), in `real`
   `tan(atan2(x, 0)) -> nan` (the evidence policy reads the interval layer, which certifies
@@ -2539,10 +2539,10 @@ model predictions.
   Of the rules with a variable the files lose, every `permissive` one (55) and 11 of 18 `real`
   ones are served by the new files; the rest the judge no longer licenses in the mode
   (`pow(0, asinh(_0)) -> pow(0, _0)` and four siblings, `atan2(0, ceil(_0)) -> atan2(0, _0)`
-  and its `floor` twin), and in `f64` three hold by the judge and fail the mint's agreement
+  and its `floor` twin), and in `strict` three hold by the judge and fail the mint's agreement
   to 8 units in the last place on its rows (`log(exp(atanh(_0))) -> atanh(_0)`).
 - **What the new judgment moves.** On a reduced length-4 mine of this version, verify-mine
-  keeps every rule of the `f64` (392) and `permissive` (422) files and refuses 17 of
+  keeps every rule of the `strict` (392) and `permissive` (422) files and refuses 17 of
   the 543 `real` rules, each for one of the reasons above: `1/exp(_0) -> exp(-_0)` (at
   `_0 = -inf` the left side is `1/0`), `atan2(0, 1/_0) -> atan2(0, _0)`, `pow(0, f(_0)) ->
   pow(0, _0)` for five odd functions f, and ground facts through `tan(pi/2)`
@@ -2562,7 +2562,7 @@ model predictions.
   not move again. Every spelling of length 5 or less over the operators around `nan`, `inf`,
   `-inf`, `0`, `-0.0` and `x0` builds in both modes.
 - **A mine with proposals finalizes.** Rules that join a mine through the proposal channel
-  (the proposals, the f64 file offered to permissive, the overlap completions) or through
+  (the proposals, the strict file offered to permissive, the overlap completions) or through
   sort promotion pass the twin-shadow removal where they join, as a length's picks do: of two
   rows that are each other's orientation twin, the one whose rewrite the other's twin already
   serves is dropped there and recorded in the sidecar (`twin_shadowed`). The final gate found
@@ -2574,38 +2574,38 @@ model predictions.
   other operators appear at every length. The mine's cell is the universe this gives: the
   overlap completion offers, and the overlap gate and `verify-mine` demand, only completions
   whose source lies in it. The sidecar records the setting among the parameters, and a
-  checkpoint written under another setting is not resumed. Proposals and the f64 file offered
+  checkpoint written under another setting is not resumed. Proposals and the strict file offered
   to permissive are not bounded by it, as they are not by `max_source_pattern_length`.
   `certify_rules` takes the same keyword for its candidate library. Without the setting a mine
   is unchanged, byte for byte.
-- **`f64` admits the identities float64 only rounds.** A rule with variables holds in `f64`
+- **`strict` admits the identities float64 only rounds.** A rule with variables holds in `strict`
   where float64's two sides agree to 8 units in the last place, as before, or where it is true
   in the reals and float64's two sides agree in kind -- both finite -- at every point the judge
   reads where the reals give both sides a value, and to 8 units in the last place at every
   other point. There is no error bound in the second reading:
   `sin(x0 + pi) -> -sin(x0)` (1.2e-16 against -0 at x0 = 0), `exp(x0 + log(2)) -> 2*exp(x0)`,
   `x0 + 1 - x0 -> 1`, `sinh(asinh(x0)) -> x0`, `floor(x0 + 1) -> floor(x0) + 1` (1 against 0
-  at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0` hold in `f64`; `atanh(tanh(x0)) -> x0` (+inf
+  at x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0` hold in `strict`; `atanh(tanh(x0)) -> x0` (+inf
   against x0), `exp(log(x0)) -> x0`, `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1
   against -1 on x0 > 0, where the reals give neither side a value), `pow(cos(C), inf) -> 0` (1
   against 0 at C = 0) and every rule false in the reals do not. The judge decides
   it in one place (`verify._contract.strict_reading`), which `verify_rule`, the mine's judge and
   `verify-mine` read, and a verdict reports float64's two readings (`realised_f6`,
-  `realised_kinds`). The f64 mine reads its rows by one agreement at every row it reads, the
+  `realised_kinds`). The strict mine reads its rows by one agreement at every row it reads, the
   rows where an operation overflowed aside: strict's, where a value is off by where it came
   from -- an evaluated side by rounding, within the mine's tolerances (`rtol`, `atol`), a fitted
   constant by the fit's band (`log(exp(x0)) -> x0` and `acosh(cosh(x0)) -> abs(x0)`, with an
   overflow row and a rounding row, and `besselj(cos(1), C) -> C'` are mined). The overlap gate
-  reads the same agreement: a completion the judge licenses and the f64 mine's agreement refuses
-  is no rule of the f64 file, recorded in the sidecar as left unjoined by the prefilter
-  (`overlaps_prefilter`, counted by `verify-mine`); the permissive file joins it. The f64 mine
+  reads the same agreement: a completion the judge licenses and the strict mine's agreement refuses
+  is no rule of the strict file, recorded in the sidecar as left unjoined by the prefilter
+  (`overlaps_prefilter`, counted by `verify-mine`); the permissive file joins it. The strict mine
   reads the f64 bar, the magnitude ladder, the special points and
   the Dirac refuter by both readings (`pow(sin(x0), inf) -> 0`, 1 against 0 at pi/2's double,
   where the reals' left side is 0); an identity whose rounding a function magnifies past the
-  tolerances is not mined in `f64`. The engine's own inverse collapses keep their bands
-  (`acosh(cosh(x))` to |x| >= 1), so `acosh(cosh(x0)) -> abs(x0)` holds as a rule in `f64` where
+  tolerances is not mined in `strict`. The engine's own inverse collapses keep their bands
+  (`acosh(cosh(x))` to |x| >= 1), so `acosh(cosh(x0)) -> abs(x0)` holds as a rule in `strict` where
   the constructor does not collapse it.
-- **`f64` reads a zero's sign where it changes a value on a region.** Both of `f64`'s readings
+- **`strict` reads a zero's sign where it changes a value on a region.** Both of `strict`'s readings
   refuse a rule where float64 gives its two sides zeros of opposite sign, and the reading in
   kind refuses a difference at which exactly one side's value turns on a zero's sign: the value
   changes when every negative zero that a divisor, `inv`, `pow`, `rootn` or `atan2` receives is
@@ -2619,19 +2619,19 @@ model predictions.
   two sides agree, a zero's sign one side reads is no change: `1/(0*x1) -> inf/x1` holds. The
   definition is the core's (`battery::zero_sign_event`); the judge reads it at every point of its
   f64 lane and at the deployed bar's probes for every rule (`_core.zero_sign_bar_sorted`; a
-  verdict reports `zero_sign` and `zero_sign_bar`), and the f64 mint applies the bar to every
+  verdict reports `zero_sign` and `zero_sign_bar`), and the strict mint applies the bar to every
   pick, so it picks only what the judge holds. The deployed bar of a rule with a 0.15 head reads
   two zeros as one value; it told them apart at every probe where the rule held an operation
-  that reads a zero's sign, an isolated point included. A fitted constant is a double in `f64`,
+  that reads a zero's sign, an isolated point included. A fitted constant is a double in `strict`,
   -0.0 included: the witness of `max(C, -0.0) -> C` at C = -1.5 is -0.0 (a snap no longer moves a
-  zero's sign), so the rule holds. Permissive reads one zero and is unchanged: it includes `f64`
+  zero's sign), so the rule holds. Permissive reads one zero and is unchanged: it includes `strict`
   with the two zeros one value (a verdict reports that reading as `realised_one_zero`), and
-  takes float64's evidence for a rule `f64` so read holds, as before
+  takes float64's evidence for a rule `strict` so read holds, as before
   (`neg(acosh(erf(x0))) -> acosh(erf(x0))`, whose left side has no value in the reals); where a
   rule's tier cannot say which evidence applies, the licence reads the judgment, as
-  `verify-mine` does, and the permissive mint certifies through `f64` with the two zeros one
+  `verify-mine` does, and the permissive mint certifies through `strict` with the two zeros one
   value.
-- **`f64` reads an infinity's sign at an isolated pole as a zero's.** At a point where float64's
+- **`strict` reads an infinity's sign at an isolated pole as a zero's.** At a point where float64's
   two sides differ (F6) and agree once the zeros one side's operations read as poles (a divisor,
   `inv`'s operand, the base of `pow` or `rootn` at a negative exponent) are read with the other
   sign, they agree where the pole is isolated (along a data variable or a fitted constant, no
@@ -2642,7 +2642,7 @@ model predictions.
   `POLE-SIGN` among `f64_kinds`), and the deployed bar at its probes, along a data variable or a
   fitted constant and at a sort's isolated value. The monitor admits it in a whole answer
   (`judge_pair`).
-- **A verdict's `permissive` includes `f64`.** It is permissive's reading, so it holds wherever
+- **A verdict's `permissive` includes `strict`.** It is permissive's reading, so it holds wherever
   `realised` does; permissive's own criterion alone is `permissive_own`. The field used to be
   the own criterion: `2*tanh(x0)/(1 + tanh(x0)^2) -> 2/(tanh(x0) + 1/tanh(x0))` read `realised`
   true (float64's `1/0` is `inf`) and `permissive` false (the reals' `1/0` has no value). The
@@ -2659,7 +2659,7 @@ model predictions.
 - **An extension isolated by an underflow is a null set in the f64 bar.** The bar and the
   magnitude ladder read an extension's neighbouring doubles as the judge's lane does: a
   neighbour where an operation overflowed or underflowed, or where neither side has a value, is
-  no extension. `atan2(x0, x1)/atan2(-x0, x1) -> -1` holds in `f64` (the input is 0/-0 on
+  no extension. `atan2(x0, x1)/atan2(-x0, x1) -> -1` holds in `strict` (the input is 0/-0 on
   x0 = 0, x1 > 0, and `atan2(5e-324, 2)` underflows to 0 beside it).
 - **A step is judged alike alone and inside an expression that cancels it.** Where both sides
   cancel to residue, the judge's decay test reads the residue at the intermediates' scale, as it
@@ -2715,7 +2715,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   `simplify` does; passing the keyword raises `TypeError`. For another notation, convert the
   answer with `to_infix`, `to_tagged` or `to_prefix`.
 - **`complexity(..., canon=)`.** `complexity()` prices each mode in its own reading, and the
-  keyword that priced a mode's parse in `f64`'s canon is gone (passing it raises `TypeError`). To
+  keyword that priced a mode's parse in `strict`'s canon is gone (passing it raises `TypeError`). To
   compare answers of different modes on one scale, use `simplipy.mining.cross_mode_complexity`.
 - **`explicit_constant_placeholders(..., convert_numbers_to_constant=)`.** The helper renames
   placeholder slots and never numerals; which literals become fittable constants is decided
@@ -2741,7 +2741,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   They named the exemption that let rules with more than one `<constant>` on the left side
   ship unjudged; the judge decides such rules now (see In detail).
 - **`monitor_ruleset`'s `tolerated` and `f64_folds`.** The monitor judges with the rule judge,
-  which tolerates nothing a mode does not license and reads an f64 fold as any other rewrite;
+  which tolerates nothing a mode does not license and reads a strict fold as any other rewrite;
   a rewrite it cannot read or decide is counted under `unscored`.
 - **`utils.remove_pow1`**, a cleanup of the generation-1 `pow1`/`pow_1` operators that nothing
   called. Generation-2 configs that declare those names as operators still evaluate them.
@@ -2789,7 +2789,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   from 18.990341103219276), and on AVX-512 hosts numpy routes `exp`, `log`, `tan`, the inverse
   trigonometric and hyperbolic functions, `sinh`, `cosh`, `power` and `arctan2` through Intel's
   SVML. The transcendentals are the platform libm's, through one module of the core. So `tanh`
-  is exactly 1.0 from 19.061547465398498 (glibc), where float64's tails are now read in `f64`
+  is exactly 1.0 from 19.061547465398498 (glibc), where float64's tails are now read in `strict`
   (`atan`'s stays 5805358775541310). Scalars give numpy float64 scalars (`abs` keeps a Python
   scalar's own type and `rootn` gives a float, as before); arrays of 32,768 elements or more
   are split over threads (`SIMPLIPY_KERNEL_THREADS` caps the count; 1 keeps every call on the
@@ -2801,7 +2801,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   numpy's, in the realization, the constant fold and the evaluator alike. So `(-0.0)**0.5` is
   `-0.0` (C's `pow` gives `+0.0`), and the other cells are unchanged (`(-inf)**0.5` is NaN, as
   every negative base under a non-integer exponent). `pow(b, 1/2)` and `rootn(b, 2)` are then
-  two functions at `b = -0`, which `f64` keeps apart where `b` may be a zero with a sign of its
+  two functions at `b = -0`, which `strict` keeps apart where `b` may be a zero with a sign of its
   own: `pow(-0.0, 1/2)` is `-0.0` and `rootn(-0.0, 2)` is `0`; over a base that vanishes with a
   sign on a region, `pow(ceil(x0), 1/2)` stays the call it is, so `1/pow(ceil(x0), 1/2)` is
   `-inf` and `1/rootn(ceil(x0), 2)` is `inf` on (-1, 0), and `ceil(x0)^(-1/2)` is
@@ -2825,7 +2825,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   `acj2-5-4-llm/`.
 - **The nine heads in every layer.**
   - *Folds.* `floor`, `ceil` and `mod` of literals fold exactly in `real` (`mod(a, 0)` is NaN)
-    and to their float in `f64` and `permissive`, where a literal reads as its float
+    and to their float in `strict` and `permissive`, where a literal reads as its float
     (`floor(0.99999999999999999)` is 1 there, 0 in `real`). A function of literals whose float
     is dearer than it stays written (`erf(1)`), as for the other heads. `erf` is odd, so
     `erf(-x)` is `-erf(x)`.
@@ -2839,17 +2839,17 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     a negative integer (`besselj(sin(1), 0)` is `0`) and `atan2(0, x)` at an `x` certainly
     positive (`atan2(0, cosh(1))` is `0`). An undecided enclosure leaves the node as written:
     `floor(tanh(40))` and `ceil(exp(-800))` stay, where float64 gives `1` and `0` and the reals
-    `0` and `1`. `f64` and `permissive` keep their float folds. The `real` rule file no longer
+    `0` and `1`. `strict` and `permissive` keep their float folds. The `real` rule file no longer
     states these values one spelling at a time (the length-4 mine drops 816 such facts).
   - *A ground fold returns a member.* A ground node whose value is one of its own arguments'
-    folds to that argument, never to a newly written float: in `f64` and `permissive` where
+    folds to that argument, never to a newly written float: in `strict` and `permissive` where
     float64 gives the argument's bits, in `real` where an enclosure proves it.
-    `mod(sin(1), 123456.78912345678)` and `mod(sin(1), 2)` are `sin(1)` in every mode (`f64` and
+    `mod(sin(1), 123456.78912345678)` and `mod(sin(1), 2)` are `sin(1)` in every mode (`strict` and
     `permissive` wrote the float `0.8414709848078965`, or kept the call), `abs(sin(1))` and
-    `abs(-sin(1))` are `sin(1)`, and in `f64` and `permissive` `sin(1) + 1e-30` is `sin(1)`,
+    `abs(-sin(1))` are `sin(1)`, and in `strict` and `permissive` `sin(1) + 1e-30` is `sin(1)`,
     float64's value of the sum (`real` keeps it). Where several arguments carry the value the
     cheapest is taken; a literal argument is its float (`floor(0.99999999999999999)` is `1` in
-    `f64`).
+    `strict`).
   - *`max` and `min` are bags,* as sums and products are: `max(x2, max(x0, x1))`,
     `max(max(x1, x2), x0)` and `max(x0, x1, x2)` are one answer, written `max x0 max x1 x2`
     in the explicit form (the right-nested chain of the members in the canonical order),
@@ -2860,14 +2860,14 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     (NaN-propagating, `-0` below `+0`; like `np.maximum` they return the first NaN operand,
     whose payload the engine does not read), and each was put to the judge: equal members
     collapse (`max(a, a)` is `a`; two `<constant>`s stay apart), the literal members fold to
-    their extreme (`max(-0.0, 0)` is `0`, `min(-0.0, 0)` is `-0.0` in `f64`; in `real` and
+    their extreme (`max(-0.0, 0)` is `0`, `min(-0.0, 0)` is `-0.0` in `strict`; in `real` and
     `permissive` `pi` and `e` fold with them, each comparison decided by a certified enclosure:
     `max(3, pi)` is `pi`, `min(e, pi, 4)` is `e`; so does every ground member whose value set
     certainly is a finite real, `max(sin(1), 1/2)` is `sin(1)` and `min(-1, asinh(1))` is `-1`,
-    and two members whose enclosures overlap both stay; `f64`'s ground fold reads them all as
+    and two members whose enclosures overlap both stay; `strict`'s ground fold reads them all as
     their floats), `-inf` drops from
     a `max` and `+inf` from a `min`, and a NaN member makes the bag NaN. A ground bag folds in
-    `f64` and `permissive` to the member whose float64 value is the bag's, never to a newly
+    `strict` and `permissive` to the member whose float64 value is the bag's, never to a newly
     written float, and members of one value (the same float64 bits; `+0` and `-0` are two) are
     decided by price: `max(sin(1), 0.8414709848078965)` is `sin(1)` (it was the literal, 7 times
     the price), `max(np.pi, 3.1415926535897933)` is `np.pi`, `min(sin(-0.0), 0)` is `-0.0`. `real`
@@ -2876,7 +2876,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     none decides: `max(sin(1), 0.8414709848078965)` is `sin(1)` (6.7e-18 apart; it kept both),
     `max(cosh(acosh(2)), 2)` keeps both. The readings can pick differently:
     `max(cosh(acosh(3)), 3.0000000000000001)` is the literal in `real` (3 is below it) and
-    `cosh(acosh(3))` in `f64` and `permissive`, whose kernels give 3.0000000000000004 and read
+    `cosh(acosh(3))` in `strict` and `permissive`, whose kernels give 3.0000000000000004 and read
     the literal as 3.0. The absorber and the
     dual bag need their other members to be no NaN almost everywhere (the finite-a.e. licence;
     `max(+inf, nan)` is `nan`): `max(+inf, x0)` is `+inf` and `max(x0, min(x0, x1))` is `x0`,
@@ -2905,7 +2905,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     certificates read each of the nine by its argument, so a cancellation or a zero product
     over one is licensed where it was refused: `x1*erf(x2)/erf(x2)`,
     `x1*besselj(0, x2)/besselj(0, x2)`, `max(x1, x2)/max(x1, x2)` and
-    `x3*mod(x1, x2)/mod(x1, x2)` are `x1`, `1` and `x3`, and `mod(x1, x2)*0` is `0`, in `f64`
+    `x3*mod(x1, x2)/mod(x1, x2)` are `x1`, `1` and `x3`, and `mod(x1, x2)*0` is `0`, in `strict`
     and `real`. `erf` vanishes only at 0; `besselj` at a literal order has isolated zeros in x;
     `harmonic` is finite off its poles at the negative integers and vanishes once between each
     two; `max` and `min` vanish only where a member does; `mod(x, y)` vanishes on countably many
@@ -2913,12 +2913,12 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     stay refused where the head vanishes, is NaN or has a pole on a region: `floor(x2)` (0 on
     [0, 1)), `ceil(x2)`, `besselj(3/2, x2)` (NaN below 0), `besselj(x1, x2)` (an order that is
     no literal), and `mod(x1, 2)`, which float64 makes 0 at every |x1| >= 2^53. A step head of
-    an argument that certainly misses the interval is nonzero (`floor(exp(x2) + 2)`). In `f64`,
+    an argument that certainly misses the interval is nonzero (`floor(exp(x2) + 2)`). In `strict`,
     `harmonic(x2)*0` and `x1*harmonic(x2)/harmonic(x2)` stay: float64's `harmonic` is NaN at
     every float at or below -2^52, each a negative integer; `real` gives `0` and `x1`.
   - *Signed zeros.* `ceil(-0.5)`, `mod(3, -3)` and their kin are -0 in float64, and `atan2`
     reads the sign of a zero in both arguments, as an inverse does (`atan2(-0, -1)` is -pi,
-    `atan2(+0, -0)` is pi). In `f64` such a ground folds to `-0.0` and a ground infinity takes
+    `atan2(+0, -0)` is pi). In `strict` such a ground folds to `-0.0` and a ground infinity takes
     float64's sign (`1/ceil(-0.5)` and `1/mod(3, -3)` are `-inf`). Every `atan2` node is built
     from its arguments' product members, however it arises (the parse, a rule's right-hand
     side, the pass's rebuild): a negative coefficient of the first leaves the call,
@@ -2926,7 +2926,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     moves into a sum's orientation, so a sum that vanishes on a region keeps the sign of its
     zero in either argument (printed as the negation it is). The search moves inside an
     `atan2`'s arguments as inside any other head's (`atan2((x0 + 1)^2 - x0^2 - 1, x1)` is
-    `atan2(2*x0, x1)`), and in `f64` takes no move where the product member it rewrites, or what
+    `atan2(2*x0, x1)`), and in `strict` takes no move where the product member it rewrites, or what
     it writes, vanishes with a sign of its own, the bar an inverse keeps:
     `atan2(x0*x1 - x0*|x1|, -1)` stays, since the factored `x0*(x1 - |x1|)` is -0 for every
     x1 >= 0 where x0 < 0 and the call would read -pi for pi. The step and lattice heads count as
@@ -2940,17 +2940,17 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     kernels by float64's agreement (within 8 units in the last place, the two zeros one value
     except where a head of the rule reads a zero's sign, an isolated NaN of the left side
     excused where a data variable's neighbouring doubles give it a value: `ceil(atan(x)/x) -> 1`,
-    `erf(0.1*x) -> erf(x/10)` and `floor(floor(x) + 0.5) -> floor(x)` hold in `f64`) at each
+    `erf(0.1*x) -> erf(x/10)` and `floor(floor(x) + 0.5) -> floor(x)` hold in `strict`) at each
     variable's battery, +-inf, NaN, -0, the float neighbours of the integers, tiny and huge
     magnitudes and the negative integers, every 0.05 over [-25, 25] and on the diagonal: one
     function in the core (`f64_bar`), which the
-    contract judge ANDs into a rule's realisation and the `f64` mine applies to every pick. So
+    contract judge ANDs into a rule's realisation and the `strict` mine applies to every pick. So
     `floor(x + 1) -> floor(x) + 1`, `mod(x + 1, 1) -> mod(x, 1)` and `floor(mod(x, 1)) -> 0`,
     true over the reals and false in float64 just below an integer, are minted in `real` and
-    `permissive` and refused in `f64`, and `ceil(x) -> floor(x) + 1`, false at every integer,
+    `permissive` and refused in `strict`, and `ceil(x) -> floor(x) + 1`, false at every integer,
     is refused everywhere. A source `<constant>` is probed as a finite variable; a fitted target
     constant beside a step head or `mod` cannot be judged bit for bit, so such a rule is not
-    served in `f64`. A source constant of such a source is also swept over zero and the small
+    served in `strict`. A source constant of such a source is also swept over zero and the small
     integers and half-integers, and the refuter's witnesses read the new heads (integer
     neighbours for `floor`, `ceil` and `harmonic`; preimages through `atan2`, `mod`, `max`
     and `min`).
@@ -2981,7 +2981,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     killed at x = asinh(-5.5). Its ground tier skips a probe a contract kernel cannot decide
     (`erf(1e20)`, inside the band of its asymptote) instead of dropping the rule as unevaluable,
     so licensed constant collapses such as `acos(erf(c)) -> c_t` and
-    `harmonic(exp(c)) -> c_t` reach the `f64` and `real` files (`permissive` folds a function
+    `harmonic(exp(c)) -> c_t` reach the `strict` and `real` files (`permissive` folds a function
     of a constant itself).
   - *The judge's constant witness.* The witness of a target `<constant>` is polished at the
     generic point the fit determined it at (it was always the first one, where a lattice head
@@ -3016,7 +3016,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     the parity hold bit for bit in float64, a zero's sign included; a sum's orientation keeps
     the sign of its zero exactly where `sin`'s does (where the zero set may hold a region). A
     literal order at 0 folds exactly: `besselj(0, 0)` is `1`, `besselj(5/2, 0)` and
-    `besselj(-2, 0)` are `0` (in `f64` the kernel's zero, whose sign varies with the order:
+    `besselj(-2, 0)` are `0` (in `strict` the kernel's zero, whose sign varies with the order:
     `besselj(-1, 0)` and `besselj(1.5, 0)` are `-0.0`, so `1/besselj(1.5, 0)` is `-inf`, as in
     scipy), and a negative non-integer order gives its pole's one-sided limit, the sign of
     `1/Gamma(nu + 1)`: `besselj(-1/2, 0)` is `inf`, `besselj(-3/2, 0)` is `-inf`, as scipy
@@ -3069,7 +3069,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `bessely` at x = 0 under a negative half-integer order has no value (the orders beside it
     tend to infinities of both signs, so the joint limit does not exist), nor has `besseli` at an
     infinite negative order at any argument, as for `besselj`; `permissive` folds them to `nan`,
-    and `f64` keeps scipy's cells (`yv(-0.5, 0)` is `-inf`, `iv(-inf, -1)` is 0). An
+    and `strict` keeps scipy's cells (`yv(-0.5, 0)` is `-inf`, `iv(-inf, -1)` is 0). An
     approximate order within the working band of a negative half-integer leaves `bessely` at 0
     undecided. Values come from
     the power series, the integer-order series of DLMF 10.8.1 and 10.31.1 and the Hankel
@@ -3082,7 +3082,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   - *Elsewhere.* The libm fingerprint probes each kernel in each of its regimes. `besseli`'s
     order is a `masking.Role.ORDER`, as `besselj`'s, and kept by `mask_fittable`; the orders of
     `bessely` and `besselk` are values (both functions are defined on x > 0 at every order).
-    `prettify` writes a Bessel order exactly, as an exponent. In `f64` the four may vanish on a
+    `prettify` writes a Bessel order exactly, as an exponent. In `strict` the four may vanish on a
     whole region with a sign of their own, so a sum keeps a `+0` term beside one, as beside
     `ceil` (`bessely(2, x1) + 0`). Rules spelled with them answer to the deployed bar, as the
     other 0.15 heads' do.
@@ -3113,11 +3113,11 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   function (`tanh`, `erf`, `erfc`) left inside the band of its bound tells the reading its
   distance to the bound, and the next rung at an owed point is sized to resolve it:
   `floor(erf(exp(_0))) -> 0` is read at `_0 = 3`, where `erf(exp(3))` is 1 - 1.7e-177, at about
-  400 digits. The f64 bar of the 0.15 heads no longer turns an `f64` reading that reached no
+  400 digits. The f64 bar of the 0.15 heads no longer turns a `strict` reading that reached no
   answer into a pass.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
-  judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and
+  judged: `real` read the strict fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and
   `rootn(2, 3)`, `x1 + rootn(2, 3)` and `x1*rootn(10, 5)` simplified to `nan` in `real` (212
   such rows served on acj-5-4-llm). `from_config` now reads each file's canon off its
   provenance sidecar: a recorded `mode` is that mode's canon; a file whose sidecar records none
@@ -3127,15 +3127,15 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   `SimpliPyEngine(rule_canons=...)`; on the core, `from_strs(.., canon)`,
   `set_mode_rules(.., canon=)`, `ac_canonical_keys(.., canon=)` and `mode_rules_canon`.
   On acj-5-4-llm, `real` now serves 133,552 rules (was 132,754; 122 subsumed at load, was 838)
-  and the f64 file keeps 141 more rows through the construction dedup.
+  and the strict file keeps 141 more rows through the construction dedup.
 - **The engine-owned-law gate takes the search's own FACTOR move.** The load and the miner
   refused a distributive-law rule only over plain sums and products, so
   `sin(x)*a + sin(x)*b -> sin(x)*(a + b)` loaded and was mined although the search performs it
   in every mode. The gate now judges the rule on an instance the search meets, with the search's
-  licence and `factor_moves`. On acj-5-4-llm it drops 2 (f64), 10 (real) and 13 (permissive)
+  licence and `factor_moves`. On acj-5-4-llm it drops 2 (strict), 10 (real) and 13 (permissive)
   rows at load, was 0, 5 and 5.
 - **A mine without `--reset-rules` starts each mode from its own set.** The real and
-  permissive mines were seeded from the f64 set.
+  permissive mines were seeded from the strict set.
 - **No judge timeout inside a mine.** The judge's 30 s wall-clock timeout filed a slow
   judgment as a rejection, so a mined file depended on machine load. A mine now judges with no
   timeout under a watchdog: a judgment past `judge_warn_s` (60 s) is logged, one past
@@ -3163,7 +3163,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   exhausted its eight rounds on spellings of one value (`bessely(erfc(10), x1)`,
   `(x0 - abs(x0))/2 -> min(x0, 0)`) are refused that value once and go on to the next
   candidate. The library is smaller by the spellings it no longer holds.
-- **A mine resumed after a ladder snapshot finishes.** It took the f64 snapshot it had
+- **A mine resumed after a ladder snapshot finishes.** It took the strict snapshot it had
   finished as unfinished and failed at the permissive snapshot; it now takes it as it is, and
   every file and snapshot equals a mine run through.
 - **The judge loop of a split length splits too** (`find_rules(split_loop=True)`, CLI
@@ -3197,7 +3197,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 - **The promotion refund reads the constructor's dedup** instead of a copy of it ("shortest
   target"), which disagreed with the serve-ordering tie-break and sent every probe to the slow
   rebuild.
-- **The search keeps a one-signed pole joined** in `f64` and `real`, where a pole is read by its
+- **The search keeps a one-signed pole joined** in `strict` and `real`, where a pole is read by its
   limit. Distributing `(1 + x3 - x1 + 5/3*exp(x2))/abs(x3)` gave
   `5/3*exp(x2)*abs(1/x3) + (x3 + 1 - x1)*abs(1/x3)`, which is `inf - inf` at `x3 = 0` wherever
   `1 < x1 < 1 + 5/3*exp(x2)`, where the expression is `+inf`. A factor is now distributed only
@@ -3205,16 +3205,16 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   (`1/x`, `1/sin(x)`), or where the terms it multiplies keep one sign. Answers change on 4 of
   srbf's 6,531 ground truths and 11 of a tenth of the T8.1 inputs in each of the two modes, none
   priced lower; `permissive` keeps no value at a pole and is unchanged.
-- **`mode='real'` is never served the f64 set, also while another thread unloads it.** The
+- **`mode='real'` is never served the strict set, also while another thread unloads it.** The
   fail-closed check runs inside the core call, under the read guard the answer is computed
   under. A call that finds the set unloaded rebuilds it and answers, where it used to raise
-  `ValueError` or, rarely, answer from the f64 set.
+  `ValueError` or, rarely, answer from the strict set.
 - **No call waits for the engine with the GIL held.** A call queued behind a rule push
   (`set_mode_rules`, a deferred set's first build) froze every other Python thread until the push
   landed (14.9 s measured); every entry now waits with the GIL released.
 - **Permissive answers holding tiny numbers are fixpoints.** `x1 + 5/1.7976931348623157e308`
   folded to `2.781342323134002e-308`, a literal the reader keeps as a symbol, so a second call
-  reordered the sum. A folded float whose shortest decimal is outside the f64 number range stays
+  reordered the sum. A folded float whose shortest decimal is outside the float64 number range stays
   unfolded, as the written decimal does.
 - **`to_tagged` bags every quotient.** `to_tagged(['exp', '1/2'])` is
   `['exp', '<mul>', '1', '<div>', '2', '</mul>']` and `to_tagged(['inv', 'x0'])` is
@@ -3231,17 +3231,17 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   keyword `own_set`, which raises the new `simplipy._core.MissingModeSet` where the mode holds no
   set of its own.
 - **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
-  `promote` take a required keyword `rule_mode`: `'f64'` (also spelled `'default'`, the core's
-  name for the f64 set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the
-  f64 set. Every entry of the compiled core that reads a mode takes it explicitly, and its
-  mode-less twins are gone. Migration: add `rule_mode='f64'` where the call relied on the f64
+  `promote` take a required keyword `rule_mode`: `'strict'` (also spelled `'default'`, the core's
+  name for the strict set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the
+  strict set. Every entry of the compiled core that reads a mode takes it explicitly, and its
+  mode-less twins are gone. Migration: add `rule_mode='strict'` where the call relied on the strict
   set.
 - **One mode vocabulary.** Every entry that takes a mode (`mode=`, `modes=`, `rule_mode=`,
   `unload_mode`, `verify_ruleset`, `verify_mine`, `cross_mode_complexity` and the CLI's
-  `verify-mine --mode`) accepts `'f64'` and `'default'` as the same mode, besides `'real'`,
+  `verify-mine --mode`) accepts `'strict'` and `'default'` as the same mode, besides `'real'`,
   `'permissive'` (in any case) and `simplipy.Mode` members. Before, `rule_mode` took
-  `'default'` and refused `'f64'` (`prune_covered_rules` raised a bare `KeyError`), while
-  `simplify`, `--mode` and `verify_mine` took `'f64'` and refused `'default'`. An unknown name
+  `'default'` and refused `'strict'` (`prune_covered_rules` raised a bare `KeyError`), while
+  `simplify`, `--mode` and `verify_mine` took `'strict'` and refused `'default'`. An unknown name
   raises `ValueError` naming both spellings, and a mode that is neither a string nor a `Mode`
   raises `TypeError` (`verify_ruleset` raised `ValueError`).
 - **`simplipy.mining` declares `verify_mine` and `cross_mode_complexity`** in `__all__`, so both
@@ -3268,7 +3268,7 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 - **Rule sets are compiled when they load.** `load` returns with every set it was asked for
   translated and ready, so no mode's first call pays for it (before, the first call per mode
   did, for seconds). Peak memory with `acj-5-4-llm`: about 0.9 GB for all three sets, about
-  0.7 GB for `modes=('f64', 'permissive')`, about 0.45 GB for `f64` alone; a set left out builds
+  0.7 GB for `modes=('strict', 'permissive')`, about 0.45 GB for `strict` alone; a set left out builds
   on its mode's first use in about 3–4 s and adds about 100 MB. Answers do not change.
 - **Library messages go through `logging`.** The default-engine announcement and the first-use
   build of a deferred set are WARNING records on the `simplipy` logger (visible with no logging

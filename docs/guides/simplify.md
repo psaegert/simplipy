@@ -9,7 +9,7 @@ engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
 ## The pipeline
 
 ```text
-function simplify(expr, max_passes=48, mode=f64, effort=DEFAULT_EFFORT):
+function simplify(expr, max_passes=48, mode=strict, effort=DEFAULT_EFFORT):
     state = canon(parse(expr))            # infix→prefix or validate, then the CANONICAL
                                           # form: flat AC bags, exact rationals, like
                                           # terms collected — this is state ZERO
@@ -30,10 +30,10 @@ canonical constructors, rule application, and the exact fold. The result is ther
 sound, never costlier than the input in the measure the chain itself descends — each
 mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
 mode=m)` is that measure: each mode reads an expression into its own canonical form,
-because the modes accept different simplifications as true (`f64` follows the float
+because the modes accept different simplifications as true (`strict` follows the float
 evaluator, so `atanh(tanh(x))` is not `x`, as `tanh` saturates to `1` in floats; `permissive`
 follows the reals, so it is, and also what holds only up to sign or domain, so `(x^2)^(1/2)`
-is `x`, where `f64` gives `abs(x)`), and prices
+is `x`, where `strict` gives `abs(x)`), and prices
 that form. So
 `complexity(simplify(e, mode=m), mode=m) ≤ complexity(e, mode=m)` in every mode, and
 prices of different modes are prices of different readings, not comparable across
@@ -111,7 +111,7 @@ whole expression, so the search owns it, in every mode alike, and `effort=0` doe
 Each move is a law of the catalogue with its own premise (`search.distribute`,
 `search.pow_expand`, `search.factor`, `search.reciprocal_join`): the two sides of the law differ
 only where a piece it multiplies into two or more terms, or collects out of them, is infinite, so
-in `f64` such a piece is infinite only at points and may have no value on a region
+in `strict` such a piece is infinite only at points and may have no value on a region
 (`x1*sqrt(x0) + sqrt(x0)` is `sqrt(x0)*(x1 + 1)`), and a pole two or more terms keep is split
 only where each of those terms carries two-signed poles only, the sign of its infinity an isolated
 zero's, no value kept, or where they take one strict sign there: `(x1 + x2)/abs(x0)` stays, `+inf`
@@ -134,8 +134,8 @@ A cap counts every candidate tried, refused ones included, over the whole expres
 the cap a search needs grows with the expression: one of srbf's model predictions needs 5
 candidates to reach its uncapped answer, a sum of two copies of it 10 and of six 30, so no fixed
 cap is enough. Capped at 4, the old default, 1,632 of srbf's 125,127 model predictions change on
-a second call in `f64`, every one to a cheaper form, because the first call stopped
-between two improvements. Uncapped, none does in `f64`, on any of the three sets. On
+a second call in `strict`, every one to a cheaper form, because the first call stopped
+between two improvements. Uncapped, none does in `strict`, on any of the three sets. On
 the predictions no answer is costlier than at cap 4 and 1,633 are cheaper. The search is one
 walk: it rebuilds each candidate of the current answer into the whole expression it makes,
 tries them cheapest first, steps to the first whose descent ends cheaper than the current
@@ -144,24 +144,24 @@ walk. A round tries a sum's pairs of terms only once every other move found noth
 grows with the square of the terms, and a factor every term shares goes first
 (`x0*x1 + ... + x0*x64` factors `x0` out in 13 ms, where reading its 2,016 pairs took a second;
 past 64 terms the pairs are not read, and a longer sum still factors what all its terms share). On srbf's predictions it spends 15% more matcher steps and constructor calls than
-`effort=4` in `f64`. Every internal caller that passes no
+`effort=4` in `strict`. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
 `permissive` is one walk, like every mode: its chain to a fixpoint, then the search, in its own
 canon and rules. No constructor folds a transcendental, so a constructor identity always
 sees the shape it reads (`atanh(tanh(30))` is `30`); its ground fold is a step of the chain,
-tried after the rules at each node and kept only when it is cheaper, as in `f64`. It takes the
-table's value in the reals, written as the double nearest to it, where `f64` computes the
+tried after the rules at each node and kept only when it is cheaper, as in `strict`. It takes the
+table's value in the reals, written as the double nearest to it, where `strict` computes the
 deployed evaluator's (`asin(1e-8)` is `1e-8` in both; `exp(9.55893790547399)` is
-`14170.787488305128`, where `f64` gives `14170.787488305119`), and like `f64` it reads a whole
+`14170.787488305128`, where `strict` gives `14170.787488305119`), and like `strict` it reads a whole
 ground node before its parts (`rootn(exp(19.11787581094798), 2)` is `14170.787488305128`, not the
 root of `200811218.03870487`). Its literals are exact and rounded once, where
 they land: a literal that becomes a constant term, a coefficient, a function's argument or a
 power's operand beside a non-literal moves to whichever of the two floats around it prints
 shorter, when that spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
 `0.07665412684716773*x1`, and `4/(2.7167019109484434*3.1415926535897)` is `0.4686710527952964`,
-not the nearest float's `0.46867105279529636`, which `f64` writes). Its search has one move of its own, joining reciprocal sums
+not the nearest float's `0.46867105279529636`, which `strict` writes). Its search has one move of its own, joining reciprocal sums
 (`c/(A*B)` is held as `c * A^-1 * B^-1`, and the move proposes `(A*B)^-1` and `(A/c)^-1` with the
 inside distributed). So, as in every mode, its answer never prices above the input or above its
 answer at a smaller `effort`, and a second call returns it unchanged.
@@ -170,7 +170,7 @@ answer at a smaller `effort`, and a second call returns it unchanged.
      over the distributive law and before permissive became one walk (permissive then: mean ratio
      0.961 -> 0.950, strictly simplified 21.2% -> 33.9%, about 64% more median time). -->
 What the search buys, on the 129,490 simplify inputs of flash-ansr's training-data generator
-(output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
+(output price over input price, `complexity(.., mode=m)`): in `strict` it moves the mean ratio from 0.979
 with the search off to 0.972 and lifts the strictly simplified answers from 5.7% to 13.5%, for
 about 30% more median time per call.
 
@@ -219,35 +219,35 @@ parts that differ in more than their names.
 ## Soundness modes
 
 `simplify(expr, mode=...)` selects a point on an **axis**, not a rung on a ladder.
-`simplipy.Mode` has two members: `f64` (the default) and `permissive`. The `real` mode is
+`simplipy.Mode` has two members: `strict` (the default) and `permissive`. The `real` mode is
 retired: naming it raises, and its values in the reals are what `permissive` reads.
 
 The axis exists because soundness is two *incomparable* notions, not one ordering. A rewrite
 can be true in mathematics and not reproduced by floating point, or reproduced exactly by
 floating point and mathematically false:
 
-| rewrite | true over ℝ? | what f64 computes |
+| rewrite | true over ℝ? | what float64 computes |
 |---|---|---|
 | `atanh(tanh t) → t` | yes, for every real `t` | `inf` once `tanh t` rounds to exactly `1.0` — from `t ≈ 19.06` on the release host; the exact threshold is libm-dependent |
 | `asin(1e-8) → 1e-8` | no — wrong by the cubic term, `1.667e-25` | bit-identical |
 
 Neither rule is "more sound" than the other, so there is no rung to put them on, and `<`
 between modes raises `TypeError`. The rule sets are nested all the same: `permissive` includes
-`f64`. Every rule that holds in `f64` holds in `permissive`, which serves it with its own
-matcher and promises for that step what `f64` promises; `permissive` adds the rules true in the
+`strict`. Every rule that holds in `strict` holds in `permissive`, which serves it with its own
+matcher and promises for that step what `strict` promises; `permissive` adds the rules true in the
 reals at float resolution and its own simplifications.
 
-- **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes, wherever no
+- **`Mode.strict`** (the default) is sound as the deployed float64 evaluator computes, wherever no
   operation overflows or underflows. Use it whenever the output will be evaluated in floating
   point. Where an operation overflows or underflows, an answer may hold the evaluator's value
-  there or the true one: `log(exp(x0))` is `x0`, where f64 computes `inf` past x0 = 709.78 (see
-  [What `f64` mode does and does not promise](#what-f64-mode-does-and-does-not-promise)).
+  there or the true one: `log(exp(x0))` is `x0`, where float64 computes `inf` past x0 = 709.78 (see
+  [What `strict` mode does and does not promise](#what-strict-mode-does-and-does-not-promise)).
 
 - **`Mode.permissive`** is for training-corpus canonicalisation ("beautification"). It
-  includes `f64`: every rule that holds in `f64` holds in `permissive` too. Its promise is per
+  includes `strict`: every rule that holds in `strict` holds in `permissive` too. Its promise is per
   rule:
   every rule it applies agrees with the reals' values up to float resolution (8 units in the
-  last place), or gives a value where its input has none, or holds in `f64`. A whole
+  last place), or gives a value where its input has none, or holds in `strict`. A whole
   answer carries no such bound: rounding-sized differences compose over the steps, and
   `floor`, `ceil` and cancellations magnify them (`floor` of a value one unit in the last place
   below an integer is a whole unit off). Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
@@ -266,11 +266,11 @@ abstracts a shared inexact number into one `<constant>`; an exact number whose g
 stays distributed. The key is the exact value, so the grouping is deterministic and does not
 depend on how the sum was built; with the whole sum as the group it is the content every mode
 takes out. A coefficient of magnitude one is no number to share, and a term holding a fitted
-constant keeps its own. In `f64` each group is the factoring of a whole sum, which float64 only
+constant keeps its own. In `strict` each group is the factoring of a whole sum, which float64 only
 rounds otherwise (`c*a + c*b` against `c*(a + b)`), with that factoring's premise: a sign leaves
 a group only where nothing reads the zero of the group's sum. Where two spellings of a sum then
-cost the same in `permissive`, the one `f64` prices lower is taken, so a permissive answer is
-never dearer than `f64`'s on `f64`'s yardstick. `prettify` displays the groups.
+cost the same in `permissive`, the one `strict` prices lower is taken, so a permissive answer is
+never dearer than `strict`'s on `strict`'s yardstick. `prettify` displays the groups.
 
 ```python
 engine.simplify('3.71649*(x1 + x2) + x3')                           # -> 'x3 + 3.71649*(x1 + x2)'
@@ -284,7 +284,7 @@ A product of a sum with a factor that reappears in it, itself or the base of one
 as a multiplicative factor of a term, is multiplied out (the reappearing factors only), and the
 search takes no move that nests one. A factor that does not reappear inside is taken out;
 products and powers of sums stay products, and a quotient by a power keeps the form it comes in.
-The step is the distributive law with its `f64` premises, in both modes; where they refuse it,
+The step is the distributive law with its `strict` premises, in both modes; where they refuse it,
 the product stays.
 
 ```python
@@ -298,7 +298,7 @@ engine.simplify('2*x1*(x1 + 1)')                    # -> '2*(x1 + x1^2)'
 
 Every literal is its exact rational value (`0.1` is 1/10), and arithmetic between numbers is
 exact. A number is then written as the cheapest value its mode admits, and costs what its
-written spelling costs: `f64` writes float64's double where that is cheaper than the exact
+written spelling costs: `strict` writes float64's double where that is cheaper than the exact
 value, and the exact value where it is not; `permissive` writes the exact value or one of the
 two doubles around it.
 
@@ -345,8 +345,8 @@ The token answers keep the fraction (explicit `['/', '3500000', '3141592653']`, 
 reads them back, and callers mask and compare token answers, so one fixed spelling serves
 them.
 
-Each mode names one **distinct, complete** rule set — `rules_f64.json` /
-`rules_permissive.json` (a config may name the f64 file `rules.json`, as artifacts before 0.15
+Each mode names one **distinct, complete** rule set — `rules_strict.json` /
+`rules_permissive.json` (a config may name the strict file `rules.json`, as artifacts before 0.15
 did) — so selecting a mode selects a file, and what is loaded is what is served.
 
 ```python
@@ -355,8 +355,8 @@ from simplipy import Mode
 # A fitted constant owes a value only where its expression is finite: log(C) is finite on
 # C > 0, so every mode reads exp(log(C)) as a fitted constant. (-1)^C is finite only at the
 # integers, which no fit lands on; the default keeps it, the permissive mode collapses it.
-engine.simplify('exp(log(<constant>))', mode=Mode.f64)     # -> '<constant>'
-engine.simplify('(-1)^<constant>', mode=Mode.f64)          # -> '(-1)^(<constant>)'
+engine.simplify('exp(log(<constant>))', mode=Mode.strict)  # -> '<constant>'
+engine.simplify('(-1)^<constant>', mode=Mode.strict)       # -> '(-1)^(<constant>)'
 engine.simplify('(-1)^<constant>', mode=Mode.permissive)   # -> '<constant>'
 
 # sqrt(x^2) is |x| over the reals; the permissive mode takes the sign-ignoring
@@ -371,16 +371,16 @@ engine.simplify('1/<constant>')                            # -> '<constant>'
 The two modes disagree on a single expression where float64 saturates:
 
 ```python
-engine.simplify('atanh(tanh(30))', mode=Mode.f64)         # -> 'inf'   what f64 computes
+engine.simplify('atanh(tanh(30))', mode=Mode.strict)      # -> 'inf'   what float64 computes
 engine.simplify('atanh(tanh(30))', mode=Mode.permissive)  # -> '30'    what is true
 ```
 
 
-### What `f64` mode does and does not promise
+### What `strict` mode does and does not promise
 
 **Every rule it applies** has been checked against the deployed evaluator itself. Both sides
 of the rewrite are evaluated in floating point across the verifier's battery and grid, and a
-rule enters the `f64` set where they agree to within 8 ULP, or where the rule is true in the
+rule enters the `strict` set where they agree to within 8 ULP, or where the rule is true in the
 reals wherever they give both sides a value and the two floating-point sides agree in kind --
 both finite -- at every such point, and within 8 ULP at every other point. The 8 ULP are derived rather than chosen: a rewrite has two sides, each a
 composition of up to four implementation-defined library calls whose errors are independent
@@ -390,7 +390,7 @@ x0 = 0, 1.2e-16 against -0), as `floor(x0 + 1)` and `floor(x0) + 1` differ at x0
 (1 against 0). A zero's sign counts where it changes a value on a region: a rule whose sides
 float64 makes zeros of opposite sign there (`0*asin(x0)` and `0*acos(x0)` for x0 < 0), or whose
 one side turns on a zero's sign that the other does not read (`atan2(0*x0, -1)` against `pi`),
-is not in the `f64` set; one whose sides differ at an isolated point only (`log(exp(x0))` and
+is not in the `strict` set; one whose sides differ at an isolated point only (`log(exp(x0))` and
 `x0` at x0 = -0) is. So a rewrite keeps float64's kind of every value, and agrees with float64's
 evaluation of its input within rounding, except where a jump or a pole lies between float64's
 argument and the real one.
@@ -409,7 +409,7 @@ engine.simplify('rootn(exp(800.5), 2)')   # -> 'exp(1601/4)'
 
 A pole is not an overflow (`atanh(1)` and `log(0)` are infinite exactly), and saturation is
 not one either: `tanh(20)` is exactly `1.0` in float64 without leaving the range, so
-`atanh(tanh(x0))` keeps the evaluator's `inf` and `f64` does not rewrite it to `x0`. Where `|x|`
+`atanh(tanh(x0))` keeps the evaluator's `inf` and `strict` does not rewrite it to `x0`. Where `|x|`
 is shown at most 19, short of that, it does: `atanh(tanh(19*sin(x0)))` is `19*sin(x0)`.
 
 It does **not** promise that a *sequence* of rewrites carries the same bound. Each rule
@@ -425,7 +425,7 @@ a `SimplifyStatus` whose `interrupted` is true and whose `caps` names the cap th
 `'effort'` where the search budget ran out with candidates left). The process-wide count of
 step-cap bindings stays readable (`engine._core.step_cap_binds()`).
 
-**The f64 realizations.** `f64` means the shipped realizations, `simplipy.operators`, each the
+**The float64 realizations.** `strict` means the shipped realizations, `simplipy.operators`, each the
 core's float64 kernel, so the deployed value, the constant fold, the miner and the rule judge
 compute the same bits. Where they differ from numpy, they differ by name:
 
@@ -452,7 +452,7 @@ engine.simplify(['+', '+', 'x0', 'x1', 'x2'])   # -> ['+', 'x0', '+', 'x1', 'x2'
 ```
 
 The association is deterministic — the same input always gives the same output — and for
-expressions that are well-conditioned in f64 the value is preserved. For ill-conditioned ones
+expressions that are well-conditioned in float64 the value is preserved. For ill-conditioned ones
 it may not be. This is the standard position for any AC-normalising simplifier, and it is
 stated here rather than left to be discovered.
 
@@ -467,13 +467,13 @@ uses each mode on a different side of its pipeline:
   the shortest, most canonical target. (A `(-1)^<constant>` that survives cancellation, for
   instance, becomes a plain `<constant>`, which is what the generated data reflects.)
 
-- **Inference and recovery scoring use `Mode.f64`.** At test time the data comes from an unknown
+- **Inference and recovery scoring use `Mode.strict`.** At test time the data comes from an unknown
   true function; the predicted skeleton must be simplified *without* changing what it computes, or
   the fit and the score would drift, and the data is evaluated in floating point -- which is
-  exactly the soundness `f64` preserves.
+  exactly the soundness `strict` preserves.
 
 That split is the whole reason the permissive mode exists: `permissive` maximizes canonicalization where the
-simplified form *defines* the data, and `f64` preserves what the evaluator computes where
+simplified form *defines* the data, and `strict` preserves what the evaluator computes where
 it must not change.
 
 ## Key components
@@ -544,11 +544,11 @@ three declared corpora — a symbolic-regression training prior of flash-ansr (s
 n = 65,536), the same prior under the engine mask policy 'all'
 (n = 65,536), and an external neutral problem set (SOOSE fc/nc/wc,
 n = 600; every row compiles in the engine language). The engine is the
-pinned acj-5-4-llm artifact: `f64` is the shipped default, `permissive` is
+pinned acj-5-4-llm artifact: `strict` is the shipped default, `permissive` is
 `Mode.permissive`, every arm at `effort=4`, the
 default before 0.15.0. Scoring runs in the deployment space:
 ratio = `complexity(output)` / `complexity(input)`, priced by the engine's
-shipped `complexity()` instrument in the default (f64) canonicalization;
+shipped `complexity()` instrument in the default (strict) canonicalization;
 lower is better, means carry bootstrap 95% CIs, and "made bigger" is the
 fraction of rows an arm inflated. SymPy is censored — a 1 s timeout, or an
 output with no spelling in the engine's language — on 8,232 / 5,895 / 8
@@ -559,17 +559,17 @@ cap and end the wall-clock ECDFs below 1.
 
 | corpus | arm | mean ratio | wins | made bigger |
 |---|---|---|---|---|
-| SR prior, unmasked | simplipy f64 (default) | **0.966** | 13.2% | **0.0%** |
+| SR prior, unmasked | simplipy strict (default) | **0.966** | 13.2% | **0.0%** |
 | | simplipy permissive | **0.936** | **36.9%** | 0.003% |
 | | sympy simplify | 1.085 | 22.3% | 45.1% |
-| SR prior, masked | simplipy f64 (default) | **0.998** | 1.8% | **0.0%** |
+| SR prior, masked | simplipy strict (default) | **0.998** | 1.8% | **0.0%** |
 | | simplipy permissive | **0.958** | **33.5%** | **0.0%** |
 | | sympy simplify | 1.068 | 18.3% | 43.2% |
-| external set | simplipy f64 (default) | 0.995 | 3.8% | **0.0%** |
+| external set | simplipy strict (default) | 0.995 | 3.8% | **0.0%** |
 | | simplipy permissive | 0.992 | 9.8% | **0.0%** |
 | | sympy simplify | 1.006 | 26.3% | 15.0% |
 
-The f64 arm at effort 4 (the default when this was measured) made no expression bigger: 0 of
+The strict arm at effort 4 (the default when this was measured) made no expression bigger: 0 of
 131,072 SR rows and 0 of 600 external rows. The permissive arm
 minimizes its own mode's reduction ordering, which is not the default
 pricing: under the table's measure it returned a form pricing above
@@ -580,8 +580,8 @@ to `float("inf")` — never through an uphill rule application or search
 acceptance, which are descent-gated by construction. SymPy's `simplify`
 inflates 43–45% of rows on the SR-shaped corpora. Paired wall-clock on
 the same rows: median
-speedup **≈260× / 300× / 420×** across corpora (f64 vs sympy, over rows
-where sympy finished), f64 medians at 70–327 µs per row against SymPy's
+speedup **≈260× / 300× / 420×** across corpora (strict vs sympy, over rows
+where sympy finished), strict medians at 70–327 µs per row against SymPy's
 27–83 ms. On the external set both systems are near the fixpoint;
 SymPy's wins there are dominated by number-respelling (floats rewritten
 as exact rationals), not structural simplification.

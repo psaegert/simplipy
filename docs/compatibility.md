@@ -54,13 +54,23 @@ Removed in 0.14.0:
   helper approximated. Unaffected: `read_infix(..., mask_numbers=True)`,
   which shares the name but not the surface.
 
-No deprecations are currently running. 0.14.0 retires every alias that was
-outstanding, so a retired name raises rather than warning:
+One deprecation is running. The mode that preserves what the deployed float64 evaluator
+computes is named `strict` from 0.15.0; its earlier names select it with a
+`DeprecationWarning` and are removed in 0.16.0:
+
+| deprecated in 0.15.0, removed in 0.16.0 | replacement |
+|---|---|
+| `Mode.f64`, `Mode('f64')`, `Mode['f64']` | `Mode.strict` |
+| the mode names `'f64'` and `'default'` (every entry that takes a mode, the CLI's `--modes`) | `'strict'` |
+| a provenance sidecar recording the mode `'f64'` | read as `'strict'`; a new mine records `'strict'` |
+
+0.14.0 retired every alias that was outstanding then, so a name it retired raises rather
+than warning:
 
 | removed in 0.14.0 | replacement |
 |---|---|
-| `Mode.SOUND`, `Mode.LOSSY` | `Mode.f64`, `Mode.permissive` |
-| `mode='sound'`, `mode='lossy'` | `mode='f64'`, `mode='permissive'` (matched case-insensitively) |
+| `Mode.SOUND`, `Mode.LOSSY` | `Mode.strict`, `Mode.permissive` |
+| `mode='sound'`, `mode='lossy'` | `mode='strict'`, `mode='permissive'` (matched case-insensitively) |
 | `SimpliPyEngine.parse` | `read_infix` |
 | `simplify(..., form=)` | convert first: `simplify(to_tagged(x))` |
 | `simplify(..., node_budget=)` | `max_passes=` — it bounds outer rewrite passes, and never counted nodes |
@@ -77,9 +87,9 @@ Removed in 0.15.0, again without an alias cycle:
 
 | removed in 0.15.0 | replacement |
 |---|---|
-| `Mode.real`, `mode='real'`, `rule_mode='real'` (every entry: `simplify`, `load`, the verify APIs and CLIs, `find-rules`, masking and normalization helpers, certification) | `mode='f64'` for what the deployed float64 evaluator computes, `mode='permissive'` for training-corpus canonicalisation; naming the retired mode raises `ValueError` |
-| a config's `rules_real:` key, `SimpliPyEngine(rules_real=)`, `real_simplification_rules` | none: a config naming a real set is refused; the artifact is the f64 and the permissive file |
-| `verify.verify_triple(f64, real, permissive)` | `verify.verify_artifact(f64, permissive)`; `verify_triple` raises |
+| `Mode.real`, `mode='real'`, `rule_mode='real'` (every entry: `simplify`, `load`, the verify APIs and CLIs, `find-rules`, masking and normalization helpers, certification) | `mode='strict'` for what the deployed float64 evaluator computes, `mode='permissive'` for training-corpus canonicalisation; naming the retired mode raises `ValueError` |
+| a config's `rules_real:` key, `SimpliPyEngine(rules_real=)`, `real_simplification_rules` | none: a config naming a real set is refused; the artifact is the strict and the permissive file |
+| `verify.verify_triple(f64, real, permissive)` | `verify.verify_artifact(strict, permissive)`; `verify_triple` raises |
 | `complexity(..., canon=)` | `complexity(e, mode=m)` prices in mode `m`'s own reading; `simplipy.mining.cross_mode_complexity` compares answers across modes |
 | `evaluate_constants(..., form=)` | it answers in the input's dialect; convert the answer with `to_infix`, `to_tagged` or `to_prefix` |
 | `find_rules(..., save_every=)`, CLI `find-rules -s/--save-every` | drop the argument: the rule file is written once, when the mode's mine ends, and a mine checkpoints after every completed length |
@@ -90,7 +100,7 @@ Signatures changed in 0.15.0:
 
 | changed in 0.15.0 | what to do |
 |---|---|
-| `SimpliPyEngine.prune_covered_rules(..., rule_mode=)` | the keyword is required: `'f64'` (also spelled `'default'`) or `'permissive'` |
+| `SimpliPyEngine.prune_covered_rules(..., rule_mode=)` | the keyword is required: `'strict'` or `'permissive'` |
 | `utils.deduplicate_rules(..., rule_mode=)` | the keyword is required, as above; the kept target is the one lower in that mode's serve ordering |
 | `promotion.promote(..., rule_mode=)` | the keyword is required, as above |
 | `simplify(..., max_passes=0)` | raises `ValueError` (it ran one pass); pass `max_passes=1` or leave the default |

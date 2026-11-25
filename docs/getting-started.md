@@ -38,11 +38,11 @@ engine.to_infix(engine.simplify(expr))
 # -> '<constant> / log(x3)'
 ```
 
-`simplify`'s default `Mode.f64` is sound as the deployed f64 evaluator computes,
+`simplify`'s default `Mode.strict` is sound as the deployed float64 evaluator computes,
 wherever no operation overflows or underflows (where one does, the true value is accepted
 too). The training-only `Mode.permissive` reads the reals' values and trades soundness for
-recall: `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in f64 once
-`tanh` saturates to exactly `1.0` at large `|t|`, so f64 does not serve it and permissive
+recall: `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in float64 once
+`tanh` saturates to exactly `1.0` at large `|t|`, so strict does not serve it and permissive
 does. The `real` mode is retired: naming it raises. The
 [simplification guide](guides/simplify.md) covers the modes, the search
 budget, and the guarantee the engine actually makes.

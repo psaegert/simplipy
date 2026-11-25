@@ -8,11 +8,11 @@ complete mining configuration.
 ## How mining works
 
 `SimpliPyEngine.find_rules` mines two files in one run, one per mode:
-`rules_f64.json` (`Mode.f64`) and `rules_permissive.json` (`Mode.permissive`). Each file is
+`rules_strict.json` (`Mode.strict`) and `rules_permissive.json` (`Mode.permissive`). Each file is
 mined in its own mode from start to end: the mode reads each source, the mode's own answer
 is the mark a target must beat, the mode's numerics accept a target, and the contract
 judge's tier must be one the mode licenses. The permissive mine runs against the finished
-f64 set, as its file is served beside it.
+strict set, as its file is served beside it.
 
 **Phase 1 — building the source universe.** All valid prefix expressions up to
 `max_source_pattern_length` are enumerated bottom-up, and the enumeration is cross-checked
@@ -40,11 +40,11 @@ against an exact counting recurrence.
    restarted optimizer otherwise). A row agrees relatively (`rtol`; zero agrees only with
    zero), rows where the source is undefined may be completed by the target (so
    `x/x → 1` certifies, in the sense of the limit), and a minimum number of informative
-   rows is required (`min_informative`). In `f64` the deployed evaluator's values decide,
+   rows is required (`min_informative`). In `strict` the deployed evaluator's values decide,
    except on a row where an operation of either side overflows or underflows: there the
    true value is accepted too, so such a row is re-judged at high precision (the judge
    reads the same event, one definition in the core). In `permissive` a near miss (at most
-   half of the points failing in f64) is re-judged at high precision.
+   half of the points failing in float64) is re-judged at high precision.
 5. **Confirm**: the pick is re-judged on an independent, twice-as-wide matrix with fresh
    seeds; a pick that fails yields to the next candidate.
 6. **Judge**: the length's picks go to the contract judge (`simplipy.verify`), each as the
@@ -87,17 +87,17 @@ exact rules before patterns and file order among equals; the first rule that mat
 descends fires. A rule mined for a longer source therefore takes its instances wherever
 the file places it.
 
-The permissive mine runs last, and its post-pass is also offered the finished f64 file
-(`offer_final_rules`, on by default). Permissive includes f64: every rule that holds in f64
-holds in permissive, so permissive's answer must never cost more than f64's, while a per-mode
-mine finds only what its own scan reaches. Every rule of the f64 file runs through the proposal
+The permissive mine runs last, and its post-pass is also offered the finished strict file
+(`offer_final_rules`, on by default). Permissive includes strict: every rule that holds in strict
+holds in permissive, so permissive's answer must never cost more than strict's, while a per-mode
+mine finds only what its own scan reaches. Every rule of the strict file runs through the proposal
 lane right after the proposals, certified by permissive's own acceptance (its mint certifies
-what f64's certifies, its judge licenses what f64 holds), and enters where permissive's answer
+what strict's certifies, its judge licenses what strict holds), and enters where permissive's answer
 is not already as low, under permissive's own ordering and liveness. A rule is offered at
 permissive's reading of its left side wherever its spelling would not match there: permissive
-reads a ground pole as its infinity before any rule fires, so the f64 rule
-`atan2(C, atanh(-1)) -> C` is offered as `atan2(C, -inf) -> C`. The gate `covers_f64` checks
-that the permissive file covers the f64 file.
+reads a ground pole as its infinity before any rule fires, so the strict rule
+`atan2(C, atanh(-1)) -> C` is offered as `atan2(C, -inf) -> C`. The gate `covers_strict` checks
+that the permissive file covers the strict file.
 
 The procedure is **deterministic**: a fixed `seed` reproduces the two files byte-for-byte,
 independent of process, hash randomization, thread count or the judge's process count. One
@@ -122,9 +122,9 @@ exclusions, twin-shadowed rows and the picks the merge folded (`per_length`), th
 twin-shadowed rows of the proposal channel's lanes and of sort promotion, by the stage they
 joined at (`twin_shadowed`), every rule a later stage dropped with its stage and why
 (`dropped`), every completion each completion round offered with its verdict (`completion`),
-the file gates (`gates`, with the overlaps left unjoined by the f64 prefilter), the digests of
+the file gates (`gates`, with the overlaps left unjoined by the strict prefilter), the digests of
 the code that mined it (`code_digest`), in the
-permissive sidecar the f64 file it was offered, pinned by name and sha256, with the
+permissive sidecar the strict file it was offered, pinned by name and sha256, with the
 lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
 mine (`soundness.env_overrides`), so a published file is reproducible from its artifact.
@@ -164,7 +164,7 @@ Take `!0 - !0 → 0`: with a bare variable the source is `0` everywhere, but wit
 the target says `0` — so the certificate refuses `log(x)`, which is not finite almost
 everywhere, and the rule never sees it.
 
-These sort gates define the default **`f64`** apply-time contract. `Mode.permissive`
+These sort gates define the default **`strict`** apply-time contract. `Mode.permissive`
 (see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
 placeholder then binds any subtree with the certificate skipped which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are
@@ -174,7 +174,7 @@ at apply time.
 ## Running a mine
 
 ```sh
-simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules_f64.json" -v --reset-rules
+simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules_strict.json" -v --reset-rules
 ```
 
 - `-e` is the path to the engine configuration file to use as a backend
@@ -182,16 +182,16 @@ simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yam
 - `-o` is the output path for the collected rules
 - `-v` enables verbose output
 - `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
-- `--modes f64` mines only the listed modes (default: both) and leaves the other file as it is; a mode mined beside an existing file reads it (`permissive` mines beside the f64 file and is offered it)
+- `--modes strict` mines only the listed modes (default: both) and leaves the other file as it is; a mode mined beside an existing file reads it (`permissive` mines beside the strict file and is offered it)
 
 The published `acj-5-4-llm` artifact is this machinery at its shipped scale:
 complete sources through length 5, targets through length 4, plus the
 LLM-augmented proposal lane, certified by the same gates as the mined rules.
 It is mined and independently gate-verified — 138,651 rules in
-`rules_f64.json` and 139,299 in `rules_permissive.json`, both modes clean, with 13
-constant folds that hold in the reals and not in float64 relocated out of the f64 set by
+`rules_strict.json` and 139,299 in `rules_permissive.json`, both modes clean, with 13
+constant folds that hold in the reals and not in float64 relocated out of the strict set by
 the gate (each present in the permissive set). The exact mine configuration ships with the
-asset as `mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml -o rules_f64.json -v --reset-rules`
+asset as `mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml -o rules_strict.json -v --reset-rules`
 reproduces the files byte-for-byte at the recorded environment. The
 configuration format, annotated:
 
@@ -255,7 +255,7 @@ promote_sorts: true
 # sidecar. The judge and the engine's own answers always read the default.
 # interval_node_budget: 800000
 
-# Offer the permissive mine the finished f64 file through its proposal lane (the
+# Offer the permissive mine the finished strict file through its proposal lane (the
 # default); its sidecar pins the file.
 offer_final_rules: true
 
@@ -344,13 +344,13 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
 | `preempted` | no ground rule is one the rule-less engine already performs, such as a ground fact it folds (`log (-3) → nan`) |
 | `dead` | every rule is live: on each generic instance of its left side (each placeholder a fresh variable, a wide one also `1/(x + x')`, with a variable of its own), the engine holding the file reaches the right side or below, so no rule is shadowed by another that takes its instance and ends dearer |
-| `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file, within the mine's cell (a completion source no longer than the mine's sources, holding no operator its `operator_max_length` keeps out of that length and no literal its universe's leaves lack); the overlaps whose completion the judge refuses are listed with its tier and verdict, those beyond the cell are counted, and in `f64` those whose licensed completion the mine's row agreement refuses on the mine's rows (an identity whose rounding a function magnifies past the mine's tolerances, which stays permissive's) are listed as left unjoined by the prefilter (`overlaps_prefilter`); none of these fails |
+| `overlaps` | where two rules overlap at an instance (their left sides unify) and the two paths end in different states, the rule between them that the judge licenses is in the file, within the mine's cell (a completion source no longer than the mine's sources, holding no operator its `operator_max_length` keeps out of that length and no literal its universe's leaves lack); the overlaps whose completion the judge refuses are listed with its tier and verdict, those beyond the cell are counted, and in `strict` those whose licensed completion the mine's row agreement refuses on the mine's rows (an identity whose rounding a function magnifies past the mine's tolerances, which stays permissive's) are listed as left unjoined by the prefilter (`overlaps_prefilter`); none of these fails |
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
-| `offered` | (`permissive` only) the sidecar pins the f64 file the mine was offered, and it lies beside the file with the pinned sha256 |
-| `covers_f64` | (`permissive` only) the file covers the pinned f64 file, as permissive includes f64: on each f64 rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
-| `ground_exact` | every ground rule holds in the file's mode by the ground evaluator the engine and the judge read: in `f64` its two sides are the same double, or the reals give them one value and float64's two values agree in kind (`exp(sin(np.pi)) -> 1` holds, 1.0000000000000002 and 1.0 both being finite), in `permissive` the table's two values agree at float resolution (`0*tan(asin(1)) -> 0` fails: the left side has no value) |
+| `offered` | (`permissive` only) the sidecar pins the strict file the mine was offered, and it lies beside the file with the pinned sha256 |
+| `covers_strict` | (`permissive` only) the file covers the pinned strict file, as permissive includes strict: on each strict rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
+| `ground_exact` | every ground rule holds in the file's mode by the ground evaluator the engine and the judge read: in `strict` its two sides are the same double, or the reals give them one value and float64's two values agree in kind (`exp(sin(np.pi)) -> 1` holds, 1.0000000000000002 and 1.0 both being finite), in `permissive` the table's two values agree at float resolution (`0*tan(asin(1)) -> 0` fails: the left side has no value) |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.
@@ -394,7 +394,7 @@ ignored. A bare list of such `{source, target?}` objects is accepted too.
 ```
 
 ```sh
-simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules_f64.json" -v --reset-rules
+simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules_strict.json" -v --reset-rules
 ```
 
 After the mining length loop completes and before the optional prune, every proposal is certified against
@@ -433,22 +433,22 @@ proposals = [
 hints = [None, None, ["*", "4", "*", "x0", "x1"]]  # optional target suggestions
 
 extra_terms = ['<constant>', '0', '1', '(-1)', 'np.pi', 'np.e']  # target vocabulary
-certified = engine.certify_rules(proposals, hints, mode="f64",
+certified = engine.certify_rules(proposals, hints, mode="strict",
                                  extra_internal_terms=extra_terms, verbose=True)
 # certified: a list of CertifiedRule(source, target, certificate, mode, basis), each
 # licensed in the mode it was certified in ('minimal' | 'verified'; 'proved' | 'evidence')
 
 dummies = ["x0", "x1"]
-engine.simplification_rules = deduplicate_rules(   # the f64 set takes the f64 certificates
+engine.simplification_rules = deduplicate_rules(   # the strict set takes the strict certificates
     engine.simplification_rules + [(r.source, r.target) for r in certified], dummies,
-    engine=engine, rule_mode="f64")   # keys on the mode's internal form, not the spelling
+    engine=engine, rule_mode="strict")  # keys on the mode's internal form, not the spelling
 engine.compile_rules()
 ```
 
 `mode` is required: the chain runs in that mode (its serve answer is the mark, its canon
 reads the sources, its numerics accept), and the judge keeps only rules whose tier
 that mode licenses, so a rule certified in `permissive` (`atanh(tanh(x0)) -> x0`) belongs in
-`permissive_simplification_rules`, never in the f64 set. Each result carries its `basis`:
+`permissive_simplification_rules`, never in the strict set. Each result carries its `basis`:
 `'proved'` where an exact route proves it in the mode, `'evidence'` where it holds at every
 point the judge read.
 
