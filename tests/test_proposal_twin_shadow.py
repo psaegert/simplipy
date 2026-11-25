@@ -36,7 +36,7 @@ def test_twins_from_the_proposal_channel_and_promotion_ship_once(tmp_path) -> No
     # finalization raises on a twin-shadow owner in the file; it must not
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=3,
                       dummy_variables=1, X=256, seed=7, verbose=False, output_file=out,
-                      proposals=PROPOSALS, modes="f64")
+                      proposals=PROPOSALS, modes="strict")
     rules = json.load(open(out))
     with open(out + ".provenance.json") as fh:
         provenance = json.load(fh)

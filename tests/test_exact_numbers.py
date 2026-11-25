@@ -18,7 +18,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 A, B = 7 ** 190, 3 ** 280      # A/B is admissible, (A/B)^2 has a numerator beyond DBL_MAX
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -58,7 +58,7 @@ class TestPlanConsequences:
         assert simplify(engine, '- * 3e-40 x1 * x1 * 1e-40 3', mode) == ['0']
 
     # f64 alone: permissive writes a literal as its float (its own simplification)
-    @pytest.mark.parametrize('mode', ('f64',))
+    @pytest.mark.parametrize('mode', ('strict',))
     def test_the_larmor_denominator_is_one_number(self, engine: SimpliPyEngine, mode: str) -> None:
         # the denominator is one number, its exact value; as a coefficient its reciprocal is
         # written as its double, float64's value of it, which is cheaper than the exact fraction
@@ -71,7 +71,7 @@ class TestPlanConsequences:
         # 1e308 + 1e308 is past the doubles' range: float64's value is +inf, which strict writes
         # (the range standard accepts it beside the true value, and it is cheaper), and x1 + inf
         # is inf (as in main). Permissive has no float for 2e308 and collects it like a symbol.
-        assert simplify(engine, '+ x1 + 1e308 1e308', 'f64') == ['float("inf")']
+        assert simplify(engine, '+ x1 + 1e308 1e308', 'strict') == ['float("inf")']
         assert simplify(engine, '+ x1 + 1e308 1e308', 'permissive') == ['+', '*', '2', '1e308', 'x1']
 
     @pytest.mark.parametrize('mode', MODES)
@@ -86,28 +86,28 @@ class TestAdmissibleInF64Mode:
 
     def test_a_subnormal_stays_as_written(self, engine: SimpliPyEngine) -> None:
         # a subnormal is no number of the f64 domain: it is printed as written and not folded
-        assert simplify(engine, '* x1 5e-324', 'f64') == ['*', '5e-324', 'x1']
-        assert simplify(engine, '* x1 * 2 5e-324', 'f64') == ['*', '2', '*', '5e-324', 'x1']
+        assert simplify(engine, '* x1 5e-324', 'strict') == ['*', '5e-324', 'x1']
+        assert simplify(engine, '* x1 * 2 5e-324', 'strict') == ['*', '2', '*', '5e-324', 'x1']
 
     def test_a_numerator_beyond_dbl_max_does_not_fold_in_f64_mode(self, engine: SimpliPyEngine) -> None:
         prefix = f'* x1 * / {A} {B} / {A} {B}'
-        assert simplify(engine, prefix, 'f64') == ['*', '/', str(A), str(B), '*', '/', str(A), str(B), 'x1']
+        assert simplify(engine, prefix, 'strict') == ['*', '/', str(A), str(B), '*', '/', str(A), str(B), 'x1']
 
 
 class TestF64SeesWhatTheEvaluatorSees:
     def test_a_literal_read_as_inf_is_a_range_event(self, engine: SimpliPyEngine) -> None:
         # float64 reads 1e400 as inf, so its 0*1e400 is NaN; the literal is past the doubles'
         # range, where the range standard accepts its true value too, and 0*10^400 is 0
-        assert simplify(engine, '* 0 1e400', 'f64') == ['0']
+        assert simplify(engine, '* 0 1e400', 'strict') == ['0']
         assert np.isnan(constant(engine, ['*', '0', '1e400']))
         # the reals' value of exp(10^400) is past what the table reads, so only float64's value
         # of the difference, inf - inf, is certain: NaN
-        assert simplify(engine, '- exp 1e400 exp 1e400', 'f64') == ['float("nan")']
+        assert simplify(engine, '- exp 1e400 exp 1e400', 'strict') == ['float("nan")']
 
     def test_parity_beyond_2_53_is_unknown(self, engine: SimpliPyEngine) -> None:
         odd = 'pow -1 9007199254740993'
         # no parity fold in f64; the walk folds the ground node to the evaluator's float
-        assert simplify(engine, odd, 'f64') == ['1']
+        assert simplify(engine, odd, 'strict') == ['1']
         # the evaluator reads the exponent as the even float 2^53
         assert constant(engine, odd.split()) == 1.0
         for mode in MODES:
@@ -116,14 +116,14 @@ class TestF64SeesWhatTheEvaluatorSees:
 
 class TestCap:
     # f64 alone: permissive writes a literal as its float (its own simplification)
-    @pytest.mark.parametrize('mode', ('f64',))
+    @pytest.mark.parametrize('mode', ('strict',))
     def test_a_power_within_the_cap_folds(self, engine: SimpliPyEngine, mode: str) -> None:
         assert numbers(simplify(engine, '* pow 2 1000 x1', mode)) == [2 ** 1000]
 
     def test_a_power_beyond_the_doubles_is_a_range_event(self, engine: SimpliPyEngine) -> None:
         # 2^1100 is past the doubles' range: strict writes float64's +inf, the cheaper of the two
         # values the range standard accepts; permissive has no float for it and keeps the power
-        assert simplify(engine, '* pow 2 1100 x1', 'f64') == ['*', 'float("inf")', 'x1']
+        assert simplify(engine, '* pow 2 1100 x1', 'strict') == ['*', 'float("inf")', 'x1']
         assert simplify(engine, '* pow 2 1100 x1', 'permissive') == ['*', 'pow', '2', '1100', 'x1']
 
 
@@ -152,7 +152,7 @@ class TestFixedPoint:
         names = [t for t in prefix.split() if t.startswith('x')]
         x = np.linspace(0.5, 2.0, 9)
         before = engine.as_callable(prefix.split(), names)(x)
-        after = engine.as_callable(simplify(engine, prefix, 'f64'), names)(x)
+        after = engine.as_callable(simplify(engine, prefix, 'strict'), names)(x)
         np.testing.assert_allclose(after, before, rtol=4e-16)
 
     @pytest.mark.parametrize('mode', MODES)
@@ -180,7 +180,7 @@ class TestFixedPoint:
 
 # 1e300*1e300 leaves the domain in every mode (10^600 is beyond 1,100 bits): the product keeps
 # both members, and the term's coefficient is that partition, both members together.
-MODES3 = ('f64', 'permissive')
+MODES3 = ('strict', 'permissive')
 REFUSED_ROWS = [
     # each changed on a second call before (boundary-literal fuzz)
     '-1e300*1e300*x1 - 1e300*1e300*x2',
@@ -294,16 +294,16 @@ class TestReviewFindings:
     """Review reproducers: each misbehaved before the fix."""
 
     def test_a_number_and_its_reciprocal_cancel_in_f64_mode(self, engine: SimpliPyEngine) -> None:
-        assert simplify(engine, '/ 5e307 5e307', 'f64') == ['1']
-        assert simplify(engine, '* x1 / 1e308 1e308', 'f64') == ['x1']
+        assert simplify(engine, '/ 5e307 5e307', 'strict') == ['1']
+        assert simplify(engine, '* x1 / 1e308 1e308', 'strict') == ['x1']
         for prefix in ('/ 0.5 * 5e307 x1', '/ 1/3 * 5e307 x1'):
-            once = simplify(engine, prefix, 'f64')
-            assert list(engine.simplify(once, mode='f64')) == once
+            once = simplify(engine, prefix, 'strict')
+            assert list(engine.simplify(once, mode='strict')) == once
 
     def test_exponent_pools_merge_in_one_pass(self, engine: SimpliPyEngine) -> None:
         prefix = '* * pow x1 1e-306 pow x1 1000 pow x1 1001'
-        once = simplify(engine, prefix, 'f64')
-        assert list(engine.simplify(once, mode='f64')) == once
+        once = simplify(engine, prefix, 'strict')
+        assert list(engine.simplify(once, mode='strict')) == once
         assert '2001' in once, once
 
     def test_a_leaf_past_the_doubles_is_the_rational_it_spells(self, engine: SimpliPyEngine) -> None:
@@ -311,16 +311,16 @@ class TestReviewFindings:
         # leaves as inf and 0 and the quotient as NaN, a range event, beside which the range
         # standard admits the true value; f64 writes the cheaper.
         for prefix in ('/ 1e400 1e400', '/ 1e-400 1e-400'):
-            assert simplify(engine, prefix, 'f64') == ['1'], prefix
+            assert simplify(engine, prefix, 'strict') == ['1'], prefix
             assert np.isnan(constant(engine, prefix.split()))
 
     def test_exponents_do_not_merge_beyond_2_53(self, engine: SimpliPyEngine) -> None:
         prefix = '* pow x1 9007199254740992 x1'
-        assert simplify(engine, prefix, 'f64') == ['*', 'x1', 'pow', 'x1', '9007199254740992']
+        assert simplify(engine, prefix, 'strict') == ['*', 'x1', 'pow', 'x1', '9007199254740992']
 
     def test_a_big_fraction_coefficient_evaluates_without_overflow(self, engine: SimpliPyEngine) -> None:
         p, q = 7 ** 360, 3 ** 630      # about 1,011 and 999 bits; p/q is about 4.5e3
-        out = simplify(engine, f'* x1 / {p} {q}', 'f64')
+        out = simplify(engine, f'* x1 / {p} {q}', 'strict')
         value = engine.as_callable(out, ['x1'])(np.array([10.0]))[0]
         assert np.isfinite(value) and value == pytest.approx(10 * p / q, rel=1e-15)
 

@@ -12,7 +12,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 SCHEMES = {
     'x_k': lambda k: f'x_{k}',
     'vk': lambda k: f'v{k}',

@@ -533,7 +533,7 @@ def test_a_product_of_numbers_held_apart_pays_its_product_charge(eng):
     """Two numbers whose product no number of the domain admits stay a product, which pays its
     product charge as the same product beside a variable does; a product the domain folds is the
     one number."""
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         def price(s):
             return eng.complexity(s.split(), mode=mode)
         apart = price('* 1e200 1e200')

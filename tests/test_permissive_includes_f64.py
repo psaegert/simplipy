@@ -39,7 +39,7 @@ def test_a_rule_f64_holds_holds_in_permissive(acj, lhs, rhs) -> None:
     assert d['realised'] is True and d['permissive'] is True and d['permissive_own'] is False, d
     assert d['tier'] == 'core'
     assert d['basis'] == {'strict': 'evidence', 'permissive': 'evidence'}
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         assert licensed(lhs.split(), rhs.split(), mode, acj, detail=d)['licensed'], mode
 
 
@@ -47,7 +47,7 @@ def test_a_rule_neither_mode_holds_stays_refused(acj) -> None:
     """`ceil(x0) - floor(x0) -> 1`: the left side is 0 at every integer, in float64 too."""
     d = verify_rule('- ceil ?0 floor ?0'.split(), ['1'])
     assert (d['realised'], d['permissive'], d['tier']) == (False, False, 'reject'), d
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         assert not licensed('- ceil ?0 floor ?0'.split(), ['1'], mode, acj,
                             detail=d)['licensed']
 
@@ -89,7 +89,7 @@ def test_the_mode_reading_includes_f64() -> None:
     readings = (True, False, None)
     assert [_contract.mode_reading(f, p, 'permissive') for f in readings for p in readings] == [
         True, True, True, True, False, None, True, None, None]
-    assert [_contract.mode_reading(f, p, 'f64') for f in readings for p in readings] == [
+    assert [_contract.mode_reading(f, p, 'strict') for f in readings for p in readings] == [
         True, True, True, False, False, False, None, None, None]
 
 

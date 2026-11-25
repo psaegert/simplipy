@@ -67,12 +67,12 @@ class TestModesValidation:
     """The knob refuses nonsense LOUDLY, before any file is read."""
 
     def test_a_bare_mode_name_string_is_refused_with_the_tuple_spelling(self, tmp_path):
-        with pytest.raises(TypeError, match=r"did you mean modes=\('f64',\)"):
-            _quiet_from_config(_lazy_pair(tmp_path), modes='f64')
+        with pytest.raises(TypeError, match=r"did you mean modes=\('strict',\)"):
+            _quiet_from_config(_lazy_pair(tmp_path), modes='strict')
 
     def test_an_unknown_name_raises(self, tmp_path):
         with pytest.raises(ValueError, match="unknown mode 'nope'"):
-            _quiet_from_config(_lazy_pair(tmp_path), modes=('f64', 'nope'))
+            _quiet_from_config(_lazy_pair(tmp_path), modes=('strict', 'nope'))
 
     def test_a_non_sequence_raises(self, tmp_path):
         with pytest.raises(TypeError, match='modes must be'):
@@ -84,12 +84,12 @@ class TestModesValidation:
 
     def test_mode_members_and_spellings_are_accepted(self, tmp_path):
         cfg = _lazy_pair(tmp_path)
-        for modes in (' ALL ', Mode.f64, (Mode.f64, 'permissive'), ['PERMISSIVE'], ()):
+        for modes in (' ALL ', Mode.strict, (Mode.strict, 'permissive'), ['PERMISSIVE'], ()):
             _quiet_from_config(cfg, modes=modes)
 
     def test_the_retired_mode_is_refused(self, tmp_path):
         with pytest.raises(ValueError, match='the real mode is retired'):
-            _quiet_from_config(_lazy_pair(tmp_path), modes=('f64', 'real'))
+            _quiet_from_config(_lazy_pair(tmp_path), modes=('strict', 'real'))
 
     def test_validation_fires_before_the_files_are_read(self, tmp_path):
         """A mistyped `modes` fails on an artifact whose rule files do not even
@@ -105,13 +105,13 @@ class TestLazyMachinery:
     """The deferred set's lifecycle on the small synthetic triple."""
 
     def test_deferred_sets_are_not_read_and_the_attributes_say_so(self, tmp_path):
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         assert e.permissive_simplification_rules is None
         # ...but the engine knows the file: the recipe is recorded, not dropped.
         assert set(e._mode_rule_sources) == {'permissive'}
 
     def test_first_use_builds_once_with_one_loud_line(self, tmp_path):
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         lhs, rhs = instantiate(P_CORPUS)
         buf = io.StringIO()
         with _announcements(buf):
@@ -127,7 +127,7 @@ class TestLazyMachinery:
         assert buf.getvalue() == ''
 
     def test_complexity_triggers_the_build_too(self, tmp_path):
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         buf = io.StringIO()
         with _announcements(buf):
             e.complexity(['sin', 'x0'], mode='permissive')
@@ -138,14 +138,14 @@ class TestLazyMachinery:
         e = _quiet_from_config(_lazy_pair(tmp_path))
         buf = io.StringIO()
         with _announcements(buf):
-            for mode in (Mode.f64, Mode.permissive):
+            for mode in (Mode.strict, Mode.permissive):
                 e.simplify(['sin', 'x0'], mode=mode)
         assert buf.getvalue() == ''
 
     def test_a_lazy_build_evicts_nothing(self, tmp_path):
         """ADDITIVE-ONLY: building `permissive` on first use leaves the already-loaded
         set exactly where it was (same core object, set still installed)."""
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         core_before = e._core
         e.simplify(['sin', 'x0'], mode='permissive')
         assert e._core is core_before
@@ -153,7 +153,7 @@ class TestLazyMachinery:
         assert e._core.mode_rules_len(rule_mode='permissive') == 3
 
     def test_unload_then_reload_round_trips(self, tmp_path):
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         lhs, rhs = instantiate(P_OTHER)
         first = e.simplify(lhs, mode='permissive')
         e.unload_mode('permissive')
@@ -198,7 +198,7 @@ class TestLazyMachinery:
         in-memory set (the list stays, the core builds it on first use)."""
         config = yaml.safe_load(open(acj_config_path()))
         e = SimpliPyEngine(operators=config['operators'], rules=[list(P_ALL)],
-                           rules_permissive=[list(P_OTHER)], modes=('f64',))
+                           rules_permissive=[list(P_OTHER)], modes=('strict',))
         assert e.permissive_simplification_rules is not None
         assert e._core.mode_rules_len(rule_mode='permissive') is None
         lhs, rhs = instantiate(P_OTHER)
@@ -210,9 +210,9 @@ class TestLazyMachinery:
     def test_the_default_set_refuses_to_unload(self, tmp_path):
         e = _quiet_from_config(_lazy_pair(tmp_path))
         with pytest.raises(ValueError, match='cannot be unloaded'):
-            e.unload_mode('f64')
+            e.unload_mode('strict')
         with pytest.raises(ValueError, match='cannot be unloaded'):
-            e.unload_mode(Mode.f64)
+            e.unload_mode(Mode.strict)
         with pytest.raises(ValueError, match='the real mode is retired'):
             e.unload_mode('real')
 
@@ -239,11 +239,11 @@ class TestLazyMachinery:
         the load went lean."""
         cfg = write_artifact(tmp_path, rules=[P_ALL], declare=('permissive',))
         with pytest.warns(UserWarning, match='could not be resolved'):
-            SimpliPyEngine.from_config(cfg, modes=('f64',))
+            SimpliPyEngine.from_config(cfg, modes=('strict',))
 
     def test_compile_rules_keeps_deferred_sets_deferred_and_loaded_sets_loaded(
             self, tmp_path):
-        lean = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        lean = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         lean.compile_rules()
         assert lean.permissive_simplification_rules is None  # still deferred
         lhs, rhs = instantiate(P_OTHER)
@@ -253,7 +253,7 @@ class TestLazyMachinery:
         assert eager._core.mode_rules_len(rule_mode='permissive') == 3  # still loaded
 
     def test_a_lean_engine_pickles_and_the_worker_stays_lean(self, tmp_path):
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         back = pickle.loads(pickle.dumps(e))
         assert back.permissive_simplification_rules is None  # deferred travelled deferred
         lhs, rhs = instantiate(P_OTHER)
@@ -266,7 +266,7 @@ class TestLazyMachinery:
         assert back2.permissive_simplification_rules is not None
 
     def test_two_threads_first_calls_build_once(self, tmp_path):
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         lhs, rhs = instantiate(P_CORPUS)
         results: list = []
 
@@ -287,7 +287,7 @@ class TestLazyMachinery:
         """The install fairness gate: a first-use build must land while other
         threads keep hammering the loaded default mode (measured pre-gate: the
         core's exclusive entry stayed closed past a 60 s deadline)."""
-        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('f64',))
+        e = _quiet_from_config(_lazy_pair(tmp_path), modes=('strict',))
         stop = threading.Event()
 
         def reader() -> None:
@@ -415,14 +415,14 @@ def identity_engines():
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         eager = legacy_from_config(cfg)
-        lean = legacy_from_config(cfg, modes=('f64',))
+        lean = legacy_from_config(cfg, modes=('strict',))
     return eager, lean, label
 
 
 class TestTheIdentity:
     """eager == lazy-first-use == reloaded-after-unload, byte-identical per mode."""
 
-    @pytest.mark.parametrize('mode', [Mode.f64, Mode.permissive])
+    @pytest.mark.parametrize('mode', [Mode.strict, Mode.permissive])
     def test_lazy_equals_eager_per_mode(self, identity_engines, mode):
         eager, lean, _ = identity_engines
         buf = io.StringIO()
@@ -436,14 +436,14 @@ class TestTheIdentity:
                 assert lean.simplify(infix, mode=mode) == eager.simplify(
                     infix, mode=mode)
         # However many probes ran, the mode's set was built at most ONCE.
-        assert buf.getvalue().count('simplipy:') == (0 if mode is Mode.f64 else 1)
+        assert buf.getvalue().count('simplipy:') == (0 if mode is Mode.strict else 1)
 
     def test_reload_after_unload_equals_eager(self, identity_engines):
         eager, _, _ = identity_engines
         cfg, _ = _identity_config()
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            cycled = legacy_from_config(cfg, modes=('f64',))
+            cycled = legacy_from_config(cfg, modes=('strict',))
         for mode in (Mode.permissive,):
             expected = [eager.simplify(x, mode=mode) for x in _BATTERY]
             with _announcements(io.StringIO()):

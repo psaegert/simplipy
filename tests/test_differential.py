@@ -39,8 +39,8 @@ from simplipy.verify import MODE_TIERS, effective_tier, licensed, verify_rule
 from simplipy.verify import _contract
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODES = ('f64', 'permissive')
-RULE_MODE = {'f64': 'default', 'permissive': 'permissive'}
+MODES = ('strict', 'permissive')
+RULE_MODE = {'strict': 'default', 'permissive': 'permissive'}
 #: The reference column: the judge's verdict in real's values, which permissive is defined against.
 REALS = 'reals'
 
@@ -115,8 +115,8 @@ def test_strict_and_its_mint_read_a_rounding_alike(lhs, rhs):
     # at most, certify it. Its sides are +0 and -0 at x0 = -0 alone; with a slot that matches any
     # subexpression they are so on a region (`test_zero_sign_judge`)
     assert admits(lhs, rhs, REALS), judged(lhs, rhs)
-    assert admits(lhs, rhs, 'f64'), judged(lhs, rhs)
-    assert mint_accepts(lhs, rhs, 'f64')
+    assert admits(lhs, rhs, 'strict'), judged(lhs, rhs)
+    assert mint_accepts(lhs, rhs, 'strict')
 
 
 def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:
@@ -133,46 +133,46 @@ def mint_accepts(lhs: str, rhs: str, mode: str) -> bool:
 # ------------------------------------------------------------------------------------------
 SPEC_EXAMPLES = [
     # section 3.1: rules with variables
-    case('/ x0 x0', '1', REALS, True), case('/ x0 x0', '1', 'f64', True),
+    case('/ x0 x0', '1', REALS, True), case('/ x0 x0', '1', 'strict', True),
     case('/ x0 x0', '1', 'permissive', True),
-    case('exp log x0', 'x0', REALS, False), case('exp log x0', 'x0', 'f64', False),
+    case('exp log x0', 'x0', REALS, False), case('exp log x0', 'x0', 'strict', False),
     case('exp log x0', 'x0', 'permissive', True),
-    case('- log x0 log x0', '0', REALS, False), case('- log x0 log x0', '0', 'f64', False),
+    case('- log x0 log x0', '0', REALS, False), case('- log x0 log x0', '0', 'strict', False),
     case('- log x0 log x0', '0', 'permissive', True),
-    case('atanh tanh x0', 'x0', REALS, True), case('atanh tanh x0', 'x0', 'f64', False),
+    case('atanh tanh x0', 'x0', REALS, True), case('atanh tanh x0', 'x0', 'strict', False),
     case('atanh tanh x0', 'x0', 'permissive', True),
-    case('asin 1e-8', '1e-8', REALS, False), case('asin 1e-8', '1e-8', 'f64', True),
+    case('asin 1e-8', '1e-8', REALS, False), case('asin 1e-8', '1e-8', 'strict', True),
     case('asin 1e-8', '1e-8', 'permissive', True),
     case('rootn pow x0 2 2', 'abs x0', REALS, True),
-    case('rootn pow x0 2 2', 'abs x0', 'f64', True),
+    case('rootn pow x0 2 2', 'abs x0', 'strict', True),
     case('rootn pow x0 2 2', 'abs x0', 'permissive', True),
-    case('rootn pow x0 2 2', 'x0', REALS, False), case('rootn pow x0 2 2', 'x0', 'f64', False),
+    case('rootn pow x0 2 2', 'x0', REALS, False), case('rootn pow x0 2 2', 'x0', 'strict', False),
     # an instance of permissive's own step, powers compose (4.9): held there by its name
     case('rootn pow x0 2 2', 'x0', 'permissive', True),
     case('tan asin ceil x0', 'atanh ceil x0', REALS, False),
-    case('tan asin ceil x0', 'atanh ceil x0', 'f64', False),
+    case('tan asin ceil x0', 'atanh ceil x0', 'strict', False),
     case('tan asin ceil x0', 'atanh ceil x0', 'permissive', True),
     case('ceil inv cosh x0', '1', REALS, True),
-    case('ceil inv cosh x0', '1', 'f64', True),
+    case('ceil inv cosh x0', '1', 'strict', True),
     case('ceil inv cosh x0', '1', 'permissive', True),
     # measure for f64 on the real cells: a set of measure zero lies on lower-dimensional cells.
     # No value on (-0.001, 0.001), narrower than any cell, read at doubles whose neighbours have
     # no value either: no null set in f64. A saturation plateau is a full-dimensional cell:
     # float64's 0/0 past 19.06 is no null set. Float64's 0/0 at the one double x = 0.1 is an
     # extension on a point: f64 holds, by its own values
-    case('+ x0 * 0 rootn - pow x0 2 1e-6 2', 'x0', 'f64', False),
+    case('+ x0 * 0 rootn - pow x0 2 1e-6 2', 'x0', 'strict', False),
     case('+ x0 * 0 rootn - pow x0 2 1e-6 2', 'x0', 'permissive', True),
     case('/ - tanh x0 1 - tanh x0 1', '1', REALS, True),
-    case('/ - tanh x0 1 - tanh x0 1', '1', 'f64', False),
-    case('/ - x0 0.1 - x0 0.1', '1', 'f64', True),
+    case('/ - tanh x0 1 - tanh x0 1', '1', 'strict', False),
+    case('/ - x0 0.1 - x0 0.1', '1', 'strict', True),
     # the reals' measure is owed by no mode: both sides have no value in the reals on x0 >= 0,
     # where the cells read x0 - |x0| as a hull through 0 and cannot decide the reals' measure;
     # f64 decides it in its own values (the deployed evaluator's infinities agree there)
-    case('inv * x1 - x0 abs x0', '/ inv - x0 abs x0 x1', 'f64', True),
+    case('inv * x1 - x0 abs x0', '/ inv - x0 abs x0 x1', 'strict', True),
     case('inv * x1 - x0 abs x0', '/ inv - x0 abs x0 x1', 'permissive', True),
     # the 5% grid bar: an extension on (-0.1, 0.1) is positive measure
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', REALS, False),
-    case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'f64', False),
+    case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'strict', False),
     case('+ x0 * 0 rootn - pow x0 2 0.01 2', 'x0', 'permissive', True),
     # the owner's rulings: an infinity is a value (no clause (c)), the guard, coincident slots,
     # undecided. At x = pi/2 the left side is +inf and the right side meets 1/0: an enclosing
@@ -180,63 +180,63 @@ SPEC_EXAMPLES = [
     # where the reals give one side no value: pi/2 is no double, and at its double float64 gives
     # both sides 37.33, so f64 holds the rule, and permissive, which includes f64
     case('abs log cos x0', 'log inv cos x0', REALS, False),
-    case('abs log cos x0', 'log inv cos x0', 'f64', True),
+    case('abs log cos x0', 'log inv cos x0', 'strict', True),
     case('atan abs log cos x0', 'atan log inv cos x0', REALS, False),
     case('- ceil x0 floor x0', '1', REALS, False),
-    case('- ceil x0 floor x0', '1', 'f64', False),
+    case('- ceil x0 floor x0', '1', 'strict', False),
     case('- ceil x0 floor x0', '1', 'permissive', False),
     case('abs log cos _0', 'log inv cos _0', REALS, False),
     case('atan tan asin _0', 'asin _0', REALS, False),
     case('atan tan asin x0', 'asin x0', REALS, True),
     case('/ - x0 x1 - x1 x0', '-1', REALS, False),
-    case('/ - x0 x1 - x1 x0', '-1', 'f64', False),
+    case('/ - x0 x1 - x1 x0', '-1', 'strict', False),
     case('/ - x0 x1 - x1 x0', '-1', 'permissive', True),
     case('/ !0 !0', '1', REALS, False),
     # section 2: the sorts
-    case('- ?0 ?0', '0', REALS, True), case('- ?0 ?0', '0', 'f64', True),
-    case('- !0 !0', '0', REALS, True), case('- !0 !0', '0', 'f64', True),
-    case('/ $0 $0', '1', REALS, True), case('/ $0 $0', '1', 'f64', True),
-    case('- _0 _0', '0', REALS, False), case('- _0 _0', '0', 'f64', False),
+    case('- ?0 ?0', '0', REALS, True), case('- ?0 ?0', '0', 'strict', True),
+    case('- !0 !0', '0', REALS, True), case('- !0 !0', '0', 'strict', True),
+    case('/ $0 $0', '1', REALS, True), case('/ $0 $0', '1', 'strict', True),
+    case('- _0 _0', '0', REALS, False), case('- _0 _0', '0', 'strict', False),
     case('- _0 _0', '0', 'permissive', True),
     # `_` at +inf: 0*tanh(inf) = 0 has a value, 0*inf has none
     case('* 0 tanh _0', '* 0 _0', REALS, False),
-    case('* 0 tanh _0', '* 0 _0', 'f64', False),
+    case('* 0 tanh _0', '* 0 _0', 'strict', False),
     # section 3.2: constants
     case('acos <constant>', '<constant>', REALS, True),
-    case('acos <constant>', '<constant>', 'f64', True),
+    case('acos <constant>', '<constant>', 'strict', True),
     case('exp + x0 <constant>', '* <constant> exp x0', REALS, True),
     case('* <constant> exp x0', 'exp + x0 <constant>', REALS, False),
-    case('* <constant> exp x0', 'exp + x0 <constant>', 'f64', False),
+    case('* <constant> exp x0', 'exp + x0 <constant>', 'strict', False),
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', REALS, False),
-    case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'f64', False),
+    case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'strict', False),
     case('pow rootn x0 <constant> <constant>', 'pow x0 <constant>', 'permissive', False),
     case('* exp + x0 <constant> <constant>', '* <constant> exp x0', REALS, True),
     case('pow 0 <constant>', '<constant>', REALS, True),
-    case('pow 0 <constant>', '<constant>', 'f64', True),
+    case('pow 0 <constant>', '<constant>', 'strict', True),
     case('pow -1 <constant>', '<constant>', REALS, True),
-    case('pow -1 <constant>', '1', REALS, False), case('pow -1 <constant>', '1', 'f64', False),
+    case('pow -1 <constant>', '1', REALS, False), case('pow -1 <constant>', '1', 'strict', False),
     # section 3.3: ground rules, one point, read by each mode's own value of it: f64 by float64's
     # double or, where float64's kind agrees, the reals' value; permissive by the table at float
     # resolution, a fully numeric expression without a value being NaN (permissive does not
     # include f64 here: a fully numeric part keeps each mode's value)
-    case('cos np.pi', '-1', REALS, True), case('cos np.pi', '-1', 'f64', True),
-    case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'f64', True),
+    case('cos np.pi', '-1', REALS, True), case('cos np.pi', '-1', 'strict', True),
+    case('sin np.pi', '0', REALS, True), case('sin np.pi', '0', 'strict', True),
     case('sin np.pi', '0', 'permissive', True),
     case('log -1', '0', REALS, False),
-    case('log -1', '0', 'f64', False),
+    case('log -1', '0', 'strict', False),
     case('log -1', '0', 'permissive', False),
     case('exp tan asin 1', 'float("inf")', REALS, False),
-    case('exp tan asin 1', 'float("inf")', 'f64', True),
+    case('exp tan asin 1', 'float("inf")', 'strict', True),
     case('exp tan asin 1', 'float("inf")', 'permissive', False),
-    case('asin 1', 'acos 0', REALS, True), case('asin 1', 'acos 0', 'f64', True),
+    case('asin 1', 'acos 0', REALS, True), case('asin 1', 'acos 0', 'strict', True),
     # the limit rule (V4, V5, V6)
     case('/ 1 0', 'float("inf")', REALS, False),
-    case('/ 1 0', 'float("inf")', 'f64', True),
+    case('/ 1 0', 'float("inf")', 'strict', True),
     case('/ 1 0', 'float("inf")', 'permissive', False),
     case('pow 0 -1', 'float("inf")', REALS, False),
     case('pow 0 -2', 'float("inf")', REALS, False),
     case('pow 1 float("inf")', '1', REALS, False),
-    case('pow 1 float("inf")', '1', 'f64', True),
+    case('pow 1 float("inf")', '1', 'strict', True),
     # P3 as ruled: permissive serves real's values up to float resolution -- a deep saturation
     # (1 - 2e-9566 is the double 1.0). Judged at the `_` its matcher binds (the owner's ruling,
     # 2026-10-31), its own criterion excuses no isolated point: a disagreement at x = +-1 alone
@@ -249,7 +249,7 @@ SPEC_EXAMPLES = [
     case('tanh sinh atanh _0', 'tanh tan asin _0', 'permissive', True),
     case('ceil abs cos x0', '1', 'permissive', True),
     case('abs log cos x0', 'log inv cos x0', 'permissive', True),
-    case('pow 0 asinh _0', 'pow 0 _0', 'f64', True),
+    case('pow 0 asinh _0', 'pow 0 _0', 'strict', True),
     # a negative power of zero has no value however its exponent is spelled, so `0^asinh(x)`
     # and `0^x` agree at every binding: 0 for x > 0, 1 at 0, no value for x < 0
     case('pow 0 asinh _0', 'pow 0 _0', 'permissive', True),
@@ -264,11 +264,11 @@ def test_the_judge_gives_the_specifications_verdict(lhs, rhs, mode, expected) ->
 #: Section 4: rules that hold and are refused by a named policy (`licensed` = holds and every
 #: policy), each with the policy the specification names.
 POLICY_EXAMPLES = [
-    ('asin 1', 'acos 0', 'f64', 'ground_composite'),
+    ('asin 1', 'acos 0', 'strict', 'ground_composite'),
     ('asin 1', 'acos 0', 'permissive', 'ground_composite'),
-    ('exp tan asin 1', 'float("inf")', 'f64', 'evidence'),
-    ('pow -1 <constant>', '<constant>', 'f64', 'evidence'),
-    ('abs x0', 'rootn pow x0 2 2', 'f64', 'ordering'),
+    ('exp tan asin 1', 'float("inf")', 'strict', 'evidence'),
+    ('pow -1 <constant>', '<constant>', 'strict', 'evidence'),
+    ('abs x0', 'rootn pow x0 2 2', 'strict', 'ordering'),
     ('exp * 2 _0', '* exp _0 exp _0', 'permissive', 'duplication'),
     ('+ * x0 x1 * x0 x2', '* x0 + x1 x2', 'permissive', 'engine_owned'),
     ('log -3', 'float("nan")', 'permissive', 'engine_owned'),
@@ -289,8 +289,8 @@ def test_a_named_policy_refuses_what_holds(lhs, rhs, mode, policy) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('exp + log x0 log x1', '* x0 x1', 'permissive'), ('acos <constant>', '<constant>', 'f64'),
-    ('exp + x0 <constant>', '* <constant> exp x0', 'permissive'), ('ceil inv cosh x0', '1', 'f64'),
+    ('exp + log x0 log x1', '* x0 x1', 'permissive'), ('acos <constant>', '<constant>', 'strict'),
+    ('exp + x0 <constant>', '* <constant> exp x0', 'permissive'), ('ceil inv cosh x0', '1', 'strict'),
 ])
 def test_licensed_is_holds_and_every_policy(lhs, rhs, mode) -> None:
     got = licensed(lhs.split(), rhs.split(), mode, bare(), detail=judged(lhs, rhs))
@@ -442,12 +442,12 @@ def test_rootn_over_an_expression_index_is_read(rule) -> None:
 @pytest.mark.parametrize('lhs, rhs, mode', [
     ('tan asin ceil x0', 'atanh ceil x0', 'permissive'),
     ('pow 0 <constant>', '<constant>', 'permissive'),
-    ('pow 0 <constant>', '<constant>', 'f64'),
-    ('exp <constant>', '<constant>', 'f64'),
+    ('pow 0 <constant>', '<constant>', 'strict'),
+    ('exp <constant>', '<constant>', 'strict'),
     # the mint's f64 bar reads data as finite (no probe at +-inf), and permissive's mint owes no
     # clause (b)
-    ('ceil inv cosh x0', '1', 'f64'),
-    ('exp log x0', 'x0', 'permissive'), ('exp log x0', 'x0', 'f64'),
+    ('ceil inv cosh x0', '1', 'strict'),
+    ('exp log x0', 'x0', 'permissive'), ('exp log x0', 'x0', 'strict'),
     # rows the table cannot read are skipped, as the judge skips them (erf(sinh(-100)) is
     # -1 + e^-(1.7e86)); the special points check float64's divergence in f64 only
     ('ceil erf sinh x0', 'ceil erf x0', 'permissive'),
@@ -464,8 +464,8 @@ def test_a_mint_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
 
 
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('ceil inv cosh ?0', '1', 'permissive'), ('ceil inv cosh ?0', '1', 'f64'),
-    ('- ?0 ?0', '0', 'f64'), ('/ ?0 ?0', '1', 'f64'),
+    ('ceil inv cosh ?0', '1', 'permissive'), ('ceil inv cosh ?0', '1', 'strict'),
+    ('- ?0 ?0', '0', 'strict'), ('/ ?0 ?0', '1', 'strict'),
 ])
 def test_a_promotion_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
     """Promotion keeps a rule the judge admits at its own sort (it may ship it at a stronger
@@ -550,16 +550,16 @@ def test_a_mint_acceptance_is_a_judge_admission(mode) -> None:
     ('floor abs sin x0', '0', 'permissive'), ('asin 1e-8', '1e-8', 'permissive'),
     # f64 reads float64 at the battery's doubles, by strict's two readings: pow(1.0, inf) is 1
     # at x = pi/2's double, of one kind with 0, and in the reals sin of that double is below 1
-    ('pow sin x0 float("inf")', '0', 'f64'), ('pow sin x0 float("inf")', '0', 'permissive'),
+    ('pow sin x0 float("inf")', '0', 'strict'), ('pow sin x0 float("inf")', '0', 'permissive'),
     # a variable-free source owes its value only where it is finite (3.2): pow(asin(C/2), inf) is
     # 0 for |C| < 1.683 and +inf on the band up to 2, where `0` owes nothing
     ('pow asin / <constant> 2 float("inf")', '0', 'permissive'),
     ('pow cos <constant> float("inf")', '0', 'permissive'),
     # at C = 0 float64's pow(1, inf) is 1 against 0, where the reals give the left side no value:
     # F6 there, and both refuse
-    ('pow cos <constant> float("inf")', '0', 'f64'),
+    ('pow cos <constant> float("inf")', '0', 'strict'),
     # the magnitude ladder
-    ('sinh asinh x0', 'x0', 'f64'), ('tan atan asinh x0', 'asinh x0', 'f64'),
+    ('sinh asinh x0', 'x0', 'strict'), ('tan atan asinh x0', 'asinh x0', 'strict'),
 ])
 def test_the_mint_reads_as_the_judge_reads(lhs, rhs, mode) -> None:
     """One reading: the mint's pair judgment accepts exactly where the judge admits."""
@@ -578,9 +578,9 @@ def test_the_f64_mints_tolerances_may_refuse_stricts_second_reading(lhs, rhs) ->
     reals, float64's two sides of one kind, not within F6) may be refused by them, a loss of the
     scan's recall and not of its soundness."""
     d = judged(lhs, rhs)
-    assert admits(lhs, rhs, 'f64') and d['realised_f6'] is False, d
+    assert admits(lhs, rhs, 'strict') and d['realised_f6'] is False, d
     assert d['realised_kinds'] is True, d
-    assert not mint_accepts(lhs, rhs, 'f64')
+    assert not mint_accepts(lhs, rhs, 'strict')
 
 
 @pytest.mark.parametrize('src, tgt, rows', [
@@ -614,7 +614,7 @@ def test_an_overflow_row_and_a_rounding_row_are_read_by_one_agreement(lhs, rhs) 
     accepted, as the judge holds it."""
     X = mine_rows()
     assert (np.abs(X[:, 0]) > 710).any()
-    assert mint_accepts(lhs, rhs, 'f64') and admits(lhs, rhs, 'f64'), judged(lhs, rhs)
+    assert mint_accepts(lhs, rhs, 'strict') and admits(lhs, rhs, 'strict'), judged(lhs, rhs)
 
 
 @pytest.mark.parametrize('lhs, rhs', [('besselj cos 1 <constant>', '<constant>')])
@@ -624,7 +624,7 @@ def test_a_fitted_constant_agrees_within_the_fits_band(lhs, rhs) -> None:
     constant C = 0.1 the fitted witness of `besselj(cos(1), C) -> C'` is 3.2e-12 from the
     source's value, inside the fit's band and past the tolerances of a rounding: the pair is
     minted, as the judge holds it."""
-    assert mint_accepts(lhs, rhs, 'f64') and admits(lhs, rhs, 'f64'), judged(lhs, rhs)
+    assert mint_accepts(lhs, rhs, 'strict') and admits(lhs, rhs, 'strict'), judged(lhs, rhs)
 
 
 @pytest.mark.parametrize('src', ['inv ceil sin x0', 'inv ceil tanh x0', 'inv floor erf x0',
@@ -646,9 +646,9 @@ def test_the_mints_evidence_is_the_policys(src, mode) -> None:
 # Assertion 3: a policy gives the same answer from every step that applies it.
 # ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('lhs, rhs, mode', [
-    ('asin 1', 'acos 0', 'f64'), ('asin 1', 'acos 0', 'permissive'),
+    ('asin 1', 'acos 0', 'strict'), ('asin 1', 'acos 0', 'permissive'),
     ('exp tan asin 1', 'float("inf")', 'permissive'),
-    ('rootn pow x0 2 2', 'x0', 'f64'),
+    ('rootn pow x0 2 2', 'x0', 'strict'),
 ])
 def test_the_overlap_gate_demands_only_what_the_mint_mints(monkeypatch, lhs, rhs, mode) -> None:
     """An overlap whose completion is `lhs -> rhs`: the gate lists it as missing only if the
@@ -685,7 +685,7 @@ def test_the_overlap_gate_leaves_to_the_prefilter_only_what_it_refuses(monkeypat
     monkeypatch.setattr(mining, '_unjoined_overlaps', lambda *a, **k: [overlap])
     X = mine_rows()
     prefilter = mining._prefilter_reading(bare(), X, ['x0', 'x1'], 1e-11, 1e-12)
-    assert admits(' '.join(lhs), ' '.join(rhs), 'f64'), judged(' '.join(lhs), ' '.join(rhs))
+    assert admits(' '.join(lhs), ' '.join(rhs), 'strict'), judged(' '.join(lhs), ' '.join(rhs))
     missing, _, _, prefiltered = mining._overlap_gate(bare(), 'default', [], mining.judge_tiers,
                                                       prefilter=prefilter)
     want = (1, 0) if left else (0, 1)
@@ -700,9 +700,9 @@ def test_the_overlap_gate_leaves_to_the_prefilter_only_what_it_refuses(monkeypat
 
 
 @pytest.mark.parametrize('expr, mode', [
-    ('exp <constant>', 'f64'),
+    ('exp <constant>', 'strict'),
     ('exp <constant>', 'permissive'),
-    ('acos <constant>', 'f64'), ('log <constant>', 'f64'),
+    ('acos <constant>', 'strict'), ('log <constant>', 'strict'),
 ])
 def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:
     """The engine folds a constant expression to `<constant>` exactly where the mint would mint
@@ -712,10 +712,10 @@ def test_the_fold_and_the_mint_read_one_collapse_licence(expr, mode) -> None:
 
 
 @pytest.mark.parametrize('expr, mode, folds', [
-    ('pow 0 <constant>', 'f64', True), ('pow 0 <constant>', 'permissive', True),
-    ('exp <constant>', 'f64', True), ('acos <constant>', 'f64', True),
-    ('pow -1 <constant>', 'f64', False),
-    ('pow -1 <constant>', 'permissive', True), ('+ <constant> <constant>', 'f64', True),
+    ('pow 0 <constant>', 'strict', True), ('pow 0 <constant>', 'permissive', True),
+    ('exp <constant>', 'strict', True), ('acos <constant>', 'strict', True),
+    ('pow -1 <constant>', 'strict', False),
+    ('pow -1 <constant>', 'permissive', True), ('+ <constant> <constant>', 'strict', True),
 ])
 def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     """The engine collapses a constant expression to `<constant>` exactly where the collapse
@@ -725,7 +725,7 @@ def test_the_fold_reads_the_collapse_licence(expr, mode, folds) -> None:
     from simplipy import _core
     folded = list(bare().simplify(expr.split(), mode=mode)) == ['<constant>']
     holds = admits(expr, '<constant>', mode)
-    evidence = _core.table_evidence(expr.split(), dict(_contract.ARITY), mode == 'f64')
+    evidence = _core.table_evidence(expr.split(), dict(_contract.ARITY), mode == 'strict')
     assert folded is folds
     assert folded == (holds and (evidence is True or mode == 'permissive'))
 
@@ -757,7 +757,7 @@ COLLAPSES_IN_CONTEXT = [
 
 
 @pytest.mark.parametrize('around, node', COLLAPSES_IN_CONTEXT[:16])
-@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
 def test_a_constant_node_collapses_wherever_it_stands(around, node, mode) -> None:
     """A fitted constant is finite: the constant part's value is the witness wherever it has
     one, and a value of the constant at which it has none is no member, so a constant node
@@ -807,7 +807,7 @@ def test_a_left_side_the_engine_folds_to_a_leaf_is_the_engines_own(lhs, rhs, pol
     """A written composite the canon folds to a leaf is what the engine does itself
     (`engine_owned`); only a written leaf is an ill-formed left side (`well_formed`)."""
     from simplipy.verify import policy_refusals
-    got = policy_refusals(lhs.split(), rhs.split(), 'f64', bare())
+    got = policy_refusals(lhs.split(), rhs.split(), 'strict', bare())
     assert policy in got and ({'engine_owned', 'well_formed'} - {policy}).isdisjoint(got), got
 
 
@@ -916,69 +916,69 @@ def function_case(law, lhs, rhs, mode, *causes):
 #: region under an inverse (`ceil(x0)` on (-1, 0)), with the cause of a disagreement where it has
 #: one.
 FUNCTION_PINS = [
-    function_case('fun.atanh_tanh', 'atanh tanh * 19 sin x0', '* 19 sin x0', 'f64'),
-    function_case('fun.atanh_tanh', 'atanh tanh * 20 sin x0', '* 20 sin x0', 'f64'),
-    function_case('fun.atanh_tanh', 'atanh tanh x0', 'x0', 'f64'),
-    function_case('fun.atanh_tanh', 'inv atanh tanh ceil sin x0', 'inv ceil sin x0', 'f64'),
-    function_case('fun.log_exp', 'log exp x0', 'x0', 'f64'),
-    function_case('fun.log_exp', 'log exp sin x0', 'sin x0', 'f64'),
-    function_case('fun.log_exp', 'floor log exp x0', 'floor x0', 'f64'),
-    function_case('fun.log_exp', 'inv log exp ceil x0', 'inv ceil x0', 'f64'),
+    function_case('fun.atanh_tanh', 'atanh tanh * 19 sin x0', '* 19 sin x0', 'strict'),
+    function_case('fun.atanh_tanh', 'atanh tanh * 20 sin x0', '* 20 sin x0', 'strict'),
+    function_case('fun.atanh_tanh', 'atanh tanh x0', 'x0', 'strict'),
+    function_case('fun.atanh_tanh', 'inv atanh tanh ceil sin x0', 'inv ceil sin x0', 'strict'),
+    function_case('fun.log_exp', 'log exp x0', 'x0', 'strict'),
+    function_case('fun.log_exp', 'log exp sin x0', 'sin x0', 'strict'),
+    function_case('fun.log_exp', 'floor log exp x0', 'floor x0', 'strict'),
+    function_case('fun.log_exp', 'inv log exp ceil x0', 'inv ceil x0', 'strict'),
     function_case('fun.log_exp', 'inv log exp ceil x0', 'inv ceil x0', 'permissive'),
     # an odd negative power: -0 where its base is -inf on a region, never -0 over a base that is
     # never negative, and -0 by underflow only at range events
-    function_case('fun.log_exp', 'log exp pow log ceil x0 -3', 'pow log ceil x0 -3', 'f64'),
+    function_case('fun.log_exp', 'log exp pow log ceil x0 -3', 'pow log ceil x0 -3', 'strict'),
     function_case('fun.log_exp', 'log exp pow abs log ceil x0 -3', 'pow abs log ceil x0 -3',
-                  'f64'),
-    function_case('fun.log_exp', 'log exp pow x0 -3', 'pow x0 -3', 'f64'),
-    function_case('fun.asinh_sinh', 'asinh sinh x0', 'x0', 'f64'),
-    function_case('fun.asinh_sinh', 'inv asinh sinh ceil x0', 'inv ceil x0', 'f64'),
-    function_case('fun.sinh_asinh', 'sinh asinh * 1000 sin x0', '* 1000 sin x0', 'f64'),
-    function_case('fun.sinh_asinh', 'inv sinh asinh ceil x0', 'inv ceil x0', 'f64'),
-    function_case('fun.sinh_asinh', 'sinh * min -1 cos 1 asinh x0', 'neg x0', 'f64'),
+                  'strict'),
+    function_case('fun.log_exp', 'log exp pow x0 -3', 'pow x0 -3', 'strict'),
+    function_case('fun.asinh_sinh', 'asinh sinh x0', 'x0', 'strict'),
+    function_case('fun.asinh_sinh', 'inv asinh sinh ceil x0', 'inv ceil x0', 'strict'),
+    function_case('fun.sinh_asinh', 'sinh asinh * 1000 sin x0', '* 1000 sin x0', 'strict'),
+    function_case('fun.sinh_asinh', 'inv sinh asinh ceil x0', 'inv ceil x0', 'strict'),
+    function_case('fun.sinh_asinh', 'sinh * min -1 cos 1 asinh x0', 'neg x0', 'strict'),
     function_case('fun.sinh_asinh', 'sinh * min -1 cos 1 asinh x0', 'neg x0', 'permissive'),
-    function_case('fun.acosh_cosh', 'acosh cosh * 0.5 sin x0', 'abs * 0.5 sin x0', 'f64'),
-    function_case('fun.acosh_cosh', 'inv acosh cosh ceil x0', 'inv abs ceil x0', 'f64',
+    function_case('fun.acosh_cosh', 'acosh cosh * 0.5 sin x0', 'abs * 0.5 sin x0', 'strict'),
+    function_case('fun.acosh_cosh', 'inv acosh cosh ceil x0', 'inv abs ceil x0', 'strict',
                   FAIL_CLOSED),
-    function_case('fun.acosh_cosh', 'inv acosh cosh sin x0', 'inv abs sin x0', 'f64'),
+    function_case('fun.acosh_cosh', 'inv acosh cosh sin x0', 'inv abs sin x0', 'strict'),
     # the flat point: held under a reader of zeros, through a carrier, and collapsed at the root,
     # under a carrier with nothing above it and under a blind head
-    function_case('fun.log_exp', 'inv log exp x0', 'inv x0', 'f64', FAIL_CLOSED),
-    function_case('fun.log_exp', 'log log exp x0', 'log x0', 'f64'),
-    function_case('fun.log_exp', 'inv sin log exp x0', 'inv sin x0', 'f64', CARRIED),
-    function_case('fun.log_exp', 'inv * 2 log exp x0', 'inv * 2 x0', 'f64', CARRIED),
-    function_case('fun.log_exp', 'inv inv log exp x0', 'x0', 'f64', CARRIED),
-    function_case('fun.log_exp', 'sin log exp x0', 'sin x0', 'f64'),
-    function_case('fun.log_exp', 'inv exp log exp x0', 'inv exp x0', 'f64'),
-    function_case('fun.acosh_cosh', 'inv acosh cosh x0', 'inv abs x0', 'f64'),
-    function_case('fun.acosh_cosh', 'floor acosh cosh x0', 'floor abs x0', 'f64', PLATFORM_LIBM),
-    function_case('fun.acosh_cosh', 'exp acosh cosh x0', 'exp abs x0', 'f64'),
-    function_case('fun.acosh_cosh', 'acosh cosh x0', 'abs x0', 'f64'),
+    function_case('fun.log_exp', 'inv log exp x0', 'inv x0', 'strict', FAIL_CLOSED),
+    function_case('fun.log_exp', 'log log exp x0', 'log x0', 'strict'),
+    function_case('fun.log_exp', 'inv sin log exp x0', 'inv sin x0', 'strict', CARRIED),
+    function_case('fun.log_exp', 'inv * 2 log exp x0', 'inv * 2 x0', 'strict', CARRIED),
+    function_case('fun.log_exp', 'inv inv log exp x0', 'x0', 'strict', CARRIED),
+    function_case('fun.log_exp', 'sin log exp x0', 'sin x0', 'strict'),
+    function_case('fun.log_exp', 'inv exp log exp x0', 'inv exp x0', 'strict'),
+    function_case('fun.acosh_cosh', 'inv acosh cosh x0', 'inv abs x0', 'strict'),
+    function_case('fun.acosh_cosh', 'floor acosh cosh x0', 'floor abs x0', 'strict', PLATFORM_LIBM),
+    function_case('fun.acosh_cosh', 'exp acosh cosh x0', 'exp abs x0', 'strict'),
+    function_case('fun.acosh_cosh', 'acosh cosh x0', 'abs x0', 'strict'),
     # the log of an inverse: +0 against -0 at t = 1, held under a reader of a zero's sign, over a
     # t float64 rounds to 1 on a region, and over a t that is -0 on a region; permissive reads one
     # zero and takes it everywhere
-    function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'log inv + x0 x1', 'neg log + x0 x1', 'f64'),
+    function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'strict'),
+    function_case('fun.log_inverse', 'log inv + x0 x1', 'neg log + x0 x1', 'strict'),
     function_case('fun.log_inverse', 'log inv + x0 x1', 'neg log + x0 x1', 'permissive'),
     function_case('fun.log_inverse', 'inv log inv + x0 x1', 'inv neg log + x0 x1', 'permissive'),
     function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'permissive'),
     function_case('fun.log_inverse', 'log inv x0', 'neg log x0', 'permissive'),
-    function_case('fun.log_inverse', 'sin log inv x0', 'sin neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'inv inv log inv x0', 'neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'f64'),
-    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'f64'),
-    function_case('fun.log_inverse', 'log inv exp x0', 'neg log exp x0', 'f64'),
-    function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'f64'),
-    function_case('fun.exp_log', 'exp log abs x0', 'abs x0', 'f64'),
-    function_case('fun.exp_log', 'exp log x0', 'x0', 'f64'),
-    function_case('fun.exp_log', 'inv exp log pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'f64'),
-    function_case('fun.unit_inverses', 'cos acos sin x0', 'sin x0', 'f64'),
-    function_case('fun.unit_inverses', 'cos acos x0', 'x0', 'f64'),
-    function_case('fun.abs_nonnegative', 'abs exp x0', 'exp x0', 'f64'),
-    function_case('fun.log_inverse', 'log abs inv x0', 'neg log abs x0', 'f64'),
+    function_case('fun.log_inverse', 'sin log inv x0', 'sin neg log x0', 'strict'),
+    function_case('fun.log_inverse', 'inv log inv x0', 'inv neg log x0', 'strict'),
+    function_case('fun.log_inverse', 'inv inv log inv x0', 'neg log x0', 'strict'),
+    function_case('fun.log_inverse', 'pow log inv x0 -3', 'pow neg log x0 -3', 'strict'),
+    function_case('fun.log_inverse', 'inv sin log inv x0', 'inv sin neg log x0', 'strict'),
+    function_case('fun.log_inverse', 'log inv exp x0', 'neg log exp x0', 'strict'),
+    function_case('fun.log_inverse', 'log inv ceil x0', 'neg log ceil x0', 'strict'),
+    function_case('fun.exp_log', 'exp log abs x0', 'abs x0', 'strict'),
+    function_case('fun.exp_log', 'exp log x0', 'x0', 'strict'),
+    function_case('fun.exp_log', 'inv exp log pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'strict'),
+    function_case('fun.unit_inverses', 'cos acos sin x0', 'sin x0', 'strict'),
+    function_case('fun.unit_inverses', 'cos acos x0', 'x0', 'strict'),
+    function_case('fun.abs_nonnegative', 'abs exp x0', 'exp x0', 'strict'),
+    function_case('fun.log_inverse', 'log abs inv x0', 'neg log abs x0', 'strict'),
     function_case('fun.log_inverse', 'log abs inv x0', 'neg log abs x0', 'permissive'),
-    function_case('fun.abs_nonnegative', 'inv abs pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'f64'),
+    function_case('fun.abs_nonnegative', 'inv abs pow ceil x0 0.5', 'inv pow ceil x0 0.5', 'strict'),
     function_case('perm.inverse_pairs', 'asin sin x0', 'x0', 'permissive'),
     function_case('perm.inverse_pairs', 'atan tan x0', 'x0', 'permissive'),
     function_case('perm.inverse_pairs', 'acosh cosh x0', 'x0', 'permissive'),
@@ -1003,18 +1003,18 @@ def test_the_engine_takes_a_function_law_where_the_judge_holds_it(law, lhs, rhs,
     assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('tier'))
     if PLATFORM_LIBM in causes:
         # only the safe direction: the engine keeps a step the judge holds on this machine
-        assert mode == 'f64' and holds and not takes, (lhs, mode)
+        assert mode == 'strict' and holds and not takes, (lhs, mode)
         return
     if FAIL_CLOSED in causes:
         # the engine keeps the step the judge holds, never the other way, and keeps it under a
         # reader: the same pair at the root is taken
-        assert mode == 'f64' and holds and not takes, (lhs, mode)
+        assert mode == 'strict' and holds and not takes, (lhs, mode)
         reader, pair = lhs.split()[0], lhs.split()[1:]
         assert reader == 'inv' and pair[:2] in (['log', 'exp'], ['acosh', 'cosh']), lhs
         assert list(engine.simplify(pair, mode=mode, effort=0)) != pair, pair
     if CARRIED in causes:
         # the engine keeps the step the judge holds, never the other way
-        assert mode == 'f64' and holds and not takes, (lhs, mode)
+        assert mode == 'strict' and holds and not takes, (lhs, mode)
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
                             f'{d.get("verdict")} {d.get("tier")}')
 
@@ -1044,60 +1044,60 @@ def power_case(law, lhs, rhs, mode, *causes):
 #: The laws of powers where their premises hold and where they fail, in both modes, with the
 #: cause of a disagreement where one has it.
 POWER_PINS = [
-    power_case('pow.distribute', 'pow * x0 x1 -3', '* pow x0 -3 pow x1 -3', 'f64'),
+    power_case('pow.distribute', 'pow * x0 x1 -3', '* pow x0 -3 pow x1 -3', 'strict'),
     power_case('pow.distribute', 'pow * x1 pow - x0 abs x0 2 -3',
-               '* pow x1 -3 pow pow - x0 abs x0 2 -3', 'f64', DISTRIBUTION_HELD),
+               '* pow x1 -3 pow pow - x0 abs x0 2 -3', 'strict', DISTRIBUTION_HELD),
     power_case('pow.distribute', 'pow * x1 pow - x0 abs x0 2 -3',
                '* pow x1 -3 pow pow - x0 abs x0 2 -3', 'permissive'),
-    power_case('parse.inverse_of_product', '/ x2 * x0 x1', '* x2 * inv x0 inv x1', 'f64'),
+    power_case('parse.inverse_of_product', '/ x2 * x0 x1', '* x2 * inv x0 inv x1', 'strict'),
     power_case('parse.inverse_of_product', '/ x2 * x1 pow - x0 abs x0 2',
-               '* x2 * inv x1 inv pow - x0 abs x0 2', 'f64', DISTRIBUTION_HELD),
+               '* x2 * inv x1 inv pow - x0 abs x0 2', 'strict', DISTRIBUTION_HELD),
     power_case('parse.inverse_of_product', '/ x2 * x1 pow - x0 abs x0 2',
                '* x2 * inv x1 inv pow - x0 abs x0 2', 'permissive'),
-    power_case('pow.compose', 'pow pow x0 2 3', 'pow x0 6', 'f64'),
-    power_case('pow.compose', 'pow pow x0 2 0.5', 'x0', 'f64'),
+    power_case('pow.compose', 'pow pow x0 2 3', 'pow x0 6', 'strict'),
+    power_case('pow.compose', 'pow pow x0 2 0.5', 'x0', 'strict'),
     power_case('pow.compose', 'pow pow x0 2 0.5', 'x0', 'permissive'),
-    power_case('pow.compose', 'pow pow x0 3 0.5', 'pow x0 1.5', 'f64'),
-    power_case('pow.compose', 'pow pow sin x0 -1 0.5', 'pow sin x0 -0.5', 'f64', NEVER_INFINITE),
-    power_case('pow.root_inverse', 'pow rootn x0 3 3', 'x0', 'f64'),
-    power_case('pow.root_inverse', 'pow rootn x0 2 2', 'x0', 'f64'),
+    power_case('pow.compose', 'pow pow x0 3 0.5', 'pow x0 1.5', 'strict'),
+    power_case('pow.compose', 'pow pow sin x0 -1 0.5', 'pow sin x0 -0.5', 'strict', NEVER_INFINITE),
+    power_case('pow.root_inverse', 'pow rootn x0 3 3', 'x0', 'strict'),
+    power_case('pow.root_inverse', 'pow rootn x0 2 2', 'x0', 'strict'),
     power_case('pow.root_inverse', 'pow rootn x0 2 2', 'x0', 'permissive'),
-    power_case('pow.root_inverse', 'pow rootn abs x0 2 2', 'abs x0', 'f64'),
-    power_case('pow.odd_root_compose', 'pow rootn x0 3 0.5', 'pow x0 / 1 6', 'f64'),
-    power_case('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow x0 / 2 3', 'f64'),
+    power_case('pow.root_inverse', 'pow rootn abs x0 2 2', 'abs x0', 'strict'),
+    power_case('pow.odd_root_compose', 'pow rootn x0 3 0.5', 'pow x0 / 1 6', 'strict'),
+    power_case('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow x0 / 2 3', 'strict'),
     power_case('pow.odd_root_compose', 'pow rootn x0 3 2', 'pow x0 / 2 3', 'permissive',
                ONE_SPELLING),
-    power_case('pow.odd_root_compose', 'pow rootn abs x0 3 2', 'pow abs x0 / 2 3', 'f64',
+    power_case('pow.odd_root_compose', 'pow rootn abs x0 3 2', 'pow abs x0 / 2 3', 'strict',
                ONE_SPELLING),
-    power_case('pow.odd_root_compose', 'pow rootn ceil x0 3 5', 'pow ceil x0 / 5 3', 'f64'),
-    power_case('pow.literal_base_sign', 'inv pow 3 x0', 'pow / 1 3 x0', 'f64'),
+    power_case('pow.odd_root_compose', 'pow rootn ceil x0 3 5', 'pow ceil x0 / 5 3', 'strict'),
+    power_case('pow.literal_base_sign', 'inv pow 3 x0', 'pow / 1 3 x0', 'strict'),
     # at a slot that binds any part: float64 gives +inf on both sides where the reals give the
     # left none, read pointwise
-    power_case('pow.literal_base_sign', 'inv pow 3 _0', 'pow / 1 3 _0', 'f64'),
-    power_case('pow.literal_base_sign', 'pow 2 neg x0', 'pow 0.5 x0', 'f64'),
-    power_case('pow.half_root', 'pow x0 0.5', 'rootn x0 2', 'f64'),
-    power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'f64'),
+    power_case('pow.literal_base_sign', 'inv pow 3 _0', 'pow / 1 3 _0', 'strict'),
+    power_case('pow.literal_base_sign', 'pow 2 neg x0', 'pow 0.5 x0', 'strict'),
+    power_case('pow.half_root', 'pow x0 0.5', 'rootn x0 2', 'strict'),
+    power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'strict'),
     power_case('pow.half_root', 'pow ceil x0 0.5', 'rootn ceil x0 2', 'permissive'),
-    power_case('pow.half_root', 'inv pow ceil x0 0.5', 'inv rootn ceil x0 2', 'f64'),
-    power_case('pow.half_root', 'inv pow x0 0.5', 'inv rootn x0 2', 'f64'),
-    power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'f64'),
+    power_case('pow.half_root', 'inv pow ceil x0 0.5', 'inv rootn ceil x0 2', 'strict'),
+    power_case('pow.half_root', 'inv pow x0 0.5', 'inv rootn x0 2', 'strict'),
+    power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'strict'),
     power_case('mul.collect', '* pow x0 0.5 pow x0 0.5', 'x0', 'permissive'),
-    power_case('mul.collect', '* rootn x0 2 x0', 'pow x0 1.5', 'f64'),
-    power_case('mul.collect', 'inv * rootn x0 2 x0', 'inv pow x0 1.5', 'f64'),
-    power_case('mul.collect', '* pow abs x0 0.5 pow abs x0 0.5', 'abs x0', 'f64'),
+    power_case('mul.collect', '* rootn x0 2 x0', 'pow x0 1.5', 'strict'),
+    power_case('mul.collect', 'inv * rootn x0 2 x0', 'inv pow x0 1.5', 'strict'),
+    power_case('mul.collect', '* pow abs x0 0.5 pow abs x0 0.5', 'abs x0', 'strict'),
     # the symbolic merge: the level sets of the exponent null (nonconstant entire), and the base
     # not -0 on a region; a fat level set, or an exponent no certificate reads, stays
-    power_case('mul.collect_symbolic', '* pow x0 x1 pow x0 x1', 'pow x0 * 2 x1', 'f64'),
+    power_case('mul.collect_symbolic', '* pow x0 x1 pow x0 x1', 'pow x0 * 2 x1', 'strict'),
     power_case('mul.collect_symbolic', '* pow ceil x0 x1 pow ceil x0 x1', 'pow ceil x0 * 2 x1',
-               'f64'),
+               'strict'),
     power_case('mul.collect_symbolic', '* pow ceil x0 x1 pow ceil x0 x1', 'pow ceil x0 * 2 x1',
                'permissive'),
     power_case('mul.collect_symbolic', '* pow abs x0 x1 pow abs x0 x1', 'pow abs x0 * 2 x1',
-               'f64'),
+               'strict'),
     power_case('mul.collect_symbolic', '* pow x0 floor x1 pow x0 floor x1',
-               'pow x0 * 2 floor x1', 'f64'),
+               'pow x0 * 2 floor x1', 'strict'),
     power_case('mul.collect_symbolic', '* pow x0 pow abs sin x1 0.5 pow x0 pow abs sin x1 0.5',
-               'pow x0 * 2 pow abs sin x1 0.5', 'f64'),
+               'pow x0 * 2 pow abs sin x1 0.5', 'strict'),
 ]
 
 
@@ -1144,44 +1144,44 @@ def sign_case(law, lhs, rhs, mode, *causes):
 #: nor strict promises (`class.pole_orientation`), and where a pole there takes both signs beside it
 #: strict promises no value at all (`1/(x0 - 3) + 1/(3 - x0)` is 0).
 SIGN_PINS = [
-    sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'f64', ROOT_ZERO),
+    sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'strict', ROOT_ZERO),
     sign_case('class.sign_trade', 'neg sin - x0 x1', 'sin - x1 x0', 'permissive'),
-    sign_case('class.sign_trade', 'neg sin - x0 3', 'sin - 3 x0', 'f64'),
-    sign_case('class.sign_trade', 'neg pow - x0 3 3', 'pow - 3 x0 3', 'f64'),
+    sign_case('class.sign_trade', 'neg sin - x0 3', 'sin - 3 x0', 'strict'),
+    sign_case('class.sign_trade', 'neg pow - x0 3 3', 'pow - 3 x0 3', 'strict'),
     sign_case('class.sign_trade', 'inv * -2 sin + ceil x0 floor x1',
-              'inv * 2 sin - neg ceil x0 floor x1', 'f64'),
+              'inv * 2 sin - neg ceil x0 floor x1', 'strict'),
     sign_case('class.sign_trade', 'inv * -2 sin + ceil x0 floor x1',
               'inv * 2 sin - neg ceil x0 floor x1', 'permissive'),
-    sign_case('class.sign_trade', 'inv neg sin - x0 3', 'inv sin - 3 x0', 'f64'),
-    sign_case('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'f64'),
+    sign_case('class.sign_trade', 'inv neg sin - x0 3', 'inv sin - 3 x0', 'strict'),
+    sign_case('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'strict'),
     sign_case('class.pole_orientation', 'neg inv - x0 3', 'inv - 3 x0', 'permissive'),
-    sign_case('class.pole_orientation', 'neg inv sin - x0 3', 'inv sin - 3 x0', 'f64'),
-    sign_case('class.pole_orientation', 'pow * -2 - x0 3 -1', '/ inv - 3 x0 2', 'f64'),
+    sign_case('class.pole_orientation', 'neg inv sin - x0 3', 'inv sin - 3 x0', 'strict'),
+    sign_case('class.pole_orientation', 'pow * -2 - x0 3 -1', '/ inv - 3 x0 2', 'strict'),
     sign_case('class.pole_orientation', 'pow * -2 - x0 3 -1', '/ inv - 3 x0 2', 'permissive'),
-    sign_case('class.pole_orientation', 'neg inv - -1 pow x0 2', 'inv + pow x0 2 1', 'f64'),
-    sign_case('class.pole_orientation', 'inv neg - x0 3', 'neg inv - x0 3', 'f64'),
-    sign_case('class.opposite_sums', '* - x0 3 - 3 x0', 'neg pow - x0 3 2', 'f64'),
-    sign_case('class.opposite_sums', 'inv * - x0 3 - 3 x0', 'neg inv pow - x0 3 2', 'f64'),
+    sign_case('class.pole_orientation', 'neg inv - -1 pow x0 2', 'inv + pow x0 2 1', 'strict'),
+    sign_case('class.pole_orientation', 'inv neg - x0 3', 'neg inv - x0 3', 'strict'),
+    sign_case('class.opposite_sums', '* - x0 3 - 3 x0', 'neg pow - x0 3 2', 'strict'),
+    sign_case('class.opposite_sums', 'inv * - x0 3 - 3 x0', 'neg inv pow - x0 3 2', 'strict'),
     sign_case('class.opposite_sums', 'inv * - x0 3 - 3 x0', 'neg inv pow - x0 3 2', 'permissive'),
-    sign_case('class.opposite_sums', '/ - x0 3 - 3 x0', '-1', 'f64'),
-    sign_case('class.opposite_sums', '/ - x0 x1 - x1 x0', '-1', 'f64', COINCIDENCE),
-    sign_case('class.like_terms_up_to_sign', '+ sin - x0 x1 sin - x1 x0', '0', 'f64'),
-    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'f64'),
+    sign_case('class.opposite_sums', '/ - x0 3 - 3 x0', '-1', 'strict'),
+    sign_case('class.opposite_sums', '/ - x0 x1 - x1 x0', '-1', 'strict', COINCIDENCE),
+    sign_case('class.like_terms_up_to_sign', '+ sin - x0 x1 sin - x1 x0', '0', 'strict'),
+    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'strict'),
     sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 inv - 3 x0', '0', 'permissive'),
-    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 neg inv - 3 x0', '* 2 inv - x0 3', 'f64'),
-    sign_case('pow.even_orientation', 'pow - x1 x0 2', 'pow - x0 x1 2', 'f64'),
-    sign_case('pow.even_orientation', 'pow - x1 x0 -2', 'pow - x0 x1 -2', 'f64'),
-    sign_case('pow.negated_site', 'pow neg - x0 3 3', 'pow - 3 x0 3', 'f64'),
-    sign_case('pow.negated_site', 'inv pow neg - x0 3 3', 'inv pow - 3 x0 3', 'f64'),
+    sign_case('class.like_terms_up_to_sign', '+ inv - x0 3 neg inv - 3 x0', '* 2 inv - x0 3', 'strict'),
+    sign_case('pow.even_orientation', 'pow - x1 x0 2', 'pow - x0 x1 2', 'strict'),
+    sign_case('pow.even_orientation', 'pow - x1 x0 -2', 'pow - x0 x1 -2', 'strict'),
+    sign_case('pow.negated_site', 'pow neg - x0 3 3', 'pow - 3 x0 3', 'strict'),
+    sign_case('pow.negated_site', 'inv pow neg - x0 3 3', 'inv pow - 3 x0 3', 'strict'),
     sign_case('pow.negated_site', 'inv pow neg + ceil x0 floor x1 3',
-              'inv pow - neg ceil x0 floor x1 3', 'f64'),
+              'inv pow - neg ceil x0 floor x1 3', 'strict'),
     sign_case('pow.negated_site', 'inv pow neg + ceil x0 floor x1 3',
               'inv pow - neg ceil x0 floor x1 3', 'permissive'),
-    sign_case('fun.even', 'cos neg x0', 'cos x0', 'f64'),
-    sign_case('fun.even', 'cos - x1 x0', 'cos - x0 x1', 'f64'),
-    sign_case('fun.odd_sign', 'sin neg x0', 'neg sin x0', 'f64'),
-    sign_case('fun.odd_sign', 'sin * -2 ceil x0', 'neg sin * 2 ceil x0', 'f64'),
-    sign_case('fun.atan2_sign', 'atan2 neg x0 -1', 'neg atan2 x0 -1', 'f64'),
+    sign_case('fun.even', 'cos neg x0', 'cos x0', 'strict'),
+    sign_case('fun.even', 'cos - x1 x0', 'cos - x0 x1', 'strict'),
+    sign_case('fun.odd_sign', 'sin neg x0', 'neg sin x0', 'strict'),
+    sign_case('fun.odd_sign', 'sin * -2 ceil x0', 'neg sin * 2 ceil x0', 'strict'),
+    sign_case('fun.atan2_sign', 'atan2 neg x0 -1', 'neg atan2 x0 -1', 'strict'),
     sign_case('fun.atan2_sign', 'atan2 neg x0 -1', 'neg atan2 x0 -1', 'permissive', ONE_ZERO),
 ]
 
@@ -1200,9 +1200,9 @@ def test_the_engine_takes_a_law_of_signs_where_the_judge_holds_it(law, lhs, rhs,
         return
     assert causes, (law, lhs, rhs, mode, takes, d.get('verdict'), d.get('f64_kinds'))
     if ROOT_ZERO in causes:
-        assert mode == 'f64' and takes and set(d.get('f64_kinds') or []) == {'ZERO-SIGN'}, lhs
+        assert mode == 'strict' and takes and set(d.get('f64_kinds') or []) == {'ZERO-SIGN'}, lhs
     elif COINCIDENCE in causes:
-        assert mode == 'f64' and takes and d.get('verdict') == 'UNDECIDED-MEASURE', lhs
+        assert mode == 'strict' and takes and d.get('verdict') == 'UNDECIDED-MEASURE', lhs
     else:
         assert holds and not takes, (lhs, mode)
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge '
@@ -1216,11 +1216,11 @@ def _engine_serving(rule: list, mode: str) -> SimpliPyEngine:
     with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
     e = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
-    mining.RuleMiner(e)._install('default' if mode == 'f64' else mode, [rule])
+    mining.RuleMiner(e)._install('default' if mode == 'strict' else mode, [rule])
     return e
 
 
-@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
 @pytest.mark.parametrize('lhs, rhs, instance, answer', [
     ('inv * x1 ?0', '1', 'inv * x1 x3', '1'), ('/ 2 * 3 ?0', 'inv ?0', '/ 2 * 3 x3', 'inv x3'),
     ('rootn / 2 * x1 ?0 2', '1', 'rootn / 2 * x1 x3 2', '1')])
@@ -1242,9 +1242,9 @@ def test_the_distributed_reading_reads_the_binding_licence() -> None:
     certificates license every member."""
     held = 'inv * x1 abs - x2 abs x2'.split()
     apart = '* inv x1 inv abs - x2 abs x2'.split()
-    e = _engine_serving([['inv', '*', 'x1', '_0'], ['1']], 'f64')
-    assert e.simplify(held, mode='f64') == ['1']
-    assert e.simplify(apart, mode='f64') == '/ inv abs - x2 abs x2 x1'.split()
+    e = _engine_serving([['inv', '*', 'x1', '_0'], ['1']], 'strict')
+    assert e.simplify(held, mode='strict') == ['1']
+    assert e.simplify(apart, mode='strict') == '/ inv abs - x2 abs x2 x1'.split()
     e = _engine_serving([['inv', '*', 'x1', '_0'], ['1']], 'permissive')
     assert e.simplify(apart, mode='permissive') == ['1']
 
@@ -1280,7 +1280,7 @@ def test_permissive_leaves_what_is_no_entry_as_f64_does(expr) -> None:
     """`abs`, `max`, `floor` and `min` are no entry of the list: their shape is the point of
     the expression, and permissive gives f64's answer."""
     e = bare()
-    assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='f64')
+    assert e.simplify(expr.split(), mode='permissive') == e.simplify(expr.split(), mode='strict')
 
 
 def test_the_core_exports_the_named_steps_schemas() -> None:
@@ -1333,7 +1333,7 @@ def test_the_monitor_reads_a_named_step_in_an_answer() -> None:
     from simplipy.verify._monitor import judge_pair
     inp, out = '+ x1 asin sin x0'.split(), '+ x0 x1'.split()
     assert judge_pair(inp, out, mode='permissive')[0] == 'OK'
-    assert judge_pair(inp, out, mode='f64')[0] == 'VIOLATION'
+    assert judge_pair(inp, out, mode='strict')[0] == 'VIOLATION'
 
 
 @pytest.mark.parametrize('inp', [
@@ -1348,7 +1348,7 @@ def test_the_monitor_reads_permissives_steps_without_a_definedness_check(inp) ->
     gives the input NaN on a region."""
     from simplipy.verify._monitor import judge_pair
     assert judge_pair(inp.split(), ['x1'], mode='permissive')[0] == 'OK'
-    assert judge_pair(inp.split(), ['x1'], mode='f64')[0] == 'VIOLATION'
+    assert judge_pair(inp.split(), ['x1'], mode='strict')[0] == 'VIOLATION'
 
 
 # ------------------------------------------------------------------------------------------
@@ -1424,7 +1424,7 @@ def test_permissive_is_judged_at_the_sort_its_matcher_binds() -> None:
     # differs at pi/2 + k*pi alone: at `x0 = asin(ceil(x1))`, 0 against 1 on all of (0, 1], so
     # permissive's own criterion refuses it; it holds in f64, and so in permissive
     assert judged('ceil abs cos x0', '1')['permissive_own'] is False
-    assert admits('ceil abs cos x0', '1', 'f64')
+    assert admits('ceil abs cos x0', '1', 'strict')
     assert admits('ceil abs cos x0', '1', 'permissive')
     # differs at 1 alone, and so on (0, 1] at `x0 = ceil(x1)`; past 1 the left side has no
     # value, which still owes nothing in permissive (an extension is no disagreement)
@@ -1488,5 +1488,5 @@ def test_the_mint_and_the_policy_read_one_evidence(mode) -> None:
     got = licensed(tokens, ['float("nan")'], mode, bare(),
                    detail=judged('tan atan2 x0 0', 'float("nan")'))
     assert not got['licensed'], got
-    assert ('evidence' in got['refused_by']) is (mode != 'f64'), got
+    assert ('evidence' in got['refused_by']) is (mode != 'strict'), got
     assert not mint_accepts('tan atan2 x0 0', 'float("nan")', mode)

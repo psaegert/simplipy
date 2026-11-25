@@ -147,16 +147,16 @@ class TestKernelLiterals:
     @pytest.mark.parametrize('prefix, out', [
         (['rootn', '-1', str(2 ** 128)], ['float("nan")']),       # an even root of -1
         (['rootn', 'rootn', 'x1', '0', str(2 ** 127)], ['float("nan")']),
-        (['log', '-1/' + Q], {'f64': ['float("-inf")'], 'permissive': ['float("nan")']}),
+        (['log', '-1/' + Q], {'strict': ['float("-inf")'], 'permissive': ['float("nan")']}),
         (['pow', '-2', f'{2 ** 256}/{2 ** 128}'],
-         {'f64': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 128)]}),  # finite
+         {'strict': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 128)]}),  # finite
         (['pow', '-2', f'{3 * 2 ** 200}/3'],
-         {'f64': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 200)]}),  # main: nan
+         {'strict': ['float("inf")'], 'permissive': ['pow', '-2', str(2 ** 200)]}),  # main: nan
         (['log', f'{Q}/{Q[:-1]}'], ['log', '10']),                # log(10), no nan
     ])
     def test_beyond_i128_literals_fold_only_when_certain(self, engine: SimpliPyEngine,
                                                          prefix: list[str], out) -> None:
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             want = out[mode] if isinstance(out, dict) else out
             assert list(engine.simplify(prefix, mode=mode)) == want, mode
 

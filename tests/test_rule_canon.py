@@ -28,11 +28,11 @@ _OPS = {
 }
 #: An f64 fact: f64's atanh(tanh(3)) is not 3, so rootn reads a non-integer degree.
 _F64_FACT = [[['rootn', '2', 'atanh', 'tanh', '3'], ['float("nan")']]]
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.mark.parametrize('canon, core_name', [
-    ('legacy', 'legacy'), ('permissive', 'permissive'), ('f64', 'default')])
+    ('legacy', 'legacy'), ('permissive', 'permissive'), ('strict', 'default')])
 def test_a_set_is_read_in_the_canon_it_was_certified_in(canon, core_name) -> None:
     """The canon a set was certified in is part of its recipe: the core reads the set in it, and
     a rebuilt core reads it the same way. The f64 fact never fires on `rootn(2, 3)`."""
@@ -138,7 +138,7 @@ def default_engine():
     if not os.path.exists(config):
         pytest.skip(f'the default artifact {simplipy.DEFAULT_ENGINE} is not staged')
     # a pre-0.15 mine, read through the legacy opt-in
-    return legacy_from_config(config, modes=('f64', 'permissive'))
+    return legacy_from_config(config, modes=('strict', 'permissive'))
 
 
 def test_no_served_nan_rule_has_a_finite_lhs(shipped, default_engine) -> None:

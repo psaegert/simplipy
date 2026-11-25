@@ -46,7 +46,7 @@ def evaluate(eng, tokens, names, X):
 ])
 def test_f64_keeps_the_infinity_of_an_inverted_region_zero(eng, expression, expected):
     tokens = expression.split()
-    answer = eng.simplify(tokens, mode='f64')
+    answer = eng.simplify(tokens, mode='strict')
     names = sorted(eng.expression_variables(tokens))
     X = np.array(list(itertools.product(VALUES, repeat=len(names))))
     a, b = evaluate(eng, tokens, names, X), evaluate(eng, answer, names, X)

@@ -48,7 +48,7 @@ def table(op: str, args, dps: int):
 
 def test_the_engine_reads_them(engine) -> None:
     import simplipy.operators as ops
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         s = lambda t: engine.simplify(t, mode=mode)  # noqa: E731
         assert s('erfc(x1)') == 'erfc(x1)'
         assert s('besseli(2.5, x1*x2)') == 'besseli(5/2, x1*x2)'
@@ -60,7 +60,7 @@ def test_the_engine_reads_them(engine) -> None:
         assert s('bessely(1.5, 0.37)') == 'bessely(3/2, 0.37)'
         assert engine.prettify(s('besselk(2, 7452/1615)')) == '0.008339089152780824'
     # float64 keeps a zero's sign the scipy heads give it on whole regions; permissive drops it
-    assert engine.simplify('bessely(2, x1) + 0', mode='f64') == 'bessely(2, x1) + 0'
+    assert engine.simplify('bessely(2, x1) + 0', mode='strict') == 'bessely(2, x1) + 0'
     assert engine.simplify('bessely(2, x1) + 0', mode='permissive') == 'bessely(2, x1)'
     ev = engine._core.evaluate_constant_subtree
     for toks, f, args in ((['erfc', '0.5'], ops.erfc, (0.5,)), (['bessely', '1', '2'], ops.bessely, (1.0, 2.0)),
@@ -192,12 +192,12 @@ def test_erfc_is_never_negative_zero(engine, expr, f64, holds) -> None:
     whose premise is a part that is not `-0` on a region hold of it: `log(exp(erfc(x1)))` is
     `erfc(x1)` where nothing reads its flat point, and `erfc(x1) + 0` is `erfc(x1)`; under an
     inverse the flat point is read, and the pair stays. The judge reads each step alike."""
-    got = ' '.join(engine.simplify(expr.split(), mode='f64'))
+    got = ' '.join(engine.simplify(expr.split(), mode='strict'))
     assert got == f64
     collapsed = {'log exp erfc x1': 'erfc x1', '+ erfc x1 0': 'erfc x1',
                  'inv log exp erfc x1': 'inv erfc x1'}[expr]
     d = _contract.judge_rule(expr.split(), collapsed.split())
-    assert (_contract.judged_reading(d, 'f64') is True) == holds, d.get('verdict')
+    assert (_contract.judged_reading(d, 'strict') is True) == holds, d.get('verdict')
 
 
 def test_the_judge_decides_rules_over_them() -> None:
@@ -236,7 +236,7 @@ def test_where_the_joint_limit_does_not_exist_there_is_no_value(engine, expr, ca
     import simplipy.operators as ops
     assert engine.simplify(expr, mode='permissive') == 'nan', expr
     assert float(getattr(ops, call[0])(*call[1:])) == f64, expr
-    assert engine.simplify(expr, mode='f64') != 'nan', expr
+    assert engine.simplify(expr, mode='strict') != 'nan', expr
 
 
 @pytest.mark.parametrize('order', [Fraction(-1, 2), Fraction(-3, 2), Fraction(-5, 2)])
@@ -285,15 +285,15 @@ def parity_case(lhs, rhs, mode, *causes):
 
 
 @pytest.mark.parametrize('lhs, rhs, mode, causes', [
-    parity_case('besseli 2 neg x0', 'besseli 2 x0', 'f64'),
-    parity_case('besseli 2 neg ceil x0', 'besseli 2 ceil x0', 'f64'),
-    parity_case('besseli 0 - x1 x0', 'besseli 0 - x0 x1', 'f64'),
-    parity_case('besseli 1 neg x0', 'neg besseli 1 x0', 'f64'),
-    parity_case('besseli 3 * -2 x0', 'neg besseli 3 * 2 x0', 'f64'),
-    parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'f64'),
+    parity_case('besseli 2 neg x0', 'besseli 2 x0', 'strict'),
+    parity_case('besseli 2 neg ceil x0', 'besseli 2 ceil x0', 'strict'),
+    parity_case('besseli 0 - x1 x0', 'besseli 0 - x0 x1', 'strict'),
+    parity_case('besseli 1 neg x0', 'neg besseli 1 x0', 'strict'),
+    parity_case('besseli 3 * -2 x0', 'neg besseli 3 * 2 x0', 'strict'),
+    parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'strict'),
     parity_case('besseli 1 neg ceil x0', 'neg besseli 1 ceil x0', 'permissive'),
-    parity_case('inv besseli 1 neg x0', 'inv neg besseli 1 x0', 'f64'),
-    parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'f64', SLOT),
+    parity_case('inv besseli 1 neg x0', 'inv neg besseli 1 x0', 'strict'),
+    parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'strict', SLOT),
     parity_case('besseli 1 neg _0', 'neg besseli 1 _0', 'permissive'),
 ])
 def test_besselis_parity_is_taken_where_the_judge_holds_it(engine, lhs, rhs, mode, causes) -> None:
@@ -306,5 +306,5 @@ def test_besselis_parity_is_taken_where_the_judge_holds_it(engine, lhs, rhs, mod
     holds = _contract.judged_reading(d, mode) is True
     if takes == holds:
         return
-    assert causes and mode == 'f64' and takes and not holds, (lhs, mode, takes, d.get('verdict'))
+    assert causes and mode == 'strict' and takes and not holds, (lhs, mode, takes, d.get('verdict'))
     raise KnownDisagreement(f'{lhs} -> {rhs} [{mode}]: engine takes {takes}, judge {d.get("verdict")}')

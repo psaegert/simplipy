@@ -29,7 +29,7 @@ def _mine(tmp_path, eng, **kwargs):
     out = str(tmp_path / 'mined.json')
     eng.find_rules(max_source_pattern_length=2, dummy_variables=1,
                    extra_internal_terms=['0', '1'], X=128, seed=7, verbose=False,
-                   output_file=out, reset_rules=False, modes='f64', judge_processes=1,
+                   output_file=out, reset_rules=False, modes='strict', judge_processes=1,
                    **kwargs)
     return out
 
@@ -87,7 +87,7 @@ def test_the_mint_refuses_what_the_licence_refuses(acj, src, hint, mode, policy,
     assert (ok, why) == (False, mint)
     pattern = [t.replace('x0', '?0') for t in src.split()]
     target = [t.replace('x0', '?0') for t in hint.split()]
-    got = licensed(pattern, target, 'f64' if mode == 'default' else mode, acj)
+    got = licensed(pattern, target, 'strict' if mode == 'default' else mode, acj)
     assert policy in got['refused_by'], got
 
 

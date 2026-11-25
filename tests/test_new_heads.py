@@ -11,7 +11,7 @@ from simplipy import SimpliPyEngine
 from simplipy.verify import _contract
 
 ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -38,12 +38,12 @@ def test_a_literal_is_the_rational_it_spells_in_both_modes(bare):
     # permissive's ground value is the table's, where a literal is the rational it spells; f64
     # reads the same real value (0), float64's value of it (floor(1.0) = 1) being finite too, so
     # both kinds agree and the reals' value is written
-    assert bare.simplify(['floor', '0.99999999999999999'], mode='f64') == ['0']
+    assert bare.simplify(['floor', '0.99999999999999999'], mode='strict') == ['0']
     assert bare.simplify(['floor', '0.99999999999999999'], mode='permissive') == ['0']
-    assert bare.simplify(['erf', '0'], mode='f64') == ['0']
-    assert bare.simplify(['besselj', '0', '0'], mode='f64') == ['1']
+    assert bare.simplify(['erf', '0'], mode='strict') == ['0']
+    assert bare.simplify(['besselj', '0', '0'], mode='strict') == ['1']
     # erf is odd in float64 bit for bit, so its sign leaves it
-    assert bare.simplify(['erf', 'neg', 'x0'], mode='f64') == ['neg', 'erf', 'x0']
+    assert bare.simplify(['erf', 'neg', 'x0'], mode='strict') == ['neg', 'erf', 'x0']
 
 
 def test_the_evaluator_folds_with_the_deployed_kernels(bare):
@@ -193,7 +193,7 @@ def test_max_and_min_are_lattice_bags(bare):
     ('max float("inf") float("nan")', 'float("nan")'), ('min x0 float("nan")', 'float("nan")'),
 ])
 def test_lattice_laws(bare, src, want):
-    assert ' '.join(bare.simplify(src.split(), mode='f64')) == want
+    assert ' '.join(bare.simplify(src.split(), mode='strict')) == want
 
 
 @pytest.mark.parametrize('mode', ('permissive',))
@@ -234,7 +234,7 @@ def test_rules_match_any_sub_bag(bare):
     cfg = yaml.safe_load(open(ACJ2_4))['operators']
     rule = (('max', 'abs', '_0', '_0'), ('abs', '_0'))
     e = SimpliPyEngine(operators=cfg, rules=[rule], rules_permissive=[])
-    s = lambda t: ' '.join(e.simplify(t.split(), mode='f64'))  # noqa: E731
+    s = lambda t: ' '.join(e.simplify(t.split(), mode='strict'))  # noqa: E731
     assert s('max max abs x0 x1 x0') == 'max x1 abs x0'
     assert s('max x2 max abs x0 max x1 x0') == 'max x1 max x2 abs x0'
     assert s('sin max x1 max x0 abs x0') == 'sin max x1 abs x0'
@@ -251,7 +251,7 @@ def test_masking_reads_lattice_bags(bare):
 def test_the_search_moves_inside_atan2(bare):
     """The search rewrites atan2's arguments as it rewrites any other head's; in `f64` it
     makes no move whose part vanishes with a sign of its own, which atan2 reads."""
-    s = lambda t, m='f64': ' '.join(bare.simplify(t.split(), mode=m))  # noqa: E731
+    s = lambda t, m='strict': ' '.join(bare.simplify(t.split(), mode=m))  # noqa: E731
     for mode in MODES:
         assert s('atan2 - pow + x0 1 2 + pow x0 2 1 x1', mode) == 'atan2 * 2 x0 x1'
         assert s('atan2 x1 - pow + x0 1 2 + pow x0 2 1', mode) == 'atan2 x1 * 2 x0'
@@ -267,7 +267,7 @@ def test_the_search_moves_inside_atan2(bare):
 def test_f64_ground_folds_keep_float64s_zero_sign(bare):
     """A negated or scaled odd function of 0 and a written product of ground zeros are what
     float64 computes, the sign of the zero included."""
-    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='strict'))  # noqa: E731
     for head in ('sin', 'tan', 'asin', 'atan', 'sinh', 'tanh', 'asinh', 'atanh', 'erf'):
         assert f64(f'neg {head} 0') == '-0.0', head
         assert f64(f'* -2 {head} 0') == '-0.0', head
@@ -305,9 +305,9 @@ def test_f64_ground_fold_is_the_evaluator_at_zero_and_small_inputs(bare):
     zeros = [g for g in grounds if ev(g) == 0.0]
     srcs = [c + g for g in grounds for c in ([], ['neg'], ['*', '-1'], ['*', '2'], ['*', '-2'])]
     srcs += [p + g + h for g in zeros[::7] for h in zeros[::11] for p in (['*'], ['neg', '*'])]
-    moved = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
+    moved = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='strict')))]
     bad = [(s, a) for s, a in moved
-           if _contract.judged_reading(_contract.judge_rule(list(s), list(a)), 'f64') is not True]
+           if _contract.judged_reading(_contract.judge_rule(list(s), list(a)), 'strict') is not True]
     assert moved and not bad, (len(bad), bad[:5])
 
 
@@ -315,7 +315,7 @@ def test_f64_writes_the_negative_zero_and_reads_it(bare):
     """f64 follows float64: a -0 is written `-0.0` (Python's `-0` is the integer zero, +0), a
     ground fold writes its float exactly, and an inverse or `atan2` reads the sign.
     `permissive` has one zero, where 1/0 has no value."""
-    f64 = lambda t: bare.simplify(t.split(), mode='f64')  # noqa: E731
+    f64 = lambda t: bare.simplify(t.split(), mode='strict')  # noqa: E731
     for src, want in (('ceil -0.5', ['-0.0']), ('mod 3 -3', ['-0.0']),
                       ('inv mod 3 -3', ['float("-inf")']), ('inv ceil -0.5', ['float("-inf")']),
                       ('inv -0.0', ['float("-inf")']), ('pow -0.0 -2', ['float("inf")']),
@@ -328,7 +328,7 @@ def test_f64_writes_the_negative_zero_and_reads_it(bare):
     assert bare.simplify(['inv', '-0.0'], mode='permissive') == ['float("nan")']
     assert bare.simplify(['ceil', '-0.5'], mode='permissive') == ['0']
     # one sign bit on top of the zero
-    assert bare.complexity(['-0.0'], mode='f64') == bare.complexity(['0'], mode='f64') + 1000
+    assert bare.complexity(['-0.0'], mode='strict') == bare.complexity(['0'], mode='strict') + 1000
 
 
 def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
@@ -345,7 +345,7 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
     for src in ('atan2 neg - x0 abs x0 -1', 'atan2 neg - x0 x0 -1', 'atan2 ceil -0.5 -1',
                 'atan2 0 neg - x0 abs x0', 'atan2 neg - x0 abs x0 neg - x0 abs x0',
                 'atan2 0 * 2 neg - x0 abs x0'):
-        same(src.split(), bare.simplify(src.split(), mode='f64'))
+        same(src.split(), bare.simplify(src.split(), mode='strict'))
     # built by substitution into a rule's right-hand side
     cfg = yaml.safe_load(open(ACJ2_4))['operators']
     for rule, src, want in (
@@ -354,7 +354,7 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
             ((('erf', 'atan2', '_0', 'sin', '_1'), ('atan2', 'neg', '_0', '_1')),
              'erf atan2 - x0 abs x0 sin 1', ['neg', 'atan2', '-', 'x0', 'abs', 'x0', '1'])):
         e = SimpliPyEngine(operators=cfg, rules=[rule], rules_permissive=[])
-        assert e.simplify(src.split(), mode='f64') == want
+        assert e.simplify(src.split(), mode='strict') == want
 
 
 def test_the_mint_reads_laws_float64_breaks_at_a_jump_as_the_judge_reads_them(bare):
@@ -446,7 +446,7 @@ def test_a_rule_without_slots_passes_promotion_through(bare):
     rules = [(lhs.split(), ['<constant>']) for lhs in
              ('acos erf <constant>', 'floor <constant>', 'harmonic exp <constant>',
               'acos erf sinh <constant>', 'harmonic <constant>')]
-    kept, report = promote(rules, bare, rule_mode='f64', run_positive_controls=False)
+    kept, report = promote(rules, bare, rule_mode='strict', run_positive_controls=False)
     assert [[a, b] for a, b in kept if '<constant>' in a] == [[a, b] for a, b in rules]
     assert report['stage_counts']['promoted_any'] == report['stage_counts']['promoted_bang'] == 0
 
@@ -467,7 +467,7 @@ def test_a_constant_collapse_owes_a_witness_only_where_the_source_is_defined(bar
     # a source finite at no constant has no evidence: the judge holds the collapse (nothing is
     # owed anywhere) and the evidence policy refuses it
     from simplipy.verify import licensed
-    verdict = licensed('log neg cosh <constant>'.split(), ['<constant>'], 'f64', bare)
+    verdict = licensed('log neg cosh <constant>'.split(), ['<constant>'], 'strict', bare)
     assert not verdict['licensed'] and 'evidence' in verdict['refused_by'], verdict
     assert list(_contract.source_defined([0.5, np.nan, np.inf, -np.inf])) == [True, False,
                                                                               False, False]
@@ -503,7 +503,7 @@ def test_besselj_of_literals_at_zero_folds_exactly(bare, mode):
     s = lambda t: ' '.join(bare.simplify(t.split(), mode=mode))  # noqa: E731
     assert s('besselj 0 0') == '1'
     assert s('besselj 2.5 0') == '0' and s('besselj -2 0') == '0'
-    assert s('besselj -1 0') == ('-0.0' if mode == 'f64' else '0')
+    assert s('besselj -1 0') == ('-0.0' if mode == 'strict' else '0')
     # the pole's one-sided limit, the sign of 1/Gamma(nu + 1), as scipy has it
     assert s('besselj -0.5 0') == 'float("inf")'
     assert s('besselj -1.5 0') == 'float("-inf")'
@@ -511,7 +511,7 @@ def test_besselj_of_literals_at_zero_folds_exactly(bare, mode):
     # an infinite order: 0 at x >= 0, NaN below in float64 (scipy's cells); the reals' limit
     # from inside the domain (the integer orders, where J_n(-2) = (-1)^n J_n(2)) is 0
     assert s('besselj atanh 1 2') == '0'
-    assert s('besselj atanh 1 -2') == ('float("nan")' if mode == 'f64' else '0')
+    assert s('besselj atanh 1 -2') == ('float("nan")' if mode == 'strict' else '0')
 
 
 def test_besselj_identities_hold_bit_for_bit_in_float64():
@@ -577,7 +577,7 @@ def test_f64_and_permissive_fold_a_ground_step_value(bare):
     permissive's ground value is the table's, written as a float. Where float64 rounds onto an
     integer (tanh(40) is 1.0, the table reads it below 1), f64 writes the reals' value too: its
     kind, finite, agrees with float64's."""
-    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='strict'))  # noqa: E731
     perm = lambda t: ' '.join(bare.simplify(t.split(), mode='permissive'))  # noqa: E731
     assert f64('floor tanh 40') == '0' and perm('floor tanh 40') == '0'
     assert f64('mod 0 log 0') == '-0.0'
@@ -595,7 +595,7 @@ def test_ground_members_of_a_lattice_bag_are_ordered_by_enclosure(bare, mode):
     # cheaper member
     assert s('max sin 1 + 1 neg 0.1585290151921035') == 'sin 1'
     # f64 reads the bag through its ground fold, which folds it to the member whose float it is
-    assert ' '.join(bare.simplify('max sin 1 0.5'.split(), mode='f64')) == 'sin 1'
+    assert ' '.join(bare.simplify('max sin 1 0.5'.split(), mode='strict')) == 'sin 1'
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -629,14 +629,14 @@ def test_f64_besselj_at_zero_is_the_kernel_with_its_zero_sign(bare):
         return float(np.asarray(bare._core.evaluate_batch(t, ['x0'], [0.0], 1, []))[0])
     for nu in orders:
         want = kernel_binary_scalar('besselj', float(nu), 0.0)
-        got = bare.simplify(['besselj', nu, '0'], mode='f64')
+        got = bare.simplify(['besselj', nu, '0'], mode='strict')
         assert bits(ev(got)) == bits(want), (nu, got, want)
         if want == 0:
-            inv = bare.simplify(['inv', 'besselj', nu, '0'], mode='f64')
+            inv = bare.simplify(['inv', 'besselj', nu, '0'], mode='strict')
             assert bits(ev(inv)) == bits(np.copysign(np.inf, want)), (nu, inv)
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 def test_match_time_certificates_read_the_new_heads(bare, mode):
     """The `!` (finite a.e.) and `$` (finite and nonzero a.e.) certificates read each 0.15 head by
     its own argument: a cancellation or a zero product is licensed where the head is finite (and
@@ -677,13 +677,13 @@ def test_f64_square_root_spellings_keep_float64s_zero_signs(bare):
     for b in bases:
         for shape in shapes:
             src = shape.format(b).split()
-            got = bare.simplify(src, mode='f64')
+            got = bare.simplify(src, mode='strict')
             want, have = ev(src), ev(got)
             # the zeros and infinities bit for bit (their signs); other values to rounding
             exact = (want == 0) | np.isinf(want) | np.isnan(want)
             assert bits(have[exact]) == bits(want[exact]), (src, got)
             assert np.allclose(have[~exact], want[~exact], rtol=1e-15, atol=0), (src, got)
-    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='strict'))  # noqa: E731
     assert f64('pow -0.0 0.5') == '-0.0' and f64('rootn -0.0 2') == '0'
     assert f64('pow x0 0.5') == 'rootn x0 2'
 
@@ -694,7 +694,7 @@ def test_f64_reciprocal_of_an_infinity_keeps_float64s_zero_sign(bare):
     computes wherever the input's value is a zero or an infinity, its sign included."""
     import itertools
     import struct
-    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='strict'))  # noqa: E731
     inf, ninf = 'float("inf")', 'float("-inf")'
     assert f64(f'inv {ninf}') == '-0.0' and f64(f'inv inv {ninf}') == ninf
     assert f64(f'pow {ninf} -3') == '-0.0' and f64(f'pow {ninf} -2') == '0'
@@ -713,11 +713,11 @@ def test_f64_reciprocal_of_an_infinity_keeps_float64s_zero_sign(bare):
         return 'nan' if v != v else struct.pack('<d', v)
     srcs = [c + g for g in grounds for c in ([], ['neg'], ['*', '-1'], ['*', '-2'], ['inv'], ['inv', 'neg'])]
     srcs = [s for s in srcs if ev(s) == 0.0 or abs(ev(s)) == np.inf]
-    bad = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='f64')))]
+    bad = [(s, a) for s in srcs if bits(ev(s)) != bits(ev(a := bare.simplify(s, mode='strict')))]
     assert len(srcs) > 1000 and not bad, (len(bad), bad[:5])
 
 
-@pytest.mark.parametrize('mode', ('f64', 'permissive'))
+@pytest.mark.parametrize('mode', ('strict', 'permissive'))
 def test_a_ground_lattice_bag_folds_to_its_cheapest_equal_member(bare, mode):
     """A ground `max` or `min` folds to one of its members, never to a newly written float: the
     member whose float64 value is the bag's, the cheapest under the mode's measure where members
@@ -739,7 +739,7 @@ def test_a_ground_lattice_bag_folds_to_its_cheapest_equal_member(bare, mode):
 
 
 def test_a_lattice_member_fold_keeps_the_zero_sign(bare):
-    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='strict'))  # noqa: E731
     # +0 and -0 are no tie: each bag folds to the member with its bits
     assert f64('max -0.0 0') == '0' and f64('min -0.0 0') == '-0.0'
     assert f64('max sin -0.0 0') == '0' and f64('min sin -0.0 0') == '-0.0'
@@ -768,7 +768,7 @@ def test_lattice_members_are_ordered_by_float64_bits(bare):
     """`f64` and `permissive` order two ground members by the float64 values the deployed
     kernels compute, and write a fully numeric bag as its value: float64's, or the reals' where
     float64's kind agrees."""
-    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='f64'))  # noqa: E731
+    f64 = lambda t: ' '.join(bare.simplify(t.split(), mode='strict'))  # noqa: E731
     # cosh(acosh(3)) is 3.0000000000000004 in float64, where the decimal 3.0000000000000001 reads
     # as 3.0: float64's maximum is cosh(acosh(3)), and the reals' value of the bag, 3, is cheaper
     assert f64('max cosh acosh 3 3.0000000000000001') == '3'

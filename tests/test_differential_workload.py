@@ -37,8 +37,8 @@ from simplipy.verify import MODE_TIERS, effective_tier, licensed
 from simplipy.verify import _contract
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODES = ('f64', 'permissive')
-RULE_MODE = {'f64': 'default', 'permissive': 'permissive'}
+MODES = ('strict', 'permissive')
+RULE_MODE = {'strict': 'default', 'permissive': 'permissive'}
 SEED = 20261101
 N_SOURCES = 500
 LEAVES = ('x0', 'x1', '<constant>', '(-1)', '0', '1')
@@ -277,7 +277,7 @@ def _scan_one(pattern_side: str, mode: str) -> tuple:
 #: sources, so a gap is checked on its own source, where the scan must still reject the candidate
 #: by that verdict and the judge must still hold it.
 PREFILTER_GAPS = {
-    'f64': {},
+    'strict': {},
     'permissive': {
         ('fit', 'atan2 log <constant> ?0', 'atan2 <constant> ?0'):
             "the fit does not read log(c) as a constant of its own inside atan2's first argument",
@@ -286,7 +286,7 @@ PREFILTER_GAPS = {
 
 
 def _by_tolerance(v: str, record: dict, mode: str) -> bool:
-    return mode == 'f64' and v.split(' (')[0] in TOLERANCES and record['f6'] is not True \
+    return mode == 'strict' and v.split(' (')[0] in TOLERANCES and record['f6'] is not True \
         and record['kinds'] is True
 
 
@@ -295,7 +295,7 @@ def _by_tolerance(v: str, record: dict, mode: str) -> bool:
 # undecided (4.10) and f64's tolerances on strict's second reading, which are reported with
 # their counts.
 # ------------------------------------------------------------------------------------------
-@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
 def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
     from simplipy import _core
     todo = {v: sampled(pairs) for v, (k, pairs) in by_kind(mode).items() if k == 'N'}
@@ -339,7 +339,7 @@ def test_a_prefilter_rejection_is_a_judge_rejection(mode) -> None:
 #: longer picked. The draw follows the canonical sources, so each is checked on its own source,
 #: where the mint must still pick it and the judge must still refute it.
 BEYOND_THE_ROWS: dict = {
-    'f64': {},
+    'strict': {},
     'permissive': {},
 }
 
@@ -686,7 +686,7 @@ def disagreements() -> tuple:
     readers = {
         'f64 judge': lambda t: float(_contract.d_eval(_contract.parse(list(t)), {})),
         'f64 mint': lambda t: probe_engine()._core.evaluate_batch(list(t), [], [], 1, [])[0],
-        'f64 fold': lambda t: _literal(probe_engine().simplify(list(t), mode='f64'))}
+        'f64 fold': lambda t: _literal(probe_engine().simplify(list(t), mode='strict'))}
     out = []
     for tokens, real, (f64, in_range) in probe_table():
         for name, read in readers.items():
@@ -821,14 +821,14 @@ SECTION_1 = [
     ('floor tanh 40', 'real', '0.0'), ('mod 0 atanh 1', 'real', 'nan'),
     ('- log -1 log -1', 'real', 'nan'),
     # 1.2, f64 (F2-F4, F7)
-    ('0.1', 'f64', 0.1), ('np.pi', 'f64', 3.141592653589793),
-    ('+ 0.1 0.2', 'f64', 0.30000000000000004), ('sin np.pi', 'f64', 1.2246467991473532e-16),
-    ('max -0.0 0', 'f64', 0.0), ('max 0 -0.0', 'f64', 0.0),
-    ('pow float("-inf") 0.5', 'f64', math.nan), ('/ 1 0', 'f64', math.inf),
-    ('/ 1 -0.0', 'f64', -math.inf), ('log 0', 'f64', -math.inf), ('atanh 1', 'f64', math.inf),
-    ('tan asin 1.0', 'f64', 1.633123935319537e16), ('tanh 20', 'f64', 1.0),
-    ('atanh tanh 20', 'f64', math.inf), ('inv ceil -0.5', 'f64', -math.inf),
-    ('inv + ceil -0.5 0', 'f64', math.inf),
+    ('0.1', 'strict', 0.1), ('np.pi', 'strict', 3.141592653589793),
+    ('+ 0.1 0.2', 'strict', 0.30000000000000004), ('sin np.pi', 'strict', 1.2246467991473532e-16),
+    ('max -0.0 0', 'strict', 0.0), ('max 0 -0.0', 'strict', 0.0),
+    ('pow float("-inf") 0.5', 'strict', math.nan), ('/ 1 0', 'strict', math.inf),
+    ('/ 1 -0.0', 'strict', -math.inf), ('log 0', 'strict', -math.inf), ('atanh 1', 'strict', math.inf),
+    ('tan asin 1.0', 'strict', 1.633123935319537e16), ('tanh 20', 'strict', 1.0),
+    ('atanh tanh 20', 'strict', math.inf), ('inv ceil -0.5', 'strict', -math.inf),
+    ('inv + ceil -0.5 0', 'strict', math.inf),
 ]
 
 
@@ -863,7 +863,7 @@ def test_f64_agreement_is_eight_units(a, b, agree) -> None:
 
 @pytest.mark.parametrize('lhs, rhs, mode, expected', [
     # F5: at x = 800 the evaluator's exp(x)/exp(x) is inf/inf, and 1 is the true value
-    ('/ exp x0 exp x0', '1', 'f64', True),
+    ('/ exp x0 exp x0', '1', 'strict', True),
     # P5: `mod(0, _0)` has no value only at 0 and +-inf, where permissive may give one
     ('mod 0 _0', '0', 'permissive', True),
 ])
@@ -875,13 +875,13 @@ def test_section_1s_rules(lhs, rhs, mode, expected) -> None:
 def test_f64_keeps_the_zero_term_a_negative_zero_needs() -> None:
     """F7: at x = -0.5, `ceil(x)` is -0, so `1/ceil(x)` is -inf and `1/(ceil(x) + 0)` is +inf:
     f64 keeps `ceil(x) + 0`."""
-    assert engine().simplify('+ ceil x0 0'.split(), mode='f64') == '+ ceil x0 0'.split()
+    assert engine().simplify('+ ceil x0 0'.split(), mode='strict') == '+ ceil x0 0'.split()
 
 
 @known('D1')
 def test_f64_folds_a_numeric_expression_in_written_order() -> None:
     """F8: `0.1 + 0.2` becomes 0.30000000000000004, never 0.3."""
-    assert engine().simplify('+ 0.1 0.2'.split(), mode='f64') == ['0.30000000000000004']
+    assert engine().simplify('+ 0.1 0.2'.split(), mode='strict') == ['0.30000000000000004']
 
 
 # ------------------------------------------------------------------------------------------

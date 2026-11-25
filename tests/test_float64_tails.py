@@ -62,7 +62,7 @@ def tail_points(n_vars):
 ])
 def test_f64_keeps_the_infinities_of_a_zero_on_a_tail(eng, expression):
     tokens = expression.split()
-    answer = eng.simplify(tokens, mode='f64')
+    answer = eng.simplify(tokens, mode='strict')
     names = sorted(eng.expression_variables(tokens))
     X = tail_points(len(names))
     a, b = evaluate(eng, tokens, names, X), evaluate(eng, answer, names, X)
@@ -72,14 +72,14 @@ def test_f64_keeps_the_infinities_of_a_zero_on_a_tail(eng, expression):
 
 
 @pytest.mark.parametrize('mode, expected', [
-    ('f64', '/ -1 - * x2 tanh x1 x2'),
+    ('strict', '/ -1 - * x2 tanh x1 x2'),
     ('permissive', '/ inv - 1 tanh x1 x2'),
 ])
 def test_only_f64_reads_the_tails(eng, mode, expected):
     assert ' '.join(eng.simplify('* -1 inv - * x2 tanh x1 x2'.split(), mode=mode)) == expected
 
 
-@pytest.mark.parametrize('mode', ('f64', 'permissive'))
+@pytest.mark.parametrize('mode', ('strict', 'permissive'))
 @pytest.mark.parametrize('expression, expected', [
     # the tails do not cancel: x2 - x1 and -x2 - x1, fl(pi/2) - x1 are zero on null sets
     ('* -1 inv - * x2 tanh x1 x1', 'inv - x1 * x2 tanh x1'),
@@ -101,7 +101,7 @@ def test_a_sum_whose_tails_do_not_cancel_still_moves_its_sign(eng, mode, express
 ])
 def test_f64_keeps_the_nan_of_a_cancellation_on_a_tail(eng, expression):
     tokens = expression.split()
-    answer = eng.simplify(tokens, mode='f64')
+    answer = eng.simplify(tokens, mode='strict')
     names = sorted(eng.expression_variables(tokens))
     X = tail_points(len(names))
     a, b = evaluate(eng, tokens, names, X), evaluate(eng, answer, names, X)
@@ -111,7 +111,7 @@ def test_f64_keeps_the_nan_of_a_cancellation_on_a_tail(eng, expression):
 
 
 @pytest.mark.parametrize('mode, expected', [
-    ('f64', '/ - tanh x1 1 - tanh x1 1'),
+    ('strict', '/ - tanh x1 1 - tanh x1 1'),
     ('permissive', '1'),
 ])
 def test_only_f64_reads_the_tails_of_a_cancellation(eng, mode, expected):
@@ -119,7 +119,7 @@ def test_only_f64_reads_the_tails_of_a_cancellation(eng, mode, expected):
 
 
 @pytest.mark.parametrize('mode, expected', [
-    ('f64', '* pow x2 * 3 atan x1 pow x2 * 3 atan x1'),
+    ('strict', '* pow x2 * 3 atan x1 pow x2 * 3 atan x1'),
     ('permissive', 'pow x2 * 6 atan x1'),
 ])
 def test_an_exponent_constant_on_a_tail_merges_only_at_an_integer(eng, mode, expected):

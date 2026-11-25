@@ -13,7 +13,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -35,7 +35,7 @@ def test_a_sign_moves_through_a_sum_null_on_its_domain(eng, mode, expression, ex
 
 
 @pytest.mark.parametrize('mode, expected', [
-    ('f64', '/ -1 - x1 abs x1'),
+    ('strict', '/ -1 - x1 abs x1'),
     ('permissive', 'inv - abs x1 x1'),
 ])
 def test_a_sum_zero_on_a_region_of_its_domain_keeps_its_sign(eng, mode, expected):

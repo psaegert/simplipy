@@ -135,7 +135,7 @@ class TestGroundNanFolds:
     index's value is decided by the interval layer and fails closed where its enclosure holds an
     integer."""
 
-    @pytest.mark.parametrize('mode', [Mode.f64, Mode.permissive])
+    @pytest.mark.parametrize('mode', [Mode.strict, Mode.permissive])
     @pytest.mark.parametrize('source', [
         'rootn x1 asinh tanh 4',     # index 0.8807...: NaN at every radicand
         'rootn -5 asinh tanh 4',     # a ground radicand: the ground classification
@@ -151,7 +151,7 @@ class TestGroundNanFolds:
         # acos(cos 1) is exactly 1 and 2 + sin(pi) exactly 2: no proof that the index is no
         # integer, so the root stays in f64, where the evaluator's acos(cos 1) is not 1;
         # permissive cancels the inverse pair, and the root of index 1 is its radicand
-        assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=Mode.f64) == \
+        assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=Mode.strict) == \
             ['rootn', 'x1', 'acos', 'cos', '1']
         assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=Mode.permissive) == ['x1']
 
@@ -501,7 +501,7 @@ class TestPowerOfExpIsExp:
         # is 1 in f64 and in mathematics alike. `permissive` reads it from the table, which
         # holds the exact value.
         from simplipy import Mode
-        assert bare.simplify(['exp', '0'], mode=Mode.f64) == ['1']
+        assert bare.simplify(['exp', '0'], mode=Mode.strict) == ['1']
         assert bare.simplify(['exp', '0'], mode=Mode.permissive) == ['1']
         # `exp(1) -> e` is a different thing and unchanged: it chooses between two exact
         # SYMBOLS for one value, so it is not an evaluation at all and is unconditional.
@@ -620,8 +620,8 @@ class TestEvenFunctionsAreSignBlind:
         # the pole (`1/-0 = -inf`), so in `f64` the two spellings agree too.
         assert bare.simplify(['inv', 'neg', '0'], mode=Mode.permissive) == ['float("nan")']
         assert bare.simplify(['neg', 'inv', '0'], mode=Mode.permissive) == ['float("nan")']
-        assert bare.simplify(['inv', 'neg', '0'], mode=Mode.f64) == ['float("-inf")']
-        assert bare.simplify(['neg', 'inv', '0'], mode=Mode.f64) == ['float("-inf")']
+        assert bare.simplify(['inv', 'neg', '0'], mode=Mode.strict) == ['float("-inf")']
+        assert bare.simplify(['neg', 'inv', '0'], mode=Mode.strict) == ['float("-inf")']
         # `abs(1/(-x)) -> abs(1/x)` DOES hold and does fire -- not through a parity claim
         # about `inv`, but because `pow` distributes the -1 out of the base first and the
         # bag-coefficient arm then drops it. The refusal above is about the POLE, and the
@@ -702,15 +702,15 @@ class TestInversePairsCollapse:
         # f64 does not merely REFUSE the collapse -- with folding it answers what f64
         # genuinely computes: tanh(30) attains exactly 1.0, so atanh of it is inf, and
         # `np.arctanh(np.tanh(30.0))` really is inf. Faithful, and still not `30`.
-        assert bare.simplify(list(band), mode=Mode.f64) == ['float("inf")']
+        assert bare.simplify(list(band), mode=Mode.strict) == ['float("inf")']
         assert bare.simplify(list(band), mode=Mode.permissive) == ['30']
 
         recall = ['pow', '(-1)', '<constant>']   # finite only at integer constants
-        assert bare.simplify(list(recall), mode=Mode.f64) == ['pow', '-1', '<constant>']
+        assert bare.simplify(list(recall), mode=Mode.strict) == ['pow', '-1', '<constant>']
         assert bare.simplify(list(recall), mode=Mode.permissive) == ['<constant>']
 
         inside = ['atanh', 'tanh', 'sin', 'x0']  # inside the band: both agree
-        for mode in (Mode.f64, Mode.permissive):
+        for mode in (Mode.strict, Mode.permissive):
             assert bare.simplify(list(inside), mode=mode) == ['sin', 'x0']
 
     def test_a_ground_nan_is_never_answered_by_a_value(self, bare) -> None:
@@ -720,10 +720,10 @@ class TestInversePairsCollapse:
         ground `exp(log(-3))` involves no rule: the engine evaluates it and `log(-3)` is nan.
         No mode answers `-3`."""
         from simplipy import Mode
-        for mode in (Mode.f64, Mode.permissive):
+        for mode in (Mode.strict, Mode.permissive):
             assert bare.simplify(['exp', 'log', '<constant>'], mode=mode) == ['<constant>']
         ground = ['exp', 'log', '(-3)']
-        for mode in (Mode.f64, Mode.permissive):
+        for mode in (Mode.strict, Mode.permissive):
             got = bare.simplify(list(ground), mode=mode)
             assert got == ['float("nan")'], (mode, got)
             assert got != ['(-3)'], mode
@@ -1003,7 +1003,7 @@ class TestPermissiveTakesTheBestOfBoth:
         answer replaced by a non-finite token, in the mode that feeds flash-ansr
         training."""
         from simplipy import Mode
-        assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.f64) == ['float("inf")']
+        assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.strict) == ['float("inf")']
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.permissive) == ['30']
 
     def test_f64_folds_a_whole_ground_node_before_its_parts(self, bare) -> None:
@@ -1012,14 +1012,14 @@ class TestPermissiveTakesTheBestOfBoth:
         the `exp` a 9-digit literal first and left its root (66,912 milli-bits)."""
         from simplipy import Mode
         source = ['rootn', 'exp', '19.11787581094798', '2']
-        assert bare.simplify(list(source), mode=Mode.f64) == ['14170.787488305119']
+        assert bare.simplify(list(source), mode=Mode.strict) == ['14170.787488305119']
         # permissive writes the table's value as a float: the root of e^19.11787581094798, the
         # decimal read exactly, is 14170.7874883051273..., where float64's reading of the
         # literal gives 14170.787488305119
         assert bare.simplify(list(source), mode=Mode.permissive) == ['14170.787488305128']
-        assert bare.complexity(['14170.787488305119'], mode=Mode.f64) == 58354
+        assert bare.complexity(['14170.787488305119'], mode=Mode.strict) == 58354
         # the reading complexity prices keeps a ground constant as written in every mode
-        assert bare.complexity(['asin', '1e-08'], mode=Mode.f64) == \
+        assert bare.complexity(['asin', '1e-08'], mode=Mode.strict) == \
             bare.complexity(['asin', '1e-08'], mode=Mode.permissive)
 
     def test_permissive_folds_a_ground_value_no_literal_spells(self, bare) -> None:
@@ -1035,5 +1035,5 @@ class TestPermissiveTakesTheBestOfBoth:
                  ['+', 'asin', '1e-08', 'asin', '1e-08']]
         for t in cases:
             mu = {m: bare._core.ac_complexity(bare.simplify(list(t), mode=m), rule_mode='default')
-                  for m in (Mode.f64, Mode.permissive)}
-            assert mu[Mode.permissive] <= mu[Mode.f64], (t, mu)
+                  for m in (Mode.strict, Mode.permissive)}
+            assert mu[Mode.permissive] <= mu[Mode.strict], (t, mu)

@@ -24,7 +24,7 @@ from conftest import legacy_from_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -62,7 +62,7 @@ def test_fractions_over_a_class_combine_up_to_sign(eng, mode):
     assert simp(eng, 'x1/(x2 - x3) - x4/(x2 - x3)', mode) == want
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('src', ['-1/(rootn(x1 - x2, 3)*(x1 - x2))', '1/(rootn(x1 - x2, 3)*(x1 - x2))'])
 def test_a_one_signed_pole_keeps_its_infinity(eng, mode, src):
     # At x1 = x2 the product's pole has order -4/3: one-signed, so its infinity is the limit. A member that traded
@@ -108,7 +108,7 @@ ONE_SIGNED = ['inv * - 3 x1 sin * x1 - 3 x1', 'inv * - 3 x1 rootn * x1 - 3 x1 3'
               '+ x2 inv * - 3 x1 sin * x1 - 3 x1']
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('src', ONE_SIGNED)
 def test_a_class_member_inside_a_product_keeps_the_limit(eng, mode, src):
     t = src.split()
@@ -133,7 +133,7 @@ def test_the_up_to_sign_retry_keeps_a_class_whole(eng, src):
     over = [['+', '*', '_0', 'pow', '_2', '-1', '*', '_1', 'pow', '_2', '-1'], ['*', '+', '_0', '_1', 'pow', '_2', '-1']]
     rule = SimpliPyEngine(eng._operators_config, [over])
     t = src.split()
-    ans = list(rule.simplify(list(t), effort=0, mode='f64'))
+    ans = list(rule.simplify(list(t), effort=0, mode='strict'))
     f_ans = eng.as_callable(ans, ['x1', 'x2'])
     with np.errstate(all='ignore'):
         assert f_ans(3.0, 1.5) == math.inf, ' '.join(ans)
@@ -154,7 +154,7 @@ CLASS_AT_ITS_ZERO = ['inv * pow - 3 x1 / 1 2 sin - 3 x1', 'inv * rootn - 3 x1 2 
                      'inv * - - x1 3 pow - x1 3 3 - * x2 x1 * 3 x2', 'inv * rootn * x2 - x1 3 3 - 3 x1']
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('src', CLASS_AT_ITS_ZERO)
 def test_the_value_at_the_zero_of_a_class_is_kept(eng, mode, src):
     t = src.split()
@@ -182,7 +182,7 @@ ONE_SIDED = [(['/ log - x1 3 - 3 x1', 'neg / log - x1 3 - x1 3', '/ * log - x1 3
                'neg / * * x2 rootn - x1 3 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7'], None)]
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('spellings,side', ONE_SIDED)
 def test_a_one_sided_member_fixes_the_orientation(eng, mode, spellings, side):
     answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
@@ -210,7 +210,7 @@ POLYNOMIAL_MULTIPLES = [(['1/((9 - x1^2)*(x1 - 3))', '1/((x1^2 - 9)*(3 - x1))', 
                           '-1/((x1 - 3 - (x1 - 3)^3)*(x1 - 3))'], -1.0)]
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('effort', (0, None))
 @pytest.mark.parametrize('spellings,side', POLYNOMIAL_MULTIPLES)
 def test_a_polynomial_multiple_of_a_class_is_a_member(eng, mode, effort, spellings, side):
@@ -228,7 +228,7 @@ def test_a_polynomial_multiple_of_a_class_is_a_member(eng, mode, effort, spellin
 # A class whose cofactor's sign at the zero is not a constant (`x2^2 - x3^2` is `(x2 - x3)(x2 + x3)`, and `x2 + x3` is
 # `2 x2` at `x2 = x3`) is not read there, so its product keeps no value there and takes its cheapest orientation: one
 # answer for every spelling of the function, whose value at x2 = x3 need not be the limit (a registered residual).
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 def test_an_unread_class_takes_its_cheapest_orientation(eng, mode):
     spellings = ['1/((x2^2 - x3^2)*(x2 - x3))', '1/((x3^2 - x2^2)*(x3 - x2))', '-1/((x3^2 - x2^2)*(x2 - x3))']
     answers = {' '.join(eng.simplify(eng.to_prefix(s), mode=mode)) for s in spellings}
@@ -297,7 +297,7 @@ POLE_DISTRIBUTIONS = ['(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/abs(x3)'
                       '(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/x3^2']
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('src', POLE_DISTRIBUTIONS)
 def test_the_search_keeps_a_one_signed_pole_joined(eng, mode, src):
     t = eng.to_prefix(src)
@@ -323,13 +323,13 @@ def test_the_search_still_splits_a_pole_one_addend_cancels(eng, mode):
 def test_f64_keeps_a_regions_zero_sign_and_not_an_isolated_ones():
     with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
         eng = SimpliPyEngine(operators=yaml.safe_load(f)['operators'], rules=[], rules_permissive=[])
-    assert simp(eng, '1/(-x1 - 3)', 'f64') == simp(eng, '-1/(x1 + 3)', 'f64')
+    assert simp(eng, '1/(-x1 - 3)', 'strict') == simp(eng, '-1/(x1 + 3)', 'strict')
     spellings = ('1/(-ceil(x1) - floor(x2))', '-1/(ceil(x1) + floor(x2))')
-    assert simp(eng, spellings[0], 'f64') != simp(eng, spellings[1], 'f64')
+    assert simp(eng, spellings[0], 'strict') != simp(eng, spellings[1], 'strict')
     x1, x2 = np.array([-0.5, -0.25, -0.75]), np.array([0.25, 0.0, 0.5])
     for src, want in zip(spellings, (math.inf, -math.inf)):
         f_src = eng.as_callable(eng.to_prefix(src), ['x1', 'x2'])
-        f_ans = eng.as_callable(simp(eng, src, 'f64'), ['x1', 'x2'])
+        f_ans = eng.as_callable(simp(eng, src, 'strict'), ['x1', 'x2'])
         with np.errstate(all='ignore'):
             assert (f_src(x1, x2) == want).all()
             assert (f_ans(x1, x2) == want).all(), src

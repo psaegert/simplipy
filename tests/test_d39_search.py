@@ -241,7 +241,7 @@ class TestTheSearchOwnsTheDistributiveLaw:
     moves one factor of a product into one of its sum factors; both are search moves under the
     whole-state acceptance, in every mode alike (no rule states the law)."""
 
-    MODES = ('f64', 'permissive')
+    MODES = ('strict', 'permissive')
 
     @pytest.fixture(scope='class')
     def llm(self) -> SimpliPyEngine:

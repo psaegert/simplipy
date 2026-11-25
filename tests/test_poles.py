@@ -185,7 +185,7 @@ def test_the_inputs_limit_decides_where_the_reals_give_it_no_value(lhs, rhs, hol
     r = verify_rule(lhs.split(), rhs.split())
     assert (r['tier'] == 'core') is holds, r
     if holds:
-        assert (r.get('basis') or {}).get('f64') == 'evidence' or 'LIMIT' not in r['f64_kinds'], r
+        assert (r.get('basis') or {}).get('strict') == 'evidence' or 'LIMIT' not in r['f64_kinds'], r
 
 
 @pytest.mark.parametrize('side, limit', [

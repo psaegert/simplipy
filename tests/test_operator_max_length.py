@@ -114,14 +114,14 @@ def test_a_mine_reads_the_setting_wherever_it_builds_the_universe(tmp_path, monk
         assert {int(k): v['complete_count'] for k, v in sidecar['universe'].items()} == counts
 
     engine = _engine(tmp_path / 'c')
-    engine.certify_rules([['exp', 'log', 'x0']], mode='f64', max_target_pattern_length=3, X=256,
+    engine.certify_rules([['exp', 'log', 'x0']], mode='strict', max_target_pattern_length=3, X=256,
                          operator_max_length={'exp': 2})
     assert universes[-1] == {'exp': 2}
 
     cells: list = []
     monkeypatch.setattr(mining, '_overlap_gate',
                         lambda *args, **kwargs: cells.append(kwargs) or ([], [], [], []))
-    mining.verify_mine(str(out), 'f64', _OPERATORS,
+    mining.verify_mine(str(out), 'strict', _OPERATORS,
                        judge=lambda pairs: ['core'] * len(pairs))
     assert cells and cells[0]['max_source'] == 3
     assert cells[0]['operator_max_length'] == {'exp': 2}
@@ -138,9 +138,9 @@ def test_the_cell_is_the_universe(tmp_path) -> None:
     assert not _in_cell(longer, 4, {'exp': 2}) and _in_cell(shorter, 4, {'exp': 2})
     assert not _in_cell(longer, 2)
     engine = _engine(tmp_path)
-    assert 'cell_bound' in policy_refusals(['exp', 'exp', '?0'], ['?0'], 'f64', engine,
+    assert 'cell_bound' in policy_refusals(['exp', 'exp', '?0'], ['?0'], 'strict', engine,
                                            max_source=4, operator_max_length={'exp': 2})
-    assert 'cell_bound' not in policy_refusals(['exp', 'exp', '?0'], ['?0'], 'f64', engine,
+    assert 'cell_bound' not in policy_refusals(['exp', 'exp', '?0'], ['?0'], 'strict', engine,
                                                max_source=4)
 
 
@@ -164,9 +164,9 @@ def test_the_cell_holds_the_universes_literals_only(tmp_path) -> None:
     for o in (folded, summed):
         assert not _in_cell(o, 4, None, literals) and _in_cell(o, 4), o
     assert 'cell_bound' in policy_refusals(['*', '0.3', 'log', '?0'], ['log', 'pow', '?0', '0.3'],
-                                           'f64', engine, max_source=4, literals=literals)
+                                           'strict', engine, max_source=4, literals=literals)
     assert 'cell_bound' not in policy_refusals(['*', '-1', 'log', '?0'], ['neg', 'log', '?0'],
-                                               'f64', engine, max_source=4, literals=literals)
+                                               'strict', engine, max_source=4, literals=literals)
 
 
 def test_an_empty_setting_mines_the_same_files(tmp_path) -> None:

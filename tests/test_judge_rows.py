@@ -88,7 +88,7 @@ def test_a_mine_of_other_rows_leaves_the_judges_rows_as_they_are(tmp_path) -> No
     before = _contract.judge_rows().copy()
     engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
                       X=64, seed=3, verbose=False, output_file=str(tmp_path / "mined.json"),
-                      modes="f64")
+                      modes="strict")
     assert np.array_equal(_contract.judge_rows(), before)
     # the two log-exp identities the reduced mine's own rows refused at one rounding, held alike
     for lhs, rhs in (('asin sinh asinh x0', 'asin x0'), ('log exp acos x0', 'acos x0')):

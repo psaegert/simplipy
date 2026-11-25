@@ -120,7 +120,7 @@ class TestDivisorSideSpelling:
         assert sites == [(3, '0.333', masking.Role.COEFFICIENT)]
 
 
-@pytest.mark.parametrize('mode', ['f64', 'permissive'])
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
 @pytest.mark.parametrize('divisor', ['6.674e-11', '1.380649e-23', '8.854187817e-12',
                                      '0.225147640565301', '3.7', '9.81'])
 def test_a_reciprocal_is_priced_as_its_divisor(eng, mode, divisor):

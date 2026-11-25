@@ -89,7 +89,7 @@ class TestGroundFoldLicence:
         # finite value as 0 is, so f64 writes the reals' value too: the cheaper spelling the
         # fold may write in both modes.
         from simplipy import Mode
-        assert eng.simplify(['sin', 'np.pi'], mode=Mode.f64) == ['0']
+        assert eng.simplify(['sin', 'np.pi'], mode=Mode.strict) == ['0']
         assert eng.simplify(['sin', 'np.pi'], mode=Mode.permissive) == ['0']
 
     def test_pow_with_special_stays(self, eng):
@@ -261,7 +261,7 @@ class TestExactCollapsesMint:
         assert gate['buckets']['KILL'] == [0], gate['buckets']
         verdict = judge_rule(list(f64_respell[0]), list(f64_respell[1]))
         assert verdict['realised'] is True and verdict['tier'] == 'core', verdict
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             [offender] = verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
                                         mode=mode)['offenders']
             assert (offender['tier'], offender['refused_by']) == ('core', ['ordering']), offender

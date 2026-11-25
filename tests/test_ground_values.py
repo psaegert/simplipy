@@ -89,7 +89,7 @@ def _simplify(engine, expr, mode):
     ('asin sin x0', 'asin sin x0', 'x0'),
 ])
 def test_a_fully_numeric_part_takes_its_value_first(engine, expr, strict, permissive) -> None:
-    assert _simplify(engine, expr, 'f64') == strict
+    assert _simplify(engine, expr, 'strict') == strict
     assert _simplify(engine, expr, 'permissive') == permissive
 
 
@@ -110,7 +110,7 @@ def test_a_fully_numeric_part_takes_its_value_first(engine, expr, strict, permis
 ])
 def test_a_number_is_written_as_the_cheapest_value_its_mode_admits(engine, expr, strict,
                                                                    permissive) -> None:
-    assert _simplify(engine, expr, 'f64') == strict
+    assert _simplify(engine, expr, 'strict') == strict
     assert _simplify(engine, expr, 'permissive') == permissive
 
 
@@ -125,7 +125,7 @@ def test_f64_rounds_a_product_of_literals_once(engine) -> None:
     assert once == 9.101978259167069e16
     assert ds[0] * ds[1] * ds[2] == 9.10197825916707e16
     got = engine.simplify('* * * x0 / 1 89875517873681764 / 1 8.854e-12 / 1 1.380649e-23'.split(),
-                          mode='f64')
+                          mode='strict')
     assert got == ['*', '91019782591670690', 'x0'], got
     assert float(got[1]) == once
 
@@ -144,15 +144,15 @@ def test_f64_rounds_a_product_of_literals_once(engine) -> None:
     ('* 3.14159 x0', '* 3.14159 x0'),
 ])
 def test_a_literal_on_the_recognition_list_is_read_as_its_entry(engine, expr, both) -> None:
-    assert _simplify(engine, expr, 'f64') == both
+    assert _simplify(engine, expr, 'strict') == both
     assert _simplify(engine, expr, 'permissive') == both
 
 
 def test_groundness_belongs_to_the_tree_not_its_spelling(engine) -> None:
     """A tagged spelling of a ground tree is ground: `1/(2/-inf)` is 1/(-0), -inf in float64."""
     x = ['inv', '/', '2', 'float("-inf")']
-    assert engine.simplify(x, mode='f64') == ['float("-inf")']
-    assert engine.to_prefix(engine.simplify(engine.to_tagged(x), mode='f64')) == ['float("-inf")']
+    assert engine.simplify(x, mode='strict') == ['float("-inf")']
+    assert engine.to_prefix(engine.simplify(engine.to_tagged(x), mode='strict')) == ['float("-inf")']
 
 
 def test_a_literal_binds_no_variable_slot(engine) -> None:
@@ -164,8 +164,8 @@ def test_a_literal_binds_no_variable_slot(engine) -> None:
     loaded = SimpliPyEngine(operators=ops, rules=[rule], rules_permissive=[])
     s = '0.' + '9' * 308
     x = ['/', '-', s, '1', '-', s, '1']
-    assert loaded.simplify(x, mode='f64') == ['float("nan")']
-    assert loaded.simplify(['/', '-', 'x0', '1', '-', 'x0', '1'], mode='f64') == ['1']
+    assert loaded.simplify(x, mode='strict') == ['float("nan")']
+    assert loaded.simplify(['/', '-', 'x0', '1', '-', 'x0', '1'], mode='strict') == ['1']
 
 
 @pytest.mark.parametrize('expr, reals', [
@@ -178,8 +178,8 @@ def test_an_exact_position_takes_no_real_value_in_f64(engine, expr, reals) -> No
     """In context the judge refuses the part's value in the reals in an exponent or a root
     index, which reads its integrality and parity (NaN at x1 < 0 for an index or an exponent that
     is no integer), and f64 does not write it."""
-    assert _simplify(engine, expr, 'f64') != reals
-    assert _contract.judged_reading(verify_rule(expr.split(), reals.split()), 'f64') is not True
+    assert _simplify(engine, expr, 'strict') != reals
+    assert _contract.judged_reading(verify_rule(expr.split(), reals.split()), 'strict') is not True
 
 
 def test_an_exact_position_takes_float64s_double_in_f64(engine) -> None:
@@ -187,8 +187,8 @@ def test_an_exact_position_takes_float64s_double_in_f64(engine) -> None:
     `2 + floor(tanh(100))` (float64's `tanh(100)` is 1.0), and the judge's f64, which reads a fully
     numeric index by its double, holds the step."""
     expr, f64 = 'rootn x1 + 2 floor tanh 100', 'rootn x1 3'
-    assert _simplify(engine, expr, 'f64') == f64
-    assert _contract.judged_reading(verify_rule(expr.split(), f64.split()), 'f64') is True
+    assert _simplify(engine, expr, 'strict') == f64
+    assert _contract.judged_reading(verify_rule(expr.split(), f64.split()), 'strict') is True
 
 
 def test_a_rule_changes_no_ground_value() -> None:
@@ -262,7 +262,7 @@ def test_the_strict_mint_reads_the_ground_evaluator(engine) -> None:
                                           data.shape[0], rtol=1e-11, atol=1e-12,
                                           rule_mode='default')
         assert ok is held, (target, why)
-    assert engine.simplify('exp sin np.pi'.split(), mode='f64') == ['1']
+    assert engine.simplify('exp sin np.pi'.split(), mode='strict') == ['1']
 
 
 def test_a_coincidence_that_reaches_no_answer_is_no_counterexample() -> None:

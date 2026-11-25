@@ -196,7 +196,7 @@ class TestEvaluateConstants:
         from conftest import require_mode_sets
         require_mode_sets()
         assert eng._core.mode_rules_len(rule_mode='permissive') is not None, 'the artifact must ship one'
-        for mode in (Mode.f64, Mode.permissive):
+        for mode in (Mode.strict, Mode.permissive):
             assert eng.simplify(['tan', '1'], mode=mode) == ['tan', '1'], mode
             assert eng.simplify(['asin', '1e-08'], mode=mode) == ['1e-8'], mode
 

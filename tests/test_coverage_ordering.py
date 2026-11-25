@@ -264,7 +264,7 @@ class TestProbesReadEveryAlphabet:
         so the probes need no head of the alphabet (an alphabet without `sin` built
         `sin(x0)`)."""
         from simplipy.engine import _coverage_variants
-        variants = _coverage_variants(('log', 'exp', '_0'), ('_0',), 'f64')
+        variants = _coverage_variants(('log', 'exp', '_0'), ('_0',), 'strict')
         assert (['log', 'exp', 'x0'], ['x0']) in variants
         assert (['log', 'exp', 'inv', '+', 'x0', 'x1'], ['inv', '+', 'x0', 'x1']) in variants
         assert not any('sin' in v for pair in variants for v in pair)

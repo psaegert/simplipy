@@ -612,7 +612,7 @@ class TestProvenance:
         check_config({"engine_generation": 2, "operators": _OPERATORS,
                       "requires_simplipy": side["requires_simplipy"]}, source=str(cfg))
         # One sidecar per rule file, each with the measure in its own mode's reading.
-        for mode, path in (("f64", out), ("permissive", out.replace(".json", "_permissive.json"))):
+        for mode, path in (("strict", out), ("permissive", out.replace(".json", "_permissive.json"))):
             measure = json.load(open(path + ".provenance.json"))["measure"]
             assert measure == eng._measure_fingerprint(mode), mode
 
@@ -2421,9 +2421,9 @@ class TestThePerModePrune:
         from simplipy.mining import _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
         engine = legacy_from_config(acj_config_path())
-        assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'f64') is True
+        assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'strict') is True
         # f64's constructor answers `atanh(tanh(30))` with inf, permissive's with 30
-        assert _preempted_by(engine, ['atanh', 'tanh', '30'], ['30'], 'f64') is False
+        assert _preempted_by(engine, ['atanh', 'tanh', '30'], ['30'], 'strict') is False
         assert _preempted_by(engine, ['atanh', 'tanh', '30'], ['30'], 'permissive') is True
 
     def test_the_comparison_is_on_values_not_token_spellings(self) -> None:
@@ -2438,8 +2438,8 @@ class TestThePerModePrune:
         # engine normalises both sides to the same token before the comparison. The
         # discriminating case is a rule whose SIDES are spelled differently from each
         # other: a spelling comparer answers False, a value comparer answers True.
-        assert _preempted_by(engine, ['asin', '1e-08'], ['0.00000001'], 'f64') is True
-        assert _preempted_by(engine, ['asin', '0.00000001'], ['1e-08'], 'f64') is True
+        assert _preempted_by(engine, ['asin', '1e-08'], ['0.00000001'], 'strict') is True
+        assert _preempted_by(engine, ['asin', '0.00000001'], ['1e-08'], 'strict') is True
         # ... and the engine really does normalise them to one token, which is why a
         # token comparison on the RAW sides would have differed
         assert ['1e-08'] != ['0.00000001']
@@ -2523,9 +2523,9 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         require_or_skip(acj_config_path(), 'needs the acj-4 asset')
         engine = legacy_from_config(acj_config_path())
         e = ['+', 'atanh', 'tanh', 'x1', 'x2']
-        assert engine.complexity(e, mode='f64') == 31000
+        assert engine.complexity(e, mode='strict') == 31000
         assert engine.complexity(e, mode='permissive') == 15000
-        for mode, rule_mode, price in (('f64', 'default', 31000), ('permissive', 'permissive', 15000)):
+        for mode, rule_mode, price in (('strict', 'default', 31000), ('permissive', 'permissive', 15000)):
             assert cross_mode_complexity(engine, e, mode) == price, mode
             assert cross_mode_complexity(engine, e, mode) == \
                 engine._core.ac_complexity_certified(e, 'default', rule_mode=rule_mode)
@@ -2562,7 +2562,7 @@ class TestThePruneIsInstanceSafe:
         from simplipy.mining import _is_ground, _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
         engine = legacy_from_config(acj_config_path())
-        assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'f64') is True
+        assert _preempted_by(engine, ['asin', '1e-08'], ['1e-08'], 'strict') is True
         assert _is_ground(['asin', '1e-08']) is True
         for slotted in (['/', '$0', '$0'], ['atanh', 'tanh', '_0'], ['sin', '?0'],
                         ['acos', '<constant>'], ['abs', '!0']):

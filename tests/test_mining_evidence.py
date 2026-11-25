@@ -150,7 +150,7 @@ def test_the_engine_collapses_what_the_mint_would(bare):
     licence."""
     for src in ('log <constant>', 'acos <constant>', 'atan atanh <constant>',
                 'exp log <constant>', 'pow 0 <constant>'):
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             assert bare.simplify(src.split(), mode=mode) == ['<constant>'], (src, mode)
-    assert ' '.join(bare.simplify('pow (-1) <constant>'.split(), mode='f64')) == \
+    assert ' '.join(bare.simplify('pow (-1) <constant>'.split(), mode='strict')) == \
         'pow -1 <constant>'

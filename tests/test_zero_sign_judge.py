@@ -22,7 +22,7 @@ def judge(lhs, rhs):
 
 
 def strict(detail):
-    return _contract.judged_reading(detail, 'f64')
+    return _contract.judged_reading(detail, 'strict')
 
 
 def permissive(detail):
@@ -77,7 +77,7 @@ def test_permissive_keeps_a_rule_it_held_through_f64_with_float64s_evidence(lhs,
     assert strict(d) is False and d['realised_one_zero'] is True, d
     engine = _vocabulary_engine()
     assert licensed(lhs.split(), rhs.split(), 'permissive', engine)['licensed'] is True
-    assert licensed(lhs.split(), rhs.split(), 'f64', engine)['licensed'] is False
+    assert licensed(lhs.split(), rhs.split(), 'strict', engine)['licensed'] is False
     pair = (tuple(lhs.split()), tuple(rhs.split()))
     tiers = _licences(engine, 'permissive', [pair], lambda pairs: [d['tier'] for _ in pairs])
     assert tiers[pair]['licensed'] is True, tiers

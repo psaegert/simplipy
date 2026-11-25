@@ -16,7 +16,7 @@ from simplipy.promotion import promote
 from simplipy.verify import licensed, verify_rule
 
 ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -85,7 +85,7 @@ def test_each_rung_is_asked_of_the_judge(bare):
         asked.extend((tuple(lhs), tuple(rhs)) for lhs, rhs in pairs)
         return ['reject'] * len(pairs)
 
-    kept, report = promote(RULES, bare, rule_mode='f64', judge=refusing)
+    kept, report = promote(RULES, bare, rule_mode='strict', judge=refusing)
     assert ('ceil', 'inv', 'cosh', '_0') in [lhs for lhs, _ in asked]
     assert ('ceil', 'inv', 'cosh', '!0') in [lhs for lhs, _ in asked]
     assert not report['promoted_any'] and not report['promoted_bang']
@@ -99,7 +99,7 @@ def test_a_miscalibrated_rule_judge_stops_promotion(bare, monkeypatch):
     monkeypatch.setattr(verify, 'verify_rule', lambda lhs, rhs, *a, **k: dict(
         real(lhs, rhs, *a, **k), tier='core'))
     with pytest.raises(RuntimeError, match='positive control'):
-        promote(RULES, bare, rule_mode='f64')
+        promote(RULES, bare, rule_mode='strict')
 
 
 def test_a_rule_without_slots_passes_through_at_once(bare):
@@ -117,7 +117,7 @@ def test_a_rule_without_slots_passes_through_at_once(bare):
         return ['reject'] * len(pairs)      # the seeds, refused here, are asked about too
 
     start = time.monotonic()
-    kept, _ = promote(offenders, bare, rule_mode='f64', run_positive_controls=False,
+    kept, _ = promote(offenders, bare, rule_mode='strict', run_positive_controls=False,
                       judge=judge)
     assert time.monotonic() - start < 5.0
     assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept] == offenders

@@ -667,8 +667,8 @@ class TestApiFootguns:
 
     def test_mode_string_any_case(self, engine: SimpliPyEngine) -> None:
         expr = ['+', 'x0', 'x0']
-        assert engine.simplify(list(expr), mode='f64') == engine.simplify(list(expr))
-        assert engine.simplify(list(expr), mode='F64') == engine.simplify(list(expr))
+        assert engine.simplify(list(expr), mode='strict') == engine.simplify(list(expr))
+        assert engine.simplify(list(expr), mode='STRICT') == engine.simplify(list(expr))
 
     def test_mode_unknown_string_raises(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match='unknown mode'):
@@ -830,7 +830,7 @@ class TestZeroPoles:
     `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the first and `+inf` for the
     others)."""
 
-    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("nan")')])
+    @pytest.mark.parametrize('mode,want', [('strict', 'float("-inf")'), ('permissive', 'float("nan")')])
     def test_a_negative_zero_inverts_to_minus_inf(self, engine: SimpliPyEngine, mode, want) -> None:
         for tokens in (['inv', '/', '0', 'tanh', '-2'],
                        ['inv', '*', '0', 'tanh', '-2'],
@@ -841,27 +841,27 @@ class TestZeroPoles:
         # an even negative power of a zero: +inf in float64, whatever the zero's sign; no value
         # in the reals, a division by zero
         assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -2)'), mode=mode) == \
-            ['float("inf")' if mode == 'f64' else 'float("nan")']
+            ['float("inf")' if mode == 'strict' else 'float("nan")']
 
     def test_a_zero_takes_the_sign_of_its_co_members(self, engine: SimpliPyEngine) -> None:
-        assert engine.simplify(['inv', '*', '0', 'x1'], mode='f64') == ['/', 'float("inf")', 'x1']
-        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode='f64') == \
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode='strict') == ['/', 'float("inf")', 'x1']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode='strict') == \
             ['/', 'float("inf")', 'x11']
-        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode='f64') == \
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode='strict') == \
             ['*', 'float("inf")', '*', 'x1', 'x2']
 
     def test_a_written_signed_zero_keeps_float64s_sign_in_f64(self, engine) -> None:
         # A written negation of a zero is f64's `-0.0`, which an odd function keeps, and a written
         # difference subtracts by adding the negation (`-0 - 0` is `-0`): float64 gives -inf for
         # all three. permissive reads the one zero, where 1/0 has no value.
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0'],
                            ['inv', '-', '-0.0', '0']):
-                want = 'float("-inf")' if mode == 'f64' else 'float("nan")'
+                want = 'float("-inf")' if mode == 'strict' else 'float("nan")'
                 assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
         # -0 + 0 is +0, and x - 0 is x bit for bit
-        assert engine.simplify(['inv', '+', '-0.0', '0'], mode='f64') == ['float("inf")']
-        assert engine.simplify(['-', 'x1', '0'], mode='f64') == ['x1']
+        assert engine.simplify(['inv', '+', '-0.0', '0'], mode='strict') == ['float("inf")']
+        assert engine.simplify(['-', 'x1', '0'], mode='strict') == ['x1']
 
     @pytest.mark.parametrize('mode', ['permissive'])
     def test_permissive_reads_one_zero(self, engine: SimpliPyEngine, mode) -> None:
@@ -978,7 +978,7 @@ class TestTranscendentalAtomEnclosures:
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'tan', 'np.pi', 'x1']):
             assert engine.simplify(list(tokens), mode=Mode.permissive) == ['float("nan")'], tokens
-            assert engine.simplify(list(tokens), mode=Mode.f64) == ['/', 'float("inf")', 'x1'], \
+            assert engine.simplify(list(tokens), mode=Mode.strict) == ['/', 'float("inf")', 'x1'], \
                 tokens
 
     def test_fuzz_row_172346(self, engine: SimpliPyEngine) -> None:

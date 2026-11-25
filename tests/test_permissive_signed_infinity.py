@@ -83,7 +83,7 @@ def test_a_quotient_by_a_vanishing_quotient_has_no_value_in_permissive(engine, p
     # keep: NaN. f64 keeps float64's signed infinity.
     t = f'/ - 0.5 x1 / exp x2 {INF}'.split()
     assert engine.simplify(t, mode='permissive', effort=effort) == ['float("nan")']
-    answer = engine.simplify(t, mode='f64', effort=effort)
+    answer = engine.simplify(t, mode='strict', effort=effort)
     assert agrees_where_defined(values(engine, t, points), values(engine, answer, points)).all()
 
 
@@ -105,6 +105,6 @@ def test_the_search_leaves_these_alone(engine, expr) -> None:
 def test_finite_pieces_still_distribute(engine, expr, expected) -> None:
     # The move itself is kept wherever no piece spells an infinity, in every mode.
     t = expr.split()
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         assert ' '.join(engine.simplify(t, mode=mode, effort=0)) != expected, mode  # the search did it
         assert ' '.join(engine.simplify(t, mode=mode)) == expected, mode

@@ -720,7 +720,7 @@ def rows_on(rows, fixture):
 def test_each_mode_applies_the_law_where_its_premise_holds(
         request, fixture, law, expr, f64, permissive, effort) -> None:
     engine = request.getfixturevalue(fixture)
-    for mode, want in (('f64', f64), ('permissive', permissive)):
+    for mode, want in (('strict', f64), ('permissive', permissive)):
         got = ' '.join(engine.simplify(expr.split(), mode=mode, effort=effort))
         assert got == want, (law, mode, expr)
 
@@ -730,14 +730,14 @@ def test_each_mode_applies_the_law_where_its_premise_holds(
                          + rows_on(RULE_ROWS, 'rule_engine'))
 def test_each_answer_reads_back_to_itself(request, fixture, law, expr, f64, permissive) -> None:
     engine = request.getfixturevalue(fixture)
-    for mode, answer in (('f64', f64), ('permissive', permissive)):
+    for mode, answer in (('strict', f64), ('permissive', permissive)):
         assert ' '.join(engine.simplify(answer.split(), mode=mode, effort=0)) == answer, (law, mode)
 
 
 @pytest.mark.parametrize('law, expr, f64, permissive', [
     pytest.param(*row, id=f'{row[0]}: {row[1]}') for row in SEARCH_ROWS])
 def test_the_search_applies_its_laws_where_their_premises_hold(engine, law, expr, f64, permissive) -> None:
-    for mode, want in (('f64', f64), ('permissive', permissive)):
+    for mode, want in (('strict', f64), ('permissive', permissive)):
         got = ' '.join(engine.simplify(expr.split(), mode=mode))
         assert got == want, (law, mode, expr)
         # the answer is its own simplification
@@ -851,4 +851,4 @@ def test_the_f64_answer_keeps_float64s_values_at_its_zeros(
      '* - inv x2 1 - + inv x2 * pow x1 2 - x2 1 * x1 log x1'),
 ])
 def test_the_log_of_an_inverse_collapses_in_srbfs_ground_truths(engine, expr, f64) -> None:
-    assert ' '.join(engine.simplify(expr.split(), mode='f64')) == f64
+    assert ' '.join(engine.simplify(expr.split(), mode='strict')) == f64

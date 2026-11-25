@@ -49,7 +49,7 @@ def spellings(length, memo={}):
 
 counts = {}
 for toks in spec['family']:
-    for mode, rule_mode in (('f64', 'default'), ('permissive', 'permissive')):
+    for mode, rule_mode in (('strict', 'default'), ('permissive', 'permissive')):
         engine.simplify(toks, mode=mode)
         core.mine_sources([toks], rule_mode=rule_mode)
         core.mine_mark(toks, rule_mode=rule_mode)

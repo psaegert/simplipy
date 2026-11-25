@@ -56,14 +56,14 @@ def test_floor_turns_a_pole_into_an_interval(eng) -> None:
     and `0*e = 0` does not fire on it in f64 (float64 gives NaN there too)."""
     assert eng._core.interval_finite_ae(F29) is False
     src = ['*', '0'] + F29
-    assert eng.simplify(list(src), mode='f64') == src
+    assert eng.simplify(list(src), mode='strict') == src
 
 
 def test_a_null_pole_is_still_certified(eng) -> None:
     """A pole on a null set keeps its certificate (`1/x` at 0, the structural certificate), and
     float64's 1/+0 = +inf is a value: `0*tanh(1/floor(x))` is 0 at every float64 input."""
     assert eng._core.interval_finite_ae(['tanh', 'inv', 'x0']) is True
-    assert eng.simplify(['*', '0', 'tanh', 'inv', 'floor', 'x0'], mode='f64') == ['0']
+    assert eng.simplify(['*', '0', 'tanh', 'inv', 'floor', 'x0'], mode='strict') == ['0']
 
 
 def test_a_pole_edge_attained_on_positive_measure_holds_the_infinity(eng) -> None:

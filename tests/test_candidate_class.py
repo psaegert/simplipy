@@ -119,7 +119,7 @@ def test_a_value_of_many_spellings_is_no_longer_given_up(tmp_path, caplog) -> No
         SimpliPyEngine(operators=_OPERATORS, rules=[]).find_rules(
             max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
             extra_internal_terms=['0', '1', '10'], X=256, seed=7, promote_sorts=False,
-            output_file=out, modes=['f64'], operator_max_length={'-': 1, '/': 1, 'abs': 1},
+            output_file=out, modes=['strict'], operator_max_length={'-': 1, '/': 1, 'abs': 1},
             proposals=[{'source': _PROPOSAL, 'target': ['min', 'x0', '0']}])
     side = json.load(open(out + '.provenance.json'))
     assert not side.get('given_up') and side['per_length']['4']['given_up'] == 0

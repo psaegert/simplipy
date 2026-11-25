@@ -80,14 +80,14 @@ def cases(terms, constructs):
 def test_f64_answer_keeps_the_zero_sign_on_the_region(bare, points, term, expression):
     region = evaluate(bare, term.split(), points) == 0
     assert region.sum() >= 30, f'{term} vanishes on too few sample points'
-    answer = bare.simplify(expression.split(), mode='f64')
+    answer = bare.simplify(expression.split(), mode='strict')
     a = evaluate(bare, expression.split(), points)[region]
     b = evaluate(bare, answer, points)[region]
     read = expression.startswith('inv ')
     same = (np.isnan(a) & np.isnan(b)) | ((a.view(np.int64) == b.view(np.int64)) if read else (a == b))
     assert same.all(), (f'{" ".join(answer)} at {points[region][~same][0]}: '
                         f'{a[~same][0]!r} vs {b[~same][0]!r}')
-    assert bare.simplify(answer, mode='f64') == answer
+    assert bare.simplify(answer, mode='strict') == answer
 
 
 @pytest.mark.parametrize('expression, expected', [
@@ -112,7 +112,7 @@ def test_f64_answer_keeps_the_zero_sign_on_the_region(bare, points, term, expres
     ('- 0 sin 0', '0'),
 ])
 def test_f64_spells_the_kept_zero_term(bare, expression, expected):
-    assert ' '.join(bare.simplify(expression.split(), mode='f64')) == expected
+    assert ' '.join(bare.simplify(expression.split(), mode='strict')) == expected
 
 
 @pytest.mark.parametrize('mode', ('permissive',))

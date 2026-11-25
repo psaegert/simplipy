@@ -152,7 +152,7 @@ def test_a_resumed_mine_counts_the_misses_of_the_runs_before(tmp_path, monkeypat
             return real_length(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
 
         monkeypatch.setattr(RuleMiner, '_mine_length', length)
-        _mine(directory, modes=['f64'], snapshot_at={3: str(directory / 'snap.json')})
+        _mine(directory, modes=['strict'], snapshot_at={3: str(directory / 'snap.json')})
 
     def counted(directory):
         return [json.load(open(directory / f'{name}.provenance.json'))['soundness']

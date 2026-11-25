@@ -2,7 +2,7 @@
 
 One distinct rule set for each mode, so the artifact is two COMPLETE, self-contained files::
 
-    rules.json              `Mode.f64`        -- every rule the deployed evaluator reproduces
+    rules.json              `Mode.strict`        -- every rule the deployed evaluator reproduces
     rules_permissive.json   `Mode.permissive` -- every rule that holds in permissive
 
 Each file is COMPLETE and carries only what its mode can serve: the per-mode prune drops
@@ -175,7 +175,7 @@ class TestAbsentFilesAreANoOp:
         # what is NOT: the answer, because the constructor is mode-aware
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
-        assert bare.simplify(['atanh', 'tanh', '30'], mode='f64') == ['float("inf")']
+        assert bare.simplify(['atanh', 'tanh', '30'], mode='strict') == ['float("inf")']
         assert bare.simplify(['atanh', 'tanh', '30'], mode='permissive') == ['30']
 
     def test_naming_a_copy_of_the_default_file_changes_no_output(self, tmp_path):
@@ -193,7 +193,7 @@ class TestAbsentFilesAreANoOp:
         declared = SimpliPyEngine.from_config(write_artifact(
             str(declared_dir), rules=rules, corpus=rules))
         for row in rows:
-            for mode in (Mode.f64, Mode.permissive):
+            for mode in (Mode.strict, Mode.permissive):
                 assert declared.simplify(row, mode=mode) == plain.simplify(row, mode=mode)
 
     def test_a_declared_but_missing_file_is_not_an_error(self, tmp_path):
@@ -274,10 +274,10 @@ class TestEachModeServesExactlyItsOwnFile:
         e = SimpliPyEngine.from_config(pair)
         d_lhs, d_rhs = instantiate(P_DEFAULT)
         c_lhs, c_rhs = instantiate(P_CORPUS)
-        assert e.simplify(d_lhs, mode=Mode.f64) == d_rhs
+        assert e.simplify(d_lhs, mode=Mode.strict) == d_rhs
         assert e.simplify(d_lhs, mode=Mode.permissive) != d_rhs
         assert e.simplify(c_lhs, mode=Mode.permissive) == c_rhs
-        assert e.simplify(c_lhs, mode=Mode.f64) != c_rhs
+        assert e.simplify(c_lhs, mode=Mode.strict) != c_rhs
 
     def test_the_infix_rendering_selects_the_same_set(self, pair):
         """An infix RENDERING is the same answer in another notation, so it must not
@@ -292,7 +292,7 @@ class TestEachModeServesExactlyItsOwnFile:
         # documented equivalent, and it must still select by mode identically.
         assert e.simplify(e.to_infix(lhs), mode=Mode.permissive) == \
             e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
-        assert e.simplify(e.to_infix(lhs), mode=Mode.f64) == \
+        assert e.simplify(e.to_infix(lhs), mode=Mode.strict) == \
             e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='default')
 
 

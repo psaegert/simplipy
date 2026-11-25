@@ -168,10 +168,10 @@ class TestSeveralConstantsOnTheLeft:
         engine = SimpliPyEngine(operators=ops, rules=[self.EXP_RULE, self.ROOT_RULE])
         assert not [w for w in recwarn if 'on the left side' in str(w.message)]
         assert engine._core.ac_rules_drop_census(rule_mode='default') == {}
-        assert engine.simplify('* <constant> exp + x0 <constant>'.split(), mode='f64') == \
+        assert engine.simplify('* <constant> exp + x0 <constant>'.split(), mode='strict') == \
             ['*', '<constant>', 'exp', 'x0']
 
-    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
+    @pytest.mark.parametrize('mode', ['strict', 'permissive'])
     def test_licensed_decides_it(self, ops, mode) -> None:
         from simplipy.verify import licensed
         bare = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])

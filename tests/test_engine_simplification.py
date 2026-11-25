@@ -204,7 +204,7 @@ class TestMode:
     def test_the_retired_mode_is_refused(self) -> None:
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        engine.simplify(["x0"], mode=Mode.f64)
+        engine.simplify(["x0"], mode=Mode.strict)
         engine.simplify(["x0"], mode=Mode.permissive)
         with pytest.raises(ValueError, match="the real mode is retired"):
             engine.simplify(["x0"], mode="real")
@@ -216,7 +216,7 @@ class TestMode:
         documented spelling, since the members are lower-case."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        for spelling in ("f64", "F64", "PERMISSIVE"):
+        for spelling in ("strict", "STRICT", "PERMISSIVE"):
             engine.simplify(["x0"], mode=spelling)
         # ` real ` is read as the retired mode's name, not as an unknown one
         with pytest.raises(ValueError, match="the real mode is retired"):
@@ -234,7 +234,7 @@ class TestMode:
         # <constant> -- the value class is not finite. (The LOSSY parity corner for this
         # spelling is a flagged flash-ansr-migration item.)
         src = engine.to_tagged(["/", "<constant>", "0"])
-        out = engine.simplify(src, mode=Mode.f64)
+        out = engine.simplify(src, mode=Mode.strict)
         assert out == ["<mul>", 'float("inf")', "<constant>", "</mul>"]
         assert engine.simplify(src) == out  # the default is SOUND
 
@@ -250,7 +250,7 @@ class TestMode:
         """A finite-a.e. subtree (`1/C`) folds in BOTH modes -- the pole is measure-zero."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        assert engine.simplify(["inv", "<constant>"], mode=Mode.f64) == ["<constant>"]
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.strict) == ["<constant>"]
         assert engine.simplify(["inv", "<constant>"], mode=Mode.permissive) == ["<constant>"]
 
     def test_lossy_relaxes_cancellation_group_axioms(self) -> None:
@@ -265,14 +265,14 @@ class TestMode:
         # (inf/inf)*x0: SOUND keeps the sound nan; LOSSY relaxes the $-certificate and the
         # structural cancel fires.
         c = ["*", "/", 'float("inf")', 'float("inf")', "x0"]
-        assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
+        assert list(engine.simplify(list(c), mode=Mode.strict)) == ['float("nan")']
         # a fully numeric `inf/inf` has no value in permissive either: read first, NaN
         assert list(engine.simplify(list(c), mode=Mode.permissive)) == ['float("nan")']
         # (inf-inf)+x0: the AC CONSTRUCTORS compute inf + (-inf) = nan exactly (total
         # extended-real arithmetic, mode-independent) before any cancel could see it, so
         # BOTH modes return the true value -- there is no unsound step for LOSSY to relax.
         c = ["+", "-", 'float("inf")', 'float("inf")', "x0"]
-        assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
+        assert list(engine.simplify(list(c), mode=Mode.strict)) == ['float("nan")']
         assert list(engine.simplify(list(c), mode=Mode.permissive)) == ['float("nan")']
 
 
@@ -1039,8 +1039,8 @@ class TestMultSort:
 
         def holds(lhs, rhs, mode):
             return effective_tier(verify_rule(lhs.split(), rhs.split())) in MODE_TIERS[mode]
-        assert not holds('/ !0 !0', '1', 'f64')
-        assert holds('/ $0 $0', '1', 'f64') and not holds('/ 0 $0', '0', 'f64')
+        assert not holds('/ !0 !0', '1', 'strict')
+        assert holds('/ $0 $0', '1', 'strict') and not holds('/ 0 $0', '0', 'strict')
         assert holds('/ 0 $0', '0', 'permissive')
 
 
@@ -1099,7 +1099,7 @@ class TestApi1ModeParameter:
         unproven = ['pow', '(-1)', '<constant>']  # finite only at integer constants
         assert list(eng.simplify(unproven, mode=Mode.permissive)) == ['<constant>']
         assert list(eng.simplify(unproven, mode='permissive')) == ['<constant>']
-        assert list(eng.simplify(unproven, mode=Mode.f64)) == ['pow', '-1', '<constant>']
+        assert list(eng.simplify(unproven, mode=Mode.strict)) == ['pow', '-1', '<constant>']
 
 
 class TestConc12CopyOnWrite:

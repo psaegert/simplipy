@@ -514,7 +514,7 @@ class TestOneMeasurePerMode:
 
     def test_the_reading_is_the_mode_own(self, eng):
         for e in self.SPECIMENS:
-            for mode, rule_mode in (('f64', 'default'), ('permissive', 'permissive')):
+            for mode, rule_mode in (('strict', 'default'), ('permissive', 'permissive')):
                 assert eng.complexity(e, mode=mode) == \
                     eng._core.ac_complexity_certified(e, 'mode', rule_mode=rule_mode), (e, mode)
                 assert eng.complexity(e, certified=False, mode=mode) == \
@@ -524,18 +524,18 @@ class TestOneMeasurePerMode:
         # f64's own reading IS the cross-mode yardstick for an f64 answer: no number moves.
         from simplipy.mining import cross_mode_complexity
         for e in self.SPECIMENS:
-            assert eng.complexity(e) == cross_mode_complexity(eng, e, 'f64'), e
+            assert eng.complexity(e) == cross_mode_complexity(eng, e, 'strict'), e
 
     def test_the_modes_read_one_expression_differently(self, eng):
         # f64 reads atanh(tanh(x0)) as written (tanh saturates in floats), permissive as x0. A
         # ground constant is read as written in every mode: the float evaluator reads
         # exp(5132.3) as inf, and f64's WALK folds 1/exp(5132.3) to 0, while its reading keeps it.
         e = ['atanh', 'tanh', 'x0']
-        assert eng.complexity(e, mode='f64') > eng.complexity(['x0'], mode='f64')
+        assert eng.complexity(e, mode='strict') > eng.complexity(['x0'], mode='strict')
         assert eng.complexity(e, mode='permissive') == eng.complexity(['x0'], mode='permissive')
         e = ['+', 'x0', '/', '1', 'exp', '5132.277024704901']
-        assert eng.complexity(e, mode='f64') == eng.complexity(e, mode='permissive')
-        assert list(eng.simplify(list(e), mode='f64')) == ['x0']
+        assert eng.complexity(e, mode='strict') == eng.complexity(e, mode='permissive')
+        assert list(eng.simplify(list(e), mode='strict')) == ['x0']
 
     def test_simplify_never_prices_above_its_input_in_its_mode(self, eng):
         from simplipy.engine import Mode
@@ -548,7 +548,7 @@ class TestOneMeasurePerMode:
              'exp', '5132.277024704901', 'asinh', 'x3', 'x3'],
         ]
         for expr in exprs:
-            for mode in (Mode.f64, Mode.permissive):
+            for mode in (Mode.strict, Mode.permissive):
                 out = list(eng.simplify(list(expr), mode=mode))
                 assert eng.complexity(out, mode=mode) <= eng.complexity(list(expr), mode=mode), (expr, mode)
 
@@ -576,7 +576,7 @@ class TestNumbersArePricedAsWritten:
         '1.2345678901234567e-290 * 1e-15 * x1',  # two numbers whose product leaves the domain
     ])
     def test_both_modes_price_alike(self, eng, text):
-        assert eng.complexity(text, mode='f64') == eng.complexity(text, mode='permissive')
+        assert eng.complexity(text, mode='strict') == eng.complexity(text, mode='permissive')
 
     def test_the_quotient_is_written_as_its_double(self, eng):
         # the quotient held in pieces costs the leaf and the reciprocal of B, priced as its divisor
@@ -587,16 +587,16 @@ class TestNumbersArePricedAsWritten:
         strict = repr(float(self.A) / float(self.B))
         nearest = repr(float(Fraction(self.A) / Fraction(self.B)))
         assert (strict, nearest) == ('1.2499999886093752e-296', '1.249999988609375e-296')
-        assert eng.simplify(list(quotient), mode='f64') == [strict]
+        assert eng.simplify(list(quotient), mode='strict') == [strict]
         assert eng.simplify(list(quotient), mode='permissive') == [nearest]
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             assert eng.complexity(quotient, mode=mode) == 125619
             assert eng.complexity(nearest, mode=mode) == 59436
 
     def test_a_long_literal_beyond_the_domain_is_written_as_its_double(self, eng):
         # 1.23456789012345678901234567e-305 is held as written (its denominator passes 2^1022);
         # both modes write it as its double, float64's reading of it and its nearest
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             assert eng.simplify(['1.23456789012345678901234567e-305'], mode=mode) == \
                 ['1.2345678901234568e-305']
 
@@ -604,9 +604,9 @@ class TestNumbersArePricedAsWritten:
         # 1e400 has no number in either domain (its 1,329 bits pass the 1,100-bit cap), so its
         # product with 1e-300 keeps the price of its pieces, alike in every mode.
         text = 'x1 * 1e400 * 1e-300'
-        prices = {mode: eng.complexity(text, mode=mode) for mode in ('f64', 'permissive')}
+        prices = {mode: eng.complexity(text, mode=mode) for mode in ('strict', 'permissive')}
         assert len(set(prices.values())) == 1
-        assert prices['f64'] > eng.complexity('x1 * 1e100', mode='f64')
+        assert prices['strict'] > eng.complexity('x1 * 1e100', mode='strict')
 
 
 class TestFingerprintAndArtifactLoad:

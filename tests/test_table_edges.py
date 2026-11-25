@@ -86,7 +86,7 @@ def test_permissive_takes_the_tables_limits(engine, expr, answer) -> None:
     ('mod 0 float("-inf")', '-0.0'), ('mod 1 0', 'float("nan")')])
 def test_f64_follows_the_evaluator(engine, expr, answer) -> None:
     """f64 is unchanged: it follows the realizations (numpy's 1/0.0 is inf, 0.0**-2 inf)."""
-    assert ' '.join(engine.simplify(expr.split(), mode='f64')) == answer
+    assert ' '.join(engine.simplify(expr.split(), mode='strict')) == answer
 
 
 @pytest.mark.parametrize('lhs, rhs', [

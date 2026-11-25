@@ -826,8 +826,8 @@ def test_every_policy_refuses_where_the_mine_first_considers_a_pick() -> None:
     core = lambda pairs: ['core'] * len(pairs)  # noqa: E731
     picks = {0: (['harmonic', 'tan', 'asin', '-1'], ['float("nan")']),   # no evidence
              1: (['asin', '1'], ['acos', '0'])}                           # a ground composite
-    assert 'evidence' in policy_refusals(*picks[0], 'f64', miner.engine)
-    assert 'ground_composite' in policy_refusals(*picks[1], 'f64', miner.engine)
+    assert 'evidence' in policy_refusals(*picks[0], 'strict', miner.engine)
+    assert 'ground_composite' in policy_refusals(*picks[1], 'strict', miner.engine)
     assert miner._unlicensed(dict(picks), 'default', core, {}, ['x0']) == \
         {0: 'licence', 1: 'licence'}
 

@@ -152,7 +152,7 @@ class TestZeroLanes:
     def test_each_mode_reads_its_own_values(self, src, ieee, one_zero):
         def verdict(out, mode):
             return judge_pair(src.split(), out.split(), rng(), mode=mode)[0]
-        assert verdict(ieee, 'f64') == 'OK' and verdict(one_zero, 'f64') == 'VIOLATION'
+        assert verdict(ieee, 'strict') == 'OK' and verdict(one_zero, 'strict') == 'VIOLATION'
         assert verdict(ieee, 'permissive') == verdict(one_zero, 'permissive') == 'OK'
         with pytest.raises(ValueError, match='the real mode is retired'):
             verdict(ieee, 'real')
@@ -189,7 +189,7 @@ class TestZeroLanes:
     def test_the_default_lane_is_the_engines_default_mode(self):
         src, ieee, one_zero = self.POLES[0]
         assert judge_pair(src.split(), ieee.split(), rng()) == \
-            judge_pair(src.split(), ieee.split(), rng(), mode='f64')
+            judge_pair(src.split(), ieee.split(), rng(), mode='strict')
         assert judge_pair(src.split(), one_zero.split(), rng())[0] == 'VIOLATION'
 
     def test_f64_reads_the_deployed_kernels_zero_signs(self):
@@ -222,9 +222,9 @@ class TestZeroLanes:
 
     def test_a_zero_valued_literal_span_keeps_its_sign(self):
         # `* -1 0` folds to an exact zero, whose sign IEEE reads as -0
-        assert judge_pair(['inv', '*', '-1', '0'], ['float("-inf")'], rng(), mode='f64')[0] == 'OK'
+        assert judge_pair(['inv', '*', '-1', '0'], ['float("-inf")'], rng(), mode='strict')[0] == 'OK'
         assert judge_pair(['inv', '*', '-1', '0'], ['float("inf")'], rng(),
-                          mode='f64')[0] == 'VIOLATION'
+                          mode='strict')[0] == 'VIOLATION'
 
     def test_an_unknown_mode_is_refused(self):
         with pytest.raises(ValueError, match='mode'):
@@ -725,7 +725,7 @@ class TestTheF64RangeStandard:
             assert got['out_of_range'] > 0, got
         assert v.verify_ruleset([[['rootn', 'exp', 'x0', '2'], ['exp', '/', 'x0', '2']],
                                  [['/', '1', 'exp', 'x0'], ['exp', 'neg', 'x0']]],
-                                mode='f64')['is_clean'] is True
+                                mode='strict')['is_clean'] is True
 
     def test_a_ground_rule_takes_the_range_standard(self) -> None:
         """A ground rule's one point is read as a rule's points are: where the reals give both
@@ -839,13 +839,13 @@ class TestCleanlinessIsPerMode:
         evaluator contradicts. One rule, two answers -- which a bucket count cannot say."""
         from simplipy.verify import verify_ruleset
         assert verify_ruleset([self.PERMISSIVE], mode='permissive')['is_clean'] is True
-        assert verify_ruleset([self.PERMISSIVE], mode='f64')['is_clean'] is False
+        assert verify_ruleset([self.PERMISSIVE], mode='strict')['is_clean'] is False
         with pytest.raises(ValueError, match='the real mode is retired'):
             verify_ruleset([self.PERMISSIVE], mode='real')
 
     def test_no_mode_may_carry_a_reject(self) -> None:
         from simplipy.verify import verify_ruleset
-        for mode in ('f64', 'permissive'):
+        for mode in ('strict', 'permissive'):
             rep = verify_ruleset([self.CORE, self.REJECT], mode=mode)
             assert rep['is_clean'] is False, mode
             assert [o['tier'] for o in rep['offenders']] == ['reject'], mode
@@ -1776,12 +1776,12 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
         assert (r['verdict'], effective_tier(r)) == ('CERTIFIED', 'core'), r
         r = verify_rule(*false)
         assert (r['verdict'], effective_tier(r)) == ('KILL', 'reject'), r
-        for mode in (None, 'f64', 'permissive'):
+        for mode in (None, 'strict', 'permissive'):
             assert verify_ruleset([true], mode=mode)['is_clean'] is True, mode
             assert verify_ruleset([false], mode=mode)['is_clean'] is False, mode
         # a false rule stays dirty everywhere too
         bad = [[['rootn', 'pow', '?0', '2', '2'], ['?0']]]
-        for mode in (None, 'f64'):
+        for mode in (None, 'strict'):
             assert verify_ruleset(bad, mode=mode)['is_clean'] is False, mode
 
     def test_a_timed_out_rule_is_retried_serially(self, monkeypatch) -> None:
@@ -1929,7 +1929,7 @@ def test_the_monitor_reads_a_fold_as_a_step() -> None:
     from simplipy.verify import _contract, _monitor
 
     def held(rules):
-        return [_contract.judged_reading(judge_rule(lhs, rhs), 'f64') for lhs, rhs in rules]
+        return [_contract.judged_reading(judge_rule(lhs, rhs), 'strict') for lhs, rhs in rules]
 
     lhs = '* 27.940055475362794 + ?1 * 0.2856797429345068 ?2'.split()
     rhs = '+ * 27.940055475362794 ?1 * 7.981907865777503 ?2'.split()
@@ -2299,10 +2299,10 @@ def test_the_ruleset_check_reads_the_artifacts_own_operators(tmp_path) -> None:
     sidecar = tmp_path / 'rules.json.provenance.json'
     from simplipy.verify._contract import ARITY
     everything = sorted(ARITY)
-    sidecar.write_text(json.dumps({'mode': 'f64', 'operators': everything}))
-    assert v.verify_ruleset(str(path), mode='f64')['is_clean']
-    sidecar.write_text(json.dumps({'mode': 'f64',
+    sidecar.write_text(json.dumps({'mode': 'strict', 'operators': everything}))
+    assert v.verify_ruleset(str(path), mode='strict')['is_clean']
+    sidecar.write_text(json.dumps({'mode': 'strict',
                                    'operators': [n for n in everything if n != 'floor']}))
-    report = v.verify_ruleset(str(path), mode='f64')
+    report = v.verify_ruleset(str(path), mode='strict')
     assert not report['is_clean'], report
     assert report['offenders'][0]['refused_by'] == ['well_formed'], report['offenders']

@@ -282,17 +282,17 @@ def test_a_number_that_would_show_as_a_short_number_it_is_not_gets_its_rest(eng,
 # short exact sum (its first digits and the rest), or as its float. Exponents count no digits.
 # (`mode` None: the form as given, whose number `simplify` writes as its double, 1.)
 SHORT_SUMS = [
-    ('x1*(2.5e307 + 1e170)', 'f64', '(2.5e307 + 1e170)*x1'),
-    ('x1*(2.5e30 + 1e10)', 'f64', '(2.5e30 + 1e10)*x1'),
-    ('x1*(2.5e30 + 1e15)', 'f64', '(2.5e30 + 1e15)*x1'),
-    ('x1*(1e20 + 1)', 'f64', '(1e20 + 1)*x1'),
+    ('x1*(2.5e307 + 1e170)', 'strict', '(2.5e307 + 1e170)*x1'),
+    ('x1*(2.5e30 + 1e10)', 'strict', '(2.5e30 + 1e10)*x1'),
+    ('x1*(2.5e30 + 1e15)', 'strict', '(2.5e30 + 1e15)*x1'),
+    ('x1*(1e20 + 1)', 'strict', '(1e20 + 1)*x1'),
     ('x1 + 1.000000000000000000003', None, 'x1 + 1 + 3e-21'),
-    ('0.30000000000000004*x1', 'f64', '(0.3 + 4e-17)*x1'),
+    ('0.30000000000000004*x1', 'strict', '(0.3 + 4e-17)*x1'),
     # a decimal float64 writes exactly in 15 digits is written as its float, not as a sum
     # (permissive keeps exp(1905), which has no float; f64 writes float64's inf)
     ('x1*exp(1905)', 'permissive', 'x1*exp(1905)'),
-    ('1.0001*x1', 'f64', '1.0001*x1'),
-    ('x1*1e10', 'f64', '1e10*x1'),
+    ('1.0001*x1', 'strict', '1.0001*x1'),
+    ('x1*1e10', 'strict', '1e10*x1'),
 ]
 
 

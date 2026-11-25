@@ -20,7 +20,7 @@ from conftest import acj_config_path
 from conftest import legacy_from_config  # noqa: E402
 
 CONFIG = acj_config_path()
-MODES = ('f64', 'permissive')
+MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
@@ -73,7 +73,7 @@ def test_seven_site_product_does_not_depend_on_the_route(eng, mode):
     assert len(answers) == 1, answers
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 def test_wide_orbit_with_literal_coefficients_is_idempotent(eng, mode):
     # nine sites with integer coefficients and a rational coefficient on the product
     sums = [['-', '*', str(p), f'x{i}', str(q)] for i, (p, q) in
@@ -203,7 +203,7 @@ REDECIDED = [
     # defined where 3 - x1 is positive, orients the class (its infinity at the zero is the
     # one-sided limit's; permissive keeps no value at a pole)
     ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(),
-     {'f64': '/ neg pow - 3 x1 x3 - 3 x1', 'permissive': '/ pow - 3 x1 x3 - x1 3'}),
+     {'strict': '/ neg pow - 3 x1 x3 - 3 x1', 'permissive': '/ pow - 3 x1 x3 - x1 3'}),
     # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
     (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'],
      '<mul> 1 <div> <add> x1 <sub> 3 </add> </mul>'),
@@ -415,7 +415,7 @@ def _prod(*fs):
     return ['*'] * (len(fs) - 1) + ' '.join(fs).split()
 
 
-@pytest.mark.parametrize('mode', ('f64',))
+@pytest.mark.parametrize('mode', ('strict',))
 @pytest.mark.parametrize('pair', [
     (_prod('- x2 x1', 'sin - x1 x2', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
      _prod('- x1 x2', 'sin - x2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)])),

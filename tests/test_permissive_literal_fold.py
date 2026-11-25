@@ -68,7 +68,7 @@ def test_f64_writes_the_double_of_the_exact_value(engine):
     # f64 builds the EXACT value, 2e29/426738538271436458205631863649, and writes float64's
     # double of that one number, cheaper than the 60-digit fraction: the double nearest it,
     # where permissive takes the shorter-spelled of the two floats around it.
-    out = prefix(engine, MONSTER, Mode.f64)
+    out = prefix(engine, MONSTER, Mode.strict)
     assert out == [repr(float(exact_value(MONSTER)))] == ["0.46867105279529636"], out
 
 
@@ -97,7 +97,7 @@ def test_monster_coefficient_folds_into_one_literal(engine):
 def test_fold_is_idempotent_and_descends_the_exact_price(engine):
     once = prefix(engine, MONSTER, Mode.permissive)
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
-    exact = prefix(engine, MONSTER, Mode.f64)
+    exact = prefix(engine, MONSTER, Mode.strict)
     # Under the float cap the exact quotient costs its nearest float's shortest decimal; the
     # fold lands on the shorter neighbour, so the measure never rises; the fold descends the
     # EXACT price, which gates it.
@@ -116,7 +116,7 @@ def test_huge_integer_folds_to_its_float_value(engine):
 
 def test_one_thirds_double_is_one_third(engine):
     # the recognition list reads 0.3333333333333333, 1/3's double, as 1/3, in both modes
-    for mode in (Mode.f64, Mode.permissive):
+    for mode in (Mode.strict, Mode.permissive):
         assert prefix(engine, "0.3333333333333333 * 0.3333333333333333", mode) == ["/", "1", "9"]
 
 
@@ -129,7 +129,7 @@ def test_one_thirds_double_is_one_third(engine):
 def test_f64_writes_a_double_where_cheaper(engine, expr):
     """Strict writes float64's value of the one exact number the literals make where that double
     is cheaper than the exact value: one of the two doubles around it, priced below it."""
-    out = prefix(engine, expr, Mode.f64)
+    out = prefix(engine, expr, Mode.strict)
     exact = exact_value(expr)
     assert len(out) == 1 and "/" not in out[0], out
     assert float(out[0]) in floats_around(exact), (out, exact)
@@ -142,7 +142,7 @@ def test_f64_writes_a_double_where_cheaper(engine, expr):
     ("123456789.123456789 / 987654321.987654321", None),
 ])
 def test_f64_keeps_an_exact_value_cheaper_than_its_double(engine, expr, expected):
-    out = prefix(engine, expr, Mode.f64)
+    out = prefix(engine, expr, Mode.strict)
     if expected is not None:
         assert out == expected, out
     value = Fraction(out[0]) if len(out) == 1 else Fraction(out[1]) / Fraction(out[2])
@@ -165,7 +165,7 @@ def test_fold_follows_the_mu_gate_and_lands_on_a_float_around_the_value(engine, 
     quotient of two rounded components -- priced by the EXACT codewords (where the fold fires,
     the fold changes what is printed and never raises the price)."""
     exact = exact_value(expr)
-    strict = prefix(engine, expr, Mode.f64)
+    strict = prefix(engine, expr, Mode.strict)
     as_float = [repr(float(exact))]
     out = prefix(engine, expr, Mode.permissive)
     if exact_price(Fraction(as_float[0])) < exact_price(exact):
@@ -197,7 +197,7 @@ def test_stream_constant_draw_folds_to_one_literal_and_is_idempotent(engine):
     once = list(engine.simplify(STREAM_DRAW, mode=Mode.permissive))
     assert len(once) == 1 and "/" not in once[0] and len(once[0].replace("-", "").replace(".", "").lstrip("0")) <= 17, once
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
-    strict = list(engine.simplify(STREAM_DRAW, mode=Mode.f64))
+    strict = list(engine.simplify(STREAM_DRAW, mode=Mode.strict))
     # Phase 2c: the exact product fits the 1,100-bit cap, so the strict tier folds the subtree
     # too (the cosine in float64, as f64 mode folds functions; the subtraction exactly). The two
     # modes' floats differ: permissive values the whole ground subtree by the table and rounds it

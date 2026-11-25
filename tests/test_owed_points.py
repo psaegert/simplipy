@@ -57,7 +57,7 @@ def test_the_fully_numeric_form_takes_its_table_value() -> None:
                      'commutative': False}
     false = [[['atanh', head, '_0', '0'], ['0']] for head in ('besseli', 'besselj')]
     engine = SimpliPyEngine(operators=ops, rules=[], rules_permissive=false)
-    for mode in ('f64', 'permissive'):
+    for mode in ('strict', 'permissive'):
         assert engine.simplify('atanh(besseli(0, 0))', mode=mode) == 'inf'
         assert engine.simplify('atanh(besselj(0, 0))', mode=mode) == 'inf'
 
