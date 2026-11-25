@@ -137,7 +137,8 @@ class _Reading(_Loading):
                   f"its operands; re-project a valid expression with "
                   f"to_prefix(expr) or to_tagged(expr).")
             return
-        if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
+        arity = self._effective_arity
+        if len(prefix_expression) > 1 and prefix_expression[0] not in arity:
             print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
             return
         for token in reversed(prefix_expression):
@@ -147,11 +148,11 @@ class _Reading(_Loading):
                 except ValueError:
                     print(f'Invalid token {token} in expression {prefix_expression}')
                     return
-            if token in self.operator_arity:
-                if len(stack) < self.operator_arity[token]:
+            if token in arity:
+                if len(stack) < arity[token]:
                     print(f'Not enough operands for operator {token} in expression {prefix_expression}')
                     return
-                for _ in range(self.operator_arity[token]):
+                for _ in range(arity[token]):
                     stack.pop()
             stack.append(token)
         if len(stack) != 1:

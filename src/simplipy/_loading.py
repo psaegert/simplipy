@@ -51,6 +51,15 @@ class _Loading:
     _mode_load_lock: threading.Lock
     _core_loaded_modes: set[str]
 
+    @property
+    def _effective_arity(self) -> dict[str, Any]:
+        """THE EFFECTIVE OPERATOR SCHEMA, the one every helper that walks an expression reads:
+        the arity of each operator of the core serialization language (``+``, ``-``, ``*``,
+        ``/``, ``neg``, ``inv``, ``pow``, ``rootn``), which the core reads and writes whatever
+        the config declares (an engine over ``+`` and ``*`` answers ``x0*x0`` with
+        ``pow(x0, 2)``), and of each operator the config declares."""
+        return {**_CORE_SERIALIZATION_ARITIES, **self.operator_arity}
+
     @staticmethod
     def _normalized_modes(modes: 'str | Mode | tuple | list') -> 'str | tuple[str, ...]':
         """Validate + normalize the ``modes=`` selection: ``'all'``, or the tuple of
@@ -454,7 +463,7 @@ class _Loading:
         if not full:
             return 0
 
-        arity = {**_CORE_SERIALIZATION_ARITIES, **self.operator_arity}
+        arity = self._effective_arity
 
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
             # State-coverage in the serve-time reduction ordering (`_reaches_promise`). The
@@ -552,11 +561,12 @@ class _Loading:
         """
         n_resolved = 0
         candidate = list(self.simplification_rules)  # Mutate a copy, swap on success
+        arity = self._effective_arity
         for i, rule in enumerate(candidate):
             lhs, rhs = rule
             if tuple(rhs) != ('<constant>',):
                 continue
-            leaves = [t for t in lhs if t not in self.operator_arity]
+            leaves = [t for t in lhs if t not in arity]
             if not leaves or not all(is_numeric_string(t) for t in leaves):
                 continue
             result_token = self._core.evaluate_constant_subtree(list(lhs))

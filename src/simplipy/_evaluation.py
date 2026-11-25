@@ -55,7 +55,7 @@ class _Evaluation(_Reading):
         prefix = self._core.to_prefix_syntactic(tokens) if in_form == 'tagged' else tokens
         self._core.check_form(prefix)
 
-        arity = self.operator_arity
+        arity = self._effective_arity
         # A variable is what `expression_variables` says it is, the engine's one definition.
         variables = set(self.expression_variables(prefix))
 
@@ -167,15 +167,17 @@ class _Evaluation(_Reading):
         Order is the contract, not an accident: it is the signature
         :meth:`as_callable` binds, so `f(*values)` has to mean what the expression
         reads. A token is a variable when it is none of the things that are not one --
-        an operator, a numeric literal, a special constant, or a slot. Slots are
+        an operator (of the effective schema: the config's and the core's own), a numeric
+        literal, a special constant, or a slot. Slots are
         excluded because a `<constant>` is a fitted degree of freedom, not an argument,
         and so is a named constant (``<constant_NAME>``): a parameter, never a variable.
         """
         from .utils import is_numeric_string
         tokens = self.to_prefix(expression)
+        operators = self._effective_arity
         out: list[str] = []
         for t in tokens:
-            if t in self._operators_config or t in out:
+            if t in operators or t in out:
                 continue
             if is_numeric_string(t) or t in _SPECIAL_LEAVES:
                 continue

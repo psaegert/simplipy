@@ -648,9 +648,9 @@ def _dead_rules(engine: Any, rule_mode: str, rules: Any) -> list:
     never decides an answer. Expected empty.
     -> ``[lhs, rhs, instance, answer]`` per dead row (the first instance it misses on).
     """
-    from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants, _reaches_promise
+    from .engine import _coverage_variants, _reaches_promise
     core = engine._core
-    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    arity = engine._effective_arity
     dead: list = []
     for lhs, rhs in rules:
         for variant_lhs, variant_rhs in _coverage_variants(tuple(lhs), tuple(rhs), rule_mode,
@@ -861,10 +861,10 @@ def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any, prog: Any = None
     ``{rule, instance, other_path, rhs_path, completion}``, once per completion. An instance
     no other path moves (``A`` is the rule-less answer) is no overlap. ``prog`` (a
     :class:`~simplipy.progress.Progress`) reports the instances as they are read."""
-    from .engine import _CORE_SERIALIZATION_ARITIES, _coverage_variants
+    from .engine import _coverage_variants
     core = engine._core
     rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
-    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    arity = engine._effective_arity
     every_row = list(range(len(rules)))
     instances = _critical_instances(rules, arity)
     for i, (lhs, rhs) in enumerate(rules):
@@ -4037,8 +4037,7 @@ def _ground_rules_refused(engine: Any, rules: list, mode: str) -> list:
     one value and float64's kinds agree; in ``permissive`` where the table's values agree at
     float resolution. A side the evaluator cannot read fails the gate."""
     from simplipy import _core
-    from .engine import _CORE_SERIALIZATION_ARITIES
-    arity = {**_CORE_SERIALIZATION_ARITIES, **engine.operator_arity}
+    arity = engine._effective_arity
     refused: list = []
     for lhs, rhs in rules:
         if not (_is_ground(lhs) and _is_ground(rhs)):
