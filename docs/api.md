@@ -14,6 +14,7 @@ and `simplipy.mining` are power-user surfaces with documented sharp edges.
     options:
       heading_level: 3
       show_root_toc_entry: false
+      inherited_members: true
 
 ## Asset Management
 
