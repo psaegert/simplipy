@@ -1911,6 +1911,22 @@ model predictions.
   the files are unchanged. On the reduced length-4 mine about 14% of the scanned sources have
   no evidence and held a quarter of the length-4 scan's time; the mine ran in 3232 s instead
   of 4258 s (4 threads).
+- **Mining fits fewer constants, with the same verdicts.** Fitting candidates' constants is most
+  of a mine's time, and nearly every fit fails. Three changes cut that work and leave every
+  verdict, so every mined file, unchanged. A source with constants stops its scan at its mark:
+  beyond it the scan keeps only candidates whose slot may resolve to a cheaper literal, and no
+  slot of such a source resolves. Permissive's float64 lane reads the fit permissive's own lane
+  made at an instance where the two fit on bit-identical rows and values, instead of fitting
+  again: a fit is a function of the candidate, the rows, the instance's values and its seed, and
+  the seed is the instance's in either lane. And each restart of a fit gates the constants its
+  solve returns on the values the solve computed there. On slices of the 0.15 mines (480 classes
+  each, the old and the new scan run at once on one machine) a class takes 3.24 CPU seconds
+  instead of 4.76 in permissive at length 4, 5.73 instead of 8.21 at length 5, and in strict
+  2.97 instead of 3.21 at length 4 and 3.09 instead of 3.42 at length 5. The sidecar's
+  `soundness.interval_undecided` counters count the fail-closed refusals of the certifications a
+  mine attempts, not of the candidates it scans: a mine no longer certifies a candidate above the
+  mark of a source with constants, and counts fewer than before. (The 0.15 length-5 sidecar merges
+  a strict half scanned before this change with a permissive half scanned after it.)
 - **A constant collapse is minted where the judge licenses it.** The judge licenses
   `acos(c) -> c_t` from |c| <= 1 alone (a fitted constant owes a witness only where its source
   is finite), but the mint kept a stricter rule of its own for a source without variables: its
