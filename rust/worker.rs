@@ -3137,7 +3137,10 @@ pub fn find_rule_with_lib(
             // Strictly-greater tiers are refused by `ordered_below` outright, so stopping
             // there loses nothing.
             if *tier_mu > cap {
-                if *tier_mu > lib.max_const_mu {
+                // A source with constants resolves no slot (`certify_candidate`): each of its
+                // candidates emits its own spelling at its own mu, so beyond the mark none of
+                // them remains eligible.
+                if src_has_const || *tier_mu > lib.max_const_mu {
                     break; // tiers ascend: no resolvable candidate remains either
                 }
                 resolvable_only = true;
@@ -4291,5 +4294,73 @@ mod tests {
             32,
             7
         ));
+    }
+
+    /// The arithmetic, `log`, `exp`, `pow` and the three Bessel functions the 0.15 mines read.
+    fn bessel_engine() -> crate::engine::Engine {
+        let cfg = r#"operators:
+  "+": {realization: '+', arity: 2, precedence: 1, commutative: true}
+  "*": {realization: '*', arity: 2, precedence: 2, commutative: true}
+  neg: {realization: simplipy.operators.neg, arity: 1, precedence: 2.5}
+  log: {realization: simplipy.operators.log, arity: 1, precedence: 2}
+  exp: {realization: simplipy.operators.exp, arity: 1, precedence: 3}
+  pow: {realization: simplipy.operators.pow, arity: 2, precedence: 3}
+  besselj: {realization: simplipy.operators.besselj, arity: 2, precedence: 2}
+  bessely: {realization: simplipy.operators.bessely, arity: 2, precedence: 2}
+  besselk: {realization: simplipy.operators.besselk, arity: 2, precedence: 2}
+"#;
+        crate::engine::Engine::from_strs(cfg, "[]").expect("engine builds")
+    }
+
+    /// A source with constants resolves no slot, so beyond its mark the scan certifies nothing of
+    /// it: the candidate above the mark is never considered, and the pick is the one an
+    /// acceptance that refuses every target above the mark gives. A constant-free source still
+    /// tries the constant-bearing candidate there (its slot may resolve to a cheap literal).
+    #[test]
+    fn a_source_with_constants_scans_no_tier_above_its_mark() {
+        let e = bessel_engine();
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let xf = grid_1var(n);
+        let cands = vec![s(&["neg", "x0"]), s(&["*", "<constant>", "x0"])];
+        let lib =
+            CandidateLibrary::build(ops, &cands, &[Some(3), Some(10)], &vars, &xf, n).unwrap();
+        let mu = |t: &[String]| if t == cands[1].as_slice() { 10 } else { 3 };
+        let below = |t: &[String]| mu(t) <= 5;
+        for (source, beyond) in [
+            (&["*", "<constant>", "neg", "x0"][..], false),
+            (&["*", "2", "neg", "x0"], true),
+        ] {
+            let src = s(source);
+            let (got, steps) = traced(|| {
+                find_rule_with_lib(
+                    ops,
+                    &src,
+                    src.len(),
+                    None,
+                    Some(5),
+                    &lib,
+                    8,
+                    8,
+                    7,
+                    1e-11,
+                    1e-12,
+                    8,
+                    Lane(crate::engine::RuleMode::Strict),
+                    Some(&below),
+                    None,
+                    None,
+                )
+            });
+            if !beyond {
+                assert_eq!(got.unwrap(), None, "{source:?}");
+            }
+            assert_eq!(
+                steps.iter().any(|(c, _, _)| c == &cands[1]),
+                beyond,
+                "{source:?}: {steps:?}"
+            );
+        }
     }
 }
