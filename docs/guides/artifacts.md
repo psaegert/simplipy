@@ -70,6 +70,37 @@ provenance alone. Each rule file has its own sidecar. Loading reads every
 sidecar present and warns, naming the probes, when a recorded probe now prices
 differently; a probe added after the file was mined is not recorded and not a mismatch.
 
+## Defined functions
+
+A config may define functions beside its operators. Each has a name, an arity and a definition
+written in infix over the config's operators, its arguments written `_0`, `_1`, ...:
+
+```yaml
+defined_functions:
+  sqrt:
+    arity: 1
+    definition: "rootn(_0, 2)"
+  cot:
+    arity: 1
+    definition: "1/tan(_0)"
+  acot:
+    arity: 1
+    definition: "atan(1/_0)"   # SymPy's convention: range (-pi/2, pi/2], acot(-1) = -pi/4
+```
+
+The config is a floor for what the engine supports, not a ceiling: a defined function is
+supported without being mined. `read_infix`, the conversions and `is_valid` read its head and keep
+it as written (`to_infix(['sqrt', 'x0'])` is `sqrt(x0)`); `simplify`, `complexity`, `prettify`,
+`mask` and every evaluation read its definition, so `simplify('cot(x0)')` answers `1/tan(x0)`,
+`simplify('sqrt(x0)')` answers what `simplify('rootn(x0, 2)')` answers, the mined `rootn`, `tan`
+and `atan` rules apply, and a value is the definition's, bit for bit.
+A defined function is not an operator: it is in neither `operator_arity`
+nor the operator table the miner, the monitor and the rule files' fingerprints read, so a mine is
+the same with or without the section. A definition may call only the config's operators (never
+another defined function) and hold numbers, `np.pi`, `np.e` and its arguments, each at least
+once; a name that is already an operator or an alias is refused, when the engine is built. Every
+config this repository ships defines these three.
+
 ## Identity
 
 An installed artifact is identified by its manifest `revision` (the pinned

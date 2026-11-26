@@ -203,3 +203,17 @@ operators:
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
 # generation 2 = the AC engine's clean vocabulary, simplipy >= 0.12.
 engine_generation: 2
+
+# DEFINED FUNCTIONS (ruling 40): supported, never mined. Each is a definition over the operators
+# above, its arguments written _0, _1, ...: the readers and the conversions keep the head as
+# written; simplify, complexity, prettify, mask and every evaluation read the definition.
+defined_functions:
+  sqrt:
+    arity: 1
+    definition: "rootn(_0, 2)"
+  cot:
+    arity: 1
+    definition: "1/tan(_0)"
+  acot:
+    arity: 1
+    definition: "atan(1/_0)"

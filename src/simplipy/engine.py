@@ -161,6 +161,22 @@ class SimpliPyEngine(_Evaluation):
         peak RSS directly after ``load``): about 0.7 GB with both sets and 0.45 GB for
         ``modes=('strict',)``, about 100 MB per set; a deferred set then costs its build on
         first use (about 3-4 s on this artifact, announced by the log line).
+    defined_functions : dict[str, dict] or None, optional
+        The DEFINED FUNCTIONS (a config's ``defined_functions:`` section): name ->
+        ``{'arity': n, 'definition': infix}``, the definition written over this engine's
+        operators with the arguments ``_0`` to ``_{n-1}``, e.g. ``sqrt: {arity: 1,
+        definition: 'rootn(_0, 2)'}``. A defined function is supported without being mined
+        (ruling 40: the config is a floor for what the engine supports, not a ceiling):
+        :meth:`read_infix`, the conversions and :meth:`is_valid` read and keep its head like a
+        declared function's; :meth:`simplify`, :meth:`complexity`, :meth:`prettify`,
+        :meth:`mask` and every evaluation (:meth:`as_callable`, :meth:`evaluate_constants`)
+        read its definition, so ``simplify('sqrt(x0)')`` answers what
+        ``simplify('rootn(x0, 2)')`` answers and the value is the definition's, bit for bit.
+        It is not an operator: it is in neither ``operator_arity`` nor the operator config the
+        miner, the monitor and the rule files' fingerprints read, so mining is unchanged. A
+        definition calls only declared (or core) operators, never another defined function;
+        the core refuses any other definition, and a name that is already an operator or an
+        alias, when the engine is built.
     trusted_modules : list[str] or None, optional
         Extra module roots this engine may import for its operator realizations,
         on top of the defaults (``math``, ``np``, ``scipy``, ``simplipy``) and
@@ -186,6 +202,8 @@ class SimpliPyEngine(_Evaluation):
         here -- it materializes on the mode's first use (and returns to ``None``
         after :meth:`unload_mode`); the engine still knows the set's file and the
         mode still serves it, lazily.
+    defined_functions : dict[str, dict]
+        The defined functions (see the parameter), ``{}`` for none.
     modules : list[str]
         The importable package names this engine's realizations need (``numpy`` is
         always present: ``np.pi``/``np.e`` are token grammar). These are PACKAGE
@@ -196,7 +214,8 @@ class SimpliPyEngine(_Evaluation):
                  rules_permissive: list[tuple] | None = None,
                  rule_canons: dict[str, str] | None = None,
                  modes: 'str | Mode | tuple | list' = 'all',
-                 trusted_modules: list[str] | None = None) -> None:
+                 trusted_modules: list[str] | None = None,
+                 defined_functions: dict[str, dict[str, Any]] | None = None) -> None:
         # Loud validation FIRST, like the operator specs below: a mistyped `modes`
         # must never construct an engine that silently built the wrong sets.
         self._modes = self._normalized_modes(modes)
@@ -236,6 +255,9 @@ class SimpliPyEngine(_Evaluation):
 
         # The raw operator config, kept for core (re)construction.
         self._operators_config = deepcopy(operators)
+        # The defined functions: part of the recipe, read by every core this engine builds,
+        # and kept apart from the operator config the miner reads.
+        self.defined_functions = self._normalized_defined_functions(defined_functions)
 
         # Normalize the incoming rule list and eliminate duplicate patterns.
         #
@@ -249,7 +271,8 @@ class SimpliPyEngine(_Evaluation):
         if rules is None:
             self.simplification_rules = []
         else:
-            self._core = self._build_core(self._operators_config, [])
+            self._core = self._build_core(self._operators_config, [],
+                                          defined_functions=self.defined_functions)
             self.simplification_rules = deduplicate_rules(
                 rules, dummy_variables=dummy_variables, engine=self, rule_mode='strict',
                 canon=self._rule_canons.get('default'))
@@ -279,7 +302,7 @@ class SimpliPyEngine(_Evaluation):
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.permissive_simplification_rules if 'permissive' in eager else None,
-            canons=self._rule_canons)
+            canons=self._rule_canons, defined_functions=self.defined_functions)
         # The lazy-mode bookkeeping. `_mode_rule_sources` maps a rule mode name to the
         # FILE its set loads from (attached by `from_config` for a config-named
         # set); `_core_loaded_modes` holds the non-default modes whose sets the CURRENT
@@ -443,7 +466,8 @@ class SimpliPyEngine(_Evaluation):
             canons['strict'] = _canon_of_record(rules_path)
         engine = cls(operators=config['operators'], rules=rules,
                      rules_permissive=mode_rules['permissive'],
-                     rule_canons=canons, modes=modes, trusted_modules=trusted_modules)
+                     rule_canons=canons, modes=modes, trusted_modules=trusted_modules,
+                     defined_functions=config.get('defined_functions'))
         # The file recipe, attached AFTER construction because paths are this
         # loader's knowledge, not `__init__`'s: a deferred set lazily loads from
         # here on first use, and `unload_mode` re-reads from here after a drop.
@@ -612,12 +636,14 @@ class SimpliPyEngine(_Evaluation):
             raise TypeError(
                 f'policy must be a policy name or a (value, role) -> str | None '
                 f'callable, not {type(policy).__name__}')
+        # A defined function is masked as its definition: the answer is canonical.
         if isinstance(expression, str):
             return self.to_infix(
-                _masking.mask(self._core.parse(expression, strict=True), self, policy_fn,
-                              collect=collect))
+                _masking.mask(self._expand_defined(self._core.parse(expression, strict=True)),
+                              self, policy_fn, collect=collect))
         if isinstance(expression, list):
-            return _masking.mask(expression, self, policy_fn, collect=collect)
+            return _masking.mask(self._expand_defined(expression), self, policy_fn,
+                                 collect=collect)
         raise TypeError(
             f'mask expects an infix str or a token list, '
             f'not {type(expression).__name__}')
@@ -783,8 +809,8 @@ class SimpliPyEngine(_Evaluation):
         # answers in the form it was handed -- a str is infix, a token sequence carrying
         # a bag delimiter is tagged, anything else is the explicit binary prefix, so a
         # prefix input never comes back tagged; to change the NOTATION, convert:
-        # `simplify(to_tagged(x))`.
-        form, tokens = self._read_input(expression)
+        # `simplify(to_tagged(x))`. A defined function enters as its definition.
+        form, tokens = self._read_input(expression, expand=True)
 
         # ONE lookup, both branches: the rule mode is decided here and the core is asked
         # for it by name, so the two output paths cannot end up serving different sets.
@@ -956,7 +982,7 @@ class SimpliPyEngine(_Evaluation):
             precision = int(precision)
         if not isinstance(keep_grouping, (bool, np.bool_)):
             raise TypeError(f"keep_grouping must be a bool, not {type(keep_grouping).__name__} ({keep_grouping!r})")
-        in_form, tokens = self._read_input(expression)
+        in_form, tokens = self._read_input(expression, expand=True)
         target = form or in_form
         if target not in ('infix', 'explicit', 'tagged'):
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
@@ -1016,7 +1042,7 @@ class SimpliPyEngine(_Evaluation):
         at. A literal beyond the 1,100-bit cap keeps its own price. The price is an integer
         in milli-bits.
         """
-        _, tokens = self._read_input(expression)
+        _, tokens = self._read_input(expression, expand=True)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
         # LAZY MODES: same first-use hook as `simplify` -- the mode
         # argument reaches the core below, so a deferred set must be built first.

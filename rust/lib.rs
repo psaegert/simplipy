@@ -325,6 +325,7 @@ mod ac;
 mod battery;
 
 mod convert;
+mod defined;
 pub mod engine;
 mod env_switches;
 mod eval;
@@ -1226,6 +1227,16 @@ impl PyEngine {
         let out = py
             .detach(|| self.inner().to_prefix_syntactic(&tokens))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(PyList::new(py, out)?.into())
+    }
+
+    /// EXPAND the config's DEFINED FUNCTIONS (`defined.rs`) into their definitions, in either
+    /// dialect: what the canonical entries and the evaluators read. The identity on a sequence
+    /// with no defined head; a malformed sequence comes back unchanged for its consumer to
+    /// refuse.
+    fn expand_defined(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
+        ensure_tokens_are_tokens(&tokens)?;
+        let out = py.detach(|| self.inner().expand_defined(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 

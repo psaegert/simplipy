@@ -580,6 +580,8 @@ organised by who you are, then the highlights, then every change in detail.
   for it.
 - **The canonical form reads like a law**: no quantity's own powers nested, polynomials written
   with their powers.
+- **Defined functions**: a config defines `sqrt`, `cot` and `acot` over its operators; they are
+  read, simplified, priced and evaluated without being mined.
 
 ### In detail
 
@@ -587,6 +589,18 @@ The measurements below use three sets: the 129,490 simplify inputs of flash-ansr
 training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
 model predictions.
 
+- **Defined functions** (`defined_functions:` in a config). A function given by a name, an arity
+  and a definition over the config's operators, its arguments `_0`, `_1`, ...; every shipped
+  config defines `sqrt(u) = rootn(u, 2)`, `cot(u) = 1/tan(u)` and `acot(u) = atan(1/u)` (SymPy's
+  convention, `acot(-1) = -pi/4`). The readers, the conversions and `is_valid` keep the head as
+  written; `simplify`, `complexity`, `prettify`, `mask` and every evaluation read the definition,
+  so `simplify('cot(x0)')` is `1/tan(x0)`, `simplify('sqrt(x0)')` answers as
+  `simplify('rootn(x0, 2)')`, and `as_callable('sqrt(x0)')` computes `rootn(x0, 2)` bit for bit.
+  A defined function is never mined: it is not in `operator_arity` or the operator table the
+  miner reads, and a mine with the section is byte-identical to one without. A function neither
+  declared nor defined is still refused by every strict entry (`sqrt` was the example of one
+  until now; the tests use `sec`). `SimpliPyEngine(defined_functions=...)` builds one directly;
+  pickles keep the section.
 - **The aliases `Abs` and `div`.** Every config this repository ships or tests with reads
   `Abs(x)` as `abs(x)` (sympy's spelling) and `div(a, b)` as `a/b`, as the catalogs write them.
   `ln`, `arcsin`, `arccos`, `pow(a, b)` and `power(a, b)` already read as `log`, `asin`, `acos`

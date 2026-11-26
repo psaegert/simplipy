@@ -169,7 +169,7 @@ fn parse_one(tokens: &[String], idx: usize, ops: &Operators) -> Result<(Node, us
     if TAG_TOKENS.contains(&t.as_str()) {
         return Err(format!("malformed expression: {t} with no enclosing bag"));
     }
-    match ops.arity_of(t) {
+    match ops.syntax_arity(t) {
         None => Ok((Node::Leaf(t.clone()), idx + 1)),
         Some(n) => {
             let mut args = Vec::with_capacity(n as usize);

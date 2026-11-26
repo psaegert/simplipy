@@ -55,7 +55,8 @@ class _Evaluation(_Reading):
         prefix = self._core.to_prefix_syntactic(tokens) if in_form == 'tagged' else tokens
         self._core.check_form(prefix)
 
-        arity = self._effective_arity
+        # The walk reads the expression as written, a defined function at its arity.
+        arity = self._syntax_arity
         # A variable is what `expression_variables` says it is, the engine's one definition.
         variables = set(self.expression_variables(prefix))
 
@@ -83,8 +84,9 @@ class _Evaluation(_Reading):
             if j - i > 1 and not held[i]:
                 sub = prefix[i:j]
                 try:
-                    value = float(np.asarray(
-                        self._core.evaluate_batch(sub, ['x0'], [0.0], 1, [])).ravel()[0])
+                    # a defined function evaluates as its definition
+                    value = float(np.asarray(self._core.evaluate_batch(
+                        self._expand_defined(sub), ['x0'], [0.0], 1, [])).ravel()[0])
                 except ValueError:  # an operator the evaluator has no kernel for: left as is
                     value = float('nan')
                 if np.isfinite(value):
@@ -174,7 +176,8 @@ class _Evaluation(_Reading):
         """
         from .utils import is_numeric_string
         tokens = self.to_prefix(expression)
-        operators = self._effective_arity
+        # a defined function is a function of the expression as written, never a variable
+        operators = self._syntax_arity
         out: list[str] = []
         for t in tokens:
             if t in operators or t in out:
@@ -204,9 +207,10 @@ class _Evaluation(_Reading):
         an operator actually resolves to, without running anything.
 
         Reading realization notation back needs an injective realization map; writing it
-        does not, so this direction never refuses.
+        does not, so this direction never refuses. A defined function has no callable of its
+        own: it is written as the callables of its definition.
         """
-        return self.operators_to_realizations(self.to_prefix(expression))
+        return self.operators_to_realizations(self._expand_defined(self.to_prefix(expression)))
 
     def as_code(
             self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray',
@@ -237,13 +241,16 @@ class _Evaluation(_Reading):
            (:mod:`simplipy.trust`).
         """
         from .utils import codify, evaluator_literal
-        prefix = self.to_prefix(expression)
+        written = self.to_prefix(expression)
         named: list[str] = []
-        for t in prefix:
+        for t in written:
             if is_named_constant(t) and t not in named:
                 named.append(t)
         if variables is None:
-            variables = self.expression_variables(prefix) + named
+            variables = self.expression_variables(written) + named
+        # The signature is the expression's as written; the code computes each defined
+        # function's definition, so the value is the expanded expression's, bit for bit.
+        prefix = self._expand_defined(written)
         if named:
             missing = [t for t in named if t not in variables]
             if missing:

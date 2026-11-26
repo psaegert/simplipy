@@ -312,7 +312,7 @@ class TestErrors:
         pytest.param(['<mul>', 'x0', '<div>', 'x1', '<div>', 'x2', '</mul>'], id='two-sections'),
         pytest.param(['<mul>', 'x0', '</mul>'], id='one-member-bag'),
         pytest.param(['bogusfn', 'x0'], id='unknown-operator'),
-        pytest.param('sqrt(x0)', id='unknown-vocabulary-infix'),
+        pytest.param('sec(x0)', id='unknown-vocabulary-infix'),
     ])
     def test_malformed_raises_value_error(self, engine, bad) -> None:
         for to_x in (engine.to_infix, engine.to_prefix, engine.to_tagged):
@@ -335,4 +335,4 @@ class TestErrors:
         assert engine.to_infix([]) == ''
 
     def test_read_infix_stays_tolerant(self, engine) -> None:
-        assert engine.read_infix('sqrt(x0)') == ['sqrt', 'x0']
+        assert engine.read_infix('sec(x0)') == ['sec', 'x0']

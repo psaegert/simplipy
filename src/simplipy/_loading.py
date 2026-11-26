@@ -46,6 +46,7 @@ class _Loading:
     _realization_roots: dict[str, list[str]]
     _trusted_modules: frozenset[str]
     _operators_config: dict[str, dict[str, Any]]
+    defined_functions: dict[str, dict[str, Any]]
     _core: Any
     _mode_rule_sources: dict[str, str]
     _mode_load_lock: threading.Lock
@@ -59,6 +60,24 @@ class _Loading:
         the config declares (an engine over ``+`` and ``*`` answers ``x0*x0`` with
         ``pow(x0, 2)``), and of each operator the config declares."""
         return {**_CORE_SERIALIZATION_ARITIES, **self.operator_arity}
+
+    @property
+    def _syntax_arity(self) -> dict[str, Any]:
+        """The effective schema with the config's DEFINED FUNCTIONS beside it, each at its arity:
+        what a walk over an expression AS WRITTEN reads (:meth:`expression_variables`,
+        :meth:`evaluate_constants`). The canonical entries never meet a defined head: they
+        read the expansion (:meth:`_expand_defined`)."""
+        return {**self._effective_arity,
+                **{name: spec['arity'] for name, spec in self.defined_functions.items()}}
+
+    def _expand_defined(self, tokens: list[str]) -> list[str]:
+        """``tokens`` with every DEFINED FUNCTION expanded into its definition (the core's
+        ``expand_defined``, either dialect): what every entry into the canonical state and every
+        evaluation reads, so a defined head answers, prices and evaluates as its definition. The
+        same list when the engine defines nothing."""
+        if not self.defined_functions:
+            return tokens
+        return self._core.expand_defined(list(tokens))
 
     @staticmethod
     def _normalized_modes(modes: 'str | Mode | tuple | list') -> 'str | tuple[str, ...]':
@@ -109,6 +128,31 @@ class _Loading:
         return out
 
     @staticmethod
+    def _normalized_defined_functions(
+            defined: dict[str, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+        """The ``defined_functions`` section as the engine keeps it: name -> ``{'arity': int,
+        'definition': str}``, a copy. Its SHAPE is checked here, loudly; what a definition may
+        say (the engine's operators, numbers and its arguments ``_0``, ``_1``, ...) is checked by
+        the core when it is built."""
+        if defined is None:
+            return {}
+        if not isinstance(defined, dict):
+            raise ValueError(f"defined_functions must be a mapping of name to "
+                             f"{{arity, definition}}, not {type(defined).__name__}")
+        out: dict[str, dict[str, Any]] = {}
+        for name, spec in defined.items():
+            if not isinstance(name, str) or not isinstance(spec, dict) \
+                    or set(spec) != {'arity', 'definition'} \
+                    or isinstance(spec['arity'], bool) or not isinstance(spec['arity'], int) \
+                    or not isinstance(spec['definition'], str):
+                raise ValueError(
+                    f"defined_functions: {name!r} must give exactly an integer 'arity' and a "
+                    f"'definition' string, as in sqrt: {{arity: 1, definition: 'rootn(_0, 2)'}}; "
+                    f"got {spec!r}")
+            out[name] = {'arity': spec['arity'], 'definition': spec['definition']}
+        return out
+
+    @staticmethod
     def _normalized_mode_rules(rules: list[tuple] | None) -> list[tuple] | None:
         """One mode's own rule set in the engine's (tuple, tuple) shape -- ``None``
         through unchanged, because ``None`` (no set of its own) and ``[]`` (an empty
@@ -120,7 +164,8 @@ class _Loading:
     @staticmethod
     def _build_core(operators: dict[str, dict[str, Any]], rules: list[tuple],
                     rules_permissive: list[tuple] | None = None, *,
-                    canons: dict[str, str] | None = None) -> Any:
+                    canons: dict[str, str] | None = None,
+                    defined_functions: dict[str, dict[str, Any]] | None = None) -> Any:
         """Build the compiled core (``simplipy._core``) from in-memory config + rules.
 
         The core is REQUIRED: a missing extension or a load failure is a hard error --
@@ -137,13 +182,21 @@ class _Loading:
 
         ``canons`` maps a rule mode to the canon its set was certified in
         (:meth:`_normalized_rule_canons`); a mode not named reads its set in its own.
+
+        ``defined_functions`` is the config's ``defined_functions:`` section
+        (:meth:`_normalized_defined_functions`), which the core reads and checks beside the
+        operators; none, or an empty section, builds the core from the operators alone, as
+        before.
         """
         canons = canons or {}
         if _RustEngine is None:
             raise ImportError(
                 'simplipy._core is required (the pure-Python engine was removed): the compiled '
                 f'extension failed to import ({_CORE_IMPORT_ERROR!r})')
-        config_text = yaml.safe_dump({'operators': operators}, sort_keys=False)
+        config = {'operators': operators}
+        if defined_functions:
+            config['defined_functions'] = defined_functions
+        config_text = yaml.safe_dump(config, sort_keys=False)
         rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
         core = _RustEngine.from_strs(config_text, rules_text, canons.get('default'))
         if rules_permissive is not None:
@@ -222,10 +275,12 @@ class _Loading:
         self.__dict__.setdefault('_mode_rule_sources', {})
         self.__dict__.setdefault('_rule_canons', {})
         self._mode_load_lock = threading.Lock()
+        # Pickles written before defined functions existed define none.
+        self.__dict__.setdefault('defined_functions', {})
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.__dict__.setdefault('permissive_simplification_rules', None),
-            canons=self._rule_canons)
+            canons=self._rule_canons, defined_functions=self.defined_functions)
         # The fresh core carries exactly the non-None in-memory sets `_build_core`
         # just pushed; a set that was deferred (or unloaded) in the parent stays
         # deferred here and lazily loads from its recorded source on first use.
@@ -254,7 +309,8 @@ class _Loading:
         with self._mode_load_lock:
             self._core = self._build_core(
                 self._operators_config, self.simplification_rules,
-                self.permissive_simplification_rules, canons=self._rule_canons)
+                self.permissive_simplification_rules, canons=self._rule_canons,
+                defined_functions=self.defined_functions)
             self._core_loaded_modes = {
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
@@ -389,7 +445,7 @@ class _Loading:
         with self._mode_load_lock:
             new_core = self._build_core(
                 self._operators_config, rules, self.permissive_simplification_rules,
-                canons=self._rule_canons)
+                canons=self._rule_canons, defined_functions=self.defined_functions)
             self.simplification_rules = rules
             self._core = new_core
             self._core_loaded_modes = {
@@ -494,10 +550,12 @@ class _Loading:
                 if rule_mode == 'default':
                     core = self._build_core(self._operators_config, probe_set,
                                             self.permissive_simplification_rules,
-                                            canons=self._rule_canons)
+                                            canons=self._rule_canons,
+                                            defined_functions=self.defined_functions)
                 else:
                     core = self._build_core(self._operators_config, self.simplification_rules,
-                                            probe_set, canons=self._rule_canons)
+                                            probe_set, canons=self._rule_canons,
+                                            defined_functions=self.defined_functions)
                 readd = [rule for rule in
                          prog.track(list(pending), f'  wave {wave_length} round {rounds}: coverage scan')
                          if not covered(core, *rule)]

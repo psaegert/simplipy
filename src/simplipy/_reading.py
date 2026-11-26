@@ -33,8 +33,9 @@ class _Reading(_Loading):
         sequences are verified by the shared liberal parser (the arbiter for that
         dialect, exactly as in :meth:`simplify`), everything else by the arity
         oracle. Note the difference from :meth:`read_infix`, which TOLERATES
-        undeclared vocabulary: ``read_infix('sqrt(x0)')`` reads, while
-        ``is_valid('sqrt(x0)')`` is False if this engine declares no ``sqrt`` --
+        undeclared vocabulary: ``read_infix('sec(x0)')`` reads, while
+        ``is_valid('sec(x0)')`` is False if this engine declares no ``sec`` (a defined
+        function, such as the shipped configs' ``sqrt``, is valid) --
         this method verifies against the vocabulary rather than merely reading.
 
         Malformed input is a False VERDICT, never an exception -- that is what a
@@ -217,7 +218,7 @@ class _Reading(_Loading):
         ------
         ValueError
             When two operands are separated only by whitespace (``x0 x1``, ``2 3``,
-            ``sqrt x0`` for an undeclared ``sqrt``), or when an implicit product falls inside
+            ``sec x0`` for an undeclared ``sec``), or when an implicit product falls inside
             the argument of a function without parentheses (``sin 2x0``).
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
@@ -253,13 +254,14 @@ class _Reading(_Loading):
         The name states the contract because the contract is a CAPABILITY that no
         other public entry offers (it was called ``parse`` before 0.14.0):
 
-        * **TOLERANT of unknown vocabulary.** A function this engine's config does
-          not declare survives as a bare leaf --
-          ``read_infix('sqrt(x0)') == ['sqrt', 'x0']`` -- so a corpus written in a
+        * **TOLERANT of unknown vocabulary.** A function this engine's config neither
+          declares nor defines survives as a bare leaf --
+          ``read_infix('sec(x0)') == ['sec', 'x0']`` -- so a corpus written in a
           wider vocabulary can be read first and desugared afterwards. Every
           conversion entry (:meth:`to_prefix`, :meth:`to_infix`, :meth:`to_tagged`)
-          and :meth:`simplify` REFUSE such input: they parse into the canonical
-          state, which only knows declared operators.
+          and :meth:`simplify` REFUSE such input: they read only the engine's
+          operators and its defined functions (a config's ``defined_functions:``,
+          such as ``sqrt``, whose head every reader keeps as written).
         * **SPELLING-PRESERVING: it does NOT canonicalise.** This is a reader, not a
           simplification -- it never enters the canonical state, so like terms are not
           collected and constants are not folded::
@@ -277,7 +279,7 @@ class _Reading(_Loading):
         Implicit multiplication is read after a number or a closing parenthesis, with
         the precedence of ``*``: ``2x0`` is ``2*x0``, ``2(x0 + 1)`` is ``2*(x0 + 1)``,
         ``(a)(b)`` is ``(a)*(b)`` and ``1/2x0`` is ``(1/2)*x0``. A name before a
-        parenthesis is always a call, so ``sqrt(x0)`` stays ``['sqrt', 'x0']``. Token
+        parenthesis is always a call, so ``sec(x0)`` stays ``['sec', 'x0']``. Token
         lists are expected well formed and get no such reading.
 
         Whitespace separates tokens, and an implicit product forms across it as across
@@ -286,7 +288,7 @@ class _Reading(_Loading):
         products, quotients or sums: ``sin x0^2`` is ``sin(x0^2)`` and ``log x0 / 2`` is
         ``log(x0)/2``. ``x0 * * 2`` is ``x0**2`` and ``1 e-5`` is ``1e-5``. ``ValueError``
         is raised for two operands with only whitespace between them and no product
-        (``x0 x1``, ``2 3``, ``sqrt x0`` for an undeclared ``sqrt``) and for an implicit
+        (``x0 x1``, ``2 3``, ``sec x0`` for an undeclared ``sec``) and for an implicit
         product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
 
         Mechanically it is :meth:`infix_to_prefix` plus optional
@@ -313,7 +315,8 @@ class _Reading(_Loading):
         return self._core.parse(infix_expression, convert_expression, mask_numbers)
 
     def _read_input(
-            self, expression: str | list[str] | tuple[str, ...] | np.ndarray
+            self, expression: str | list[str] | tuple[str, ...] | np.ndarray,
+            expand: bool = False,
     ) -> tuple[str, list[str]]:
         """``(form, tokens)``: THE reading of an expression argument, shared by
         :meth:`simplify`, :meth:`complexity`, :meth:`prettify`, the conversion API and
@@ -333,9 +336,14 @@ class _Reading(_Loading):
         Refuses loudly: an ``ndarray`` that is not 1-D or not string-like raises
         ``ValueError``, any other type ``TypeError``. The reading does not validate;
         each consumer validates through the core.
+
+        With ``expand`` (the entries into the canonical state) every DEFINED FUNCTION is
+        expanded into its definition (:meth:`_expand_defined`); without it (the conversions)
+        the tokens keep the head as written.
         """
         if isinstance(expression, str):
-            return 'infix', self._core.parse(expression, strict=True)
+            tokens = self._core.parse(expression, strict=True)
+            return 'infix', self._expand_defined(tokens) if expand else tokens
         if isinstance(expression, np.ndarray):
             if expression.ndim != 1:
                 raise ValueError('expected a one-dimensional numpy array of tokens, '
@@ -356,6 +364,8 @@ class _Reading(_Loading):
         if self._realization_only_tokens().intersection(tokens):
             self._assert_realizations_are_invertible()
             tokens = self.realizations_to_operators(tokens)
+        if expand:
+            tokens = self._expand_defined(tokens)
         return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'explicit'), tokens
 
     def to_infix(self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:

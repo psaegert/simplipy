@@ -39,16 +39,18 @@ class TestTheContractTheNameStates:
     """The three claims the docstring makes, each pinned by a test."""
 
     def test_tolerates_unknown_vocabulary(self, engine: SimpliPyEngine) -> None:
-        """`sqrt` is not in the engine's operator table; it survives as a leaf."""
-        assert 'sqrt' not in engine.operator_arity
-        assert engine.read_infix('sqrt(x0)') == ['sqrt', 'x0']
+        """`sec` is neither an operator nor a defined function of the engine; it survives as
+        a leaf. (`sqrt`, the example until 0.15, is a defined function of the shipped configs
+        since ruling 40, and reads as one.)"""
+        assert 'sec' not in engine.operator_arity and 'sec' not in engine.defined_functions
+        assert engine.read_infix('sec(x0)') == ['sec', 'x0']
 
     def test_the_conversion_trio_refuses_what_read_infix_accepts(
             self, engine: SimpliPyEngine) -> None:
         """The capability is exclusive to this reader -- that is why it stays."""
         for convert in (engine.to_prefix, engine.to_tagged, engine.to_infix):
             with pytest.raises(ValueError):
-                convert('sqrt(x0)')
+                convert('sec(x0)')
 
     def test_the_strict_entries_name_the_unknown_function(
             self, engine: SimpliPyEngine) -> None:
@@ -56,18 +58,18 @@ class TestTheContractTheNameStates:
         infix -- not a generic "malformed prefix expression" about text that is infix."""
         for entry in (engine.simplify, engine.complexity, engine.to_prefix, engine.to_tagged,
                       engine.to_infix, engine.evaluate_constants):
-            with pytest.raises(ValueError, match=r"unknown function 'sqrt' in 'sqrt\(x1\^2\)'"):
-                entry('sqrt(x1^2)')
+            with pytest.raises(ValueError, match=r"unknown function 'sec' in 'sec\(x1\^2\)'"):
+                entry('sec(x1^2)')
         with pytest.raises(ValueError, match=r"unknown functions 'foo', 'x1' in"):
             engine.simplify('foo(x2) + x1(x3) + foo(1)')
-        with pytest.raises(ValueError, match=r"unknown function 'sqrt' in"):
-            engine.mask('sqrt(x1) + 2')
+        with pytest.raises(ValueError, match=r"unknown function 'sec' in"):
+            engine.mask('sec(x1) + 2')
         # declared names, aliases and plain products are not calls of unknown functions:
         # the strict reading of such text is the tolerant one
         text = 'sin(x1) + pow(x1, 2) + 2(x1 + 1) + (x1)(x2)'
         assert engine._core.parse(text, strict=True) == engine.read_infix(text)
         # the tolerant reader keeps the call as written
-        assert engine._core.parse('sqrt(x1)', strict=False) == ['sqrt', 'x1']
+        assert engine._core.parse('sec(x1)', strict=False) == ['sec', 'x1']
 
     def test_legacy_spellings_are_read_where_they_are_called(
             self, engine: SimpliPyEngine) -> None:
@@ -213,7 +215,7 @@ class TestWhitespace:
         with pytest.raises(ValueError):
             engine.simplify(text)
 
-    @pytest.mark.parametrize("text", ["x0 x1", "x 1", "2 3", "1 000", "sin x0 x1", "sqrt x0", "pi x0"])
+    @pytest.mark.parametrize("text", ["x0 x1", "x 1", "2 3", "1 000", "sin x0 x1", "sec x0", "pi x0"])
     def test_two_operands_with_only_whitespace_between_are_refused(
             self, engine: SimpliPyEngine, text: str) -> None:
         for read in (engine.read_infix, engine.infix_to_prefix, engine.simplify):

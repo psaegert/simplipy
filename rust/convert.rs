@@ -514,7 +514,7 @@ fn insert_implicit_products(
     };
     let is_function = |t: &str| {
         let name = ops.operator_aliases.get(t).map(String::as_str).unwrap_or(t);
-        ops.arity_of(name) == Some(1)
+        ops.syntax_arity(name) == Some(1)
     };
     let mut out: Vec<(String, bool)> = Vec::with_capacity(tokens.len());
     // The paren depth, and the depths at which arguments of functions without parentheses are
@@ -710,7 +710,7 @@ fn refuse_undeclared_calls(
     let mut unknown: Vec<&str> = Vec::new();
     for pair in tokens.windows(2) {
         let (name, next) = (pair[0].text.as_str(), pair[1].text.as_str());
-        let declared = ops.operator_aliases.contains_key(name) || ops.arity_of(name).is_some();
+        let declared = ops.operator_aliases.contains_key(name) || ops.syntax_arity(name).is_some();
         if next == "(" && is_ident_start(name) && !declared && !unknown.contains(&name) {
             unknown.push(name);
         }
@@ -821,7 +821,7 @@ fn close_group(
     let callee = callee.filter(|c| is_ident_start(c));
     let declared = callee.and_then(|c| {
         let canonical = ops.operator_aliases.get(c).map_or(c, String::as_str);
-        ops.arity_of(canonical)
+        ops.syntax_arity(canonical)
             .map(|arity| (c, canonical, usize::from(arity)))
     });
     match declared {

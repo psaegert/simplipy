@@ -57,6 +57,10 @@ struct EngineConfig {
     // path, but rule RESOLUTION is the Python shim's job (the core receives rules text).
     #[allow(dead_code)]
     rules: Option<String>,
+    /// The DEFINED FUNCTIONS (`crate::defined`), read against the operator table once it is
+    /// built.
+    #[serde(default)]
+    defined_functions: Option<serde_yaml_ng::Mapping>,
 }
 
 /// (insertion-ordered operator names, name -> spec), preserving config.yaml order.
@@ -151,7 +155,8 @@ impl Engine {
         rules_text: &str,
         canon: crate::ac::rules::RuleCanon,
     ) -> Result<Self, Box<dyn Error>> {
-        let cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
+        let mut cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
+        let defined_section = cfg.defined_functions.take();
 
         // rules.json: a JSON list of [lhs_tokens, rhs_tokens] pairs; serde_json maps each
         // 2-element array onto the (Vec<String>, Vec<String>) tuple. Compile interns the
@@ -223,7 +228,14 @@ impl Engine {
                 }
             }
         }
-        let operators = Operators::from_specs(order.clone(), specs);
+        let mut operators = Operators::from_specs(order.clone(), specs);
+        // The DEFINED FUNCTIONS, read against the finished operator table (a definition calls
+        // operators, never another defined function).
+        if let Some(section) = defined_section {
+            for (name, function) in crate::defined::read_section(section, &operators)? {
+                operators.add_defined(name, function);
+            }
+        }
         // The per-Engine token table (operators + aliases + vocab), then compile interns
         // every rule token into it.
         let mut tokens = TokenTable::build(&order, &operators);
@@ -276,8 +288,9 @@ impl Engine {
     /// Stays on `&[String]`: it never touches the tree types, and it runs at the FFI boundary
     /// BEFORE interning (the validation gate for inputs that may be malformed).
     pub fn is_valid(&self, expression: &[String]) -> bool {
-        // A multi-token expression must start with an operator.
-        if expression.len() > 1 && !self.operators.is_operator(&expression[0]) {
+        // A multi-token expression must start with an operator (or a defined function, which
+        // the readers read like one: `Operators::syntax_arity`).
+        if expression.len() > 1 && self.operators.syntax_arity(&expression[0]).is_none() {
             return false;
         }
 
@@ -296,7 +309,7 @@ impl Engine {
                 return false;
             }
 
-            if let Some(arity) = self.operators.arity_of(token) {
+            if let Some(arity) = self.operators.syntax_arity(token) {
                 let arity = arity as usize;
                 if depth < arity {
                     return false; // not enough operands
@@ -307,6 +320,13 @@ impl Engine {
         }
 
         depth == 1
+    }
+
+    /// EXPAND the defined functions of a token sequence into their definitions
+    /// (`crate::defined::expand_defined`): what every entry into the canonical state and every
+    /// evaluation reads.
+    pub fn expand_defined(&self, tokens: &[String]) -> Vec<String> {
+        crate::defined::expand_defined(tokens, &self.operators)
     }
 
     /// `prefix_to_infix`: render a prefix token list to infix. `Err` mirrors Python's `ValueError`

@@ -111,6 +111,12 @@ pub struct Operators {
     /// `realization_to_operator`: the inverse, built in config order so a (here
     /// absent) realization collision would resolve last-wins exactly as Python's dict comprehension.
     pub realization_to_operator: FxHashMap<String, String>,
+    /// The config's DEFINED FUNCTIONS (`crate::defined`, ruling 40): read and written by the
+    /// readers and printers like declared functions ([`Operators::syntax_arity`], and the
+    /// infix tables above), expanded into their definitions before the canonical state and
+    /// evaluation see them, and absent from [`Operators::arity`], so nothing that reads the
+    /// config's operators (the kernel, the measure, the miner) meets them.
+    pub defined: crate::defined::DefinedTable,
 }
 
 impl Operators {
@@ -200,7 +206,26 @@ impl Operators {
             operator_aliases,
             operator_realizations,
             realization_to_operator,
+            defined: crate::defined::DefinedTable::default(),
         }
+    }
+
+    /// Add a DEFINED FUNCTION (`crate::defined`): its head joins the infix reader's and the
+    /// printer's tables, and [`Operators::syntax_arity`], at its arity; a defined head renders
+    /// as a call, so its precedence is never consulted.
+    pub fn add_defined(&mut self, name: String, function: crate::defined::DefinedFunction) {
+        self.operator_arity_compat
+            .insert(name.clone(), function.arity);
+        self.defined.insert(name, function);
+    }
+
+    /// The arity a READER or PRINTER gives a token: an operator's ([`Operators::arity_of`]) or
+    /// a defined function's. The canonical state and the evaluators read [`Operators::arity_of`]
+    /// alone: they never meet a defined head, which is expanded before them.
+    #[inline]
+    pub fn syntax_arity(&self, token: &str) -> Option<u8> {
+        self.arity_of(token)
+            .or_else(|| self.defined.get(token).map(|d| d.arity))
     }
 
     #[inline]
