@@ -41,14 +41,14 @@ operators:
     commutative: true
   /:
     realization: simplipy.operators.div
-    alias: []
+    alias: ['div']
     inverse: '*'
     arity: 2
     precedence: 2
     commutative: false
   abs:
     realization: simplipy.operators.abs
-    alias: []
+    alias: ['Abs']
     inverse: null
     arity: 1
     precedence: 3

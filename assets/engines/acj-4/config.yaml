@@ -25,13 +25,13 @@ operators:
     commutative: true
   "/":
     realization: "simplipy.operators.div"
-    alias: []
+    alias: ["div"]
     arity: 2
     precedence: 2
     commutative: false
   abs:
     realization: "simplipy.operators.abs"
-    alias: []
+    alias: ["Abs"]
     arity: 1
     precedence: 3
     commutative: false

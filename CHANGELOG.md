@@ -587,6 +587,11 @@ The measurements below use three sets: the 129,490 simplify inputs of flash-ansr
 training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
 model predictions.
 
+- **The aliases `Abs` and `div`.** Every config this repository ships or tests with reads
+  `Abs(x)` as `abs(x)` (sympy's spelling) and `div(a, b)` as `a/b`, as the catalogs write them.
+  `ln`, `arcsin`, `arccos`, `pow(a, b)` and `power(a, b)` already read as `log`, `asin`, `acos`
+  and `pow`, and the tests keep them reading. An alias is a reading only: the canonical state,
+  the answer, the price and the mined rules are the target's.
 - **One operator schema for the helpers.** The core reads and writes `+`, `-`, `*`, `/`, `neg`,
   `inv`, `pow` and `rootn` whatever a config declares (an engine over `+`, `*` and `sin` answers
   `x0*x0` with `pow(x0, 2)`), and every helper that walks an expression now reads them beside the
