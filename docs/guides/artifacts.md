@@ -93,8 +93,8 @@ supported without being mined. `read_infix`, the conversions and `is_valid` read
 it as written (`to_infix(['sqrt', 'x0'])` is `sqrt(x0)`); `simplify`, `complexity`, `prettify`,
 `mask` and every evaluation read its definition, so `simplify('cot(x0)')` answers `1/tan(x0)`,
 `simplify('sqrt(x0)')` answers what `simplify('rootn(x0, 2)')` answers, the mined `rootn`, `tan`
-and `atan` rules apply, and a value is the definition's, bit for bit.
-A defined function is not an operator: it is in neither `operator_arity`
+and `atan` rules apply, and a value is the definition's, bit for bit. `written_complexity` prices
+the head as written. A defined function is not an operator: it is in neither `operator_arity`
 nor the operator table the miner, the monitor and the rule files' fingerprints read, so a mine is
 the same with or without the section. A definition may call only the config's operators (never
 another defined function) and hold numbers, `np.pi`, `np.e` and its arguments, each at least

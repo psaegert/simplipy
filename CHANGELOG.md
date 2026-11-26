@@ -580,6 +580,8 @@ organised by who you are, then the highlights, then every change in detail.
   for it.
 - **The canonical form reads like a law**: no quantity's own powers nested, polynomials written
   with their powers.
+- **`written_complexity()`** prices an expression exactly as written, beside `complexity()`,
+  which prices its canonical state.
 - **Defined functions**: a config defines `sqrt`, `cot` and `acot` over its operators; they are
   read, simplified, priced and evaluated without being mined.
 
@@ -589,6 +591,18 @@ The measurements below use three sets: the 129,490 simplify inputs of flash-ansr
 training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
 model predictions.
 
+- **`written_complexity()`, the written price.** `complexity(e, mode=m)` prices the canonical
+  state a mode reads `e` into; `written_complexity(e)` applies the same code book to `e` exactly
+  as written, in milli-bits, with no mode and no certificate: every operator, function, variable,
+  sign and number written is charged, and the only identifications are those infix notation
+  forces (a run of `+`/`-` is one sum and of `*`/`/` one product, whatever the bracketing, a
+  bracketed subtrahend or divisor staying whole; operands unordered; `-y` is a sign; `1/y` and
+  `inv(y)` are the reciprocal; dividing by `y^k` is `y^-k`; a literal divisor `x/3` is the
+  literal 1/3). A number pays the literal code on the exact value written, every digit; an alias
+  pays its target's price, a defined function its own head (`sqrt` 6 bits, `cot` 6, `acot` 8),
+  and any other undeclared head is refused. `x0 + 0` costs 11 bits written (6 canonical),
+  `exp(1)` 8 (4), `x0 - x0/1 + 2` 23.585 (2.585); `x0*x1/(4*np.pi*x2*x3**2)` costs 45.907
+  written and 47.907 canonical. Additive: no answer, price of `complexity`, rule or mine changes.
 - **Defined functions** (`defined_functions:` in a config). A function given by a name, an arity
   and a definition over the config's operators, its arguments `_0`, `_1`, ...; every shipped
   config defines `sqrt(u) = rootn(u, 2)`, `cot(u) = 1/tan(u)` and `acot(u) = atan(1/u)` (SymPy's

@@ -200,6 +200,28 @@ fn mu_fun_bits(name: &str) -> u64 {
     }
 }
 
+/// A declared function head's price in milli-bits ([`mu_fun_bits`] at the symbol unit): what
+/// [`complexity`] charges a `Fun` node's head, and what the written price charges a head written.
+pub(super) fn mu_head(name: &str) -> u64 {
+    sym_bits(mu_fun_bits(name))
+}
+
+/// The head of a DEFINED FUNCTION (ruling 40: a config's `defined_functions:`, `crate::defined`),
+/// in milli-bits, priced by name like every head, at the tier of the function its definition
+/// applies: `sqrt` at rootn's (`rootn(u, 2)`, without the 2) and `cot` at tan's (`1/tan(u)`), the
+/// elementary tier, and `acot` at atan's (`atan(1/u)`), the transcendental tier. Another defined
+/// name keeps the flat unit, as an unknown head does. Only the written price reads it
+/// (`written_complexity`): the canonical state holds a defined function's definition, never its
+/// head, and a config that declares an operator of one of these names keeps [`mu_fun_bits`]'s
+/// price for it.
+pub(super) fn mu_defined_head(name: &str) -> u64 {
+    sym_bits(match name {
+        "sqrt" | "cot" => MU_BITS_ELEMENTARY,
+        "acot" => MU_BITS_TRANSCENDENTAL,
+        _ => 8,
+    })
+}
+
 /// The free constant's price, DERIVED rather than chosen (contract §10.10(5)) --
 /// derived under the mu' codebook: the sup-construction
 /// RECIPE is untouched, the codebook under the sup changed.
@@ -1007,7 +1029,7 @@ fn piece_price(structural: u64, value: Option<&Rat>, nodes: u64) -> u64 {
 /// domain costs what the same value costs as a `Num`; one beyond the 1,100-bit cap keeps its
 /// print's price. A function of the string, so each thread remembers the prices it computed,
 /// emptying the table at 65,536 entries.
-fn mu_numeric_leaf(s: &str) -> u64 {
+pub(super) fn mu_numeric_leaf(s: &str) -> u64 {
     thread_local! {
         static LEAF_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Box<str>, u64>> =
             std::cell::RefCell::new(rustc_hash::FxHashMap::default());

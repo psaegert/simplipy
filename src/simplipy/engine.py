@@ -1041,6 +1041,11 @@ class SimpliPyEngine(_Evaluation):
         as that literal times a number), which cost at most what the exact number is priced
         at. A literal beyond the 1,100-bit cap keeps its own price. The price is an integer
         in milli-bits.
+
+        :meth:`written_complexity` is the other half of the pair: the same code book applied to
+        the expression exactly as written, with no mode and nothing read into a canonical
+        state. ``complexity`` measures what an expression is in a mode (srbf's symbolic
+        recovery); ``written_complexity`` measures what was written (srbf's MDL).
         """
         _, tokens = self._read_input(expression, expand=True)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
@@ -1050,6 +1055,61 @@ class SimpliPyEngine(_Evaluation):
         if certified:
             return self._core.ac_complexity_certified(tokens, 'mode', rule_mode=rule_mode)
         return self._core.ac_complexity(tokens, 'mode', rule_mode=rule_mode)
+
+    def written_complexity(
+            self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> int:
+        """The WRITTEN COMPLEXITY of an expression: its price exactly as written, in milli-bits.
+
+        The code book of :meth:`complexity` (the measure mu: its symbol table, the sign bit and
+        the literal code) applied to the expression as written. There is no mode and no
+        certificate: nothing is read into a canonical state and nothing is simplified, so every
+        operator, function, variable, sign and number written is charged. The only
+        identifications are the ones infix notation forces:
+
+        * a run of ``+`` and ``-`` is ONE sum and a run of ``*`` and ``/`` ONE product, whatever
+          the bracketing: a left operand and a ``+`` (``*``) operand continue the run, a
+          bracketed subtrahend or divisor stays whole; operands are unordered. A sum pays its
+          head (3 bits) once, a product its head (3 bits) once;
+        * ``-y`` and ``neg(y)`` are a SIGN, one bit on ``y``, as is the sign of a subtrahend;
+        * ``1/y`` is the RECIPROCAL of ``y`` (the 1 is the notation's) and ``inv(y)`` is the same:
+          a divisor, which pays the power head (3 bits) over itself, as ``complexity`` prices
+          ``y^-1``; dividing by a written power ``y^k`` is ``y^-k`` (the head, ``y``, a sign and
+          ``k``); a literal divisor ``c`` is the literal ``1/c`` (``x/3`` holds the literal 1/3,
+          as ``complexity`` prices it);
+        * a NUMBER pays the literal code on the EXACT value written, with every digit: a long
+          literal is not rounded to its double (``6.674000000000001e-11`` costs its 16 digits),
+          and a written minus is its sign bit;
+        * ``np.pi``, ``np.e``, the infinities, NaN, ``<constant>`` and named constants
+          (``<constant_NAME>``) are priced exactly as ``complexity`` prices them; every other
+          symbol is a variable (6 bits);
+        * a function pays its head's entry of the symbol table and its arguments, ``pow`` its
+          head, base and exponent; an alias is priced as its target (``ln`` as ``log``);
+        * a DEFINED FUNCTION (the config's ``defined_functions:``) pays its own head at the tier
+          of the function its definition applies: ``sqrt`` at ``rootn``'s (6 bits, without the
+          2), ``cot`` at ``tan``'s (6) and ``acot`` at ``atan``'s (8). Any other head the engine
+          neither declares nor defines is refused with ``ValueError``, never guessed.
+
+        For example ``x0 + 0`` costs 11 bits (``complexity``: 6), ``x0 + x0`` 15 (11.585),
+        ``exp(1)`` 8 (4), ``-(x0 - x1)`` 17 (16), ``sqrt(x0)`` 12, ``x0**0.5`` 12.585 and
+        ``x0 - x0/1 + 2`` 23.585 (2.585); ``6.674e-11*x0*x1/x2**2`` costs 45.197 bits either way,
+        and ``x0*x1/(4*np.pi*x2*x3**2)`` 45.907 written where its canonical form, which
+        distributes the reciprocal, costs 47.907: the written price is not bounded by the
+        canonical one in either direction.
+
+        It reads an infix ``str`` as :meth:`read_infix` does, strictly (an undeclared call is
+        refused), or explicit prefix tokens as :meth:`read_infix` returns them; a tagged
+        sequence is read through :meth:`to_prefix`, and realization notation as the conversions
+        read it. The price is an integer in milli-bits, on the scale of :meth:`complexity`, and
+        on an expression already in canonical form it is meant to equal ``complexity`` in that
+        mode.
+        """
+        if isinstance(expression, str):
+            tokens = self._core.parse(expression, strict=True)
+        else:
+            form, tokens = self._read_input(expression)
+            if form == 'tagged':
+                tokens = self._core.to_prefix_syntactic(tokens)
+        return self._core.written_complexity(list(tokens))
 
     def _denormalize(
             self,

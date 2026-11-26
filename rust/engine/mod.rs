@@ -322,6 +322,12 @@ impl Engine {
         depth == 1
     }
 
+    /// THE WRITTEN PRICE of explicit prefix tokens, in milli-bits
+    /// (`ac::expr::written_complexity`): the code book applied to the expression as written.
+    pub fn written_complexity(&self, tokens: &[String]) -> Result<u64, String> {
+        crate::ac::expr::written_complexity(tokens, &self.operators)
+    }
+
     /// EXPAND the defined functions of a token sequence into their definitions
     /// (`crate::defined::expand_defined`): what every entry into the canonical state and every
     /// evaluation reads.

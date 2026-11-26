@@ -1230,6 +1230,16 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
+    /// THE WRITTEN PRICE of explicit prefix tokens, in milli-bits (`ac::expr::written_complexity`):
+    /// the code book applied to the expression exactly as written, no mode, nothing read into a
+    /// canonical state. `ValueError` for a tagged sequence, a malformed one, or a head that is
+    /// neither an operator nor a defined function of the engine.
+    fn written_complexity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<u64> {
+        ensure_tokens_are_tokens(&tokens)?;
+        py.detach(|| self.inner().written_complexity(&tokens))
+            .map_err(PyValueError::new_err)
+    }
+
     /// EXPAND the config's DEFINED FUNCTIONS (`defined.rs`) into their definitions, in either
     /// dialect: what the canonical entries and the evaluators read. The identity on a sequence
     /// with no defined head; a malformed sequence comes back unchanged for its consumer to

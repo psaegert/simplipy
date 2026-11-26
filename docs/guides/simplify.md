@@ -91,6 +91,66 @@ it applies:
 The compiled core implements one engine line: numeric constant folding (including
 non-finite results such as `1/0 -> float("inf")`) and real-semantics power evaluation.
 
+## The written price
+
+`complexity(e, mode=m)` prices what an expression *is* in a mode: its canonical state.
+`written_complexity(e)` prices what was *written*: the same code book (the symbol table, the sign
+bit and the literal code, in milli-bits) applied to the expression exactly as written. It takes no
+mode and no certificate, because nothing is read into a state and nothing is simplified: every
+operator, function, variable, sign and number written is charged. The only identifications are
+the ones infix notation forces:
+
+- a run of `+` and `-` is one sum, and a run of `*` and `/` one product, whatever the bracketing:
+  a left operand and a `+` (`*`) operand continue the run, a bracketed subtrahend or divisor stays
+  whole, and operands are unordered;
+- `-y` and `neg(y)` are a sign, one bit;
+- `1/y` is the reciprocal of `y` (the 1 is the notation's) and `inv(y)` is the same; dividing by a
+  written power `y^k` is `y^-k`, and a literal divisor `x/3` holds the literal 1/3, as
+  `complexity` prices it;
+- a number pays the literal code on the exact value written, every digit (a long literal is not
+  rounded to its double); `np.pi`, `np.e`, the infinities, NaN and the constants `<constant>` and
+  `<constant_NAME>` are priced as `complexity` prices them;
+- an alias is priced as its target, and a defined function (see
+  [Defined functions](artifacts.md#defined-functions)) pays its own head at the tier of the
+  function its definition applies: `sqrt` 6 bits, `cot` 6, `acot` 8. Any other head the engine
+  neither declares nor defines is refused.
+
+| expression | written (bits) | `complexity` (bits) |
+|---|---|---|
+| `x0 + 0` | 11 | 6 |
+| `x0*x0` | 15 | 11.585 |
+| `exp(1)` | 8 | 4 |
+| `-(x0 - x1)` | 17 | 16 |
+| `sqrt(x0)` | 12 | 14.585 |
+| `x0**0.5` | 12.585 | 14.585 |
+| `x0 - x0/1 + 2` | 23.585 | 2.585 |
+| `6.674e-11*x0*x1/x2**2` | 45.197 | 45.197 |
+| `x0*x1/(4*np.pi*x2*x3**2)` | 45.907 | 47.907 |
+
+The last row shows that neither price bounds the other: the canonical form distributes the
+reciprocal of a product (`x0*x1/4/pi/x2/x3^2`), which costs one reciprocal per factor where the
+written bracket pays one reciprocal and one product head.
+
+```python
+engine.written_complexity('x0 + 0')                    # -> 11000
+engine.written_complexity('exp(1)')                    # -> 8000
+engine.written_complexity('-(x0 - x1)')                # -> 17000
+engine.written_complexity('x0**0.5')                   # -> 12585
+engine.written_complexity('x0 - x0/1 + 2')             # -> 23585
+engine.written_complexity('6.674e-11*x0*x1/x2**2')     # -> 45197
+engine.written_complexity('x0*x1/(4*np.pi*x2*x3**2)')  # -> 45907
+engine.complexity('x0*x1/(4*np.pi*x2*x3**2)')          # -> 47907
+```
+
+On a canonical form written as its state is held — one run per bag, one divisor per reciprocal,
+each sign where the state holds it — the two prices agree. The canonical *serializations* part
+from that in a few places, measured over the census's answers: a fraction `p/q` with `|p| ≠ 1` is
+printed as a quotient (`3/4`, `4*x0/3`, `x0^(3/2)`), which this reading prices as a product of `p`
+and the literal `1/q`; the prefix serializer writes a product of reciprocals as the reciprocal of
+a product (`inv * x0 x1`) and a sign on a product inside a product; the printers distribute a
+negation over a sum (`-x0 - x1` for `-(x0 + x1)`), write `-(1/x0)` as `-1/x0` and the negative
+infinity as a sign on `inf`; and the reader nests a variadic `max(a, b, c)` to the right.
+
 ## The search budget
 
 Strict descent cannot cross a μ-hill. `x2*(x2 + (x1+1)/x2)` reaches the strictly
