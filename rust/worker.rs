@@ -910,7 +910,9 @@ fn pin_root_on_row(
 /// miss is read as the mode reads one: f64 by its range standard, the other modes by the table
 /// at the robust refit. The drawn instances and the special constants are fitted alike. A
 /// collapse of the source (`collapse`) is read at its own witness first, the values of the
-/// subtrees it replaces, as the search would accept a witness it found.
+/// subtrees it replaces, as the search would accept a witness it found. `fits`: the candidate's
+/// fits the lanes share (`Fits`), with this instance's index and whether a fit made there by the
+/// other lane is this lane's too.
 #[allow(clippy::too_many_arguments)]
 fn fit_instance(
     cand: &CandEntry,
@@ -928,6 +930,7 @@ fn fit_instance(
     retries: usize,
     seed: u64,
     lane: Lane,
+    fits: Option<(&Fits, usize, bool)>,
 ) -> Option<Option<Vec<f64>>> {
     let rescue = lane.rescue();
     if let Some(d) = collapse
@@ -939,18 +942,25 @@ fn fit_instance(
             return Some(Some(d));
         }
     }
-    match crate::fit::exist_constants_fit_prepared(
-        &cand.tape,
-        cand.linearity,
-        cols,
-        n_rows,
-        y,
-        rtol,
-        atol,
-        retries,
-        seed,
-        cand.loglin.as_ref().map(|(f, t)| (*f, t)),
-    ) {
+    let fit = || {
+        crate::fit::exist_constants_fit_prepared(
+            &cand.tape,
+            cand.linearity,
+            cols,
+            n_rows,
+            y,
+            rtol,
+            atol,
+            retries,
+            seed,
+            cand.loglin.as_ref().map(|(f, t)| (*f, t)),
+        )
+    };
+    let verdict = match fits {
+        Some((fits, inst, shared)) => fits.at(inst, shared, fit),
+        None => fit(),
+    };
+    match verdict {
         crate::fit::FitVerdict::Pass(c) => Some(c),
         crate::fit::FitVerdict::Fail => None,
         // f64 does not escalate a near miss: the deployed evaluator's values decide,
@@ -1344,6 +1354,7 @@ fn candidate_matches(
     min_informative: usize,
     fit_seed: u64,
     lane: Lane,
+    fits: Option<(&Fits, &[bool])>,
 ) -> Result<Option<Vec<f64>>, &'static str> {
     let rescue = lane.rescue();
     // A FULLY NUMERIC SOURCE (no variable, no constant) has one point, read by the ground
@@ -1474,6 +1485,7 @@ fn candidate_matches(
                 retries,
                 s,
                 lane,
+                fits.map(|(f, shared)| (f, inst, shared.get(inst).copied().unwrap_or(false))),
             )
         };
         let fitted = match ok {
@@ -1718,6 +1730,7 @@ fn candidate_matches(
                     retries,
                     sseed,
                     lane,
+                    None,
                 ) {
                     Some(Some(c)) => Some(adopt_snapped_witness(
                         &cand.tape,
@@ -2502,6 +2515,40 @@ fn lane_refutes_literal(source: &[String], target: &[String], ops: &Operators, l
             || dirac_refutes_literal(source, target, ops, crate::engine::RuleMode::Strict))
 }
 
+/// ONE CANDIDATE'S CONSTANT FITS, by instance, as the lanes of `Lanes::certify` make them. A fit
+/// (`fit::exist_constants_fit_prepared`) is a function of the candidate, the rows, the instance's
+/// values and its seed alone, and the seed is the instance's in either lane, so where f64's context
+/// fits on the same rows and values as the mode's own (`Lanes::shared_fits`), f64's lane reads the
+/// fit the mode's own lane made instead of making it again. Each lane reads the fit in its own
+/// values (`fit_instance`).
+#[derive(Default)]
+struct Fits(std::cell::RefCell<Vec<(usize, crate::fit::FitVerdict)>>);
+
+impl Fits {
+    /// The fit at instance `inst`: the one made there before where `shared` says it is this
+    /// lane's too, else `fit()`'s, kept.
+    fn at(
+        &self,
+        inst: usize,
+        shared: bool,
+        fit: impl FnOnce() -> crate::fit::FitVerdict,
+    ) -> crate::fit::FitVerdict {
+        if shared {
+            if let Some((_, made)) = self.0.borrow().iter().find(|(i, _)| *i == inst) {
+                return made.clone();
+            }
+        }
+        let made = fit();
+        self.0.borrow_mut().push((inst, made.clone()));
+        made
+    }
+}
+
+/// Bit-identical values.
+fn same_bits(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+}
+
 /// ONE SOURCE'S CERTIFICATION IN A MODE: its own context (`SourceCtx`, in the mode's values) and,
 /// for a mode that includes f64 (permissive), f64's context, built on the first candidate the
 /// mode's own check refuses. A pair is certified where the mode's own check certifies it, or
@@ -2512,6 +2559,8 @@ struct Lanes<'s> {
     lane: Lane,
     own: Option<SourceCtx<'s>>,
     f64: std::cell::OnceCell<Option<SourceCtx<'s>>>,
+    /// Per instance, whether f64's context fits on the mode's own rows and values (`Fits`).
+    shared: std::cell::OnceCell<Vec<bool>>,
     ops: &'s Operators,
     source: &'s [String],
     var_names: &'s [String],
@@ -2552,6 +2601,7 @@ impl<'s> Lanes<'s> {
             lane,
             own,
             f64: std::cell::OnceCell::new(),
+            shared: std::cell::OnceCell::new(),
             ops,
             source,
             var_names,
@@ -2591,6 +2641,32 @@ impl<'s> Lanes<'s> {
             .as_ref()
     }
 
+    /// Per instance of the source, whether f64's context fits on the same rows and values as the
+    /// mode's own (`Fits`): the rows differ only where an evidence decision appended some, the
+    /// values where the mode's own reading differs from float64's (`hiprec::table_classes`).
+    /// Read once f64's context is built.
+    fn shared_fits(&self) -> &[bool] {
+        self.shared
+            .get_or_init(|| match (self.own.as_ref(), self.f64_ctx()) {
+                (Some(own), Some(f64))
+                    if own.n_rows == f64.n_rows
+                        && own.cols.len() == f64.cols.len()
+                        && own
+                            .cols
+                            .iter()
+                            .zip(f64.cols.iter())
+                            .all(|(a, b)| same_bits(a, b)) =>
+                {
+                    own.y
+                        .iter()
+                        .zip(&f64.y)
+                        .map(|((_, a), (_, b))| same_bits(a, b))
+                        .collect()
+                }
+                _ => Vec::new(),
+            })
+    }
+
     /// The pair's certification in the mode (see the type). Where every lane refuses, the
     /// refusal is the mode's own check's, or, where the source has no context in the mode's own
     /// reading, `evidence`: the one route left, f64's, refused the pair, and the mode's own
@@ -2606,6 +2682,8 @@ impl<'s> Lanes<'s> {
         seed: u64,
         accept_resolved: Option<AcceptFn<'_>>,
     ) -> Result<Certified, Refused> {
+        // the fits f64's lane may read, kept where it may run
+        let fits = Fits::default();
         let own = self.own.as_ref().map(|sc| {
             certify_candidate(
                 sc,
@@ -2619,6 +2697,7 @@ impl<'s> Lanes<'s> {
                 seed,
                 self.lane,
                 accept_resolved,
+                self.lane.includes_f64().then_some((&fits, &[][..])),
             )
         });
         // permissive's own reading answers to its magnitude ladder in the reals too
@@ -2654,6 +2733,7 @@ impl<'s> Lanes<'s> {
                 seed,
                 Lane(crate::engine::RuleMode::Strict),
                 accept_resolved,
+                Some((&fits, self.shared_fits())),
             )
             .and_then(|c| {
                 match f64_refusal(self.source, &c.tokens, self.var_names, self.ops) {
@@ -2690,6 +2770,7 @@ fn certify_candidate(
     seed: u64,
     lane: Lane,
     accept_resolved: Option<AcceptFn<'_>>,
+    fits: Option<(&Fits, &[bool])>,
 ) -> Result<Certified, Refused> {
     let source = sc.source;
     // the rows this source is judged on (`SourceCtx::cols`)
@@ -2746,6 +2827,7 @@ fn certify_candidate(
         min_informative,
         seed,
         lane,
+        fits,
     )
     .map_err(|why| (why, Vec::new()))?;
     // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
@@ -2816,6 +2898,7 @@ fn certify_candidate(
                     min_informative,
                     seed,
                     lane,
+                    None,
                 )
                 .is_ok()
             });
@@ -4362,5 +4445,56 @@ mod tests {
                 "{source:?}: {steps:?}"
             );
         }
+    }
+
+    /// One candidate's fits: a lane that may not read another's fit makes its own and keeps it, a
+    /// lane that may reads the fit kept at the instance, and makes one where none is kept. A
+    /// constant-free source's lanes in permissive fit on the same rows and values.
+    #[test]
+    fn fits_are_read_across_lanes_where_the_inputs_agree() {
+        use crate::fit::FitVerdict;
+        let made = std::cell::Cell::new(0);
+        let fit = |c: f64| {
+            made.set(made.get() + 1);
+            FitVerdict::Pass(Some(vec![c]))
+        };
+        let fits = Fits::default();
+        assert_eq!(
+            fits.at(0, false, || fit(1.5)),
+            FitVerdict::Pass(Some(vec![1.5]))
+        );
+        assert_eq!(
+            fits.at(0, true, || fit(9.0)),
+            FitVerdict::Pass(Some(vec![1.5]))
+        );
+        assert_eq!(
+            fits.at(1, true, || fit(2.5)),
+            FitVerdict::Pass(Some(vec![2.5]))
+        );
+        assert_eq!(
+            fits.at(0, false, || fit(3.5)),
+            FitVerdict::Pass(Some(vec![3.5]))
+        );
+        assert_eq!(made.get(), 3);
+        let e = bessel_engine();
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let cols = vec![grid_1var(n).iter().map(|x| x.abs()).collect::<Vec<f64>>()];
+        let src = s(&["+", "x0", "1"]);
+        let lanes = Lanes::new(
+            ops,
+            &src,
+            &vars,
+            &cols,
+            n,
+            8,
+            7,
+            Lane(crate::engine::RuleMode::Permissive),
+            8,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(lanes.shared_fits(), &[true]);
     }
 }
