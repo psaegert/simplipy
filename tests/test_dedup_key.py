@@ -137,7 +137,7 @@ def test_variable_remap_still_runs_before_the_key(vocab_engine):
     top of that remap, it does not replace it."""
     out = deduplicate_rules(
         [(('+', 'x0', 'x1'), ('+', 'x1', 'x0')), (('+', 'x2', 'x3'), ('+', 'x3', 'x2'))],
-        dummy_variables=['x0', 'x1', 'x2', 'x3'], engine=vocab_engine, rule_mode='default')
+        dummy_variables=['x0', 'x1', 'x2', 'x3'], engine=vocab_engine, rule_mode='strict')
     assert out == [(('+', '?0', '?1'), ('+', '?1', '?0'))]
 
 
