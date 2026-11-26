@@ -242,7 +242,7 @@ def test_the_dedup_tie_break_is_the_modes_ordering_not_token_count(eng) -> None:
     assert eng._core.ac_ordered_below_in(list(below[1]), list(shorter[1]), rule_mode='default')
     want = [(('*', 'exp', '?0', 'exp', '?0'), ('exp', '*', '2', '?0'))]
     for rules in ([below, shorter], [shorter, below]):
-        assert deduplicate_rules(rules, ['x0'], engine=eng, rule_mode='default') == want, rules
+        assert deduplicate_rules(rules, ['x0'], engine=eng, rule_mode='strict') == want, rules
 
 
 def test_a_twin_shadowed_row_is_dropped_and_nothing_it_served_is_lost() -> None:

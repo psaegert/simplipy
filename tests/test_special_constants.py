@@ -243,7 +243,7 @@ class TestExactCollapsesMint:
         cground_other = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
         f64_respell = (('+', '1', 'exp', '(-1)'), ('1.3678794411714423',))
         kept, report = promote(bare + [judged_not_bypassed, cground_pass, cground_other,
-                                       f64_respell], eng, rule_mode='default')
+                                       f64_respell], eng, rule_mode='strict')
         kept_set = {(tuple(lhs), tuple(rhs)) for lhs, rhs in kept}
         for rule in bare + [cground_pass, cground_other, f64_respell]:
             assert rule in kept_set, (rule, sorted(kept_set))

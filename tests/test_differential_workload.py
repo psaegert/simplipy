@@ -505,7 +505,7 @@ def test_every_rung_of_promotion_is_the_licences(mode, monkeypatch) -> None:
 
     monkeypatch.setattr(promotion, '_rungs', recording)
     promotion.promote([[list(lhs), list(rhs)] for lhs, rhs in picks_file(mode)], engine(),
-                      rule_mode=RULE_MODE[mode], run_positive_controls=False)
+                      rule_mode=mode, run_positive_controls=False)
     record = judge([p for p, _ in asked])
     wrong = []
     for pair, verdict in asked:

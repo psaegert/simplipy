@@ -37,7 +37,7 @@ LOG_A = (('*', '5', 'log', '_0'), ('log', 'pow', '_0', '5'))
 
 def test_ac_equivalent_spellings_collapse(vocab_engine):
     """`* (-1) asin _0` and `* asin _0 (-1)` are two spellings of one pattern."""
-    out = deduplicate_rules([ASIN_A, ASIN_B], dummy_variables=[], engine=vocab_engine, rule_mode='default')
+    out = deduplicate_rules([ASIN_A, ASIN_B], dummy_variables=[], engine=vocab_engine, rule_mode='strict')
     assert len(out) == 1
     # The FIRST pair survives whole -- source and target are the pair that was mined
     # together, never a synthesized cross of two rules.
@@ -54,7 +54,7 @@ def test_permuted_bags_and_chains_collapse(vocab_engine):
         # `/ a b` and `* a inv b` are the same Mul bag with the same inverse section.
         ((('/', '_0', '_1'), ('_0',)), (('*', '_0', 'inv', '_1'), ('_0',))),
     ]:
-        assert len(deduplicate_rules([a, b], dummy_variables=[], engine=vocab_engine, rule_mode='default')) == 1, (a, b)
+        assert len(deduplicate_rules([a, b], dummy_variables=[], engine=vocab_engine, rule_mode='strict')) == 1, (a, b)
 
 
 def test_the_key_is_not_the_conversion_api(vocab_engine):
@@ -95,7 +95,7 @@ def test_the_key_is_not_the_conversion_api(vocab_engine):
 
     # 4. ... so the rule survives dedup with two DISTINCT sides, on either engine.
     for engine in (vocab_engine, loaded):
-        out = deduplicate_rules([LOG_A], dummy_variables=[], engine=engine, rule_mode='default')
+        out = deduplicate_rules([LOG_A], dummy_variables=[], engine=engine, rule_mode='strict')
         assert out == [LOG_A]
         assert out[0][0] != out[0][1]
 
@@ -105,9 +105,9 @@ def test_wildcard_sorts_and_indices_stay_distinct(vocab_engine):
     certified strength and distinct indices are distinct slots: merging any of them
     would ship a rule stronger than what was certified."""
     sorts = [(('sin', w), ('0',)) for w in ('_0', '?0', '!0', '$0')]
-    assert len(deduplicate_rules(sorts, dummy_variables=[], engine=vocab_engine, rule_mode='default')) == 4
+    assert len(deduplicate_rules(sorts, dummy_variables=[], engine=vocab_engine, rule_mode='strict')) == 4
     two_slots = [(('+', '_0', '_0'), ('_0',)), (('+', '_0', '_1'), ('_0',))]
-    assert len(deduplicate_rules(two_slots, dummy_variables=[], engine=vocab_engine, rule_mode='default')) == 2
+    assert len(deduplicate_rules(two_slots, dummy_variables=[], engine=vocab_engine, rule_mode='strict')) == 2
 
 
 def test_shortest_target_still_wins_and_keeps_its_own_pair(vocab_engine):
@@ -117,8 +117,8 @@ def test_shortest_target_still_wins_and_keeps_its_own_pair(vocab_engine):
     # canonical state.)
     long_ = (('*', '5', 'log', '_0'), ('*', '5', 'log', '_0'))
     short = (('*', 'log', '_0', '5'), ('log', 'pow', '_0', '5'))
-    assert deduplicate_rules([long_, short], dummy_variables=[], engine=vocab_engine, rule_mode='default') == [short]
-    assert deduplicate_rules([short, long_], dummy_variables=[], engine=vocab_engine, rule_mode='default') == [short]
+    assert deduplicate_rules([long_, short], dummy_variables=[], engine=vocab_engine, rule_mode='strict') == [short]
+    assert deduplicate_rules([short, long_], dummy_variables=[], engine=vocab_engine, rule_mode='strict') == [short]
 
 
 def test_unparseable_sides_fall_back_to_the_spelling(vocab_engine):
@@ -128,7 +128,7 @@ def test_unparseable_sides_fall_back_to_the_spelling(vocab_engine):
     junk_a = (('sin',), ('0',))            # arity underflow
     junk_b = (('sin', 'sin'), ('0',))      # ditto, different spelling
     good = (('sin', '_0'), ('0',))
-    out = deduplicate_rules([junk_a, junk_b, good], dummy_variables=[], engine=vocab_engine, rule_mode='default')
+    out = deduplicate_rules([junk_a, junk_b, good], dummy_variables=[], engine=vocab_engine, rule_mode='strict')
     assert len(out) == 3
 
 

@@ -35,7 +35,7 @@ class TestPruneCoveredRules:
         covered = (("sin", "sin", "sin", "?0"), ("sin", "?0"))
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[base, covered])
 
-        n_pruned = engine.prune_covered_rules(rule_mode='default')
+        n_pruned = engine.prune_covered_rules(rule_mode='strict')
 
         assert n_pruned == 1
         assert engine.simplification_rules == [base]
@@ -65,7 +65,7 @@ class TestPruneCoveredRules:
         # ... but the composite variant does not
         assert probe.simplify(["sin", "+", "sin", "x0", "1"]) != ["sin", "sin", "x0"]
 
-        n_pruned = engine.prune_covered_rules(rule_mode='default')
+        n_pruned = engine.prune_covered_rules(rule_mode='strict')
 
         assert n_pruned == 0
         assert engine.simplification_rules == [leaf_cover, wide]
@@ -86,7 +86,7 @@ class TestPruneCoveredRules:
         no_rules = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         assert no_rules.simplify(["/", "<constant>", 'float("-inf")']) == ["0"]
 
-        n_pruned = engine.prune_covered_rules(rule_mode='default')
+        n_pruned = engine.prune_covered_rules(rule_mode='strict')
 
         assert n_pruned == 1
         assert engine.simplification_rules == []
@@ -99,10 +99,10 @@ class TestPruneCoveredRules:
             (("sin", "sin", "sin", "sin", "?0"), ("?0",)),     # covered
         ]
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
-        n_first = engine.prune_covered_rules(rule_mode='default')
+        n_first = engine.prune_covered_rules(rule_mode='strict')
         rules_after_first = list(engine.simplification_rules)
 
-        n_second = engine.prune_covered_rules(rule_mode='default')
+        n_second = engine.prune_covered_rules(rule_mode='strict')
 
         assert n_first == 2
         assert n_second == 0
@@ -132,7 +132,7 @@ class TestPruneCoveredRules:
             "    (('/', '<constant>', 'float(\"-inf\")'), ('0',)),\n"
             "]\n"
             "engine = SimpliPyEngine(operators=ops, rules=rules)\n"
-            "engine.prune_covered_rules(rule_mode='default')\n"
+            "engine.prune_covered_rules(rule_mode='strict')\n"
             "print(json.dumps(engine.simplification_rules))\n"
         )
         outputs = []
@@ -1133,7 +1133,7 @@ class TestConc12CopyOnWrite:
             raise RuntimeError('injected core-build failure')
         monkeypatch.setattr(SimpliPyEngine, '_build_core', staticmethod(boom))
         with pytest.raises(RuntimeError, match='injected'):
-            engine.prune_covered_rules(rule_mode='default')
+            engine.prune_covered_rules(rule_mode='strict')
         assert engine.simplification_rules == before, \
             'a failed push must leave the wrapper list unchanged (loud, not diverged)'
         assert engine._core is core_before

@@ -474,7 +474,7 @@ def test_a_promotion_rejection_is_a_judge_rejection(lhs, rhs, mode) -> None:
     from simplipy.promotion import promote
     unsort = lambda ts: ['?' + t[1:] if t[:1] in '_!$' and t[1:].isdigit() else t  # noqa: E731
                          for t in ts]
-    kept, _ = promote([(lhs.split(), rhs.split())], bare(), rule_mode=RULE_MODE[mode],
+    kept, _ = promote([(lhs.split(), rhs.split())], bare(), rule_mode=mode,
                       run_positive_controls=False)
     shipped = [(lhs_k, rhs_k) for lhs_k, rhs_k in kept if unsort(lhs_k) == lhs.split()]
     derived = bare().simplify(lhs.replace('?0', 'x0').split(), mode=mode) == rhs.split()

@@ -66,7 +66,7 @@ class TestPruneStateCoverage:
         assert SimpliPyEngine(operators=_PRUNE_OPS, rules=[]).simplify(["inv", "abs", "x0"]) \
             == ["inv", "abs", "x0"]
 
-        assert engine.prune_covered_rules(rule_mode='default') == 0
+        assert engine.prune_covered_rules(rule_mode='strict') == 0
         assert engine.simplification_rules == [rule]
         # and the kept rule still fires on the serving engine after recompile
         assert engine.simplify(["abs", "neg", "x0"]) == ["abs", "x0"]
@@ -77,7 +77,7 @@ class TestPruneStateCoverage:
         order is state identity -- and must still be pruned."""
         engine = SimpliPyEngine(operators=_PRUNE_OPS,
                                 rules=[(("*", "1", "?0"), ("?0",))])
-        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.prune_covered_rules(rule_mode='strict') == 1
         assert engine.simplification_rules == []
         assert engine.simplify(["*", "1", "x0"]) == ["x0"]
 
@@ -98,7 +98,7 @@ class TestConstAbstractionFulfillment:
         literal fulfills (exceeds) the abstract promise: covered, pruned."""
         engine = SimpliPyEngine(operators=_PRUNE_OPS,
                                 rules=[(("*", "?0", "abs", "0"), ("<constant>",))])
-        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.prune_covered_rules(rule_mode='strict') == 1
         assert engine.simplification_rules == []
 
     def test_compound_constant_promise_fulfilled_by_ground_instance(self) -> None:
@@ -107,7 +107,7 @@ class TestConstAbstractionFulfillment:
         engine = SimpliPyEngine(
             operators=_PRUNE_OPS,
             rules=[(("*", "abs", "np.e", "?0"), ("*", "<constant>", "?0"))])
-        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.prune_covered_rules(rule_mode='strict') == 1
         assert engine.simplification_rules == []
 
     def test_constant_collapse_rule_survives(self) -> None:
@@ -120,7 +120,7 @@ class TestConstAbstractionFulfillment:
         until the engine's collapse licence took them.)"""
         rule = (("pow", "-1", "<constant>"), ("<constant>",))
         engine = SimpliPyEngine(operators=_PRUNE_OPS, rules=[rule])
-        assert engine.prune_covered_rules(rule_mode='default') == 0
+        assert engine.prune_covered_rules(rule_mode='strict') == 0
         assert engine.simplification_rules == [rule]
 
     def test_const_promise_rule_is_dead_weight_under_mu(self) -> None:
@@ -138,7 +138,7 @@ class TestConstAbstractionFulfillment:
                       "inverse": None, "arity": 2, "precedence": 3, "commutative": False}
         rule = (("exp", "*", "np.e", "?0"), ("pow", "<constant>", "?0"))
         engine = SimpliPyEngine(operators=ops, rules=[rule])
-        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.prune_covered_rules(rule_mode='strict') == 1
         assert engine.simplification_rules == []
 
 
@@ -244,7 +244,7 @@ class TestPruneProbesWhatTheSlotBinds:
         probes = [['/', 'x0', 'x0'], ['/', 'sin', 'x0', 'sin', 'x0'],
                   ['*', '/', 'float("inf")', 'float("inf")', 'x0']]
         before = [engine.simplify(p) for p in probes]
-        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.prune_covered_rules(rule_mode='strict') == 1
         assert [engine.simplify(p) for p in probes] == before
 
 
@@ -279,7 +279,7 @@ class TestProbesReadEveryAlphabet:
         short = (('exp', 'log', '_0'), ('_0',))
         covered = (('neg', 'exp', 'log', '_0'), ('neg', '_0'))
         engine = SimpliPyEngine(operators=_NO_SIN_OPS, rules=[short, covered])
-        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert engine.prune_covered_rules(rule_mode='strict') == 1
         assert engine.simplification_rules == [short]
         assert engine.simplify(['neg', 'exp', 'log', 'inv', '+', 'x0', 'x1']) != \
             ['neg', 'exp', 'log', 'inv', '+', 'x0', 'x1']
