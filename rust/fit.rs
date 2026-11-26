@@ -495,7 +495,7 @@ pub(crate) fn refit_robust(
                     .map(|col| kept.iter().map(|&r| col[r]).collect())
                     .collect();
                 let yv: Vec<f64> = kept.iter().map(|&r| y_target[r]).collect();
-                lm_fit(tape, &xv, &yv, m, k, &c, rtol, atol)
+                lm_fit(tape, &xv, &yv, m, k, &c, rtol, atol).0
             }
         };
         let moved = c
@@ -728,7 +728,8 @@ impl Rng {
 /// One Levenberg-Marquardt least-squares solve (Marquardt diagonal scaling, forward-difference
 /// Jacobian) from start point `p0`, minimizing `||fitted(C) - y_valid||^2` over the valid rows
 /// `xv_cols` (m rows). The native analog of MINPACK `lmdif` (what scipy `curve_fit` calls). Returns
-/// the best parameters found. EARLY-EXITS as soon as the valid-row residual passes `allclose` (the
+/// the best parameters found and the candidate's values at them on the valid rows, the evaluation
+/// the solve made there. EARLY-EXITS as soon as the valid-row residual passes `allclose` (the
 /// goal is the accept/reject gate, not full convergence) -- this keeps positives cheap.
 #[allow(clippy::too_many_arguments)]
 fn lm_fit(
@@ -740,17 +741,17 @@ fn lm_fit(
     p0: &[f64],
     rtol: f64,
     atol: f64,
-) -> Vec<f64> {
-    let resid = |c: &[f64]| -> (Vec<f64>, f64) {
+) -> (Vec<f64>, Vec<f64>) {
+    let resid = |c: &[f64]| -> (Vec<f64>, Vec<f64>, f64) {
         let f = tape.eval_columns(xv_cols, c, m);
         let r: Vec<f64> = f.iter().zip(y_valid).map(|(a, b)| a - b).collect();
         let cost = r.iter().map(|x| x * x).sum::<f64>();
-        (r, cost)
+        (f, r, cost)
     };
     let mut c = p0.to_vec();
-    let (mut r, mut cost) = resid(&c);
+    let (mut f, mut r, mut cost) = resid(&c);
     if !cost.is_finite() {
-        return c;
+        return (c, f);
     }
     let close = |r: &[f64]| -> bool {
         // valid-row allclose proxy: fitted = r + y_valid, allclose(y_valid, fitted).
@@ -759,7 +760,7 @@ fn lm_fit(
             .all(|(ri, &y)| ri.abs() <= atol + rtol * (ri + y).abs())
     };
     if close(&r) {
-        return c;
+        return (c, f);
     }
     let mut lambda = 1e-3f64;
     let eps = f64::EPSILON.sqrt();
@@ -804,35 +805,72 @@ fn lm_fit(
                 continue;
             };
             let c_new: Vec<f64> = c.iter().zip(&delta).map(|(a, b)| a + b).collect();
-            let (r_new, cost_new) = resid(&c_new);
+            let (f_new, r_new, cost_new) = resid(&c_new);
             if cost_new.is_finite() && cost_new < cost {
                 let dn: f64 = delta.iter().map(|x| x * x).sum::<f64>().sqrt();
                 let cn: f64 = c.iter().map(|x| x * x).sum::<f64>().sqrt();
                 let red = cost - cost_new;
                 c = c_new;
+                f = f_new;
                 r = r_new;
                 lambda = (lambda * 0.3).max(1e-12);
                 stepped = true;
                 if close(&r) {
-                    return c; // accept/reject gate satisfied -> done
+                    return (c, f); // accept/reject gate satisfied -> done
                 }
                 if red < 1e-12 * cost.max(1e-300) || dn < 1e-10 * (cn + 1e-10) {
-                    return c; // converged
+                    return (c, f); // converged
                 }
                 cost = cost_new;
                 break;
             } else {
                 lambda *= 3.0;
                 if lambda > 1e14 {
-                    return c; // stuck
+                    return (c, f); // stuck
                 }
             }
         }
         if !stepped {
-            return c;
+            return (c, f);
         }
     }
-    c
+    (c, f)
+}
+
+/// The candidate's values at `c` on all `n_rows` rows, for the gate (`allclose_extends`) and the
+/// failing-row count after a solve: the solve's own values `fv` on the `valid` rows, and the rest
+/// evaluated where the gate reads them -- a row whose target is NaN is extended, whatever the
+/// candidate gives there, and is left NaN. Rows evaluate independently, so each value is the one a
+/// whole evaluation gives.
+fn on_all_rows(
+    tape: &Tape,
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    y_target: &[f64],
+    valid: &[usize],
+    fv: Vec<f64>,
+    c: &[f64],
+) -> Vec<f64> {
+    if valid.len() == n_rows {
+        return fv;
+    }
+    let mut fitted = vec![f64::NAN; n_rows];
+    for (&r, v) in valid.iter().zip(fv) {
+        fitted[r] = v;
+    }
+    let read: Vec<usize> = (0..n_rows)
+        .filter(|&r| !y_target[r].is_nan() && valid.binary_search(&r).is_err())
+        .collect();
+    if !read.is_empty() {
+        let sub: Vec<Vec<f64>> = cols
+            .iter()
+            .map(|col| read.iter().map(|&r| col[r]).collect())
+            .collect();
+        for (&r, v) in read.iter().zip(tape.eval_columns(&sub, c, read.len())) {
+            fitted[r] = v;
+        }
+    }
+    fitted
 }
 
 /// The two log-linearizable single-constant power forms (Improvement 2): `pow(<constant>, g)` = C^g
@@ -1164,8 +1202,8 @@ pub(crate) fn exist_constants_fit_prepared(
             Some(c0) if restart == 0 && k == 1 => vec![c0],
             _ => (0..k).map(|_| rng.normal(0.0, 5.0)).collect(),
         };
-        let c = lm_fit(tape, &xv, &yv, m, k, &p0, rtol, atol);
-        let fitted = tape.eval_columns(cols, &c, n_rows);
+        let (c, fv) = lm_fit(tape, &xv, &yv, m, k, &p0, rtol, atol);
+        let fitted = on_all_rows(tape, cols, n_rows, y_target, &valid, fv, &c);
         if allclose_extends(y_target, &fitted, rtol, atol) {
             return FitVerdict::Pass(Some(c));
         }
@@ -1590,5 +1628,47 @@ mod tests {
             1e-12,
             true,
         ));
+    }
+
+    /// The restart's gate reads the solve's own values on the valid rows (`on_all_rows`): at every
+    /// row whose target is not NaN they are the whole evaluation's, bit for bit, an infinite
+    /// target's row evaluated alone.
+    #[test]
+    fn the_gate_reads_the_solves_own_values() {
+        let cfg = r#"operators:
+  "*": {realization: '*', arity: 2, precedence: 2, commutative: true}
+  exp: {realization: simplipy.operators.exp, arity: 1, precedence: 3}
+"#;
+        let e = crate::engine::Engine::from_strs(cfg, "[]").expect("engine builds");
+        let ops = e.operators_ref();
+        let tape = Tape::compile(&s(&["exp", "*", "<constant>", "x0"]), ops, &s(&["x0"])).unwrap();
+        let n = 9usize;
+        let cols = vec![vec![-3.0, -1.0, -0.5, 0.0, 0.25, 1.0, 2.0, 700.0, 710.0]];
+        let y = [
+            0.1,
+            f64::NAN,
+            0.7,
+            f64::INFINITY,
+            1.2,
+            f64::NEG_INFINITY,
+            4.0,
+            f64::NAN,
+            9.0,
+        ];
+        let valid: Vec<usize> = (0..n).filter(|&r| y[r].is_finite()).collect();
+        let c = [1.0];
+        let xv: Vec<Vec<f64>> = vec![valid.iter().map(|&r| cols[0][r]).collect()];
+        let fv = tape.eval_columns(&xv, &c, valid.len());
+        let got = on_all_rows(&tape, &cols, n, &y, &valid, fv, &c);
+        let whole = tape.eval_columns(&cols, &c, n);
+        for r in 0..n {
+            if !y[r].is_nan() {
+                assert_eq!(got[r].to_bits(), whole[r].to_bits(), "row {r}");
+            }
+        }
+        assert_eq!(
+            allclose_extends(&y, &got, 1e-11, 1e-12),
+            allclose_extends(&y, &whole, 1e-11, 1e-12)
+        );
     }
 }
