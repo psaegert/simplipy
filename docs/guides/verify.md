@@ -120,7 +120,11 @@ refused in `strict` and holds at `?`, while `erf(!0) - 1 -> -erfc(!0)` (+0 again
 `!0 - !0 -> 0` hold. The grid, the rows of the shipped mines' matrix (one matrix, the
 same for every caller, so a verdict is the rule's), the preimages of jumps, the slots'
 magnitude ladder and the constants' span and saturation magnitudes (`|c|` from 0.001 to 0.1
-and from 10 to 1e4, and 19 to 1e17) are samples: a point among them that cannot be read counts neither way. A rule with
+and from 10 to 1e4, and 19 to 1e17) are samples: a point among them that cannot be read counts neither way. The
+slots' magnitude ladder runs each slot from the smallest normal double to the largest, both signs;
+float64's lane reads every rung, and past the grid's 1e4 the reals read the rungs as they read the
+grid: `min(10, log(x0)) -> log(x0)`, false past e^10 = 22,026, is refused in both modes (10
+against 11.5 at 1e5). A rule with
 constants and no slots reads one point per constant value, and at least a quarter of them must
 be read.
 `strict` reads float64's values: `x^2 + 1 + 1e-3000 -> x^2 + 1` holds in
@@ -179,7 +183,12 @@ largest, where no operation of either side overflows or underflows; its second, 
 true in the reals and both sides have one kind at all those points (`sinh(asinh(x0)) → x0` is 66
 ULP off at 1e100 and holds by the second). At a point
 where one does, the rewrite may give the true value instead, as the canonical constructors do,
-so `rootn(exp(x0), 2) → exp(x0/2)` is `core` although `exp` overflows past 709.78. A pole
+so `rootn(exp(x0), 2) → exp(x0/2)` is `core` although `exp` overflows past 709.78. Where no
+rung of the precision ladder reads the true values there, they are read at float resolution, as
+`permissive` reads a point, and where that reads nothing and one side alone left the range, that
+side's true value is read against the other side's double: `besselk(1, x0) - besselk(-1, x0) →
+besselj(exp(10), x0)` is refused at x0 = 1e5, where the left side's Bessel functions underflow and
+its value, 0 as computed and in truth, is not the right side's -0.0022. A pole
 (`atanh(1)`, `log(0)`) is not an overflow and saturation inside the range is not one either,
 so `atanh(tanh(x0)) → x0` stays `permissive`. The verdict's `out_of_range` counts the points read
 this way.

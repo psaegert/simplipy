@@ -2663,7 +2663,9 @@ pub fn demanded_dps(max_mag: &BigFloat, min_mag: &BigFloat) -> i64 {
 /// `log(exp(x))` and `acosh(cosh(x))` lose their argument at small ones. Where the core keeps one
 /// of its own inverse collapses to a safe magnitude (`sinh o asinh` to |t| <= 710, `log o exp` to
 /// t >= 1, `acosh o cosh` to |t| >= 1, `atanh o tanh` to |t| <= 2), the ladder runs past the limit.
-/// One ladder, read by the judge's f64 lane and the f64 mint (`battery::f64_magnitudes_mint`).
+/// One ladder, read by the judge in float64 and, past its grid's 1e4, in the reals (a slot's span
+/// is the real line: `min(10, log(x)) -> log(x)` is false past e^10 = 22,026), and by the mint
+/// (`battery::f64_magnitudes_mint`, `battery::permissive_magnitudes_mint`).
 pub const F64_MAGNITUDES: [f64; 21] = [
     2.2250738585072014e-308,
     1e-300,

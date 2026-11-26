@@ -990,10 +990,15 @@ GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
 # twice the say in `meas`. Order preserved; the point SET is unchanged.
 GRID = list(dict.fromkeys(GRID))
 
-#: THE f64 MAGNITUDE LADDER (`table::F64_MAGNITUDES`, one ladder, which the f64 mint reads too):
-#: float64's lane probes each slot here, from the smallest normal double to the largest, both
-#: signs, where the grid (to 1e4) and the mine's rows (to 1e3) do not reach. `sinh(asinh(x))` is
-#: 66 units in the last place off at 1e100.
+#: The grid's widest point: past it, the reals read the slots' magnitude ladder (`magnitudes`).
+GRID_REACH = max(abs(float(g)) for g in GRID)
+
+#: THE SLOTS' MAGNITUDE LADDER (`table::F64_MAGNITUDES`, one ladder, which the mint reads too, in
+#: float64 for strict and in the reals for permissive): the judge reads each slot here, from the
+#: smallest normal double to the largest, both signs, where the grid (to 1e4) and the mine's rows
+#: (to 1e3) do not reach, in float64's lane, and past the grid's reach in the reals too
+#: (`magnitudes`): a slot's span is the real line. `sinh(asinh(x))` is 66 units in the last place
+#: off at 1e100 in float64; `min(10, log(x)) -> log(x)` is false in the reals past e^10 = 22,026.
 F64_MAGNITUDES = tuple(_table.TABLE_F64_MAGNITUDES) if _TABLE_OK else ()
 
 # ---------------------------------------------------------------- witness fitting
@@ -2712,6 +2717,43 @@ def kind_holds(dv, valued):
     return valued()
 
 
+def _double_leaf(x):
+    """A double as a literal leaf of the exact value it is (an infinity or NaN as itself)."""
+    x = float(x)
+    return ('lit', Fraction(x) if math.isfinite(x) else x)
+
+
+def range_reading(tl, tr, env):
+    """THE RANGE STANDARD AT A POINT THE PRECISION LADDER LEFT UNREAD (F5, F6): float64's two sides
+    differ at float64's point `env` (each name bound to its double), an operation of a side
+    overflowed or underflowed there, and the reals' ladder reached no answer for the true values.
+    The true values are read at the resolution F6 asks for, as permissive reads a point
+    (`_float_resolution`: a rigorous enclosure, else the precision the point demands, twice):
+    they agree or they differ. Where that reads nothing and one side alone left the range, F6's
+    letter decides: that side's value is its double or its true value, the other side's its double
+    alone ("at a range event, when one is the true value"), so the true value of the side that left
+    the range is read against the other side's double. `- besselk 1 x besselk -1 x -> besselj
+    exp 10 x` at x = 1e5: the left side is 0 and its two Bessel functions underflow; the right
+    side, read by no rung, stays in range at -0.0022, which is neither 0 nor the left side's true
+    value 0. -> True (an agreement), False (a disagreement), or None (unread: counts neither
+    way at a sampled point)."""
+    def exact():
+        return {k: mpf(float(x)) for k, x in env.items()}
+    held = _float_resolution(tl, tr, exact)
+    if held is not None:
+        return held
+    sides = []
+    for tree in (tl, tr):
+        flag = [True]
+        with np.errstate(all='ignore'):
+            sides.append((float(d_eval(tree, env, flag)), flag[0]))
+    (dl, l_in), (dr, r_in) = sides
+    if l_in == r_in:
+        return None
+    return (_float_resolution(tl, _double_leaf(dr), exact) if r_in
+            else _float_resolution(_double_leaf(dl), tr, exact))
+
+
 _PAIRS: dict = {}
 
 
@@ -3863,9 +3905,17 @@ def _with_f64_bar(lhs, rhs, r):
             for row in range_rows[:RANGE_ROWS_CAP]:
                 env = {k: mpf(v) for k, v in zip(keys + lnames, row)}
                 v, _ = _point_verdict(tl, tr, lambda env=env: {k: +x for k, x in env.items()})
+                if v is None:
+                    # where the ladder resolves no true value, the deployed lane's reading of
+                    # the range standard (`range_reading`): a disagreement there fails the bar
+                    try:
+                        held = range_reading(tl, tr, {k: F(float(x)) for k, x in env.items()})
+                    except Exception:  # noqa: BLE001  (a probe it cannot read says nothing)
+                        held = None
+                    v = 'REAL-CHANGE' if held is False else None
                 # a probe the contract cannot resolve says nothing about the true value, and is
-                # skipped as the deployed lane skips an unresolved grid point (`cosh(1e17)` is
-                # beyond every rung); one it resolves to a disagreement fails the bar
+                # skipped as the deployed lane skips an unread point (`cosh(1e17)` is beyond
+                # every rung); one it resolves to a disagreement fails the bar
                 if v is not None and v != 'eq':
                     range_ok, first = False, list(row)
                     break
@@ -5003,7 +5053,9 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         and is counted apart. The reals' reading `v` (and whether a snap read it) is asked only
         at a range event, where the true value is accepted (F5): where an operation of either
         side overflowed or underflowed and float64's sides differ, a true value the reals
-        resolved decides, and one they did not leaves the point unread (`out['unread']`; an
+        resolved decides; where their ladder resolved none, the true values read at F6's
+        resolution, or by F6's letter where one side alone left the range, decide
+        (`range_reading`), and a point none of them reads stays unread (`out['unread']`; an
         `owed` point so left is recorded, `out['owed_unread']`). At a slot's `isolated` value
         (`battery_for`) a value is read as anywhere, while an extension is the sort's null
         set's and a zero's sign there is no event (a difference at an isolated point)."""
@@ -5072,10 +5124,21 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                 out['read'] += 1
                 return
             if not exact_point and not in_range[0] and dv != 'eq' and (v is None or snapped):
-                out['unread'] += 1
-                if owed:
-                    out['owed_unread'].append(point)
-                return
+                # the ladder left the true values unread: read them at F6's resolution, or by
+                # F6's letter where one side alone left the range (`range_reading`)
+                try:
+                    held = range_reading(tl, tr, tl_env)
+                except Exception:  # noqa: BLE001  (a point it cannot read stays unread)
+                    held = None
+                if held:
+                    out['oor'] += 1
+                    out['read'] += 1
+                    return
+                if held is None:
+                    out['unread'] += 1
+                    if owed:
+                        out['owed_unread'].append(point)
+                    return
             out['read'] += 1
             if dv != 'eq':
                 out['kinds'].add(_f64_kind(dv, _dl, _dr))
@@ -5336,19 +5399,53 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         merge(acc, key, builders)
 
     def magnitudes(acc, lanes, cr_f64):
-        """THE f64 MAGNITUDE PROBES (`F64_MAGNITUDES`), at the generic constants: along each lane,
-        the slot at every magnitude of the ladder, both signs. float64's sides are compared
-        first: where they agree there is nothing to read; where they disagree and no operation
-        left the range, f64 fails there, whatever the reals say; where an operation overflowed or
-        underflowed, the true value stands, and the contract reads it (a point it cannot read
-        says nothing)."""
-        if not deployed_check:
-            return
-        for cfg, n in lanes:
+        """THE SLOTS' MAGNITUDE LADDER (`F64_MAGNITUDES`), at the generic constants: along each
+        lane, and on the diagonal where the rule has two slots or more, the slot at every
+        magnitude of the ladder, from the smallest normal double to the largest, both signs.
+        Past the grid's widest point (`GRID_REACH`, 1e4) the reals read every rung as they read
+        the grid's points, by the precision ladder and, where it runs out, at float resolution:
+        a slot's span is the real line, and a counterexample of the reals there refutes their
+        reading, strict's second reading and permissive's own criterion alike.
+        `min(10, log(x0)) -> log(x0)` is false past e^10 = 22,026, 10 against 11.5 at 1e5. The
+        rungs below 1e-8 probe float64's rounding near zero, where the battery reads the exact
+        zero and the grid and the rows read the reals down to 1e-4; the reals' readings there are
+        measured unreliable for true identities: the precision ladder's decay test reads
+        `acos(cos(sin(x0))) -> abs(sin(x0))` apart at 1e-200 (105 decades of decay from 452 to
+        904 digits, against a bar of 226), and the point enclosure of the reading at float
+        resolution reads `rootn(x0^6, 6) -> abs(x0)` apart at 1e-50. float64's sides are compared
+        at every rung: where they agree there is nothing more to read; where they disagree and no
+        operation left the range, F6 fails there, whatever the reals say; where an operation
+        overflowed or underflowed, the true value stands (`deployed`, `range_reading`), and a
+        point nothing reads counts neither way."""
+        for cfg, n in lanes + ([(None, None)] if len(names) >= 2 else []):
             for m in F64_MAGNITUDES:
+                reals = m > GRID_REACH
+                if n is None and not reals:
+                    continue
                 for x in (m, -m):
-                    vals = {k: cfg for k in names}
-                    vals[n] = x
+                    if n is None:
+                        # THE DIAGONAL, as the grid's: every slot at the one magnitude
+                        vals = {k: x for k in names}
+                    else:
+                        vals = {k: cfg for k in names}
+                        vals[n] = x
+
+                    def env_mp(vals=vals):
+                        e = {k: mpf(y) for k, y in vals.items()}
+                        e.update({k: b() for k, b in gbuilders.items()})
+                        e.update(fitted(grid_key))
+                        return e
+
+                    point = dict(vals)
+                    point.update(dict(zip(lnames, grid_key)))
+                    v, snapped = None, False
+                    if reals:
+                        v, snapped = _point_verdict(tl, tr, env_mp)
+                        where = (grid_key, {k: mpf(y) for k, y in vals.items()})
+                        judge_point(acc, v, point, 'real', True, where)
+                        unread_at_float_resolution(acc, v, point, where, env_mp, count=False)
+                    if n is None or not deployed_check:
+                        continue
                     ed = {k: F(y) for k, y in vals.items()}
                     ed.update({k: F(c) for k, c in zip(lnames, grid_key)})
                     ed.update({k: F(w) for k, w in cr_f64.items()})
@@ -5360,18 +5457,8 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
                     if compare_deployed_realised(cls_np(dl), cls_np(dr)) == 'eq' and \
                             not opposite_zeros(dl, dr):
                         continue
-                    point = dict(vals)
-                    point.update(dict(zip(lnames, grid_key)))
-                    v, snapped = None, False
-                    if not in_range[0]:
-                        def env_mp(vals=vals):
-                            e = {k: mpf(y) for k, y in vals.items()}
-                            e.update({k: b() for k, b in gbuilders.items()})
-                            e.update(fitted(grid_key))
-                            return e
+                    if not reals and not in_range[0]:
                         v, snapped = _point_verdict(tl, tr, env_mp)
-                        if v is None:
-                            continue
                     deployed(ed, v, point, True, snapped, acc)
 
     def mint_rows(acc, cr_f64):

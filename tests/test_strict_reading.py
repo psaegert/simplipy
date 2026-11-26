@@ -54,6 +54,71 @@ FALSE_PAST_THE_LADDER = [
 ]
 
 
+#: False in the reals only past the grid's widest point, |x| = 1e4 (FX-74): the slots' magnitude
+#: ladder, which the reals read as they read the grid, refutes them, in both modes.
+FALSE_PAST_THE_GRID = [
+    ('min 10 log ?0', 'log ?0'),            # past e^10 = 22,026: 10 against 11.5 at 1e5
+    ('min ?0 exp 10', '?0'),                # 22,026 against 1e5 at 1e5
+    ('max -10 asinh ?0', 'asinh ?0'),       # -10 against -12.2 at -1e5
+    ('mod acosh !0 10', 'acosh !0'),        # 2.2 against 12.2 at 1e5
+]
+
+#: False in the reals at a point where an operation leaves float64's range and no rung of the
+#: precision ladder reads the true values: read at float resolution, or, where one side alone left
+#: the range, by F6's letter, that side's true value against the other side's double.
+FALSE_AT_AN_UNREAD_RANGE_EVENT = [
+    # -9.9 against -8 at x0 = -1e4, where exp underflows: the true values, at float resolution
+    ('min -8 asinh ?0', 'min (-8) exp ?0'),
+    # 0 against -0.0022 at x0 = 1e5, where the Bessel K functions underflow and besselj(e^10, x0),
+    # read by no rung, stays in range: neither the left side's double nor its true value, 0
+    ('- besselk 1 ?0 besselk (-1) ?0', 'besselj exp 10 ?0'),
+]
+
+
+@pytest.mark.parametrize('lhs, rhs', FALSE_PAST_THE_GRID)
+def test_the_reals_read_the_slots_magnitude_ladder(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['verdict'] == 'KILL' and r['reals_valued_holds'] is False, r
+    assert any(abs(next(iter(p.values()))) > 1e4 for p in r['points']), r
+    assert r['realised'] is False and r['permissive'] is False and r['tier'] == 'reject', r
+
+
+@pytest.mark.parametrize('lhs, rhs', FALSE_AT_AN_UNREAD_RANGE_EVENT)
+def test_an_unread_range_event_is_read_at_float_resolution(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['realised_f6'] is False and r['realised'] is not True, r
+    assert r['permissive'] is not True and r['tier'] == 'reject', r
+
+
+def test_the_range_reading_reads_one_sides_true_value_against_the_others_double() -> None:
+    lhs, rhs = '- besselk 1 ?0 besselk (-1) ?0'.split(), 'besselj exp 10 ?0'.split()
+    tl, tr = _contract.parse(lhs, number=True), _contract.parse(rhs, number=True)
+    exact = lambda: {'?0': _contract.mpf(1e5)}  # noqa: E731
+    # no rung reads besselj(e^10, x) at all, and neither does the reading at float resolution
+    assert _contract._point_verdict(tl, tr, exact)[0] is None
+    assert _contract._float_resolution(tl, tr, exact) is None
+    assert _contract.range_reading(tl, tr, {'?0': _contract.F(1e5)}) is False
+    # where the true values agree, the range standard admits: exp(x)/exp(x) at x = 800
+    tl, tr = _contract.parse('/ exp ?0 exp ?0'.split(), number=True), _contract.parse(['1'], number=True)
+    assert _contract.range_reading(tl, tr, {'?0': _contract.F(800.0)}) is True
+
+
+#: True in the reals, and float64's two sides finite, at every magnitude: the ladder's readings
+#: keep them (strict by its second reading where float64 rounds them apart).
+HELD_AT_EVERY_MAGNITUDE = [
+    ('acos sin atan _0', 'atan2 1 _0'),     # 0 against 1e-8 at 1e8 in float64; equal in the reals
+    ('tan atan asinh ?0', 'asinh ?0'),      # tan near pi/2 magnifies atan's rounding
+    ('asinh sinh ?0', '?0'),                # sinh overflows past 710.48: the true value stands
+    ('floor + x0 1', '+ floor x0 1'),
+]
+
+
+@pytest.mark.parametrize('lhs, rhs', HELD_AT_EVERY_MAGNITUDE)
+def test_the_ladder_keeps_what_is_true_in_the_reals(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['reals_valued_holds'] is True and r['realised'] is True and r['tier'] == 'core', r
+
+
 @pytest.mark.parametrize('lhs, rhs', ADMITTED)
 def test_strict_admits_the_identities_float64_only_rounds(lhs, rhs) -> None:
     r = verify_rule(lhs.split(), rhs.split())

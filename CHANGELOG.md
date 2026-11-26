@@ -2184,6 +2184,27 @@ model predictions.
   value stands. `sinh(asinh(x0)) -> x0` (66 units in the last place off at 1e100),
   `rootn(pow(x0, 3), 3) -> x0` (101 at 1e-100), `pow(x0, log(2)) -> pow(2, log(x0))` and
   `tan(atan(asinh(x0))) -> asinh(x0)` now hold in `permissive` only.
+- **The reals read every magnitude too (FX-74).** `strict`'s second reading (true in the reals,
+  float64's kinds kept) and `permissive`'s own criterion read the reals at the battery, the grid
+  (to 1e4) and the rows (to 1e3), while only float64's lane read the slots' magnitude ladder; a
+  finite float64 difference there passed the second reading as rounding, though the reals were
+  never read at the point. The reals now read every rung of the ladder past the grid's 1e4, up to
+  the largest double, both signs, along each slot and on the diagonal, as they read the grid (the
+  rungs below 1e-8 stay float64's: there the reals' readings are measured unreliable for true
+  identities, `acos(cos(sin(x0))) -> abs(sin(x0))` read apart at 1e-200). Where an operation
+  leaves float64's range and no rung of
+  the precision ladder reads the true values, float64's lane reads them at float resolution, and
+  where one side alone left the range, that side's true value against the other side's double
+  (F6: "at a range event, when one is the true value"); the f64 bar's range probes read the same.
+  Refused now in both modes, each false in the reals: `min(10, log(x0)) -> log(x0)` (10 against
+  11.5 at 1e5; false past e^10 = 22,026), `min(x0, exp(10)) -> x0`, `max(-10, asinh(x0)) ->
+  asinh(x0)`, `mod(acosh(x0), 10) -> acosh(x0)`, `min(-8, asinh(x0)) -> min(-8, exp(x0))` (-9.9
+  against -8 at -1e4, where `exp` underflows) and `besselk(1, x0) - besselk(-1, x0) ->
+  besselj(exp(10), x0)` (0 against -0.0022 at 1e5, where the Bessel K functions underflow;
+  `besselj(e^10, x)` underflows to 0 below about 2e4). `cos(asin(tanh(x0))) -> 1/cosh(x0)` and
+  `sin(acos(tanh(x0))) -> 1/cosh(x0)`, true in the reals, now hold in `permissive` only: past
+  cosh's overflow float64 gives 6.1e-17 against 0, and from |x0| = 1e4 no rung reads the true
+  values, so `strict`'s second reading reaches no answer there.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's

@@ -119,9 +119,14 @@ def test_a_constants_magnitude_sample_left_unread_keeps_the_quota() -> None:
 
 def test_an_owed_point_left_unread_refuses_f64(monkeypatch) -> None:
     """In f64 an owed point is unread where an operation left the range, float64's sides differ
-    and no rung reads the true value: f64 reaches no answer there."""
+    and nothing reads the true values: f64 reaches no answer there. Since FX-74 a range event no
+    rung reads is read at float resolution (`range_reading`, F6: "at a range event, when one is
+    the true value"), so the point is left unread only where that reading reaches nothing too;
+    where it reads the true values `1*sin(0.5)` and `sin(0.5)` agreeing, the range standard (F5)
+    admits the point and f64 holds."""
     lhs, rhs = '* 1 sin _0'.split(), 'sin _0'.split()
     d_eval, point_verdict = _contract.d_eval, _contract._point_verdict
+    range_reading = _contract.range_reading
 
     def at_half(env) -> bool:
         return any(float(v) == 0.5 for v in env.values())
@@ -137,6 +142,10 @@ def test_an_owed_point_left_unread_refuses_f64(monkeypatch) -> None:
     monkeypatch.setattr(_contract, '_point_verdict',
                         lambda tl, tr, env, owed=False: (None, False) if at_half(env())
                         else point_verdict(tl, tr, env, owed))
+    d = verify_rule(lhs, rhs)
+    assert d['realised'] is True and 'strict' not in d.get('unread_owed', {}), d
+    monkeypatch.setattr(_contract, 'range_reading',
+                        lambda tl, tr, env: None if at_half(env) else range_reading(tl, tr, env))
     d = verify_rule(lhs, rhs)
     assert d['realised'] is None and {'_0': 0.5} in d['unread_owed']['strict'], d
 

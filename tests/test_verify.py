@@ -1420,12 +1420,22 @@ class TestABoundedFunctionNeverAttainsItsLimit:
         # correctly dies `a-nonfinite-binding`, which is sort doctrine, not the ladder's.
         # true in the reals, float64's two sides finite at every point (past F6 where tanh
         # saturates, and where exp overflows, the reals' value by the range standard): strict
-        # holds both by its second reading
-        for lhs, rhs in ((['cos', 'asin', 'tanh', '_0'], ['inv', 'cosh', '_0']),
-                         (['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0'])):
-            got = judge_rule(lhs, rhs)
-            assert got.get('verdict') != 'KILL', (lhs, got)
-            assert got.get('tier') == 'core' and got['realised_f6'] is False, (lhs, got)
+        # holds `log(exp(x) * exp(-x)) -> 0` by its second reading
+        got = judge_rule(['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0'])
+        assert got.get('verdict') != 'KILL', got
+        assert got.get('tier') == 'core' and got['realised_f6'] is False, got
+        # `cos(asin(tanh(x))) -> 1/cosh(x)` is true in the reals too, but from |x| = 710.5 cosh
+        # overflows and float64 gives 6.1e-17 (cos of the double nearest pi/2) against 0. Where
+        # no rung reads the true values (about 2e-4343 at 1e4: tanh's distance to 1 asks for
+        # 8,700 digits), F6's per-side letter reads the left side's double against the right
+        # side's true value, and they differ (FX-74, `range_reading`, the overseer's ruling: the
+        # letter stays on). Ruling 23's (b) would excuse the difference where the reals give both
+        # sides one value, which no rung reads there: strict reaches no answer (4.10), and the rule
+        # keeps permissive's tier by permissive's own criterion
+        got = judge_rule(['cos', 'asin', 'tanh', '_0'], ['inv', 'cosh', '_0'])
+        assert got.get('verdict') != 'KILL' and got['reals_valued_holds'] is True, got
+        assert (got['realised_f6'], got['realised'], got['permissive_own'], got['tier']) == \
+            (False, None, True, 'permissive'), got
 
 
 class TestTheQuantifierWidensWithoutConvictingTheTrue:
