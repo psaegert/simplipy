@@ -82,24 +82,37 @@ defined_functions:
     definition: "rootn(_0, 2)"
   cot:
     arity: 1
-    definition: "1/tan(_0)"
+    definition: "inv(tan(_0))"
   acot:
     arity: 1
-    definition: "atan(1/_0)"   # SymPy's convention: range (-pi/2, pi/2], acot(-1) = -pi/4
+    definition: "atan(inv(_0))"   # SymPy's convention: range (-pi/2, pi/2], acot(-1) = -pi/4
+  sec:
+    arity: 1
+    definition: "inv(cos(_0))"
+  csc:
+    arity: 1
+    definition: "inv(sin(_0))"
+  asec:
+    arity: 1
+    definition: "acos(inv(_0))"   # SymPy's convention
+  acsc:
+    arity: 1
+    definition: "asin(inv(_0))"   # SymPy's convention
 ```
 
 The config is a floor for what the engine supports, not a ceiling: a defined function is
 supported without being mined. `read_infix`, the conversions and `is_valid` read its head and keep
 it as written (`to_infix(['sqrt', 'x0'])` is `sqrt(x0)`); `simplify`, `complexity`, `prettify`,
 `mask` and every evaluation read its definition, so `simplify('cot(x0)')` answers `1/tan(x0)`,
-`simplify('sqrt(x0)')` answers what `simplify('rootn(x0, 2)')` answers, the mined `rootn`, `tan`
-and `atan` rules apply, and a value is the definition's, bit for bit. `written_complexity` prices
+`simplify('sqrt(x0)')` answers what `simplify('rootn(x0, 2)')` answers, the mined rules of the
+operators a definition applies (`rootn`, `tan`, `cos`, `sin`, `atan`, `acos`, `asin`) apply, and a value is the definition's, bit for bit. `written_complexity` prices
 the head as written. A defined function is not an operator: it is in neither `operator_arity`
 nor the operator table the miner, the monitor and the rule files' fingerprints read, so a mine is
 the same with or without the section. A definition may call only the config's operators (never
 another defined function) and hold numbers, `np.pi`, `np.e` and its arguments, each at least
 once; a name that is already an operator or an alias is refused, when the engine is built. Every
-config this repository ships defines these three.
+config this repository ships defines these seven, writing `inv(y)` (the same as `1/y`, bit for bit)
+so that an expansion holds no literal 1 a mask could read as a fitted constant.
 
 ## Identity
 

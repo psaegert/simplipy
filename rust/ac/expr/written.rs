@@ -273,8 +273,9 @@ fn price(n: &Written, ops: &Operators) -> u64 {
 ///   (`mu_leaf`).
 /// * A function pays its head's entry (the head table, by name) and its operands; `pow` pays
 ///   `mu_pow`, base and exponent; an alias pays its target's price. A DEFINED FUNCTION
-///   (`crate::defined`) pays its own head's entry ([`mu_defined_head`]: `sqrt` and `cot` at the
-///   elementary tier, `acot` at the transcendental). A head that is neither an operator nor a
+///   (`crate::defined`) pays its own head's entry ([`mu_defined_head`]: `sqrt`, `cot`, `sec` and
+///   `csc` at the elementary tier, `acot`, `asec` and `acsc` at the transcendental). A head that is
+///   neither an operator nor a
 ///   defined function of the engine is refused, never guessed.
 ///
 /// On an expression already in canonical form the written price is meant to equal
@@ -311,6 +312,10 @@ mod tests {
             ("sqrt(x0)", 12_000),
             ("cot(x0)", 12_000),
             ("acot(x0)", 14_000),
+            ("sec(x0)", 12_000),
+            ("csc(x0)", 12_000),
+            ("asec(x0)", 14_000),
+            ("acsc(x0)", 14_000),
             ("x0**0.5", 12_585),
             ("rootn(x0, 2)", 14_585),
             ("6.674e-11*x0*x1/x2**2", 45_197),
@@ -330,7 +335,7 @@ mod tests {
     fn an_undeclared_head_or_a_tagged_sequence_is_refused() {
         let e = engine();
         let t = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
-        assert!(e.written_complexity(&t("sec x0")).is_err());
+        assert!(e.written_complexity(&t("zeta x0")).is_err());
         assert!(e.written_complexity(&t("<add> x0 x1 </add>")).is_err());
         assert!(e.written_complexity(&t("+ x0")).is_err());
         assert!(e.written_complexity(&[]).is_err());

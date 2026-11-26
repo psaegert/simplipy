@@ -8,8 +8,12 @@
 //! ```yaml
 //! defined_functions:
 //!   sqrt: {arity: 1, definition: "rootn(_0, 2)"}
-//!   cot:  {arity: 1, definition: "1/tan(_0)"}
-//!   acot: {arity: 1, definition: "atan(1/_0)"}
+//!   cot:  {arity: 1, definition: "inv(tan(_0))"}
+//!   acot: {arity: 1, definition: "atan(inv(_0))"}
+//!   sec:  {arity: 1, definition: "inv(cos(_0))"}
+//!   csc:  {arity: 1, definition: "inv(sin(_0))"}
+//!   asec: {arity: 1, definition: "acos(inv(_0))"}
+//!   acsc: {arity: 1, definition: "asin(inv(_0))"}
 //! ```
 //!
 //! A defined function is SUPPORTED, not mined: the readers keep its head as written (it is a
@@ -356,14 +360,18 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_config_defines_the_three() {
+    fn the_shipped_config_defines_the_seven() {
         let shipped = include_str!("../assets/engines/acj2-4/config.yaml");
         let e = crate::Engine::from_strs(shipped, "[]").unwrap();
         let ops = e.operators_ref();
         let mut names: Vec<&str> = ops.defined.keys().map(String::as_str).collect();
         names.sort_unstable();
-        assert_eq!(names, ["acot", "cot", "sqrt"]);
-        assert_eq!(expand_defined(&t("acot x0"), ops), t("atan / 1 x0"));
+        assert_eq!(names, ["acot", "acsc", "asec", "cot", "csc", "sec", "sqrt"]);
+        assert_eq!(expand_defined(&t("acot x0"), ops), t("atan inv x0"));
+        assert_eq!(
+            expand_defined(&t("+ sec x0 csc asec acsc x1"), ops),
+            t("+ inv cos x0 inv sin acos inv asin inv x1")
+        );
     }
 
     fn t(s: &str) -> Vec<String> {

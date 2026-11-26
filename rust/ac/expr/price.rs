@@ -208,16 +208,18 @@ pub(super) fn mu_head(name: &str) -> u64 {
 
 /// The head of a DEFINED FUNCTION (ruling 40: a config's `defined_functions:`, `crate::defined`),
 /// in milli-bits, priced by name like every head, at the tier of the function its definition
-/// applies: `sqrt` at rootn's (`rootn(u, 2)`, without the 2) and `cot` at tan's (`1/tan(u)`), the
-/// elementary tier, and `acot` at atan's (`atan(1/u)`), the transcendental tier. Another defined
+/// applies: `sqrt` at rootn's (`rootn(u, 2)`, without the 2), `cot` at tan's (`1/tan(u)`), `sec` at
+/// cos's (`1/cos(u)`) and `csc` at sin's (`1/sin(u)`), the elementary tier, and `acot` at atan's
+/// (`atan(1/u)`), `asec` at acos's (`acos(1/u)`) and `acsc` at asin's (`asin(1/u)`), the
+/// transcendental tier. Another defined
 /// name keeps the flat unit, as an unknown head does. Only the written price reads it
 /// (`written_complexity`): the canonical state holds a defined function's definition, never its
 /// head, and a config that declares an operator of one of these names keeps [`mu_fun_bits`]'s
 /// price for it.
 pub(super) fn mu_defined_head(name: &str) -> u64 {
     sym_bits(match name {
-        "sqrt" | "cot" => MU_BITS_ELEMENTARY,
-        "acot" => MU_BITS_TRANSCENDENTAL,
+        "sqrt" | "cot" | "sec" | "csc" => MU_BITS_ELEMENTARY,
+        "acot" | "asec" | "acsc" => MU_BITS_TRANSCENDENTAL,
         _ => 8,
     })
 }

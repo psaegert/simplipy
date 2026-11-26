@@ -33,8 +33,8 @@ class _Reading(_Loading):
         sequences are verified by the shared liberal parser (the arbiter for that
         dialect, exactly as in :meth:`simplify`), everything else by the arity
         oracle. Note the difference from :meth:`read_infix`, which TOLERATES
-        undeclared vocabulary: ``read_infix('sec(x0)')`` reads, while
-        ``is_valid('sec(x0)')`` is False if this engine declares no ``sec`` (a defined
+        undeclared vocabulary: ``read_infix('zeta(x0)')`` reads, while
+        ``is_valid('zeta(x0)')`` is False if this engine declares no ``zeta`` (a defined
         function, such as the shipped configs' ``sqrt``, is valid) --
         this method verifies against the vocabulary rather than merely reading.
 
@@ -218,7 +218,7 @@ class _Reading(_Loading):
         ------
         ValueError
             When two operands are separated only by whitespace (``x0 x1``, ``2 3``,
-            ``sec x0`` for an undeclared ``sec``), or when an implicit product falls inside
+            ``zeta x0`` for an undeclared ``zeta``), or when an implicit product falls inside
             the argument of a function without parentheses (``sin 2x0``).
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
@@ -256,7 +256,7 @@ class _Reading(_Loading):
 
         * **TOLERANT of unknown vocabulary.** A function this engine's config neither
           declares nor defines survives as a bare leaf --
-          ``read_infix('sec(x0)') == ['sec', 'x0']`` -- so a corpus written in a
+          ``read_infix('zeta(x0)') == ['zeta', 'x0']`` -- so a corpus written in a
           wider vocabulary can be read first and desugared afterwards. Every
           conversion entry (:meth:`to_prefix`, :meth:`to_infix`, :meth:`to_tagged`)
           and :meth:`simplify` REFUSE such input: they read only the engine's
@@ -279,7 +279,7 @@ class _Reading(_Loading):
         Implicit multiplication is read after a number or a closing parenthesis, with
         the precedence of ``*``: ``2x0`` is ``2*x0``, ``2(x0 + 1)`` is ``2*(x0 + 1)``,
         ``(a)(b)`` is ``(a)*(b)`` and ``1/2x0`` is ``(1/2)*x0``. A name before a
-        parenthesis is always a call, so ``sec(x0)`` stays ``['sec', 'x0']``. Token
+        parenthesis is always a call, so ``zeta(x0)`` stays ``['zeta', 'x0']``. Token
         lists are expected well formed and get no such reading.
 
         Whitespace separates tokens, and an implicit product forms across it as across
@@ -288,7 +288,7 @@ class _Reading(_Loading):
         products, quotients or sums: ``sin x0^2`` is ``sin(x0^2)`` and ``log x0 / 2`` is
         ``log(x0)/2``. ``x0 * * 2`` is ``x0**2`` and ``1 e-5`` is ``1e-5``. ``ValueError``
         is raised for two operands with only whitespace between them and no product
-        (``x0 x1``, ``2 3``, ``sec x0`` for an undeclared ``sec``) and for an implicit
+        (``x0 x1``, ``2 3``, ``zeta x0`` for an undeclared ``zeta``) and for an implicit
         product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
 
         Mechanically it is :meth:`infix_to_prefix` plus optional

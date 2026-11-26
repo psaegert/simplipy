@@ -37,7 +37,7 @@ EXPLICIT_UNCHANGED = [
     (['x0', 'x1'], False),                # two roots
     ([], False),                          # the one valid case is_valid rejects
     (['+', 'x0', 'x0', 'x1'], False),     # trailing token
-    (['sec', 'x0'], False),               # undeclared vocabulary (`sqrt` is a defined
+    (['zeta', 'x0'], False),              # undeclared vocabulary (`sqrt` is a defined
                                           # function of the shipped configs since ruling 40)
 ]
 
@@ -130,8 +130,8 @@ class TestInfixForm:
         """is_valid VERIFIES; read_infix TOLERATES. The two must not be confused:
         an undeclared function reads fine and is still not a valid expression for
         THIS engine."""
-        assert engine.read_infix('sec(x0)') == ['sec', 'x0']
-        assert engine.is_valid('sec(x0)') is False
+        assert engine.read_infix('zeta(x0)') == ['zeta', 'x0']
+        assert engine.is_valid('zeta(x0)') is False
 
 
 class TestFormDetectionMatchesTheTrio:

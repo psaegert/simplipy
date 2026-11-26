@@ -112,7 +112,8 @@ the ones infix notation forces:
   `<constant_NAME>` are priced as `complexity` prices them;
 - an alias is priced as its target, and a defined function (see
   [Defined functions](artifacts.md#defined-functions)) pays its own head at the tier of the
-  function its definition applies: `sqrt` 6 bits, `cot` 6, `acot` 8. Any other head the engine
+  function its definition applies: `sqrt`, `cot`, `sec` and `csc` 6 bits, `acot`, `asec` and
+  `acsc` 8. Any other head the engine
   neither declares nor defines is refused.
 
 | expression | written (bits) | `complexity` (bits) |

@@ -582,8 +582,9 @@ organised by who you are, then the highlights, then every change in detail.
   with their powers.
 - **`written_complexity()`** prices an expression exactly as written, beside `complexity()`,
   which prices its canonical state.
-- **Defined functions**: a config defines `sqrt`, `cot` and `acot` over its operators; they are
-  read, simplified, priced and evaluated without being mined.
+- **Defined functions**: a config defines `sqrt` and the rest of the trigonometric family (`cot`,
+  `sec`, `csc`, `acot`, `asec`, `acsc`) over its operators; they are read, simplified, priced and
+  evaluated without being mined.
 
 ### In detail
 
@@ -599,21 +600,23 @@ model predictions.
   bracketed subtrahend or divisor staying whole; operands unordered; `-y` is a sign; `1/y` and
   `inv(y)` are the reciprocal; dividing by `y^k` is `y^-k`; a literal divisor `x/3` is the
   literal 1/3). A number pays the literal code on the exact value written, every digit; an alias
-  pays its target's price, a defined function its own head (`sqrt` 6 bits, `cot` 6, `acot` 8),
-  and any other undeclared head is refused. `x0 + 0` costs 11 bits written (6 canonical),
+  pays its target's price, a defined function its own head (`sqrt`, `cot`, `sec` and `csc` 6
+  bits, `acot`, `asec` and `acsc` 8), and any other undeclared head is refused. `x0 + 0` costs 11 bits written (6 canonical),
   `exp(1)` 8 (4), `x0 - x0/1 + 2` 23.585 (2.585); `x0*x1/(4*np.pi*x2*x3**2)` costs 45.907
   written and 47.907 canonical. Additive: no answer, price of `complexity`, rule or mine changes.
 - **Defined functions** (`defined_functions:` in a config). A function given by a name, an arity
   and a definition over the config's operators, its arguments `_0`, `_1`, ...; every shipped
-  config defines `sqrt(u) = rootn(u, 2)`, `cot(u) = 1/tan(u)` and `acot(u) = atan(1/u)` (SymPy's
-  convention, `acot(-1) = -pi/4`). The readers, the conversions and `is_valid` keep the head as
+  config defines `sqrt(u) = rootn(u, 2)` and the trigonometric family completed: `cot(u) =
+  1/tan(u)`, `sec(u) = 1/cos(u)`, `csc(u) = 1/sin(u)`, `acot(u) = atan(1/u)`, `asec(u) =
+  acos(1/u)` and `acsc(u) = asin(1/u)` (SymPy's conventions, `acot(-1) = -pi/4`), written with
+  `inv(u)` for `1/u` so that an expansion holds no literal 1 for masking to fit. The readers, the conversions and `is_valid` keep the head as
   written; `simplify`, `complexity`, `prettify`, `mask` and every evaluation read the definition,
   so `simplify('cot(x0)')` is `1/tan(x0)`, `simplify('sqrt(x0)')` answers as
   `simplify('rootn(x0, 2)')`, and `as_callable('sqrt(x0)')` computes `rootn(x0, 2)` bit for bit.
   A defined function is never mined: it is not in `operator_arity` or the operator table the
   miner reads, and a mine with the section is byte-identical to one without. A function neither
   declared nor defined is still refused by every strict entry (`sqrt` was the example of one
-  until now; the tests use `sec`). `SimpliPyEngine(defined_functions=...)` builds one directly;
+  until now; the tests use `zeta`). `SimpliPyEngine(defined_functions=...)` builds one directly;
   pickles keep the section.
 - **The aliases `Abs` and `div`.** Every config this repository ships or tests with reads
   `Abs(x)` as `abs(x)` (sympy's spelling) and `div(a, b)` as `a/b`, as the catalogs write them.

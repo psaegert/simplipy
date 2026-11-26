@@ -156,7 +156,19 @@ defined_functions:
     definition: "rootn(_0, 2)"
   cot:
     arity: 1
-    definition: "1/tan(_0)"
+    definition: "inv(tan(_0))"
   acot:
     arity: 1
-    definition: "atan(1/_0)"
+    definition: "atan(inv(_0))"
+  sec:
+    arity: 1
+    definition: "inv(cos(_0))"
+  csc:
+    arity: 1
+    definition: "inv(sin(_0))"
+  asec:
+    arity: 1
+    definition: "acos(inv(_0))"
+  acsc:
+    arity: 1
+    definition: "asin(inv(_0))"

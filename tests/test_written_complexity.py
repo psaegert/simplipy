@@ -117,16 +117,17 @@ class TestTheVocabulary:
     def test_an_alias_is_priced_as_its_target(self, engine: SimpliPyEngine, alias: str, target: str) -> None:
         assert engine.written_complexity(alias) == engine.written_complexity(target)
 
-    @pytest.mark.parametrize('head, bits', [('sqrt', 6000), ('cot', 6000), ('acot', 8000)])
+    @pytest.mark.parametrize('head, bits', [('sqrt', 6000), ('cot', 6000), ('acot', 8000), ('sec', 6000),
+                                            ('csc', 6000), ('asec', 8000), ('acsc', 8000)])
     def test_a_defined_function_pays_its_own_head(self, engine: SimpliPyEngine, head: str, bits: int) -> None:
         assert engine.written_complexity(f'{head}(x0)') == bits + 6000
         assert engine.written_complexity([head, 'x0']) == bits + 6000
 
     def test_any_other_undeclared_head_is_refused(self, engine: SimpliPyEngine) -> None:
-        with pytest.raises(ValueError, match=r"unknown function 'sec'"):
-            engine.written_complexity('sec(x0)')
+        with pytest.raises(ValueError, match=r"unknown function 'zeta'"):
+            engine.written_complexity('zeta(x0)')
         with pytest.raises(ValueError, match='undeclared function head is refused'):
-            engine.written_complexity(['sec', 'x0'])
+            engine.written_complexity(['zeta', 'x0'])
         with pytest.raises(ValueError, match='empty'):
             engine.written_complexity([])
 

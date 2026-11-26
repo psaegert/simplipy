@@ -1086,7 +1086,8 @@ class SimpliPyEngine(_Evaluation):
           head, base and exponent; an alias is priced as its target (``ln`` as ``log``);
         * a DEFINED FUNCTION (the config's ``defined_functions:``) pays its own head at the tier
           of the function its definition applies: ``sqrt`` at ``rootn``'s (6 bits, without the
-          2), ``cot`` at ``tan``'s (6) and ``acot`` at ``atan``'s (8). Any other head the engine
+          2), ``cot``, ``sec`` and ``csc`` at ``tan``'s, ``cos``'s and ``sin``'s (6), and ``acot``,
+          ``asec`` and ``acsc`` at ``atan``'s, ``acos``'s and ``asin``'s (8). Any other head the engine
           neither declares nor defines is refused with ``ValueError``, never guessed.
 
         For example ``x0 + 0`` costs 11 bits (``complexity``: 6), ``x0 + x0`` 15 (11.585),
