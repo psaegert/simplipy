@@ -371,6 +371,8 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 
 | gate | holds when |
 |---|---|
+| `sidecar` | the provenance sidecar lies beside the file and records a final, uninterrupted mine of the file's mode (the file's bytes are not compared with the sha256 the sidecar records) |
+| `rules` | the file holds rules |
 | `twin_shadow` | no row is one the mode's load mints anyway from another row's orientation twin |
 | `engine_owned_law` | no rule respells one canonical state or states the distributive law as the search factors (a sign pull such as `neg sin _0 -> sin neg _0` still passes) |
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
@@ -384,6 +386,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `covers_strict` | (`permissive` only) the file covers the pinned strict file, as permissive includes strict: on each strict rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
 | `unmined` | no rule mentions an operator the mine does not mine (bounded at 0 in the sidecar's `operator_max_length`) |
 | `ground_exact` | every ground rule holds in the file's mode by the ground evaluator the engine and the judge read: in `strict` its two sides are the same double, or the reals give them one value and float64's two values agree in kind (`exp(sin(np.pi)) -> 1` holds, 1.0000000000000002 and 1.0 both being finite), in `permissive` the table's two values agree at float resolution (`0*tan(asin(1)) -> 0` fails: the left side has no value) |
+| `basis` | the sidecar records one basis per rule of the file, `proved` or `evidence`, as the mine judged it (the record is read, not judged again) |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.

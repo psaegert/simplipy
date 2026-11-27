@@ -4558,4 +4558,145 @@ mod tests {
             );
         }
     }
+
+    /// The premise of the shared fits (772f381), on the lanes themselves: at an instance where
+    /// permissive's two contexts fit on bit-identical rows and values (`Lanes::shared_fits`), the
+    /// fit permissive's own lane made there is the one f64's lane makes alone, and f64's lane gives
+    /// every candidate the verdict it gives fitting every constant itself. (A Bessel source holds
+    /// the same premise and is left out: a debug build judges `besselj(C, x0)` in about 95 s.)
+    #[test]
+    fn the_f64_lane_reads_a_shared_fit_as_it_would_make_it() {
+        let e = bessel_engine();
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let xf = grid_1var(n);
+        let cands: Vec<Vec<String>> = [
+            &["<constant>"][..],
+            &["*", "<constant>", "x0"],
+            &["neg", "x0"],
+            &["*", "<constant>", "exp", "x0"],
+            &["exp", "*", "<constant>", "x0"],
+            &["pow", "<constant>", "x0"],
+            &["pow", "x0", "<constant>"],
+            &["log", "*", "<constant>", "x0"],
+            &["exp", "+", "x0", "<constant>"],
+            &["+", "x0", "<constant>"],
+        ]
+        .iter()
+        .map(|c| s(c))
+        .collect();
+        let lib =
+            CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n).unwrap();
+        let sources: [&[&str]; 5] = [
+            &["*", "<constant>", "exp", "x0"],
+            &["exp", "+", "x0", "<constant>"],
+            &["exp", "*", "<constant>", "x0"],
+            &["log", "*", "<constant>", "x0"],
+            &["neg", "*", "<constant>", "x0"],
+        ];
+        let (retries, rtol, atol, min_inf, seed) = (4usize, 1e-11, 1e-12, 8usize, 7u64);
+        let (mut compared, mut read) = (0usize, 0usize);
+        for source in sources {
+            let src = s(source);
+            let Some(lanes) = Lanes::new(
+                ops,
+                &src,
+                &vars,
+                &lib.cols,
+                n,
+                4,
+                seed,
+                Lane(crate::engine::RuleMode::Permissive),
+                min_inf,
+            )
+            .unwrap() else {
+                continue;
+            };
+            let (Some(own), Some(f64_ctx)) = (lanes.own.as_ref(), lanes.f64_ctx()) else {
+                continue;
+            };
+            let shared = lanes.shared_fits();
+            let f64_lane = Lane(crate::engine::RuleMode::Strict);
+            for cand in lib.by_len.iter().flatten() {
+                // the own lane's fits, as `Lanes::certify` keeps them
+                let fits = Fits::default();
+                let _ = certify_candidate(
+                    own,
+                    cand,
+                    ops,
+                    &vars,
+                    retries,
+                    rtol,
+                    atol,
+                    min_inf,
+                    seed,
+                    lanes.lane,
+                    None,
+                    Some((&fits, &[][..])),
+                );
+                // f64's lane fitting every constant itself, its own fits kept apart
+                let alone_fits = Fits::default();
+                let alone = certify_candidate(
+                    f64_ctx,
+                    cand,
+                    ops,
+                    &vars,
+                    retries,
+                    rtol,
+                    atol,
+                    min_inf,
+                    seed,
+                    f64_lane,
+                    None,
+                    Some((&alone_fits, &[][..])),
+                );
+                for (inst, made) in fits.0.borrow().iter() {
+                    if !shared.get(*inst).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    if let Some((_, own_fit)) =
+                        alone_fits.0.borrow().iter().find(|(i, _)| i == inst)
+                    {
+                        assert_eq!(
+                            made, own_fit,
+                            "{src:?} / {:?} at instance {inst}",
+                            cand.tokens
+                        );
+                        read += 1;
+                    }
+                }
+                let with = certify_candidate(
+                    f64_ctx,
+                    cand,
+                    ops,
+                    &vars,
+                    retries,
+                    rtol,
+                    atol,
+                    min_inf,
+                    seed,
+                    f64_lane,
+                    None,
+                    Some((&fits, shared)),
+                );
+                let verdict = |r: &Result<Certified, Refused>| match r {
+                    Ok(c) => Ok((c.tokens.clone(), c.resolved)),
+                    Err(why) => Err(why.clone()),
+                };
+                assert_eq!(
+                    verdict(&with),
+                    verdict(&alone),
+                    "{src:?} / {:?}",
+                    cand.tokens
+                );
+                compared += 1;
+            }
+        }
+        eprintln!("shared fits: {compared} verdicts compared, {read} shared fits read");
+        assert!(
+            compared >= 30 && read >= 5,
+            "{compared} verdicts, {read} shared fits"
+        );
+    }
 }
