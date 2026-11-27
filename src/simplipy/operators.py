@@ -17,7 +17,9 @@ evaluator and the rule judge compute the same bits on every host. The transcende
 from the platform's libm (as Python's ``math`` module does), the exact operations are
 IEEE-754's, ``harmonic`` is the core's own kernel, and ``erfc`` and the Bessel functions are
 scipy 1.18.1's code (``scipy.special.erfc``, ``jv``, ``yv``, ``iv``, ``kv``), carried in the
-core. Singular inputs give signed infinities or NaN rather than raising.
+core, whose elementary functions (``exp``, ``log`` and the complex ones) are the platform's libm
+too, so their bits can differ on another libm. Singular inputs give signed infinities or NaN
+rather than raising.
 
 Scalars give numpy float64 scalars and array-likes arrays, broadcast like numpy. A torch
 tensor takes torch's own functions (the torch branch is torch's arithmetic, not the core's);
@@ -326,14 +328,22 @@ def _rootn_table(xp: ModuleType, x, n):  # type: ignore[no-untyped-def]
 
 
 def rootn(x: float, n: float) -> float:
-    """Return the real n-th root of x: IEEE-754 rootn, honest for EVERY integer index.
+    """Return the real n-th root of x: IEEE-754 rootn's cells, honest for EVERY integer index.
 
     * n odd:  the signed root, total on R (``rootn(-8, 3) = -2``) and odd at zero as
       everywhere else (``rootn(-0, 3) = -0``, so ``rootn(-0, -3) = -inf``);
-    * n even: the principal root, NaN on negatives (identical to ``pow(x, 1/n)``),
-      ``+0`` at either zero;
+    * n even: the principal root, NaN on negatives, ``+0`` at either zero; the value of
+      ``pow(x, 1/n)`` except at n = 2, where ``pow(x, 0.5)`` is numpy's ``sqrt``: that keeps
+      ``-0`` (``rootn(-0, 2) = +0``) and is correctly rounded, which the libm's
+      ``pow(x, 0.5)`` is not at about 0.09% of points (one ulp apart);
     * n == 1: the identity; n negative: ``1 / rootn(x, -n)``; n == 0 or a non-integer
       index: NaN (invalid operation).
+
+    The value is ``pow(|x|, 1/|n|)`` with ``1/|n|`` rounded to a double, the sign restored at
+    an odd index, so it is not correctly rounded as IEEE-754's recommended ``rootn`` is: within
+    ``pow``'s own error where ``|n|`` is a power of two, and otherwise up to about
+    ``|ln x| 2^-53 / |n|`` more, relative (measured: 120 ulp at n = 3, 73 at 5, 37 at 10, near
+    the subnormals).
 
     One semantics, five surfaces: this realization (the core's kernel), ``numeric.rs``,
     ``interval.rs`` and both ``hiprec.rs`` evaluators implement the same table, pinned
@@ -420,10 +430,12 @@ def harmonic(x: Any) -> Any:
 
     The core's own kernel (the literal ``digamma(x + 1) + euler_gamma`` loses every digit near
     0, where it is exactly 0 on ``|x| < 1e-17``): within 0.53 ulp of the true value on
-    x > -1, and below -1 within one ulp plus 2^-58 of the larger reflection term (H's zero
-    between two poles is where those cancel). ``H(+-0) = +-0``, ``H(+inf) = +inf``,
-    ``H(-inf) = nan``, and NaN at every negative integer, where H has a pole whose one-sided
-    limits differ. The torch branch is torch's digamma, whose accuracy near 0 is torch's."""
+    x > -1, except on 1e-320 < |x| < 1e-306, where the double-double's low word falls below
+    the subnormals and the error reaches 1.5 ulp (1.48 measured); below -1 within one ulp plus
+    2^-58 of the larger reflection term (H's zero between two poles is where those cancel).
+    ``H(+-0) = +-0``, ``H(+inf) = +inf``, ``H(-inf) = nan``, and NaN at every negative integer,
+    where H has a pole whose one-sided limits differ. The torch branch is torch's digamma, whose
+    accuracy is torch's, near 0 and elsewhere (it gives ``H(1) = 0.9999999999999999``)."""
     torch = _torch_of(x)
     if torch is not None:
         xt = x if x.is_floating_point() else x.to(torch.get_default_dtype())
@@ -449,9 +461,10 @@ def erfc(x: Any) -> Any:
 
 
 def atan2(y: Any, x: Any) -> Any:
-    """The angle of the point (x, y) in (-pi, pi], element-wise, argument order as numpy's
+    """The angle of the point (x, y) in [-pi, pi], element-wise, argument order as numpy's
     ``arctan2(y, x)`` (from the platform's libm, with C99's cells: ``atan2(+-0, +0) = +-0``,
-    ``atan2(+-0, -0) = +-pi``, ``atan2(+-inf, +-inf) = +-pi/4`` or ``+-3pi/4``)."""
+    ``atan2(+-0, -0) = +-pi``, ``atan2(+-0, x < 0) = +-pi``, ``atan2(+-inf, +-inf) = +-pi/4``
+    or ``+-3pi/4``; so -pi is the angle of a negative zero y on the negative x axis)."""
     def torch_atan2(torch: ModuleType, a: Any, b: Any) -> Any:
         at, bt = _torch_pair(torch, a, b)
         return torch.atan2(at, bt)
@@ -465,11 +478,16 @@ def besselj(nu: Any, x: Any) -> Any:
     through Y for a negative order and Cephes where AMOS fails), and so scipy's accuracy. Its
     bits are scipy's where measured, not on every platform: on the development host (Linux,
     glibc 2.43) none of the 167,361 points of the repository grid differ, and another host
-    measured 65 of them apart, by at most 30 ulp. Accuracy: measured against 50-digit mpmath on nu in [0, 50], x in [0, 100],
-    within 2,634 ulp at least 0.1 away from a zero of J_nu and within 1.4e-14 absolute near
-    one. NaN for a non-integer order of a negative argument (the value is complex there) and
-    for an infinite argument; ``J_0(0) = 1``, ``J_nu(0) = 0`` for nu > 0 and for a negative
-    integer nu, ``J_nu(0) = inf`` for a negative non-integer nu. Torch has no Bessel function
+    measured 65 of them apart, by at most 30 ulp. Accuracy: measured against 50-digit mpmath on
+    nu in [0, 50], x in [0, 100], within 1.4e-14 absolute (6.1e-15 the largest error found).
+    In ulps of the value the median is about 8 at an integer order and 17 at a non-integer
+    one, and the error reaches about 7,000 ulp where J_nu is small, 0.1 away from one of its
+    zeros (6,853 ulp at ``J_38.13958621743932(98.89217889943711)``, 0.1003 from a zero). NaN
+    for a non-integer order of a negative argument (the value is complex there) and for an
+    infinite argument; ``J_0(0) = 1``, ``J_nu(0) = 0`` for nu > 0 and for a negative integer
+    nu, ``J_nu(0) = +-inf`` for a negative non-integer nu, with the sign of
+    ``1/Gamma(nu + 1)`` (``J_-0.5(0) = inf``, ``J_-1.5(0) = -inf``); at an infinite order of
+    either sign, 0 on 0 <= x <= 2 and NaN elsewhere. Torch has no Bessel function
     of real order, so a tensor is evaluated by the same kernel on the host and returned as a
     tensor of its dtype and device (not differentiable)."""
     def torch_besselj(torch: ModuleType, a: Any, b: Any) -> Any:
@@ -494,12 +512,19 @@ def bessely(nu: Any, x: Any) -> Any:
     """The Bessel function of the second kind Y_nu(x) of real order nu, element-wise: scipy
     1.18.1's ``scipy.special.yv`` (AMOS, through the Hankel functions, with the reflection or the
     rotation through J for a negative order and Cephes where AMOS fails), carried in the core, its
-    bits scipy's where measured. NaN at x < 0 (Y has no real value there, at any order) and at an
-    infinite argument or order; at x = 0, -inf for nu >= 0 and the reflection or rotation of it
-    below (``yv(-1, 0) = inf``, ``yv(-0.5, 0) = -inf``); -inf where the value passes the doubles
-    near 0 and below x = 2.2e-305 (AMOS's cut: the true value of Y_0 there is about -447);
-    +-0 on 7.2e8 <= x <= 2^51 at orders from 86 and integer orders to -86 (the true magnitude is
-    about sqrt(2/(pi x))). Torch has no Bessel function of real order, so a tensor is evaluated
+    bits scipy's where measured. NaN at x < 0 (Y has no real value there, at any order), at
+    x = +inf, and at an infinite order with x > 0; at x = 0, -inf for nu >= 0 (+inf included) and
+    the reflection or rotation of it below (``yv(-1, 0) = inf``, ``yv(-0.5, 0) = -inf``,
+    ``yv(-inf, 0) = -inf``); -inf where the value passes the doubles near 0, and at every order
+    >= 0 below x = 2.2250738585072014e-305 (AMOS's cut: the true value of Y_0 there is about
+    -447), where a negative order takes the reflection or rotation of it
+    (``yv(-1, 1e-306) = inf``, ``yv(-0.5, 1e-306) = -4.9e136``); +-0 on about 7.16e8 <= x <= 2^51
+    at orders from about 85.93 (and integer orders to -86) up to an order that grows with x
+    (about 2.7e6 at x = 7.2e8, 1.9e8 at 1e9, 0.99 x from 1e12; past it the value is finite again
+    or -inf), where the true magnitude is about sqrt(2/(pi x)). At a nonzero order below about
+    1.77e-309 in magnitude (where the rotation's division by sin(pi nu) overflows) scipy's Y
+    leaves the function on 0 < x < 2: +-inf, 0, or far off (``yv(5e-324, 2) = -1.9e306``;
+    Y_0(2) is 0.51). Torch has no Bessel function of real order, so a tensor is evaluated
     by the same kernel on the host and returned as a tensor of its dtype and device (not
     differentiable)."""
     return _binary('bessely', nu, x, _on_host(bessely))
@@ -513,18 +538,23 @@ def besseli(nu: Any, x: Any) -> Any:
     value is complex there) and at an infinite argument; ``I_0(0) = 1``, ``I_nu(0) = 0`` for
     nu > 0 and for a negative integer nu, +inf for a negative non-integer nu (scipy's cell,
     whatever the sign of the pole); +inf past the doubles (from about x = 714 at order 0); 0 at
-    an infinite order; NaN at a subnormal argument, and 0 near 0 below order 50 wherever the
-    Wronskian's K_nu+1(x) overflows (``iv(0.5, 1e-250)`` is 0, the true value 1.3e-125). Torch: on
-    the host, as ``bessely``."""
+    an infinite order and a finite argument (NaN at x = +-inf, as at every order); NaN near 0 at
+    orders to 50 in magnitude, at every argument below about 1.1e-308 and at scattered ones up to
+    6e-307 (above order 50 the uniform expansion gives 0 or +-inf there instead), and 0 near 0
+    below order 50 wherever the Wronskian's K_nu+1(x) overflows (``iv(0.5, 1e-250)`` is 0, the
+    true value 8.0e-126). Torch: on the host, as ``bessely``."""
     return _binary('besseli', nu, x, _on_host(besseli))
 
 
 def besselk(nu: Any, x: Any) -> Any:
     """The modified Bessel function of the second kind K_nu(x) = K_-nu(x) of real order nu,
     element-wise: scipy 1.18.1's ``scipy.special.kv`` (AMOS), carried in the core, its bits
-    scipy's where measured. +inf at x = 0 (at every order, NaN included) and below x = 2.2e-305
-    (AMOS's cut: the true value of K_0 there is about 702), NaN at x < 0 and at an infinite
-    order, 0 past x = 710 (1 + |nu|) and wherever AMOS's value underflows (from about x = 697.9 at
-    order 0, where the true value is about 4e-305); at x = +inf, 0, and NaN past order 2.5e305.
+    scipy's where measured. +inf at x = +-0 (at every order, NaN and +-inf included) and below
+    x = 2.2250738585072014e-305 (AMOS's cut: the true value of K_0 there is about 702), NaN at
+    x < 0 and at an infinite order with x > 0, 0 past x = 710 (1 + |nu|) and wherever AMOS's
+    value underflows (from about x = 697.87 at order 0, where the true value is about 4e-305);
+    at x = +inf, 0, and NaN past order 2.53e305 (where ``710 (1 + |nu|)`` overflows). At a
+    nonzero order below about 1.77e-309 in magnitude scipy's K leaves the function on 0 < x < 2:
+    +inf or NaN (``kv(5e-324, 1)`` is NaN, K_0(1) = 0.42).
     Torch: on the host, as ``bessely``."""
     return _binary('besselk', nu, x, _on_host(besselk))

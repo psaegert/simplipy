@@ -82,8 +82,9 @@ pub fn pow(x: f64, y: f64) -> f64 {
     super::aligned_pow(x, y)
 }
 
-/// The real n-th root (IEEE-754 `rootn`): odd index signed, even index principal, NaN for a
-/// zero or non-integer index, a negative index the reciprocal.
+/// The real n-th root (IEEE-754 `rootn`'s cells, not its correct rounding: see `rootn_f64`):
+/// odd index signed, even index principal, NaN for a zero or non-integer index, a negative
+/// index the reciprocal.
 #[inline]
 pub fn rootn(x: f64, n: f64) -> f64 {
     super::rootn_f64(x, n)
@@ -169,9 +170,10 @@ pub fn modulo(a: f64, b: f64) -> f64 {
     }
 }
 
-/// `atan2(y, x)`, the angle of the point (x, y) in (-pi, pi], from the elementary-function
+/// `atan2(y, x)`, the angle of the point (x, y) in [-pi, pi], from the elementary-function
 /// source with C99's cells: `atan2(+-0, +0) = +-0`, `atan2(+-0, -0) = +-pi`,
-/// `atan2(+-inf, +-inf) = +-pi/4` or `+-3pi/4`.
+/// `atan2(+-0, x < 0) = +-pi`, `atan2(+-inf, +-inf) = +-pi/4` or `+-3pi/4` (so -pi is the angle
+/// of a negative zero y on the negative x axis).
 #[inline]
 pub fn atan2(y: f64, x: f64) -> f64 {
     elementary::atan2(y, x)

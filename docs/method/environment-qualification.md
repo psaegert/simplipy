@@ -18,6 +18,14 @@ can prove. This is not hypothetical; it is measured:
 > simply different, and only the environment record makes the difference
 > attributable.
 
+Nor is it always a handful. One build of the core, run on glibc 2.39 and on
+glibc 2.43 over the same 1.26 million arguments, gives different bits for
+`asinh` at 11% of them, `atanh` at 3.7%, `acosh` at 3.4% and `erf` at 2.2%
+(by one or two ulp; at those points glibc 2.43's value is the correctly rounded
+one, glibc 2.39's up to 1.4 ulp off), and the same bits for
+every other operator, the Bessel functions and `erfc` included (650,000 and
+1.26 million points).
+
 The exact-rational core is unaffected (rational arithmetic has no libm); the
 qualification is about the fold path and the numeric confirmation/judging
 stages.
@@ -30,8 +38,11 @@ product and quotient of two complex numbers to runtime routines, `__muldc3` and
 `__divdc3`, and runtimes differ between machines in the last bits of a
 quotient. The engine calls none of them: the core computes both itself, with
 the algorithms of GCC's runtime (C99 Annex G's product, Smith's quotient with
-the scaling of Baudin and Smith, 2012), so these three functions give the same
-bits on every platform. Against GCC's runtime on Linux, 29 million operand sets
+the scaling of Baudin and Smith, 2012), so their complex products and quotients
+give the same bits on every platform (their elementary functions, `exp`, `log`
+and the complex `cexp`, `clog`, `csqrt`, `csinh`, `ccosh` and `cabs`, are still
+the platform's libm, so their values are not: see the end of this section).
+Against GCC's runtime on Linux, 29 million operand sets
 per function, drawn to reach every branch (ordinary, subnormal and huge parts,
 zero divisors, infinite and NaN parts, both orientations), give the same values;
 a NaN may carry another operand's sign and payload, which no value reads.

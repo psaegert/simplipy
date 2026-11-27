@@ -1577,7 +1577,10 @@ fn u_erf(v: &Vs) -> Vs {
 /// `besselk`) widen their kernel images by, in both readings: off their range events the kernels
 /// are within 2^-41 of the true value where measured (`erfc` 2^-44, I and K 2^-42, the Nicholson
 /// bound of Y 2^-41.7), so an image read where the function is extremal holds the function's
-/// values and the kernel's.
+/// values and the kernel's. Not relatively near a zero: I at a negative non-integer order has
+/// zeros, where its error is absolute (`besseli(-1.25, 0.9321309848066271)` is 0, the true
+/// value 2.4e-17; `besseli(-1.5, 1.1996786402577342)` is 8.9e-16, the true value 4.6e-16), and
+/// the arm of `besseli` reads a negative order only at a point (`bessel_point`).
 const SCIPY_KERNEL_MARGIN: f64 = 9.313225746154785e-10; // 2^-30
 
 /// The ulps the arms of the scipy kernels step their images out by: the kernels are monotone
@@ -2049,8 +2052,9 @@ fn negative_order_bound(lo: f64, hi: f64, x: f64) -> Option<f64> {
 /// 0 < |x| <= 2: there the series J_m(t) = sum_j (-1)^j (t/2)^(2j+m) / (j! (m+j)!) alternates
 /// with decreasing terms, so t0 - t1 <= J_m(t) <= t0 - t1 + t2, with t0 = (t/2)^m / m!
 /// increasing in t, t1 / t0 = (t/2)^2 / (m+1) and t2 / t0 = (t/2)^4 / (2 (m+1) (m+2)). Widened
-/// by 2^-36 relative (the kernel's error, measured within
-/// about 2,600 ulp, and this arithmetic's); the sign follows `J_-m = (-1)^m J_m` and
+/// by 2^-36 relative, 65,536 ulp (the kernel's error: 656 ulp the largest on 1,500 points of
+/// this region, about 7,000 at 0.1 from a zero of J elsewhere; and this arithmetic's); the
+/// sign follows `J_-m = (-1)^m J_m` and
 /// `J_m(-t) = (-1)^m J_m(t)`. `None` outside that region, or where the bound nears underflow.
 fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
     if !x.has_fin || x.pinf || x.ninf {
@@ -2095,8 +2099,9 @@ fn besselj_integer_small_argument(n: f64, x: &Vs) -> Option<(f64, f64)> {
 /// kernels: Y and K are NaN-free at every finite x >= 0 there (measured to order 1e4), I's NaNs
 /// are float64's own (`IV_TINY`, `IV_HUGE`).
 const SCIPY_BESSEL_NU: f64 = 1e3;
-/// Below this argument scipy's I is NaN in float64 (its Wronskian `1/x` overflows below about
-/// 5.6e-309), and its corner is read here instead.
+/// Below this argument scipy's I may be NaN in float64 at orders to 50 (measured: NaN at every
+/// argument below about 1.1e-308 and at scattered ones up to 6e-307), and its corner is read
+/// here instead.
 const IV_TINY: f64 = 1e-300;
 /// Past this argument scipy's I may be NaN in float64 above order 50 (the uniform expansion's
 /// `(x/nu)^2` overflows past about 1.3e154 nu).
@@ -2201,7 +2206,7 @@ fn monotone_image(mut r: Vs, lo: f64, hi: f64, positive: bool) -> Vs {
 /// the corner orders read at `BESSEL_NU_FLOOR` or 0. +inf at the point x = 0 at every order (in
 /// float64 at a NaN order too), and where a hull's edge 0 is attained on positive measure; an
 /// unbounded edge elsewhere. NaN at x < 0 and at -inf; 0 at +inf under a finite order (in
-/// float64 NaN instead past order 2.5e305, where xsf's cut `710 (1 + |nu|)` overflows). An
+/// float64 NaN instead past order 2.53e305, where xsf's cut `710 (1 + |nu|)` overflows). An
 /// infinite order: +inf on x >= 0 in the reals, NaN at x > 0 in float64 (the kernel's cell), as
 /// at a subnormal order (`BESSEL_NU_FLOOR`). Orders past `SCIPY_BESSEL_NU` are refused.
 fn b_besselk(nu: &Vs, x: &Vs) -> Option<Vs> {
