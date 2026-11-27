@@ -148,6 +148,9 @@ def walk(eng, X):
     corpus = default_corpus()
     r = {'n': len(corpus), 'errors': [], 'idem_rows': [], 'perm_rows': [],
          'complexity_in': 0, 'complexity_out': 0, 'screened': 0, 'flagged': []}
+    # the step cap's count is process-wide, and another suite binds it on purpose (F31's
+    # replay in test_audit_reproductions_015.py): the walk reads what it adds itself
+    cap_binds_before = eng._core.step_cap_binds()
     for i, sk in enumerate(corpus):
         sk = list(sk)
         try:
@@ -169,6 +172,7 @@ def walk(eng, X):
                     r['flagged'].append((i, num, sk, explicit))
         except Exception as ex:  # noqa: BLE001 -- every raise is a gate failure, collected
             r['errors'].append((i, f'{type(ex).__name__}: {ex}'))
+    r['step_cap_binds'] = eng._core.step_cap_binds() - cap_binds_before
     return r
 
 
@@ -185,7 +189,7 @@ class TestCorpusGate:
     def test_step_cap_never_binds(self, eng, walk):
         # The walk ran the deployed default effort on every row. A binding step cap would
         # leave a non-fixpoint answer with no other signal.
-        assert eng._core.step_cap_binds() == 0
+        assert walk['step_cap_binds'] == 0
 
     def test_screen_coverage_exact(self, walk):
         # anti-vacuity, pinned exactly: 400 rows minus the 135 whose INPUT carries

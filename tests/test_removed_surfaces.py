@@ -162,12 +162,15 @@ class TestRemovedIn015:
 
 def test_the_compatibility_policy_is_the_hard_cut() -> None:
     """The published policy matches what the releases do: a removal is a hard cut,
-    announced in the release that makes it, and the page carries no open question."""
+    announced in the release that makes it, a rename may keep its old name for one minor release
+    with a DeprecationWarning (the f64 -> strict rename does; the docs review's D7 made the page
+    say so), and the page carries no open question."""
     import os
     import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     page = open(os.path.join(root, 'docs', 'compatibility.md'), encoding='utf-8').read()
     versioning = page.split('## Versioning', 1)[1].split('\n## ', 1)[0]
-    assert 'A removal is a hard cut, announced in the release that makes it' in versioning
+    assert 'A removal is usually a hard cut, announced in the release that makes' in versioning
+    assert 'A rename may instead keep the old name\nworking for one minor release' in versioning
     assert 'PENDING' not in page
     assert not re.search(r'warning for at\s+least one minor release', page)
