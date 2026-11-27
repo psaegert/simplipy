@@ -585,6 +585,10 @@ def remap_expression(source_expression: list[str], dummy_variables: list[str], v
     return source_expression, variable_mapping
 
 
+#: A rule slot of any sort: `_k` (any subtree), `?k` (a variable leaf), `!k` and `$k`.
+_SLOT_TOKEN = re.compile(r'[_!?$][0-9]+')
+
+
 # The dedup key of a rule side: either the engine's INTERNAL FORM (the AC parser
 # accepted the side) or, for a side the parser refuses, its raw spelling. The bool
 # keeps the two APART -- a tagged canonical key can be spelled exactly like a raw
@@ -622,7 +626,13 @@ def _dedup_keyed_rules(
         # EARNED by the post-mine promotion pass, never emitted here. Already-sorted rule
         # sets pass through untouched: `?N`/`_N` tokens are not dummy variables and are
         # never remapped.
-        remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables, variable_prefix=variable_prefix)
+        #
+        # The fresh names start past the rule's own slots (every sort shares one index space:
+        # `?0` and `_0` are the same slot to the miner's channel), so a variable never lands on a
+        # slot the rule already holds: `inv * x1 ?0` became `inv * ?0 ?0`, another rule.
+        taken = [int(t[1:]) for t in (*rule[0], *rule[1]) if _SLOT_TOKEN.fullmatch(str(t))]
+        offset = max(taken) + 1 if taken else 0
+        remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables, variable_prefix=variable_prefix, enumeration_offset=offset)
         remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping, variable_prefix=variable_prefix)
         remapped.append((tuple(remapped_source), tuple(remapped_target)))
 

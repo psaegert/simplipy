@@ -313,11 +313,15 @@ def test_F23_the_wheel_ships_the_notice_of_the_allocator_it_compiles_in() -> Non
     assert 'mimalloc' in text and 'Microsoft Corporation' in text
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Constructor rule renaming, found while replaying F34's class at 3a6ed3a: the strict set's "
-    "dedup renames a rule's x-variables to ?0, ?1, ... from 0, over the rule's own slots, so "
-    "`inv(x1*?0) -> 1` loads as `inv(?0*?0) -> 1` (another rule; the permissive set is not renamed)."))
+# Constructor rule renaming (R8), found while replaying F34's class at 3a6ed3a and fixed in the 0.15
+# fix round: the strict set's dedup renamed a rule's x-variables to ?0, ?1, ... from 0, over the
+# rule's own slots, so `inv(x1*?0) -> 1` loaded as `inv(?0*?0) -> 1` (another rule; the permissive
+# set is not renamed). The fresh names start past the rule's slots now.
 def test_a_rules_variable_name_never_collides_with_its_slots() -> None:
     rule = (('inv', '*', 'x1', '?0'), ('1',))
     e = SimpliPyEngine(OPERATORS, rules=[rule], rules_permissive=[rule])
     assert [lhs.count('?0') for lhs, _ in e.simplification_rules] == [1], e.simplification_rules
+    assert e.simplification_rules == [(('inv', '*', '?1', '?0'), ('1',))]
+    mixed = (('+', 'x0', '*', '_2', 'x1'), ('*', 'x1', 'x0'))
+    e = SimpliPyEngine(OPERATORS, rules=[mixed])
+    assert e.simplification_rules == [(('+', '?3', '*', '_2', '?4'), ('*', '?4', '?3'))]
