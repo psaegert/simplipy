@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.8 (2026-11-27)
+
+- **Security.** Operator realizations are now checked against the trusted modules at the
+  callable they resolve to. Previously an engine file from an untrusted source could make
+  `as_callable` call functions outside them. The realizations of the shipped engines are
+  unchanged. Advisory: GHSA-XXXX-XXXX-XXXX.
+
 ## 0.14.7.post1 (2026-11-14, documentation only)
 
 The package's code is unchanged; the documentation and the docstrings it renders change.
