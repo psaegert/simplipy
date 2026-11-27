@@ -224,9 +224,16 @@ _SPECIAL_LEAVES = {'np.pi', 'np.e', 'float("inf")', 'float("-inf")', 'float("nan
 def _token_of(t: Any) -> str:
     """One element of a token sequence as its token: a ``str`` as itself, a number as its
     ``str``. Anything else is refused: ``str(True)`` and ``str(None)`` are words, not the tokens
-    of anything the element denotes."""
+    of anything the element denotes.
+
+    A numpy float narrower than a double (``float32``, ``float16``) is written as the double it
+    holds exactly, ``repr(float(t))``: its own ``str`` is the shortest spelling that rounds back to
+    the NARROW type, so ``np.float32(0.1)`` would read as exactly 1/10 instead of the
+    0.10000000149011612 it holds."""
     if isinstance(t, str):
         return t
+    if isinstance(t, np.floating) and t.dtype.itemsize < 8:
+        return repr(float(t))
     if isinstance(t, (int, float, np.integer, np.floating)) and not isinstance(t, (bool, np.bool_)):
         return str(t)
     raise ValueError(f'a token must be a str or a number, not {type(t).__name__} ({t!r})')

@@ -242,6 +242,16 @@ def test_non_token_elements_are_refused_naming_their_type(engine, element) -> No
             getattr(engine, entry)(['+', element, 'x0'])
 
 
+def test_a_narrow_numpy_float_reads_as_the_double_it_holds(engine) -> None:
+    """API-14 (fixed in the 0.15 fix round): a float32 or float16 token was written with its own
+    ``str``, the shortest spelling for the NARROW type, so ``np.float32(0.1)`` read as exactly 1/10
+    instead of the 0.10000000149011612 it holds (a silent change of 1.5e-8 relative)."""
+    assert engine.simplify(['*', np.float32(0.1), 'x0']) == ['*', '0.10000000149011612', 'x0']
+    assert engine.to_prefix(['*', np.float16(0.1), 'x0']) == ['*', '0.0999755859375', 'x0']
+    assert engine.to_prefix(['*', np.float64(0.1), 'x0']) == ['*', '0.1', 'x0']
+    assert engine.to_prefix(np.array(['*', np.float32(0.5), 'x0'], dtype=object)) == ['*', '0.5', 'x0']
+
+
 def test_a_tuple_answers_as_a_tuple(engine) -> None:
     assert engine.simplify(('+', 'x0', 'x0')) == ('*', '2', 'x0')
 
