@@ -3883,7 +3883,7 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     or names what breaks it:
 
     - ``sidecar``: the sidecar exists, records a final, uninterrupted mine, and its mode is
-      ``mode``;
+      ``mode`` (the file's bytes are not compared with the sha256 it records, ``resume``);
     - ``rules``: the file holds rules (an empty file passes every other gate vacuously);
     - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
     - ``engine_owned_law``: no rule that is a respelling within one canonical state, or an
@@ -3923,11 +3923,14 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       agree (``exp(sin(np.pi)) -> 1`` holds, ``sin(np.pi) -> 0.1`` does not); in ``permissive``
       where the table's two values agree at float resolution (``0*tan(asin(1)) -> 0`` does not:
       the left side has no value);
+    - ``unmined``: no rule mentions an operator the mine supports and does not mine, one its
+      sidecar's ``operator_max_length`` bounds at 0 (``_unmined``);
     - ``basis``: the sidecar records what every rule's verdict rests on in the mode, proved or
-      evidence (``judge_bases``), one entry per rule of the file.
+      evidence (``judge_bases``), one entry per rule of the file; the record is read as the
+      mine wrote it, not judged again.
 
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}, 'basis'}``,
-    ``basis`` the number of rules proved and held on evidence alone.
+    ``basis`` the number of rules the sidecar records as proved and as held on evidence alone.
 
     The judge reads its own battery, the one every caller's judgment reads.
     """
