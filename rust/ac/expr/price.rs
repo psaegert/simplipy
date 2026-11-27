@@ -39,9 +39,11 @@ use super::*;
 /// behind a one-bit selector, and c_free' re-derives to 67 bits. Current authority:
 /// `mu_rat`, `decimal_code`, `mu_numeric_str`, `mu_free` below.)
 ///
-/// Worked examples: `x + y` = 24, `x*y` = 24, `2x` = 18, `x^2` = 18, `1/x` = 16,
-/// `sin(x)` = 16, `sin(pi)` = 16, `E*x` = 24 < `2.718281828459045*x` = ~117,
-/// `<constant>*x` = 144, `exp(pi*x)` = 32 < `pow(23.14..., x)` = ~121.
+/// The preamble's worked examples, in its flat 1/8 units and superseded with it: `x + y` = 24,
+/// `x*y` = 24, `2x` = 18, `x^2` = 18, `1/x` = 16, `sin(x)` = 16, `sin(pi)` = 16, `E*x` = 24 <
+/// `2.718281828459045*x` = ~117, `<constant>*x` = 144, `exp(pi*x)` = 32 < `pow(23.14..., x)` =
+/// ~121. Under the current table, in bits: `x + y` = `x*y` = 15, `2x` = `x^2` = 11.585, `1/x` = 9,
+/// `sin(x)` = 12, `sin(pi)` = 10, `E*x` = 13, `<constant>*x` = 76 (docs/formal.md, section 5).
 /// The symbol UNIT, in BITS: what one grammar symbol costs at the ratified 1/8 pin, and
 /// the scale every entry of the symbol table below is expressed against;
 /// no node is priced at the bare unit except an unclassified function head -- the table
@@ -413,9 +415,10 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
 /// codeword alone -- still plus the selector, so every priced numeric leaf pays exactly
 /// one selector bit and the codebook is a genuine prefix code.
 ///
-/// Each codeword total carries the sign bit and the two-bit mantissa floor exactly as
-/// the reference rescorer priced them (the mantissa at the
-/// integer price `max(2, L(m))`, the exponent at `L(k)`, the sign once); the NATIVE
+/// Each codeword total carries the sign bit and the mantissa floor (`MU_RAT_FLOOR`, one
+/// bit since the floor moved from the reference rescorer's two) as the reference rescorer
+/// priced them (the mantissa at the integer price `max(floor, L(m))`, the exponent at
+/// `L(k)`, the sign once); the NATIVE
 /// measure adds the selector uniformly on top, which the study rescorer -- computing
 /// `min(old, dec)` only -- deliberately omitted. Native mu' and study-rescored prices
 /// therefore differ by a constant 1000 mB per priced numeric leaf, by design.
@@ -467,16 +470,6 @@ pub fn mu_rat(r: &Rat) -> u64 {
     mu_rat_exact(r)
 }
 
-/// The two codewords' TOTAL prices, in milli-bits, each carrying its own floor and the
-/// sign bit, WITHOUT the selector (the caller adds it once): `(rational,
-/// decimal_scientific_if_terminating)`.
-///
-/// Rational: `max(2 bits, L(p) [+ L(q) if q > 1] + sign)` -- an integer pays only its
-/// own cost (implicit denominator), a genuine fraction pays both components. Decimal-
-/// scientific: `max(2 bits, L(m)) + L(k) + sign` -- the mantissa at the integer price
-/// (exactly `c([str(mant)])` of the rescorer), the exponent on top. These are ALSO the
-/// exact quantities the serializer argmin compares (`decimal_spelling_wins`), so the
-/// spelling emitted is by construction the codeword the measure priced.
 /// The literal codeword FLOOR, in milli-bits: ONE bit, beyond the selector (a floor of
 /// two was blind).
 ///
@@ -497,6 +490,18 @@ pub(super) const MU_RAT_FLOOR: u64 = MU_MILLI;
 /// The codeword totals of a literal: (fraction, decimal, reciprocal), each without the selector.
 type CodewordTotals = (u64, Option<u64>, Option<u64>);
 
+/// The three codewords' TOTAL prices, in milli-bits, each carrying its own floor
+/// (`MU_RAT_FLOOR`) and the sign bit, WITHOUT the selector (the caller adds it once):
+/// `(rational, decimal_scientific_if_terminating, reciprocal_if_admitted)`.
+///
+/// Rational: `max(floor, L(p) [+ L(q) if q > 1] + sign)` -- an integer pays only its
+/// own cost (implicit denominator), a genuine fraction pays both components. Decimal-
+/// scientific: `max(floor, L(m)) + L(k) + sign` -- the mantissa at the integer price
+/// (exactly `c([str(mant)])` of the rescorer), the exponent on top. Reciprocal:
+/// `L(1) + max(floor, L(m')) + L(k') + sign` for `1/c`, `c = m' * 10^k'` (see
+/// `mu_rat_exact`). These are ALSO the exact quantities the serializer argmin compares
+/// (`decimal_spelling_wins`, `reciprocal_spelling_wins`), so the spelling emitted is by
+/// construction the codeword the measure priced.
 pub(super) fn mu_rat_codeword_totals(r: &Rat) -> CodewordTotals {
     // A literal's codewords cost integer divisions and logarithms (128-bit or big), and the same
     // values are priced again and again while candidates are compared (the sign placement in
@@ -1164,7 +1169,8 @@ fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
             let head = mu_pow();
             if let Ex::Num(r) = &**ex {
                 // Rational exponent as a coefficient slot: `x^-1` is division (pure
-                // structure, the sign is free), `x^2` pays cost(2), `x^-2` the same.
+                // structure, the sign is free), `x^2` pays cost(2), `x^-2` cost(-2), one bit
+                // more: its sign.
                 let mag = if r.is_one() || *r == Rat::NEG_ONE {
                     0
                 } else {
