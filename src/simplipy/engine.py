@@ -1080,17 +1080,18 @@ class SimpliPyEngine(_Evaluation):
           a divisor, which pays the power head (3 bits) over itself, as ``complexity`` prices
           ``y^-1``. ``-1/y`` is the sign of the reciprocal, ``-(1/y)``: a numerator ``-1`` is one
           sign bit (``-1/x0`` costs 10 bits). Dividing by a written power ``y^k`` is ``y^-k`` when
-          ``k`` is a number, the division's sign merging into it (``x/y**2`` holds y^-2 and
-          ``x/y**-2`` holds y^2), and the reciprocal of the power otherwise (``x/y**z``: the
-          power head over ``y**z``). Dividing by a number ``c`` is the literal ``1/c`` (``x/3``
-          holds the literal 1/3, as ``complexity`` prices it);
+          ``k`` is one number (a literal, ``1/c`` or ``-1/c``), the division's sign merging into
+          it (``x/y**2`` holds y^-2 and ``x/y**-2`` holds y^2), and the reciprocal of the power
+          otherwise (``x/y**z``: the power head over ``y**z``). Dividing by a number ``c`` is the
+          literal ``1/c`` (``x/3`` holds the literal 1/3, as ``complexity`` prices it);
         * a NUMBER pays the literal code on the EXACT value written, with every digit: a long
           literal is not rounded to its double (``6.674000000000001e-11`` costs its 16 digits),
-          and a written minus is its sign bit. A quotient of two integer literals written
-          directly, ``p/q``, is ONE literal, the number p/q, as ``1/q`` and ``0.75`` are
-          (``3/4`` costs 5.322 bits and ``x0**(3/2)`` 13.585), while numbers written apart in a
-          product pay apart (``4*x0/3`` 16.322, ``2*x0*3`` 14.585). This reading of ``p/q`` awaits
-          the owner's ruling; as a division, ``3/4`` would cost 10.322 bits (``p`` and ``1/q``);
+          and a written minus is its sign bit. A FRACTION costs its division and a decimal its
+          value (the owner's ruling, 2026-11-28): ``p/q`` is ``p`` and the literal ``1/q``, as
+          any number divided by a number, so ``3/4`` costs 10.322 bits where ``0.75`` costs
+          5.322, ``x0**(3/2)`` costs 18.585, and ``3/4*x0`` and ``4*x0/3`` cost the same, 16.322
+          (``2*x0*3`` 14.585: numbers written apart pay apart). Only ``1/q`` and ``-1/q`` are one
+          literal, the reciprocal's 1 being the notation's (``1/2`` 3.585 bits);
         * ``np.pi``, ``np.e``, the infinities, NaN, ``<constant>`` and named constants
           (``<constant_NAME>``) are priced exactly as ``complexity`` prices them; every other
           symbol is a variable (6 bits);
@@ -1118,14 +1119,16 @@ class SimpliPyEngine(_Evaluation):
         which is not promised: the canonical serializations write some states otherwise.
         Measured over the 0.15 census (31,993 canonical answers per mode: srbf's 6,531 ground
         truths and a tenth of flash-ansr T8.1's training inputs and of srbf's predictions), the
-        written price of the answer equals ``complexity`` on 94.75% (``strict``) and 94.39%
-        (``permissive``) of the infix answers, and on 92.43% and 92.35% of the prefix answers.
-        Every difference is a serializer's: a negation distributed over a sum (``-x0 - x1`` for
-        ``-(x0 + x1)``, 17 bits against 16), a coefficient p/q printed ``p*x/q``, its numbers
-        apart (``4*x0/3``, 16.322 against 14.322), and in the prefix answers a product of
-        reciprocals written as the reciprocal of a product (``inv * x0 x1``, 18 against 21) and
-        a sign on a product inside a product (``/ neg * x0 x1 x2``, 28 against 25); a few answers
-        print a factored form that ``complexity`` reads distributed.
+        written price of the answer equals ``complexity`` on 89.81% (``strict``) and 88.98%
+        (``permissive``) of the infix answers, and on 87.66% and 87.09% of the prefix answers.
+        Every difference is a serializer's: a fraction the state holds as one number, printed
+        ``p/q``, which costs its division written and its value canonical (``3/4``, 10.322 bits
+        against 5.322; ``x0^(3/2)``, 18.585 against 13.585), a negation distributed over a sum
+        (``-x0 - x1`` for ``-(x0 + x1)``, 17 bits against 16), a coefficient p/q printed
+        ``p*x/q``, its numbers apart (``4*x0/3``, 16.322 against 14.322), and in the prefix
+        answers a product of reciprocals written as the reciprocal of a product (``inv * x0
+        x1``, 18 against 21) and a sign on a product inside a product (``/ neg * x0 x1 x2``, 28
+        against 25); a few answers print a factored form that ``complexity`` reads distributed.
         """
         if isinstance(expression, str):
             tokens = self._core.parse(expression, strict=True)

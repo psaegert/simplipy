@@ -109,15 +109,17 @@ the code book prices:
   symbol `float("-inf")`, 8 bits;
 - `1/y` is the reciprocal of `y` (the 1 is the notation's) and `inv(y)` is the same, and `-1/y`
   is the sign of the reciprocal, `-(1/y)`; dividing by a written power `y^k` is `y^-k` when `k`
-  is a number, the division's sign merging into it (`x/y^-2` holds `y^2`), and the reciprocal of
-  the power otherwise (`x/y^z`); dividing by a number, `x/3`, holds the literal 1/3, as
-  `complexity` prices it;
+  is one number (a literal, `1/c` or `-1/c`), the division's sign merging into it (`x/y^-2`
+  holds `y^2`), and the reciprocal of the power otherwise (`x/y^z`); dividing by a number, `x/3`,
+  holds the literal 1/3, as `complexity` prices it;
 - a number pays the literal code on the exact value written, every digit (a long literal is not
-  rounded to its double); a quotient of two integer literals written directly, `p/q`, is one
-  literal, the number p/q, as `1/q` and `0.75` are, while numbers written apart in a product pay
-  apart (`4*x0/3`, `2*x0*3`) — this reading of `p/q` awaits the owner's ruling, and as a division
-  `3/4` would cost 10.322 bits; `np.pi`, `np.e`, the infinities, NaN and the constants
-  `<constant>` and `<constant_NAME>` are priced as `complexity` prices them;
+  rounded to its double); as written, a fraction costs its division and a decimal its value (the
+  owner's ruling, 2026-11-28): `p/q` is `p` and the literal `1/q`, as any number divided by a
+  number, so `3/4` costs 10.322 bits where `0.75` costs 5.322, and `3/4*x0` and `4*x0/3` cost the
+  same; only `1/q` and `-1/q` are one literal, the reciprocal's 1 being the notation's (`1/2`
+  3.585 bits). In the canonical state a fraction is one number and `complexity` prices its value;
+  `np.pi`, `np.e`, the infinities, NaN and the constants `<constant>` and `<constant_NAME>` are
+  priced as `complexity` prices them;
 - an alias is priced as its target, and a defined function (see
   [Defined functions](artifacts.md#defined-functions)) pays its own head at the tier of the
   function its definition applies: `sqrt`, `cot`, `sec` and `csc` 6 bits, `acot`, `asec` and
@@ -136,8 +138,10 @@ the code book prices:
 | `-inf` | 8 | 8 |
 | `x0/x1**x2` | 27 | 27 |
 | `max(x0, x1, x2)` | 26 | 26 |
-| `3/4` | 5.322 | 5.322 |
-| `x0**(3/2)` | 13.585 | 13.585 |
+| `0.75` | 5.322 | 5.322 |
+| `3/4` | 10.322 | 5.322 |
+| `x0**(3/2)` | 18.585 | 13.585 |
+| `3/4*x0` | 16.322 | 14.322 |
 | `4*x0/3` | 16.322 | 14.322 |
 | `6.674e-11*x0*x1/x2**2` | 45.197 | 45.197 |
 | `x0*x1/(4*np.pi*x2*x3**2)` | 45.907 | 47.907 |
@@ -165,11 +169,14 @@ srbf's predictions), the written price of the answer equals `complexity`:
 
 | answer | `strict` | `permissive` |
 |---|---|---|
-| infix print (`simplify(str)`) | 30,312 (94.75%) | 30,197 (94.39%) |
-| prefix tokens | 29,571 (92.43%) | 29,544 (92.35%) |
+| infix print (`simplify(str)`) | 28,732 (89.81%) | 28,467 (88.98%) |
+| prefix tokens | 28,044 (87.66%) | 27,863 (87.09%) |
 
 Every difference is the serializer's (an answer can show more than one cause):
 
+- **F**, a fraction the state holds as one number, printed `p/q`: written it costs its division,
+  canonical its value (`3/4`, 10.322 bits against 5.322; `x0^(3/2)`, 18.585 against 13.585);
+  1,655 and 1,820 infix prints, 1,653 and 1,817 prefix answers;
 - **N2**, a negation distributed over a sum: the printers write `-(x0 + x1)` as `-x0 - x1` (17
   bits written, 16 canonical); 1,617 and 1,668 infix prints, 761 and 770 prefix answers;
 - a coefficient p/q printed `p*x/q`, its numbers written apart (`4*x0/3`, 16.322 against 14.322);

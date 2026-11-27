@@ -600,19 +600,21 @@ model predictions.
   sum and of `*`/`/` one product, whatever the bracketing, a bracketed subtrahend or divisor
   staying whole; operands unordered; `max(a, b, c)` is one call; `-y` is a sign, and `-inf` the
   symbol `float("-inf")`; `1/y` and `inv(y)` are the reciprocal and `-1/y` its sign
-  (`-(1/y)`, 10 bits for `-1/x0`); dividing by `y^k` is `y^-k` for a number `k`, the sign
-  merging into it, and the reciprocal of the power otherwise (`x/y^z`); a divisor `x/3` is the
-  literal 1/3. A number pays the literal code on the exact value written, every digit, and a
-  quotient of two integer literals `p/q` is one literal, the number p/q (`3/4` 5.322 bits,
-  `x0^(3/2)` 13.585), while numbers written apart in a product pay apart (`4*x0/3`); this reading
-  of `p/q` awaits the owner's ruling. An alias pays its target's price, a defined function its
+  (`-(1/y)`, 10 bits for `-1/x0`); dividing by `y^k` is `y^-k` for one number `k` (a literal,
+  `1/c` or `-1/c`), the sign merging into it, and the reciprocal of the power otherwise
+  (`x/y^z`); a divisor `x/3` is the literal 1/3. A number pays the literal code on the exact
+  value written, every digit; as written, a fraction costs its division and a decimal its value
+  (the owner's ruling): `p/q` is `p` and the literal `1/q`, so `3/4` costs 10.322 bits (`0.75`
+  5.322, `x0^(3/2)` 18.585), and `3/4*x0` and `4*x0/3` cost the same, 16.322; only `1/q` and
+  `-1/q` are one literal (`1/2` 3.585). An alias pays its target's price, a defined function its
   own head (`sqrt`, `cot`, `sec` and `csc` 6 bits, `acot`, `asec` and `acsc` 8), and any other
   undeclared head is refused. `x0 + 0` costs 11 bits written (6 canonical), `exp(1)` 8 (4),
   `x0 - x0/1 + 2` 23.585 (2.585); `x0*x1/(4*np.pi*x2*x3**2)` costs 45.907 written and 47.907
-  canonical. On the census's canonical answers the two prices agree on 94.75% (`strict`) and
-  94.39% (`permissive`) of the infix prints and 92.43% and 92.35% of the prefix answers; every
-  difference is the serializer's (a distributed negation, a coefficient printed `p*x/q`, and in
-  prefix a grouped reciprocal or a sign on a product inside a product). Additive: no answer,
+  canonical. On the census's canonical answers the two prices agree on 89.81% (`strict`) and
+  88.98% (`permissive`) of the infix prints and 87.66% and 87.09% of the prefix answers; every
+  difference is the serializer's (a fraction held as one number and printed `p/q`, a distributed
+  negation, a coefficient printed `p*x/q`, and in prefix a grouped reciprocal or a sign on a
+  product inside a product). Additive: no answer,
   price of `complexity`, rule or mine changes.
 - **Defined functions** (`defined_functions:` in a config). A function given by a name, an arity
   and a definition over the config's operators, its arguments `_0`, `_1`, ...; every shipped

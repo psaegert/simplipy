@@ -15,12 +15,6 @@ from simplipy import SimpliPyEngine
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# DEFINITION POINT F, PENDING THE OWNER (2026-11-27): is a quotient of two integer literals written
-# directly, `p/q`, ONE rational literal (True, the recommended reading) or a division, `p` and the
-# literal `1/q` apart (False)? It mirrors FRACTION_IS_ONE_LITERAL in rust/ac/expr/written.rs; the
-# switch flips both, and these tests then pin the other column.
-FRACTION_IS_ONE_LITERAL = True
-
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
@@ -104,8 +98,8 @@ class TestTheIdentificationsInfixForces:
         assert w('0.12345678901234568*x0') == 67625  # its double's shortest spelling
         assert w('6.674000000000001e-11') > w('6.674e-11')
         assert w('2.5') == w('2.50')  # the literal code is the value's: no digit is free or dear
-        # F: a quotient of two integer literals is one literal (pending the owner; see TestTheDecisions)
-        assert w('5/2') == w('2.5') + (0 if FRACTION_IS_ONE_LITERAL else 5000)
+        # a fraction costs its division, a decimal its value (owner, 2026-11-28; see TestTheDecisions)
+        assert w('5/2') == w('2.5') + 5000
 
     def test_named_constants_and_symbols(self, engine: SimpliPyEngine) -> None:
         w = engine.written_complexity
@@ -171,25 +165,26 @@ class TestTheDecisions:
         assert w(['-', 'x0', 'float("-inf")']) == 18000  # x0 - (-inf): a sign on the symbol
         assert w('-1*x0') == 12000  # a factor -1 is a literal: M1 reads only a numerator
 
-    # F, PENDING THE OWNER: (expression, as one literal, as a division). Under either reading
-    # `1/q` and `-1/q` are one literal and numbers written apart in a product pay apart.
-    @pytest.mark.parametrize('expression, one_literal, division', [
-        ('3/4', 5322, 10322), ('-3/4', 6322, 11322), ('3/-4', 6322, 11322), ('5/2', 5170, 10170),
-        ('6/4', 4585, 11129), ('3.0/4', 5322, 10322), ('x0**(3/2)', 13585, 18585),
-        ('x0**(-3/2)', 14585, 19585), ('x0/x1**(3/2)', 23585, 30585), ('1/x0**(3/2)', 14585, 21585),
-        ('x0/(3/4)', 14322, 22322), ('3/4*x0', 14322, 16322), ('x0*(3/4)', 14322, 16322),
-        ('1/4', 4322, 4322), ('-1/4', 5322, 5322), ('4*x0/3', 16322, 16322), ('x0*3/4', 16322, 16322),
-        ('2*x0*3', 14585, 14585), ('2.5/2', 11755, 11755),
+    # The owner's ruling (2026-11-28): "As written, fractions should cost their division, and
+    # numbers their value." A quotient of numbers `p/q` is `p` and the literal `1/q`, as any number
+    # divided by a number; `1/q` and `-1/q` stay the literal 1/q and -1/q (the reciprocal's 1 is
+    # the notation's), and a decimal costs its value. (expression, written price in milli-bits)
+    @pytest.mark.parametrize('expression, price', [
+        ('3/4', 10322), ('-3/4', 11322), ('3/-4', 11322), ('5/2', 10170), ('6/4', 11129),
+        ('3.0/4', 10322), ('x0**(3/2)', 18585), ('x0**(-3/2)', 19585), ('x0/x1**(3/2)', 30585),
+        ('1/x0**(3/2)', 21585), ('x0/(3/4)', 22322), ('3/4*x0', 16322), ('x0*(3/4)', 16322),
+        ('1/4', 4322), ('1/2', 3585), ('-1/4', 5322), ('4*x0/3', 16322), ('x0*3/4', 16322),
+        ('2*x0*3', 14585), ('2.5/2', 11755), ('0.75', 5322),
     ])
-    def test_f_fractions(self, engine: SimpliPyEngine, expression: str, one_literal: int, division: int) -> None:
-        price = one_literal if FRACTION_IS_ONE_LITERAL else division
+    def test_a_fraction_costs_its_division(self, engine: SimpliPyEngine, expression: str, price: int) -> None:
         assert engine.written_complexity(expression) == price
         assert engine.written_complexity(engine.read_infix(expression)) == price
 
-    def test_f_a_fraction_costs_its_value_as_a_decimal_does(self, engine: SimpliPyEngine) -> None:
+    def test_a_fraction_costs_what_its_product_costs_written_either_way(self, engine: SimpliPyEngine) -> None:
         w = engine.written_complexity
-        assert (w('3/4') == w('0.75')) is FRACTION_IS_ONE_LITERAL
-        assert (w('x0**(3/2)') == w('x0**1.5')) is FRACTION_IS_ONE_LITERAL
+        assert w('3/4*x0') == w('4*x0/3') == w('x0*3/4')
+        assert w('3/4') == w('0.75') + 5000  # the division, against the value
+        assert w('x0**(3/2)') == w('x0**1.5') + 5000
 
 
 class TestTheProperty:
@@ -212,13 +207,18 @@ class TestTheProperty:
         canonical = engine.simplify(expression, mode=mode)
         assert engine.written_complexity(canonical) == engine.complexity(canonical, mode=mode)
 
-    @pytest.mark.parametrize('expression', ['3/4', 'x0**(3/2)', '1/x0**(3/2)', 'x0/x1**(3/2)', '-3/4'])
+    # A canonical fraction is printed `p/q` and held as the one number p/q: written, it costs its
+    # division; canonical, its value (owner, 2026-11-28). (expression, written price of its
+    # canonical print, complexity) in milli-bits.
+    @pytest.mark.parametrize('expression, written, canonical', [
+        ('3/4', 10322, 5322), ('-3/4', 11322, 6322), ('x0**(3/2)', 18585, 13585),
+    ])
     @pytest.mark.parametrize('mode', ['strict', 'permissive'])
-    def test_written_equals_canonical_on_fractions_read_as_one_literal(
-            self, engine: SimpliPyEngine, expression: str, mode: str) -> None:
-        canonical = engine.simplify(expression, mode=mode)
-        agree = engine.written_complexity(canonical) == engine.complexity(canonical, mode=mode)
-        assert agree is FRACTION_IS_ONE_LITERAL
+    def test_a_canonical_fraction_costs_its_division_written_and_its_value_canonical(
+            self, engine: SimpliPyEngine, expression: str, written: int, canonical: int, mode: str) -> None:
+        printed = engine.simplify(expression, mode=mode)
+        assert engine.written_complexity(printed) == written
+        assert engine.complexity(printed, mode=mode) == canonical
 
     # The canonical SERIALIZATIONS part from this reading where they write a state other than as
     # it is held; measured over the census and pinned here. (expression, written price of its

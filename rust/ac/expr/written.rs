@@ -8,23 +8,12 @@
 //! the infix notation forces (owner's ruling relayed 2026-11-26: srbf measures ground truths and
 //! predictions "exactly as written, without any modifications that either benefit the benchmark
 //! or the model"). Where the notation leaves a choice, the identification is the one the code
-//! book prices (the overseer's decisions M1, S1, K, L and F, 2026-11-27).
+//! book prices (the overseer's decisions M1, S1, K and L, 2026-11-27), and a quotient of two
+//! numbers is their division (owner's ruling 2026-11-28: "As written, fractions should cost their
+//! division, and numbers their value").
 
 use super::*;
 use crate::operators::Operators;
-
-/// DEFINITION POINT F, PENDING THE OWNER (2026-11-27): what a quotient of two integer literals
-/// written directly, `p/q` (`3/4`, the exponent in `x^(3/2)`), is.
-///
-/// `true`, the overseer's recommended reading: ONE rational literal, priced by the literal code
-/// on the value p/q, as `1/q` and `0.75` are (`3/4` 5.322 bits, `x0^(3/2)` 13.585).
-/// `false`: a division, `p` and the literal `1/q` apart (`3/4` 10.322 bits, `x0^(3/2)` 18.585).
-///
-/// Either way a quotient whose numerator is 1 or -1 is the literal 1/q or -1/q (the reciprocal's
-/// 1 is the notation's; M1), and numbers written apart in a product pay apart (`4*x0/3`,
-/// `2*x0*3`). The switch is this one constant; `tests/test_written_complexity.py` pins the
-/// values of both readings.
-const FRACTION_IS_ONE_LITERAL: bool = true;
 
 /// A node of the expression as written: a leaf token, or a head (its canonical name, an alias
 /// resolved) over its operands.
@@ -167,12 +156,12 @@ fn is_minus_one(n: &Written) -> bool {
     }
 }
 
-/// The exact value of a node written as ONE NUMBER, or `None`: a literal; the reciprocal of a
-/// literal (`1/c`, `inv(c)`: the literal 1/c, its 1 the notation's) and its sign (`-1/c`, M1);
-/// and a quotient of two integer literals written directly, `p/q`
-/// ([`FRACTION_IS_ONE_LITERAL`]). A literal beyond the exact domain has no value here (it is
-/// priced by its spelling), and numbers written apart in a product are not one number. The
-/// value is exact: it is read and computed in the exact number domain.
+/// The exact value of a node written as ONE NUMBER, or `None`: a literal, and the reciprocal of
+/// a literal (`1/c`, `inv(c)`: the literal 1/c, its 1 the notation's) and its sign (`-1/c`, M1).
+/// Any other quotient of numbers is a division, not one number (owner's ruling 2026-11-28:
+/// `3/4` is `3` and the literal `1/4`, as `4*x0/3` is `4`, `x0` and the literal `1/3`). A
+/// literal beyond the exact domain has no value here (it is priced by its spelling). The value
+/// is exact: it is read and computed in the exact number domain.
 fn number(n: &Written) -> Option<Rat> {
     let _exact = crate::ac::rat::number_domain(false);
     match n {
@@ -180,9 +169,7 @@ fn number(n: &Written) -> Option<Rat> {
         Written::Node("inv", k) => leaf_value(&k[0])?.checked_inv(),
         Written::Node("/", k) => {
             let (p, q) = (leaf_value(&k[0])?, leaf_value(&k[1])?);
-            let reciprocal = p.abs().is_one();
-            let fraction = FRACTION_IS_ONE_LITERAL && p.is_integer() && q.is_integer();
-            if reciprocal || fraction {
+            if p.abs().is_one() {
                 p.checked_mul(&q.checked_inv()?)
             } else {
                 None
@@ -246,8 +233,8 @@ enum Factor<'a> {
 
 /// The factors of a run of `*` and `/`: a left operand and a `*` operand continue the run, a
 /// divisor stays whole; `1/y` (and `inv(y)`, the same) is the reciprocal of `y`, its 1 the
-/// notation's, and `-1/y` is the SIGN of the reciprocal, -(1/y) (M1). One number (`3/4`, `1/3`:
-/// [`number`]) is one factor.
+/// notation's, and `-1/y` is the SIGN of the reciprocal, -(1/y) (M1). One number (`1/3`, `-1/3`:
+/// [`number`]) is one factor; `3/4` is the factor `3` and the divisor `4`.
 fn factors<'a>(n: &'a Written<'a>, out: &mut Vec<Factor<'a>>) {
     match n {
         Written::Node("*", k) => {
@@ -395,9 +382,11 @@ fn price(n: &Written, ops: &Operators) -> u64 {
 ///   the literal 1/3, as [`complexity`] prices it).
 /// * A NUMBER pays the literal code on the exact value written, with every digit ([`mu_rat`];
 ///   its print's price beyond the 1,100-bit cap): a long literal is not rounded to its double.
-///   A written minus on a literal is its sign bit. A quotient of two integer literals written
-///   directly, `p/q`, is ONE literal, the number p/q (`3/4`, `x^(3/2)`; definition point F,
-///   [`FRACTION_IS_ONE_LITERAL`]); numbers written apart in a product pay apart (`4*x0/3`).
+///   A written minus on a literal is its sign bit. A FRACTION written `p/q` costs its
+///   division, `p` and the literal `1/q`, as any number divided by a number does (owner's
+///   ruling 2026-11-28: `3/4` 10.322 bits, `3/4*x0` and `4*x0/3` both 16.322; a decimal costs
+///   its value, `0.75` 5.322); only `1/q` and `-1/q` are one literal, the reciprocal's 1 the
+///   notation's.
 /// * `np.pi`, `np.e`, the infinities, NaN, `<constant>` and named constants (`<constant_NAME>`)
 ///   pay their entries, as [`complexity`] prices them; every other symbol is a variable
 ///   (`mu_leaf`).
@@ -467,8 +456,8 @@ mod tests {
 
     /// The overseer's decisions (2026-11-27), each case with its price and the price it had
     /// before: M1 `-1/y` is the sign of the reciprocal, S1 a written `-inf` is the symbol, K a
-    /// divisor `y^k` is `y^-k` only for a literal `k`, L a variadic `max`/`min` is one call, F a
-    /// quotient `p/q` of integer literals is one literal.
+    /// divisor `y^k` is `y^-k` only for a literal `k`, L a variadic `max`/`min` is one call; and
+    /// the owner's ruling (2026-11-28) that a fraction `p/q` costs its division.
     #[test]
     fn the_decisions_m1_s1_k_l_f() {
         let e = engine();
@@ -491,22 +480,22 @@ mod tests {
         ] {
             assert_eq!(written(&e, infix), price, "{infix} (was {before})");
         }
-        // F, pending the owner: (expression, as one literal, as a division, the price before)
-        for (infix, one_literal, division, before) in [
-            ("3/4", 5_322, 10_322, 10_322),
-            ("x0**(3/2)", 13_585, 18_585, 18_585),
-            ("x0**(-3/2)", 14_585, 19_585, 19_585),
-            ("x0/x1**(3/2)", 23_585, 30_585, 28_585),
-            ("3/4*x0", 14_322, 16_322, 16_322),
-            ("4*x0/3", 16_322, 16_322, 16_322),
-            ("2*x0*3", 14_585, 14_585, 14_585),
-            ("1/4", 4_322, 4_322, 4_322),
+        // a fraction costs its division (owner, 2026-11-28): (expression, price, the price before
+        // the decisions); `1/q` stays the literal 1/q and `0.75` costs its value
+        for (infix, price, before) in [
+            ("3/4", 10_322, 10_322),
+            ("x0**(3/2)", 18_585, 18_585),
+            ("x0**(-3/2)", 19_585, 19_585),
+            ("x0/x1**(3/2)", 30_585, 28_585),
+            ("x0/(3/4)", 22_322, 22_322),
+            ("6/4", 11_129, 11_129),
+            ("3/4*x0", 16_322, 16_322),
+            ("4*x0/3", 16_322, 16_322),
+            ("2*x0*3", 14_585, 14_585),
+            ("1/4", 4_322, 4_322),
+            ("1/2", 3_585, 3_585),
+            ("0.75", 5_322, 5_322),
         ] {
-            let price = if super::FRACTION_IS_ONE_LITERAL {
-                one_literal
-            } else {
-                division
-            };
             assert_eq!(written(&e, infix), price, "{infix} (was {before})");
         }
         // the numerator -1 in any spelling, and the infinities as prefix tokens
