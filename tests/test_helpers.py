@@ -13,7 +13,7 @@ from simplipy.utils import (_uniform_below, codify, count_expressions, is_consta
                             sample_expression, substitute_constants)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ACJ2_4 = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')))[
+VOCAB32 = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')))[
     'operators']
 
 
@@ -68,13 +68,13 @@ def test_a_placeholder_is_a_whole_identifier() -> None:
 
 
 def test_sampling_is_uniform_beyond_int64_counts() -> None:
-    arity = {name: row['arity'] for name, row in ACJ2_4.items()}
+    arity = {name: row['arity'] for name, row in VOCAB32.items()}
     leaves = ['x0', 'x1', '<constant>']
     counts = count_expressions(len(leaves), arity, 15)
     assert counts[15] > np.iinfo(np.int64).max
     draws = [sample_expression(15, leaves, arity, counts, np.random.default_rng(42)) for _ in range(2)]
     assert draws[0] == draws[1] and len(draws[0]) == 15, 'deterministic in the seed'
-    engine = SimpliPyEngine(operators=ACJ2_4, rules=[])
+    engine = SimpliPyEngine(operators=VOCAB32, rules=[])
     assert engine.is_valid(list(draws[0]))
     # below 2^63 the draw is numpy's own, so every seed already in use keeps its expression
     assert _uniform_below(10 ** 6, np.random.default_rng(7)) == \

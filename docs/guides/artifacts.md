@@ -24,8 +24,9 @@ is retired.
 
 From 0.15 the loader refuses a rule file mined before 0.15, by the simplipy version its
 provenance sidecar records: 0.15 changed the canonical forms, the measure and the rule judge,
-and serves only the rule sets mined for it (`acj2-4-llm`). The error names the version that
-mined the file. A rule file without a sidecar is a hand-made set and loads.
+and serves only the rule sets mined for it (`acj-4-llm_0.15`, the default, and
+`acj-5-4-llm_0.15`). The error names the version that mined the file. A rule file without a
+sidecar is a hand-made set and loads.
 
 Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('strict',))` builds only the
 named sets, each compiled before `load` returns — the profile an inference worker runs, at
@@ -127,15 +128,15 @@ treated as not installed.
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # resolve, installing on demand
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)   # resolve, installing on demand
 ```
 
 <!-- docs-example: skip: cache-mutating -- installs into and removes from the user's shared asset cache -->
 ```python
-sp.install("acj-5-4-llm")      # explicit install (alias of asset_manager.install_asset)
-sp.get_path("acj-5-4-llm")     # resolve an installed asset to its entrypoint path
+sp.install("acj-4-llm_0.15")   # explicit install (alias of asset_manager.install_asset)
+sp.get_path("acj-4-llm_0.15")  # resolve an installed asset to its entrypoint path
 sp.list_assets("engine")       # list available and installed engine assets
-sp.uninstall("acj-5-4-llm")    # remove (alias of asset_manager.uninstall_asset)
+sp.uninstall("acj-4-llm_0.15") # remove (alias of asset_manager.uninstall_asset)
 ```
 
 An installed asset resolves without the network: `get_path` (and so `load`) reads the

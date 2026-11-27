@@ -14,14 +14,14 @@ import yaml
 from simplipy import SimpliPyEngine
 from simplipy.mining import RuleMiner
 
-ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
+VOCAB32 = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32', 'config.yaml')
 MODES = ('default', 'permissive')
 
 
 @pytest.fixture(scope='module')
 def bare():
-    """The acj2-4 operators with an empty rule set per mode: the core on its own."""
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    """The vocab32 operators with an empty rule set per mode: the core on its own."""
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 

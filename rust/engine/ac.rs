@@ -2352,10 +2352,10 @@ mod tests {
     #[test]
     fn new_heads_of_literals_fold_in_every_mode() {
         let e = Engine::from_strs(
-            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            include_str!("../../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let run = |t: &[&str], mode: RuleMode| {
             let v: Vec<String> = t.iter().map(|x| x.to_string()).collect();
             e.ac_simplify_proj(&v, 48, mode, crate::engine::AcForm::Explicit)
@@ -2418,10 +2418,10 @@ mod tests {
     #[test]
     fn max_and_min_are_bags_and_rules_match_their_sub_bags() {
         let e = Engine::from_strs(
-            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            include_str!("../../tests/fixtures/vocab32/config.yaml"),
             r#"[[["max", "abs", "_0", "_0"], ["abs", "_0"]]]"#,
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let run = |t: &str, form: crate::engine::AcForm| {
             let v: Vec<String> = t.split(' ').map(String::from).collect();
             e.ac_simplify_proj(&v, 48, RuleMode::Strict, form)

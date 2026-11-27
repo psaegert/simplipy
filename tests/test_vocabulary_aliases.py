@@ -45,11 +45,11 @@ def _engines() -> list[tuple[str, SimpliPyEngine]]:
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         return [('acj-4', legacy_from_config(acj_config_path())),
-                ('acj2-4', SimpliPyEngine.from_config(
-                    os.path.join(_ROOT, 'assets', 'engines', 'acj2-4', 'config.yaml')))]
+                ('acj-4-llm_0.15', SimpliPyEngine.from_config(
+                    os.path.join(_ROOT, 'assets', 'engines', 'acj-4-llm_0.15', 'config.yaml')))]
 
 
-@pytest.fixture(scope='module', params=['acj-4', 'acj2-4'])
+@pytest.fixture(scope='module', params=['acj-4', 'acj-4-llm_0.15'])
 def engine(request) -> SimpliPyEngine:
     return dict(_engines())[request.param]
 

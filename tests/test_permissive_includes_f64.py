@@ -15,8 +15,8 @@ REPO = os.path.join(os.path.dirname(__file__), '..')
 
 @pytest.fixture(scope='module')
 def acj():
-    """A rule-less engine over the acj2-4 vocabulary (the 0.15 heads included)."""
-    config = os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')
+    """A rule-less engine over the vocab32 vocabulary (the nine 0.15 heads it holds included)."""
+    config = os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')
     return SimpliPyEngine(operators=yaml.safe_load(open(config))['operators'], rules=[])
 
 

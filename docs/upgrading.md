@@ -12,11 +12,8 @@ mode's answers change, and so do the prices `complexity` returns.
 import simplipy as sp
 from simplipy import Mode
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)
 ```
-
-<!-- RELEASE: the name above is the placeholder every page uses until the engine mined for 0.15
-     is published under its own name; replace it with the rest. -->
 
 ## 1. Rule files from 0.14 do not load
 
@@ -27,12 +24,14 @@ criterion. Loading one raises:
 - a rule file whose provenance sidecar (`rules.json.provenance.json`) records a simplipy version
   before 0.15 raises `IncompatibleArtifactError`, naming the version that mined it;
 - a config that names a `rules_real:` set raises `ValueError`, since the `real` mode is retired.
-  `acj-5-4-llm` and `acj-4` as published for 0.14 name one, so this is the error they give first.
+  `acj-5-4-llm` and `acj-4` as published for 0.14 name one, but their rule files' version is
+  checked first, so they raise the `IncompatibleArtifactError` above.
 
-What to do: load the engines published for 0.15, or pin `simplipy<0.15` to keep serving a 0.14
-artifact. A rule file without a sidecar is treated as hand-written and still loads. A 0.15
-artifact holds two rule files, `rules_strict.json` and `rules_permissive.json`, and its
-`config.yaml` names them; a config may still call its strict file `rules.json`.
+What to do: load the engines published for 0.15 (`acj-4-llm_0.15`, the default, and
+`acj-5-4-llm_0.15`), or pin `simplipy<0.15` to keep serving a 0.14 artifact. A rule file without
+a sidecar is treated as hand-written and still loads. A 0.15 artifact holds two rule files,
+`rules_strict.json` and `rules_permissive.json`, and its `config.yaml` names them; a config may
+still call its strict file `rules.json`.
 
 ## 2. The `f64` mode is now `strict`
 

@@ -96,7 +96,7 @@ def admits(lhs: str, rhs: str, mode: str) -> bool:
 
 @functools.lru_cache(maxsize=1)
 def bare() -> SimpliPyEngine:
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
@@ -1228,10 +1228,10 @@ def test_the_engine_takes_a_law_of_signs_where_the_judge_holds_it(law, lhs, rhs,
 
 
 def _engine_serving(rule: list, mode: str) -> SimpliPyEngine:
-    """The rule-free acj2-4 engine serving one rule, unjudged, as the mine installs a pick (the
+    """The rule-free vocab32 engine serving one rule, unjudged, as the mine installs a pick (the
     matcher alone decides where it fires)."""
     from simplipy import mining
-    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+    with open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
     e = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
     mining.RuleMiner(e)._install('default' if mode == 'strict' else mode, [rule])

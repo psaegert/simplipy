@@ -35,7 +35,7 @@ _ZERO_ORDERS = [['0'], ['neg', '0'], ['log', '1'], ['sin', '0'], ['tan', '0'], [
 
 
 def _bessel_engine() -> SimpliPyEngine:
-    config = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4',
+    config = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32',
                           'config.yaml')
     operators = dict(yaml.safe_load(open(config))['operators'])
     operators['erfc'] = {'realization': 'simplipy.operators.erfc', 'alias': [], 'arity': 1,

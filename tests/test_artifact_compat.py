@@ -31,8 +31,12 @@ def _require_or_skip(path: str, why: str) -> None:
 
 class TestNameAllowlist:
     def test_known_generation1_names_refuse_before_download(self):
+        # ...naming the pin, and the engine to load on this version instead (the default)
+        import re
+        import simplipy
         for name in sorted(GENERATION_1_ASSET_NAMES):
-            with pytest.raises(IncompatibleArtifactError, match='simplipy<0.12'):
+            with pytest.raises(IncompatibleArtifactError,
+                               match=r'simplipy<0\.12.*' + re.escape(f"'{simplipy.DEFAULT_ENGINE}'")):
                 SimpliPyEngine.load(name)
 
     def test_generation2_name_is_not_blocked_by_the_name_gate(self):
@@ -41,6 +45,8 @@ class TestNameAllowlist:
         from simplipy.compat import check_asset_name
         check_asset_name('acj-4-3')
         check_asset_name('base')
+        check_asset_name('acj-4-llm_0.15')
+        check_asset_name('acj-5-4-llm_0.15')
 
 
 class TestConfigGate:
@@ -52,8 +58,12 @@ class TestConfigGate:
     def test_a_rule_file_mined_before_0_15_refuses(self):
         # 0.15 serves only the rule sets mined for it: the pinned acj-4 cell (simplipy 0.14.0)
         # is refused by the public loader, naming the version and the engine to load instead
+        # (the default engine)
+        import re
+        import simplipy
         _require_or_skip(ACJ_CONFIG, 'acj-4 config not staged')
-        with pytest.raises(IncompatibleArtifactError, match=r'0\.14\.0.*acj2-4-llm'):
+        with pytest.raises(IncompatibleArtifactError,
+                           match=r'0\.14\.0.*' + re.escape(simplipy.DEFAULT_ENGINE)):
             SimpliPyEngine.from_config(ACJ_CONFIG)
 
     def test_a_rule_file_mined_before_0_15_refuses_for_its_version_before_a_real_set(self, tmp_path):

@@ -28,7 +28,7 @@ MILLI = 1000
 def engine() -> SimpliPyEngine:
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        return SimpliPyEngine.from_config(os.path.join(_ROOT, 'assets', 'engines', 'acj2-4', 'config.yaml'))
+        return SimpliPyEngine.from_config(os.path.join(_ROOT, 'tests', 'fixtures', 'vocab32', 'config.yaml'))
 
 
 def _bits(cell: str) -> int:

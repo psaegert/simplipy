@@ -22,7 +22,7 @@ from simplipy import SimpliPyEngine, _core
 from simplipy.verify import _contract, licensed, verify_rule
 
 REPO = Path(__file__).resolve().parent.parent
-OPERATORS = yaml.safe_load(open(REPO / 'assets' / 'engines' / 'acj2-4' / 'config.yaml'))['operators']
+OPERATORS = yaml.safe_load(open(REPO / 'tests' / 'fixtures' / 'vocab32' / 'config.yaml'))['operators']
 MODES = ('strict', 'permissive')
 
 #: Where each finding's reproduction lives when it is not in this file (file: test name).

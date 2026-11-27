@@ -126,7 +126,7 @@ organised by who you are, then the highlights, then every change in detail.
 - **Rule files mined before 0.15 are refused.** 0.15 changes the canonical forms, the measure
   and the rule judge, and serves only the rule sets mined for it. `SimpliPyEngine.from_config`
   and `load` refuse a rule file whose provenance sidecar records a simplipy before 0.15, naming
-  that version: load `acj2-4-llm`, or pin the version that mined the file. A rule file without
+  that version: load `acj-4-llm_0.15`, or pin the version that mined the file. A rule file without
   a sidecar (a hand-made set) loads. The acj-4 and acj-4-3 rule files are no longer in the
   package (their configs are).
 
@@ -535,10 +535,11 @@ organised by who you are, then the highlights, then every change in detail.
 - `verify_artifact(strict, permissive, engine_config=)` checks the two rule sets it is given (the
   config contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which
   ships in the wheel, when `corpus_rows` is not given.
-- <!-- PENDING the re-mine: name the new artifacts and the pinned revision here. -->The rule
-  files are mined again for 0.15 and published under new names; `simplipy.DEFAULT_ENGINE` and
-  `simplipy.DEFAULT_ENGINE_REVISION` name the artifact and revision this version loads by
-  default.
+- <!-- PENDING the release: the pinned revision. -->The rule files are mined again for 0.15,
+  under names that carry the minor version: `acj-4-llm_0.15` (sources and targets to length 4,
+  the LLM and manual proposals on), the default, and `acj-5-4-llm_0.15` (sources to length 5).
+  `simplipy.DEFAULT_ENGINE` names the artifact this version loads by default and
+  `simplipy.DEFAULT_ENGINE_REVISION` its revision.
 
 **Users of the miner API**
 
@@ -2987,6 +2988,11 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **The repository's engine assets are the 0.15 rule sets'.** `assets/engines/acj-4-llm_0.15/`
+  and `assets/engines/acj-5-4-llm_0.15/` carry each set's `config.yaml` (the 36 operators, one
+  file for both) and its mine kit, `mine.yaml`; the rule files are published on the Hugging Face
+  manifest. The working names `acj2-4`, `acj2-4-llm` and `acj2-5-4-llm` are retired, and the
+  refusals of a rule file mined before 0.15 or of a generation-1 asset name the default engine.
 - **A deep expression's memory is linear in its depth.** The normal-form memo of a simplify pass
   keeps one id per distinct subtree, where it kept a copy of every subtree it marked, which grew
   with the square of the depth on a chain at the input cap of 4,096 tokens. Answers are unchanged.

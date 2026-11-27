@@ -11,7 +11,7 @@ import yaml
 
 from simplipy import SimpliPyEngine, _core
 from simplipy.verify import _contract, verify_rule
-from test_new_heads import ACJ2_4
+from test_new_heads import VOCAB32
 
 NEW = {'erfc': 1, 'bessely': 2, 'besseli': 2, 'besselk': 2}
 
@@ -51,7 +51,7 @@ def test_atanh_of_a_bessel_head_at_zero_is_not_zero(lhs) -> None:
 def test_the_fully_numeric_form_takes_its_table_value() -> None:
     """P5: `atanh(besseli(0, 0))` is +inf, and no rule changes it, even the false one installed
     by hand (the load does not judge): the fold reads the table's value first."""
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     for name, arity in NEW.items():
         ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,
                      'commutative': False}

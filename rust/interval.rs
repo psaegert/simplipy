@@ -10289,8 +10289,11 @@ mod new_head_tests {
     type Binary = (&'static str, fn(f64, f64) -> f64);
 
     fn engine() -> crate::engine::Engine {
-        crate::engine::Engine::from_strs(include_str!("../assets/engines/acj2-4/config.yaml"), "[]")
-            .expect("acj2-4 builds")
+        crate::engine::Engine::from_strs(
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
+            "[]",
+        )
+        .expect("vocab32 builds")
     }
 
     fn s(v: &[&str]) -> Vec<String> {

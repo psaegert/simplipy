@@ -52,9 +52,9 @@ def eng() -> SimpliPyEngine:
 
 @pytest.fixture(scope='module')
 def acj() -> SimpliPyEngine:
-    """A rule-free engine over the acj2-4 vocabulary (floor and ceil among it)."""
+    """A rule-free engine over the vocab32 vocabulary (floor and ceil among it)."""
     import os
-    config = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4',
+    config = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32',
                           'config.yaml')
     return SimpliPyEngine(operators=yaml.safe_load(open(config))['operators'], rules=[])
 
@@ -819,7 +819,7 @@ def test_every_policy_refuses_where_the_mine_first_considers_a_pick() -> None:
     each is `core` here, so only the policy can refuse it."""
     import os
     from simplipy.verify import policy_refusals
-    config = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4',
+    config = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32',
                           'config.yaml')
     ops = yaml.safe_load(open(config))['operators']
     miner = RuleMiner(SimpliPyEngine(operators=ops, rules=[]))

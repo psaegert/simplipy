@@ -339,20 +339,20 @@ pub type DefinedTable = FxHashMap<String, DefinedFunction>;
 mod tests {
     use super::*;
 
-    /// acj2-4's operators with `section` in place of the config's own defined functions (the
-    /// last section of the file).
+    /// The vocab32 test vocabulary's operators (`tests/fixtures/vocab32`) with `section` in
+    /// place of the config's own defined functions (the last section of the file).
     fn engine(section: &str) -> Result<crate::Engine, String> {
-        let shipped = include_str!("../assets/engines/acj2-4/config.yaml");
-        let own = shipped
+        let vocab = include_str!("../tests/fixtures/vocab32/config.yaml");
+        let own = vocab
             .find("\ndefined_functions:")
-            .expect("acj2-4 defines its functions last");
-        let cfg = format!("{}\n{section}", &shipped[..own]);
+            .expect("vocab32 defines its functions last");
+        let cfg = format!("{}\n{section}", &vocab[..own]);
         crate::Engine::from_strs(&cfg, "[]").map_err(|e| e.to_string())
     }
 
     #[test]
     fn the_shipped_config_defines_the_seven() {
-        let shipped = include_str!("../assets/engines/acj2-4/config.yaml");
+        let shipped = include_str!("../assets/engines/acj-4-llm_0.15/config.yaml");
         let e = crate::Engine::from_strs(shipped, "[]").unwrap();
         let ops = e.operators_ref();
         let mut names: Vec<&str> = ops.defined.keys().map(String::as_str).collect();

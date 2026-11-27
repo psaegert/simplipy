@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from conftest import acj_config_path, require_or_skip
+import simplipy
 from simplipy import SimpliPyEngine
 from conftest import legacy_from_config  # noqa: E402
 
@@ -127,21 +128,27 @@ def _off_rows(engine, mode: str) -> list:
     return off
 
 
-@pytest.fixture(scope='module')
-def default_engine():
-    """The default artifact (the one the family was found on), when it is staged: it is too
-    large for the CI asset stage, so it is not required there."""
+@pytest.fixture(scope='module', params=['acj-5-4-llm', simplipy.DEFAULT_ENGINE])
+def staged_engine(request):
+    """A large artifact, when it is staged: `acj-5-4-llm`, the 0.14.0 mine the family was found
+    on, and the default artifact, whose rule files the release step publishes on the Hugging Face
+    manifest. Both are too large for the CI asset stage, so neither is required there."""
     import os
-    import simplipy
     config = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines',
-                          simplipy.DEFAULT_ENGINE, 'config.yaml')
+                          request.param, 'config.yaml')
     if not os.path.exists(config):
-        pytest.skip(f'the default artifact {simplipy.DEFAULT_ENGINE} is not staged')
-    # a pre-0.15 mine, read through the legacy opt-in
+        why = (' (installable once the release step publishes its rule files on the Hugging Face '
+               'manifest)' if request.param == simplipy.DEFAULT_ENGINE else '')
+        pytest.skip(f'the artifact {request.param} is not staged{why}')
+    # a pre-0.15 mine is read through the legacy opt-in (a 0.15 mine loads through it alike)
     return legacy_from_config(config, modes=('strict', 'permissive'))
 
 
-def test_no_served_nan_rule_has_a_finite_lhs(shipped, default_engine) -> None:
+def test_no_served_nan_rule_has_a_finite_lhs(shipped) -> None:
     """Every served `-> nan` row's LHS is undefined where the evaluator reads it."""
-    for engine in (shipped, default_engine):
-        assert _off_rows(engine, 'permissive') == []
+    assert _off_rows(shipped, 'permissive') == []
+
+
+def test_no_served_nan_rule_of_a_staged_artifact_has_a_finite_lhs(staged_engine) -> None:
+    """...on the large artifacts too."""
+    assert _off_rows(staged_engine, 'permissive') == []

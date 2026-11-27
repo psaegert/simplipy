@@ -29,7 +29,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
@@ -158,7 +158,7 @@ def test_groundness_belongs_to_the_tree_not_its_spelling(engine) -> None:
 def test_a_literal_binds_no_variable_slot(engine) -> None:
     """A literal of more digits than the exact domain holds is a literal: it binds no `?` slot, so
     `(?0 - 1)/(?0 - 1) -> 1` does not turn float64's NaN into 1 (the literal reads as 1.0)."""
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     rule = (['/', '-', '?0', '1', '-', '?0', '1'], ['1'])
     loaded = SimpliPyEngine(operators=ops, rules=[rule], rules_permissive=[])
@@ -195,7 +195,7 @@ def test_a_rule_changes_no_ground_value() -> None:
     """A rule fires on a fully numeric subject only where the ground evaluator admits its result:
     `asin(sin(_0)) -> _0` serves `asin(sin(x0))` and leaves `asin(sin(4))`, whose value is
     pi - 4."""
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     rule = (['asin', 'sin', '_0'], ['_0'])
     loaded = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[rule])

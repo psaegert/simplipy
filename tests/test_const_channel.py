@@ -161,7 +161,7 @@ class TestSeveralConstantsOnTheLeft:
     @pytest.fixture(scope='class')
     def ops(self) -> dict:
         import yaml
-        return yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+        return yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                                 'config.yaml')))['operators']
 
     def test_the_load_serves_it(self, ops, recwarn) -> None:

@@ -11,7 +11,7 @@ changes how a number is written, never the structure, and applies no rules.
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)
 
 answer = engine.simplify("2.14583142772210003669120562399025*x1")
 answer

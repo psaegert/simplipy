@@ -10,14 +10,14 @@ import yaml
 from simplipy import SimpliPyEngine
 from simplipy.verify import _contract
 
-ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
+VOCAB32 = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32', 'config.yaml')
 MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
 def bare():
-    """The acj2-4 operators with an empty rule set per mode: the core on its own."""
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    """The vocab32 operators with an empty rule set per mode: the core on its own."""
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
@@ -129,7 +129,7 @@ def test_the_fit_keeps_the_witness_it_found():
 def test_a_small_mine_mines_new_head_rules():
     """End to end, in every mode: the rules true over the reals and realised in float64 appear
     in both files."""
-    full = yaml.safe_load(open(ACJ2_4))['operators']
+    full = yaml.safe_load(open(VOCAB32))['operators']
     ops = {k: full[k] for k in ('neg', 'floor', 'ceil', 'max')}
     e = SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
     e.find_rules(max_source_pattern_length=3, max_target_pattern_length=3, dummy_variables=2,
@@ -231,7 +231,7 @@ def test_lattice_laws_are_the_judges():
 
 
 def test_rules_match_any_sub_bag(bare):
-    cfg = yaml.safe_load(open(ACJ2_4))['operators']
+    cfg = yaml.safe_load(open(VOCAB32))['operators']
     rule = (('max', 'abs', '_0', '_0'), ('abs', '_0'))
     e = SimpliPyEngine(operators=cfg, rules=[rule], rules_permissive=[])
     s = lambda t: ' '.join(e.simplify(t.split(), mode='strict'))  # noqa: E731
@@ -347,7 +347,7 @@ def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
                 'atan2 0 * 2 neg - x0 abs x0'):
         same(src.split(), bare.simplify(src.split(), mode='strict'))
     # built by substitution into a rule's right-hand side
-    cfg = yaml.safe_load(open(ACJ2_4))['operators']
+    cfg = yaml.safe_load(open(VOCAB32))['operators']
     for rule, src, want in (
             ((('erf', 'atan2', '_0', '_1'), ('atan2', '_0', 'neg', '_1')),
              'erf atan2 0 - x0 abs x0', ['atan2', '0', 'neg', '-', 'x0', 'abs', 'x0']),

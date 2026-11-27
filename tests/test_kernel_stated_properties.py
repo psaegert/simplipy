@@ -493,7 +493,7 @@ def test_defined_functions_are_their_expansions_at_the_edges() -> None:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        engine = SimpliPyEngine.from_config(os.path.join(root, 'assets', 'engines', 'acj2-4', 'config.yaml'))
+        engine = SimpliPyEngine.from_config(os.path.join(root, 'tests', 'fixtures', 'vocab32', 'config.yaml'))
     x = np.array([0.0, -0.0, TINY, -TINY, 1e-310, -1e-310, 2.2250738585072014e-308, 5.562684646268003e-309,
                   5.5e-309, BIG, -BIG, PI / 2, -PI / 2, PI, 1.0, -1.0, 1.0000000000000002, 0.9999999999999999,
                   -1.0000000000000002, -0.9999999999999999, 1e22, 2.0 ** 1023, inf, -inf, nan])

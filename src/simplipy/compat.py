@@ -45,8 +45,9 @@ without the key predates it and loads as before.
 
 From 0.15 a rule FILE mined before :data:`RULES_MINED_SINCE` is refused at the same
 boundary, by the version its provenance sidecar records (:func:`check_rule_file`): 0.15
-changed the canonical forms, the measure and the rule judge, and ships only the rule sets
-mined for it (``acj2-4-llm``). A rule file without a sidecar is a hand-made set and loads.
+changed the canonical forms, the measure and the rule judge, and serves only the rule sets
+mined for it (``acj-4-llm_0.15``, the default, and ``acj-5-4-llm_0.15``). A rule file
+without a sidecar is a hand-made set and loads.
 """
 
 from typing import Any
@@ -199,8 +200,13 @@ def _check_requires_simplipy(config: dict[str, Any], source: str) -> None:
 #: canonical forms, the measure and the rule judge (and mined the rule sets again).
 RULES_MINED_SINCE = "0.15"
 
-#: The engine mined for :data:`RULES_MINED_SINCE`, which the refusal names.
-RULES_SUCCESSOR = "acj2-4-llm"
+
+def _rules_successor() -> str:
+    """The engine mined for :data:`RULES_MINED_SINCE` that the refusals name: the default
+    engine, :data:`simplipy.engine.DEFAULT_ENGINE`, read here so that switching the default
+    switches the name the refusals give (one constant)."""
+    from .engine import DEFAULT_ENGINE
+    return DEFAULT_ENGINE
 
 
 def check_rule_file(rules_path: str, source: str) -> None:
@@ -233,7 +239,7 @@ def check_rule_file(rules_path: str, source: str) -> None:
         f"{source}: the rule file '{rules_path}' was mined by simplipy {mined}, and simplipy "
         f"{_package_version()} serves only rule files mined by simplipy {RULES_MINED_SINCE} or "
         f"later (0.15 changed the canonical forms, the measure and the rule judge). Load the "
-        f"engine mined for {RULES_MINED_SINCE}, SimpliPyEngine.load('{RULES_SUCCESSOR}'), or "
+        f"engine mined for {RULES_MINED_SINCE}, SimpliPyEngine.load('{_rules_successor()}'), or "
         f"install the version that mined this file: pip install \"simplipy=={mined}\"")
 
 
@@ -256,7 +262,7 @@ def check_asset_name(name: str) -> None:
         raise IncompatibleArtifactError(
             f"asset '{name}' is a generation-1 artifact (retired hyper-operator "
             f"vocabulary), served only by simplipy <= 0.11 -- {_PIN_HINT}. On this "
-            f"version use the acj-* family instead (e.g. 'acj-4').")
+            f"version load an engine mined for it: SimpliPyEngine.load('{_rules_successor()}').")
 
 
 def _package_version() -> str:

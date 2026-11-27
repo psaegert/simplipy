@@ -1,7 +1,7 @@
 """Pre-audit reinforcement of the canon and simplify (canon angle, 2026-11-27, frozen at 3a6ed3a).
 
 Each class here was probed by differential fuzzing against float64 and an independent mpmath
-oracle; the tests pin what holds, with fixed seeds, on the constructors alone (acj2-4's operators,
+oracle; the tests pin what holds, with fixed seeds, on the constructors alone (vocab32's operators,
 no rules), so they are fast and need no staged asset:
 
 * ``confine.sibling`` (FX-76) is sound: a member confines only the base it is NaN below, read only
@@ -38,7 +38,7 @@ VARS = ['x1', 'x2', 'x3']
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+    with open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
     for name, arity in {'besselk': 2}.items():
         ops.setdefault(name, {'realization': f'simplipy.operators.{name}', 'alias': [],

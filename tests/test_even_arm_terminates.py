@@ -13,7 +13,7 @@ import sys
 
 import yaml
 
-from test_new_heads import ACJ2_4
+from test_new_heads import VOCAB32
 from test_scipy_heads import NEW
 
 EVEN = ('abs', 'cos', 'cosh')
@@ -64,7 +64,7 @@ print(json.dumps(counts))
 
 
 def _operators() -> dict:
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     for name, arity in NEW.items():
         ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,
                      'commutative': False}

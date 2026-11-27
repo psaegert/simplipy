@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Mine an engine's rule files (strict, permissive), each in its own mode")
     find_simplifications_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4-llm_0.15) or a local path to an engine configuration file'
     )
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
     find_simplifications_parser.add_argument(
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Remove the strict rules that the remaining strict rules cover behaviorally")
     prune_covered_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4-llm_0.15) or a local path to an engine configuration file'
     )
     prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned strict rules json file')
     prune_covered_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
     resolve_rules_parser = subparsers.add_parser("resolve-rules", help="Replace <constant> with actual numeric values in all-numeric rules")
     resolve_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4-llm_0.15) or a local path to an engine configuration file'
     )
     resolve_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the resolved rules json file')
     resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
@@ -113,18 +113,18 @@ def main(argv: list[str] | None = None) -> None:
                                     help="The mode the file serves: strict or permissive")
     verify_mine_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file (its operators)')
+        help='Name of an official engine (e.g., acj-4-llm_0.15) or a local path to an engine configuration file (its operators)')
     verify_mine_parser.add_argument('--judge-processes', type=int, default=4, help='Worker processes of the contract judge')
     verify_mine_parser.add_argument('--report', type=str, default=None, help='Write the full report as JSON here')
 
     # Install command
     install_parser = subparsers.add_parser("install", help="Install an official asset from Hugging Face")
-    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-5-4-llm)')
+    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4-llm_0.15)')
     install_parser.add_argument('--force', action='store_true', help='Force reinstall even if already installed')
 
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove an installed asset")
-    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-5-4-llm)')
+    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-4-llm_0.15)')
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available or installed assets")

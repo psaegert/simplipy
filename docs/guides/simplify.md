@@ -3,7 +3,7 @@
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)
 ```
 
 ## The pipeline

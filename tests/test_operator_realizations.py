@@ -216,10 +216,11 @@ def test_abs_of_an_array_like_is_an_array() -> None:
     assert ops.abs([3 + 4j]).tolist() == [5.0]
 
 
-def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:
-    """acj2-4's vocabulary is acj-4's plus the nine 0.15 operators, every realization one of
-    `simplipy.operators`; it loads (without rule sets until its mines write them) and reads
-    the new calls."""
+@pytest.mark.parametrize('asset', ['acj-4-llm_0.15', 'acj-5-4-llm_0.15'])
+def test_the_shipped_0_15_config_is_acj_4_plus_the_new_operators(asset: str) -> None:
+    """The vocabulary of each shipped 0.15 config is acj-4's plus the thirteen 0.15 operators,
+    every realization one of `simplipy.operators`; it loads (its rule files are published with
+    the release, so the repository's copy names none) and reads the new calls."""
     import importlib
     import os
     import warnings
@@ -231,10 +232,11 @@ def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:
     root = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines')
     with open(os.path.join(root, 'acj-4', 'config.yaml')) as f:
         old = yaml.safe_load(f)['operators']
-    path = os.path.join(root, 'acj2-4', 'config.yaml')
+    path = os.path.join(root, asset, 'config.yaml')
     with open(path) as f:
         new = yaml.safe_load(f)['operators']
-    added = {'floor', 'ceil', 'erf', 'harmonic', 'max', 'min', 'mod', 'atan2', 'besselj'}
+    added = {'floor', 'ceil', 'erf', 'harmonic', 'max', 'min', 'mod', 'atan2', 'besselj',
+             'erfc', 'bessely', 'besseli', 'besselk'}
     assert set(new) == set(old) | added
     for token, spec in new.items():
         module, name = spec['realization'].rsplit('.', 1)

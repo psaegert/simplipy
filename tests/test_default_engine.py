@@ -4,10 +4,10 @@ Pinned IN THE PACKAGE (`simplipy.DEFAULT_ENGINE` / `DEFAULT_ENGINE_REVISION`) an
 in the hosted manifest, so that "what do I get by default" is answerable offline and
 cannot change under a user without a simplipy release.
 
-The revision is what disambiguates one NAME across simplipy versions: `acj-4` mined
-under 0.14's judge and `acj-4` mined under 0.15's are both legitimately `acj-4`, and
-only (name, revision) picks one. The measure-fingerprint check stays the
-safety net for an artifact loaded by name across a measure change; this pin is what
+The revision is what disambiguates one NAME across simplipy versions: a name carries
+the minor version it was mined for (`acj-4-llm_0.15`), but a patch release that mines
+a set again keeps its name, and only (name, revision) picks one. The measure-fingerprint
+check stays the safety net for an artifact loaded by name across a measure change; this pin is what
 stops that happening on the path the user did not choose.
 
 These tests never touch the network: the resolver is stubbed, because what is under
@@ -70,3 +70,12 @@ class TestTheDefaultIsPinnedAndAnnounced:
         # The default must not be a name this package refuses to load (compat gate).
         from simplipy.compat import check_asset_name
         check_asset_name(simplipy.DEFAULT_ENGINE)
+
+    def test_the_default_is_a_rule_set_the_repository_carries(self):
+        # Its config and mine kit ship under assets/engines/ (its rule files on the manifest),
+        # so switching the default to another 0.15 rule set is the one constant.
+        import os
+        root = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines',
+                            simplipy.DEFAULT_ENGINE)
+        assert os.path.isfile(os.path.join(root, 'config.yaml'))
+        assert os.path.isfile(os.path.join(root, 'mine.yaml'))

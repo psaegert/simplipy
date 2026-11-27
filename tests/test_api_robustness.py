@@ -37,7 +37,7 @@ from simplipy import Mode, SimpliPyEngine
 from conftest import acj_config_path, legacy_from_config, require_or_skip
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_BARE_CONFIG = os.path.join(_ROOT, 'assets', 'engines', 'acj2-4', 'config.yaml')
+_BARE_CONFIG = os.path.join(_ROOT, 'tests', 'fixtures', 'vocab32', 'config.yaml')
 
 #: Every entry that reads an expression and refuses a malformed one.
 _READERS = ('simplify', 'complexity', 'written_complexity', 'to_prefix', 'to_infix', 'to_tagged',

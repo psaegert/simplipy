@@ -1736,10 +1736,10 @@ mod deployed_bar_tests {
     #[test]
     fn the_permissive_ladder_reads_the_reals() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0 x1");
         let (l, r) = (s("floor atan atan x0"), s("floor erf x0"));
@@ -1763,10 +1763,10 @@ mod deployed_bar_tests {
     #[test]
     fn deployed_exact_sees_the_jumps() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0 x1");
         for (l, r) in [
@@ -1828,10 +1828,10 @@ mod deployed_bar_tests {
     #[test]
     fn the_bar_excuses_an_isolated_nan_of_the_left_side() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0");
         let bar = |l: &str, r: &str, sort: char| {
@@ -1850,10 +1850,10 @@ mod deployed_bar_tests {
     #[test]
     fn the_bar_reads_a_value_at_a_sorts_null_set() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0");
         let bar = |l: &str, r: &str, sort: char, agreement| {
@@ -1877,10 +1877,10 @@ mod deployed_bar_tests {
     #[test]
     fn an_extension_isolated_by_an_underflow_is_a_null_set() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0 x1");
         let (l, r) = (s("/ atan2 x0 x1 atan2 neg x0 x1"), s("-1"));
@@ -1897,10 +1897,10 @@ mod deployed_bar_tests {
     #[test]
     fn in_kind_the_bar_refuses_only_a_change_of_kind() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0 x1");
         let bar = |l: &str, r: &str, agreement| {
@@ -1935,10 +1935,10 @@ mod deployed_bar_tests {
     #[test]
     fn the_zero_sign_bar_reads_a_region_not_a_point() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0 x1");
         let bar = |l: &str, r: &str, sort: char| {
@@ -2183,10 +2183,10 @@ mod deployed_bar_tests {
         // the deployed bar reads it so, at a data variable and not at a slot that matches any
         // subexpression
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0");
         let bar = |sort: char| {
@@ -2212,10 +2212,10 @@ mod deployed_bar_tests {
     #[test]
     fn f64_bar_reads_constants() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = s("x0 x1");
         let bar = |l: &str, r: &str| f64_bar(&s(l), &s(r), &v, ops).map(|d| d.ok);

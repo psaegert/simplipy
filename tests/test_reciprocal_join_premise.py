@@ -11,12 +11,12 @@ import yaml
 from simplipy import SimpliPyEngine
 from simplipy.verify import verify_rule
 
-ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
+VOCAB32 = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32', 'config.yaml')
 
 
 @pytest.fixture(scope='module')
 def bare() -> SimpliPyEngine:
-    return SimpliPyEngine(operators=yaml.safe_load(open(ACJ2_4))['operators'], rules=[],
+    return SimpliPyEngine(operators=yaml.safe_load(open(VOCAB32))['operators'], rules=[],
                           rules_permissive=[])
 
 

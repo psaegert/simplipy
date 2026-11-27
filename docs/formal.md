@@ -566,13 +566,13 @@ hand-written false rule such as `sin(x0) -> x0` loads, and `simplipy.verify.lice
 | G7 | $\mu(\mathrm{nf}(\rho)) > \mu(\mathrm{nf}(\ell))$ (uphill patterns) | no loaded rule climbs; sides of one price load, and the `oriented` gate decides each application under the full ordering (§5) |
 | G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node. A law the constructors own, such as the collection of powers of e ($e^a e^b = e^{a+b}$), needs no gate of its own: a rule stating it, in either direction, has $\mathrm{nf}(\ell) = \mathrm{nf}(\rho)$ and G2 refuses it |
 
-Both directions of a rewrite whose sides cost the same may load (on the shipped `acj-5-4-llm`,
+Both directions of a rewrite whose sides cost the same may load (on the 0.14.0 mine `acj-5-4-llm`,
 `acos(0) - _0` and `asin(1) - _0`): $<_o$ is strict and total, so on any instance at most one of
 them descends it, and the `oriented` gate fires only that one; neither undoes the other, and no
 separate check for the inverse of an earlier rule is needed. Each admitted rule $\ell \to \rho$ whose negated LHS absorbs the sign
 also loads its orientation twin $-\ell \to -\rho$, through the same gates. Before translation,
 the licence registry refuses a rule that changes a defined extended-real value at a pole.
-Every drop is counted by reason (`ac_rules_drop_census`). On the shipped `acj-5-4-llm`
+Every drop is counted by reason (`ac_rules_drop_census`). On the 0.14.0 mine `acj-5-4-llm`
 [EMPIRICAL — re-verified on every load, since translation runs the gates each time]: <!-- re-measure after the re-mine: the translation counts below -->
 
 | mode's file | rows reaching translation | G2 | G4 | G7 | G8 | twins | served |

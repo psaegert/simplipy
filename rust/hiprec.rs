@@ -3339,12 +3339,13 @@ mod tests {
         }
     }
 
-    /// acj2-4 with the four heads of the release vocabulary (`erfc` and the Bessel heads past J).
+    /// The vocab32 test vocabulary (`tests/fixtures/vocab32`) with the four heads of the release
+    /// vocabulary (`erfc` and the Bessel heads past J).
     fn engine_with_the_four() -> crate::engine::Engine {
-        let base = include_str!("../assets/engines/acj2-4/config.yaml");
+        let base = include_str!("../tests/fixtures/vocab32/config.yaml");
         let at = base
             .find("engine_generation:")
-            .expect("acj2-4 ends its operators there");
+            .expect("vocab32 ends its operators there");
         let four: String = [("erfc", 1), ("bessely", 2), ("besseli", 2), ("besselk", 2)]
             .iter()
             .map(|(name, arity)| {
@@ -3355,7 +3356,7 @@ mod tests {
             })
             .collect();
         crate::engine::Engine::from_strs(&format!("{}{four}{}", &base[..at], &base[at..]), "[]")
-            .expect("acj2-4 with the four builds")
+            .expect("vocab32 with the four builds")
     }
 
     /// A ROW ITS CANDIDATE CANNOT READ CANNOT FAIL (`table_row`'s `fail_only`): where the caller
@@ -3493,10 +3494,10 @@ mod tests {
     #[test]
     fn a_side_read_again_is_read_as_it_was() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let vars = s(&["x0", "x1"]);
         let cols = vec![
@@ -3873,10 +3874,10 @@ mod tests {
     #[test]
     fn an_unread_row_is_read_as_the_judge_reads_it() {
         let e = crate::engine::Engine::from_strs(
-            include_str!("../assets/engines/acj2-4/config.yaml"),
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let ops = e.operators_ref();
         let v = ["x0".to_string()];
         let cols = vec![vec![-14.9862579]];
@@ -4552,16 +4553,19 @@ mod new_head_tests {
         t.split(' ').map(String::from).collect()
     }
 
-    fn acj2() -> crate::engine::Engine {
-        crate::engine::Engine::from_strs(include_str!("../assets/engines/acj2-4/config.yaml"), "[]")
-            .expect("acj2-4 builds")
+    fn vocab32() -> crate::engine::Engine {
+        crate::engine::Engine::from_strs(
+            include_str!("../tests/fixtures/vocab32/config.yaml"),
+            "[]",
+        )
+        .expect("vocab32 builds")
     }
 
     /// The contract point verdict on the 0.15 heads: exact at the jumps and the poles where the
     /// reals decide, Unresolved on atan2's cut, a real change where a rule is false at a jump.
     #[test]
     fn contract_verdicts_at_the_jumps_and_the_cut() {
-        let e = acj2();
+        let e = vocab32();
         let ops = e.operators_ref();
         let v = s("x0");
         let at = |l: &str, r: &str, x: ProbeAtom| {

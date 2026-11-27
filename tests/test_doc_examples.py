@@ -12,6 +12,7 @@ equality assertion -- the printed claims are the strongest ones the docs make, s
 they are exactly what must not drift.
 """
 import ast
+import functools
 import io
 import os
 import re
@@ -101,15 +102,31 @@ def _instrument(body: str) -> tuple[str, list[str]]:
     return '\n'.join(out), problems
 
 
+#: INTERIM STAND-INS, until the release step that publishes the 0.15 rule sets on the Hugging Face
+#: manifest. The docs load them by name; while the manifest does not list one, the examples run on
+#: `acj-5-4-llm`, the 0.14.0 mine their printed outputs were measured on. Self-retiring: a name the
+#: manifest lists loads itself, so from that release step on the examples run on the published set
+#: and an output that differs there fails here until the docs are re-measured.
+_STAND_INS = {'acj-4-llm_0.15': 'acj-5-4-llm', 'acj-5-4-llm_0.15': 'acj-5-4-llm'}
+
+
+@functools.lru_cache(maxsize=1)
+def _published() -> frozenset:
+    from simplipy.asset_manager import fetch_manifest
+    return frozenset(fetch_manifest())
+
+
 @pytest.mark.parametrize('relpath', FILES)
 def test_doc_examples_execute_and_their_outputs_hold(relpath, tmp_path, monkeypatch):
     from conftest import acj_config_path, require_or_skip
     from simplipy import SimpliPyEngine
+    from simplipy.asset_manager import get_path
     require_or_skip(acj_config_path(), 'acj-4-3 asset not staged')
     monkeypatch.chdir(tmp_path)  # examples must not depend on or touch the repo cwd
-    # INTERIM, until the docs name the engine mined for 0.15 (`acj2-4-llm`, published with the
-    # re-mine): they load acj-5-4-llm, a 0.14.0 mine, which the public loader refuses, so the
-    # examples read it through the legacy opt-in.
+    monkeypatch.setattr('simplipy.engine.get_path', lambda asset, **kw: get_path(
+        asset if asset in _published() else _STAND_INS.get(asset, asset), **kw))
+    # A stand-in is a 0.14.0 mine, which the public loader refuses, so the examples read every
+    # engine through the legacy opt-in (a rule set mined for 0.15 loads through it alike).
     from conftest import legacy_from_config
     monkeypatch.setattr(SimpliPyEngine, 'from_config', classmethod(
         lambda cls, path, **kw: legacy_from_config(path, **kw)))

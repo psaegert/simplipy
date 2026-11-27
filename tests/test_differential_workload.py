@@ -5,13 +5,13 @@ module runs the inputs the specification names and holds every step to the judge
 The inputs, fixed by `SEED`:
 
 1. the scan: every (source, candidate) pair the length-4 scan considers for 500 sources drawn
-   from the canonical sources of lengths 2 to 4 over the acj2-4 operators (the reduced
+   from the canonical sources of lengths 2 to 4 over the vocab32 operators (the reduced
    alphabet: two variables, `<constant>`, (-1), 0 and 1; targets to length 3), with the verdict
    that decided each (`find_rule_lib_traced`): the pre-filter that rejected the candidate, or
    the acceptance's answer on the target it emits;
 2. the completions: every overlap completion within the cell the engine proposes on the shipped
-   rule file (acj-4-3's; acj2-4's ship with the release mine) and on the file of the scan's
-   licensed picks, each installed as the mode's set;
+   rule file (acj-4-3's; the 0.15 rule files ship with the release mine) and on the file of the
+   scan's licensed picks, each installed as the mode's set;
 3. the promotions: every respelling sort promotion tries on those picks (`?` to `_` and `!`,
    and the seeds);
 4. the probe table: each operator at its poles, at +-0, +-inf and NaN, at the overflow and
@@ -71,20 +71,20 @@ VERDICTS = {
 
 @functools.lru_cache(maxsize=1)
 def engine() -> SimpliPyEngine:
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
-#: The operators the probe table reads beyond acj2-4's: every operator the package realizes.
+#: The operators the probe table reads beyond vocab32's: every operator the package realizes.
 PROBE_ONLY = {'erfc': 1, 'bessely': 2, 'besseli': 2, 'besselk': 2}
 
 
 @functools.lru_cache(maxsize=1)
 def probe_engine() -> SimpliPyEngine:
-    """acj2-4's operators and `PROBE_ONLY`: the probe table's vocabulary (the scan's workload
-    stays on acj2-4's, as the specification fixes it)."""
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    """vocab32's operators and `PROBE_ONLY`: the probe table's vocabulary (the scan's workload
+    stays on vocab32's, as the specification fixes it)."""
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     for name, arity in PROBE_ONLY.items():
         ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,
@@ -439,7 +439,7 @@ def picks_file(mode: str) -> tuple:
 
 
 #: The shipped rule file the completions are proposed on: acj-4-3's (the last file shipped, 5,319
-#: rules; acj2-4's ship with the release mine).
+#: rules; the 0.15 rule files ship with the release mine).
 SHIPPED = os.path.join(REPO, 'tests', 'fixtures', 'acj-4-3')
 
 

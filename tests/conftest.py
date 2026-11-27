@@ -15,6 +15,12 @@ generation-1 artifacts outright (`simplipy.compat`); the
 suites that legitimately need the legacy TABLE -- the conversion layer's
 input-language tests and the chain-combining caps -- go through here instead, so
 the refusal stays total on the public surface and no test downloads a legacy asset.
+
+`tests/fixtures/vocab32/config.yaml` is the 32-operator TEST VOCABULARY (acj-4's operators plus
+the nine 0.15 heads floor, ceil, max, min, mod, erf, harmonic, atan2 and besselj: the operators of
+the retired working config acj2-4, unchanged). The suites that need an operator table and no rules
+read it, so their inputs stay where they were pinned when the shipped vocabulary grows; the tests
+of the SHIPPED 0.15 configs read `assets/engines/acj-4-llm_0.15/config.yaml` (36 operators).
 """
 import os
 import tempfile

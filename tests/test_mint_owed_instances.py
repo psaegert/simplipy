@@ -20,7 +20,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 

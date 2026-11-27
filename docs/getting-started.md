@@ -16,7 +16,7 @@ simplification touches only numpy (all three install as required dependencies).
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # the published AC-engine artifact
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)   # the published default rule set
 
 # Simplify infix expressions: a str in, a str out
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
@@ -55,18 +55,18 @@ budget, and the guarantee the engine actually makes.
 Available engines can be browsed and downloaded from Hugging Face. The
 asset manager handles listing, installing, and uninstalling:
 
+<!-- PENDING the release: the manifest's own descriptions of the 0.15 assets. -->
 ```python
 sp.list_assets("engine")
 # --- Available engine assets ---
-# - acj-5-4-llm [installed] Complete AC-judged rule mine of the clean 23-operator
-#                         vocabulary (sources to length 5, targets to length 4) plus the
-#                         LLM-augmented proposal lane, independently gate-verified ...
-#                         Pairs with simplipy >= 0.14.
-# - acj-4                 Complete AC-judged rule mine ... (sources and targets to length 4), ...
+# - acj-4-llm_0.15 [installed] Complete AC-judged rule mine of the 36-operator 0.15
+#                         vocabulary (sources and targets to length 4) plus the LLM and
+#                         manual proposal lane ... Pairs with simplipy 0.15.
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
-# - ...                   (older assets remain listed for older installs; generation-1 artifacts
-#                         refuse to load on >= 0.12)
+# - ...                   (older assets remain listed for older installs; a rule file mined
+#                         before 0.15 refuses to load on >= 0.15, a generation-1 artifact
+#                         on >= 0.12)
 ```
 
 `base` loads with a warning: an engine without rules parses, evaluates and

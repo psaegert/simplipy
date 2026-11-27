@@ -6,11 +6,13 @@ reporter is OFF by default (so a library call stays quiet), and turning it on ch
 nothing but the output.
 """
 import io
+import os
 import re
 import sys
 import time
 
 import pytest
+import yaml
 
 from simplipy import SimpliPyEngine
 from simplipy.progress import DEFAULT_INTERVAL, Progress, _duration
@@ -23,7 +25,11 @@ RULES = [(("+", "_0", "0"), ("_0",)), (("*", "_0", "1"), ("_0",)),
 
 @pytest.fixture(scope="module")
 def engine():
-    return SimpliPyEngine.load("base", install=True)
+    # The operators of the bare `base` asset (no rules), read from the acj-4 config the
+    # repository carries (the same 23 operators): the suite downloads nothing.
+    config = os.path.join(os.path.dirname(__file__), "..", "assets", "engines", "acj-4", "config.yaml")
+    with open(config) as f:
+        return SimpliPyEngine(operators=yaml.safe_load(f)["operators"], rules=[])
 
 
 def _capture(fn):

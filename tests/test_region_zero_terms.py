@@ -24,7 +24,7 @@ import yaml
 
 from simplipy import SimpliPyEngine
 
-ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
+VOCAB32 = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32', 'config.yaml')
 NAMES = ['x1', 'x2', 'x3']
 
 # Terms that are -0 (or +0, then negated) on a set of positive measure in float64.
@@ -47,8 +47,8 @@ NEGATING = ['- * 2 {t} {t}', '- {t} * 2 {t}', '- 0 {t}', '- * 3 {t} * 2 {t}', '-
 
 @pytest.fixture(scope='module')
 def bare():
-    """The acj2-4 operators with an empty rule set per mode: the constructors on their own."""
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    """The vocab32 operators with an empty rule set per mode: the constructors on their own."""
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 

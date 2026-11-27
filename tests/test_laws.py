@@ -587,15 +587,15 @@ SCIPY_ROWS = [
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
-    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+    with open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
 @pytest.fixture(scope='module')
 def rule_engine() -> SimpliPyEngine:
-    """acj2-4's operators and two rules, the same in each mode."""
-    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+    """vocab32's operators and two rules, the same in each mode."""
+    with open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
     rules = [[['+', 'pow', 'sin', '_0', '2', 'pow', 'cos', '_0', '2'], ['1']],
              [['-', '1', '*', '2', 'pow', 'sin', '_0', '2'], ['cos', '*', '2', '_0']]]
@@ -604,8 +604,8 @@ def rule_engine() -> SimpliPyEngine:
 
 @pytest.fixture(scope='module')
 def scipy_engine() -> SimpliPyEngine:
-    """acj2-4's operators and the scipy heads, with an empty rule set per mode."""
-    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+    """vocab32's operators and the scipy heads, with an empty rule set per mode."""
+    with open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')) as f:
         ops = yaml.safe_load(f)['operators']
     for name, arity in {'erfc': 1, 'bessely': 2, 'besseli': 2, 'besselk': 2}.items():
         ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,

@@ -16,7 +16,7 @@ from simplipy import SimpliPyEngine
 from simplipy.verify import licensed, load_policy_refusal, verify_artifact, verify_ruleset
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OPERATORS = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')))[
+OPERATORS = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')))[
     'operators']
 L, R = ['asin', '1'], ['acos', '0']
 RULE_MODE = {'strict': 'default', 'permissive': 'permissive'}

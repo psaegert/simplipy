@@ -440,7 +440,7 @@ pub fn written_complexity(tokens: &[String], ops: &Operators) -> Result<u64, Str
 #[cfg(test)]
 mod tests {
     fn engine() -> crate::Engine {
-        let cfg = include_str!("../../../assets/engines/acj2-4/config.yaml");
+        let cfg = include_str!("../../../tests/fixtures/vocab32/config.yaml");
         crate::Engine::from_strs(cfg, "[]").unwrap()
     }
 

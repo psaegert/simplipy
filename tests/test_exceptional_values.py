@@ -15,7 +15,7 @@ F29 = 'tanh / floor x0 floor x0'.split()
 
 @pytest.fixture(scope='module')
 def eng() -> SimpliPyEngine:
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 

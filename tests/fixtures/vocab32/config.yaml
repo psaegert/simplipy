@@ -1,3 +1,8 @@
+# vocab32: a TEST FIXTURE, never published. The 32-operator vocabulary of 0.15 before erfc,
+# bessely, besseli and besselk joined it (acj-4's operators plus floor, ceil, max, min, mod, erf,
+# harmonic, atan2 and besselj), the operators of the retired working config acj2-4 unchanged, so
+# that the suites reading an operator table keep their inputs. The shipped 0.15 vocabulary is
+# assets/engines/acj-4-llm_0.15/config.yaml.
 operators:
   "+":
     realization: "simplipy.operators.add"
@@ -201,9 +206,8 @@ operators:
     family: bessel
     slow: true
 
-# NO RULE SETS YET: the acj2-4 mines write `rules:` and `rules_permissive:`
-# beside this file. Until then an engine loaded from it simplifies with the constructors alone
-# (and says so).
+# NO RULE SETS: a test vocabulary, never mined. An engine loaded from it simplifies with the
+# constructors alone (and says so).
 
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
 # generation 2 = the AC engine's clean vocabulary, simplipy >= 0.12.

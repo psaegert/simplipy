@@ -61,7 +61,7 @@ def test_finalization_fails_naming_an_offender(tmp_path, monkeypatch) -> None:
 def acj() -> SimpliPyEngine:
     import os
     import yaml
-    config = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4',
+    config = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32',
                           'config.yaml')
     return SimpliPyEngine(operators=yaml.safe_load(open(config))['operators'], rules=[],
                           rules_permissive=[])

@@ -232,7 +232,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     asset : str
         The identifier for the asset. This can be a direct path to a local
         file (e.g., './my_rules.yaml') or the name of an official asset
-        (e.g., 'acj-5-4-llm').
+        (e.g., 'acj-4-llm_0.15').
     install : bool, optional
         If True, automatically downloads and installs the asset from
         Hugging Face Hub if it is not found locally. Defaults to False.

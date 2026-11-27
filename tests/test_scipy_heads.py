@@ -12,7 +12,7 @@ import yaml
 
 from simplipy import SimpliPyEngine, _core
 from simplipy.verify import _contract
-from test_new_heads import ACJ2_4
+from test_new_heads import VOCAB32
 
 ARITY = dict(_contract.ARITY)
 NEW = {'erfc': 1, 'bessely': 2, 'besseli': 2, 'besselk': 2}
@@ -22,8 +22,8 @@ REF = {'erfc': mpmath.erfc, 'besselj': mpmath.besselj, 'bessely': mpmath.bessely
 
 @pytest.fixture(scope='module')
 def engine():
-    """acj2-4's operators and the four, with an empty rule set per mode."""
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    """vocab32's operators and the four, with an empty rule set per mode."""
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     for name, arity in NEW.items():
         ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [], 'arity': arity,
                      'commutative': False}

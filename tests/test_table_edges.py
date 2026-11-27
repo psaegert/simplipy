@@ -19,7 +19,7 @@ from simplipy.verify import _contract
 from simplipy.verify._contract import judge_rule
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OPERATORS = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')))[
+OPERATORS = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')))[
     'operators']
 
 #: Fully numeric expressions without a value.

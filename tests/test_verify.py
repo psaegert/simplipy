@@ -55,7 +55,7 @@ def rng():
 def bag_engine():
     """An engine that reads the tagged form (`to_prefix`), as the sweep's engine does."""
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     return SimpliPyEngine(operators=ops, rules=[])
 
@@ -1909,7 +1909,7 @@ def test_the_multi_constant_fit_is_the_same_on_every_blas_kernel() -> None:
 # ------------------------------------------------------------------------------------------
 def test_the_monitor_holds_each_rule_step_to_the_mode() -> None:
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     eng = SimpliPyEngine(operators=ops, rules=[(('atanh', 'tanh', '?0'), ('?0',))])
     out, fires = eng._core.ac_simplify_fires(['atanh', 'tanh', 'x0'], rule_mode='default')
@@ -1927,7 +1927,7 @@ def test_the_trace_records_each_fold_as_a_ground_rule() -> None:
     # product of the two doubles, `0.09000000000000002` (the exact product has 34 digits). The
     # trace changes no answer.
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     eng = SimpliPyEngine(operators=ops, rules=[])
     src = ['*', '*', 'x0', '0.30000000000000004', '0.30000000000000004']
@@ -2000,7 +2000,7 @@ def test_the_monitor_passes_exact_algebra_float64_rounds_apart() -> None:
     # F8: no promise of 8 units in the last place for a whole answer, only the engine's algebra
     # exact in the reals; a zero's sign is float64's own event and is held (F7)
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     eng = SimpliPyEngine(operators=ops, rules=[])
     for src in ('/ x0 / x0 - pow x0 2 x0', 'tan + x0 np.pi'):
@@ -2018,7 +2018,7 @@ def test_the_monitor_reads_a_step_in_its_context_only_for_a_zeros_sign() -> None
     # change of kind is float64's rounding of the step's input magnified by an operation there,
     # unless a value turns on a zero's sign
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     eng = SimpliPyEngine(operators=ops, rules=[(('log', 'exp', '?0'), ('?0',))])
     # float64's 1/log(exp(x0)) is +inf against 1/x0 at x0 = 1e-17, and log(log(exp(x0))) -inf
@@ -2045,7 +2045,7 @@ def test_the_monitor_reads_the_smallest_changed_part_that_holds_as_a_step() -> N
     # the step `sin(np.pi - x0) -> sin(x0)` gives 0 against 1.2e-16 at x0 = np.pi, both finite;
     # under `1/` that is +inf against 8.2e15, float64's rounding of the step's input magnified
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     for src, part in (('/ 1 sin - np.pi x0', 'sin - np.pi ?0 -> sin ?0'),
@@ -2067,7 +2067,7 @@ def test_the_monitor_reads_a_products_changed_factors_as_a_step() -> None:
     # where the input's is not (+inf against 8.7e15). The changed factors, (a*x^2 + b*x)/x -> a*x + b,
     # hold as a step (0 against a rounding there), and the reciprocal around them magnifies it
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     src = '/ x0 + * 1.84813996308601 pow x0 2 * 0.893721330937074 x0'.split()
@@ -2105,7 +2105,7 @@ def test_the_monitor_pairs_changed_factors_one_to_one() -> None:
     # where sin(x0) is 1.2e-16 (-inf against 8.2e15 under the reciprocal). Both factors changed;
     # read as one part they take in the reciprocal, paired one to one each holds as a step
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     src = '* inv sin x0 sin x1'.split()
@@ -2142,7 +2142,7 @@ def test_the_judge_names_the_strict_mode_and_reads_its_old_names_with_a_warning(
     with pytest.raises(ValueError):
         _contract.judge_mode('real')
     # the monitor's strict branches read a zero's sign under every spelling of the mode
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     pair = ('atan2 * 0 x0 -1'.split(), ['np.pi'])
@@ -2157,7 +2157,7 @@ def test_the_monitor_refuses_a_whole_answer_that_turns_on_a_zeros_sign() -> None
     # true in the reals and float64's kinds kept (-pi against pi), but -pi for every x0 < 0, where
     # `0*x0` is -0 and atan2 reads it
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     verdict, detail = judge_pair('atan2 * 0 x0 -1'.split(), ['np.pi'], engine=bare)
@@ -2172,7 +2172,7 @@ def test_around_a_held_step_the_monitor_keeps_poles_and_a_regions_zero_sign() ->
     # gains the reals' infinity at x0 = 0 in one direction, and loses it in the other, where the
     # left side's pole is one-signed and keeps its infinity
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     gains = judge_pair('inv pow sin + x0 * 2 np.pi 2'.split(), 'inv pow sin x0 2'.split(), engine=bare)
@@ -2191,7 +2191,7 @@ def test_the_monitor_reads_no_zeros_sign_at_the_root_or_at_isolated_points() -> 
     # float64's log(x3) and sin(x2) are equal (+0 against -0 at (-1, 1.5707963267948966, e)), at the
     # answer's root, which no operation reads; the f64 lane names the kind, and it is no refusal
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     src = '* - / * x1 log x3 sin x2 x1 sin x2'.split()
@@ -2207,7 +2207,7 @@ def test_the_monitor_reads_no_zeros_sign_at_the_root_or_at_isolated_points() -> 
 
 def test_the_monitor_does_not_hold_an_infinitys_sign_at_an_isolated_pole() -> None:
     import yaml
-    ops = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4',
+    ops = yaml.safe_load(open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32',
                                            'config.yaml')))['operators']
     bare = SimpliPyEngine(operators=ops, rules=[])
     # +inf against -inf at x0 = -3 alone

@@ -321,7 +321,7 @@ def test_the_search_still_splits_a_pole_one_addend_cancels(eng, mode):
 # reader: where -1 < x1 <= 0 and 0 <= x2 < 1, `1/(-ceil(x1) - floor(x2))` is +inf and `-1/(ceil(x1) + floor(x2))`
 # is -inf, two answers, each keeping its value there.
 def test_f64_keeps_a_regions_zero_sign_and_not_an_isolated_ones():
-    with open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', 'config.yaml')) as f:
+    with open(os.path.join(REPO, 'tests', 'fixtures', 'vocab32', 'config.yaml')) as f:
         eng = SimpliPyEngine(operators=yaml.safe_load(f)['operators'], rules=[], rules_permissive=[])
     assert simp(eng, '1/(-x1 - 3)', 'strict') == simp(eng, '-1/(x1 + 3)', 'strict')
     spellings = ('1/(-ceil(x1) - floor(x2))', '-1/(ceil(x1) + floor(x2))')

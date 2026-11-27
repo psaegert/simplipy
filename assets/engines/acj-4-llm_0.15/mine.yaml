@@ -1,14 +1,14 @@
-# Artifact kit acj2-4-llm: the complete AC-judged 4->4 mine over the 0.15 vocabulary (acj-4's
-# operators plus floor, ceil, max, min, mod, erf, harmonic, atan2 and besselj, each priced at
-# the transcendental tier), LLM channel on, as acj-5-4-llm. Reproduce with ONE command:
+# Mine kit acj-4-llm_0.15: the complete AC-judged 4->4 mine over the 0.15 vocabulary, LLM and manual
+# proposals on. The default rule set of 0.15. Reproduce with ONE command:
 #   simplipy find-rules -e config.yaml -c mine.yaml -o rules.json -v --reset-rules
-# It writes rules.json (f64) and rules_permissive.json, each with its provenance sidecar.
+# It writes rules.json (strict) and rules_permissive.json, each with its provenance sidecar.
 #
-# NO SECOND NUMBER: the target cap is 4 and so is the source bound, so the cap refuses nothing.
+# Universe (SEMANTICS 4.12, 4.13; rulings 41-43): the 36 operators of the config, of which erfc and harmonic are
+# supported but not mined (operator_max_length 0 below), and the Bessel family is slow (config `slow: true`: a rule
+# brings a Bessel function into its right side only where its left side holds one). The config's defined functions
+# (sqrt and the reciprocal trigonometric functions) and aliases are reading only and never mined.
 #
-# Universe at u=21 unary, b=11 binary, a=29 leaves (27 terms + two dummies), by the miner's
-# recurrence: T(1)=29  T(2)=609  T(3)=22,040  T(4)=851,382. Measure the rate off the length-3
-# tier before promising an ETA.
+# No second number: the target cap is 4 and so is the source bound, so the cap refuses nothing.
 #
 # Alphabet unchanged from acj-4 (flash-ansr vocabulary literals -10..10, e, pi).
 extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(-5)', '(-4)', '(-3)', '(-2)', '(-1)', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
@@ -28,9 +28,7 @@ confirm: true
 relaxed_kruskal: true
 prune: covered
 promote_sorts: true
-# Supported and not mined (an operator bounded at 0): harmonic, which no expression over the
-# other operators spells, so a rule mentioning it would only bring it in.
-operator_max_length: {harmonic: 0}
 # LLM channel: the acj-5-4-llm batch (194 proposals, sha256
 # b97573c2813d0bb535364ef32817c71549fe40e76a794c37b0403c09827bf359), placed beside this file.
-proposals: llm_proposals.json
+proposals: llm_and_manual_proposals.json
+operator_max_length: {erfc: 0, harmonic: 0}

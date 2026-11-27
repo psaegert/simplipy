@@ -738,10 +738,10 @@ mod tests {
         assert_eq!(verdict, (None, false));
         assert!(!crate::hiprec::evaluable(&b, &ops));
         let e = Engine::from_strs(
-            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            include_str!("../../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         for t in [&["floor", "x0"][..], &["besselj", "1", "x0"][..]] {
             assert!(crate::hiprec::evaluable(&s(t), &e.operators), "{t:?}");
         }
@@ -752,10 +752,10 @@ mod tests {
     #[test]
     fn jumps_are_exceptional_points() {
         let e = Engine::from_strs(
-            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            include_str!("../../tests/fixtures/vocab32/config.yaml"),
             "[]",
         )
-        .expect("acj2-4 builds");
+        .expect("vocab32 builds");
         let vars = s(&["x0"]);
         let mut pts = Vec::new();
         exceptional_points(

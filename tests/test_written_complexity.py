@@ -20,7 +20,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def engine() -> SimpliPyEngine:
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        return SimpliPyEngine.from_config(os.path.join(_ROOT, 'assets', 'engines', 'acj2-4', 'config.yaml'))
+        return SimpliPyEngine.from_config(os.path.join(_ROOT, 'tests', 'fixtures', 'vocab32', 'config.yaml'))
 
 
 # (written, its written price in milli-bits)

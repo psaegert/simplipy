@@ -58,16 +58,24 @@ __all__ = ['SimpliPyEngine', 'Mode', 'SimplifyStatus', 'ARTIFACT_ENV_SWITCHES', 
 #: user without a simplipy release. The manifest still supplies the files; this decides
 #: WHICH ones.
 #:
-#: WHY A REVISION AND NOT JUST A NAME. One name can mean different rules across simplipy
-#: versions -- `acj-4` mined under 0.14's judge is not `acj-4` mined under 0.15's, and
-#: both are legitimately called `acj-4`. The manifest is revision-addressed, so the pair
-#: (name, revision) names exactly one artifact, and each simplipy release pins the pair
-#: it was tested against. `None` means "whatever the manifest currently points at", which
-#: is the right answer only for a release that ships no artifact of its own.
+#: ONE CONSTANT. 0.15 ships `acj-4-llm_0.15` (sources and targets to length 4) as its
+#: default rule set, and `acj-5-4-llm_0.15` (sources to length 5) follows; switching the
+#: default is this line alone: the refusals that name the engine to load instead
+#: (:mod:`simplipy.compat`) read it.
+#:
+#: WHY A REVISION AND NOT JUST A NAME. A name carries the minor version it was mined for
+#: (`_0.15`), but a patch release that mines a set again keeps its name, so one name can
+#: still mean different rules across simplipy versions (without the suffix, `acj-4` mined
+#: under 0.14's judge and under 0.15's would both be `acj-4`). The manifest is
+#: revision-addressed, so the pair (name, revision) names exactly one artifact, and each
+#: simplipy release pins the pair it was tested against. `None` means "whatever the
+#: manifest currently points at", which is the right answer only for a release that ships
+#: no artifact of its own.
 #:
 #: The measure-fingerprint check remains the safety net for an artifact loaded by
 #: NAME across a measure change; this pin is what stops that happening by default.
-DEFAULT_ENGINE = 'acj-5-4-llm'
+DEFAULT_ENGINE = 'acj-4-llm_0.15'
+# PENDING the release: pin the manifest revision that publishes DEFAULT_ENGINE's rule files.
 DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given.
@@ -524,7 +532,7 @@ class SimpliPyEngine(_Evaluation):
         Parameters
         ----------
         engine : str or None, optional
-            The NAME of an official engine artifact (e.g. ``'acj-4'``). Defaults to
+            The NAME of an official engine artifact (e.g. ``'acj-4-llm_0.15'``). Defaults to
             :data:`simplipy.DEFAULT_ENGINE`, the artifact this simplipy version was
             built and tested against; when it is used implicitly, the choice is
             announced (a WARNING record on the ``simplipy`` logger), because a silent
@@ -694,7 +702,7 @@ class SimpliPyEngine(_Evaluation):
 
         .. note::
             Pair this engine with sort-promoted rulesets, which every published engine
-            (such as ``acj-5-4-llm``) is. Generation-1 artifacts (the retired hyper-operator
+            (such as ``acj-4-llm_0.15``) is. Generation-1 artifacts (the retired hyper-operator
             vocabulary, such as ``dev_7-3``) are refused at load; they need
             ``simplipy<0.12``.
 

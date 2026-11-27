@@ -15,13 +15,13 @@ from simplipy import SimpliPyEngine
 from simplipy.promotion import promote
 from simplipy.verify import licensed, verify_rule
 
-ACJ2_4 = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj2-4', 'config.yaml')
+VOCAB32 = os.path.join(os.path.dirname(__file__), 'fixtures', 'vocab32', 'config.yaml')
 MODES = ('strict', 'permissive')
 
 
 @pytest.fixture(scope='module')
 def bare():
-    ops = yaml.safe_load(open(ACJ2_4))['operators']
+    ops = yaml.safe_load(open(VOCAB32))['operators']
     return SimpliPyEngine(operators=ops, rules=[], rules_permissive=[])
 
 
