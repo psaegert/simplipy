@@ -1,6 +1,8 @@
 SimpliPy is distributed under the MIT License (see LICENSE). Parts of its compiled core are
 ported from the works below. Each entry names the original, the files in this repository that
-carry the port, and the license it is used under; the license texts follow.
+carry the port, and the license it is used under; the license texts follow. The compiled core
+also links the Rust crates of its dependency tree, mimalloc's C sources among them: their notices
+follow in the generated section at the end.
 
 
 Name: NumPy -- npy_remainder / npy_divmod (the float64 modulus behind np.mod / np.remainder)
@@ -153,3 +155,1000 @@ License: BSL-1.0
   WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
+
+
+====================================================================================================
+BEGIN GENERATED: the Rust crates the compiled core links (rust/bundled_notices.py)
+Do not edit by hand: run `python rust/bundled_notices.py` after a change to Cargo.lock or
+to the wheel's features.
+====================================================================================================
+
+Name: astro-float 0.9.6
+Origin: crates.io, https://github.com/stencillogic/astro-float
+License: MIT; used under MIT
+Notice: LICENSE
+
+  MIT License
+
+  Copyright (c) 2022 stencillogic
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+Name: astro-float-macro 0.4.6
+Origin: crates.io, https://github.com/stencillogic/astro-float
+License: MIT; used under MIT
+Notice: (none shipped; the standard text over the published authors)
+
+  Copyright (c) stencillogic
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+  following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or substantial
+  portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+  LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+  EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+  AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+  OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+Name: astro-float-num 0.3.7
+Origin: crates.io, https://github.com/stencillogic/astro-float
+License: MIT; used under MIT
+Notice: (none shipped; the standard text over the published authors)
+
+  ((none shipped; the standard text over the published authors): the same text as astro-float-macro 0.4.6's (none shipped; the standard text over the published authors) above)
+
+
+Name: cfg-if 1.0.4
+Origin: crates.io, https://github.com/rust-lang/cfg-if
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2014 Alex Crichton
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: crossbeam-deque 0.8.6
+Origin: crates.io, https://github.com/crossbeam-rs/crossbeam
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  The MIT License (MIT)
+
+  Copyright (c) 2019 The Crossbeam Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: crossbeam-epoch 0.9.20
+Origin: crates.io, https://github.com/crossbeam-rs/crossbeam
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as crossbeam-deque 0.8.6's LICENSE-MIT above)
+
+
+Name: crossbeam-utils 0.8.21
+Origin: crates.io, https://github.com/crossbeam-rs/crossbeam
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as crossbeam-deque 0.8.6's LICENSE-MIT above)
+
+
+Name: either 1.16.0
+Origin: crates.io, https://github.com/rayon-rs/either
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2015
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: equivalent 1.0.2
+Origin: crates.io, https://github.com/indexmap-rs/equivalent
+License: Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2016--2023
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: getrandom 0.2.17
+Origin: crates.io, https://github.com/rust-random/getrandom
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2018-2024 The rust-random Project Developers
+  Copyright (c) 2014 The Rust Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: hashbrown 0.17.1
+Origin: crates.io, https://github.com/rust-lang/hashbrown
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2016 Amanieu d'Antras
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: heck 0.5.0
+Origin: crates.io, https://github.com/withoutboats/heck
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2015 The Rust Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: indexmap 2.14.0
+Origin: crates.io, https://github.com/indexmap-rs/indexmap
+License: Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2016--2017
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: itertools 0.10.5
+Origin: crates.io, https://github.com/rust-itertools/itertools
+License: MIT/Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as either 1.16.0's LICENSE-MIT above)
+
+
+Name: itoa 1.0.18
+Origin: crates.io, https://github.com/dtolnay/itoa
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: lazy_static 1.5.0
+Origin: crates.io, https://github.com/rust-lang-nursery/lazy-static.rs
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2010 The Rust Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: libc 0.2.186
+Origin: crates.io, https://github.com/rust-lang/libc
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) The Rust Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: libmimalloc-sys 0.1.49
+Origin: crates.io, https://github.com/purpleprotocol/mimalloc_rust/tree/master/libmimalloc-sys
+License: MIT; used under MIT
+Notice: LICENSE.txt, c_src/mimalloc/v2/LICENSE, c_src/mimalloc/v3/LICENSE
+
+  Copyright 2019 Octavian Oncescu
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+  MIT License
+
+  Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  (c_src/mimalloc/v3/LICENSE: the same text as libmimalloc-sys 0.1.49's c_src/mimalloc/v2/LICENSE above)
+
+
+Name: memchr 2.8.2
+Origin: crates.io, https://github.com/BurntSushi/memchr
+License: Unlicense OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  The MIT License (MIT)
+
+  Copyright (c) 2015 Andrew Gallant
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  THE SOFTWARE.
+
+
+Name: mimalloc 0.1.52
+Origin: crates.io, https://github.com/purpleprotocol/mimalloc_rust
+License: MIT; used under MIT
+Notice: LICENSE.txt
+
+  (LICENSE.txt: the same text as libmimalloc-sys 0.1.49's LICENSE.txt above)
+
+
+Name: num-bigint 0.4.8
+Origin: crates.io, https://github.com/rust-num/num-bigint
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2014 The Rust Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: num-integer 0.1.47
+Origin: crates.io, https://github.com/rust-num/num-integer
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as num-bigint 0.4.8's LICENSE-MIT above)
+
+
+Name: num-traits 0.2.19
+Origin: crates.io, https://github.com/rust-num/num-traits
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as num-bigint 0.4.8's LICENSE-MIT above)
+
+
+Name: once_cell 1.21.4
+Origin: crates.io, https://github.com/matklad/once_cell
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: portable-atomic 1.13.1
+Origin: crates.io, https://github.com/taiki-e/portable-atomic
+License: Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: ppv-lite86 0.2.21
+Origin: crates.io, https://github.com/cryptocorrosion/cryptocorrosion
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2019 The CryptoCorrosion Contributors
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: proc-macro2 1.0.106
+Origin: crates.io, https://github.com/dtolnay/proc-macro2
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: pyo3 0.29.0
+Origin: crates.io, https://github.com/pyo3/pyo3
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright (c) 2023-present PyO3 Project and Contributors.  https://github.com/PyO3
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: pyo3-ffi 0.29.0
+Origin: crates.io, https://github.com/pyo3/pyo3
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as pyo3 0.29.0's LICENSE-MIT above)
+
+
+Name: pyo3-macros 0.29.0
+Origin: crates.io, https://github.com/pyo3/pyo3
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as pyo3 0.29.0's LICENSE-MIT above)
+
+
+Name: pyo3-macros-backend 0.29.0
+Origin: crates.io, https://github.com/pyo3/pyo3
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as pyo3 0.29.0's LICENSE-MIT above)
+
+
+Name: quote 1.0.45
+Origin: crates.io, https://github.com/dtolnay/quote
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: rand 0.8.7
+Origin: crates.io, https://github.com/rust-random/rand
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright 2018 Developers of the Rand project
+  Copyright (c) 2014 The Rust Project Developers
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: rand_chacha 0.3.1
+Origin: crates.io, https://github.com/rust-random/rand
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as rand 0.8.7's LICENSE-MIT above)
+
+
+Name: rand_core 0.6.4
+Origin: crates.io, https://github.com/rust-random/rand
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as rand 0.8.7's LICENSE-MIT above)
+
+
+Name: rayon 1.12.0
+Origin: crates.io, https://github.com/rayon-rs/rayon
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as lazy_static 1.5.0's LICENSE-MIT above)
+
+
+Name: rayon-core 1.13.0
+Origin: crates.io, https://github.com/rayon-rs/rayon
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as lazy_static 1.5.0's LICENSE-MIT above)
+
+
+Name: rustc-hash 2.1.2
+Origin: crates.io, https://github.com/rust-lang/rustc-hash
+License: Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: ryu 1.0.23
+Origin: crates.io, https://github.com/dtolnay/ryu
+License: Apache-2.0 OR BSL-1.0; used under BSL-1.0
+Notice: LICENSE-BOOST
+
+  Boost Software License - Version 1.0 - August 17th, 2003
+
+  Permission is hereby granted, free of charge, to any person or organization
+  obtaining a copy of the software and accompanying documentation covered by
+  this license (the "Software") to use, reproduce, display, distribute,
+  execute, and transmit the Software, and to prepare derivative works of the
+  Software, and to permit third-parties to whom the Software is furnished to
+  do so, all subject to the following:
+
+  The copyright notices in the Software and this entire statement, including
+  the above license grant, this restriction and the following disclaimer,
+  must be included in all copies of the Software, in whole or in part, and
+  all derivative works of the Software, unless such copies or derivative
+  works are solely in the form of machine-executable object code generated by
+  a source language processor.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+  SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+  FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: serde 1.0.228
+Origin: crates.io, https://github.com/serde-rs/serde
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: serde_core 1.0.228
+Origin: crates.io, https://github.com/serde-rs/serde
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: serde_derive 1.0.228
+Origin: crates.io, https://github.com/serde-rs/serde
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: serde_json 1.0.150
+Origin: crates.io, https://github.com/serde-rs/json
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: serde_yaml_ng 0.10.0
+Origin: crates.io, https://github.com/acatton/serde-yaml-ng
+License: MIT; used under MIT
+Notice: LICENSE
+
+                                    MIT License
+
+  Copyright 2024 Antoine Catton
+  Copyright 2016-2024 David Tolnay
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of
+  this software and associated documentation files (the “Software”), to deal in
+  the Software without restriction, including without limitation the rights to
+  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+  of the Software, and to permit persons to whom the Software is furnished to do
+  so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+Name: syn 1.0.109
+Origin: crates.io, https://github.com/dtolnay/syn
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: syn 2.0.118
+Origin: crates.io, https://github.com/dtolnay/syn
+License: MIT OR Apache-2.0; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: unicode-ident 1.0.24
+Origin: crates.io, https://github.com/dtolnay/unicode-ident
+License: (MIT OR Apache-2.0) AND Unicode-3.0; used under MIT AND Unicode-3.0
+Notice: LICENSE-MIT, LICENSE-UNICODE
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+  UNICODE LICENSE V3
+
+  COPYRIGHT AND PERMISSION NOTICE
+
+  Copyright © 1991-2023 Unicode, Inc.
+
+  NOTICE TO USER: Carefully read the following legal agreement. BY
+  DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+  SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+  TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+  DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+  Permission is hereby granted, free of charge, to any person obtaining a
+  copy of data files and any associated documentation (the "Data Files") or
+  software and any associated documentation (the "Software") to deal in the
+  Data Files or Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, and/or sell
+  copies of the Data Files or Software, and to permit persons to whom the
+  Data Files or Software are furnished to do so, provided that either (a)
+  this copyright and permission notice appear with all copies of the Data
+  Files or Software, or (b) this copyright and permission notice appear in
+  associated Documentation.
+
+  THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+  KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+  THIRD PARTY RIGHTS.
+
+  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+  BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+  OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+  WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+  ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+  FILES OR SOFTWARE.
+
+  Except as contained in this notice, the name of a copyright holder shall
+  not be used in advertising or otherwise to promote the sale, use or other
+  dealings in these Data Files or Software without prior written
+  authorization of the copyright holder.
+
+
+Name: unsafe-libyaml 0.2.11
+Origin: crates.io, https://github.com/dtolnay/unsafe-libyaml
+License: MIT; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: wasi 0.11.1+wasi-snapshot-preview1
+Origin: crates.io, https://github.com/bytecodealliance/wasi
+License: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+
+Name: zerocopy 0.8.52
+Origin: crates.io, https://github.com/google/zerocopy
+License: BSD-2-Clause OR Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  Copyright 2023 The Fuchsia Authors
+
+  Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the
+  Software without restriction, including without
+  limitation the rights to use, copy, modify, merge,
+  publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software
+  is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice
+  shall be included in all copies or substantial portions
+  of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+  ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+  TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+
+Name: zerocopy-derive 0.8.52
+Origin: crates.io, https://github.com/google/zerocopy
+License: BSD-2-Clause OR Apache-2.0 OR MIT; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as zerocopy 0.8.52's LICENSE-MIT above)
+
+
+Name: zmij 1.0.21
+Origin: crates.io, https://github.com/dtolnay/zmij
+License: MIT; used under MIT
+Notice: LICENSE-MIT
+
+  (LICENSE-MIT: the same text as itoa 1.0.18's LICENSE-MIT above)
+
+END GENERATED: the Rust crates the compiled core links
+====================================================================================================

@@ -301,16 +301,19 @@ def test_F37_the_callable_of_the_cores_own_answer_evaluates() -> None:
     assert e.to_prefix(e.to_realization(y)) == y
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "F23, reproduces at 3a6ed3a: the wheel compiles mimalloc in (Cargo feature mimalloc-allocator), "
-    "but the bundled notices (LICENSES_bundled.txt, the wheel's only third-party notice file) do not "
-    "carry its MIT notice (release checklist item I: notices from the Cargo tree)."))
+# F23 (R6), reproduced at 3a6ed3a and fixed in the 0.15 fix round: the wheel compiles mimalloc in
+# (Cargo feature mimalloc-allocator), but the bundled notices (LICENSES_bundled.txt, the wheel's
+# only third-party notice file) did not carry its MIT notice. rust/bundled_notices.py now writes
+# the notices of every crate the core links, from the Cargo tree (release checklist item I), and
+# the CI checks the file is current.
 def test_F23_the_wheel_ships_the_notice_of_the_allocator_it_compiles_in() -> None:
     notices = REPO / 'LICENSES_bundled.txt'
     if not notices.exists():
         pytest.skip('outside the source tree')
     text = notices.read_text()
     assert 'mimalloc' in text and 'Microsoft Corporation' in text
+    for crate in ('pyo3', 'serde_json', 'rayon', 'astro-float', 'libmimalloc-sys'):
+        assert f'\nName: {crate} ' in text, crate
 
 
 # Constructor rule renaming (R8), found while replaying F34's class at 3a6ed3a and fixed in the 0.15

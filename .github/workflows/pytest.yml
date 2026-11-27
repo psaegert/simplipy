@@ -39,6 +39,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      # The wheel ships the notices of every crate its core links (LICENSES_bundled.txt); the
+      # generator reads them from the Cargo tree, and the file must be what it writes.
+      - name: The bundled notices are current
+        if: matrix.python-version == '3.12'
+        run: python rust/bundled_notices.py --check
+
       # Recorded per job so the resolved numeric stack is a fact in the log, never an
       # assumption (the 3.11-era divergence this caught is resolved: D35 moved the
       # floor to >=3.12, matching the dependency reality).
