@@ -22,7 +22,7 @@ function simplify(expr, max_passes=48, mode=strict, effort=DEFAULT_EFFORT):
                                           # output strictly descends the well-founded
                                           # reduction ordering, so termination is a
                                           # THEOREM; max_passes and the step cap are
-                                          # defence-in-depth, not the mechanism
+                                          # resource limits, not the mechanism
 ```
 
 Every step (like-term collection inside the canonical constructors, rule application, and
@@ -49,9 +49,11 @@ collection in flat bags, computed by one deterministic function, so inside a pas
 is nothing to branch over. Every changed pass output strictly descends the reduction
 ordering (μ, then the canonical order), and that ordering is well-founded, so the chain
 never revisits a state and reaches its fixpoint in finitely many passes as a theorem;
-the `max_passes` parameter (default 48) and the internal step cap are defence-in-depth
-against ordering-invariant bugs, not part of the argument. `max_passes` bounds the
-number of times that `loop` body runs — **passes, not nodes**: one pass reaches the
+the `max_passes` parameter (default 48) and the internal step cap are resource limits,
+not part of the argument: termination is finite, not short, so a valid descent can need
+more steps than the cap allows, and a binding cap is reported rather than read as a bug
+([What `strict` mode does and does not promise](#what-strict-mode-does-and-does-not-promise)).
+`max_passes` bounds the number of times that `loop` body runs — **passes, not nodes**: one pass reaches the
 fixpoint (it re-enters every node it changes; debug builds assert it), so the next pass
 only confirms it, the default of 48 is never reached, and the knob is not a performance
 dial. It must be at least 1. What strict descent alone cannot do —
