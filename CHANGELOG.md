@@ -2224,7 +2224,9 @@ model predictions.
   multiples of pi, which `pow` reads rounded, `x^2 + 1` now encloses wider than float resolution,
   as at e. The layer's odd and even roots carried their
   rounded exponent `fl(1/k)` without its error, which `x^fl(1/k)` magnifies by `|ln x|` (30 units
-  in the last place at 1e-300 for k = 6); their enclosures now hold it.
+  in the last place at 1e-300 for k = 6); their enclosures now hold it. The cells' constant
+  subtrees (evidence, clause (b)'s measure, the engine's constant fold) read the table by the
+  same discipline; no answer of the census and no verdict of the shipped mines' rules moved.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's

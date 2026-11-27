@@ -4237,7 +4237,10 @@ fn value_set_table_points(
         if kids.iter().all(|(_, pt)| pt.is_some()) {
             let args: Vec<Val> = kids.iter().filter_map(|(_, pt)| pt.clone()).collect();
             let c = ctx_of(ctx)?;
-            if let Some(val) = crate::table::apply(tok, &args, c) {
+            // a value no rounding of an operand reaches (`table_value_encloses`); else the
+            // interval arithmetic below, on the operands' own enclosures
+            let (val, unrounded) = crate::table::apply_unrounded(tok, &args, c);
+            if let Some(val) = val.filter(|v| table_value_encloses(tok, v, unrounded)) {
                 if let Some(vs) = vs_of_table(&val, c) {
                     return Some((vs, Some(val), j));
                 }
@@ -4284,17 +4287,33 @@ const RELATIVE_ERROR_KEEPING: [&str; 15] = [
     "div3", "div4", "div5",
 ];
 
+/// IS THE TABLE'S VALUE OF `op` AN ENCLOSURE? Only where no rounding of an operand reaches it:
+/// the table read every operand exact and rounded none on the way (`unrounded`, from
+/// `table::apply_unrounded`: `tan(pi/2)` is undefined from the multiple of pi itself), or exact
+/// arithmetic on exact operands (`EXACT_ON_EXACT`), or an operation that keeps a relative error
+/// (`RELATIVE_ERROR_KEEPING`). Elsewhere an operand the table rounds first (a rational past a
+/// double's bits, a multiple of pi, an approximation) may sit where the operation magnifies the
+/// rounding past any bound, and an approximation that collapses to 0 reads as exact: `log(1 + x)`
+/// at x = 1e-300 is the exact 0 at forty digits. The point enclosure (`point_value_set`) and the
+/// cells' constant subtrees (`value_set_table_points`) read the table so.
+fn table_value_encloses(op: &str, v: &crate::table::Val, unrounded: bool) -> bool {
+    let exact = matches!(v, crate::table::Val::Exact(_));
+    unrounded
+        || (exact && EXACT_ON_EXACT.contains(&op))
+        || (!exact && RELATIVE_ERROR_KEEPING.contains(&op))
+}
+
 /// The real reading's value set of `tokens` at ONE POINT, each variable `x<i>` bound to `env[i]`
 /// (a value of THE TABLE), with an error bound that holds at any working precision: a node whose
 /// operands are all EXACT table values takes the table's value there where no rounding of an
-/// operand reaches it (`table::apply_unrounded`, `EXACT_ON_EXACT`, `RELATIVE_ERROR_KEEPING`), and
-/// is carried on as a point only where that value is exact itself; an approximate value enters as
-/// its float enclosure (`table::f64_enclosure`: one operation on unrounded operands, read far past
-/// a double's precision), and every node above it is the layer's outward-rounded interval
-/// arithmetic. No chain of approximations is trusted past one operation, so a cancellation whose
-/// working-precision residue would read as a value (`(x + 1e-3000) - x`) encloses as wide as its
-/// bound. A pole is taken at the point (no zero set is null at a point). `None` where a token
-/// cannot be read or the table snapped a value.
+/// operand reaches it (`table_value_encloses`: `table::apply_unrounded`, `EXACT_ON_EXACT`,
+/// `RELATIVE_ERROR_KEEPING`), and is carried on as a point only where that value is exact itself;
+/// an approximate value enters as its float enclosure (`table::f64_enclosure`: one operation on
+/// unrounded operands, read far past a double's precision), and every node above it is the
+/// layer's outward-rounded interval arithmetic. No chain of approximations is trusted past one
+/// operation, so a cancellation whose working-precision residue would read as a value
+/// (`(x + 1e-3000) - x`) encloses as wide as its bound. A pole is taken at the point (no zero set
+/// is null at a point). `None` where a token cannot be read or the table snapped a value.
 fn point_value_set(tokens: &[String], ops: &Operators, env: &[crate::table::Val]) -> Option<Vs> {
     use crate::table::{Ctx, Val};
     fn exact(v: &Val) -> bool {
@@ -4339,21 +4358,9 @@ fn point_value_set(tokens: &[String], ops: &Operators, env: &[crate::table::Val]
             if ctx.snapped {
                 return None;
             }
-            // THE TABLE'S VALUE IS AN ENCLOSURE ONLY WHERE NO ROUNDING OF AN OPERAND REACHES IT:
-            // the table read every operand exact and rounded none on the way
-            // (`table::apply_unrounded`: `tan(pi/2)` is undefined from the multiple of pi itself),
-            // or exact arithmetic on exact operands, or an operation that keeps a relative error
-            // (a product, a quotient, an order). Elsewhere an operand the table rounds first may
-            // sit where the operation magnifies the rounding past any bound, and an approximation
-            // that collapses to 0 reads as exact: `log(1 + x)` at x = 1e-300 is the exact 0 at
-            // forty digits. The interval arithmetic below, on the operand's own enclosure, bounds
-            // it honestly.
-            let trusted = |v: &Val| {
-                unrounded
-                    || (exact(v) && EXACT_ON_EXACT.contains(&tok))
-                    || (!exact(v) && RELATIVE_ERROR_KEEPING.contains(&tok))
-            };
-            if let Some(val) = val.filter(trusted) {
+            // the interval arithmetic below, on the operand's own enclosure, bounds an untrusted
+            // value honestly
+            if let Some(val) = val.filter(|v| table_value_encloses(tok, v, unrounded)) {
                 let vs = vs_of_table(&val, ctx)?;
                 return Some((vs, exact(&val).then_some(val), j));
             }
@@ -8258,6 +8265,37 @@ mod tests {
             read(&["log", "+", "1", "x0"], &["x0"]),
             FloatReading::Differ
         );
+    }
+
+    /// The cells' constant subtrees read the table by the point enclosure's discipline
+    /// (`table_value_encloses`): `log(1 + 1e-300)` is 1e-300, and its enclosure holds it, where
+    /// the table's forty-digit value is the exact 0. A value the table decides from exact
+    /// operands without rounding them stays the table's (`table::apply_unrounded`): `tan(pi/2)`
+    /// is undefined from the multiple of pi, `(-inf)^(10^40)` is +inf from the exponent's parity.
+    #[test]
+    fn a_cells_constant_subtree_never_reads_a_rounded_operands_approximation_as_exact() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let read = |t: &[&str]| {
+            with_real_reading(|| {
+                value_set_table_points(
+                    &s(t),
+                    ops,
+                    &[Vs::interval(0.0, 0.0, false, false)],
+                    &[],
+                    None,
+                )
+            })
+            .unwrap()
+        };
+        let v = read(&["+", "x0", "log", "+", "1", "1e-300"]);
+        assert!(v.has_fin && v.lo <= 1e-300 && 1e-300 <= v.hi, "{v:?}");
+        let v = read(&["+", "x0", "tan", "asin", "1"]);
+        assert!(v.nan && !v.has_fin && !v.pinf && !v.ninf, "{v:?}");
+        let v = read(&["+", "x0", "pow", "float(\"-inf\")", "1e40"]);
+        assert!(v.pinf && !v.has_fin && !v.nan && !v.ninf, "{v:?}");
     }
 
     /// A root's index decides it: an index that reaches no nonzero integer is NaN at every
