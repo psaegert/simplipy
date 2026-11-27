@@ -35,21 +35,6 @@ def _with_operator(**changes) -> SimpliPyEngine:
     return SimpliPyEngine(operators, [], defined_functions=config.get('defined_functions'))
 
 
-# API-2: `is_valid` answers True for token sequences that every reader refuses: a reserved
-# numeric spelling (`nan`, `inf`, `1/0`, `1/-3`) or an empty or whitespace token. The explicit
-# path asks only the core's arity oracle; the readers also run the token grammar (`check_form`)
-# and the 4,096-token cap (`is_valid` answers True for a 4,097-token sequence every reader refuses).
-# The miner calls `engine.is_valid` (mining.py, three sites), so aligning it is the owner's call.
-@pytest.mark.xfail(strict=True, reason='API-2: is_valid is True for tokens every reader refuses')
-@pytest.mark.parametrize('tokens', [['+', 'nan', 'x0'], ['+', 'inf', 'x0'], ['+', '1/0', 'x0'],
-                                    ['+', '1/-3', 'x0'], ['+', '', 'x0'], ['+', 'x 0', 'x0'],
-                                    ['sin'] * 4096 + ['x0']])
-def test_is_valid_agrees_with_the_readers(engine, tokens) -> None:
-    with pytest.raises(ValueError):
-        engine.to_prefix(tokens)
-    assert engine.is_valid(tokens) is False
-
-
 # API-3: `mask` returns some malformed tagged sequences unchanged instead of raising
 # ("Raises ValueError ... on a malformed expression"); every other reader refuses them.
 @pytest.mark.xfail(strict=True, reason='API-3: mask passes malformed tagged sequences through')

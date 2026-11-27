@@ -141,12 +141,25 @@ def test_is_valid_answers_false_on_malformed_tokens(engine, tokens) -> None:
     assert engine.is_valid(list(tokens)) is False
 
 
+# API-2 (fixed in the 0.15 fix round): `is_valid` asked only the core's arity oracle, so it
+# answered True for token sequences every reader refuses: a reserved numeric spelling, an empty
+# or spaced token, and a sequence past the 4,096-token cap. It runs the readers' token grammar
+# (`check_form`) too now.
+@pytest.mark.parametrize('tokens', [['+', 'nan', 'x0'], ['+', 'inf', 'x0'], ['+', '1/0', 'x0'],
+                                    ['+', '1/-3', 'x0'], ['+', '', 'x0'], ['+', 'x 0', 'x0'],
+                                    ['sin'] * 4096 + ['x0']])
+def test_is_valid_agrees_with_the_readers(engine, tokens) -> None:
+    with pytest.raises(ValueError):
+        engine.to_prefix(tokens)
+    assert engine.is_valid(tokens) is False
+
+
 def test_the_token_cap_refuses_before_any_recursion(engine) -> None:
     deep = ['sin'] * 4096 + ['x0']
     for entry in _READERS:
         with pytest.raises(ValueError, match=r'too long \(4097 tokens > 4096\)'):
             getattr(engine, entry)(deep)
-    # (is_valid answers True here: finding API-2, pinned in test_api_findings.py)
+    assert engine.is_valid(deep) is False
     # one under the cap reads, and the core's recursion holds at that depth
     assert engine.simplify(['sin'] * 4095 + ['x0']) == ['sin'] * 4095 + ['x0']
 

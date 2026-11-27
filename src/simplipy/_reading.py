@@ -19,7 +19,9 @@ class _Reading(_Loading):
 
         An expression is valid if it reads as a well-formed expression over THIS
         engine's vocabulary: every operator gets exactly its arity of operands, a
-        single root remains, and every tag section closes.
+        single root remains, every tag section closes, and every token passes the token
+        grammar every reader applies (no reserved numeric spelling such as ``nan``,
+        ``inf`` or ``1/0``, no empty or spaced token, at most 4,096 tokens).
 
         All three external forms are accepted and VERIFIED; the form is detected
         exactly as the conversion API detects it, by TYPE first and then by dialect:
@@ -97,6 +99,16 @@ class _Reading(_Loading):
         valid = self._core.is_valid(tokens)
         if verbose and not valid:
             self._explain_invalid(tokens, 'explicit')
+        if valid:
+            # The arity oracle reads the tree only; every reader also runs the token grammar
+            # (no reserved numeric spelling such as `nan` or `1/0`, no empty or spaced token) and
+            # the 4,096-token cap. An expression every reader refuses is not valid.
+            try:
+                self._core.check_form(tokens)
+            except ValueError as error:
+                if verbose:
+                    print(f'Invalid expression {prefix_expression!r}: {error}')
+                return False
         return valid
 
     def _validation_tokens(
