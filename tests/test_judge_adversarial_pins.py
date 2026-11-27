@@ -143,6 +143,56 @@ def test_false_between_the_points_read_is_refused(rule, tier) -> None:
     assert r['tier'] == tier, r
 
 
+#: False in float64 by a change of kind on a run of doubles no point reads, true in the reals: held
+#: in `core`. Strict should refuse it; permissive holds it by its own criterion.
+FALSE_IN_F64_HELD_IN_STRICT = [
+    # In the strict length-4 file. On -9.84e-17 < x < -5.55e-17 (about 3.5e15 doubles) erfc(x)
+    # rounds to 1.0 and exp(x) to 0.9999999999999999: 1.0 against +inf, a change of kind with no
+    # range event (a saturation plateau, a region by ruling 33). The ladder's rung 1e-16 lies just
+    # outside the run, where both sides are +inf; the reals give both sides +inf throughout.
+    ('pow erfc _0 float("inf")', 'pow exp _0 float("-inf")'),
+]
+
+
+@pytest.mark.xfail(strict=True, reason='judge defect (pre-audit review J-4): a change of kind on a '
+                                       'run of doubles no point reads')
+@pytest.mark.parametrize('lhs, rhs', FALSE_IN_F64_HELD_IN_STRICT)
+def test_a_change_of_kind_on_a_run_is_refused_in_strict(lhs, rhs) -> None:
+    r = _judge(lhs, rhs)
+    assert r['tier'] == 'permissive', r
+
+
+@pytest.mark.parametrize('lhs, rhs', FALSE_IN_F64_HELD_IN_STRICT)
+def test_a_change_of_kind_on_a_run_is_held_today(lhs, rhs) -> None:
+    r = _judge(lhs, rhs)
+    assert r['tier'] == 'core', r
+    x = -7e-17
+    assert ops.pow(ops.erfc(x), math.inf) == 1.0 and ops.pow(ops.exp(x), -math.inf) == math.inf
+
+
+#: Held in `core` by the range standard (F5, F6: "at a range event, when one is the true value"),
+#: though the answer overflows where the input is finite and far from float64's limits: the left
+#: side's double is the true value, and the right side's operation underflows or overflows. Pinned
+#: as they stand: the semantics accepts them in either direction (pre-audit review, a question
+#: for the owner).
+RANGE_STANDARD_EITHER_WAY = [
+    # strict length-4 file: exp(-0.1 x) is finite for x > -7097; exp(x) underflows below -745, so
+    # the right side is +inf there (5.5e34 against +inf at x = -800). The engine's strict answer
+    # for exp(-0.1*x0) is 1/exp(x0)^(0.1).
+    ('exp * -0.1 _0', 'rootn exp _0 (-10)'),
+    # 7.378 against +inf at x = 800: exp(x) overflows past 709.78
+    ('atanh tanh acosh _0', 'acosh log exp _0'),
+]
+
+
+@pytest.mark.parametrize('lhs, rhs', RANGE_STANDARD_EITHER_WAY)
+def test_the_range_standard_admits_an_answer_that_overflows(lhs, rhs) -> None:
+    r = _judge(lhs, rhs)
+    assert r['tier'] == 'core', r
+    assert ops.exp(-0.1 * -800.0) == pytest.approx(5.54062238439351e+34)
+    assert ops.rootn(ops.exp(-800.0), -10.0) == math.inf
+
+
 def test_the_counterexamples_are_real() -> None:
     """The values quoted above, from SimpliPy's own evaluator and mpmath."""
     mpmath = pytest.importorskip('mpmath')
