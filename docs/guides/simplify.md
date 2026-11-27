@@ -98,23 +98,30 @@ non-finite results such as `1/0 -> float("inf")`) and real-semantics power evalu
 bit and the literal code, in milli-bits) applied to the expression exactly as written. It takes no
 mode and no certificate, because nothing is read into a state and nothing is simplified: every
 operator, function, variable, sign and number written is charged. The only identifications are
-the ones infix notation forces:
+the ones infix notation forces, and where the notation leaves a choice, the reading is the one
+the code book prices:
 
 - a run of `+` and `-` is one sum, and a run of `*` and `/` one product, whatever the bracketing:
   a left operand and a `+` (`*`) operand continue the run, a bracketed subtrahend or divisor stays
-  whole, and operands are unordered;
-- `-y` and `neg(y)` are a sign, one bit;
-- `1/y` is the reciprocal of `y` (the 1 is the notation's) and `inv(y)` is the same; dividing by a
-  written power `y^k` is `y^-k`, and a literal divisor `x/3` holds the literal 1/3, as
+  whole, and operands are unordered; a call of `max` or `min` with more than two arguments,
+  `max(a, b, c)`, is one call and pays its head once (`max(max(a, b), c)` writes two calls);
+- `-y` and `neg(y)` are a sign, one bit; a written `-inf`, and `inf` as a subtrahend, is the
+  symbol `float("-inf")`, 8 bits;
+- `1/y` is the reciprocal of `y` (the 1 is the notation's) and `inv(y)` is the same, and `-1/y`
+  is the sign of the reciprocal, `-(1/y)`; dividing by a written power `y^k` is `y^-k` when `k`
+  is a number, the division's sign merging into it (`x/y^-2` holds `y^2`), and the reciprocal of
+  the power otherwise (`x/y^z`); dividing by a number, `x/3`, holds the literal 1/3, as
   `complexity` prices it;
 - a number pays the literal code on the exact value written, every digit (a long literal is not
-  rounded to its double); `np.pi`, `np.e`, the infinities, NaN and the constants `<constant>` and
-  `<constant_NAME>` are priced as `complexity` prices them;
+  rounded to its double); a quotient of two integer literals written directly, `p/q`, is one
+  literal, the number p/q, as `1/q` and `0.75` are, while numbers written apart in a product pay
+  apart (`4*x0/3`, `2*x0*3`) — this reading of `p/q` awaits the owner's ruling, and as a division
+  `3/4` would cost 10.322 bits; `np.pi`, `np.e`, the infinities, NaN and the constants
+  `<constant>` and `<constant_NAME>` are priced as `complexity` prices them;
 - an alias is priced as its target, and a defined function (see
   [Defined functions](artifacts.md#defined-functions)) pays its own head at the tier of the
   function its definition applies: `sqrt`, `cot`, `sec` and `csc` 6 bits, `acot`, `asec` and
-  `acsc` 8. Any other head the engine
-  neither declares nor defines is refused.
+  `acsc` 8. Any other head the engine neither declares nor defines is refused.
 
 | expression | written (bits) | `complexity` (bits) |
 |---|---|---|
@@ -125,6 +132,13 @@ the ones infix notation forces:
 | `sqrt(x0)` | 12 | 14.585 |
 | `x0**0.5` | 12.585 | 14.585 |
 | `x0 - x0/1 + 2` | 23.585 | 2.585 |
+| `-1/x0` | 10 | 10 |
+| `-inf` | 8 | 8 |
+| `x0/x1**x2` | 27 | 27 |
+| `max(x0, x1, x2)` | 26 | 26 |
+| `3/4` | 5.322 | 5.322 |
+| `x0**(3/2)` | 13.585 | 13.585 |
+| `4*x0/3` | 16.322 | 14.322 |
 | `6.674e-11*x0*x1/x2**2` | 45.197 | 45.197 |
 | `x0*x1/(4*np.pi*x2*x3**2)` | 45.907 | 47.907 |
 
@@ -144,13 +158,30 @@ engine.complexity('x0*x1/(4*np.pi*x2*x3**2)')          # -> 47907
 ```
 
 On a canonical form written as its state is held — one run per bag, one divisor per reciprocal,
-each sign where the state holds it — the two prices agree. The canonical *serializations* part
-from that in a few places, measured over the census's answers: a fraction `p/q` with `|p| ≠ 1` is
-printed as a quotient (`3/4`, `4*x0/3`, `x0^(3/2)`), which this reading prices as a product of `p`
-and the literal `1/q`; the prefix serializer writes a product of reciprocals as the reciprocal of
-a product (`inv * x0 x1`) and a sign on a product inside a product; the printers distribute a
-negation over a sum (`-x0 - x1` for `-(x0 + x1)`), write `-(1/x0)` as `-1/x0` and the negative
-infinity as a sign on `inf`; and the reader nests a variadic `max(a, b, c)` to the right.
+each sign where the state holds it — the two prices agree, but that is measured, not promised:
+the canonical *serializations* write some states otherwise. Over the census's canonical answers
+(31,993 per mode: srbf's 6,531 ground truths and a tenth of flash-ansr's training inputs and of
+srbf's predictions), the written price of the answer equals `complexity`:
+
+| answer | `strict` | `permissive` |
+|---|---|---|
+| infix print (`simplify(str)`) | 30,312 (94.75%) | 30,197 (94.39%) |
+| prefix tokens | 29,571 (92.43%) | 29,544 (92.35%) |
+
+Every difference is the serializer's (an answer can show more than one cause):
+
+- **N2**, a negation distributed over a sum: the printers write `-(x0 + x1)` as `-x0 - x1` (17
+  bits written, 16 canonical); 1,617 and 1,668 infix prints, 761 and 770 prefix answers;
+- a coefficient p/q printed `p*x/q`, its numbers written apart (`4*x0/3`, 16.322 against 14.322);
+  60 to 69 answers per mode and form;
+- **G**, in the prefix tokens a product of reciprocals written as the reciprocal of a product
+  (`inv * x0 x1`, 18 against 21); 1,108 and 1,114 prefix answers, and 1 and 38 infix prints;
+- **N1**, in the prefix tokens a sign on a product inside a product (`/ neg * x0 x1 x2`, 28 against
+  25; the infix print `-x0*x1/x2` agrees); 563 and 542 prefix answers;
+- **D**, an answer printed factored that `complexity` reads distributed; 2 to 91 answers per mode
+  and form.
+
+(Counts are `strict`, then `permissive`.)
 
 ## The search budget
 

@@ -7,10 +7,24 @@
 //! `mu_pow`, the head table, `MU_SIGN`, the literal code), and makes only the identifications
 //! the infix notation forces (owner's ruling relayed 2026-11-26: srbf measures ground truths and
 //! predictions "exactly as written, without any modifications that either benefit the benchmark
-//! or the model").
+//! or the model"). Where the notation leaves a choice, the identification is the one the code
+//! book prices (the overseer's decisions M1, S1, K, L and F, 2026-11-27).
 
 use super::*;
 use crate::operators::Operators;
+
+/// DEFINITION POINT F, PENDING THE OWNER (2026-11-27): what a quotient of two integer literals
+/// written directly, `p/q` (`3/4`, the exponent in `x^(3/2)`), is.
+///
+/// `true`, the overseer's recommended reading: ONE rational literal, priced by the literal code
+/// on the value p/q, as `1/q` and `0.75` are (`3/4` 5.322 bits, `x0^(3/2)` 13.585).
+/// `false`: a division, `p` and the literal `1/q` apart (`3/4` 10.322 bits, `x0^(3/2)` 18.585).
+///
+/// Either way a quotient whose numerator is 1 or -1 is the literal 1/q or -1/q (the reciprocal's
+/// 1 is the notation's; M1), and numbers written apart in a product pay apart (`4*x0/3`,
+/// `2*x0*3`). The switch is this one constant; `tests/test_written_complexity.py` pins the
+/// values of both readings.
+const FRACTION_IS_ONE_LITERAL: bool = true;
 
 /// A node of the expression as written: a leaf token, or a head (its canonical name, an alias
 /// resolved) over its operands.
@@ -131,6 +145,60 @@ fn literal_value(s: &str) -> Option<Rat> {
     Rat::from_big(p, q)
 }
 
+/// The exact value of a literal LEAF (`None` for any other node, and beyond the exact domain).
+fn leaf_value(n: &Written) -> Option<Rat> {
+    match n {
+        Written::Leaf(s) if literal(s) => literal_value(s),
+        _ => None,
+    }
+}
+
+/// Is a written node the literal one (whatever its spelling: `1`, `1.0`)?
+fn is_unit(n: &Written) -> bool {
+    leaf_value(n).is_some_and(|v| v.is_one())
+}
+
+/// Is a written node the literal minus one (`-1`, `-1.0`, `(-1)`, or the sign on the literal one,
+/// `neg(1)`, which costs what `-1` costs)?
+fn is_minus_one(n: &Written) -> bool {
+    match n {
+        Written::Node("neg", k) => is_unit(&k[0]),
+        _ => leaf_value(n).is_some_and(|v| v.abs().is_one() && v.is_negative()),
+    }
+}
+
+/// The exact value of a node written as ONE NUMBER, or `None`: a literal; the reciprocal of a
+/// literal (`1/c`, `inv(c)`: the literal 1/c, its 1 the notation's) and its sign (`-1/c`, M1);
+/// and a quotient of two integer literals written directly, `p/q`
+/// ([`FRACTION_IS_ONE_LITERAL`]). A literal beyond the exact domain has no value here (it is
+/// priced by its spelling), and numbers written apart in a product are not one number. The
+/// value is exact: it is read and computed in the exact number domain.
+fn number(n: &Written) -> Option<Rat> {
+    let _exact = crate::ac::rat::number_domain(false);
+    match n {
+        Written::Leaf(_) => leaf_value(n),
+        Written::Node("inv", k) => leaf_value(&k[0])?.checked_inv(),
+        Written::Node("/", k) => {
+            let (p, q) = (leaf_value(&k[0])?, leaf_value(&k[1])?);
+            let reciprocal = p.abs().is_one();
+            let fraction = FRACTION_IS_ONE_LITERAL && p.is_integer() && q.is_integer();
+            if reciprocal || fraction {
+                p.checked_mul(&q.checked_inv()?)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The exact reciprocal of [`number`] (`None` for zero too), in the exact number domain.
+fn number_reciprocal(n: &Written) -> Option<Rat> {
+    let v = number(n)?;
+    let _exact = crate::ac::rat::number_domain(false);
+    v.checked_inv()
+}
+
 /// A leaf as [`complexity`] prices it: `np.pi`, `np.e`, the infinities and NaN, `<constant>`
 /// and a named constant `<constant_NAME>` at their symbol-table entries, a literal at the
 /// literal code, any other symbol (a variable) at `mu_leaf`.
@@ -144,6 +212,12 @@ fn leaf_price(s: &str) -> u64 {
         _ if literal(s) => literal_price(s),
         _ => mu_leaf(),
     }
+}
+
+/// Is a written node the positive infinity (`inf`, read as `float("inf")`)? With a sign on it,
+/// or as a subtrahend, it is the symbol `float("-inf")` (S1), as [`complexity`] prices it.
+fn is_infinity(n: &Written) -> bool {
+    matches!(n, Written::Leaf("float(\"inf\")"))
 }
 
 /// The addends of a run of `+` and `-`: a left operand and a `+` operand continue the run, a
@@ -162,23 +236,29 @@ fn addends<'a>(n: &'a Written<'a>, out: &mut Vec<(bool, &'a Written<'a>)>) {
     }
 }
 
-/// One factor of a run of `*` and `/`: a factor, or a divisor (stays whole).
+/// One member of a run of `*` and `/`: a factor, a divisor (stays whole), or the sign a
+/// numerator `-1` writes (M1).
 enum Factor<'a> {
     Times(&'a Written<'a>),
     Divisor(&'a Written<'a>),
+    Sign,
 }
 
 /// The factors of a run of `*` and `/`: a left operand and a `*` operand continue the run, a
 /// divisor stays whole; `1/y` (and `inv(y)`, the same) is the reciprocal of `y`, its 1 the
-/// notation's.
+/// notation's, and `-1/y` is the SIGN of the reciprocal, -(1/y) (M1). One number (`3/4`, `1/3`:
+/// [`number`]) is one factor.
 fn factors<'a>(n: &'a Written<'a>, out: &mut Vec<Factor<'a>>) {
     match n {
         Written::Node("*", k) => {
             factors(&k[0], out);
             factors(&k[1], out);
         }
+        Written::Node("/" | "inv", _) if number(n).is_some() => out.push(Factor::Times(n)),
         Written::Node("/", k) => {
-            if !is_unit(&k[0]) {
+            if is_minus_one(&k[0]) {
+                out.push(Factor::Sign);
+            } else if !is_unit(&k[0]) {
                 factors(&k[0], out);
             }
             out.push(Factor::Divisor(&k[1]));
@@ -188,26 +268,43 @@ fn factors<'a>(n: &'a Written<'a>, out: &mut Vec<Factor<'a>>) {
     }
 }
 
-/// Is a written node the literal one (whatever its spelling: `1`, `1.0`)?
-fn is_unit(n: &Written) -> bool {
-    matches!(n, Written::Leaf(s) if literal(s) && literal_value(s).is_some_and(|v| v.is_one()))
+/// The price of the exponent `-k` when a written power `y^k` divides (K): the division's sign
+/// merges into a literal `k` (`x/y^2` holds y^-2, `x/y^-2` holds y^2); `None` when `k` is not
+/// one number ([`number`]), whose power is then a reciprocal.
+fn merged_exponent(k: &Written) -> Option<u64> {
+    if let Written::Leaf(s) = k {
+        if literal(s) {
+            // by its spelling, which prices a literal beyond the exact domain too
+            return Some(match unwrapped(s).strip_prefix('-') {
+                Some(magnitude) => literal_price(magnitude),
+                None => MU_SIGN.saturating_add(literal_price(s)),
+            });
+        }
+    }
+    let negated = {
+        let v = number(k)?;
+        let _exact = crate::ac::rat::number_domain(false);
+        v.checked_neg()?
+    };
+    Some(mu_rat(&negated))
 }
 
-/// A divisor's price: a literal `c` is the literal `1/c` at the literal code (as [`complexity`]
-/// prices `x/3`: the literal 1/3); a written power `y^k` is `y^-k`, the division the exponent's
-/// sign; any other divisor is a reciprocal, the `Pow` head over it (`x^-1` is division and its
-/// exponent is free).
+/// A divisor's price: one number `c` is the literal `1/c` at the literal code (as [`complexity`]
+/// prices `x/3`: the literal 1/3); a written power `y^k` is `y^-k` when `k` is a literal (K: the
+/// division's sign merges into it) and the reciprocal of the power otherwise; any other divisor
+/// is a reciprocal, the `Pow` head over it (`x^-1` is division and its exponent is free).
 fn divisor_price(d: &Written, ops: &Operators) -> u64 {
+    if let Some(r) = number_reciprocal(d) {
+        return mu_rat(&r);
+    }
     match d {
-        Written::Leaf(s) if literal(s) => match literal_value(s).and_then(|v| v.checked_inv()) {
-            Some(r) => mu_rat(&r),
-            // zero, or beyond the exact domain: a reciprocal of the literal as written
-            None => mu_pow().saturating_add(literal_price(s)),
+        Written::Node("pow", k) => match merged_exponent(&k[1]) {
+            Some(exponent) => mu_pow()
+                .saturating_add(price(&k[0], ops))
+                .saturating_add(exponent),
+            None => mu_pow().saturating_add(price(d, ops)),
         },
-        Written::Node("pow", k) => mu_pow()
-            .saturating_add(price(&k[0], ops))
-            .saturating_add(MU_SIGN)
-            .saturating_add(price(&k[1], ops)),
+        // a reciprocal, also of the literal zero and of a literal beyond the exact domain
         _ => mu_pow().saturating_add(price(d, ops)),
     }
 }
@@ -220,25 +317,49 @@ fn price(n: &Written, ops: &Operators) -> u64 {
             let mut run = Vec::new();
             addends(n, &mut run);
             run.iter().fold(mu_add(), |acc, (negated, m)| {
-                acc.saturating_add(if *negated { MU_SIGN } else { 0 })
-                    .saturating_add(price(m, ops))
+                acc.saturating_add(match (*negated, is_infinity(m)) {
+                    (true, true) => mu_infinity(),
+                    (true, false) => MU_SIGN.saturating_add(price(m, ops)),
+                    (false, _) => price(m, ops),
+                })
             })
         }
         Written::Node("*" | "/" | "inv", _) => {
+            if let Some(v) = number(n) {
+                return mu_rat(&v);
+            }
             let mut run = Vec::new();
             factors(n, &mut run);
-            let head = if run.len() > 1 { mu_mul() } else { 0 };
+            let members = run.iter().filter(|f| !matches!(f, Factor::Sign)).count();
+            let head = if members > 1 { mu_mul() } else { 0 };
             run.iter().fold(head, |acc, f| {
                 acc.saturating_add(match f {
                     Factor::Times(m) => price(m, ops),
                     Factor::Divisor(d) => divisor_price(d, ops),
+                    Factor::Sign => MU_SIGN,
                 })
             })
         }
+        Written::Node("neg", k) if is_infinity(&k[0]) => mu_infinity(),
         Written::Node("neg", k) => MU_SIGN.saturating_add(price(&k[0], ops)),
         Written::Node("pow", k) => mu_pow()
             .saturating_add(price(&k[0], ops))
             .saturating_add(price(&k[1], ops)),
+        Written::Node(head @ ("max" | "min"), _) => {
+            // L: the reader writes the call max(a, b, c) as max(a, max(b, c)), and the printer
+            // writes that chain back as the one call: a right operand of the same head
+            // continues the call, which pays its head once
+            let mut total = mu_head(head);
+            let mut rest = n;
+            while let Written::Node(h, k) = rest {
+                if h != head || k.len() != 2 {
+                    break;
+                }
+                total = total.saturating_add(price(&k[0], ops));
+                rest = &k[1];
+            }
+            total.saturating_add(price(rest, ops))
+        }
         Written::Node(head, k) => {
             let head_price = if ops.defined.contains_key(*head) {
                 mu_defined_head(head)
@@ -254,33 +375,42 @@ fn price(n: &Written, ops: &Operators) -> u64 {
 /// THE WRITTEN PRICE of an expression, in milli-bits: [`complexity`]'s code book applied to the
 /// expression EXACTLY AS WRITTEN. Nothing is read into a canonical state and nothing is
 /// simplified: every operator, function, variable, sign and number the expression writes is
-/// charged, and the only identifications are the ones infix notation forces.
+/// charged, and the only identifications are the ones infix notation forces, each read as the
+/// code book prices it.
 ///
 /// * A run of `+` and `-` is ONE sum, a run of `*` and `/` ONE product, whatever the
 ///   bracketing: a left operand and a `+` (`*`) operand continue the run; a bracketed
 ///   subtrahend or divisor stays whole. Operands are unordered. A sum pays `mu_add` once, a
-///   product `mu_mul` once (a lone reciprocal is no product).
-/// * `-y` and `neg(y)` are a SIGN: one bit (`MU_SIGN`) on `y`, as is a subtrahend.
+///   product `mu_mul` once (a lone reciprocal is no product). A call of `max` or `min` with
+///   more than two arguments, `max(a, b, c)`, is ONE call (L): the reader nests it to the
+///   right, `max(a, max(b, c))`, and a right operand of the same head continues the call.
+/// * `-y` and `neg(y)` are a SIGN: one bit (`MU_SIGN`) on `y`, as is a subtrahend. A written
+///   `-inf` and a subtrahend `inf` are the symbol `float("-inf")` (S1).
 /// * `1/y` is the RECIPROCAL of `y`, its 1 the notation's, and `inv(y)` is the same: a divisor.
-///   A divisor pays `mu_pow` over itself (`x^-1` is division, its exponent free), except that
-///   dividing by a written power `y^k` is `y^-k` (`mu_pow`, `y`, a sign and `k`), and a literal
-///   divisor `c` is the literal `1/c` (`x/3` holds the literal 1/3, as [`complexity`] prices it).
+///   `-1/y` is the sign of the reciprocal, -(1/y) (M1): a numerator `-1` is a sign. A divisor
+///   pays `mu_pow` over itself (`x^-1` is division, its exponent free), except that dividing
+///   by a written power `y^k` with a LITERAL exponent is `y^-k`, the sign merging into the
+///   literal (K: `x/y^2` holds y^-2, `x/y^-2` holds y^2, and `x/y^z` divides by the power,
+///   `mu_pow` over `y^z`), and dividing by one number `c` is the literal `1/c` (`x/3` holds
+///   the literal 1/3, as [`complexity`] prices it).
 /// * A NUMBER pays the literal code on the exact value written, with every digit ([`mu_rat`];
 ///   its print's price beyond the 1,100-bit cap): a long literal is not rounded to its double.
-///   A written minus on a literal is its sign bit.
+///   A written minus on a literal is its sign bit. A quotient of two integer literals written
+///   directly, `p/q`, is ONE literal, the number p/q (`3/4`, `x^(3/2)`; definition point F,
+///   [`FRACTION_IS_ONE_LITERAL`]); numbers written apart in a product pay apart (`4*x0/3`).
 /// * `np.pi`, `np.e`, the infinities, NaN, `<constant>` and named constants (`<constant_NAME>`)
 ///   pay their entries, as [`complexity`] prices them; every other symbol is a variable
 ///   (`mu_leaf`).
 /// * A function pays its head's entry (the head table, by name) and its operands; `pow` pays
 ///   `mu_pow`, base and exponent; an alias pays its target's price. A DEFINED FUNCTION
 ///   (`crate::defined`) pays its own head's entry ([`mu_defined_head`]: `sqrt`, `cot`, `sec` and
-///   `csc` at the elementary tier, `acot`, `asec` and `acsc` at the transcendental). A head that is
-///   neither an operator nor a
-///   defined function of the engine is refused, never guessed.
+///   `csc` at the elementary tier, `acot`, `asec` and `acsc` at the transcendental). A head that
+///   is neither an operator nor a defined function of the engine is refused, never guessed.
 ///
-/// On an expression already in canonical form the written price is meant to equal
-/// [`complexity`] in that mode; `tests/` and the measurement in the 0.15 notes record where the
-/// serialization of a canonical form and this reading part.
+/// The written price of a canonical form is not promised to equal [`complexity`]: the
+/// canonical serializations write some states otherwise than they are held (a product of
+/// reciprocals as the reciprocal of a product, a distributed negation, a coefficient p/q as
+/// `p*x/q`); the measured agreement is in `SimpliPyEngine.written_complexity`'s docstring.
 pub fn written_complexity(tokens: &[String], ops: &Operators) -> Result<u64, String> {
     let tree = read(tokens, ops)?;
     Ok(price(&tree, ops))
@@ -296,6 +426,10 @@ mod tests {
     fn written(e: &crate::Engine, infix: &str) -> u64 {
         e.written_complexity(&e.parse(infix, true, false, true).unwrap())
             .unwrap()
+    }
+
+    fn tokens(s: &str) -> Vec<String> {
+        s.split_whitespace().map(str::to_string).collect()
     }
 
     /// The brief's values (milli-bits), and the identifications of the runs.
@@ -331,13 +465,71 @@ mod tests {
         }
     }
 
+    /// The overseer's decisions (2026-11-27), each case with its price and the price it had
+    /// before: M1 `-1/y` is the sign of the reciprocal, S1 a written `-inf` is the symbol, K a
+    /// divisor `y^k` is `y^-k` only for a literal `k`, L a variadic `max`/`min` is one call, F a
+    /// quotient `p/q` of integer literals is one literal.
+    #[test]
+    fn the_decisions_m1_s1_k_l_f() {
+        let e = engine();
+        for (infix, price, before) in [
+            ("-1/x0", 10_000, 15_000),
+            ("x0*(-1/x1)", 19_000, 21_000),
+            ("-1/x0/x1", 22_000, 24_000),
+            ("-1/3", 5_000, 10_000),
+            ("-inf", 8_000, 9_000),
+            ("x0 - inf", 17_000, 18_000),
+            ("x0 + -inf", 17_000, 18_000),
+            ("2*(-inf)", 13_585, 14_585),
+            ("x0/x1**x2", 27_000, 25_000),
+            ("x0/exp(x1)**x2", 33_000, 31_000),
+            ("x0/x1**(-2)", 20_585, 22_585),
+            ("x0/x1**2", 21_585, 21_585),
+            ("max(x0, x1, x2)", 26_000, 34_000),
+            ("min(x0, x1, x2, x3)", 32_000, 48_000),
+            ("max(max(x0, x1), x2)", 34_000, 34_000),
+        ] {
+            assert_eq!(written(&e, infix), price, "{infix} (was {before})");
+        }
+        // F, pending the owner: (expression, as one literal, as a division, the price before)
+        for (infix, one_literal, division, before) in [
+            ("3/4", 5_322, 10_322, 10_322),
+            ("x0**(3/2)", 13_585, 18_585, 18_585),
+            ("x0**(-3/2)", 14_585, 19_585, 19_585),
+            ("x0/x1**(3/2)", 23_585, 30_585, 28_585),
+            ("3/4*x0", 14_322, 16_322, 16_322),
+            ("4*x0/3", 16_322, 16_322, 16_322),
+            ("2*x0*3", 14_585, 14_585, 14_585),
+            ("1/4", 4_322, 4_322, 4_322),
+        ] {
+            let price = if super::FRACTION_IS_ONE_LITERAL {
+                one_literal
+            } else {
+                division
+            };
+            assert_eq!(written(&e, infix), price, "{infix} (was {before})");
+        }
+        // the numerator -1 in any spelling, and the infinities as prefix tokens
+        assert_eq!(
+            e.written_complexity(&tokens("/ neg 1 x0")),
+            e.written_complexity(&tokens("/ -1 x0"))
+        );
+        assert_eq!(
+            e.written_complexity(&tokens("neg float(\"inf\")")),
+            e.written_complexity(&tokens("float(\"-inf\")"))
+        );
+        assert_eq!(
+            e.written_complexity(&tokens("- x0 float(\"-inf\")")),
+            Ok(18_000)
+        );
+    }
+
     #[test]
     fn an_undeclared_head_or_a_tagged_sequence_is_refused() {
         let e = engine();
-        let t = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
-        assert!(e.written_complexity(&t("zeta x0")).is_err());
-        assert!(e.written_complexity(&t("<add> x0 x1 </add>")).is_err());
-        assert!(e.written_complexity(&t("+ x0")).is_err());
+        assert!(e.written_complexity(&tokens("zeta x0")).is_err());
+        assert!(e.written_complexity(&tokens("<add> x0 x1 </add>")).is_err());
+        assert!(e.written_complexity(&tokens("+ x0")).is_err());
         assert!(e.written_complexity(&[]).is_err());
     }
 }

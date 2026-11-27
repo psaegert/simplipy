@@ -1064,21 +1064,33 @@ class SimpliPyEngine(_Evaluation):
         the literal code) applied to the expression as written. There is no mode and no
         certificate: nothing is read into a canonical state and nothing is simplified, so every
         operator, function, variable, sign and number written is charged. The only
-        identifications are the ones infix notation forces:
+        identifications are the ones infix notation forces, and where the notation leaves a
+        choice, the reading is the one the code book prices:
 
         * a run of ``+`` and ``-`` is ONE sum and a run of ``*`` and ``/`` ONE product, whatever
           the bracketing: a left operand and a ``+`` (``*``) operand continue the run, a
           bracketed subtrahend or divisor stays whole; operands are unordered. A sum pays its
-          head (3 bits) once, a product its head (3 bits) once;
-        * ``-y`` and ``neg(y)`` are a SIGN, one bit on ``y``, as is the sign of a subtrahend;
+          head (3 bits) once, a product its head (3 bits) once. A call of ``max`` or ``min``
+          with more than two arguments, ``max(a, b, c)``, is ONE call and pays its head once
+          (the reader nests it to the right, ``max(a, max(b, c))``, and a right operand of the
+          same head continues the call; ``max(max(a, b), c)`` writes two calls);
+        * ``-y`` and ``neg(y)`` are a SIGN, one bit on ``y``, as is the sign of a subtrahend; a
+          written ``-inf``, and ``inf`` as a subtrahend, is the symbol ``float("-inf")`` (8 bits);
         * ``1/y`` is the RECIPROCAL of ``y`` (the 1 is the notation's) and ``inv(y)`` is the same:
           a divisor, which pays the power head (3 bits) over itself, as ``complexity`` prices
-          ``y^-1``; dividing by a written power ``y^k`` is ``y^-k`` (the head, ``y``, a sign and
-          ``k``); a literal divisor ``c`` is the literal ``1/c`` (``x/3`` holds the literal 1/3,
-          as ``complexity`` prices it);
+          ``y^-1``. ``-1/y`` is the sign of the reciprocal, ``-(1/y)``: a numerator ``-1`` is one
+          sign bit (``-1/x0`` costs 10 bits). Dividing by a written power ``y^k`` is ``y^-k`` when
+          ``k`` is a number, the division's sign merging into it (``x/y**2`` holds y^-2 and
+          ``x/y**-2`` holds y^2), and the reciprocal of the power otherwise (``x/y**z``: the
+          power head over ``y**z``). Dividing by a number ``c`` is the literal ``1/c`` (``x/3``
+          holds the literal 1/3, as ``complexity`` prices it);
         * a NUMBER pays the literal code on the EXACT value written, with every digit: a long
           literal is not rounded to its double (``6.674000000000001e-11`` costs its 16 digits),
-          and a written minus is its sign bit;
+          and a written minus is its sign bit. A quotient of two integer literals written
+          directly, ``p/q``, is ONE literal, the number p/q, as ``1/q`` and ``0.75`` are
+          (``3/4`` costs 5.322 bits and ``x0**(3/2)`` 13.585), while numbers written apart in a
+          product pay apart (``4*x0/3`` 16.322, ``2*x0*3`` 14.585). This reading of ``p/q`` awaits
+          the owner's ruling; as a division, ``3/4`` would cost 10.322 bits (``p`` and ``1/q``);
         * ``np.pi``, ``np.e``, the infinities, NaN, ``<constant>`` and named constants
           (``<constant_NAME>``) are priced exactly as ``complexity`` prices them; every other
           symbol is a variable (6 bits);
@@ -1100,9 +1112,20 @@ class SimpliPyEngine(_Evaluation):
         It reads an infix ``str`` as :meth:`read_infix` does, strictly (an undeclared call is
         refused), or explicit prefix tokens as :meth:`read_infix` returns them; a tagged
         sequence is read through :meth:`to_prefix`, and realization notation as the conversions
-        read it. The price is an integer in milli-bits, on the scale of :meth:`complexity`, and
-        on an expression already in canonical form it is meant to equal ``complexity`` in that
-        mode.
+        read it. The price is an integer in milli-bits, on the scale of :meth:`complexity`.
+
+        On a canonical form the two prices agree where the form is written as its state is held,
+        which is not promised: the canonical serializations write some states otherwise.
+        Measured over the 0.15 census (31,993 canonical answers per mode: srbf's 6,531 ground
+        truths and a tenth of flash-ansr T8.1's training inputs and of srbf's predictions), the
+        written price of the answer equals ``complexity`` on 94.75% (``strict``) and 94.39%
+        (``permissive``) of the infix answers, and on 92.43% and 92.35% of the prefix answers.
+        Every difference is a serializer's: a negation distributed over a sum (``-x0 - x1`` for
+        ``-(x0 + x1)``, 17 bits against 16), a coefficient p/q printed ``p*x/q``, its numbers
+        apart (``4*x0/3``, 16.322 against 14.322), and in the prefix answers a product of
+        reciprocals written as the reciprocal of a product (``inv * x0 x1``, 18 against 21) and
+        a sign on a product inside a product (``/ neg * x0 x1 x2``, 28 against 25); a few answers
+        print a factored form that ``complexity`` reads distributed.
         """
         if isinstance(expression, str):
             tokens = self._core.parse(expression, strict=True)

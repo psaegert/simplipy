@@ -15,6 +15,12 @@ from simplipy import SimpliPyEngine
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# DEFINITION POINT F, PENDING THE OWNER (2026-11-27): is a quotient of two integer literals written
+# directly, `p/q`, ONE rational literal (True, the recommended reading) or a division, `p` and the
+# literal `1/q` apart (False)? It mirrors FRACTION_IS_ONE_LITERAL in rust/ac/expr/written.rs; the
+# switch flips both, and these tests then pin the other column.
+FRACTION_IS_ONE_LITERAL = True
+
 
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
@@ -98,7 +104,8 @@ class TestTheIdentificationsInfixForces:
         assert w('0.12345678901234568*x0') == 67625  # its double's shortest spelling
         assert w('6.674000000000001e-11') > w('6.674e-11')
         assert w('2.5') == w('2.50')  # the literal code is the value's: no digit is free or dear
-        assert w('5/2') == w('2.5') + 5000  # F: a quotient of literals is a product of 5 and 1/2
+        # F: a quotient of two integer literals is one literal (pending the owner; see TestTheDecisions)
+        assert w('5/2') == w('2.5') + (0 if FRACTION_IS_ONE_LITERAL else 5000)
 
     def test_named_constants_and_symbols(self, engine: SimpliPyEngine) -> None:
         w = engine.written_complexity
@@ -132,33 +139,93 @@ class TestTheVocabulary:
             engine.written_complexity([])
 
 
+class TestTheDecisions:
+    """The overseer's decisions (2026-11-27): where infix notation leaves a choice, the reading is
+    the one complexity()'s code book prices. Each row: the expression, its written price, and the
+    price it had before the decision (milli-bits)."""
+
+    @pytest.mark.parametrize('expression, price, before', [
+        # M1: `-1/y` is the SIGN of the reciprocal, -(1/y), not (-1)/y: a numerator -1 is a sign
+        ('-1/x0', 10000, 15000), ('(-1)/x0', 10000, 15000), ('-1.0/x0', 10000, 15000),
+        ('x0*(-1/x1)', 19000, 21000), ('-1/x0/x1', 22000, 24000), ('-1/3', 5000, 10000),
+        # S1: a written `-inf`, and `inf` as a subtrahend, is the symbol float("-inf")
+        ('-inf', 8000, 9000), ('x0 - inf', 17000, 18000), ('x0 + -inf', 17000, 18000),
+        ('2*(-inf)', 13585, 14585),
+        # K: a divisor y^k is y^-k only for a literal k, the sign merging into it; otherwise
+        # the reciprocal of the power
+        ('x0/x1**x2', 27000, 25000), ('x0/exp(x1)**x2', 33000, 31000), ('x0/x1**(-2)', 20585, 22585),
+        ('x0/x1**2', 21585, 21585), ('1/x0**2', 12585, 12585),
+        # L: max/min written with more than two arguments is ONE call
+        ('max(x0, x1, x2)', 26000, 34000), ('min(x0, x1, x2, x3)', 32000, 48000),
+        ('max(x0, max(x1, x2))', 26000, 34000),  # the same tokens as max(x0, x1, x2)
+        ('max(max(x0, x1), x2)', 34000, 34000),  # two calls written
+    ])
+    def test_m1_s1_k_l(self, engine: SimpliPyEngine, expression: str, price: int, before: int) -> None:
+        assert engine.written_complexity(expression) == price
+        assert engine.written_complexity(engine.read_infix(expression)) == price
+
+    def test_the_spellings_of_minus_one_and_of_the_negative_infinity(self, engine: SimpliPyEngine) -> None:
+        w = engine.written_complexity
+        assert w(['/', 'neg', '1', 'x0']) == w(['/', '-1', 'x0']) == w('-(1/x0)') == 10000
+        assert w(['neg', 'float("inf")']) == w(['float("-inf")']) == 8000
+        assert w(['-', 'x0', 'float("-inf")']) == 18000  # x0 - (-inf): a sign on the symbol
+        assert w('-1*x0') == 12000  # a factor -1 is a literal: M1 reads only a numerator
+
+    # F, PENDING THE OWNER: (expression, as one literal, as a division). Under either reading
+    # `1/q` and `-1/q` are one literal and numbers written apart in a product pay apart.
+    @pytest.mark.parametrize('expression, one_literal, division', [
+        ('3/4', 5322, 10322), ('-3/4', 6322, 11322), ('3/-4', 6322, 11322), ('5/2', 5170, 10170),
+        ('6/4', 4585, 11129), ('3.0/4', 5322, 10322), ('x0**(3/2)', 13585, 18585),
+        ('x0**(-3/2)', 14585, 19585), ('x0/x1**(3/2)', 23585, 30585), ('1/x0**(3/2)', 14585, 21585),
+        ('x0/(3/4)', 14322, 22322), ('3/4*x0', 14322, 16322), ('x0*(3/4)', 14322, 16322),
+        ('1/4', 4322, 4322), ('-1/4', 5322, 5322), ('4*x0/3', 16322, 16322), ('x0*3/4', 16322, 16322),
+        ('2*x0*3', 14585, 14585), ('2.5/2', 11755, 11755),
+    ])
+    def test_f_fractions(self, engine: SimpliPyEngine, expression: str, one_literal: int, division: int) -> None:
+        price = one_literal if FRACTION_IS_ONE_LITERAL else division
+        assert engine.written_complexity(expression) == price
+        assert engine.written_complexity(engine.read_infix(expression)) == price
+
+    def test_f_a_fraction_costs_its_value_as_a_decimal_does(self, engine: SimpliPyEngine) -> None:
+        w = engine.written_complexity
+        assert (w('3/4') == w('0.75')) is FRACTION_IS_ONE_LITERAL
+        assert (w('x0**(3/2)') == w('x0**1.5')) is FRACTION_IS_ONE_LITERAL
+
+
 class TestTheProperty:
-    """On an expression already in canonical form the written price equals complexity() in that
-    mode. These canonical forms write the canonical state as it is held (one run per bag, one
-    divisor per reciprocal, every sign where the state holds it)."""
+    """On a canonical form written as its state is held (one run per bag, one divisor per
+    reciprocal, every sign where the state holds it) the written price equals complexity() in
+    that mode. It is a measured agreement, not a promise: the canonical serializations write some
+    states otherwise (below, and the agreement rate in the docstring)."""
 
     @pytest.mark.parametrize('expression', [
         'x0 + x1 + x2', 'x0 - x1', 'x0/x1', '1/x0', 'x0/3', 'x0**2', '2*x0', '6.674e-11*x0*x1/x2**2',
         'x0*exp(-x1/x2)', '(x0 + x1)**2', 'x0**(1/3)', '1/x0**(1/2)', 'x1/0.225147640565301',
         'x0**2 + x1**2 + 2*x0*x1', 'x0*(x1 + 1)**2', 'x0*x1/4/np.pi/x2/x3**2', 'x0/2/x1',
         'x0*abs(1/x1)', 'rootn(x0, 2)', 'x0 + x2 - x1', 'log(abs(x0))', 'atan(1/x0)', '1/tan(x0)',
+        # the decisions M1, S1, K, L
+        '-1/x0', '-1/x0/x1', '-1/3', '-x0/x1', '-inf', 'x0/x1**x2', 'x0/exp(x1)**x2', 'max(x0, x1, x2)',
+        'min(x0, x1, x2, x3)',
     ])
     @pytest.mark.parametrize('mode', ['strict', 'permissive'])
     def test_written_equals_canonical(self, engine: SimpliPyEngine, expression: str, mode: str) -> None:
         canonical = engine.simplify(expression, mode=mode)
         assert engine.written_complexity(canonical) == engine.complexity(canonical, mode=mode)
 
-    # The canonical SERIALIZATIONS part from this reading where they write a state other than
-    # as it is held, and where the brief's identifications do not cover the notation; measured
-    # over the census (design notes, 2026-11-26) and pinned here, so a ruling on any of them
-    # changes these tests visibly. (written, its canonical print, written, canonical) in bits.
+    @pytest.mark.parametrize('expression', ['3/4', 'x0**(3/2)', '1/x0**(3/2)', 'x0/x1**(3/2)', '-3/4'])
+    @pytest.mark.parametrize('mode', ['strict', 'permissive'])
+    def test_written_equals_canonical_on_fractions_read_as_one_literal(
+            self, engine: SimpliPyEngine, expression: str, mode: str) -> None:
+        canonical = engine.simplify(expression, mode=mode)
+        agree = engine.written_complexity(canonical) == engine.complexity(canonical, mode=mode)
+        assert agree is FRACTION_IS_ONE_LITERAL
+
+    # The canonical SERIALIZATIONS part from this reading where they write a state other than as
+    # it is held; measured over the census and pinned here. (expression, written price of its
+    # canonical print, complexity) in milli-bits.
     @pytest.mark.parametrize('expression, written, canonical', [
-        ('3/4', 10322, 5322),             # F: a fraction p/q (|p| != 1) is written as a quotient
-        ('4*x0/3', 16322, 14322),         # F: ... its numerator and divisor apart in a product
-        ('x0**(3/2)', 18585, 13585),      # F: ... and as an exponent
-        ('-1/x0', 15000, 10000),          # M1: the printers write -(1/x0) as -1/x0, read (-1)/x0
-        ('-x0 - x1', 17000, 16000),       # N2: the printers distribute -(x0 + x1)
-        ('max(x0, x1, x2)', 34000, 26000),  # L: the reader nests a variadic max to the right
+        ('4*x0/3', 16322, 14322),  # a coefficient p/q is printed p*x/q: numbers written apart
+        ('-x0 - x1', 17000, 16000),  # N2: the printers distribute -(x0 + x1)
     ])
     def test_where_the_print_and_the_reading_part(self, engine: SimpliPyEngine, expression: str,
                                                   written: int, canonical: int) -> None:
@@ -166,9 +233,15 @@ class TestTheProperty:
         assert engine.written_complexity(printed) == written
         assert engine.complexity(printed) == canonical
 
-    def test_the_prefix_serializer_groups_reciprocals(self, engine: SimpliPyEngine) -> None:
+    def test_the_prefix_serializer_groups_reciprocals_and_moves_a_sign(self, engine: SimpliPyEngine) -> None:
         # G: x0^-1 * x1^-1 is serialized `inv * x0 x1`, the reciprocal of a written product
         tokens = engine.simplify(['/', '1', '*', 'x0', 'x1'])
         assert tokens == ['inv', '*', 'x0', 'x1']
         assert engine.written_complexity(tokens) == 18000
         assert engine.complexity(tokens) == 21000
+        # N1: -(x0*x1)/x2 is serialized `/ neg * x0 x1 x2`, a sign on a product inside a product
+        tokens = engine.simplify(['/', 'neg', '*', 'x0', 'x1', 'x2'])
+        assert tokens == ['/', 'neg', '*', 'x0', 'x1', 'x2']
+        assert engine.written_complexity(tokens) == 28000
+        assert engine.complexity(tokens) == 25000
+        assert engine.written_complexity(engine.simplify('-(x0*x1)/x2')) == 25000  # its infix print agrees
