@@ -46,22 +46,3 @@ def test_mask_refuses_a_malformed_tagged_sequence(engine, tokens) -> None:
     with pytest.raises(ValueError):
         engine.mask(tokens)
 
-
-# API-8: a pre-0.15 engine pickle unpickles in 0.15 without the gate `from_config` applies to the
-# same rule files (IncompatibleArtifactError: "serves only rule files mined by simplipy 0.15 or
-# later"), and reads them in the strict canon, not the legacy canon the suites' explicit opt-in
-# uses. Measured with a real simplipy 0.14.7 pickle of the acj-4 engine: 5,338 + 5,499 rules
-# served, no warning. Simulated here with the 0.14.7 state's shape (no `_rule_canons`, a
-# `real_simplification_rules` attribute).
-@pytest.mark.xfail(strict=True, reason='API-8: a pre-0.15 engine pickle bypasses the 0.15 rule-file gate')
-def test_a_pre_015_engine_pickle_is_refused_or_announced(engine) -> None:
-    state = engine.__getstate__()
-    state.pop('_rule_canons', None)
-    state.pop('defined_functions', None)
-    state['real_simplification_rules'] = None
-    state['simplification_rules'] = [(('sin', '_0'), ('_0',))]  # rules the 0.15 gate never saw
-    clone = SimpliPyEngine.__new__(SimpliPyEngine)
-    with warnings.catch_warnings():
-        warnings.simplefilter('error')
-        with pytest.raises(Exception):
-            clone.__setstate__(state)

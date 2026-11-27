@@ -262,7 +262,20 @@ class _Loading:
         the same in-memory config + rules. The trusted set travels IN the state, so
         a worker imports exactly what the parent was allowed to import -- widening
         trust needs the caller or the environment, in the parent, as everywhere else.
+
+        A state written by simplipy 0.14 or earlier is REFUSED (``IncompatibleArtifactError``):
+        its rules were mined under another engine generation's canonical forms, the gate
+        :meth:`from_config` applies to the same rule files ("serves only rule files mined by
+        simplipy 0.15 or later"). Such a state carries the retired real mode's
+        ``real_simplification_rules`` or no ``_rule_canons``, which every 0.15 engine records.
         """
+        if 'real_simplification_rules' in state or '_rule_canons' not in state:
+            from .compat import IncompatibleArtifactError
+            raise IncompatibleArtifactError(
+                'this pickled SimpliPyEngine was written by simplipy 0.14 or earlier: its rules '
+                'were mined under another engine generation, and simplipy 0.15 serves only rule '
+                'files mined by 0.15 or later (from_config refuses the same files). Rebuild the '
+                'engine with SimpliPyEngine.load or from_config on a 0.15 asset, and pickle that')
         self.__dict__.update(state)
         self.import_modules()
         # The permissive set travels IN the state (a plain attribute), so the recipe a
@@ -273,7 +286,6 @@ class _Loading:
         # `modes='all'` engines with no file sources, which is exactly what they were.
         self.__dict__.setdefault('_modes', 'all')
         self.__dict__.setdefault('_mode_rule_sources', {})
-        self.__dict__.setdefault('_rule_canons', {})
         self._mode_load_lock = threading.Lock()
         # Pickles written before defined functions existed define none.
         self.__dict__.setdefault('defined_functions', {})

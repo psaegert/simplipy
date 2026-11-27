@@ -346,6 +346,27 @@ def test_as_code_refuses_a_leaf_that_is_not_an_identifier(engine, tmp_path) -> N
     assert f(np.array([1.0]), 2.0)[0] == -3.0 + np.pi + 0.5
 
 
+# API-8 (fixed in the 0.15 fix round): a pre-0.15 engine pickle unpickled in 0.15 without the gate
+# `from_config` applies to the same rule files, and served its 0.14-mined rules in the strict
+# canon (measured with a real simplipy 0.14.7 pickle of the acj-4 engine: 5,338 + 5,499 rules,
+# no warning). `__setstate__` refuses such a state now: the 0.14.7 state's shape (no
+# `_rule_canons`, a `real_simplification_rules` attribute) is simulated here.
+def test_a_pre_015_engine_pickle_is_refused(engine) -> None:
+    from simplipy.compat import IncompatibleArtifactError
+    state = engine.__getstate__()
+    state.pop('_rule_canons', None)
+    state.pop('defined_functions', None)
+    state['real_simplification_rules'] = None
+    state['simplification_rules'] = [(('sin', '_0'), ('_0',))]  # rules the 0.15 gate never saw
+    no_real = {k: v for k, v in state.items() if k != 'real_simplification_rules'}
+    for old in (state, no_real, dict(state, _rule_canons={})):
+        clone = SimpliPyEngine.__new__(SimpliPyEngine)
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            with pytest.raises(IncompatibleArtifactError, match='simplipy 0.14 or earlier'):
+                clone.__setstate__(dict(old))
+
+
 # ---- the mode's names -------------------------------------------------------------------------
 
 def test_the_deprecated_names_select_strict_and_warn_at_the_caller(engine) -> None:
