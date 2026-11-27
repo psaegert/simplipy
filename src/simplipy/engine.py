@@ -419,9 +419,6 @@ class SimpliPyEngine(_Evaluation):
         #
         # An EMPTY file is honoured as an empty set, not as an absent one: `[]` says
         # "this mode serves nothing" and the loader has no business overruling it.
-        if 'rules_real' in config:
-            raise ValueError(f"the config '{config_path}' names a 'rules_real' set: "
-                             f"{_REAL_MODE_RETIRED}")
         mode_rules: dict[str, list | None] = {'permissive': None}
         # Resolved paths of every config-named mode file that EXISTS, attached to the
         # engine below: the recipe `unload_mode` re-reads from, and -- for a set
@@ -460,6 +457,13 @@ class SimpliPyEngine(_Evaluation):
             for checked_path in [rules_path, *mode_sources.values()]:
                 if checked_path is not None:
                     check_rule_file(checked_path, source=config_path)
+        # A config naming the retired real mode's set is refused AFTER its files' versions are
+        # checked: an artifact mined before 0.15 (acj-5-4-llm names one) is refused for its
+        # version, which says what to load instead, rather than told to pick a mode, which a
+        # `load` call cannot act on.
+        if 'rules_real' in config:
+            raise ValueError(f"the config '{config_path}' names a 'rules_real' set: "
+                             f"{_REAL_MODE_RETIRED}")
         # Each file is read in the canon it was certified in, which its sidecar records.
         canons = {mode_name: _canon_of_record(path) for mode_name, path in mode_sources.items()}
         if rules_path is not None and os.path.exists(rules_path):

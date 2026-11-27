@@ -56,6 +56,21 @@ class TestConfigGate:
         with pytest.raises(IncompatibleArtifactError, match=r'0\.14\.0.*acj2-4-llm'):
             SimpliPyEngine.from_config(ACJ_CONFIG)
 
+    def test_a_rule_file_mined_before_0_15_refuses_for_its_version_before_a_real_set(self, tmp_path):
+        """D1 (pre-audit review): a 0.14 config naming the retired real mode's set (acj-5-4-llm,
+        the old DEFAULT_ENGINE, does) was refused with the real mode's message, which asks for a
+        mode a `load` call cannot pick; its files' version is checked first now, and that refusal
+        names the version and what to load instead."""
+        _require_or_skip(ACJ_CONFIG, 'acj-4 config not staged')
+        config = load_config(ACJ_CONFIG)
+        here = os.path.dirname(os.path.abspath(ACJ_CONFIG))
+        config.update({'rules': os.path.join(here, 'rules.json'),
+                       'rules_real': os.path.join(here, 'rules.json')})
+        config.pop('rules_corpus', None)
+        (tmp_path / 'config.yaml').write_text(yaml.safe_dump(config))
+        with pytest.raises(IncompatibleArtifactError, match=r'mined by simplipy 0\.14\.0'):
+            SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+
     def test_the_legacy_opt_in_loads_it(self):
         # ...and the suites that pin its verdicts read it through the explicit opt-in
         from conftest import legacy_from_config
