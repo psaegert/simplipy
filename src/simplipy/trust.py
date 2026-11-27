@@ -144,6 +144,12 @@ def check_realization(realization: str, operator: str) -> str | None:
     See :data:`_BARE_BUILTIN`.
     """
     text = str(realization).strip()
+    if text != str(realization):
+        # the realization is written into generated source as it is: `np.sin\n` would load and
+        # fail only when an expression is compiled
+        raise UntrustedModuleError(
+            f"operator {operator!r} declares the realization {str(realization)!r}, which carries "
+            f"surrounding whitespace; a realization is written into generated source verbatim")
     if _DOTTED.match(text):
         return _DOTTED.match(text).group(1)  # type: ignore[union-attr]
     if text in _OPERATOR_SYMBOL or text in _BARE_BUILTIN:

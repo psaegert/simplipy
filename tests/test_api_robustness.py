@@ -389,6 +389,45 @@ def test_a_pre_015_engine_pickle_is_refused(engine) -> None:
                 clone.__setstate__(dict(old))
 
 
+# API-13 (the cheap ones, fixed in the 0.15 fix round): unclear errors and lenient arguments.
+@pytest.mark.parametrize('max_passes, error', [(True, TypeError), (1.5, TypeError), ('3', TypeError),
+                                               (0, ValueError)])
+def test_max_passes_is_an_int_like_effort(engine, max_passes, error) -> None:
+    with pytest.raises(error, match='max_passes must be'):
+        engine.simplify('x0 + x0', max_passes=max_passes)
+
+
+def test_a_huge_max_passes_binds_no_cap(engine) -> None:
+    assert engine.simplify('x0 + x0', max_passes=2 ** 70) == engine.simplify('x0 + x0')
+    assert engine.simplify('x0 + x0', max_passes=np.int64(5)) == engine.simplify('x0 + x0')
+
+
+@pytest.mark.parametrize('certified', ['no', 1, None])
+def test_certified_is_a_bool(engine, certified) -> None:
+    with pytest.raises(TypeError, match='certified must be True or False'):
+        engine.complexity('x0', certified=certified)
+    assert engine.complexity('x0', certified=np.bool_(True)) == engine.complexity('x0')
+
+
+@pytest.mark.parametrize('text, says', [('', 'empty'), ('[1, 2]', 'list'),
+                                        ('rules: rules.json', 'without an operators mapping')])
+def test_a_yaml_that_is_no_engine_config_is_refused_by_name(tmp_path, text, says) -> None:
+    (tmp_path / 'config.yaml').write_text(text)
+    with pytest.raises(ValueError, match=f'is not an engine config.*{says}'):
+        SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+
+
+def test_a_realization_with_surrounding_whitespace_is_refused_at_load() -> None:
+    from simplipy.trust import UntrustedModuleError
+    with pytest.raises(UntrustedModuleError, match='surrounding whitespace'):
+        _with_operator(sin={'realization': 'np.sin\n'})
+
+
+def test_as_code_names_an_anonymous_constant(engine) -> None:
+    with pytest.raises(ValueError, match="anonymous '<constant>'"):
+        engine.as_code('<constant>*x0')
+
+
 # ---- the mode's names -------------------------------------------------------------------------
 
 def test_the_deprecated_names_select_strict_and_warn_at_the_caller(engine) -> None:

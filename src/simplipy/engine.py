@@ -367,6 +367,13 @@ class SimpliPyEngine(_Evaluation):
         eager = cls._normalized_modes(modes)
         config_path = os.path.abspath(config_path)
         config = load_config(config_path)
+        # an empty or list-valued YAML, or one without an operator table, is no engine config:
+        # refused by name, not by the AttributeError or KeyError of its first reader
+        if not isinstance(config, dict) or not isinstance(config.get('operators'), dict):
+            raise ValueError(
+                f"'{config_path}' is not an engine config: it must be a mapping with an "
+                f"'operators' mapping (it is {'empty' if config is None else type(config).__name__}"
+                f"{'' if not isinstance(config, dict) else ', without an operators mapping'})")
         # ARTIFACT-GENERATION GATE: generation-1 artifacts
         # (retired hyper-operator vocabulary) serve only on simplipy <= 0.11; refusing
         # here -- the choke point of every artifact-loading path, including
@@ -788,11 +795,22 @@ class SimpliPyEngine(_Evaluation):
         """
         if max_passes is None:
             max_passes = 48
+        # an int, as effort is (a bool would silently mean one pass; a float is no count)
+        if isinstance(max_passes, bool):
+            raise TypeError(f"max_passes must be an int >= 1, not bool ({max_passes!r})")
+        try:
+            max_passes = max_passes.__index__()
+        except AttributeError:
+            raise TypeError(f"max_passes must be an int >= 1, not {type(max_passes).__name__} "
+                            f"({max_passes!r})") from None
         if max_passes < 1:
             # 0 would run no pass at all (the core reads it literally), and a negative
             # value would surface as a raw pyo3 OverflowError at the usize conversion
             #
             raise ValueError(f"max_passes must be at least 1, got {max_passes}")
+        # beyond the index range no cap binds (the chain stops at its fixpoint): no raw
+        # OverflowError at the usize conversion
+        max_passes = min(max_passes, 2 ** 63 - 1)
         if effort is None:
             effort = DEFAULT_EFFORT
         # None stays None: the core then searches until a round finds nothing.
@@ -1062,6 +1080,10 @@ class SimpliPyEngine(_Evaluation):
         state. ``complexity`` measures what an expression is in a mode (srbf's symbolic
         recovery); ``written_complexity`` measures what was written (srbf's MDL).
         """
+        if not isinstance(certified, (bool, np.bool_)):
+            # a string such as 'no' would read as true
+            raise TypeError(f'certified must be True or False, not {type(certified).__name__} '
+                            f'({certified!r})')
         _, tokens = self._read_input(expression, expand=True)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
         # LAZY MODES: same first-use hook as `simplify` -- the mode
