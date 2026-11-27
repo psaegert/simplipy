@@ -36,7 +36,7 @@ def _shard_spec(value: str) -> tuple[int, int]:
     return index, count
 
 
-def main(argv: str = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description='SimpliPy CLI Tool')
     subparsers = parser.add_subparsers(dest='command_name', required=True)
 
