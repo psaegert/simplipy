@@ -172,8 +172,9 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
     # The walk is ITERATIVE, so every depth the core reads (up to its 4,096-token cap) reads
     # here too; a recursive walk raised RecursionError from depth 1,000 on. `work` holds what
     # is still to read, top last: a Role is one subtree read in that role, a tuple an open bag
-    # `(opener, closer, section, member_role)` reading members until its closer.
-    work: list[Role | tuple[str, str, str, Role]] = [Role.VALUE]
+    # `(opener, closer, section, member_role)` reading members until its closer (a lattice bag
+    # has no section: None).
+    work: list[Role | tuple[str, str, str | None, Role]] = [Role.VALUE]
     i = 0
     while work:
         item = work.pop()

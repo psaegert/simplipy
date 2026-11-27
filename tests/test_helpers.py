@@ -4,7 +4,6 @@ identifier; uniform sampling works beyond int64 counts."""
 import os
 
 import numpy as np
-import pytest
 import yaml
 
 import simplipy.operators as ops
