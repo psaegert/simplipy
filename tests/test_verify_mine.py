@@ -482,3 +482,30 @@ def test_a_ground_nan_fact_of_a_non_integer_root_index_is_no_rule(tmp_path, mine
     path = _plant(tmp_path, mine, 'strict', [fact])
     gate = _gate(verify_mine(path, 'strict', _acj_operators(), judge=core_judge), 'preempted')
     assert not gate['ok'] and gate['examples'] == [[list(fact[0]), list(fact[1])]], gate
+
+
+def test_the_operators_gate(tmp_path, mine) -> None:
+    """M5 (pre-audit review): verify-mine trusted the operator table it was given. The sidecar
+    records the table's names and digest (family and slow included): the clean check passes, a
+    table with an operator more, or one spec changed, fails; a sidecar recording names only (a
+    mine before the digest) is checked by its names."""
+    rules = json.load(open(mine / FILES['strict']))
+    path = _plant(tmp_path, mine, 'strict', rules)
+    side = json.load(open(mine / (FILES['strict'] + '.provenance.json')))
+    assert len(side['operators_digest']) == 64
+    assert _gate(verify_mine(path, 'strict', _OPERATORS, judge=core_judge), 'operators')['ok']
+    more = dict(_OPERATORS, sin={"realization": "np.sin", "alias": [], "arity": 1, "precedence": 3,
+                                 "commutative": False})
+    gate = _gate(verify_mine(path, 'strict', more, judge=core_judge), 'operators')
+    assert not gate['ok'] and [e[0] for e in gate['examples']] == ['operators', 'operators_digest']
+    slow = copy.deepcopy(_OPERATORS)
+    slow['exp']['slow'] = True
+    gate = _gate(verify_mine(path, 'strict', slow, judge=core_judge), 'operators')
+    assert not gate['ok'] and [e[0] for e in gate['examples']] == ['operators_digest'], gate
+
+    def names_only(side):
+        side.pop('operators_digest')
+
+    path = _plant(tmp_path, mine, 'strict', rules, names_only)
+    assert _gate(verify_mine(path, 'strict', slow, judge=core_judge), 'operators')['ok']
+    assert not _gate(verify_mine(path, 'strict', more, judge=core_judge), 'operators')['ok']

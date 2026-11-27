@@ -384,6 +384,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
+| `operators` | the operator table given is the mine's: its operator names are the ones the sidecar records and, where the sidecar records the table's digest (`operators_digest`, family and slow included), the digest is this table's |
 | `offered` | (`permissive` only) the sidecar pins the strict file the mine was offered, and it lies beside the file with the pinned sha256 |
 | `covers_strict` | (`permissive` only) the file covers the pinned strict file, as permissive includes strict: on each strict rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
 | `unmined` | no rule mentions an operator the mine does not mine (bounded at 0 in the sidecar's `operator_max_length`) |

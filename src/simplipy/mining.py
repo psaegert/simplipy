@@ -924,8 +924,18 @@ def _unmined(operator_max_length: dict | None) -> set[str]:
     """THE OPERATORS A MINE SUPPORTS AND DOES NOT MINE: those its per-length operator set bounds
     at 0 (``_operator_max_length``). They appear in no source and no candidate, so no rule of the
     mine mentions one: not a proposal (its vocabulary leaves them out), not a completion (the cell
-    holds none), and verify-mine checks the file (``unmined``)."""
+    holds none), and verify-mine checks the file (``unmined``). A positive bound below an
+    operator's shortest expression (1 for a unary one, 2 for a binary one) keeps it out of the
+    sources and candidates too, but not out of the proposals' vocabulary: a mine bounds an operator
+    so to keep it out of the scan while a proposal may still use it (test_candidate_class)."""
     return {op for op, bound in (operator_max_length or {}).items() if bound == 0}
+
+
+def _operators_digest(operators: dict) -> str:
+    """The sha256 of an operator table as a mine reads it (every key of every spec, ``family``
+    and ``slow`` included), in a canonical JSON spelling: a sidecar records it, and verify-mine
+    compares the table it is given with it."""
+    return hashlib.sha256(json.dumps(operators, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _excluded_at_length(length: int, operator_max_length: dict | None) -> set[str]:
@@ -2133,7 +2143,9 @@ class RuleMiner:
                 # one the judge refuses or a named policy refuses is no rule to mine
                 # a completion is offered again once the set it was mined against has moved:
                 # the mint reads the set's answer as the mark to beat
-                _set = hash(tuple(sorted(self._mode_rules(rule_mode))))
+                # (by its sha256, not Python's seeded hash: a collision is negligible and no
+                # answer depends on the interpreter's hash seed)
+                _set = _rules_sha256(sorted(self._mode_rules(rule_mode)))
                 _fresh = [o for o in _within
                           if _tried.get((tuple(o['completion'][0]),
                                          tuple(o['completion'][1]))) != _set]
@@ -2749,9 +2761,10 @@ class RuleMiner:
             'equivalence': 'Lengths are mined shortest-first and the per-source seed is '
                            'mine_seed + (length << 40). Every bound the search applies is a '
                            'function of the SOURCE and the candidate alone: the candidate library '
-                           'is bounded by max_target_pattern_length, mu is scored once from the '
-                           'bare context at library-build time, acceptance requires mu(target) < '
-                           'mu(source), and certification is per canonical source class. None of '
+                           'is bounded by max_target_pattern_length, a candidate is priced in the '
+                           "mode's certified reading (mine_price), acceptance requires the target "
+                           "to be ordered below the source's mark (the mode's serve ordering), and "
+                           'certification is per canonical source class. None of '
                            'them reads how far the climb continues, so this prefix equals a '
                            'one-shot mine of this cell.',
         }
@@ -2941,6 +2954,9 @@ class RuleMiner:
                 } for length in sorted(expressions_of_length)
             },
             'operators': sorted(self.engine.operator_arity),
+            # the operator table the mine read, family and slow included: verify-mine compares
+            # the table it is given with it (`operators` gate)
+            'operators_digest': _operators_digest(self.engine._operators_config),
             # the operators the universe holds at some length: the engine's, less those the
             # mine supports and does not mine (bounded at 0 in `operator_max_length`)
             'mined_operators': sorted(set(self.engine.operator_arity)
@@ -3925,6 +3941,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       prices each as this engine does;
     - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
       check;
+    - ``operators``: ``operators`` is the mine's table: its names are the ones the sidecar records
+      and, where the sidecar records the table's digest (``operators_digest``, family and slow
+      included), the digest is this table's;
     - ``offered`` (``permissive`` only): the mine was offered the strict file, and the file its
       sidecar pins lies beside this one with the pinned sha256;
     - ``covers_strict`` (``permissive`` only): permissive includes strict, so the file covers the
@@ -4033,6 +4052,18 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         [['the sidecar records no env_overrides', None]] if recorded_env is None else
         [[key, value] for key, value in sorted(recorded_env.items())]
         + [[key, value] for key, value in env_overrides().items()])
+    # The operator table is the mine's: the names its sidecar records (`operators`) and, where it
+    # records one, the whole table's digest (`operators_digest`, family and slow included), so a
+    # check under a table that drops `slow:` or changes a spec fails here instead of reading every
+    # other gate under another table.
+    recorded_ops, recorded_digest = sidecar.get('operators'), sidecar.get('operators_digest')
+    digest = _operators_digest(engine._operators_config)
+    gates['operators'] = (
+        [['the sidecar records no operators', None, None]] if not isinstance(recorded_ops, list) else
+        ([['operators', sorted(recorded_ops), sorted(engine.operator_arity)]]
+         if sorted(recorded_ops) != sorted(engine.operator_arity) else [])
+        + ([['operators_digest', recorded_digest, digest]]
+           if recorded_digest is not None and recorded_digest != digest else []))
     gates['ground_exact'] = _ground_rules_refused(engine, rules, mode)
     # no rule mentions an operator the mine does not mine (`_unmined`, from the sidecar's
     # per-length operator set)
