@@ -636,17 +636,22 @@ class SimpliPyEngine(_Evaluation):
             raise TypeError(
                 f'policy must be a policy name or a (value, role) -> str | None '
                 f'callable, not {type(policy).__name__}')
-        # A defined function is masked as its definition: the answer is canonical.
         if isinstance(expression, str):
-            return self.to_infix(
-                _masking.mask(self._expand_defined(self._core.parse(expression, strict=True)),
-                              self, policy_fn, collect=collect))
-        if isinstance(expression, list):
-            return _masking.mask(self._expand_defined(expression), self, policy_fn,
-                                 collect=collect)
-        raise TypeError(
-            f'mask expects an infix str or a token list, '
-            f'not {type(expression).__name__}')
+            tokens = self._core.parse(expression, strict=True)
+        elif isinstance(expression, list):
+            tokens = expression
+        else:
+            raise TypeError(
+                f'mask expects an infix str or a token list, '
+                f'not {type(expression).__name__}')
+        # Checked as every reader checks an expression (`check_form`: the token grammar and
+        # either dialect's well-formedness), so a malformed tagged sequence (`<add> </add>`) is
+        # refused rather than passed through unchanged.
+        if tokens:
+            self._core.check_form(tokens)
+        # A defined function is masked as its definition: the answer is canonical.
+        masked = _masking.mask(self._expand_defined(tokens), self, policy_fn, collect=collect)
+        return self.to_infix(masked) if isinstance(expression, str) else masked
 
     def simplify(
             self,

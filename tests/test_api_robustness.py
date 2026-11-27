@@ -17,8 +17,9 @@ behaviour that was measured to hold, so a regression fails here, by name:
   engine answer as serial ones do;
 * answers do not depend on the interpreter's hash seed.
 
-The findings of the same review that do not hold yet are pinned as strict xfails in
-``test_api_findings.py``.
+The review's findings API-1 to API-5, API-7 and API-8 were strict xfails in
+``test_api_findings.py`` until the 0.15 fix round fixed them; their tests are here now, each under
+a comment naming its finding.
 """
 import copy
 import os
@@ -344,6 +345,17 @@ def test_as_code_refuses_a_leaf_that_is_not_an_identifier(engine, tmp_path) -> N
     # numbers, constants, identifiers and named constants compile as before
     f = engine.as_callable(['+', '*', '(-3)', 'x_1', '+', 'np.pi', '*', '1/4', '<constant_a>'])
     assert f(np.array([1.0]), 2.0)[0] == -3.0 + np.pi + 0.5
+
+
+# API-3 (fixed in the 0.15 fix round): `mask` returned some malformed tagged sequences unchanged
+# instead of raising, while every other reader refused them. It runs the readers' check now.
+@pytest.mark.parametrize('tokens', [['<add>', '</add>'], ['<add>', '<sub>', 'x0', '</add>'],
+                                    ['<mul>', 'x0', '<sub>', 'x1', '</mul>']])
+def test_mask_refuses_a_malformed_tagged_sequence(engine, tokens) -> None:
+    with pytest.raises(ValueError):
+        engine.to_prefix(tokens)
+    with pytest.raises(ValueError):
+        engine.mask(tokens)
 
 
 # API-8 (fixed in the 0.15 fix round): a pre-0.15 engine pickle unpickled in 0.15 without the gate
