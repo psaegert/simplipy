@@ -7,8 +7,8 @@ modes where the statement is about every mode, so a doc that drifts from the cod
 
 The last class records the counterexamples to the descent bound
 ``complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)`` found by the pre-audit review
-(all in ``permissive``), as strict xfails: each flips to a failure once the bound holds for it, so
-the record cannot go stale.
+(in both modes), as strict xfails: each flips to a failure once the bound holds for it, so the
+record cannot go stale.
 """
 
 import os
@@ -229,6 +229,28 @@ _DESCENT_COUNTEREXAMPLES = [
     ('1.5/(x0*(x0 - 1)*floor(x2))', '1/(2*floor(x2)*(x0^2 - x0)/3)'),      # 48585 -> 49170
     ('1.5/(x0*(x0 - 1)*ceil(x2))', '1/(2*ceil(x2)*(x0^2 - x0)/3)'),        # 48585 -> 49170
 ]
+# ... and in strict, the default mode (input price -> answer price):
+_STRICT_DESCENT_COUNTEREXAMPLES = [
+    # S-1: the reading takes the true value past an overflow (0*u = 0, a finite addend beside an
+    # infinity), while the walk folds the overflowing ground part to float64's infinity first
+    ('0*pow(3, 123456789012345678901234567890)', 'nan'),                      # 2000 -> 8000
+    ('exp(123456789012345678901234567890)*0', 'nan'),                         # 2000 -> 8000
+    ('pow(10, 123456789012345678901234567890) + x0/-0.0', '(-inf)*x0 + inf'),  # 17000 -> 28000
+    # S-2: the reading drops `abs` over a power of a ground base it takes as nonnegative (rootn,
+    # asin of a positive), while the walk folds that base to NaN first and keeps the abs
+    ('abs(pow(pow(-2, 0.5), x1))', 'abs(nan^(x1))'),                          # 21170 -> 23000
+    ('abs(pow(asin(1.5), x2))', 'abs(nan^(x2))'),                             # 21585 -> 23000
+    # S-3: the print of the state re-reads one sign dearer (inside max, beside a sibling)
+    ('max(x1, -(max(x1, x2)*tanh(3) + x2))', 'max(x1, max(x1, x2)*tanh(-3) - x2)'),  # 58000 -> 59000
+    # S-4: the reading groups a shared number while a named constant is used twice; the walk drops
+    # one use (C^0 = 1) and distributes the number, paying it twice
+    ('(pow(<constant_g>, x2) + x0)*6.674e-11 + pow(<constant_g>, 0)',
+     '6.674e-11*x0 + 6.674e-11*<constant_g>^(x2) + 1'),                       # 110612 -> 128224
+    # S-5: the reading lands the reciprocal of an integer coefficient on a double, the walk keeps
+    # the exact integer
+    ('1/(pow(log(-1e400), x1)/123456789012345678901234567890)',
+     '123456789012345678901234567890/nan^(x1)'),                              # 75242 -> 118318
+]
 
 
 class TestTheDescentBound:
@@ -253,3 +275,10 @@ class TestTheDescentBound:
         # `answer` is the answer recorded at 3a6ed3a, for the reader; only the bound is asserted
         got = engine.simplify(expression, mode='permissive')
         assert engine.complexity(got, mode='permissive') <= engine.complexity(expression, mode='permissive')
+
+    @pytest.mark.xfail(strict=True, reason='pre-audit S-1..S-5: strict answers priced above their '
+                                           'input; the owner decides re-mine or after 0.15')
+    @pytest.mark.parametrize('expression, answer', _STRICT_DESCENT_COUNTEREXAMPLES)
+    def test_the_strict_counterexamples(self, engine: SimpliPyEngine, expression: str, answer: str) -> None:
+        got = engine.simplify(expression)
+        assert engine.complexity(got) <= engine.complexity(expression)
