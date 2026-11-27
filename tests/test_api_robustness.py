@@ -23,6 +23,7 @@ The findings of the same review that do not hold yet are pinned as strict xfails
 import copy
 import os
 import pickle
+import re
 import subprocess
 import sys
 import threading
@@ -84,6 +85,32 @@ def test_malformed_infix_is_refused_by_every_reader(engine, entry, text, message
 @pytest.mark.parametrize('text', [t for t, _ in _MALFORMED_INFIX] + ['', 'sin(x0))', 'x0 x1'])
 def test_is_valid_answers_false_on_malformed_infix_never_raises(engine, text) -> None:
     assert engine.is_valid(text) is False
+
+
+# API-1 (fixed in the 0.15 fix round): a character the infix reader has no token for used to be
+# dropped silently, so text outside the grammar read as another expression (`|x0|` as `x0`, `x0!`
+# as `x0`, `?0 + x1` as `0 + x1`, a fullwidth `x0` as the empty expression). It is refused now,
+# naming the character and its position, by every reader, `read_infix` and `infix_to_prefix`
+# included, and `is_valid` answers False.
+_OUTSIDE_THE_GRAMMAR = [('|x0|', "'|' at position 0"), ('x0!', "'!' at position 2"),
+                        ('?0 + x1', "'?' at position 0"), ('~x0', "'~' at position 0"),
+                        ('<constant_a-b>*x0', "'<' at position 0"), ('ｘ０', "'ｘ' at position 0"),
+                        ('[x0]', "'[' at position 0"), ('x0\x00 + 1', r"'\0' at position 2"),
+                        ('x0 $ x1', "'$' at position 3"), ('2é', "'é' at position 1")]
+
+
+@pytest.mark.parametrize('text, named', _OUTSIDE_THE_GRAMMAR)
+def test_a_character_outside_the_grammar_is_refused(engine, text, named) -> None:
+    for entry in _READERS + ('read_infix', 'infix_to_prefix'):
+        with pytest.raises(ValueError, match=re.escape(f'no token for the character {named}')):
+            getattr(engine, entry)(text)
+    assert engine.is_valid(text) is False
+
+
+def test_a_hexadecimal_spelling_is_an_implicit_product_not_a_character_outside_the_grammar(engine) -> None:
+    """`0x1F` has a token for every character: the numeral `0` and the variable `x1F`, an
+    implicit product (as `0x10` is), so it reads and is not refused."""
+    assert engine.read_infix('0x1F') == ['*', '0', 'x1F']
 
 
 _MALFORMED_TOKENS = [

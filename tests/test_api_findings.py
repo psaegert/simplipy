@@ -35,21 +35,6 @@ def _with_operator(**changes) -> SimpliPyEngine:
     return SimpliPyEngine(operators, [], defined_functions=config.get('defined_functions'))
 
 
-# API-1: the infix reader drops every character it has no token for, silently, so text outside
-# the grammar reads as another expression instead of being refused ("Raises ValueError on a
-# malformed expression"). `|x0|` is read as `x0`, `x0!` as `x0`, `0x1F` as `0*x1F`, `?0 + x1` as
-# `0 + x1`, `~x0` as `x0`, `<constant_a-b>` as `constant_a - b`, and a fullwidth `x0` as the empty
-# expression, whose simplification is ''. The tokenizer documents the
-# drop as "pinned legacy parity" (rust/convert.rs, tokenize_infix); the public docs disclose only
-# the dropped unmatched opening parenthesis.
-@pytest.mark.xfail(strict=True, reason='API-1: unknown characters are dropped silently (|x0| reads as x0)')
-@pytest.mark.parametrize('text', ['|x0|', 'x0!', '0x1F', '?0 + x1', '~x0', '<constant_a-b>*x0',
-                                  'ｘ０', '[x0]', 'x0\x00 + 1'])
-def test_a_character_outside_the_grammar_is_refused(engine, text) -> None:
-    with pytest.raises(ValueError):
-        engine.simplify(text)
-
-
 # API-2: `is_valid` answers True for token sequences that every reader refuses: a reserved
 # numeric spelling (`nan`, `inf`, `1/0`, `1/-3`) or an empty or whitespace token. The explicit
 # path asks only the core's arity oracle; the readers also run the token grammar (`check_form`)

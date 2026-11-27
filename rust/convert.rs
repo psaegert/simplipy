@@ -327,24 +327,25 @@ fn join_operands(operands_data: &[Item]) -> String {
 
 // ---- infix_to_prefix ----------------------------------------------------------------------------
 
-/// Tokenize the (space-stripped) infix string, per the Python regex
-/// `float_special|<constant>|number|[A-Za-z_][\w.]*|\*\*|[-+*/^()]` under `re.findall` semantics:
-/// scan left to right, at each position take the FIRST alternative (in pattern order) that matches,
-/// and SILENTLY DROP any char that matches no alternative. Numbers/identifiers are emitted as
-/// verbatim source substrings. (`\w` is treated as ASCII `[A-Za-z0-9_]`; the deployment corpus is
-/// ASCII -- a non-ASCII identifier is the documented out-of-domain boundary.)
+/// Tokenize the infix string, per the pattern
+/// `float_special|<constant>|number|[A-Za-z_][\w.]*|\*\*|[-+*/^(),]`: scan left to right, at each
+/// position take the FIRST alternative (in pattern order) that matches. Numbers/identifiers are
+/// emitted as verbatim source substrings. (`\w` is ASCII `[A-Za-z0-9_]`.)
 ///
-/// Each token carries whether it TOUCHES the previous one (`false` when an unmatched char was
-/// dropped between them) and whether WHITESPACE separates them. Implicit multiplication
-/// (`insert_implicit_products`) applies only to touching tokens, so a dropped char never turns
-/// two operands into a product; whitespace still counts as touching.
+/// A CHARACTER OUTSIDE THE GRAMMAR -- one that is not whitespace and starts no alternative
+/// (`|`, `!`, `?`, `~`, `$`, brackets, quotes, a NUL, a non-ASCII letter such as a fullwidth
+/// `ｘ`) -- is refused, naming the character and its position (counted in characters from 0).
+/// It used to be dropped without a token or an error, so `|x0|` read as `x0`, `x0!` as `x0`
+/// and `0x1F` as `0*x1F`: text outside the grammar answered as another expression.
+///
+/// Each token carries whether WHITESPACE separates it from the one before.
 ///
 /// WHITESPACE SEPARATES TOKENS: `sin x0` is two tokens, never the
 /// name `sinx0`, and `2 3` is two numbers, never `23`. Two joins survive it, because the text
 /// can only mean one thing: `* *` is the power operator (`x0 * * 2` is `x0**2`), and an
 /// exponent part after a number joins it (`1 e-5` is `1e-5`; but `1e -5` is `1*e - 5`, since
 /// `1e` is no numeral).
-fn tokenize_infix(s: &str) -> Vec<Token> {
+fn tokenize_infix(s: &str) -> Result<Vec<Token>, String> {
     let chars: Vec<char> = s.chars().collect();
     let n = chars.len();
     let skip_space = |mut j: usize| {
@@ -354,16 +355,13 @@ fn tokenize_infix(s: &str) -> Vec<Token> {
         j
     };
     let mut tokens: Vec<Token> = Vec::new();
-    let mut touching = true;
     let mut spaced = false;
     let mut i = 0;
-    let push = |tokens: &mut Vec<Token>, text: String, touching: &mut bool, spaced: &mut bool| {
+    let push = |tokens: &mut Vec<Token>, text: String, spaced: &mut bool| {
         tokens.push(Token {
             text,
-            touching: *touching,
             spaced: *spaced,
         });
-        *touching = true;
         *spaced = false;
     };
     while i < n {
@@ -372,9 +370,8 @@ fn tokenize_infix(s: &str) -> Vec<Token> {
             spaced = true;
             continue;
         }
-        // `1 e-5`: an exponent part after whitespace joins the number before it -- only across
-        // whitespace alone: a dropped char between them never fuses (`1 $ e5` stays malformed).
-        if spaced && touching {
+        // `1 e-5`: an exponent part after whitespace joins the number before it.
+        if spaced {
             if let Some(last) = tokens.last_mut() {
                 let number_without_exponent =
                     is_number_fullmatch(&last.text) && !last.text.contains(['e', 'E']);
@@ -390,68 +387,44 @@ fn tokenize_infix(s: &str) -> Vec<Token> {
         // alternation -- else they split on the '(' / '"'. Leads the scan; the token is then
         // classified as a leaf by `is_ident_start` in `infix_to_prefix`.
         if let Some(j) = match_float_special(&chars, i) {
-            push(
-                &mut tokens,
-                chars[i..j].iter().collect(),
-                &mut touching,
-                &mut spaced,
-            );
+            push(&mut tokens, chars[i..j].iter().collect(), &mut spaced);
             i = j;
             continue;
         }
         if let Some(j) = match_constant(&chars, i) {
-            push(
-                &mut tokens,
-                chars[i..j].iter().collect(),
-                &mut touching,
-                &mut spaced,
-            );
+            push(&mut tokens, chars[i..j].iter().collect(), &mut spaced);
             i = j;
         } else if let Some(j) = match_number(&chars, i) {
-            push(
-                &mut tokens,
-                chars[i..j].iter().collect(),
-                &mut touching,
-                &mut spaced,
-            );
+            push(&mut tokens, chars[i..j].iter().collect(), &mut spaced);
             i = j;
         } else if let Some(j) = match_ident(&chars, i) {
-            push(
-                &mut tokens,
-                chars[i..j].iter().collect(),
-                &mut touching,
-                &mut spaced,
-            );
+            push(&mut tokens, chars[i..j].iter().collect(), &mut spaced);
             i = j;
         } else if chars[i] == '*' && skip_space(i + 1) < n && chars[skip_space(i + 1)] == '*' {
-            push(&mut tokens, "**".to_string(), &mut touching, &mut spaced);
+            push(&mut tokens, "**".to_string(), &mut spaced);
             i = skip_space(i + 1) + 1;
         } else if matches!(chars[i], '-' | '+' | '*' | '/' | '^' | '(' | ')' | ',') {
             // ',' is the 2-ary call-syntax argument separator the pretty renderer
-            // emits (`rootn(x0, 3)`, `pow(a, b)`). It used to fall into the silent
-            // drop below, which FUSED the two arguments and let operators bind across
-            // the boundary: `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1)
-            // (a round-trip break of the parser's own
-            // output language; 97/2000 fuzz rows).
-            push(
-                &mut tokens,
-                chars[i].to_string(),
-                &mut touching,
-                &mut spaced,
-            );
+            // emits (`rootn(x0, 3)`, `pow(a, b)`). It used to be dropped, which FUSED
+            // the two arguments and let operators bind across the boundary:
+            // `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1) (a round-trip break of
+            // the parser's own output language; 97/2000 fuzz rows).
+            push(&mut tokens, chars[i].to_string(), &mut spaced);
             i += 1;
         } else {
-            i += 1; // unmatched -> drop (no token, no error; pinned legacy parity)
-            touching = false;
+            return Err(format!(
+                "the infix reader has no token for the character {:?} at position {i} of {s:?}",
+                chars[i]
+            ));
         }
     }
-    tokens
+    Ok(tokens)
 }
 
-/// One infix token with its relation to the token before it (see `tokenize_infix`).
+/// One infix token, and whether whitespace separates it from the one before (see
+/// `tokenize_infix`).
 struct Token {
     text: String,
-    touching: bool,
     spaced: bool,
 }
 
@@ -474,7 +447,7 @@ fn match_exponent(s: &[char], i: usize) -> Option<usize> {
 }
 
 /// IMPLICIT MULTIPLICATION (infix only -- token lists are expected
-/// well formed): an explicit `*` is inserted between two touching tokens when the left one
+/// well formed): an explicit `*` is inserted between two adjacent tokens when the left one
 /// is a number or a `)` and the right one starts an operand (a name, a `(`, or -- after a
 /// `)` -- a number). So `2x` reads `2*x`, `0x` reads `0*x`, `2(x1 + 1)` reads `2*(x1 + 1)`,
 /// `(a)(b)` reads `(a)*(b)`, `2pi` reads `2*pi` and `2sin(x)` reads `2*sin(x)`. The inserted
@@ -523,18 +496,13 @@ fn insert_implicit_products(
     // precedence of `*`), so it is refused.
     let mut depth: i64 = 0;
     let mut open_arguments: Vec<i64> = Vec::new();
-    for Token {
-        text: tok,
-        touching,
-        spaced,
-    } in tokens
-    {
+    for Token { text: tok, spaced } in tokens {
         if let Some((prev, _)) = out.last() {
             let after_number = is_number_fullmatch(prev);
             let after_paren = prev == ")";
             let starts_operand =
                 tok == "(" || is_leaf(&tok) || (after_paren && is_number_fullmatch(&tok));
-            if touching && (after_number || after_paren) && starts_operand {
+            if (after_number || after_paren) && starts_operand {
                 if open_arguments.last() == Some(&depth) {
                     return Err(format!(
                         "{prev:?} and {tok:?} would multiply inside the argument of a function \
@@ -543,13 +511,12 @@ fn insert_implicit_products(
                     ));
                 }
                 out.push(("*".to_string(), false));
-            } else if touching && is_function(prev) && ((spaced && is_operand(&tok)) || tok == "-")
-            {
+            } else if is_function(prev) && ((spaced && is_operand(&tok)) || tok == "-") {
                 out.last_mut().unwrap().1 = true;
                 if open_arguments.last() != Some(&depth) {
                     open_arguments.push(depth);
                 }
-            } else if touching && spaced && is_operand(prev) && is_operand(&tok) {
+            } else if spaced && is_operand(prev) && is_operand(&tok) {
                 let call = if is_ident_start(prev) {
                     format!(", a call ({prev}({tok})) if {prev:?} is a function")
                 } else {
@@ -741,8 +708,9 @@ fn unmark(s: String) -> String {
 }
 
 /// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Malformed inputs produce
-/// structurally-degenerate prefix lists, matching Python; the one error is two operands that
-/// only whitespace separates (`x0 x1`, `2 3`; see `insert_implicit_products`).
+/// structurally-degenerate prefix lists, matching Python; the errors are a character outside
+/// the grammar (`tokenize_infix`) and two operands that only whitespace separates (`x0 x1`,
+/// `2 3`; see `insert_implicit_products`).
 /// With `strict`, a call of an undeclared name is refused (`refuse_undeclared_calls`).
 pub fn infix_to_prefix(
     infix_expression: &str,
@@ -765,7 +733,6 @@ fn rewrite_legacy_calls(tokens: Vec<Token>) -> Vec<Token> {
         match t.text.as_str() {
             "pow1" if called => {
                 if let Some(paren) = it.peek_mut() {
-                    paren.touching = t.touching;
                     paren.spaced = t.spaced;
                 }
                 continue;
@@ -852,7 +819,7 @@ fn read_infix_tokens(
     strict: bool,
     legacy_calls: bool,
 ) -> Result<Vec<String>, String> {
-    let mut tokens = tokenize_infix(infix_expression);
+    let mut tokens = tokenize_infix(infix_expression)?;
     if strict {
         refuse_undeclared_calls(&tokens, infix_expression, ops)?;
     }
@@ -1674,15 +1641,31 @@ mod tests {
         );
         assert_eq!(i2p(&e, "a ** b ** c"), v(&["**", "a", "**", "b", "c"]));
         assert_eq!(i2p(&e, "1/x1"), v(&["/", "1", "x1"]));
-        // tokenizer: '**' before '*', drop unmatched, empty parens.
+        // tokenizer: '**' before '*', empty parens.
         assert_eq!(i2p(&e, "x1***x2"), v(&["*", "**", "x1", "x2"]));
-        // A dropped char separates: it never becomes an implicit product.
-        assert_eq!(i2p(&e, "x1 $ x2"), v(&["x1", "x2"]));
+        // A character outside the grammar is refused, named with its position (API-1: it
+        // used to be dropped, so `|x0|` read as `x0`).
+        for (text, named) in [
+            ("x1 $ x2", "'$' at position 3"),
+            ("|x0|", "'|' at position 0"),
+            ("x0!", "'!' at position 2"),
+            ("?0 + x1", "'?' at position 0"),
+            ("~x0", "'~' at position 0"),
+            ("<constant_a-b>*x0", "'<' at position 0"),
+            ("ｘ０", "'ｘ' at position 0"),
+            ("[x0]", "'[' at position 0"),
+            ("x0\0 + 1", "'\\0' at position 2"),
+        ] {
+            let error = e.infix_to_prefix(text).unwrap_err();
+            assert!(error.contains(named), "{text:?}: {error}");
+        }
         assert_eq!(i2p(&e, "()"), Vec::<String>::new());
         assert_eq!(i2p(&e, ""), Vec::<String>::new());
         // Implicit multiplication: an ordinary `*`, same precedence.
         assert_eq!(i2p(&e, "2x"), v(&["*", "2", "x"]));
         assert_eq!(i2p(&e, "0x10"), v(&["*", "0", "x10"]));
+        // a hexadecimal spelling is no numeral here: `0x1F` is 0 times the variable `x1F`
+        assert_eq!(i2p(&e, "0x1F"), v(&["*", "0", "x1F"]));
         assert_eq!(i2p(&e, "2(x1 + 1)"), v(&["*", "2", "+", "x1", "1"]));
         assert_eq!(i2p(&e, "(x1)(x2)"), v(&["*", "x1", "x2"]));
         assert_eq!(i2p(&e, "(x1)2"), v(&["*", "x1", "2"]));
@@ -1706,8 +1689,8 @@ mod tests {
         // the joined exponent reads like the touching one, also before a name
         assert_eq!(i2p(&e, "1 e-5x1"), v(&["*", "1e-5", "x1"]));
         assert_eq!(i2p(&e, "1 e5x1"), v(&["*", "1e5", "x1"]));
-        // a dropped char never fuses, whitespace or not
-        assert_eq!(i2p(&e, "1 $ e5"), v(&["1", "e5"]));
+        // a character outside the grammar between them is refused, not skipped
+        assert!(e.infix_to_prefix("1 $ e5").is_err());
         // A function without parentheses: below powers, above signs, products and sums.
         assert_eq!(i2p(&e, "sin x1"), v(&["sin", "x1"]));
         assert_eq!(i2p(&e, "sin x1^2"), v(&["sin", "**", "x1", "2"]));
@@ -1741,8 +1724,7 @@ mod tests {
             assert!(e.infix_to_prefix(text).is_err(), "{text}");
         }
         assert_eq!(i2p(&e, "sin (x1)^2"), v(&["**", "sin", "x1", "2"]));
-        // Two operands separated by whitespace alone are refused, not guessed; a dropped
-        // char between them keeps the old malformed reading.
+        // Two operands separated by whitespace alone are refused, not guessed.
         for text in ["x1 x2", "x 1", "2 3", "1 000", "sin x1 x2"] {
             assert!(e.infix_to_prefix(text).is_err(), "{text}");
         }

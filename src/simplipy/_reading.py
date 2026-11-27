@@ -44,11 +44,10 @@ class _Reading(_Loading):
         One inherited tolerance is worth knowing about on the infix path: the
         reader silently DROPS unmatched OPENING parentheses (``'((x0'`` reads as
         ``x0``), so such a string validates. Unmatched CLOSING parentheses survive
-        as a stray token and are rejected. It also drops, without a token or an
-        error, every character it has no token for (``|``, ``!``, ``?``, ``~``,
-        brackets, braces, quotes, non-ASCII letters): ``'|x0|'`` reads, and
-        validates, as ``x0``. This method reports on what the reader reads rather
-        than keeping a second, partial infix grammar of its own.
+        as a stray token and are rejected. A character the reader has no token for
+        (``|``, ``!``, ``?``, ``~``, brackets, braces, quotes, non-ASCII letters) is
+        refused, so ``'|x0|'`` is invalid. This method reports on what the reader
+        reads rather than keeping a second, partial infix grammar of its own.
 
         Parameters
         ----------
@@ -220,7 +219,8 @@ class _Reading(_Loading):
         Raises
         ------
         ValueError
-            When two operands are separated only by whitespace (``x0 x1``, ``2 3``,
+            On a character the reader has no token for (``|x0|``; see :meth:`read_infix`),
+            when two operands are separated only by whitespace (``x0 x1``, ``2 3``,
             ``zeta x0`` for an undeclared ``zeta``), or when an implicit product falls inside
             the argument of a function without parentheses (``sin 2x0``).
         """
@@ -294,12 +294,14 @@ class _Reading(_Loading):
         (``x0 x1``, ``2 3``, ``zeta x0`` for an undeclared ``zeta``) and for an implicit
         product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
 
-        A character the reader has no token for (anything but letters, digits, ``_``, ``.``,
-        ``+ - * / ^ ( ) ,``, whitespace and the spellings ``<constant>`` and ``float("inf")``)
-        is DROPPED without an error, and the text around it is read as if it were absent:
-        ``'|x0|'`` reads as ``['x0']``, ``'x0!'`` as ``['x0']``, ``'0x1F'`` as
-        ``['*', '0', 'x1F']``. Every infix reader shares this tokenizer, :meth:`simplify` and
-        the conversions included.
+        A character the reader has no token for (anything but ASCII letters, digits, ``_``,
+        ``.``, ``+ - * / ^ ( ) ,``, whitespace and the spellings ``<constant>``,
+        ``<constant_NAME>`` and ``float("inf")``) raises ``ValueError`` naming the character and
+        its position: ``'|x0|'``, ``'x0!'``, ``'?0 + x1'`` and a fullwidth ``'ｘ０'`` are
+        refused. (Before 0.15 such a character was dropped, and the text around it read as if
+        it were absent: ``'|x0|'`` read as ``['x0']``.) A hexadecimal spelling is no numeral
+        but an implicit product: ``'0x1F'`` reads as ``['*', '0', 'x1F']``. Every infix reader
+        shares this tokenizer, :meth:`simplify` and the conversions included.
 
         Mechanically it is :meth:`infix_to_prefix` plus optional
         :meth:`convert_expression` normalization.
