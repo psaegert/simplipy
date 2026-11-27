@@ -2711,7 +2711,12 @@ def kind_holds(dv, valued):
     there (`dv`, `compare_deployed_realised`) agree in kind -- both finite, `KIND_AGREEMENTS` --
     at a point where the reals give both sides a value (`valued()`, `reals_valued_at`), where
     their difference is rounding; at any other point they agree only as F6 asks.
-    -> True, False, or None where the reals' reading of the point reached no answer."""
+    -> True, False, or None where the reals' reading of the point reached no answer.
+
+    It reads whether the reals give both sides a value at the point, not whether their values
+    agree there: that is the reals' reading of the rule (`reals_valued_holds`), taken at the points
+    the reals read. At a point float64 reads alone a real difference passes here as rounding
+    (`strict_reading`)."""
     if dv not in KIND_AGREEMENTS:
         return False
     return valued()
@@ -3470,7 +3475,15 @@ def strict_reading(f6, kinds, reals):
     x0 = -1e-17) and `floor(tanh(abs(x0))) -> 0`; `atanh(tanh(x0)) -> x0` does not (+inf against
     x0 from x0 = 19.06), nor `exp(log(x0)) -> x0` (NaN against x0 for x0 < 0), nor
     `tanh(1/(abs(x0) - x0)) -> tanh(-1/(x0 - abs(x0)))` (1 against -1 on x0 > 0, where the reals
-    give neither side a value), nor any rule false in the reals.
+    give neither side a value), nor any rule the reals refute at a point they read.
+
+    (b) is no proof that the rule is true in the reals: `reals` is their reading at the points
+    they read, and at a point float64 reads alone (the slots' magnitude rungs at and below 1e-8,
+    the mint's rows past the first `ROWS_JUDGED` where float64 differs, the f64 bar's probes)
+    `kind_holds` asks only that the reals give both sides a value, so a finite float64 difference
+    there counts as rounding whether or not the reals agree. `- tanh min * abs ?0 1e16 1 tanh min
+    * abs ?0 100000 1 -> 0` holds in strict, though it is 0.7606 against 0 at x0 = 1e-8 in both
+    readings (`tests/test_judge_adversarial_pins.py`).
 
     `f6` and `kinds` are float64's two readings, and `reals` the reals' at the points where they
     give both sides a value (`reals_valued_holds`), each True, False or None (no answer reached).
@@ -5466,7 +5479,14 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         k (a slot past the columns the grid's
         1.7). Where float64's sides disagree (F6), the row is judged as a grid point, in the
         reals and in float64, the first `ROWS_JUDGED` of them; a `$` slot's 0, its sort's
-        isolated value, is read by the battery (`battery_for`)."""
+        isolated value, is read by the battery (`battery_for`).
+
+        The first in row order, whatever their difference: a row past them is read neither in the
+        reals nor by float64's lane, and counts neither way. Rows where only the left side has no
+        value (the special values +-1 under atanh, an extension) can fill them:
+        `ceil sin atanh ?0 -> ceil sin asin ?0` differs at 44 rows, the first eight at x0 = +-1, and
+        its one counterexample, row 2611 (x0 = -0.9997006899413192, 1 against -0), is not read
+        (`tests/test_judge_adversarial_pins.py`)."""
         X = judge_rows()
         cols = {}
         for m in names:

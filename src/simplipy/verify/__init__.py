@@ -31,12 +31,14 @@ from typing import Any, Collection
 from . import _contract, _gate, _monitor
 from ._modes import RULE_MODES, ModeKeyed, engine_mode, judge_mode
 
-#: Every bucket that is NOT sound to ship: all verdicts but CERTIFIED / TOLERATED.
-#: THE single source of truth for "fatal" -- consumed by this module's
-#: ``is_clean``, by the mining gate in ``engine._finalize`` and by the
-#: ``certify_rules`` gate, so the three sites cannot drift apart. A rule the judge
-#: cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) is exactly as
-#: unshippable as a KILL: the second authority never passed it.
+#: The reals' buckets that are NOT clean in the MODE-LESS diagnostic: all verdicts but
+#: CERTIFIED / TOLERATED. Read by :func:`verify_ruleset` with ``mode=None`` alone (``is_clean``;
+#: ``_gate._FATAL`` is the sweep's copy of it). The gates of a mode's file -- ``verify_ruleset``
+#: with a mode, :func:`licensed`, the miner's acceptance and ``certify_rules`` -- read the modes'
+#: readings (the tier, ``MODE_TIERS``), not these buckets: an ENGINE-MISALIGN rule ships in the
+#: strict file where strict's second reading holds it (`sinh(asinh(x0)) -> x0`), and in the
+#: permissive file where permissive does (`atanh(tanh(x0)) -> x0`). A rule the judge cannot
+#: evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) carries no tier and ships in no mode.
 FATAL_BUCKETS = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
                  'UNDECIDED-MEASURE', 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
 
