@@ -678,7 +678,9 @@ pub(super) fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
         };
         let radicand_at = |b: &FBucket| b.sym.is_none() && b.base == rad;
         let target = buckets.iter().position(radicand_at);
-        let composes = if cx.permits(Permissive::PowersCompose) {
+        // Where the state confines the product to t >= 0 (`confine.sibling`: an enclosing node is
+        // NaN wherever t < 0), the root composes as in `permissive`: on t >= 0 both readings agree.
+        let composes = if cx.permits(Permissive::PowersCompose) || cx.confined_nonneg(&rad) {
             target.is_some()
                 || buckets.iter().enumerate().any(|(j, b)| {
                     j != i

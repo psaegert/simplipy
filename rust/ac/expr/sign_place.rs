@@ -821,6 +821,9 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
         }
     });
     let _scope = FlipScope(outer);
+    if memo_free(cx) {
+        return sign_trade_flip_raw(f, cx, refit);
+    }
     if let Some(hit) = FLIP_MEMO.with(|m| m.borrow().as_ref().and_then(|t| t.get(&key).cloned())) {
         return hit;
     }
@@ -919,7 +922,9 @@ impl Drop for CallDecisions {
 /// while a fire log records the folds (`rules::FireLog`): a decision taken from the memo would not
 /// record the folds of its constructions again.
 pub(super) fn call_lived(key: &FlipCxKey) -> bool {
-    if crate::ac::rules::folds_logged() {
+    // Nor under a confinement (`Cx::confined`, bit 7 of the key): its bases are no part of the
+    // key, and a decision taken under one holds under no other.
+    if crate::ac::rules::folds_logged() || key.2 & CONFINED_BIT != 0 {
         return false;
     }
     CALL_DECISIONS.with(|m| {
@@ -979,6 +984,17 @@ impl Drop for FlipScope {
     }
 }
 
+/// The bit of a context key (`flip_cx_key`) that marks a context confined by the state
+/// (`Cx::confined`): no decision under one is remembered (`memo_free`).
+pub(super) const CONFINED_BIT: u8 = 1 << 7;
+
+/// May a decision under `cx` be remembered or taken from a memo? Not under a confinement
+/// (`Cx::confined`), whose bases no memo key holds.
+#[inline]
+pub(super) fn memo_free(cx: &Cx) -> bool {
+    !cx.confined.is_empty()
+}
+
 pub(super) fn flip_cx_key(cx: &Cx) -> FlipCxKey {
     fn id(c: Option<&dyn Fn(&Ex) -> bool>) -> usize {
         c.map_or(0, |f| f as *const dyn Fn(&Ex) -> bool as *const () as usize)
@@ -990,7 +1006,8 @@ pub(super) fn flip_cx_key(cx: &Cx) -> FlipCxKey {
     let bits = mode
         | (u8::from(cx.fold_f64) << 2)
         | (u8::from(crate::ac::rat::f64_numbers()) << 4)
-        | (u8::from(cx.flat_unread) << 6);
+        | (u8::from(cx.flat_unread) << 6)
+        | (u8::from(!cx.confined.is_empty()) << 7);
     (
         cx.view as *const TokenView as usize,
         [

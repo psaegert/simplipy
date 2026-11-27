@@ -192,6 +192,15 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
                 }
                 spent += 1;
                 let cur = descend(rebuilt, pass, max_passes);
+                // A candidate is compared as the root's landing reads it (`confine.sibling`): a
+                // move that multiplies out `rootn(x1, 2)*(rootn(x1, 2) + 1)` reaches
+                // `x1 + rootn(x1, 2)` only there.
+                let confined = crate::ac::expr::release_confined(cur.clone(), pass.cx);
+                let cur = if confined == cur {
+                    cur
+                } else {
+                    descend(confined, pass, max_passes)
+                };
                 if ordered_below(&cur, &best, view) {
                     accepted = Some(cur);
                     break;

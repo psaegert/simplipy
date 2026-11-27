@@ -79,6 +79,7 @@
 //! | `pow.half_root` | t^(1/(2*k)) = rootn(t, 2*k) | t^(1/2) as numpy's `sqrt`: t is no zero with a sign of its own | none |
 //! | `mul.collect` | t^a*t^b = t^(a+b) | a and b integers float64 reads exactly; or t >= 0; or a + b a nonzero non-integer | none |
 //! | `mul.collect_symbolic` | t^y*t^y = t^(2*y) | t not `-0` on a region, and t >= 0 or the level sets of y null | none |
+//! | `confine.sibling` | a + b = a + b', a*b = a*b', a NaN wherever t < 0 and b = b' wherever t >= 0, through every operation that propagates NaN, b' by the laws that merge fractional powers of t on t >= 0 | a NaN at every t < 0 (`-inf` included) through operations that propagate NaN; t not `-0` on a region; the answer still NaN wherever t < 0 | no step (the laws of powers take no premise) |
 //! | `fun.atanh_tanh` | atanh(tanh(t)) = t | abs(t) at most 19: tanh(t) is no +-1 | none |
 //! | `fun.log_exp` | log(exp(t)) = t | t is not `-0` on a region, and nothing around reads its flat point | none |
 //! | `fun.asinh_sinh` | asinh(sinh(t)) = t | none | none |
@@ -399,6 +400,27 @@ pub enum Law {
     /// (`ceil(x0)^x1*ceil(x0)^x1` is `+inf` at x0 = -0.5, x1 = -0.5, `ceil(x0)^(2*x1)` is
     /// `-inf`), a value where the input has one. In `permissive`, none (agreement).
     MulCollectSymbolic,
+    /// A node that is NaN wherever a base `t` is negative reads its other members on `t >= 0`:
+    /// `a + b = a + b'` and `a*b = a*b'` where `a` is NaN at every point where `t < 0` and `b = b'`
+    /// wherever `t >= 0`, so both sides are NaN where `t < 0` and agree elsewhere. `b'` is `b`
+    /// rebuilt by the laws of powers whose two sides differ only where their base is negative
+    /// (`mul.collect`, `mul.collect_symbolic`, `pow.compose` over a fractional power,
+    /// `pow.root_inverse`, and `pow.odd_root_compose` in a product, which then composes as in
+    /// `permissive`), each reading `t >= 0` of the confined `t` (`Cx::confined`). No law that folds
+    /// a sign is read so (`abs(t) = t`, `(t^2)^(1/2) = t`): `abs(x0) + x0^(1/2)` stays. The confinement flows up through every
+    /// operation the deployed evaluator propagates NaN through (`+`, `*`, a power's base under a
+    /// nonzero exponent, every unary head, `rootn`'s radicand, both operands of `max`, `min`, `mod`,
+    /// `atan2`, `besselj`, `bessely`, `besseli`, and `besselk`'s argument; `pow(NaN, 0)`,
+    /// `pow(1, NaN)` and `besselk(NaN, 0)` have values), and down into every member below the
+    /// node. `t` is confined by `t^r` with an exponent float64 reads as a non-integer, an even root
+    /// of `t`, `log(t)` and `acosh(t)`, each NaN at every `t < 0`, `-inf` included. In `f64`, `t`
+    /// not `-0` on a region (`ceil(x0)^(3/2)*ceil(x0)^(3/2)` is `+0` on (-1, 0), where
+    /// `ceil(x0)^3` is `-0`), and the rebuilt node still NaN wherever `t < 0`, so a merge may not
+    /// take the member that confined it (`x0^(1/2)*x0^(1/2) + x0^(3/2)*x0^(3/2)` stays, where
+    /// `x0 + x0^3` has a value for x0 < 0). A step of the root's landing
+    /// (`expr::release_confined`): `x0^(3/2)*(x0^(3/2) + x0)` is `x0^(5/2) + x0^3`, as
+    /// `x0*x0*(x0^(1/2) + x0)` is. In `permissive`, no step: the laws of powers take no premise.
+    ConfineSibling,
     /// `atanh(tanh(t)) = t`. In `f64` where `|t|` is at most 19: float64's `tanh` is `+-1` from
     /// `|t|` = 19.0615 on, where `atanh` gives an infinity against `t`; within the band the
     /// rounding of `tanh` keeps the kind (`Cx::certainly_in_band`). In `permissive`, none.
@@ -597,7 +619,7 @@ pub enum Law {
 
 impl Law {
     /// The whole catalogue, in its order.
-    pub const ALL: [Law; 92] = [
+    pub const ALL: [Law; 93] = [
         Law::AddZero,
         Law::MulOne,
         Law::MulZero,
@@ -659,6 +681,7 @@ impl Law {
         Law::PowHalfRoot,
         Law::MulCollect,
         Law::MulCollectSymbolic,
+        Law::ConfineSibling,
         Law::FunAtanhTanh,
         Law::FunLogExp,
         Law::FunAsinhSinh,
@@ -756,6 +779,7 @@ impl Law {
             Law::PowHalfRoot => "pow.half_root",
             Law::MulCollect => "mul.collect",
             Law::MulCollectSymbolic => "mul.collect_symbolic",
+            Law::ConfineSibling => "confine.sibling",
             Law::FunAtanhTanh => "fun.atanh_tanh",
             Law::FunLogExp => "fun.log_exp",
             Law::FunAsinhSinh => "fun.asinh_sinh",
@@ -854,6 +878,7 @@ impl Law {
             Law::PowHalfRoot => "t^(1/(2*k)) = rootn(t, 2*k)",
             Law::MulCollect => "t^a*t^b = t^(a+b)",
             Law::MulCollectSymbolic => "t^y*t^y = t^(2*y)",
+            Law::ConfineSibling => "a + b = a + b', a*b = a*b'",
             Law::FunAtanhTanh => "atanh(tanh(t)) = t",
             Law::FunLogExp => "log(exp(t)) = t",
             Law::FunAsinhSinh => "asinh(sinh(t)) = t",
@@ -1017,6 +1042,8 @@ impl Law {
                     && (!cx.f64_semantics() || super::expr::signed_zero_null(t, true, cx))
             }
             Law::FunUnitInverses => cx.certainly_in_unit(t),
+            // `t` is the confined base.
+            Law::ConfineSibling => cx.f64_semantics() && super::expr::signed_zero_null(t, true, cx),
             // `t` is the base of the spelled square root.
             Law::PowHalfRoot => !super::expr::sqrt_parts_from_rootn(t, cx),
             Law::PermInversePairs => cx.permits_on(Permissive::InversePairs, t),
@@ -1041,8 +1068,12 @@ impl Law {
             }
             (Law::PowCompose, Powers::Rational { base, r, s }) => {
                 let rs = r.checked_mul(s);
+                // A confined base (`confine.sibling`) composes a fractional power only: over an
+                // integer power the composition folds the power's sign (`(t^2)^(1/2)` is `abs(t)`),
+                // which the state's confinement does not read.
                 composes(base)
                     || cx.certainly_nonneg(base)
+                    || (cx.confined_nonneg(base) && !r.is_integer())
                     || if r.is_integer() {
                         s.is_integer()
                             || (r.is_odd_integer()
@@ -1054,7 +1085,10 @@ impl Law {
             }
             // `r` is the index, `s` the exponent (`n` or `-n`).
             (Law::PowRootInverse, Powers::Rational { base, r, .. }) => {
-                composes(base) || r.is_odd_integer() || cx.certainly_nonneg(base)
+                composes(base)
+                    || r.is_odd_integer()
+                    || cx.certainly_nonneg(base)
+                    || cx.confined_nonneg(base)
             }
             // `r` is the odd index, `s` the exponent.
             // An integer `s` keeps the root, in both modes: `rootn(t, m)^k` collects with
@@ -1069,6 +1103,7 @@ impl Law {
                 cx.permits(Permissive::Agreement)
                     || exact_integers
                     || cx.certainly_nonneg(base)
+                    || cx.confined_nonneg(base)
                     || r.checked_add(s)
                         .is_some_and(|q| !q.is_integer() && !q.is_zero())
             }
@@ -1079,7 +1114,9 @@ impl Law {
             }
             (Law::MulCollectSymbolic, Powers::Symbolic { base, y }) => {
                 cx.permits(Permissive::Agreement)
-                    || ((cx.certainly_nonneg(base) || cx.nonconstant_entire(y))
+                    || ((cx.certainly_nonneg(base)
+                        || cx.confined_nonneg(base)
+                        || cx.nonconstant_entire(y))
                         && (!cx.f64_semantics() || signed_zero_null(base, true, cx)))
             }
             (law, _) => unreachable!("{} reads no such powers", law.name()),

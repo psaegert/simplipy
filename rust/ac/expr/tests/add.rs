@@ -73,6 +73,7 @@ fn add_sign_cancel_gate() {
             zero_sign_unread: false,
             flat_unread: false,
             sign_held: None,
+            confined: &[],
         };
         assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));
         // Same-sign merging never needs the licence: log(x) + log(x) -> 2 log(x).

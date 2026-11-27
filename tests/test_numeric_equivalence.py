@@ -432,7 +432,10 @@ class TestCorpusGate:
         # non-negative radicand: 55,021,607 -> 55,026,131 (+4,524). One walk row moves, 296:
         # `rootn(x17, 4)*rootn(x17, 5)` is `x17^0.45`, and the root no longer kept apart is
         # multiplied out over the sum beside it.
-        assert walk['complexity_out'] == 55026131, walk['complexity_out']
+        # A SIBLING'S CONFINEMENT IS READ: 55,026,131 -> 55,019,031 (-7,100). One walk row moves,
+        # 272: `log(x5)` beside `(1/x5^(3/2))^4` confines the product to x5 >= 0, where the power
+        # composes to `1/x5^6`.
+        assert walk['complexity_out'] == 55019031, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

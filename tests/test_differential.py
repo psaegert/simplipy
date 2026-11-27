@@ -1099,6 +1099,23 @@ POWER_PINS = [
                'pow x0 * 2 floor x1', 'strict'),
     power_case('mul.collect_symbolic', '* pow x0 pow abs sin x1 0.5 pow x0 pow abs sin x1 0.5',
                'pow x0 * 2 pow abs sin x1 0.5', 'strict'),
+    # a member NaN wherever x0 < 0 confines its sum or product, where the powers of x0 merge; not
+    # where the merge takes the member that confines it, nor beside a member finite for x0 < 0
+    power_case('confine.sibling', '+ pow x0 2.5 * pow x0 1.5 pow x0 1.5', '+ pow x0 2.5 pow x0 3',
+               'strict'),
+    power_case('confine.sibling', '+ pow x0 2.5 * pow x0 1.5 pow x0 1.5', '+ pow x0 2.5 pow x0 3',
+               'permissive'),
+    power_case('confine.sibling', '* log x0 * pow x0 0.5 pow x0 0.5', '* x0 log x0', 'strict'),
+    power_case('confine.sibling', '+ pow x0 1.5 * x0 rootn x0 3', '+ pow x0 1.5 pow x0 / 4 3',
+               'strict'),
+    power_case('confine.sibling', 'max rootn x0 2 * pow x0 1.5 pow x0 1.5',
+               'max rootn x0 2 pow x0 3', 'strict'),
+    power_case('confine.sibling', '+ rootn x0 2 pow rootn x0 2 2', '+ rootn x0 2 x0', 'strict'),
+    power_case('confine.sibling', '+ * pow x0 0.5 pow x0 0.5 * pow x0 1.5 pow x0 1.5',
+               '+ x0 pow x0 3', 'strict'),
+    power_case('confine.sibling', '+ * pow x0 0.5 pow x0 0.5 * pow x0 1.5 pow x0 1.5',
+               '+ x0 pow x0 3', 'permissive'),
+    power_case('confine.sibling', '+ asin x0 * pow x0 0.5 pow x0 0.5', '+ asin x0 x0', 'strict'),
 ]
 
 

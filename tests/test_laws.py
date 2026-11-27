@@ -423,6 +423,59 @@ POWER_ROWS = [
      'pow ceil x0 * 2 x1'),
     ('mul.collect_symbolic', '* pow x0 floor x1 pow x0 floor x1',
      '* pow x0 floor x1 pow x0 floor x1', 'pow x0 * 2 floor x1'),
+    # a member NaN wherever t < 0 confines its sum or product to t >= 0, where the laws of powers
+    # hold that strict refuses for a sign-indefinite t (mul.collect, mul.collect_symbolic,
+    # pow.compose, pow.root_inverse, pow.odd_root_compose in a product): x0^(5/2), an even root of
+    # x0, log(x0) and acosh(x0) confine x0, through +, *, a unary head and max or atan2
+    ('confine.sibling', '* pow x0 1.5 + pow x0 1.5 x0', '+ pow x0 / 5 2 pow x0 3',
+     '+ pow x0 / 5 2 pow x0 3'),
+    ('confine.sibling', '* * x0 x0 + pow x0 0.5 x0', '+ pow x0 / 5 2 pow x0 3',
+     '+ pow x0 / 5 2 pow x0 3'),
+    ('confine.sibling', '+ pow x0 2.5 * pow x0 1.5 pow x0 1.5', '+ pow x0 / 5 2 pow x0 3',
+     '+ pow x0 / 5 2 pow x0 3'),
+    ('confine.sibling', '+ log x0 * pow x0 0.5 pow x0 0.5', '+ x0 log x0', '+ x0 log x0'),
+    ('confine.sibling', '* log x0 * pow x0 1.5 pow x0 1.5', '* pow x0 3 log x0',
+     '* pow x0 3 log x0'),
+    ('confine.sibling', '* acosh x0 * pow x0 1.5 pow x0 1.5', '* pow x0 3 acosh x0',
+     '* pow x0 3 acosh x0'),
+    ('confine.sibling', '+ pow x0 1.5 * x0 rootn x0 3', '+ pow x0 / 4 3 pow x0 / 3 2',
+     '+ pow x0 / 4 3 pow x0 / 3 2'),
+    ('confine.sibling', '* log x0 * rootn x0 3 rootn x0 5', '* pow x0 / 8 15 log x0',
+     '* pow x0 / 8 15 log x0'),
+    ('confine.sibling', '+ rootn x0 2 pow pow x0 1.5 2', '+ rootn x0 2 pow x0 3',
+     '+ rootn x0 2 pow x0 3'),
+    ('confine.sibling', '+ pow x0 1.5 pow rootn x0 2 2', '+ x0 pow x0 / 3 2', '+ x0 pow x0 / 3 2'),
+    ('confine.sibling', '+ log x0 * pow x0 floor x1 pow x0 floor x1',
+     '+ log x0 pow x0 * 2 floor x1', '+ log x0 pow x0 * 2 floor x1'),
+    ('confine.sibling', '+ rootn x0 2 * pow x0 -0.5 pow x0 -0.5', '+ rootn x0 2 inv x0',
+     '+ rootn x0 2 inv x0'),
+    ('confine.sibling', '+ sin rootn x0 2 * pow x0 0.5 pow x0 0.5', '+ x0 sin rootn x0 2',
+     '+ x0 sin rootn x0 2'),
+    ('confine.sibling', 'max rootn x0 2 * pow x0 1.5 pow x0 1.5', 'max rootn x0 2 pow x0 3',
+     'max rootn x0 2 pow x0 3'),
+    ('confine.sibling', 'atan2 rootn x0 2 * pow x0 1.5 pow x0 1.5', 'atan2 rootn x0 2 pow x0 3',
+     'atan2 rootn x0 2 pow x0 3'),
+    ('confine.sibling', 'inv + rootn x0 2 * pow x0 1.5 pow x0 1.5', 'inv + rootn x0 2 pow x0 3',
+     'inv + rootn x0 2 pow x0 3'),
+    ('confine.sibling', '+ log + x0 1 * pow + x0 1 1.5 pow + x0 1 1.5',
+     '+ log + x0 1 pow + x0 1 3', '+ log + x0 1 pow + x0 1 3'),
+    # strict keeps the powers where the merge would take the member that confines the node, where
+    # nothing confines their base, where the confining part sits in an exponent (pow(1, NaN) is 1)
+    # or where the base is -0 on a region (ceil(x0)^3 is -0 on (-1, 0), its halves' product +0),
+    # and a law that folds a sign reads no confinement
+    ('confine.sibling', '* pow x0 1.5 pow x0 1.5', '* pow x0 / 3 2 pow x0 / 3 2', 'pow x0 3'),
+    ('confine.sibling', '+ * pow x0 0.5 pow x0 0.5 * pow x0 1.5 pow x0 1.5',
+     '+ * rootn x0 2 rootn x0 2 * pow x0 / 3 2 pow x0 / 3 2', '+ x0 pow x0 3'),
+    ('confine.sibling', '+ asin x0 * pow x0 0.5 pow x0 0.5', '+ asin x0 * rootn x0 2 rootn x0 2',
+     '+ x0 asin x0'),
+    ('confine.sibling', '+ rootn x1 2 * pow x0 0.5 pow x0 0.5',
+     '+ rootn x1 2 * rootn x0 2 rootn x0 2', '+ x0 rootn x1 2'),
+    ('confine.sibling', '+ pow x1 rootn x0 2 * pow x0 1.5 pow x0 1.5',
+     '+ pow x1 rootn x0 2 * pow x0 / 3 2 pow x0 / 3 2', '+ pow x0 3 pow x1 rootn x0 2'),
+    ('confine.sibling', '+ log x0 rootn pow x0 2 2', '+ log x0 rootn pow x0 2 2', '+ x0 log x0'),
+    ('confine.sibling', '+ log x0 abs x0', '+ abs x0 log x0', '+ abs x0 log x0'),
+    ('confine.sibling', '+ pow ceil x0 0.5 * pow ceil x0 1.5 pow ceil x0 1.5',
+     '+ pow ceil x0 / 1 2 * pow ceil x0 / 3 2 pow ceil x0 / 3 2', '+ rootn ceil x0 2 pow ceil x0 3'),
 ]
 
 C = '<constant>'
@@ -607,6 +660,7 @@ def test_the_core_names_its_laws() -> None:
         ('pow.literal_base_sign', 'r^(-t) = (1/r)^t'),
         ('pow.half_root', 't^(1/(2*k)) = rootn(t, 2*k)'),
         ('mul.collect', 't^a*t^b = t^(a+b)'), ('mul.collect_symbolic', 't^y*t^y = t^(2*y)'),
+        ('confine.sibling', "a + b = a + b', a*b = a*b'"),
         ('fun.atanh_tanh', 'atanh(tanh(t)) = t'), ('fun.log_exp', 'log(exp(t)) = t'),
         ('fun.asinh_sinh', 'asinh(sinh(t)) = t'), ('fun.sinh_asinh', 'sinh(asinh(t)) = t'),
         ('fun.acosh_cosh', 'acosh(cosh(t)) = abs(t)'), ('fun.exp_log', 'exp(log(t)) = t'),
@@ -733,7 +787,7 @@ def test_every_law_a_test_names_is_in_the_catalogue() -> None:
     """A test that names a law names one the catalogue holds, so no row checks a law that is
     gone or misspelt."""
     pattern = re.compile(r"""['"]((?:add|mul|pow|rootn|absorb|num|parse|lattice|fun|perm|class|"""
-                         r"""search|settle)\.[a-z0-9_]+)['"]""")
+                         r"""confine|search|settle)\.[a-z0-9_]+)['"]""")
     names = {name for name, _ in _core.laws()}
     here = os.path.dirname(os.path.abspath(__file__))
     unknown = sorted({(f, law) for f in os.listdir(here) if f.endswith('.py')

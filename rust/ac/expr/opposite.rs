@@ -104,8 +104,7 @@ pub(super) fn collect_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, 
         return hit;
     }
     // Within an enclosing scope (a parse, a re-walk) each distinct product is decided once.
-    let key = FLIP_MEMO
-        .with(|m| m.borrow().is_some())
+    let key = (FLIP_MEMO.with(|m| m.borrow().is_some()) && !memo_free(cx))
         .then(|| (ctx_key, host.key(), raw.clone()));
     if let Some(hit) = key
         .as_ref()

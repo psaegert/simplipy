@@ -140,10 +140,16 @@ mod tests {
     /// reading, no schema.
     const AGREEMENT_LAWS: [Law; 2] = [Law::MulCollect, Law::MulCollectSymbolic];
 
+    /// A node's confinement by a member (`confine.sibling`): the like-base merges and
+    /// compositions on t >= 0 where a member keeps the node NaN for t < 0, whose premise in `f64`
+    /// is a zero's sign on a region; `permissive` takes those merges by `powers compose` and its
+    /// reading of agreement, so no step and no schema of its own.
+    const CONFINE_LAWS: [Law; 1] = [Law::ConfineSibling];
+
     /// The step entries are the four the constructors take on a rule's structure, each schema
     /// one expression a side; the partial laws are the like-term laws, each with its schema,
     /// `mul.zero` (the step `a zero factor absorbs the product`), the sum-sign, kind,
-    /// composition, agreement and search laws, and the inverse pairs' law, which is the step
+    /// composition, agreement, confinement and search laws, and the inverse pairs' law, which is the step
     /// `inverse pairs cancel` (its schemas, `INVERSE_PAIRS`), so a partial law the catalogue gains
     /// must be placed before it is read.
     #[test]
@@ -179,6 +185,7 @@ mod tests {
                     || KIND_LAWS.contains(&law)
                     || COMPOSE_LAWS.contains(&law)
                     || AGREEMENT_LAWS.contains(&law)
+                    || CONFINE_LAWS.contains(&law)
                     || SEARCH_LAWS.contains(&law)
                     || law == Law::PermInversePairs,
                 "{}",

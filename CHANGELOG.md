@@ -757,6 +757,22 @@ model predictions.
   merge in `strict` (their sum an integer, which has a value where they have none), the powers
   merge as a whole where that sum does not: `x^(1/2)*x^(1/2)*x^(1/2)` is `x^(3/2)` and
   `1/(x^0.5*x^0.5*x^0.5)` is `x^(-3/2)`, while `x^(1/2)*x^(1/2)` keeps its halves.
+- **A sibling's confinement is read** (`confine.sibling`, `strict`). A sum or a product is NaN
+  wherever one of its members is, so where a member is NaN at every point where a base `t` is
+  negative (`x^(5/2)`, `rootn(x, 2)`, `log(x)`, `acosh(x)`), the other members are read on t >= 0,
+  where the laws merging fractional powers that `strict` otherwise refuses for a sign-indefinite
+  base hold:
+  `x1^(3/2)*(x1^(3/2) + x1)` is `x1^(5/2) + x1^3`, as `x1*x1*(x1^0.5 + x1)` is (it was
+  `x1^(5/2) + x1^(3/2)*x1^(3/2)`), `log(x)*x^(1/2)*x^(1/2)` is `x*log(x)`,
+  `x^(3/2) + x*rootn(x, 3)` is `x^(4/3) + x^(3/2)` and `max(sqrt(x), x^(3/2)*x^(3/2))` is
+  `max(sqrt(x), x^3)`. The confinement passes up through every operation the deployed evaluator
+  propagates NaN through (`+`, `*`, a power's base, every unary head, both operands of `max`, `min`,
+  `mod`, `atan2`, `besselj`, `bessely` and `besseli`; not a power's exponent, `pow(1, NaN)` being
+  1, nor `besselk`'s order, `besselk(NaN, 0)` being `inf`), and a merge may not take the member
+  that confined the node: `x^(3/2)*x^(3/2)` and `x^(1/2)*x^(1/2) + x^(3/2)*x^(3/2)` keep their
+  halves. A base that is `-0` on a region is not read so (`ceil(x)^(3/2)*ceil(x)^(3/2)` stays
+  beside `sqrt(ceil(x))`), and no law that folds a sign is (`abs(x) + sqrt(x)` and
+  `sqrt(x^2) + sqrt(x)` stay). `permissive` already merged these powers.
 - **`prettify(..., mode=)`** reads the expression with the constructors of a mode, `strict` by
   default: pass the mode an answer was simplified in, and the display is that mode's reading of
   it. Both modes display a group as it is written (`x3 + 3.71649*(x1 + x2)`), `keep_grouping`

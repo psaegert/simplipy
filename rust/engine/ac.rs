@@ -426,6 +426,7 @@ impl Engine {
             zero_sign_unread: false,
             flat_unread: false,
             sign_held: None,
+            confined: &[],
         };
         f(&law)
     }
@@ -1856,6 +1857,7 @@ impl Engine {
             zero_sign_unread: false,
             flat_unread: false,
             sign_held: None,
+            confined: &[],
         };
         // Parse with the CHAIN'S context for the requested mode
         // -- see ac_complexity; this is the theorem-bearing
@@ -2069,6 +2071,7 @@ impl Engine {
             zero_sign_unread: false,
             flat_unread: false,
             sign_held: None,
+            confined: &[],
         };
         // Each distinct base's region verdict is decided once per context in the call.
         let _regions = crate::ac::expr::RegionScope::open();

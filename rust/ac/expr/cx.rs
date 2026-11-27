@@ -81,6 +81,12 @@ pub struct Cx<'a> {
     /// ([`held_sums`]), whose negations it writes as the negations they are. `None` for a
     /// construction, which reads a sum's form (`sum_holds_its_sign`).
     pub sign_held: Option<&'a dyn Fn(&Ex) -> bool>,
+    /// THE CONFINED BASES (`confine.sibling`): the bases `t` this construction stands confined to
+    /// `t >= 0` by, an enclosing node of the state being NaN wherever `t < 0` whatever this
+    /// construction computes ([`release_confined`]), so the laws of powers read `t >= 0` of each
+    /// (`Cx::confined_nonneg`). Set by [`release_confined`] alone, for the nodes it rebuilds;
+    /// empty everywhere else.
+    pub confined: &'a [Ex],
 }
 
 /// PERMISSIVE'S OWN SIMPLIFICATIONS (the specification's 4.9), the one list, named here and
@@ -276,7 +282,18 @@ impl<'a> Cx<'a> {
             zero_sign_unread: false,
             flat_unread: false,
             sign_held: None,
+            confined: &[],
         }
+    }
+
+    /// Is `t` one of the bases this construction stands confined to `t >= 0` by
+    /// (`Cx::confined`, `confine.sibling`)? The laws of powers whose two sides differ only where
+    /// their base is negative read it beside `certainly_nonneg`: `mul.collect`,
+    /// `mul.collect_symbolic`, `pow.compose` over a fractional power, `pow.root_inverse` and
+    /// `pow.odd_root_compose` in a product.
+    #[inline]
+    pub(crate) fn confined_nonneg(&self, t: &Ex) -> bool {
+        self.confined.iter().any(|b| b == t)
     }
 
     /// Symbolic-exponent merge licence (see `mul`'s like-base collection): may n

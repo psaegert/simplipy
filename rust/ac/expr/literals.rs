@@ -112,8 +112,11 @@ pub(super) fn land_operand(e: Ex, cx: &Cx) -> Ex {
 /// `1/log(exp(x0))` stays), a zero product drops the factors that only gave it its sign
 /// (`unsigned_zero`; `0*x0` is 0 as an answer, while `1/(0*x0)` is `inf/x0`), and a sum's sign
 /// moves wherever nothing reads its zero (`release_unread`; `-ceil(x0) - floor(x1)` is
-/// `-(ceil(x0) + floor(x1))` as an answer, while `1/(-ceil(x0) - floor(x1))` stays).
+/// `-(ceil(x0) + floor(x1))` as an answer, while `1/(-ceil(x0) - floor(x1))` stays). First, in
+/// `f64`, every node reads what its members confine (`release_confined`; `x0^(5/2) +
+/// x0^(3/2)*x0^(3/2)` is `x0^(5/2) + x0^3`, the sum being NaN for x0 < 0 by its first term).
 pub fn land_root(e: Ex, cx: &Cx) -> Ex {
+    let e = release_confined(e, cx);
     let e = release_flat(e, cx);
     let e = release_unread(e, cx);
     if let Some(u) = unsigned_zero(&e, cx) {
