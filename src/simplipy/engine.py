@@ -1100,7 +1100,7 @@ class SimpliPyEngine(_Evaluation):
         * a NUMBER pays the literal code on the EXACT value written, with every digit: a long
           literal is not rounded to its double (``6.674000000000001e-11`` costs its 16 digits),
           and a written minus is its sign bit. A FRACTION costs its division and a decimal its
-          value (the owner's ruling, 2026-11-28): ``p/q`` is ``p`` and the literal ``1/q``, as
+          value (the owner's ruling, 2026-11-27): ``p/q`` is ``p`` and the literal ``1/q``, as
           any number divided by a number, so ``3/4`` costs 10.322 bits where ``0.75`` costs
           5.322, ``x0**(3/2)`` costs 18.585, and ``3/4*x0`` and ``4*x0/3`` cost the same, 16.322
           (``2*x0*3`` 14.585: numbers written apart pay apart), written as the prefix ``/ 3 4`` or

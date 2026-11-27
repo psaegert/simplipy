@@ -9,7 +9,7 @@
 //! predictions "exactly as written, without any modifications that either benefit the benchmark
 //! or the model"). Where the notation leaves a choice, the identification is the one the code
 //! book prices (the overseer's decisions M1, S1, K and L, 2026-11-27), and a quotient of two
-//! numbers is their division (owner's ruling 2026-11-28: "As written, fractions should cost their
+//! numbers is their division (owner's ruling 2026-11-27: "As written, fractions should cost their
 //! division, and numbers their value").
 
 use super::*;
@@ -184,7 +184,7 @@ fn signed_value(n: &Written) -> Option<Rat> {
 /// and the reciprocal of one (`1/c`, `inv(c)`: the literal 1/c, its 1 the notation's) and its
 /// sign (`-1/c`, M1). A written minus on the divisor of `1/c` or `-1/c` is no part of one number:
 /// `-1/-3` is the sign of the reciprocal of `-3`, two signs written. Any other quotient of numbers
-/// is a division, not one number (owner's ruling 2026-11-28: `3/4` is `3` and the literal `1/4`,
+/// is a division, not one number (owner's ruling 2026-11-27: `3/4` is `3` and the literal `1/4`,
 /// as `4*x0/3` is `4`, `x0` and the literal `1/3`). A literal beyond the exact domain has no value
 /// here (it is priced by its spelling). The value is exact: it is read and computed in the exact
 /// number domain.
@@ -413,7 +413,7 @@ fn price(n: &Written, ops: &Operators) -> u64 {
 ///   its print's price beyond the 1,100-bit cap): a long literal is not rounded to its double.
 ///   A written minus on a literal is its sign bit. A FRACTION written `p/q` costs its
 ///   division, `p` and the literal `1/q`, as any number divided by a number does (owner's
-///   ruling 2026-11-28: `3/4` 10.322 bits, `3/4*x0` and `4*x0/3` both 16.322; a decimal costs
+///   ruling 2026-11-27: `3/4` 10.322 bits, `3/4*x0` and `4*x0/3` both 16.322; a decimal costs
 ///   its value, `0.75` 5.322), whether it is written as three tokens (`/ 3 4`) or as the one
 ///   token `3/4`; only `1/q` and `-1/q` are one literal, the reciprocal's 1 the notation's, and
 ///   a minus written on their `q` is a sign of its own (`-1/-3` pays two).
@@ -489,7 +489,7 @@ mod tests {
     /// The overseer's decisions (2026-11-27), each case with its price and the price it had
     /// before: M1 `-1/y` is the sign of the reciprocal, S1 a written `-inf` is the symbol, K a
     /// divisor `y^k` is `y^-k` only for a literal `k`, L a variadic `max`/`min` is one call; and
-    /// the owner's ruling (2026-11-28) that a fraction `p/q` costs its division.
+    /// the owner's ruling (2026-11-27) that a fraction `p/q` costs its division.
     #[test]
     fn the_decisions_m1_s1_k_l_f() {
         let e = engine();
@@ -512,7 +512,7 @@ mod tests {
         ] {
             assert_eq!(written(&e, infix), price, "{infix} (was {before})");
         }
-        // a fraction costs its division (owner, 2026-11-28): (expression, price, the price before
+        // a fraction costs its division (owner, 2026-11-27): (expression, price, the price before
         // the decisions); `1/q` stays the literal 1/q and `0.75` costs its value
         for (infix, price, before) in [
             ("3/4", 10_322, 10_322),

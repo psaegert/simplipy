@@ -98,7 +98,7 @@ class TestTheIdentificationsInfixForces:
         assert w('0.12345678901234568*x0') == 67625  # its double's shortest spelling
         assert w('6.674000000000001e-11') > w('6.674e-11')
         assert w('2.5') == w('2.50')  # the literal code is the value's: no digit is free or dear
-        # a fraction costs its division, a decimal its value (owner, 2026-11-28; see TestTheDecisions)
+        # a fraction costs its division, a decimal its value (owner, 2026-11-27; see TestTheDecisions)
         assert w('5/2') == w('2.5') + 5000
 
     def test_named_constants_and_symbols(self, engine: SimpliPyEngine) -> None:
@@ -176,7 +176,7 @@ class TestTheDecisions:
         assert w(['-', 'x0', 'float("-inf")']) == 18000  # x0 - (-inf): a sign on the symbol
         assert w('-1*x0') == 12000  # a factor -1 is a literal: M1 reads only a numerator
 
-    # The owner's ruling (2026-11-28): "As written, fractions should cost their division, and
+    # The owner's ruling (2026-11-27): "As written, fractions should cost their division, and
     # numbers their value." A quotient of numbers `p/q` is `p` and the literal `1/q`, as any number
     # divided by a number; `1/q` and `-1/q` stay the literal 1/q and -1/q (the reciprocal's 1 is
     # the notation's), and a decimal costs its value. (expression, written price in milli-bits)
@@ -241,7 +241,7 @@ class TestTheProperty:
         assert engine.written_complexity(canonical) == engine.complexity(canonical, mode=mode)
 
     # A canonical fraction is printed `p/q` and held as the one number p/q: written, it costs its
-    # division; canonical, its value (owner, 2026-11-28). (expression, written price of its
+    # division; canonical, its value (owner, 2026-11-27). (expression, written price of its
     # canonical print, complexity) in milli-bits.
     @pytest.mark.parametrize('expression, written, canonical', [
         ('3/4', 10322, 5322), ('-3/4', 11322, 6322), ('x0**(3/2)', 18585, 13585),

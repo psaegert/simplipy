@@ -120,7 +120,7 @@ the code book prices:
   holds the literal 1/3, as `complexity` prices it;
 - a number pays the literal code on the exact value written, every digit (a long literal is not
   rounded to its double); as written, a fraction costs its division and a decimal its value (the
-  owner's ruling, 2026-11-28): `p/q` is `p` and the literal `1/q`, as any number divided by a
+  owner's ruling, 2026-11-27): `p/q` is `p` and the literal `1/q`, as any number divided by a
   number, so `3/4` costs 10.322 bits where `0.75` costs 5.322, and `3/4*x0` and `4*x0/3` cost the
   same; only `1/q` and `-1/q` are one literal, the reciprocal's 1 being the notation's (`1/2`
   3.585 bits). In the canonical state a fraction is one number and `complexity` prices its value;
