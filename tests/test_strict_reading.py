@@ -74,6 +74,23 @@ FALSE_AT_AN_UNREAD_RANGE_EVENT = [
     ('- besselk 1 ?0 besselk (-1) ?0', 'besselj exp 10 ?0'),
 ]
 
+#: False in the reals where `log(exp(x))` passes through a magnitude past every affordable precision
+#: (exp(1e4) is 10^4343): a magnitude a log reads sizes no reading, so the reals read 1e4 and refute
+#: them, in both modes.
+FALSE_THROUGH_A_LOG = [
+    ('min ?0 exp 9', 'log exp ?0'),         # 8103.08 against 1e4 at 1e4
+    ('max ?0 sinh -9', 'log exp ?0'),       # -4051.54 against -1e4 at -1e4
+    ('min 9 acosh ?0', 'acosh log exp ?0'),
+    ('mod acosh ?0 9', 'acosh log exp ?0'),
+]
+
+
+@pytest.mark.parametrize('lhs, rhs', FALSE_THROUGH_A_LOG)
+def test_a_magnitude_a_log_reads_is_read(lhs, rhs) -> None:
+    r = verify_rule(lhs.split(), rhs.split())
+    assert r['verdict'] == 'KILL' and r['reals_valued_holds'] is False, r
+    assert r['realised'] is False and r['permissive'] is False and r['tier'] == 'reject', r
+
 
 @pytest.mark.parametrize('lhs, rhs', FALSE_PAST_THE_GRID)
 def test_the_reals_read_the_slots_magnitude_ladder(lhs, rhs) -> None:

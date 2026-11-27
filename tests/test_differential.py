@@ -27,6 +27,7 @@ the judge's verdict in them. Policies (evidence, ground composites) are not part
 `simplipy.verify.licensed` adds them (the specification's 3.4).
 """
 import functools
+import math
 import os
 
 import numpy as np
@@ -1392,10 +1393,12 @@ def test_precision_run_out_is_no_equality(slot) -> None:
     certified. Each mode is judged on its own values: float64 reads `1e-3000` as 0.0 and the two
     sides are bit-identical, so the rule holds in f64, whatever the reals resolved; permissive's
     float resolution needs no equality, and the enclosures of both sides decide at each atom but
-    e that they round to the same doubles. At e, an approximation, `x^2 + 1` encloses wider than
-    float resolution: permissive's own reading leaves that owed point unread and reaches no
-    answer (`permissive_own`), and permissive holds the rule through f64, as it holds every rule
-    strict holds. At 1e-100 the rungs reach the separation:
+    e and the multiples of pi that they round to the same doubles. At e, an approximation, and at
+    the multiples of pi, which the table rounds before `pow` reads them (FX-75: the point
+    enclosure takes no table approximation of `pow` on a rounded operand), `x^2 + 1` encloses
+    wider than float resolution: permissive's own reading leaves those owed points unread and
+    reaches no answer (`permissive_own`), and permissive holds the rule through f64, as it holds
+    every rule strict holds. At 1e-100 the rungs reach the separation:
     false in the reals, while float64 adds the double 1e-100 to 1 exactly and permissive reads the
     reals' values at float resolution (P3), so it holds in both."""
     v = verify_rule(f'+ + pow {slot} 2 1 1e-3000'.split(), f'+ pow {slot} 2 1'.split())
@@ -1403,7 +1406,9 @@ def test_precision_run_out_is_no_equality(slot) -> None:
     assert (v['realised'], v['permissive_own'], v['permissive'], v['tier']) == \
         (True, None, True, 'core'), v
     name = '?0' if slot == 'x0' else slot
-    assert v['unread_owed'] == {'permissive': [{name: 2.718281828459045}]}, v
+    # the verdict names the first three owed points left unread (`test_float_resolution`: e too)
+    assert v['unread_owed'] == {'permissive': [{name: math.pi / 2}, {name: -math.pi / 2},
+                                               {name: math.pi}]}, v
     assert v['basis'] == {'strict': 'evidence', 'permissive': 'evidence'}, v
     w = verify_rule('+ + pow x0 2 1 1e-100'.split(), '+ pow x0 2 1'.split())
     assert (w['verdict'], w['tier']) == ('KILL', 'core'), w

@@ -1208,22 +1208,28 @@ class TestTheWitnessOutResolvesTheLadder:
     def test_the_polish_depth_follows_the_operands(self) -> None:
         """`cosh(710) ~ 1.1e308` puts rung 2 at dps 668 and rung 3 at dps 1336. A witness
         frozen at 300 leaves the SAME ~1e-300 residue at both rungs: it does not decay,
-        so the decay test reads it as an analytic gap."""
+        so the decay test reads it as an analytic gap. Since FX-74 a value `log` reads sizes
+        no reading (`table::MAGNITUDE_READERS`), in the ladder and in the polish alike:
+        `log(cosh(C))`'s rungs stay at `GAP_RUNGS` (rung 3 at 250), and its witness, polished
+        to 300, still out-resolves them."""
         from mpmath import cosh, log, mp, mpf
 
-        from simplipy.verify._contract import mp_polish, parse
-        tl = parse(['log', 'cosh', '<constant>'], '<C_L>')
+        from simplipy.verify._contract import GAP_RUNGS, mp_polish, parse
         tr = parse(['<constant>'], '<C_R>')
-        got = mp_polish(tl, tr, {}, lambda: mpf(710), 709.3068528194401)
-        old = mp.dps
-        try:
-            mp.dps = 1500
-            want = log(cosh(mpf(710)))
-            digits = -mp.log10(abs(got - want) / abs(want))
-        finally:
-            mp.dps = old
-        # rung 3 sits at dps 1336; the witness must be deeper than that, not at 300
-        assert digits > 1336, f'witness good to only {digits} digits'
+        for tokens, f, c0, deepest in (
+                (['cosh', '<constant>'], cosh, 1.1169973830808557e308, 1336),
+                (['log', 'cosh', '<constant>'], lambda c: log(cosh(c)), 709.3068528194401,
+                 GAP_RUNGS[-1])):
+            got = mp_polish(parse(tokens, '<C_L>'), tr, {}, lambda: mpf(710), c0)
+            old = mp.dps
+            try:
+                mp.dps = 1500
+                want = f(mpf(710))
+                digits = -mp.log10(abs(got - want) / abs(want))
+            finally:
+                mp.dps = old
+            # the witness must be deeper than the deepest rung, not at a fixed 300
+            assert digits > deepest, f'{tokens}: witness good to only {digits} digits'
 
     def test_a_rule_true_by_construction_is_not_killed_at_the_overflow_edge(self) -> None:
         """`log(cosh(C)) -> c_t` holds for every C with c_t = log(cosh(C)). At C = 710 --

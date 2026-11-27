@@ -5408,11 +5408,10 @@ def _judge_contract(lhs, rhs, deployed_check=True, coincide=True):
         reading, strict's second reading and permissive's own criterion alike.
         `min(10, log(x0)) -> log(x0)` is false past e^10 = 22,026, 10 against 11.5 at 1e5. The
         rungs below 1e-8 probe float64's rounding near zero, where the battery reads the exact
-        zero and the grid and the rows read the reals down to 1e-4; the reals' readings there are
-        measured unreliable for true identities: the precision ladder's decay test reads
+        zero and the grid and the rows read the reals down to 1e-4; the precision ladder's reading
+        there is measured unreliable for true identities: its decay test reads
         `acos(cos(sin(x0))) -> abs(sin(x0))` apart at 1e-200 (105 decades of decay from 452 to
-        904 digits, against a bar of 226), and the point enclosure of the reading at float
-        resolution reads `rootn(x0^6, 6) -> abs(x0)` apart at 1e-50. float64's sides are compared
+        904 digits, against a bar of 226). float64's sides are compared
         at every rung: where they agree there is nothing more to read; where they disagree and no
         operation left the range, F6 fails there, whatever the reals say; where an operation
         overflowed or underflowed, the true value stands (`deployed`, `range_reading`), and a

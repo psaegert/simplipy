@@ -2205,6 +2205,26 @@ model predictions.
   `sin(acos(tanh(x0))) -> 1/cosh(x0)`, true in the reals, now hold in `permissive` only: past
   cosh's overflow float64 gives 6.1e-17 against 0, and from |x0| = 1e4 no rung reads the true
   values, so `strict`'s second reading reaches no answer there.
+- **A magnitude a log reads costs no digits (FX-74).** A reading of the reals is sized by the
+  magnitudes of its intermediates (a large or small one may later cancel against another), so
+  `log(exp(x))` at x = 1e4, through 10^4343, demanded 8,738 digits, past the ceiling, and was
+  never read. An intermediate whose reader is `log`, `asinh` or `acosh` meets no cancellation
+  there (they are well conditioned away from 1, and a value near 1 has no magnitude to size by),
+  so it no longer sizes the reading; every other operation keeps its operands' magnitudes, since
+  a quotient of large values can be 1 below the working precision (`log(cosh(x)/sinh(x))` at
+  x = 1000). Refused now, each false in the reals: `min(x0, exp(7)) -> log(exp(x0))` (1096.6
+  against 1e4 at 1e4) and its sixteen siblings through `log(exp(x0))` in the strict length-4 mine.
+- **The point enclosure is an enclosure (FX-74).** The interval layer's enclosure of a side at
+  one point, which decides permissive's reading at float resolution before any rung is read, took
+  the table's forty-digit value of an operation on operands it had to round first: `log(1 + x)` at
+  x = 1e-300 read 0, so `log(1 + x0) -> 0` agreed there. Such a value now encloses by interval
+  arithmetic on the operand's own enclosure (but a product's, a quotient's or an order's, which
+  keep the operand's relative error), while a value the table decides from exact operands without
+  rounding them stays the table's: `tan(pi/2)` is undefined, `(-inf)^(10^40)` is +inf. At the
+  multiples of pi, which `pow` reads rounded, `x^2 + 1` now encloses wider than float resolution,
+  as at e. The layer's odd and even roots carried their
+  rounded exponent `fl(1/k)` without its error, which `x^fl(1/k)` magnifies by `|ln x|` (30 units
+  in the last place at 1e-300 for k = 6); their enclosures now hold it.
 - **One collapse licence.** The engine collapses a constant expression to a fitted constant
   exactly where it has evidence in the mode's values: it is finite on a set of positive measure
   of its constants, and nothing is owed where it is not finite (the witness is the expression's

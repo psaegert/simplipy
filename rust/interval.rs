@@ -1139,6 +1139,36 @@ fn u_acosh(v: &Vs) -> Vs {
     r
 }
 
+/// THE ROOT'S EXPONENT IS ROUNDED: a k-th root is computed as `x^fl(1/k)`, and
+/// `x^fl(1/k) = x^(1/k) * x^d` with `|d| <= 2^-53 / k`, so the computed root is off by a relative
+/// `|ln x| * 2^-53 / k` beside the libm's own few units in the last place: 30 units at x = 1e-300
+/// for k = 6, past the 8 the endpoints are stepped by (`rootn(x^6, 6)` enclosed apart from
+/// `abs(x)` at 1e-50). The margin is that bound, doubled for `ln`'s own rounding; an index that
+/// is a power of two has an exact exponent and none, and 0 and 1 are fixed points.
+fn root_exponent_margin(x: f64, root: f64) -> f64 {
+    let index = root.abs();
+    if !x.is_finite() || x == 0.0 || (index.fract() == 0.0 && (index as u64).is_power_of_two()) {
+        return 0.0;
+    }
+    x.abs().ln().abs() * f64::EPSILON / index
+}
+
+/// A computed root's endpoint `y` (from the operand endpoint `x`) widened outward by its
+/// exponent's margin (`root_exponent_margin`), down for a lower end and up for an upper one.
+fn root_widened(y: f64, x: f64, root: f64, upper: bool) -> f64 {
+    let m = root_exponent_margin(x, root);
+    if m == 0.0 || !y.is_finite() || y == 0.0 {
+        return y;
+    }
+    let grows = (y > 0.0) == upper;
+    let w = y * if grows { 1.0 + m } else { 1.0 - m };
+    if upper {
+        out_hi(w, ULP_ARITH)
+    } else {
+        out_lo(w, ULP_ARITH)
+    }
+}
+
 fn u_even_root(v: &Vs, root: f64) -> Vs {
     let mut r = domain_op(
         v,
@@ -1158,6 +1188,10 @@ fn u_even_root(v: &Vs, root: f64) -> Vs {
         r.lo = 0.0;
         r.lo_open = false;
     }
+    if r.has_fin {
+        r.lo = root_widened(r.lo, v.lo.max(0.0), root, false);
+        r.hi = root_widened(r.hi, v.hi, root, true);
+    }
     if v.pinf {
         r.pinf = true;
     }
@@ -1169,6 +1203,10 @@ fn u_even_root(v: &Vs, root: f64) -> Vs {
 
 fn u_odd_root(v: &Vs, root: f64) -> Vs {
     let mut r = mono(v, |x| x.abs().powf(1.0 / root).copysign(x), None, None);
+    if r.has_fin {
+        r.lo = root_widened(r.lo, v.lo, root, false);
+        r.hi = root_widened(r.hi, v.hi, root, true);
+    }
     r.nan = v.nan;
     r.pinf = v.pinf;
     r.ninf = v.ninf;
@@ -4231,12 +4269,28 @@ fn value_set_table_points(
     go(tokens, 0, ops, doms, params, &mut k, &mut ctx, &mut memo).map(|(v, _, _)| v)
 }
 
+/// The operations whose value on exact operands the table computes exactly where it gives an
+/// exact value: the field's and the order's (`point_value_set`).
+const EXACT_ON_EXACT: [&str; 20] = [
+    "+", "-", "*", "/", "neg", "abs", "inv", "min", "max", "floor", "ceil", "mod", "mult2",
+    "mult3", "mult4", "mult5", "div2", "div3", "div4", "div5",
+];
+
+/// The operations that carry an operand's relative error into their value unmagnified, so an
+/// approximation of theirs from rounded operands is good to the working precision
+/// (`point_value_set`).
+const RELATIVE_ERROR_KEEPING: [&str; 15] = [
+    "*", "/", "neg", "abs", "inv", "min", "max", "mult2", "mult3", "mult4", "mult5", "div2",
+    "div3", "div4", "div5",
+];
+
 /// The real reading's value set of `tokens` at ONE POINT, each variable `x<i>` bound to `env[i]`
 /// (a value of THE TABLE), with an error bound that holds at any working precision: a node whose
-/// operands are all EXACT table values takes the table's value there (`table::apply`) and is
-/// carried on as a point only where that value is exact itself; an approximate value enters as
-/// its float enclosure (`table::f64_enclosure`: one operation on exact operands, read far past a
-/// double's precision), and every node above it is the layer's outward-rounded interval
+/// operands are all EXACT table values takes the table's value there where no rounding of an
+/// operand reaches it (`table::apply_unrounded`, `EXACT_ON_EXACT`, `RELATIVE_ERROR_KEEPING`), and
+/// is carried on as a point only where that value is exact itself; an approximate value enters as
+/// its float enclosure (`table::f64_enclosure`: one operation on unrounded operands, read far past
+/// a double's precision), and every node above it is the layer's outward-rounded interval
 /// arithmetic. No chain of approximations is trusted past one operation, so a cancellation whose
 /// working-precision residue would read as a value (`(x + 1e-3000) - x`) encloses as wide as its
 /// bound. A pole is taken at the point (no zero set is null at a point). `None` where a token
@@ -4281,11 +4335,25 @@ fn point_value_set(tokens: &[String], ops: &Operators, env: &[crate::table::Val]
             // a value the table cannot read at this precision (inside a boundary band) is the
             // layer's interval arithmetic's, below
             let args: Vec<Val> = kids.iter().filter_map(|(_, pt)| pt.clone()).collect();
-            let val = crate::table::apply(tok, &args, ctx);
+            let (val, unrounded) = crate::table::apply_unrounded(tok, &args, ctx);
             if ctx.snapped {
                 return None;
             }
-            if let Some(val) = val {
+            // THE TABLE'S VALUE IS AN ENCLOSURE ONLY WHERE NO ROUNDING OF AN OPERAND REACHES IT:
+            // the table read every operand exact and rounded none on the way
+            // (`table::apply_unrounded`: `tan(pi/2)` is undefined from the multiple of pi itself),
+            // or exact arithmetic on exact operands, or an operation that keeps a relative error
+            // (a product, a quotient, an order). Elsewhere an operand the table rounds first may
+            // sit where the operation magnifies the rounding past any bound, and an approximation
+            // that collapses to 0 reads as exact: `log(1 + x)` at x = 1e-300 is the exact 0 at
+            // forty digits. The interval arithmetic below, on the operand's own enclosure, bounds
+            // it honestly.
+            let trusted = |v: &Val| {
+                unrounded
+                    || (exact(v) && EXACT_ON_EXACT.contains(&tok))
+                    || (!exact(v) && RELATIVE_ERROR_KEEPING.contains(&tok))
+            };
+            if let Some(val) = val.filter(trusted) {
                 let vs = vs_of_table(&val, ctx)?;
                 return Some((vs, exact(&val).then_some(val), j));
             }
@@ -8122,6 +8190,74 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// A root's computed exponent `fl(1/k)` is off by up to `2^-53/k`, which `x^fl(1/k)` magnifies
+    /// by `|ln x|` (`root_exponent_margin`): the enclosure holds the table's root at every
+    /// magnitude (30 units in the last place off at 1e-300 for k = 6, past the libm's 8).
+    #[test]
+    fn a_root_encloses_the_true_root_at_every_magnitude() {
+        let pt = |x: f64| Vs::interval(x, x, false, false);
+        for k in [3.0f64, 5.0, 6.0, 7.0] {
+            for x in [
+                1e-300,
+                2.2250738585072014e-308,
+                1e-150,
+                1e-20,
+                3.5,
+                1e20,
+                1e150,
+                1e300,
+            ] {
+                let mut ctx = crate::table::Ctx::new(60).unwrap();
+                let root = crate::table::apply(
+                    "rootn",
+                    &[crate::table::val_of_f64(x), crate::table::val_of_f64(k)],
+                    &mut ctx,
+                )
+                .unwrap();
+                let want = crate::table::nearest_f64(&root, &mut ctx).unwrap();
+                let enc = if k % 2.0 == 0.0 {
+                    u_even_root(&pt(x), k)
+                } else {
+                    u_odd_root(&pt(x), k)
+                };
+                assert!(
+                    enc.lo <= want && want <= enc.hi,
+                    "k={k} x={x:e}: {enc:?} {want:e}"
+                );
+                if k % 2.0 == 1.0 {
+                    let neg = u_odd_root(&pt(-x), k);
+                    assert!(
+                        neg.lo <= -want && -want <= neg.hi,
+                        "k={k} x=-{x:e}: {neg:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The point enclosure takes a table approximation only from operands read unrounded: where
+    /// an operand is rounded first, an ill-conditioned operation magnifies the rounding past any
+    /// bound, and the interval arithmetic on the operand's own enclosure answers instead.
+    #[test]
+    fn a_point_enclosure_never_reads_a_rounded_operands_approximation_as_exact() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let x = crate::table::val_spec(&crate::table::val_of_f64(1e-300));
+        let read = |l: &[&str], r: &[&str]| {
+            float_resolution(&s(l), &s(r), &s(&["x0"]), std::slice::from_ref(&x), ops)
+        };
+        // log(1 + x) is 1e-300 and acos(1 - 2x^2) is 2e-300, neither 0
+        assert_ne!(read(&["log", "+", "1", "x0"], &["0"]), FloatReading::Agree);
+        let acos = ["acos", "-", "1", "*", "2", "pow", "x0", "2"];
+        assert_ne!(read(&acos, &["0"]), FloatReading::Agree);
+        assert_ne!(
+            read(&["log", "+", "1", "x0"], &["x0"]),
+            FloatReading::Differ
+        );
     }
 
     /// A root's index decides it: an index that reaches no nonzero integer is NaN at every

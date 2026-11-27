@@ -216,6 +216,10 @@ pub struct Ctx {
     /// e^-11013, read at the ordinary precision to its last place, while an intermediate that
     /// small would ask for the digits a later cancellation against it costs.
     pub root_unnoted: bool,
+    /// WAS AN OPERAND ROUNDED (`apply_unrounded`)? `Some(true)` once the reading rounds an exact
+    /// value it does not read unrounded (`read_unrounded`: a rational past a double's bits, a
+    /// multiple of pi) to a working float, `Some(false)` before that, `None` where no one asks.
+    rounding: Option<bool>,
     cc: PooledConsts,
 }
 
@@ -312,8 +316,17 @@ impl Ctx {
             unread_through: 0,
             unread_above: i32::MAX,
             root_unnoted: false,
+            rounding: None,
             cc: PooledConsts::take()?,
         })
+    }
+
+    /// Notes, where `apply_unrounded` asks, that the reading rounds the exact value `v` to a
+    /// working float, unless the table reads it unrounded (`read_unrounded`).
+    fn note_rounding(&mut self, v: &Val) {
+        if self.rounding == Some(false) && matches!(v, Val::Exact(_)) && !read_unrounded(v) {
+            self.rounding = Some(true);
+        }
     }
 
     fn zero(&self) -> BigFloat {
@@ -366,6 +379,7 @@ impl Ctx {
 
     /// The working-precision reading of an exact value.
     pub fn bf(&mut self, v: &Val) -> BigFloat {
+        self.note_rounding(v);
         match v {
             Val::Approx(b) => b.clone(),
             Val::Exact(Exact::Rat(r)) => {
@@ -1641,6 +1655,7 @@ fn bessel_order(nu: &Val, fragile: bool, ctx: &mut Ctx) -> Option<BigFloat> {
             if g > besselj::BITS_CAP {
                 return None;
             }
+            ctx.note_rounding(nu);
             let (a, b) = (ctx.big_at(&p, g), ctx.big_at(&q, g));
             Some(a.div(&b, g, RM))
         }
@@ -1843,7 +1858,35 @@ pub struct Expr {
     nodes: Vec<Node>,
     root: usize,
     pub names: Vec<String>,
+    /// Per node: is it the operand of a `log`, `asinh` or `acosh` (`MAGNITUDE_READERS`)? Its
+    /// magnitude is then no intermediate a reading's precision is sized by (`node_real`).
+    read_by_a_log: Vec<bool>,
 }
+
+/// THE OPERATIONS A MAGNITUDE PASSES THROUGH FREELY. A reading's precision is sized by the
+/// magnitudes its intermediates reach (`demanded_dps`), because a large or small intermediate may
+/// later cancel against another or be absorbed by one, and then its relative error becomes the
+/// result's. An intermediate whose reader is `log`, `asinh` or `acosh` meets neither: the tree
+/// gives it one reader, and these are well conditioned away from 1 (log's relative condition at
+/// `y` is 1/|ln y|; asinh's and acosh's are at most that at a large argument), so the reader's
+/// value carries the operand's relative error as an absolute error of the order of its own
+/// rounding, and the magnitude ends there. `log(exp(x))` at x = 1e4 passes through 10^4343 and is
+/// read at fifty digits (it demanded 8,738, past `MAX_DPS`, and was unread). Near 1, where these
+/// readers are ill conditioned, an operand's magnitude is about 1 and demanded nothing anyway:
+/// the digits a value near 1 needs are its own making's (a sum's operands, a small argument of
+/// `cos`, a quotient of large values, each noted where it is made). Every other operation keeps
+/// its operands' magnitudes: a product or a quotient of large values can be near 1 with the
+/// difference far below the working precision (`log(cosh(x)/sinh(x))` at x = 1000 is 10^-869,
+/// read at the 918 digits cosh's 10^434 demands). Why the rule stops there, and is no general
+/// conditioning demand: such a demand would read each operation's condition from the values the
+/// first rung computes, and at that rung the quotient above is exactly 1 and its log exactly 0,
+/// so it could not size the rung that reads `log(cosh(x)/sinh(x)) -> 2*atanh(exp(-2*x))` as the
+/// identity it is (every affordable rung would read 0 against 1e-869); a general rule needs error
+/// bounds carried through every operation. A leaf is no intermediate: a variable's or a literal's
+/// magnitude keeps sizing the reading wherever it is read (a double's, at most 668 digits), since
+/// the first rung's other readings lean on it (`floor(tanh(acosh(x)))` at 1e300 is 0 only at the
+/// 610 digits tanh's distance to 1 asks, which no band reading reports at fifty).
+const MAGNITUDE_READERS: [&str; 3] = ["log", "asinh", "acosh"];
 
 /// What a real evaluation found.
 #[derive(Clone)]
@@ -1880,10 +1923,21 @@ impl Expr {
         if pos != tokens.len() {
             return Err("trailing tokens".into());
         }
+        let mut read_by_a_log = vec![false; nodes.len()];
+        for node in &nodes {
+            if let Node::Op(name, kids) = node {
+                if MAGNITUDE_READERS.contains(&name.as_str()) {
+                    for &k in kids {
+                        read_by_a_log[k] = true;
+                    }
+                }
+            }
+        }
         Ok(Expr {
             nodes,
             root,
             names: names.to_vec(),
+            read_by_a_log,
         })
     }
 
@@ -1957,6 +2011,14 @@ impl Expr {
         })
     }
 
+    /// Is node `i`'s value one whose magnitude sizes the reading (`Ctx::note_mag`)? Not the
+    /// expression's own value where that is asked (`Ctx::root_unnoted`), nor an operation's value
+    /// a log reads (`MAGNITUDE_READERS`; a leaf is noted wherever it is read).
+    fn noted(&self, i: usize, ctx: &Ctx) -> bool {
+        !(ctx.root_unnoted && i == self.root)
+            && !(self.read_by_a_log[i] && matches!(self.nodes[i], Node::Op(..)))
+    }
+
     fn node_real(&self, i: usize, env: &[Val], ctx: &mut Ctx) -> Out {
         match &self.nodes[i] {
             // A leaf is an operand like any intermediate: the precision a computation demands is
@@ -1964,7 +2026,7 @@ impl Expr {
             // the 1e-3000 is spelled.
             Node::Var(k) => {
                 let v = env.get(*k)?.clone();
-                if !(ctx.root_unnoted && i == self.root) {
+                if self.noted(i, ctx) {
                     ctx.note_mag(&v, false);
                 }
                 Some(v)
@@ -1976,7 +2038,7 @@ impl Expr {
                     Leaf::Dec(m, k) => approx(ctx.decimal(m, *k)),
                     Leaf::E => approx(ctx.cc.e(ctx.p, RM)),
                 };
-                if !(ctx.root_unnoted && i == self.root) {
+                if self.noted(i, ctx) {
                     ctx.note_mag(&v, false);
                 }
                 Some(v)
@@ -2013,7 +2075,7 @@ impl Expr {
                 if is_inf(&v) {
                     ctx.inf_node = true;
                 }
-                if !(ctx.root_unnoted && i == self.root) {
+                if self.noted(i, ctx) {
                     ctx.note_mag(&v, matches!(name.as_str(), "+" | "-" | "mod"));
                 }
                 Some(v)
@@ -2258,6 +2320,38 @@ pub fn apply(name: &str, args: &[Val], ctx: &mut Ctx) -> Option<Val> {
         [a, b] => binary(name, a, b, ctx)?,
         _ => None,
     }
+}
+
+/// Does the table read `v` without rounding it at any working precision: an infinity, undefined,
+/// or a rational that is a double? An operation on such operands is computed from them exactly,
+/// to its own last place (`apply`), while a rational past a double's bits (`1 + 1e-300`) or a
+/// multiple of pi is rounded first, and an ill-conditioned operation magnifies that rounding past
+/// any bound (`log` of it reads 0 at forty digits, not 1e-300).
+pub fn read_unrounded(v: &Val) -> bool {
+    match v {
+        Val::Exact(Exact::Rat(r)) => r.is_zero() || matches!(r.float_bracket(), Some((_, None))),
+        Val::Exact(Exact::PosInf | Exact::NegInf | Exact::Undef) => true,
+        _ => false,
+    }
+}
+
+/// `apply`, and whether NO ROUNDING OF AN OPERAND REACHES ITS VALUE: every operand exact, and
+/// none the table does not read unrounded (`read_unrounded`) rounded to a working float on the
+/// way. The value is then the table's reading of the operands themselves, one operation on
+/// unrounded values read far past a double's precision, or a value decided from the exact
+/// operands alone: `tan(pi/2)` is undefined from the multiple of pi, `(-inf)^(10^40)` is +inf
+/// from the exponent's parity, `besseli(nu, -inf)` takes the order's. `log(1 + 1e-300)` reads
+/// its operand rounded to 1, and the exact 0 it gives is no enclosure (`interval`'s point
+/// readers, `table_value_encloses`).
+pub fn apply_unrounded(name: &str, args: &[Val], ctx: &mut Ctx) -> (Option<Val>, bool) {
+    let outer = ctx.rounding.replace(false);
+    let v = apply(name, args, ctx);
+    let rounded = ctx.rounding == Some(true);
+    ctx.rounding = outer.map(|o| o || rounded);
+    (
+        v,
+        !rounded && args.iter().all(|a| matches!(a, Val::Exact(_))),
+    )
 }
 
 /// THE TABLE's real value of a literal token at `ctx`'s precision (`None`: no literal).
@@ -3350,5 +3444,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A magnitude read by `log`, `asinh` or `acosh` sizes no reading (`MAGNITUDE_READERS`):
+    /// `log(exp(x))` at 1e4 passes through 10^4343 and is read at the ordinary precision, while a
+    /// quotient's and a sum's operands keep their magnitudes (`log(cosh(x)/sinh(x))` at 1000 is
+    /// 1 + 10^-869 inside the log).
+    #[test]
+    fn a_magnitude_a_log_reads_demands_no_digits() {
+        let demand = |expr: &str, x: f64| {
+            let toks: Vec<String> = expr.split(' ').map(String::from).collect();
+            let e = Expr::compile(&toks, &["x0".to_string()], &arity()).unwrap();
+            let out = e.eval_real(&[val_of_f64(x)], BASE_DPS).unwrap();
+            (demanded_dps(&out.max_mag, &out.min_mag), out.value)
+        };
+        let (d, v) = demand("log exp x0", 1e4);
+        assert!(d <= 70, "{d}");
+        let mut ctx = Ctx::new(BASE_DPS).unwrap();
+        assert_eq!(nearest_f64(&v.unwrap(), &mut ctx), Some(1e4));
+        assert!(demand("asinh log exp x0", -1e4).0 <= 70);
+        assert!(demand("acosh exp x0", 3e3).0 <= 70);
+        assert!(demand("log / cosh x0 sinh x0", 1e3).0 > 900);
+        assert!(demand("log + exp x0 1", 1e4).0 > i64::from(MAX_DPS));
+        // a leaf keeps sizing the reading wherever it is read
+        assert!(demand("floor tanh acosh x0", 1e300).0 > 600);
     }
 }

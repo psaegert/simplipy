@@ -132,9 +132,10 @@ be read.
 own criterion, agreement at float resolution, needs no exact equality: where the reals' readings
 run out of precision (`UNRESOLVED-COVERAGE`, the 6,050 digits `1e-3000` beside 1 demands), the
 interval layer's enclosure of both sides at the point decides that every double either side can
-round to is the same, so `x + 1e-3000 -> x` holds by it too. (At the atom e, an approximation,
-the enclosure of `x^2 + 1` is wider than that, so `permissive`'s own reading of the first rule
-leaves an owed point unread; `permissive` holds it through `strict`.) Running out of precision
+round to is the same, so `x + 1e-3000 -> x` holds by it too. (At the atoms e and the multiples
+of pi, which the enclosure rounds before `pow` reads them, the enclosure of `x^2 + 1` is wider
+than that, so `permissive`'s own reading of the first rule leaves owed points unread;
+`permissive` holds it through `strict`.) Running out of precision
 never reads as equality: `((x + 1e-3000) - x) * 1e3000 -> 0`, whose left side is 1, encloses
 unbounded and is refused. A measure the cells cannot decide is refused where it is owed: `strict`
 owes it in float64's values, so an undecided float64 measure refuses `strict`;
