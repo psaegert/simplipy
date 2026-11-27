@@ -47,15 +47,6 @@ def test_mask_refuses_a_malformed_tagged_sequence(engine, tokens) -> None:
         engine.mask(tokens)
 
 
-# API-4: below the 4,096-token cap, `mask` (and `normalization.to_skeleton`) recurse in Python
-# and raise RecursionError from depth 1,000 (the F22 class, fixed for `evaluate_constants`).
-@pytest.mark.xfail(strict=True, reason='API-4: mask raises RecursionError at depth 1000 (< the token cap)')
-def test_mask_reads_every_depth_the_core_reads(engine) -> None:
-    deep = ['sin'] * 1500 + ['x0']
-    assert engine.simplify(deep) == deep
-    assert engine.mask(deep) == deep
-
-
 # API-5: an alias that names another declared operator loads silently, and then the infix reader
 # and the prefix reader disagree: with `sin: {alias: [cos]}`, `simplify('cos(x0)')` is `sin(x0)`
 # while `simplify(['cos', 'x0'])` is `cos(x0)`. Defined functions refuse such a name; aliases do not.

@@ -235,6 +235,12 @@ class _Evaluation(_Reading):
         by its token, where the caller wants it. The anonymous ``<constant>`` is not a
         parameter of its own: name its slots first (:func:`simplipy.utils.explicit_constant_placeholders`).
 
+        The code is Python source, so it inherits the Python parser's limit of 200 nested
+        parentheses: an expression whose calls and parenthesized groups nest deeper than 200
+        (``sin`` applied 201 times) raises ``SyntaxError`` here, although every other entry
+        reads it (up to the 4,096-token cap). :meth:`evaluate_constants` folds a variable-free
+        one at any depth.
+
         .. warning::
            Compiling runs the expression's realizations through :func:`compile`, so the
            usual trust rules apply -- the evaluation namespace is scoping, not a sandbox

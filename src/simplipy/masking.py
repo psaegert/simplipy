@@ -169,10 +169,31 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
     arity = dict(engine.operator_arity)
     sites: list[tuple[int, str, Role]] = []
 
-    def walk(i: int, role: Role) -> int:
+    # The walk is ITERATIVE, so every depth the core reads (up to its 4,096-token cap) reads
+    # here too; a recursive walk raised RecursionError from depth 1,000 on. `work` holds what
+    # is still to read, top last: a Role is one subtree read in that role, a tuple an open bag
+    # `(opener, closer, section, member_role)` reading members until its closer.
+    work: list[Role | tuple[str, str, str, Role]] = [Role.VALUE]
+    i = 0
+    while work:
+        item = work.pop()
+        if isinstance(item, tuple):
+            opener, closer, section, member_role = item
+            if i >= len(tokens):
+                raise ValueError(f"malformed tagged expression: unclosed {opener}")
+            if tokens[i] == closer:
+                i += 1
+            elif tokens[i] == section:
+                i += 1
+                work.append(item)
+            else:
+                work.extend((item, member_role))
+            continue
+        role = item
         if i >= len(tokens):
             raise ValueError("malformed prefix expression: ran out of tokens")
         t = tokens[i]
+        i += 1
         # A TYPED position types its whole subtree: the exponent ``3/2`` is spelled
         # structurally (``<mul> 3 <div> 2 </mul>``, or ``/ 3 2`` explicitly), and each of
         # those literals controls the DOMAIN exactly as a bare exponent does -- so every
@@ -181,51 +202,33 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         # function, a power, a root and a Bessel function instead of their own operands'
         # roles (``pow(x, abs(2))``'s ``2`` is an exponent).
         typed = role in _TYPED
+        children: tuple[Role, ...]
         if t in _OPENERS:
-            closer, section, child_role = _OPENERS[t]
-            if typed:
-                child_role = role
-            i += 1
-            while True:
-                if i >= len(tokens):
-                    raise ValueError(f"malformed tagged expression: unclosed {t}")
-                if tokens[i] == closer:
-                    return i + 1
-                if tokens[i] == section:
-                    i += 1
-                    continue
-                i = walk(i, child_role)
+            closer, section, member_role = _OPENERS[t]
+            work.append((t, closer, section, role if typed else member_role))
+            continue
         if t == "pow":
-            i = walk(i + 1, role if typed else Role.VALUE)
-            return walk(i, role if typed else Role.EXPONENT)
-        if t == "rootn":
-            i = walk(i + 1, role if typed else Role.VALUE)
-            return walk(i, role if typed else Role.ROOT_INDEX)
-        if t in ("besselj", "besseli") and arity.get(t) == 2:
-            i = walk(i + 1, role if typed else Role.ORDER)
-            return walk(i, role if typed else Role.VALUE)
-        if t in ("*", "/"):
-            child = role if typed else Role.COEFFICIENT
-            i = walk(i + 1, child)
-            return walk(i, child)
-        if t in ("+", "-"):
-            child = role if typed else Role.ADDEND
-            i = walk(i + 1, child)
-            return walk(i, child)
-        if t in _TRANSPARENT:
-            return walk(i + 1, role)
-        n = arity.get(t)
-        if n:
-            j = i + 1
-            for _ in range(int(n)):
-                j = walk(j, role if typed else Role.VALUE)
-            return j
-        if t != "<constant>" and (t in _SPECIAL_CONSTANTS or is_numeric_string(t)):
-            sites.append((i, t, role))
-        return i + 1
+            children = (Role.VALUE, Role.EXPONENT)
+        elif t == "rootn":
+            children = (Role.VALUE, Role.ROOT_INDEX)
+        elif t in ("besselj", "besseli") and arity.get(t) == 2:
+            children = (Role.ORDER, Role.VALUE)
+        elif t in ("*", "/"):
+            children = (Role.COEFFICIENT, Role.COEFFICIENT)
+        elif t in ("+", "-"):
+            children = (Role.ADDEND, Role.ADDEND)
+        elif t in _TRANSPARENT:
+            children = (role,)
+        elif arity.get(t):
+            children = (Role.VALUE,) * int(arity[t])
+        else:
+            if t != "<constant>" and (t in _SPECIAL_CONSTANTS or is_numeric_string(t)):
+                sites.append((i - 1, t, role))
+            continue
+        # the children are read first to last: pushed last to first
+        work.extend(reversed((role,) * len(children) if typed else children))
 
-    end = walk(0, Role.VALUE)
-    if end != len(tokens):
+    if i != len(tokens):
         raise ValueError("malformed prefix expression: trailing tokens")
     return sites
 

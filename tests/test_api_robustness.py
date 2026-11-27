@@ -164,6 +164,24 @@ def test_the_token_cap_refuses_before_any_recursion(engine) -> None:
     assert engine.simplify(['sin'] * 4095 + ['x0']) == ['sin'] * 4095 + ['x0']
 
 
+# API-4 (fixed in the 0.15 fix round): below the 4,096-token cap, `mask` (and through it
+# `normalization.to_skeleton`) recursed in Python and raised RecursionError from depth 1,000 on.
+# The role walk is iterative now; `as_callable` keeps Python's parser limit of 200 nested
+# parentheses, which its docstring states.
+def test_mask_reads_every_depth_the_core_reads(engine) -> None:
+    from simplipy.normalization import to_skeleton
+    deep = ['sin'] * 4095 + ['x0']
+    assert engine.simplify(deep) == deep
+    assert engine.mask(deep) == deep
+    assert engine.mask(deep, 'fittable') == deep
+    tagged = ['sin'] * 3000 + ['<mul>', '2', 'x0', '</mul>']
+    assert engine.mask(tagged) == ['sin'] * 3000 + ['<mul>', '<constant>', 'x0', '</mul>']
+    assert to_skeleton(['sin'] * 3000 + ['*', '2', 'x0'], engine) == ['sin'] * 3000 + ['*', '<constant>', 'x0']
+    engine.as_callable(['sin'] * 200 + ['x0'])
+    with pytest.raises(SyntaxError, match='too many nested parentheses'):
+        engine.as_callable(['sin'] * 201 + ['x0'])
+
+
 @pytest.mark.parametrize('literal', ['1e999999999999', '1e-999999999999', '1.' + '3' * 5000, '9' * 4000])
 def test_extreme_literals_are_read_without_error(engine, literal) -> None:
     """A literal far past float64's range, or thousands of digits long, is a number like any
