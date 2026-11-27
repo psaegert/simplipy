@@ -598,6 +598,49 @@ The measurements below use three sets: the 129,490 simplify inputs of flash-ansr
 training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
 model predictions.
 
+- **The pre-audit fix round, its answer-neutral part (2026-11-27).** Nothing below changes a
+  `simplify` or `complexity` answer for an input inside the grammar, or a mined rule; the census,
+  the masks and the mines are byte-identical across it.
+  - *Reading.* The infix reader refuses a character it has no token for, naming it and its
+    position (it dropped it: `'|x0|'` read as `x0`, `'x0!'` as `x0`); `0x1F` stays `0*x1F`, an
+    implicit product. `is_valid` runs the readers' token grammar too (`nan`, `1/0`, an empty token
+    and a 4,097-token list are invalid). `mask` refuses a malformed tagged sequence and reads any
+    depth below the token cap (it raised `RecursionError` from depth 1,000). A float32 or float16
+    token reads as the double it holds (`np.float32(0.1)` is `0.10000000149011612`, not 1/10).
+  - *Configs and engines.* An alias that names another operator, an alias two operators declare,
+    and an operator name or alias that is no function name (an identifier starting with a letter,
+    not a constant's or a variable's spelling) are refused at load, as a defined function's name
+    is. `as_code` refuses a leaf or a variable that is not a number, a constant or a Python
+    identifier, and states the Python parser's limit of 200 nested parentheses. A pickled 0.14
+    engine is refused (`IncompatibleArtifactError`), as `from_config` refuses its rule files. An
+    engine whose config leaves out a core operator evaluates and reads back that operator's core
+    realization (`x0*x0` answered as `pow(x0, 2)` by an engine over `*` alone). The loader checks
+    a rule file's version before it refuses a `rules_real` set, so a 0.14 artifact is refused for
+    its version. A rule's variables are renamed past its own slots (`inv(x1*?0)` loaded as
+    `inv(?0*?0)`). `max_passes` and `certified` take only what they mean, and an empty or
+    operator-less config and a realization with surrounding whitespace are refused by name, and
+    `trusted_modules` takes a list of module names, never a bare string, which it read as its
+    characters.
+  - *The written price.* One price per writing: a one-token fraction `3/4` costs its division as
+    `/ 3 4` does (10.322 bits; also merged into an exponent), `neg(c)` is one number as `-c` is,
+    `-1/-3` pays its two signs, `x/y**0` pays none, and a prefix alias token (`ln`, `div`, `**`)
+    is refused, as `complexity` refuses it.
+  - *Mining.* The resume key holds `promote_sorts`, `symbolic_gate` (both now in the sidecar's
+    params) and the proposal batch's sha256, so a rerun changing one mines anew and a checkpoint
+    of another batch is refused. `verify-mine` has a `file` gate (the file's sha256 and counts are
+    its sidecar's), an `operators` gate (the table given is the mine's; new sidecars record its
+    digest), and judges the `basis` record again; the completion round's token no longer reads
+    Python's seeded hash.
+  - *Operators.* `abs` takes lists and tuples; the torch branches of `mod` (integer tensors) and
+    `pow` (`pow(-inf, 0.5)` is NaN, `pow(-0, 0.5)` is `-0`) give the kernel's values.
+  - *Packaging and CI.* `LICENSES_bundled.txt` carries the notice of every crate the core links
+    (mimalloc's among them), generated from the Cargo tree by `rust/bundled_notices.py`, which
+    the CI checks; one CI job installs CPU torch, so the torch branches' tests run and cannot
+    skip there.
+  - *Claims.* The docs and docstrings say what the code does where the pre-audit reviewers found
+    otherwise: strict's promise is per step and in kind, kernels' error bounds and platform
+    differences as measured, the judge's readings, the step cap, the 0.14 -> 0.15 upgrading guide.
+
 - **`written_complexity()`, the written price.** `complexity(e, mode=m)` prices the canonical
   state a mode reads `e` into; `written_complexity(e)` applies the same code book to `e` exactly
   as written, in milli-bits, with no mode and no certificate: every operator, function, variable,
