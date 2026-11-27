@@ -270,6 +270,24 @@ def test_F08_ceil_of_a_reciprocal_reads_the_reciprocals_own_value(engine) -> Non
 
 
 @pytest.mark.xfail(strict=True, reason=(
+    "F08 (ground arithmetic), reproduces at 3a6ed3a: strict folds a fully numeric product of two "
+    "literals to the double nearest their exact product (0.9999292916561292), which the judge holds "
+    "in permissive only and the ground evaluator refuses in strict (neither numpy's double "
+    "0.9999292916561291 nor the exact value); the same product as a coefficient of x0 folds to "
+    "numpy's double, as an addend to the exact one. About a fifth of random two-literal products "
+    "and quotients."))
+def test_F08_strict_folds_a_product_of_literals_to_a_value_its_evaluator_admits(engine) -> None:
+    a, b = '0.7234567890123457', '1.3821548250604163'
+    expr = f'* {a} {b}'.split()
+    numpy_double = repr(float(np.float64(a) * np.float64(b)))
+    assert simplified(engine, f'* x0 * {a} {b}', 'strict') == f'* {numpy_double} x0'
+    out = engine.simplify(expr, mode='strict')
+    verdict = _core.ground_rule_verdict(expr, out, dict(_contract.ARITY))
+    assert verdict[0] or verdict[1], (out, verdict)
+    assert simplified(engine, f'+ x0 * {a} {b}', 'strict') == f'+ x0 {" ".join(out)}'
+
+
+@pytest.mark.xfail(strict=True, reason=(
     "F37, partly reproduces at 3a6ed3a: an engine whose config declares `*` (or `+`, `*`, `sin`) "
     "answers x0*x0 with the core's `pow(x0, 2)`; is_valid and expression_variables read it (59dee9e), "
     "but as_callable raises NameError ('simplipy' is not in the engine's namespace) and the "
