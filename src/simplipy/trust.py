@@ -166,6 +166,12 @@ def resolve_trusted(trusted_modules: Iterable[str] | None = None) -> frozenset[s
     trusted = set(DEFAULT_TRUSTED_MODULES)
     trusted.update(
         part.strip() for part in os.environ.get(TRUSTED_MODULES_ENV_VAR, '').split(',') if part.strip())
+    if isinstance(trusted_modules, (str, bytes)):
+        # A string is also a sequence of characters: `trusted_modules='mylab'` would trust the
+        # modules 'm', 'y', 'l', 'a' and 'b', and not 'mylab'.
+        raise TypeError(
+            f"trusted_modules must be a list of module names, not a bare string "
+            f"({trusted_modules!r}); did you mean trusted_modules=[{trusted_modules!r}]?")
     if trusted_modules is not None:
         trusted.update(str(module).strip() for module in trusted_modules if str(module).strip())
     return frozenset(trusted)

@@ -44,8 +44,11 @@ class _Reading(_Loading):
         One inherited tolerance is worth knowing about on the infix path: the
         reader silently DROPS unmatched OPENING parentheses (``'((x0'`` reads as
         ``x0``), so such a string validates. Unmatched CLOSING parentheses survive
-        as a stray token and are rejected. This method reports on what the reader
-        reads rather than keeping a second, partial infix grammar of its own.
+        as a stray token and are rejected. It also drops, without a token or an
+        error, every character it has no token for (``|``, ``!``, ``?``, ``~``,
+        brackets, braces, quotes, non-ASCII letters): ``'|x0|'`` reads, and
+        validates, as ``x0``. This method reports on what the reader reads rather
+        than keeping a second, partial infix grammar of its own.
 
         Parameters
         ----------
@@ -290,6 +293,13 @@ class _Reading(_Loading):
         is raised for two operands with only whitespace between them and no product
         (``x0 x1``, ``2 3``, ``zeta x0`` for an undeclared ``zeta``) and for an implicit
         product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
+
+        A character the reader has no token for (anything but letters, digits, ``_``, ``.``,
+        ``+ - * / ^ ( ) ,``, whitespace and the spellings ``<constant>`` and ``float("inf")``)
+        is DROPPED without an error, and the text around it is read as if it were absent:
+        ``'|x0|'`` reads as ``['x0']``, ``'x0!'`` as ``['x0']``, ``'0x1F'`` as
+        ``['*', '0', 'x1F']``. Every infix reader shares this tokenizer, :meth:`simplify` and
+        the conversions included.
 
         Mechanically it is :meth:`infix_to_prefix` plus optional
         :meth:`convert_expression` normalization.
