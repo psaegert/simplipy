@@ -124,6 +124,17 @@ class TestTheVocabulary:
         assert engine.written_complexity(f'{head}(x0)') == bits + 6000
         assert engine.written_complexity([head, 'x0']) == bits + 6000
 
+    @pytest.mark.parametrize('tokens', [['ln', 'x0'], ['div', 'x0', 'x1'], ['**', 'x0', '2'],
+                                        ['Max', 'x0', 'x1'], ['+', 'x0', 'Abs', 'x1']])
+    def test_a_prefix_alias_token_is_refused_as_complexity_refuses_it(
+            self, engine: SimpliPyEngine, tokens: list) -> None:
+        """W-5 (pre-audit review): written_complexity priced prefix alias tokens that every other
+        prefix entry refuses; a prefix token list names the operators themselves."""
+        with pytest.raises(ValueError):
+            engine.complexity(tokens)
+        with pytest.raises(ValueError, match='is an alias of'):
+            engine.written_complexity(tokens)
+
     def test_any_other_undeclared_head_is_refused(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match=r"unknown function 'zeta'"):
             engine.written_complexity('zeta(x0)')
@@ -185,6 +196,28 @@ class TestTheDecisions:
         assert w('3/4*x0') == w('4*x0/3') == w('x0*3/4')
         assert w('3/4') == w('0.75') + 5000  # the division, against the value
         assert w('x0**(3/2)') == w('x0**1.5') + 5000
+
+    # One writing, one price, in every spelling (pre-audit review W-1..W-4): (prefix tokens, the
+    # price, the spelling it equals)
+    @pytest.mark.parametrize('tokens, price, other', [
+        # W-1: a one-token fraction costs its division (it cost its value, 5.322), also in the
+        # exponent merge
+        (['3/4'], 10322, ['/', '3', '4']), (['(-3/4)'], 11322, ['/', '-3', '4']),
+        (['/', 'x0', 'pow', 'x1', '3/2'], 30585, 'x0/x1**(3/2)'),
+        (['1/4'], 4322, '1/4'), (['-1/4'], 5322, '-1/4'),
+        # W-2: neg(c) is one number as a divisor, a merged exponent and a 1/q part
+        (['/', 'x0', 'neg', '3'], 14000, ['/', 'x0', '-3']),
+        (['/', 'x0', 'pow', 'x1', 'neg', '2'], 20585, ['/', 'x0', 'pow', 'x1', '-2']),
+        (['/', '1', 'neg', '3'], 5000, ['/', '1', '-3']),
+        # W-3: -1/-3 writes two minus signs (it was priced as 1/3)
+        (['/', '-1', '-3'], 6000, '-1/-3'),
+        # W-4: x/y**0 writes no sign
+        (['/', 'x0', 'pow', 'x1', '0'], 20000, ['*', 'x0', 'pow', 'x1', '0']),
+    ])
+    def test_one_writing_one_price(self, engine: SimpliPyEngine, tokens: list, price: int,
+                                   other: 'list | str') -> None:
+        assert engine.written_complexity(tokens) == price
+        assert engine.written_complexity(other) == price
 
 
 class TestTheProperty:

@@ -1092,22 +1092,29 @@ class SimpliPyEngine(_Evaluation):
           ``y^-1``. ``-1/y`` is the sign of the reciprocal, ``-(1/y)``: a numerator ``-1`` is one
           sign bit (``-1/x0`` costs 10 bits). Dividing by a written power ``y^k`` is ``y^-k`` when
           ``k`` is one number (a literal, ``1/c`` or ``-1/c``), the division's sign merging into
-          it (``x/y**2`` holds y^-2 and ``x/y**-2`` holds y^2), and the reciprocal of the power
-          otherwise (``x/y**z``: the power head over ``y**z``). Dividing by a number ``c`` is the
-          literal ``1/c`` (``x/3`` holds the literal 1/3, as ``complexity`` prices it);
+          it (``x/y**2`` holds y^-2, ``x/y**-2`` holds y^2 and ``x/y**0`` holds y^0, no sign), and
+          the reciprocal of the power otherwise (``x/y**z``: the power head over ``y**z``).
+          Dividing by a number ``c`` is the literal ``1/c`` (``x/3`` holds the literal 1/3, as
+          ``complexity`` prices it). A literal with a sign, ``-c`` or the prefix ``neg c``, is one
+          number in each of these places;
         * a NUMBER pays the literal code on the EXACT value written, with every digit: a long
           literal is not rounded to its double (``6.674000000000001e-11`` costs its 16 digits),
           and a written minus is its sign bit. A FRACTION costs its division and a decimal its
           value (the owner's ruling, 2026-11-28): ``p/q`` is ``p`` and the literal ``1/q``, as
           any number divided by a number, so ``3/4`` costs 10.322 bits where ``0.75`` costs
           5.322, ``x0**(3/2)`` costs 18.585, and ``3/4*x0`` and ``4*x0/3`` cost the same, 16.322
-          (``2*x0*3`` 14.585: numbers written apart pay apart). Only ``1/q`` and ``-1/q`` are one
-          literal, the reciprocal's 1 being the notation's (``1/2`` 3.585 bits);
+          (``2*x0*3`` 14.585: numbers written apart pay apart), written as the prefix ``/ 3 4`` or
+          as the one token ``3/4`` alike. Only ``1/q`` and ``-1/q`` are one literal, the
+          reciprocal's 1 being the notation's (``1/2`` 3.585 bits), and a minus written on their
+          ``q`` is a sign of its own (``-1/-3`` pays two, 6 bits);
         * ``np.pi``, ``np.e``, the infinities, NaN, ``<constant>`` and named constants
           (``<constant_NAME>``) are priced exactly as ``complexity`` prices them; every other
           symbol is a variable (6 bits);
         * a function pays its head's entry of the symbol table and its arguments, ``pow`` its
-          head, base and exponent; an alias is priced as its target (``ln`` as ``log``);
+          head, base and exponent; an alias in infix text is priced as its target (``ln`` as
+          ``log``: the reader reads it so), and a prefix token list names the operators
+          themselves, so an alias token there (``ln``, ``div``, ``**``) is refused with
+          ``ValueError``, as :meth:`complexity` refuses it;
         * a DEFINED FUNCTION (the config's ``defined_functions:``) pays its own head at the tier
           of the function its definition applies: ``sqrt`` at ``rootn``'s (6 bits, without the
           2), ``cot``, ``sec`` and ``csc`` at ``tan``'s, ``cos``'s and ``sin``'s (6), and ``acot``,

@@ -15,27 +15,29 @@
 use super::*;
 use crate::operators::Operators;
 
-/// A node of the expression as written: a leaf token, or a head (its canonical name, an alias
-/// resolved) over its operands.
+/// A node of the expression as written: a leaf token, or a head over its operands.
 enum Written<'a> {
     Leaf(&'a str),
     Node(&'a str, Vec<Written<'a>>),
 }
 
-/// The canonical name of a written head: an alias is its target (`ln` is `log`, `Abs` is
-/// `abs`, `div` is `/`, `power` is `pow`) and `**` is `pow`.
-fn canonical<'a>(token: &'a str, ops: &'a Operators) -> &'a str {
-    if token == "**" {
-        return "pow";
+/// A one-token fraction `p/q` with `|p| != 1` (`3/4`, `(-3/4)`) as the quotient it writes, the
+/// leaves `p` and `q` under `/`: it costs its division, as the infix `3/4` and the prefix
+/// `/ 3 4` do (the fraction ruling). `1/q` and `-1/q` stay one literal (`None`).
+fn fraction_quotient(token: &str) -> Option<Written<'_>> {
+    let s = unwrapped(token);
+    let (p, q) = s.split_once('/')?;
+    if !crate::utils::is_numeric_string(s) || literal_value(p)?.abs().is_one() {
+        return None;
     }
-    ops.operator_aliases
-        .get(token)
-        .map(String::as_str)
-        .unwrap_or(token)
+    Some(Written::Node("/", vec![Written::Leaf(p), Written::Leaf(q)]))
 }
 
 /// Read explicit prefix tokens into the tree they write. A head is a declared or core operator
-/// or a defined function (`Operators::syntax_arity`); every other token is a leaf.
+/// or a defined function (`Operators::syntax_arity`), by its own name: an alias or `**` is
+/// refused, as every other prefix entry refuses it ([`complexity`] among them; infix text reads
+/// an alias as its target before it gets here). Every other token is a leaf, a one-token
+/// fraction the quotient it writes ([`fraction_quotient`]).
 fn read<'a>(tokens: &'a [String], ops: &'a Operators) -> Result<Written<'a>, String> {
     if let Some(t) = tokens.iter().find(|t| {
         matches!(
@@ -66,14 +68,23 @@ fn read<'a>(tokens: &'a [String], ops: &'a Operators) -> Result<Written<'a>, Str
             .get(at)
             .ok_or("written_complexity: an operand is missing (malformed expression)")?
             .as_str();
-        let head = canonical(token, ops);
-        let arity = if token == "**" {
-            Some(2)
+        let target = if token == "**" {
+            Some("pow")
         } else {
-            ops.syntax_arity(head)
+            ops.operator_aliases.get(token).map(String::as_str)
         };
-        match arity {
-            None => Ok((Written::Leaf(token), at + 1)),
+        if let Some(target) = target {
+            return Err(format!(
+                "written_complexity: the prefix token {token:?} is an alias of {target:?}: prefix \
+                 tokens name the engine's operators as every prefix entry reads them (infix text \
+                 reads an alias as its target)"
+            ));
+        }
+        match ops.syntax_arity(token) {
+            None => Ok((
+                fraction_quotient(token).unwrap_or(Written::Leaf(token)),
+                at + 1,
+            )),
             Some(n) => {
                 let mut kids = Vec::with_capacity(usize::from(n));
                 let mut next = at + 1;
@@ -82,7 +93,7 @@ fn read<'a>(tokens: &'a [String], ops: &'a Operators) -> Result<Written<'a>, Str
                     kids.push(kid);
                     next = after;
                 }
-                Ok((Written::Node(head, kids), next))
+                Ok((Written::Node(token, kids), next))
             }
         }
     }
@@ -156,20 +167,35 @@ fn is_minus_one(n: &Written) -> bool {
     }
 }
 
-/// The exact value of a node written as ONE NUMBER, or `None`: a literal, and the reciprocal of
-/// a literal (`1/c`, `inv(c)`: the literal 1/c, its 1 the notation's) and its sign (`-1/c`, M1).
-/// Any other quotient of numbers is a division, not one number (owner's ruling 2026-11-28:
-/// `3/4` is `3` and the literal `1/4`, as `4*x0/3` is `4`, `x0` and the literal `1/3`). A
-/// literal beyond the exact domain has no value here (it is priced by its spelling). The value
-/// is exact: it is read and computed in the exact number domain.
+/// The exact value of a literal leaf or of the sign on one (`neg(c)` is the number `-c`, as `-c`
+/// is), `None` for any other node.
+fn signed_value(n: &Written) -> Option<Rat> {
+    match n {
+        Written::Node("neg", k) => {
+            let v = leaf_value(&k[0])?;
+            let _exact = crate::ac::rat::number_domain(false);
+            v.checked_neg()
+        }
+        _ => leaf_value(n),
+    }
+}
+
+/// The exact value of a node written as ONE NUMBER, or `None`: a literal (`c`, `-c`, `neg(c)`),
+/// and the reciprocal of one (`1/c`, `inv(c)`: the literal 1/c, its 1 the notation's) and its
+/// sign (`-1/c`, M1). A written minus on the divisor of `1/c` or `-1/c` is no part of one number:
+/// `-1/-3` is the sign of the reciprocal of `-3`, two signs written. Any other quotient of numbers
+/// is a division, not one number (owner's ruling 2026-11-28: `3/4` is `3` and the literal `1/4`,
+/// as `4*x0/3` is `4`, `x0` and the literal `1/3`). A literal beyond the exact domain has no value
+/// here (it is priced by its spelling). The value is exact: it is read and computed in the exact
+/// number domain.
 fn number(n: &Written) -> Option<Rat> {
     let _exact = crate::ac::rat::number_domain(false);
     match n {
-        Written::Leaf(_) => leaf_value(n),
-        Written::Node("inv", k) => leaf_value(&k[0])?.checked_inv(),
+        Written::Leaf(_) | Written::Node("neg", _) => signed_value(n),
+        Written::Node("inv", k) => signed_value(&k[0])?.checked_inv(),
         Written::Node("/", k) => {
-            let (p, q) = (leaf_value(&k[0])?, leaf_value(&k[1])?);
-            if p.abs().is_one() {
+            let (p, q) = (signed_value(&k[0])?, signed_value(&k[1])?);
+            if p.abs().is_one() && !q.is_negative() {
                 p.checked_mul(&q.checked_inv()?)
             } else {
                 None
@@ -256,14 +282,16 @@ fn factors<'a>(n: &'a Written<'a>, out: &mut Vec<Factor<'a>>) {
 }
 
 /// The price of the exponent `-k` when a written power `y^k` divides (K): the division's sign
-/// merges into a literal `k` (`x/y^2` holds y^-2, `x/y^-2` holds y^2); `None` when `k` is not
-/// one number ([`number`]), whose power is then a reciprocal.
+/// merges into a literal `k` (`x/y^2` holds y^-2, `x/y^-2` holds y^2, and `x/y^0` holds y^0, no
+/// sign written or held); `None` when `k` is not one number ([`number`]: `neg(c)` is one, a
+/// fraction `p/q` is a division), whose power is then a reciprocal.
 fn merged_exponent(k: &Written) -> Option<u64> {
     if let Written::Leaf(s) = k {
         if literal(s) {
             // by its spelling, which prices a literal beyond the exact domain too
             return Some(match unwrapped(s).strip_prefix('-') {
                 Some(magnitude) => literal_price(magnitude),
+                None if literal_value(s).is_some_and(|v| v.is_zero()) => literal_price(s),
                 None => MU_SIGN.saturating_add(literal_price(s)),
             });
         }
@@ -377,21 +405,25 @@ fn price(n: &Written, ops: &Operators) -> u64 {
 ///   `-1/y` is the sign of the reciprocal, -(1/y) (M1): a numerator `-1` is a sign. A divisor
 ///   pays `mu_pow` over itself (`x^-1` is division, its exponent free), except that dividing
 ///   by a written power `y^k` with a LITERAL exponent is `y^-k`, the sign merging into the
-///   literal (K: `x/y^2` holds y^-2, `x/y^-2` holds y^2, and `x/y^z` divides by the power,
-///   `mu_pow` over `y^z`), and dividing by one number `c` is the literal `1/c` (`x/3` holds
-///   the literal 1/3, as [`complexity`] prices it).
+///   literal (K: `x/y^2` holds y^-2, `x/y^-2` holds y^2, `x/y^0` holds y^0 and pays no sign,
+///   and `x/y^z` divides by the power, `mu_pow` over `y^z`), and dividing by one number `c` is
+///   the literal `1/c` (`x/3` holds the literal 1/3, as [`complexity`] prices it). A literal
+///   with a sign, `-c` or `neg(c)`, is one number in each of these places.
 /// * A NUMBER pays the literal code on the exact value written, with every digit ([`mu_rat`];
 ///   its print's price beyond the 1,100-bit cap): a long literal is not rounded to its double.
 ///   A written minus on a literal is its sign bit. A FRACTION written `p/q` costs its
 ///   division, `p` and the literal `1/q`, as any number divided by a number does (owner's
 ///   ruling 2026-11-28: `3/4` 10.322 bits, `3/4*x0` and `4*x0/3` both 16.322; a decimal costs
-///   its value, `0.75` 5.322); only `1/q` and `-1/q` are one literal, the reciprocal's 1 the
-///   notation's.
+///   its value, `0.75` 5.322), whether it is written as three tokens (`/ 3 4`) or as the one
+///   token `3/4`; only `1/q` and `-1/q` are one literal, the reciprocal's 1 the notation's, and
+///   a minus written on their `q` is a sign of its own (`-1/-3` pays two).
 /// * `np.pi`, `np.e`, the infinities, NaN, `<constant>` and named constants (`<constant_NAME>`)
 ///   pay their entries, as [`complexity`] prices them; every other symbol is a variable
 ///   (`mu_leaf`).
 /// * A function pays its head's entry (the head table, by name) and its operands; `pow` pays
-///   `mu_pow`, base and exponent; an alias pays its target's price. A DEFINED FUNCTION
+///   `mu_pow`, base and exponent; an alias in infix text pays its target's price (the reader
+///   reads it as its target), and a prefix token list names the operators themselves: an alias
+///   token (`ln`, `div`, `**`) is refused there, as [`complexity`] refuses it. A DEFINED FUNCTION
 ///   (`crate::defined`) pays its own head's entry ([`mu_defined_head`]: `sqrt`, `cot`, `sec` and
 ///   `csc` at the elementary tier, `acot`, `asec` and `acsc` at the transcendental). A head that
 ///   is neither an operator nor a defined function of the engine is refused, never guessed.
@@ -520,5 +552,42 @@ mod tests {
         assert!(e.written_complexity(&tokens("<add> x0 x1 </add>")).is_err());
         assert!(e.written_complexity(&tokens("+ x0")).is_err());
         assert!(e.written_complexity(&[]).is_err());
+    }
+
+    /// The written price's consistency (pre-audit review W-1..W-5): each spelling costs what the
+    /// same writing costs in its other spellings; (tokens, price, the spelling it equals).
+    #[test]
+    fn one_writing_one_price_w1_to_w5() {
+        let e = engine();
+        let w = |s: &str| e.written_complexity(&tokens(s));
+        for (spelling, price, other) in [
+            // W-1: a one-token fraction costs its division, also in the exponent merge
+            ("3/4", 10_322, "/ 3 4"),
+            ("(-3/4)", 11_322, "/ -3 4"),
+            ("/ x0 pow x1 3/2", 30_585, "/ x0 pow x1 / 3 2"),
+            ("1/4", 4_322, "inv 4"),
+            ("-1/4", 5_322, "/ -1 4"),
+            // W-2: a sign on a literal is one number, as a divisor, a merged exponent, a 1/q part
+            ("/ x0 neg 3", 14_000, "/ x0 -3"),
+            ("/ x0 pow x1 neg 2", 20_585, "/ x0 pow x1 -2"),
+            ("/ 1 neg 3", 5_000, "/ 1 -3"),
+            ("inv neg 3", 5_000, "inv -3"),
+            // W-3: -1/-3 writes two minus signs: the sign of the reciprocal of -3
+            ("/ -1 -3", 6_000, "neg / 1 -3"),
+            // W-4: x/y**0 writes no sign
+            ("/ x0 pow x1 0", 20_000, "* x0 pow x1 0"),
+        ] {
+            assert_eq!(w(spelling), Ok(price), "{spelling}");
+            assert_eq!(w(other), Ok(price), "{other}");
+        }
+        assert_eq!(written(&e, "-1/-3"), 6_000);
+        assert_eq!(written(&e, "-1/3"), 5_000);
+        // W-5: a prefix alias token is refused, as complexity refuses it; infix reads its target
+        for alias in ["ln x0", "div x0 x1", "** x0 2", "Max x0 x1", "power x0 2"] {
+            let error = w(alias).unwrap_err();
+            assert!(error.contains("is an alias of"), "{alias}: {error}");
+        }
+        assert_eq!(written(&e, "ln(x0)"), written(&e, "log(x0)"));
+        assert_eq!(written(&e, "x0**2"), w("pow x0 2").unwrap());
     }
 }
