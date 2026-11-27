@@ -1,12 +1,12 @@
 """The mine's resume key (`checkpoint_fp` in `RuleMiner._find_rules_native`) against the arguments
 that change a finished file: a rerun reuses a finished file (`_finished_cell`) and resumes a
 checkpoint only under the key, which holds the sidecar's `params`, the mode, the code, the operator
-table, the data, the numeric environment, the universe and the starting and other sets.
-`promote_sorts` and the proposal batch change the file, or its sidecar's pin of the batch, and are
-not in it, so a rerun that changes only them takes the other mine's work as its own. Pre-audit
-review of 0.15 (au-mine): each marked test fails on its assertion today, and its marker comes off
-when the key holds the argument (a run that does not reuse passes it, and the strict marker then
-fails the suite)."""
+table, the data, the numeric environment, the universe, the starting and other sets and the
+proposal batch's sha256. Pre-audit review of 0.15 (au-mine, M1 and M2): `promote_sorts`,
+`symbolic_gate` and the proposal batch change the file, or its sidecar's pin of the batch, and
+were not in the key, so a rerun that changed only them took the other mine's work as its own; the
+three tests below were strict xfails until the 0.15 fix round put them in (`promote_sorts` and
+`symbolic_gate` through the sidecar's params)."""
 import hashlib
 import json
 import shutil
@@ -31,9 +31,6 @@ _PROPOSALS = (
     [{"source": ["abs", "neg", "asin", "x0"], "target": ["abs", "asin", "x0"]},
      {"source": ["asin", "abs", "neg", "x0"], "target": ["abs", "asin", "x0"]}],
 )
-
-_UNKEYED = pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    'promote_sorts and the proposal batch are not in the resume key (au-mine)'))
 
 
 def _mine(directory, **kw) -> list | None:
@@ -78,14 +75,14 @@ def test_the_premise_a_mine_pins_its_proposal_batch(tmp_path) -> None:
     assert _pinned(tmp_path / 'a').get('sha256') == sha
 
 
-@_UNKEYED
 def test_a_finished_file_is_reused_only_by_a_mine_that_promotes_as_it_did(cells, tmp_path) -> None:
     root, _, promoted = cells
     shutil.copytree(root / 'raw', tmp_path / 'a')
     assert _mine(tmp_path / 'a') == promoted
+    side = json.load(open(tmp_path / 'a' / 'mined.json.provenance.json'))
+    assert (side['params']['promote_sorts'], side['params']['symbolic_gate']) == (True, True)
 
 
-@_UNKEYED
 def test_a_finished_file_is_reused_only_by_a_mine_of_its_proposal_batch(cells, tmp_path) -> None:
     root, _, _ = cells
     shutil.copytree(root / 'raw', tmp_path / 'a')
@@ -94,12 +91,17 @@ def test_a_finished_file_is_reused_only_by_a_mine_of_its_proposal_batch(cells, t
     assert _pinned(tmp_path / 'a').get('sha256') == sha
 
 
-@_UNKEYED
 def test_a_resumed_mine_pins_the_proposal_batch_it_certifies(tmp_path) -> None:
+    """A checkpoint written under one batch is another mine's under another batch: it is refused,
+    not resumed (it used to resume, certify the new batch and pin the old one, M2), and the mine
+    started anew pins the batch it certifies."""
     _batch(tmp_path / 'first.json', _PROPOSALS[0])
     second = _batch(tmp_path / 'second.json', _PROPOSALS[1])
     _mine(tmp_path / 'a', promote_sorts=False, proposals=str(tmp_path / 'first.json'),
           stop_after_length=2)
+    with pytest.raises(RuntimeError, match='was written by a different mine'):
+        _mine(tmp_path / 'a', promote_sorts=False, proposals=str(tmp_path / 'second.json'))
+    (tmp_path / 'a' / 'mined.json.checkpoint.json').unlink()
     _mine(tmp_path / 'a', promote_sorts=False, proposals=str(tmp_path / 'second.json'))
     pin = _pinned(tmp_path / 'a')
     assert (pin.get('sha256'), pin.get('count')) == (second, len(_PROPOSALS[1]))

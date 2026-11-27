@@ -104,8 +104,9 @@ independent of process, hash randomization, thread count or the judge's process 
 master seed derives the evaluation matrices and every per-length, per-source and per-rule
 seed, and a source's seed and exclusions follow its global index, so a length mined in
 shards equals the length mined at once. A mine writes `<file>.checkpoint.json` after every
-completed length; a rerun of the same mine (the same parameters, mode, universe, starting
-rules and code) resumes after the last completed length, any other mine refuses to start
+completed length; a rerun of the same mine (the same parameters, `promote_sorts` and
+`symbolic_gate` among them, mode, universe, starting rules, proposal batch and code) resumes
+after the last completed length, any other mine refuses to start
 over it, and the checkpoint is removed once the file is final. A final file is not mined
 again: its sidecar records the mine's key (`resume.key`, the checkpoint's) and the file's
 sha256 (`resume.rules_sha256`), and a rerun of the same mine takes an unchanged file as it

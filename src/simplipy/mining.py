@@ -2373,11 +2373,14 @@ class RuleMiner:
         judged: dict = {}
         # Everything the length loop's state is a function of: the parameters, the mode, the
         # code, the operator table, the evaluation data (its content, explicit or seeded),
-        # the numeric environment that evaluates it, the universe and the starting sets.
+        # the numeric environment that evaluates it, the universe, the starting sets and the
+        # proposal batch (its sha256, None for none: a resume under another batch would
+        # certify the new batch while the restored record pins the old one).
         _environment = {k: v for k, v in ((provenance or {}).get('environment') or {}).items()
                         if k != 'platform'}
         checkpoint_fp = hashlib.sha256(json.dumps(
             {'params': (provenance or {}).get('params'), 'rule_mode': rule_mode,
+             'proposals': ((provenance or {}).get('proposals') or {}).get('sha256'),
              'code': code_digest(),
              'operators': self.engine._operators_config,
              'X': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest(),
@@ -2840,7 +2843,9 @@ class RuleMiner:
             judge_warn_s: float = JUDGE_WARN_S,
             judge_fail_s: float = JUDGE_FAIL_S,
             offer_final_rules: bool = True,
-            operator_max_length: dict | None = None) -> dict:
+            operator_max_length: dict | None = None,
+            promote_sorts: bool = True,
+            symbolic_gate: bool = True) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
         be reproducible from its sidecar alone. Everything that determines the mine is
         recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
@@ -2919,6 +2924,10 @@ class RuleMiner:
                 # the per-length operator set, normalized ({} for none): part of the
                 # checkpoint's key through these parameters
                 'operator_max_length': dict(operator_max_length or {}),
+                # the stages that change the file (sort promotion, the symbolic gate): part
+                # of the key too, so a rerun that changes one mines anew instead of reusing
+                'promote_sorts': promote_sorts,
+                'symbolic_gate': symbolic_gate,
             },
             'X': x_spec,
             'universe': {
@@ -3749,7 +3758,8 @@ class RuleMiner:
             interval_node_budget=interval_node_budget,
             judge_warn_s=judge_warn_s, judge_fail_s=judge_fail_s,
             offer_final_rules=offer_final_rules,
-            operator_max_length=operator_max_length)
+            operator_max_length=operator_max_length,
+            promote_sorts=promote_sorts, symbolic_gate=symbolic_gate)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).
