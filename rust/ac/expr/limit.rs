@@ -41,6 +41,9 @@ pub(super) struct ZeroRead {
 }
 
 /// `zero_read`'s verdicts within a simplify call (`RegionScope`), per token view, class and factor.
+/// No other part of the context is in the key because the reading reads none: `read_walk`,
+/// `class_of`, `class_multiple` and `zero_mag` read the token view and the expression's structure
+/// only, never a certificate, the mode or a confinement (`Cx::confined`).
 pub(super) type ReadMemo =
     rustc_hash::FxHashMap<usize, rustc_hash::FxHashMap<Ex, rustc_hash::FxHashMap<Ex, ZeroRead>>>;
 

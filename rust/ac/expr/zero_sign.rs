@@ -43,7 +43,12 @@ pub(super) fn zero_set_null(e: &Ex, cx: &Cx) -> bool {
     r
 }
 
-/// `zero_set_null`'s verdicts, per context (`flip_cx_key`) and expression.
+/// `zero_set_null`'s verdicts, per context (`flip_cx_key`) and expression. The key holds whether a
+/// confinement holds (`CONFINED_BIT`) but not its bases (`Cx::confined`), and needs none: the
+/// verdict reads the certificate closures (`nz_ae_licensed`, `fin_licensed`), never the bases,
+/// which only `Cx::confined_nonneg` reads (the composition of powers in `mul` and `laws`). So a
+/// verdict under one confinement is the verdict under any other and under none (the canon review of
+/// 2026-11-27 measured 0 re-ask differences over 300,000 random expressions in shuffled order).
 type RegionMemo = rustc_hash::FxHashMap<FlipCxKey, rustc_hash::FxHashMap<Ex, bool>>;
 
 thread_local! {
@@ -51,7 +56,9 @@ thread_local! {
 }
 
 /// [`strict_price`]'s prices within a simplify call (`RegionScope`), per spelling and number
-/// domain (the token view is the call's own).
+/// domain (the token view is the call's own). No other part of the context is in the key because
+/// the price reads none: it is strict's canonical form priced under the BARE context of the call's
+/// token view (`Cx::bare`: no certificate, no mode's permissions, no confinement).
 type StrictPriceMemo = rustc_hash::FxHashMap<(Ex, bool), u64>;
 
 thread_local! {
