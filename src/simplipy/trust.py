@@ -29,9 +29,11 @@ module is the allowlist that closes that.
 ATTRIBUTE TRAVERSAL in generated source, and a module's attributes include every
 module it imported. So the root is only the first hop: ``simplipy.engine.os.system``
 starts at a trusted root and lands on :func:`os.system`. :func:`check_chain` walks the
-remaining components and holds every module it passes through to the same allowlist
-as the root, so trust ends where the trusted package ends rather than at everything
-that package happens to import.
+remaining components and holds every module it passes through, and the package that
+defines the callable it lands on, to the same allowlist as the root, so trust ends where
+the trusted package ends rather than at everything that package happens to import (a
+module, or a callable imported by name). A submodule not imported yet is imported and
+walked, so a realization cannot resolve later to something the walk did not see.
 
 **Trust is granted from OUTSIDE the config, never by the config.** A
 ``trusted_modules:`` key inside the YAML would be worthless: the author of the
@@ -52,6 +54,8 @@ reachable inside evaluated expressions. It does NOT make :func:`simplipy.codify`
 safe against a hostile EXPRESSION: compiling and evaluating attacker-supplied source
 is unsafe by construction in Python, and no allowlist changes that.
 """
+import importlib
+import importlib.util
 import os
 import re
 from types import ModuleType
@@ -240,13 +244,23 @@ def check_chain(realization: str, operator: str, root_module: ModuleType,
     * the terminal may not be a module: a realization is the callable that computes the
       operator, and a module cannot be called.
 
-    A component that does not resolve stops the walk WITHOUT a refusal. It reaches nothing
-    -- ``np.os`` is an ``AttributeError``, not a door -- and refusing it would turn version
-    skew in a trusted dependency into a dead engine even for configs that never evaluate
-    the operator (the legacy-vocabulary fixture names sixteen such realizations). The
-    escape only exists if the attribute exists, and if it exists the walk sees it: the walk
-    runs at construction and again on unpickle, before any expression is evaluated, and
-    making the attribute appear in between takes code execution that has already won.
+    * the terminal callable must itself belong to a trusted package: its ``__module__`` is
+      held to the same allowlist. A trusted module's attributes include the callables it
+      imported BY NAME, not only the modules it imported, and those lead out of the grant
+      as surely as a module does.
+
+    A component that is not an attribute YET but names a SUBMODULE of the module walked so
+    far (a submodule nothing has imported yet) is imported and walked: the submodule
+    belongs to the package the root check already licensed, and leaving it unresolved
+    would let the realization resolve later, at evaluation, to whatever the submodule
+    imported.
+
+    Any other component that does not resolve stops the walk WITHOUT a refusal. It reaches
+    nothing -- ``np.os`` is an ``AttributeError``, not a door -- and refusing it would turn
+    version skew in a trusted dependency into a dead engine even for configs that never
+    evaluate the operator (the legacy-vocabulary fixture names sixteen such realizations).
+    The walk runs at construction and again on unpickle, before any expression is
+    evaluated.
 
     Dunder components are refused outright. ``__loader__``, ``__globals__`` and their
     siblings are Python's introspection surface, no realization is legitimately spelled
@@ -286,7 +300,10 @@ def check_chain(realization: str, operator: str, root_module: ModuleType,
         try:
             current = getattr(current, name)
         except AttributeError:
-            return  # resolves to nothing, so it reaches nothing (see the docstring)
+            submodule = _submodule(current, name)
+            if submodule is None:
+                return  # resolves to nothing, so it reaches nothing (see the docstring)
+            current = submodule
 
         if isinstance(current, ModuleType):
             reached = _reached_root(current)
@@ -306,3 +323,50 @@ def check_chain(realization: str, operator: str, root_module: ModuleType,
             f"operator {operator!r} declares the realization {text!r}, which names the module "
             f"{current.__name__!r} itself. A realization is the CALLABLE that computes the operator "
             f"({_EXAMPLE_DOTTED}); a module cannot be called.")
+
+    # A callable without a `__module__` of its own (scipy's ufuncs, a bound method) is read by
+    # its type's: `numpy` for a ufunc, `builtins` for a method of an instance.
+    home = getattr(current, '__module__', None) or getattr(type(current), '__module__', None)
+    package = _home_package(home)
+    if package not in trusted:
+        raise UntrustedModuleError(
+            f"operator {operator!r} declares the realization {text!r}, which resolves to "
+            f"{current!r}, defined in {home!r} -- reached THROUGH a trusted root, but itself outside "
+            f"the trusted set: a module's attributes include the callables it imported by name, so "
+            f"trusting a root does not trust everything reachable from it; only "
+            f"{', '.join(DEFAULT_TRUSTED_MODULES)} are trusted by default. If you trust it, say so "
+            f"outside the config (a config cannot authorize itself): pass "
+            f"trusted_modules=[{package!r}] to SimpliPyEngine.from_config / load / the constructor, "
+            f"or set {TRUSTED_MODULES_ENV_VAR}={package} in the environment.")
+
+
+#: The platform modules that implement a stdlib module under another name: ``os.getcwd`` is
+#: defined in ``posix``. A C accelerator's leading underscore is dropped too (``_io`` is ``io``).
+_IMPLEMENTATION_OF = {'posix': 'os', 'nt': 'os'}
+
+
+def _home_package(home: object) -> str | None:
+    """The canonical top-level package a callable's ``__module__`` names, or ``None`` when it
+    names none (a bound method of an instance, for example)."""
+    if not isinstance(home, str) or not home:
+        return None
+    package = home.split('.')[0]
+    package = _IMPLEMENTATION_OF.get(package, package)
+    if package.startswith('_') and len(package) > 1:
+        package = package[1:]
+    return _CANONICAL_SPELLING_OF.get(package, package)
+
+
+def _submodule(module: object, name: str) -> ModuleType | None:
+    """The submodule ``name`` of the package ``module``, imported, or ``None`` when there is no
+    such submodule. Only a package (a module with a ``__path__``) has submodules; anything a
+    finder cannot locate is no submodule."""
+    if not isinstance(module, ModuleType) or not hasattr(module, '__path__'):
+        return None
+    qualified = f'{module.__name__}.{name}'
+    try:
+        if importlib.util.find_spec(qualified) is None:
+            return None
+    except (ImportError, ValueError):
+        return None
+    return importlib.import_module(qualified)
