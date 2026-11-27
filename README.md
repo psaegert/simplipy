@@ -65,9 +65,11 @@ engine.simplify(engine.to_tagged(expr))      # convert, then simplify: the tagge
 # > ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
 ```
 
-`simplify(expr, mode=...)` takes `'strict'`, the default, sound as the deployed float64
-evaluator computes, or `'permissive'`, for training-corpus canonicalisation, which reads the
-reals' values and promises per rule. The `real` mode is retired: naming it raises.
+`simplify(expr, mode=...)` takes `'strict'`, the default, for outputs evaluated in float64:
+every step is reproduced by float64 or is true in the reals with float64's kind of value kept
+(promised per step, not for the whole answer). Or it takes `'permissive'`, for training-corpus
+canonicalisation, which reads the reals' values and promises per rule. The `real` mode is
+retired: naming it raises.
 
 ## Normalization
 
@@ -97,6 +99,9 @@ sp.normalize_variable_token('sin')
 ```
 
 More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
+
+Coming from 0.14? [Upgrading to 0.15](https://simplipy.readthedocs.io/en/latest/upgrading/) lists what changes
+(rule files, mode names, answers and prices) and what to do about each.
 
 # Performance
 

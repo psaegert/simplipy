@@ -38,12 +38,15 @@ engine.to_infix(engine.simplify(expr))
 # -> '<constant> / log(x3)'
 ```
 
-`simplify`'s default `Mode.strict` is sound as the deployed float64 evaluator computes,
-wherever no operation overflows or underflows (where one does, the true value is accepted
-too). The training-only `Mode.permissive` reads the reals' values and trades soundness for
-recall: `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in float64 once
-`tanh` saturates to exactly `1.0` at large `|t|`, so strict does not serve it and permissive
-does. The `real` mode is retired: naming it raises. The
+`simplify`'s default `Mode.strict` is for expressions you will evaluate in float64. Every step
+it takes is either reproduced by float64 itself (within 8 units in the last place), or true in
+the real numbers with float64 giving both sides the same kind of value (both finite, the same
+infinity, or both undefined). That promise is made per step, not for the whole answer: where
+float64 rounds badly (near a pole, a jump or a saturation) the answer can differ from float64's
+evaluation of your input by more than rounding. The training-only `Mode.permissive` reads the
+reals' values and trades soundness for recall: `atanh(tanh(t)) → t` is true for every real `t`
+yet returns `inf` in float64 once `tanh` saturates to exactly `1.0` at large `|t|`, so strict
+does not serve it and permissive does. The `real` mode is retired: naming it raises. The
 [simplification guide](guides/simplify.md) covers the modes, the search
 budget, and the guarantee the engine actually makes.
 
@@ -75,6 +78,7 @@ per-file sha256 digests, enforced at install and at cache resolution) — see
 
 ## Where next
 
+- [Upgrading to 0.15](upgrading.md) — for users of 0.14: what changes and what to do.
 - [Simplifying expressions](guides/simplify.md) — modes, budget, the μ guarantee.
 - [Masking](guides/masking.md) — literals → `<constant>` for models, done once, done right.
 - [Mining rulesets](rules.md) — build your own artifact.

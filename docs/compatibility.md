@@ -34,10 +34,11 @@ at a **minor** version bump (0.x → 0.x+1) and are listed in the CHANGELOG unde
 "Changed"/"Removed". Patch releases (0.13.x) never break declared names or change
 artifact semantics.
 
-**Deprecation policy.** A removal is a hard cut, announced in the release that makes it.
-There is no deprecation period and no warning cycle: the removed name or keyword raises
-from that release on, and the CHANGELOG's "Removed" section and the tables below name the
-replacement.
+**Deprecation policy.** A removal is usually a hard cut, announced in the release that makes
+it: the removed name or keyword raises from that release on, and the CHANGELOG's "Removed"
+section and the tables below name the replacement. A rename may instead keep the old name
+working for one minor release with a `DeprecationWarning`; the one running now is the
+`f64` → `strict` rename, in the table below.
 
 Removed in 0.14.0:
 
@@ -54,8 +55,8 @@ Removed in 0.14.0:
   helper approximated. Unaffected: `read_infix(..., mask_numbers=True)`,
   which shares the name but not the surface.
 
-One deprecation is running. The mode that preserves what the deployed float64 evaluator
-computes is named `strict` from 0.15.0; its earlier names select it with a
+One deprecation is running. The default mode, for outputs evaluated in float64, is named
+`strict` from 0.15.0 (it was `f64`); its earlier names select it with a
 `DeprecationWarning` and are removed in 0.16.0:
 
 | deprecated in 0.15.0, removed in 0.16.0 | replacement |
@@ -104,6 +105,11 @@ Signatures changed in 0.15.0:
 | `utils.deduplicate_rules(..., rule_mode=)` | the keyword is required, as above; the kept target is the one lower in that mode's serve ordering |
 | `promotion.promote(..., rule_mode=)` | the keyword is required, as above |
 | `simplify(..., max_passes=0)` | raises `ValueError` (it ran one pass); pass `max_passes=1` or leave the default |
+
+0.15.0 also changes answers, prices and the rule files without renaming anything: rule files
+mined before 0.15 are refused at load, a fully numeric part is computed exactly, and both
+modes write shared numbers once and polynomials expanded. [Upgrading to 0.15](upgrading.md)
+lists these changes and what to do about each.
 
 Behaviour changes in 0.14.0 that are **not** deprecations, because no name changed:
 
