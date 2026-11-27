@@ -192,6 +192,30 @@ def test_torch_branches() -> None:
         assert bits_equal(t.numpy(), f(nu64.numpy(), x64.numpy())).all(), f.__name__
 
 
+def test_the_torch_branches_of_mod_and_pow_agree_with_the_kernel_at_the_edge_cells() -> None:
+    """K17 (pre-audit review): integer tensors raised in mod (the kernel takes integer operands
+    as float64), and torch's pow gave pow(-inf, 0.5) = inf and pow(-0, 0.5) = +0 where the kernel
+    gives NaN and -0 (numpy's sqrt). Gradients stay finite where the value is."""
+    torch = require_torch()
+    m = ops.mod(torch.tensor([3, -7, 7]), torch.tensor([0, 3, -3]))
+    assert m.is_floating_point() and torch.isnan(m[0]) and m[1:].tolist() == [2.0, -2.0]
+    base = torch.tensor([-np.inf, -2.0, -0.0, 0.0, 2.0, np.inf], dtype=torch.float64)
+    for y in (0.5, 1.5, -0.5, 2.0, 3.0, 0.0, -1.0, -2.5):
+        assert bits_equal(ops.pow(base, y).numpy(), ops.pow(base.numpy(), np.float64(y))).all(), y
+    g = torch.tensor([-2.0, 3.0], requires_grad=True)
+    ops.pow(g, 2.0).sum().backward()
+    assert g.grad.tolist() == [-4.0, 6.0]
+
+
+def test_abs_of_an_array_like_is_an_array() -> None:
+    """K16 (pre-audit review): `abs` raised on a list or a tuple, against the module's
+    "array-likes give arrays"."""
+    out = ops.abs([-1.0, 2.0, -0.0])
+    assert isinstance(out, np.ndarray) and bits_equal(out, np.array([1.0, 2.0, 0.0])).all()
+    assert ops.abs((-3, 4)).tolist() == [3.0, 4.0]
+    assert ops.abs([3 + 4j]).tolist() == [5.0]
+
+
 def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:
     """acj2-4's vocabulary is acj-4's plus the nine 0.15 operators, every realization one of
     `simplipy.operators`; it loads (without rule sets until its mines write them) and reads

@@ -230,10 +230,13 @@ def div(x: float, y: float) -> float:
 
 def abs(x: float) -> float:
     """Return the element-wise absolute value of x (``+0`` at either zero). A Python scalar
-    keeps its own type, an int staying an int; a complex operand gives its magnitude."""
+    keeps its own type, an int staying an int; a list or a tuple gives an array; a complex
+    operand gives its magnitude."""
     torch = _torch_of(x)
     if torch is not None:
         return torch.abs(x)
+    if isinstance(x, (list, tuple)):
+        x = np.asarray(x)  # an array-like gives an array, as every other realization's does
     if isinstance(x, np.ndarray):
         return np.abs(x) if np.iscomplexobj(x) else _kernel1('abs', x)
     if isinstance(x, complex):
@@ -369,8 +372,16 @@ def pow(x: float, y: float) -> float:
         torch = _torch_of(x, y)
         if torch is not None:
             xt, yt = _torch_pair(torch, x, y)
-            nonint = torch.isfinite(yt) & (yt != torch.floor(yt)) & (yt != 0.5)
-            return torch.pow(torch.where((xt == 0) & nonint, torch.zeros_like(xt), xt), yt)
+            nonint = torch.isfinite(yt) & (yt != torch.floor(yt))
+            half = yt == 0.5
+            # a zero base under a finite non-integer exponent other than 0.5 reads as +0
+            out = torch.pow(torch.where((xt == 0) & nonint & ~half, torch.zeros_like(xt), xt), yt)
+            # at 0.5 the value is sqrt, as numpy's (pow(-0, 0.5) = -0; torch.pow gives +0); the
+            # base is replaced by 1 where the exponent is not 0.5, so no NaN of the branch not
+            # taken reaches a gradient
+            out = torch.where(half, torch.sqrt(torch.where(half, xt, torch.ones_like(xt))), out)
+            # a -inf base under a finite non-integer exponent is NaN (torch, as C99, gives inf)
+            return torch.where((xt == -torch.inf) & nonint, torch.full_like(out, float('nan')), out)
         if np.iscomplexobj(x) or np.iscomplexobj(y):
             return np.power(x, y)
     return _kernel2('pow', x, y)
@@ -417,7 +428,9 @@ def mod(a: Any, b: Any) -> Any:
     ``mod(3, -inf) = -inf``, ``mod(-3, -inf) = -3``; a tiny negative dividend can give b
     itself (``mod(-1e-20, 3) = 3``, the correctly rounded 3 - 1e-20)."""
     def torch_mod(torch: ModuleType, a: Any, b: Any) -> Any:
-        at, bt = _torch_pair(torch, a, b)
+        # integer operands are taken as floats, as the kernel takes them as float64 (an integer
+        # tensor's fmod by zero raises)
+        at, bt = _torch_pair(torch, a, b, floating=True)
         m = torch.fmod(at, bt)  # numpy's npy_remainder, step for step
         m = torch.where((m != 0) & ((bt < 0) != (m < 0)), m + bt, m)
         return torch.where(m == 0, torch.copysign(torch.zeros_like(m), bt), m)
