@@ -43,7 +43,8 @@ def _plant(tmp_path, mine, mode, rules, sidecar_edit=None):
     if mode == 'permissive':
         (tmp_path / FILES['strict']).write_bytes((mine / FILES['strict']).read_bytes())
     path = tmp_path / FILES[mode]
-    path.write_text(json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules]))
+    # written as a mine writes a file, so a copy of the clean rules is byte-identical to it
+    path.write_text(json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules], indent=4))
     side = json.load(open(mine / (FILES[mode] + '.provenance.json')))
     if sidecar_edit is not None:
         sidecar_edit(side)
@@ -291,6 +292,55 @@ def test_the_basis_gate(tmp_path, mine, mode) -> None:
     for edit in (drop, short, refused):
         path = _plant(tmp_path, mine, mode, rules, edit)
         assert not _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'basis')['ok']
+
+
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
+def test_the_basis_gate_judges_the_record_again(tmp_path, mine, mode) -> None:
+    """M4 (pre-audit review): the gate used to check the record's shape only, so a record with
+    every label flipped to `proved` passed. Each entry is judged again now: a flipped label fails,
+    naming the rule, the recorded basis and the judged one."""
+    rules = json.load(open(mine / FILES[mode]))
+    labels = json.load(open(mine / (FILES[mode] + '.provenance.json')))['basis']['rules']
+    assert 'evidence' in labels, 'vacuous: no rule held on evidence alone'
+
+    def all_proved(side):
+        side['basis']['rules'] = ['proved'] * len(side['basis']['rules'])
+
+    gate = _gate(verify_mine(_plant(tmp_path, mine, mode, rules, all_proved), mode, _OPERATORS,
+                             judge=core_judge), 'basis')
+    assert not gate['ok'] and gate['count'] == labels.count('evidence'), gate
+    assert all(e[2:] == ['proved', 'evidence'] for e in gate['examples']), gate
+
+
+@pytest.mark.parametrize('mode', ['strict', 'permissive'])
+def test_the_file_gate(tmp_path, mine, mode) -> None:
+    """M3 (pre-audit review): verify-mine passed a rule file that is not the one its sidecar
+    describes. The file's sha256, rule count and count per left-side length are the recorded
+    ones: the clean copy passes; every slot demoted to `?` (`_0` or `$0` to `?0`), the rules
+    reversed, a rule dropped or repeated, and a file written in another layout fail."""
+    rules = json.load(open(mine / FILES[mode]))
+    assert rules, 'vacuous: an empty file'
+    assert _gate(verify_mine(_plant(tmp_path, mine, mode, rules), mode, _OPERATORS,
+                             judge=core_judge), 'file')['ok']
+
+    def demote(side):
+        return ['?' + t[1:] if t[:1] in '_$!' and t[1:].isdigit() else t for t in side]
+
+    demoted = [[demote(lhs), demote(rhs)] for lhs, rhs in rules]
+    assert demoted != rules, 'vacuous: no slot to demote'
+    planted_files = [(demoted, 'sha256'), (rules[:-1], 'rules_total'),
+                     (rules + rules[:1], 'rules_total')]
+    if len(rules) > 1:
+        planted_files.append((rules[::-1], 'sha256'))
+    for planted, why in planted_files:
+        gate = _gate(verify_mine(_plant(tmp_path, mine, mode, planted), mode, _OPERATORS,
+                                 judge=core_judge), 'file')
+        assert not gate['ok'] and why in [e[0] for e in gate['examples']], (why, gate)
+    path = _plant(tmp_path, mine, mode, rules)
+    with open(path, 'w') as file:
+        json.dump(rules, file)  # the same rules, another layout: not the bytes the mine wrote
+    gate = _gate(verify_mine(path, mode, _OPERATORS, judge=core_judge), 'file')
+    assert not gate['ok'] and [e[0] for e in gate['examples']] == ['sha256'], gate
 
 
 def test_the_cli_exit_code(tmp_path, mine) -> None:

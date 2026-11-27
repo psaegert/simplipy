@@ -3893,7 +3893,10 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     or names what breaks it:
 
     - ``sidecar``: the sidecar exists, records a final, uninterrupted mine, and its mode is
-      ``mode`` (the file's bytes are not compared with the sha256 it records, ``resume``);
+      ``mode``;
+    - ``file``: the file is the one the sidecar describes -- its bytes' sha256 is the one the
+      mine recorded (``resume.rules_sha256``), and so are its rule count and its count per
+      left-side length (``progress``), so a reordered, edited or truncated file fails;
     - ``rules``: the file holds rules (an empty file passes every other gate vacuously);
     - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
     - ``engine_owned_law``: no rule that is a respelling within one canonical state, or an
@@ -3936,8 +3939,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``unmined``: no rule mentions an operator the mine supports and does not mine, one its
       sidecar's ``operator_max_length`` bounds at 0 (``_unmined``);
     - ``basis``: the sidecar records what every rule's verdict rests on in the mode, proved or
-      evidence (``judge_bases``), one entry per rule of the file; the record is read as the
-      mine wrote it, not judged again.
+      evidence (``judge_bases``), one entry per rule of the file, and each entry is the one the
+      judge gives the rule again here (a record relabelled from ``evidence`` to ``proved``
+      fails, naming the rule, the recorded basis and the judged one).
 
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}, 'basis'}``,
     ``basis`` the number of rules the sidecar records as proved and as held on evidence alone.
@@ -3952,8 +3956,9 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
     from .engine import SimpliPyEngine, _RULE_MODE, _coerce_mode
     mode = _coerce_mode(mode).name
     rule_mode = _RULE_MODE[_coerce_mode(mode)]
-    with open(rules_path) as file:
-        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
+    with open(rules_path, 'rb') as file:
+        raw = file.read()
+    rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.loads(raw)]
     sidecar_path = rules_path + '.provenance.json'
     sidecar: dict = {}
     if os.path.exists(sidecar_path):
@@ -3972,6 +3977,22 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         + ([['mode', sidecar.get('mode'), mode]] if _recorded_mode(sidecar.get('mode')) != mode
            else []))
     gates['rules'] = [] if rules else [['the file holds no rules', rules_path]]
+    # The file is the one its sidecar describes: its bytes' sha256 is the one the mine recorded
+    # (`resume.rules_sha256`), and so are its rule count and its count per left-side length
+    # (`progress`). A reordered, edited, demoted or truncated file fails here by name.
+    recorded_sha = (sidecar.get('resume') or {}).get('rules_sha256')
+    by_length: dict[str, int] = {}
+    for lhs, _ in rules:
+        by_length[str(len(lhs))] = by_length.get(str(len(lhs)), 0) + 1
+    gates['file'] = (
+        [['no provenance sidecar', sidecar_path]] if not sidecar else
+        ([['the sidecar records no sha256 of its file', None, None]] if recorded_sha is None else
+         [['sha256', recorded_sha, hashlib.sha256(raw).hexdigest()]]
+         if recorded_sha != hashlib.sha256(raw).hexdigest() else [])
+        + ([['rules_total', progress.get('rules_total'), len(rules)]]
+           if progress.get('rules_total') != len(rules) else [])
+        + ([['rules_by_lhs_length', progress.get('rules_by_lhs_length'), by_length]]
+           if progress.get('rules_by_lhs_length') != by_length else []))
     load_gates = _rule_gates(engine, rule_mode, rules)
     gates['twin_shadow'] = load_gates['twin_shadow']
     gates['engine_owned_law'] = load_gates['engine_owned_law']
@@ -4025,14 +4046,20 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         gates['covers_strict'] = (
             [['no pinned strict file to cover', None, None, None]] if strict_rules is None
             else _uncovered_strict_rules(engine, strict_rules))
-    # What every rule's verdict rests on (the specification's 3.4), as the mine recorded it.
+    # What every rule's verdict rests on (the specification's 3.4): the mine's record, one
+    # entry per rule, and each entry judged again (`judge_bases`, as the mine judged it), so a
+    # record whose labels were edited (`evidence` relabelled `proved`) fails by rule.
     basis = sidecar.get('basis')
     labels = basis.get('rules') if isinstance(basis, dict) else None
+    judged_bases = (judge_bases(rules, mode, processes=judge_processes)
+                    if isinstance(labels, list) and len(labels) == len(rules) else [])
     gates['basis'] = (
         [['the sidecar records no basis', None, None]] if not isinstance(labels, list) else
         ([['recorded for', len(labels), len(rules)]] if len(labels) != len(rules) else [])
         + [[list(lhs), list(rhs), b] for (lhs, rhs), b in zip(rules, labels)
-           if b not in ('proved', 'evidence')])
+           if b not in ('proved', 'evidence')]
+        + [[list(lhs), list(rhs), b, now] for (lhs, rhs), b, now in zip(rules, labels, judged_bases)
+           if b in ('proved', 'evidence') and b != now])
     report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
               for name, found in gates.items()}
     return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
