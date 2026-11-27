@@ -1671,4 +1671,76 @@ mod tests {
             allclose_extends(&y, &whole, 1e-11, 1e-12)
         );
     }
+
+    /// The premise `on_all_rows` reads (b51cd5c): whatever exit the solve takes (an accepted start,
+    /// a start whose cost is not finite, an accepted step, convergence, a stuck damping, no step,
+    /// the iteration cap), the values it returns are the candidate's at exactly the constants it
+    /// returns, on the valid rows, bit for bit. Targets the form reaches, the same with noise, and
+    /// another function, from the true constants and from random starts.
+    #[test]
+    fn every_exit_of_the_solve_returns_its_values_at_its_constants() {
+        let cfg = r#"operators:
+  "+": {realization: '+', arity: 2, precedence: 1, commutative: true}
+  "*": {realization: '*', arity: 2, precedence: 2, commutative: true}
+  exp: {realization: simplipy.operators.exp, arity: 1, precedence: 3}
+  sin: {realization: simplipy.operators.sin, arity: 1, precedence: 2}
+  log: {realization: simplipy.operators.log, arity: 1, precedence: 2}
+  pow: {realization: simplipy.operators.pow, arity: 2, precedence: 3}
+"#;
+        let e = crate::engine::Engine::from_strs(cfg, "[]").expect("engine builds");
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let forms: [&[&str]; 5] = [
+            &["exp", "*", "<constant>", "x0"],
+            &["*", "<constant>", "sin", "*", "<constant>", "x0"],
+            &["log", "+", "x0", "<constant>"],
+            &["pow", "x0", "<constant>"],
+            &["+", "exp", "<constant>", "*", "<constant>", "x0"],
+        ];
+        let m = 40usize;
+        let x: Vec<f64> = (0..m).map(|i| -3.0 + 0.17 * i as f64).collect();
+        let cols = vec![x.clone()];
+        let mut rng = Rng::new(11);
+        let mut solves = 0usize;
+        for form in forms {
+            let tape = Tape::compile(&s(form), ops, &vars).unwrap();
+            let k = tape.n_params;
+            for trial in 0..24 {
+                let truth: Vec<f64> = (0..k).map(|_| rng.normal(0.0, 2.0)).collect();
+                let y: Vec<f64> = match trial % 3 {
+                    0 => tape.eval_columns(&cols, &truth, m),
+                    1 => tape
+                        .eval_columns(&cols, &truth, m)
+                        .into_iter()
+                        .map(|v| v + rng.normal(0.0, 1.0))
+                        .collect(),
+                    _ => x.iter().map(|v| v.abs().sqrt()).collect(),
+                };
+                // the solve reads the valid rows only, as `exist_constants_fit_prepared` hands them
+                let valid: Vec<usize> = (0..m).filter(|&r| y[r].is_finite()).collect();
+                if valid.len() < k {
+                    continue;
+                }
+                let xv: Vec<Vec<f64>> = vec![valid.iter().map(|&r| x[r]).collect()];
+                let yv: Vec<f64> = valid.iter().map(|&r| y[r]).collect();
+                let p0: Vec<f64> = if trial % 4 == 0 {
+                    truth.clone()
+                } else {
+                    (0..k).map(|_| rng.normal(0.0, 5.0)).collect()
+                };
+                let (c, f) = lm_fit(&tape, &xv, &yv, valid.len(), k, &p0, 1e-11, 1e-12);
+                let whole = tape.eval_columns(&xv, &c, valid.len());
+                assert_eq!(f.len(), whole.len(), "{form:?} trial {trial}");
+                for (i, (a, b)) in f.iter().zip(&whole).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "{form:?} trial {trial} row {i}: {a} against {b} at {c:?}"
+                    );
+                }
+                solves += 1;
+            }
+        }
+        assert!(solves >= 100, "{solves} solves");
+    }
 }

@@ -1179,3 +1179,146 @@ impl Engine {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// Every prefix expression of exactly `len` tokens over `leaves`, the unary and the binary
+    /// operators, in a fixed order.
+    fn expressions(
+        len: usize,
+        leaves: &[&str],
+        unary: &[&str],
+        binary: &[&str],
+    ) -> Vec<Vec<String>> {
+        match len {
+            0 => Vec::new(),
+            1 => leaves.iter().map(|l| vec![l.to_string()]).collect(),
+            _ => {
+                let mut out = Vec::new();
+                for u in unary {
+                    for e in expressions(len - 1, leaves, unary, binary) {
+                        out.push(std::iter::once(u.to_string()).chain(e).collect());
+                    }
+                }
+                for b in binary {
+                    for left in 1..len - 1 {
+                        for l in expressions(left, leaves, unary, binary) {
+                            for r in expressions(len - 1 - left, leaves, unary, binary) {
+                                out.push(
+                                    std::iter::once(b.to_string())
+                                        .chain(l.clone())
+                                        .chain(r)
+                                        .collect(),
+                                );
+                            }
+                        }
+                    }
+                }
+                out
+            }
+        }
+    }
+
+    /// THE SCAN BOUND LOSES NO PICK (`worker::find_rule_with_lib`, a36ebc1): the scan stops at the
+    /// first mu tier above the source's mark for a source with constants, and skips the
+    /// constant-free candidates of those tiers for every source. Both rest on one premise, pinned
+    /// here on the mine's own acceptance: a candidate whose spelling is emitted as it is (any
+    /// candidate of a source with constants, which resolves no slot; a constant-free candidate of
+    /// any source), priced above the mark in the measure the library's tiers use (`mine_price` of
+    /// the spelling its class writes, `build_candidate_library`), is refused by `Acceptor::license`,
+    /// in both modes, so no candidate the bound skips could have been picked.
+    #[test]
+    fn the_acceptance_refuses_every_emitted_spelling_priced_above_the_mark() {
+        let cfg = r#"operators:
+  "+": {realization: '+', arity: 2, precedence: 1, commutative: true}
+  "*": {realization: '*', arity: 2, precedence: 2, commutative: true}
+  neg: {realization: simplipy.operators.neg, arity: 1, precedence: 2.5}
+  abs: {realization: simplipy.operators.abs, arity: 1, precedence: 3}
+  exp: {realization: simplipy.operators.exp, arity: 1, precedence: 3}
+  log: {realization: simplipy.operators.log, arity: 1, precedence: 2}
+  sin: {realization: simplipy.operators.sin, arity: 1, precedence: 2}
+  asin: {realization: simplipy.operators.asin, arity: 1, precedence: 2}
+  cosh: {realization: simplipy.operators.cosh, arity: 1, precedence: 2}
+  pow: {realization: simplipy.operators.pow, arity: 2, precedence: 3}
+  besselj: {realization: simplipy.operators.besselj, arity: 2, precedence: 2, family: bessel, slow: true}
+"#;
+        let e = Engine::from_strs(cfg, "[]").expect("engine builds");
+        let vars = s(&["x0"]);
+        let leaves = ["x0", "<constant>", "0", "1", "2"];
+        let unary = ["neg", "abs", "exp", "log", "sin", "asin", "cosh"];
+        let binary = ["+", "*", "pow", "besselj"];
+        let candidates: Vec<Vec<String>> = (1..=3)
+            .flat_map(|len| expressions(len, &leaves, &unary, &binary))
+            .collect();
+        // the sources of lengths 2 to 4 holding the variable: every other one with a constant,
+        // every 9th without
+        let all: Vec<Vec<String>> = (2..=4)
+            .flat_map(|len| expressions(len, &leaves, &unary, &binary))
+            .filter(|t| t.iter().any(|x| x == "x0"))
+            .collect();
+        let has_const = |t: &&Vec<String>| t.iter().any(|x| x == "<constant>");
+        let sources: Vec<Vec<String>> = all
+            .iter()
+            .filter(has_const)
+            .step_by(2)
+            .chain(all.iter().filter(|t| !has_const(t)).step_by(9))
+            .cloned()
+            .collect();
+        let (mut checked, mut with_constants) = (0usize, 0usize);
+        for mode in [RuleMode::Strict, RuleMode::Permissive] {
+            let spec = MineSpec {
+                mode,
+                rtol: 1e-11,
+                atol: 1e-12,
+                min_informative: 8,
+                challenges: 4,
+                retries: 4,
+                node_budget: None,
+            };
+            // each candidate as the library holds it: the spelling its class writes, at its price
+            let priced: Vec<(Vec<String>, u64)> = candidates
+                .iter()
+                .map(|c| e.candidate_class(c, mode).map_or(c.clone(), |(w, _)| w))
+                .filter(|w| !crate::engine::refusals::ground_composite(w, |t| t == "x0"))
+                .map(|w| {
+                    let mu = e.mine_price(&w, mode).unwrap_or(u64::MAX);
+                    (w, mu)
+                })
+                .collect();
+            for src in &sources {
+                let src_has_const = src.iter().any(|t| t == "<constant>");
+                let Some(mark) = e.mine_mark(src, mode) else {
+                    continue;
+                };
+                let Some(acc) = Acceptor::new(&e, &spec, src, mark, &vars, None, &[]) else {
+                    continue; // an atomic mark: nothing is scanned
+                };
+                let Some(cap) = acc.scan_bound() else {
+                    continue; // an unpriceable mark: the token bound stands, no tier is skipped
+                };
+                for (w, mu) in &priced {
+                    let emitted_as_is = src_has_const || !w.iter().any(|t| t == "<constant>");
+                    if *mu > cap && emitted_as_is {
+                        assert!(
+                            acc.license(w).is_err(),
+                            "{mode:?}: {src:?} licenses {w:?}, priced {mu} above its mark {cap}"
+                        );
+                        checked += 1;
+                        with_constants += usize::from(src_has_const);
+                    }
+                }
+            }
+        }
+        eprintln!("scan bound: {checked} refused above the mark, {with_constants} with constants");
+        assert!(
+            checked >= 200 && with_constants >= 50,
+            "{checked} / {with_constants}"
+        );
+    }
+}
