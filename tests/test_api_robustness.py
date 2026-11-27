@@ -325,6 +325,27 @@ def test_the_shipped_names_and_ordinary_new_ones_load() -> None:
     _with_operator(sin={'alias': ['Sin', 'sine']}, xy={'alias': []}, f_2={'alias': ['g']})
 
 
+# API-7 (fixed in the 0.15 fix round): `as_code` interpolated every leaf token and every
+# `variables=` entry into Python source, and the token grammar admits any whitespace-free string
+# as a variable, so a token that is Python source ran when the compiled function was called. A
+# leaf is a number, a special constant or a Python identifier now, a variable an identifier.
+def test_as_code_refuses_a_leaf_that_is_not_an_identifier(engine, tmp_path) -> None:
+    mark = tmp_path / 'ran'
+    payload = f"__import__('pathlib').Path({str(mark)!r}).touch()"
+    with pytest.raises(ValueError, match='neither a number, a constant nor a Python identifier'):
+        engine.as_callable(['+', 'x0', payload], variables=['x0'])(np.array([1.0]))
+    with pytest.raises(ValueError, match='not a Python identifier'):
+        engine.as_callable(['+', 'x0', 'x1'], variables=['x0', f'x1={payload}'])(np.array([1.0]))
+    assert not mark.exists()
+    for leaf, message in (('?0', 'neither a number'), ('<constant>', "anonymous '<constant>'"),
+                          ('lambda', 'neither a number')):
+        with pytest.raises(ValueError, match=message):
+            engine.as_code(['*', '2', leaf])
+    # numbers, constants, identifiers and named constants compile as before
+    f = engine.as_callable(['+', '*', '(-3)', 'x_1', '+', 'np.pi', '*', '1/4', '<constant_a>'])
+    assert f(np.array([1.0]), 2.0)[0] == -3.0 + np.pi + 0.5
+
+
 # ---- the mode's names -------------------------------------------------------------------------
 
 def test_the_deprecated_names_select_strict_and_warn_at_the_caller(engine) -> None:

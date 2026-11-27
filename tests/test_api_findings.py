@@ -47,21 +47,6 @@ def test_mask_refuses_a_malformed_tagged_sequence(engine, tokens) -> None:
         engine.mask(tokens)
 
 
-# API-7: `as_code` interpolates every leaf token into Python source, and the token grammar admits
-# any whitespace-free string as a variable, so a token that is Python source runs when the
-# compiled function is called. The docs disclaim hostile expressions (docs/guides/trust.md), but
-# `to_prefix` and `is_valid` accept the token, and nothing tells a caller that the expression is
-# not one. A leaf that is neither a number, a constant, an operator nor a Python identifier could
-# be refused before compiling, which changes no simplify or complexity answer.
-@pytest.mark.xfail(strict=True, reason='API-7: as_code compiles a leaf token that is Python source')
-def test_as_code_refuses_a_leaf_that_is_not_an_identifier(engine, tmp_path) -> None:
-    mark = tmp_path / 'ran'
-    payload = f"__import__('pathlib').Path({str(mark)!r}).touch()"
-    with pytest.raises(ValueError):
-        engine.as_callable(['+', 'x0', payload], variables=['x0'])(np.array([1.0]))
-    assert not mark.exists()
-
-
 # API-8: a pre-0.15 engine pickle unpickles in 0.15 without the gate `from_config` applies to the
 # same rule files (IncompatibleArtifactError: "serves only rule files mined by simplipy 0.15 or
 # later"), and reads them in the strict canon, not the legacy canon the suites' explicit opt-in

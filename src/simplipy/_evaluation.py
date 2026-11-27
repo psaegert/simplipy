@@ -235,6 +235,11 @@ class _Evaluation(_Reading):
         by its token, where the caller wants it. The anonymous ``<constant>`` is not a
         parameter of its own: name its slots first (:func:`simplipy.utils.explicit_constant_placeholders`).
 
+        Every leaf is written into the source, so a leaf must be a number, a special constant
+        (``np.pi``, ``float("inf")``) or a Python identifier, and every entry of ``variables`` an
+        identifier: anything else (``__import__('os').getpid()``, ``?0``, an anonymous
+        ``<constant>``) raises ``ValueError`` before anything is compiled.
+
         The code is Python source, so it inherits the Python parser's limit of 200 nested
         parentheses: an expression whose calls and parenthesized groups nest deeper than 200
         (``sin`` applied 201 times) raises ``SyntaxError`` here, although every other entry
@@ -271,11 +276,46 @@ class _Evaluation(_Reading):
                     f"the expression or in `variables`")
             prefix = [identifier.get(t, t) for t in prefix]
             variables = [identifier.get(v, v) for v in variables]
+        self._refuse_non_code_leaves(prefix, variables)
         # Every literal is read as its nearest float64 (`evaluator_literal`): an integer
         # beyond 2^53 would otherwise reach Python as an exact int, which numpy's ufuncs and
         # float arithmetic reject above int64 and float64's range.
         prefix = [evaluator_literal(t) for t in prefix]
         return codify(self.prefix_to_infix(prefix, realization=True), variables)
+
+    def _refuse_non_code_leaves(self, prefix: list[str], variables: list[str]) -> None:
+        """Refuse, before anything is compiled, a leaf of ``prefix`` or an entry of ``variables``
+        that would reach the Python source as something other than a number, a constant or a
+        name: the token grammar admits any whitespace-free string as a variable, so a leaf
+        ``__import__('os').getpid()`` would otherwise RUN when the compiled function is called.
+        A leaf is a numeral, a special constant (``np.pi``, ``float("inf")``) or a Python
+        identifier that is no keyword; ``variables`` holds identifiers only."""
+        from keyword import iskeyword
+
+        from .utils import is_numeric_string
+
+        def name(t: str) -> bool:
+            return t.isidentifier() and not iskeyword(t)
+
+        arity = self._effective_arity
+        for t in prefix:
+            if arity.get(t) or t in _SPECIAL_LEAVES or name(t):
+                continue
+            bare = t[1:-1] if t.startswith('(') and t.endswith(')') else t
+            if is_numeric_string(bare):
+                continue
+            if t == '<constant>':
+                raise ValueError(
+                    "as_code cannot compile an anonymous '<constant>': it is no parameter of its "
+                    "own; name its slots first (simplipy.utils.explicit_constant_placeholders)")
+            raise ValueError(
+                f'as_code compiles every leaf into Python source, and {t!r} is neither a number, '
+                f'a constant nor a Python identifier')
+        for v in variables:
+            if not isinstance(v, str) or not name(v):
+                raise ValueError(
+                    f'as_code compiles each variable into a Python signature, and {v!r} is not '
+                    f'a Python identifier')
 
     def as_callable(
             self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray',
