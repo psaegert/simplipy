@@ -1032,10 +1032,16 @@ class SimpliPyEngine(_Evaluation):
         free and an exponent -1 is division, literals pay their description length on the
         exact value, symbols pay their entry of the symbol table.
 
-        Every number is priced as it is written: a number carrying more digits than its
-        float needs costs those digits, and :meth:`simplify` writes the cheaper value its
-        mode admits (``strict``: float64's double; ``permissive``: the double nearest the
-        value). ``strict`` and ``permissive`` admit a number only where its numerator and
+        The code book prices every number as it is spelled: a number carrying more digits
+        than its float needs costs those digits (:meth:`written_complexity` charges them).
+        The reading, like :meth:`simplify`, writes the cheaper value its mode admits wherever
+        a literal lands (the whole expression, a sum's constant term, a coefficient, a power's
+        literal operand), so ``complexity('0.1000000000000000055511151231257827')`` is
+        ``complexity('0.1')``: ``strict`` reads float64's double of the literal,
+        ``permissive`` whichever of the two doubles around it prints shorter, which need not
+        be the nearest (``0.3000000000000000444`` reads as ``0.3``). A ground constant is read
+        as written (above), so ``sin(0.1000000000000000055511151231257827)`` pays every
+        digit. ``strict`` and ``permissive`` admit a number only where its numerator and
         denominator are at most 2^1022, and hold any other value in pieces
         (``1.2345678901234567e-305`` as written, and its quotient by ``9.876543210987654e-10``
         as that literal times a number), which cost at most what the exact number is priced
