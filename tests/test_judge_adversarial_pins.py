@@ -300,3 +300,35 @@ HELD = [
 def test_true_rules_are_held(lhs, rhs) -> None:
     r = _judge(lhs, rhs)
     assert r['tier'] == 'core', r
+
+
+#: Zeros of I at negative non-integer orders (kernels review K15): scipy's kernel is not within its
+#: relative bound there (`interval::SCIPY_KERNEL_MARGIN`), so the interval layer's kernel reading
+#: of a point (`interval::bessel_point`) would exclude the true value. The judge reaches that
+#: reading only where the table leaves I unresolved (order past 1e3, argument past 1e4); within
+#: the caps its point reading at float resolution takes the table's value.
+I_ZEROS = [(-1.5, 1.1996786402577342), (-1.25, 0.9321309848066273), (-1.25, 0.932130984806627)]
+
+
+@pytest.mark.parametrize('nu, x', I_ZEROS)
+def test_the_point_reading_near_a_zero_of_i_is_the_tables(nu, x) -> None:
+    from fractions import Fraction
+
+    from simplipy import _core
+    mpmath = pytest.importorskip('mpmath')
+
+    def lit(v: float) -> str:
+        f = Fraction(v)
+        return f'{f.numerator}/{f.denominator}'
+
+    with mpmath.workdps(60):
+        true = float(mpmath.besseli(nu, mpmath.mpf(x)))
+    kernel = float(ops.besseli(nu, x))
+    assert abs(kernel - true) > 1e-3 * abs(true)   # far past the kernel's margin
+    f = Fraction(x)
+    point = [('q', str(f.numerator), str(f.denominator))]
+    side = ['besseli', lit(nu), 'x0']
+    reading = _core.table_float_resolution(side, [lit(true)], ['x0'], point, dict(_contract.ARITY))
+    assert reading is not None and reading[0] == 'agree', reading
+    reading = _core.table_float_resolution(side, [lit(kernel)], ['x0'], point, dict(_contract.ARITY))
+    assert reading is not None and reading[0] == 'differ', reading
