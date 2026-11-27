@@ -76,7 +76,7 @@ def test_the_setting_is_validated_and_normalized() -> None:
     assert _operator_max_length(None, _ARITY) == {}
     normalized = _operator_max_length({'log': 3, 'exp': 2}, _ARITY)
     assert normalized == {'exp': 2, 'log': 3} and list(normalized) == ['exp', 'log']
-    for bad in ({'sin': 2}, {'exp': 0}, {'exp': True}, {'exp': 2.0}, {'exp': '2'}, ['exp']):
+    for bad in ({'sin': 2}, {'exp': -1}, {'exp': True}, {'exp': 2.0}, {'exp': '2'}, ['exp']):
         with pytest.raises(ValueError, match='operator_max_length'):
             _operator_max_length(bad, _ARITY)
 
@@ -111,6 +111,7 @@ def test_a_mine_reads_the_setting_wherever_it_builds_the_universe(tmp_path, monk
     for name in ('mined.json', 'mined_permissive.json'):
         sidecar = json.load(open(tmp_path / 'm' / f'{name}.provenance.json'))
         assert sidecar['params']['operator_max_length'] == {'exp': 2}
+        assert sidecar['mined_operators'] == sidecar['operators']
         assert {int(k): v['complete_count'] for k, v in sidecar['universe'].items()} == counts
 
     engine = _engine(tmp_path / 'c')
@@ -225,3 +226,29 @@ def test_the_cli_forwards_the_config_key(tmp_path) -> None:
     main(['find-rules', '-e', str(tmp_path / 'config.yaml'), '-c', str(mine_cfg), '-o', str(out)])
     params = json.load(open(str(out) + '.provenance.json'))['params']
     assert params['operator_max_length'] == {'exp': 2, 'log': 2}
+
+
+def test_an_unmined_operator_is_in_no_rule_and_verify_mine_checks_it(tmp_path, monkeypatch) -> None:
+    """An operator bounded at 0 is supported and not mined: the sidecar's mined operators leave it
+    out, no rule of the files mentions it, and verify-mine fails a file one of whose rules does
+    (`unmined`)."""
+    out = _mine(tmp_path / 'u', operator_max_length={'exp': 0})
+    for name in ('mined.json', 'mined_permissive.json'):
+        sidecar = json.load(open(tmp_path / 'u' / f'{name}.provenance.json'))
+        assert sidecar['params']['operator_max_length'] == {'exp': 0}
+        assert 'exp' in sidecar['operators'] and 'exp' not in sidecar['mined_operators']
+        rules = json.load(open(tmp_path / 'u' / name))
+        assert not any('exp' in lhs + rhs for lhs, rhs in rules)
+    monkeypatch.setattr(mining, '_overlap_gate', lambda *args, **kwargs: ([], [], [], []))
+
+    def judge(pairs):
+        return ['core'] * len(pairs)
+
+    clean = mining.verify_mine(str(out), 'strict', _OPERATORS, judge=judge)
+    assert clean['gates']['unmined'] == {'ok': True, 'count': 0, 'examples': []}
+    with open(out) as file:
+        rules = json.load(file)
+    with open(out, 'w') as file:
+        json.dump(rules + [[['log', 'exp', '_0'], ['_0']]], file)
+    dirty = mining.verify_mine(str(out), 'strict', _OPERATORS, judge=judge)
+    assert dirty['gates']['unmined']['examples'] == [[['log', 'exp', '_0'], ['_0']]]

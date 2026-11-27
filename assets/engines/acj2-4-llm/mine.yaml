@@ -28,6 +28,9 @@ confirm: true
 relaxed_kruskal: true
 prune: covered
 promote_sorts: true
+# Supported and not mined (an operator bounded at 0): harmonic, which no expression over the
+# other operators spells, so a rule mentioning it would only bring it in.
+operator_max_length: {harmonic: 0}
 # LLM channel: the acj-5-4-llm batch (194 proposals, sha256
 # b97573c2813d0bb535364ef32817c71549fe40e76a794c37b0403c09827bf359), placed beside this file.
 proposals: llm_proposals.json

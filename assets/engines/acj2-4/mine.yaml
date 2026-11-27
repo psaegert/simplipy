@@ -29,3 +29,6 @@ confirm: true
 relaxed_kruskal: true
 prune: covered
 promote_sorts: true
+# Supported and not mined (an operator bounded at 0): harmonic, which no expression over the
+# other operators spells, so a rule mentioning it would only bring it in.
+operator_max_length: {harmonic: 0}

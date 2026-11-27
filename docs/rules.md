@@ -286,12 +286,16 @@ promote_sorts: true
 offer_final_rules: true
 
 # Optional: the per-length operator set. An operator named here appears only in
-# sources and candidates of at most that many tokens (here: the four mined
-# through length 4 and not at length 5); the others appear at every length. The
-# mine's cell, where overlaps are completed and demanded, is the universe this
-# gives. Recorded in the sidecar's parameters; a checkpoint written under another
-# setting is not resumed.
-# operator_max_length: {erfc: 4, bessely: 4, besseli: 4, besselk: 4}
+# sources and candidates of at most that many tokens (here: three mined through
+# length 4 and not at length 5); the others appear at every length. An operator
+# bounded at 0 is supported and not mined: the engine reads, evaluates, prices and
+# writes it, and no rule mentions it, so no answer introduces it (the 0.15 mines
+# leave out erfc, whose 1 - erf(u) spelling loses its digits past u = 6, and
+# harmonic, which no expression over the other operators spells). The mine's
+# cell, where overlaps are completed and demanded, is the universe this gives.
+# Recorded in the sidecar's parameters, with the mined operators
+# (`mined_operators`); a checkpoint written under another setting is not resumed.
+# operator_max_length: {erfc: 0, harmonic: 0, bessely: 4, besseli: 4, besselk: 4}
 
 # Optional: LLM/human-proposed rules, certified against the mined state at the
 # end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
@@ -376,6 +380,7 @@ simplipy verify-mine rules_permissive.json --mode permissive -e config.yaml
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
 | `offered` | (`permissive` only) the sidecar pins the strict file the mine was offered, and it lies beside the file with the pinned sha256 |
 | `covers_strict` | (`permissive` only) the file covers the pinned strict file, as permissive includes strict: on each strict rule's generic instance (each placeholder a fresh variable), the engine holding the file answers with something no dearer, in permissive's price, than the rule's right side |
+| `unmined` | no rule mentions an operator the mine does not mine (bounded at 0 in the sidecar's `operator_max_length`) |
 | `ground_exact` | every ground rule holds in the file's mode by the ground evaluator the engine and the judge read: in `strict` its two sides are the same double, or the reals give them one value and float64's two values agree in kind (`exp(sin(np.pi)) -> 1` holds, 1.0000000000000002 and 1.0 both being finite), in `permissive` the table's two values agree at float resolution (`0*tan(asin(1)) -> 0` fails: the left side has no value) |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the

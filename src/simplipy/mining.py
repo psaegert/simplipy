@@ -900,8 +900,9 @@ def _unjoined_overlaps(engine: Any, rule_mode: str, rules: Any, prog: Any = None
 def _operator_max_length(setting: Any, operators: Any) -> dict[str, int]:
     """THE PER-LENGTH OPERATOR SET of a mine, normalized: ``{operator: n}`` keeps ``operator``
     out of every source and candidate longer than ``n`` tokens; an operator it does not name
-    appears at every length (``None`` and ``{}`` name none). Each key must be one of
-    ``operators`` and each bound a positive integer. Sorted by operator, as the sidecar's
+    appears at every length (``None`` and ``{}`` name none), and one bounded at 0 at none: the
+    engine supports it, and the mine does not mine it (``_unmined``). Each key must be one of
+    ``operators`` and each bound a non-negative integer. Sorted by operator, as the sidecar's
     parameters and the checkpoint's key record it."""
     if setting is None:
         return {}
@@ -913,10 +914,18 @@ def _operator_max_length(setting: Any, operators: Any) -> dict[str, int]:
         raise ValueError(f'operator_max_length names operators the engine does not have: '
                          f'{", ".join(unknown)}')
     for op, bound in setting.items():
-        if isinstance(bound, bool) or not isinstance(bound, int) or bound < 1:
-            raise ValueError(f'operator_max_length[{op!r}] must be a positive integer, '
+        if isinstance(bound, bool) or not isinstance(bound, int) or bound < 0:
+            raise ValueError(f'operator_max_length[{op!r}] must be a non-negative integer, '
                              f'got {bound!r}')
     return {str(op): int(setting[op]) for op in sorted(setting)}
+
+
+def _unmined(operator_max_length: dict | None) -> set[str]:
+    """THE OPERATORS A MINE SUPPORTS AND DOES NOT MINE: those its per-length operator set bounds
+    at 0 (``_operator_max_length``). They appear in no source and no candidate, so no rule of the
+    mine mentions one: not a proposal (its vocabulary leaves them out), not a completion (the cell
+    holds none), and verify-mine checks the file (``unmined``)."""
+    return {op for op, bound in (operator_max_length or {}).items() if bound == 0}
 
 
 def _excluded_at_length(length: int, operator_max_length: dict | None) -> set[str]:
@@ -1944,7 +1953,8 @@ class RuleMiner:
                     dummy_variables, X_data, X_confirm, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries, rtol, atol,
                     min_informative, mine_seed, confirm_seed, verbose, rule_mode,
-                    lane_judge or judge, judged, prog=prog, node_budget=node_budget)
+                    lane_judge or judge, judged, prog=prog, node_budget=node_budget,
+                    unmined=_unmined(operator_max_length))
                 for incident in judge_loop.pop('given_up'):
                     _given_up({'mode': file_mode, 'length': len(incident['source']),
                                'stage': stage, **incident}, prov)
@@ -2922,6 +2932,10 @@ class RuleMiner:
                 } for length in sorted(expressions_of_length)
             },
             'operators': sorted(self.engine.operator_arity),
+            # the operators the universe holds at some length: the engine's, less those the
+            # mine supports and does not mine (bounded at 0 in `operator_max_length`)
+            'mined_operators': sorted(set(self.engine.operator_arity)
+                                      - _unmined(operator_max_length)),
         }
 
     @staticmethod
@@ -3064,7 +3078,8 @@ class RuleMiner:
             print(f'Candidate library: {library.n_candidates:,} candidates '
                   f'({library.n_filtered:,} var-free filtered)')
 
-        vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
+        vocabulary = set(leaf_nodes) | (set(self.engine.operator_arity)
+                                        - _unmined(operator_max_length))
         certified: list = []
         fit = dict(challenges=constants_fit_challenges, retries=constants_fit_retries,
                    rtol=rtol, atol=atol, min_informative=min_informative)
@@ -3140,12 +3155,14 @@ class RuleMiner:
             judge: Callable,
             judged: dict,
             prog: Any = None,
-            node_budget: int | None = None) -> tuple[dict[str, int], list[dict[str, Any]],
-                                                     dict[str, Any]]:
+            node_budget: int | None = None,
+            unmined: Collection[str] = ()) -> tuple[dict[str, int], list[dict[str, Any]],
+                                                    dict[str, Any]]:
         """The proposal channel of :meth:`find_rules`: certify externally proposed rules
         against the just-mined rule state and merge the survivors. ``prog`` (a
-        :class:`~simplipy.progress.Progress`) reports the certification as it runs, and
-        ``node_budget`` is the mine's scan budget (``interval_node_budget``).
+        :class:`~simplipy.progress.Progress`) reports the certification as it runs,
+        ``node_budget`` is the mine's scan budget (``interval_node_budget``), and ``unmined``
+        the operators the mine does not mine (``_unmined``), which no proposal may hold.
 
         PLUMBING ONLY -- no new certification semantics. Each proposal runs the exact
         chain of :meth:`certify_rules` (vocabulary/validity check; shortest-first scan
@@ -3206,7 +3223,7 @@ class RuleMiner:
         assert self.engine._core is not None
         counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0,
                   'certified_then_dropped': 0}
-        vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
+        vocabulary = set(leaf_nodes) | (set(self.engine.operator_arity) - set(unmined))
         fit = dict(challenges=constants_fit_challenges, retries=constants_fit_retries,
                    rtol=rtol, atol=atol, min_informative=min_informative,
                    node_budget=node_budget)
@@ -3983,6 +4000,11 @@ def _verify_mine(rules_path: str, mode: Any, operators: dict, *,
         [[key, value] for key, value in sorted(recorded_env.items())]
         + [[key, value] for key, value in env_overrides().items()])
     gates['ground_exact'] = _ground_rules_refused(engine, rules, mode)
+    # no rule mentions an operator the mine does not mine (`_unmined`, from the sidecar's
+    # per-length operator set)
+    unmined = _unmined(params.get('operator_max_length'))
+    gates['unmined'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
+                        if unmined & (set(lhs) | set(rhs))]
     if mode == 'permissive':
         gates['offered'] = _offered_pins_broken(rules_path, sidecar.get('offered'))
         # permissive includes strict: the file covers every rule of the strict file it was offered
