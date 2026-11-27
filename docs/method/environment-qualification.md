@@ -59,8 +59,9 @@ recording, alongside the mine parameters and the core build stamp:
 
 - **The environment**: python, platform, machine, libc, and the
   numpy/scipy/mpmath versions.
-- **The `libm_fingerprint`**: a sha256 digest over a fixed battery of 36
-  probes evaluated **through the deployed folding path** — not through a
+- **The `libm_fingerprint`**: a sha256 digest over a fixed battery of 57
+  probes (the elementary functions, `erf`, `erfc`, `atan2` and the Bessel
+  functions, each in the regimes its code takes) evaluated **through the deployed folding path** — not through a
   separately-linked libm, so the fingerprint measures the code path that
   actually minted the artifact. Two sidecars are comparable-or-not by
   inspecting one field.
@@ -72,6 +73,14 @@ recording, alongside the mine parameters and the core build stamp:
 - **The measure fingerprint**: the μ constants and probe values with a
   digest, so artifacts mined under different reduction orderings are
   distinguishable from provenance alone.
+
+## The reference environment
+
+Every rule file published for 0.15 is mined in one environment: Ubuntu 24.04
+(glibc 2.39), CPython 3.13.13, numpy 2.5.4, scipy 1.18.1 and mpmath 1.4.1, on
+x86_64. Each sidecar records it, with the libm fingerprint, and a mine refuses to
+resume from a checkpoint written in another environment. A mine split across
+machines runs every part in this environment.
 
 ## What the qualification means in practice
 

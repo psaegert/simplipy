@@ -213,10 +213,10 @@ simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yam
 The published `acj-5-4-llm` artifact is this machinery at its shipped scale:
 complete sources through length 5, targets through length 4, plus the
 LLM-augmented proposal lane, certified by the same gates as the mined rules.
-It is mined and independently gate-verified — 138,651 rules in
-`rules_strict.json` and 139,299 in `rules_permissive.json`, both modes clean, with 13
-constant folds that hold in the reals and not in float64 relocated out of the strict set by
-the gate (each present in the permissive set). The exact mine configuration ships with the
+<!-- RE-MEASURE after the 0.15 re-mine: the rule counts below are the 0.14.0 mine's. -->
+As mined by simplipy 0.14.0 it held 138,651 rules in its f64 file (`rules.json`) and 139,299 in
+its permissive file (`rules_corpus.json`); 0.15 refuses those files, and the 0.15 mine's counts
+are recorded in its provenance sidecars. The exact mine configuration ships with the
 asset as `mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml -o rules_strict.json -v --reset-rules`
 reproduces the files byte-for-byte at the recorded environment. The
 configuration format, annotated:
@@ -304,10 +304,12 @@ offer_final_rules: true
 # proposals: ./llm_proposals.json
 ```
 
-With this operator set the complete universes through length 4 hold 413,772 sources
+With these leaves and acj-4's 23-operator set (17 unary and 6 binary operators) the
+complete universes through length 4 hold 413,772 sources
 (29 / 493 / 13,427 / 399,823 at lengths 1–4), the enumeration is cross-checked
 against the counting recurrence, and the length-4 tier dominates: a full mine of
-this cell completes in about 25 minutes on a 16-core desktop host. Cost climbs
+this cell took about 25 minutes on a 16-core desktop host under 0.14. The 0.15 vocabulary
+has more operators, so its universes, and its mines, are larger. Cost climbs
 steeply with either cap. Length 5 — the published artifact's source tier — adds
 roughly 13 million sources, and the target cap sizes the candidate library every
 source is judged against.

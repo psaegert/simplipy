@@ -5,9 +5,11 @@ machine-generated expressions in symbolic-regression and ML-training
 pipelines, where per-expression cost is multiplied by the size of the dataset.
 
 One rule drives the engine. Expressions are canonicalized into flat AC bags
-with exact rational arithmetic, and a rewrite is applied only when the
-description length μ strictly drops. Termination, loop-freedom,
-never-worse-than-input, and idempotence follow from that rule.
+with exact rational arithmetic, and a rewrite is applied only when it moves the
+expression strictly down one fixed order: first by its description length μ,
+then, between two forms of equal μ, by a canonical order. Termination,
+loop-freedom, never-worse-than-input (in μ) and idempotence follow from that
+rule (see the [formal specification](formal.md#5-the-reduction-ordering)).
 
 Tokens are parsed straight into the
 canonical state (interned ids in flat bags) and serialized straight back
@@ -28,6 +30,8 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 
 ## Where to go
 
+- **Coming from 0.14?** — [Upgrading to 0.15](upgrading.md): what changes in
+  answers, prices, rule files and names, and what to do about it.
 - **Use it** — [Getting started](getting-started.md), then the guides:
   [simplifying](guides/simplify.md), [artifacts](guides/artifacts.md),
   [masking](guides/masking.md), [trust](guides/trust.md),

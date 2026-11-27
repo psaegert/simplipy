@@ -50,6 +50,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Upgrading to 0.15: upgrading.md
   - Guides:
     - Simplifying expressions: guides/simplify.md
     - Displaying expressions: guides/prettify.md

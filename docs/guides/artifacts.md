@@ -12,7 +12,7 @@ configuration). Each artifact is byte-deterministically reproducible from the co
 
 | file | mode | contains |
 |---|---|---|
-| `rules_strict.json` | `Mode.strict` (the default) | every rule the deployed float64 evaluator reproduces |
+| `rules_strict.json` | `Mode.strict` (the default) | the rules that hold in strict: float64 reproduces them within 8 units in the last place, or they are true in the reals and float64 keeps every value's kind |
 | `rules_permissive.json` | `Mode.permissive` | every rule that holds in permissive: every rule that holds in strict (permissive includes strict), and the rules that agree with the reals' values up to float resolution or give a value where the input has none |
 
 The two files carry their mode in their name. `config.yaml` names its rule files

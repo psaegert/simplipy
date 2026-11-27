@@ -25,9 +25,13 @@ function simplify(expr, max_passes=48, mode=strict, effort=DEFAULT_EFFORT):
                                           # defence-in-depth, not the mechanism
 ```
 
-Every step preserves the function almost everywhere: like-term collection inside the
-canonical constructors, rule application, and the exact fold. The result is therefore
-sound, never costlier than the input in the measure the chain itself descends — each
+Every step (like-term collection inside the canonical constructors, rule application, and
+the exact fold) keeps the promise of its mode: in `strict`, the step holds as described under
+[What `strict` mode does and does not promise](#what-strict-mode-does-and-does-not-promise);
+in `permissive`, the step agrees with the reals up to float resolution, holds in `strict`, or
+is one of permissive's own named simplifications, which can drop a domain or a sign
+(`sqrt(x^2)` becomes `x`). The promise is per step, not for the whole answer. The result is
+never costlier than the input in the measure the chain itself descends — each
 mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
 mode=m)` is that measure: each mode reads an expression into its own canonical form,
 because the modes accept different simplifications as true (`strict` follows the float
@@ -336,10 +340,13 @@ between modes raises `TypeError`. The rule sets are nested all the same: `permis
 matcher and promises for that step what `strict` promises; `permissive` adds the rules true in the
 reals at float resolution and its own simplifications.
 
-- **`Mode.strict`** (the default) is sound as the deployed float64 evaluator computes, wherever no
-  operation overflows or underflows. Use it whenever the output will be evaluated in floating
-  point. Where an operation overflows or underflows, an answer may hold the evaluator's value
-  there or the true one: `log(exp(x0))` is `x0`, where float64 computes `inf` past x0 = 709.78 (see
+- **`Mode.strict`** (the default) is for outputs that will be evaluated in floating point. Every
+  step it takes is reproduced by the deployed float64 evaluator (within 8 units in the last
+  place), or is true in the reals with float64 giving both sides the same kind of value at every
+  point (both finite, the same infinity, both undefined). Where an operation overflows or
+  underflows, an answer may hold the evaluator's value there or the true one: `log(exp(x0))` is
+  `x0`, where float64 computes `inf` past x0 = 709.78. The promise is per step: the answer is not
+  promised to match float64's evaluation of the input within rounding (see
   [What `strict` mode does and does not promise](#what-strict-mode-does-and-does-not-promise)).
 
 - **`Mode.permissive`** is for training-corpus canonicalisation ("beautification"). It
@@ -490,9 +497,11 @@ x0 = 0, 1.2e-16 against -0), as `floor(x0 + 1)` and `floor(x0) + 1` differ at x0
 float64 makes zeros of opposite sign there (`0*asin(x0)` and `0*acos(x0)` for x0 < 0), or whose
 one side turns on a zero's sign that the other does not read (`atan2(0*x0, -1)` against `pi`),
 is not in the `strict` set; one whose sides differ at an isolated point only (`log(exp(x0))` and
-`x0` at x0 = -0) is. So a rewrite keeps float64's kind of every value, and agrees with float64's
-evaluation of its input within rounding, except where a jump or a pole lies between float64's
-argument and the real one.
+`x0` at x0 = -0) is. So a rewrite keeps float64's kind of every value. It does not promise
+that float64 computes the answer within rounding of the input: where float64's own evaluation
+of the input is ill-conditioned (a jump or a pole between float64's argument and the real one,
+or a function so steep that its rounding is magnified), the two can differ by much more than
+rounding, though never in kind. The answer is then the closer of the two to the real value.
 
 Overflow and underflow are a special case. An operation overflows when its operands and its
 exact value are finite but its float is `±inf` (`exp(800)`), and underflows when its exact
@@ -509,7 +518,10 @@ engine.simplify('rootn(exp(800.5), 2)')   # -> 'exp(1601/4)'
 A pole is not an overflow (`atanh(1)` and `log(0)` are infinite exactly), and saturation is
 not one either: `tanh(20)` is exactly `1.0` in float64 without leaving the range, so
 `atanh(tanh(x0))` keeps the evaluator's `inf` and `strict` does not rewrite it to `x0`. Where `|x|`
-is shown at most 19, short of that, it does: `atanh(tanh(19*sin(x0)))` is `19*sin(x0)`.
+is shown at most 19, short of that, it does: `atanh(tanh(19*sin(x0)))` is `19*sin(x0)`. Both
+are finite everywhere, so the kinds agree, but the digits need not: at x0 = pi/2 float64
+evaluates the input to 18.71 (`tanh(19)` rounds to the double just below 1) and the answer to 19,
+the real value.
 
 It does **not** promise that a *sequence* of rewrites carries the same bound. Each rule
 carries it individually; simplification composes rules, and floating-point error composes
@@ -568,12 +580,13 @@ uses each mode on a different side of its pipeline:
 
 - **Inference and recovery scoring use `Mode.strict`.** At test time the data comes from an unknown
   true function; the predicted skeleton must be simplified *without* changing what it computes, or
-  the fit and the score would drift, and the data is evaluated in floating point -- which is
-  exactly the soundness `strict` preserves.
+  the fit and the score would drift, and the data is evaluated in floating point. `strict`'s
+  per-step promise (each step true in float64, or true in the reals with float64's kinds kept)
+  is what makes that safe.
 
 That split is the whole reason the permissive mode exists: `permissive` maximizes canonicalization where the
-simplified form *defines* the data, and `strict` preserves what the evaluator computes where
-it must not change.
+simplified form *defines* the data, and `strict` keeps every step faithful to the reals and to
+float64's kinds where the function must not change.
 
 ## Key components
 
