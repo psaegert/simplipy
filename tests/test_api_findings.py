@@ -47,15 +47,6 @@ def test_mask_refuses_a_malformed_tagged_sequence(engine, tokens) -> None:
         engine.mask(tokens)
 
 
-# API-5: an alias that names another declared operator loads silently, and then the infix reader
-# and the prefix reader disagree: with `sin: {alias: [cos]}`, `simplify('cos(x0)')` is `sin(x0)`
-# while `simplify(['cos', 'x0'])` is `cos(x0)`. Defined functions refuse such a name; aliases do not.
-@pytest.mark.xfail(strict=True, reason='API-5: an alias may shadow another operator (infix and prefix then disagree)')
-def test_an_alias_naming_another_operator_is_refused() -> None:
-    with pytest.raises(ValueError):
-        _with_operator(sin={'alias': ['cos']})
-
-
 # API-7: `as_code` interpolates every leaf token into Python source, and the token grammar admits
 # any whitespace-free string as a variable, so a token that is Python source runs when the
 # compiled function is called. The docs disclaim hostile expressions (docs/guides/trust.md), but

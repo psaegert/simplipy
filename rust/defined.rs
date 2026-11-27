@@ -98,26 +98,17 @@ pub fn read_section(
     Ok(out)
 }
 
-/// A defined function's name: an identifier starting with a letter (so never an argument or a
-/// sigil), not one of the engine's operators or aliases, and not a name the infix language
-/// reserves for a constant.
+/// A defined function's name: a function name as an operator's is
+/// ([`crate::operators::name_refusal`]: an identifier starting with a letter, so never an
+/// argument or a sigil, and not the infix spelling of a constant or a variable), and not one of
+/// the engine's operators or aliases.
 fn check_name(name: &str, ops: &Operators) -> Result<(), String> {
-    let identifier = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if !identifier {
-        return Err(format!(
-            "defined_functions: {name:?} is not a function name (letters, digits and '_', \
-             starting with a letter)"
-        ));
+    if let Some(why) = crate::operators::name_refusal(name) {
+        return Err(format!("defined_functions: {name:?} {why}"));
     }
     if ops.arity_of(name).is_some() || ops.operator_aliases.contains_key(name) {
         return Err(format!(
             "defined_functions: {name:?} is already an operator or an alias of this config"
-        ));
-    }
-    if matches!(name, "pi" | "e" | "inf" | "nan") {
-        return Err(format!(
-            "defined_functions: {name:?} is the infix spelling of a constant"
         ));
     }
     Ok(())

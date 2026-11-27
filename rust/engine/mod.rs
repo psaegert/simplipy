@@ -171,6 +171,44 @@ impl Engine {
         // supplying realizations/precedences -- but never repurpose them: a conflicting
         // arity or an alias shadowing a core token would silently change what the engine's
         // own output means. Fail loudly at build instead.
+        //
+        // NAMES: an operator's name and each alias is a function name
+        // (`crate::operators::name_refusal`), and an alias names one operator and is none: an
+        // alias naming another operator made the readers disagree (with `sin: {alias: [cos]}`
+        // the infix reader read `cos(x0)` as `sin(x0)`, the prefix readers as `cos x0`).
+        let mut alias_owner: FxHashMap<&str, &str> = FxHashMap::default();
+        for (name, spec) in &specs {
+            if crate::operators::core_arity(name).is_none() {
+                if let Some(why) = crate::operators::name_refusal(name) {
+                    return Err(format!("config error: the operator name {name:?} {why}").into());
+                }
+            }
+            for alias in &spec.alias {
+                let refusal = crate::operators::name_refusal(alias).or_else(|| {
+                    specs
+                        .contains_key(alias.as_str())
+                        .then_some("is an operator of this config")
+                });
+                if let Some(why) = refusal.filter(|_| crate::operators::core_arity(alias).is_none())
+                {
+                    return Err(format!(
+                        "config error: operator {name:?} declares the alias {alias:?}, which {why}; \
+                         an alias is another name of its one operator"
+                    )
+                    .into());
+                }
+                if let Some(other) = alias_owner
+                    .insert(alias.as_str(), name.as_str())
+                    .filter(|o| *o != name.as_str())
+                {
+                    return Err(format!(
+                        "config error: the alias {alias:?} is declared by both {other:?} and \
+                         {name:?}; an alias names one operator"
+                    )
+                    .into());
+                }
+            }
+        }
         for (name, spec) in &specs {
             if let Some(core_a) = crate::operators::core_arity(name) {
                 if spec.arity != core_a {

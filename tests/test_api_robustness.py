@@ -279,6 +279,52 @@ def test_an_alias_reads_as_its_operator_in_infix(engine, alias, operator) -> Non
     assert engine.convert_expression([alias, 'x0']) == [operator, 'x0']
 
 
+# API-5 (fixed in the 0.15 fix round): an alias naming another declared operator loaded silently,
+# and then the infix reader and the prefix readers disagreed (with `sin: {alias: [cos]}`,
+# `simplify('cos(x0)')` was `sin(x0)` and `simplify(['cos', 'x0'])` was `cos(x0)`); odd operator
+# names and aliases loaded too. A name is a function name now: an identifier starting with a
+# letter, not a constant's or a variable's spelling, the core's `+ - * /` aside; an alias names
+# one operator and is none.
+def _with_operator(**changes):
+    from simplipy.io import load_config
+    config = load_config(_BARE_CONFIG)
+    operators = copy.deepcopy(config['operators'])
+    for name, spec in changes.items():
+        operators[name] = dict(operators.get(name, operators['sin']), **spec)
+    defined = dict(config.get('defined_functions') or {})
+    return SimpliPyEngine(operators, [], defined_functions=defined)
+
+
+@pytest.mark.parametrize('alias, message', [
+    ('cos', 'which is an operator of this config'), ('sin', 'which is an operator of this config'),
+    ('ln', 'declared by both'), ('3', 'not a function name'), ('x1', 'spelling of a variable'),
+    ('pi', 'infix spelling of a constant'), ('np.sin', 'not a function name')])
+def test_an_alias_naming_another_operator_or_no_function_is_refused(alias, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        _with_operator(sin={'alias': [alias]})
+
+
+@pytest.mark.parametrize('name, message', [
+    ('', 'not a function name'), ('(', 'not a function name'), ('<add>', 'not a function name'),
+    ('np.pi', 'not a function name'), ('_0', 'not a function name'), ('x0', 'spelling of a variable'),
+    ('v12', 'spelling of a variable'), ('e', 'infix spelling of a constant')])
+def test_an_odd_operator_name_is_refused(name, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        _with_operator(**{name: {'alias': []}})
+
+
+def test_a_defined_function_name_follows_the_operator_name_rule() -> None:
+    from simplipy.io import load_config
+    config = load_config(_BARE_CONFIG)
+    defined = dict(config['defined_functions'], x0={'arity': 1, 'definition': 'sin(_0)'})
+    with pytest.raises(ValueError, match='spelling of a variable'):
+        SimpliPyEngine(config['operators'], [], defined_functions=defined)
+
+
+def test_the_shipped_names_and_ordinary_new_ones_load() -> None:
+    _with_operator(sin={'alias': ['Sin', 'sine']}, xy={'alias': []}, f_2={'alias': ['g']})
+
+
 # ---- the mode's names -------------------------------------------------------------------------
 
 def test_the_deprecated_names_select_strict_and_warn_at_the_caller(engine) -> None:

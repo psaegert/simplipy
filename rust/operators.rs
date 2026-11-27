@@ -30,6 +30,30 @@ pub const CORE_SERIALIZATION_OPS: [(&str, u8, f64, Option<&str>); 8] = [
     ("rootn", 2, 3.0, Some("simplipy.operators.rootn")),
 ];
 
+/// Why `name` cannot name an operator, an alias or a defined function (`None` when it can): a
+/// name is an identifier starting with a letter (letters, digits and `_`), so every reader reads
+/// it as a function and never as a number, a slot, a sigil, a tag or a constant token; it is not
+/// the infix spelling of a constant (`pi`, `e`, `inf`, `nan`); and it is not a variable's (`x`
+/// or `v` and digits, as `simplipy.normalization` reads one). The core's symbolic tokens (`+`,
+/// `-`, `*`, `/`) are named by the engine, not by this rule.
+pub fn name_refusal(name: &str) -> Option<&'static str> {
+    let identifier = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !identifier {
+        return Some("is not a function name (letters, digits and '_', starting with a letter)");
+    }
+    if matches!(name, "pi" | "e" | "inf" | "nan") {
+        return Some("is the infix spelling of a constant");
+    }
+    if name.len() > 1
+        && name.starts_with(['x', 'X', 'v', 'V'])
+        && name[1..].bytes().all(|b| b.is_ascii_digit())
+    {
+        return Some("is the spelling of a variable");
+    }
+    None
+}
+
 /// The built-in arity of a core serialization token (`None` for everything else).
 #[inline]
 pub fn core_arity(token: &str) -> Option<u8> {
