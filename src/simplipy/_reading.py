@@ -470,7 +470,9 @@ class _Reading(_Loading):
         return cast(list, self._core.to_tagged_syntactic(tokens))
 
     def _realization_only_tokens(self) -> set[str]:
-        """Realization spellings that are NOT also operator tokens -- the detectable half.
+        """Realization spellings that are NOT also operator tokens -- the detectable half: the
+        config's, and the core's own for the core operators the config does not declare
+        (:meth:`_core_realizations`), which the realization rendering writes too.
 
         Cached on the instance: the operator table is fixed at construction.
         """
@@ -478,7 +480,7 @@ class _Reading(_Loading):
         if cached is None:
             ops = set(self._operators_config)
             cached = {spec['realization'] for spec in self._operators_config.values()
-                      if spec['realization'] not in ops}
+                      if spec['realization'] not in ops} | set(self._core_realizations().values())
             self._realization_only_cache = cached
         return cached
 

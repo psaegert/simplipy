@@ -18,8 +18,8 @@ import yaml
 from simplipy._modes import (
     Mode, _MODE_RULES_ATTR, _RULE_MODE, _coerce_mode, _coerce_rule_mode)
 from simplipy._schema import (
-    _CORE_IMPORT_ERROR, _CORE_SERIALIZATION_ARITIES, _RustEngine, _coverage_variants,
-    _reaches_promise)
+    _CORE_IMPORT_ERROR, _CORE_SERIALIZATION_ARITIES, _RustEngine, _core_serialization_ops,
+    _coverage_variants, _reaches_promise)
 from simplipy.trust import check_chain, check_root, package_for
 from simplipy.utils import is_numeric_string
 
@@ -691,7 +691,25 @@ class _Loading:
                 check_chain(str(self.operator_realizations[operator]), str(operator),
                             module, self._trusted_modules)
             namespace[root] = module
+        # The core serialization language's operators the config does not declare are written
+        # with their core realizations (`pow` as `simplipy.operators.pow`): the projections emit
+        # them whatever the config declares (an engine over `*` answers x0*x0 with pow(x0, 2)), so
+        # their module is bound too, checked as every realization is.
+        for operator, realization in sorted(self._core_realizations().items()):
+            root = realization.split('.')[0]
+            if root not in namespace:
+                check_root(root, [operator], self._trusted_modules)
+                namespace[root] = importlib.import_module(package_for(root))
+            check_chain(realization, operator, namespace[root], self._trusted_modules)
         self._eval_namespace = namespace
+
+    def _core_realizations(self) -> dict[str, str]:
+        """The realization of each operator of the core serialization language (``/``, ``neg``,
+        ``inv``, ``pow``, ``rootn``) that this engine's config does not declare: the core's own
+        (``pow`` -> ``simplipy.operators.pow``), which the realization rendering writes for it."""
+        core = _core_serialization_ops() if _core_serialization_ops is not None else {}
+        return {token: spec['realization'] for token, spec in core.items()
+                if spec['realization'] is not None and token not in self.operator_realizations}
 
     _MEASURE_PROBES = (
         # the LITERAL codebook: an integer (the L-formula), a unit fraction and a

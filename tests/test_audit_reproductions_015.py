@@ -287,11 +287,11 @@ def test_F08_strict_folds_a_product_of_literals_to_a_value_its_evaluator_admits(
     assert simplified(engine, f'+ x0 * {a} {b}', 'strict') == f'+ x0 {" ".join(out)}'
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "F37, partly reproduces at 3a6ed3a: an engine whose config declares `*` (or `+`, `*`, `sin`) "
-    "answers x0*x0 with the core's `pow(x0, 2)`; is_valid and expression_variables read it (59dee9e), "
-    "but as_callable raises NameError ('simplipy' is not in the engine's namespace) and the "
-    'realization spelling does not read back.'))
+# F37 (R5), partly reproduced at 3a6ed3a and fixed in the 0.15 fix round: an engine whose config
+# declares `*` (or `+`, `*`, `sin`) answers x0*x0 with the core's `pow(x0, 2)`; is_valid and
+# expression_variables read it (59dee9e), but as_callable raised NameError ('simplipy' was not in
+# the engine's namespace) and the realization spelling did not read back. The core operators the
+# config leaves out are written, bound and read back with their core realizations now.
 def test_F37_the_callable_of_the_cores_own_answer_evaluates() -> None:
     e = SimpliPyEngine({'*': dict(realization='*', alias=[], arity=2, commutative=True)},
                        rules=[], rules_permissive=[])
