@@ -144,6 +144,17 @@ class TestOptIn:
                                        trusted_modules=['some_other_module'])
         assert not probe_module.exists()
 
+    @pytest.mark.parametrize('value', ['mylab', b'mylab'])
+    def test_a_bare_string_of_trusted_modules_is_refused(self, tmp_path, value):
+        """A string is a sequence of characters: `trusted_modules='os'` trusted 'o' and 's'."""
+        from simplipy.trust import resolve_trusted
+        with pytest.raises(TypeError, match='not a bare string'):
+            resolve_trusted(value)
+        with pytest.raises(TypeError, match='not a bare string'):
+            SimpliPyEngine.from_config(_config(tmp_path, 'simplipy.operators.sin'),
+                                       trusted_modules=value)
+        assert 'mylab' in resolve_trusted(['mylab'])
+
 
 class TestOneSpellingPerModule:
     def test_numpy_spelling_refused_with_a_hint(self):
