@@ -1927,6 +1927,32 @@ model predictions.
   mine attempts, not of the candidates it scans: a mine no longer certifies a candidate above the
   mark of a source with constants, and counts fewer than before. (The 0.15 length-5 sidecar merges
   a strict half scanned before this change with a permissive half scanned after it.)
+- **Slow operators stay with their family.** An operator's spec may name its `family` (the
+  operators it is a variant or sibling of; one without is a family of its own) and declare it
+  `slow: true`. A rule brings a slow operator into its right side only where its left side holds
+  an operator of the same family: the named policy `slow_operator` (`simplipy.verify.POLICIES`).
+  The scan never fits a candidate the policy refuses, the mint's licence refuses such a target,
+  and `verify.licensed`, and so `verify-mine`, name the policy, so no file carries such a rule. A
+  config that declares nothing slow refuses nothing. The 0.15 engines declare the four Bessel
+  functions slow, one family `bessel`: on the mine's rows their float64 kernels take 100 to 300
+  nanoseconds a row against 34 for `harmonic` and at most 8 for every other operator, and in a
+  mine's own fits, whose orders and arguments range wider, 0.7 to 2.9 microseconds against at
+  most 0.2. `besselk(0, x0)` may still be rewritten with `besselj`; `sin(x0)/sqrt(x0)` is not
+  rewritten as a multiple of `besselj(0.5, x0)`, however true. `erf` and `erfc` are one family,
+  neither slow.
+- **A mine may support an operator without mining it.** `operator_max_length` in `mine.yaml` may
+  bound an operator at 0, which leaves it out of every source and candidate at every length: the
+  engine still reads, evaluates, prices and writes it, and no mined rule mentions it, so no answer
+  introduces it. The proposals' vocabulary and the mine's cell leave it out too, the sidecar
+  records the operators the mine does mine (`mined_operators`), and `verify-mine` fails a file
+  with a rule that mentions an unmined operator (gate `unmined`). The 0.15 mines leave out `erfc`,
+  whose spelling `1 - erf(u)` loses its digits from about u = 6 (so `1 - erf(x0)` stays as
+  written), and `harmonic`, which no expression over the other operators spells; `erf` stays
+  mined. With the slow Bessel functions, this takes a class of the 0.15 mines' universes from
+  2.51 to 0.55 CPU seconds in strict at length 4, 3.18 to 1.09 in permissive at length 4, 2.57 to
+  0.42 in strict at length 5 and 5.51 to 0.93 in permissive at length 5 (slices of 480 classes,
+  the classes without `erfc` or `harmonic` for the new universe), and the universes lose a sixth
+  of their classes at length 4 and a tenth at length 5.
 - **A constant collapse is minted where the judge licenses it.** The judge licenses
   `acos(c) -> c_t` from |c| <= 1 alone (a fitted constant owes a witness only where its source
   is finite), but the mint kept a stricter rule of its own for a source without variables: its
