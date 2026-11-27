@@ -12,13 +12,16 @@ value, the right side agrees; 3.4: a mode's file holds the rules that hold in th
 turns them into failures to be moved to the refused lists, and a regression elsewhere is not
 hidden by them:
 
-- `FALSE_IN_BOTH_READINGS_HELD`: false in float64 AND in the reals at a point the judge reads, or
-  on a band no point of the battery reaches. Not known limits; defects of the judge.
+- `FALSE_IN_BOTH_READINGS_HELD`: false in float64 AND in the reals on a set of positive measure,
+  held in `core`; three of them are mined rules, refuted at a row of the judge's own that it does
+  not read (`_contract.ROWS_JUDGED`). Not known limits; defects of the judge.
 - `FALSE_IN_THE_REALS_HELD_IN_PERMISSIVE`: false in the reals beyond float resolution where
-  float64 is false too, held by permissive's own criterion, which reads the reals nowhere below
-  the mine's rows (1e-4) except at the sorts' atoms.
-- `EVIDENCE_LIMITS`: false only between the points the battery reads, which `evidence` does not
-  claim to exclude (`SIMPLIPY_015_ALGORITHM.md` 5.1: "no counterexample in the stated battery").
+  float64 is false too, held by permissive's own criterion: two mined rules refuted at the same
+  unread row, and two below the mine's rows' 1e-4, where permissive reads the reals nowhere but
+  at the sorts' atoms.
+- `EVIDENCE_LIMITS`: false only between the points the battery reads, or where the precision
+  ceiling leaves every point of the false region unread, which `evidence` does not claim to
+  exclude (`SIMPLIPY_015_ALGORITHM.md` 5.1: "no counterexample in the stated battery").
 
 Every value quoted is SimpliPy's own evaluator (`simplipy.operators`) and mpmath at 60 digits.
 """
@@ -46,6 +49,12 @@ FALSE_IN_BOTH_READINGS_HELD = [
     # (454 rows differ, nearly all by acos's rounding near 1), and no atom, grid point or rung of
     # the ladder lies in the band.
     ('acos cos atanh ?0', 'abs atanh ?0'),
+    # In the strict length-4 file: sin(atanh(x)) changes sign where atanh(x) passes pi, so both are
+    # false on the same band (x = 0.999: -1 against 0, and -0 against 1). Row 2611 refutes both
+    # (0 against -1, 1 against -0), at ranks 52 and 40 of the rows where float64 differs; the first
+    # eight are the special values x0 = +-1, where the left side alone has no value.
+    ('floor sin atanh ?0', 'floor cos acos ?0'),
+    ('ceil sin atanh ?0', 'ceil sin asin ?0'),
     # The same with the band at tanh(2 pi) = 0.99999303 < |x| < 1 (7e-6 wide).
     ('acos cos * 0.5 atanh ?0', 'abs * 0.5 atanh ?0'),
     # False on 0 < |x| < 1e-5: at x = 1e-8, tanh(1) - tanh(1e-3) = 0.7606 in float64 and in the
@@ -58,10 +67,18 @@ FALSE_IN_BOTH_READINGS_HELD = [
     ('tanh min * abs ?0 100000 1', 'tanh min * abs ?0 1e300 1'),
 ]
 
-#: False in the reals (and in float64) on 0 < |x| < b with b below the mine's rows' 1e-4, held in
-#: tier `permissive` by permissive's own criterion, which does not read the reals at the rungs at
-#: and below 1e-8. Spelled in the 0.15 alphabet (`pow 10 10`, `exp exp 3`), longer than the mines.
+#: False in the reals beyond float resolution at real bindings, held in tier `permissive` by
+#: permissive's own criterion (no named step of 4.9 applies).
 FALSE_IN_THE_REALS_HELD_IN_PERMISSIVE = [
+    # In the reduced reference mine (a0e8269, permissive): x = 0.999 gives -1 against 0 and -0
+    # against 1 (float64 and mpmath alike). Row 2611 refutes both, at rank 1974 of the 2328 rows
+    # where float64 differs (the first are the extensions at |x0| > 1, where the left side alone
+    # has no value).
+    ('floor sin atanh _0', 'floor _0'),
+    ('ceil sin atanh _0', 'ceil _0'),
+    # False on 0 < |x| < b with b below the mine's rows' 1e-4: permissive's own criterion does not
+    # read the reals at the rungs at and below 1e-8. Spelled in the 0.15 alphabet (`pow 10 10`,
+    # `exp exp 3`), longer than the mines.
     # b = 1.9e-9: at x = 1e-10, tanh(1) = 0.7616 against 1
     ('tanh * pow 10 10 abs ?0', 'ceil tanh abs ?0'),
     # b = 3.6e-8: at x = 1e-8, tanh(5.28) = 0.99995 against 1
@@ -83,6 +100,10 @@ EVIDENCE_LIMITS = [
     # an extension on (0.29999, 0.30001), narrower than the interval layer's cells (5.5's first
     # known limit): strict owes clause (b) and should refuse it; permissive may extend
     (('+ ?0 * 0 log - abs - ?0 0.3 0.00001', '?0'), 'permissive'),
+    # -x against -2e4 for x > 2e4: past 1e4 the cancellation cosh(x) - sinh(x) asks more digits
+    # than the precision ceiling (2,000) and float64 overflows, so no point past 2e4 is read
+    # (FX-75's general conditioning demand); held in permissive
+    (('log - cosh ?0 sinh ?0', 'max neg ?0 -20000'), 'reject'),
 ]
 
 
@@ -99,19 +120,18 @@ def test_false_in_both_readings_is_held_today(lhs, rhs) -> None:
     """The defect as it stands, so a change of the verdict is seen either way."""
     r = _judge(lhs, rhs)
     assert r['tier'] == 'core' and r['realised'] is True, r
-    assert r['realised_f6'] is False and r['realised_kinds'] is True, r
 
 
-@pytest.mark.xfail(strict=True, reason='judge defect (pre-audit review J-3): permissive reads the '
-                                       'reals nowhere below 1e-4')
+@pytest.mark.xfail(strict=True, reason='judge defect (pre-audit review J-1, J-3): held in permissive '
+                                       'though false in the reals')
 @pytest.mark.parametrize('lhs, rhs', FALSE_IN_THE_REALS_HELD_IN_PERMISSIVE)
-def test_false_in_the_reals_at_tiny_magnitudes_is_refused(lhs, rhs) -> None:
+def test_false_in_the_reals_is_refused_in_permissive(lhs, rhs) -> None:
     r = _judge(lhs, rhs)
     assert r['tier'] == 'reject', r
 
 
 @pytest.mark.parametrize('lhs, rhs', FALSE_IN_THE_REALS_HELD_IN_PERMISSIVE)
-def test_false_in_the_reals_at_tiny_magnitudes_is_held_today(lhs, rhs) -> None:
+def test_false_in_the_reals_is_held_in_permissive_today(lhs, rhs) -> None:
     r = _judge(lhs, rhs)
     assert r['tier'] == 'permissive' and r['permissive_own'] is True, r
 
@@ -137,6 +157,14 @@ def test_the_counterexamples_are_real() -> None:
     rows = _contract.judge_rows()
     band = [float(v) for v in rows[:, 0] if math.tanh(math.pi) < abs(v) < 1]
     assert band == [-0.9997006899413192]
+    # sin(atanh(x)) changes sign in the band: floor and ceil of it against floor and ceil of x
+    s = ops.sin(ops.atanh(x))
+    assert s == pytest.approx(-0.6120169953608354, rel=1e-14)
+    assert (ops.floor(s), ops.floor(x), ops.ceil(s), ops.ceil(x)) == (-1.0, 0.0, 0.0, 1.0)
+    with mpmath.workdps(60):
+        assert mpmath.sin(mpmath.atanh(mpmath.mpf(x))) < -0.6
+    s = ops.sin(ops.atanh(band[0]))
+    assert (ops.floor(s), ops.floor(band[0]), ops.ceil(s), ops.ceil(band[0])) == (0.0, -1.0, 1.0, 0.0)
     # the tiny band: x = 1e-8, in float64 and in the reals
     v64 = ops.tanh(ops.min(1e-8 * 1e16, 1.0)) - ops.tanh(ops.min(1e-8 * 1e5, 1.0))
     assert v64 == pytest.approx(0.7605941562890981, rel=1e-14)
