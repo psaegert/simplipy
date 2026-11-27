@@ -33,9 +33,10 @@
 //! J_0(0) = 1, J_v(0) = 0 for v > 0, and at a negative non-integer v the pole's one-sided limit,
 //! `+-inf` with the sign of `1/Gamma(v + 1)` (`J_-0.5(0) = inf`, `J_-1.5(0) = -inf`).
 //! Accuracy is scipy's: measured against mpmath, the median error is 1-2 ulp for integer orders
-//! and about 50 ulp for non-integer ones, up to about 2,600 ulp at points 0.1 or more from a
-//! zero of J, and an absolute error below 4.1e-10 at every point measured (|nu| <= 50,
-//! x <= 1e4), most of it near the zeros.
+//! and about 50 ulp for non-integer ones, up to about 7,000 ulp at points 0.1 from a zero of J
+//! (6,853 at `J_38.13958621743932(98.89217889943711)`, 0.1003 from one, with nu in [0, 50] and
+//! x in [0, 100], where the absolute error stays below 6.1e-15), and an absolute error below
+//! 4.1e-10 at every point measured (|nu| <= 50, x <= 1e4), most of it near the zeros.
 //!
 //! Two departures from scipy, both where scipy's value is not J's (`besselj` below): an integer
 //! order reads its reflection and its parity, so `J_n` is even or odd and `J_{-n} = (-1)^n J_n`

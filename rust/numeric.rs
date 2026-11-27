@@ -508,11 +508,14 @@ pub(crate) fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
     }
 }
 
-/// IEEE-754 `rootn(x, n)`, honest for every integer index:
+/// IEEE-754 `rootn(x, n)`'s cells, honest for every integer index:
 /// odd index = the signed root (total on R, `-0` at `-0`); even = the principal root (NaN on
-/// negatives, `+0` at either zero, identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 =
-/// the reciprocal of the positive-index root; n == 0 or a non-integer index = NaN (invalid
-/// operation).
+/// negatives, `+0` at either zero; `pow(x, 1/n)`'s value except at n = 2, where `aligned_pow`
+/// takes numpy's `sqrt`, which keeps `-0` and is correctly rounded); n == 1 = the identity;
+/// n < 0 = the reciprocal of the positive-index root; n == 0 or a non-integer index = NaN
+/// (invalid operation). The value is the libm's `pow(|x|, 1/k)` with `1/k` rounded, so it is
+/// not correctly rounded as IEEE-754's recommended `rootn` is: off a power-of-two index the
+/// rounded exponent adds up to about |ln x| 2^-53 / k relative (120 ulp at k = 3 measured).
 /// One semantics, five surfaces: this table, `operators.py::rootn`, `interval.rs`, and
 /// both `hiprec.rs` evaluators -- pinned against each other by the parity tests.
 pub(crate) fn rootn_f64(x: f64, n: f64) -> f64 {

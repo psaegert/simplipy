@@ -6,7 +6,9 @@
 //! constant (it is exactly 0 on |x| < 1e-17), so this kernel never forms that sum: every
 //! branch carries the factor its zero needs, and the leading terms are carried as
 //! double-doubles, so on x > -1 a result is within 0.53 ulp of the true value (measured
-//! against mpmath on 210,000 points; every harmonic number H(1)..H(1000) correctly rounded).
+//! against mpmath on 210,000 points; every harmonic number H(1)..H(1000) correctly rounded),
+//! except on 1e-320 < |x| < 1e-306: there the double-double's low word falls below the
+//! subnormals and the error reaches 1.5 ulp (1.48 measured on 48,000 points).
 //!
 //! * x >= -1/2: on [-1/2, 1/2), H(t) = t (1/(1+t) + D_1(t)); on [1/2, K + 1/2),
 //!   H(k + t) = H(k) + t D_k(t) about the nearest integer k, with |t| <= 1/2; beyond, the
