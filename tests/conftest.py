@@ -117,6 +117,19 @@ def require_or_skip(path: str, why: str) -> None:
         pytest.skip(why)
 
 
+def require_torch():
+    """torch, for the operators' torch branches: skipped where torch is not installed (`.[dev]`
+    does not install it), and a FAILURE under ``SIMPLIPY_TEST_REQUIRE_TORCH``, which the CI job
+    that installs CPU torch sets, so the torch tests cannot skip there silently."""
+    try:
+        import torch
+    except ImportError:
+        if os.environ.get('SIMPLIPY_TEST_REQUIRE_TORCH'):
+            pytest.fail('SIMPLIPY_TEST_REQUIRE_TORCH is set but torch is not installed')
+        pytest.skip('torch is not installed')
+    return torch
+
+
 def require_mode_sets(why: str = 'the acj-4 rule files are not staged') -> None:
     """Both rule sets of the acj-4 cell (f64, permissive), gated like every other staged
     asset: a missing file skips locally and fails under SIMPLIPY_TEST_REQUIRE_ASSETS."""

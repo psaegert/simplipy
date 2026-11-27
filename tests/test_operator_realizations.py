@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import simplipy.operators as ops
+from conftest import require_torch
 from test_operator_kernels import bits_equal, core1, core2, dense_binary_grid, dense_unary_grid
 
 F = np.float64
@@ -165,7 +166,7 @@ def test_complex_operands() -> None:
 
 
 def test_torch_branches() -> None:
-    torch = pytest.importorskip('torch')
+    torch = require_torch()
     t = torch.tensor([-2.5, -0.0, 0.0, 1.5, 3.0], dtype=torch.float64)
     assert torch.equal(ops.floor(t), torch.floor(t)) and torch.equal(ops.ceil(t), torch.ceil(t))
     assert torch.equal(ops.sin(t), torch.sin(t)) and torch.equal(ops.add(t, t), t + t)

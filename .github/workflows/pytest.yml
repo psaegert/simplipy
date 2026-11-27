@@ -45,6 +45,13 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python rust/bundled_notices.py --check
 
+      # The operators' torch branches (tests/test_helpers.py, tests/test_operator_realizations.py)
+      # need torch, which `.[dev]` does not install: one job installs the CPU build and sets
+      # SIMPLIPY_TEST_REQUIRE_TORCH below, so those tests run there and cannot skip silently.
+      - name: Install CPU torch (the torch branches' tests)
+        if: matrix.python-version == '3.12'
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
       # Recorded per job so the resolved numeric stack is a fact in the log, never an
       # assumption (the 3.11-era divergence this caught is resolved: D35 moved the
       # floor to >=3.12, matching the dependency reality).
@@ -97,6 +104,7 @@ jobs:
         run: pytest tests
         env:
           SIMPLIPY_TEST_REQUIRE_ASSETS: "1"
+          SIMPLIPY_TEST_REQUIRE_TORCH: ${{ matrix.python-version == '3.12' && '1' || '' }}
 
   # THE RELEASE GATES ON THE BUILT WHEEL. The job above tests an editable install, which
   # reads the package from src/ and so cannot see a file the wheel leaves out. This job

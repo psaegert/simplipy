@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 import simplipy.operators as ops
+from conftest import require_torch
 from simplipy import SimpliPyEngine, explicit_constant_placeholders
 from simplipy.utils import (_uniform_below, codify, count_expressions, is_constant_placeholder,
                             sample_expression, substitute_constants)
@@ -18,7 +19,7 @@ ACJ2_4 = yaml.safe_load(open(os.path.join(REPO, 'assets', 'engines', 'acj2-4', '
 
 
 def test_a_tensor_on_either_side_takes_torch() -> None:
-    torch = pytest.importorskip('torch')
+    torch = require_torch()
     t = torch.tensor([2.0, 3.0], dtype=torch.float64)
     got = ops.pow(2.0, t)
     assert isinstance(got, torch.Tensor)
@@ -29,7 +30,7 @@ def test_a_tensor_on_either_side_takes_torch() -> None:
 
 
 def test_a_tensor_with_a_gradient_and_a_parameter_keep_their_graph() -> None:
-    torch = pytest.importorskip('torch')
+    torch = require_torch()
     g = torch.tensor([2.0, 3.0], requires_grad=True)
     out = ops.pow(2.0, g)
     assert out.requires_grad
