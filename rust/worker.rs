@@ -4522,7 +4522,8 @@ mod tests {
         let n = 64usize;
         let xf = grid_1var(n);
         let cand = s(&["besselj", "<constant>", "x0"]);
-        let lib = CandidateLibrary::build(ops, &[cand.clone()], &[None], &vars, &xf, n).unwrap();
+        let lib = CandidateLibrary::build(ops, std::slice::from_ref(&cand), &[None], &vars, &xf, n)
+            .unwrap();
         for (source, refused) in [(&["log", "x0"][..], true), (&["besselk", "0", "x0"], false)] {
             let src = s(source);
             let (_, steps) = traced(|| {
