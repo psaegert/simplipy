@@ -5,7 +5,7 @@
 - **Security.** Operator realizations are now checked against the trusted modules at the
   callable they resolve to. Previously an engine file from an untrusted source could make
   `as_callable` call functions outside them. The realizations of the shipped engines are
-  unchanged. Advisory: GHSA-XXXX-XXXX-XXXX.
+  unchanged. Advisory: GHSA-9wrh-8xx4-gmh5.
 
 ## 0.14.7.post1 (2026-11-14, documentation only)
 
