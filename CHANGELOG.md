@@ -11,8 +11,9 @@ organised by who you are, then the highlights, then every change in detail.
 
 **Everyone**
 
-- **`f64` is now `strict`.** The mode that preserves what the deployed float64 evaluator
-  computes is `Mode.strict` (`mode='strict'`), and its rule file is `rules_strict.json`; a
+- **`f64` is now `strict`.** The mode whose every step float64 reproduces, or that holds in the
+  reals with float64's kinds kept (see "What `strict` promises" below), is `Mode.strict`
+  (`mode='strict'`), and its rule file is `rules_strict.json`; a
   provenance sidecar records the mode as `strict`, and `find-rules --modes` defaults to
   `strict,permissive`. `Mode.f64`, `Mode('f64')` and the names `'f64'` and `'default'` select it
   with a `DeprecationWarning` in 0.15 and are removed in 0.16. A file named `rules_f64.json` is
@@ -131,10 +132,15 @@ organised by who you are, then the highlights, then every change in detail.
 
 **`strict` users**
 
-- **What `strict` promises.** `strict` promises the deployed evaluator's value wherever no operation
-  overflows or underflows. Where one does, a rewrite may give the true value instead, as the
-  constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads strict rules by
-  the same standard.
+- **What `strict` promises.** Each step: the deployed float64 evaluator reproduces it (within 8
+  units in the last place), or it is true in the reals with float64 giving both sides the same kind
+  of value at every point (both finite, the same infinity, both undefined, a zero's sign where it
+  changes a value on a region). Where an operation overflows or underflows, a rewrite may give the
+  true value instead, as the constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge
+  now reads strict rules by the same standard. The promise is per step, not on a whole answer: an
+  answer is not promised to agree with float64's evaluation of its input within rounding where that
+  evaluation is ill-conditioned (`atanh(tanh(19*sin(x0)))` becomes `19*sin(x0)`, 19 where float64
+  evaluates the input to 18.71 at `x0 = pi/2`, with no jump or pole between).
 - **A fully numeric part is float64's value, or the reals' where float64's kind agrees.**
   `strict` writes a fully numeric part as its double, or as its value in the reals where float64's
   two values agree in kind (both finite, two zeros of one sign, the same infinity, both NaN, or
@@ -750,7 +756,8 @@ model predictions.
   confined to t >= 0 by a power of `t` with a non-integer exponent (`x1*x17^(3/2)/rootn(x17, 3)^2`
   is `x1*x17^(5/6)`, `rootn(x, 4)*rootn(x, 3)` is `x^(7/12)`), so the two readings differ by
   rounding alone; in `permissive` always, as powers compose there ignoring the sign
-  (`x*rootn(x, 3)` is `x^(4/3)`, `rootn(x, 3)*rootn(x, 5)` is `x^(8/15)`). `strict` keeps
+  (`x*rootn(x, 3)` is `x^(4/3)`, `rootn(x, 3)*rootn(x, 5)` is `x^(8/15)`), and with it the domain:
+  `x^(4/3)` has no value for x < 0, where `x*rootn(x, 3)` has one (by design). `strict` keeps
   `x*rootn(x, 3)`, which has a value for x < 0, and a root whose powers would merge to nothing
   keeps its spelling (`x^(2/3)*rootn(x, 3)` in `strict`, `rootn(x, 3)^2`).
 - **Powers of one base merge as a whole.** Where no two of a product's powers of one base may
@@ -766,9 +773,11 @@ model predictions.
   `x1^(5/2) + x1^(3/2)*x1^(3/2)`), `log(x)*x^(1/2)*x^(1/2)` is `x*log(x)`,
   `x^(3/2) + x*rootn(x, 3)` is `x^(4/3) + x^(3/2)` and `max(sqrt(x), x^(3/2)*x^(3/2))` is
   `max(sqrt(x), x^3)`. The confinement passes up through every operation the deployed evaluator
-  propagates NaN through (`+`, `*`, a power's base, every unary head, both operands of `max`, `min`,
-  `mod`, `atan2`, `besselj`, `bessely` and `besseli`; not a power's exponent, `pow(1, NaN)` being
-  1, nor `besselk`'s order, `besselk(NaN, 0)` being `inf`), and a merge may not take the member
+  propagates NaN through (`+`, `*`, a power's base under a nonzero numeric exponent, every unary
+  head, `rootn`'s radicand, both operands of `max`, `min`, `mod`, `atan2`, `besselj`, `bessely` and
+  `besseli`, and `besselk`'s argument; not a power's exponent, `pow(1, NaN)` being 1, nor a base
+  under a zero or a symbolic exponent, `pow(NaN, 0)` being 1, nor `besselk`'s order,
+  `besselk(NaN, 0)` being `inf`), and a merge may not take the member
   that confined the node: `x^(3/2)*x^(3/2)` and `x^(1/2)*x^(1/2) + x^(3/2)*x^(3/2)` keep their
   halves. A base that is `-0` on a region is not read so (`ceil(x)^(3/2)*ceil(x)^(3/2)` stays
   beside `sqrt(ceil(x))`), and no law that folds a sign is (`abs(x) + sqrt(x)` and
@@ -2296,7 +2305,7 @@ model predictions.
   finite float64 difference there passed the second reading as rounding, though the reals were
   never read at the point. The reals now read every rung of the ladder past the grid's 1e4, up to
   the largest double, both signs, along each slot and on the diagonal, as they read the grid (the
-  rungs below 1e-8 stay float64's: there the reals' readings are measured unreliable for true
+  rungs at and below 1e-8 stay float64's: there the reals' readings are measured unreliable for true
   identities, `acos(cos(sin(x0))) -> abs(sin(x0))` read apart at 1e-200). Where an operation
   leaves float64's range and no rung of
   the precision ladder reads the true values, float64's lane reads them at float resolution, and

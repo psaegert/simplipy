@@ -30,7 +30,9 @@ the exact fold) keeps the promise of its mode: in `strict`, the step holds as de
 [What `strict` mode does and does not promise](#what-strict-mode-does-and-does-not-promise);
 in `permissive`, the step agrees with the reals up to float resolution, holds in `strict`, or
 is one of permissive's own named simplifications, which can drop a domain or a sign
-(`sqrt(x^2)` becomes `x`). The promise is per step, not for the whole answer. The result is
+(`sqrt(x^2)` becomes `x`), and can leave an answer undefined where its input is defined (powers
+compose ignoring the sign, so `x*rootn(x, 3)` becomes `x^(4/3)`, which has no value for x < 0).
+The promise is per step, not for the whole answer. The result is
 never costlier than the input in the measure the chain itself descends — each
 mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
 mode=m)` is that measure: each mode reads an expression into its own canonical form,

@@ -21,9 +21,9 @@
 //! by an enclosing one reads that confinement too.
 //!
 //! What propagates NaN is what the deployed evaluator computes (`simplipy.operators`, measured at
-//! every special value of the other operand): `+`, `*`, a power's base under a nonzero exponent
-//! (`pow(NaN, 0)` is 1, and `pow(1, NaN)` is 1, so neither a zero exponent nor the exponent
-//! propagates), every unary head, `rootn`'s radicand, both operands of `max`, `min`, `mod`, `atan2`,
+//! every special value of the other operand): `+`, `*`, a power's base under a nonzero NUMERIC
+//! exponent (`pow(NaN, 0)` is 1, and `pow(1, NaN)` is 1, so neither a zero exponent, nor a
+//! symbolic one, which may be zero, nor the exponent propagates), every unary head, `rootn`'s radicand, both operands of `max`, `min`, `mod`, `atan2`,
 //! `besselj`, `bessely` and `besseli`, and `besselk`'s argument (`besselk(NaN, 0)` is `+inf`). An
 //! operator outside the list propagates nothing (fail closed). What confines `t` to `t >= 0`
 //! (NaN at every `t < 0`, `-inf` included): `t^r` with an exponent float64 reads as a non-integer

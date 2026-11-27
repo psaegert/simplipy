@@ -409,7 +409,8 @@ pub enum Law {
     /// `permissive`), each reading `t >= 0` of the confined `t` (`Cx::confined`). No law that folds
     /// a sign is read so (`abs(t) = t`, `(t^2)^(1/2) = t`): `abs(x0) + x0^(1/2)` stays. The confinement flows up through every
     /// operation the deployed evaluator propagates NaN through (`+`, `*`, a power's base under a
-    /// nonzero exponent, every unary head, `rootn`'s radicand, both operands of `max`, `min`, `mod`,
+    /// nonzero numeric exponent (a symbolic one may be zero), every unary head, `rootn`'s radicand,
+    /// both operands of `max`, `min`, `mod`,
     /// `atan2`, `besselj`, `bessely`, `besseli`, and `besselk`'s argument; `pow(NaN, 0)`,
     /// `pow(1, NaN)` and `besselk(NaN, 0)` have values), and down into every member below the
     /// node. `t` is confined by `t^r` with an exponent float64 reads as a non-integer, an even root
