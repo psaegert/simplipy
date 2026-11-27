@@ -1136,6 +1136,18 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().load_refusal(&lhs, &rhs, mode, canon)))
     }
 
+    /// THE SLOW-OPERATOR POLICY for one rule (`engine::refusals::slow_operator`): the first
+    /// operator its right side brings in that the config declares slow and of whose family its
+    /// left side holds no operator, or None.
+    fn slow_operator(&self, lhs: Vec<String>, rhs: Vec<String>) -> PyResult<Option<String>> {
+        ensure_tokens_are_tokens(&lhs)?;
+        ensure_tokens_are_tokens(&rhs)?;
+        Ok(
+            engine::refusals::slow_operator(&lhs, &rhs, self.inner().operators_ref())
+                .map(str::to_string),
+        )
+    }
+
     /// The licence registry for one would-be rule, as a PROBE: the mint channels
     /// consult the registry through the miner's one acceptance (`judge_hint` for a hint),
     /// never through this entry. Returns the refusal
@@ -2595,6 +2607,8 @@ fn arity_table(arity: std::collections::BTreeMap<String, u8>) -> crate::operator
                 arity,
                 precedence: None,
                 commutative: name == "+" || name == "*",
+                family: None,
+                slow: false,
             };
             (name, spec)
         })

@@ -1822,6 +1822,8 @@ mod tests {
                     arity,
                     precedence: None,
                     commutative: false,
+                    family: None,
+                    slow: false,
                 },
             );
         }
@@ -1886,6 +1888,8 @@ mod tests {
                     arity,
                     precedence: Some(prec),
                     commutative: arity == 2 && name != "pow",
+                    family: None,
+                    slow: false,
                 },
             );
         }

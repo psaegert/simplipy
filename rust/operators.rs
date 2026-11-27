@@ -6,7 +6,7 @@
 //! operator_precedence_compat, inverse_base/unary/binary, connection_classes, ...). v1 only needs
 //! the subset the deployed skeleton path touches; the rest are stubs to fill as ported.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Deserialize;
 
 /// The AC CORE SERIALIZATION LANGUAGE: `(token, arity, infix precedence)` for every sugar
@@ -76,6 +76,16 @@ pub struct OperatorSpec {
     pub precedence: Option<f64>,
     #[serde(default)]
     pub commutative: bool,
+    /// `family:` the name of the operators this one is a variant or sibling of (`bessel` for
+    /// `besselj`, `bessely`, `besseli` and `besselk`); an operator without one is a family of its
+    /// own. Read by the slow-operator policy (`slow`).
+    #[serde(default)]
+    pub family: Option<String>,
+    /// `slow: true`: the operator is slow to evaluate, and a rule may bring it into its right side
+    /// only where its left side holds an operator of its family (the slow-operator policy,
+    /// `engine::refusals::slow_operator`).
+    #[serde(default)]
+    pub slow: bool,
 }
 
 /// The engine's operator universe. Insertion order is preserved (config.yaml order) because some
@@ -117,6 +127,10 @@ pub struct Operators {
     /// evaluation see them, and absent from [`Operators::arity`], so nothing that reads the
     /// config's operators (the kernel, the measure, the miner) meets them.
     pub defined: crate::defined::DefinedTable,
+    /// `family:` of every operator that declares one (`OperatorSpec::family`).
+    pub family: FxHashMap<String, String>,
+    /// The operators declared `slow: true` (`OperatorSpec::slow`).
+    pub slow: FxHashSet<String>,
 }
 
 impl Operators {
@@ -197,6 +211,15 @@ impl Operators {
                     .or_insert_with(|| tok.to_string());
             }
         }
+        let family = specs
+            .iter()
+            .filter_map(|(name, s)| s.family.clone().map(|f| (name.clone(), f)))
+            .collect();
+        let slow = specs
+            .iter()
+            .filter(|(_, s)| s.slow)
+            .map(|(name, _)| name.clone())
+            .collect();
         Self {
             arity,
             max_power,
@@ -207,6 +230,8 @@ impl Operators {
             operator_realizations,
             realization_to_operator,
             defined: crate::defined::DefinedTable::default(),
+            family,
+            slow,
         }
     }
 
@@ -226,6 +251,11 @@ impl Operators {
     pub fn syntax_arity(&self, token: &str) -> Option<u8> {
         self.arity_of(token)
             .or_else(|| self.defined.get(token).map(|d| d.arity))
+    }
+
+    /// The family of `token`: its declared `family:`, else the operator itself.
+    pub fn family_of<'a>(&'a self, token: &'a str) -> &'a str {
+        self.family.get(token).map_or(token, String::as_str)
     }
 
     #[inline]

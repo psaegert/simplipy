@@ -129,6 +129,32 @@ lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
 mine (`soundness.env_overrides`), so a published file is reproducible from its artifact.
 
+## Slow operators
+
+An engine config may declare an operator **slow** and name its **family**, the operators it is a
+variant or sibling of, in the operator's own spec:
+
+```yaml
+operators:
+  besselj:
+    realization: simplipy.operators.besselj
+    alias: [jv]
+    arity: 2
+    precedence: 2
+    commutative: false
+    family: bessel
+    slow: true
+```
+
+A rule may bring a slow operator into its right side only where its left side holds an operator
+of the same family (the named policy `slow_operator`). An operator without a `family` is a family
+of its own, and a config that declares nothing slow refuses nothing. The 0.15 engines declare the
+four Bessel functions slow, one family: `besselk(0, x0)` may be rewritten with `besselj`, and
+`log(x0)` may not, however true the rule. The scan never fits a candidate the policy refuses,
+which is most of what a mine of the Bessel functions spends, the mint's licence refuses such a
+target, and `simplipy.verify.licensed` and `verify-mine` name the policy, so no rule file carries
+one.
+
 ## Rule sorts: `_`, `?`, `!`, and `$`
 
 Every placeholder in a shipped rule carries a *sort*: the binding claim its sigil

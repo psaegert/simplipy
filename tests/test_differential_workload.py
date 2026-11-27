@@ -61,6 +61,7 @@ VERDICTS = {
     'collapse_licence': 'evidence', 'evidence': 'evidence', 'ordering': 'ordering',
     'engine_owned': 'engine_owned', 'engine-owned-law': 'engine_owned',
     'well_formed': 'well_formed', 'special_absorption': 'specials',
+    'slow_operator': 'slow_operator',
     'const_introduction': 'constant_count',
     'not_below': 'bar', 'not_structural': 'bar', 'excluded': 'bar', 'not_served': 'bar',
     'undecided': 'U',
@@ -186,7 +187,7 @@ HINT = {'accepted': 'pass', 'uncertified': 'N', 'atomic_mark': 'bar', 'respelled
 #: The policies the mint applies to a pick (`Acceptor::license`, the scan's emit guard and its
 #: constant count); `cell_bound` is the mine's, `duplication` its candidate selection's.
 MINT_POLICIES = ('evidence', 'constant_count', 'ground_composite', 'ordering', 'specials',
-                 'engine_owned', 'well_formed')
+                 'engine_owned', 'well_formed', 'slow_operator')
 
 #: The pairs judged of each verdict's rejections: all where there are at most this many, a
 #: sample drawn by `SEED` where there are more. The scan rejects about 100,000 pairs per mode,

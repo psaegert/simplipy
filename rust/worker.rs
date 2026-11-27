@@ -2779,6 +2779,11 @@ fn certify_candidate(
     if cand.var_mask & !sc.mask != 0 {
         return Err(("variable_mask", Vec::new())); // candidate uses a variable the source lacks
     }
+    // THE SLOW-OPERATOR POLICY (`engine::refusals::slow_operator`): a candidate bringing in a slow
+    // operator whose family the source does not hold is refused unfitted.
+    if crate::engine::refusals::slow_operator(source, &cand.tokens, ops).is_some() {
+        return Err(("slow_operator", Vec::new()));
+    }
     // The Const-count invariant at the mint (its serve twin is the translate-time
     // count gate; one invariant, both layers): a fire may never INCREASE the number
     // of `<constant>` placeholders. For a const-BEARING source, a candidate with
@@ -3665,6 +3670,8 @@ mod tests {
                         arity: *a,
                         precedence: None,
                         commutative: false,
+                        family: None,
+                        slow: false,
                     };
                     (name.to_string(), spec)
                 })
@@ -4496,5 +4503,58 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(lanes.shared_fits(), &[true]);
+    }
+
+    /// The scan never fits a candidate that brings in a slow operator whose family its source
+    /// lacks: it is refused by the policy before any check of its values, and a source holding a
+    /// sibling has it judged as any other candidate.
+    #[test]
+    fn a_slow_operator_without_its_family_is_never_fitted() {
+        let cfg = r#"operators:
+  "+": {realization: '+', arity: 2, precedence: 1, commutative: true}
+  log: {realization: simplipy.operators.log, arity: 1, precedence: 2}
+  besselj: {realization: simplipy.operators.besselj, arity: 2, precedence: 2, family: bessel, slow: true}
+  besselk: {realization: simplipy.operators.besselk, arity: 2, precedence: 2, family: bessel, slow: true}
+"#;
+        let e = crate::engine::Engine::from_strs(cfg, "[]").expect("engine builds");
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let xf = grid_1var(n);
+        let cand = s(&["besselj", "<constant>", "x0"]);
+        let lib = CandidateLibrary::build(ops, &[cand.clone()], &[None], &vars, &xf, n).unwrap();
+        for (source, refused) in [(&["log", "x0"][..], true), (&["besselk", "0", "x0"], false)] {
+            let src = s(source);
+            let (_, steps) = traced(|| {
+                find_rule_with_lib(
+                    ops,
+                    &src,
+                    4,
+                    None,
+                    None,
+                    &lib,
+                    8,
+                    8,
+                    7,
+                    1e-11,
+                    1e-12,
+                    8,
+                    Lane(crate::engine::RuleMode::Strict),
+                    None,
+                    None,
+                    None,
+                )
+            });
+            let verdicts: Vec<&str> = steps
+                .iter()
+                .filter(|(c, _, _)| c == &cand)
+                .map(|s| s.2)
+                .collect();
+            assert_eq!(
+                verdicts == ["slow_operator"],
+                refused,
+                "{source:?}: {verdicts:?}"
+            );
+        }
     }
 }

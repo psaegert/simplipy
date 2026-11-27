@@ -448,6 +448,8 @@ mod tests {
                     arity,
                     precedence: None,
                     commutative: false,
+                    family: None,
+                    slow: false,
                 },
             );
         }

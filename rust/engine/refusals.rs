@@ -72,6 +72,32 @@ pub fn ground_composite_rule(rhs: &[String]) -> bool {
     ground_composite(rhs, rule_variable)
 }
 
+/// THE SLOW-OPERATOR POLICY (the specification's 4.12): a rule may bring an operator its config
+/// declares `slow: true` into its right side only where its left side holds an operator of the
+/// same family (`family:`; an operator without one is a family of its own). With the Bessel
+/// functions slow and one family, `besselk(0, x0) -> ...besselj...` may be minted, and
+/// `log(x0) -> ...besselj...` is refused however true: the scan never fits such a candidate
+/// (`worker::certify_candidate`), the mint's licence refuses it (`miner::Acceptor::license`), and
+/// `simplipy.verify.policy_refusals` names it, so no file carries one. The first such operator of
+/// `rhs`, or `None`.
+pub fn slow_operator<'a>(
+    lhs: &[String],
+    rhs: &'a [String],
+    ops: &crate::operators::Operators,
+) -> Option<&'a str> {
+    if ops.slow.is_empty() {
+        return None;
+    }
+    rhs.iter()
+        .find(|t| {
+            ops.slow.contains(t.as_str())
+                && !lhs
+                    .iter()
+                    .any(|u| ops.is_operator(u) && ops.family_of(u) == ops.family_of(t))
+        })
+        .map(String::as_str)
+}
+
 /// Count of special-constant tokens (`np.pi` / `np.e`) in a token slice. The raw
 /// token count is only ever used together with the ENDPOINT count (spelling
 /// independence); see `mint_refusals`.
@@ -681,6 +707,8 @@ mod tests {
                     arity: if n == "-" { 2 } else { 1 },
                     precedence: None,
                     commutative: false,
+                    family: None,
+                    slow: false,
                 };
                 (n.to_string(), spec)
             })
@@ -783,5 +811,43 @@ mod tests {
             refused(&["mod", "x0", "1"], &["x0"]),
             Some(Refusal::PoleClassChange)
         );
+    }
+
+    /// The slow-operator policy: a right side brings in an operator declared slow only where the
+    /// left side holds one of its family; a config that declares none refuses nothing.
+    #[test]
+    fn a_slow_operator_comes_only_with_its_family() {
+        let cfg = r#"operators:
+  "+": {realization: '+', arity: 2, precedence: 1, commutative: true}
+  log: {realization: simplipy.operators.log, arity: 1, precedence: 2}
+  exp: {realization: simplipy.operators.exp, arity: 1, precedence: 3}
+  besselj: {realization: simplipy.operators.besselj, arity: 2, precedence: 2, family: bessel, slow: true}
+  besselk: {realization: simplipy.operators.besselk, arity: 2, precedence: 2, family: bessel, slow: true}
+"#;
+        let e = Engine::from_strs(cfg, "[]").expect("engine builds");
+        let ops = &e.operators;
+        let (log, j, k) = (
+            s(&["log", "_0"]),
+            s(&["besselj", "0", "_0"]),
+            s(&["besselk", "0", "_0"]),
+        );
+        assert_eq!(slow_operator(&log, &j, ops), Some("besselj"));
+        assert_eq!(
+            slow_operator(&log, &s(&["+", "_0", "besselk", "1", "_0"]), ops),
+            Some("besselk")
+        );
+        assert_eq!(
+            slow_operator(&k, &j, ops),
+            None,
+            "a sibling on the left admits the family"
+        );
+        assert_eq!(
+            slow_operator(&s(&["exp", "besselj", "0", "_0"]), &j, ops),
+            None
+        );
+        assert_eq!(slow_operator(&j, &s(&["exp", "_0"]), ops), None);
+        let plain = Engine::from_strs(&cfg.replace(", family: bessel, slow: true", ""), "[]")
+            .expect("engine builds");
+        assert_eq!(slow_operator(&log, &j, &plain.operators), None);
     }
 }

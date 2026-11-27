@@ -172,6 +172,11 @@ def _normalized_operator_specs(operators: dict[str, dict[str, Any]]) -> dict[str
                 f'(the AC bags), so {token}(a, b) and {token}(b, a) would stay two distinct '
                 "canonical states while the config claims one value. Declare "
                 "'commutative: false' (rendering and evaluation are unaffected)")
+        if not isinstance(spec.get('family', ''), str) or not isinstance(spec.get('slow', False), bool):
+            raise ValueError(
+                f"config error: operator {token!r} declares 'family: {spec.get('family')!r}' or "
+                f"'slow: {spec.get('slow')!r}'; 'family' names the operator's family (a string) and "
+                "'slow' is true or false")
         out = dict(spec)
         if 'precedence' not in out and token in core:
             out['precedence'] = core[token]['precedence']

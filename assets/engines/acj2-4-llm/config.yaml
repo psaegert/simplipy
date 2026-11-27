@@ -189,12 +189,17 @@ operators:
     arity: 2
     precedence: 2
     commutative: false
+  # The Bessel functions are slow to evaluate (about 2 microseconds a row, ten times any other
+  # kernel): a rule brings one into its right side only where its left side holds one of its
+  # family (the slow-operator policy).
   besselj:
     realization: "simplipy.operators.besselj"
     alias: ["jv"]
     arity: 2
     precedence: 2
     commutative: false
+    family: bessel
+    slow: true
 
 # NO RULE SETS YET: the acj2-4-llm mine writes `rules:` and `rules_permissive:`
 # beside this file. Until then an engine loaded from it simplifies with the constructors alone

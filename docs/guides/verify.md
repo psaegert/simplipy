@@ -309,7 +309,9 @@ The exact routes (`verdict['exact']`):
 What a mode's file may hold is `licensed`: the rule holds in the mode, and no named policy
 refuses it — evidence (the left side finite on a set of positive measure), the constant
 count, ground composites, the mine's cell, the serve ordering, special constants,
-duplication of a `_` slot, and what the engine does itself (`policy_refusals`):
+duplication of a `_` slot, what the engine does itself, and a slow operator brought in
+without one of its family on the left (`policy_refusals`; see "Slow operators" in the mining
+guide):
 
 <!-- docs-example: skip: needs an engine; see tests/test_differential.py -->
 ```python

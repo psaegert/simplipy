@@ -102,7 +102,7 @@ def effective_tier(detail: dict) -> str:
 #: The named policies of the specification's section 4 that :func:`licensed` applies: which
 #: true rules the project wants. Each is defined in one place and read from there.
 POLICIES = ('evidence', 'constant_count', 'ground_composite', 'cell_bound', 'ordering',
-            'specials', 'duplication', 'engine_owned', 'well_formed')
+            'specials', 'duplication', 'engine_owned', 'well_formed', 'slow_operator')
 
 #: The load's refusals (`Engine.load_refusal`) by the policy each applies. `pole-class-change`
 #: is a pre-filter of truth, not a policy, and licenses nothing either way. `catch-all-lhs` is a
@@ -150,8 +150,10 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
     mine's cell (4.4, with ``max_source``, the mine's per-length operator set
     ``operator_max_length`` and the literals of its universe ``literals``); the
     registry's special absorption and constant introduction (4.6, 4.2); the duplication
-    predicate (4.7); and the ground facts the engine's fold performs (4.8, the preemption
-    gate). ``engine`` is a :class:`~simplipy.SimpliPyEngine` holding the operators."""
+    predicate (4.7); the ground facts the engine's fold performs (4.8, the preemption
+    gate); and the slow operators (4.12: a right side brings in an operator the config declares
+    ``slow`` only where the left side holds one of its ``family``, `Engine.slow_operator`).
+    ``engine`` is a :class:`~simplipy.SimpliPyEngine` holding the operators."""
     from .. import _core  # type: ignore[attr-defined]
     from ..mining import _in_cell, _preempted_by
     lhs, rhs = list(lhs), list(rhs)
@@ -174,6 +176,8 @@ def policy_refusals(lhs: list[str], rhs: list[str], mode: str, engine: Any,
         out.append('duplication')
     if _preempted_by(engine, lhs, rhs, engine_mode(mode)):
         out.append('engine_owned')
+    if engine._core.slow_operator(lhs, rhs) is not None:
+        out.append('slow_operator')
     return [p for p in POLICIES if p in out]
 
 

@@ -1512,6 +1512,8 @@ mod tests {
                     arity,
                     precedence: None,
                     commutative: n == "+" || n == "*",
+                    family: None,
+                    slow: false,
                 },
             );
         }

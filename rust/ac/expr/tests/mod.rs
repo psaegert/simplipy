@@ -29,6 +29,8 @@ fn test_ops() -> (Vec<String>, Operators) {
                 arity: 2,
                 precedence: None,
                 commutative: n == "+" || n == "*",
+                family: None,
+                slow: false,
             },
         );
     }
@@ -43,6 +45,8 @@ fn test_ops() -> (Vec<String>, Operators) {
                 arity: 1,
                 precedence: None,
                 commutative: false,
+                family: None,
+                slow: false,
             },
         );
     }

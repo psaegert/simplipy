@@ -264,6 +264,9 @@ impl<'a> Acceptor<'a> {
         if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
             return Err(MineRefusal::Registry(r.name()));
         }
+        if super::refusals::slow_operator(self.src, t, &self.eng.operators).is_some() {
+            return Err(MineRefusal::Policy("slow_operator"));
+        }
         // A FULLY NUMERIC PAIR is read by the ground evaluator, as the judge reads it
         // (`ground::rule_verdict`): each mode holds it where its own value of both sides is one,
         // and a side the evaluator cannot read is refused (`ceil(atan(tan(1))) -> 1`: the reals

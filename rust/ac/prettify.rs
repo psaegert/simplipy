@@ -2489,6 +2489,8 @@ mod tests {
                     arity: a,
                     precedence: None,
                     commutative: n == "+" || n == "*",
+                    family: None,
+                    slow: false,
                 },
             );
         }
