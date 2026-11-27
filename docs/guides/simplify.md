@@ -298,18 +298,30 @@ constant**, `<constant_NAME>` with NAME letters and digits, is one unknown finit
 by every occurrence of its name; distinct names are independent. All three dialects read it,
 infix text included.
 
-- A name the expression uses **more than once** is read as a variable, in both modes: every
-  answer holds for every value, and the name is never folded with numbers.
-- A name used **once** is exactly a `<constant>`: it is absorbed as one, and the answer writes
-  it with its name. Where fitted constants become one, the one keeps a name if any of them had
-  one, the least in string order. A name the answer uses once is read as a fitted constant too,
-  so an answer simplifies to itself.
+A name's uses are counted on the answer, after simplification, in both modes:
+
+- A name whose remaining uses all lie in **one** absorbable part is a name used once: it is
+  exactly a `<constant>`, absorbed with the numbers beside it, and the answer writes it with its
+  name. `<constant_a> + 1` is `<constant_a>`, and so are the uses that cancel or divide out:
+  `x1 + <constant_a>*x2 - <constant_a>*x2 + <constant_a> + 1` and
+  `(<constant_a>*x1 + 1)/<constant_a>` are both `x1 + <constant_a>`. Where fitted constants
+  become one, the one keeps a name if any of them had one, the least in string order. A name the
+  answer uses once is read as a fitted constant too, so an answer simplifies to itself.
+- While a name's uses survive in **more than one** part, the tie between them stays: the name is
+  read as a variable, and nothing is absorbed into it or folded with it.
+  `<constant_a>*x1 + <constant_a> + 1` is `<constant_a>*(x1 + 1) + 1`, and
+  `<constant_a>*x1 + sin(<constant_a>)` stays.
+- An absorbed name keeps its name but not its value: the answer holds for some value of the
+  name, not necessarily the input's (`<constant_a> + 1` and `<constant_a>` are one family of
+  functions, not one function).
 - The complexity measure prices a name as a `<constant>` at every occurrence, however often the
   expression uses it, so an answer never prices above its input.
 
 ```python
 engine.simplify('<constant_a>*x1 + <constant_a>*x2 + x3')   # -> 'x3 + <constant_a>*(x1 + x2)'
 engine.simplify('<constant_a>*x1 + sin(<constant_a>)')      # -> 'sin(<constant_a>) + <constant_a>*x1'
+engine.simplify('<constant_a>*x1 + <constant_a> + 1')       # -> '<constant_a>*(x1 + 1) + 1'
+engine.simplify('(<constant_a>*x1 + 1)/<constant_a>')       # -> 'x1 + <constant_a>'
 engine.simplify('sin(<constant_a>)')                         # -> '<constant_a>'
 engine.simplify('<constant_b> + 3.7*<constant_a>')           # -> '<constant_a>'
 engine.simplify('exp(<constant_a>) + exp(<constant_a>)*x1')  # -> '<constant_a>*(x1 + 1)'

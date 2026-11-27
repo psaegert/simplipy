@@ -66,9 +66,12 @@ fn sigil_of(s: &str) -> u8 {
 
 /// Is `s` a NAMED CONSTANT, `<constant_NAME>` with NAME alphanumeric (`[A-Za-z0-9]+`)? One
 /// unknown finite real per name, distinct names independent; `<constant>` is the anonymous one.
-/// A named constant is a parameter, never a data variable: the engine reads a name used more
-/// than once as it reads a variable (every answer holds for every value), and a name used once
-/// as exactly a `<constant>`, keeping its name ([`TokenView::is_free_name`]).
+/// A named constant is a parameter, never a data variable. Its uses are counted on the answer,
+/// after simplification: a name whose remaining uses all lie in one absorbable part is used once,
+/// exactly a `<constant>` absorbed with the numbers beside it and keeping its name (the answer then
+/// holds for some value of the name, not necessarily the input's); while its uses survive in more
+/// than one part it is read as a variable and nothing is absorbed into it
+/// ([`TokenView::is_free_name`]).
 pub fn is_named_constant(s: &str) -> bool {
     s.strip_prefix("<constant_")
         .and_then(|r| r.strip_suffix('>'))

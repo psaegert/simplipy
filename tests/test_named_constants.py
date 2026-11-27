@@ -1,10 +1,13 @@
 """Named constants: ``<constant_NAME>``, NAME alphanumeric, is one unknown finite real per name;
 distinct names are independent, and ``<constant>`` stays an anonymous constant per occurrence.
 
-* Simplification reads a name the expression uses more than once as it reads a variable (every
-  answer holds for every value; never folded with numbers), in both modes.
-* A name used once is exactly a ``<constant>`` and may be absorbed, keeping its name; where
-  fitted constants become one, the one keeps a name if any had one, the least.
+* A name's uses are counted on the answer, after simplification (ruling 37 as reworded on
+  2026-11-27), in both modes: while they survive in more than one part, the name is read as a
+  variable and nothing is absorbed into it or folded with it.
+* A name whose remaining uses all lie in one absorbable part is used once: exactly a
+  ``<constant>``, absorbed with the numbers beside it and keeping its name (the answer holds for
+  some value of the name, not necessarily the input's); where fitted constants become one, the
+  one keeps a name if any had one, the least.
 * Masking's collection of degrees of freedom turns a ground part into one fresh constant only if
   it holds a parameter used nowhere else.
 * Code generation, masking and the list of an expression's variables treat a named constant as a
@@ -48,7 +51,8 @@ class TestTokens:
 
 
 class TestNameUsedMoreThanOnce:
-    """Read as a variable: every answer holds for every value."""
+    """Uses that survive in more than one part of the answer: the name is read as a variable,
+    and the tie between its uses stays."""
 
     @pytest.mark.parametrize('mode', MODES)
     @pytest.mark.parametrize('expression, answer', [
@@ -71,6 +75,44 @@ class TestNameUsedMoreThanOnce:
     def test_never_folded_with_numbers(self, engine: SimpliPyEngine) -> None:
         # the 2 stays a number beside the name
         assert engine.simplify('<constant_a>*x1 + 2*<constant_a>*x2') == '<constant_a>*(x1 + 2*x2)'
+
+
+class TestUsesAreCountedOnTheAnswer:
+    """Ruling 37 as reworded (owner, 2026-11-27; canon-11 of the pre-audit review): a name's uses
+    are counted on the answer, after simplification, not on the input. Uses that cancel or divide
+    out leave a name used once, which is absorbed with the numbers beside it and keeps its name,
+    but not its value; uses that survive in two parts keep the tie, and nothing is absorbed into
+    the name. Measured on 3a6ed3a, both modes."""
+
+    @pytest.mark.parametrize('mode', MODES)
+    @pytest.mark.parametrize('expression, answer', [
+        ('<constant_a> + 1', '<constant_a>'),
+        ('x1 + <constant_a>*x2 - <constant_a>*x2 + <constant_a> + 1', 'x1 + <constant_a>'),
+        ('(<constant_a>*x1 + 1)/<constant_a>', 'x1 + <constant_a>'),
+    ])
+    def test_remaining_uses_in_one_absorbable_part_are_a_name_used_once(
+            self, engine: SimpliPyEngine, expression: str, answer: str, mode: str) -> None:
+        assert engine.simplify(expression, mode=mode) == answer
+
+    @pytest.mark.parametrize('mode', MODES)
+    @pytest.mark.parametrize('expression, answer', [
+        ('<constant_a>*x1 + <constant_a> + 1', '<constant_a>*(x1 + 1) + 1'),
+        ('<constant_a>*x1 + sin(<constant_a>)', 'sin(<constant_a>) + <constant_a>*x1'),
+    ])
+    def test_uses_in_more_than_one_part_keep_the_tie(
+            self, engine: SimpliPyEngine, expression: str, answer: str, mode: str) -> None:
+        assert engine.simplify(expression, mode=mode) == answer
+
+    @pytest.mark.parametrize('mode', MODES)
+    def test_an_absorbed_name_keeps_its_name_not_its_value(self, engine: SimpliPyEngine,
+                                                           mode: str) -> None:
+        # `<constant_a> + 1` is 3 at a = 2; its answer `<constant_a>` is 3 at a = 3, not at a = 2
+        answer = engine.simplify('<constant_a> + 1', mode=mode)
+        assert answer == '<constant_a>'
+        # the name is the compiled functions' one parameter
+        f_in, f_out = engine.as_callable('<constant_a> + 1'), engine.as_callable(answer)
+        assert float(f_in(2.0)) == 3.0 and float(f_out(2.0)) == 2.0
+        assert float(f_out(3.0)) == float(f_in(2.0))
 
 
 class TestNameUsedOnce:

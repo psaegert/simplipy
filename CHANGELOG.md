@@ -699,14 +699,20 @@ model predictions.
   `<constant_k12>`), is a named constant: one unknown finite real per name, every occurrence of a
   name the same value, distinct names independent. `<constant>` stays an anonymous constant per
   occurrence. All three dialects read them, infix text included.
-  - Simplification reads a name the expression uses more than once as it reads a variable, in
-    both modes: every answer holds for every value, and the name is never folded with numbers
+  - A name's uses are counted on the answer, after simplification, in both modes (ruling 37 as
+    reworded on 2026-11-27). While its uses survive in more than one part, the name is read as a
+    variable and the tie between its uses stays: nothing is absorbed into it or folded with it
     (`<constant_a>*x1 + <constant_a>*x2 + x3` is `x3 + <constant_a>*(x1 + x2)`,
-    `<constant_a>*x1 + 2*<constant_a>*x2` is `<constant_a>*(x1 + 2*x2)`).
-  - A name used once is exactly a `<constant>`, absorbed as one and written with its name:
-    `sin(<constant_a>)` is `<constant_a>`, `3.7*<constant_a>` is `<constant_a>`. A name used more
-    than once is never absorbed, since that would cut the tie between its uses:
-    `<constant_a>*x1 + sin(<constant_a>)` stays. Where fitted constants become one, the one keeps
+    `<constant_a>*x1 + 2*<constant_a>*x2` is `<constant_a>*(x1 + 2*x2)`,
+    `<constant_a>*x1 + <constant_a> + 1` is `<constant_a>*(x1 + 1) + 1`, and
+    `<constant_a>*x1 + sin(<constant_a>)` stays).
+  - A name whose remaining uses all lie in one absorbable part is a name used once: exactly a
+    `<constant>`, absorbed with the numbers beside it and written with its name.
+    `sin(<constant_a>)`, `3.7*<constant_a>` and `<constant_a> + 1` are `<constant_a>`, and
+    `x1 + <constant_a>*x2 - <constant_a>*x2 + <constant_a> + 1` and
+    `(<constant_a>*x1 + 1)/<constant_a>` are `x1 + <constant_a>`. An absorbed name keeps its name
+    but not its value: the answer holds for some value of the name, not necessarily the
+    input's. Where fitted constants become one, the one keeps
     a name if any of them had one, the least in string order (`<constant_b> + <constant_a>` is
     `<constant_a>`). A name the answer uses once is read as a fitted constant too, so an answer
     simplifies to itself: `exp(<constant_a>) + exp(<constant_a>)*x1` is `<constant_a>*(x1 + 1)`,

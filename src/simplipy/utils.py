@@ -226,9 +226,11 @@ def is_named_constant(token: str) -> bool:
     A named constant is one unknown finite real per name: every occurrence of a name is the
     same value, distinct names are independent, and ``<constant>`` stays an anonymous constant
     per occurrence. It is a parameter, never a data variable: :meth:`SimpliPyEngine.simplify`
-    treats a name used more than once as it treats a variable and a name used once as exactly
-    a ``<constant>`` (keeping its name), and the code-generation helpers bind one parameter per
-    name.
+    counts a name's uses on the answer, after simplification, and treats a name whose remaining
+    uses all lie in one absorbable part as exactly a ``<constant>`` (absorbed with the numbers
+    beside it, keeping its name; the answer then holds for some value of the name, not
+    necessarily the input's) and a name whose uses survive in more than one part as a variable;
+    the code-generation helpers bind one parameter per name.
     """
     return bool(_NAMED_CONSTANT_PATTERN.fullmatch(token))
 
