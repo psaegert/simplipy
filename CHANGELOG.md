@@ -641,6 +641,11 @@ model predictions.
     otherwise: strict's promise is per step and in kind, kernels' error bounds and platform
     differences as measured, the judge's readings, the step cap, the 0.14 -> 0.15 upgrading guide.
 
+- **Security.** Operator realizations are now checked against the trusted modules at the
+  callable they resolve to. Previously an engine file from an untrusted source could make
+  `as_callable` call functions outside them. The realizations of the shipped engines are
+  unchanged. Advisory: GHSA-9wrh-8xx4-gmh5.
+
 - **`written_complexity()`, the written price.** `complexity(e, mode=m)` prices the canonical
   state a mode reads `e` into; `written_complexity(e)` applies the same code book to `e` exactly
   as written, in milli-bits, with no mode and no certificate: every operator, function, variable,
