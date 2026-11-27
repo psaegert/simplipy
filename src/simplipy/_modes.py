@@ -35,15 +35,21 @@ class _ModeType(EnumType):
 class Mode(Enum, metaclass=_ModeType):
     """What a simplification preserves.
 
-    - ``strict`` (the default): preserves what the deployed
-      float64 evaluator computes, wherever no operation overflows or underflows. Where one
-      does, a rewrite may give the true value instead (``exp(x)/exp(x)`` is ``1`` also
-      past ``exp``'s overflow). This is the inference and scoring mode: a rewrite in it
-      is safe for a model that is evaluated in float64.
-    - ``permissive``: reads real numbers, and accepts what holds up to sign or domain as well
-      (``(x^2)^(1/2)`` is ``x``, ``(-1)^<constant>`` is ``<constant>``), trading equivalence
-      for shorter forms. Each rule agrees with the real values up to float resolution; a whole
-      answer is not promised to, because floor, ceil and cancellations magnify a
+    - ``strict`` (the default): every step is reproduced by the deployed float64 evaluator
+      (within 8 units in the last place), or is true in the real numbers with float64 giving
+      both sides the same kind of value at every point (both finite, the same infinity, both
+      undefined, a zero's sign where it changes a value on a region). Where an operation
+      overflows or underflows, a rewrite may give the true value instead (``exp(x)/exp(x)`` is
+      ``1`` also past ``exp``'s overflow). This is the inference and scoring mode. The promise
+      is per step: an answer is not promised to agree with float64's evaluation of the input
+      within rounding where that evaluation is ill-conditioned (``atanh(tanh(19*sin(x)))``
+      becomes ``19*sin(x)``, 19 where float64 evaluates the input to 18.71 at ``x = pi/2``).
+    - ``permissive``: reads real numbers, includes every rule ``strict`` holds, and accepts
+      what holds up to sign or domain as well (``(x^2)^(1/2)`` is ``x``,
+      ``(-1)^<constant>`` is ``<constant>``), trading equivalence for shorter forms. Each
+      rule agrees with the real values up to float resolution, or holds in ``strict``; its own
+      named simplifications may drop a domain or a sign. A whole answer is not promised to
+      agree, because floor, ceil and cancellations magnify a
       rounding-sized difference. It is meant for training-corpus canonicalisation, where the
       training data is generated from the simplified form, so there is no external function
       to violate. Do not use it on an inference or scoring path.

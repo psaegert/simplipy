@@ -4,10 +4,11 @@
 
 Only the latest released minor version receives security fixes.
 
+<!-- RELEASE: this table states the support after the 0.15.0 tag. -->
 | Version | Supported |
 |---|---|
-| 0.13.x (latest) | yes |
-| < 0.13 | no |
+| 0.15.x (latest) | yes |
+| < 0.15 | no |
 
 ## Reporting a vulnerability
 
