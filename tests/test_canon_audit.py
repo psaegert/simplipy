@@ -331,3 +331,24 @@ def test_a_negative_power_of_a_zero_product_is_a_fixpoint(engine, expression) ->
 def test_permissive_answer_never_prices_above_a_fully_numeric_input(engine, expression) -> None:
     answer = engine.simplify(expression, mode='permissive')
     assert engine.complexity(answer, mode='permissive') <= engine.complexity(expression, mode='permissive')
+
+
+@pytest.mark.xfail(strict=True, reason='audit canon-9: an odd root and a fractional power of one base '
+                   'merge (FX-72) or compose only on a second call, when the root first collects '
+                   'with its own powers in the same product, or stands as rootn(t, 2) under a power')
+@pytest.mark.parametrize('expression', [
+    'rootn(x2, 3)/(x2^(3/4)*rootn(x2, 3)^2*floor(log(x2)))',
+    '(min(sin(x1^1.5*rootn(x1, 3)), acosh(x1))^(-1/2))^(1/4)',
+])
+def test_a_root_merges_with_its_radicands_powers_in_one_call(engine, expression) -> None:
+    answer = engine.simplify(expression, mode='strict')
+    assert engine.simplify(answer, mode='strict') == answer
+
+
+@pytest.mark.xfail(strict=True, reason='audit canon-10: permissive multiplies a factor out over a sum '
+                   'that holds it (ruling 38, R1) only on a second call, where strict does it in one')
+@pytest.mark.parametrize('expression', ['(x1*x2)*((5/2 - x1)^2 + (x1/x2 + x1))',
+                                        '(x1*x2)*((x1 - 1)^2 + x1/x2 + x1)'])
+def test_permissive_multiplies_out_in_one_call(engine, expression) -> None:
+    answer = engine.simplify(expression, mode='permissive')
+    assert engine.simplify(answer, mode='permissive') == answer
