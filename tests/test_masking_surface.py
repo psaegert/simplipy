@@ -1,5 +1,4 @@
-"""The masking redundancy, cleared (ruling 2026-08-18, evening batch 2 item 4):
-"The masking redundancies should be cleared of course and everything streamlined."
+"""The masking redundancy, cleared: the masking surface is streamlined.
 
 VERDICT: one policy, not two. `mask_values_keep_structure` and `mask_fittable`
 are the SAME function object today, and the evidence says that is not an
@@ -28,11 +27,12 @@ import pytest
 
 from simplipy import SimpliPyEngine, masking
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 class TestDeclaredSurface:

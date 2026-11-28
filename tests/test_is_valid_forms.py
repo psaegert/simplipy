@@ -1,5 +1,4 @@
-"""`is_valid` accepts and verifies ALL THREE forms (ruling 2026-08-18, evening
-batch 2 item 5): "is_valid should support and verify all forms, prefix, infix and
+"""`is_valid` accepts and verifies ALL THREE forms: "is_valid should support and verify all forms, prefix, infix and
 tagged".
 
 This closes a v24 seam. The v24.0 target format is the TAGGED canonical form, so
@@ -9,7 +8,7 @@ this", but a wrong VERDICT, silently, on the exact form the training target now
 uses. An infix `str` was worse: `list('x0+x0')` walks the CHARACTERS, so a
 perfectly valid expression came back False.
 
-Form detection follows the conversion trio (D2): the TYPE decides str-vs-tokens,
+Form detection follows the conversion trio: the TYPE decides str-vs-tokens,
 and for tokens the liberal reader decides dialect. Every pre-existing call --
 explicit binary prefix, the only form callers could use -- must answer exactly as
 before, so the explicit verdicts below are the recorded pre-change answers.
@@ -19,11 +18,12 @@ import pytest
 
 from simplipy import SimpliPyEngine
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.from_config(acj_config_path())
+    return legacy_from_config(acj_config_path())
 
 
 # Verdicts recorded on the pre-change tree; not one of them may move.
@@ -37,7 +37,8 @@ EXPLICIT_UNCHANGED = [
     (['x0', 'x1'], False),                # two roots
     ([], False),                          # the one valid case is_valid rejects
     (['+', 'x0', 'x0', 'x1'], False),     # trailing token
-    (['sqrt', 'x0'], False),              # undeclared vocabulary
+    (['zeta', 'x0'], False),              # undeclared vocabulary (`sqrt` is a defined
+                                          # function of the shipped configs since ruling 40)
 ]
 
 
@@ -129,8 +130,8 @@ class TestInfixForm:
         """is_valid VERIFIES; read_infix TOLERATES. The two must not be confused:
         an undeclared function reads fine and is still not a valid expression for
         THIS engine."""
-        assert engine.read_infix('sqrt(x0)') == ['sqrt', 'x0']
-        assert engine.is_valid('sqrt(x0)') is False
+        assert engine.read_infix('zeta(x0)') == ['zeta', 'x0']
+        assert engine.is_valid('zeta(x0)') is False
 
 
 class TestFormDetectionMatchesTheTrio:
@@ -138,6 +139,16 @@ class TestFormDetectionMatchesTheTrio:
             self, engine: SimpliPyEngine) -> None:
         assert engine.is_valid(np.array(['+', 'x0', 'x0'], dtype=object)) is True
         assert engine.is_valid(np.array(['+', 'x0'], dtype=object)) is False
+
+    def test_an_ndarray_of_byte_strings_is_read_as_the_tokens_it_spells(
+            self, engine: SimpliPyEngine) -> None:
+        """A byte-string array (dtype ``S``) is read as the conversion API reads it: each token
+        is the text it spells, not the ``repr`` of a ``bytes`` object."""
+        tokens = np.array([b'*', b'x0', b'x1'])
+        assert tokens.dtype.kind == 'S'
+        assert engine.is_valid(tokens) is True
+        assert engine.is_valid(np.array([b'*', b'x0'])) is False
+        assert engine.to_prefix(tokens) == ['*', 'x0', 'x1']
 
     def test_a_non_expression_type_refuses_loudly(
             self, engine: SimpliPyEngine) -> None:

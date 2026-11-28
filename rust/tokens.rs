@@ -41,6 +41,8 @@ pub struct TokProps {
     /// First-character sigil class: b'_' / b'?' / b'!' / b'$' or 0. Placeholder classification is
     /// BY FIRST CHARACTER (Python keys on the sigil prefix, not the full `^[_?!$]\d+$` regex).
     pub sigil: u8,
+    /// Is the token a named constant ([`is_named_constant`])?
+    pub named: bool,
 }
 
 impl TokProps {
@@ -49,6 +51,7 @@ impl TokProps {
         Self {
             arity: None,
             sigil: sigil_of(s),
+            named: is_named_constant(s),
         }
     }
 }
@@ -61,10 +64,24 @@ fn sigil_of(s: &str) -> u8 {
     }
 }
 
+/// Is `s` a NAMED CONSTANT, `<constant_NAME>` with NAME alphanumeric (`[A-Za-z0-9]+`)? One
+/// unknown finite real per name, distinct names independent; `<constant>` is the anonymous one.
+/// A named constant is a parameter, never a data variable. Its uses are counted on the answer,
+/// after simplification: a name whose remaining uses all lie in one absorbable part is used once,
+/// exactly a `<constant>` absorbed with the numbers beside it and keeping its name (the answer then
+/// holds for some value of the name, not necessarily the input's); while its uses survive in more
+/// than one part it is read as a variable and nothing is absorbed into it
+/// ([`TokenView::is_free_name`]).
+pub fn is_named_constant(s: &str) -> bool {
+    s.strip_prefix("<constant_")
+        .and_then(|r| r.strip_suffix('>'))
+        .is_some_and(|name| !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
 /// Per-Engine interner: strings, ids, properties.
 ///
 /// (The deleted binary kernel's distinguished-token FIELDS -- `constant`/`nan`/`plus`/
-/// .../`cc_inverse_op`, its id-comparison anchors -- were removed in D3, 2026-08-05:
+/// .../`cc_inverse_op`, its id-comparison anchors -- are gone:
 /// zero consumers since the 0.12.0 kernel deletion. The AC core interns through
 /// `TokenView::intern` and compares by string, never against stored ids. Their eager
 /// `intern` CALLS survive at the FRONT of [`TokenTable::build`]'s literal list, in the
@@ -85,7 +102,7 @@ impl TokenTable {
         // Eager membership is PERFORMANCE-only (a missing literal just lands in the
         // per-call overlay) -- except `rootn`, see below. The first eleven entries are
         // the deleted kernel's distinguished tokens, kept FIRST in their historical
-        // order so the D3 field removal left every table id unchanged.
+        // order so removing the fields left every table id unchanged.
         for s in [
             "<constant>",
             "float(\"nan\")",
@@ -140,12 +157,16 @@ impl TokenTable {
         for a in aliases {
             t.intern(a, ops);
         }
+        // `f64`'s written negative zero (`ac::expr::NEG_ZERO`): the constructors build it, and
+        // a rule holding one is stored per-Engine, so it is a TABLE id (appended: every other
+        // id is unchanged).
+        t.intern(crate::ac::expr::NEG_ZERO, ops);
         // (The former cc_inverse_op tail interned the config's +/* inverse names here.
         // For every real config that is a no-op on table contents -- `-` and `/` are
         // eagerly interned above, and an inverse naming another OPERATOR is interned
         // via operator_order; only a malformed non-operator inverse name ever added a
         // token, and such a string now simply lands in per-call overlays, where the
-        // string-based comparisons treat it identically. Removed in D3 with the dead
+        // string-based comparisons treat it identically. Removed with the dead
         // field it fed.)
         t
     }
@@ -197,6 +218,9 @@ pub struct TokenOverlay {
     strings: Vec<Box<str>>,
     ids: FxHashMap<Box<str>, Tok>,
     props: Vec<TokProps>,
+    /// The call's FREE NAMES: the named constants the expression of the call uses once
+    /// ([`TokenView::is_free_name`]). Empty unless the call's entry classifies its input.
+    free_names: Vec<Tok>,
 }
 
 impl TokenOverlay {
@@ -206,6 +230,7 @@ impl TokenOverlay {
             strings: Vec::new(),
             ids: FxHashMap::default(),
             props: Vec::new(),
+            free_names: Vec::new(),
         }
     }
 
@@ -317,5 +342,102 @@ impl<'a> TokenView<'a> {
     #[inline]
     pub fn sigil(&self, t: Tok) -> u8 {
         self.props(t).sigil
+    }
+
+    /// Is `t` a FREE NAME of this call: a named constant ([`is_named_constant`]) the call's
+    /// expression uses exactly once? Such a name is exactly a `<constant>` (one unknown
+    /// finite real nothing else refers to), so the parse reads it as the fitted constant
+    /// `Ex::Const` carrying its name, which the constructors may absorb as they absorb any
+    /// fitted constant, keeping the name (`sin(<constant_a>)` is `<constant_a>`). A name used
+    /// more than once is a leaf, read as a variable: absorbing it would cut the tie between
+    /// its uses. Table tokens are never free.
+    pub fn is_free_name(&self, t: Tok) -> bool {
+        !self.table.is_table_id(t) && self.overlay.borrow().free_names.contains(&t)
+    }
+
+    /// Does this call read any free name ([`Self::is_free_name`])?
+    pub fn has_free_names(&self) -> bool {
+        !self.overlay.borrow().free_names.is_empty()
+    }
+
+    /// Is `t` a named constant ([`is_named_constant`])?
+    #[inline]
+    pub fn is_named(&self, t: Tok) -> bool {
+        self.props(t).named
+    }
+
+    /// CLASSIFY the named constants of one expression for this call (`tokens`, interned through
+    /// this view): each name used exactly once becomes a free name ([`Self::is_free_name`]).
+    /// Called once, by an entry point, on the whole expression it reads: a part of an expression
+    /// does not say how often the whole uses a name.
+    pub fn classify_names(&self, tokens: &[Tok]) {
+        let mut counts: Vec<(Tok, usize)> = Vec::new();
+        for &t in tokens {
+            if self.table.is_table_id(t) || !self.is_named(t) {
+                continue;
+            }
+            match counts.iter_mut().find(|(u, _)| *u == t) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((t, 1)),
+            }
+        }
+        let free: Vec<Tok> = counts
+            .into_iter()
+            .filter(|&(_, n)| n == 1)
+            .map(|(t, _)| t)
+            .collect();
+        self.overlay.borrow_mut().free_names = free;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_constants_are_alphanumeric_names() {
+        for s in [
+            "<constant_a>",
+            "<constant_k12>",
+            "<constant_1>",
+            "<constant_X1y>",
+        ] {
+            assert!(is_named_constant(s), "{s}");
+        }
+        for s in [
+            "<constant>",
+            "<constant_>",
+            "<constant_a_b>",
+            "<constant_a-b>",
+            "<constant_a",
+            "constant_a",
+            "<constant_\u{e9}>",
+            "x1",
+        ] {
+            assert!(!is_named_constant(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn a_name_used_once_is_free() {
+        let ops = Operators::from_specs(Vec::new(), FxHashMap::default());
+        let table = TokenTable::build(&[], &ops);
+        let overlay = RefCell::new(TokenOverlay::new(table.len()));
+        let view = TokenView::new(&table, &overlay);
+        let toks: Vec<Tok> = [
+            "<constant_a>",
+            "<constant_b>",
+            "<constant_a>",
+            "x1",
+            "<constant>",
+        ]
+        .iter()
+        .map(|s| view.intern(s))
+        .collect();
+        view.classify_names(&toks);
+        assert!(!view.is_free_name(toks[0]), "a is used twice");
+        assert!(view.is_free_name(toks[1]), "b is used once");
+        assert!(!view.is_free_name(toks[3]) && !view.is_free_name(toks[4]));
+        assert!(view.is_named(toks[0]) && !view.is_named(toks[4]));
     }
 }

@@ -1,4 +1,4 @@
-"""The realization trust model (register C1.12, owner-ruled 2026-08-09).
+"""The realization trust model.
 
 Two defects, both reproduced on the pre-fix engine before this file existed:
 
@@ -22,7 +22,6 @@ The load-bearing test in this file is
 :meth:`TestConfigIsNotExecutable.test_refusal_happens_before_the_import`: refusing is
 worth nothing if the module was already imported when the refusal fired.
 """
-import json
 import os
 import pickle
 import sys
@@ -33,8 +32,10 @@ import pytest
 import yaml
 
 from simplipy import SimpliPyEngine, codify, explicit_constant_placeholders
+from simplipy.verify import default_corpus
 from simplipy.trust import UntrustedModuleError
 from conftest import acj_config_path
+from conftest import legacy_from_config  # noqa: E402
 
 _UNTRUSTED = 'simplipy_trust_probe_mod'
 
@@ -143,6 +144,17 @@ class TestOptIn:
                                        trusted_modules=['some_other_module'])
         assert not probe_module.exists()
 
+    @pytest.mark.parametrize('value', ['mylab', b'mylab'])
+    def test_a_bare_string_of_trusted_modules_is_refused(self, tmp_path, value):
+        """A string is a sequence of characters: `trusted_modules='os'` trusted 'o' and 's'."""
+        from simplipy.trust import resolve_trusted
+        with pytest.raises(TypeError, match='not a bare string'):
+            resolve_trusted(value)
+        with pytest.raises(TypeError, match='not a bare string'):
+            SimpliPyEngine.from_config(_config(tmp_path, 'simplipy.operators.sin'),
+                                       trusted_modules=value)
+        assert 'mylab' in resolve_trusted(['mylab'])
+
 
 class TestOneSpellingPerModule:
     def test_numpy_spelling_refused_with_a_hint(self):
@@ -206,7 +218,7 @@ class TestDeployedEvaluationPath:
 
     @pytest.fixture(scope='class')
     def engine(self):
-        return SimpliPyEngine.from_config(acj_config_path())
+        return legacy_from_config(acj_config_path())
 
     def test_shipped_config_needs_only_default_roots(self, engine):
         assert engine.modules == ['numpy', 'simplipy']
@@ -216,9 +228,7 @@ class TestDeployedEvaluationPath:
         refiner uses: simplify, render with realizations, turn ``<constant>`` into
         named lambda arguments, codify, call. Every name the rendered row mentions has
         to resolve in the engine's own namespace, or the downstream refiner breaks."""
-        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(repo, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')) as file:
-            corpus = json.load(file)
+        corpus = default_corpus()
 
         checked = 0
         with_constants = 0
@@ -228,7 +238,7 @@ class TestDeployedEvaluationPath:
                 continue
             simplified = engine.simplify(list(row))
             with_placeholders, constants = explicit_constant_placeholders(
-                simplified, convert_numbers_to_constant=False)
+                simplified)
             infix = engine.prefix_to_infix(with_placeholders, realization=True)
             function = engine.code_to_lambda(codify(infix, variables + constants))
             function(*[0.7] * (len(variables) + len(constants)))  # a NameError here is the regression
@@ -241,7 +251,7 @@ class TestDeployedEvaluationPath:
 
 
 class TestRealizationShapeIsTotal:
-    """R3/B14 (SEC-L1): the shape check must decide EVERY realization, not just dotted ones.
+    """The shape check must decide EVERY realization, not just dotted ones.
 
     ``realization_root`` returns ``None`` for anything that is not a dotted name, and the
     engine read that as "nothing to check" (``if root is not None:``, no else branch). So a
@@ -284,7 +294,7 @@ class TestRealizationShapeIsTotal:
 
 
 class TestTheWholeDottedPathIsChecked:
-    """SEC-L1 / audit S2: the root is only the FIRST hop, and the reach is in the rest.
+    """The root is only the FIRST hop, and the reach is in the rest.
 
     A realization is resolved by attribute traversal in generated source, and a module's
     attributes include every module IT imported. So ``simplipy.engine.os.system`` starts
@@ -300,7 +310,7 @@ class TestTheWholeDottedPathIsChecked:
     """
 
     ESCAPES = ['simplipy.engine.os.system', 'simplipy.io.os.abort',
-               'simplipy.engine.importlib.import_module', 'simplipy.engine.hashlib.sha256',
+               'simplipy._loading.importlib.import_module', 'simplipy._loading.hashlib.sha256',
                'simplipy.asset_manager.shutil.rmtree', 'simplipy.engine.os']
 
     @pytest.mark.parametrize('realization', ESCAPES)
@@ -416,7 +426,7 @@ class TestBareNamesAreAnAllowlist:
     Python's own builtins, where `eval`, `exec`, `compile`, `open` and `__import__` sit
     beside `abs`. Closing the dotted path while leaving this open would be false closure:
     both doors reach arbitrary code given a string argument, and neither reaches anything
-    given a float. So the accepted names are enumerated (audit S2 sibling)."""
+    given a float. So the accepted names are enumerated."""
 
     @pytest.mark.parametrize('realization', [
         'eval', 'exec', 'compile', 'open', 'input', 'breakpoint',

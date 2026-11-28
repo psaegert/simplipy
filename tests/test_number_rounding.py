@@ -51,21 +51,21 @@ class TestF64FoldReadsTheNearestDouble:
     def test_a_large_argument_folds_to_the_evaluators_value(self, bare) -> None:
         # sin amplifies the double rounding of 9161892985817857 / 10^5 into a 3e-6 error:
         # the fold gave -0.9807961394411915.
-        (folded,) = bare.simplify(['sin', '91618929858.17857'], mode=Mode.f64)
+        (folded,) = bare.simplify(['sin', '91618929858.17857'], mode=Mode.strict)
         assert float(folded) == math.sin(float('91618929858.17857'))
 
     # (the last fraction is left out: its fold is not cheaper than the fraction, so it stays)
     @pytest.mark.parametrize('p, q', FRACTIONS[:4])
     @pytest.mark.parametrize('fn', ['log', 'sin', 'atan'])
     def test_every_fold_reads_the_correctly_rounded_argument(self, bare, fn, p, q) -> None:
-        (folded,) = bare.simplify([fn, '/', str(p), str(q)], mode=Mode.f64)
+        (folded,) = bare.simplify([fn, '/', str(p), str(q)], mode=Mode.strict)
         assert float(folded) == getattr(math, fn)(float(Fraction(p, q)))
 
     @pytest.mark.parametrize('fn', ['sin', 'atan'])
     def test_small_arguments_fold_to_the_evaluators_value(self, bare, fn) -> None:
         # e.g. sin(4.7164035732078835e-06) folded to 4.716403573190399e-06, Python gives ...398
         for lit in ['4.7164035732078835e-06', '6.013849055450248e-10'] + small_decimals(0, 150):
-            (folded,) = bare.simplify([fn, lit], mode=Mode.f64)
+            (folded,) = bare.simplify([fn, lit], mode=Mode.strict)
             assert float(folded) == getattr(math, fn)(float(lit)), (fn, lit, folded)
 
 
@@ -82,7 +82,7 @@ class TestFractionLeaves:
         (88524220207673979580413052837552725604400, 89201998976178365554424057804963117690730),
     ])
     def test_the_interval_leaf_encloses_the_fraction(self, bare, p, q) -> None:
-        # B6: the old reader took float(p) / float(q) and bracketed it by one ulp, which
+        # The old reader took float(p) / float(q) and bracketed it by one ulp, which
         # missed 673107593011939307760027002528/810572757194796821120128085049 (1.5 ulps
         # away). Components beyond i128 cannot be certified and get a four-ulp bracket.
         box = bare._core.interval_value_set_box([f'{p}/{q}'], [0.0], [1.0])

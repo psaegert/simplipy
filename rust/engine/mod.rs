@@ -4,17 +4,17 @@
 //! `&[String]` methods (intern once at entry, resolve once at exit). Submodules: [`stats`]
 //! (hot-path counters), `memo` (cache/ctx state), `ac` (THE engine), `miner` (the OFFLINE
 //! mining surface); config deserialization, the `Engine` struct and constructors live here.
-//! The old binary kernel is deleted (clean 0.12); masking is the PYTHON-side
-//! `simplipy.masking` module, downstream of simplify, never a kernel pass.
+//! Masking is the PYTHON-side `simplipy.masking` module, downstream of simplify, never a
+//! kernel pass.
 
 mod ac;
 mod memo;
 mod miner;
+mod prettify;
 pub mod refusals;
 pub mod stats;
 
 use std::error::Error;
-use std::fs;
 
 use rustc_hash::FxHashMap;
 
@@ -26,6 +26,8 @@ use memo::{BangCache, SimplifyCtx};
 
 pub use ac::AcForm;
 pub use ac::RuleMode;
+pub use miner::{ConfirmSet, MineRefusal, MineSpec, MinedRule};
+pub use prettify::{Pretty, PrettyForm, PrettyOptions};
 
 /// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
 #[cfg(test)]
@@ -55,6 +57,10 @@ struct EngineConfig {
     // path, but rule RESOLUTION is the Python shim's job (the core receives rules text).
     #[allow(dead_code)]
     rules: Option<String>,
+    /// The DEFINED FUNCTIONS (`crate::defined`), read against the operator table once it is
+    /// built.
+    #[serde(default)]
+    defined_functions: Option<serde_yaml_ng::Mapping>,
 }
 
 /// (insertion-ordered operator names, name -> spec), preserving config.yaml order.
@@ -83,32 +89,34 @@ pub struct Engine {
     /// Memo for the `!`-sort match-time certificate (`interval::finite_ae` by subtree tokens).
     /// Per-ENGINE, not global: certificates depend on this engine's operator semantics, and
     /// tests build many engines with different op sets in one process. Generational (see
-    /// `BangCache`): bounded memory, never stops memoizing.
-    bang_cache: std::sync::Mutex<BangCache>,
+    /// `BangCache`): bounded memory, never stops memoizing. One per reading, indexed by
+    /// `ac_cert`'s `f64`: 0 over the reals (`permissive`), 1 in float64 (`f64`), whose
+    /// `tanh` and `atan` are constant on whole tails.
+    bang_cache: [std::sync::Mutex<BangCache>; 2],
     /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
-    mult_cache: std::sync::Mutex<BangCache>,
+    mult_cache: [std::sync::Mutex<BangCache>; 2],
     /// The DEFAULT mode's translated ruleset, built lazily on first `ac_simplify` (see
     /// `engine/ac.rs`) so consumers that never opt in pay nothing at construction.
     ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
-    /// THE `real` MODE'S OWN COMPLETE RULE SET (`rules_real.json`), interned exactly like
-    /// `rules` -- NOT a supplement to it. Owner ruling, 2026-08-19: "one distinct rule set
-    /// for each mode", and "for provenance, the triple should be pinned; we will only ever
-    /// mine and distribute triples". So this file carries the core rules AND the real-only
-    /// rules, complete, and the engine never computes a union to decide what `real` serves.
+    /// THE `permissive` MODE'S OWN COMPLETE RULE SET (`rules_permissive.json`), interned
+    /// exactly like `rules` -- NOT a supplement to it: one distinct, self-contained rule set
+    /// for each mode, so the engine never computes a union to decide what a mode serves.
     ///
     /// `None` -- the state of every engine not handed one -- means the mode names NO SET
     /// OF ITS OWN and serves the default set. `Some(vec![])` is the different, sayable
     /// statement "this mode serves nothing"; see `Engine::ac_rules_for`.
-    real_rules: Option<CompiledRules>,
-    /// THE `permissive` MODE'S OWN COMPLETE RULE SET (`rules_permissive.json`), same discipline:
-    /// core plus BOTH the real-only and permissive-only rules, in one self-contained file.
     permissive_rules: Option<CompiledRules>,
-    /// `real`'s translated set, lazily built by the same `translate_rules` as the default
-    /// cell. Untouched by a consumer that never asks for `real`.
-    ac_real_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
-    /// `permissive`'s translated set, same discipline as `ac_real_rules_cell`.
+    /// `permissive`'s translated set, lazily built by the same `translate_rules` as the
+    /// default cell. Untouched by a consumer that never asks for `permissive`.
     ac_permissive_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
+    /// Memo of the engine's reading of a ground part (`Engine::ground_part_written`), by mode
+    /// (`true`: `permissive`) and the part's tokens. The reading consults no rule, so it
+    /// holds whatever set the engine serves.
+    written_ground_parts: std::sync::Mutex<WrittenGroundParts>,
 }
+
+/// The memo of [`Engine::ground_part_written`]: (`permissive`?, the part) -> its writing.
+type WrittenGroundParts = rustc_hash::FxHashMap<(bool, Vec<String>), Option<Vec<String>>>;
 
 impl Engine {
     /// Syntactic PREFIX -> TAGGED regrouping (`crate::forms`): NOTATION only -- no AC
@@ -129,24 +137,26 @@ impl Engine {
         crate::forms::check(tokens, &self.operators)
     }
 
-    /// Build from resolved local paths (the Python shim resolves HF-hub/local via simplipy's own
-    /// asset_manager and hands us files; the Rust core is network-free). REUSES the unchanged
-    /// config.yaml + rules.json (single source of truth shared with Python).
-    pub fn from_paths(
-        config_yaml_path: &str,
-        rules_json_path: &str,
-    ) -> Result<Self, Box<dyn Error>> {
-        let cfg_text = fs::read_to_string(config_yaml_path)?;
-        let rules_text = fs::read_to_string(rules_json_path)?;
-        Self::from_strs(&cfg_text, &rules_text)
-    }
-
     /// Build from in-memory config/rules text: direct `SimpliPyEngine(operators=..., rules=...)`
     /// construction serializes its in-memory state and attaches a core through here -- with no
     /// pure-Python fallback, every construction path must reach a compiled core without touching
-    /// the filesystem.
+    /// the filesystem. The default set is read in its own mode's canon.
     pub fn from_strs(cfg_text: &str, rules_text: &str) -> Result<Self, Box<dyn Error>> {
-        let cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
+        Self::from_strs_read_in(
+            cfg_text,
+            rules_text,
+            crate::ac::rules::RuleCanon::Mode(RuleMode::Strict),
+        )
+    }
+
+    /// [`Engine::from_strs`] with the canon the default set was certified in.
+    pub fn from_strs_read_in(
+        cfg_text: &str,
+        rules_text: &str,
+        canon: crate::ac::rules::RuleCanon,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
+        let defined_section = cfg.defined_functions.take();
 
         // rules.json: a JSON list of [lhs_tokens, rhs_tokens] pairs; serde_json maps each
         // 2-element array onto the (Vec<String>, Vec<String>) tuple. Compile interns the
@@ -161,6 +171,44 @@ impl Engine {
         // supplying realizations/precedences -- but never repurpose them: a conflicting
         // arity or an alias shadowing a core token would silently change what the engine's
         // own output means. Fail loudly at build instead.
+        //
+        // NAMES: an operator's name and each alias is a function name
+        // (`crate::operators::name_refusal`), and an alias names one operator and is none: an
+        // alias naming another operator made the readers disagree (with `sin: {alias: [cos]}`
+        // the infix reader read `cos(x0)` as `sin(x0)`, the prefix readers as `cos x0`).
+        let mut alias_owner: FxHashMap<&str, &str> = FxHashMap::default();
+        for (name, spec) in &specs {
+            if crate::operators::core_arity(name).is_none() {
+                if let Some(why) = crate::operators::name_refusal(name) {
+                    return Err(format!("config error: the operator name {name:?} {why}").into());
+                }
+            }
+            for alias in &spec.alias {
+                let refusal = crate::operators::name_refusal(alias).or_else(|| {
+                    specs
+                        .contains_key(alias.as_str())
+                        .then_some("is an operator of this config")
+                });
+                if let Some(why) = refusal.filter(|_| crate::operators::core_arity(alias).is_none())
+                {
+                    return Err(format!(
+                        "config error: operator {name:?} declares the alias {alias:?}, which {why}; \
+                         an alias is another name of its one operator"
+                    )
+                    .into());
+                }
+                if let Some(other) = alias_owner
+                    .insert(alias.as_str(), name.as_str())
+                    .filter(|o| *o != name.as_str())
+                {
+                    return Err(format!(
+                        "config error: the alias {alias:?} is declared by both {other:?} and \
+                         {name:?}; an alias names one operator"
+                    )
+                    .into());
+                }
+            }
+        }
         for (name, spec) in &specs {
             if let Some(core_a) = crate::operators::core_arity(name) {
                 if spec.arity != core_a {
@@ -168,6 +216,20 @@ impl Engine {
                         "config error: {name:?} is a core serialization token with arity \
                          {core_a}, but the config declares arity {}; core tokens cannot \
                          be repurposed",
+                        spec.arity
+                    )
+                    .into());
+                }
+            }
+            // THE CORE'S OPERATOR SCHEMA: a name the core evaluates natively has the arity of
+            // its kernel, and every native dispatch indexes its operands by it, so a config
+            // declaring `sin` with arity 0 is refused here, not met at evaluation.
+            if let Some(native) = crate::numeric::native_arity(name) {
+                if spec.arity != native {
+                    return Err(format!(
+                        "config error: the core evaluates {name:?} with arity {native}, but the \
+                         config declares arity {}; declare arity {native} or give the operator \
+                         another name",
                         spec.arity
                     )
                     .into());
@@ -204,27 +266,33 @@ impl Engine {
                 }
             }
         }
-        let operators = Operators::from_specs(order.clone(), specs);
+        let mut operators = Operators::from_specs(order.clone(), specs);
+        // The DEFINED FUNCTIONS, read against the finished operator table (a definition calls
+        // operators, never another defined function).
+        if let Some(section) = defined_section {
+            for (name, function) in crate::defined::read_section(section, &operators)? {
+                operators.add_defined(name, function);
+            }
+        }
         // The per-Engine token table (operators + aliases + vocab), then compile interns
         // every rule token into it.
         let mut tokens = TokenTable::build(&order, &operators);
-        let compiled = CompiledRules::compile(raw, &mut tokens, &operators);
+        let compiled = CompiledRules::compile(raw, canon, &mut tokens, &operators);
 
         Ok(Self {
             operators,
             rules: compiled,
             tokens,
-            bang_cache: std::sync::Mutex::new(BangCache::new()),
-            mult_cache: std::sync::Mutex::new(BangCache::new()),
+            bang_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
+            mult_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
             ac_rules_cell: std::sync::OnceLock::new(),
-            // NO per-mode sets at construction: `from_strs` builds exactly today's engine
-            // from exactly today's `rules.json`, and the other two files -- when a config
-            // names them -- arrive afterwards through `set_mode_rules`. That is what makes
-            // "absent files are a no-op" true by construction rather than by argument.
-            real_rules: None,
+            // NO permissive set at construction: `from_strs` builds the engine from the
+            // default `rules.json` alone, and the permissive file -- when a config names it
+            // -- arrives afterwards through `set_mode_rules`. That is what makes "an absent
+            // file is a no-op" true by construction rather than by argument.
             permissive_rules: None,
-            ac_real_rules_cell: std::sync::OnceLock::new(),
             ac_permissive_rules_cell: std::sync::OnceLock::new(),
+            written_ground_parts: std::sync::Mutex::new(WrittenGroundParts::default()),
         })
     }
 
@@ -245,8 +313,8 @@ impl Engine {
         toks.iter().map(|&t| view.resolve_owned(t)).collect()
     }
 
-    /// Crate-internal accessor for the operator tables (used by `crate::eval` tests/benches).
-    #[allow(dead_code)] // test/bench-only today
+    /// Crate-internal accessor for the operator tables (the interval probes in `lib.rs`, and
+    /// tests).
     pub(crate) fn operators_ref(&self) -> &Operators {
         &self.operators
     }
@@ -258,8 +326,9 @@ impl Engine {
     /// Stays on `&[String]`: it never touches the tree types, and it runs at the FFI boundary
     /// BEFORE interning (the validation gate for inputs that may be malformed).
     pub fn is_valid(&self, expression: &[String]) -> bool {
-        // A multi-token expression must start with an operator.
-        if expression.len() > 1 && !self.operators.is_operator(&expression[0]) {
+        // A multi-token expression must start with an operator (or a defined function, which
+        // the readers read like one: `Operators::syntax_arity`).
+        if expression.len() > 1 && self.operators.syntax_arity(&expression[0]).is_none() {
             return false;
         }
 
@@ -278,7 +347,7 @@ impl Engine {
                 return false;
             }
 
-            if let Some(arity) = self.operators.arity_of(token) {
+            if let Some(arity) = self.operators.syntax_arity(token) {
                 let arity = arity as usize;
                 if depth < arity {
                     return false; // not enough operands
@@ -289,6 +358,19 @@ impl Engine {
         }
 
         depth == 1
+    }
+
+    /// THE WRITTEN PRICE of explicit prefix tokens, in milli-bits
+    /// (`ac::expr::written_complexity`): the code book applied to the expression as written.
+    pub fn written_complexity(&self, tokens: &[String]) -> Result<u64, String> {
+        crate::ac::expr::written_complexity(tokens, &self.operators)
+    }
+
+    /// EXPAND the defined functions of a token sequence into their definitions
+    /// (`crate::defined::expand_defined`): what every entry into the canonical state and every
+    /// evaluation reads.
+    pub fn expand_defined(&self, tokens: &[String]) -> Vec<String> {
+        crate::defined::expand_defined(tokens, &self.operators)
     }
 
     /// `prefix_to_infix`: render a prefix token list to infix. `Err` mirrors Python's `ValueError`
@@ -307,7 +389,7 @@ impl Engine {
     /// shunting-yard. Degenerate inputs give degenerate lists (matching Python); `Err` only
     /// for two operands separated by whitespace alone (`x0 x1`).
     pub fn infix_to_prefix(&self, infix_expression: &str) -> Result<Vec<String>, String> {
-        crate::convert::infix_to_prefix(infix_expression, &self.operators)
+        crate::convert::infix_to_prefix(infix_expression, &self.operators, false)
     }
 
     /// `convert_expression`: normalize into the engine's internal form. `Err` mirrors a Python
@@ -323,14 +405,22 @@ impl Engine {
     }
 
     /// `parse`: infix string -> standardized prefix expression
-    /// (infix_to_prefix -> convert_expression -> numbers_to_constant -> remove_pow1).
+    /// (infix_to_prefix with the legacy call spellings -> convert_expression -> numbers_to_constant).
+    /// `strict` refuses a call of a name no operator declares.
     pub fn parse(
         &self,
         infix_expression: &str,
         convert: bool,
         mask_numbers: bool,
+        strict: bool,
     ) -> Result<Vec<String>, String> {
-        crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers)
+        crate::convert::parse(
+            infix_expression,
+            &self.operators,
+            convert,
+            mask_numbers,
+            strict,
+        )
     }
 
     /// `operators_to_realizations`: map each operator NAME to its

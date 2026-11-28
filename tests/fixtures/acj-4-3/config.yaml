@@ -1,0 +1,174 @@
+operators:
+  "+":
+    realization: "+"
+    alias: []
+    arity: 2
+    precedence: 1
+    commutative: true
+  "-":
+    realization: "-"
+    alias: []
+    arity: 2
+    precedence: 1
+    commutative: false
+  neg:
+    realization: "simplipy.operators.neg"
+    alias: []
+    arity: 1
+    precedence: 2.5
+    commutative: false
+  "*":
+    realization: "*"
+    alias: []
+    arity: 2
+    precedence: 2
+    commutative: true
+  "/":
+    realization: "simplipy.operators.div"
+    alias: ["div"]
+    arity: 2
+    precedence: 2
+    commutative: false
+  abs:
+    realization: "simplipy.operators.abs"
+    alias: ["Abs"]
+    arity: 1
+    precedence: 3
+    commutative: false
+  inv:
+    realization: "simplipy.operators.inv"
+    alias: ["inverse"]
+    arity: 1
+    precedence: 4
+    commutative: false
+  pow:
+    realization: "simplipy.operators.pow"
+    alias: ["power"]
+    arity: 2
+    precedence: 3
+    commutative: false
+  rootn:
+    realization: "simplipy.operators.rootn"
+    alias: []
+    arity: 2
+    precedence: 3
+    commutative: false
+  sin:
+    realization: "simplipy.operators.sin"
+    alias: []
+    arity: 1
+    precedence: 2
+    commutative: false
+  cos:
+    realization: "simplipy.operators.cos"
+    alias: []
+    arity: 1
+    precedence: 2
+    commutative: false
+  tan:
+    realization: "simplipy.operators.tan"
+    alias: []
+    arity: 1
+    precedence: 2
+    commutative: false
+  asin:
+    realization: "simplipy.operators.asin"
+    alias: ["arcsin"]
+    arity: 1
+    precedence: 2
+    commutative: false
+  acos:
+    realization: "simplipy.operators.acos"
+    alias: ["arccos"]
+    arity: 1
+    precedence: 2
+    commutative: false
+  atan:
+    realization: "simplipy.operators.atan"
+    alias: ["arctan"]
+    arity: 1
+    precedence: 2
+    commutative: false
+  sinh:
+    realization: "simplipy.operators.sinh"
+    alias: []
+    arity: 1
+    precedence: 2
+    commutative: false
+  cosh:
+    realization: "simplipy.operators.cosh"
+    alias: []
+    arity: 1
+    precedence: 2
+    commutative: false
+  tanh:
+    realization: "simplipy.operators.tanh"
+    alias: []
+    arity: 1
+    precedence: 2
+    commutative: false
+  asinh:
+    realization: "simplipy.operators.asinh"
+    alias: ["arcsinh"]
+    arity: 1
+    precedence: 2
+    commutative: false
+  acosh:
+    realization: "simplipy.operators.acosh"
+    alias: ["arccosh"]
+    arity: 1
+    precedence: 2
+    commutative: false
+  atanh:
+    realization: "simplipy.operators.atanh"
+    alias: ["arctanh"]
+    arity: 1
+    precedence: 2
+    commutative: false
+  exp:
+    realization: "simplipy.operators.exp"
+    alias: []
+    arity: 1
+    precedence: 3
+    commutative: false
+  log:
+    realization: "simplipy.operators.log"
+    alias: ["ln"]
+    arity: 1
+    precedence: 2
+    commutative: false
+
+# ONE RULE SET PER MODE: `rules:` carries the f64 set, and `rules_corpus:` names the
+# permissive one. This artifact declares only `rules:`, so the permissive mode has no set of
+# its own here and serves the f64 set.
+rules: "./rules.json"
+
+# The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
+# generation 2 = the AC engine's clean 23-operator vocabulary, simplipy >= 0.12.
+engine_generation: 2
+
+# DEFINED FUNCTIONS (ruling 40): supported, never mined. Each is a definition over the operators
+# above, its arguments written _0, _1, ...: the readers and the conversions keep the head as
+# written; simplify, complexity, prettify, mask and every evaluation read the definition.
+defined_functions:
+  sqrt:
+    arity: 1
+    definition: "rootn(_0, 2)"
+  cot:
+    arity: 1
+    definition: "inv(tan(_0))"
+  acot:
+    arity: 1
+    definition: "atan(inv(_0))"
+  sec:
+    arity: 1
+    definition: "inv(cos(_0))"
+  csc:
+    arity: 1
+    definition: "inv(sin(_0))"
+  asec:
+    arity: 1
+    definition: "acos(inv(_0))"
+  acsc:
+    arity: 1
+    definition: "asin(inv(_0))"

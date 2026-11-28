@@ -3,13 +3,13 @@
 //!
 //! ## Why this exists
 //!
-//! The shipped engine represents expressions as binary trees over a finite operator vocabulary in
-//! which 16 of 38 operators are baked-in coefficients (`mult2..5`, `div2..5`, `pow2..5`,
-//! `pow1_2..5`) -- a workaround for the missing numeric literal. That representation caused a
-//! measured commutative-order invariance defect (4.58% of eligible expressions simplify
-//! differently under operand permutation) with TWO axes: ORDER (which operand spelling a rule
-//! was mined in) and ADJACENCY (`+ x3 (+ x8 (div5 x3))` never fires even though both operand
-//! spellings of the rule exist, because the matching is strictly local to one binary node).
+//! Binary trees over a finite operator vocabulary in which 16 of 38 operators are baked-in
+//! coefficients (`mult2..5`, `div2..5`, `pow2..5`, `pow1_2..5`), a workaround for a missing
+//! numeric literal, have a measured commutative-order invariance defect (4.58% of eligible
+//! expressions simplify differently under operand permutation) with TWO axes: ORDER (which
+//! operand spelling a rule was mined in) and ADJACENCY (`+ x3 (+ x8 (div5 x3))` never fires
+//! even though both operand spellings of the rule exist, because the matching is strictly local
+//! to one binary node).
 //!
 //! The AC core removes both axes at the representation level:
 //! * `Add`/`Mul` are FLAT SORTED BAGS -- there is no operand order and no bracketing for a rule
@@ -33,7 +33,7 @@
 //! order cannot leak. Serializations are bijective-on-classes projections, asserted stable
 //! (parse -> canon -> serialize == identity) on every chain state in debug builds.
 //!
-//! Like-term/like-factor collection inside the canonical constructors SUBSUMES the old engine's
+//! Like-term/like-factor collection inside the canonical constructors SUBSUMES a separate
 //! cancellation unit -- and makes it confluent: bags eliminate the adjacency choices that made
 //! cancellation a branching search dimension. The soundness discipline is carried over 1:1 and
 //! generalized: the additive sign-cancel gate is the `!`-certificate (`finite_ae`), the
@@ -48,18 +48,20 @@
 //! their cancellation rules carry the `!`/`$` certificate sorts, which the matcher gates per
 //! fire, so pole identities resolve exactly. The legacy pre-promotion `dev_7-3` asset is
 //! certificate-free (`_`-sorted throughout); on the unified AC representation its cancel
-//! rules reach pole spellings the binary engine's tree bucketing happened to shield, so that
-//! asset stays paired with the binary engine and older simplipy versions.
+//! rules reach pole spellings that binary tree bucketing happened to shield, so that asset stays
+//! with older simplipy versions.
 //!
-//! Serialization is pluggable and stays INSIDE the old token language (`ac::convert::to_prefix`):
-//! binary nesting, explicit literal coefficients, `-`//`/`/`neg`/`inv` sugar, no hyper-operators.
-//! Every output remains parseable, evaluable and certifiable by the shipped engine, which keeps
-//! the old engine available as a differential-testing oracle.
+//! Serialization is pluggable and stays INSIDE the prefix token language
+//! (`ac::convert::to_prefix`): binary nesting, explicit literal coefficients, `-`//`/`/`neg`/`inv`
+//! sugar, no hyper-operators. Every output parses, evaluates and is judged in the token language
+//! of its input.
 
 pub mod convert;
 pub mod expr;
+pub mod laws;
 pub mod matcher;
+pub(crate) mod poly;
+pub mod prettify;
 pub mod rat;
 pub mod rules;
 pub mod search;
-pub mod work;

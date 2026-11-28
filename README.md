@@ -38,7 +38,7 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # a published ruleset artifact
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)   # the published default rule set
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
@@ -64,6 +64,12 @@ engine.to_infix(engine.simplify(expr))       # simplify, then render
 engine.simplify(engine.to_tagged(expr))      # convert, then simplify: the tagged answer
 # > ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
 ```
+
+`simplify(expr, mode=...)` takes `'strict'`, the default, for outputs evaluated in float64:
+every step is reproduced by float64 or is true in the reals with float64's kind of value kept
+(promised per step, not for the whole answer). Or it takes `'permissive'`, for training-corpus
+canonicalisation, which reads the reals' values and promises per rule. The `real` mode is
+retired: naming it raises.
 
 ## Normalization
 
@@ -94,8 +100,13 @@ sp.normalize_variable_token('sin')
 
 More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
 
+Coming from 0.14? [Upgrading to 0.15](https://simplipy.readthedocs.io/en/latest/upgrading/) lists what changes
+(rule files, mode names, answers and prices) and what to do about each.
+
 # Performance
 
+<!-- TO BE RE-MEASURED after the re-mine: the table and the figure below were measured
+     with acj-5-4-llm at effort=4 under 0.14.x; re-run the benchmark for 0.15.0. -->
 On a 65,536-expression symbolic-regression benchmark, paired per-row against SymPy's `simplify` (serial single-core, 1 s cap):
 
 | | SimpliPy | SymPy |
@@ -134,6 +145,7 @@ pytest tests --cov src --cov-report html -m "not integration"
 ```
 
 # Citation
+<!-- RELEASE: set `version = {0.15.0}` in the @software entry below at the 0.15.0 tag. -->
 ```bibtex
 @inproceedings{saegert2026breakingsimplificationbottleneckamortized,
   title   = {Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression},

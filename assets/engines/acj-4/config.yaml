@@ -25,13 +25,13 @@ operators:
     commutative: true
   "/":
     realization: "simplipy.operators.div"
-    alias: []
+    alias: ["div"]
     arity: 2
     precedence: 2
     commutative: false
   abs:
     realization: "simplipy.operators.abs"
-    alias: []
+    alias: ["Abs"]
     arity: 1
     precedence: 3
     commutative: false
@@ -143,5 +143,30 @@ rules: "./rules.json"
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
 # generation 2 = the AC engine's clean 23-operator vocabulary, simplipy >= 0.12.
 engine_generation: 2
-rules_real: "./rules_real.json"
 rules_corpus: "./rules_corpus.json"
+
+# DEFINED FUNCTIONS (ruling 40): supported, never mined. Each is a definition over the operators
+# above, its arguments written _0, _1, ...: the readers and the conversions keep the head as
+# written; simplify, complexity, prettify, mask and every evaluation read the definition.
+defined_functions:
+  sqrt:
+    arity: 1
+    definition: "rootn(_0, 2)"
+  cot:
+    arity: 1
+    definition: "inv(tan(_0))"
+  acot:
+    arity: 1
+    definition: "atan(inv(_0))"
+  sec:
+    arity: 1
+    definition: "inv(cos(_0))"
+  csc:
+    arity: 1
+    definition: "inv(sin(_0))"
+  asec:
+    arity: 1
+    definition: "acos(inv(_0))"
+  acsc:
+    arity: 1
+    definition: "asin(inv(_0))"

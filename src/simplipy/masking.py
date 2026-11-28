@@ -4,7 +4,8 @@ Masking is DOWNSTREAM POLICY, not engine behavior: the engine simplifies and del
 full expression with explicit constants; consumers decide what to abstract. This module is
 the MECHANISM. It walks the engine's output (the native tagged form or the explicit binary
 form) and tells a policy the structural ROLE of every literal it meets -- a multiplicative
-coefficient, an additive constant, a ``pow`` exponent, a ``rootn`` index -- so a policy
+coefficient, an additive constant, a ``pow`` exponent, a ``rootn`` index, a ``besselj`` or
+``besseli`` order -- so a policy
 like "mask constants, but keep in-vocabulary integer exponents" is a single conditional,
 and position-blind accidents (masking a ``rootn`` index into a skeleton that is NaN almost
 everywhere) are impossible to write by accident.
@@ -15,13 +16,14 @@ modes, so the kinds live here rather than being re-invented by every consumer:
 * :func:`mask_all` -- every number, including either half of a fraction and the special
   constants. For structural comparison.
 * :func:`mask_fittable` -- every number a constant optimizer can actually fit, KEEPING the
-  ones it cannot (``pow`` exponents, ``rootn`` indices). For training data.
+  ones it cannot (``pow`` exponents, ``rootn`` indices, ``besselj`` and ``besseli``
+  orders). For training data.
 
 TWO KINDS, TWO NAMES -- and they are the SAME kind. ``mask_values_keep_structure`` was
 this module's original name for :func:`mask_fittable` and has been a bare alias since the
 rename; it is REMOVED in 0.14.0. There is no third semantics hiding
 behind the older name: "mask the values, keep the structure" partitions :class:`Role` into
-``{COEFFICIENT, ADDEND, VALUE}`` and ``{EXPONENT, ROOT_INDEX}``, which is exactly the
+``{COEFFICIENT, ADDEND, VALUE}`` and ``{EXPONENT, ROOT_INDEX, ORDER}``, which is exactly the
 partition :func:`mask_fittable` applies. The two names say one thing from two sides --
 WHAT is kept, and WHY it must be (an unfittable literal controls the expression's DOMAIN
 rather than its magnitude).
@@ -29,10 +31,12 @@ rather than its magnitude).
 A custom ``(value, role) -> str | None`` policy remains the primitive, so any other rule
 (mask only floats, keep a given vocabulary, ...) is a one-line function.
 
-ONE CONSTANT PER DEGREE OF FREEDOM -- the invariant every kind must satisfy. Masking is
-TWO stages: (a) the positional substitution the policy drives, then (b) a COLLECT pass
-that re-runs the engine over the result. Stage (b) is what makes the invariant hold, and
-it is needed because the serializers split ONE state node across several tokens: a
+REDUNDANT CONSTANTS, the ones the engine recognises, are removed. Masking is TWO stages:
+(a) the positional substitution the policy drives, then (b) a COLLECT pass that re-runs the
+engine over the result. Stage (b) removes the redundancies the engine's canonical form and
+rules recognise; it does not establish one constant per degree of freedom in general:
+``(a*x + b)/(c*y + d)`` keeps its four constants, though scaling all four by one value changes
+nothing. It is needed because the serializers split ONE state node across several tokens: a
 rational is one node but prints as ``<mul> 2 x0 <div> 3 </mul>``, so a positional pass
 alone would abstract it into TWO ``<constant>``s for ONE degree of freedom, and
 ``(c1*x)/c2`` is a flat direction for the refiner. Re-running the engine also collapses
@@ -65,7 +69,7 @@ The ``-1`` after one pass IS the original ``<sub>``: collect moved the negation 
 ``atan`` (an odd function), so it is structure wearing a literal's clothes. Masking it
 invents a coefficient. Measured at ~0.15% of skeletons over 20k rows.
 
-KEEPING A SYMBOLIC CONSTANT BESIDE A MASKED ONE IS POINTLESS (owner, 2026-08-07). A policy
+KEEPING A SYMBOLIC CONSTANT BESIDE A MASKED ONE IS POINTLESS. A policy
 may keep ``np.pi`` while masking its coefficient, and the mechanism will honour it -- but
 the result ``<constant> * np.pi`` is worth nothing: the constant optimizer just fits an
 arbitrary float, and an arbitrary float times pi is an arbitrary float, so the
@@ -88,7 +92,7 @@ Example (the flash-ansr-style policy)::
     from simplipy import masking
 
     def keep_structure(value: str, role: masking.Role) -> str | None:
-        if role in (masking.Role.EXPONENT, masking.Role.ROOT_INDEX):
+        if role in (masking.Role.EXPONENT, masking.Role.ROOT_INDEX, masking.Role.ORDER):
             return None            # keep structural integers: pow x0 2 stays pow x0 2
         return "<constant>"        # abstract every value-position literal
 
@@ -97,15 +101,12 @@ Example (the flash-ansr-style policy)::
 import enum
 from typing import TYPE_CHECKING, Callable, Optional, cast
 
-from simplipy.utils import is_numeric_string, reserved_numeric_spelling
+from simplipy.utils import is_named_constant, is_numeric_string, reserved_numeric_spelling
 
 if TYPE_CHECKING:
     from simplipy.engine import SimpliPyEngine
 
-# The DECLARED surface. `mask_values_keep_structure` is deliberately absent: it is a
-# deprecated spelling of `mask_fittable`, still reachable (with a warning) through the
-# module, but no longer advertised or bound by `import *`. The typing
-# helpers this module imports were never part of the surface either.
+# The DECLARED surface. The typing helpers this module imports are not part of it.
 __all__ = ["Role", "literal_sites", "mask", "mask_all", "mask_fittable"]
 
 
@@ -116,15 +117,26 @@ class Role(enum.Enum):
     ADDEND = "addend"            # a term in an additive context (incl. - operands)
     EXPONENT = "exponent"        # the second operand of ``pow``
     ROOT_INDEX = "root_index"    # the second operand of ``rootn``
+    ORDER = "order"              # the first operand of ``besselj``/``besseli`` (nu of J_nu(x))
     VALUE = "value"              # everything else: function argument, pow base, lone literal
 
 
+#: The STRUCTURAL roles: a literal whose value decides the expression's domain, which types
+#: its whole subtree (the exponent ``3/2`` is three literals, each an exponent).
+_TYPED = (Role.EXPONENT, Role.ROOT_INDEX, Role.ORDER)
+
+# A lattice bag's members are function arguments (VALUE), as in ``max a b``; it has no
+# inverse section.
 _OPENERS = {"<add>": ("</add>", "<sub>", Role.ADDEND),
-            "<mul>": ("</mul>", "<div>", Role.COEFFICIENT)}
+            "<mul>": ("</mul>", "<div>", Role.COEFFICIENT),
+            "<max>": ("</max>", None, Role.VALUE),
+            "<min>": ("</min>", None, Role.VALUE)}
+#: The tokens only the tagged dialect writes (its bag delimiters).
+_TAGGED_DELIMITERS = frozenset(_OPENERS) | frozenset(c for c, _, _ in _OPENERS.values())
 # Sign/reciprocal wrappers are role-transparent: the literal in ``neg 2`` plays whatever
 # role the wrapped position plays.
 _TRANSPARENT = {"neg", "inv"}
-# Special constants are SITES like any numeric literal (owner ruling 2026-07-31: "mask
+# Special constants are SITES like any numeric literal ("mask
 # all should mask all, even pi or e or other specials") -- the POLICY decides their fate,
 # which keeps a future pi-vocabulary pipeline a one-line policy away. Poles and nan are
 # deliberately NOT here: a fitted `<constant>` is finite by doctrine, so masking an
@@ -145,70 +157,79 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
     # degrade the walk to an empty arity map -- function tokens would read as leaves,
     # giving misleading "malformed" errors on explicit input and silently wrong roles
     # on tagged input (the argument literal takes the enclosing bag's role).
-    # H-007: the same token-boundary ruling as the core -- a reserved numeric spelling
+    # The same token-boundary ruling as the core -- a reserved numeric spelling
     # (``inf``, ``1_000``, ``0x10``) must never reach the role walk as a "symbol".
     for t in tokens:
         if reserved_numeric_spelling(t):
             raise ValueError(
                 f"invalid token {t!r}: reserved numeric spelling -- a value to Python or a "
-                f"malformed numeral, but not a simplipy numeric literal (H-007); use the "
+                f"malformed numeral, but not a simplipy numeric literal; use the "
                 f"canonical spelling "
                 f"('5', '0.5', '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), float(\"nan\"))")
     arity = dict(engine.operator_arity)
     sites: list[tuple[int, str, Role]] = []
 
-    def walk(i: int, role: Role) -> int:
+    # The walk is ITERATIVE, so every depth the core reads (up to its 4,096-token cap) reads
+    # here too; a recursive walk raised RecursionError from depth 1,000 on. `work` holds what
+    # is still to read, top last: a Role is one subtree read in that role, a tuple an open bag
+    # `(opener, closer, section, member_role)` reading members until its closer (a lattice bag
+    # has no section: None).
+    work: list[Role | tuple[str, str, str | None, Role]] = [Role.VALUE]
+    i = 0
+    while work:
+        item = work.pop()
+        if isinstance(item, tuple):
+            opener, closer, section, member_role = item
+            if i >= len(tokens):
+                raise ValueError(f"malformed tagged expression: unclosed {opener}")
+            if tokens[i] == closer:
+                i += 1
+            elif tokens[i] == section:
+                i += 1
+                work.append(item)
+            else:
+                work.extend((item, member_role))
+            continue
+        role = item
         if i >= len(tokens):
             raise ValueError("malformed prefix expression: ran out of tokens")
         t = tokens[i]
+        i += 1
         # A TYPED position types its whole subtree: the exponent ``3/2`` is spelled
         # structurally (``<mul> 3 <div> 2 </mul>``, or ``/ 3 2`` explicitly), and each of
-        # those literals controls the DOMAIN exactly as a bare exponent does -- so the
-        # openers and the arithmetic operators inside an exponent / root index pass the
-        # typed role down instead of their own COEFFICIENT / ADDEND roles.
-        typed = role in (Role.EXPONENT, Role.ROOT_INDEX)
+        # those literals controls the DOMAIN exactly as a bare exponent does -- so every
+        # operator inside an exponent / root index / order passes the typed role down: the
+        # openers and the arithmetic instead of their COEFFICIENT / ADDEND roles, and a
+        # function, a power, a root and a Bessel function instead of their own operands'
+        # roles (``pow(x, abs(2))``'s ``2`` is an exponent).
+        typed = role in _TYPED
+        children: tuple[Role, ...]
         if t in _OPENERS:
-            closer, section, child_role = _OPENERS[t]
-            if typed:
-                child_role = role
-            i += 1
-            while True:
-                if i >= len(tokens):
-                    raise ValueError(f"malformed tagged expression: unclosed {t}")
-                if tokens[i] == closer:
-                    return i + 1
-                if tokens[i] == section:
-                    i += 1
-                    continue
-                i = walk(i, child_role)
+            closer, section, member_role = _OPENERS[t]
+            work.append((t, closer, section, role if typed else member_role))
+            continue
         if t == "pow":
-            i = walk(i + 1, Role.VALUE)
-            return walk(i, Role.EXPONENT)
-        if t == "rootn":
-            i = walk(i + 1, Role.VALUE)
-            return walk(i, Role.ROOT_INDEX)
-        if t in ("*", "/"):
-            child = role if typed else Role.COEFFICIENT
-            i = walk(i + 1, child)
-            return walk(i, child)
-        if t in ("+", "-"):
-            child = role if typed else Role.ADDEND
-            i = walk(i + 1, child)
-            return walk(i, child)
-        if t in _TRANSPARENT:
-            return walk(i + 1, role)
-        n = arity.get(t)
-        if n:
-            j = i + 1
-            for _ in range(int(n)):
-                j = walk(j, Role.VALUE)
-            return j
-        if t != "<constant>" and (t in _SPECIAL_CONSTANTS or is_numeric_string(t)):
-            sites.append((i, t, role))
-        return i + 1
+            children = (Role.VALUE, Role.EXPONENT)
+        elif t == "rootn":
+            children = (Role.VALUE, Role.ROOT_INDEX)
+        elif t in ("besselj", "besseli") and arity.get(t) == 2:
+            children = (Role.ORDER, Role.VALUE)
+        elif t in ("*", "/"):
+            children = (Role.COEFFICIENT, Role.COEFFICIENT)
+        elif t in ("+", "-"):
+            children = (Role.ADDEND, Role.ADDEND)
+        elif t in _TRANSPARENT:
+            children = (role,)
+        elif arity.get(t):
+            children = (Role.VALUE,) * int(arity[t])
+        else:
+            if t != "<constant>" and (t in _SPECIAL_CONSTANTS or is_numeric_string(t)):
+                sites.append((i - 1, t, role))
+            continue
+        # the children are read first to last: pushed last to first
+        work.extend(reversed((role,) * len(children) if typed else children))
 
-    end = walk(0, Role.VALUE)
-    if end != len(tokens):
+    if i != len(tokens):
         raise ValueError("malformed prefix expression: trailing tokens")
     return sites
 
@@ -226,6 +247,14 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
     Pass ``collect=False`` for the raw positional substitution (a strict 1:1 token
     correspondence with ``tokens``), at the cost of the degree-of-freedom guarantee.
 
+    NAMED CONSTANTS (``<constant_NAME>``) are parameters, never literals: the policy does not
+    see them, and stage (b) keeps every name the expression uses more than once. A ground part
+    (no data variable) that holds such a name and a parameter used nowhere else (a
+    ``<constant>``, or a name used once) becomes one fresh ``<constant>``:
+    ``c_a*c_b*x1 + c_a*x2`` is ``<constant>*x1 + c_a*x2``, and ``3.7*c_a*x1 + c_a*x2``, its
+    3.7 masked, likewise, while ``c_a*c_b*x1 + c_a*x2 + c_b*x3`` keeps both names (each is
+    used elsewhere) and ``c_a*x1 + c_a*x2`` has nothing to merge.
+
     ONE-SHOT, BY DESIGN -- feed it an unmasked expression, never a skeleton. ``mask`` is
     deliberately NOT idempotent: stage (b) can turn STRUCTURE into a literal, and masking
     that literal would widen the family. Measured on 20k rows, ~0.15% of skeletons: a
@@ -238,9 +267,16 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
         replacement = policy(value, role)
         if replacement is not None:
             out[idx] = replacement
+    if collect and any(is_named_constant(t) for t in out):
+        # The ground parts that hold a name used more than once and a parameter used nowhere
+        # else, each one fresh `<constant>` (the core's `collect_parameters`), in the input's
+        # dialect. The simplification below never collects such a part: it reads a name used
+        # more than once as a variable.
+        form = 'tagged' if _TAGGED_DELIMITERS.intersection(out) else 'explicit'
+        out = engine._core.collect_parameters(out, form)
     if collect and out != list(tokens):
-        # simplify mirrors the input container AND the input DIALECT (owner ruling
-        # 2026-08-18), so the collect stage needs no projection argument: a tagged
+        # simplify mirrors the input container AND the input DIALECT, so the collect
+        # stage needs no projection argument: a tagged
         # sequence comes back tagged, an explicit one explicit. The masked `out` carries
         # the same delimiters as `tokens` -- a policy replaces literals, never tags.
         out = cast(list[str], engine.simplify(out))
@@ -271,13 +307,17 @@ def mask_fittable(value: str, role: Role) -> Optional[str]:
       the integers, so a continuous optimizer has no gradient anywhere to descend.
     * ``pow`` EXPONENT -- ``pow(x, 2.5)`` is ``nan`` wherever ``x < 0``. The exponent's
       integrality decides the domain, so masking it silently deletes half the data.
+    * ``besselj`` and ``besseli`` ORDER -- ``besselj(2.5, x)`` is ``nan`` wherever ``x < 0``,
+      and an integer order's parity decides the function's: the order controls the domain as
+      an exponent does.
 
     Everything else is smooth in its literal (``c*x``, ``x+c``, ``log(c*x)``) and is
-    masked. This is the policy for training-data preparation.
+    masked, the orders of ``bessely`` and ``besselk`` among them: both are defined on
+    ``x > 0`` alone at every order. This is the policy for training-data preparation.
 
     Formerly ``mask_values_keep_structure`` -- the same policy under the name that says
     what it keeps rather than why. That spelling is removed in 0.14.0.
     """
-    if role in (Role.EXPONENT, Role.ROOT_INDEX):
+    if role in _TYPED:
         return None
     return "<constant>"

@@ -8,7 +8,8 @@ vocabulary, a fitter's parameter budget), not on the algebra. `simplipy.masking`
 mechanism for exactly that decision. It walks the engine's
 output (the native tagged form or the explicit binary form) and tells a policy
 the structural role of every literal it meets: a multiplicative
-coefficient, an additive constant, a `pow` exponent, a `rootn` index. A
+coefficient, an additive constant, a `pow` exponent, a `rootn` index, a
+`besselj` or `besseli` order. A
 policy like "mask constants, but keep in-vocabulary integer exponents" is a
 single conditional, and position-blind accidents (masking a `rootn` index into
 a skeleton that is NaN almost everywhere) are impossible to write by accident.
@@ -19,7 +20,7 @@ Masking is a separate **terminal** step: apply it to `simplify`'s output.
 import simplipy as sp
 from simplipy import masking
 
-engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
+engine = sp.SimpliPyEngine.load("acj-4-llm_0.15", install=True)
 
 # The front door takes any form, with policies by name:
 engine.mask(engine.simplify('x1 + 3.14'), 'fittable')
@@ -39,29 +40,56 @@ kinds ship in the module rather than being re-invented by every consumer:
 - **`mask_all`** — every number, including either half of a fraction and the
   special constants. For structural comparison.
 - **`mask_fittable`** — every number a constant optimizer can actually fit,
-  *keeping* the ones it cannot (`pow` exponents, `rootn` indices). For
+  *keeping* the ones it cannot (`pow` exponents, `rootn` indices, the orders of
+  `besselj` and `besseli`, which decide where the function has a value). For
   training data. The special constants are masked too wherever they are
   fittable: `x1 * pi` becomes `<constant> * x1`, while `pow(x1, np.pi)` keeps
-  its exponent.
+  its exponent. The orders of `bessely` and `besselk` are masked: both
+  functions are defined on `x > 0` alone, at every order.
 
 A custom `(value, role) -> str | None` policy remains the primitive
 (`masking.Role` is the role enum, `masking.literal_sites` enumerates the
 literal positions with their roles), so any other rule — mask only floats,
 keep a given vocabulary — is a one-line function.
 
-## One constant per degree of freedom
+## Redundant constants
 
 Masking runs **two** stages: (a) the positional substitution the policy
 drives, then (b) a **collect** pass that re-runs the engine over the result.
-Stage (b) is what makes the invariant *one `<constant>` per degree of freedom*
-hold: the serializers can split one state node across several tokens (a
-rational is one node but prints as `<mul> 2 x0 <div> 3 </mul>`), so a
-positional pass alone would abstract it into two `<constant>`s for one degree
-of freedom — a flat direction for any downstream refiner. The collect pass
+Stage (b) removes the redundant `<constant>`s the engine recognises: the
+serializers can split one state node across several tokens (a rational is one
+node but prints as `<mul> 2 x0 <div> 3 </mul>`), so a positional pass alone
+would abstract it into two `<constant>`s for one degree of freedom — a flat
+direction for any downstream refiner. It does not find every redundancy:
+`(a*x + b)/(c*y + d)` keeps its four constants, though scaling all four by one
+value changes nothing. The collect pass
 also collapses `c1*c2` and `c1+c2` (one degree of freedom each) while
 correctly leaving `c1*x0 + c2*x1` alone (two), and normalizes the shape the
 way a human would write it (`x0 / <constant>` → `<constant> * x0`).
 `mask(..., collect=False)` gives the raw positional substitution instead.
+
+## Named constants
+
+A named constant, `<constant_NAME>` with NAME letters and digits, is a
+parameter shared by every occurrence of its name (see the
+[simplify guide](simplify.md#named-constants)). Masking never masks one: it
+is not a literal. The collect pass turns a ground part (a part with no data
+variable) into one fresh `<constant>` only if the part holds a parameter used
+nowhere else in the expression, a `<constant>` or a name used once; a name
+used more than once stays, since it ties its uses together:
+
+```python
+engine.mask('<constant_a>*<constant_b>*x1 + <constant_a>*x2')
+# -> '<constant> * x1 + <constant_a> * x2'
+engine.mask('3.7*<constant_a>*x1 + <constant_a>*x2', 'fittable')
+# -> '<constant> * x1 + <constant_a> * x2'
+engine.mask('<constant_a>*<constant_b>*x1 + <constant_a>*x2 + <constant_b>*x3')
+# -> '<constant_a> * <constant_b> * x1 + <constant_a> * x2 + <constant_b> * x3'
+```
+
+The number 3.7 is masked and then collected with the name beside it, never
+absorbed into `<constant_a>`; in the last example each name is used
+elsewhere, so nothing is collected.
 
 ## Mask once
 

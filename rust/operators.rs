@@ -6,7 +6,7 @@
 //! operator_precedence_compat, inverse_base/unary/binary, connection_classes, ...). v1 only needs
 //! the subset the deployed skeleton path touches; the rest are stubs to fill as ported.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Deserialize;
 
 /// The AC CORE SERIALIZATION LANGUAGE: `(token, arity, infix precedence)` for every sugar
@@ -29,6 +29,30 @@ pub const CORE_SERIALIZATION_OPS: [(&str, u8, f64, Option<&str>); 8] = [
     ("pow", 2, 3.0, Some("simplipy.operators.pow")),
     ("rootn", 2, 3.0, Some("simplipy.operators.rootn")),
 ];
+
+/// Why `name` cannot name an operator, an alias or a defined function (`None` when it can): a
+/// name is an identifier starting with a letter (letters, digits and `_`), so every reader reads
+/// it as a function and never as a number, a slot, a sigil, a tag or a constant token; it is not
+/// the infix spelling of a constant (`pi`, `e`, `inf`, `nan`); and it is not a variable's (`x`
+/// or `v` and digits, as `simplipy.normalization` reads one). The core's symbolic tokens (`+`,
+/// `-`, `*`, `/`) are named by the engine, not by this rule.
+pub fn name_refusal(name: &str) -> Option<&'static str> {
+    let identifier = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !identifier {
+        return Some("is not a function name (letters, digits and '_', starting with a letter)");
+    }
+    if matches!(name, "pi" | "e" | "inf" | "nan") {
+        return Some("is the infix spelling of a constant");
+    }
+    if name.len() > 1
+        && name.starts_with(['x', 'X', 'v', 'V'])
+        && name[1..].bytes().all(|b| b.is_ascii_digit())
+    {
+        return Some("is the spelling of a variable");
+    }
+    None
+}
 
 /// The built-in arity of a core serialization token (`None` for everything else).
 #[inline]
@@ -61,11 +85,11 @@ pub struct OperatorSpec {
     pub realization: String,
     #[serde(default)]
     pub alias: Vec<String>,
-    /// PARSE-ONLY at 0.12.0 (D3): shipped configs declare `inverse:` entries, so the
+    /// PARSE-ONLY at 0.12.0: shipped configs declare `inverse:` entries, so the
     /// field stays accepted for deserialization compatibility, but nothing derives from
     /// it any more -- the `operator_inverses` map and its one (dead) intern site were
     /// removed with the binary kernel's relic layer. The shipped acj configs' historic
-    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) were FIXED 2026-08-05;
+    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) are FIXED;
     /// legacy configs in the wild still carry them (the legacy fixture reproduces one
     /// verbatim), which is why `worker.rs::inverse_unary_name` keeps its own map
     /// rather than trusting the field.
@@ -76,6 +100,16 @@ pub struct OperatorSpec {
     pub precedence: Option<f64>,
     #[serde(default)]
     pub commutative: bool,
+    /// `family:` the name of the operators this one is a variant or sibling of (`bessel` for
+    /// `besselj`, `bessely`, `besseli` and `besselk`); an operator without one is a family of its
+    /// own. Read by the slow-operator policy (`slow`).
+    #[serde(default)]
+    pub family: Option<String>,
+    /// `slow: true`: the operator is slow to evaluate, and a rule may bring it into its right side
+    /// only where its left side holds an operator of its family (the slow-operator policy,
+    /// `engine::refusals::slow_operator`).
+    #[serde(default)]
+    pub slow: bool,
 }
 
 /// The engine's operator universe. Insertion order is preserved (config.yaml order) because some
@@ -83,7 +117,6 @@ pub struct OperatorSpec {
 #[derive(Debug, Default)]
 pub struct Operators {
     pub arity: FxHashMap<String, u8>,
-    pub commutative: Vec<String>,
     /// `max_power`: `max(int(op[3:]) for op in operator_tokens if op matches
     /// `^pow\d+` NOT followed by `_`)`, else 0. The factor ceiling for the LEGACY
     /// conversion paths' power-chain factorization (`convert.rs`; the other historical
@@ -112,17 +145,22 @@ pub struct Operators {
     /// `realization_to_operator`: the inverse, built in config order so a (here
     /// absent) realization collision would resolve last-wins exactly as Python's dict comprehension.
     pub realization_to_operator: FxHashMap<String, String>,
+    /// The config's DEFINED FUNCTIONS (`crate::defined`, ruling 40): read and written by the
+    /// readers and printers like declared functions ([`Operators::syntax_arity`], and the
+    /// infix tables above), expanded into their definitions before the canonical state and
+    /// evaluation see them, and absent from [`Operators::arity`], so nothing that reads the
+    /// config's operators (the kernel, the measure, the miner) meets them.
+    pub defined: crate::defined::DefinedTable,
+    /// `family:` of every operator that declares one (`OperatorSpec::family`).
+    pub family: FxHashMap<String, String>,
+    /// The operators declared `slow: true` (`OperatorSpec::slow`).
+    pub slow: FxHashSet<String>,
 }
 
 impl Operators {
     pub fn from_specs(order: Vec<String>, specs: FxHashMap<String, OperatorSpec>) -> Self {
         let arity: FxHashMap<String, u8> =
             specs.iter().map(|(k, v)| (k.clone(), v.arity)).collect();
-        let commutative = order
-            .iter()
-            .filter(|k| specs.get(*k).map(|s| s.commutative).unwrap_or(false))
-            .cloned()
-            .collect();
         let max_power = order.iter().filter_map(|t| pow_power(t)).max().unwrap_or(0);
         let max_fractional_power = order
             .iter()
@@ -197,9 +235,17 @@ impl Operators {
                     .or_insert_with(|| tok.to_string());
             }
         }
+        let family = specs
+            .iter()
+            .filter_map(|(name, s)| s.family.clone().map(|f| (name.clone(), f)))
+            .collect();
+        let slow = specs
+            .iter()
+            .filter(|(_, s)| s.slow)
+            .map(|(name, _)| name.clone())
+            .collect();
         Self {
             arity,
-            commutative,
             max_power,
             max_fractional_power,
             operator_precedence_compat,
@@ -207,7 +253,33 @@ impl Operators {
             operator_aliases,
             operator_realizations,
             realization_to_operator,
+            defined: crate::defined::DefinedTable::default(),
+            family,
+            slow,
         }
+    }
+
+    /// Add a DEFINED FUNCTION (`crate::defined`): its head joins the infix reader's and the
+    /// printer's tables, and [`Operators::syntax_arity`], at its arity; a defined head renders
+    /// as a call, so its precedence is never consulted.
+    pub fn add_defined(&mut self, name: String, function: crate::defined::DefinedFunction) {
+        self.operator_arity_compat
+            .insert(name.clone(), function.arity);
+        self.defined.insert(name, function);
+    }
+
+    /// The arity a READER or PRINTER gives a token: an operator's ([`Operators::arity_of`]) or
+    /// a defined function's. The canonical state and the evaluators read [`Operators::arity_of`]
+    /// alone: they never meet a defined head, which is expanded before them.
+    #[inline]
+    pub fn syntax_arity(&self, token: &str) -> Option<u8> {
+        self.arity_of(token)
+            .or_else(|| self.defined.get(token).map(|d| d.arity))
+    }
+
+    /// The family of `token`: its declared `family:`, else the operator itself.
+    pub fn family_of<'a>(&'a self, token: &'a str) -> &'a str {
+        self.family.get(token).map_or(token, String::as_str)
     }
 
     #[inline]
@@ -225,12 +297,6 @@ impl Operators {
     #[inline]
     pub fn is_operator(&self, token: &str) -> bool {
         core_arity(token).is_some() || self.arity.contains_key(token)
-    }
-
-    /// `operator in self.commutative_operators`. dev_7-3: `{'+', '*'}`.
-    #[inline]
-    pub fn is_commutative(&self, token: &str) -> bool {
-        self.commutative.iter().any(|c| c == token)
     }
 
     /// `operator_precedence_compat.get(token)`. `None` if the token is unknown;

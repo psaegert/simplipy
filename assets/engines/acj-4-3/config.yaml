@@ -25,13 +25,13 @@ operators:
     commutative: true
   "/":
     realization: "simplipy.operators.div"
-    alias: []
+    alias: ["div"]
     arity: 2
     precedence: 2
     commutative: false
   abs:
     realization: "simplipy.operators.abs"
-    alias: []
+    alias: ["Abs"]
     arity: 1
     precedence: 3
     commutative: false
@@ -138,13 +138,37 @@ operators:
     precedence: 2
     commutative: false
 
-# ONE RULE SET PER MODE (owner ruling 2026-08-19): `rules:` carries the f64 set, and
-# `rules_real:`/`rules_corpus:` name the other two. This artifact declares only `rules:`,
-# so `Mode.real` and `Mode.corpus` have no set of their own here and the engine refuses
-# them rather than serving the f64 set under a different claim of soundness. The mined
-# `real` and `corpus` sets are published as their own asset revision.
+# ONE RULE SET PER MODE: `rules:` carries the f64 set, and `rules_corpus:` names the
+# permissive one. This artifact declares only `rules:`, so the permissive mode has no set of
+# its own here and serves the f64 set.
 rules: "./rules.json"
 
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
 # generation 2 = the AC engine's clean 23-operator vocabulary, simplipy >= 0.12.
 engine_generation: 2
+
+# DEFINED FUNCTIONS (ruling 40): supported, never mined. Each is a definition over the operators
+# above, its arguments written _0, _1, ...: the readers and the conversions keep the head as
+# written; simplify, complexity, prettify, mask and every evaluation read the definition.
+defined_functions:
+  sqrt:
+    arity: 1
+    definition: "rootn(_0, 2)"
+  cot:
+    arity: 1
+    definition: "inv(tan(_0))"
+  acot:
+    arity: 1
+    definition: "atan(inv(_0))"
+  sec:
+    arity: 1
+    definition: "inv(cos(_0))"
+  csc:
+    arity: 1
+    definition: "inv(sin(_0))"
+  asec:
+    arity: 1
+    definition: "acos(inv(_0))"
+  acsc:
+    arity: 1
+    definition: "asin(inv(_0))"

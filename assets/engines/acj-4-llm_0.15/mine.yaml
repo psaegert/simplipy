@@ -1,0 +1,34 @@
+# Mine kit acj-4-llm_0.15: the complete AC-judged 4->4 mine over the 0.15 vocabulary, LLM and manual
+# proposals on. The default rule set of 0.15. Reproduce with ONE command:
+#   simplipy find-rules -e config.yaml -c mine.yaml -o rules.json -v --reset-rules
+# It writes rules.json (strict) and rules_permissive.json, each with its provenance sidecar.
+#
+# Universe (SEMANTICS 4.12, 4.13; rulings 41-43): the 36 operators of the config, of which erfc and harmonic are
+# supported but not mined (operator_max_length 0 below), and the Bessel family is slow (config `slow: true`: a rule
+# brings a Bessel function into its right side only where its left side holds one). The config's defined functions
+# (sqrt and the reciprocal trigonometric functions) and aliases are reading only and never mined.
+#
+# No second number: the target cap is 4 and so is the source bound, so the cap refuses nothing.
+#
+# Alphabet unchanged from acj-4 (flash-ansr vocabulary literals -10..10, e, pi).
+extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(-5)', '(-4)', '(-3)', '(-2)', '(-1)', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+                       'np.e', 'np.pi',
+                       'float("inf")', 'float("-inf")', 'float("nan")']
+dummy_variables: 2  # ceil(max_source_pattern_length/2)
+max_source_pattern_length: 4
+max_target_pattern_length: 4
+n_samples: 1024
+constants_fit_challenges: 16
+constants_fit_retries: 16
+rtol: 1.0e-11  # carried from acj-4-3 (2026-08-01 grid measurement)
+atol: 1.0e-12
+min_informative: null
+seed: 42
+confirm: true
+relaxed_kruskal: true
+prune: covered
+promote_sorts: true
+# LLM channel: the acj-5-4-llm batch (194 proposals, sha256
+# b97573c2813d0bb535364ef32817c71549fe40e76a794c37b0403c09827bf359), placed beside this file.
+proposals: llm_and_manual_proposals.json
+operator_max_length: {erfc: 0, harmonic: 0}
