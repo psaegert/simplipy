@@ -521,9 +521,10 @@ def _twin_shadow_owners(census: list) -> set[int]:
 
 
 #: `SIMPLIPY_*` variables that change no artifact: the diagnostics (`*_TRACE`), the
-#: test-asset switch, the build stamp, the progress cadence and the trusted-module list.
-_INERT_ENV = ('SIMPLIPY_TEST_REQUIRE_ASSETS', 'SIMPLIPY_BUILD', 'SIMPLIPY_MINE_PROGRESS_INTERVAL',
-              'SIMPLIPY_TRUSTED_MODULES')
+#: test-asset and test-torch switches, the build stamp, the progress cadence and the
+#: trusted-module list.
+_INERT_ENV = ('SIMPLIPY_TEST_REQUIRE_ASSETS', 'SIMPLIPY_TEST_REQUIRE_TORCH', 'SIMPLIPY_BUILD',
+              'SIMPLIPY_MINE_PROGRESS_INTERVAL', 'SIMPLIPY_TRUSTED_MODULES')
 
 
 def env_overrides(environ: Any = None) -> dict[str, str]:

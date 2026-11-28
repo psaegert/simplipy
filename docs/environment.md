@@ -28,6 +28,6 @@ budget wherever it runs, so a verdict is the same in a mine, in `verify-mine` an
 `verify_rule`.
 
 A mine still records every `SIMPLIPY_*` variable set while it runs (the diagnostics,
-the test-asset switch, the build stamp, the progress interval and the trusted-module
-list excepted) in its provenance sidecar, under `soundness.env_overrides`, and
+the test-asset and test-torch switches, the build stamp, the progress interval and the
+trusted-module list excepted) in its provenance sidecar, under `soundness.env_overrides`, and
 `simplipy verify-mine` requires that record, and its own environment, to be empty.
